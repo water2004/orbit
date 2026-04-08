@@ -12,3 +12,5 @@ hex = "0.4"
 reqwest = { version = "0.11", features = ["blocking", "json"] }
 modrinth-wrapper = "0.1.0"
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+clap = { version = "4.6.0", features = ["derive"] }
+anyhow = "1.0.102"
