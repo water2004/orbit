@@ -1,5 +1,7 @@
 pub mod commands;
 use clap::{Parser, Subcommand};
+use crate::cli::commands::CommandHandler;
+use anyhow::Result;
 
 #[derive(Parser)]
 #[command(name = "orbit")]
@@ -88,4 +90,46 @@ pub enum InstanceCommands {
 pub enum CacheCommands {
     /// 清理下载缓存
     Clean,
+}
+
+impl CommandHandler for Commands {
+    fn execute(self) -> Result<()> {
+        use crate::cli::commands::*;
+        match self {
+            Commands::Init { name } => handle_init(name),
+            Commands::Instances { command } => command.execute(),
+            Commands::Sync => handle_sync(),
+            Commands::Update => handle_update(),
+            Commands::Upgrade { mod_name } => handle_upgrade(mod_name),
+            Commands::Search { query } => handle_search(query),
+            Commands::Install { mod_name } => handle_install(mod_name),
+            Commands::Remove { mod_name } => handle_remove(mod_name),
+            Commands::Purge { mod_name } => handle_purge(mod_name),
+            Commands::List => handle_list(),
+            Commands::Import { file } => handle_import(file),
+            Commands::Export { file } => handle_export(file),
+            Commands::Check { version } => handle_check(version),
+            Commands::Cache { command } => command.execute(),
+        }
+    }
+}
+
+impl CommandHandler for InstanceCommands {
+    fn execute(self) -> Result<()> {
+        use crate::cli::commands::instances::*;
+        match self {
+            InstanceCommands::List => handle_list(),
+            InstanceCommands::Default { name } => handle_default(name),
+            InstanceCommands::Remove { name } => handle_remove(name),
+        }
+    }
+}
+
+impl CommandHandler for CacheCommands {
+    fn execute(self) -> Result<()> {
+        use crate::cli::commands::cache::clean;
+        match self {
+            CacheCommands::Clean => clean::handle(),
+        }
+    }
 }

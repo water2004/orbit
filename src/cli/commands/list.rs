@@ -1,6 +1,6 @@
 use anyhow::Result;
 
 pub fn handle() -> Result<()> {
-    println!("Syncing mods...");
+    println!("Listing installed mods...");
     Ok(())
 }
