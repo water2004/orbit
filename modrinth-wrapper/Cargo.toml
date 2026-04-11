@@ -1,0 +1,16 @@
+[package]
+name = "modrinth-wrapper"
+version = "0.1.0"
+edition = "2024"
+exclude = [
+    "modrinth-docs"
+]
+description = "A Rust wrapper for the Modrinth API."
+license = "MIT"
+[dependencies]
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+url.workspace = true
