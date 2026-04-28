@@ -1,5 +1,5 @@
-﻿use super::{ModProvider, ModSource, UnifiedMod, ModVersion, ModFile};
-use reqwest::blocking::Client;
+use super::{ModProvider, ModSource, UnifiedMod, ModVersion, ModFile};
+use reqwest::Client;
 use serde::Deserialize;
 use std::collections::HashMap;
 
@@ -65,7 +65,7 @@ impl CurseForgeProvider {
 }
 
 impl ModProvider for CurseForgeProvider {
-    fn search(
+    async fn search(
         &self,
         query: &str,
         mc_version: Option<&str>,
@@ -117,10 +117,10 @@ impl ModProvider for CurseForgeProvider {
             }
         }
 
-        let res = req.send()?;
+        let res = req.send().await?;
             
         if res.status().is_success() {
-            let parsed: SearchResponse = res.json()?;
+            let parsed: SearchResponse = res.json().await?;
             let count = parsed.data.len();
             Ok(super::SearchResult {
                 results: parsed.data.into_iter().map(|m| UnifiedMod {
@@ -141,14 +141,14 @@ impl ModProvider for CurseForgeProvider {
         }
     }
 
-    fn get_mod(&self, id: &str) -> Result<Option<UnifiedMod>, Box<dyn std::error::Error>> {
+    async fn get_mod(&self, id: &str) -> Result<Option<UnifiedMod>, Box<dyn std::error::Error>> {
         let url = format!("{}/mods/{}", CURSEFORGE_API, id);
         let res = self.client.get(&url)
             .header("x-api-key", &self.api_key)
-            .send()?;
+            .send().await?;
             
         if res.status().is_success() {
-            let parsed: ModResponse = res.json()?;
+            let parsed: ModResponse = res.json().await?;
             Ok(Some(UnifiedMod {
                 id: parsed.data.id.to_string(),
                 name: parsed.data.name,
@@ -160,7 +160,7 @@ impl ModProvider for CurseForgeProvider {
         }
     }
 
-    fn get_version_by_hash(
+    async fn get_version_by_hash(
         &self, 
         hash: &str, 
         algorithm: &str
@@ -176,17 +176,17 @@ impl ModProvider for CurseForgeProvider {
             "fingerprints": [hash.parse::<u64>().unwrap_or(0)]
         });
 
-        let res = self.client.post(&url)
+        let _res = self.client.post(&url)
             .header("x-api-key", &self.api_key)
             .json(&request_body)
-            .send()?;
+            .send().await?;
         
         // For brevity: return Ok(None) since parsing `FingerprintsMatchesResponse` and mapping 
         // back to ModVersion relies on additional models. The HMCL Java code does this parsing fully.
         Ok(None)
     }
 
-    fn get_versions(
+    async fn get_versions(
         &self, 
         mod_id: &str, 
         mc_version: Option<&str>, 
@@ -215,7 +215,7 @@ impl ModProvider for CurseForgeProvider {
             }
         }
 
-        let res = req.send()?;
+        let res = req.send().await?;
 
         if res.status().is_success() {
             // 解析数据列表
@@ -224,7 +224,7 @@ impl ModProvider for CurseForgeProvider {
                 data: Vec<CfFile>,
             }
 
-            let parsed: FilesResponse = res.json()?;
+            let parsed: FilesResponse = res.json().await?;
             let versions = parsed.data.into_iter().map(|f| {
                 let mut v_hashes = HashMap::new();
                 for h in f.hashes {
@@ -249,18 +249,18 @@ impl ModProvider for CurseForgeProvider {
         }
     }
 
-    fn get_categories(&self) -> Result<Vec<super::Category>, Box<dyn std::error::Error>> {
+    async fn get_categories(&self) -> Result<Vec<super::Category>, Box<dyn std::error::Error>> {
         let url = format!("{}/categories", CURSEFORGE_API);
-        let res = self.client.get(&url)
+        let _res = self.client.get(&url)
             .header("x-api-key", &self.api_key)
             .query(&[("gameId", "432")])
-            .send()?;
+            .send().await?;
         // Missing category struct parser for CurseForge. 
         // We'll leave it as a stub for feature completeness.
         Ok(vec![])
     }
 
-    fn resolve_dependency(&self, _id: &str) -> Result<Option<UnifiedMod>, Box<dyn std::error::Error>> {
-        self.get_mod(_id)
+    async fn resolve_dependency(&self, _id: &str) -> Result<Option<UnifiedMod>, Box<dyn std::error::Error>> {
+        self.get_mod(_id).await
     }
 }

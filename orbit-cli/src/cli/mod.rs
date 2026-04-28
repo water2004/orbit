@@ -93,43 +93,43 @@ pub enum CacheCommands {
 }
 
 impl CommandHandler for Commands {
-    fn execute(self) -> Result<()> {
+    async fn execute(self) -> Result<()> {
         use crate::cli::commands::*;
         match self {
-            Commands::Init { name } => handle_init(name),
-            Commands::Instances { command } => command.execute(),
-            Commands::Sync => handle_sync(),
-            Commands::Update => handle_update(),
-            Commands::Upgrade { mod_name } => handle_upgrade(mod_name),
-            Commands::Search { query } => handle_search(query),
-            Commands::Install { mod_name } => handle_install(mod_name),
-            Commands::Remove { mod_name } => handle_remove(mod_name),
-            Commands::Purge { mod_name } => handle_purge(mod_name),
-            Commands::List => handle_list(),
-            Commands::Import { file } => handle_import(file),
-            Commands::Export { file } => handle_export(file),
-            Commands::Check { version } => handle_check(version),
-            Commands::Cache { command } => command.execute(),
+            Commands::Init { name } => handle_init(name).await,
+            Commands::Instances { command } => command.execute().await,
+            Commands::Sync => handle_sync().await,
+            Commands::Update => handle_update().await,
+            Commands::Upgrade { mod_name } => handle_upgrade(mod_name).await,
+            Commands::Search { query } => handle_search(query).await,
+            Commands::Install { mod_name } => handle_install(mod_name).await,
+            Commands::Remove { mod_name } => handle_remove(mod_name).await,
+            Commands::Purge { mod_name } => handle_purge(mod_name).await,
+            Commands::List => handle_list().await,
+            Commands::Import { file } => handle_import(file).await,
+            Commands::Export { file } => handle_export(file).await,
+            Commands::Check { version } => handle_check(version).await,
+            Commands::Cache { command } => command.execute().await,
         }
     }
 }
 
 impl CommandHandler for InstanceCommands {
-    fn execute(self) -> Result<()> {
+    async fn execute(self) -> Result<()> {
         use crate::cli::commands::instances::*;
         match self {
-            InstanceCommands::List => handle_list(),
-            InstanceCommands::Default { name } => handle_default(name),
-            InstanceCommands::Remove { name } => handle_remove(name),
+            InstanceCommands::List => handle_list().await,
+            InstanceCommands::Default { name } => handle_default(name).await,
+            InstanceCommands::Remove { name } => handle_remove(name).await,
         }
     }
 }
 
 impl CommandHandler for CacheCommands {
-    fn execute(self) -> Result<()> {
+    async fn execute(self) -> Result<()> {
         use crate::cli::commands::cache::clean;
         match self {
-            CacheCommands::Clean => clean::handle(),
+            CacheCommands::Clean => clean::handle().await,
         }
     }
 }

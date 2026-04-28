@@ -1,9 +1,7 @@
-﻿
 use super::{ModProvider, ModSource, UnifiedMod, ModVersion, ModFile};
 use modrinth_wrapper::{Client as MRClient, models as mr_models};
 use modrinth_wrapper::models::ProjectInfo;
 use std::collections::HashMap;
-use tokio::runtime::Runtime;
 
 // Convert wrapper `Version` -> local `ModVersion`
 fn convert_version(v: mr_models::Version) -> ModVersion {
@@ -29,21 +27,18 @@ fn convert_version(v: mr_models::Version) -> ModVersion {
 
 pub struct ModrinthProvider {
     client: MRClient,
-    rt: Runtime,
 }
 
 impl ModrinthProvider {
     pub fn new() -> Result<Self, Box<dyn std::error::Error>> {
-        // create runtime for blocking calls to async API
-        let rt = Runtime::new().map_err(|e| Box::<dyn std::error::Error>::from(e))?;
         // wrapper Client::new is synchronous and returns its own Result type
         let client = MRClient::new("orbit").map_err(|e| Box::<dyn std::error::Error>::from(e))?;
-        Ok(Self { client, rt })
+        Ok(Self { client })
     }
 }
 
 impl ModProvider for ModrinthProvider {
-    fn search(
+    async fn search(
         &self,
         query: &str,
         _mc_version: Option<&str>,
@@ -56,7 +51,7 @@ impl ModProvider for ModrinthProvider {
     ) -> Result<super::SearchResult, Box<dyn std::error::Error>> {
         // wrapper provides `search_projects` returning `SearchResult`
         let q = query.to_string();
-        let res: mr_models::SearchResult = self.rt.block_on(self.client.search_projects(&q))?;
+        let res: mr_models::SearchResult = self.client.search_projects(&q).await?;
 
         let results = res.hits.into_iter().map(|h| UnifiedMod {
             id: h.get_id().to_string(),
@@ -73,9 +68,9 @@ impl ModProvider for ModrinthProvider {
         })
     }
 
-    fn get_mod(&self, id: &str) -> Result<Option<UnifiedMod>, Box<dyn std::error::Error>> {
+    async fn get_mod(&self, id: &str) -> Result<Option<UnifiedMod>, Box<dyn std::error::Error>> {
         let id_str = id.to_string();
-        let parsed: mr_models::Project = match self.rt.block_on(self.client.get_project(&id_str)) {
+        let parsed: mr_models::Project = match self.client.get_project(&id_str).await {
             Ok(p) => p,
             Err(_) => return Ok(None),
         };
@@ -88,25 +83,25 @@ impl ModProvider for ModrinthProvider {
         }))
     }
 
-    fn get_version_by_hash(
+    async fn get_version_by_hash(
         &self,
         hash: &str,
         _algorithm: &str,
     ) -> Result<Option<ModVersion>, Box<dyn std::error::Error>> {
         // wrapper provides get_version_from_hash
-        match self.rt.block_on(self.client.get_version_from_hash(hash)) {
+        match self.client.get_version_from_hash(hash).await {
             Ok(v) => Ok(Some(convert_version(v))),
             Err(_) => Ok(None),
         }
     }
 
-    fn get_versions(
+    async fn get_versions(
         &self,
         mod_id: &str,
         _mc_version: Option<&str>,
         _loader: Option<&str>,
     ) -> Result<Vec<ModVersion>, Box<dyn std::error::Error>> {
-        let parsed: Vec<mr_models::Version> = match self.rt.block_on(self.client.list_versions(mod_id)) {
+        let parsed: Vec<mr_models::Version> = match self.client.list_versions(mod_id).await {
             Ok(vs) => vs,
             Err(_) => return Ok(vec![]),
         };
@@ -114,11 +109,11 @@ impl ModProvider for ModrinthProvider {
         Ok(parsed.into_iter().map(convert_version).collect())
     }
 
-    fn get_categories(&self) -> Result<Vec<super::Category>, Box<dyn std::error::Error>> {
+    async fn get_categories(&self) -> Result<Vec<super::Category>, Box<dyn std::error::Error>> {
         Ok(vec![])
     }
 
-    fn resolve_dependency(&self, _id: &str) -> Result<Option<UnifiedMod>, Box<dyn std::error::Error>> {
-        self.get_mod(_id)
+    async fn resolve_dependency(&self, _id: &str) -> Result<Option<UnifiedMod>, Box<dyn std::error::Error>> {
+        self.get_mod(_id).await
     }
 }
