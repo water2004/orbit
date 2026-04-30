@@ -4,13 +4,17 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+# 内部依赖
+orbit-core = { path = "../orbit-core" }
+modrinth-wrapper = { path = "../modrinth-wrapper" }
+
+# 工作区依赖
 zip.workspace = true
 serde_json.workspace = true
 serde.workspace = true
 sha2.workspace = true
 hex.workspace = true
 reqwest = { workspace = true, features = ["blocking"] }
-modrinth-wrapper = { path = "../modrinth-wrapper" }
 tokio.workspace = true
 clap.workspace = true
 anyhow.workspace = true

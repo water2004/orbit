@@ -1,0 +1,24 @@
+[package]
+name = "orbit-core"
+version = "0.1.0"
+edition = "2024"
+description = "Core business logic for Orbit — the Minecraft mod package manager"
+
+[dependencies]
+# 内部依赖
+modrinth-wrapper = { path = "../modrinth-wrapper" }
+
+# 工作区共享依赖
+tokio.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+toml.workspace = true
+sha2.workspace = true
+hex.workspace = true
+url.workspace = true
+zip.workspace = true
+async-trait.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+indexmap.workspace = true

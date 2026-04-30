@@ -2,19 +2,30 @@
 resolver = "2"
 members = [
     "orbit-cli",
+    "orbit-core",
     "modrinth-wrapper",
 ]
 
 [workspace.dependencies]
-zip = "3.0.0"
-serde_json = "1.0"
+# 序列化
 serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+toml = "0.8"
+# 加密
 sha2 = "0.10"
 hex = "0.4"
+# HTTP
 reqwest = { version = "0.13.2", features = ["json"] }
+# 异步
 tokio = { version = "1.51.0", features = ["macros", "rt-multi-thread"] }
+async-trait = "0.1"
+# CLI
 clap = { version = "4.6.0", features = ["derive"] }
+# 错误处理
 anyhow = "1.0.102"
 thiserror = "2.0.18"
+# 工具
 url = "2.5.8"
+zip = "3.0.0"
+indexmap = { version = "2.0", features = ["serde"] }
 
