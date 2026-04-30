@@ -19,7 +19,7 @@ pub mod installer;
 pub mod checker;
 pub mod purge;
 
-// 重新导出常用类型
+pub use config::{GlobalConfig, InstancesRegistry, InstanceEntry, orbit_data_dir, config_path};
 pub use error::OrbitError;
 pub use manifest::OrbitManifest;
 pub use lockfile::{OrbitLockfile, LockEntry, LockMeta};

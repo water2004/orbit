@@ -35,7 +35,7 @@ orbit-cli ──→ orbit-core ──→ modrinth-wrapper
 | `lockfile.rs` | ✅ | orbit.lock serde 解析/序列化 + 2 单测 |
 | `error.rs` | ✅ | OrbitError 枚举 (thiserror, 12 变体) |
 | `jar.rs` | ✅ | fabric.mod.json 解析 + SHA-256 |
-| `config.rs` | ✅ | 全局实例注册表 (~/.orbit/instances.toml) |
+| `config.rs` | ✅ | GlobalConfig (5 段 + 分层加载) + InstancesRegistry + 4 单测 |
 | `providers/mod.rs` | ✅ | ModProvider trait + 统一类型定义 |
 | `providers/modrinth.rs` | ✅ | ModrinthProvider 完整实现（search/resolve/get_versions 等 7 方法） |
 | `providers/curseforge.rs` | 🚧 | 骨架（待 curseforge-wrapper 创建后实现） |
@@ -118,7 +118,8 @@ orbit-cli ──→ orbit-core ──→ modrinth-wrapper
 
 | 文档 | 定义 |
 |------|------|
-| [orbit-toml-spec.md](orbit-toml-spec.md) | orbit.toml / orbit.lock 数据格式 |
+| [orbit-toml-spec.md](orbit-toml-spec.md) | 项目级 orbit.toml / orbit.lock 数据格式 |
+| [orbit-global-config.md](orbit-global-config.md) | 全局级 config.toml 规格与加载策略 |
 | [orbit-cli-commands.md](orbit-cli-commands.md) | 命令行为规格 |
 | [orbit-architecture.md](orbit-architecture.md) | 项目结构、模块边界、核心接口 |
 | [orbit-status.md](orbit-status.md) | 本文档 — 当前完成度追踪 |

@@ -62,8 +62,10 @@ ORBIT/
 ├── LICENSE
 ├── docs/                         # 设计文档
 │   ├── orbit-toml-spec.md        #   orbit.toml / orbit.lock 格式规格
+│   ├── orbit-global-config.md    #   config.toml 全局配置规格
 │   ├── orbit-cli-commands.md     #   命令行为规格
-│   └── orbit-architecture.md     #   本文档
+│   ├── orbit-architecture.md     #   本文档
+│   └── orbit-status.md           #   项目完成度追踪
 │
 ├── modrinth-wrapper/             # 🧩 Modrinth API v2 客户端 (独立发布)
 │   ├── Cargo.toml
@@ -940,8 +942,10 @@ fn map_side(side: Option<&str>) -> Option<SideSupport> {
 ---
 
 > **关联文档**
-> - `orbit-toml-spec.md` — orbit.toml / orbit.lock 数据格式规格
+> - `orbit-toml-spec.md` — 项目级 orbit.toml / orbit.lock 数据格式规格
+> - `orbit-global-config.md` — 全局级 config.toml 规格与加载策略
 > - `orbit-cli-commands.md` — 每个命令的行为规格
+> - `orbit-status.md` — 项目完成度追踪
 > - 本文档 — 项目结构、模块边界、核心抽象接口
 >
-> 三文档共同构成 Orbit 的完整开发规范。架构文档定义 **How it's built**，格式规格定义 **What it stores**，命令规格定义 **What it does**。
+> 四文档共同构成 Orbit 的完整开发规范。
