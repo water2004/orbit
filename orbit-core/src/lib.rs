@@ -10,6 +10,7 @@ pub mod error;
 pub mod manifest;
 pub mod lockfile;
 pub mod jar;
+pub mod metadata;
 pub mod providers;
 
 // 业务逻辑模块（逐步实现中）
