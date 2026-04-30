@@ -34,7 +34,12 @@ orbit-cli ──→ orbit-core ──→ modrinth-wrapper
 | `manifest.rs` | ✅ | orbit.toml serde 解析/序列化 + 3 单测 |
 | `lockfile.rs` | ✅ | orbit.lock serde 解析/序列化 + 2 单测 |
 | `error.rs` | ✅ | OrbitError 枚举 (thiserror, 12 变体) |
-| `jar.rs` | ✅ | fabric.mod.json 解析 + SHA-256 |
+| `jar.rs` | ✅ | SHA-256 + ZIP 遍历 → 委托 metadata/ |
+| `metadata/mod.rs` | 🆕 | MetadataParser trait + ModMetadata + Extractor |
+| `metadata/fabric.rs` | 🆕 | FabricParser — fabric.mod.json |
+| `metadata/forge.rs` | 🆕 | ForgeParser — META-INF/mods.toml |
+| `metadata/neoforge.rs` | 🆕 | NeoForgeParser — META-INF/neoforge.mods.toml |
+| `metadata/quilt.rs` | 🆕 | QuiltParser — quilt.mod.json |
 | `config.rs` | ✅ | GlobalConfig (5 段 + 分层加载) + InstancesRegistry + 4 单测 |
 | `providers/mod.rs` | ✅ | ModProvider trait + 统一类型定义 |
 | `providers/modrinth.rs` | ✅ | ModrinthProvider 完整实现（search/resolve/get_versions 等 7 方法） |

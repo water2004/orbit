@@ -96,7 +96,13 @@ ORBIT/
 │       ├── installer.rs          #   模组下载与磁盘写入
 │       ├── checker.rs            #   跨版本升级预检 (orbit check)
 │       ├── purge.rs              #   深度清理启发式搜索
-│       ├── jar.rs                #   JAR 内 fabric.mod.json 解析 + SHA-256 计算
+│       ├── jar.rs                #   JAR SHA-256 + ZIP 遍历 → 委托 metadata/
+│       ├── metadata/             #   模组元数据解析 (策略模式)
+│       │   ├── mod.rs            #     MetadataParser trait + ModMetadata + Extractor
+│       │   ├── fabric.rs         #     fabric.mod.json (JSON)
+│       │   ├── forge.rs          #     META-INF/mods.toml (TOML)
+│       │   ├── neoforge.rs       #     META-INF/neoforge.mods.toml (TOML)
+│       │   └── quilt.rs          #     quilt.mod.json (JSON)
 │       ├── providers/            #   Provider 特质 + 各平台实现
 │       │   ├── mod.rs            #     ModProvider trait, ResolvedMod 等核心类型
 │       │   ├── modrinth.rs       #     ModrinthProvider (封装 modrinth-wrapper)
@@ -372,7 +378,13 @@ lib.rs                    ← 公共 API 入口，重新导出所有公开类型
 ├── installer.rs          ← 下载 jar + 写磁盘 + 更新 lockfile (并发下载)
 ├── checker.rs            ← orbit check 跨版本预检
 ├── purge.rs              ← 深度清理启发式搜索
-├── jar.rs                ← JAR 解析 (fabric.mod.json) + SHA-256
+├── jar.rs                ← JAR SHA-256 + ZIP 遍历 → 委托 metadata/
+├── metadata/             ← 模组元数据解析 (策略模式)
+│   ├── mod.rs            ← MetadataParser trait + ModMetadata + Extractor
+│   ├── fabric.rs         ← fabric.mod.json
+│   ├── forge.rs          ← META-INF/mods.toml
+│   ├── neoforge.rs       ← META-INF/neoforge.mods.toml
+│   └── quilt.rs          ← quilt.mod.json
 ├── config.rs             ← 全局配置 (~/.orbit/instances.toml)
 ├── error.rs              ← 统一错误类型 (OrbitError)
 └── providers/
