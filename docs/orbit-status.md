@@ -36,32 +36,35 @@ orbit-cli ──→ orbit-core ──→ modrinth-wrapper
 | `error.rs` | ✅ | OrbitError 枚举 (thiserror, 12 变体) |
 | `jar.rs` | ✅ | SHA-256 + ZIP 遍历 → 委托 metadata/ |
 | `metadata/mod.rs` | ✅ | MetadataParser trait + ModMetadata + Extractor (entries 纯内存) |
-| `metadata/fabric.rs` | ✅ | FabricParser — String/Array depends + \uXXXX + 3 单测 |
-| `metadata/mojang.rs` | 🆕 | McVersion::from_json — version.json 纯函数 |
-| `metadata/forge.rs` | 🚧 | 占位 |
-| `metadata/neoforge.rs` | 🚧 | 占位 |
-| `metadata/quilt.rs` | 🚧 | 占位 |
-| `detection/mod.rs` | 🆕 | DetectionResult + LoaderDetector trait + LoaderDetectionService |
-| `detection/fabric.rs` | 🆕 | FabricDetector (Phase 1: Confidence::None) |
-| `detection/forge.rs` | 🚧 | 占位 |
-| `detection/neoforge.rs` | 🚧 | 占位 |
-| `detection/quilt.rs` | 🚧 | 占位 |
-| `config.rs` | ✅ | GlobalConfig (5 段 + 分层加载) + InstancesRegistry + 4 单测 |
-| `providers/mod.rs` | ✅ | ModProvider trait + 统一类型定义 |
-| `providers/modrinth.rs` | ✅ | ModrinthProvider 完整实现（search/resolve/get_versions 等 7 方法） |
-| `providers/curseforge.rs` | 🚧 | 骨架（待 curseforge-wrapper 创建后实现） |
-| `resolver.rs` | 🚧 | 类型定义就绪，算法占位 |
-| `sync.rs` | 🚧 | 类型定义就绪，算法占位 |
-| `installer.rs` | 🚧 | 类型定义就绪，逻辑占位 |
-| `checker.rs` | 🚧 | 类型定义就绪，逻辑占位 |
-| `purge.rs` | 🚧 | 类型定义就绪，逻辑占位 |
+| `manifest.rs` | ✅ | orbit.toml serde + 3 单测 |
+| `lockfile.rs` | ✅ | orbit.lock serde + 2 单测 |
+| `error.rs` | ✅ | OrbitError 枚举 (thiserror) |
+| `jar.rs` | ✅ | SHA-256 + ZIP I/O → 委托 metadata/ |
+| `metadata/mod.rs` | ✅ | MetadataParser trait + ModMetadata + Extractor (纯内存) |
+| `metadata/fabric.rs` | ✅ | FabricParser — per-field fallback + 7 单测（含完整 Voxy/Sodium） |
+| `metadata/mojang.rs` | ✅ | McVersion::from_json — version.json 纯函数 + 1 单测 |
+| `detection/mod.rs` | ✅ | LoaderDetector trait + LoaderDetectionService |
+| `detection/fabric.rs` | ✅ | FabricDetector (Confidence::None → 交互式选择) |
+| `init.rs` | ✅ | scan_mods_dir + run_init → 生成 orbit.toml |
+| `config.rs` | ✅ | GlobalConfig (分层加载) + InstancesRegistry + 4 单测 |
+| `providers/mod.rs` | ✅ | ModProvider trait + 统一类型 |
+| `providers/modrinth.rs` | ✅ | ModrinthProvider 完整 (7 方法) |
+| `metadata/{forge,neoforge,quilt}.rs` | 🚧 | 占位 |
+| `detection/{forge,neoforge,quilt}.rs` | 🚧 | 占位 |
+| `providers/curseforge.rs` | 🚧 | 骨架（待 curseforge-wrapper） |
+| `resolver.rs` | 🚧 | 算法占位 |
+| `sync.rs` | 🚧 | 算法占位 |
+| `installer.rs` | 🚧 | 逻辑占位 |
+| `checker.rs` | 🚧 | 逻辑占位 |
+| `purge.rs` | 🚧 | 逻辑占位 |
 
 ### orbit-cli — ✅ 极薄层，结构对齐架构
 
 | 模块 | 状态 | 说明 |
 |------|------|------|
 | `cli/mod.rs` | ✅ | 完整 clap 命令定义（16 个命令 + 全局标志） |
-| `cli/commands/*` | 🚧 | 命令 handler 签名与 core 对齐，暂为 println! 占位 |
+| `cli/commands/init.rs` | ✅ | 交互式选择 + 调用 orbit_core::init |
+| `cli/commands/*` | 🚧 | 其余 15 个命令 handler，签名就绪、println! 占位 |
 | `adaptors/` | — | ❌ 已删除，provider 实现归属于 orbit-core |
 | `models/` | — | ❌ 已删除，类型定义归属于 orbit-core |
 | Cargo.toml | ✅ | 仅依赖 `orbit-core` + `clap` + `tokio` + `anyhow`，不再直接依赖 wrapper |
@@ -72,7 +75,7 @@ orbit-cli ──→ orbit-core ──→ modrinth-wrapper
 
 | 命令 | CLI 入口 | Core 逻辑 | 说明 |
 |------|:---:|:---:|------|
-| `orbit init` | ✅ | 🚧 manifest::OrbitManifest::from_dir | 需实现目录检测 + jar 识别 |
+| `orbit init` | ✅ | ✅ init::run_init | 交互式选择 + mods/ 扫描 + orbit.toml 生成 |
 | `orbit instances list` | ✅ | 🚧 config::InstancesRegistry | 需实现格式化输出 |
 | `orbit instances default` | ✅ | 🚧 config | 需 UI |
 | `orbit instances remove` | ✅ | 🚧 config | 需 UI |
@@ -102,13 +105,13 @@ orbit-cli ──→ orbit-core ──→ modrinth-wrapper
 - [x] `OrbitError` 统一错误类型
 - [x] `GlobalConfig` 分层加载 + `InstancesRegistry`
 - [x] `ModProvider` trait + `ModrinthProvider` 完整实现
-- [x] `MetadataParser` trait + `FabricParser` + `MetadataExtractor`
-- [x] 迁移 CLI 命令到新架构（16 命令 + 全局标志）
-- [x] 移除 CLI 中的 adaptors/models/utils（归属 orbit-core）
+- [x] `MetadataParser` trait + `FabricParser` (per-field fallback, 7 测试)
+- [x] `McVersion` (mojang.rs) + `LoaderDetectionService` (detection/)
+- [x] `init` 命令: 扫描 mods/、提取元数据、生成 orbit.toml
+- [x] 迁移 CLI 到新架构（16 命令 + 全局标志，移除 adaptors/models）
 
 ### Phase 2 — 🔜 下一阶段
 
-- [ ] 实现 `detection/` + `mojang.rs`（init 命令依赖）
 - [ ] 实现 `resolver.rs` 依赖解析引擎
 - [ ] 实现 `installer.rs` 并发下载
 - [ ] 实现 `sync.rs` 五态比对
