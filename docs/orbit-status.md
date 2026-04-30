@@ -35,11 +35,17 @@ orbit-cli ──→ orbit-core ──→ modrinth-wrapper
 | `lockfile.rs` | ✅ | orbit.lock serde 解析/序列化 + 2 单测 |
 | `error.rs` | ✅ | OrbitError 枚举 (thiserror, 12 变体) |
 | `jar.rs` | ✅ | SHA-256 + ZIP 遍历 → 委托 metadata/ |
-| `metadata/mod.rs` | ✅ | MetadataParser trait + ModMetadata + Extractor (by_name O(1)) |
-| `metadata/fabric.rs` | ✅ | FabricParser — 支持 String/Array depends + \uXXXX 转义 + 3 单测 |
-| `metadata/forge.rs` | 🚧 | 占位（下一批实现） |
-| `metadata/neoforge.rs` | 🚧 | 占位（下一批实现） |
-| `metadata/quilt.rs` | 🚧 | 占位（下一批实现） |
+| `metadata/mod.rs` | ✅ | MetadataParser trait + ModMetadata + Extractor (entries 纯内存) |
+| `metadata/fabric.rs` | ✅ | FabricParser — String/Array depends + \uXXXX + 3 单测 |
+| `metadata/mojang.rs` | 🆕 | McVersion::from_json — version.json 纯函数 |
+| `metadata/forge.rs` | 🚧 | 占位 |
+| `metadata/neoforge.rs` | 🚧 | 占位 |
+| `metadata/quilt.rs` | 🚧 | 占位 |
+| `detection/mod.rs` | 🆕 | DetectionResult + LoaderDetector trait + LoaderDetectionService |
+| `detection/fabric.rs` | 🆕 | FabricDetector (Phase 1: Confidence::None) |
+| `detection/forge.rs` | 🚧 | 占位 |
+| `detection/neoforge.rs` | 🚧 | 占位 |
+| `detection/quilt.rs` | 🚧 | 占位 |
 | `config.rs` | ✅ | GlobalConfig (5 段 + 分层加载) + InstancesRegistry + 4 单测 |
 | `providers/mod.rs` | ✅ | ModProvider trait + 统一类型定义 |
 | `providers/modrinth.rs` | ✅ | ModrinthProvider 完整实现（search/resolve/get_versions 等 7 方法） |
@@ -91,28 +97,30 @@ orbit-cli ──→ orbit-core ──→ modrinth-wrapper
 
 ### Phase 1 — ✅ 完成 (2026-05-01)
 
-- [x] 创建 `orbit-core` crate
-- [x] 定义 `OrbitManifest` / `OrbitLockfile` serde 结构体
-- [x] 定义 `ModProvider` trait
-- [x] 创建所有 placeholder 模块
-- [x] 迁移 CLI 命令到新架构
-- [x] 迁移 CLI adaptors 到 orbit-core trait
+- [x] 创建 `orbit-core` crate + Monorepo 架构
+- [x] `OrbitManifest` / `OrbitLockfile` serde 结构体 + 测试
+- [x] `OrbitError` 统一错误类型
+- [x] `GlobalConfig` 分层加载 + `InstancesRegistry`
+- [x] `ModProvider` trait + `ModrinthProvider` 完整实现
+- [x] `MetadataParser` trait + `FabricParser` + `MetadataExtractor`
+- [x] 迁移 CLI 命令到新架构（16 命令 + 全局标志）
+- [x] 移除 CLI 中的 adaptors/models/utils（归属 orbit-core）
 
 ### Phase 2 — 🔜 下一阶段
 
-- [ ] 实现 `ModrinthProvider` 的完整方法（替换 todo!()）
-- [ ] 创建 `curseforge-wrapper` crate，提取内联 API 代码
-- [ ] 实现 `CurseForgeProvider` 的完整方法
+- [ ] 实现 `detection/` + `mojang.rs`（init 命令依赖）
 - [ ] 实现 `resolver.rs` 依赖解析引擎
 - [ ] 实现 `installer.rs` 并发下载
 - [ ] 实现 `sync.rs` 五态比对
 - [ ] 实现 `checker.rs` 跨版本预检
 - [ ] 实现 `purge.rs` 启发式搜索
 - [ ] 将所有 `println!` 占位符替换为 core 调用
+- [ ] 创建 `curseforge-wrapper` crate
 
 ### Phase 3 — 📋 未来
 
-- [ ] 移除 orbit-cli 中的旧类型 (`models/adaptors.rs`, `utils/jar.rs`)
+- [ ] Forge / NeoForge / Quilt parser + detector
+- [ ] 自动 MC 版本探测（version.json from JAR）
 - [ ] `orbit-core` 集成测试
 - [ ] CLI 进度条与彩色输出
 - [ ] 发布到 crates.io

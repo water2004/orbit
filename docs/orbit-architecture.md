@@ -64,6 +64,8 @@ ORBIT/
 │   ├── orbit-toml-spec.md        #   orbit.toml / orbit.lock 格式规格
 │   ├── orbit-global-config.md    #   config.toml 全局配置规格
 │   ├── orbit-cli-commands.md     #   命令行为规格
+│   ├── orbit-metadata.md         #   文件元数据解析层设计
+│   ├── orbit-detection.md        #   实例环境检测层设计
 │   ├── orbit-architecture.md     #   本文档
 │   └── orbit-status.md           #   项目完成度追踪
 │
@@ -96,14 +98,21 @@ ORBIT/
 │       ├── installer.rs          #   模组下载与磁盘写入
 │       ├── checker.rs            #   跨版本升级预检 (orbit check)
 │       ├── purge.rs              #   深度清理启发式搜索
-│       ├── jar.rs                #   JAR SHA-256 + ZIP 遍历 → 委托 metadata/
-│       ├── metadata/             #   模组元数据解析 (策略模式)
+│       ├── jar.rs                #   JAR SHA-256 + ZIP I/O → 委托 metadata/
+│       ├── metadata/             #   文件格式解析 (纯解析，无 I/O)
 │       │   ├── mod.rs            #     MetadataParser trait + ModMetadata + Extractor
 │       │   ├── fabric.rs         #     fabric.mod.json (JSON)
-│       │   ├── forge.rs          #     META-INF/mods.toml (TOML)
-│       │   ├── neoforge.rs       #     META-INF/neoforge.mods.toml (TOML)
-│       │   └── quilt.rs          #     quilt.mod.json (JSON)
-│       ├── providers/            #   Provider 特质 + 各平台实现
+│       │   ├── forge.rs          #     META-INF/mods.toml (TOML) [future]
+│       │   ├── neoforge.rs       #     META-INF/neoforge.mods.toml (TOML) [future]
+│       │   ├── quilt.rs          #     quilt.mod.json (JSON) [future]
+│       │   └── mojang.rs         #     version.json (JSON, 纯函数)
+│       ├── detection/            #   实例环境检测 (策略模式)
+│       │   ├── mod.rs            #     LoaderDetector trait + LoaderDetectionService
+│       │   ├── fabric.rs         #     FabricDetector
+│       │   ├── forge.rs          #     ForgeDetector [future]
+│       │   ├── neoforge.rs       #     NeoForgeDetector [future]
+│       │   └── quilt.rs          #     QuiltDetector [future]
+│       ├── providers/            #   平台 Provider 特质 + 各平台实现
 │       │   ├── mod.rs            #     ModProvider trait, ResolvedMod 等核心类型
 │       │   ├── modrinth.rs       #     ModrinthProvider (封装 modrinth-wrapper)
 │       │   └── curseforge.rs     #     CurseForgeProvider (封装 curseforge-wrapper)
@@ -378,14 +387,16 @@ lib.rs                    ← 公共 API 入口，重新导出所有公开类型
 ├── installer.rs          ← 下载 jar + 写磁盘 + 更新 lockfile (并发下载)
 ├── checker.rs            ← orbit check 跨版本预检
 ├── purge.rs              ← 深度清理启发式搜索
-├── jar.rs                ← JAR SHA-256 + ZIP 遍历 → 委托 metadata/
-├── metadata/             ← 模组元数据解析 (策略模式)
+├── jar.rs                ← JAR SHA-256 + ZIP I/O → 委托 metadata/ 和 detection/
+├── metadata/             ← 文件格式解析 (纯解析，无 I/O)
 │   ├── mod.rs            ← MetadataParser trait + ModMetadata + Extractor
 │   ├── fabric.rs         ← fabric.mod.json
-│   ├── forge.rs          ← META-INF/mods.toml
-│   ├── neoforge.rs       ← META-INF/neoforge.mods.toml
-│   └── quilt.rs          ← quilt.mod.json
-├── config.rs             ← 全局配置 (~/.orbit/instances.toml)
+│   ├── forge/quilt/...   ← (future)
+│   └── mojang.rs         ← version.json (纯函数)
+├── detection/            ← 实例环境检测 (策略模式)
+│   ├── mod.rs            ← LoaderDetector trait + LoaderDetectionService
+│   └── fabric.rs         ← FabricDetector (future: forge/quilt)
+├── config.rs             ← 全局配置
 ├── error.rs              ← 统一错误类型 (OrbitError)
 └── providers/
     ├── mod.rs            ← ModProvider trait + ResolvedMod 等公共类型
@@ -954,10 +965,10 @@ fn map_side(side: Option<&str>) -> Option<SideSupport> {
 ---
 
 > **关联文档**
-> - `orbit-toml-spec.md` — 项目级 orbit.toml / orbit.lock 数据格式规格
+> - `orbit-toml-spec.md` — 项目级 orbit.toml / orbit.lock 格式规格
 > - `orbit-global-config.md` — 全局级 config.toml 规格与加载策略
-> - `orbit-cli-commands.md` — 每个命令的行为规格
+> - `orbit-cli-commands.md` — 命令行为规格
+> - `orbit-metadata.md` — 文件格式解析层（metadata/ + jar.rs）
+> - `orbit-detection.md` — 实例环境检测层（init 命令编排）
 > - `orbit-status.md` — 项目完成度追踪
 > - 本文档 — 项目结构、模块边界、核心抽象接口
->
-> 四文档共同构成 Orbit 的完整开发规范。
