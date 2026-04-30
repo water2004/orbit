@@ -1,15 +1,15 @@
-# Orbit 模组元数据解析层设计
+# Orbit 文件元数据解析层设计
 
-> 本文档定义 `orbit-core/src/metadata/` 的 trait 体系、各加载器格式映射、
-> 以及 `MetadataExtractor` 策略选择器的完整规格。
+> 本文档定义 `orbit-core/src/metadata/` 的所有文件格式解析。
+> 覆盖**模组**元数据（策略模式）和 **Mojang 游戏本体**版本信息（纯函数）。
 
 ---
 
 ## 目录
 
-1. [设计动机](#1-设计动机)
+1. [设计概述](#1-设计概述)
 2. [目录结构](#2-目录结构)
-3. [核心抽象](#3-核心抽象)
+3. [模组元数据（策略模式）](#3-模组元数据策略模式)
    - [ModMetadata — 统一元数据](#modmetadata--统一元数据)
    - [MetadataParser trait](#metadataparser-trait)
    - [MetadataExtractor — 策略选择器](#metadataextractor--策略选择器)
@@ -18,15 +18,23 @@
    - [Forge — META-INF/mods.toml](#forge--meta-infmodstoml)
    - [NeoForge — META-INF/neoforge.mods.toml](#neoforge--meta-infneoforgemodstoml)
    - [Quilt — quilt.mod.json](#quilt--quiltmodjson)
-5. [解析流程图](#5-解析流程图)
-6. [Rust 实现参考](#6-rust-实现参考)
-7. [扩展指南](#7-扩展指南)
+5. [游戏本体版本（纯函数）](#5-游戏本体版本纯函数)
+6. [模组元数据解析流程图](#6-模组元数据解析流程图)
+7. [Rust 实现参考](#7-rust-实现参考)
+8. [扩展指南](#8-扩展指南)
 
 ---
 
-## 1. 设计动机
+## 1. 设计概述
 
-Minecraft 有多个模组加载器（Fabric、Forge、NeoForge、Quilt），每个加载器的 JAR 内嵌元数据格式不同：
+`metadata/` 模块处理两类文件格式：
+
+| 类别 | 文件 | 方案 | 原因 |
+|------|------|------|------|
+| 模组元数据 | fabric.mod.json / mods.toml / ... | **策略模式** | 加载器多，格式各异，需可扩展 |
+| 游戏本体 | version.json | **纯函数** | 只有一个格式，固定路径，无扩展需求 |
+
+**模组元数据（策略模式）**：
 
 | 加载器 | 元数据文件 | 格式 |
 |--------|-----------|------|
@@ -40,6 +48,10 @@ Orbit 需要从任意 JAR 中提取**统一的** `ModMetadata`，用于：
 - `orbit sync` 通过哈希反查失败时，回退读取元数据作为兜底
 - 验证模组兼容性（MC 版本、加载器类型是否匹配当前实例）
 
+**游戏本体版本（纯函数）**：
+
+`instance/version.json` 是 Mojang 标准格式，位置固定、格式唯一。不需要策略模式，一个函数直接解析即可。用于 `orbit init` 自动检测当前实例的 MC 版本。
+
 **核心设计原则**：加载器之间互不知晓。新增一个加载器只需加一个文件 + 一行注册代码。
 
 ---
@@ -50,12 +62,13 @@ Orbit 需要从任意 JAR 中提取**统一的** `ModMetadata`，用于：
 orbit-core/src/metadata/
 ├── mod.rs               # MetadataParser trait + ModMetadata + MetadataExtractor
 ├── fabric.rs            # FabricParser — fabric.mod.json (JSON)
-├── forge.rs             # ForgeParser — META-INF/mods.toml (TOML)
-├── neoforge.rs          # NeoForgeParser — META-INF/neoforge.mods.toml (TOML)
-└── quilt.rs             # QuiltParser — quilt.mod.json (JSON)
+├── forge.rs             # ForgeParser — META-INF/mods.toml (TOML) [future]
+├── neoforge.rs          # NeoForgeParser — META-INF/neoforge.mods.toml (TOML) [future]
+├── quilt.rs             # QuiltParser — quilt.mod.json (JSON) [future]
+└── mojang.rs            # McVersion — version.json (JSON, 纯函数，不走 trait)
 ```
 
-与 `providers/` 完全对称的策略模式结构。`jar.rs` 作为入口，调用 `MetadataExtractor`。
+`jar.rs` 调用 `MetadataExtractor`（模组）；`detection/` 模块调用 `mojang.rs`（游戏版本）。
 
 ---
 
@@ -243,36 +256,114 @@ side = "BOTH"
 
 ---
 
-## 5. 解析流程
+## 5. 游戏本体版本（纯函数）
+
+Mojang 的 `version.json` 存放在游戏 JAR 内部，格式唯一、无扩展需求——一个纯解析函数即可。
+
+**入口**：`jar.rs` 从 JAR 中读出 `version.json` 的字符串内容 → 交给此模块解析。
+
+**不碰文件**：此模块的输入是 JSON 字符串内容，不关心它来自哪个 JAR、什么路径。
+
+### 示例
+
+```json
+{
+    "id": "1.21.11",
+    "name": "1.21.11",
+    "world_version": 4671,
+    "series_id": "main",
+    "protocol_version": 774,
+    "pack_version": {
+        "resource_major": 75,
+        "resource_minor": 0,
+        "data_major": 94,
+        "data_minor": 1
+    },
+    "build_time": "2025-12-09T12:20:42+00:00",
+    "java_component": "java-runtime-delta",
+    "java_version": 21,
+    "stable": true,
+    "use_editor": false
+}
+```
+
+### 提取类型
+
+```rust
+/// Minecraft 游戏本体版本信息
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct McVersion {
+    /// 版本 ID，如 "1.21.11"
+    pub id: String,
+    /// 人类可读名称
+    pub name: String,
+    /// 世界数据版本（用于存档兼容性判断）
+    pub world_version: u32,
+    /// 网络协议版本
+    pub protocol_version: u32,
+    /// 资源包/数据包版本
+    pub pack_version: PackVersion,
+    /// 要求的 Java 版本
+    pub java_version: u32,
+    /// 是否为稳定版
+    pub stable: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PackVersion {
+    pub resource_major: u32,
+    pub resource_minor: u32,
+    pub data_major: u32,
+    pub data_minor: u32,
+}
+```
+
+### 解析函数
+
+```rust
+impl McVersion {
+    /// 从 version.json 字符串内容解析
+    pub fn from_json(content: &str) -> Result<Self, OrbitError> {
+        serde_json::from_str(content)
+            .map_err(|e| OrbitError::Other(anyhow::anyhow!("invalid version.json: {e}")))
+    }
+}
+```
+
+> **设计决策**：为什么不用 trait？Mojang 只有一个，不像加载器需要策略模式。`McVersion::from_json(str)` 只做一件事——把 JSON 字符串变成 struct。调用方（`detection/`）负责从 JAR 中提取这个字符串。
+
+---
+
+## 6. 模组元数据解析流程
+
+**职责边界**：`jar.rs` 负责文件 I/O，`metadata/` 只做字符串解析。
 
 ```
 jar.rs: get_mod_metadata(file, modloader_context)
   │
   ├─ 1. 计算 SHA-256（流式，避免将整个 JAR 加载到内存）
   │
-  ├─ 2. 打开 ZIP 归档，对每个 parser 执行 O(1) 直接查找：
-  │      candidates = []
+  ├─ 2. 打开 ZIP 归档，用每个 parser 的 target_file() 做 O(1) 直接查找：
+  │      entries = []
   │      for parser in extractor.parsers:
-  │          if archive.by_name(parser.target_file()).is_ok():
-  │              candidates.push(parser)
-  │      -- 若 candidates 为空 → 返回 Err(UnrecognizedJar)
+  │          if let Ok(file) = archive.by_name(parser.target_file()):
+  │              entries.push((filename, read_to_string(file)))
+  │      -- 若 entries 为空 → 返回 Err(UnrecognizedJar)
   │
-  ├─ 3. 多加载器消除歧义：
-  │      if candidates.len() == 1:
-  │          return candidates[0].parse(content)
-  │      -- 存在多个元数据文件（Architectury 多端 JAR）
-  │      -- 按 modloader_context 筛选匹配的 parser
-  │      if 有匹配 → 使用匹配的
-  │      else → 返回 AmbiguousJar 错误（要求用户手动指定）
+  ├─ 3. 将 entries 传给 MetadataExtractor::extract(entries, modloader_context)
+  │      -- extract() 只做文件名匹配 + 调用 parser.parse(str)
+  │      -- 不碰任何文件 I/O
   │
-  └─ 4. 填充 sha256 → 返回 ModMetadata
+  ├─ 4. 填充 sha256 → 返回 ModMetadata
+  │
+  └─ 5. 歧义消除（多个候选时按 modloader_context 选择）
 ```
 
-> **性能说明**：`archive.by_name()` 使用 ZIP 中央目录索引，O(1) 直接查找，不遍历文件列表。扫描 200 个模组时，这比逐条目遍历快一个数量级。物理上 ZIP 中央目录在文件末尾，`by_name` 直接跳转读取。
+> **分层职责**：`jar.rs` 负责"从哪里读"（ZIP 打开、`by_name` 查找、read_to_string），`metadata/` 负责"怎么解析"（字符串 → 结构体）。parser 根本不知道文件系统的存在。
 
 ---
 
-## 6. Rust 实现参考
+## 7. Rust 实现参考
 
 ### mod.rs — trait + extractor
 
@@ -356,56 +447,38 @@ impl MetadataExtractor {
         MetadataExtractorBuilder::new()
     }
 
-    /// 从 ZIP 归档中提取元数据。
-    ///
-    /// `modloader_context` 用于多加载器 JAR 的歧义消除：
-    /// 当同一个 jar 同时包含 fabric.mod.json 和 mods.toml 时，
-    /// 优先返回与当前实例 loader 匹配的解析结果。
+    /// 从已提取的条目中解析模组元数据。
+    /// `entries` 由 `jar.rs` 通过 `archive.by_name()` 提取后传入。
+    /// 此方法纯内存操作，不碰文件 I/O。
     pub fn extract(
         &self,
-        archive: &mut zip::ZipArchive<std::fs::File>,
+        entries: &[(String, String)],
         modloader_context: Option<&str>,
     ) -> Result<ModMetadata, OrbitError> {
-        // 1. 收集所有能匹配的 parser（O(1) by_name 查找）
-        let mut candidates: Vec<(&dyn MetadataParser, String)> = vec![];
-        for parser in &self.parsers {
-            if let Ok(mut file) = archive.by_name(parser.target_file()) {
-                let mut content = String::new();
-                std::io::Read::read_to_string(&mut file, &mut content)
-                    .map_err(|e| OrbitError::Other(anyhow::anyhow!("failed to read {}: {e}", parser.target_file())))?;
-                candidates.push((parser.as_ref(), content));
+        let mut candidates: Vec<(&dyn MetadataParser, &str)> = vec![];
+        for (filename, content) in entries {
+            for parser in &self.parsers {
+                if filename == parser.target_file() {
+                    candidates.push((parser.as_ref(), content.as_str()));
+                }
             }
         }
 
-        // 2. 消除歧义
         match candidates.len() {
             0 => Err(OrbitError::Other(anyhow::anyhow!(
-                "unrecognized JAR: no metadata file found for any known loader"
+                "unrecognized JAR: no known metadata file"
             ))),
-            1 => {
-                let (parser, content) = candidates.into_iter().next().unwrap();
-                parser.parse(&content)
-            }
+            1 => candidates[0].0.parse(candidates[0].1),
             _ => {
-                // 多加载器 JAR — 按 modloader_context 选择
                 if let Some(ctx) = modloader_context {
-                    let ctx_lower = ctx.to_lowercase();
                     for (parser, content) in &candidates {
-                        let loader_name = match parser.loader_type() {
-                            ModLoader::Fabric => "fabric",
-                            ModLoader::Forge => "forge",
-                            ModLoader::NeoForge => "neoforge",
-                            ModLoader::Quilt => "quilt",
-                            ModLoader::Unknown => "",
-                        };
-                        if loader_name == ctx_lower {
+                        if parser.loader_type().as_str() == ctx.to_lowercase() {
                             return parser.parse(content);
                         }
                     }
                 }
                 Err(OrbitError::Other(anyhow::anyhow!(
-                    "ambiguous JAR: contains multiple metadata files ({:?}). Specify --modloader to disambiguate.",
-                    candidates.iter().map(|(p, _)| p.target_file()).collect::<Vec<_>>()
+                    "ambiguous JAR: contains multiple metadata files"
                 )))
             }
         }
@@ -567,7 +640,7 @@ impl MetadataParser for ForgeParser {
 
 ---
 
-## 7. 扩展指南
+## 8. 扩展指南
 
 新增一个加载器只需三步，**不修改任何现有文件**：
 

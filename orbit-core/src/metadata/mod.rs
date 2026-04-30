@@ -99,26 +99,26 @@ impl MetadataExtractor {
         MetadataExtractorBuilder::new()
     }
 
-    /// 从 ZIP 归档中提取元数据。
+    /// 从已提取的 ZIP 条目中解析模组元数据。
+    ///
+    /// `entries` 由调用方 (`jar.rs`) 通过 `archive.by_name()` O(1) 提取后传入。
+    /// 此方法只做文件名匹配 + 内容解析，不碰任何文件 I/O。
     ///
     /// `modloader_context` 用于多加载器 JAR 的歧义消除：
     /// 当同一个 jar 同时包含 fabric.mod.json 和 mods.toml 时，
     /// 优先返回与当前实例 loader 匹配的解析结果。
     pub fn extract(
         &self,
-        archive: &mut zip::ZipArchive<std::fs::File>,
+        entries: &[(String, String)],
         modloader_context: Option<&str>,
     ) -> Result<ModMetadata, OrbitError> {
-        // 1. 收集所有能匹配的 parser（O(1) by_name 直接查找）
-        let mut candidates: Vec<(&dyn MetadataParser, String)> = vec![];
-        for parser in &self.parsers {
-            if let Ok(mut file) = archive.by_name(parser.target_file()) {
-                let mut content = String::new();
-                std::io::Read::read_to_string(&mut file, &mut content)
-                    .map_err(|e| OrbitError::Other(anyhow::anyhow!(
-                        "failed to read {}: {e}", parser.target_file()
-                    )))?;
-                candidates.push((parser.as_ref(), content));
+        // 1. 收集所有能匹配的 parser（纯内存操作，无 I/O）
+        let mut candidates: Vec<(&dyn MetadataParser, &str)> = vec![];
+        for (filename, content) in entries {
+            for parser in &self.parsers {
+                if filename == parser.target_file() {
+                    candidates.push((parser.as_ref(), content.as_str()));
+                }
             }
         }
 
@@ -128,11 +128,10 @@ impl MetadataExtractor {
                 "unrecognized JAR: no metadata file found for any known loader"
             ))),
             1 => {
-                let (parser, content) = candidates.into_iter().next().unwrap();
-                parser.parse(&content)
+                let (parser, content) = candidates[0];
+                parser.parse(content)
             }
             _ => {
-                // 多加载器 JAR — 按 modloader_context 选择
                 if let Some(ctx) = modloader_context {
                     let ctx_lower = ctx.to_lowercase();
                     for (parser, content) in &candidates {
