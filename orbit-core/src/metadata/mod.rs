@@ -4,6 +4,7 @@
 //! `MetadataExtractor` 负责选择合适的 parser 并提取统一元数据。
 
 pub mod fabric;
+pub mod mojang;
 
 use indexmap::IndexMap;
 

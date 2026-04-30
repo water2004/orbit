@@ -6,6 +6,7 @@
 //! 此 crate 不包含任何 CLI 或 UI 代码。
 
 pub mod config;
+pub mod detection;
 pub mod error;
 pub mod manifest;
 pub mod lockfile;
@@ -21,8 +22,10 @@ pub mod checker;
 pub mod purge;
 
 pub use config::{GlobalConfig, InstancesRegistry, InstanceEntry, orbit_data_dir, config_path};
+pub use detection::LoaderDetectionService;
 pub use error::OrbitError;
 pub use manifest::OrbitManifest;
 pub use lockfile::{OrbitLockfile, LockEntry, LockMeta};
+pub use metadata::{ModLoader, mojang::McVersion};
 pub use jar::FabricModInfo;
 pub use providers::ModProvider;
