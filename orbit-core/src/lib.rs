@@ -5,11 +5,19 @@
 //!
 //! 此 crate 不包含任何 CLI 或 UI 代码。
 
+pub mod config;
 pub mod error;
 pub mod manifest;
 pub mod lockfile;
 pub mod jar;
 pub mod providers;
+
+// 业务逻辑模块（逐步实现中）
+pub mod resolver;
+pub mod sync;
+pub mod installer;
+pub mod checker;
+pub mod purge;
 
 // 重新导出常用类型
 pub use error::OrbitError;
