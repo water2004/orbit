@@ -105,7 +105,8 @@ ORBIT/
 │       │   ├── forge.rs          #     META-INF/mods.toml (TOML) [future]
 │       │   ├── neoforge.rs       #     META-INF/neoforge.mods.toml (TOML) [future]
 │       │   ├── quilt.rs          #     quilt.mod.json (JSON) [future]
-│       │   └── mojang.rs         #     version.json (JSON, 纯函数)
+│       │   ├── mojang.rs         #     version.json (JSON, 纯函数)
+│       │   └── version_profile.rs #     launcher 版本 JSON (libraries 列表)
 │       ├── detection/            #   实例环境检测 (策略模式)
 │       │   ├── mod.rs            #     LoaderDetector trait + LoaderDetectionService
 │       │   ├── fabric.rs         #     FabricDetector
@@ -392,7 +393,8 @@ lib.rs                    ← 公共 API 入口，重新导出所有公开类型
 │   ├── mod.rs            ← MetadataParser trait + ModMetadata + Extractor
 │   ├── fabric.rs         ← fabric.mod.json
 │   ├── forge/quilt/...   ← (future)
-│   └── mojang.rs         ← version.json (纯函数)
+│   ├── mojang.rs         ← version.json (纯函数)
+│   └── version_profile.rs ← launcher 版本 JSON
 ├── detection/            ← 实例环境检测 (策略模式)
 │   ├── mod.rs            ← LoaderDetector trait + LoaderDetectionService
 │   └── fabric.rs         ← FabricDetector (future: forge/quilt)
