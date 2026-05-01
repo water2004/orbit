@@ -148,6 +148,11 @@ impl ModProvider for ModrinthProvider {
         match candidate {
             Some(v) => {
                 let file = v.files.first().ok_or_else(|| OrbitError::ModNotFound(slug.to_string()))?;
+                let deps = v.dependencies.as_ref().map(|deps| deps.iter().map(|d| ResolvedDependency {
+                    name: d.project_id.clone().unwrap_or_default(),
+                    slug: d.project_id.clone(),
+                    required: d.dependency_type == "required",
+                }).collect()).unwrap_or_default();
                 Ok(ResolvedMod {
                     name: slug.to_string(),
                     mod_id: v.project_id.clone(),
@@ -155,11 +160,7 @@ impl ModProvider for ModrinthProvider {
                     download_url: file.url.clone(),
                     filename: file.filename.clone(),
                     sha256: file.hashes.sha512.clone(),
-                    dependencies: v.dependencies.as_ref().map(|deps| deps.iter().map(|d| ResolvedDependency {
-                        name: d.project_id.clone().unwrap_or_default(),
-                        slug: d.project_id.clone(),
-                        required: d.dependency_type == "required",
-                    }).collect()).unwrap_or_default(),
+                    dependencies: deps,
                     client_side: None,
                     server_side: None,
                 })
@@ -179,6 +180,11 @@ impl ModProvider for ModrinthProvider {
                 let ver = v.version_number.clone().unwrap_or_default();
                 eprintln!("    [modrinth]   → {} v{}", v.project_id, ver);
                 let file = v.files.first();
+                let deps = v.dependencies.unwrap_or_default().into_iter().map(|d| ResolvedDependency {
+                    name: d.project_id.clone().unwrap_or_default(),
+                    slug: d.project_id.clone(),
+                    required: d.dependency_type == "required",
+                }).collect();
                 Ok(Some(ResolvedMod {
                     name: v.project_id.clone(),
                     mod_id: v.project_id.clone(),
@@ -186,7 +192,7 @@ impl ModProvider for ModrinthProvider {
                     download_url: file.map(|f| f.url.clone()).unwrap_or_default(),
                     filename: file.map(|f| f.filename.clone()).unwrap_or_default(),
                     sha256: file.map(|f| f.hashes.sha512.clone()).unwrap_or_default(),
-                    dependencies: vec![],
+                    dependencies: deps,
                     client_side: None,
                     server_side: None,
                 }))
@@ -215,6 +221,11 @@ impl ModProvider for ModrinthProvider {
 
         Ok(versions.iter().map(|v| {
             let file = v.files.first();
+            let deps = v.dependencies.as_ref().map(|deps| deps.iter().map(|d| ResolvedDependency {
+                name: d.project_id.clone().unwrap_or_default(),
+                slug: d.project_id.clone(),
+                required: d.dependency_type == "required",
+            }).collect()).unwrap_or_default();
             ResolvedMod {
                 name: slug.to_string(),
                 mod_id: v.project_id.clone(),
@@ -222,7 +233,7 @@ impl ModProvider for ModrinthProvider {
                 download_url: file.map(|f| f.url.clone()).unwrap_or_default(),
                 filename: file.map(|f| f.filename.clone()).unwrap_or_default(),
                 sha256: file.map(|f| f.hashes.sha512.clone()).unwrap_or_default(),
-                dependencies: vec![],
+                dependencies: deps,
                 client_side: None,
                 server_side: None,
             }

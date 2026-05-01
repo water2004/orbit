@@ -78,6 +78,7 @@ pub async fn handle(
         output.manifest.project.mc_version
     );
     println!("  orbit.toml created");
+    println!("  orbit.lock created ({} entries)", output.scanned_mods.len());
     if output.scanned_mods.is_empty() {
         println!("  No mods found in mods/ directory.");
     } else {

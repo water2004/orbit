@@ -32,6 +32,8 @@ pub struct ScannedMod {
     pub version: Option<String>,
     pub sha256: String,
     pub sha512: String,
+    /// 从 fabric.mod.json 提取的依赖: mod_id → version_constraint
+    pub jar_deps: Vec<(String, String)>,
 }
 
 /// 扫描 mods/ 目录并提取元数据。
@@ -84,14 +86,14 @@ fn scan_mods_dir(
         eprintln!("    SHA-256: {}", &sha256[..16]);
 
         // 尝试从 JAR 中提取 fabric.mod.json
-        let (mod_id, mod_name, version) = match read_jar_metadata(file) {
-            Ok((id, name, ver)) => {
-                eprintln!("    fabric.mod.json: id={:?} name={:?} version={ver}", id, name);
-                (id, name, Some(ver))
+        let (mod_id, mod_name, version, jar_deps) = match read_jar_metadata(file) {
+            Ok((id, name, ver, deps)) => {
+                eprintln!("    fabric.mod.json: id={:?} name={:?} version={ver} deps={}", id, name, deps.len());
+                (id, name, Some(ver), deps)
             }
             Err(e) => {
                 eprintln!("    ⚠ cannot read fabric.mod.json: {e}");
-                (None, None, None)
+                (None, None, None, vec![])
             }
         };
 
@@ -102,19 +104,17 @@ fn scan_mods_dir(
             version,
             sha256,
             sha512,
+            jar_deps,
         });
     }
 
     Ok(results)
 }
 
-/// 从 JAR 中读取 fabric.mod.json 并返回 (id, name, version)
-///
-/// 有些 JAR 打包时外层会套一层目录（如 `voxy-0.2.14-alpha/fabric.mod.json`），
-/// 因此先尝试根路径，找不到则遍历所有条目按文件名匹配。
+/// 从 JAR 中读取 fabric.mod.json 并返回 (id, name, version, dependencies)
 fn read_jar_metadata(
     file: std::fs::File,
-) -> Result<(Option<String>, Option<String>, String), OrbitError> {
+) -> Result<(Option<String>, Option<String>, String, Vec<(String, String)>), OrbitError> {
     let mut archive = zip::ZipArchive::new(file).map_err(|e| {
         OrbitError::Other(anyhow::anyhow!("cannot open JAR as ZIP: {e}"))
     })?;
@@ -165,7 +165,8 @@ fn read_jar_metadata(
 
     let id = if meta.id.is_empty() { None } else { Some(meta.id) };
     let name = if meta.name.is_empty() { None } else { Some(meta.name) };
-    Ok((id, name, meta.version))
+    let deps: Vec<(String, String)> = meta.dependencies.into_iter().collect();
+    Ok((id, name, meta.version, deps))
 }
 
 /// 从实例目录的 JAR 中自动检测 MC 版本。
@@ -248,7 +249,11 @@ pub async fn run_init(
     };
     let identified = crate::identification::identify_mods(&scanned, providers, &ctx).await?;
 
-    // 3. 构建依赖声明
+    // 3. 构建依赖声明 + lock 条目
+    let (lock_entries, _warnings) = crate::resolver::build_lock_entries(&identified, &scanned);
+    let mc_ver = input.mc_version.clone();
+    let loader_name = input.modloader.clone();
+    let loader_ver = input.modloader_version.clone();
     let mut dependencies = indexmap::IndexMap::new();
     for m in identified {
         let key = if m.mod_name.is_empty() { m.filename.clone() } else { m.mod_name.clone() };
@@ -289,9 +294,9 @@ pub async fn run_init(
     let manifest = OrbitManifest {
         project: ProjectMeta {
             name: input.name,
-            mc_version: input.mc_version,
-            modloader: input.modloader,
-            modloader_version: input.modloader_version,
+            mc_version: mc_ver.clone(),
+            modloader: loader_name.clone(),
+            modloader_version: loader_ver.clone(),
             description: None,
             authors: None,
             version: None,
@@ -305,8 +310,23 @@ pub async fn run_init(
     // 4. 写入 orbit.toml
     let toml_path = input.instance_dir.join("orbit.toml");
     let content = manifest.to_toml_string()?;
-    std::fs::write(&toml_path, content).map_err(|e| {
+    std::fs::write(&toml_path, &content).map_err(|e| {
         OrbitError::Other(anyhow::anyhow!("cannot write {}: {e}", toml_path.display()))
+    })?;
+
+    // 5. 写入 orbit.lock
+    let lockfile = crate::lockfile::OrbitLockfile {
+        meta: crate::lockfile::LockMeta {
+            mc_version: mc_ver,
+            modloader: loader_name,
+            modloader_version: loader_ver,
+        },
+        entries: lock_entries,
+    };
+    let lock_path = input.instance_dir.join("orbit.lock");
+    let lock_content = lockfile.to_toml_string()?;
+    std::fs::write(&lock_path, &lock_content).map_err(|e| {
+        OrbitError::Other(anyhow::anyhow!("cannot write {}: {e}", lock_path.display()))
     })?;
 
     Ok(InitOutput {
