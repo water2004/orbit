@@ -1,6 +1,7 @@
 use anyhow::Result;
 use orbit_core::detection::LoaderDetectionService;
 use orbit_core::init::{detect_mc_version, InitInput, run_init};
+use orbit_core::providers::{ModProvider, modrinth::ModrinthProvider};
 
 pub async fn handle(
     name: String,
@@ -66,7 +67,10 @@ pub async fn handle(
         instance_dir,
     };
 
-    let output = run_init(input)?;
+    let providers: Vec<Box<dyn ModProvider>> = vec![
+        Box::new(ModrinthProvider::new("orbit", 3)?),
+    ];
+    let output = run_init(input, &providers).await?;
 
     // ── 4. 输出结果 ────────────────────────────
     println!(

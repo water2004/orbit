@@ -8,6 +8,7 @@
 pub mod config;
 pub mod detection;
 pub mod error;
+pub mod identification;
 pub mod init;
 pub mod manifest;
 pub mod lockfile;

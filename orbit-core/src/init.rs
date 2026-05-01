@@ -219,45 +219,53 @@ fn read_version_json_from_jar(
 
 /// 执行 init 流程。
 ///
-/// 扫描 mods/ → 构建 OrbitManifest → 写入文件 → 注册实例。
-pub fn run_init(input: InitInput) -> Result<InitOutput, OrbitError> {
+/// 扫描 mods/ → 识别来源 → 构建 OrbitManifest → 写入文件。
+pub async fn run_init(
+    input: InitInput,
+    providers: &[Box<dyn crate::providers::ModProvider>],
+) -> Result<InitOutput, OrbitError> {
     // 1. 扫描 mods/
     let scanned = scan_mods_dir(&input.instance_dir, &input.modloader)?;
 
-    // 2. 构建依赖声明（每个扫描到的模组作为依赖条目）
+    // 2. 识别来源
+    let ctx = crate::identification::IdentificationContext {
+        mc_version: input.mc_version.clone(),
+        loader: input.modloader.clone(),
+    };
+    let identified = crate::identification::identify_mods(&scanned, providers, &ctx).await?;
+
+    // 3. 构建依赖声明
     let mut dependencies = indexmap::IndexMap::new();
-    for m in &scanned {
-        // 有 mod_id 的模组记录为平台依赖（后续可通过 Modrinth API 查询版本）
-        // 无法识别的模组记录为 file 类型
-        let key = m.mod_name.clone().unwrap_or_else(|| m.filename.clone());
-        let spec = if m.mod_id.is_some() {
-            // 平台模组：version 留空，后续 orbit install 时解析
-            DependencySpec::Full {
-                platform: Some("modrinth".into()),
-                slug: m.mod_id.clone(),
-                version: m.version.clone(),
-                optional: None,
-                env: None,
-                exclude: None,
-                source_type: None,
-                path: None,
-                url: None,
-                sha256: None,
+    for m in identified {
+        let key = if m.mod_name.is_empty() { m.filename.clone() } else { m.mod_name.clone() };
+        let spec = match &m.source {
+            crate::identification::IdentifiedSource::Platform { platform, slug } => {
+                DependencySpec::Full {
+                    platform: Some(platform.clone()),
+                    slug: Some(slug.clone()),
+                    version: if m.version.is_empty() { None } else { Some(m.version.clone()) },
+                    optional: None,
+                    env: None,
+                    exclude: None,
+                    source_type: None,
+                    path: None,
+                    url: None,
+                    sha256: None,
+                }
             }
-        } else {
-            // 未知模组：记录为本地文件
-            let relative_path = format!("mods/{}", m.filename);
-            DependencySpec::Full {
-                platform: None,
-                slug: None,
-                version: m.version.clone(),
-                optional: None,
-                env: None,
-                exclude: None,
-                source_type: Some("file".into()),
-                path: Some(relative_path),
-                url: None,
-                sha256: Some(m.sha256.clone()),
+            crate::identification::IdentifiedSource::File { path } => {
+                DependencySpec::Full {
+                    platform: None,
+                    slug: None,
+                    version: if m.version.is_empty() { None } else { Some(m.version.clone()) },
+                    optional: None,
+                    env: None,
+                    exclude: None,
+                    source_type: Some("file".into()),
+                    path: Some(path.clone()),
+                    url: None,
+                    sha256: Some(m.sha256.clone()),
+                }
             }
         };
         dependencies.insert(key, spec);
