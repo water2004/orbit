@@ -115,6 +115,7 @@ ORBIT/
 │       │   └── quilt.rs          #     QuiltDetector [future]
 │       ├── providers/            #   平台 Provider 特质 + 各平台实现
 │       │   ├── mod.rs            #     ModProvider trait, ResolvedMod 等核心类型
+│       │   ├── rate_limiter.rs   #     RateLimiter — Semaphore 并发控制
 │       │   ├── modrinth.rs       #     ModrinthProvider (封装 modrinth-wrapper)
 │       │   └── curseforge.rs     #     CurseForgeProvider (封装 curseforge-wrapper)
 │       ├── error.rs              #   Orbit 统一错误类型
@@ -402,8 +403,9 @@ lib.rs                    ← 公共 API 入口，重新导出所有公开类型
 ├── error.rs              ← 统一错误类型 (OrbitError)
 └── providers/
     ├── mod.rs            ← ModProvider trait + ResolvedMod 等公共类型
-    ├── modrinth.rs       ← ModrinthProvider impl
-    └── curseforge.rs     ← CurseForgeProvider impl
+    ├── rate_limiter.rs   ← RateLimiter — Semaphore 并发控制
+    ├── modrinth.rs       ← ModrinthProvider impl（持有 RateLimiter）
+    └── curseforge.rs     ← CurseForgeProvider impl（持有 RateLimiter）
 ```
 
 ### 6.2 关键类型
@@ -972,5 +974,7 @@ fn map_side(side: Option<&str>) -> Option<SideSupport> {
 > - `orbit-cli-commands.md` — 命令行为规格
 > - `orbit-metadata.md` — 文件格式解析层（metadata/ + jar.rs）
 > - `orbit-detection.md` — 实例环境检测层（init 命令编排）
+> - `orbit-providers.md` — 平台 Provider 层（RateLimiter + ModProvider trait）
+> - `orbit-resolver.md` — PubGrub 依赖解析引擎设计
 > - `orbit-status.md` — 项目完成度追踪
 > - 本文档 — 项目结构、模块边界、核心抽象接口

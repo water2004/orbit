@@ -44,7 +44,8 @@ orbit-cli ──→ orbit-core ──→ modrinth-wrapper
 | `detection/fabric.rs` | ✅ | FabricDetector — 扫描 JSON libraries 匹配 fabric-loader → Certain + 版本号 |
 | `init.rs` | ✅ | detect_mc_version (JAR → version.json) + scan_mods_dir + run_init |
 | `providers/mod.rs` | ✅ | ModProvider trait + 统一类型 |
-| `providers/modrinth.rs` | ✅ | ModrinthProvider 完整 (7 方法) |
+| `providers/rate_limiter.rs` | 🆕 | RateLimiter — Semaphore 并发控制 |
+| `providers/modrinth.rs` | ✅ | ModrinthProvider 完整 (7 方法，待集成 RateLimiter) |
 | `metadata/{forge,neoforge,quilt}.rs` | 🚧 | 占位 |
 | `detection/{forge,neoforge,quilt}.rs` | 🚧 | 占位 |
 | `providers/curseforge.rs` | 🚧 | 骨架（待 curseforge-wrapper） |
@@ -135,6 +136,7 @@ orbit-cli ──→ orbit-core ──→ modrinth-wrapper
 | [orbit-cli-commands.md](orbit-cli-commands.md) | 命令行为规格 |
 | [orbit-metadata.md](orbit-metadata.md) | 文件元数据解析层 |
 | [orbit-detection.md](orbit-detection.md) | 实例环境检测层 |
+| [orbit-providers.md](orbit-providers.md) | 平台 Provider 层（RateLimiter + trait） |
 | [orbit-resolver.md](orbit-resolver.md) | PubGrub 依赖解析引擎设计 |
 | [orbit-architecture.md](orbit-architecture.md) | 项目结构、模块边界、核心接口 |
 | [orbit-status.md](orbit-status.md) | 本文档 — 当前完成度追踪 |
