@@ -31,6 +31,7 @@ pub struct ScannedMod {
     pub mod_name: Option<String>,
     pub version: Option<String>,
     pub sha256: String,
+    pub sha512: String,
 }
 
 /// 扫描 mods/ 目录并提取元数据。
@@ -71,16 +72,25 @@ fn scan_mods_dir(
             OrbitError::Other(anyhow::anyhow!("cannot open {}: {e}", path.display()))
         })?;
 
-        // SHA-256 + 元数据提取
+        eprintln!("  → {filename}:");
+
+        // SHA-256 + SHA-512（平台哈希反查用 SHA-512）
         let sha256 = crate::jar::compute_sha256(&path).map_err(|e| {
             OrbitError::Other(anyhow::anyhow!("cannot hash {}: {e}", path.display()))
         })?;
+        let sha512 = crate::jar::compute_sha512(&path).map_err(|e| {
+            OrbitError::Other(anyhow::anyhow!("cannot hash {}: {e}", path.display()))
+        })?;
+        eprintln!("    SHA-256: {}", &sha256[..16]);
 
         // 尝试从 JAR 中提取 fabric.mod.json
         let (mod_id, mod_name, version) = match read_jar_metadata(file) {
-            Ok((id, name, ver)) => (id, name, Some(ver)),
+            Ok((id, name, ver)) => {
+                eprintln!("    fabric.mod.json: id={:?} name={:?} version={ver}", id, name);
+                (id, name, Some(ver))
+            }
             Err(e) => {
-                eprintln!("  ⚠ cannot read metadata from {}: {e}", filename);
+                eprintln!("    ⚠ cannot read fabric.mod.json: {e}");
                 (None, None, None)
             }
         };
@@ -91,6 +101,7 @@ fn scan_mods_dir(
             mod_name,
             version,
             sha256,
+            sha512,
         });
     }
 
@@ -225,9 +236,12 @@ pub async fn run_init(
     providers: &[Box<dyn crate::providers::ModProvider>],
 ) -> Result<InitOutput, OrbitError> {
     // 1. 扫描 mods/
+    eprintln!("Scanning mods/ ...");
     let scanned = scan_mods_dir(&input.instance_dir, &input.modloader)?;
+    eprintln!("  found {} jar(s)\n", scanned.len());
 
     // 2. 识别来源
+    eprintln!("Identifying mods via Modrinth ...");
     let ctx = crate::identification::IdentificationContext {
         mc_version: input.mc_version.clone(),
         loader: input.modloader.clone(),

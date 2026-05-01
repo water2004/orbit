@@ -63,6 +63,20 @@ pub fn get_fabric_mod_info(file: std::fs::File) -> Result<FabricModInfo, zip::re
     }
 }
 
+/// 计算任意文件的 SHA-512（用于 Modrinth 哈希反查）
+pub fn compute_sha512(path: &std::path::Path) -> Result<String, std::io::Error> {
+    use sha2::Sha512;
+    let mut file = std::fs::File::open(path)?;
+    let mut hasher = Sha512::new();
+    let mut buf = [0u8; 8192];
+    loop {
+        let n = file.read(&mut buf)?;
+        if n == 0 { break; }
+        hasher.update(&buf[..n]);
+    }
+    Ok(hex::encode(hasher.finalize()))
+}
+
 /// 计算任意文件的 SHA-256
 pub fn compute_sha256(path: &std::path::Path) -> Result<String, std::io::Error> {
     let mut file = std::fs::File::open(path)?;

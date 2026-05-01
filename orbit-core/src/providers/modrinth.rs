@@ -173,13 +173,16 @@ impl ModProvider for ModrinthProvider {
 
     async fn get_version_by_hash(&self, hash: &str) -> Result<Option<ResolvedMod>, OrbitError> {
         let _permit = self.rate_limiter.acquire().await;
+        eprintln!("    [modrinth] get_version_by_hash(sha512={:.16}...)", &hash[..16]);
         match self.client.get_version_from_hash(hash).await {
             Ok(v) => {
+                let ver = v.version_number.clone().unwrap_or_default();
+                eprintln!("    [modrinth]   → {} v{}", v.project_id, ver);
                 let file = v.files.first();
                 Ok(Some(ResolvedMod {
                     name: v.project_id.clone(),
                     mod_id: v.project_id.clone(),
-                    version: v.version_number.clone().unwrap_or_default(),
+                    version: ver,
                     download_url: file.map(|f| f.url.clone()).unwrap_or_default(),
                     filename: file.map(|f| f.filename.clone()).unwrap_or_default(),
                     sha256: file.map(|f| f.hashes.sha512.clone()).unwrap_or_default(),
@@ -188,7 +191,10 @@ impl ModProvider for ModrinthProvider {
                     server_side: None,
                 }))
             }
-            Err(_) => Ok(None),
+            Err(e) => {
+                eprintln!("    [modrinth]   → not found ({e})");
+                Ok(None)
+            }
         }
     }
 
@@ -199,11 +205,13 @@ impl ModProvider for ModrinthProvider {
         _loader: Option<&str>,
     ) -> Result<Vec<ResolvedMod>, OrbitError> {
         let _permit = self.rate_limiter.acquire().await;
+        eprintln!("    [modrinth] get_versions(slug={slug})");
         let versions = self
             .client
             .list_versions(slug)
             .await
             .map_err(|e| OrbitError::Other(e.into()))?;
+        eprintln!("    [modrinth]   → {} versions", versions.len());
 
         Ok(versions.iter().map(|v| {
             let file = v.files.first();
