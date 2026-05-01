@@ -7,31 +7,35 @@ pub mod version;
 use indexmap::IndexMap;
 
 use crate::identification::IdentifiedMod;
-use crate::init::ScannedMod;
 use crate::lockfile::{LockDependency, LockEntry};
 
 /// 系统级依赖（不作为模组依赖处理）
 const SYSTEM_DEPS: &[&str] = &["minecraft", "fabricloader", "java"];
 
 /// 根据识别结果生成 lock 条目列表。
-///
-/// 依赖校验：
-/// - 跳过系统依赖（minecraft / fabricloader / java）
-/// - 检查每个声明依赖是否在磁盘上存在，且版本满足约束
-/// - 版本不满足 → error
-/// - 依赖不存在 → warning（只记录存在的）
 pub fn build_lock_entries(
     identified: &[IdentifiedMod],
-    scanned: &[ScannedMod],
 ) -> (Vec<LockEntry>, Vec<String>) {
-    let installed: IndexMap<String, &ScannedMod> = scanned
+    // 构建查找索引：project_id / slug / mod_id / mod_name / filename → 已安装模组信息
+    // needed because API deps use project IDs (e.g. P7dR8mSH) while JAR deps use slugs (e.g. fabric-api)
+    #[derive(Clone)]
+    struct DepInfo {
+        name: String,
+        version: String,
+    }
+    let installed: IndexMap<String, DepInfo> = identified
         .iter()
-        .flat_map(|s| {
-            let mut keys = vec![];
-            if let Some(ref id) = s.mod_id { keys.push(id.clone()); }
-            if let Some(ref name) = s.mod_name { keys.push(name.clone()); }
-            keys.push(s.filename.clone());
-            keys.into_iter().map(move |k| (k, s))
+        .flat_map(|m| {
+            let info = DepInfo {
+                name: if m.mod_name.is_empty() { m.mod_id.clone() } else { m.mod_name.clone() },
+                version: m.version.clone(),
+            };
+            let mut keys = vec![m.mod_id.clone(), m.mod_name.clone(), m.filename.clone()];
+            // Also index by platform project ID (e.g. P7dR8mSH for fabric-api)
+            if let crate::identification::IdentifiedSource::Platform { ref slug, .. } = m.source {
+                keys.push(slug.clone());
+            }
+            keys.into_iter().filter(|k| !k.is_empty()).map(move |k| (k, info.clone()))
         })
         .collect();
 
@@ -71,16 +75,15 @@ pub fn build_lock_entries(
                 }
 
                 if let Some(dep) = installed.get(dep_id) {
-                    let dep_ver = dep.version.as_deref().unwrap_or("?");
-                    if version_satisfies(dep_ver, constraint) {
+                    if version_satisfies(&dep.version, constraint) {
                         entry.dependencies.push(LockDependency {
-                            name: dep.mod_name.clone().unwrap_or_else(|| dep.filename.clone()),
-                            version: dep.version.clone().unwrap_or_default(),
+                            name: dep.name.clone(),
+                            version: dep.version.clone(),
                         });
                     } else {
                         let msg = format!(
-                            "  ✗ {} requires {dep_id} {constraint} but version {dep_ver} is installed",
-                            entry.name
+                            "  ✗ {} requires {dep_id} {constraint} but version {} is installed",
+                            entry.name, dep.version
                         );
                         eprintln!("{msg}");
                         warnings.push(msg);

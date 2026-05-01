@@ -250,7 +250,7 @@ pub async fn run_init(
     let identified = crate::identification::identify_mods(&scanned, providers, &ctx).await?;
 
     // 3. 构建依赖声明 + lock 条目
-    let (lock_entries, _warnings) = crate::resolver::build_lock_entries(&identified, &scanned);
+    let (lock_entries, _warnings) = crate::resolver::build_lock_entries(&identified);
     let mc_ver = input.mc_version.clone();
     let loader_name = input.modloader.clone();
     let loader_ver = input.modloader_version.clone();

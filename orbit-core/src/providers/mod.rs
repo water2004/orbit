@@ -145,4 +145,10 @@ pub trait ModProvider: Send + Sync {
 
     /// 获取平台分类列表
     async fn get_categories(&self) -> Result<Vec<String>, OrbitError>;
+
+    /// 获取项目的完整依赖列表（含可读名称/slug）
+    /// 默认返回空，各平台可覆盖实现
+    async fn fetch_dependencies(&self, _project_id: &str) -> Result<Vec<ResolvedDependency>, OrbitError> {
+        Ok(vec![])
+    }
 }

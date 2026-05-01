@@ -172,38 +172,6 @@ impl ModProvider for ModrinthProvider {
         }
     }
 
-    async fn get_version_by_hash(&self, hash: &str) -> Result<Option<ResolvedMod>, OrbitError> {
-        let _permit = self.rate_limiter.acquire().await;
-        eprintln!("    [modrinth] get_version_by_hash(sha512={:.16}...)", &hash[..16]);
-        match self.client.get_version_from_hash(hash).await {
-            Ok(v) => {
-                let ver = v.version_number.clone().unwrap_or_default();
-                eprintln!("    [modrinth]   → {} v{}", v.project_id, ver);
-                let file = v.files.first();
-                let deps = v.dependencies.unwrap_or_default().into_iter().map(|d| ResolvedDependency {
-                    name: d.project_id.clone().unwrap_or_default(),
-                    slug: d.project_id.clone(),
-                    required: d.dependency_type == "required",
-                }).collect();
-                Ok(Some(ResolvedMod {
-                    name: v.project_id.clone(),
-                    mod_id: v.project_id.clone(),
-                    version: ver,
-                    download_url: file.map(|f| f.url.clone()).unwrap_or_default(),
-                    filename: file.map(|f| f.filename.clone()).unwrap_or_default(),
-                    sha256: file.map(|f| f.hashes.sha512.clone()).unwrap_or_default(),
-                    dependencies: deps,
-                    client_side: None,
-                    server_side: None,
-                }))
-            }
-            Err(e) => {
-                eprintln!("    [modrinth]   → not found ({e})");
-                Ok(None)
-            }
-        }
-    }
-
     async fn get_versions(
         &self,
         slug: &str,
@@ -243,5 +211,58 @@ impl ModProvider for ModrinthProvider {
     async fn get_categories(&self) -> Result<Vec<String>, OrbitError> {
         let _permit = self.rate_limiter.acquire().await;
         Ok(vec![])
+    }
+
+    async fn fetch_dependencies(&self, project_id: &str) -> Result<Vec<ResolvedDependency>, OrbitError> {
+        let _permit = self.rate_limiter.acquire().await;
+        eprintln!("    [modrinth] fetch_dependencies({project_id})");
+        let deps = self.client.get_project_dependencies(project_id).await
+            .map_err(|e| OrbitError::Other(e.into()))?;
+        eprintln!("    [modrinth]   → {} projects, {} versions", deps.projects.len(), deps.versions.len());
+        for p in &deps.projects {
+            eprintln!("    [modrinth]     project: id={} slug={:?} title={:?}", p.id, p.slug, p.title);
+        }
+        Ok(deps.projects.into_iter().map(|p| ResolvedDependency {
+            name: p.title.unwrap_or_else(|| p.slug.clone().unwrap_or(p.id.clone())),
+            slug: p.slug.or(Some(p.id)),
+            required: true,
+        }).collect())
+    }
+
+    async fn get_version_by_hash(&self, hash: &str) -> Result<Option<ResolvedMod>, OrbitError> {
+        let _permit = self.rate_limiter.acquire().await;
+        eprintln!("    [modrinth] get_version_by_hash(sha512={:.16}...)", &hash[..16]);
+        match self.client.get_version_from_hash(hash).await {
+            Ok(v) => {
+                let ver = v.version_number.clone().unwrap_or_default();
+                eprintln!("    [modrinth]   → id={} project_id={} version={ver}", v.id, v.project_id);
+                if let Some(ref raw_deps) = v.dependencies {
+                    for d in raw_deps {
+                        eprintln!("    [modrinth]     dep: type={} project_id={:?} version_id={:?}", d.dependency_type, d.project_id, d.version_id);
+                    }
+                }
+                let file = v.files.first();
+                let deps = v.dependencies.unwrap_or_default().into_iter().map(|d| ResolvedDependency {
+                    name: d.project_id.clone().unwrap_or_default(),
+                    slug: d.project_id.clone(),
+                    required: d.dependency_type == "required",
+                }).collect();
+                Ok(Some(ResolvedMod {
+                    name: v.project_id.clone(),
+                    mod_id: v.project_id.clone(),
+                    version: ver,
+                    download_url: file.map(|f| f.url.clone()).unwrap_or_default(),
+                    filename: file.map(|f| f.filename.clone()).unwrap_or_default(),
+                    sha256: file.map(|f| f.hashes.sha512.clone()).unwrap_or_default(),
+                    dependencies: deps,
+                    client_side: None,
+                    server_side: None,
+                }))
+            }
+            Err(e) => {
+                eprintln!("    [modrinth]   → not found ({e})");
+                Ok(None)
+            }
+        }
     }
 }
