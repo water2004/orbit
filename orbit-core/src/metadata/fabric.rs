@@ -34,6 +34,7 @@ impl MetadataParser for FabricParser {
             license: v.get("license").and_then(|l| l.as_str()).map(String::from),
             environment: map_environment(v.get("environment").and_then(|e| e.as_str()).unwrap_or("*")),
             dependencies: get_depends(&v),
+            embedded_jars: get_jars(&v),
             loader: ModLoader::Fabric,
             sha256: String::new(),
         })
@@ -68,6 +69,17 @@ fn get_authors(v: &serde_json::Value) -> Vec<String> {
         }).collect(),
         _ => vec![],
     }
+}
+
+/// 提取 jars 字段 → 内嵌 JAR 的相对路径列表
+fn get_jars(v: &serde_json::Value) -> Vec<String> {
+    v.get("jars")
+        .and_then(|j| j.as_array())
+        .map(|arr| arr.iter()
+            .filter_map(|entry| entry.get("file").and_then(|f| f.as_str()))
+            .map(String::from)
+            .collect())
+        .unwrap_or_default()
 }
 
 /// 提取 depends → IndexMap<String, String>

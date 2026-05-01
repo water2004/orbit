@@ -92,6 +92,14 @@ pub fn compute_sha256(path: &std::path::Path) -> Result<String, std::io::Error> 
     Ok(hex::encode(hasher.finalize()))
 }
 
+/// 计算字节数据的 SHA-512
+pub fn sha512_digest(data: &[u8]) -> String {
+    use sha2::Sha512;
+    let mut hasher = Sha512::new();
+    hasher.update(data);
+    hex::encode(hasher.finalize())
+}
+
 /// 计算字节数据的 SHA-256
 pub fn sha256_digest(data: &[u8]) -> String {
     let mut hasher = Sha256::new();

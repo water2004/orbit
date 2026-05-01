@@ -7,7 +7,8 @@ pub mod version;
 use indexmap::IndexMap;
 
 use crate::identification::IdentifiedMod;
-use crate::lockfile::{LockDependency, LockEntry};
+use crate::init::ScannedMod;
+use crate::lockfile::{ImplantedMod, LockDependency, LockEntry};
 
 /// 系统级依赖（不作为模组依赖处理）
 const SYSTEM_DEPS: &[&str] = &["minecraft", "fabricloader", "java"];
@@ -15,6 +16,7 @@ const SYSTEM_DEPS: &[&str] = &["minecraft", "fabricloader", "java"];
 /// 根据识别结果生成 lock 条目列表。
 pub fn build_lock_entries(
     identified: &[IdentifiedMod],
+    scanned: &[ScannedMod],
 ) -> (Vec<LockEntry>, Vec<String>) {
     // 构建查找索引：project_id / slug / mod_id / mod_name / filename → 已安装模组信息
     // needed because API deps use project IDs (e.g. P7dR8mSH) while JAR deps use slugs (e.g. fabric-api)
@@ -40,7 +42,7 @@ pub fn build_lock_entries(
         .collect();
 
     let mut warnings = vec![];
-    let entries = identified
+    let mut entries: Vec<LockEntry> = identified
         .iter()
         .map(|m| {
             let mut entry = LockEntry {
@@ -49,6 +51,7 @@ pub fn build_lock_entries(
                 filename: m.filename.clone(),
                 sha256: m.sha256.clone(),
                 dependencies: vec![],
+                implanted: vec![],
                 platform: None,
                 mod_id: None,
                 url: None,
@@ -102,6 +105,22 @@ pub fn build_lock_entries(
             entry
         })
         .collect();
+
+    // 填充 implanted：将内嵌子模组归入父模组
+    for m in identified {
+        // 找到此 identified mod 对应的 scanned mod
+        let Some(sm) = scanned.iter().find(|s| s.filename == m.filename) else { continue };
+        let Some(ref parent_name) = sm.embedded_parent else { continue };
+
+        if let Some(parent_entry) = entries.iter_mut().find(|e| e.filename == *parent_name) {
+            parent_entry.implanted.push(ImplantedMod {
+                name: if m.mod_name.is_empty() { m.mod_id.clone() } else { m.mod_name.clone() },
+                version: m.version.clone(),
+                sha256: m.sha256.clone(),
+                filename: m.filename.clone(),
+            });
+        }
+    }
 
     (entries, warnings)
 }

@@ -28,6 +28,10 @@ pub struct LockEntry {
     pub sha256: String,
     pub dependencies: Vec<LockDependency>,
 
+    /// 内嵌子模组（从父 JAR 的 META-INF/jars/ 解出）
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub implanted: Vec<ImplantedMod>,
+
     // 平台在线依赖
     #[serde(skip_serializing_if = "Option::is_none")]
     pub platform: Option<String>,
@@ -41,6 +45,14 @@ pub struct LockEntry {
     pub source_type: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ImplantedMod {
+    pub name: String,
+    pub version: String,
+    pub sha256: String,
+    pub filename: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -134,6 +146,7 @@ dependencies = []
                 source_type: None,
                 path: None,
                 dependencies: vec![],
+                implanted: vec![],
             }],
         };
 

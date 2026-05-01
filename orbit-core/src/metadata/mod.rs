@@ -49,6 +49,7 @@ pub struct ModMetadata {
     pub environment: String,
     /// 依赖映射: mod_id → version_constraint
     pub dependencies: IndexMap<String, String>,
+    pub embedded_jars: Vec<String>,
     pub loader: ModLoader,
     pub sha256: String,
 }

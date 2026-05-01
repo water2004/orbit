@@ -257,8 +257,12 @@ version = "0.5.8"                                  # 实际安装的版本号
 filename = "sodium-fabric-mc1.20.1-0.5.8.jar"      # 文件名
 url = "https://cdn.modrinth.com/data/AANobbMI/versions/abc123/sodium-fabric-mc1.20.1-0.5.8.jar"
 sha256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-dependencies = [                                   # 此模组的前置依赖（含锁定版本）
+dependencies = [                                   # 此模组的直接前置依赖
     { name = "fabric-api", version = "0.92.0" },
+]
+# 此模组自带的内嵌子模组（从 META-INF/jars/ 提取）
+implanted = [
+    { name = "xaerolib", version = "1.1.13", sha256 = "abc...", filename = "xaerolib-1.1.13.jar" },
 ]
 
 [[lock]]
@@ -292,7 +296,8 @@ dependencies = []
 | `url` | `String` (可选) | 下载源 URL。type = file 时不出现 |
 | `path` | `String` (可选) | 本地文件相对路径。仅 type = file 时出现 |
 | `sha256` | `String` | SHA-256 校验值 |
-| `dependencies` | `[{name, version}]` | 此模组的前置依赖列表，每个条目包含锁定版本号，防止上游元数据变更导致解析漂移 |
+| `dependencies` | `[{name, version}]` | 此模组的直接前置依赖，每个条目含被依赖模组的名称和锁定版本 |
+| `implanted` | `[{name, version, sha256, filename}]` | 此模组内嵌的子模组（从 META-INF/jars/ 提取）。implanted 模组不需要出现在顶层 `[[lock]]` 中 |
 
 ---
 
