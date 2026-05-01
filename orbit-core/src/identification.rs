@@ -58,11 +58,16 @@ async fn identify_one(
     for p in providers {
         match p.get_version_by_hash(&m.sha512).await {
             Ok(Some(resolved)) => {
-                // 从 Version.dependencies 获取带 required 标记的依赖
-                let deps: Vec<(String, String, bool)> = resolved.dependencies.iter().map(|d| {
-                    (d.slug.clone().unwrap_or_else(|| d.name.clone()), String::new(), d.required)
-                }).collect();
-                eprintln!("    ✓ identified as {}/{} v{} (hash match, {} deps)", p.name(), resolved.mod_id, resolved.version, deps.len());
+                let deps = match p.fetch_dependencies(&resolved.mod_id).await {
+                    Ok(d) => {
+                        eprintln!("    ✓ identified as {}/{} v{} (hash match, {} deps)", p.name(), resolved.mod_id, resolved.version, d.len());
+                        d.into_iter().map(|d| (d.slug.unwrap_or(d.name), String::new(), d.required)).collect()
+                    }
+                    Err(_) => {
+                        eprintln!("    ✓ identified as {}/{} v{} (hash match, deps unavailable)", p.name(), resolved.mod_id, resolved.version);
+                        vec![]
+                    }
+                };
                 return (
                     IdentifiedSource::Platform { platform: p.name().to_string(), slug: resolved.mod_id },
                     deps,
@@ -80,10 +85,16 @@ async fn identify_one(
                     versions.iter().find(|v| v.version == *ver)
                 });
                 if let Some(v) = matched {
-                    let deps: Vec<(String, String, bool)> = v.dependencies.iter().map(|d| {
-                        (d.slug.clone().unwrap_or_else(|| d.name.clone()), String::new(), d.required)
-                    }).collect();
-                    eprintln!("    ✓ identified as {}/{} v{} (version match, {} deps)", p.name(), mod_id, v.version, deps.len());
+                    let deps = match p.fetch_dependencies(&v.mod_id).await {
+                        Ok(d) => {
+                            eprintln!("    ✓ identified as {}/{} v{} (version match, {} deps)", p.name(), mod_id, v.version, d.len());
+                            d.into_iter().map(|d| (d.slug.unwrap_or(d.name), String::new(), d.required)).collect()
+                        }
+                        Err(_) => {
+                            eprintln!("    ✓ identified as {}/{} v{} (version match, deps unavailable)", p.name(), mod_id, v.version);
+                            vec![]
+                        }
+                    };
                     return (
                         IdentifiedSource::Platform { platform: p.name().to_string(), slug: mod_id.clone() },
                         deps,

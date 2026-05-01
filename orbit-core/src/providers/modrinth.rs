@@ -232,7 +232,7 @@ impl ModProvider for ModrinthProvider {
     async fn get_version_by_hash(&self, hash: &str) -> Result<Option<ResolvedMod>, OrbitError> {
         let _permit = self.rate_limiter.acquire().await;
         eprintln!("    [modrinth] get_version_by_hash(sha512={:.16}...)", &hash[..16]);
-        match self.client.get_version_from_hash(hash, None, None).await {
+        match self.client.get_version_from_hash(hash, Some("sha512"), None).await {
             Ok(v) => {
                 let ver = v.version_number.clone();
                 eprintln!("    [modrinth]   → id={} project_id={} version={ver}", v.id, v.project_id);
