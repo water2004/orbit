@@ -67,8 +67,7 @@ pub fn build_lock_entries(
                 }
             }
 
-            for (dep_id, constraint) in &m.deps {
-                // 跳过系统依赖
+            for (dep_id, constraint, is_required) in &m.deps {
                 if SYSTEM_DEPS.contains(&dep_id.as_str()) {
                     eprintln!("    ↳ depends on {dep_id} {constraint} (system, skipped)");
                     continue;
@@ -88,13 +87,15 @@ pub fn build_lock_entries(
                         eprintln!("{msg}");
                         warnings.push(msg);
                     }
-                } else {
+                } else if *is_required {
                     let msg = format!(
                         "  ⚠ {} depends on '{dep_id}' ({constraint}) which is not installed",
                         entry.name
                     );
                     eprintln!("{msg}");
                     warnings.push(msg);
+                } else {
+                    eprintln!("    ↳ optional dep {dep_id} not installed, skipped");
                 }
             }
 

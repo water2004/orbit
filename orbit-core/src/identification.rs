@@ -17,10 +17,8 @@ pub struct IdentifiedMod {
     pub version: String,
     pub sha256: String,
     pub source: IdentifiedSource,
-    /// 依赖列表: (mod_id, version_constraint)
-    /// - Platform 来源: 从 API 获取
-    /// - File 来源: 从 JAR 内 fabric.mod.json 提取
-    pub deps: Vec<(String, String)>,
+    /// 依赖列表: (mod_id, version_constraint, required)
+    pub deps: Vec<(String, String, bool)>,
 }
 
 pub struct IdentificationContext {
@@ -55,22 +53,16 @@ async fn identify_one(
     m: &ScannedMod,
     providers: &[Box<dyn ModProvider>],
     ctx: &IdentificationContext,
-) -> (IdentifiedSource, Vec<(String, String)>) {
+) -> (IdentifiedSource, Vec<(String, String, bool)>) {
     // Step 1: SHA-512 哈希反查
     for p in providers {
         match p.get_version_by_hash(&m.sha512).await {
             Ok(Some(resolved)) => {
-                // 通过 /project/{id}/dependencies 获取带 slug 的完整依赖
-                let deps = match p.fetch_dependencies(&resolved.mod_id).await {
-                    Ok(d) => {
-                        eprintln!("    ✓ identified as {}/{} v{} (hash match, {} deps)", p.name(), resolved.mod_id, resolved.version, d.len());
-                        d.into_iter().map(|d| (d.slug.unwrap_or(d.name), String::new())).collect()
-                    }
-                    Err(_) => {
-                        eprintln!("    ✓ identified as {}/{} v{} (hash match, deps unavailable)", p.name(), resolved.mod_id, resolved.version);
-                        vec![]
-                    }
-                };
+                // 从 Version.dependencies 获取带 required 标记的依赖
+                let deps: Vec<(String, String, bool)> = resolved.dependencies.iter().map(|d| {
+                    (d.slug.clone().unwrap_or_else(|| d.name.clone()), String::new(), d.required)
+                }).collect();
+                eprintln!("    ✓ identified as {}/{} v{} (hash match, {} deps)", p.name(), resolved.mod_id, resolved.version, deps.len());
                 return (
                     IdentifiedSource::Platform { platform: p.name().to_string(), slug: resolved.mod_id },
                     deps,
@@ -88,16 +80,10 @@ async fn identify_one(
                     versions.iter().find(|v| v.version == *ver)
                 });
                 if let Some(v) = matched {
-                    let deps = match p.fetch_dependencies(&v.mod_id).await {
-                        Ok(d) => {
-                            eprintln!("    ✓ identified as {}/{} v{} (version match, {} deps)", p.name(), mod_id, v.version, d.len());
-                            d.into_iter().map(|d| (d.slug.unwrap_or(d.name), String::new())).collect()
-                        }
-                        Err(_) => {
-                            eprintln!("    ✓ identified as {}/{} v{} (version match, deps unavailable)", p.name(), mod_id, v.version);
-                            vec![]
-                        }
-                    };
+                    let deps: Vec<(String, String, bool)> = v.dependencies.iter().map(|d| {
+                        (d.slug.clone().unwrap_or_else(|| d.name.clone()), String::new(), d.required)
+                    }).collect();
+                    eprintln!("    ✓ identified as {}/{} v{} (version match, {} deps)", p.name(), mod_id, v.version, deps.len());
                     return (
                         IdentifiedSource::Platform { platform: p.name().to_string(), slug: mod_id.clone() },
                         deps,

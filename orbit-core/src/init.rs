@@ -32,8 +32,8 @@ pub struct ScannedMod {
     pub version: Option<String>,
     pub sha256: String,
     pub sha512: String,
-    /// 从 fabric.mod.json 提取的依赖: mod_id → version_constraint
-    pub jar_deps: Vec<(String, String)>,
+    /// 从 fabric.mod.json 提取的依赖: (mod_id, version_constraint, required)
+    pub jar_deps: Vec<(String, String, bool)>,
 }
 
 /// 扫描 mods/ 目录并提取元数据。
@@ -114,7 +114,7 @@ fn scan_mods_dir(
 /// 从 JAR 中读取 fabric.mod.json 并返回 (id, name, version, dependencies)
 fn read_jar_metadata(
     file: std::fs::File,
-) -> Result<(Option<String>, Option<String>, String, Vec<(String, String)>), OrbitError> {
+) -> Result<(Option<String>, Option<String>, String, Vec<(String, String, bool)>), OrbitError> {
     let mut archive = zip::ZipArchive::new(file).map_err(|e| {
         OrbitError::Other(anyhow::anyhow!("cannot open JAR as ZIP: {e}"))
     })?;
@@ -165,7 +165,7 @@ fn read_jar_metadata(
 
     let id = if meta.id.is_empty() { None } else { Some(meta.id) };
     let name = if meta.name.is_empty() { None } else { Some(meta.name) };
-    let deps: Vec<(String, String)> = meta.dependencies.into_iter().collect();
+    let deps: Vec<(String, String, bool)> = meta.dependencies.into_iter().map(|(k, v)| (k, v, true)).collect();
     Ok((id, name, meta.version, deps))
 }
 
