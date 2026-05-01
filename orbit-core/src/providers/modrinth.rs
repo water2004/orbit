@@ -58,11 +58,11 @@ impl ModrinthProvider {
     }
 }
 
-fn map_side(side: Option<&str>) -> Option<SideSupport> {
+fn map_side(side: &str) -> Option<SideSupport> {
     match side {
-        Some("required") => Some(SideSupport::Required),
-        Some("optional") => Some(SideSupport::Optional),
-        Some("unsupported") => Some(SideSupport::Unsupported),
+        "required" => Some(SideSupport::Required),
+        "optional" => Some(SideSupport::Optional),
+        "unsupported" => Some(SideSupport::Unsupported),
         _ => None,
     }
 }
@@ -89,14 +89,14 @@ impl ModProvider for ModrinthProvider {
 
         Ok(res.hits.into_iter().take(limit).map(|hit| SearchResultItem {
             mod_id: hit.project_id,
-            slug: hit.slug.unwrap_or_default(),
-            name: hit.title.unwrap_or_default(),
-            description: hit.description.unwrap_or_default(),
+            slug: hit.slug,
+            name: hit.title,
+            description: hit.description,
             latest_version: hit.versions.last().cloned().unwrap_or_default(),
             downloads: hit.downloads as u64,
             mc_versions: hit.versions,
-            client_side: map_side(hit.client_side.as_deref()),
-            server_side: map_side(hit.server_side.as_deref()),
+            client_side: map_side(&hit.client_side),
+            server_side: map_side(&hit.server_side),
             categories: hit.categories.unwrap_or_default(),
         }).collect())
     }
@@ -110,16 +110,16 @@ impl ModProvider for ModrinthProvider {
             .map_err(|e| OrbitError::Other(e.into()))?;
 
         Ok(ModInfo {
-            slug: project.slug.unwrap_or_else(|| project.id.clone()),
-            name: project.title.unwrap_or_default(),
-            description: project.description.unwrap_or_default(),
+            slug: project.slug.clone(),
+            name: project.title,
+            description: project.description,
             authors: vec![],
-            latest_version: project.versions.last().cloned().unwrap_or_default(),
+            latest_version: project.versions.as_deref().and_then(|v| v.last()).cloned().unwrap_or_default(),
             downloads: project.downloads as u64,
             license: project.license.map(|l| l.id),
-            client_side: map_side(project.client_side.as_deref()),
-            server_side: map_side(project.server_side.as_deref()),
-            categories: project.categories.unwrap_or_default(),
+            client_side: map_side(&project.client_side),
+            server_side: map_side(&project.server_side),
+            categories: project.categories,
             recent_versions: vec![],
             dependencies: vec![],
         })
@@ -141,8 +141,8 @@ impl ModProvider for ModrinthProvider {
 
         let candidate = versions
             .iter()
-            .filter(|v| v.game_versions.as_ref().map(|gv| gv.iter().any(|g| g == mc_version)).unwrap_or(false))
-            .filter(|v| v.loaders.as_ref().map(|l| l.iter().any(|l| l == loader)).unwrap_or(false))
+            .filter(|v| v.game_versions.iter().any(|g| g == mc_version))
+            .filter(|v| v.loaders.iter().any(|l| l == loader))
             .max_by_key(|v| v.date_published.clone());
 
         match candidate {
@@ -156,7 +156,7 @@ impl ModProvider for ModrinthProvider {
                 Ok(ResolvedMod {
                     name: slug.to_string(),
                     mod_id: v.project_id.clone(),
-                    version: v.version_number.clone().unwrap_or_default(),
+                    version: v.version_number.clone(),
                     download_url: file.url.clone(),
                     filename: file.filename.clone(),
                     sha256: file.hashes.sha512.clone(),
@@ -197,7 +197,7 @@ impl ModProvider for ModrinthProvider {
             ResolvedMod {
                 name: slug.to_string(),
                 mod_id: v.project_id.clone(),
-                version: v.version_number.clone().unwrap_or_default(),
+                version: v.version_number.clone(),
                 download_url: file.map(|f| f.url.clone()).unwrap_or_default(),
                 filename: file.map(|f| f.filename.clone()).unwrap_or_default(),
                 sha256: file.map(|f| f.hashes.sha512.clone()).unwrap_or_default(),
@@ -220,11 +220,11 @@ impl ModProvider for ModrinthProvider {
             .map_err(|e| OrbitError::Other(e.into()))?;
         eprintln!("    [modrinth]   → {} projects, {} versions", deps.projects.len(), deps.versions.len());
         for p in &deps.projects {
-            eprintln!("    [modrinth]     project: id={} slug={:?} title={:?}", p.id, p.slug, p.title);
+            eprintln!("    [modrinth]     project: id={} slug={} title={}", p.id, p.slug, p.title);
         }
         Ok(deps.projects.into_iter().map(|p| ResolvedDependency {
-            name: p.title.unwrap_or_else(|| p.slug.clone().unwrap_or(p.id.clone())),
-            slug: p.slug.or(Some(p.id)),
+            name: p.title.clone(),
+            slug: Some(p.slug),
             required: true,
         }).collect())
     }
@@ -232,9 +232,9 @@ impl ModProvider for ModrinthProvider {
     async fn get_version_by_hash(&self, hash: &str) -> Result<Option<ResolvedMod>, OrbitError> {
         let _permit = self.rate_limiter.acquire().await;
         eprintln!("    [modrinth] get_version_by_hash(sha512={:.16}...)", &hash[..16]);
-        match self.client.get_version_from_hash(hash).await {
+        match self.client.get_version_from_hash(hash, None, None).await {
             Ok(v) => {
-                let ver = v.version_number.clone().unwrap_or_default();
+                let ver = v.version_number.clone();
                 eprintln!("    [modrinth]   → id={} project_id={} version={ver}", v.id, v.project_id);
                 if let Some(ref raw_deps) = v.dependencies {
                     for d in raw_deps {
