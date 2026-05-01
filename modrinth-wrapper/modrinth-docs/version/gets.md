@@ -1,17 +1,16 @@
-# Get versions from hashes
+# Get multiple versions
 ## Endpoint
-`POST /version_files`
+`GET /versions`
 
-## Request Body
-Request body is a JSON object with the following properties:
-| Name | Type | Description |
+## Query Parameters
+### ids
+| Type | Description | Example |
 | --- | --- | --- |
-| *hashes | `array<string>` | The hashes of the files. |
-| *algorithm | `string` | The hashing algorithm used to generate the hashes. Allowed values: sha1 sha512. Default: sha1 |
+| `string` | The IDs of the versions. Passed as a JSON-encoded array. | `["IIJJKKLL", "AABBCCDD"]` |
 
 ## Response
 ### 200 OK
-A map from hashes to version objects. The version objects have the following properties:
+Response is a JSON array of objects, each containing the following properties:
 
 | Name | Type | Description |
 | --- | --- | --- |
@@ -58,4 +57,7 @@ The hashes object in the file objects has the following properties:
 | sha1 | `string` | The SHA-1 hash of the file. |
 
 ### 400 Bad Request
-The request body is invalid, such as missing required properties or invalid values.
+Request is invalid.
+
+### 404 Not Found
+The requested versions were not found.

@@ -13,6 +13,29 @@
 | --- | --- | --- |
 | `string` | essential concept for understanding how to filter out results | [["categories:forge"],["versions:1.17.1"],["project_type:mod"],["license:mit"]] |
 
+### index
+| Type | Description | Example |
+| --- | --- | --- |
+| `string` | The sorting method used for sorting search results. Allowed values: relevance downloads follows newest updated | `downloads` |
+
+Default: relevance
+
+### offset
+| Type | Description | Example |
+| --- | --- | --- |
+| `integer` | The offset into the search. Skips this number of results | `20` |
+
+Default: 0
+
+### limit
+| Type | Description | Example |
+| --- | --- | --- |
+| `integer` | The number of results returned by the search | `20` |
+
+Default: 10
+Minimum: 0
+Maximum: 100
+
 These are the most commonly used facet types:
 
 - project_type
@@ -67,21 +90,29 @@ Response is a JSON object with the following properties:
 the hits array contains objects with the following properties(some are not listed), the "*" indicates that the property is required:
 | Name | Type | Description |
 | --- | --- | --- |
+| *slug | `string` | The slug of a project, used for vanity URLs. Regex: \^[\w!@$()`.+,"\\-']{3,64}$ |
+| *title | `string` | The title of the project. |
+| *description | `string` | The description of the project. |
+| categories | `array<string>` | The categories of the project. |
+| *client_side | `string` | The client side of the project. Allowed values: required optional unsupported unknown |
+| *server_side | `string` | The server side of the project. Allowed values: required optional unsupported unknown |
 | *project_type | `string` | The type of the project. Allowed values: mod modpack resourcepack shader |
 | *downloads | `integer` | The number of times the project has been downloaded |
+| icon_url | `string` | The URL of the project's icon |
+| color | `integer` | The RGB color of the project, automatically generated from the project icon |
+| thread_id | `string` | The ID of the moderation thread associated with this project |
+| monetization_status | `string` | The monetization status of the project. Allowed values: monetized demonetized force-demonetized |
 | *project_id | `string` | The ID of the project. encoded as a base62 string |
-| *author | `string` | The ID of the team that has ownership of this project |
-| *versions | `array<string>` | The versions of the project |
-| *follows | `integer` | The number of followers the project has |
-| *date_created | `string` | The date the project was published format: ISO-8601 |
-| *date_modified | `string` | The date the project was last updated format: ISO-8601 |
-| *license | `string` | The license of the project. |
-| slug | `string` | The slug of a project, used for vanity URLs. Regex: \^[\w!@$()`.+,"\\-']{3,64}$ |
-| title | `string` | The title of the project. |
-| description | `string` | The description of the project. |
-| categories | `array<string>` | The categories of the project. |
-| client_side | `string` | The client side of the project. Allowed values: required optional unsupported unknown |
-| server_side | `string` | The server side of the project. Allowed values: required optional unsupported unknown |
+| *author | `string` | The username of the project's author |
+| display_categories | `array<string>` | A list of the categories that the project has which are not secondary |
+| *versions | `array<string>` | A list of the minecraft versions supported by the project |
+| *follows | `integer` | The total number of users following the project |
+| *date_created | `string` | The date the project was added to search format: ISO-8601 |
+| *date_modified | `string` | The date the project was last modified format: ISO-8601 |
+| latest_version | `string` | The latest version of minecraft that this project supports |
+| *license | `string` | The SPDX license ID of a project |
+| gallery | `array<string>` | All gallery images attached to the project |
+| featured_gallery | `string` | The featured gallery image of the project |
 
 ### 400 Bad Request
 Request is invalid, response is a JSON object with the following properties:
