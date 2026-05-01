@@ -5,6 +5,7 @@
 
 pub mod fabric;
 pub mod mojang;
+pub mod version_profile;
 
 use indexmap::IndexMap;
 

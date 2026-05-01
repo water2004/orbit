@@ -157,6 +157,66 @@ fn read_jar_metadata(
     Ok((id, name, meta.version))
 }
 
+/// 从实例目录的 JAR 中自动检测 MC 版本。
+///
+/// 先查当前目录，找不到再查 versions/ 下一级子目录。
+/// 提取 JAR 内的 `version.json`，若完全找不到则报错。
+pub fn detect_mc_version(instance_dir: &std::path::Path) -> Result<crate::metadata::mojang::McVersion, OrbitError> {
+    let mut search_dirs = vec![instance_dir.to_path_buf()];
+
+    let versions_dir = instance_dir.join("versions");
+    if versions_dir.is_dir() {
+        if let Ok(entries) = std::fs::read_dir(&versions_dir) {
+            for entry in entries.filter_map(|e| e.ok()) {
+                if entry.path().is_dir() {
+                    search_dirs.push(entry.path());
+                }
+            }
+        }
+    }
+
+    for dir in &search_dirs {
+        if let Ok(entries) = std::fs::read_dir(dir) {
+            for entry in entries.filter_map(|e| e.ok()) {
+                let path = entry.path();
+                if path.extension().map(|e| e != "jar").unwrap_or(true) {
+                    continue;
+                }
+                // 尝试从 JAR 中提取 version.json
+                if let Ok(version) = read_version_json_from_jar(&path) {
+                    return Ok(version);
+                }
+            }
+        }
+    }
+
+    Err(OrbitError::Other(anyhow::anyhow!(
+        "no Minecraft version.json found in any JAR under {} or its versions/ subdirectories.\n\
+         Specify --mc-version manually.",
+        instance_dir.display()
+    )))
+}
+
+/// 从游戏 JAR 中提取 version.json
+fn read_version_json_from_jar(
+    jar_path: &std::path::Path,
+) -> Result<crate::metadata::mojang::McVersion, OrbitError> {
+    let file = std::fs::File::open(jar_path).map_err(|e| {
+        OrbitError::Other(anyhow::anyhow!("cannot open {}: {e}", jar_path.display()))
+    })?;
+    let mut archive = zip::ZipArchive::new(file).map_err(|e| {
+        OrbitError::Other(anyhow::anyhow!("cannot open {} as ZIP: {e}", jar_path.display()))
+    })?;
+    let mut entry = archive.by_name("version.json").map_err(|_| {
+        OrbitError::Other(anyhow::anyhow!("no version.json in {}", jar_path.display()))
+    })?;
+    let mut content = String::new();
+    std::io::Read::read_to_string(&mut entry, &mut content).map_err(|e| {
+        OrbitError::Other(anyhow::anyhow!("cannot read version.json from {}: {e}", jar_path.display()))
+    })?;
+    crate::metadata::mojang::McVersion::from_json(&content)
+}
+
 /// 执行 init 流程。
 ///
 /// 扫描 mods/ → 构建 OrbitManifest → 写入文件 → 注册实例。
