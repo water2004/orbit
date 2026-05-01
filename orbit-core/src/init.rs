@@ -377,7 +377,7 @@ pub async fn run_init(
     for m in identified {
         let key = if m.mod_name.is_empty() { m.filename.clone() } else { m.mod_name.clone() };
         let spec = match &m.source {
-            crate::identification::IdentifiedSource::Platform { platform, slug } => {
+            crate::identification::IdentifiedSource::Platform { platform, slug, .. } => {
                 DependencySpec::Full {
                     platform: Some(platform.clone()),
                     slug: Some(slug.clone()),

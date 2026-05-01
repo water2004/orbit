@@ -34,8 +34,9 @@ pub fn build_lock_entries(
             };
             let mut keys = vec![m.mod_id.clone(), m.mod_name.clone(), m.filename.clone()];
             // Also index by platform project ID (e.g. P7dR8mSH for fabric-api)
-            if let crate::identification::IdentifiedSource::Platform { ref slug, .. } = m.source {
+            if let crate::identification::IdentifiedSource::Platform { ref project_id, ref slug, .. } = m.source {
                 keys.push(slug.clone());
+                keys.push(project_id.clone());
             }
             keys.into_iter().filter(|k| !k.is_empty()).map(move |k| (k, info.clone()))
         })
@@ -60,9 +61,9 @@ pub fn build_lock_entries(
             };
 
             match &m.source {
-                crate::identification::IdentifiedSource::Platform { platform, slug } => {
+                crate::identification::IdentifiedSource::Platform { platform, project_id, .. } => {
                     entry.platform = Some(platform.clone());
-                    entry.mod_id = Some(slug.clone());
+                    entry.mod_id = Some(project_id.clone());
                 }
                 crate::identification::IdentifiedSource::File { path } => {
                     entry.source_type = Some("file".into());

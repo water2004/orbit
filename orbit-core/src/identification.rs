@@ -6,7 +6,8 @@ use crate::providers::ModProvider;
 
 #[derive(Debug, Clone)]
 pub enum IdentifiedSource {
-    Platform { platform: String, slug: String },
+    /// 平台模组。`project_id` = 平台项目 ID (如 AANobbMI)，`slug` = 模组别名 (如 sodium，来自 JAR)
+    Platform { platform: String, project_id: String, slug: String },
     File { path: String },
 }
 
@@ -58,18 +59,24 @@ async fn identify_one(
     for p in providers {
         match p.get_version_by_hash(&m.sha512).await {
             Ok(Some(resolved)) => {
-                let deps = match p.fetch_dependencies(&resolved.mod_id).await {
+                let project_id = resolved.mod_id;
+                // 通过 API 获取 slug（project_id → slug）
+                let slug = match p.get_mod_info(&project_id).await {
+                    Ok(info) => info.slug,
+                    Err(_) => m.mod_id.clone().unwrap_or_else(|| project_id.clone()),
+                };
+                let deps = match p.fetch_dependencies(&project_id).await {
                     Ok(d) => {
-                        eprintln!("    ✓ identified as {}/{} v{} (hash match, {} deps)", p.name(), resolved.mod_id, resolved.version, d.len());
+                        eprintln!("    ✓ identified as {}/{} v{} (hash match, {} deps)", p.name(), slug, resolved.version, d.len());
                         d.into_iter().map(|d| (d.slug.unwrap_or(d.name), String::new(), d.required)).collect()
                     }
                     Err(_) => {
-                        eprintln!("    ✓ identified as {}/{} v{} (hash match, deps unavailable)", p.name(), resolved.mod_id, resolved.version);
+                        eprintln!("    ✓ identified as {}/{} v{} (hash match, deps unavailable)", p.name(), slug, resolved.version);
                         vec![]
                     }
                 };
                 return (
-                    IdentifiedSource::Platform { platform: p.name().to_string(), slug: resolved.mod_id },
+                    IdentifiedSource::Platform { platform: p.name().to_string(), project_id, slug },
                     deps,
                 );
             }
@@ -77,7 +84,7 @@ async fn identify_one(
         }
     }
 
-    // Step 2: slug + 版本交叉校验
+    // Step 2: slug（from JAR）+ 版本交叉校验
     if let Some(ref mod_id) = m.mod_id {
         for p in providers {
             if let Ok(versions) = p.get_versions(mod_id, Some(&ctx.mc_version), Some(&ctx.loader)).await {
@@ -85,7 +92,8 @@ async fn identify_one(
                     versions.iter().find(|v| v.version == *ver)
                 });
                 if let Some(v) = matched {
-                    let deps = match p.fetch_dependencies(&v.mod_id).await {
+                    let project_id = v.mod_id.clone();
+                    let deps = match p.fetch_dependencies(&project_id).await {
                         Ok(d) => {
                             eprintln!("    ✓ identified as {}/{} v{} (version match, {} deps)", p.name(), mod_id, v.version, d.len());
                             d.into_iter().map(|d| (d.slug.unwrap_or(d.name), String::new(), d.required)).collect()
@@ -96,7 +104,7 @@ async fn identify_one(
                         }
                     };
                     return (
-                        IdentifiedSource::Platform { platform: p.name().to_string(), slug: mod_id.clone() },
+                        IdentifiedSource::Platform { platform: p.name().to_string(), project_id, slug: mod_id.clone() },
                         deps,
                     );
                 }
