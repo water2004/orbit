@@ -4,9 +4,15 @@
 //! 每个平台（Modrinth、CurseForge）各自实现此 trait，`resolver` 模块仅依赖此 trait，
 //! 不耦合任何具体平台的 SDK。
 
-use async_trait::async_trait;
+pub mod rate_limiter;
+pub mod modrinth;
+pub mod curseforge;
 
+use async_trait::async_trait;
 use crate::error::OrbitError;
+
+/// 下载进度回调：`(bytes_downloaded, total_bytes)`
+pub type ProgressCallback = Box<dyn Fn(u64, u64) + Send + Sync>;
 
 // ---------------------------------------------------------------------------
 // 统一数据类型
