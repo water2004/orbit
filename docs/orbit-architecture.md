@@ -96,7 +96,7 @@ ORBIT/
 │       ├── versions/             #   版本号解析（按 loader 分别实现）
 │       │   ├── mod.rs            #     VersionScheme trait
 │       │   └── fabric.rs         #     Fabric SemanticVersion (1:1 复刻)
-│       ├── resolver.rs           #   依赖解析引擎 (lock 条目生成、依赖校验)
+│       ├── resolver.rs           #   lock 条目生成、依赖校验、版本约束
 │       ├── sync.rs               #   双向同步算法 (五态比对)
 │       ├── installer.rs          #   模组下载与磁盘写入
 │       ├── checker.rs            #   跨版本升级预检 (orbit check)
