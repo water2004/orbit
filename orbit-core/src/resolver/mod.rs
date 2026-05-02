@@ -28,6 +28,7 @@ pub fn build_lock_entries(
     }
     let installed: IndexMap<String, DepInfo> = identified
         .iter()
+        .chain(embedded.iter())
         .flat_map(|m| {
             let info = DepInfo {
                 name: if m.mod_name.is_empty() { m.mod_id.clone() } else { m.mod_name.clone() },
@@ -79,10 +80,10 @@ pub fn build_lock_entries(
                 }
 
                 if let Some(dep) = installed.get(dep_id) {
-                    if version_satisfies(&dep.version, constraint) {
+                    if constraint.is_empty() || version_satisfies(&dep.version, constraint) {
                         entry.dependencies.push(LockDependency {
                             name: dep.name.clone(),
-                            version: dep.version.clone(),
+                            version: if constraint.is_empty() { dep.version.clone() } else { constraint.to_string() },
                         });
                     } else {
                         let msg = format!(

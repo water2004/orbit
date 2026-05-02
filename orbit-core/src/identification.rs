@@ -50,23 +50,6 @@ pub async fn identify_mods(
     Ok(results)
 }
 
-/// 将 Version.dependencies 的 project_id 转为 slug
-async fn resolve_dep_slugs(
-    p: &dyn ModProvider,
-    deps: &[crate::providers::ResolvedDependency],
-) -> Vec<(String, String, bool)> {
-    let mut result = vec![];
-    for d in deps {
-        let project_id = d.slug.clone().unwrap_or_else(|| d.name.clone());
-        let slug = match p.get_mod_info(&project_id).await {
-            Ok(info) => info.slug,
-            Err(_) => project_id.clone(),
-        };
-        result.push((slug, String::new(), d.required));
-    }
-    result
-}
-
 async fn identify_one(
     m: &ScannedMod,
     providers: &[Box<dyn ModProvider>],
@@ -82,8 +65,7 @@ async fn identify_one(
                     Ok(info) => info.slug,
                     Err(_) => m.mod_id.clone().unwrap_or_else(|| project_id.clone()),
                 };
-                // Version.dependencies 的 project_id → slug
-                let deps = resolve_dep_slugs(p.as_ref(), &resolved.dependencies).await;
+                let deps = m.jar_deps.clone();
                 eprintln!("    ✓ identified as {}/{} v{} (hash match, {} deps)", p.name(), slug, resolved.version, deps.len());
                 return (
                     IdentifiedSource::Platform { platform: p.name().to_string(), project_id, slug },
@@ -103,7 +85,7 @@ async fn identify_one(
                 });
                 if let Some(v) = matched {
                     let project_id = v.mod_id.clone();
-                    let deps = resolve_dep_slugs(p.as_ref(), &v.dependencies).await;
+                    let deps = m.jar_deps.clone();
                     eprintln!("    ✓ identified as {}/{} v{} (version match, {} deps)", p.name(), mod_id, v.version, deps.len());
                     return (
                         IdentifiedSource::Platform { platform: p.name().to_string(), project_id, slug: mod_id.clone() },
