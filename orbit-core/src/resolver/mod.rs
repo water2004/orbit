@@ -17,6 +17,7 @@ const SYSTEM_DEPS: &[&str] = &["minecraft", "fabricloader", "java"];
 pub fn build_lock_entries(
     identified: &[IdentifiedMod],
     scanned: &[ScannedMod],
+    embedded: &[IdentifiedMod],
 ) -> (Vec<LockEntry>, Vec<String>) {
     // 构建查找索引：project_id / slug / mod_id / mod_name / filename → 已安装模组信息
     // needed because API deps use project IDs (e.g. P7dR8mSH) while JAR deps use slugs (e.g. fabric-api)
@@ -108,8 +109,7 @@ pub fn build_lock_entries(
         .collect();
 
     // 填充 implanted：将内嵌子模组归入父模组
-    for m in identified {
-        // 找到此 identified mod 对应的 scanned mod
+    for m in embedded {
         let Some(sm) = scanned.iter().find(|s| s.filename == m.filename) else { continue };
         let Some(ref parent_name) = sm.embedded_parent else { continue };
 

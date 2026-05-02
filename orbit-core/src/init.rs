@@ -355,9 +355,9 @@ pub async fn run_init(
     let top_slice: Vec<crate::init::ScannedMod> = top_level.into_iter().cloned().collect();
     let mut identified = crate::identification::identify_mods(&top_slice, providers, &ctx).await?;
 
-    // 2b. 内嵌模组不调 API，直接用 JAR metadata
-    for s in embedded {
-        identified.push(crate::identification::IdentifiedMod {
+    // 2b. 内嵌模组不调 API，直接用 JAR metadata（不加入顶层，仅用于 lock 的 implanted）
+    let embedded_identified: Vec<_> = embedded.iter().map(|s| {
+        crate::identification::IdentifiedMod {
             filename: s.filename.clone(),
             mod_id: s.mod_id.clone().unwrap_or_default(),
             mod_name: s.mod_name.clone().unwrap_or_default(),
@@ -365,16 +365,16 @@ pub async fn run_init(
             sha256: s.sha256.clone(),
             source: crate::identification::IdentifiedSource::File { path: format!("mods/{}", s.filename) },
             deps: s.jar_deps.clone(),
-        });
-    }
+        }
+    }).collect();
 
-    // 3. 构建依赖声明 + lock 条目
-    let (lock_entries, _warnings) = crate::resolver::build_lock_entries(&identified, &scanned);
+    // 3. 构建依赖声明 + lock 条目（仅顶层模组）
+    let (lock_entries, _warnings) = crate::resolver::build_lock_entries(&identified, &scanned, &embedded_identified);
     let mc_ver = input.mc_version.clone();
     let loader_name = input.modloader.clone();
     let loader_ver = input.modloader_version.clone();
     let mut dependencies = indexmap::IndexMap::new();
-    for m in identified {
+    for m in &identified {
         let key = if m.mod_name.is_empty() { m.filename.clone() } else { m.mod_name.clone() };
         let spec = match &m.source {
             crate::identification::IdentifiedSource::Platform { platform, slug, .. } => {
