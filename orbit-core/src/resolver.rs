@@ -8,10 +8,19 @@ use crate::identification::IdentifiedMod;
 use crate::init::ScannedMod;
 use crate::lockfile::{ImplantedMod, LockDependency, LockEntry};
 
-fn system_deps(loader: &str) -> &'static [&'static str] {
+/// 各 loader 内嵌的依赖（不检查）
+fn embedded_deps(loader: &str) -> &'static [&'static str] {
     match loader {
-        "fabric" => &["minecraft", "fabricloader", "java", "mixinextras"],
-        _ => &["minecraft", "java"],
+        "fabric" => &["mixinextras", "java"],
+        _ => &["java"],
+    }
+}
+
+/// 各 loader 的环境级虚拟依赖（版本来自 init 检测）
+fn env_deps<'a>(loader: &str, mc_ver: &'a str, loader_ver: &'a str) -> Vec<(&'a str, &'a str)> {
+    match loader {
+        "fabric" => vec![("minecraft", mc_ver), ("fabricloader", loader_ver)],
+        _ => vec![("minecraft", mc_ver)],
     }
 }
 
@@ -20,6 +29,8 @@ pub fn build_lock_entries(
     scanned: &[ScannedMod],
     embedded: &[IdentifiedMod],
     loader: &str,
+    mc_version: &str,
+    loader_version: &str,
 ) -> (Vec<LockEntry>, Vec<String>) {
     // 构建查找索引：project_id / slug / mod_id / mod_name / filename → 已安装模组信息
     // needed because API deps use project IDs (e.g. P7dR8mSH) while JAR deps use slugs (e.g. fabric-api)
@@ -28,7 +39,7 @@ pub fn build_lock_entries(
         name: String,
         version: String,
     }
-    let installed: IndexMap<String, DepInfo> = identified
+    let mut installed: IndexMap<String, DepInfo> = identified
         .iter()
         .chain(embedded.iter())
         .flat_map(|m| {
@@ -45,6 +56,11 @@ pub fn build_lock_entries(
             keys.into_iter().filter(|k| !k.is_empty()).map(move |k| (k, info.clone()))
         })
         .collect();
+
+    // 注入环境依赖（根据 loader 类型）
+    for (name, version) in env_deps(loader, mc_version, loader_version) {
+        installed.entry(name.to_string()).or_insert(DepInfo { name: name.to_string(), version: version.to_string() });
+    }
 
     let mut warnings = vec![];
     let mut entries: Vec<LockEntry> = identified
@@ -76,7 +92,7 @@ pub fn build_lock_entries(
             }
 
             for (dep_id, constraint, is_required) in &m.deps {
-                if system_deps(loader).contains(&dep_id.as_str()) {
+                if embedded_deps(loader).contains(&dep_id.as_str()) {
                     eprintln!("    ↳ depends on {dep_id} {constraint} (system, skipped)");
                     continue;
                 }

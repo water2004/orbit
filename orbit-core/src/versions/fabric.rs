@@ -237,18 +237,30 @@ fn satisfies_single(version: &SemanticVersion, predicate: &str) -> bool {
         return version.cmp(&upper) == Ordering::Less;
     }
 
-    match op {
+    // Fabric: ~ → comp(0)==v.comp(0) && comp(1)==v.comp(1) && >=v
+    // Fabric: ^ → comp(0)==v.comp(0) && >=v
+    let check = match op {
+        "~" => {
+            version >= &ref_ver
+                && version.component(0) == ref_ver.component(0)
+                && version.component(1) == ref_ver.component(1)
+        }
+        "^" => {
+            version >= &ref_ver
+                && version.component(0) == ref_ver.component(0)
+        }
         ">=" => version >= &ref_ver,
         ">" => version > &ref_ver,
         "<=" => version <= &ref_ver,
         "<" => version < &ref_ver,
         "=" => version == &ref_ver,
         _ => version == &ref_ver,
-    }
+    };
+    check
 }
 
 fn parse_operator(predicate: &str) -> (&str, &str) {
-    for op in &[">=", "<=", ">", "<", "="] {
+    for op in &[">=", "<=", "~", "^", ">", "<", "="] {
         if predicate.starts_with(op) {
             return (op, predicate[op.len()..].trim());
         }
@@ -352,10 +364,24 @@ mod tests {
 
     #[test]
     fn test_real_world_cases() {
-        // 来自实际报错的 case
         assert!(satisfies(&v("0.8.10+mc26.1.2"), "0.8.x"));
         assert!(satisfies(&v("26.1+v260402"), ">=26.1-"));
         assert!(satisfies(&v("6.7.1"), ">=6.7.1 <6.8"));
         assert!(satisfies(&v("0.28.3"), ">=0.28.3- <0.29.0-"));
+    }
+
+    #[test]
+    fn test_tilde_operator() {
+        assert!(satisfies(&v("26.1.2"), "~26.1"));
+        assert!(satisfies(&v("26.1.10"), "~26.1"));
+        assert!(!satisfies(&v("26.2.0"), "~26.1"));
+        assert!(!satisfies(&v("27.0.0"), "~26.1"));
+    }
+
+    #[test]
+    fn test_caret_operator() {
+        assert!(satisfies(&v("1.2.3"), "^1.2"));
+        assert!(satisfies(&v("1.9.0"), "^1.2"));
+        assert!(!satisfies(&v("2.0.0"), "^1.2"));
     }
 }

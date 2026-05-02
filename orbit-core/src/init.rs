@@ -369,7 +369,10 @@ pub async fn run_init(
     }).collect();
 
     // 3. 构建依赖声明 + lock 条目（仅顶层模组）
-    let (lock_entries, _warnings) = crate::resolver::build_lock_entries(&identified, &scanned, &embedded_identified, &input.modloader);
+    let (lock_entries, _warnings) = crate::resolver::build_lock_entries(
+        &identified, &scanned, &embedded_identified,
+        &input.modloader, &input.mc_version, &input.modloader_version,
+    );
     let mc_ver = input.mc_version.clone();
     let loader_name = input.modloader.clone();
     let loader_ver = input.modloader_version.clone();
