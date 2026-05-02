@@ -93,7 +93,10 @@ ORBIT/
 │       ├── lib.rs                #   公共 API 入口，暴露核心类型
 │       ├── manifest.rs           #   orbit.toml / orbit.lock 解析与序列化
 │       ├── lockfile.rs           #   orbit.lock 的读写与校验
-│       ├── resolver.rs           #   依赖解析引擎 (版本选择、传递依赖展开)
+│       ├── versions/             #   版本号解析（按 loader 分别实现）
+│       │   ├── mod.rs            #     VersionScheme trait
+│       │   └── fabric.rs         #     Fabric SemanticVersion (1:1 复刻)
+│       ├── resolver.rs           #   依赖解析引擎 (lock 条目生成、依赖校验)
 │       ├── sync.rs               #   双向同步算法 (五态比对)
 │       ├── installer.rs          #   模组下载与磁盘写入
 │       ├── checker.rs            #   跨版本升级预检 (orbit check)
@@ -378,10 +381,10 @@ anyhow = { workspace = true }
 lib.rs                    ← 公共 API 入口，重新导出所有公开类型
 ├── manifest.rs           ← orbit.toml 的 serde 结构体 + parse/save
 ├── lockfile.rs           ← orbit.lock 的 serde 结构体 + 读写 + 校验
-├── resolver.rs           ← 依赖解析引擎
-│   ├── 输入：manifest 的 [dependencies] + lockfile 的快照
-│   ├── 输出：ResolvedGraph (要安装的模组列表 + 版本 + 依赖树)
-│   └── 调用：providers 进行版本查询
+├── versions/             ← 版本号解析 (按 loader)
+│   ├── mod.rs            ← VersionScheme trait
+│   └── fabric.rs         ← Fabric SemanticVersion (1:1 复刻)
+├── resolver.rs           ← lock 生成 + 依赖校验
 ├── sync.rs               ← 双向同步 (五态比对)
 │   ├── 扫描 mods/ 目录
 │   ├── 比对 manifest + lockfile
@@ -975,6 +978,7 @@ fn map_side(side: Option<&str>) -> Option<SideSupport> {
 > - `orbit-metadata.md` — 文件格式解析层（metadata/ + jar.rs）
 > - `orbit-detection.md` — 实例环境检测层（init 命令编排）
 > - `orbit-providers.md` — 平台 Provider 层（RateLimiter + ModProvider trait）
+> - `orbit-versions.md` — 版本号解析（Fabric 等加载器语义）
 > - `orbit-resolver.md` — PubGrub 依赖解析引擎设计
 > - `orbit-status.md` — 项目完成度追踪
 > - 本文档 — 项目结构、模块边界、核心抽象接口

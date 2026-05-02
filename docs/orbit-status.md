@@ -49,7 +49,9 @@ orbit-cli ──→ orbit-core ──→ modrinth-wrapper
 | `metadata/{forge,neoforge,quilt}.rs` | 🚧 | 占位 |
 | `detection/{forge,neoforge,quilt}.rs` | 🚧 | 占位 |
 | `providers/curseforge.rs` | 🚧 | 骨架（待 curseforge-wrapper） |
-| `resolver.rs` | 🚧 | 设计文档已定，编码待开始 |
+| `versions/mod.rs` | ✅ | VersionScheme trait |
+| `versions/fabric.rs` | ✅ | Fabric SemanticVersion 1:1 复刻 + 11 单测 |
+| `resolver.rs` | ✅ | lock 生成 + 依赖校验 + 版本约束（委托 versions） |
 | `sync.rs` | 🚧 | 算法占位 |
 | `installer.rs` | 🚧 | 逻辑占位 |
 | `checker.rs` | 🚧 | 逻辑占位 |
@@ -137,6 +139,7 @@ orbit-cli ──→ orbit-core ──→ modrinth-wrapper
 | [orbit-metadata.md](orbit-metadata.md) | 文件元数据解析层 |
 | [orbit-detection.md](orbit-detection.md) | 实例环境检测层 |
 | [orbit-providers.md](orbit-providers.md) | 平台 Provider 层（RateLimiter + trait） |
+| [orbit-versions.md](orbit-versions.md) | 版本号解析（Fabric SemanticVersion 1:1） |
 | [orbit-resolver.md](orbit-resolver.md) | PubGrub 依赖解析引擎设计 |
 | [orbit-architecture.md](orbit-architecture.md) | 项目结构、模块边界、核心接口 |
 | [orbit-status.md](orbit-status.md) | 本文档 — 当前完成度追踪 |
