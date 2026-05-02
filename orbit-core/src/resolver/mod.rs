@@ -10,14 +10,18 @@ use crate::identification::IdentifiedMod;
 use crate::init::ScannedMod;
 use crate::lockfile::{ImplantedMod, LockDependency, LockEntry};
 
-/// 系统级依赖（不作为模组依赖处理）
-const SYSTEM_DEPS: &[&str] = &["minecraft", "fabricloader", "java"];
+fn system_deps(loader: &str) -> &'static [&'static str] {
+    match loader {
+        "fabric" => &["minecraft", "fabricloader", "java", "mixinextras"],
+        _ => &["minecraft", "java"],
+    }
+}
 
-/// 根据识别结果生成 lock 条目列表。
 pub fn build_lock_entries(
     identified: &[IdentifiedMod],
     scanned: &[ScannedMod],
     embedded: &[IdentifiedMod],
+    loader: &str,
 ) -> (Vec<LockEntry>, Vec<String>) {
     // 构建查找索引：project_id / slug / mod_id / mod_name / filename → 已安装模组信息
     // needed because API deps use project IDs (e.g. P7dR8mSH) while JAR deps use slugs (e.g. fabric-api)
@@ -74,7 +78,7 @@ pub fn build_lock_entries(
             }
 
             for (dep_id, constraint, is_required) in &m.deps {
-                if SYSTEM_DEPS.contains(&dep_id.as_str()) {
+                if system_deps(loader).contains(&dep_id.as_str()) {
                     eprintln!("    ↳ depends on {dep_id} {constraint} (system, skipped)");
                     continue;
                 }
