@@ -138,37 +138,50 @@ fabric-api = "^0.92"
 
 当使用简写形式时，`platform` 由 `[resolver].platforms` 决定搜索顺序。
 
-#### 3.3.2 内联表完整形式
+#### 3.3.2 完整子表形式
+
+除简写外，每个依赖也可以用一个 `[dependencies.<name>]` 子表声明：
 
 ```toml
-[dependencies]
 # 指定平台 + 版本约束
-"fabric-api" = { platform = "modrinth", version = "^0.92" }
+[dependencies."fabric-api"]
+platform = "modrinth"
+version = "^0.92"
 
 # 显式 mod ID / slug（当名称与平台内标识符不同时）
-"jei" = { platform = "curseforge", slug = "238222", version = "^12" }
+[dependencies.jei]
+platform = "curseforge"
+slug = "238222"
+version = "^12"
 
 # 精确锁定，禁止升级
-"iris" = { platform = "modrinth", version = "=1.7.0" }
+[dependencies.iris]
+platform = "modrinth"
+version = "=1.7.0"
 
 # 可选依赖 — orbit install 默认安装，orbit install --no-optional 跳过
-"zoomify" = { platform = "modrinth", optional = true }
+[dependencies.zoomify]
+platform = "modrinth"
+optional = true
 
-# 环境限定：仅客户端 / 仅服务端（默认 both）
-"inventory-hud" = { platform = "modrinth", env = "client" }
-"spark" = { platform = "modrinth", env = "server" }
-
-# 排除特定传递依赖（该模组强制依赖了一个你不需要的库）
-"some-bloated-mod" = { platform = "modrinth", exclude = ["annoying-library"] }
+# 环境限定
+[dependencies."inventory-hud"]
+platform = "modrinth"
+env = "client"
 
 # 本地文件
-"my-custom-mod" = { type = "file", path = "mods/custom/mymod.jar" }
+[dependencies."my-custom-mod"]
+type = "file"
+path = "mods/custom/mymod.jar"
 
 # 直链下载
-"rare-mod" = { type = "url", url = "https://ci.example.com/latest.jar", sha256 = "e3b0c442..." }
+[dependencies."rare-mod"]
+type = "url"
+url = "https://ci.example.com/latest.jar"
+sha256 = "e3b0c442..."
 ```
 
-#### 3.3.3 内联表字段全表
+#### 3.3.3 完整形式字段全表
 
 | 字段 | 类型 | 适用场景 | 说明 |
 |------|------|----------|------|
@@ -252,18 +265,22 @@ modloader_version = "0.15.7"      # 锁定时的加载器版本
 [[lock]]
 name = "sodium"                                    # 对应 orbit.toml [dependencies] 中的键名
 platform = "modrinth"                              # 解析到的平台
-mod_id = "AANobbMI"                                # 平台内唯一 ID
+mod_id = "AANobbMI"                                # 平台内项目 ID
 version = "0.5.8"                                  # 实际安装的版本号
 filename = "sodium-fabric-mc1.20.1-0.5.8.jar"      # 文件名
 url = "https://cdn.modrinth.com/data/AANobbMI/versions/abc123/sodium-fabric-mc1.20.1-0.5.8.jar"
 sha256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-dependencies = [                                   # 此模组的直接前置依赖
-    { name = "fabric-api", version = "0.92.0" },
-]
+
+[[lock.dependencies]]
+name = "fabric-api"
+version = "0.92.0"
+
 # 此模组自带的内嵌子模组（从 META-INF/jars/ 提取）
-implanted = [
-    { name = "xaerolib", version = "1.1.13", sha256 = "abc...", filename = "xaerolib-1.1.13.jar" },
-]
+[[lock.implanted]]
+name = "xaerolib"
+version = "1.1.13"
+sha256 = "abc..."
+filename = "xaerolib-1.1.13.jar"
 
 [[lock]]
 name = "my-custom-mod"
@@ -296,8 +313,8 @@ dependencies = []
 | `url` | `String` (可选) | 下载源 URL。type = file 时不出现 |
 | `path` | `String` (可选) | 本地文件相对路径。仅 type = file 时出现 |
 | `sha256` | `String` | SHA-256 校验值 |
-| `dependencies` | `[{name, version}]` | 此模组的直接前置依赖，每个条目含被依赖模组的名称和锁定版本 |
-| `implanted` | `[{name, version, sha256, filename}]` | 此模组内嵌的子模组（从 META-INF/jars/ 提取）。implanted 模组不需要出现在顶层 `[[lock]]` 中 |
+| `[[lock.dependencies]]` | `{name, version}` | 此模组的直接前置依赖，数组表格式，每个条目含被依赖模组的名称和锁定版本 |
+| `[[lock.implanted]]` | `{name, version, sha256, filename}` | 此模组内嵌的子模组（从 META-INF/jars/ 提取），数组表格式 |
 
 ---
 
@@ -317,9 +334,9 @@ dependencies = []
 
 | 写法 | 示例 | 含义 |
 |------|------|------|
-| 字符串 | `sodium = "*"` | 任何版本，平台由 resolver 决定 |
-| 字符串 | `iris = "=1.7.0"` | 精确版本，平台由 resolver 决定 |
-| 内联表 | `sodium = { platform = "modrinth", version = "^0.5" }` | 完整指定 |
+| 字符串 | `sodium = "*"` | 简写：任何版本，平台由 resolver 决定 |
+| 字符串 | `iris = "=1.7.0"` | 简写：精确版本 |
+| 子表 | `[dependencies.sodium]\nplatform = "modrinth"\nversion = "^0.5"` | 完整指定 |
 
 ---
 
@@ -503,23 +520,25 @@ sodium = "^0.5"
 lithium = ">=0.11, <0.14"
 phosphor = { platform = "modrinth" }
 
-# 小地图 — 客户端专用
-"journeymap" = { platform = "curseforge", version = "^5.9", env = "client" }
+# 完整子表形式
+[dependencies.journeymap]
+platform = "curseforge"
+version = "^5.9"
+env = "client"
 
-# JEI — 显式指定 CurseForge 上的 slug
-"jei" = { platform = "curseforge", slug = "238222", version = "^12" }
+[dependencies.jei]
+platform = "curseforge"
+slug = "238222"
+version = "^12"
 
-# 可选：缩放 mod（客户端）
-"zoomify" = { platform = "modrinth", optional = true, env = "client" }
+[dependencies.zoomify]
+platform = "modrinth"
+optional = true
+env = "client"
 
-# 服务端性能分析
-"spark" = { platform = "modrinth", env = "server" }
-
-# 某大型模组带了不需要的库，排除之
-"big-pack" = { platform = "curseforge", exclude = ["redundant-lib"] }
-
-# 自己做的补丁 mod
-"my-tweaks" = { type = "file", path = "mods/local/mytweaks-1.0.jar" }
+[dependencies."my-tweaks"]
+type = "file"
+path = "mods/local/mytweaks-1.0.jar"
 
 # 高级自定义分组 — benchmark 场景
 [groups.benchmark]
@@ -542,7 +561,6 @@ version = "0.5.8"
 filename = "sodium-fabric-mc1.20.1-0.5.8.jar"
 url = "https://cdn.modrinth.com/data/AANobbMI/versions/u4ZoB70l/sodium-fabric-mc1.20.1-0.5.8.jar"
 sha256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-dependencies = []
 
 [[lock]]
 name = "lithium"
@@ -552,7 +570,6 @@ version = "0.12.1"
 filename = "lithium-fabric-mc1.20.1-0.12.1.jar"
 url = "https://cdn.modrinth.com/data/gvQqBUqZ/versions/x98ZyK1m/lithium-fabric-mc1.20.1-0.12.1.jar"
 sha256 = "aa1b2c3d4e5f67890123456789abcdef0123456789abcdef0123456789abcdef01"
-dependencies = []
 
 [[lock]]
 name = "phosphor"
@@ -562,7 +579,6 @@ version = "0.2.0"
 filename = "phosphor-fabric-mc1.20.1-0.2.0.jar"
 url = "https://cdn.modrinth.com/data/hEOCdOgW/versions/p3Rq7Sm2/phosphor-fabric-mc1.20.1-0.2.0.jar"
 sha256 = "bb2c3d4e5f67890123456789abcdef0123456789abcdef0123456789abcdef0123"
-dependencies = []
 
 [[lock]]
 name = "journeymap"
