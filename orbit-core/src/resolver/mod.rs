@@ -1,8 +1,6 @@
 //! 依赖解析引擎。
 //!
-//! 负责版本号归一化和 lock 条目生成。
-
-pub mod version;
+//! 负责 lock 条目生成和依赖校验。
 
 use indexmap::IndexMap;
 
@@ -131,28 +129,7 @@ pub fn build_lock_entries(
     (entries, warnings)
 }
 
-/// 简单版本约束检查：支持 * / =x.y / >=x.y / >x.y / <x.y / ~x.y
 fn version_satisfies(installed: &str, constraint: &str) -> bool {
-    let constraint = constraint.trim();
-    if constraint == "*" || constraint.is_empty() {
-        return true;
-    }
-    let installed = version::NormalizedVersion::new(installed);
-
-    if let Some(v) = constraint.strip_prefix(">=") {
-        installed >= version::NormalizedVersion::new(v.trim())
-    } else if let Some(v) = constraint.strip_prefix('>') {
-        installed > version::NormalizedVersion::new(v.trim())
-    } else if let Some(v) = constraint.strip_prefix("<=") {
-        installed <= version::NormalizedVersion::new(v.trim())
-    } else if let Some(v) = constraint.strip_prefix('<') {
-        installed < version::NormalizedVersion::new(v.trim())
-    } else if let Some(v) = constraint.strip_prefix("~") {
-        installed >= version::NormalizedVersion::new(v.trim())
-    } else if let Some(v) = constraint.strip_prefix('=') {
-        installed == version::NormalizedVersion::new(v.trim())
-    } else {
-        // 无前缀 → 精确匹配或尝试 semver
-        installed == version::NormalizedVersion::new(constraint)
-    }
+    let Ok(ver) = crate::versions::fabric::SemanticVersion::parse(installed, true) else { return false; };
+    crate::versions::fabric::satisfies(&ver, constraint)
 }

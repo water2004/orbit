@@ -353,7 +353,7 @@ pub async fn run_init(
         loader: input.modloader.clone(),
     };
     let top_slice: Vec<crate::init::ScannedMod> = top_level.into_iter().cloned().collect();
-    let mut identified = crate::identification::identify_mods(&top_slice, providers, &ctx).await?;
+    let identified = crate::identification::identify_mods(&top_slice, providers, &ctx).await?;
 
     // 2b. 内嵌模组不调 API，直接用 JAR metadata（不加入顶层，仅用于 lock 的 implanted）
     let embedded_identified: Vec<_> = embedded.iter().map(|s| {

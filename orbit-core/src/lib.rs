@@ -15,6 +15,7 @@ pub mod lockfile;
 pub mod jar;
 pub mod metadata;
 pub mod providers;
+pub mod versions;
 
 // 业务逻辑模块（逐步实现中）
 pub mod resolver;
