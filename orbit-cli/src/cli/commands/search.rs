@@ -89,9 +89,15 @@ pub async fn handle(
             .collect::<Vec<_>>()
             .join(", ");
 
+        // Show slug prominently — this is what users type for `orbit install <slug>`
+        let name_part = if item.name.to_lowercase() != item.slug.to_lowercase().replace('-', " ") {
+            format!("{} — {}", item.slug, item.name)
+        } else {
+            item.slug.clone()
+        };
+
         println!(
-            "  {check} {name} ({platform})  \u{2b07} {dl}  mc [{mc_list}]",
-            name = item.name,
+            "  {check} {name_part} ({platform})  \u{2b07} {dl}  mc [{mc_list}]",
             platform = provider.name(),
             dl = dl,
         );
