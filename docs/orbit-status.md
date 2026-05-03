@@ -1,6 +1,6 @@
 # Orbit 项目状态
 
-> 最后更新: 2026-05-03
+> 最后更新: 2026-05-04
 
 ---
 
@@ -51,9 +51,9 @@ orbit-cli ──→ orbit-core ──→ modrinth-wrapper
 | `providers/curseforge.rs` | 🚧 | 骨架（待 curseforge-wrapper） |
 | `versions/mod.rs` | ✅ | VersionScheme trait |
 | `versions/fabric.rs` | ✅ | Fabric SemanticVersion 1:1 复刻 + 11 单测 |
-| `resolver.rs` | ✅ | lock 生成 + 依赖校验 + 版本约束（委托 versions） |
+| `resolver.rs` | ✅ | lock 构建 + 依赖图查询（find_entry / dependents / check_version_conflict） |
 | `sync.rs` | 🚧 | 算法占位 |
-| `installer.rs` | 🚧 | 逻辑占位 |
+| `installer.rs` | ✅ | install_mod：resolve → 依赖检查 → 下载 → JAR 解析 → 写入 toml/lock |
 | `checker.rs` | 🚧 | 逻辑占位 |
 | `purge.rs` | 🚧 | 逻辑占位 |
 
@@ -61,10 +61,12 @@ orbit-cli ──→ orbit-core ──→ modrinth-wrapper
 
 | 模块 | 状态 | 说明 |
 |------|------|------|
-| `cli/mod.rs` | ✅ | 完整 clap 命令定义（16 个命令 + 全局标志） |
+| `cli/mod.rs` | ✅ | 完整 clap 命令定义（16 个命令 + 全局标志 + install 可接收 mod 参数） |
 | `cli/commands/init.rs` | ✅ | 自动检测 MC 版本 + Fabric loader → 仅自动失败时才交互 |
-| `cli/commands/search.rs` | ✅ | 完整实现：provider.search() → facets 过滤 + 格式化输出 + ✓ 兼容标记 |
-| `cli/commands/*` | 🚧 | 其余 14 个命令 handler，签名就绪、println! 占位 |
+| `cli/commands/search.rs` | ✅ | 完整实现：provider.search() → facets 过滤 + 格式化输出 + ✓ 兼容标记 + slug 展示 |
+| `cli/commands/install.rs` | ✅ | 单模组安装：resolve → 依赖检查 → 下载 → Not Found 搜索回退 → 交互式选择 |
+| `cli/commands/remove.rs` | ✅ | 按 slug 删除 + 反查依赖图阻断 + 找不到时列出候选交互式选择 |
+| `cli/commands/*` | 🚧 | 其余 12 个命令 handler，签名就绪、println! 占位 |
 | `adaptors/` | — | ❌ 已删除，provider 实现归属于 orbit-core |
 | `models/` | — | ❌ 已删除，类型定义归属于 orbit-core |
 | Cargo.toml | ✅ | 仅依赖 `orbit-core` + `clap` + `tokio` + `anyhow`，不再直接依赖 wrapper |
@@ -79,9 +81,9 @@ orbit-cli ──→ orbit-core ──→ modrinth-wrapper
 | `orbit instances list` | ✅ | 🚧 config::InstancesRegistry | 需实现格式化输出 |
 | `orbit instances default` | ✅ | 🚧 config | 需 UI |
 | `orbit instances remove` | ✅ | 🚧 config | 需 UI |
-| `orbit add` | ✅ | 🚧 resolver + installer | **核心功能** |
-| `orbit install` | ✅ | 🚧 resolver + installer | **核心功能** |
-| `orbit remove` | ✅ | 🚧 manifest | 需文件操作 |
+| `orbit add` | ✅ | 🚧 resolver + installer | 占位，用 `orbit install <slug>` 替代 |
+| `orbit install` | ✅ | ✅ installer::install_mod | 单模组安装：resolve → dep check → 下载 → JAR 解析 → toml/lock |
+| `orbit remove` | ✅ | ✅ resolver::dependents | 反查依赖图 + 删除 JAR + 更新 toml/lock |
 | `orbit purge` | ✅ | 🚧 purge + manifest | 需启发式搜索 |
 | `orbit sync` | ✅ | 🚧 sync | **核心功能** |
 | `orbit outdated` | ✅ | 🚧 resolver (只读) | 需版本比对 |
@@ -110,11 +112,14 @@ orbit-cli ──→ orbit-core ──→ modrinth-wrapper
 - [x] `init` 命令: 自动 MC + Fabric 检测 + mods/ 扫描 + orbit.toml 生成
 - [x] 迁移 CLI 到新架构（16 命令 + 全局标志，移除 adaptors/models）
 
-### Phase 2 — 🔜 下一阶段
+### Phase 2 — 🔜 进行中
 
 - [x] Resolver 设计文档（`docs/orbit-resolver.md`）
-- [ ] 实现 `resolver.rs` 依赖解析引擎（PubGrub）
-- [ ] 实现 `installer.rs` 并发下载
+- [x] `resolver.rs` 依赖图查询 API（find_entry / dependents / check_version_conflict）
+- [x] `installer.rs` install_mod（resolve → dep 检查 → 下载 → JAR 解析 → toml/lock 写入）
+- [x] `cli install <slug>` 单模组安装（含搜索回退 + 交互式选择）
+- [x] `cli remove <mod>` 按 slug 删除（含反查依赖图 + 候选列表）
+- [ ] 实现 `resolver.rs` PubGrub 求解器集成
 - [ ] 实现 `sync.rs` 五态比对
 - [ ] 实现 `checker.rs` 跨版本预检
 - [ ] 实现 `purge.rs` 启发式搜索

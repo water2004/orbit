@@ -48,15 +48,48 @@
 
 ## 2. 模块结构
 
+当前 Phase 1 为单文件实现，Phase 2 将拆分为目录结构：
+
 ```
-orbit-core/src/resolver/
-├── mod.rs              # compute_resolution_graph() 入口
-├── types.rs            # PackageId, NormalizedVersion, VersionConstraint
-├── version.rs          # 版本号归一化：MC 版本字符串 → NormalizedVersion
-└── provider.rs         # OrbitDependencyProvider impl DependencyProvider
+orbit-core/src/
+├── resolver.rs          # Phase 1：单文件，基于 lockfile 的依赖图查询
+│                        # Phase 2 规划：
+│   ├── mod.rs           #   compute_resolution_graph() 入口
+│   ├── types.rs         #   PackageId, NormalizedVersion, VersionConstraint
+│   ├── version.rs       #   版本号归一化
+│   └── provider.rs      #   OrbitDependencyProvider impl
 ```
 
-与 `metadata/`、`detection/`、`providers/` 同层，策略模式统一。
+---
+
+## 2b. Phase 1 实现：lockfile 依赖图查询
+
+当前 resolver 以 `orbit.lock` 为依赖图的唯一数据源，提供以下查询 API：
+
+### `find_entry(slug, entries) -> Option<&LockEntry>`
+
+按 slug 在 lockfile 中查找条目，同时匹配 `entry.name` 和 `entry.mod_id`。
+
+### `dependents(slug, entries) -> Vec<&str>`
+
+从 lockfile 的 `[[lock.dependencies]]` 反向查询：返回所有依赖了 `slug` 的模组名称列表。供 `orbit remove` 使用——被依赖的模组不可删除。
+
+### `check_version_conflict(slug, new_version, entries) -> Result<(), String>`
+
+检查新版本与 lockfile 中已有版本是否冲突。若 lock 中已存在同名条目且版本不同，返回错误描述。
+
+### `build_lock_entries(identified, scanned, embedded, loader, mc, loader_ver) -> (Vec<LockEntry>, Vec<String>)`
+
+从已识别的模组列表构建 lock 条目，解析 JAR 声明的依赖、注入环境依赖（minecraft / fabricloader）、检测版本不匹配并生成警告。供 `orbit init` 使用。
+
+**调用关系**：
+
+```
+orbit remove ──→ resolver::dependents()
+orbit install ──→ resolver::find_entry()
+                  resolver::check_version_conflict()
+orbit init    ──→ resolver::build_lock_entries()
+```
 
 ---
 

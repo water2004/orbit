@@ -384,12 +384,12 @@ lib.rs                    ← 公共 API 入口，重新导出所有公开类型
 ├── versions/             ← 版本号解析 (按 loader)
 │   ├── mod.rs            ← VersionScheme trait
 │   └── fabric.rs         ← Fabric SemanticVersion (1:1 复刻)
-├── resolver.rs           ← lock 生成 + 依赖校验
+├── resolver.rs           ← lock 构建 + 依赖图查询 (find_entry / dependents / check_version_conflict)
 ├── sync.rs               ← 双向同步 (五态比对)
 │   ├── 扫描 mods/ 目录
 │   ├── 比对 manifest + lockfile
 │   └── 更新 manifest + lockfile
-├── installer.rs          ← 下载 jar + 写磁盘 + 更新 lockfile (并发下载)
+├── installer.rs          ← install_mod：resolve → dep 检查 → 下载 → JAR 解析 → toml/lock 写入
 ├── checker.rs            ← orbit check 跨版本预检
 ├── purge.rs              ← 深度清理启发式搜索
 ├── jar.rs                ← JAR SHA-256 + ZIP I/O → 委托 metadata/ 和 detection/
