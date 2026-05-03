@@ -68,7 +68,7 @@ orbit-core/src/
 
 ### `find_entry(slug, entries) -> Option<&LockEntry>`
 
-按 slug 在 lockfile 中查找条目，同时匹配 `entry.name` 和 `entry.mod_id`。
+按 slug 在 lockfile 中查找条目，同时匹配 `entry.name`、`entry.mod_id` 和 `entry.slug`。
 
 ### `dependents(slug, entries) -> Vec<&str>`
 
@@ -79,6 +79,10 @@ orbit-core/src/
 检查新版本与 lockfile 中已有版本是否冲突。若 lock 中已存在同名条目且版本不同，返回错误描述。
 
 ### `build_lock_entries(identified, scanned, embedded, loader, mc, loader_ver) -> (Vec<LockEntry>, Vec<String>)`
+
+从已识别的模组列表构建 lock 条目，解析 JAR 声明的依赖、注入环境依赖（minecraft / fabricloader）、检测版本不匹配并生成警告。Entry name 优先使用 `mod_id`（slug）而非 human-readable name。供 `orbit init` 使用。
+
+**注意**：内嵌子模组 dedup 已修复——多父模组共享同名内嵌 JAR 时，按 `(filename, parent)` 精确归入。
 
 从已识别的模组列表构建 lock 条目，解析 JAR 声明的依赖、注入环境依赖（minecraft / fabricloader）、检测版本不匹配并生成警告。供 `orbit init` 使用。
 

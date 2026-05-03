@@ -91,17 +91,19 @@ ORBIT/
 │   ├── Cargo.toml
 │   └── src/
 │       ├── lib.rs                #   公共 API 入口，暴露核心类型
-│       ├── manifest.rs           #   orbit.toml / orbit.lock 解析与序列化
-│       ├── lockfile.rs           #   orbit.lock 的读写与校验
-│       ├── versions/             #   版本号解析（按 loader 分别实现）
-│       │   ├── mod.rs            #     VersionScheme trait
-│       │   └── fabric.rs         #     Fabric SemanticVersion (1:1 复刻)
-│       ├── resolver.rs           #   lock 条目生成、依赖校验、版本约束
-│       ├── sync.rs               #   双向同步算法 (五态比对)
-│       ├── installer.rs          #   模组下载与磁盘写入
-│       ├── checker.rs            #   跨版本升级预检 (orbit check)
-│       ├── purge.rs              #   深度清理启发式搜索
-│       ├── jar.rs                #   JAR SHA-256 + ZIP I/O → 委托 metadata/
+│       ├── manifest.rs           #   orbit.toml 解析 + mc_version_from_dir()
+│       ├── lockfile.rs           #   orbit.lock 读写 (LockEntry 含 sha256+sha512+slug)
+│       ├── identification.rs     #   模组来源识别 (批量哈希反查)
+│       ├── init.rs               #   init 编排: scan_mods_dir + run_init
+│       ├── versions/             #   版本号解析
+│       │   ├── mod.rs            #     pub mod fabric
+│       │   └── fabric.rs         #     SemanticVersion + satisfies() 支持 ||
+│       ├── resolver.rs           #   lock 构建 + find_entry / dependents / check_version_conflict
+│       ├── sync.rs               #   双向同步 (Err 占位)
+│       ├── installer.rs          #   install_to_instance + remove_from_instance + 批量 provider fallback
+│       ├── checker.rs            #   跨版本预检 (Err 占位)
+│       ├── purge.rs              #   深度清理 (Err 占位)
+│       ├── jar.rs                #   SHA-256/512 哈希计算 (FabricModInfo 已删除)
 │       ├── metadata/             #   文件格式解析 (纯解析，无 I/O)
 │       │   ├── mod.rs            #     MetadataParser trait + ModMetadata + Extractor
 │       │   ├── fabric.rs         #     fabric.mod.json (JSON)
@@ -378,34 +380,34 @@ anyhow = { workspace = true }
 ### 6.1 模块依赖图
 
 ```
-lib.rs                    ← 公共 API 入口，重新导出所有公开类型
-├── manifest.rs           ← orbit.toml 的 serde 结构体 + parse/save
-├── lockfile.rs           ← orbit.lock 的 serde 结构体 + 读写 + 校验
-├── versions/             ← 版本号解析 (按 loader)
-│   ├── mod.rs            ← VersionScheme trait
-│   └── fabric.rs         ← Fabric SemanticVersion (1:1 复刻)
-├── resolver.rs           ← lock 构建 + 依赖图查询 (find_entry / dependents / check_version_conflict)
-├── sync.rs               ← 双向同步 (五态比对)
-│   ├── 扫描 mods/ 目录
-│   ├── 比对 manifest + lockfile
-│   └── 更新 manifest + lockfile
-├── installer.rs          ← install_mod：resolve → dep 检查 → 下载 → JAR 解析 → toml/lock 写入
-├── checker.rs            ← orbit check 跨版本预检
-├── purge.rs              ← 深度清理启发式搜索
-├── jar.rs                ← JAR SHA-256 + ZIP I/O → 委托 metadata/ 和 detection/
+lib.rs                    ← 公共 API 入口，暴露 install_to_instance / remove_from_instance 等
+├── manifest.rs           ← orbit.toml serde + mc_version_from_dir()
+├── lockfile.rs           ← orbit.lock serde (LockEntry 含 sha256+sha512+slug)
+├── identification.rs     ← 模组来源识别 (批量 hash 反查)
+├── init.rs               ← init 编排: scan_mods_dir + detect_mc_version + run_init
+├── versions/             ← 版本号解析
+│   ├── mod.rs            ← pub mod fabric
+│   └── fabric.rs         ← SemanticVersion + satisfies() 支持 ||
+├── resolver.rs           ← lock 构建 + find_entry / dependents / check_version_conflict
+├── sync.rs               ← 双向同步 (Err 占位)
+├── installer.rs          ← install_to_instance + remove_from_instance + 批量 provider
+├── checker.rs            ← 跨版本预检 (Err 占位)
+├── purge.rs              ← 深度清理 (Err 占位)
+├── jar.rs                ← SHA-256/512 哈希计算 (FabricModInfo 已删除)
 ├── metadata/             ← 文件格式解析 (纯解析，无 I/O)
 │   ├── mod.rs            ← MetadataParser trait + ModMetadata + Extractor
 │   ├── fabric.rs         ← fabric.mod.json
-│   ├── forge/quilt/...   ← (future)
-│   ├── mojang.rs         ← version.json (纯函数)
-│   └── version_profile.rs ← launcher 版本 JSON
+│   └── mojang.rs         ← version.json (纯函数)
 ├── detection/            ← 实例环境检测 (策略模式)
 │   ├── mod.rs            ← LoaderDetector trait + LoaderDetectionService
-│   └── fabric.rs         ← FabricDetector (future: forge/quilt)
-├── config.rs             ← 全局配置
+│   └── fabric.rs         ← FabricDetector
+├── config.rs             ← 全局配置 (GlobalConfig 待实际接入)
 ├── error.rs              ← 统一错误类型 (OrbitError)
 └── providers/
-    ├── mod.rs            ← ModProvider trait + ResolvedMod 等公共类型
+    ├── mod.rs            ← ModProvider trait + create_providers() 工厂
+    ├── rate_limiter.rs   ← RateLimiter (acquire 返回 Result)
+    ├── modrinth.rs       ← ModrinthProvider (批量 API + version_constraint + slug 解析)
+    └── curseforge.rs     ← CurseForgeProvider (Err 占位)
     ├── rate_limiter.rs   ← RateLimiter — Semaphore 并发控制
     ├── modrinth.rs       ← ModrinthProvider impl（持有 RateLimiter）
     └── curseforge.rs     ← CurseForgeProvider impl（持有 RateLimiter）

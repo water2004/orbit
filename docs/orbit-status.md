@@ -1,6 +1,6 @@
 # Orbit 项目状态
 
-> 最后更新: 2026-05-04
+> 最后更新: 2026-05-04 (sync with code)
 
 ---
 
@@ -21,9 +21,9 @@ orbit-cli ──→ orbit-core ──→ modrinth-wrapper
 
 | 模块 | 状态 | 说明 |
 |------|------|------|
-| `client.rs` | ✅ | HTTP 客户端构造 |
-| `api.rs` | ✅ | 所有 API 端点方法 |
-| `models.rs` | ✅ | Project, Version, SearchHit 等 |
+| `client.rs` | ✅ | HTTP 客户端（30s 超时 + check_response 保留错误 body） |
+| `api.rs` | ✅ | 所有端点 + SearchParams/ListVersionsParams builder |
+| `models.rs` | ✅ | Project, Version, SearchHit（含 author_id/organization）, VersionFile（含 id） |
 | `error.rs` | ✅ | ModrinthError 枚举 |
 | 集成测试 | ✅ | 14/14 通过（对接真实 API） |
 
@@ -34,7 +34,7 @@ orbit-cli ──→ orbit-core ──→ modrinth-wrapper
 | `manifest.rs` | ✅ | orbit.toml serde + 3 单测 |
 | `lockfile.rs` | ✅ | orbit.lock serde + 2 单测 |
 | `error.rs` | ✅ | OrbitError 枚举 (thiserror) |
-| `jar.rs` | ✅ | SHA-256 + ZIP I/O → 委托 metadata/ |
+| `jar.rs` | ✅ | SHA-256/512 哈希计算（FabricModInfo 已删除，统一走 metadata/） |
 | `config.rs` | ✅ | GlobalConfig (分层加载) + InstancesRegistry + 4 单测 |
 | `metadata/mod.rs` | ✅ | MetadataParser trait + ModMetadata + Extractor (纯内存) |
 | `metadata/fabric.rs` | ✅ | FabricParser — per-field fallback + 7 单测 |
@@ -44,18 +44,19 @@ orbit-cli ──→ orbit-core ──→ modrinth-wrapper
 | `detection/fabric.rs` | ✅ | FabricDetector — 扫描 JSON libraries 匹配 fabric-loader → Certain + 版本号 |
 | `init.rs` | ✅ | detect_mc_version (JAR → version.json) + scan_mods_dir + run_init |
 | `providers/mod.rs` | ✅ | ModProvider trait + 统一类型 |
-| `providers/rate_limiter.rs` | 🆕 | RateLimiter — Semaphore 并发控制 |
-| `providers/modrinth.rs` | ✅ | ModrinthProvider 完整 (8 方法，含 RateLimiter + facets 过滤) |
+| `providers/rate_limiter.rs` | ✅ | RateLimiter — acquire() 返回 Result |
+| `providers/modrinth.rs` | ✅ | ModrinthProvider（含批量 API + version_constraint 过滤 + slug 解析） |
+| `identification.rs` | ✅ | 批量哈希反查（get_versions_by_hashes），避免 N+1 |
 | `metadata/{forge,neoforge,quilt}.rs` | 🚧 | 占位 |
 | `detection/{forge,neoforge,quilt}.rs` | 🚧 | 占位 |
 | `providers/curseforge.rs` | 🚧 | 骨架（待 curseforge-wrapper） |
-| `versions/mod.rs` | ✅ | VersionScheme trait |
+| `versions/mod.rs` | ✅ | pub mod fabric（VersionScheme trait 已删除） |
 | `versions/fabric.rs` | ✅ | Fabric SemanticVersion 1:1 复刻 + 11 单测 |
 | `resolver.rs` | ✅ | lock 构建 + 依赖图查询（find_entry / dependents / check_version_conflict） |
-| `sync.rs` | 🚧 | 算法占位 |
-| `installer.rs` | ✅ | install_mod：resolve → 依赖检查 → 下载 → JAR 解析 → 写入 toml/lock |
-| `checker.rs` | 🚧 | 逻辑占位 |
-| `purge.rs` | 🚧 | 逻辑占位 |
+| `sync.rs` | 🚧 | 算法占位（todo! 已改为 Err） |
+| `installer.rs` | ✅ | install_to_instance + remove_from_instance + 批量 provider fallback |
+| `checker.rs` | 🚧 | 逻辑占位（todo! 已改为 Err） |
+| `purge.rs` | 🚧 | 逻辑占位（todo! 已改为 Err） |
 
 ### orbit-cli — ✅ 极薄层，结构对齐架构
 
@@ -66,10 +67,10 @@ orbit-cli ──→ orbit-core ──→ modrinth-wrapper
 | `cli/commands/search.rs` | ✅ | 完整实现：provider.search() → facets 过滤 + 格式化输出 + ✓ 兼容标记 + slug 展示 |
 | `cli/commands/install.rs` | ✅ | 单模组安装：resolve → 依赖检查 → 下载 → Not Found 搜索回退 → 交互式选择 |
 | `cli/commands/remove.rs` | ✅ | 按 slug 删除 + 反查依赖图阻断 + 找不到时列出候选交互式选择 |
-| `cli/commands/*` | 🚧 | 其余 12 个命令 handler，签名就绪、println! 占位 |
-| `adaptors/` | — | ❌ 已删除，provider 实现归属于 orbit-core |
-| `models/` | — | ❌ 已删除，类型定义归属于 orbit-core |
-| Cargo.toml | ✅ | 仅依赖 `orbit-core` + `clap` + `tokio` + `anyhow`，不再直接依赖 wrapper |
+| `cli/commands/*` | 🚧 | 其余 12 个 handler 全部 `eprintln! + exit(2)` |
+| `adaptors/` | — | ❌ 已删除 |
+| `models/` | — | ❌ 已删除 |
+| Cargo.toml | ✅ | 依赖 `orbit-core` + `clap` + `tokio` + `anyhow`（toml 已删除） |
 
 ---
 

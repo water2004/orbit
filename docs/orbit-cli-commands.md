@@ -212,6 +212,8 @@ orbit add <mod> [--platform <p>] [--version <constraint>] [--env client|server|b
                [--optional] [--no-deps]
 ```
 
+> **注意**：`orbit add` 当前为 stub（exit 2）。请使用 `orbit install <slug>` 安装单个模组。
+
 添加新模组。**修改 `orbit.toml` 和 `orbit.lock`**，并下载 jar 到 `mods/`。
 
 **行为**：
@@ -258,11 +260,17 @@ orbit add sodium --no-deps                                 # 不装传递依赖
 ### orbit install
 
 ```
+# 单模组安装（已实现）
+orbit install <slug> [-c <constraint>] [--dry-run] [-y]
+
+# 全量还原（待实现）
 orbit install [--target client|server|both] [--group <group>] [--no-optional]
               [--locked] [--frozen]
 ```
 
-根据 `orbit.toml` 和 `orbit.lock` 还原完整的模组环境。**不接受任何模组名称参数。**
+**单模组安装**（`orbit install sodium`）：接受 slug 参数，调用 Provider 解析 → 检查依赖 → 下载 → JAR 校验 → 写入 toml/lock。找不到 slug 时搜索并交互式选择。`--dry-run` 仅解析不下载，`-y` 跳过交互。
+
+**全量还原**（`orbit install` 无参数）：根据 `orbit.toml` 和 `orbit.lock` 还原完整环境。**待实现**。
 
 **行为**：
 
