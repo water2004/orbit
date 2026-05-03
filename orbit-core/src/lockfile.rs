@@ -41,6 +41,8 @@ pub struct LockEntry {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mod_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub slug: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
 
     // 本地/直链依赖

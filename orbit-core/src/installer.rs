@@ -326,7 +326,7 @@ fn apply_to_manifest_and_lock(
             name: key.clone(), platform: Some(inst.provider.clone()),
             version: inst.version.clone(), filename: inst.filename.clone(),
             sha256, sha512: String::new(), dependencies: lock_deps, implanted: vec![],
-            source_type: None, path: None, mod_id: None, url: None,
+            source_type: None, path: None, mod_id: None, slug: Some(key.clone()), url: None,
         });
     }
 }

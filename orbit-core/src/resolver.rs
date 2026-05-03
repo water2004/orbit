@@ -44,7 +44,7 @@ pub fn build_lock_entries(
         .chain(embedded.iter())
         .flat_map(|m| {
             let info = DepInfo {
-                name: if m.mod_name.is_empty() { m.mod_id.clone() } else { m.mod_name.clone() },
+                name: if !m.mod_id.is_empty() { m.mod_id.clone() } else if !m.mod_name.is_empty() { m.mod_name.clone() } else { m.filename.clone() },
                 version: m.version.clone(),
             };
             let mut keys = vec![m.mod_id.clone(), m.mod_name.clone(), m.filename.clone()];
@@ -67,7 +67,7 @@ pub fn build_lock_entries(
         .iter()
         .map(|m| {
             let mut entry = LockEntry {
-                name: if m.mod_name.is_empty() { m.mod_id.clone() } else { m.mod_name.clone() },
+                name: if !m.mod_id.is_empty() { m.mod_id.clone() } else if !m.mod_name.is_empty() { m.mod_name.clone() } else { m.filename.clone() },
                 version: m.version.clone(),
                 filename: m.filename.clone(),
                 sha256: m.sha256.clone(),
@@ -76,15 +76,17 @@ pub fn build_lock_entries(
                 implanted: vec![],
                 platform: None,
                 mod_id: None,
+                slug: None,
                 url: None,
                 source_type: None,
                 path: None,
             };
 
             match &m.source {
-                crate::identification::IdentifiedSource::Platform { platform, project_id, .. } => {
+                crate::identification::IdentifiedSource::Platform { platform, project_id, slug } => {
                     entry.platform = Some(platform.clone());
                     entry.mod_id = Some(project_id.clone());
+                    entry.slug = Some(slug.clone());
                 }
                 crate::identification::IdentifiedSource::File { path } => {
                     entry.source_type = Some("file".into());
@@ -140,7 +142,7 @@ pub fn build_lock_entries(
                     continue;
                 }
                 parent_entry.implanted.push(ImplantedMod {
-                    name: if m.mod_name.is_empty() { m.mod_id.clone() } else { m.mod_name.clone() },
+                    name: if !m.mod_id.is_empty() { m.mod_id.clone() } else if !m.mod_name.is_empty() { m.mod_name.clone() } else { m.filename.clone() },
                     version: m.version.clone(),
                     sha256: m.sha256.clone(),
                     filename: m.filename.clone(),
@@ -168,7 +170,11 @@ pub fn dependents<'a>(slug: &str, entries: &'a [LockEntry]) -> Vec<&'a str> {
 
 /// 在 lockfile 中按 slug 查找条目。
 pub fn find_entry<'a>(slug: &str, entries: &'a [LockEntry]) -> Option<&'a LockEntry> {
-    entries.iter().find(|e| e.name == slug || e.mod_id.as_deref() == Some(slug))
+    entries.iter().find(|e| {
+        e.name == slug 
+        || e.mod_id.as_deref() == Some(slug) 
+        || e.slug.as_deref() == Some(slug)
+    })
 }
 
 /// 检查新版本是否与 lockfile 中已有版本冲突。

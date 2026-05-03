@@ -364,7 +364,7 @@ pub async fn run_init(
     let loader_ver = input.modloader_version.clone();
     let mut dependencies = indexmap::IndexMap::new();
     for m in &identified {
-        let key = if m.mod_name.is_empty() { m.filename.clone() } else { m.mod_name.clone() };
+        let key = if !m.mod_id.is_empty() { m.mod_id.clone() } else if !m.mod_name.is_empty() { m.mod_name.clone() } else { m.filename.clone() };
         let spec = match &m.source {
             crate::identification::IdentifiedSource::Platform { platform, slug, .. } => {
                 DependencySpec::Full {
