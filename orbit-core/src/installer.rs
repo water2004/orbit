@@ -60,10 +60,10 @@ pub async fn install_mod(
         .await?;
 
     // 检查是否已存在
-    let main_key = pick_key(slug, &main_mod.name, manifest);
-    if !existing_ok && manifest.dependencies.contains_key(&main_key) {
+    let main_key = slug.to_string();
+    if !existing_ok && crate::resolver::find_entry(slug, &lockfile.entries).is_some() {
         return Err(OrbitError::Conflict(format!(
-            "'{main_key}' already exists in orbit.toml. Use 'orbit upgrade {main_key}' to update it."
+            "'{main_key}' already in lockfile. Use 'orbit upgrade {main_key}' to update it."
         )));
     }
 
@@ -74,26 +74,26 @@ pub async fn install_mod(
 
     if !no_deps {
         for dep in &main_mod.dependencies {
-            let Some(slug) = dep.slug.as_deref() else { continue; };
+            let Some(dep_slug) = dep.slug.as_deref() else { continue; };
 
             if !dep.required {
-                skipped_optional.push(slug.to_string());
+                skipped_optional.push(dep_slug.to_string());
                 continue;
             }
 
-            if is_dep_satisfied(slug, manifest, lockfile) {
-                already_satisfied.push(slug.to_string());
+            if crate::resolver::find_entry(dep_slug, &lockfile.entries).is_some() {
+                already_satisfied.push(dep_slug.to_string());
                 continue;
             }
 
             // 尝试在线解析
-            match provider.resolve(slug, "*", &mc_version, &loader).await {
+            match provider.resolve(dep_slug, "*", &mc_version, &loader).await {
                 Ok(resolved_dep) => {
                     to_install.push(resolved_dep);
                 }
                 Err(_) => {
                     return Err(OrbitError::Conflict(format!(
-                        "required dependency '{slug}' could not be resolved on {}",
+                        "required dependency '{dep_slug}' could not be resolved on {}",
                         provider.name()
                     )));
                 }
@@ -102,7 +102,11 @@ pub async fn install_mod(
     }
 
     // ── 3. 版本冲突检查 ────────────────────────────────────────────
-    check_version_conflicts(&to_install, manifest, lockfile)?;
+    for m in &to_install {
+        if let Err(msg) = crate::resolver::check_version_conflict(&m.name, &m.version, &lockfile.entries) {
+            return Err(OrbitError::Conflict(msg));
+        }
+    }
 
     // ── 4. 下载 ────────────────────────────────────────────────────
     let mut installed = Vec::new();
@@ -130,58 +134,6 @@ pub async fn install_mod(
 }
 
 // ── helpers ──────────────────────────────────────────────────────────
-
-/// 已存在依赖的版本是否满足约束。
-///
-/// 按 slug 匹配：manifest key、DependencySpec.slug 字段、lockfile name、lockfile mod_id。
-fn is_dep_satisfied(
-    slug: &str,
-    manifest: &OrbitManifest,
-    lockfile: &OrbitLockfile,
-) -> bool {
-    // ── manifest：key 名直接匹配，或 DependencySpec 内部的 slug 字段匹配 ──
-    let in_manifest = manifest.dependencies.iter().any(|(key, spec)| {
-        key == slug || spec.slug() == Some(slug)
-    });
-    if in_manifest {
-        return true;
-    }
-
-    // ── lockfile：entry.name 或 entry.mod_id 匹配 ──
-    let in_lock = lockfile.entries.iter().any(|e| {
-        e.name == slug || e.mod_id.as_deref() == Some(slug)
-    });
-    if in_lock {
-        return true;
-    }
-
-    false
-}
-
-/// 检查待安装模组与现有 manifest 之间是否存在版本冲突
-fn check_version_conflicts(
-    to_install: &[ResolvedMod],
-    manifest: &OrbitManifest,
-    _lockfile: &OrbitLockfile,
-) -> Result<(), OrbitError> {
-    for m in to_install {
-        // 遍历 manifest 查找匹配 slug 的已有条目
-        let existing = manifest.dependencies.iter().find(|(key, spec)| {
-            key.as_str() == m.name.as_str() || spec.slug() == Some(m.name.as_str())
-        });
-        if let Some((key, spec)) = existing {
-            if let Some(ev) = spec.version_constraint() {
-                if ev != "*" && ev != &m.version {
-                    return Err(OrbitError::Conflict(format!(
-                        "'{key}' version conflict: manifest requires '{ev}', but resolved version is '{}'",
-                        m.version
-                    )));
-                }
-            }
-        }
-    }
-    Ok(())
-}
 
 /// 下载模组 JAR 到 mods/ 目录，返回最终文件路径
 async fn download_mod(

@@ -52,7 +52,7 @@ pub async fn handle(input: String) -> Result<()> {
 
     // 4. 用 resolver 反查依赖图
     let slug = spec.slug().unwrap_or(&key);
-    let dependents = orbit_core::resolver::dependents(slug, &key, &lockfile.entries);
+    let dependents = orbit_core::resolver::dependents(slug, &lockfile.entries);
     if !dependents.is_empty() {
         anyhow::bail!(
             "'{key}' is required by: {}\nRemove those mods first.",

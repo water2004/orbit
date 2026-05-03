@@ -151,12 +151,28 @@ fn version_satisfies(installed: &str, constraint: &str) -> bool {
 }
 
 /// 从 lockfile 的依赖图中反查：哪些模组依赖了 `slug`。
-///
-/// 匹配规则：LockDependency.name 等于 slug 或 key。
-pub fn dependents<'a>(slug: &str, key: &str, entries: &'a [crate::lockfile::LockEntry]) -> Vec<&'a str> {
+pub fn dependents<'a>(slug: &str, entries: &'a [LockEntry]) -> Vec<&'a str> {
     entries
         .iter()
-        .filter(|e| e.dependencies.iter().any(|d| d.name == slug || d.name == key))
+        .filter(|e| e.dependencies.iter().any(|d| d.name == slug))
         .map(|e| e.name.as_str())
         .collect()
+}
+
+/// 在 lockfile 中按 slug 查找条目。
+pub fn find_entry<'a>(slug: &str, entries: &'a [LockEntry]) -> Option<&'a LockEntry> {
+    entries.iter().find(|e| e.name == slug || e.mod_id.as_deref() == Some(slug))
+}
+
+/// 检查新版本是否与 lockfile 中已有版本冲突。
+pub fn check_version_conflict(slug: &str, new_version: &str, entries: &[LockEntry]) -> Result<(), String> {
+    if let Some(entry) = find_entry(slug, entries) {
+        if entry.version != new_version {
+            return Err(format!(
+                "'{}' version conflict: lock has '{}', resolved '{}'",
+                entry.name, entry.version, new_version
+            ));
+        }
+    }
+    Ok(())
 }
