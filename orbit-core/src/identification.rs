@@ -53,7 +53,9 @@ pub async fn identify_mods(
             for &idx in &unrecognized {
                 let m = &scanned[idx];
                 if let Some(resolved) = hash_to_mod.get(m.sha512.as_str()) {
-                    let slug = resolved.mod_id.clone(); // fallback to project_id as slug
+                    // 优先使用 JAR 的 mod_id 作为 slug（与 Modrinth slug 一致），
+                    // 避免用 project_id（如 "EsAfCjCV"）作为 slug。
+                    let slug = m.mod_id.clone().unwrap_or_else(|| resolved.mod_id.clone());
                     let deps = m.jar_deps.clone();
                     eprintln!("    ✓ identified as {}/{} v{} (hash match, {} deps)", p.name(), slug, resolved.version, deps.len());
                     results[idx] = Some(IdentifiedMod {
@@ -79,7 +81,7 @@ pub async fn identify_mods(
             let m = &scanned[idx];
             match p.get_version_by_hash(&m.sha512).await {
                 Ok(Some(resolved)) => {
-                    let slug = resolved.mod_id.clone();
+                    let slug = m.mod_id.clone().unwrap_or_else(|| resolved.mod_id.clone());
                     eprintln!("    ✓ identified as {}/{} v{} (hash match)", p.name(), slug, resolved.version);
                     results[idx] = Some(IdentifiedMod {
                         filename: m.filename.clone(), mod_id: m.mod_id.clone().unwrap_or_default(),
