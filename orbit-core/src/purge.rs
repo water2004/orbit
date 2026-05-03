@@ -20,5 +20,5 @@ pub fn find_config_candidates(
     // TODO: Phase 2
     // 1. 按名称模糊匹配（大小写不敏感、连字符/下划线模糊匹配）
     // 2. 按 slug 匹配
-    todo!("purge config scanner not yet implemented")
+    Err(OrbitError::Other(anyhow::anyhow!("purge config scanner not yet implemented")))
 }

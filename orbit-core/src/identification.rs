@@ -1,12 +1,14 @@
 //! 模组来源识别编排。
+//!
+//! 使用批量 API 避免 N+1 查询。
 
+use std::collections::HashMap;
 use crate::error::OrbitError;
 use crate::init::ScannedMod;
 use crate::providers::ModProvider;
 
 #[derive(Debug, Clone)]
 pub enum IdentifiedSource {
-    /// 平台模组。`project_id` = 平台项目 ID (如 AANobbMI)，`slug` = 模组别名 (如 sodium，来自 JAR)
     Platform { platform: String, project_id: String, slug: String },
     File { path: String },
 }
@@ -18,7 +20,6 @@ pub struct IdentifiedMod {
     pub version: String,
     pub sha256: String,
     pub source: IdentifiedSource,
-    /// 依赖列表: (mod_id, version_constraint, required)
     pub deps: Vec<(String, String, bool)>,
 }
 
@@ -32,71 +33,102 @@ pub async fn identify_mods(
     providers: &[Box<dyn ModProvider>],
     ctx: &IdentificationContext,
 ) -> Result<Vec<IdentifiedMod>, OrbitError> {
-    let mut results = vec![];
+    let mut results: Vec<Option<IdentifiedMod>> = scanned.iter().map(|_| None).collect();
+    let mut unrecognized: Vec<usize> = (0..scanned.len()).collect();
 
-    for m in scanned {
-        let (source, deps) = identify_one(m, providers, ctx).await;
-        results.push(IdentifiedMod {
-            filename: m.filename.clone(),
-            mod_id: m.mod_id.clone().unwrap_or_default(),
-            mod_name: m.mod_name.clone().unwrap_or_default(),
-            version: m.version.clone().unwrap_or_default(),
-            sha256: m.sha256.clone(),
-            source,
-            deps,
-        });
-    }
-
-    Ok(results)
-}
-
-async fn identify_one(
-    m: &ScannedMod,
-    providers: &[Box<dyn ModProvider>],
-    ctx: &IdentificationContext,
-) -> (IdentifiedSource, Vec<(String, String, bool)>) {
-    // Step 1: SHA-512 哈希反查
     for p in providers {
-        match p.get_version_by_hash(&m.sha512).await {
-            Ok(Some(resolved)) => {
-                let project_id = resolved.mod_id;
-                // 通过 API 获取 slug（project_id → slug）
-                let slug = match p.get_mod_info(&project_id).await {
-                    Ok(info) => info.slug,
-                    Err(_) => m.mod_id.clone().unwrap_or_else(|| project_id.clone()),
-                };
-                let deps = m.jar_deps.clone();
-                eprintln!("    ✓ identified as {}/{} v{} (hash match, {} deps)", p.name(), slug, resolved.version, deps.len());
-                return (
-                    IdentifiedSource::Platform { platform: p.name().to_string(), project_id, slug },
-                    deps,
-                );
-            }
-            _ => continue,
-        }
-    }
+        if unrecognized.is_empty() { break; }
 
-    // Step 2: slug（from JAR）+ 版本交叉校验
-    if let Some(ref mod_id) = m.mod_id {
-        for p in providers {
-            if let Ok(versions) = p.get_versions(mod_id, Some(&ctx.mc_version), Some(&ctx.loader)).await {
-                let matched = m.version.as_ref().and_then(|ver| {
-                    versions.iter().find(|v| v.version == *ver)
-                });
-                if let Some(v) = matched {
-                    let project_id = v.mod_id.clone();
+        // ── 批量哈希反查 ──
+        let hashes: Vec<String> = unrecognized.iter()
+            .map(|&i| scanned[i].sha512.clone())
+            .collect();
+
+        if let Ok(found) = p.get_versions_by_hashes(&hashes).await {
+            let hash_to_mod: HashMap<&str, &crate::providers::ResolvedMod> = found.iter()
+                .map(|m| (m.sha512.as_str(), m))
+                .collect();
+
+            let mut still_unrecognized = Vec::new();
+            for &idx in &unrecognized {
+                let m = &scanned[idx];
+                if let Some(resolved) = hash_to_mod.get(m.sha512.as_str()) {
+                    let slug = resolved.mod_id.clone(); // fallback to project_id as slug
                     let deps = m.jar_deps.clone();
-                    eprintln!("    ✓ identified as {}/{} v{} (version match, {} deps)", p.name(), mod_id, v.version, deps.len());
-                    return (
-                        IdentifiedSource::Platform { platform: p.name().to_string(), project_id, slug: mod_id.clone() },
+                    eprintln!("    ✓ identified as {}/{} v{} (hash match, {} deps)", p.name(), slug, resolved.version, deps.len());
+                    results[idx] = Some(IdentifiedMod {
+                        filename: m.filename.clone(),
+                        mod_id: m.mod_id.clone().unwrap_or_default(),
+                        mod_name: m.mod_name.clone().unwrap_or_default(),
+                        version: resolved.version.clone(),
+                        sha256: m.sha256.clone(),
+                        source: IdentifiedSource::Platform { platform: p.name().to_string(), project_id: resolved.mod_id.clone(), slug },
                         deps,
-                    );
+                    });
+                } else {
+                    still_unrecognized.push(idx);
+                }
+            }
+            unrecognized = still_unrecognized;
+            continue;
+        }
+
+        // 批量失败 → 逐个回退
+        let mut still_unrecognized = Vec::new();
+        for &idx in &unrecognized {
+            let m = &scanned[idx];
+            match p.get_version_by_hash(&m.sha512).await {
+                Ok(Some(resolved)) => {
+                    let slug = resolved.mod_id.clone();
+                    eprintln!("    ✓ identified as {}/{} v{} (hash match)", p.name(), slug, resolved.version);
+                    results[idx] = Some(IdentifiedMod {
+                        filename: m.filename.clone(), mod_id: m.mod_id.clone().unwrap_or_default(),
+                        mod_name: m.mod_name.clone().unwrap_or_default(), version: resolved.version.clone(),
+                        sha256: m.sha256.clone(),
+                        source: IdentifiedSource::Platform { platform: p.name().to_string(), project_id: resolved.mod_id.clone(), slug },
+                        deps: m.jar_deps.clone(),
+                    });
+                }
+                _ => {
+                    // slug + 版本交叉校验
+                    if let Some(ref mod_id) = m.mod_id {
+                        if let Ok(versions) = p.get_versions(mod_id, Some(&ctx.mc_version), Some(&ctx.loader)).await {
+                            let matched = m.version.as_ref().and_then(|ver| versions.iter().find(|v| v.version == *ver));
+                            if let Some(v) = matched {
+                                eprintln!("    ✓ identified as {}/{} v{} (version match)", p.name(), mod_id, v.version);
+                                results[idx] = Some(IdentifiedMod {
+                                    filename: m.filename.clone(), mod_id: mod_id.clone(),
+                                    mod_name: m.mod_name.clone().unwrap_or_default(), version: v.version.clone(),
+                                    sha256: m.sha256.clone(),
+                                    source: IdentifiedSource::Platform { platform: p.name().to_string(), project_id: v.mod_id.clone(), slug: mod_id.clone() },
+                                    deps: m.jar_deps.clone(),
+                                });
+                                continue;
+                            }
+                        }
+                    }
+                    still_unrecognized.push(idx);
                 }
             }
         }
+        unrecognized = still_unrecognized;
     }
 
-    // Step 3: File 兜底，依赖来自 JAR
-    eprintln!("    ? unrecognized → recording as file ({} jar deps)", m.jar_deps.len());
-    (IdentifiedSource::File { path: format!("mods/{}", m.filename) }, m.jar_deps.clone())
+    // 兜底：file 类型
+    let mut final_results = Vec::new();
+    for (i, m) in scanned.iter().enumerate() {
+        if let Some(ident) = results[i].take() {
+            final_results.push(ident);
+        } else {
+            eprintln!("    ? unrecognized → recording as file ({} jar deps)", m.jar_deps.len());
+            final_results.push(IdentifiedMod {
+                filename: m.filename.clone(), mod_id: m.mod_id.clone().unwrap_or_default(),
+                mod_name: m.mod_name.clone().unwrap_or_default(), version: m.version.clone().unwrap_or_default(),
+                sha256: m.sha256.clone(),
+                source: IdentifiedSource::File { path: format!("mods/{}", m.filename) },
+                deps: m.jar_deps.clone(),
+            });
+        }
+    }
+    Ok(final_results)
 }

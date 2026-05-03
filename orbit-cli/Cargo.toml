@@ -11,5 +11,4 @@ orbit-core = { path = "../orbit-core" }
 tokio.workspace = true
 clap.workspace = true
 anyhow.workspace = true
-toml.workspace = true
 

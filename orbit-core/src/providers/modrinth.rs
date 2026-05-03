@@ -83,7 +83,7 @@ impl ModProvider for ModrinthProvider {
         loader: Option<&str>,
         limit: usize,
     ) -> Result<Vec<SearchResultItem>, OrbitError> {
-        let _permit = self.rate_limiter.acquire().await;
+        let _permit = self.rate_limiter.acquire().await?;
         let facets = build_facets(mc_version, loader);
         let mut params = SearchParams::new(query).limit(limit as i64);
         if let Some(ref f) = facets {
@@ -110,7 +110,7 @@ impl ModProvider for ModrinthProvider {
     }
 
     async fn get_mod_info(&self, slug: &str) -> Result<ModInfo, OrbitError> {
-        let _permit = self.rate_limiter.acquire().await;
+        let _permit = self.rate_limiter.acquire().await?;
         let project: mr_models::Project = self
             .client
             .get_project(slug)
@@ -152,7 +152,7 @@ impl ModProvider for ModrinthProvider {
         mc_version: &str,
         loader: &str,
     ) -> Result<ResolvedMod, OrbitError> {
-        let _permit = self.rate_limiter.acquire().await;
+        let _permit = self.rate_limiter.acquire().await?;
         let versions = self
             .client
             .list_versions_with_params(slug,
@@ -215,7 +215,7 @@ impl ModProvider for ModrinthProvider {
         mc_version: Option<&str>,
         loader: Option<&str>,
     ) -> Result<Vec<ResolvedMod>, OrbitError> {
-        let _permit = self.rate_limiter.acquire().await;
+        let _permit = self.rate_limiter.acquire().await?;
         let mut params = modrinth_wrapper::api::ListVersionsParams::new().include_changelog(false);
         if let Some(l) = loader { params = params.loaders(&[l]); }
         if let Some(mc) = mc_version { params = params.game_versions(&[mc]); }
@@ -247,12 +247,12 @@ impl ModProvider for ModrinthProvider {
     }
 
     async fn get_categories(&self) -> Result<Vec<String>, OrbitError> {
-        let _permit = self.rate_limiter.acquire().await;
+        let _permit = self.rate_limiter.acquire().await?;
         Ok(vec![])
     }
 
     async fn fetch_dependencies(&self, project_id: &str) -> Result<Vec<ResolvedDependency>, OrbitError> {
-        let _permit = self.rate_limiter.acquire().await;
+        let _permit = self.rate_limiter.acquire().await?;
         let deps = self.client.get_project_dependencies(project_id).await
             .map_err(|e| OrbitError::Other(e.into()))?;
         Ok(deps.projects.into_iter().map(|p| ResolvedDependency {
@@ -262,8 +262,32 @@ impl ModProvider for ModrinthProvider {
         }).collect())
     }
 
+    async fn get_versions_by_hashes(&self, hashes: &[String]) -> Result<Vec<ResolvedMod>, OrbitError> {
+        let _permit = self.rate_limiter.acquire().await?;
+        if hashes.is_empty() { return Ok(vec![]); }
+        let strs: Vec<&str> = hashes.iter().map(|s| s.as_str()).collect();
+        let map = self.client.get_versions_from_hashes(&strs, Some("sha512")).await
+            .map_err(|e| OrbitError::Other(e.into()))?;
+        Ok(map.into_values().map(|v| {
+            let file = v.files.first();
+            ResolvedMod {
+                name: v.project_id.clone(), mod_id: v.project_id.clone(),
+                version: v.version_number.clone(),
+                download_url: file.map(|f| f.url.clone()).unwrap_or_default(),
+                filename: file.map(|f| f.filename.clone()).unwrap_or_default(),
+                sha512: file.map(|f| f.hashes.sha512.clone()).unwrap_or_default(),
+                dependencies: v.dependencies.unwrap_or_default().into_iter().map(|d| ResolvedDependency {
+                    name: d.project_id.clone().unwrap_or_default(),
+                    slug: d.project_id.clone(),
+                    required: d.dependency_type == "required",
+                }).collect(),
+                client_side: None, server_side: None,
+            }
+        }).collect())
+    }
+
     async fn get_version_by_hash(&self, hash: &str) -> Result<Option<ResolvedMod>, OrbitError> {
-        let _permit = self.rate_limiter.acquire().await;
+        let _permit = self.rate_limiter.acquire().await?;
         match self.client.get_version_from_hash(hash, Some("sha512"), None).await {
             Ok(v) => {
                 let ver = v.version_number.clone();

@@ -156,11 +156,27 @@ pub trait ModProvider: Send + Sync {
         loader: &str,
     ) -> Result<ResolvedMod, OrbitError>;
 
-    /// 根据 SHA-256 哈希反查版本（供 orbit sync 识别手动拖入的 jar）
+    /// 根据哈希反查版本（供 orbit sync 识别手动拖入的 jar）。
+    /// 注意：Modrinth 使用 SHA-512，CurseForge 使用 murmur2。调用方应传入对应平台的哈希值。
     async fn get_version_by_hash(
         &self,
         hash: &str,
     ) -> Result<Option<ResolvedMod>, OrbitError>;
+
+    /// 批量哈希反查（一次请求查所有 hash，避免 N+1 查询）
+    async fn get_versions_by_hashes(
+        &self,
+        hashes: &[String],
+    ) -> Result<Vec<ResolvedMod>, OrbitError> {
+        // 默认回退：逐个调用 get_version_by_hash
+        let mut results = Vec::new();
+        for hash in hashes {
+            if let Some(m) = self.get_version_by_hash(hash).await? {
+                results.push(m);
+            }
+        }
+        Ok(results)
+    }
 
     /// 获取模组的所有版本列表
     async fn get_versions(

@@ -120,7 +120,7 @@ fn scan_mods_dir(
     Ok(results)
 }
 
-/// 扫描所有已发现模组的内嵌 JAR
+/// 扫描所有已发现模组的内嵌 JAR（按父模组分组，每个父 JAR 只打开一次）
 fn scan_embedded_jars(
     instance_dir: &Path,
     results: &mut Vec<ScannedMod>,
@@ -128,17 +128,17 @@ fn scan_embedded_jars(
     let mods_dir = instance_dir.join("mods");
     let mut new_mods = vec![];
 
-    for parent in results.iter() {
+    for parent in results.iter().filter(|p| !p.embedded_jars.is_empty()) {
+        let parent_jar = mods_dir.join(&parent.filename);
+        let file = std::fs::File::open(&parent_jar).map_err(|e| {
+            OrbitError::Other(anyhow::anyhow!("cannot open {}: {e}", parent_jar.display()))
+        })?;
+        let mut archive = zip::ZipArchive::new(file).map_err(|e| {
+            OrbitError::Other(anyhow::anyhow!("cannot open {} as ZIP: {e}", parent_jar.display()))
+        })?;
+
         for emb_path in &parent.embedded_jars {
             eprintln!("    ↳ [{}] embedded: {emb_path}", parent.filename);
-            let parent_jar = mods_dir.join(&parent.filename);
-            let file = std::fs::File::open(&parent_jar).map_err(|e| {
-                OrbitError::Other(anyhow::anyhow!("cannot open {}: {e}", parent_jar.display()))
-            })?;
-            let mut archive = zip::ZipArchive::new(file).map_err(|e| {
-                OrbitError::Other(anyhow::anyhow!("cannot open {} as ZIP: {e}", parent_jar.display()))
-            })?;
-
             let mut entry = match archive.by_name(emb_path) {
                 Ok(e) => e,
                 Err(_) => {
@@ -146,23 +146,15 @@ fn scan_embedded_jars(
                     continue;
                 }
             };
-
             let mut bytes = Vec::new();
             std::io::Read::read_to_end(&mut entry, &mut bytes).map_err(|e| {
                 OrbitError::Other(anyhow::anyhow!("cannot read {emb_path}: {e}"))
             })?;
-
             let sha256 = crate::jar::sha256_digest(&bytes);
             let sha512 = crate::jar::sha512_digest(&bytes);
             let filename = std::path::Path::new(emb_path)
-                .file_name()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .to_string();
-
+                .file_name().unwrap_or_default().to_string_lossy().to_string();
             eprintln!("      SHA-256: {}", &sha256[..16]);
-
-            // 尝试从内嵌 JAR 提取 fabric.mod.json
             let cursor = std::io::Cursor::new(&bytes[..]);
             let (mod_id, mod_name, version, jar_deps, _) = match read_jar_metadata_from_bytes(cursor) {
                 Ok(r) => r,
@@ -171,21 +163,14 @@ fn scan_embedded_jars(
                     (None, None, String::new(), vec![], vec![])
                 }
             };
-
             new_mods.push(ScannedMod {
-                filename: filename.clone(),
-                mod_id: mod_id.clone().or_else(|| mod_name.clone()),
-                mod_name,
+                filename, mod_id: mod_id.clone().or_else(|| mod_name.clone()), mod_name,
                 version: if version.is_empty() { None } else { Some(version) },
-                sha256,
-                sha512,
-                jar_deps,
-                embedded_jars: vec![],
+                sha256, sha512, jar_deps, embedded_jars: vec![],
                 embedded_parent: Some(parent.filename.clone()),
             });
         }
     }
-
     results.append(&mut new_mods);
     Ok(())
 }
@@ -273,10 +258,10 @@ fn read_jar_metadata(
 
 /// 从实例目录的 JAR 中自动检测 MC 版本。
 ///
-/// 先查当前目录，找不到再查 versions/ 下一级子目录。
-/// 提取 JAR 内的 `version.json`，若完全找不到则报错。
+/// 先查 versions/ 子目录（标准 MC 启动器布局），再回退到当前目录。
+/// 避免 mod JAR 中的 version.json 干扰检测。
 pub fn detect_mc_version(instance_dir: &std::path::Path) -> Result<crate::metadata::mojang::McVersion, OrbitError> {
-    let mut search_dirs = vec![instance_dir.to_path_buf()];
+    let mut search_dirs = Vec::new();
 
     let versions_dir = instance_dir.join("versions");
     if versions_dir.is_dir() {
@@ -288,6 +273,7 @@ pub fn detect_mc_version(instance_dir: &std::path::Path) -> Result<crate::metada
             }
         }
     }
+    search_dirs.push(instance_dir.to_path_buf());
 
     for dir in &search_dirs {
         if let Ok(entries) = std::fs::read_dir(dir) {

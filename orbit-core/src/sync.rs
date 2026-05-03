@@ -31,5 +31,5 @@ pub async fn sync(
     _providers: &[Box<dyn ModProvider>],
 ) -> Result<SyncReport, OrbitError> {
     // TODO: Phase 2 — 实现完整的同步逻辑
-    todo!("sync algorithm not yet implemented")
+    Err(OrbitError::Other(anyhow::anyhow!("sync algorithm not yet implemented")))
 }

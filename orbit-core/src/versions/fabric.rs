@@ -190,19 +190,20 @@ fn is_dot_separated_id(s: &str) -> bool {
 // ═══════════════════════════════════════════════════════════════
 
 /// 检查版本是否满足约束表达式（Fabric 格式）
+/// 检查版本是否满足约束。
+/// 空格分隔 = AND，`||` 分隔 = OR（OR 优先级低于 AND）。
 pub fn satisfies(version: &SemanticVersion, raw_constraint: &str) -> bool {
     let constraint = raw_constraint.trim();
     if constraint == "*" || constraint.is_empty() {
         return true;
     }
-    for part in constraint.split_whitespace() {
-        let part = part.trim();
-        if part.is_empty() || part == "*" { continue; }
-        if !satisfies_single(version, part) {
-            return false;
-        }
-    }
-    true
+    // 先按 OR 拆分，每组内按 AND 处理
+    constraint.split("||").any(|or_group| {
+        or_group.split_whitespace().all(|part| {
+            let part = part.trim();
+            part.is_empty() || part == "*" || satisfies_single(version, part)
+        })
+    })
 }
 
 fn satisfies_single(version: &SemanticVersion, predicate: &str) -> bool {

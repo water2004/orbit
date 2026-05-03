@@ -9,6 +9,14 @@ use crate::lockfile::{LockDependency, LockEntry, OrbitLockfile};
 use crate::manifest::{DependencySpec, OrbitManifest};
 use crate::providers::{ModProvider, ResolvedMod};
 
+fn download_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .user_agent(format!("orbit/{}", env!("CARGO_PKG_VERSION")))
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .expect("failed to build download client")
+}
+
 /// 单次 install 报告
 #[derive(Debug, Clone)]
 pub struct InstallReport {
@@ -23,6 +31,7 @@ pub struct InstalledMod {
     pub key: String,
     pub version: String,
     pub filename: String,
+    pub provider: String,
     /// 从 JAR 提取的真实依赖: (mod_id, version_constraint, required)
     pub jar_deps: Vec<(String, String, bool)>,
 }
@@ -167,17 +176,19 @@ async fn install_mod(
     let mc_version = manifest.project.mc_version.clone();
     let loader = manifest.project.modloader.clone();
 
-    // 按 provider 顺序尝试解析主模组
-    let mut main_mod = None;
-    let mut provider_name = "";
+    // 按 provider 顺序尝试解析主模组，记录来源
+    let mut main_mod: Option<(ResolvedMod, &str)> = None;
     for p in providers {
         match p.resolve(slug, constraint, &mc_version, &loader).await {
-            Ok(m) => { main_mod = Some(m); provider_name = p.name(); break; }
+            Ok(m) => { main_mod = Some((m, p.name())); break; }
             Err(OrbitError::ModNotFound(_)) => continue,
             Err(e) => return Err(e),
         }
     }
-    let main_mod = main_mod.ok_or_else(|| OrbitError::ModNotFound(slug.to_string()))?;
+    let (main_mod, _main_provider) = main_mod.ok_or_else(|| OrbitError::ModNotFound(slug.to_string()))?;
+
+    // 每个待安装模组附带其来源 provider
+    let mut to_install: Vec<(ResolvedMod, &str)> = vec![(main_mod.clone(), _main_provider)];
 
     if !existing_ok && crate::resolver::find_entry(slug, &lockfile.entries).is_some() {
         return Err(OrbitError::Conflict(format!(
@@ -185,7 +196,6 @@ async fn install_mod(
         )));
     }
 
-    let mut to_install: Vec<ResolvedMod> = vec![main_mod.clone()];
     let mut already_satisfied: Vec<String> = Vec::new();
     let mut skipped_optional: Vec<String> = Vec::new();
 
@@ -200,11 +210,10 @@ async fn install_mod(
                 already_satisfied.push(dep_slug.to_string());
                 continue;
             }
-            // 依次尝试所有 provider
-            let mut resolved_dep = None;
+            let mut resolved_dep: Option<(ResolvedMod, &str)> = None;
             for p in providers {
                 match p.resolve(dep_slug, "*", &mc_version, &loader).await {
-                    Ok(m) => { resolved_dep = Some(m); break; }
+                    Ok(m) => { resolved_dep = Some((m, p.name())); break; }
                     Err(OrbitError::ModNotFound(_)) => continue,
                     Err(_) => continue,
                 }
@@ -218,7 +227,7 @@ async fn install_mod(
         }
     }
 
-    for m in &to_install {
+    for (m, _) in &to_install {
         if let Err(msg) = crate::resolver::check_version_conflict(&m.name, &m.version, &lockfile.entries) {
             return Err(OrbitError::Conflict(msg));
         }
@@ -226,26 +235,20 @@ async fn install_mod(
 
     let mut installed = Vec::new();
     if !dry_run {
-        for m in &to_install {
+        for (m, prov) in &to_install {
             let dest_path = download_mod(m, mods_dir).await?;
             let jar_deps = parse_jar_deps(&dest_path)?;
             installed.push(InstalledMod {
-                slug: m.name.clone(),
-                key: m.name.clone(),
-                version: m.version.clone(),
-                filename: m.filename.clone(),
-                jar_deps,
+                slug: m.name.clone(), key: m.name.clone(), version: m.version.clone(),
+                filename: m.filename.clone(), provider: prov.to_string(), jar_deps,
             });
         }
-        apply_to_manifest_and_lock(manifest, lockfile, &installed, &to_install, provider_name, mods_dir);
+        apply_to_manifest_and_lock(manifest, lockfile, &installed, mods_dir);
     } else {
-        for m in &to_install {
+        for (m, prov) in &to_install {
             installed.push(InstalledMod {
-                slug: m.name.clone(),
-                key: m.name.clone(),
-                version: m.version.clone(),
-                filename: m.filename.clone(),
-                jar_deps: vec![],
+                slug: m.name.clone(), key: m.name.clone(), version: m.version.clone(),
+                filename: m.filename.clone(), provider: prov.to_string(), jar_deps: vec![],
             });
         }
     }
@@ -272,7 +275,8 @@ async fn download_mod(m: &ResolvedMod, mods_dir: &Path) -> Result<PathBuf, Orbit
             if meta.len() > 0 { return Ok(final_path); }
         }
     }
-    let bytes = reqwest::get(&m.download_url).await.map_err(OrbitError::Network)?.bytes().await.map_err(OrbitError::Network)?;
+    let client = download_client();
+    let bytes = client.get(&m.download_url).send().await.map_err(OrbitError::Network)?.bytes().await.map_err(OrbitError::Network)?;
     if !m.sha512.is_empty() {
         let actual = crate::jar::sha512_digest(&bytes);
         if actual != m.sha512 {
@@ -304,11 +308,9 @@ fn apply_to_manifest_and_lock(
     manifest: &mut OrbitManifest,
     lockfile: &mut OrbitLockfile,
     installed: &[InstalledMod],
-    resolved: &[ResolvedMod],
-    provider_name: &str,
     mods_dir: &Path,
 ) {
-    for (inst, resolved_mod) in installed.iter().zip(resolved.iter()) {
+    for inst in installed {
         let key = &inst.key;
         manifest.dependencies.entry(key.clone()).or_insert_with(|| {
             DependencySpec::Short(if inst.version.is_empty() { "*".into() } else { inst.version.clone() })
@@ -320,11 +322,11 @@ fn apply_to_manifest_and_lock(
         }).collect();
         let sha256 = if inst.filename.is_empty() { String::new() }
             else { crate::jar::compute_sha256(&mods_dir.join(&inst.filename)).unwrap_or_default() };
-        let sha512 = resolved_mod.sha512.clone();
         lockfile.entries.push(LockEntry {
-            name: key.clone(), platform: Some(provider_name.to_string()), mod_id: Some(resolved_mod.mod_id.clone()),
-            version: inst.version.clone(), filename: inst.filename.clone(), url: Some(resolved_mod.download_url.clone()),
-            sha256, sha512, dependencies: lock_deps, implanted: vec![], source_type: None, path: None,
+            name: key.clone(), platform: Some(inst.provider.clone()),
+            version: inst.version.clone(), filename: inst.filename.clone(),
+            sha256, sha512: String::new(), dependencies: lock_deps, implanted: vec![],
+            source_type: None, path: None, mod_id: None, url: None,
         });
     }
 }
