@@ -17,8 +17,18 @@ pub mod cache;
 
 use anyhow::Result;
 
+/// 全局 CLI 上下文，传递给所有命令 handler。
+#[derive(Debug, Clone)]
+pub struct CliContext {
+    pub verbose: bool,
+    pub quiet: bool,
+    pub yes: bool,
+    pub dry_run: bool,
+    pub instance: Option<String>,
+}
+
 pub trait CommandHandler {
-    async fn execute(self) -> Result<()>;
+    async fn execute(self, ctx: &CliContext) -> Result<()>;
 }
 
 pub use init::handle as handle_init;

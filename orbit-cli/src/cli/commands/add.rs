@@ -1,14 +1,15 @@
 use anyhow::Result;
+use super::CliContext;
 
 pub async fn handle(
-    mod_name: String,
-    platform: Option<String>,
-    version: Option<String>,
-    env: Option<String>,
-    optional: bool,
-    no_deps: bool,
+    _mod_name: String,
+    _platform: Option<String>,
+    _version: Option<String>,
+    _env: Option<String>,
+    _optional: bool,
+    _no_deps: bool,
+    _ctx: &CliContext,
 ) -> Result<()> {
-    // TODO: Phase 2 — 调用 provider.resolve() + manifest 写入 + installer
-    println!("Adding {mod_name} (platform={platform:?}, version={version:?}, env={env:?}, optional={optional}, no_deps={no_deps})...");
-    Ok(())
+    eprintln!("⚠ 'orbit add' is not yet implemented. Use 'orbit install <slug>' instead.");
+    std::process::exit(2)
 }

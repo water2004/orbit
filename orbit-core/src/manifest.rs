@@ -148,6 +148,11 @@ impl OrbitManifest {
         let path = dir.join("orbit.toml");
         Self::from_path(&path)
     }
+
+    /// 从目录中读取项目的 MC 版本（如果 orbit.toml 存在）
+    pub fn mc_version_from_dir(dir: &std::path::Path) -> Option<String> {
+        Self::from_dir(dir).ok().map(|m| m.project.mc_version)
+    }
 }
 
 #[cfg(test)]

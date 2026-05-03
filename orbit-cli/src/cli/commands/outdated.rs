@@ -1,10 +1,7 @@
 use anyhow::Result;
+use super::CliContext;
 
-pub async fn handle(mod_name: Option<String>) -> Result<()> {
-    // TODO: Phase 2 — 遍历 orbit.lock，调用 provider 查询最新版本
-    match mod_name {
-        Some(ref m) => println!("Checking if '{m}' is outdated..."),
-        None => println!("Checking for outdated mods..."),
-    }
-    Ok(())
+pub async fn handle(_mod_name: Option<String>, _ctx: &CliContext) -> Result<()> {
+    eprintln!("⚠ 'orbit outdated' is not yet implemented.");
+    std::process::exit(2);
 }

@@ -1,34 +1,25 @@
 use anyhow::Result;
-use orbit_core::providers::{ModProvider, modrinth::ModrinthProvider};
+use orbit_core::providers::create_providers_default;
+use super::CliContext;
 
 pub async fn handle(
     query: String,
-    platform: Option<String>,
+    _platform: Option<String>,
     limit: usize,
     mc_version: Option<String>,
     modloader: Option<String>,
+    _ctx: &CliContext,
 ) -> Result<()> {
-    // Validate / default platform
-    let platform = platform.as_deref().unwrap_or("modrinth");
-    if platform != "modrinth" {
-        anyhow::bail!(
-            "Platform '{platform}' is not yet supported. Currently only 'modrinth' is available."
-        );
-    }
+    // Determine reference MC version for compatibility ✓ marks
+    let ref_mc = mc_version.clone()
+        .or_else(|| orbit_core::OrbitManifest::mc_version_from_dir(&std::env::current_dir().ok()?));
 
-    // Determine reference MC version for compatibility ✓ marks:
-    //   user-supplied --mc-version > project orbit.toml > none
-    let ref_mc = mc_version.clone().or_else(|| {
-        std::fs::read_to_string("orbit.toml")
-            .ok()
-            .and_then(|s| toml::from_str::<orbit_core::OrbitManifest>(&s).ok())
-            .map(|m| m.project.mc_version)
-    });
-
-    let provider = ModrinthProvider::new("orbit", 3)?;
+    let providers = create_providers_default()?;
+    let provider = &providers[0];
 
     eprintln!(
-        "Searching for \"{query}\" on {platform}{}...",
+        "Searching for \"{query}\" on {}{}...",
+        provider.name(),
         if mc_version.is_some() || modloader.is_some() {
             format!(
                 " (mc={}, loader={})",

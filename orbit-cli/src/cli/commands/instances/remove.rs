@@ -1,6 +1,7 @@
 use anyhow::Result;
+use crate::cli::commands::CliContext;
 
-pub async fn handle(name: String) -> Result<()> {
-    println!("Removing instance from Orbit: {}", name);
-    Ok(())
+pub async fn handle(_name: String, _ctx: &CliContext) -> Result<()> {
+    eprintln!("⚠ 'orbit instances remove' is not yet implemented.");
+    std::process::exit(2);
 }

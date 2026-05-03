@@ -71,6 +71,7 @@ pub fn build_lock_entries(
                 version: m.version.clone(),
                 filename: m.filename.clone(),
                 sha256: m.sha256.clone(),
+                sha512: String::new(),
                 dependencies: vec![],
                 implanted: vec![],
                 platform: None,
@@ -93,7 +94,6 @@ pub fn build_lock_entries(
 
             for (dep_id, constraint, is_required) in &m.deps {
                 if embedded_deps(loader).contains(&dep_id.as_str()) {
-                    eprintln!("    ↳ depends on {dep_id} {constraint} (system, skipped)");
                     continue;
                 }
 
@@ -104,22 +104,16 @@ pub fn build_lock_entries(
                             version: if constraint.is_empty() { dep.version.clone() } else { constraint.to_string() },
                         });
                     } else {
-                        let msg = format!(
+                        warnings.push(format!(
                             "  ✗ {} requires {dep_id} {constraint} but version {} is installed",
                             entry.name, dep.version
-                        );
-                        eprintln!("{msg}");
-                        warnings.push(msg);
+                        ));
                     }
                 } else if *is_required {
-                    let msg = format!(
+                    warnings.push(format!(
                         "  ⚠ {} depends on '{dep_id}' ({constraint}) which is not installed",
                         entry.name
-                    );
-                    eprintln!("{msg}");
-                    warnings.push(msg);
-                } else {
-                    eprintln!("    ↳ optional dep {dep_id} not installed, skipped");
+                    ));
                 }
             }
 

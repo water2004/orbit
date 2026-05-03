@@ -1,13 +1,15 @@
 use anyhow::Result;
 use orbit_core::detection::LoaderDetectionService;
 use orbit_core::init::{detect_mc_version, InitInput, run_init};
-use orbit_core::providers::{ModProvider, modrinth::ModrinthProvider};
+use orbit_core::providers::create_providers_default;
+use super::CliContext;
 
 pub async fn handle(
     name: String,
     mc_version: Option<String>,
     modloader: Option<String>,
     modloader_version: Option<String>,
+    _ctx: &CliContext,
 ) -> Result<()> {
     let instance_dir = std::env::current_dir()?;
 
@@ -67,9 +69,7 @@ pub async fn handle(
         instance_dir,
     };
 
-    let providers: Vec<Box<dyn ModProvider>> = vec![
-        Box::new(ModrinthProvider::new("orbit", 3)?),
-    ];
+    let providers = create_providers_default()?;
     let output = run_init(input, &providers).await?;
 
     // ── 4. 输出结果 ────────────────────────────
@@ -115,7 +115,7 @@ fn select_loader_interactive(
 }
 
 fn prompt_mc_version() -> Result<String> {
-    let default = "1.20.1";
+    let default = "1.21.5";
     eprint!("? Minecraft version [{}]: ", default);
     let mut input = String::new();
     std::io::stdin().read_line(&mut input)?;
@@ -129,7 +129,7 @@ fn prompt_mc_version() -> Result<String> {
 
 fn default_loader_version(loader: &str) -> String {
     match loader {
-        "fabric" => "0.15.7".into(),
+        "fabric" => "0.16.10".into(),
         _ => "0.0.0".into(),
     }
 }

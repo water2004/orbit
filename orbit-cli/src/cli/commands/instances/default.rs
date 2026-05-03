@@ -1,6 +1,7 @@
 use anyhow::Result;
+use crate::cli::commands::CliContext;
 
-pub async fn handle(name: String) -> Result<()> {
-    println!("Setting default instance: {}", name);
-    Ok(())
+pub async fn handle(_name: String, _ctx: &CliContext) -> Result<()> {
+    eprintln!("⚠ 'orbit instances default' is not yet implemented.");
+    std::process::exit(2);
 }

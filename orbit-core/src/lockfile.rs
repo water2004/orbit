@@ -26,6 +26,9 @@ pub struct LockEntry {
     pub version: String,
     pub filename: String,
     pub sha256: String,
+    /// SHA-512 校验值（Modrinth 原生，用于哈希反查）
+    #[serde(skip_serializing_if = "String::is_empty", default)]
+    pub sha512: String,
     pub dependencies: Vec<LockDependency>,
 
     /// 内嵌子模组（从父 JAR 的 META-INF/jars/ 解出）
@@ -143,6 +146,7 @@ dependencies = []
                 filename: "sodium.jar".into(),
                 url: Some("https://example.com/sodium.jar".into()),
                 sha256: "abc123".into(),
+                sha512: String::new(),
                 source_type: None,
                 path: None,
                 dependencies: vec![],

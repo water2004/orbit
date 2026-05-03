@@ -1,10 +1,7 @@
 use anyhow::Result;
+use super::CliContext;
 
-pub async fn handle(
-    version: String,
-    modloader: Option<String>,
-) -> Result<()> {
-    // TODO: Phase 2 — 调用 orbit_core::checker::check_compatibility
-    println!("Checking compatibility with Minecraft {version} (modloader={modloader:?})...");
-    Ok(())
+pub async fn handle(_version: String, _modloader: Option<String>, _ctx: &CliContext) -> Result<()> {
+    eprintln!("⚠ 'orbit check' is not yet implemented.");
+    std::process::exit(2);
 }

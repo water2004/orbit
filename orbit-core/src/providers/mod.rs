@@ -11,8 +11,35 @@ pub mod curseforge;
 use async_trait::async_trait;
 use crate::error::OrbitError;
 
-/// 下载进度回调：`(bytes_downloaded, total_bytes)`
-pub type ProgressCallback = Box<dyn Fn(u64, u64) + Send + Sync>;
+/// 根据配置创建 provider 列表，按 `resolver.platforms` 顺序。
+pub fn create_providers(platforms: &[String]) -> Result<Vec<Box<dyn ModProvider>>, crate::error::OrbitError> {
+    let ua = format!("orbit/{}", env!("CARGO_PKG_VERSION"));
+    let mut providers: Vec<Box<dyn ModProvider>> = Vec::new();
+    for name in platforms {
+        match name.as_str() {
+            "modrinth" => {
+                providers.push(Box::new(modrinth::ModrinthProvider::new(&ua, 3)?) as Box<dyn ModProvider>);
+            }
+            "curseforge" => {
+                eprintln!("warning: CurseForge support is not yet implemented, skipping");
+            }
+            other => {
+                eprintln!("warning: unknown platform '{other}', skipped");
+            }
+        }
+    }
+    if providers.is_empty() {
+        return Err(crate::error::OrbitError::Other(anyhow::anyhow!(
+            "no valid platforms configured in [resolver].platforms"
+        )));
+    }
+    Ok(providers)
+}
+
+/// 默认仅 Modrinth 的 provider 列表。
+pub fn create_providers_default() -> Result<Vec<Box<dyn ModProvider>>, crate::error::OrbitError> {
+    create_providers(&["modrinth".into()])
+}
 
 // ---------------------------------------------------------------------------
 // 统一数据类型
@@ -31,8 +58,8 @@ pub struct ResolvedMod {
     pub download_url: String,
     /// jar 文件名
     pub filename: String,
-    /// SHA-256 校验值
-    pub sha256: String,
+    /// SHA-512 校验值（Modrinth 原生提供）
+    pub sha512: String,
     /// 前置依赖
     pub dependencies: Vec<ResolvedDependency>,
     /// 平台元数据声明的 client_side

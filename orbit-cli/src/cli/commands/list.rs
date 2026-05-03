@@ -1,14 +1,7 @@
 use anyhow::Result;
+use super::CliContext;
 
-pub async fn handle(
-    tree: bool,
-    _target: Option<String>,
-) -> Result<()> {
-    // TODO: Phase 2 — 读取 orbit.lock 并格式化输出
-    if tree {
-        println!("Listing installed mods (tree mode)...");
-    } else {
-        println!("Listing installed mods...");
-    }
-    Ok(())
+pub async fn handle(_tree: bool, _target: Option<String>, _ctx: &CliContext) -> Result<()> {
+    eprintln!("⚠ 'orbit list' is not yet implemented.");
+    std::process::exit(2);
 }

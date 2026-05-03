@@ -1,6 +1,7 @@
 use anyhow::Result;
+use crate::cli::commands::CliContext;
 
-pub async fn handle() -> Result<()> {
-    println!("Listing all managed instances...");
-    Ok(())
+pub async fn handle(_ctx: &CliContext) -> Result<()> {
+    eprintln!("⚠ 'orbit instances list' is not yet implemented.");
+    std::process::exit(2);
 }

@@ -1,10 +1,7 @@
 use anyhow::Result;
+use super::CliContext;
 
-pub async fn handle(
-    mod_name: String,
-    platform: Option<String>,
-) -> Result<()> {
-    // TODO: Phase 2 — 调用 provider.get_mod_info()
-    println!("Fetching info for '{mod_name}' (platform={platform:?})...");
-    Ok(())
+pub async fn handle(_mod_name: String, _platform: Option<String>, _ctx: &CliContext) -> Result<()> {
+    eprintln!("⚠ 'orbit info' is not yet implemented.");
+    std::process::exit(2);
 }

@@ -2,9 +2,8 @@ use std::collections::HashMap;
 use async_trait::async_trait;
 use modrinth_wrapper::{Client as MRClient, models as mr_models};
 use modrinth_wrapper::api::SearchParams;
-use std::path::{Path, PathBuf};
 
-use super::{ModInfo, ModProvider, ProgressCallback, ResolvedDependency, ResolvedMod, SearchResultItem, SideSupport};
+use super::{ModInfo, ModProvider, ResolvedDependency, ResolvedMod, SearchResultItem, SideSupport};
 use super::rate_limiter::RateLimiter;
 use crate::error::OrbitError;
 
@@ -23,7 +22,7 @@ impl ModrinthProvider {
         })
     }
 
-    /// 批量查询项目 ID → slug 映射
+    /// 批量查询项目 ID → slug 映射（内部方法，不获取 rate_limiter permit，由调用方控制并发）
     async fn lookup_project_slugs(&self, ids: &[&str]) -> HashMap<String, String> {
         if ids.is_empty() {
             return HashMap::new();
@@ -34,41 +33,6 @@ impl ModrinthProvider {
         }
     }
 
-    /// 下载模组 JAR 到指定目录。
-    /// 先写入 .tmp → SHA-256 校验 → rename 为正式文件名。
-    pub async fn download_to(
-        &self,
-        url: &str,
-        expected_sha256: &str,
-        dest_dir: &Path,
-        filename: &str,
-        on_progress: Option<&ProgressCallback>,
-    ) -> Result<PathBuf, OrbitError> {
-        let _permit = self.rate_limiter.acquire().await;
-
-        let tmp_path = dest_dir.join(format!(".{filename}.tmp"));
-        let final_path = dest_dir.join(filename);
-
-        let bytes = reqwest::get(url).await?.bytes().await?;
-        let total = bytes.len() as u64;
-        if let Some(cb) = on_progress {
-            cb(total, total);
-        }
-
-        let actual = crate::jar::sha256_digest(&bytes);
-        if actual != expected_sha256 {
-            std::fs::remove_file(&tmp_path).ok();
-            return Err(OrbitError::ChecksumMismatch {
-                name: filename.to_string(),
-                expected: expected_sha256.to_string(),
-                actual,
-            });
-        }
-
-        std::fs::write(&tmp_path, &bytes)?;
-        std::fs::rename(&tmp_path, &final_path)?;
-        Ok(final_path)
-    }
 }
 
 /// 将 Modrinth API 错误转为 OrbitError，404 → ModNotFound
@@ -153,40 +117,58 @@ impl ModProvider for ModrinthProvider {
             .await
             .map_err(|e| map_api_error(e, slug))?;
 
+        // Fetch recent versions for a richer display
+        let recent: Vec<super::ModVersionInfo> = self.client.list_versions_with_params(&project.slug,
+            modrinth_wrapper::api::ListVersionsParams::new().include_changelog(false))
+            .await
+            .map(|versions| versions.into_iter().take(5).map(|v| super::ModVersionInfo {
+                version: v.version_number,
+                mc_versions: v.game_versions,
+                loader: v.loaders.first().cloned().unwrap_or_default(),
+                released_at: v.date_published,
+            }).collect())
+            .unwrap_or_default();
+
         Ok(ModInfo {
             slug: project.slug.clone(),
             name: project.title,
             description: project.description,
             authors: vec![],
-            latest_version: project.versions.as_deref().and_then(|v| v.last()).cloned().unwrap_or_default(),
+            latest_version: recent.first().map(|v| v.version.clone()).unwrap_or_default(),
             downloads: project.downloads as u64,
             license: project.license.map(|l| l.id),
             client_side: map_side(&project.client_side),
             server_side: map_side(&project.server_side),
             categories: project.categories,
-            recent_versions: vec![],
-            dependencies: vec![],
+            recent_versions: recent,
+            dependencies: vec![], // 需额外调用 get_project_dependencies
         })
     }
 
     async fn resolve(
         &self,
         slug: &str,
-        _version_constraint: &str,
+        version_constraint: &str,
         mc_version: &str,
         loader: &str,
     ) -> Result<ResolvedMod, OrbitError> {
         let _permit = self.rate_limiter.acquire().await;
         let versions = self
             .client
-            .list_versions(slug)
+            .list_versions_with_params(slug,
+                modrinth_wrapper::api::ListVersionsParams::new()
+                    .loaders(&[loader])
+                    .game_versions(&[mc_version])
+                    .include_changelog(false))
             .await
             .map_err(|e| map_api_error(e, slug))?;
 
         let candidate = versions
             .iter()
-            .filter(|v| v.game_versions.iter().any(|g| g == mc_version))
-            .filter(|v| v.loaders.iter().any(|l| l == loader))
+            .filter(|v| version_constraint == "*" || version_constraint.is_empty()
+                || crate::versions::fabric::SemanticVersion::parse(&v.version_number, true)
+                    .map(|sv| crate::versions::fabric::satisfies(&sv, version_constraint))
+                    .unwrap_or(false))
             .max_by_key(|v| v.date_published.clone());
 
         match candidate {
@@ -217,7 +199,7 @@ impl ModProvider for ModrinthProvider {
                     version: v.version_number.clone(),
                     download_url: file.url.clone(),
                     filename: file.filename.clone(),
-                    sha256: file.hashes.sha512.clone(),
+                    sha512: file.hashes.sha512.clone(),
                     dependencies: deps,
                     client_side: None,
                     server_side: None,
@@ -230,17 +212,18 @@ impl ModProvider for ModrinthProvider {
     async fn get_versions(
         &self,
         slug: &str,
-        _mc_version: Option<&str>,
-        _loader: Option<&str>,
+        mc_version: Option<&str>,
+        loader: Option<&str>,
     ) -> Result<Vec<ResolvedMod>, OrbitError> {
         let _permit = self.rate_limiter.acquire().await;
-        eprintln!("    [modrinth] get_versions(slug={slug})");
+        let mut params = modrinth_wrapper::api::ListVersionsParams::new().include_changelog(false);
+        if let Some(l) = loader { params = params.loaders(&[l]); }
+        if let Some(mc) = mc_version { params = params.game_versions(&[mc]); }
         let versions = self
             .client
-            .list_versions(slug)
+            .list_versions_with_params(slug, params)
             .await
             .map_err(|e| map_api_error(e, slug))?;
-        eprintln!("    [modrinth]   → {} versions", versions.len());
 
         Ok(versions.iter().map(|v| {
             let file = v.files.first();
@@ -255,7 +238,7 @@ impl ModProvider for ModrinthProvider {
                 version: v.version_number.clone(),
                 download_url: file.map(|f| f.url.clone()).unwrap_or_default(),
                 filename: file.map(|f| f.filename.clone()).unwrap_or_default(),
-                sha256: file.map(|f| f.hashes.sha512.clone()).unwrap_or_default(),
+                sha512: file.map(|f| f.hashes.sha512.clone()).unwrap_or_default(),
                 dependencies: deps,
                 client_side: None,
                 server_side: None,
@@ -270,13 +253,8 @@ impl ModProvider for ModrinthProvider {
 
     async fn fetch_dependencies(&self, project_id: &str) -> Result<Vec<ResolvedDependency>, OrbitError> {
         let _permit = self.rate_limiter.acquire().await;
-        eprintln!("    [modrinth] fetch_dependencies({project_id})");
         let deps = self.client.get_project_dependencies(project_id).await
             .map_err(|e| OrbitError::Other(e.into()))?;
-        eprintln!("    [modrinth]   → {} projects, {} versions", deps.projects.len(), deps.versions.len());
-        for p in &deps.projects {
-            eprintln!("    [modrinth]     project: id={} slug={} title={}", p.id, p.slug, p.title);
-        }
         Ok(deps.projects.into_iter().map(|p| ResolvedDependency {
             name: p.title.clone(),
             slug: Some(p.slug),
@@ -286,16 +264,9 @@ impl ModProvider for ModrinthProvider {
 
     async fn get_version_by_hash(&self, hash: &str) -> Result<Option<ResolvedMod>, OrbitError> {
         let _permit = self.rate_limiter.acquire().await;
-        eprintln!("    [modrinth] get_version_by_hash(sha512={:.16}...)", &hash[..16]);
         match self.client.get_version_from_hash(hash, Some("sha512"), None).await {
             Ok(v) => {
                 let ver = v.version_number.clone();
-                eprintln!("    [modrinth]   → id={} project_id={} version={ver}", v.id, v.project_id);
-                if let Some(ref raw_deps) = v.dependencies {
-                    for d in raw_deps {
-                        eprintln!("    [modrinth]     dep: type={} project_id={:?} version_id={:?}", d.dependency_type, d.project_id, d.version_id);
-                    }
-                }
                 let file = v.files.first();
                 let deps = v.dependencies.unwrap_or_default().into_iter().map(|d| ResolvedDependency {
                     name: d.project_id.clone().unwrap_or_default(),
@@ -308,16 +279,13 @@ impl ModProvider for ModrinthProvider {
                     version: ver,
                     download_url: file.map(|f| f.url.clone()).unwrap_or_default(),
                     filename: file.map(|f| f.filename.clone()).unwrap_or_default(),
-                    sha256: file.map(|f| f.hashes.sha512.clone()).unwrap_or_default(),
+                    sha512: file.map(|f| f.hashes.sha512.clone()).unwrap_or_default(),
                     dependencies: deps,
                     client_side: None,
                     server_side: None,
                 }))
             }
-            Err(e) => {
-                eprintln!("    [modrinth]   → not found ({e})");
-                Ok(None)
-            }
+            Err(_) => Ok(None),
         }
     }
 }

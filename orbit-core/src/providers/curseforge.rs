@@ -1,69 +1,40 @@
 use async_trait::async_trait;
 
-use super::{
-    ModInfo, ModProvider, ModVersionInfo, ResolvedDependency, ResolvedMod, SearchResultItem,
-    SideSupport,
-};
+use super::{ModInfo, ModProvider, ResolvedMod, SearchResultItem};
 use crate::error::OrbitError;
 
 pub struct CurseForgeProvider {
-    api_key: String,
-    // TODO Phase 2: 当 curseforge-wrapper 创建后，替换为 curseforge_wrapper::Client
-    // client: curseforge_wrapper::Client,
+    _api_key: String,
 }
 
 impl CurseForgeProvider {
     pub fn new(api_key: &str) -> Self {
-        Self {
-            api_key: api_key.to_string(),
-        }
+        Self { _api_key: api_key.to_string() }
     }
+}
+
+fn cf_not_ready() -> OrbitError {
+    OrbitError::Other(anyhow::anyhow!(
+        "CurseForge support is not yet implemented. Remove 'curseforge' from [resolver].platforms."
+    ))
 }
 
 #[async_trait]
 impl ModProvider for CurseForgeProvider {
-    fn name(&self) -> &'static str {
-        "curseforge"
-    }
+    fn name(&self) -> &'static str { "curseforge" }
 
-    async fn search(
-        &self,
-        _query: &str,
-        _mc_version: Option<&str>,
-        _loader: Option<&str>,
-        _limit: usize,
-    ) -> Result<Vec<SearchResultItem>, OrbitError> {
-        todo!("CurseForgeProvider::search")
-    }
+    async fn search(&self, _q: &str, _mc: Option<&str>, _l: Option<&str>, _n: usize)
+        -> Result<Vec<SearchResultItem>, OrbitError> { Err(cf_not_ready()) }
 
-    async fn get_mod_info(&self, _slug: &str) -> Result<ModInfo, OrbitError> {
-        todo!("CurseForgeProvider::get_mod_info")
-    }
+    async fn get_mod_info(&self, _s: &str) -> Result<ModInfo, OrbitError> { Err(cf_not_ready()) }
 
-    async fn resolve(
-        &self,
-        _slug: &str,
-        _version_constraint: &str,
-        _mc_version: &str,
-        _loader: &str,
-    ) -> Result<ResolvedMod, OrbitError> {
-        todo!("CurseForgeProvider::resolve")
-    }
+    async fn resolve(&self, _s: &str, _c: &str, _mc: &str, _l: &str)
+        -> Result<ResolvedMod, OrbitError> { Err(cf_not_ready()) }
 
-    async fn get_version_by_hash(&self, _hash: &str) -> Result<Option<ResolvedMod>, OrbitError> {
-        todo!("CurseForgeProvider::get_version_by_hash")
-    }
+    async fn get_version_by_hash(&self, _h: &str) -> Result<Option<ResolvedMod>, OrbitError> { Err(cf_not_ready()) }
 
-    async fn get_versions(
-        &self,
-        _slug: &str,
-        _mc_version: Option<&str>,
-        _loader: Option<&str>,
-    ) -> Result<Vec<ResolvedMod>, OrbitError> {
-        todo!("CurseForgeProvider::get_versions")
-    }
+    async fn get_versions(&self, _s: &str, _mc: Option<&str>, _l: Option<&str>)
+        -> Result<Vec<ResolvedMod>, OrbitError> { Err(cf_not_ready()) }
 
-    async fn get_categories(&self) -> Result<Vec<String>, OrbitError> {
-        todo!("CurseForgeProvider::get_categories")
-    }
+    async fn get_categories(&self) -> Result<Vec<String>, OrbitError> { Err(cf_not_ready()) }
 }

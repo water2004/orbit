@@ -128,7 +128,9 @@ impl ListVersionsParams {
 
 /// Helper: build a URL with query parameters using `url::Url`.
 fn build_url(base: &str, path: &str, params: &[(&str, String)]) -> String {
-    let mut url = url::Url::parse(&format!("{}{}", base, path)).expect("valid base URL");
+    let Ok(mut url) = url::Url::parse(&format!("{base}{path}")) else {
+        return format!("{base}{path}");
+    };
     for (k, v) in params {
         url.query_pairs_mut().append_pair(k, v);
     }

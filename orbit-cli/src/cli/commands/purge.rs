@@ -1,6 +1,7 @@
 use anyhow::Result;
+use super::CliContext;
 
-pub async fn handle(mod_name: String) -> Result<()> {
-    println!("Deep purging mod and its config: {}", mod_name);
-    Ok(())
+pub async fn handle(_mod_name: String, _ctx: &CliContext) -> Result<()> {
+    eprintln!("⚠ 'orbit purge' is not yet implemented.");
+    std::process::exit(2);
 }

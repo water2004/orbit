@@ -1,12 +1,6 @@
-//! 单模组安装逻辑。
+//! 模组安装 / 卸载逻辑。
 //!
-//! `orbit install <slug>` 的完整流程：
-//! 1. provider 解析 slug → 版本 + 依赖（含正确的 slug）
-//! 2. 检查本地状态（toml + lock），区分可选/必选依赖
-//! 3. 缺失的必选依赖 → 尝试在线解析
-//! 4. 版本冲突 → 报错
-//! 5. 下载所有文件 → 写入 mods/
-//! 6. 解析 JAR 内的 fabric.mod.json → 更新 toml + lock
+//! 提供顶层 API 供 CLI 调用。CLI 层不直接操作 TOML / 文件。
 
 use std::path::{Path, PathBuf};
 
@@ -18,18 +12,14 @@ use crate::providers::{ModProvider, ResolvedMod};
 /// 单次 install 报告
 #[derive(Debug, Clone)]
 pub struct InstallReport {
-    /// 已成功安装的模组（含主模组和依赖）
     pub installed: Vec<InstalledMod>,
-    /// 已存在、无需安装的依赖名
     pub already_satisfied: Vec<String>,
-    /// 跳过的可选依赖
     pub skipped_optional: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
 pub struct InstalledMod {
     pub slug: String,
-    /// orbit.toml 中的键名（即用户看到的依赖名）
     pub key: String,
     pub version: String,
     pub filename: String,
@@ -37,37 +27,164 @@ pub struct InstalledMod {
     pub jar_deps: Vec<(String, String, bool)>,
 }
 
-/// 安装单个模组（含依赖解析、下载、JAR 校验）。
+/// 顶层 API：在指定实例目录安装模组。
 ///
-/// - `no_deps`: 不安装传递依赖
-/// - `existing_ok`: 主模组已存在时是否视为成功（否则报错）
-pub async fn install_mod(
+/// 接收 `instance_dir`，内部完成 orbit.toml / orbit.lock 的读写和 mods/ 目录管理。
+/// `dry_run` 为 true 时仅解析不下载不写文件。
+pub async fn install_to_instance(
     slug: &str,
     constraint: &str,
-    provider: &dyn ModProvider,
+    instance_dir: &Path,
+    providers: &[Box<dyn ModProvider>],
+    no_deps: bool,
+    dry_run: bool,
+) -> Result<InstallReport, OrbitError> {
+    let toml_path = instance_dir.join("orbit.toml");
+    if !toml_path.exists() {
+        return Err(OrbitError::ManifestNotFound);
+    }
+    let mut manifest = OrbitManifest::from_path(&toml_path)?;
+
+    let lock_path = instance_dir.join("orbit.lock");
+    let mut lockfile = if lock_path.exists() {
+        OrbitLockfile::from_path(&lock_path)?
+    } else {
+        OrbitLockfile {
+            meta: crate::lockfile::LockMeta {
+                mc_version: manifest.project.mc_version.clone(),
+                modloader: manifest.project.modloader.clone(),
+                modloader_version: manifest.project.modloader_version.clone(),
+            },
+            entries: vec![],
+        }
+    };
+
+    let mods_dir = instance_dir.join("mods");
+    if !mods_dir.exists() && !dry_run {
+        std::fs::create_dir_all(&mods_dir).map_err(OrbitError::Io)?;
+    }
+
+    // 按 provider 顺序尝试解析
+    let report = install_mod(slug, constraint, &providers[..], &mut manifest, &mut lockfile, &mods_dir, no_deps, false, dry_run).await?;
+
+    if !dry_run {
+        std::fs::write(&toml_path, manifest.to_toml_string()?).map_err(OrbitError::Io)?;
+        std::fs::write(&lock_path, lockfile.to_toml_string()?).map_err(OrbitError::Io)?;
+    }
+
+    Ok(report)
+}
+
+/// 顶层 API：从指定实例目录移除模组。
+pub fn remove_from_instance(
+    input: &str,
+    instance_dir: &Path,
+    dry_run: bool,
+) -> Result<RemoveReport, OrbitError> {
+    let toml_path = instance_dir.join("orbit.toml");
+    if !toml_path.exists() {
+        return Err(OrbitError::ManifestNotFound);
+    }
+    let mut manifest = OrbitManifest::from_path(&toml_path)?;
+
+    // 查找依赖
+    let key = find_by_slug(input, &manifest)
+        .ok_or_else(|| OrbitError::ModNotFound(input.to_string()))?;
+
+    let spec = manifest.dependencies.swap_remove(&key)
+        .expect("dependency entry should exist");
+
+    let lock_path = instance_dir.join("orbit.lock");
+    let mut lockfile = if lock_path.exists() {
+        OrbitLockfile::from_path(&lock_path)?
+    } else {
+        return Err(OrbitError::LockfileNotFound);
+    };
+
+    // 反查依赖图
+    let slug = spec.slug().unwrap_or(&key);
+    let dependents = crate::resolver::dependents(slug, &lockfile.entries);
+    if !dependents.is_empty() {
+        return Err(OrbitError::Conflict(format!(
+            "'{key}' is required by: {}\nRemove those mods first.",
+            dependents.join(", ")
+        )));
+    }
+
+    // 找到 lock 条目
+    let filename = lockfile.entries.iter()
+        .find(|e| e.name == key || e.mod_id.as_deref() == Some(slug))
+        .map(|e| e.filename.clone());
+
+    // 删除 JAR
+    if let Some(ref fname) = filename {
+        let jar_path = instance_dir.join("mods").join(fname);
+        if jar_path.exists() && !dry_run {
+            std::fs::remove_file(&jar_path).map_err(OrbitError::Io)?;
+        }
+    }
+
+    lockfile.entries.retain(|e| e.name != key);
+
+    if !dry_run {
+        std::fs::write(&toml_path, manifest.to_toml_string()?).map_err(OrbitError::Io)?;
+        std::fs::write(&lock_path, lockfile.to_toml_string()?).map_err(OrbitError::Io)?;
+    }
+
+    Ok(RemoveReport {
+        key,
+        jar_deleted: filename.is_some(),
+    })
+}
+
+#[derive(Debug, Clone)]
+pub struct RemoveReport {
+    pub key: String,
+    pub jar_deleted: bool,
+}
+
+/// 列出实例中所有依赖（供 remove 找不到时交互选择）
+pub fn list_dependencies(instance_dir: &Path) -> Result<Vec<(String, String)>, OrbitError> {
+    let manifest = OrbitManifest::from_path(&instance_dir.join("orbit.toml"))?;
+    Ok(manifest.dependencies.iter().map(|(k, spec)| {
+        (k.clone(), spec.slug().unwrap_or(k).to_string())
+    }).collect())
+}
+
+// ── 内部实现 ──────────────────────────────────────────────────────────
+
+async fn install_mod(
+    slug: &str,
+    constraint: &str,
+    providers: &[Box<dyn ModProvider>],
     manifest: &mut OrbitManifest,
     lockfile: &mut OrbitLockfile,
     mods_dir: &Path,
     no_deps: bool,
     existing_ok: bool,
+    dry_run: bool,
 ) -> Result<InstallReport, OrbitError> {
     let mc_version = manifest.project.mc_version.clone();
     let loader = manifest.project.modloader.clone();
 
-    // ── 1. 解析主模组 ──────────────────────────────────────────────
-    let main_mod = provider
-        .resolve(slug, constraint, &mc_version, &loader)
-        .await?;
+    // 按 provider 顺序尝试解析主模组
+    let mut main_mod = None;
+    let mut provider_name = "";
+    for p in providers {
+        match p.resolve(slug, constraint, &mc_version, &loader).await {
+            Ok(m) => { main_mod = Some(m); provider_name = p.name(); break; }
+            Err(OrbitError::ModNotFound(_)) => continue,
+            Err(e) => return Err(e),
+        }
+    }
+    let main_mod = main_mod.ok_or_else(|| OrbitError::ModNotFound(slug.to_string()))?;
 
-    // 检查是否已存在
-    let main_key = slug.to_string();
     if !existing_ok && crate::resolver::find_entry(slug, &lockfile.entries).is_some() {
         return Err(OrbitError::Conflict(format!(
-            "'{main_key}' already in lockfile. Use 'orbit upgrade {main_key}' to update it."
+            "'{slug}' already in lockfile. Use 'orbit upgrade {slug}' to update it."
         )));
     }
 
-    // ── 2. 检查依赖 ────────────────────────────────────────────────
     let mut to_install: Vec<ResolvedMod> = vec![main_mod.clone()];
     let mut already_satisfied: Vec<String> = Vec::new();
     let mut skipped_optional: Vec<String> = Vec::new();
@@ -75,188 +192,139 @@ pub async fn install_mod(
     if !no_deps {
         for dep in &main_mod.dependencies {
             let Some(dep_slug) = dep.slug.as_deref() else { continue; };
-
             if !dep.required {
                 skipped_optional.push(dep_slug.to_string());
                 continue;
             }
-
             if crate::resolver::find_entry(dep_slug, &lockfile.entries).is_some() {
                 already_satisfied.push(dep_slug.to_string());
                 continue;
             }
-
-            // 尝试在线解析
-            match provider.resolve(dep_slug, "*", &mc_version, &loader).await {
-                Ok(resolved_dep) => {
-                    to_install.push(resolved_dep);
+            // 依次尝试所有 provider
+            let mut resolved_dep = None;
+            for p in providers {
+                match p.resolve(dep_slug, "*", &mc_version, &loader).await {
+                    Ok(m) => { resolved_dep = Some(m); break; }
+                    Err(OrbitError::ModNotFound(_)) => continue,
+                    Err(_) => continue,
                 }
-                Err(_) => {
-                    return Err(OrbitError::Conflict(format!(
-                        "required dependency '{dep_slug}' could not be resolved on {}",
-                        provider.name()
-                    )));
-                }
+            }
+            match resolved_dep {
+                Some(d) => to_install.push(d),
+                None => return Err(OrbitError::Conflict(format!(
+                    "required dependency '{dep_slug}' could not be resolved on any platform"
+                ))),
             }
         }
     }
 
-    // ── 3. 版本冲突检查 ────────────────────────────────────────────
     for m in &to_install {
         if let Err(msg) = crate::resolver::check_version_conflict(&m.name, &m.version, &lockfile.entries) {
             return Err(OrbitError::Conflict(msg));
         }
     }
 
-    // ── 4. 下载 ────────────────────────────────────────────────────
     let mut installed = Vec::new();
-    for m in &to_install {
-        let dest_path = download_mod(m, mods_dir).await?;
-        let jar_deps = parse_jar_deps(&dest_path)?;
-
-        installed.push(InstalledMod {
-            slug: m.name.clone(),
-            key: pick_key(&m.name, &m.name, manifest),
-            version: m.version.clone(),
-            filename: m.filename.clone(),
-            jar_deps,
-        });
-    }
-
-    // ── 5. 写入 manifest + lockfile ────────────────────────────────
-    apply_to_manifest_and_lock(manifest, lockfile, &installed, &to_install);
-
-    Ok(InstallReport {
-        installed,
-        already_satisfied,
-        skipped_optional,
-    })
-}
-
-// ── helpers ──────────────────────────────────────────────────────────
-
-/// 下载模组 JAR 到 mods/ 目录，返回最终文件路径
-async fn download_mod(
-    m: &ResolvedMod,
-    mods_dir: &Path,
-) -> Result<PathBuf, OrbitError> {
-    let final_path = mods_dir.join(&m.filename);
-
-    // 已存在 → 跳过（后续写入 lock 时会重算 SHA-256）
-    if final_path.exists() {
-        let meta = std::fs::metadata(&final_path).map_err(OrbitError::Io)?;
-        if meta.len() > 0 {
-            return Ok(final_path);
+    if !dry_run {
+        for m in &to_install {
+            let dest_path = download_mod(m, mods_dir).await?;
+            let jar_deps = parse_jar_deps(&dest_path)?;
+            installed.push(InstalledMod {
+                slug: m.name.clone(),
+                key: m.name.clone(),
+                version: m.version.clone(),
+                filename: m.filename.clone(),
+                jar_deps,
+            });
+        }
+        apply_to_manifest_and_lock(manifest, lockfile, &installed, &to_install, provider_name, mods_dir);
+    } else {
+        for m in &to_install {
+            installed.push(InstalledMod {
+                slug: m.name.clone(),
+                key: m.name.clone(),
+                version: m.version.clone(),
+                filename: m.filename.clone(),
+                jar_deps: vec![],
+            });
         }
     }
 
-    // 下载
-    let bytes = reqwest::get(&m.download_url)
-        .await
-        .map_err(OrbitError::Network)?
-        .bytes()
-        .await
-        .map_err(OrbitError::Network)?;
+    Ok(InstallReport { installed, already_satisfied, skipped_optional })
+}
 
-    // 先写入 .tmp → 原子 rename
+fn find_by_slug(name: &str, manifest: &OrbitManifest) -> Option<String> {
+    manifest.dependencies.iter().find_map(|(key, spec)| {
+        if key == name || spec.slug() == Some(name) { Some(key.clone()) } else { None }
+    })
+}
+
+// ── download / jar / manifest helpers ─────────────────────────────────
+
+async fn download_mod(m: &ResolvedMod, mods_dir: &Path) -> Result<PathBuf, OrbitError> {
+    let final_path = mods_dir.join(&m.filename);
+    if final_path.exists() {
+        if !m.sha512.is_empty() {
+            let existing_sha = crate::jar::compute_sha512(&final_path).unwrap_or_default();
+            if existing_sha == m.sha512 { return Ok(final_path); }
+        } else {
+            let meta = std::fs::metadata(&final_path).map_err(OrbitError::Io)?;
+            if meta.len() > 0 { return Ok(final_path); }
+        }
+    }
+    let bytes = reqwest::get(&m.download_url).await.map_err(OrbitError::Network)?.bytes().await.map_err(OrbitError::Network)?;
+    if !m.sha512.is_empty() {
+        let actual = crate::jar::sha512_digest(&bytes);
+        if actual != m.sha512 {
+            return Err(OrbitError::ChecksumMismatch { name: m.filename.clone(), expected: m.sha512.clone(), actual });
+        }
+    }
     let tmp_path = mods_dir.join(format!(".{}.tmp", m.filename));
     std::fs::write(&tmp_path, &bytes).map_err(OrbitError::Io)?;
     std::fs::rename(&tmp_path, &final_path).map_err(OrbitError::Io)?;
-
     Ok(final_path)
 }
 
-/// 解析 JAR 内的 fabric.mod.json，提取依赖列表
 fn parse_jar_deps(jar_path: &Path) -> Result<Vec<(String, String, bool)>, OrbitError> {
     let file = std::fs::File::open(jar_path).map_err(OrbitError::Io)?;
     let mut archive = zip::ZipArchive::new(file).map_err(OrbitError::Zip)?;
-
     match archive.by_name("fabric.mod.json") {
         Ok(mut entry) => {
             let mut content = String::new();
-            std::io::Read::read_to_string(&mut entry, &mut content)
-                .map_err(|e| OrbitError::Io(e.into()))?;
+            std::io::Read::read_to_string(&mut entry, &mut content).map_err(|e| OrbitError::Io(e.into()))?;
             let parser = crate::metadata::fabric::FabricParser;
             let meta = crate::metadata::MetadataParser::parse(&parser, &content)?;
-            Ok(meta
-                .dependencies
-                .into_iter()
-                .map(|(k, v)| (k, v, true))
-                .collect())
+            Ok(meta.dependencies.into_iter().map(|(k, v)| (k, v, true)).collect())
         }
         Err(_) => Ok(vec![]),
     }
 }
 
-/// 根据安装结果更新 orbit.toml 和 orbit.lock
 fn apply_to_manifest_and_lock(
     manifest: &mut OrbitManifest,
     lockfile: &mut OrbitLockfile,
     installed: &[InstalledMod],
     resolved: &[ResolvedMod],
+    provider_name: &str,
+    mods_dir: &Path,
 ) {
-    // 收集所有已安装的模组信息
     for (inst, resolved_mod) in installed.iter().zip(resolved.iter()) {
         let key = &inst.key;
-
-        // ── manifest ──
         manifest.dependencies.entry(key.clone()).or_insert_with(|| {
-            if inst.version.is_empty() {
-                DependencySpec::Short("*".into())
-            } else {
-                DependencySpec::Short(inst.version.clone())
-            }
+            DependencySpec::Short(if inst.version.is_empty() { "*".into() } else { inst.version.clone() })
         });
-
-        // ── lockfile ──
-        // 删除旧条目（如果存在）
         lockfile.entries.retain(|e| e.name != *key);
-
-        // 从 JAR 解析的真实依赖 → lock dependencies
-        let lock_deps: Vec<LockDependency> = inst
-            .jar_deps
-            .iter()
-            .map(|(dep_id, constraint, _)| LockDependency {
-                name: dep_id.clone(),
-                version: if constraint.is_empty() {
-                    "*".into()
-                } else {
-                    constraint.clone()
-                },
-            })
-            .collect();
-
-        let sha256 = if inst.filename.is_empty() {
-            String::new()
-        } else {
-            crate::jar::compute_sha256(&std::path::Path::new("mods").join(&inst.filename))
-                .unwrap_or_default()
-        };
-
+        let lock_deps: Vec<LockDependency> = inst.jar_deps.iter().map(|(dep_id, constraint, _)| LockDependency {
+            name: dep_id.clone(),
+            version: if constraint.is_empty() { "*".into() } else { constraint.clone() },
+        }).collect();
+        let sha256 = if inst.filename.is_empty() { String::new() }
+            else { crate::jar::compute_sha256(&mods_dir.join(&inst.filename)).unwrap_or_default() };
+        let sha512 = resolved_mod.sha512.clone();
         lockfile.entries.push(LockEntry {
-            name: key.clone(),
-            platform: Some("modrinth".into()),
-            mod_id: Some(resolved_mod.mod_id.clone()),
-            version: inst.version.clone(),
-            filename: inst.filename.clone(),
-            url: Some(resolved_mod.download_url.clone()),
-            sha256,
-            dependencies: lock_deps,
-            implanted: vec![],
-            source_type: None,
-            path: None,
+            name: key.clone(), platform: Some(provider_name.to_string()), mod_id: Some(resolved_mod.mod_id.clone()),
+            version: inst.version.clone(), filename: inst.filename.clone(), url: Some(resolved_mod.download_url.clone()),
+            sha256, sha512, dependencies: lock_deps, implanted: vec![], source_type: None, path: None,
         });
-    }
-}
-
-/// 选择一个不在 manifest 中已存在的键名
-fn pick_key(slug: &str, name: &str, manifest: &OrbitManifest) -> String {
-    if manifest.dependencies.contains_key(slug) {
-        slug.to_string()
-    } else if manifest.dependencies.contains_key(name) {
-        name.to_string()
-    } else {
-        // 优先用 slug（更短、更规范）
-        slug.to_string()
     }
 }
