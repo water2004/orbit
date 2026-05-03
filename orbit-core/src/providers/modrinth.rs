@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 use modrinth_wrapper::{Client as MRClient, models as mr_models};
+use modrinth_wrapper::api::SearchParams;
 use std::path::{Path, PathBuf};
 
 use super::{ModInfo, ModProvider, ProgressCallback, ResolvedDependency, ResolvedMod, SearchResultItem, SideSupport};
@@ -67,6 +68,21 @@ fn map_side(side: &str) -> Option<SideSupport> {
     }
 }
 
+fn build_facets(mc_version: Option<&str>, loader: Option<&str>) -> Option<String> {
+    let mut groups: Vec<Vec<String>> = Vec::new();
+    if let Some(mc) = mc_version {
+        groups.push(vec![format!("versions:{mc}")]);
+    }
+    if let Some(l) = loader {
+        groups.push(vec![format!("categories:{l}")]);
+    }
+    if groups.is_empty() {
+        None
+    } else {
+        serde_json::to_string(&groups).ok()
+    }
+}
+
 #[async_trait]
 impl ModProvider for ModrinthProvider {
     fn name(&self) -> &'static str {
@@ -76,23 +92,28 @@ impl ModProvider for ModrinthProvider {
     async fn search(
         &self,
         query: &str,
-        _mc_version: Option<&str>,
-        _loader: Option<&str>,
+        mc_version: Option<&str>,
+        loader: Option<&str>,
         limit: usize,
     ) -> Result<Vec<SearchResultItem>, OrbitError> {
         let _permit = self.rate_limiter.acquire().await;
+        let facets = build_facets(mc_version, loader);
+        let mut params = SearchParams::new(query).limit(limit as i64);
+        if let Some(ref f) = facets {
+            params = params.facets(f.clone());
+        }
         let res: mr_models::SearchResult = self
             .client
-            .search_projects(query)
+            .search(params)
             .await
             .map_err(|e| OrbitError::Other(e.into()))?;
 
-        Ok(res.hits.into_iter().take(limit).map(|hit| SearchResultItem {
+        Ok(res.hits.into_iter().map(|hit| SearchResultItem {
             mod_id: hit.project_id,
             slug: hit.slug,
             name: hit.title,
             description: hit.description,
-            latest_version: hit.versions.last().cloned().unwrap_or_default(),
+            latest_version: hit.latest_version.unwrap_or_default(),
             downloads: hit.downloads as u64,
             mc_versions: hit.versions,
             client_side: map_side(&hit.client_side),

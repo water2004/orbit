@@ -131,6 +131,12 @@ pub enum Commands {
         /// 结果数量限制
         #[arg(long, default_value = "20")]
         limit: usize,
+        /// 按 Minecraft 版本过滤
+        #[arg(long)]
+        mc_version: Option<String>,
+        /// 按模组加载器过滤 (fabric, forge, quilt, etc.)
+        #[arg(long)]
+        modloader: Option<String>,
     },
 
     /// 查看模组详细信息
@@ -224,8 +230,8 @@ impl CommandHandler for Commands {
             Commands::Sync => handle_sync().await,
             Commands::Outdated { mod_name } => handle_outdated(mod_name).await,
             Commands::Upgrade { mod_name } => handle_upgrade(mod_name).await,
-            Commands::Search { query, platform, limit } => {
-                handle_search(query, platform, limit).await
+            Commands::Search { query, platform, limit, mc_version, modloader } => {
+                handle_search(query, platform, limit, mc_version, modloader).await
             }
             Commands::Info { mod_name, platform } => handle_info(mod_name, platform).await,
             Commands::List { tree, target } => handle_list(tree, target).await,
