@@ -1,6 +1,6 @@
 # Orbit 项目状态
 
-> 最后更新: 2026-05-01
+> 最后更新: 2026-05-03
 
 ---
 
@@ -25,9 +25,9 @@ orbit-cli ──→ orbit-core ──→ modrinth-wrapper
 | `api.rs` | ✅ | 所有 API 端点方法 |
 | `models.rs` | ✅ | Project, Version, SearchHit 等 |
 | `error.rs` | ✅ | ModrinthError 枚举 |
-| 集成测试 | ✅ | 10/10 通过（对接真实 API） |
+| 集成测试 | ✅ | 14/14 通过（对接真实 API） |
 
-### orbit-core — 🚧 Phase 1 完成，Phase 2 推进中（30 单测）
+### orbit-core — 🚧 Phase 1 完成，Phase 2 推进中（35 单测）
 
 | 模块 | 状态 | 说明 |
 |------|------|------|
@@ -45,7 +45,7 @@ orbit-cli ──→ orbit-core ──→ modrinth-wrapper
 | `init.rs` | ✅ | detect_mc_version (JAR → version.json) + scan_mods_dir + run_init |
 | `providers/mod.rs` | ✅ | ModProvider trait + 统一类型 |
 | `providers/rate_limiter.rs` | 🆕 | RateLimiter — Semaphore 并发控制 |
-| `providers/modrinth.rs` | ✅ | ModrinthProvider 完整 (7 方法，待集成 RateLimiter) |
+| `providers/modrinth.rs` | ✅ | ModrinthProvider 完整 (8 方法，含 RateLimiter + facets 过滤) |
 | `metadata/{forge,neoforge,quilt}.rs` | 🚧 | 占位 |
 | `detection/{forge,neoforge,quilt}.rs` | 🚧 | 占位 |
 | `providers/curseforge.rs` | 🚧 | 骨架（待 curseforge-wrapper） |
@@ -63,7 +63,8 @@ orbit-cli ──→ orbit-core ──→ modrinth-wrapper
 |------|------|------|
 | `cli/mod.rs` | ✅ | 完整 clap 命令定义（16 个命令 + 全局标志） |
 | `cli/commands/init.rs` | ✅ | 自动检测 MC 版本 + Fabric loader → 仅自动失败时才交互 |
-| `cli/commands/*` | 🚧 | 其余 15 个命令 handler，签名就绪、println! 占位 |
+| `cli/commands/search.rs` | ✅ | 完整实现：provider.search() → facets 过滤 + 格式化输出 + ✓ 兼容标记 |
+| `cli/commands/*` | 🚧 | 其余 14 个命令 handler，签名就绪、println! 占位 |
 | `adaptors/` | — | ❌ 已删除，provider 实现归属于 orbit-core |
 | `models/` | — | ❌ 已删除，类型定义归属于 orbit-core |
 | Cargo.toml | ✅ | 仅依赖 `orbit-core` + `clap` + `tokio` + `anyhow`，不再直接依赖 wrapper |
@@ -85,7 +86,7 @@ orbit-cli ──→ orbit-core ──→ modrinth-wrapper
 | `orbit sync` | ✅ | 🚧 sync | **核心功能** |
 | `orbit outdated` | ✅ | 🚧 resolver (只读) | 需版本比对 |
 | `orbit upgrade` | ✅ | 🚧 resolver + installer | **核心功能** |
-| `orbit search` | ✅ | 🚧 provider::search | 需格式化输出 |
+| `orbit search` | ✅ | ✅ provider::search | CLI handler + facets 过滤 + 格式化输出 |
 | `orbit info` | ✅ | 🚧 provider::get_mod_info | 需格式化输出 |
 | `orbit list` | ✅ | 🚧 lockfile | 需 --tree 算法 |
 | `orbit import` | ✅ | 🚧 manifest | 需合并逻辑 |
