@@ -54,8 +54,13 @@ pub enum Commands {
         command: InstanceCommands,
     },
 
-    /// 根据清单还原模组环境
+    /// 根据清单还原模组环境（或安装单个模组）
     Install {
+        /// 模组 slug/名称（安装单个模组时不填则还原全部）
+        mod_name: Option<String>,
+        /// 版本约束（单模组安装时可用）
+        #[arg(long, short = 'c')]
+        constraint: Option<String>,
         /// 目标环境: client / server / both (默认)
         #[arg(long)]
         target: Option<String>,
@@ -219,8 +224,8 @@ impl CommandHandler for Commands {
                 handle_init(name, mc_version, modloader, modloader_version).await
             }
             Commands::Instances { command } => command.execute().await,
-            Commands::Install { target, group, no_optional, locked, frozen } => {
-                handle_install(target, group, no_optional, locked || frozen).await
+            Commands::Install { mod_name, constraint, target, group, no_optional, locked, frozen } => {
+                handle_install(mod_name, constraint, target, group, no_optional, locked || frozen).await
             }
             Commands::Add { mod_name, platform, version, env, optional, no_deps } => {
                 handle_add(mod_name, platform, version, env, optional, no_deps).await

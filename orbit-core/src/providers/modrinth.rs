@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use async_trait::async_trait;
 use modrinth_wrapper::{Client as MRClient, models as mr_models};
 use modrinth_wrapper::api::SearchParams;
@@ -20,6 +21,17 @@ impl ModrinthProvider {
             client,
             rate_limiter: RateLimiter::new(max_concurrency),
         })
+    }
+
+    /// 批量查询项目 ID → slug 映射
+    async fn lookup_project_slugs(&self, ids: &[&str]) -> HashMap<String, String> {
+        if ids.is_empty() {
+            return HashMap::new();
+        }
+        match self.client.get_projects(ids).await {
+            Ok(projects) => projects.into_iter().map(|p| (p.id, p.slug)).collect(),
+            Err(_) => HashMap::new(),
+        }
     }
 
     /// 下载模组 JAR 到指定目录。
@@ -56,6 +68,17 @@ impl ModrinthProvider {
         std::fs::write(&tmp_path, &bytes)?;
         std::fs::rename(&tmp_path, &final_path)?;
         Ok(final_path)
+    }
+}
+
+/// 将 Modrinth API 错误转为 OrbitError，404 → ModNotFound
+fn map_api_error(e: modrinth_wrapper::ModrinthError, slug: &str) -> OrbitError {
+    use modrinth_wrapper::ModrinthError;
+    match &e {
+        ModrinthError::Reqwest(req_err) if req_err.status() == Some(reqwest::StatusCode::NOT_FOUND) => {
+            OrbitError::ModNotFound(slug.to_string())
+        }
+        _ => OrbitError::Other(e.into()),
     }
 }
 
@@ -128,7 +151,7 @@ impl ModProvider for ModrinthProvider {
             .client
             .get_project(slug)
             .await
-            .map_err(|e| OrbitError::Other(e.into()))?;
+            .map_err(|e| map_api_error(e, slug))?;
 
         Ok(ModInfo {
             slug: project.slug.clone(),
@@ -149,7 +172,7 @@ impl ModProvider for ModrinthProvider {
     async fn resolve(
         &self,
         slug: &str,
-        version_constraint: &str,
+        _version_constraint: &str,
         mc_version: &str,
         loader: &str,
     ) -> Result<ResolvedMod, OrbitError> {
@@ -158,7 +181,7 @@ impl ModProvider for ModrinthProvider {
             .client
             .list_versions(slug)
             .await
-            .map_err(|e| OrbitError::Other(e.into()))?;
+            .map_err(|e| map_api_error(e, slug))?;
 
         let candidate = versions
             .iter()
@@ -169,11 +192,25 @@ impl ModProvider for ModrinthProvider {
         match candidate {
             Some(v) => {
                 let file = v.files.first().ok_or_else(|| OrbitError::ModNotFound(slug.to_string()))?;
-                let deps = v.dependencies.as_ref().map(|deps| deps.iter().map(|d| ResolvedDependency {
-                    name: d.project_id.clone().unwrap_or_default(),
-                    slug: d.project_id.clone(),
-                    required: d.dependency_type == "required",
-                }).collect()).unwrap_or_default();
+
+                // Resolve dependency project_ids → slugs via batch lookup
+                let dep_ids: Vec<&str> = v.dependencies.as_ref()
+                    .map(|deps| deps.iter().filter_map(|d| d.project_id.as_deref()).collect())
+                    .unwrap_or_default();
+                let id_to_slug: HashMap<String, String> = self.lookup_project_slugs(&dep_ids).await;
+
+                let deps: Vec<ResolvedDependency> = v.dependencies.as_ref()
+                    .map(|deps| deps.iter().map(|d| {
+                        let pid = d.project_id.clone().unwrap_or_default();
+                        let resolved_slug = id_to_slug.get(&pid).cloned();
+                        ResolvedDependency {
+                            name: resolved_slug.clone().unwrap_or_else(|| pid.clone()),
+                            slug: resolved_slug,
+                            required: d.dependency_type == "required",
+                        }
+                    }).collect())
+                    .unwrap_or_default();
+
                 Ok(ResolvedMod {
                     name: slug.to_string(),
                     mod_id: v.project_id.clone(),
@@ -186,10 +223,7 @@ impl ModProvider for ModrinthProvider {
                     server_side: None,
                 })
             }
-            None => Err(OrbitError::VersionMismatch {
-                mod_name: slug.to_string(),
-                constraint: version_constraint.to_string(),
-            }),
+            None => Err(OrbitError::ModNotFound(slug.to_string())),
         }
     }
 
@@ -205,7 +239,7 @@ impl ModProvider for ModrinthProvider {
             .client
             .list_versions(slug)
             .await
-            .map_err(|e| OrbitError::Other(e.into()))?;
+            .map_err(|e| map_api_error(e, slug))?;
         eprintln!("    [modrinth]   → {} versions", versions.len());
 
         Ok(versions.iter().map(|v| {
