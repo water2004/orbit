@@ -50,6 +50,7 @@ Response is a JSON object with the following properties (or an array of version 
 The file objects in the response have the following properties:
 | Name | Type | Description |
 | --- | --- | --- |
+| *id | `string` | The ID of the file. encoded as a base62 string |
 | *hashes | `object` | An object containing the hashes of the file. |
 | *url | `string` | The URL to download the file. |
 | *filename | `string` | The name of the file. |

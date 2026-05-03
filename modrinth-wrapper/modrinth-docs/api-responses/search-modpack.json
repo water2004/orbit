@@ -1,0 +1,120 @@
+{
+    "hits": [
+        {
+            "project_id": "1KVo5zza",
+            "project_type": "modpack",
+            "slug": "fabulously-optimized",
+            "author": "robotkoer",
+            "author_id": "2avTeeAE",
+            "organization": "Fabulously Optimized",
+            "organization_id": "d8z9840y",
+            "title": "Fabulously Optimized",
+            "description": "Beautiful graphics, speedy performance and familiar features in a simple package. Tiny Takeover beta!",
+            "categories": [
+                "fabric",
+                "lightweight",
+                "multiplayer",
+                "optimization"
+            ],
+            "display_categories": [
+                "lightweight",
+                "multiplayer",
+                "optimization"
+            ],
+            "versions": [
+                "1.16.5",
+                "1.17.1",
+                "1.18.1",
+                "1.18.2",
+                "1.19",
+                "1.19.1",
+                "1.19.2",
+                "1.19.3",
+                "1.19.4",
+                "1.20",
+                "1.20.1",
+                "1.20.2",
+                "1.20.3",
+                "1.20.4",
+                "1.20.5",
+                "1.20.6",
+                "1.21",
+                "1.21.1",
+                "1.21.2",
+                "1.21.3",
+                "1.21.4",
+                "1.21.5",
+                "1.21.6",
+                "1.21.7",
+                "1.21.8",
+                "1.21.9",
+                "1.21.10",
+                "1.21.11",
+                "26.1",
+                "26.1.1",
+                "26.1.2"
+            ],
+            "downloads": 11851341,
+            "follows": 4232,
+            "icon_url": "https://cdn.modrinth.com/data/1KVo5zza/9f1ded4949c2a9db5ca382d3bcc912c7245486b4_96.webp",
+            "date_created": "2022-02-10T06:28:19.045034+00:00",
+            "date_modified": "2026-05-03T09:52:58.619027+00:00",
+            "latest_version": "XCK5YvqX",
+            "license": "BSD-3-Clause",
+            "client_side": "required",
+            "server_side": "unsupported",
+            "gallery": [
+                "https://cdn.modrinth.com/data/1KVo5zza/images/ce41746dbf8f3d2a9661875c18b5667778233ccf_350.webp",
+                "https://cdn.modrinth.com/data/1KVo5zza/images/044a5b9cb85394be95656a1ebcfe135466420da9.png",
+                "https://cdn.modrinth.com/data/1KVo5zza/images/9d5ddd3392ce89295caa1030ca930f71f5c6b49a_350.webp",
+                "https://cdn.modrinth.com/data/1KVo5zza/images/f9168d6fa21a53865de8e86a1e730f3bd32a4371_350.webp",
+                "https://cdn.modrinth.com/data/1KVo5zza/images/d37b5277d1309c51d4d032543dded49f6c805b76_350.webp",
+                "https://cdn.modrinth.com/data/1KVo5zza/images/486ccc239c9e54f93ecbd2fb258d96d19a1d572b_350.webp",
+                "https://cdn.modrinth.com/data/1KVo5zza/images/61f57fc2b1791edc74232d70fe1079ef89a70247_350.webp",
+                "https://cdn.modrinth.com/data/1KVo5zza/images/12d6802eeb5e0114b75624be4ae3cd062fe4634a_350.webp"
+            ],
+            "featured_gallery": "https://cdn.modrinth.com/data/1KVo5zza/images/38f70f307f1a0b17d8ed4526d1636317e8c12d1d_350.webp",
+            "color": 13813933
+        },
+        {
+            "project_id": "l9m9tuPN",
+            "project_type": "modpack",
+            "slug": "zombie-invade-100-days",
+            "author": "FlameFire",
+            "author_id": "P3U9o13d",
+            "organization": null,
+            "organization_id": null,
+            "title": "Zombie Invade 100 Days",
+            "description": "僵尸入侵 100 天（高版本惊变重制）—— Same as Forge Labs 100 Days Zombie Apocalypse in new Minecraft",
+            "categories": [
+                "challenging",
+                "combat",
+                "forge",
+                "multiplayer"
+            ],
+            "display_categories": [
+                "challenging",
+                "combat"
+            ],
+            "versions": [
+                "1.19.2",
+                "1.20.1"
+            ],
+            "downloads": 9018229,
+            "follows": 487,
+            "icon_url": "https://cdn.modrinth.com/data/l9m9tuPN/fefe3f67c37744344d100638452c7bf059d586a1_96.webp",
+            "date_created": "2024-04-16T06:56:50.108903+00:00",
+            "date_modified": "2025-12-13T12:35:17.892775+00:00",
+            "latest_version": "M8j2mfGj",
+            "license": "LicenseRef-All-Rights-Reserved",
+            "client_side": "required",
+            "server_side": "required",
+            "gallery": [],
+            "featured_gallery": null,
+            "color": 2170391
+        }
+    ],
+    "offset": 0,
+    "limit": 2,
+    "total_hits": 15839
+}

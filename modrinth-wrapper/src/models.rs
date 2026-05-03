@@ -188,6 +188,8 @@ pub struct SearchHit {
     pub project_id: String,
     /// The username of the project's author.
     pub author: String,
+    /// The ID of the project's author.
+    pub author_id: String,
     /// A list of the minecraft versions supported by the project.
     pub versions: Vec<String>,
     /// The total number of users following the project.
@@ -200,6 +202,10 @@ pub struct SearchHit {
     pub license: String,
 
     // ── optional fields ──
+    /// The name of the organization that owns this project.
+    pub organization: Option<String>,
+    /// The ID of the organization that owns this project.
+    pub organization_id: Option<String>,
     /// The categories of the project.
     pub categories: Option<Vec<String>>,
     /// The URL of the project's icon.
@@ -212,7 +218,7 @@ pub struct SearchHit {
     pub monetization_status: Option<String>,
     /// A list of display categories (non-secondary).
     pub display_categories: Option<Vec<String>>,
-    /// The latest version of minecraft that this project supports.
+    /// The latest version ID of the project (base62 string).
     pub latest_version: Option<String>,
     /// All gallery images attached to the project.
     pub gallery: Option<Vec<String>>,
@@ -296,6 +302,8 @@ pub struct Version {
 /// A file associated with a version.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VersionFile {
+    /// The ID of the file, encoded as base62.
+    pub id: String,
     /// An object containing the hashes of the file.
     pub hashes: Hashes,
     /// The URL to download the file.

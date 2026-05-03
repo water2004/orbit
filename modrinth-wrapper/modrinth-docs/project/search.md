@@ -104,12 +104,15 @@ the hits array contains objects with the following properties(some are not liste
 | monetization_status | `string` | The monetization status of the project. Allowed values: monetized demonetized force-demonetized |
 | *project_id | `string` | The ID of the project. encoded as a base62 string |
 | *author | `string` | The username of the project's author |
+| *author_id | `string` | The ID of the project's author |
+| organization | `string` | The name of the organization that owns this project (null for individual projects) |
+| organization_id | `string` | The ID of the organization that owns this project (null for individual projects) |
 | display_categories | `array<string>` | A list of the categories that the project has which are not secondary |
 | *versions | `array<string>` | A list of the minecraft versions supported by the project |
 | *follows | `integer` | The total number of users following the project |
 | *date_created | `string` | The date the project was added to search format: ISO-8601 |
 | *date_modified | `string` | The date the project was last modified format: ISO-8601 |
-| latest_version | `string` | The latest version of minecraft that this project supports |
+| latest_version | `string` | The latest version ID of the project (base62 string). Use `/version/{id}` to fetch the full version details |
 | *license | `string` | The SPDX license ID of a project |
 | gallery | `array<string>` | All gallery images attached to the project |
 | featured_gallery | `string` | The featured gallery image of the project |
