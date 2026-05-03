@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use crate::error::OrbitError;
 use crate::lockfile::{LockDependency, LockEntry, OrbitLockfile};
 use crate::manifest::{DependencySpec, OrbitManifest};
-use crate::providers::{ModProvider, ResolvedDependency, ResolvedMod};
+use crate::providers::{ModProvider, ResolvedMod};
 
 /// 单次 install 报告
 #[derive(Debug, Clone)]
@@ -74,26 +74,26 @@ pub async fn install_mod(
 
     if !no_deps {
         for dep in &main_mod.dependencies {
-            let dep_slug = dep.slug.as_deref().unwrap_or(&dep.name);
+            let slug = dep.slug.as_deref().unwrap_or(&dep.name);
 
             if !dep.required {
-                skipped_optional.push(dep_slug.to_string());
+                skipped_optional.push(slug.to_string());
                 continue;
             }
 
-            if is_dep_satisfied(dep, dep_slug, manifest, lockfile) {
-                already_satisfied.push(dep_slug.to_string());
+            if is_dep_satisfied(slug, manifest, lockfile) {
+                already_satisfied.push(slug.to_string());
                 continue;
             }
 
             // 尝试在线解析
-            match provider.resolve(dep_slug, "*", &mc_version, &loader).await {
+            match provider.resolve(slug, "*", &mc_version, &loader).await {
                 Ok(resolved_dep) => {
                     to_install.push(resolved_dep);
                 }
                 Err(_) => {
                     return Err(OrbitError::Conflict(format!(
-                        "required dependency '{dep_slug}' could not be resolved on {}",
+                        "required dependency '{slug}' could not be resolved on {}",
                         provider.name()
                     )));
                 }
@@ -131,42 +131,50 @@ pub async fn install_mod(
 
 // ── helpers ──────────────────────────────────────────────────────────
 
-/// 已存在依赖的版本是否满足约束
+/// 已存在依赖的版本是否满足约束。
+///
+/// 按 slug 匹配：manifest key、DependencySpec.slug 字段、lockfile name、lockfile mod_id。
 fn is_dep_satisfied(
-    dep: &ResolvedDependency,
-    dep_slug: &str,
+    slug: &str,
     manifest: &OrbitManifest,
     lockfile: &OrbitLockfile,
 ) -> bool {
-    // 已在 toml 中声明
-    if manifest.dependencies.contains_key(dep_slug)
-        || manifest.dependencies.contains_key(&dep.name)
-    {
+    // ── manifest：key 名直接匹配，或 DependencySpec 内部的 slug 字段匹配 ──
+    let in_manifest = manifest.dependencies.iter().any(|(key, spec)| {
+        key == slug || spec.slug() == Some(slug)
+    });
+    if in_manifest {
         return true;
     }
-    // 已在 lock 中
-    if lockfile.find(dep_slug).is_some() || lockfile.find(&dep.name).is_some() {
+
+    // ── lockfile：entry.name 或 entry.mod_id 匹配 ──
+    let in_lock = lockfile.entries.iter().any(|e| {
+        e.name == slug || e.mod_id.as_deref() == Some(slug)
+    });
+    if in_lock {
         return true;
     }
+
     false
 }
 
-/// 检查待安装模组与现有 lockfile 之间是否存在版本冲突
+/// 检查待安装模组与现有 manifest 之间是否存在版本冲突
 fn check_version_conflicts(
     to_install: &[ResolvedMod],
     manifest: &OrbitManifest,
     _lockfile: &OrbitLockfile,
 ) -> Result<(), OrbitError> {
-    // 检查是否与 manifest 中已有同名但不同约束的依赖冲突
     for m in to_install {
-        if let Some(existing) = manifest.dependencies.get(&m.name) {
-            let existing_ver = existing.version_constraint();
-            if let Some(ev) = existing_ver {
+        // 遍历 manifest 查找匹配 slug 的已有条目
+        let existing = manifest.dependencies.iter().find(|(key, spec)| {
+            key.as_str() == m.name.as_str() || spec.slug() == Some(m.name.as_str())
+        });
+        if let Some((key, spec)) = existing {
+            if let Some(ev) = spec.version_constraint() {
                 if ev != "*" && ev != &m.version {
-                    // 简单检查：如果 manifest 中已有精确版本且与新版本不同 → 冲突
                     return Err(OrbitError::Conflict(format!(
-                        "'{}' version conflict: manifest requires '{}', but resolved version is '{}'",
-                        m.name, ev, m.version
+                        "'{key}' version conflict: manifest requires '{ev}', but resolved version is '{}'",
+                        m.version
                     )));
                 }
             }

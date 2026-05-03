@@ -397,7 +397,7 @@ pub async fn run_init(
             crate::identification::IdentifiedSource::File { path } => {
                 DependencySpec::Full {
                     platform: None,
-                    slug: None,
+                    slug: if m.mod_id.is_empty() { None } else { Some(m.mod_id.clone()) },
                     version: if m.version.is_empty() { None } else { Some(m.version.clone()) },
                     optional: None,
                     env: None,
