@@ -74,7 +74,7 @@ pub async fn install_mod(
 
     if !no_deps {
         for dep in &main_mod.dependencies {
-            let slug = dep.slug.as_deref().unwrap_or(&dep.name);
+            let Some(slug) = dep.slug.as_deref() else { continue; };
 
             if !dep.required {
                 skipped_optional.push(slug.to_string());

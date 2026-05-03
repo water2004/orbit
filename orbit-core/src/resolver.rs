@@ -149,3 +149,14 @@ fn version_satisfies(installed: &str, constraint: &str) -> bool {
     let Ok(ver) = crate::versions::fabric::SemanticVersion::parse(installed, true) else { return false; };
     crate::versions::fabric::satisfies(&ver, constraint)
 }
+
+/// 从 lockfile 的依赖图中反查：哪些模组依赖了 `slug`。
+///
+/// 匹配规则：LockDependency.name 等于 slug 或 key。
+pub fn dependents<'a>(slug: &str, key: &str, entries: &'a [crate::lockfile::LockEntry]) -> Vec<&'a str> {
+    entries
+        .iter()
+        .filter(|e| e.dependencies.iter().any(|d| d.name == slug || d.name == key))
+        .map(|e| e.name.as_str())
+        .collect()
+}
