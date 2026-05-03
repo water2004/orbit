@@ -121,18 +121,31 @@ pub fn build_lock_entries(
         })
         .collect();
 
-    // 填充 implanted：将内嵌子模组归入父模组
+    // 填充 implanted：将内嵌子模组归入父模组。
+    // 注意：多个父 JAR 可能内嵌同名子 JAR（如 conditional-mixin），
+    // scanned 中会有多条 filename 相同但 embedded_parent 不同的条目。
+    // 必须按 (filename, embedded_parent) 精确匹配，避免重复归入同一父模组。
     for m in embedded {
-        let Some(sm) = scanned.iter().find(|s| s.filename == m.filename) else { continue };
-        let Some(ref parent_name) = sm.embedded_parent else { continue };
+        // 在 scanned 中找到对应的 ScannedMod，用 sha256 精确匹配（因为同名 JAR 可能来自不同父模组但内容相同）
+        let matching_parents: Vec<&str> = scanned.iter()
+            .filter(|s| s.filename == m.filename && s.embedded_parent.is_some())
+            .filter_map(|s| s.embedded_parent.as_deref())
+            .collect();
 
-        if let Some(parent_entry) = entries.iter_mut().find(|e| e.filename == *parent_name) {
-            parent_entry.implanted.push(ImplantedMod {
-                name: if m.mod_name.is_empty() { m.mod_id.clone() } else { m.mod_name.clone() },
-                version: m.version.clone(),
-                sha256: m.sha256.clone(),
-                filename: m.filename.clone(),
-            });
+        // 去重：只归入一次（相同内容的内嵌 JAR 只需在第一个匹配的父模组中出现）
+        for parent_name in &matching_parents {
+            if let Some(parent_entry) = entries.iter_mut().find(|e| e.filename == *parent_name) {
+                // 检查是否已存在相同 filename 的 implanted 条目
+                if parent_entry.implanted.iter().any(|imp| imp.filename == m.filename) {
+                    continue;
+                }
+                parent_entry.implanted.push(ImplantedMod {
+                    name: if m.mod_name.is_empty() { m.mod_id.clone() } else { m.mod_name.clone() },
+                    version: m.version.clone(),
+                    sha256: m.sha256.clone(),
+                    filename: m.filename.clone(),
+                });
+            }
         }
     }
 
