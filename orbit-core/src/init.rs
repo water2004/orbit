@@ -407,30 +407,34 @@ pub async fn run_init(
         .collect();
 
     for m in &embedded_identified {
-        let matching_parents: Vec<&str> = scanned.iter()
-            .filter(|s| s.filename == m.filename && s.embedded_parent.is_some())
-            .filter_map(|s| s.embedded_parent.as_deref())
-            .collect();
+        // 找到父 JAR 文件名
+        let parent_name = scanned.iter()
+            .find(|s| s.filename == m.filename && s.embedded_parent.is_some())
+            .and_then(|s| s.embedded_parent.as_deref());
 
-        for parent_name in matching_parents {
-            if let Some(parent_entry) = lock_entries.iter_mut().find(|e| {
-                e.file.as_ref().map(|f| {
-                    std::path::Path::new(&f.path)
-                        .file_name()
-                        .map(|n| n.to_string_lossy() == parent_name)
-                        .unwrap_or(false)
-                }).unwrap_or(false)
-            }) {
-                if parent_entry.implanted.iter().any(|imp| imp.filename == m.filename) {
-                    continue;
-                }
-                parent_entry.implanted.push(crate::lockfile::ImplantedMod {
-                    name: if !m.mod_id.is_empty() { m.mod_id.clone() } else if !m.mod_name.is_empty() { m.mod_name.clone() } else { m.filename.clone() },
-                    version: m.version.clone(),
-                    sha256: m.sha256.clone(),
-                    filename: m.filename.clone(),
-                });
+        let Some(parent_name) = parent_name else { continue; };
+
+        // 在顶层 identified 中找到父模组，推导 key 后按 mod_id 匹配 lock_entry
+        let parent_key = identified.iter()
+            .find(|im| im.filename == parent_name)
+            .map(|im| {
+                if !im.mod_id.is_empty() { im.mod_id.clone() }
+                else if !im.mod_name.is_empty() { im.mod_name.clone() }
+                else { im.filename.clone() }
+            });
+
+        let Some(parent_key) = parent_key else { continue; };
+
+        if let Some(parent_entry) = lock_entries.iter_mut().find(|e| e.mod_id == parent_key) {
+            if parent_entry.implanted.iter().any(|imp| imp.filename == m.filename) {
+                continue;
             }
+            parent_entry.implanted.push(crate::lockfile::ImplantedMod {
+                name: if !m.mod_id.is_empty() { m.mod_id.clone() } else if !m.mod_name.is_empty() { m.mod_name.clone() } else { m.filename.clone() },
+                version: m.version.clone(),
+                sha256: m.sha256.clone(),
+                filename: m.filename.clone(),
+            });
         }
     }
 
