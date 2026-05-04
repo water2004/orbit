@@ -90,6 +90,10 @@ pub async fn install_to_instance(
 }
 
 /// 顶层 API：从指定实例目录移除模组。
+///
+/// `input` 可以是 mod_id（JAR 内 fabric.mod.json 的 `id`）或 slug。
+/// 先从 lockfile 查找（同时匹配 mod_id 和 modrinth.slug），
+/// 再同步更新 manifest、lockfile、JAR 文件。
 pub fn remove_from_instance(
     input: &str,
     instance_dir: &Path,
@@ -99,25 +103,28 @@ pub fn remove_from_instance(
     if !toml_path.exists() {
         return Err(OrbitError::ManifestNotFound);
     }
+
+    let lock_path = instance_dir.join("orbit.lock");
+    if !lock_path.exists() {
+        return Err(OrbitError::LockfileNotFound);
+    }
+
     let mut manifest = OrbitManifest::from_path(&toml_path)?;
+    let mut lockfile = OrbitLockfile::from_path(&lock_path)?;
 
-    // 查找依赖
-    let key = find_by_mod_id(input, &manifest)
+    // 通过 lockfile 查找：同时匹配 mod_id 和 modrinth.slug
+    let entry = crate::resolver::find_entry(input, &lockfile.packages)
         .ok_or_else(|| OrbitError::ModNotFound(input.to_string()))?;
+    let key = entry.mod_id.clone();
 
+    if !manifest.dependencies.contains_key(&key) {
+        return Err(OrbitError::ModNotFound(input.to_string()));
+    }
     manifest.dependencies.swap_remove(&key)
         .expect("dependency entry should exist");
 
-    let lock_path = instance_dir.join("orbit.lock");
-    let mut lockfile = if lock_path.exists() {
-        OrbitLockfile::from_path(&lock_path)?
-    } else {
-        return Err(OrbitError::LockfileNotFound);
-    };
-
     // 反查依赖图
-    let slug = &key;
-    let dependents = crate::resolver::dependents(slug, &lockfile.packages);
+    let dependents = crate::resolver::dependents(&key, &lockfile.packages);
     if !dependents.is_empty() {
         return Err(OrbitError::Conflict(format!(
             "'{key}' is required by: {}\nRemove those mods first.",
@@ -138,7 +145,6 @@ pub fn remove_from_instance(
             })
         })
         .or_else(|| {
-            // modrinth 条目没有 file.path，扫描 mods/ 查找匹配的 JAR
             if let Ok(dir_entries) = std::fs::read_dir(&mods_dir) {
                 dir_entries
                     .filter_map(|e| e.ok())
@@ -293,12 +299,6 @@ async fn install_mod(
     }
 
     Ok(InstallReport { installed, already_satisfied, skipped_optional: vec![] })
-}
-
-fn find_by_mod_id(mod_id: &str, manifest: &OrbitManifest) -> Option<String> {
-    manifest.dependencies.iter().find_map(|(key, _)| {
-        if key == mod_id { Some(key.clone()) } else { None }
-    })
 }
 
 // ── download / jar / manifest helpers ─────────────────────────────────
