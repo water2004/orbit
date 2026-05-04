@@ -127,8 +127,9 @@ pub async fn resolve_manifest(
                                     let mut deps = Vec::new();
                                     for dep in &rm.dependencies {
                                         if !dep.required { continue; }
-                                        let dep_pkg = dep.slug.clone().unwrap_or_default();
-                                        deps.push((dep_pkg, pubgrub::range::Range::any()));
+                                        let Some(ref dep_pkg) = dep.slug else { continue; };
+                                        if dep_pkg.is_empty() { continue; }
+                                        deps.push((dep_pkg.clone(), pubgrub::range::Range::any()));
                                     }
                                     provider.add_package_deps(missing_pkg.clone(), nv.clone(), deps);
                                     provider.resolved_mods.insert((missing_pkg.clone(), nv.clone()), rm.clone());
