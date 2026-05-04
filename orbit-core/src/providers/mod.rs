@@ -90,6 +90,8 @@ pub struct ResolvedDependency {
     /// 依赖的 slug（Modrinth 解析后），或 mod_id
     pub slug: Option<String>,
     pub required: bool,
+    /// Modrinth project_id（用于 API 查询）
+    pub project_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

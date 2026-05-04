@@ -1,18 +1,15 @@
 pub mod types;
 pub mod provider;
-pub mod provider_version;
-pub mod modrinth_version;
 
 use std::collections::HashMap;
 
 use crate::lockfile::PackageEntry;
+use crate::manifest::OrbitManifest;
+use crate::providers::ModProvider;
 
 use self::types::PackageId;
-use self::provider_version::{ProviderVersionResolver, FallbackResolver};
-use self::modrinth_version::ModrinthVersionResolver;
 use crate::versions::Version;
 use crate::resolver::provider::OrbitDependencyProvider;
-use pubgrub::solver::resolve;
 
 #[derive(Debug)]
 pub enum FetchRetryError {
@@ -30,122 +27,6 @@ impl std::fmt::Display for FetchRetryError {
 }
 
 impl std::error::Error for FetchRetryError {}
-
-use crate::providers::ModProvider;
-use crate::manifest::OrbitManifest;
-
-/// 求解依赖图。纯函数，无副作用。
-///
-/// # 参数
-/// - `root_deps`: orbit.toml 中的顶层依赖（包名 → 版本约束）
-/// - `provider`: 预填充好的数据源
-///
-/// # 返回
-/// - `Ok(HashMap<PackageId, Version>)` — 每个包被选中的版本
-/// - `Err(String)` — 人类可读的冲突报告
-/// 求解依赖图，带 Fetch-and-Retry 懒加载。
-pub async fn resolve_manifest(
-    manifest: &OrbitManifest,
-    lockfile: &crate::lockfile::OrbitLockfile,
-    providers: &[Box<dyn ModProvider>],
-) -> Result<HashMap<PackageId, crate::providers::ResolvedMod>, String> {
-    let mut provider = OrbitDependencyProvider::new();
-    let root_pkg = "___orbit_root___".to_string();
-    let root_version = Version::zero();
-    let loader = manifest.project.modloader.clone();
-
-    inject_lockfile(&mut provider, lockfile, &loader);
-
-    let mut root_deps = Vec::new();
-    for (name, spec) in &manifest.dependencies {
-        let constraint = match spec {
-            crate::manifest::DependencySpec::Short(v) => {
-                Version::parse_constraint(v, &loader)
-            }
-            crate::manifest::DependencySpec::Full { version, .. } => {
-                let v = version.as_deref().unwrap_or("*");
-                Version::parse_constraint(v, &loader)
-            }
-        };
-        root_deps.push((name.clone(), constraint));
-    }
-
-    provider.add_package_versions(root_pkg.clone(), vec![root_version.clone()]);
-    provider.add_package_deps(root_pkg.clone(), root_version.clone(), root_deps);
-
-    let mc_version = manifest.project.mc_version.clone();
-
-    loop {
-        match resolve(&provider, root_pkg.clone(), root_version.clone()) {
-            Ok(mut solution) => {
-                solution.remove(&root_pkg);
-                let mut resolved = HashMap::new();
-                for (pkg, ver) in solution {
-                    if let Some(rm) = provider.resolved_mods.get(&(pkg.clone(), ver)) {
-                        resolved.insert(pkg, rm.clone());
-                    }
-                }
-                return Ok(resolved);
-            }
-            Err(pubgrub::error::PubGrubError::ErrorChoosingPackageVersion(err)) |
-            Err(pubgrub::error::PubGrubError::ErrorRetrievingDependencies { source: err, .. }) => {
-                if let Some(fetch_err) = err.downcast_ref::<FetchRetryError>() {
-                    let missing_pkg = match fetch_err {
-                        FetchRetryError::MissingVersions(pkg) => pkg.clone(),
-                        FetchRetryError::MissingDependencies(pkg, _) => pkg.clone(),
-                    };
-                    
-                    let mut fetched = false;
-                    for p in providers {
-                        if let Ok(mut versions) = p.get_versions(&missing_pkg, Some(&mc_version), Some(&loader)).await {
-                            if !versions.is_empty() {
-                                // 使用 provider 特定的版本排序（Modrinth → date_published，fallback → SemVer）
-                                let pvr: &dyn ProviderVersionResolver = if p.name() == "modrinth" {
-                                    &ModrinthVersionResolver
-                                } else {
-                                    &FallbackResolver
-                                };
-                                pvr.sort_newest_first(&mut versions);
-
-                                let mut norm_versions = Vec::new();
-                                for rm in &versions {
-                                    let nv = Version::parse(&rm.version, &loader);
-                                    norm_versions.push(nv.clone());
-
-                                    let mut deps = Vec::new();
-                                    for dep in &rm.dependencies {
-                                        if !dep.required { continue; }
-                                        let Some(ref dep_pkg) = dep.slug else { continue; };
-                                        if dep_pkg.is_empty() { continue; }
-                                        deps.push((dep_pkg.clone(), pubgrub::range::Range::any()));
-                                    }
-                                    provider.add_package_deps(missing_pkg.clone(), nv.clone(), deps);
-                                    provider.resolved_mods.insert((missing_pkg.clone(), nv.clone()), rm.clone());
-                                }
-                                // 按 provider 顺序注入 PubGrub（用于 choose_package_version 选第一个）
-                                provider.add_package_versions(missing_pkg.clone(), norm_versions);
-                                fetched = true;
-                                break;
-                            }
-                        }
-                    }
-                    if !fetched {
-                        provider.add_package_versions(missing_pkg.clone(), vec![]);
-                    }
-                    continue;
-                } else {
-                    return Err(format!("Resolution error: {}", err));
-                }
-            }
-            Err(pubgrub::error::PubGrubError::NoSolution(derivation_tree)) => {
-                use pubgrub::report::{DefaultStringReporter, Reporter};
-                let report = DefaultStringReporter::report(&derivation_tree);
-                return Err(report);
-            }
-            Err(e) => return Err(format!("Resolution error: {}", e)),
-        }
-    }
-}
 
 pub fn check_local_graph(
     manifest: &OrbitManifest,
@@ -262,35 +143,18 @@ pub fn check_version_conflict(slug: &str, new_version: &str, entries: &[PackageE
     Ok(())
 }
 
-/// 将 lockfile 条目注入 PubGrub provider。
-/// 条目不携带依赖（已安装的 mod 视为已满足），仅标记版本存在。
-fn inject_lockfile(
-    provider: &mut OrbitDependencyProvider,
-    lockfile: &crate::lockfile::OrbitLockfile,
-    loader: &str,
-) {
-    for entry in &lockfile.packages {
-        let ver = Version::parse(&entry.version, loader);
-        provider.add_package_versions(entry.mod_id.clone(), vec![ver.clone()]);
-        provider.add_package_deps(entry.mod_id.clone(), ver, vec![]);
-        for imp in &entry.implanted {
-            let iver = Version::parse(&imp.version, loader);
-            provider.add_package_versions(imp.name.clone(), vec![iver.clone()]);
-            provider.add_package_deps(imp.name.clone(), iver, vec![]);
-        }
-    }
-}
-
-/// 离线 PubGrub 求解：给定候选版本（已从 JAR 解析出真实版本号和依赖约束），
-/// 判断哪些 mod 可安全升级。返回 `mod_id → new_version`。
+/// 带 Fetch-and-Retry 的离线求解。
+/// 缺依赖时上 provider 下载 JAR 加入候选，重试直到求解成功或无更多候选。
 ///
-/// `candidates`: mod_id → [(jar_version, deps)]，每个元素对应一个候选版本（从新到旧排序）
-pub fn resolve_with_candidates(
+/// `candidates`: mod_id → [(jar_version, deps)]（会被追加修改）
+pub async fn resolve_with_candidates(
     manifest: &OrbitManifest,
     lockfile: &crate::lockfile::OrbitLockfile,
-    candidates: &HashMap<String, Vec<(String, Vec<(String, String, bool)>)>>,
+    candidates: &mut HashMap<String, Vec<(String, Vec<(String, String, bool)>)>>,
+    providers: &[Box<dyn ModProvider>],
 ) -> Result<HashMap<String, String>, String> {
     let loader = &manifest.project.modloader;
+    let mc_version = &manifest.project.mc_version;
 
     let mut provider = OrbitDependencyProvider::new();
 
@@ -332,11 +196,10 @@ pub fn resolve_with_candidates(
         }
     }
 
-    // 追加候选版本到已有列表（不替换），PubGrub 按序优先选取
-    for (mod_id, versions) in candidates {
-        let mut all_vers: Vec<Version> = provider.versions.get(mod_id.as_str())
-            .cloned()
-            .unwrap_or_default();
+    // 候选版本放前面（已从新到旧），lockfile 版本垫底，PubGrub 优先选新版本
+    for (mod_id, versions) in &*candidates {
+        let existing = provider.versions.get(mod_id.as_str()).cloned().unwrap_or_default();
+        let mut all_vers = Vec::new();
         for (jar_ver, deps) in versions {
             let v = Version::parse(jar_ver, loader);
             let d: Vec<_> = deps.iter()
@@ -346,6 +209,7 @@ pub fn resolve_with_candidates(
             all_vers.push(v.clone());
             provider.add_package_deps(mod_id.clone(), v, d);
         }
+        all_vers.extend(existing);
         provider.add_package_versions(mod_id.clone(), all_vers);
     }
 
@@ -386,33 +250,90 @@ pub fn resolve_with_candidates(
         };
         root_deps.push((name.clone(), constraint));
     }
+    // 候选 mod 不在 manifest 中的也加入 root deps（如 `orbit add` 的新 mod）
+    for mod_id in candidates.keys() {
+        if !manifest.dependencies.contains_key(mod_id) {
+            root_deps.push((mod_id.clone(), pubgrub::range::Range::any()));
+        }
+    }
     provider.add_package_versions(root_pkg.clone(), vec![root_version.clone()]);
     provider.add_package_deps(root_pkg.clone(), root_version.clone(), root_deps);
 
-    let solution = match pubgrub::solver::resolve(&provider, root_pkg, root_version) {
-        Ok(s) => s,
-        Err(pubgrub::error::PubGrubError::NoSolution(tree)) => {
-            use pubgrub::report::{DefaultStringReporter, Reporter};
-            return Err(DefaultStringReporter::report(&tree));
-        }
-        Err(pubgrub::error::PubGrubError::ErrorChoosingPackageVersion(err)) => {
-            if let Some(fetch) = err.downcast_ref::<FetchRetryError>() {
-                return Err(format!("internal error: package '{}' is missing from resolver", fetch));
+    let solution = loop {
+        match pubgrub::solver::resolve(&provider, root_pkg.clone(), root_version.clone()) {
+            Ok(s) => break s,
+            Err(pubgrub::error::PubGrubError::NoSolution(_tree)) => {
+                // 缺依赖 → 从 lockfile 找到 project_id → provider 下载 JAR → 加入 candidates 重试
+                // 从已注册的包中找出版本列表为空的（即缺失的）
+                // 收集候选版本引用的依赖，只下载这些依赖的 JAR
+                let mut needed_deps: std::collections::HashSet<String> = std::collections::HashSet::new();
+                for (c_mod, versions) in candidates.iter() {
+                    for (_, deps) in versions {
+                        for (name, _, req) in deps {
+                            if *req && name != "java" && name != "mixinextras"
+                                && name != "minecraft" && name != "fabricloader"
+                            {
+                                needed_deps.insert(name.clone());
+                            }
+                        }
+                    }
+                }
+                eprintln!("    needed deps from candidates: {:?}", needed_deps.iter().collect::<Vec<_>>());
+                let mut added = false;
+                for dep in &needed_deps {
+                    if candidates.contains_key(dep) { eprintln!("    {} already in candidates, skip", dep); continue; }
+                    let entry = lockfile.find(dep);
+                    if entry.is_none() { eprintln!("    {} not in lockfile, skip", dep); continue; }
+                    let Some(mr) = entry.and_then(|e| e.modrinth.as_ref()) else { eprintln!("    {} no modrinth info, skip", dep); continue; };
+                    eprintln!("    fetching dep {} versions (project={})...", dep, mr.project_id);
+                    let versions = match providers[0].get_versions(&mr.project_id, Some(mc_version), Some(loader)).await {
+                        Ok(v) => v,
+                        Err(e) => { eprintln!("    ! API error for {}: {}", dep, e); continue; }
+                    };
+                    let mut new_candidates = Vec::new();
+                    for v in &versions {
+                        if let Ok(meta) = crate::jar::download_and_parse(&v.download_url, &v.sha512, loader).await {
+                            new_candidates.push((meta.version, meta.dependencies));
+                        }
+                    }
+                    if new_candidates.is_empty() { continue; }
+                    eprintln!("    downloaded {} versions for {}", new_candidates.len(), dep);
+                    let existing = provider.versions.get(dep).cloned().unwrap_or_default();
+                    let mut all_vers: Vec<Version> = new_candidates.iter()
+                        .map(|(ver, _)| Version::parse(ver, loader))
+                        .collect();
+                    all_vers.extend(existing);
+                    for (ver, deps) in &new_candidates {
+                        let v = Version::parse(ver, loader);
+                        let d: Vec<_> = deps.iter()
+                            .filter(|(n, _, req)| *req && n != "java" && n != "mixinextras")
+                            .map(|(n, c, _)| (n.clone(), Version::parse_constraint(c, loader)))
+                            .collect();
+                        provider.add_package_deps(dep.clone(), v, d);
+                    }
+                    provider.add_package_versions(dep.clone(), all_vers);
+                    candidates.entry(dep.clone()).or_default().extend(new_candidates);
+                    added = true;
+                }
+                if !added {
+                    use pubgrub::report::{DefaultStringReporter, Reporter};
+                    return Err(DefaultStringReporter::report(&_tree));
+                }
             }
-            return Err(format!("internal error: {}", err));
-        }
-        Err(pubgrub::error::PubGrubError::ErrorRetrievingDependencies { package, version, source }) => {
-            if let Some(fetch) = source.downcast_ref::<FetchRetryError>() {
-                return Err(format!("internal error: deps of '{}' v{} are missing: {}", package, version, fetch));
+            Err(pubgrub::error::PubGrubError::ErrorChoosingPackageVersion(err)) => {
+                if let Some(fetch) = err.downcast_ref::<FetchRetryError>() {
+                    return Err(format!("internal error: package '{}' is missing from resolver", fetch));
+                }
+                return Err(format!("internal error: {}", err));
             }
-            return Err(format!("internal error: {} v{} deps: {}", package, version, source));
+            Err(e) => return Err(e.to_string()),
         }
-        Err(e) => return Err(e.to_string()),
     };
 
-    // 对比 lockfile，找出升级
+    eprintln!("    solution: {:?}", solution.keys().collect::<Vec<_>>());
     let mut upgrades = HashMap::new();
     for (mod_id, _) in candidates {
+        eprintln!("    check {}: in_solution={}", mod_id, solution.contains_key(mod_id.as_str()));
         if let Some(ver) = solution.get(mod_id.as_str()) {
             let entry = lockfile.find(mod_id);
             let current = entry.map(|e| e.version.as_str()).unwrap_or("?");

@@ -35,7 +35,6 @@ pub async fn check_all_outdated(
         return Ok(vec![]);
     }
 
-    // mod_id → [(jar_version, deps)]，从新到旧
     let mut candidates: HashMap<String, Vec<(String, Vec<(String, String, bool)>)>> = HashMap::new();
 
     for (i, entry) in modrinth_entries.iter().enumerate() {
@@ -97,7 +96,7 @@ pub async fn check_all_outdated(
 
     eprintln!("\n  resolving dependency graph with {} candidate(s)...", candidates.len());
 
-    let upgrades = crate::resolver::resolve_with_candidates(manifest, lockfile, &candidates)
+    let upgrades = crate::resolver::resolve_with_candidates(manifest, lockfile, &mut candidates, providers).await
         .map_err(|e| OrbitError::Other(anyhow::anyhow!("{e}")))?;
 
     let mut results: Vec<OutdatedMod> = upgrades.into_iter()

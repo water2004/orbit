@@ -188,6 +188,7 @@ impl ModProvider for ModrinthProvider {
                         ResolvedDependency {
                             slug: resolved_slug,
                             required: d.dependency_type == "required",
+                            project_id: d.project_id.clone(),
                         }
                     }).collect())
                     .unwrap_or_default();
@@ -247,6 +248,7 @@ impl ModProvider for ModrinthProvider {
                 ResolvedDependency {
                     slug: resolved_slug,
                     required: d.dependency_type == "required",
+                    project_id: d.project_id.clone(),
                 }
             }).collect()).unwrap_or_default();
             ResolvedMod {
@@ -299,6 +301,7 @@ impl ModProvider for ModrinthProvider {
         Ok(deps.projects.into_iter().map(|p| ResolvedDependency {
             slug: Some(p.slug),
             required: true,
+            project_id: Some(p.id),
         }).collect())
     }
 
@@ -340,6 +343,7 @@ impl ModProvider for ModrinthProvider {
                     ResolvedDependency {
                         slug: resolved_slug,
                         required: d.dependency_type == "required",
+                        project_id: d.project_id.clone(),
                     }
                 }).collect(),
                 client_side: None, server_side: None,
@@ -364,6 +368,7 @@ impl ModProvider for ModrinthProvider {
                     ResolvedDependency {
                         slug: resolved_slug,
                         required: d.dependency_type == "required",
+                        project_id: d.project_id.clone(),
                     }
                 }).collect();
                 Ok(Some(ResolvedMod {

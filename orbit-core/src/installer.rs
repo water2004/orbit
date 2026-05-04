@@ -2,6 +2,7 @@
 //!
 //! 提供顶层 API 供 CLI 调用。CLI 层不直接操作 TOML / 文件。
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use crate::error::OrbitError;
@@ -213,7 +214,7 @@ pub fn list_installed(instance_dir: &Path) -> Result<ListOutput, OrbitError> {
 
 async fn install_mod(
     slug: &str,
-    constraint: &str,
+    _constraint: &str,
     providers: &[Box<dyn ModProvider>],
     manifest: &mut OrbitManifest,
     lockfile: &mut OrbitLockfile,
@@ -228,83 +229,105 @@ async fn install_mod(
         )));
     }
 
-    // 1. 快速检查 slug 是否存在（任一 provider 能找到即可）
-    let mc_version = manifest.project.mc_version.clone();
-    let loader = manifest.project.modloader.clone();
-    let mut found = false;
-    for p in providers {
-        if let Ok(versions) = p.get_versions(slug, Some(&mc_version), Some(&loader)).await {
-            if !versions.is_empty() { found = true; break; }
+    let loader = &manifest.project.modloader;
+    let mc_version = &manifest.project.mc_version;
+
+    // 1. API 查询依赖 closure（不下载 JAR），收集所有需要下载的版本
+    let mut to_download: Vec<ResolvedMod> = Vec::new();
+    let mut seen_projects: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let provider = &providers[0];
+
+    // BFS：从目标 slug 开始，收集所有依赖项目的版本
+    let mut queue: Vec<String> = vec![slug.to_string()];
+    while let Some(pid) = queue.pop() {
+        if !seen_projects.insert(pid.clone()) { continue; }
+        let versions = match provider.get_versions(&pid, Some(mc_version), Some(loader)).await {
+            Ok(v) => v,
+            Err(e) => { eprintln!("  ! API error for {}: {}", pid, e); continue; }
+        };
+        for v in &versions {
+            for dep in &v.dependencies {
+                if dep.required {
+                    if let Some(ref pid) = dep.project_id {
+                        if !seen_projects.contains(pid.as_str()) {
+                            queue.push(pid.clone());
+                        }
+                    }
+                }
+            }
+            to_download.push(v.clone());
         }
     }
-    if !found {
+    eprintln!("  API query done: {} versions across {} projects to download", to_download.len(), seen_projects.len());
+
+    // 2. 统一下载所有版本 JAR，解析构建 candidates
+    let mut jar_ver_to_v: HashMap<String, &ResolvedMod> = HashMap::new();
+    let mut candidates: HashMap<String, Vec<(String, Vec<(String, String, bool)>)>> = HashMap::new();
+    for v in &to_download {
+        let label = v.modrinth.as_ref().map(|m| m.version_number.as_str()).unwrap_or("?");
+        let meta = match crate::jar::download_and_parse(&v.download_url, &v.sha512, loader).await {
+            Ok(m) => {
+                let mod_id = if m.mod_id.is_empty() { slug.to_string() } else { m.mod_id.clone() };
+                eprintln!("    {} → mod_id={}, version={}, deps={}", label, mod_id, m.version, m.dependencies.len());
+                jar_ver_to_v.insert(m.version.clone(), v);
+                candidates.entry(mod_id).or_default().push((m.version, m.dependencies));
+            }
+            Err(e) => {
+                eprintln!("    {} → download/parse failed: {e}", label);
+            }
+        };
+    }
+    if candidates.is_empty() {
         return Err(OrbitError::ModNotFound(slug.to_string()));
     }
 
-    // 2. Update manifest temporarily
-    let old_dep = manifest.dependencies.insert(
-        slug.to_string(),
-        DependencySpec::Short(constraint.to_string())
-    );
-
-    // 3. Resolve manifest using PubGrub
-    let solution = match crate::resolver::resolve_manifest(manifest, lockfile, providers).await {
-        Ok(s) => s,
-        Err(e) => {
-            if let Some(old) = old_dep {
-                manifest.dependencies.insert(slug.to_string(), old);
-            } else {
-                manifest.dependencies.swap_remove(slug);
-            }
-            return Err(OrbitError::Conflict(e));
+    // 3. Resolve offline
+    eprintln!("  resolving with {} candidate(s) from {} mod(s)...", to_download.len(), candidates.len());
+    let upgrades = match crate::resolver::resolve_with_candidates(manifest, lockfile, &mut candidates, providers).await {
+        Ok(u) => {
+            eprintln!("  resolved: {:?}", u);
+            u
         }
+        Err(e) => return Err(OrbitError::Conflict(e)),
     };
 
-    let mut to_install = Vec::new();
+    // 4. Download resolved versions and apply
+    let mut installed = Vec::new();
     let mut already_satisfied = Vec::new();
 
-    for (pkg, resolved_mod) in solution {
-        if let Some(existing) = crate::resolver::find_entry(&pkg, &lockfile.packages) {
-            let needs_update = existing.modrinth.as_ref().map(|m| m.version_id.is_empty()).unwrap_or(false);
-            if !needs_update && existing.version == resolved_mod.version {
-                already_satisfied.push(pkg.clone());
-                continue;
-            }
-        }
-        if no_deps && pkg != slug {
-            continue;
-        }
-        to_install.push(resolved_mod);
-    }
-
-    let mut installed = Vec::new();
     if !dry_run {
-        for m in &to_install {
-            let dest_path = download_mod(m, mods_dir).await?;
-            let meta = crate::jar::read_mod_metadata(&dest_path, &manifest.project.modloader)?;
-            let jar_mod_id = meta.mod_id;
-            let jar_version = meta.version;
-            let jar_deps = meta.dependencies;
+        for (mod_id, new_ver) in &upgrades {
+            let Some(resolved) = jar_ver_to_v.get(new_ver).copied() else { continue };
+
+            if let Some(existing) = crate::resolver::find_entry(mod_id, &lockfile.packages) {
+                if existing.version == *new_ver { already_satisfied.push(mod_id.clone()); continue; }
+            }
+            if no_deps && mod_id != slug { continue; }
+
+            let dest_path = download_mod(resolved, mods_dir).await?;
+            let meta = crate::jar::read_mod_metadata(&dest_path, loader)?;
             installed.push(InstalledMod {
-                slug: m.slug.clone(),
-                mod_id: if jar_mod_id.is_empty() { m.mod_id.clone() } else { jar_mod_id },
-                version: if jar_version.is_empty() { m.version.clone() } else { jar_version },
-                filename: m.filename.clone(), provider: m.provider.clone(),
-                project_id: m.modrinth.as_ref().map(|mr| mr.project_id.clone()).unwrap_or_default(),
-                version_id: m.modrinth.as_ref().map(|mr| mr.version_id.clone()).unwrap_or_default(),
-                modrinth_version: m.modrinth.as_ref().map(|mr| mr.version_number.clone()).unwrap_or_default(),
-                jar_deps,
+                slug: resolved.slug.clone(),
+                mod_id: if meta.mod_id.is_empty() { mod_id.clone() } else { meta.mod_id },
+                version: if meta.version.is_empty() { new_ver.clone() } else { meta.version },
+                filename: resolved.filename.clone(),
+                provider: resolved.provider.clone(),
+                project_id: resolved.modrinth.as_ref().map(|mr| mr.project_id.clone()).unwrap_or_default(),
+                version_id: resolved.modrinth.as_ref().map(|mr| mr.version_id.clone()).unwrap_or_default(),
+                modrinth_version: resolved.modrinth.as_ref().map(|mr| mr.version_number.clone()).unwrap_or_default(),
+                jar_deps: meta.dependencies,
             });
         }
         apply_to_manifest_and_lock(manifest, lockfile, &installed, mods_dir);
     } else {
-        for m in &to_install {
+        for (mod_id, new_ver) in &upgrades {
+            let Some(resolved) = jar_ver_to_v.get(new_ver).copied() else { continue };
             installed.push(InstalledMod {
-                slug: m.slug.clone(), mod_id: m.mod_id.clone(), version: m.version.clone(),
-                filename: m.filename.clone(), provider: m.provider.clone(),
-                project_id: m.modrinth.as_ref().map(|mr| mr.project_id.clone()).unwrap_or_default(),
-                version_id: m.modrinth.as_ref().map(|mr| mr.version_id.clone()).unwrap_or_default(),
-                modrinth_version: m.modrinth.as_ref().map(|mr| mr.version_number.clone()).unwrap_or_default(),
+                slug: resolved.slug.clone(), mod_id: mod_id.clone(), version: new_ver.clone(),
+                filename: resolved.filename.clone(), provider: resolved.provider.clone(),
+                project_id: resolved.modrinth.as_ref().map(|mr| mr.project_id.clone()).unwrap_or_default(),
+                version_id: resolved.modrinth.as_ref().map(|mr| mr.version_id.clone()).unwrap_or_default(),
+                modrinth_version: resolved.modrinth.as_ref().map(|mr| mr.version_number.clone()).unwrap_or_default(),
                 jar_deps: vec![],
             });
         }
