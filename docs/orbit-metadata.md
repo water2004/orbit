@@ -85,9 +85,11 @@ orbit-core/src/metadata/
 | `version` | `String` | Fabric: `version`, Forge: `mods[].version` |
 | `authors` | `Vec<String>` | Fabric: `authors`, Forge: `mods[].authors` |
 | `description` | `String` | Fabric: `description`, Forge: `mods[].description` |
+| `license` | `Option<String>` | 许可证 ID |
+| `environment` | `String` | 运行环境: "client" / "server" / "both" |
 | `dependencies` | `IndexMap<String, String>` | 加载器相关的依赖映射，key=mod_id, value=version_constraint |
+| `embedded_jars` | `Vec<String>` | META-INF/jars/ 下的内嵌 JAR 路径 |
 | `loader` | `ModLoader` | 枚举: `Fabric`, `Forge`, `NeoForge`, `Quilt` |
-| `mc_versions` | `Vec<String>` | 兼容的 MC 版本范围或列表 |
 | `sha256` | `String` | 由 `jar.rs` 在解析前计算填充 |
 
 ### MetadataParser trait
@@ -403,9 +405,11 @@ pub struct ModMetadata {
     pub version: String,
     pub authors: Vec<String>,
     pub description: String,
+    pub license: Option<String>,
+    pub environment: String,
     pub dependencies: IndexMap<String, String>,
+    pub embedded_jars: Vec<String>,
     pub loader: ModLoader,
-    pub mc_versions: Vec<String>,
     pub sha256: String,
 }
 

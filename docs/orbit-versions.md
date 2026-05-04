@@ -1,13 +1,13 @@
 # Orbit 版本号解析与比较设计
 
-> 本文档定义 `orbit-core/src/versions/` 的架构、Fabric 版本语义的 1:1 复刻逻辑及约束检查规则。
+> 本文档定义 `orbit-core/src/versions/` 的架构、Fabric 版本语义的 1:1 复刻逻辑及 PubGrub 集成。
 
 ---
 
 ## 目录
 
-1. [设计动机](#1-设计动机)
-2. [模块结构](#2-模块结构)
+1. [模块结构](#1-模块结构)
+2. [Version 枚举（PubGrub 集成）](#2-version-枚举pubgrub-集成)
 3. [Fabric SemanticVersion](#3-fabric-semanticversion)
    - [解析规则](#解析规则)
    - [比较规则](#比较规则)
@@ -16,38 +16,27 @@
 
 ---
 
-## 1. 设计动机
-
-Minecraft 模组版本号不遵循标准 SemVer——后缀（`+mc1.21`、`-hotfix`）语义依赖于具体加载器。Orbit 不能自己定义"正确"的比较方式，而应忠实复刻各加载器的官方实现。
-
-```
-versions/
-├── mod.rs       # VersionScheme trait（各 loader 实现）
-└── fabric.rs    # 1:1 复刻 Fabric Loader 的 SemanticVersionImpl
-```
-
-**核心原则**：不发明版本规则，只搬运官方实现。Fabric 怎么做，Orbit 就怎么做。
-
----
-
-## 2. 模块结构
+## 1. 模块结构
 
 ```
 orbit-core/src/versions/
-├── mod.rs          # VersionScheme trait + 通用工具
-└── fabric.rs       # Fabric SemanticVersion（1:1 复刻）
+├── mod.rs          # Version enum + parse() + parse_constraint()
+└── fabric.rs       # SemanticVersion + satisfies() + parse_constraint()
 ```
 
-`mod.rs` 定义 `VersionScheme` trait：
+`mod.rs` 定义 PubGrub 所需的 `Version` 枚举：
 
 ```rust
-pub trait VersionScheme: Ord + Clone {
-    fn parse(raw: &str) -> Self;
-    fn satisfies(&self, constraint: &str) -> bool;
+pub enum Version {
+    Lowest,                      // PubGrub 要求的无限小版本
+    Fabric(SemanticVersion),     // Fabric 1:1 复刻
+    Generic(String),             // 未知 loader 回退
 }
 ```
 
-各加载器（Fabric、Forge、NeoForge）各自实现此 trait，`resolver` 按加载器类型选择对应实现。
+`Version` 实现了 `pubgrub::version::Version` trait（`lowest()` + `bump()`）。
+
+**核心原则**：不发明版本规则，只搬运官方实现。Fabric 怎么做，Orbit 就怎么做。`VersionScheme` trait 已删除，改用 `Version` 枚举统一抽象。
 
 ---
 

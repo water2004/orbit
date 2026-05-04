@@ -149,6 +149,7 @@ dependencies = []
                 url: Some("https://example.com/sodium.jar".into()),
                 sha256: "abc123".into(),
                 sha512: String::new(),
+                slug: None,
                 source_type: None,
                 path: None,
                 dependencies: vec![],

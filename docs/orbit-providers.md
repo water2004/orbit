@@ -80,9 +80,10 @@ impl RateLimiter {
     }
 
     /// 获取一个并发槽位。所有槽位被占时自动 await 等待。
-    pub async fn acquire(&self) -> OwnedSemaphorePermit {
+    /// Semaphore 关闭时返回错误（正常运行时不会发生）。
+    pub async fn acquire(&self) -> Result<OwnedSemaphorePermit, OrbitError> {
         self.semaphore.clone().acquire_owned().await
-            .expect("RateLimiter semaphore closed")
+            .map_err(|_| OrbitError::Other(anyhow!("RateLimiter semaphore unexpectedly closed")))
     }
 }
 ```
@@ -134,19 +135,19 @@ impl ModProvider for ModrinthProvider {
     fn name(&self) -> &'static str { "modrinth" }
 
     async fn get_version_by_hash(&self, hash: &str) -> Result<Option<ResolvedMod>, OrbitError> {
-        let _permit = self.rate_limiter.acquire().await;  // ← 排队
-        match self.client.get_version_from_hash(hash).await {
+        let _permit = self.rate_limiter.acquire().await?;  // ← 排队
+        match self.client.get_version_from_hash(hash, Some("sha512"), None).await {
             Ok(v) => Ok(Some(...)),
             Err(_) => Ok(None),
         }
     }
 
     async fn get_versions(&self, slug: &str, mc: Option<&str>, loader: Option<&str>) -> ... {
-        let _permit = self.rate_limiter.acquire().await;  // ← 排队
+        let _permit = self.rate_limiter.acquire().await?;  // ← 排队
         // ...
     }
 
-    // 所有 async fn 都在第一行 acquire
+    // 所有 async fn 都在第一行 acquire，Result 用 ? 传播
 }
 ```
 
@@ -157,143 +158,53 @@ impl ModProvider for ModrinthProvider {
 ## 5. 调用方视角
 
 ```rust
-// 调用方（如 identification.rs）完全看不到 RateLimiter：
-let providers: Vec<Box<dyn ModProvider>> = vec![
-    Box::new(ModrinthProvider::new("orbit", 3)?),
-    Box::new(CurseForgeProvider::new("key", 2)),   // future
-];
+// 调用方（如 identification.rs）使用工厂创建 provider：
+let providers = create_providers(&["modrinth".into()])?;
 
-// 并发发起 50 个识别请求 —— Provider 内部自动排队
-let handles: Vec<_> = scanned_mods.iter().map(|m| {
-    let providers = &providers;
-    tokio::spawn(async move {
-        for p in providers {
-            if let Ok(Some(v)) = p.get_version_by_hash(&m.sha256).await {
-                return Some((p.name(), v));
-            }
-        }
-        None
-    })
-}).collect();
+// 批量 API 避免 N+1：
+let found = providers[0].get_versions_by_hashes(&hashes).await?;
 ```
+
+**更推荐**：`identification.rs` 使用 `get_versions_by_hashes()` 批量端点，将 30 个 mod 的识别从 60+ 次请求压缩到 1 次。
 
 **多平台并行**：ModrinthProvider(Semaphore(3)) + CurseForgeProvider(Semaphore(2)) = 两个独立 Semaphore，共 5 个并发请求同时进行，互不阻塞。
 
 ---
 
-## 6. 下载原子性与进度回调
+## 6. 下载与校验
 
-### 6.1 原子写入
+下载逻辑在 `installer.rs` 的 `download_mod()` 中实现（非 Provider 层）：
 
-```rust
-impl ModrinthProvider {
-    /// 下载模组到指定目录。
-    /// 先写入 .tmp 文件 → SHA-256 校验 → 校验通过后原子 rename 为正式文件名。
-    async fn download_to(
-        &self,
-        url: &str,
-        expected_sha256: &str,
-        dest_dir: &Path,
-        filename: &str,
-    ) -> Result<PathBuf, OrbitError> {
-        let _permit = self.rate_limiter.acquire().await;
+- 下载前检查文件是否已存在 → SHA-512 校验
+- 下载到 `.tmp` → SHA-512 校验 → 原子 rename
+- 使用带 User-Agent 和 30s 超时的共享 `reqwest::Client`（`download_client()`）
 
-        let tmp_path = dest_dir.join(format!(".{filename}.tmp"));
-        let final_path = dest_dir.join(filename);
-
-        // 1. 下载到临时文件
-        let bytes = reqwest::get(url).await?.bytes().await?;
-        tokio::fs::write(&tmp_path, &bytes).await?;
-
-        // 2. SHA-256 校验
-        let actual = sha256_digest(&bytes);
-        if actual != expected_sha256 {
-            tokio::fs::remove_file(&tmp_path).await.ok();
-            return Err(OrbitError::ChecksumMismatch { ... });
-        }
-
-        // 3. 原子重命名
-        tokio::fs::rename(&tmp_path, &final_path).await?;
-        Ok(final_path)
-    }
-}
-```
-
-### 6.2 进度回调解耦
-
-`orbit-core` 不依赖 `indicatif` 等终端 UI 库。通过回调将进度通知交给调用方：
-
-```rust
-/// 下载进度回调：`(bytes_downloaded, total_bytes)`
-pub type ProgressCallback = Box<dyn Fn(u64, u64) + Send + Sync>;
-
-impl ModrinthProvider {
-    async fn download_to(
-        &self,
-        url: &str,
-        expected_sha256: &str,
-        dest_dir: &Path,
-        filename: &str,
-        on_progress: Option<&ProgressCallback>,
-    ) -> Result<PathBuf, OrbitError> {
-        let _permit = self.rate_limiter.acquire().await;
-        // ... 流式下载，每 8KB 调用 on_progress(bytes_so_far, total)
-    }
-}
-```
-
-CLI 层注入自己的回调：
-
-```rust
-// orbit-cli
-let pb = ProgressBar::new(total_size);
-provider.download_to(url, sha256, dir, name, Some(&Box::new(move |done, total| {
-    pb.set_length(total);
-    pb.set_position(done);
-}))).await?;
-```
-
-### 6.3 为什么不用 trait 对象？
-
-回调用 `Box<dyn Fn>` 而非泛型 `<F: Fn(u64, u64)>`，原因：
-- 泛型会污染整个调用链签名（`ModProvider` trait 的 async fn 当前不支持泛型参数）
-- `Box<dyn Fn>` 允许调用方传 `None` 跳过进度报告
-- 性能开销可忽略（下载 I/O 远大于一次动态分发）
+已删除的旧 API：`ModrinthProvider::download_to()` 和 `ProgressCallback` 类型别名。
 
 ---
 
 ## 7. Rust 实现参考
-
-### Cargo.toml
-
-无需新增依赖。`tokio::sync::Semaphore` 已在 workspace 依赖中。
 
 ### 单元测试
 
 ```rust
 #[tokio::test]
 async fn rate_limiter_serializes_requests() {
-    let limiter = RateLimiter::new(1); // 单槽位 = 完全串行
+    let limiter = RateLimiter::new(1);
     let counter = Arc::new(AtomicU32::new(0));
-
     let mut handles = vec![];
     for _ in 0..10 {
         let limiter = &limiter;
         let counter = &counter;
         handles.push(tokio::spawn(async move {
-            let _permit = limiter.acquire().await;
+            let _permit = limiter.acquire().await?;
             let prev = counter.fetch_add(1, Ordering::SeqCst);
-            assert_eq!(prev, 0); // 同时最多 1 个在执行
+            assert_eq!(prev, 0);
             tokio::time::sleep(Duration::from_millis(1)).await;
             counter.fetch_sub(1, Ordering::SeqCst);
         }));
     }
     for h in handles { h.await.unwrap(); }
-}
-
-#[tokio::test]
-async fn download_atomic_on_checksum_fail() {
-    // SHA-256 不匹配时 .tmp 文件应被删除，最终路径不应存在
 }
 ```
 

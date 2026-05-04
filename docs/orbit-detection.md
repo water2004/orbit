@@ -40,7 +40,7 @@ jar.rs（负责打开 JAR / 遍历文件系统）
   └─ 加载器检测文件 → detection/（策略：LoaderDetector）
 ```
 
-**Phase 1 策略**：检测框架完整实现，但所有 `LoaderDetector` 返回 `Confidence::None`——直接走交互式选择。后续逐步加入实际检测逻辑，每加一个不改框架。
+**当前策略**：FabricDetector 已实现真实检测（扫描 JSON libraries 匹配 fabric-loader），返回 `Confidence::Certain`。Forge/NeoForge/Quilt detector 待实现。
 
 ---
 
@@ -348,7 +348,7 @@ impl LoaderDetector for FabricDetector {
 
 | Phase | 内容 |
 |-------|------|
-| **Phase 1（当前）** | 框架完整实现。所有 detector 返回 `Confidence::None` → 交互式选择。MC 版本通过 `--mc-version` 手动指定 |
+| **当前** | FabricDetector 返回 `Confidence::Certain`（扫描 JSON libraries）。MC 版本通过 JAR 内 `version.json` 自动检测 |
 | **Phase 2** | 实现 `FabricDetector.detect()`：查找 fabric-loader jar、遍历 mods/ 下 JAR 读取 fabric.mod.json |
 | **Phase 3** | 实现 Forge / NeoForge / Quilt detector |
 | **Phase 4** | 自动探测 MC 版本：遍历 `versions/` 目录 → 读 JAR 中的 `version.json` |

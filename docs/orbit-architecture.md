@@ -95,10 +95,13 @@ ORBIT/
 │       ├── lockfile.rs           #   orbit.lock 读写 (LockEntry 含 sha256+sha512+slug)
 │       ├── identification.rs     #   模组来源识别 (批量哈希反查)
 │       ├── init.rs               #   init 编排: scan_mods_dir + run_init
-│       ├── versions/             #   版本号解析
-│       │   ├── mod.rs            #     pub mod fabric
-│       │   └── fabric.rs         #     SemanticVersion + satisfies() 支持 ||
-│       ├── resolver.rs           #   lock 构建 + find_entry / dependents / check_version_conflict
+│       ├── versions/             #   版本号解析 (PubGrub 集成)
+│       │   ├── mod.rs            #     Version enum + parse() + parse_constraint()
+│       │   └── fabric.rs         #     SemanticVersion + satisfies() + parse_constraint()
+│       ├── resolver/             #   依赖解析引擎 (PubGrub)
+│       │   ├── mod.rs            #     resolve_manifest + check_local_graph + 查询 API
+│       │   ├── types.rs          #     PackageId
+│       │   └── provider.rs       #     OrbitDependencyProvider
 │       ├── sync.rs               #   双向同步 (Err 占位)
 │       ├── installer.rs          #   install_to_instance + remove_from_instance + 批量 provider fallback
 │       ├── checker.rs            #   跨版本预检 (Err 占位)
@@ -187,7 +190,10 @@ url = "2"
 # 异步 trait
 async-trait = "0.1"
 # ZIP 处理
-zip = "2"
+zip = "3"
+# 依赖求解
+pubgrub = "0.5"
+indexmap = { version = "2", features = ["serde"] }
 ```
 
 ---
@@ -385,10 +391,11 @@ lib.rs                    ← 公共 API 入口，暴露 install_to_instance / r
 ├── lockfile.rs           ← orbit.lock serde (LockEntry 含 sha256+sha512+slug)
 ├── identification.rs     ← 模组来源识别 (批量 hash 反查)
 ├── init.rs               ← init 编排: scan_mods_dir + detect_mc_version + run_init
-├── versions/             ← 版本号解析
-│   ├── mod.rs            ← pub mod fabric
-│   └── fabric.rs         ← SemanticVersion + satisfies() 支持 ||
-├── resolver.rs           ← lock 构建 + find_entry / dependents / check_version_conflict
+├── versions/             ← Version enum + parse + parse_constraint
+│   └── fabric.rs         ← SemanticVersion + satisfies()
+├── resolver/             ← PubGrub 求解器 (resolve_manifest + check_local_graph)
+│   ├── mod.rs            ← FetchRetry + 查询 API
+│   └── provider.rs       ← OrbitDependencyProvider
 ├── sync.rs               ← 双向同步 (Err 占位)
 ├── installer.rs          ← install_to_instance + remove_from_instance + 批量 provider
 ├── checker.rs            ← 跨版本预检 (Err 占位)
