@@ -32,6 +32,8 @@ pub struct PackageEntry {
     pub sha256: String,
     #[serde(skip_serializing_if = "String::is_empty", default)]
     pub sha512: String,
+    /// JAR 文件名（不含路径），用于升级/删除时定位旧文件
+    pub filename: String,
     /// "modrinth" | "file"
     pub provider: String,
     /// Modrinth provider 专属字段
@@ -187,6 +189,7 @@ path = "mods/fabric-carpet-26.1+v260402.jar"
                 sha1: String::new(),
                 sha256: "abc123".into(),
                 sha512: String::new(),
+                filename: String::new(),
                 provider: "modrinth".into(),
                 modrinth: Some(ModrinthInfo {
                     project_id: "AANobbMI".into(),

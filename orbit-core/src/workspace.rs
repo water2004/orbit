@@ -90,4 +90,35 @@ impl Lockfile {
     pub fn find_entry(&self, slug: &str) -> Option<&crate::lockfile::PackageEntry> {
         crate::resolver::find_entry(slug, &self.inner.packages)
     }
+
+    /// 通过 mod_id 找到 JAR 文件路径（同时校验 SHA-256）。
+    pub fn find_jar_path(&self, mod_id: &str, mods_dir: &Path) -> Result<PathBuf, OrbitError> {
+        let entry = self.inner.find(mod_id)
+            .ok_or_else(|| OrbitError::ModNotFound(mod_id.to_string()))?;
+        if entry.filename.is_empty() {
+            return Err(OrbitError::Other(anyhow::anyhow!("no filename recorded for '{mod_id}'")));
+        }
+        let path = mods_dir.join(&entry.filename);
+        if !path.exists() {
+            return Err(OrbitError::Other(anyhow::anyhow!("JAR not found: {}", path.display())));
+        }
+        if !entry.sha256.is_empty() {
+            let actual = crate::jar::compute_sha256(&path)?;
+            if actual != entry.sha256 {
+                return Err(OrbitError::ChecksumMismatch {
+                    name: entry.filename.clone(),
+                    expected: entry.sha256.clone(),
+                    actual,
+                });
+            }
+        }
+        Ok(path)
+    }
+
+    /// 删除指定 mod_id 的旧 JAR。
+    pub fn remove_jar(&self, mod_id: &str, mods_dir: &Path) -> Result<(), OrbitError> {
+        let path = self.find_jar_path(mod_id, mods_dir)?;
+        std::fs::remove_file(&path)?;
+        Ok(())
+    }
 }

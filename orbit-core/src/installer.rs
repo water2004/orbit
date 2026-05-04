@@ -199,48 +199,16 @@ pub fn remove_from_instance(
     }
 
     let mods_dir = instance_dir.join("mods");
-    let filename: Option<String> = lock.inner.packages.iter()
-        .find(|e| e.mod_id == key)
-        .and_then(|e| {
-            e.file.as_ref().map(|f| {
-                std::path::Path::new(&f.path)
-                    .file_name()
-                    .map(|n| n.to_string_lossy().to_string())
-                    .unwrap_or_default()
-            })
-        })
-        .or_else(|| {
-            if let Ok(dir_entries) = std::fs::read_dir(&mods_dir) {
-                dir_entries
-                    .filter_map(|e| e.ok())
-                    .find(|e| {
-                        let name = e.file_name().to_string_lossy().to_string();
-                        e.path().extension().map(|ext| ext == "jar").unwrap_or(false)
-                            && name.contains(key.as_str())
-                    })
-                    .map(|e| e.file_name().to_string_lossy().to_string())
-            } else {
-                None
-            }
-        });
-
-    if let Some(ref fname) = filename {
-        let jar_path = mods_dir.join(fname);
-        if jar_path.exists() && !dry_run {
-            std::fs::remove_file(&jar_path).map_err(OrbitError::Io)?;
-        }
-    }
-
+    let jar_deleted = !dry_run && lock.remove_jar(&key, &mods_dir).is_ok();
     lock.inner.packages.retain(|e| e.mod_id != key);
 
     if !dry_run {
         manifest_file.save()?;
         lock.save()?;
     }
-
     Ok(RemoveReport {
         mod_id: key,
-        jar_deleted: filename.is_some(),
+        jar_deleted,
     })
 }
 
@@ -432,6 +400,14 @@ async fn install_mod(
 
     let mut installed = Vec::new();
     for mut plan in planned {
+        // 升级时删旧 JAR
+        if existing_ok {
+            if let Some(old) = lockfile.find(&plan.mod_id) {
+                if !old.filename.is_empty() {
+                    let _ = std::fs::remove_file(mods_dir.join(&old.filename));
+                }
+            }
+        }
         let Some(resolved) = jar_ver_to_v.get(&plan.version).copied() else { continue };
         let dest_path = download_mod(resolved, mods_dir).await?;
         let meta = crate::jar::read_mod_metadata(&dest_path, loader)?;
@@ -511,6 +487,7 @@ fn apply_to_manifest_and_lock(
             sha1: String::new(),
             sha256,
             sha512,
+            filename: inst.filename.clone(),
             provider: inst.provider.clone(),
             modrinth: if inst.provider == "modrinth" {
                 Some(ModrinthInfo {

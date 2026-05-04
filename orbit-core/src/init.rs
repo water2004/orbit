@@ -294,6 +294,7 @@ pub async fn run_init(
                 sha1: m.sha1.clone(),
                 sha256: m.sha256.clone(),
                 sha512: m.sha512.clone(),
+                filename: m.filename.clone(),
                 provider: String::new(),
                 modrinth: None,
                 file: None,
