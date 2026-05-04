@@ -54,19 +54,7 @@ pub async fn resolve_manifest(
     let root_version = Version::zero();
     let loader = manifest.project.modloader.clone();
 
-    // 注入 lockfile 中已有条目作为本地可用版本。
-    // 这些 mod 已安装，依赖已满足——只注册为"可用版本"不携带它们的依赖，
-    // 这样 PubGrub 只需解析新添加的包的依赖，不会因已安装 mod 的内部依赖链报错。
-    for entry in &lockfile.packages {
-        let ver = Version::parse(&entry.version, &loader);
-        provider.add_package_versions(entry.mod_id.clone(), vec![ver.clone()]);
-        provider.add_package_deps(entry.mod_id.clone(), ver, vec![]);
-        for imp in &entry.implanted {
-            let iver = Version::parse(&imp.version, &loader);
-            provider.add_package_versions(imp.name.clone(), vec![iver.clone()]);
-            provider.add_package_deps(imp.name.clone(), iver, vec![]);
-        }
-    }
+    inject_lockfile(&mut provider, lockfile, &loader);
 
     let mut root_deps = Vec::new();
     for (name, spec) in &manifest.dependencies {
@@ -272,4 +260,23 @@ pub fn check_version_conflict(slug: &str, new_version: &str, entries: &[PackageE
         }
     }
     Ok(())
+}
+
+/// 将 lockfile 条目注入 PubGrub provider。
+/// 条目不携带依赖（已安装的 mod 视为已满足），仅标记版本存在。
+fn inject_lockfile(
+    provider: &mut OrbitDependencyProvider,
+    lockfile: &crate::lockfile::OrbitLockfile,
+    loader: &str,
+) {
+    for entry in &lockfile.packages {
+        let ver = Version::parse(&entry.version, loader);
+        provider.add_package_versions(entry.mod_id.clone(), vec![ver.clone()]);
+        provider.add_package_deps(entry.mod_id.clone(), ver, vec![]);
+        for imp in &entry.implanted {
+            let iver = Version::parse(&imp.version, loader);
+            provider.add_package_versions(imp.name.clone(), vec![iver.clone()]);
+            provider.add_package_deps(imp.name.clone(), iver, vec![]);
+        }
+    }
 }

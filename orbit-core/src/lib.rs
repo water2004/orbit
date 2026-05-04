@@ -23,8 +23,10 @@ pub mod sync;
 pub mod installer;
 pub mod checker;
 pub mod purge;
+pub mod workspace;
 
 pub use config::{GlobalConfig, InstancesRegistry, InstanceEntry, orbit_data_dir, config_path};
+pub use workspace::{ManifestFile, Lockfile};
 pub use detection::LoaderDetectionService;
 pub use error::OrbitError;
 pub use manifest::OrbitManifest;

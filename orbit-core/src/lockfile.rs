@@ -67,6 +67,8 @@ pub struct ImplantedMod {
     pub version: String,
     pub sha256: String,
     pub filename: String,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub dependencies: Vec<LockDependency>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

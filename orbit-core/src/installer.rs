@@ -5,9 +5,10 @@
 use std::path::{Path, PathBuf};
 
 use crate::error::OrbitError;
-use crate::lockfile::{LockDependency, PackageEntry, OrbitLockfile, ModrinthInfo, FileInfo};
+use crate::lockfile::{LockDependency, LockMeta, OrbitLockfile, PackageEntry, ModrinthInfo, FileInfo};
 use crate::manifest::{DependencySpec, OrbitManifest};
 use crate::providers::{ModProvider, ResolvedMod};
+use crate::workspace::{ManifestFile, Lockfile};
 
 fn download_client() -> reqwest::Client {
     reqwest::Client::builder()
@@ -53,37 +54,23 @@ pub async fn install_to_instance(
     no_deps: bool,
     dry_run: bool,
 ) -> Result<InstallReport, OrbitError> {
-    let toml_path = instance_dir.join("orbit.toml");
-    if !toml_path.exists() {
-        return Err(OrbitError::ManifestNotFound);
-    }
-    let mut manifest = OrbitManifest::from_path(&toml_path)?;
-
-    let lock_path = instance_dir.join("orbit.lock");
-    let mut lockfile = if lock_path.exists() {
-        OrbitLockfile::from_path(&lock_path)?
-    } else {
-        OrbitLockfile {
-            meta: crate::lockfile::LockMeta {
-                mc_version: manifest.project.mc_version.clone(),
-                modloader: manifest.project.modloader.clone(),
-                modloader_version: manifest.project.modloader_version.clone(),
-            },
-            packages: vec![],
-        }
-    };
+    let mut manifest_file = ManifestFile::open(instance_dir)?;
+    let mut lock = Lockfile::open_or_default(instance_dir, LockMeta {
+        mc_version: manifest_file.inner.project.mc_version.clone(),
+        modloader: manifest_file.inner.project.modloader.clone(),
+        modloader_version: manifest_file.inner.project.modloader_version.clone(),
+    });
 
     let mods_dir = instance_dir.join("mods");
     if !mods_dir.exists() && !dry_run {
         std::fs::create_dir_all(&mods_dir).map_err(OrbitError::Io)?;
     }
 
-    // 按 provider 顺序尝试解析
-    let report = install_mod(slug, constraint, &providers[..], &mut manifest, &mut lockfile, &mods_dir, no_deps, false, dry_run).await?;
+    let report = install_mod(slug, constraint, &providers[..], &mut manifest_file.inner, &mut lock.inner, &mods_dir, no_deps, false, dry_run).await?;
 
     if !dry_run {
-        std::fs::write(&toml_path, manifest.to_toml_string()?).map_err(OrbitError::Io)?;
-        std::fs::write(&lock_path, lockfile.to_toml_string()?).map_err(OrbitError::Io)?;
+        manifest_file.save()?;
+        lock.save()?;
     }
 
     Ok(report)
@@ -99,32 +86,20 @@ pub fn remove_from_instance(
     instance_dir: &Path,
     dry_run: bool,
 ) -> Result<RemoveReport, OrbitError> {
-    let toml_path = instance_dir.join("orbit.toml");
-    if !toml_path.exists() {
-        return Err(OrbitError::ManifestNotFound);
-    }
+    let mut manifest_file = ManifestFile::open(instance_dir)?;
+    let mut lock = Lockfile::open(instance_dir)?;
 
-    let lock_path = instance_dir.join("orbit.lock");
-    if !lock_path.exists() {
-        return Err(OrbitError::LockfileNotFound);
-    }
-
-    let mut manifest = OrbitManifest::from_path(&toml_path)?;
-    let mut lockfile = OrbitLockfile::from_path(&lock_path)?;
-
-    // 通过 lockfile 查找：同时匹配 mod_id 和 modrinth.slug
-    let entry = crate::resolver::find_entry(input, &lockfile.packages)
+    let entry = crate::resolver::find_entry(input, &lock.inner.packages)
         .ok_or_else(|| OrbitError::ModNotFound(input.to_string()))?;
     let key = entry.mod_id.clone();
 
-    if !manifest.dependencies.contains_key(&key) {
+    if !manifest_file.inner.dependencies.contains_key(&key) {
         return Err(OrbitError::ModNotFound(input.to_string()));
     }
-    manifest.dependencies.swap_remove(&key)
+    manifest_file.inner.dependencies.swap_remove(&key)
         .expect("dependency entry should exist");
 
-    // 反查依赖图
-    let dependents = crate::resolver::dependents(&key, &lockfile.packages);
+    let dependents = crate::resolver::dependents(&key, &lock.inner.packages);
     if !dependents.is_empty() {
         return Err(OrbitError::Conflict(format!(
             "'{key}' is required by: {}\nRemove those mods first.",
@@ -132,9 +107,8 @@ pub fn remove_from_instance(
         )));
     }
 
-    // 找到 JAR 文件名: 优先从 file.path 取，modrinth 条目则扫描 mods/ 目录
     let mods_dir = instance_dir.join("mods");
-    let filename: Option<String> = lockfile.packages.iter()
+    let filename: Option<String> = lock.inner.packages.iter()
         .find(|e| e.mod_id == key)
         .and_then(|e| {
             e.file.as_ref().map(|f| {
@@ -159,7 +133,6 @@ pub fn remove_from_instance(
             }
         });
 
-    // 删除 JAR
     if let Some(ref fname) = filename {
         let jar_path = mods_dir.join(fname);
         if jar_path.exists() && !dry_run {
@@ -167,11 +140,11 @@ pub fn remove_from_instance(
         }
     }
 
-    lockfile.packages.retain(|e| e.mod_id != key);
+    lock.inner.packages.retain(|e| e.mod_id != key);
 
     if !dry_run {
-        std::fs::write(&toml_path, manifest.to_toml_string()?).map_err(OrbitError::Io)?;
-        std::fs::write(&lock_path, lockfile.to_toml_string()?).map_err(OrbitError::Io)?;
+        manifest_file.save()?;
+        lock.save()?;
     }
 
     Ok(RemoveReport {
@@ -190,11 +163,11 @@ pub struct RemoveReport {
 /// 返回 (mod_id, slug)，slug 从 lockfile 的 [package.modrinth] 读取，
 /// 若 lockfile 不存在或无 modrinth 信息则回退到 mod_id。
 pub fn list_dependencies(instance_dir: &Path) -> Result<Vec<(String, String)>, OrbitError> {
-    let manifest = OrbitManifest::from_path(&instance_dir.join("orbit.toml"))?;
-    let lockfile = OrbitLockfile::from_dir(instance_dir).ok();
-    Ok(manifest.dependencies.iter().map(|(k, _)| {
-        let slug = lockfile.as_ref()
-            .and_then(|lf| lf.find(k))
+    let manifest_file = ManifestFile::open(instance_dir)?;
+    let lock = Lockfile::open(instance_dir).ok();
+    Ok(manifest_file.inner.dependencies.iter().map(|(k, _)| {
+        let slug = lock.as_ref()
+            .and_then(|l| l.find(k))
             .and_then(|e| e.modrinth.as_ref())
             .map(|m| m.slug.clone())
             .unwrap_or_else(|| k.clone());

@@ -354,11 +354,19 @@ pub async fn run_init(
             if parent_entry.implanted.iter().any(|imp| imp.filename == m.filename) {
                 continue;
             }
+            let imp_deps: Vec<crate::lockfile::LockDependency> = m.deps.iter()
+                .filter(|(id, _, req)| *req && id != "java" && id != "mixinextras" && id != "minecraft" && id != "fabricloader")
+                .map(|(dep_id, constraint, _)| crate::lockfile::LockDependency {
+                    name: dep_id.clone(),
+                    version: if constraint.is_empty() { "*".to_string() } else { constraint.clone() },
+                })
+                .collect();
             parent_entry.implanted.push(crate::lockfile::ImplantedMod {
                 name: if !m.mod_id.is_empty() { m.mod_id.clone() } else if !m.mod_name.is_empty() { m.mod_name.clone() } else { m.filename.clone() },
                 version: m.version.clone(),
                 sha256: m.sha256.clone(),
                 filename: m.filename.clone(),
+                dependencies: imp_deps,
             });
         }
     }
@@ -407,14 +415,7 @@ pub async fn run_init(
         eprintln!("Dependency graph verified successfully.");
     }
 
-    // 4. 写入 orbit.toml
-    let toml_path = input.instance_dir.join("orbit.toml");
-    let content = manifest.to_toml_string()?;
-    std::fs::write(&toml_path, &content).map_err(|e| {
-        OrbitError::Other(anyhow::anyhow!("cannot write {}: {e}", toml_path.display()))
-    })?;
-
-    // 5. 写入 orbit.lock
+    // 4. 写入 orbit.toml + orbit.lock
     let lockfile = crate::lockfile::OrbitLockfile {
         meta: crate::lockfile::LockMeta {
             mc_version: mc_ver,
@@ -423,11 +424,11 @@ pub async fn run_init(
         },
         packages: lock_entries,
     };
-    let lock_path = input.instance_dir.join("orbit.lock");
-    let lock_content = lockfile.to_toml_string()?;
-    std::fs::write(&lock_path, &lock_content).map_err(|e| {
-        OrbitError::Other(anyhow::anyhow!("cannot write {}: {e}", lock_path.display()))
-    })?;
+
+    let manifest_file = crate::workspace::ManifestFile::new(&input.instance_dir, manifest.clone());
+    let lock = crate::workspace::Lockfile::new(&input.instance_dir, lockfile);
+    manifest_file.save()?;
+    lock.save()?;
 
     Ok(InitOutput {
         manifest,
