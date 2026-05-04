@@ -92,7 +92,7 @@ ORBIT/
 │   └── src/
 │       ├── lib.rs                #   公共 API 入口，暴露核心类型
 │       ├── manifest.rs           #   orbit.toml 解析 + mc_version_from_dir()
-│       ├── lockfile.rs           #   orbit.lock 读写 (LockEntry 含 sha256+sha512+slug)
+│       ├── lockfile.rs           #   orbit.lock 读写 (PackageEntry with mod_id/version/hashes/provider/modrinth sub-table)
 │       ├── identification.rs     #   模组来源识别 (批量哈希反查)
 │       ├── init.rs               #   init 编排: scan_mods_dir + run_init
 │       ├── versions/             #   版本号解析 (PubGrub 集成)
@@ -101,9 +101,11 @@ ORBIT/
 │       ├── resolver/             #   依赖解析引擎 (PubGrub)
 │       │   ├── mod.rs            #     resolve_manifest + check_local_graph + 查询 API
 │       │   ├── types.rs          #     PackageId
-│       │   └── provider.rs       #     OrbitDependencyProvider
+│       │   ├── provider.rs       #     OrbitDependencyProvider
+│       │   ├── provider_version.rs #   ProviderVersionResolver trait + FallbackResolver
+│       │   └── modrinth_version.rs #   ModrinthVersionResolver (date_published sort)
 │       ├── sync.rs               #   双向同步 (Err 占位)
-│       ├── installer.rs          #   install_to_instance + remove_from_instance + 批量 provider fallback
+│       ├── installer.rs          #   install_to_instance + remove_from_instance
 │       ├── checker.rs            #   跨版本预检 (Err 占位)
 │       ├── purge.rs              #   深度清理 (Err 占位)
 │       ├── jar.rs                #   SHA-256/512 哈希计算 (FabricModInfo 已删除)
@@ -388,16 +390,18 @@ anyhow = { workspace = true }
 ```
 lib.rs                    ← 公共 API 入口，暴露 install_to_instance / remove_from_instance 等
 ├── manifest.rs           ← orbit.toml serde + mc_version_from_dir()
-├── lockfile.rs           ← orbit.lock serde (LockEntry 含 sha256+sha512+slug)
+├── lockfile.rs           ← orbit.lock serde (PackageEntry with mod_id/version/hashes/provider/modrinth sub-table)
 ├── identification.rs     ← 模组来源识别 (批量 hash 反查)
-├── init.rs               ← init 编排: scan_mods_dir + detect_mc_version + run_init
+├── init.rs               ← init 编排: scan_mods_dir + run_init (JAR id/version as source of truth)
 ├── versions/             ← Version enum + parse + parse_constraint
 │   └── fabric.rs         ← SemanticVersion + satisfies()
 ├── resolver/             ← PubGrub 求解器 (resolve_manifest + check_local_graph)
 │   ├── mod.rs            ← FetchRetry + 查询 API
-│   └── provider.rs       ← OrbitDependencyProvider
+│   ├── provider.rs       ← OrbitDependencyProvider
+│   ├── provider_version.rs ← ProviderVersionResolver trait + FallbackResolver
+│   └── modrinth_version.rs ← ModrinthVersionResolver (date_published sort)
 ├── sync.rs               ← 双向同步 (Err 占位)
-├── installer.rs          ← install_to_instance + remove_from_instance + 批量 provider
+├── installer.rs          ← install_to_instance + remove_from_instance
 ├── checker.rs            ← 跨版本预检 (Err 占位)
 ├── purge.rs              ← 深度清理 (Err 占位)
 ├── jar.rs                ← SHA-256/512 哈希计算 (FabricModInfo 已删除)
@@ -413,11 +417,8 @@ lib.rs                    ← 公共 API 入口，暴露 install_to_instance / r
 └── providers/
     ├── mod.rs            ← ModProvider trait + create_providers() 工厂
     ├── rate_limiter.rs   ← RateLimiter (acquire 返回 Result)
-    ├── modrinth.rs       ← ModrinthProvider (批量 API + version_constraint + slug 解析)
+    ├── modrinth.rs       ← ModrinthProvider（批量 API + version_constraint + slug 解析 + date_published 填充）
     └── curseforge.rs     ← CurseForgeProvider (Err 占位)
-    ├── rate_limiter.rs   ← RateLimiter — Semaphore 并发控制
-    ├── modrinth.rs       ← ModrinthProvider impl（持有 RateLimiter）
-    └── curseforge.rs     ← CurseForgeProvider impl（持有 RateLimiter）
 ```
 
 ### 6.2 关键类型

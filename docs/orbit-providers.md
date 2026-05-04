@@ -10,8 +10,10 @@
 2. [模块结构](#2-模块结构)
 3. [RateLimiter — 并发控制](#3-ratelimiter--并发控制)
 4. [ModProvider trait 集成](#4-modprovider-trait-集成)
-5. [调用方视角](#5-调用方视角)
-6. [Rust 实现参考](#6-rust-实现参考)
+5. [统一数据类型](#5-统一数据类型)
+6. [Provider 工厂函数](#6-provider-工厂函数)
+7. [调用方视角](#7-调用方视角)
+8. [Rust 实现参考](#8-rust-实现参考)
 
 ---
 
@@ -43,7 +45,7 @@ Provider 内部:
 
 ```
 orbit-core/src/providers/
-├── mod.rs           # ModProvider trait
+├── mod.rs           # ModProvider trait + create_providers() + 统一数据类型
 ├── rate_limiter.rs  # RateLimiter — Semaphore 封装
 ├── modrinth.rs      # ModrinthProvider（持有 RateLimiter）
 └── curseforge.rs    # CurseForgeProvider（持有 RateLimiter）
@@ -98,7 +100,7 @@ impl RateLimiter {
 
 ## 4. ModProvider trait 集成
 
-### 当前 trait（不变）
+### 当前 trait
 
 ```rust
 #[async_trait]
@@ -108,8 +110,10 @@ pub trait ModProvider: Send + Sync {
     async fn get_mod_info(&self, slug: &str) -> Result<ModInfo, OrbitError>;
     async fn resolve(...) -> Result<ResolvedMod, OrbitError>;
     async fn get_version_by_hash(&self, hash: &str) -> Result<Option<ResolvedMod>, OrbitError>;
+    async fn get_versions_by_hashes(&self, hashes: &[String]) -> Result<Vec<ResolvedMod>, OrbitError>;
     async fn get_versions(...) -> Result<Vec<ResolvedMod>, OrbitError>;
     async fn get_categories(&self) -> Result<Vec<String>, OrbitError>;
+    async fn fetch_dependencies(&self, project_id: &str) -> Result<Vec<ResolvedDependency>, OrbitError>;
 }
 ```
 
@@ -155,7 +159,116 @@ impl ModProvider for ModrinthProvider {
 
 ---
 
-## 5. 调用方视角
+## 5. 统一数据类型
+
+### ResolvedMod
+
+平台解析后的统一模组信息。
+
+```rust
+#[derive(Debug, Clone)]
+pub struct ResolvedMod {
+    /// fabric.mod.json 的 `id`（即 mod_id，PubGrub 用此作为 PackageId）
+    pub mod_id: String,
+    /// fabric.mod.json 的 `version`
+    pub version: String,
+    /// SHA-1 哈希
+    pub sha1: String,
+    /// SHA-512 哈希（Modrinth 原生提供，用于下载校验）
+    pub sha512: String,
+    /// Modrinth 专属: project_id
+    pub project_id: String,
+    /// Modrinth 专属: version_id
+    pub version_id: String,
+    /// Modrinth 专属: version_number（如 "mc26.1.2-0.8.10-fabric"）
+    pub modrinth_version: String,
+    /// Modrinth 专属: slug
+    pub slug: String,
+    /// 发布时间（ISO 8601），provider 版本排序用
+    pub date_published: String,
+    /// 下载 URL
+    pub download_url: String,
+    /// jar 文件名
+    pub filename: String,
+    /// 前置依赖
+    pub dependencies: Vec<ResolvedDependency>,
+    /// 平台元数据声明的 client_side
+    pub client_side: Option<SideSupport>,
+    /// 平台元数据声明的 server_side
+    pub server_side: Option<SideSupport>,
+}
+```
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `mod_id` | `String` | fabric.mod.json 的 `id`，PubGrub 的 PackageId |
+| `version` | `String` | fabric.mod.json 的 `version`（语义版本号） |
+| `sha1` | `String` | SHA-1 哈希值 |
+| `sha512` | `String` | SHA-512 哈希值（Modrinth 原生，下载校验） |
+| `project_id` | `String` | Modrinth project_id |
+| `version_id` | `String` | Modrinth version_id |
+| `modrinth_version` | `String` | Modrinth version_number（完整版本字符串） |
+| `slug` | `String` | Modrinth slug |
+| `date_published` | `String` | ISO 8601 发布时间，provider resolver 排序依据 |
+| `download_url` | `String` | 可直接下载的 URL |
+| `filename` | `String` | 下载文件名 |
+| `dependencies` | `Vec<ResolvedDependency>` | 前置依赖列表 |
+| `client_side` | `Option<SideSupport>` | Required / Optional / Unsupported |
+| `server_side` | `Option<SideSupport>` | Required / Optional / Unsupported |
+
+### ResolvedDependency
+
+```rust
+#[derive(Debug, Clone)]
+pub struct ResolvedDependency {
+    /// 依赖的 slug（Modrinth 解析后），或 mod_id
+    pub slug: Option<String>,
+    pub required: bool,
+}
+```
+
+仅包含 `slug` 和 `required` 两个字段。`slug` 为 `Option<String>`——当 API 返回 `project_id` 时通过 `lookup_project_slugs()` 批量解析填充；无法解析时为 `None`，此时调用方回退到 `mod_id`。
+
+### SideSupport
+
+```rust
+#[derive(Debug, Clone, PartialEq)]
+pub enum SideSupport {
+    Required,
+    Optional,
+    Unsupported,
+}
+```
+
+---
+
+## 6. Provider 工厂函数
+
+定义在 `providers/mod.rs` 中。
+
+```rust
+/// 根据配置创建 provider 列表，按 `resolver.platforms` 顺序。
+pub fn create_providers(platforms: &[String]) -> Result<Vec<Box<dyn ModProvider>>, OrbitError> {
+    let ua = format!("orbit/{}", env!("CARGO_PKG_VERSION"));
+    // 按 platforms 顺序构造，modrinth → ModrinthProvider::new(&ua, 3)
+    // curseforge → 暂未实现，输出 warning 并跳过
+    // 未知平台 → 输出 warning 并跳过
+    // 若结果为空则返回 Err
+}
+
+/// 默认仅 Modrinth 的 provider 列表。
+pub fn create_providers_default() -> Result<Vec<Box<dyn ModProvider>>, OrbitError> {
+    create_providers(&["modrinth".into()])
+}
+```
+
+- `create_providers()` 接收平台名称列表，返回 `Vec<Box<dyn ModProvider>>`
+- 通过 trait object 擦除具体类型，`resolver` 只依赖 `ModProvider` trait
+- `create_providers_default()` 提供仅 Modrinth 的便捷构造
+
+---
+
+## 7. 调用方视角
 
 ```rust
 // 调用方（如 identification.rs）使用工厂创建 provider：
@@ -165,25 +278,13 @@ let providers = create_providers(&["modrinth".into()])?;
 let found = providers[0].get_versions_by_hashes(&hashes).await?;
 ```
 
-**更推荐**：`identification.rs` 使用 `get_versions_by_hashes()` 批量端点，将 30 个 mod 的识别从 60+ 次请求压缩到 1 次。
+**推荐**：`identification.rs` 使用 `get_versions_by_hashes()` 批量端点，将 30 个 mod 的识别从 60+ 次请求压缩到 1 次。
 
 **多平台并行**：ModrinthProvider(Semaphore(3)) + CurseForgeProvider(Semaphore(2)) = 两个独立 Semaphore，共 5 个并发请求同时进行，互不阻塞。
 
 ---
 
-## 6. 下载与校验
-
-下载逻辑在 `installer.rs` 的 `download_mod()` 中实现（非 Provider 层）：
-
-- 下载前检查文件是否已存在 → SHA-512 校验
-- 下载到 `.tmp` → SHA-512 校验 → 原子 rename
-- 使用带 User-Agent 和 30s 超时的共享 `reqwest::Client`（`download_client()`）
-
-已删除的旧 API：`ModrinthProvider::download_to()` 和 `ProgressCallback` 类型别名。
-
----
-
-## 7. Rust 实现参考
+## 8. Rust 实现参考
 
 ### 单元测试
 

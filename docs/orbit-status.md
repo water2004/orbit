@@ -1,6 +1,6 @@
 # Orbit 项目状态
 
-> 最后更新: 2026-05-04 (sync with code)
+> 最后更新: 2026-05-03 (sync with code)
 
 ---
 
@@ -32,7 +32,7 @@ orbit-cli ──→ orbit-core ──→ modrinth-wrapper
 | 模块 | 状态 | 说明 |
 |------|------|------|
 | `manifest.rs` | ✅ | orbit.toml serde + 3 单测 |
-| `lockfile.rs` | ✅ | orbit.lock serde + 2 单测 |
+| `lockfile.rs` | ✅ | orbit.lock serde (PackageEntry with mod_id/sha256/sha512/modrinth/file sub-tables) |
 | `error.rs` | ✅ | OrbitError 枚举 (thiserror) |
 | `jar.rs` | ✅ | SHA-256/512 哈希计算（FabricModInfo 已删除，统一走 metadata/） |
 | `config.rs` | ✅ | GlobalConfig (分层加载) + InstancesRegistry + 4 单测 |
@@ -42,21 +42,23 @@ orbit-cli ──→ orbit-core ──→ modrinth-wrapper
 | `metadata/version_profile.rs` | ✅ | VersionProfile — launcher JSON（libraries/mainClass）+ 3 单测 |
 | `detection/mod.rs` | ✅ | LoaderDetector trait + LoaderDetectionService |
 | `detection/fabric.rs` | ✅ | FabricDetector — 扫描 JSON libraries 匹配 fabric-loader → Certain + 版本号 |
-| `init.rs` | ✅ | detect_mc_version (JAR → version.json) + scan_mods_dir + run_init |
+| `init.rs` | ✅ | scan_mods_dir + run_init (JAR id/version as source of truth) |
 | `providers/mod.rs` | ✅ | ModProvider trait + 统一类型 |
 | `providers/rate_limiter.rs` | ✅ | RateLimiter — acquire() 返回 Result |
-| `providers/modrinth.rs` | ✅ | ModrinthProvider（含批量 API + version_constraint 过滤 + slug 解析） |
-| `identification.rs` | ✅ | 批量哈希反查（get_versions_by_hashes），避免 N+1 |
+| `providers/modrinth.rs` | ✅ | ModrinthProvider（含批量 API + version_constraint 过滤 + slug 解析 + date_published 字段填充） |
+| `identification.rs` | ✅ | 批量哈希反查 + IdentifiedMod with mod_id/version/modrinth_version/version_id |
 | `metadata/{forge,neoforge,quilt}.rs` | 🚧 | 占位 |
 | `detection/{forge,neoforge,quilt}.rs` | 🚧 | 占位 |
 | `providers/curseforge.rs` | 🚧 | 骨架（待 curseforge-wrapper） |
 | `versions/mod.rs` | ✅ | Version enum（Lowest/Fabric/Generic）+ parse() + parse_constraint() |
 | `versions/fabric.rs` | ✅ | SemanticVersion + satisfies() + parse_constraint() + 11 单测 |
-| `resolver/mod.rs` | ✅ | PubGrub 求解器（resolve_manifest + check_local_graph + FetchRetry）+ 查询 API |
+| `resolver/mod.rs` | ✅ | PubGrub resolve_manifest + check_local_graph + FetchRetry with ProviderVersionResolver |
 | `resolver/provider.rs` | ✅ | OrbitDependencyProvider（PubGrub 内存数据源） |
 | `resolver/types.rs` | ✅ | PackageId 类型别名 |
+| `resolver/provider_version.rs` | ✅ | ProviderVersionResolver trait + FallbackResolver |
+| `resolver/modrinth_version.rs` | ✅ | ModrinthVersionResolver（date_published sort） |
 | `sync.rs` | 🚧 | 算法占位（todo! 已改为 Err） |
-| `installer.rs` | ✅ | install_to_instance + remove_from_instance + 批量 provider fallback |
+| `installer.rs` | ✅ | install_to_instance + remove_from_instance + JAR-based version |
 | `checker.rs` | 🚧 | 逻辑占位（todo! 已改为 Err） |
 | `purge.rs` | 🚧 | 逻辑占位（todo! 已改为 Err） |
 
@@ -67,7 +69,8 @@ orbit-cli ──→ orbit-core ──→ modrinth-wrapper
 | `cli/mod.rs` | ✅ | 完整 clap 命令定义（16 个命令 + 全局标志 + install 可接收 mod 参数） |
 | `cli/commands/init.rs` | ✅ | 自动检测 MC 版本 + Fabric loader → 仅自动失败时才交互 |
 | `cli/commands/search.rs` | ✅ | 完整实现：provider.search() → facets 过滤 + 格式化输出 + ✓ 兼容标记 + slug 展示 |
-| `cli/commands/install.rs` | 🚧 | 全量还原 stub（exit 2）；单模组安装使用 `add` |
+| `cli/commands/add.rs` | ✅ | 单模组安装：PubGrub 求解 → dep check → 下载 → JAR 解析 → toml/lock |
+| `cli/commands/install.rs` | 🚧 | stub（exit 2） |
 | `cli/commands/remove.rs` | ✅ | 按 slug 删除 + 反查依赖图阻断 + 找不到时列出候选交互式选择 |
 | `cli/commands/*` | 🚧 | 其余 12 个 handler 全部 `eprintln! + exit(2)` |
 | `adaptors/` | — | ❌ 已删除 |
@@ -85,7 +88,7 @@ orbit-cli ──→ orbit-core ──→ modrinth-wrapper
 | `orbit instances default` | ✅ | 🚧 config | 需 UI |
 | `orbit instances remove` | ✅ | 🚧 config | 需 UI |
 | `orbit add` | ✅ | ✅ installer::install_to_instance + resolver::resolve_manifest | PubGrub 求解 → dep check → 下载 → JAR 解析 → toml/lock |
-| `orbit install` | ✅ | 🚧 installer | 全量还原（待实现，当前 exit 2） |
+| `orbit install` | ✅ | 🚧 installer | stub（exit 2），全量还原待实现 |
 | `orbit remove` | ✅ | ✅ resolver::dependents | 反查依赖图 + 删除 JAR + 更新 toml/lock |
 | `orbit purge` | ✅ | 🚧 purge + manifest | 需启发式搜索 |
 | `orbit sync` | ✅ | 🚧 sync | **核心功能** |
@@ -122,6 +125,8 @@ orbit-cli ──→ orbit-core ──→ modrinth-wrapper
 - [x] `resolver/` 依赖图查询 API（find_entry / dependents / check_version_conflict）
 - [x] `versions/` Version enum + parse_constraint 用于 PubGrub
 - [x] `installer.rs` install_to_instance + remove_from_instance
+- [x] `resolver/provider_version.rs` ProviderVersionResolver trait + FallbackResolver
+- [x] `resolver/modrinth_version.rs` ModrinthVersionResolver（date_published sort）
 - [x] `cli add <slug>` 单模组安装（含搜索回退 + 交互式选择）
 - [x] `cli remove <mod>` 按 slug 删除（含反查依赖图 + 候选列表）
 - [ ] 实现 `sync.rs` 五态比对
