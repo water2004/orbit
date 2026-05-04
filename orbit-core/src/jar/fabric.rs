@@ -52,5 +52,6 @@ pub fn try_read<R: Read + Seek>(archive: &mut ZipArchive<R>) -> Result<Option<Ja
         version: meta.version,
         dependencies: meta.dependencies.into_iter().map(|(k, v)| (k, v, true)).collect(),
         embedded_jars: meta.embedded_jars,
+        implanted_mods: vec![],
     }))
 }

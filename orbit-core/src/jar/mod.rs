@@ -23,6 +23,8 @@ pub struct JarModMetadata {
     /// (mod_id, version_constraint, required)
     pub dependencies: Vec<(String, String, bool)>,
     pub embedded_jars: Vec<String>,
+    /// 从 META-INF/jars/ 中解出的内嵌子模组元数据
+    pub implanted_mods: Vec<JarModMetadata>,
 }
 
 // ── 顶层 API ────────────────────────────────────────────────────
@@ -91,12 +93,30 @@ fn read_mod_metadata_from_archive<R: std::io::Read + std::io::Seek>(
     archive: &mut zip::ZipArchive<R>,
     loader: &str,
 ) -> Result<Option<JarModMetadata>, OrbitError> {
-    match loader {
-        "fabric" | "quilt" => fabric::try_read(archive),
-        _ => Err(OrbitError::Other(anyhow::anyhow!(
+    let meta_opt = match loader {
+        "fabric" | "quilt" => fabric::try_read(archive)?,
+        _ => return Err(OrbitError::Other(anyhow::anyhow!(
             "unsupported mod loader: {loader}"
         ))),
+    };
+
+    if let Some(mut meta) = meta_opt {
+        let mut implanted = Vec::new();
+        for emb_path in &meta.embedded_jars {
+            if let Ok(mut entry) = archive.by_name(emb_path) {
+                let mut bytes = Vec::new();
+                if std::io::Read::read_to_end(&mut entry, &mut bytes).is_ok() {
+                    if let Ok(inner_meta) = read_mod_metadata_from_bytes(&bytes, loader) {
+                        implanted.push(inner_meta);
+                    }
+                }
+            }
+        }
+        meta.implanted_mods = implanted;
+        return Ok(Some(meta));
     }
+
+    Ok(None)
 }
 
 // ── 哈希计算 ────────────────────────────────────────────────────

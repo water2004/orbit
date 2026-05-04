@@ -41,6 +41,7 @@ pub struct InstalledMod {
     pub modrinth_version: String,
     /// 从 JAR 提取的真实依赖: (mod_id, version_constraint, required)
     pub jar_deps: Vec<(String, String, bool)>,
+    pub implanted: Vec<crate::lockfile::ImplantedMod>,
 }
 
 /// 顶层 API：在指定实例目录安装模组。
@@ -262,15 +263,28 @@ async fn install_mod(
 
     // 2. 统一下载所有版本 JAR，解析构建 candidates
     let mut jar_ver_to_v: HashMap<String, &ResolvedMod> = HashMap::new();
-    let mut candidates: HashMap<String, Vec<(String, Vec<(String, String, bool)>)>> = HashMap::new();
+    let mut candidates: HashMap<String, Vec<crate::resolver::types::CandidateVersion>> = HashMap::new();
     for v in &to_download {
         let label = v.modrinth.as_ref().map(|m| m.version_number.as_str()).unwrap_or("?");
-        let meta = match crate::jar::download_and_parse(&v.download_url, &v.sha512, loader).await {
+        match crate::jar::download_and_parse(&v.download_url, &v.sha512, loader).await {
             Ok(m) => {
                 let mod_id = if m.mod_id.is_empty() { slug.to_string() } else { m.mod_id.clone() };
                 eprintln!("    {} → mod_id={}, version={}, deps={}", label, mod_id, m.version, m.dependencies.len());
                 jar_ver_to_v.insert(m.version.clone(), v);
-                candidates.entry(mod_id).or_default().push((m.version, m.dependencies));
+                
+                let imp_cands = m.implanted_mods.into_iter().map(|im| {
+                    crate::resolver::types::ImplantedCandidate {
+                        mod_id: im.mod_id,
+                        version: im.version,
+                        deps: im.dependencies,
+                    }
+                }).collect();
+                
+                candidates.entry(mod_id).or_default().push(crate::resolver::types::CandidateVersion {
+                    jar_version: m.version,
+                    deps: m.dependencies,
+                    implanted: imp_cands,
+                });
             }
             Err(e) => {
                 eprintln!("    {} → download/parse failed: {e}", label);
@@ -306,6 +320,18 @@ async fn install_mod(
 
             let dest_path = download_mod(resolved, mods_dir).await?;
             let meta = crate::jar::read_mod_metadata(&dest_path, loader)?;
+            let imp_mods: Vec<_> = meta.implanted_mods.into_iter().map(|im| {
+                crate::lockfile::ImplantedMod {
+                    name: if !im.mod_id.is_empty() { im.mod_id } else { im.name },
+                    version: im.version,
+                    sha256: String::new(),
+                    filename: String::new(),
+                    dependencies: im.dependencies.into_iter()
+                        .filter(|(n, _, req)| *req && n != "java" && n != "mixinextras" && n != "minecraft" && n != "fabricloader")
+                        .map(|(name, version, _)| crate::lockfile::LockDependency { name, version })
+                        .collect(),
+                }
+            }).collect();
             installed.push(InstalledMod {
                 slug: resolved.slug.clone(),
                 mod_id: if meta.mod_id.is_empty() { mod_id.clone() } else { meta.mod_id },
@@ -316,6 +342,7 @@ async fn install_mod(
                 version_id: resolved.modrinth.as_ref().map(|mr| mr.version_id.clone()).unwrap_or_default(),
                 modrinth_version: resolved.modrinth.as_ref().map(|mr| mr.version_number.clone()).unwrap_or_default(),
                 jar_deps: meta.dependencies,
+                implanted: imp_mods,
             });
         }
         apply_to_manifest_and_lock(manifest, lockfile, &installed, mods_dir);
@@ -329,6 +356,7 @@ async fn install_mod(
                 version_id: resolved.modrinth.as_ref().map(|mr| mr.version_id.clone()).unwrap_or_default(),
                 modrinth_version: resolved.modrinth.as_ref().map(|mr| mr.version_number.clone()).unwrap_or_default(),
                 jar_deps: vec![],
+                implanted: vec![],
             });
         }
     }
@@ -405,7 +433,7 @@ fn apply_to_manifest_and_lock(
                 None
             },
             dependencies: lock_deps,
-            implanted: vec![],
+            implanted: inst.implanted.clone(),
         });
     }
 }

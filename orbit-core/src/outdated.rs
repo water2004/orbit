@@ -35,7 +35,7 @@ pub async fn check_all_outdated(
         return Ok(vec![]);
     }
 
-    let mut candidates: HashMap<String, Vec<(String, Vec<(String, String, bool)>)>> = HashMap::new();
+    let mut candidates: HashMap<String, Vec<crate::resolver::types::CandidateVersion>> = HashMap::new();
 
     for (i, entry) in modrinth_entries.iter().enumerate() {
         let mr = entry.modrinth.as_ref().unwrap();
@@ -77,7 +77,18 @@ pub async fn check_all_outdated(
             match crate::jar::download_and_parse(&v.download_url, &v.sha512, loader).await {
                 Ok(meta) => {
                     eprintln!("      {} → parsed (JAR version: {})", ver_label, meta.version);
-                    mod_candidates.push((meta.version, meta.dependencies));
+                    let imp_cands = meta.implanted_mods.into_iter().map(|im| {
+                        crate::resolver::types::ImplantedCandidate {
+                            mod_id: im.mod_id,
+                            version: im.version,
+                            deps: im.dependencies,
+                        }
+                    }).collect();
+                    mod_candidates.push(crate::resolver::types::CandidateVersion {
+                        jar_version: meta.version,
+                        deps: meta.dependencies,
+                        implanted: imp_cands,
+                    });
                 }
                 Err(e) => {
                     eprintln!("      {} → download/parse failed: {e}", ver_label);
