@@ -146,7 +146,8 @@ impl Client {
     /// `GET /project/{id|slug}`
     pub async fn get_project(&self, id_or_slug: &str) -> Result<Project> {
         let url = format!("{}/project/{}", self.base_url, id_or_slug);
-        let resp = self.http.get(&url).send().await?.error_for_status()?;
+        let resp = self.http.get(&url).send().await?;
+        let resp = self.check_response(resp).await?;
         let project = resp.json::<Project>().await?;
         Ok(project)
     }
@@ -156,7 +157,8 @@ impl Client {
     pub async fn get_projects(&self, ids: &[&str]) -> Result<Vec<Project>> {
         let ids_json = serde_json::to_string(ids)?;
         let url = build_url(&self.base_url, "/projects", &[("ids", ids_json)]);
-        let resp = self.http.get(&url).send().await?.error_for_status()?;
+        let resp = self.http.get(&url).send().await?;
+        let resp = self.check_response(resp).await?;
         let res = resp.json::<Vec<Project>>().await?;
         Ok(res)
     }
@@ -165,7 +167,8 @@ impl Client {
     /// `GET /project/{id|slug}/dependencies`
     pub async fn get_project_dependencies(&self, id_or_slug: &str) -> Result<ProjectDependencyList> {
         let url = format!("{}/project/{}/dependencies", self.base_url, id_or_slug);
-        let resp = self.http.get(&url).send().await?.error_for_status()?;
+        let resp = self.http.get(&url).send().await?;
+        let resp = self.check_response(resp).await?;
         let res = resp.json::<ProjectDependencyList>().await?;
         Ok(res)
     }
@@ -193,7 +196,8 @@ impl Client {
             query_params.push(("limit", limit.to_string()));
         }
         let url = build_url(&self.base_url, "/search", &query_params);
-        let resp = self.http.get(&url).send().await?.error_for_status()?;
+        let resp = self.http.get(&url).send().await?;
+        let resp = self.check_response(resp).await?;
         let res = resp.json::<SearchResult>().await?;
         Ok(res)
     }
@@ -206,7 +210,8 @@ impl Client {
     /// `GET /version/{id}`
     pub async fn get_version_by_id(&self, version_id: &str) -> Result<Version> {
         let url = format!("{}/version/{}", self.base_url, version_id);
-        let resp = self.http.get(&url).send().await?.error_for_status()?;
+        let resp = self.http.get(&url).send().await?;
+        let resp = self.check_response(resp).await?;
         let res = resp.json::<Version>().await?;
         Ok(res)
     }
@@ -215,7 +220,8 @@ impl Client {
     /// `GET /project/{id|slug}/version/{id|number}`
     pub async fn get_version(&self, project_id: &str, version_id_or_number: &str) -> Result<Version> {
         let url = format!("{}/project/{}/version/{}", self.base_url, project_id, version_id_or_number);
-        let resp = self.http.get(&url).send().await?.error_for_status()?;
+        let resp = self.http.get(&url).send().await?;
+        let resp = self.check_response(resp).await?;
         let res = resp.json::<Version>().await?;
         Ok(res)
     }
@@ -225,7 +231,8 @@ impl Client {
     pub async fn get_versions_by_ids(&self, ids: &[&str]) -> Result<Vec<Version>> {
         let ids_json = serde_json::to_string(ids)?;
         let url = build_url(&self.base_url, "/versions", &[("ids", ids_json)]);
-        let resp = self.http.get(&url).send().await?.error_for_status()?;
+        let resp = self.http.get(&url).send().await?;
+        let resp = self.check_response(resp).await?;
         let res = resp.json::<Vec<Version>>().await?;
         Ok(res)
     }
@@ -234,7 +241,8 @@ impl Client {
     /// `GET /project/{id|slug}/version`
     pub async fn list_versions(&self, project_id: &str) -> Result<Vec<Version>> {
         let url = format!("{}/project/{}/version", self.base_url, project_id);
-        let resp = self.http.get(&url).send().await?.error_for_status()?;
+        let resp = self.http.get(&url).send().await?;
+        let resp = self.check_response(resp).await?;
         let res = resp.json::<Vec<Version>>().await?;
         Ok(res)
     }
@@ -257,7 +265,8 @@ impl Client {
         }
         let path = format!("/project/{}/version", project_id);
         let url = build_url(&self.base_url, &path, &query_params);
-        let resp = self.http.get(&url).send().await?.error_for_status()?;
+        let resp = self.http.get(&url).send().await?;
+        let resp = self.check_response(resp).await?;
         let res = resp.json::<Vec<Version>>().await?;
         Ok(res)
     }
@@ -279,7 +288,8 @@ impl Client {
         }
         let path = format!("/version_file/{}", hash);
         let url = build_url(&self.base_url, &path, &query_params);
-        let resp = self.http.get(&url).send().await?.error_for_status()?;
+        let resp = self.http.get(&url).send().await?;
+        let resp = self.check_response(resp).await?;
         let res = resp.json::<Version>().await?;
         Ok(res)
     }
@@ -293,7 +303,8 @@ impl Client {
             "hashes": hashes,
             "algorithm": algo
         });
-        let resp = self.http.post(&url).json(&body).send().await?.error_for_status()?;
+        let resp = self.http.post(&url).json(&body).send().await?;
+        let resp = self.check_response(resp).await?;
         let res = resp.json::<HashMap<String, Version>>().await?;
         Ok(res)
     }
@@ -308,7 +319,8 @@ impl Client {
             "loaders": loaders,
             "game_versions": game_versions
         });
-        let resp = self.http.post(&url).json(&body).send().await?.error_for_status()?;
+        let resp = self.http.post(&url).json(&body).send().await?;
+        let resp = self.check_response(resp).await?;
         let res = resp.json::<Version>().await?;
         Ok(res)
     }
@@ -324,7 +336,8 @@ impl Client {
             "loaders": loaders,
             "game_versions": game_versions
         });
-        let resp = self.http.post(&url).json(&body).send().await?.error_for_status()?;
+        let resp = self.http.post(&url).json(&body).send().await?;
+        let resp = self.check_response(resp).await?;
         let res = resp.json::<HashMap<String, Version>>().await?;
         Ok(res)
     }
