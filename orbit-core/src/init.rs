@@ -47,7 +47,7 @@ pub struct ScannedMod {
 /// 读取 fabric.mod.json 并计算 SHA-256。
 fn scan_mods_dir(
     instance_dir: &Path,
-    _loader: &str,
+    loader: &str,
 ) -> Result<Vec<ScannedMod>, OrbitError> {
     let mods_dir = instance_dir.join("mods");
     if !mods_dir.is_dir() {
@@ -75,10 +75,6 @@ fn scan_mods_dir(
             .to_string_lossy()
             .to_string();
 
-        let file = std::fs::File::open(&path).map_err(|e| {
-            OrbitError::Other(anyhow::anyhow!("cannot open {}: {e}", path.display()))
-        })?;
-
         eprintln!("  → {filename}:");
 
         let sha256 = crate::jar::compute_sha256(&path).map_err(|e| {
@@ -89,14 +85,17 @@ fn scan_mods_dir(
         })?;
         eprintln!("    SHA-256: {}", &sha256[..16]);
 
-        // 尝试从 JAR 中提取 fabric.mod.json
-        let (mod_id, mod_name, version, jar_deps, embedded) = match read_jar_metadata(file) {
-            Ok((id, name, ver, deps, emb)) => {
-                eprintln!("    fabric.mod.json: id={:?} name={:?} version={ver} deps={}", id, name, deps.len());
-                (id, name, Some(ver), deps, emb)
+        let (mod_id, mod_name, version, jar_deps, embedded) = match crate::jar::read_mod_metadata(&path, loader) {
+            Ok(meta) => {
+                eprintln!("    id={} name={} version={} deps={}", meta.mod_id, meta.name, meta.version, meta.dependencies.len());
+                (if meta.mod_id.is_empty() { None } else { Some(meta.mod_id) },
+                 if meta.name.is_empty() { None } else { Some(meta.name) },
+                 if meta.version.is_empty() { None } else { Some(meta.version) },
+                 meta.dependencies,
+                 meta.embedded_jars)
             }
             Err(e) => {
-                eprintln!("    ⚠ cannot read fabric.mod.json: {e}");
+                eprintln!("    ⚠ cannot read mod metadata: {e}");
                 (None, None, None, vec![], vec![])
             }
         };
@@ -116,7 +115,7 @@ fn scan_mods_dir(
     }
 
     // 扫描内嵌 JAR（META-INF/jars/ 下的子模组）
-    scan_embedded_jars(instance_dir, &mut results)?;
+    scan_embedded_jars(instance_dir, &mut results, loader)?;
 
     Ok(results)
 }
@@ -125,6 +124,7 @@ fn scan_mods_dir(
 fn scan_embedded_jars(
     instance_dir: &Path,
     results: &mut Vec<ScannedMod>,
+    loader: &str,
 ) -> Result<(), OrbitError> {
     let mods_dir = instance_dir.join("mods");
     let mut new_mods = vec![];
@@ -156,17 +156,21 @@ fn scan_embedded_jars(
             let filename = std::path::Path::new(emb_path)
                 .file_name().unwrap_or_default().to_string_lossy().to_string();
             eprintln!("      SHA-256: {}", &sha256[..16]);
-            let cursor = std::io::Cursor::new(&bytes[..]);
-            let (mod_id, mod_name, version, jar_deps, _) = match read_jar_metadata_from_bytes(cursor) {
-                Ok(r) => r,
+            let (mod_id, mod_name, version, jar_deps) = match crate::jar::read_mod_metadata_from_bytes(&bytes, loader) {
+                Ok(meta) => {
+                    (if meta.mod_id.is_empty() { None } else { Some(meta.mod_id) },
+                     if meta.name.is_empty() { None } else { Some(meta.name) },
+                     if meta.version.is_empty() { None } else { Some(meta.version) },
+                     meta.dependencies)
+                }
                 Err(e) => {
-                    eprintln!("      ⚠ cannot read fabric.mod.json from embedded: {e}");
-                    (None, None, String::new(), vec![], vec![])
+                    eprintln!("      ⚠ cannot read mod metadata from embedded: {e}");
+                    (None, None, None, vec![])
                 }
             };
             new_mods.push(ScannedMod {
                 filename, mod_id: mod_id.clone().or_else(|| mod_name.clone()), mod_name,
-                version: if version.is_empty() { None } else { Some(version) },
+                version,
                 sha1: String::new(), sha256, sha512, jar_deps, embedded_jars: vec![],
                 embedded_parent: Some(parent.filename.clone()),
             });
@@ -177,85 +181,6 @@ fn scan_embedded_jars(
 }
 
 /// 从字节数组读取 JAR 元数据（用于内嵌 JAR）
-fn read_jar_metadata_from_bytes(
-    cursor: std::io::Cursor<&[u8]>,
-) -> Result<(Option<String>, Option<String>, String, Vec<(String, String, bool)>, Vec<String>), OrbitError> {
-    let mut archive = zip::ZipArchive::new(cursor).map_err(|e| {
-        OrbitError::Other(anyhow::anyhow!("cannot open embedded JAR as ZIP: {e}"))
-    })?;
-    if let Ok(mut entry) = archive.by_name("fabric.mod.json") {
-        let mut content = String::new();
-        std::io::Read::read_to_string(&mut entry, &mut content).map_err(|e| {
-            OrbitError::Other(anyhow::anyhow!("cannot read fabric.mod.json: {e}"))
-        })?;
-        let parser = crate::metadata::fabric::FabricParser;
-        let meta = crate::metadata::MetadataParser::parse(&parser, &content)?;
-        let id = if meta.id.is_empty() { None } else { Some(meta.id) };
-        let name = if meta.name.is_empty() { None } else { Some(meta.name) };
-        let deps: Vec<(String, String, bool)> = meta.dependencies.into_iter().map(|(k, v)| (k, v, true)).collect();
-        Ok((id, name, meta.version, deps, meta.embedded_jars))
-    } else {
-        Err(OrbitError::Other(anyhow::anyhow!("no fabric.mod.json in embedded JAR")))
-    }
-}
-
-/// 从 JAR 中读取 fabric.mod.json 并返回 (id, name, version, dependencies, embedded_jars)
-fn read_jar_metadata(
-    file: std::fs::File,
-) -> Result<(Option<String>, Option<String>, String, Vec<(String, String, bool)>, Vec<String>), OrbitError> {
-    let mut archive = zip::ZipArchive::new(file).map_err(|e| {
-        OrbitError::Other(anyhow::anyhow!("cannot open JAR as ZIP: {e}"))
-    })?;
-
-    let target = "fabric.mod.json";
-
-    // 先尝试根路径（绝大多数 JAR 的情况）
-    let content = if let Ok(mut entry) = archive.by_name(target) {
-        let mut s = String::new();
-        std::io::Read::read_to_string(&mut entry, &mut s).map_err(|e| {
-            OrbitError::Other(anyhow::anyhow!("cannot read {target}: {e}"))
-        })?;
-        Some(s)
-    } else {
-        // 遍历查找：匹配 */fabric.mod.json（只取一层目录深度）
-        let idx = (0..archive.len()).find(|&i| {
-            archive.by_index(i)
-                .map(|e| {
-                    let name = e.name();
-                    name.ends_with(target)
-                        && (name == target
-                            || name.matches('/').count() == 1)
-                })
-                .unwrap_or(false)
-        });
-
-        match idx {
-            Some(i) => {
-                let mut entry = archive.by_index(i).map_err(|e| {
-                    OrbitError::Other(anyhow::anyhow!("cannot read ZIP entry: {e}"))
-                })?;
-                let mut s = String::new();
-                std::io::Read::read_to_string(&mut entry, &mut s).map_err(|e| {
-                    OrbitError::Other(anyhow::anyhow!("cannot read {target}: {e}"))
-                })?;
-                Some(s)
-            }
-            None => None,
-        }
-    };
-
-    let Some(content) = content else {
-        return Err(OrbitError::Other(anyhow::anyhow!("no {target} found in JAR")));
-    };
-
-    let parser = crate::metadata::fabric::FabricParser;
-    let meta = crate::metadata::MetadataParser::parse(&parser, &content)?;
-
-    let id = if meta.id.is_empty() { None } else { Some(meta.id) };
-    let name = if meta.name.is_empty() { None } else { Some(meta.name) };
-    let deps: Vec<(String, String, bool)> = meta.dependencies.into_iter().map(|(k, v)| (k, v, true)).collect();
-    Ok((id, name, meta.version, deps, meta.embedded_jars))
-}
 
 /// 从实例目录的 JAR 中自动检测 MC 版本。
 ///

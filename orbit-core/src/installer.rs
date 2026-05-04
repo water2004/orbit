@@ -274,7 +274,10 @@ async fn install_mod(
     if !dry_run {
         for m in &to_install {
             let dest_path = download_mod(m, mods_dir).await?;
-            let (jar_mod_id, jar_version, jar_deps) = parse_jar_metadata(&dest_path)?;
+            let meta = crate::jar::read_mod_metadata(&dest_path, &manifest.project.modloader)?;
+            let jar_mod_id = meta.mod_id;
+            let jar_version = meta.version;
+            let jar_deps = meta.dependencies;
             installed.push(InstalledMod {
                 slug: m.slug.clone(),
                 mod_id: if jar_mod_id.is_empty() { m.mod_id.clone() } else { jar_mod_id },
@@ -328,23 +331,6 @@ async fn download_mod(m: &ResolvedMod, mods_dir: &Path) -> Result<PathBuf, Orbit
     std::fs::write(&tmp_path, &bytes).map_err(OrbitError::Io)?;
     std::fs::rename(&tmp_path, &final_path).map_err(OrbitError::Io)?;
     Ok(final_path)
-}
-
-/// 解析 JAR 的 fabric.mod.json，返回 (mod_id, version, dependencies)
-fn parse_jar_metadata(jar_path: &Path) -> Result<(String, String, Vec<(String, String, bool)>), OrbitError> {
-    let file = std::fs::File::open(jar_path).map_err(OrbitError::Io)?;
-    let mut archive = zip::ZipArchive::new(file).map_err(OrbitError::Zip)?;
-    match archive.by_name("fabric.mod.json") {
-        Ok(mut entry) => {
-            let mut content = String::new();
-            std::io::Read::read_to_string(&mut entry, &mut content).map_err(|e| OrbitError::Io(e.into()))?;
-            let parser = crate::metadata::fabric::FabricParser;
-            let meta = crate::metadata::MetadataParser::parse(&parser, &content)?;
-            let deps: Vec<(String, String, bool)> = meta.dependencies.into_iter().map(|(k, v)| (k, v, true)).collect();
-            Ok((meta.id, meta.version, deps))
-        }
-        Err(_) => Ok((String::new(), String::new(), vec![])),
-    }
 }
 
 fn apply_to_manifest_and_lock(
