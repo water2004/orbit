@@ -203,6 +203,23 @@ pub trait ModProvider: Send + Sync {
         loader: Option<&str>,
     ) -> Result<Vec<ResolvedMod>, OrbitError>;
 
+    /// 批量获取多个 project 的版本列表（按 project_id）。
+    /// 默认逐个调用 `get_versions`，Modrinth 等 provider 覆盖为高效批量实现。
+    async fn get_versions_batch(
+        &self,
+        project_ids: &[String],
+        mc_version: Option<&str>,
+        loader: Option<&str>,
+    ) -> Result<Vec<ResolvedMod>, OrbitError> {
+        let mut results = Vec::new();
+        for pid in project_ids {
+            if let Ok(versions) = self.get_versions(pid, mc_version, loader).await {
+                results.extend(versions);
+            }
+        }
+        Ok(results)
+    }
+
     /// 获取平台分类列表
     async fn get_categories(&self) -> Result<Vec<String>, OrbitError>;
 

@@ -271,6 +271,22 @@ impl ModProvider for ModrinthProvider {
         }).collect())
     }
 
+    async fn get_versions_batch(
+        &self,
+        project_ids: &[String],
+        mc_version: Option<&str>,
+        loader: Option<&str>,
+    ) -> Result<Vec<ResolvedMod>, OrbitError> {
+        // 逐个调 get_versions（内部已按 mc_version + loader 过滤，每次返回版本数很少）
+        let mut results = Vec::new();
+        for pid in project_ids {
+            if let Ok(versions) = self.get_versions(pid, mc_version, loader).await {
+                results.extend(versions);
+            }
+        }
+        Ok(results)
+    }
+
     async fn get_categories(&self) -> Result<Vec<String>, OrbitError> {
         let _permit = self.rate_limiter.acquire().await?;
         Ok(vec![])

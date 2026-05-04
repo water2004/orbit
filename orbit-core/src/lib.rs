@@ -24,6 +24,7 @@ pub mod installer;
 pub mod checker;
 pub mod purge;
 pub mod workspace;
+pub mod outdated;
 
 pub use config::{GlobalConfig, InstancesRegistry, InstanceEntry, orbit_data_dir, config_path};
 pub use workspace::{ManifestFile, Lockfile};
@@ -34,3 +35,4 @@ pub use lockfile::{OrbitLockfile, PackageEntry, ModrinthInfo, FileInfo, LockMeta
 pub use metadata::{ModLoader, mojang::McVersion};
 pub use providers::ModProvider;
 pub use installer::{install_to_instance, remove_from_instance, list_dependencies, list_installed, InstallReport, RemoveReport, InstalledMod, ListOutput, ListedPackage};
+pub use outdated::{check_mod_outdated, OutdatedMod, VersionInfo};
