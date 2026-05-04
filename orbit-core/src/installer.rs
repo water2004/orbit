@@ -175,6 +175,40 @@ pub fn list_dependencies(instance_dir: &Path) -> Result<Vec<(String, String)>, O
     }).collect())
 }
 
+/// `orbit list` 输出结构
+#[derive(Debug, Clone)]
+pub struct ListOutput {
+    pub packages: Vec<ListedPackage>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ListedPackage {
+    pub mod_id: String,
+    pub version: String,
+    pub slug: Option<String>,
+    pub provider: String,
+    /// 依赖的 mod_id 列表
+    pub dependencies: Vec<String>,
+    /// 内嵌子模组 (name, version)
+    pub implanted: Vec<(String, String)>,
+}
+
+/// 读取 lockfile 中所有已安装模组供 list 命令展示。
+pub fn list_installed(instance_dir: &Path) -> Result<ListOutput, OrbitError> {
+    let lock = Lockfile::open(instance_dir)?;
+    let packages: Vec<ListedPackage> = lock.inner.packages.iter().map(|e| {
+        ListedPackage {
+            mod_id: e.mod_id.clone(),
+            version: e.version.clone(),
+            slug: e.modrinth.as_ref().map(|m| m.slug.clone()),
+            provider: e.provider.clone(),
+            dependencies: e.dependencies.iter().map(|d| d.name.clone()).collect(),
+            implanted: e.implanted.iter().map(|i| (i.name.clone(), i.version.clone())).collect(),
+        }
+    }).collect();
+    Ok(ListOutput { packages })
+}
+
 // ── 内部实现 ──────────────────────────────────────────────────────────
 
 async fn install_mod(

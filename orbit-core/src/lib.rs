@@ -33,4 +33,4 @@ pub use manifest::OrbitManifest;
 pub use lockfile::{OrbitLockfile, PackageEntry, ModrinthInfo, FileInfo, LockMeta, LockDependency, ImplantedMod};
 pub use metadata::{ModLoader, mojang::McVersion};
 pub use providers::ModProvider;
-pub use installer::{install_to_instance, remove_from_instance, list_dependencies, InstallReport, RemoveReport, InstalledMod};
+pub use installer::{install_to_instance, remove_from_instance, list_dependencies, list_installed, InstallReport, RemoveReport, InstalledMod, ListOutput, ListedPackage};
