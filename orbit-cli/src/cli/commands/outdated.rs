@@ -16,7 +16,7 @@ pub async fn handle(mod_name: Option<String>, _ctx: &CliContext) -> Result<()> {
         manifest_file.inner.project.modloader,
     );
 
-    let mut results = check_all_outdated(&manifest_file.inner, &lock.inner, &providers).await
+    let (mut results, _) = orbit_core::outdated::check_all_outdated(&manifest_file.inner, &lock.inner, &providers).await
         .context("failed to check for updates")?;
 
     if let Some(ref name) = mod_name {

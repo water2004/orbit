@@ -45,3 +45,32 @@ pub use info::handle as handle_info;
 pub use import::handle as handle_import;
 pub use export::handle as handle_export;
 pub use check::handle as handle_check;
+
+pub fn prompt_install_report(report: &orbit_core::InstallReport, yes: bool) -> bool {
+    if report.installed.is_empty() {
+        return true;
+    }
+    eprintln!("\nThe following mods will be installed/upgraded:");
+    for m in &report.installed {
+        eprintln!("  + {} v{}", m.mod_id, m.version);
+        for (dep_id, dep_ver, _) in &m.jar_deps {
+            eprintln!("      ↳ {} {}", dep_id, dep_ver);
+        }
+        for imp in &m.implanted {
+            eprintln!("      ↳ [implanted] {} {}", imp.name, imp.version);
+        }
+    }
+    if !report.already_satisfied.is_empty() {
+        eprintln!("\nAlready satisfied: {}", report.already_satisfied.join(", "));
+    }
+    if yes {
+        return true;
+    }
+    eprint!("\nDo you want to continue? [Y/n] ");
+    use std::io::Write;
+    std::io::stdout().flush().ok();
+    let mut input = String::new();
+    std::io::stdin().read_line(&mut input).ok();
+    let input = input.trim().to_lowercase();
+    input.is_empty() || input == "y" || input == "yes"
+}

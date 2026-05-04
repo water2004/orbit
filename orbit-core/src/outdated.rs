@@ -20,7 +20,7 @@ pub async fn check_all_outdated(
     manifest: &OrbitManifest,
     lockfile: &OrbitLockfile,
     providers: &[Box<dyn ModProvider>],
-) -> Result<Vec<OutdatedMod>, OrbitError> {
+) -> Result<(Vec<OutdatedMod>, HashMap<String, crate::providers::ResolvedMod>), OrbitError> {
     let loader = &manifest.project.modloader;
     let mc_version = &manifest.project.mc_version;
     let provider = &providers[0];
@@ -32,10 +32,12 @@ pub async fn check_all_outdated(
 
     if modrinth_entries.is_empty() {
         eprintln!("  (no modrinth-sourced mods to check)");
-        return Ok(vec![]);
+        return Ok((vec![], HashMap::new()));
     }
 
     let mut candidates: HashMap<String, Vec<crate::resolver::types::CandidateVersion>> = HashMap::new();
+
+    let mut jar_ver_to_v: HashMap<String, crate::providers::ResolvedMod> = HashMap::new();
 
     for (i, entry) in modrinth_entries.iter().enumerate() {
         let mr = entry.modrinth.as_ref().unwrap();
@@ -85,10 +87,11 @@ pub async fn check_all_outdated(
                         }
                     }).collect();
                     mod_candidates.push(crate::resolver::types::CandidateVersion {
-                        jar_version: meta.version,
+                        jar_version: meta.version.clone(),
                         deps: meta.dependencies,
                         implanted: imp_cands,
                     });
+                    jar_ver_to_v.insert(meta.version, (*v).clone());
                 }
                 Err(e) => {
                     eprintln!("      {} → download/parse failed: {e}", ver_label);
@@ -102,7 +105,7 @@ pub async fn check_all_outdated(
 
     if candidates.is_empty() {
         eprintln!("\n  all mods up to date.");
-        return Ok(vec![]);
+        return Ok((vec![], HashMap::new()));
     }
 
     eprintln!("\n  resolving dependency graph with {} candidate(s)...", candidates.len());
@@ -120,5 +123,5 @@ pub async fn check_all_outdated(
         })
         .collect();
     results.sort_by(|a, b| a.mod_id.cmp(&b.mod_id));
-    Ok(results)
+    Ok((results, jar_ver_to_v))
 }

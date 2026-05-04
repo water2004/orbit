@@ -17,20 +17,24 @@ pub async fn handle(
     let instance_dir = std::env::current_dir().context("failed to get current directory")?;
     let providers = create_providers_default().context("failed to create providers")?;
 
-    match install_to_instance(slug, &constraint, &instance_dir, &providers, no_deps, ctx.dry_run).await {
+    let yes = ctx.yes;
+    let prompt_fn: Option<Box<dyn FnOnce(&orbit_core::InstallReport) -> bool + Send>> = if ctx.dry_run {
+        None
+    } else {
+        Some(Box::new(move |report| super::prompt_install_report(report, yes)))
+    };
+
+    match install_to_instance(slug, &constraint, &instance_dir, &providers, no_deps, ctx.dry_run, false, prompt_fn).await {
         Ok(report) => {
             if ctx.dry_run {
                 for m in &report.installed { println!("  [dry-run] would install {} v{}", m.mod_id, m.version); }
                 return Ok(());
             }
-            for m in &report.installed {
-                println!("  + installed {} v{}", m.mod_id, m.version);
-                for (dep_id, dep_ver, _) in &m.jar_deps { println!("      ↳ {dep_id} {dep_ver}"); }
+            if report.installed.is_empty() {
+                println!("No new mods were installed.");
+            } else {
+                println!("\nSuccessfully installed {} mod(s).", report.installed.len());
             }
-            for dep in &report.already_satisfied { println!("  ✓ {dep} (already satisfied)"); }
-            for dep in &report.skipped_optional { println!("  ~ {dep} (optional, skipped)"); }
-            println!("\nAdded {} mod(s), {} already satisfied, {} optional skipped.",
-                report.installed.len(), report.already_satisfied.len(), report.skipped_optional.len());
             Ok(())
         }
         Err(OrbitError::ModNotFound(_)) => {
