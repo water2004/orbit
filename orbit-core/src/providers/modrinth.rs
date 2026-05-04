@@ -3,7 +3,7 @@ use async_trait::async_trait;
 use modrinth_wrapper::{Client as MRClient, models as mr_models};
 use modrinth_wrapper::api::SearchParams;
 
-use super::{ModInfo, ModProvider, ResolvedDependency, ResolvedMod, SearchResultItem, SideSupport};
+use super::{ModInfo, ModProvider, ModrinthResolvedInfo, ResolvedDependency, ResolvedMod, SearchResultItem, SideSupport};
 use super::rate_limiter::RateLimiter;
 use crate::error::OrbitError;
 
@@ -197,11 +197,14 @@ impl ModProvider for ModrinthProvider {
                     version: v.version_number.clone(),
                     sha1: file.hashes.sha1.clone(),
                     sha512: file.hashes.sha512.clone(),
-                    project_id: v.project_id.clone(),
-                    version_id: v.id.clone(),
-                    modrinth_version: v.version_number.clone(),
-                    date_published: v.date_published.clone(),
                     slug: slug.to_string(),
+                    provider: "modrinth".to_string(),
+                    modrinth: Some(ModrinthResolvedInfo {
+                        project_id: v.project_id.clone(),
+                        version_id: v.id.clone(),
+                        version_number: v.version_number.clone(),
+                    }),
+                    date_published: v.date_published.clone(),
                     download_url: file.url.clone(),
                     filename: file.filename.clone(),
                     dependencies: deps,
@@ -251,11 +254,14 @@ impl ModProvider for ModrinthProvider {
                 version: v.version_number.clone(),
                 sha1: file.map(|f| f.hashes.sha1.clone()).unwrap_or_default(),
                 sha512: file.map(|f| f.hashes.sha512.clone()).unwrap_or_default(),
-                project_id: v.project_id.clone(),
-                version_id: v.id.clone(),
-                modrinth_version: v.version_number.clone(),
-                date_published: v.date_published.clone(),
                 slug: slug.to_string(),
+                provider: "modrinth".to_string(),
+                modrinth: Some(ModrinthResolvedInfo {
+                    project_id: v.project_id.clone(),
+                    version_id: v.id.clone(),
+                    version_number: v.version_number.clone(),
+                }),
+                date_published: v.date_published.clone(),
                 download_url: file.map(|f| f.url.clone()).unwrap_or_default(),
                 filename: file.map(|f| f.filename.clone()).unwrap_or_default(),
                 dependencies: deps,
@@ -302,11 +308,14 @@ impl ModProvider for ModrinthProvider {
                 version: v.version_number.clone(),
                 sha1: file.map(|f| f.hashes.sha1.clone()).unwrap_or_default(),
                 sha512: file.map(|f| f.hashes.sha512.clone()).unwrap_or_default(),
-                project_id: v.project_id.clone(),
-                version_id: v.id.clone(),
-                modrinth_version: v.version_number.clone(),
-                date_published: v.date_published.clone(),
                 slug: main_slug,
+                provider: "modrinth".to_string(),
+                modrinth: Some(ModrinthResolvedInfo {
+                    project_id: v.project_id.clone(),
+                    version_id: v.id.clone(),
+                    version_number: v.version_number.clone(),
+                }),
+                date_published: v.date_published.clone(),
                 download_url: file.map(|f| f.url.clone()).unwrap_or_default(),
                 filename: file.map(|f| f.filename.clone()).unwrap_or_default(),
                 dependencies: v.dependencies.unwrap_or_default().into_iter().map(|d| {
@@ -346,11 +355,14 @@ impl ModProvider for ModrinthProvider {
                     version: ver,
                     sha1: file.map(|f| f.hashes.sha1.clone()).unwrap_or_default(),
                     sha512: file.map(|f| f.hashes.sha512.clone()).unwrap_or_default(),
-                    project_id: v.project_id.clone(),
-                    version_id: v.id.clone(),
-                    modrinth_version: v.version_number.clone(),
-                    date_published: v.date_published.clone(),
                     slug: main_slug,
+                    provider: "modrinth".to_string(),
+                    modrinth: Some(ModrinthResolvedInfo {
+                        project_id: v.project_id.clone(),
+                        version_id: v.id.clone(),
+                        version_number: v.version_number.clone(),
+                    }),
+                    date_published: v.date_published.clone(),
                     download_url: file.map(|f| f.url.clone()).unwrap_or_default(),
                     filename: file.map(|f| f.filename.clone()).unwrap_or_default(),
                     dependencies: deps,

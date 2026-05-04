@@ -45,6 +45,15 @@ pub fn create_providers_default() -> Result<Vec<Box<dyn ModProvider>>, crate::er
 // 统一数据类型
 // ---------------------------------------------------------------------------
 
+/// Modrinth 平台专属字段
+#[derive(Debug, Clone)]
+pub struct ModrinthResolvedInfo {
+    pub project_id: String,
+    pub version_id: String,
+    /// Modrinth 的 version_number（如 "mc26.1.2-0.8.10-fabric"）
+    pub version_number: String,
+}
+
 /// 平台解析后的统一模组信息
 #[derive(Debug, Clone)]
 pub struct ResolvedMod {
@@ -56,14 +65,12 @@ pub struct ResolvedMod {
     pub sha1: String,
     /// SHA-512（Modrinth 原生提供，用于下载校验）
     pub sha512: String,
-    /// Modrinth 专属: project_id
-    pub project_id: String,
-    /// Modrinth 专属: version_id
-    pub version_id: String,
-    /// Modrinth 专属: version_number（如 "mc26.1.2-0.8.10-fabric"）
-    pub modrinth_version: String,
-    /// Modrinth 专属: slug
+    /// slug
     pub slug: String,
+    /// 来源平台名称（"modrinth"、"curseforge" 等）
+    pub provider: String,
+    /// Modrinth 专属字段
+    pub modrinth: Option<ModrinthResolvedInfo>,
     /// 发布时间（ISO 8601），provider 版本排序用
     pub date_published: String,
     /// 下载 URL

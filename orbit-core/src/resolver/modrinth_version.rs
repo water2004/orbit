@@ -17,7 +17,10 @@ impl ProviderVersionResolver for ModrinthVersionResolver {
     /// 如果 `modrinth_version` 为空则回退到 `version` 字段的 SemVer 比较。
     fn satisfies(&self, version: &ResolvedMod, constraint: &str) -> bool {
         if constraint == "*" || constraint.is_empty() { return true; }
-        let ver_str = if version.modrinth_version.is_empty() { &version.version } else { &version.modrinth_version };
+        let ver_str = match &version.modrinth {
+            Some(m) if !m.version_number.is_empty() => &m.version_number,
+            _ => &version.version,
+        };
         if let Ok(sv) = crate::versions::fabric::SemanticVersion::parse(ver_str, true) {
             return crate::versions::fabric::satisfies(&sv, constraint);
         }

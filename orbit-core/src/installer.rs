@@ -279,9 +279,10 @@ async fn install_mod(
                 slug: m.slug.clone(),
                 mod_id: if jar_mod_id.is_empty() { m.mod_id.clone() } else { jar_mod_id },
                 version: if jar_version.is_empty() { m.version.clone() } else { jar_version },
-                filename: m.filename.clone(), provider: "modrinth".to_string(),
-                project_id: m.project_id.clone(), version_id: m.version_id.clone(),
-                modrinth_version: m.modrinth_version.clone(),
+                filename: m.filename.clone(), provider: m.provider.clone(),
+                project_id: m.modrinth.as_ref().map(|mr| mr.project_id.clone()).unwrap_or_default(),
+                version_id: m.modrinth.as_ref().map(|mr| mr.version_id.clone()).unwrap_or_default(),
+                modrinth_version: m.modrinth.as_ref().map(|mr| mr.version_number.clone()).unwrap_or_default(),
                 jar_deps,
             });
         }
@@ -290,9 +291,10 @@ async fn install_mod(
         for m in &to_install {
             installed.push(InstalledMod {
                 slug: m.slug.clone(), mod_id: m.mod_id.clone(), version: m.version.clone(),
-                filename: m.filename.clone(), provider: "modrinth".to_string(),
-                project_id: m.project_id.clone(), version_id: m.version_id.clone(),
-                modrinth_version: m.modrinth_version.clone(),
+                filename: m.filename.clone(), provider: m.provider.clone(),
+                project_id: m.modrinth.as_ref().map(|mr| mr.project_id.clone()).unwrap_or_default(),
+                version_id: m.modrinth.as_ref().map(|mr| mr.version_id.clone()).unwrap_or_default(),
+                modrinth_version: m.modrinth.as_ref().map(|mr| mr.version_number.clone()).unwrap_or_default(),
                 jar_deps: vec![],
             });
         }
