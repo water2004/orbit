@@ -108,7 +108,10 @@ ORBIT/
 │       ├── installer.rs          #   install_to_instance + remove_from_instance
 │       ├── checker.rs            #   跨版本预检 (Err 占位)
 │       ├── purge.rs              #   深度清理 (Err 占位)
-│       ├── jar.rs                #   SHA-256/512 哈希计算 (FabricModInfo 已删除)
+│       ├── workspace.rs          #   ManifestFile / Lockfile 文件 I/O 封装
+│       ├── jar/                  #   JAR 文件处理 (哈希 + loader 分发元数据提取)
+│       │   ├── mod.rs            #     JarModMetadata + 哈希函数 + loader 分发
+│       │   └── fabric.rs         #     fabric.mod.json 查找与解析 (ZIP → 内容)
 │       ├── metadata/             #   文件格式解析 (纯解析，无 I/O)
 │       │   ├── mod.rs            #     MetadataParser trait + ModMetadata + Extractor
 │       │   ├── fabric.rs         #     fabric.mod.json (JSON)
@@ -404,7 +407,10 @@ lib.rs                    ← 公共 API 入口，暴露 install_to_instance / r
 ├── installer.rs          ← install_to_instance + remove_from_instance
 ├── checker.rs            ← 跨版本预检 (Err 占位)
 ├── purge.rs              ← 深度清理 (Err 占位)
-├── jar.rs                ← SHA-256/512 哈希计算 (FabricModInfo 已删除)
+├── workspace.rs          ← ManifestFile / Lockfile 文件 I/O 封装
+├── jar/                  ← JAR 文件处理 (哈希 + loader 分发元数据提取)
+│   ├── mod.rs            ← JarModMetadata + 哈希 + loader 分发
+│   └── fabric.rs         ← fabric.mod.json 查找与解析
 ├── metadata/             ← 文件格式解析 (纯解析，无 I/O)
 │   ├── mod.rs            ← MetadataParser trait + ModMetadata + Extractor
 │   ├── fabric.rs         ← fabric.mod.json
@@ -962,7 +968,7 @@ fn map_side(side: Option<&str>) -> Option<SideSupport> {
 
 1. 创建 `orbit-core/Cargo.toml`，引入 `toml`、`serde` 等依赖
 2. 将 `orbit-cli/src/models/` 中的数据结构迁移到 `orbit-core/src/manifest.rs` 和 `orbit-core/src/lockfile.rs`
-3. 将 `orbit-cli/src/utils/jar.rs` 迁移到 `orbit-core/src/jar.rs`
+3. 将 `orbit-cli/src/utils/jar.rs` 迁移到 `orbit-core/src/jar/` （哈希函数 + 元数据提取）
 4. 定义 `orbit-core/src/providers/mod.rs` 中的 `ModProvider` trait
 5. 在 `orbit-cli/Cargo.toml` 中添加 `orbit-core = { path = "../orbit-core" }` 依赖
 
@@ -985,7 +991,7 @@ fn map_side(side: Option<&str>) -> Option<SideSupport> {
 > - `orbit-toml-spec.md` — 项目级 orbit.toml / orbit.lock 格式规格
 > - `orbit-global-config.md` — 全局级 config.toml 规格与加载策略
 > - `orbit-cli-commands.md` — 命令行为规格
-> - `orbit-metadata.md` — 文件格式解析层（metadata/ + jar.rs）
+> - `orbit-metadata.md` — 文件格式解析层（metadata/ + jar/）
 > - `orbit-detection.md` — 实例环境检测层（init 命令编排）
 > - `orbit-providers.md` — 平台 Provider 层（RateLimiter + ModProvider trait）
 > - `orbit-versions.md` — 版本号解析（Fabric 等加载器语义）

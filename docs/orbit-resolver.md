@@ -25,7 +25,8 @@ orbit-core/src/resolver/
 ├── types.rs               # PackageId 类型别名
 ├── provider.rs            # OrbitDependencyProvider impl DependencyProvider
 ├── provider_version.rs    # ProviderVersionResolver trait + FallbackResolver
-└── modrinth_version.rs    # ModrinthVersionResolver — date_published 排序
+├── modrinth_version.rs    # ModrinthVersionResolver — date_published 排序
+│                          # inject_lockfile() + dependents() / find_entry()
 ```
 
 与 `versions/` 模块紧密协作——`Version` 枚举和 `parse_constraint()` 在 `versions/mod.rs` 中定义。
@@ -34,9 +35,10 @@ orbit-core/src/resolver/
 
 ## 2. PubGrub 求解器集成
 
-`resolve_manifest(manifest, providers)` 对 `orbit.toml` 中声明的顶层依赖执行 PubGrub 求解：
+`resolve_manifest(manifest, lockfile, providers)` 对 `orbit.toml` 中声明的顶层依赖执行 PubGrub 求解：
 
-- 输入：`OrbitManifest`（顶层依赖 + MC version + loader）+ Provider 列表
+- 输入：`OrbitManifest`（顶层依赖 + MC version + loader）+ `OrbitLockfile` + Provider 列表
+- 通过 `inject_lockfile()` 将 lockfile 已有条目注入 PubGrub（条目不携带依赖，避免重解析已安装 mod 的内部链）
 - 输出：`HashMap<PackageId, ResolvedMod>` —— 每个包被选中的版本（含下载 URL、SHA-512 等）
 - 版本约束通过 `Version::parse_constraint()` 转换为 PubGrub `Range<Version>`
 - 冲突时返回人类可读的冲突报告（PubGrub `DefaultStringReporter`）
@@ -83,7 +85,7 @@ pub trait ProviderVersionResolver: Send + Sync {
 位于 `modrinth_version.rs`，使用 `date_published` 时间戳排序。
 
 - **`sort_newest_first()`**: 按 `date_published` 降序排列。ISO 8601 格式天然可字符串排序，无需额外解析。
-- **`satisfies()`**: 对 `modrinth_version` 字段做 SemVer 约束检查（如 `>=0.5, <1.0`）。若 `modrinth_version` 为空则回退到 `version` 字段。约束为 `*` 或空时始终返回 `true`。
+- **`satisfies()`**: 优先用 `modrinth.version_number` 做 SemVer 约束检查，若不存在或为空则回退到 `version` 字段。约束为 `*` 或空时始终返回 `true`。
 
 ```rust
 pub struct ModrinthVersionResolver;
@@ -97,10 +99,9 @@ impl ProviderVersionResolver for ModrinthVersionResolver {
 
     fn satisfies(&self, version: &ResolvedMod, constraint: &str) -> bool {
         if constraint == "*" || constraint.is_empty() { return true; }
-        let ver_str = if version.modrinth_version.is_empty() {
-            &version.version
-        } else {
-            &version.modrinth_version
+        let ver_str = match &version.modrinth {
+            Some(m) if !m.version_number.is_empty() => &m.version_number,
+            _ => &version.version,
         };
         // fabric::SemanticVersion::parse + fabric::satisfies
         // 回退到字符串完全匹配

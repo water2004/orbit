@@ -58,12 +58,36 @@
 
 ---
 
+## 数据结构设计
+
+25. **Provider 专属字段进子 struct**。公共类型（`ResolvedMod`、`PackageEntry`）不扁平存放平台专属字段。Modrinth 的 `project_id`/`version_id`/`version_number` 放在 `modrinth: Option<ModrinthInfo>` 子 struct 中。未来加 CurseForge 时加 `curseforge: Option<CurseForgeInfo>`，不影响现有字段。
+26. **key 统一用 JAR 内 `fabric.mod.json` 的 `id`**（即 `mod_id`）。slug 只在 `find_entry` 中作为备选匹配键，不用作主键。
+
+## JAR 模块
+
+27. **所有 JAR 元数据读取走 `jar` 模块**。`init.rs`、`installer.rs` 不直接打开 ZIP、不直接调 `FabricParser`。调用 `jar::read_mod_metadata(path, loader)`，由 jar 模块按 loader 分发到对应 reader（`jar/fabric.rs` → fabric.mod.json）。未来加 Forge 只需加 `jar/forge.rs`。
+28. **`loader` 参数由调用者传入，禁止 auto-detect**。一个 JAR 可能同时兼容多个 loader（同时含 fabric.mod.json 和 META-INF/mods.toml），auto-detect 会选错。
+
+## 文件 I/O
+
+29. **manifest/lockfile 文件读写统一走 `ManifestFile` / `Lockfile` 封装**。其他模块不直接调 `std::fs::write` 操作 orbit.toml / orbit.lock。初始化用 `ManifestFile::new(dir, manifest)` + `save()`，运行时用 `ManifestFile::open(dir)` / `Lockfile::open(dir)`。
+30. **`Lockfile::open_or_default(dir, meta)` 处理锁文件不存在**。不需要每个调用方手写 `if path.exists() { from_path } else { default }`。
+
+## Resolver
+
+31. **lockfile 注入 PubGrub 的逻辑复用 `inject_lockfile()`**。`resolve_manifest` 和 `check_local_graph` 都通过此函数注入，不手写 for 循环。
+32. **lockfile 条目不携带依赖注入（避免重解析已安装 mod），之后由 `check_local_graph` 单独校验完整性**。两步分离：注入时 empty deps → PubGrub 只解析新包；校验时带全量 deps → 检测缺失。
+
 ## 代码卫生
 
-25. **写完功能立即检查是否有死代码**：未用的函数、struct、trait、import、依赖项全部删除。
-26. **字段命名必须准确**：存 SHA-512 就叫 `sha512`，不叫 `sha256`。
-27. **`expect()` / `unwrap()` 只在不可能失败时使用**。library crate 优先返回 `Result`。
-28. **修复一个问题时检查所有同类问题**（如一个 stub 改 exit(2) 就要全部改）。
+33. **写完功能立即检查是否有死代码**：未用的函数、struct、trait、import、依赖项全部删除。
+34. **字段命名必须准确**：存 SHA-512 就叫 `sha512`，不叫 `sha256`。
+35. **`expect()` / `unwrap()` 只在不可能失败时使用**。library crate 优先返回 `Result`。
+36. **修复一个问题时检查所有同类问题**（如一个 stub 改 exit(2) 就要全部改）。
+
+## core 层输出（待整改）
+
+37. **当前 `init.rs`、`identification.rs`、`providers/mod.rs` 中存在 `eprintln!`，违反规则 2**。后续需将这些输出改为 `tracing::debug!` / `tracing::info!`，或通过返回值传递给 CLI 层。
 
 ---
 

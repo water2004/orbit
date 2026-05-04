@@ -176,14 +176,12 @@ pub struct ResolvedMod {
     pub sha1: String,
     /// SHA-512 哈希（Modrinth 原生提供，用于下载校验）
     pub sha512: String,
-    /// Modrinth 专属: project_id
-    pub project_id: String,
-    /// Modrinth 专属: version_id
-    pub version_id: String,
-    /// Modrinth 专属: version_number（如 "mc26.1.2-0.8.10-fabric"）
-    pub modrinth_version: String,
-    /// Modrinth 专属: slug
+    /// slug
     pub slug: String,
+    /// 来源平台名称（"modrinth"、"curseforge" 等）
+    pub provider: String,
+    /// Modrinth 专属字段
+    pub modrinth: Option<ModrinthResolvedInfo>,
     /// 发布时间（ISO 8601），provider 版本排序用
     pub date_published: String,
     /// 下载 URL
@@ -197,6 +195,15 @@ pub struct ResolvedMod {
     /// 平台元数据声明的 server_side
     pub server_side: Option<SideSupport>,
 }
+
+/// Modrinth 平台专属字段
+#[derive(Debug, Clone)]
+pub struct ModrinthResolvedInfo {
+    pub project_id: String,
+    pub version_id: String,
+    /// Modrinth 的 version_number（如 "mc26.1.2-0.8.10-fabric"）
+    pub version_number: String,
+}
 ```
 
 | 字段 | 类型 | 说明 |
@@ -205,10 +212,9 @@ pub struct ResolvedMod {
 | `version` | `String` | fabric.mod.json 的 `version`（语义版本号） |
 | `sha1` | `String` | SHA-1 哈希值 |
 | `sha512` | `String` | SHA-512 哈希值（Modrinth 原生，下载校验） |
-| `project_id` | `String` | Modrinth project_id |
-| `version_id` | `String` | Modrinth version_id |
-| `modrinth_version` | `String` | Modrinth version_number（完整版本字符串） |
-| `slug` | `String` | Modrinth slug |
+| `slug` | `String` | slug |
+| `provider` | `String` | 来源平台名称（"modrinth"、"curseforge" 等） |
+| `modrinth` | `Option<ModrinthResolvedInfo>` | Modrinth 专属字段（其他 provider 为 None） |
 | `date_published` | `String` | ISO 8601 发布时间，provider resolver 排序依据 |
 | `download_url` | `String` | 可直接下载的 URL |
 | `filename` | `String` | 下载文件名 |

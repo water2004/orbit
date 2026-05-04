@@ -318,6 +318,7 @@ path = "mods/fabric-carpet-26.1+v260402.jar"
 | `version` | `String` | 内嵌子模组的版本 |
 | `sha256` | `String` | 内嵌子模组的 SHA-256 |
 | `filename` | `String` | 内嵌子模组的文件名 |
+| `dependencies` | `[LockDependency]` | 内嵌子模组自身声明的依赖列表（可选，从 JAR 提取） |
 
 > **关键规则**：
 > - 除 `[package.modrinth]` 子表外，所有字段均来自 JAR 的 `fabric.mod.json`。
