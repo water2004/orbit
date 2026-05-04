@@ -13,11 +13,15 @@ pub enum IdentifiedSource {
     File { path: String },
 }
 
+#[derive(Debug, Clone)]
 pub struct IdentifiedMod {
     pub filename: String,
     pub mod_id: String,
     pub mod_name: String,
+    /// Modrinth 等平台的发布版本名（如 fabric-26.1-6.7.1），用于 lock/install
     pub version: String,
+    /// 来自 fabric.mod.json 的自声明版本（如 6.7.1），用于本地依赖校验
+    pub local_version: String,
     pub sha256: String,
     pub source: IdentifiedSource,
     pub deps: Vec<(String, String, bool)>,
@@ -63,6 +67,7 @@ pub async fn identify_mods(
                         mod_id: m.mod_id.clone().unwrap_or_default(),
                         mod_name: m.mod_name.clone().unwrap_or_default(),
                         version: resolved.version.clone(),
+                        local_version: m.version.clone().unwrap_or_else(|| resolved.version.clone()),
                         sha256: m.sha256.clone(),
                         source: IdentifiedSource::Platform { platform: p.name().to_string(), project_id: resolved.mod_id.clone(), slug },
                         deps,
@@ -86,6 +91,7 @@ pub async fn identify_mods(
                     results[idx] = Some(IdentifiedMod {
                         filename: m.filename.clone(), mod_id: m.mod_id.clone().unwrap_or_default(),
                         mod_name: m.mod_name.clone().unwrap_or_default(), version: resolved.version.clone(),
+                        local_version: m.version.clone().unwrap_or_else(|| resolved.version.clone()),
                         sha256: m.sha256.clone(),
                         source: IdentifiedSource::Platform { platform: p.name().to_string(), project_id: resolved.mod_id.clone(), slug },
                         deps: m.jar_deps.clone(),
@@ -101,6 +107,7 @@ pub async fn identify_mods(
                                 results[idx] = Some(IdentifiedMod {
                                     filename: m.filename.clone(), mod_id: mod_id.clone(),
                                     mod_name: m.mod_name.clone().unwrap_or_default(), version: v.version.clone(),
+                                    local_version: m.version.clone().unwrap_or_else(|| v.version.clone()),
                                     sha256: m.sha256.clone(),
                                     source: IdentifiedSource::Platform { platform: p.name().to_string(), project_id: v.mod_id.clone(), slug: mod_id.clone() },
                                     deps: m.jar_deps.clone(),
@@ -125,7 +132,9 @@ pub async fn identify_mods(
             eprintln!("    ? unrecognized → recording as file ({} jar deps)", m.jar_deps.len());
             final_results.push(IdentifiedMod {
                 filename: m.filename.clone(), mod_id: m.mod_id.clone().unwrap_or_default(),
-                mod_name: m.mod_name.clone().unwrap_or_default(), version: m.version.clone().unwrap_or_default(),
+                mod_name: m.mod_name.clone().unwrap_or_default(),
+                version: m.version.clone().unwrap_or_default(),
+                local_version: m.version.clone().unwrap_or_default(),
                 sha256: m.sha256.clone(),
                 source: IdentifiedSource::File { path: format!("mods/{}", m.filename) },
                 deps: m.jar_deps.clone(),

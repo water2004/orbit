@@ -15,20 +15,20 @@ use std::cmp::Ordering;
 // SemanticVersion — 对应 Fabric 的 SemanticVersionImpl
 // ═══════════════════════════════════════════════════════════════
 
-const WILDCARD: i32 = i32::MIN;
+pub const WILDCARD: i32 = i32::MIN;
 
 #[derive(Debug, Clone, Hash)]
 pub struct SemanticVersion {
     pub raw: String,
     /// 数字组件（不含通配符），长度至少 1
-    components: Vec<i32>,
+    pub components: Vec<i32>,
     /// prerelease 后缀（`-` 之后），None 表示正式版
-    prerelease: Option<String>,
+    pub prerelease: Option<String>,
     /// build 后缀（`+` 之后），比较时忽略
     #[allow(dead_code)]
-    build: Option<String>,
+    pub build: Option<String>,
     /// 是否有通配符
-    has_wildcard: bool,
+    pub has_wildcard: bool,
 }
 
 impl SemanticVersion {
@@ -283,6 +283,101 @@ fn parse_operator(predicate: &str) -> (&str, &str) {
 // ═══════════════════════════════════════════════════════════════
 // 测试
 // ═══════════════════════════════════════════════════════════════
+
+use pubgrub::range::Range;
+use super::Version;
+
+pub fn parse_constraint(constraint: &str) -> Range<Version> {
+    let mut final_range: Option<Range<Version>> = None;
+
+    for or_group in constraint.split("||") {
+        let mut group_range = Range::any();
+        let mut parts = or_group.split_whitespace().peekable();
+        while let Some(part) = parts.next() {
+            let part = part.trim();
+            if part.is_empty() || part == "*" {
+                continue;
+            }
+
+            let mut combined = part.to_string();
+            if ["<", ">", "<=", ">=", "~", "^", "="].contains(&part) {
+                if let Some(next_part) = parts.next() {
+                    combined.push_str(next_part);
+                }
+            }
+
+            let (op, ver_str) = parse_operator(&combined);
+            if let Ok(ref_ver) = SemanticVersion::parse(ver_str, true) {
+                let r = match op {
+                    ">=" => Range::higher_than(Version::Fabric(ref_ver)),
+                    "<=" => Range::strictly_lower_than(Version::Fabric(ref_ver.bump())),
+                    ">"  => Range::higher_than(Version::Fabric(ref_ver.bump())),
+                    "<"  => Range::strictly_lower_than(Version::Fabric(ref_ver)),
+                    "="  => Range::exact(Version::Fabric(ref_ver)),
+                    "~"  => {
+                        let lower = Version::Fabric(ref_ver.clone());
+                        let mut upper_comp = ref_ver.components.clone();
+                        if upper_comp.len() >= 2 {
+                            if upper_comp[1] == WILDCARD {
+                                upper_comp[0] = upper_comp[0].saturating_add(1);
+                                upper_comp.truncate(1);
+                            } else {
+                                upper_comp[1] = upper_comp[1].saturating_add(1);
+                                upper_comp.truncate(2);
+                            }
+                        } else {
+                            upper_comp.push(1);
+                        }
+                        let mut upper_ver = ref_ver.clone();
+                        upper_ver.components = upper_comp;
+                        upper_ver.prerelease = None;
+                        upper_ver.has_wildcard = false;
+                        upper_ver.raw = format!("{}~upper", ref_ver.raw);
+                        Range::between(lower, Version::Fabric(upper_ver))
+                    }
+                    "^"  => {
+                        let lower = Version::Fabric(ref_ver.clone());
+                        let mut upper_comp = ref_ver.components.clone();
+                        if !upper_comp.is_empty() {
+                            if upper_comp[0] == 0 && upper_comp.len() >= 2 {
+                                if upper_comp[1] == WILDCARD {
+                                    upper_comp[0] = upper_comp[0].saturating_add(1);
+                                    upper_comp.truncate(1);
+                                } else {
+                                    upper_comp[1] = upper_comp[1].saturating_add(1);
+                                    upper_comp.truncate(2);
+                                }
+                            } else {
+                                upper_comp[0] = upper_comp[0].saturating_add(1);
+                                upper_comp.truncate(1);
+                            }
+                        } else {
+                            upper_comp.push(1);
+                        }
+                        let mut upper_ver = ref_ver.clone();
+                        upper_ver.components = upper_comp;
+                        upper_ver.prerelease = None;
+                        upper_ver.has_wildcard = false;
+                        upper_ver.raw = format!("{}^upper", ref_ver.raw);
+                        Range::between(lower, Version::Fabric(upper_ver))
+                    }
+                    _ => Range::exact(Version::Fabric(ref_ver)),
+                };
+                group_range = group_range.intersection(&r);
+            } else {
+                group_range = group_range.intersection(&Range::exact(Version::Generic(combined.clone())));
+            }
+        }
+
+        if let Some(fr) = final_range {
+            final_range = Some(fr.union(&group_range));
+        } else {
+            final_range = Some(group_range);
+        }
+    }
+
+    final_range.unwrap_or_else(|| Range::any())
+}
 
 #[cfg(test)]
 mod tests {

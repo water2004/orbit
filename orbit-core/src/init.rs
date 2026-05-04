@@ -348,6 +348,7 @@ pub async fn run_init(
             mod_id: s.mod_id.clone().unwrap_or_default(),
             mod_name: s.mod_name.clone().unwrap_or_default(),
             version: s.version.clone().unwrap_or_default(),
+            local_version: s.version.clone().unwrap_or_default(),
             sha256: s.sha256.clone(),
             source: crate::identification::IdentifiedSource::File { path: format!("mods/{}", s.filename) },
             deps: s.jar_deps.clone(),
@@ -477,7 +478,10 @@ pub async fn run_init(
 
     // 4. 使用 PubGrub 解析器检查依赖图完整性
     eprintln!("Verifying dependency graph using PubGrub resolver...");
-    if let Err(err_msg) = crate::resolver::check_local_graph(&manifest, &identified) {
+    let mut all_local_mods = identified.clone();
+    all_local_mods.extend(embedded_identified.clone());
+    
+    if let Err(err_msg) = crate::resolver::check_local_graph(&manifest, &all_local_mods) {
         eprintln!("\n⚠️  WARNING: Dependency graph verification failed!\n{}\n", err_msg);
         eprintln!("Please use 'orbit install' or 'orbit sync' to fix missing dependencies.");
     } else {
