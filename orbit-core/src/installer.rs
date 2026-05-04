@@ -155,7 +155,7 @@ pub fn remove_from_instance(
 
     // 删除 JAR
     if let Some(ref fname) = filename {
-        let jar_path = instance_dir.join(fname);
+        let jar_path = mods_dir.join(fname);
         if jar_path.exists() && !dry_run {
             std::fs::remove_file(&jar_path).map_err(OrbitError::Io)?;
         }
