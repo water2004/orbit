@@ -33,8 +33,8 @@ pub struct IdentificationContext {
     pub loader: String,
 }
 
-fn build_identified(m: &ScannedMod, platform: &str, resolved: &crate::providers::ResolvedMod, version_match: bool) -> IdentifiedMod {
-    let slug = m.mod_id.clone().unwrap_or_else(|| resolved.mod_id.clone());
+fn build_identified(m: &ScannedMod, platform: &str, resolved: &crate::providers::ResolvedMod, _version_match: bool) -> IdentifiedMod {
+    let slug = resolved.slug.clone();
     let jar_ver = m.version.clone().unwrap_or_default();
     IdentifiedMod {
         filename: m.filename.clone(),

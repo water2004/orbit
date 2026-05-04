@@ -25,15 +25,30 @@ pub async fn check_all_outdated(
     let mc_version = &manifest.project.mc_version;
     let provider = &providers[0];
 
+    // 只处理有 modrinth 信息的条目
+    let modrinth_entries: Vec<_> = lockfile.packages.iter()
+        .filter(|e| e.modrinth.is_some())
+        .collect();
+
+    if modrinth_entries.is_empty() {
+        eprintln!("  (no modrinth-sourced mods to check)");
+        return Ok(vec![]);
+    }
+
     // mod_id → [(jar_version, deps)]，从新到旧
     let mut candidates: HashMap<String, Vec<(String, Vec<(String, String, bool)>)>> = HashMap::new();
 
-    for entry in &lockfile.packages {
-        let Some(mr) = &entry.modrinth else { continue; };
+    for (i, entry) in modrinth_entries.iter().enumerate() {
+        let mr = entry.modrinth.as_ref().unwrap();
 
-        let mut versions = match provider.get_versions(&mr.slug, Some(mc_version), Some(loader)).await {
+        eprintln!("  [{}/{}] {} — checking versions...", i + 1, modrinth_entries.len(), entry.mod_id);
+
+        let mut versions = match provider.get_versions(&mr.project_id, Some(mc_version), Some(loader)).await {
             Ok(v) => v,
-            Err(_) => continue,
+            Err(e) => {
+                eprintln!("    ! API error: {e}");
+                continue;
+            }
         };
         versions.sort_by(|a, b| b.date_published.cmp(&a.date_published));
 
@@ -41,22 +56,33 @@ pub async fn check_all_outdated(
             .find(|v| v.modrinth.as_ref().map(|m| m.version_id.as_str()) == Some(mr.version_id.as_str()))
             .map(|v| v.date_published.clone());
 
-        let Some(ref cd) = current_date else { continue; };
+        let Some(ref cd) = current_date else {
+            eprintln!("    ! current version not found in API results, skipping");
+            continue;
+        };
 
-        // 收集所有更新的版本
         let newer: Vec<_> = versions.iter()
             .filter(|v| v.date_published > *cd)
             .collect();
 
-        if newer.is_empty() { continue; }
+        if newer.is_empty() {
+            eprintln!("    up to date (current: {})", mr.version);
+            continue;
+        }
+
+        eprintln!("    {} newer version(s) found, downloading JARs...", newer.len());
 
         let mut mod_candidates = Vec::new();
         for v in &newer {
+            let ver_label = v.modrinth.as_ref().map(|m| m.version_number.as_str()).unwrap_or("?");
             match crate::jar::download_and_parse(&v.download_url, &v.sha512, loader).await {
                 Ok(meta) => {
+                    eprintln!("      {} → parsed (JAR version: {})", ver_label, meta.version);
                     mod_candidates.push((meta.version, meta.dependencies));
                 }
-                Err(_) => continue,
+                Err(e) => {
+                    eprintln!("      {} → download/parse failed: {e}", ver_label);
+                }
             }
         }
         if !mod_candidates.is_empty() {
@@ -65,10 +91,12 @@ pub async fn check_all_outdated(
     }
 
     if candidates.is_empty() {
+        eprintln!("\n  all mods up to date.");
         return Ok(vec![]);
     }
 
-    // PubGrub 离线求解
+    eprintln!("\n  resolving dependency graph with {} candidate(s)...", candidates.len());
+
     let upgrades = crate::resolver::resolve_with_candidates(manifest, lockfile, &candidates)
         .map_err(|e| OrbitError::Other(anyhow::anyhow!("{e}")))?;
 
