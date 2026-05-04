@@ -82,8 +82,8 @@ orbit-cli ──→ orbit-core ──→ modrinth-wrapper
 | `orbit instances list` | ✅ | 🚧 config::InstancesRegistry | 需实现格式化输出 |
 | `orbit instances default` | ✅ | 🚧 config | 需 UI |
 | `orbit instances remove` | ✅ | 🚧 config | 需 UI |
-| `orbit add` | ✅ | 🚧 resolver + installer | 占位，用 `orbit install <slug>` 替代 |
-| `orbit install` | ✅ | ✅ installer::install_mod | 单模组安装：resolve → dep check → 下载 → JAR 解析 → toml/lock |
+| `orbit add` | ✅ | ✅ installer::install_to_instance | 单模组安装：resolve → dep check → 下载 → JAR 解析 → toml/lock |
+| `orbit install` | ✅ | 🚧 installer | 全量还原（待实现，当前 exit 2） |
 | `orbit remove` | ✅ | ✅ resolver::dependents | 反查依赖图 + 删除 JAR + 更新 toml/lock |
 | `orbit purge` | ✅ | 🚧 purge + manifest | 需启发式搜索 |
 | `orbit sync` | ✅ | 🚧 sync | **核心功能** |
