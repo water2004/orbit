@@ -1,12 +1,15 @@
 pub mod types;
-
 pub mod provider;
+pub mod provider_version;
+pub mod modrinth_version;
 
 use std::collections::HashMap;
 
 use crate::lockfile::PackageEntry;
 
 use self::types::PackageId;
+use self::provider_version::{ProviderVersionResolver, FallbackResolver};
+use self::modrinth_version::ModrinthVersionResolver;
 use crate::versions::Version;
 use crate::resolver::provider::OrbitDependencyProvider;
 use pubgrub::solver::resolve;
@@ -106,23 +109,31 @@ pub async fn resolve_manifest(
                     
                     let mut fetched = false;
                     for p in providers {
-                        if let Ok(versions) = p.get_versions(&missing_pkg, Some(&mc_version), Some(&loader)).await {
+                        if let Ok(mut versions) = p.get_versions(&missing_pkg, Some(&mc_version), Some(&loader)).await {
                             if !versions.is_empty() {
+                                // 使用 provider 特定的版本排序（Modrinth → date_published，fallback → SemVer）
+                                let pvr: &dyn ProviderVersionResolver = if p.name() == "modrinth" {
+                                    &ModrinthVersionResolver
+                                } else {
+                                    &FallbackResolver
+                                };
+                                pvr.sort_newest_first(&mut versions);
+
                                 let mut norm_versions = Vec::new();
                                 for rm in &versions {
                                     let nv = Version::parse(&rm.version, &loader);
                                     norm_versions.push(nv.clone());
-                                    
+
                                     let mut deps = Vec::new();
                                     for dep in &rm.dependencies {
-                                        if !dep.required { continue; } // ignore optional for now
+                                        if !dep.required { continue; }
                                         let dep_pkg = dep.slug.clone().unwrap_or_default();
                                         deps.push((dep_pkg, pubgrub::range::Range::any()));
                                     }
                                     provider.add_package_deps(missing_pkg.clone(), nv.clone(), deps);
                                     provider.resolved_mods.insert((missing_pkg.clone(), nv.clone()), rm.clone());
                                 }
-                                norm_versions.sort_by(|a: &crate::versions::Version, b: &crate::versions::Version| b.cmp(a));
+                                // 按 provider 顺序注入 PubGrub（用于 choose_package_version 选第一个）
                                 provider.add_package_versions(missing_pkg.clone(), norm_versions);
                                 fetched = true;
                                 break;

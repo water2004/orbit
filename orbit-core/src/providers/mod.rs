@@ -64,6 +64,8 @@ pub struct ResolvedMod {
     pub modrinth_version: String,
     /// Modrinth 专属: slug
     pub slug: String,
+    /// 发布时间（ISO 8601），provider 版本排序用
+    pub date_published: String,
     /// 下载 URL
     pub download_url: String,
     /// jar 文件名

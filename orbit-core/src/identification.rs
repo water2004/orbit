@@ -36,13 +36,11 @@ pub struct IdentificationContext {
 fn build_identified(m: &ScannedMod, platform: &str, resolved: &crate::providers::ResolvedMod, version_match: bool) -> IdentifiedMod {
     let slug = m.mod_id.clone().unwrap_or_else(|| resolved.mod_id.clone());
     let jar_ver = m.version.clone().unwrap_or_default();
-    let final_ver = if jar_ver.is_empty() { resolved.version.clone() } else { jar_ver.clone() };
-    eprintln!("    [DEBUG] build_identified: m.version={:?}, jar_ver={jar_ver:?}, final_ver={final_ver}", m.version);
     IdentifiedMod {
         filename: m.filename.clone(),
         mod_id: m.mod_id.clone().unwrap_or_default(),
         mod_name: m.mod_name.clone().unwrap_or_default(),
-        version: final_ver,
+        version: if jar_ver.is_empty() { resolved.version.clone() } else { jar_ver },
         modrinth_version: resolved.modrinth_version.clone(),
         sha1: m.sha1.clone(),
         sha256: m.sha256.clone(),
