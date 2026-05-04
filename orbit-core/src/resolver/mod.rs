@@ -43,12 +43,27 @@ use crate::manifest::OrbitManifest;
 /// 求解依赖图，带 Fetch-and-Retry 懒加载。
 pub async fn resolve_manifest(
     manifest: &OrbitManifest,
+    lockfile: &crate::lockfile::OrbitLockfile,
     providers: &[Box<dyn ModProvider>],
 ) -> Result<HashMap<PackageId, crate::providers::ResolvedMod>, String> {
     let mut provider = OrbitDependencyProvider::new();
     let root_pkg = "___orbit_root___".to_string();
     let root_version = Version::zero();
     let loader = manifest.project.modloader.clone();
+
+    // 注入 lockfile 中已有条目作为本地可用版本。
+    // 这些 mod 已安装，依赖已满足——只注册为"可用版本"不携带它们的依赖，
+    // 这样 PubGrub 只需解析新添加的包的依赖，不会因已安装 mod 的内部依赖链报错。
+    for entry in &lockfile.entries {
+        let ver = Version::parse(&entry.version, &loader);
+        provider.add_package_versions(entry.name.clone(), vec![ver.clone()]);
+        provider.add_package_deps(entry.name.clone(), ver, vec![]);
+        for imp in &entry.implanted {
+            let iver = Version::parse(&imp.version, &loader);
+            provider.add_package_versions(imp.name.clone(), vec![iver.clone()]);
+            provider.add_package_deps(imp.name.clone(), iver, vec![]);
+        }
+    }
 
     let mut root_deps = Vec::new();
     for (name, spec) in &manifest.dependencies {

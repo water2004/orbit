@@ -179,14 +179,27 @@ async fn install_mod(
         )));
     }
 
-    // 1. Update manifest temporarily
+    // 1. 快速检查 slug 是否存在（任一 provider 能找到即可）
+    let mc_version = manifest.project.mc_version.clone();
+    let loader = manifest.project.modloader.clone();
+    let mut found = false;
+    for p in providers {
+        if let Ok(versions) = p.get_versions(slug, Some(&mc_version), Some(&loader)).await {
+            if !versions.is_empty() { found = true; break; }
+        }
+    }
+    if !found {
+        return Err(OrbitError::ModNotFound(slug.to_string()));
+    }
+
+    // 2. Update manifest temporarily
     let old_dep = manifest.dependencies.insert(
-        slug.to_string(), 
+        slug.to_string(),
         DependencySpec::Short(constraint.to_string())
     );
 
-    // 2. Resolve manifest using PubGrub
-    let solution = match crate::resolver::resolve_manifest(manifest, providers).await {
+    // 3. Resolve manifest using PubGrub
+    let solution = match crate::resolver::resolve_manifest(manifest, lockfile, providers).await {
         Ok(s) => s,
         Err(e) => {
             if let Some(old) = old_dep {

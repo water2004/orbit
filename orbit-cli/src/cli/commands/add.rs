@@ -55,7 +55,7 @@ pub async fn handle(
                 }
             };
             eprintln!("Installing {}...", slug);
-            Box::pin(handle(mod_name, _platform, Some(constraint), _env, _optional, no_deps, ctx)).await
+            Box::pin(handle(slug, _platform, Some(constraint), _env, _optional, no_deps, ctx)).await
         }
         Err(OrbitError::Conflict(msg)) => anyhow::bail!("Dependency conflict:\n\n  {msg}"),
         Err(e) => anyhow::bail!("Add failed: {e}"),
