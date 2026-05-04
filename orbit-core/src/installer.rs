@@ -181,10 +181,18 @@ pub struct RemoveReport {
 }
 
 /// 列出实例中所有依赖（供 remove 找不到时交互选择）
+/// 返回 (mod_id, slug)，slug 从 lockfile 的 [package.modrinth] 读取，
+/// 若 lockfile 不存在或无 modrinth 信息则回退到 mod_id。
 pub fn list_dependencies(instance_dir: &Path) -> Result<Vec<(String, String)>, OrbitError> {
     let manifest = OrbitManifest::from_path(&instance_dir.join("orbit.toml"))?;
+    let lockfile = OrbitLockfile::from_dir(instance_dir).ok();
     Ok(manifest.dependencies.iter().map(|(k, _)| {
-        (k.clone(), k.clone())
+        let slug = lockfile.as_ref()
+            .and_then(|lf| lf.find(k))
+            .and_then(|e| e.modrinth.as_ref())
+            .map(|m| m.slug.clone())
+            .unwrap_or_else(|| k.clone());
+        (k.clone(), slug)
     }).collect())
 }
 
