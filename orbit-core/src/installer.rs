@@ -173,87 +173,68 @@ async fn install_mod(
     existing_ok: bool,
     dry_run: bool,
 ) -> Result<InstallReport, OrbitError> {
-    let mc_version = manifest.project.mc_version.clone();
-    let loader = manifest.project.modloader.clone();
-
-    // 按 provider 顺序尝试解析主模组，记录来源
-    let mut main_mod: Option<(ResolvedMod, &str)> = None;
-    for p in providers {
-        match p.resolve(slug, constraint, &mc_version, &loader).await {
-            Ok(m) => { main_mod = Some((m, p.name())); break; }
-            Err(OrbitError::ModNotFound(_)) => continue,
-            Err(e) => return Err(e),
-        }
-    }
-    let (main_mod, _main_provider) = main_mod.ok_or_else(|| OrbitError::ModNotFound(slug.to_string()))?;
-
-    // 每个待安装模组附带其来源 provider
-    let mut to_install: Vec<(ResolvedMod, &str)> = vec![(main_mod.clone(), _main_provider)];
-
     if !existing_ok && crate::resolver::find_entry(slug, &lockfile.entries).is_some() {
         return Err(OrbitError::Conflict(format!(
             "'{slug}' already in lockfile. Use 'orbit upgrade {slug}' to update it."
         )));
     }
 
-    let mut already_satisfied: Vec<String> = Vec::new();
-    let mut skipped_optional: Vec<String> = Vec::new();
+    // 1. Update manifest temporarily
+    let old_dep = manifest.dependencies.insert(
+        slug.to_string(), 
+        DependencySpec::Short(constraint.to_string())
+    );
 
-    if !no_deps {
-        for dep in &main_mod.dependencies {
-            let Some(dep_slug) = dep.slug.as_deref() else { continue; };
-            if !dep.required {
-                skipped_optional.push(dep_slug.to_string());
+    // 2. Resolve manifest using PubGrub
+    let solution = match crate::resolver::resolve_manifest(manifest, providers).await {
+        Ok(s) => s,
+        Err(e) => {
+            if let Some(old) = old_dep {
+                manifest.dependencies.insert(slug.to_string(), old);
+            } else {
+                manifest.dependencies.swap_remove(slug);
+            }
+            return Err(OrbitError::Conflict(e));
+        }
+    };
+
+    let mut to_install = Vec::new();
+    let mut already_satisfied = Vec::new();
+
+    for (pkg, resolved_mod) in solution {
+        if let Some(entry) = crate::resolver::find_entry(&pkg, &lockfile.entries) {
+            if entry.version == resolved_mod.version {
+                already_satisfied.push(pkg.clone());
                 continue;
             }
-            if crate::resolver::find_entry(dep_slug, &lockfile.entries).is_some() {
-                already_satisfied.push(dep_slug.to_string());
-                continue;
-            }
-            let mut resolved_dep: Option<(ResolvedMod, &str)> = None;
-            for p in providers {
-                match p.resolve(dep_slug, "*", &mc_version, &loader).await {
-                    Ok(m) => { resolved_dep = Some((m, p.name())); break; }
-                    Err(OrbitError::ModNotFound(_)) => continue,
-                    Err(_) => continue,
-                }
-            }
-            match resolved_dep {
-                Some(d) => to_install.push(d),
-                None => return Err(OrbitError::Conflict(format!(
-                    "required dependency '{dep_slug}' could not be resolved on any platform"
-                ))),
-            }
         }
-    }
-
-    for (m, _) in &to_install {
-        if let Err(msg) = crate::resolver::check_version_conflict(&m.name, &m.version, &lockfile.entries) {
-            return Err(OrbitError::Conflict(msg));
+        if no_deps && pkg != slug {
+            continue;
         }
+        to_install.push(resolved_mod);
     }
 
     let mut installed = Vec::new();
     if !dry_run {
-        for (m, prov) in &to_install {
+        for m in &to_install {
             let dest_path = download_mod(m, mods_dir).await?;
             let jar_deps = parse_jar_deps(&dest_path)?;
             installed.push(InstalledMod {
                 slug: m.name.clone(), key: m.name.clone(), version: m.version.clone(),
-                filename: m.filename.clone(), provider: prov.to_string(), jar_deps,
+                filename: m.filename.clone(), provider: "modrinth".to_string(), jar_deps,
             });
         }
         apply_to_manifest_and_lock(manifest, lockfile, &installed, mods_dir);
     } else {
-        for (m, prov) in &to_install {
+        for m in &to_install {
             installed.push(InstalledMod {
                 slug: m.name.clone(), key: m.name.clone(), version: m.version.clone(),
-                filename: m.filename.clone(), provider: prov.to_string(), jar_deps: vec![],
+                filename: m.filename.clone(), provider: "modrinth".to_string(), jar_deps: vec![],
             });
         }
     }
 
-    Ok(InstallReport { installed, already_satisfied, skipped_optional })
+    Ok(InstallReport { installed, already_satisfied, skipped_optional: vec![] })
 }
 
 fn find_by_slug(name: &str, manifest: &OrbitManifest) -> Option<String> {

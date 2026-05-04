@@ -17,7 +17,7 @@ use std::cmp::Ordering;
 
 const WILDCARD: i32 = i32::MIN;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Hash)]
 pub struct SemanticVersion {
     pub raw: String,
     /// 数字组件（不含通配符），长度至少 1
@@ -105,13 +105,24 @@ impl SemanticVersion {
         Ok(Self { raw: raw.to_string(), components, prerelease, build, has_wildcard })
     }
 
-    /// 获取第 pos 个组件，超出范围返回 0 或 WILDCARD
     fn component(&self, pos: usize) -> i32 {
         if pos >= self.components.len() {
             if self.has_wildcard { WILDCARD } else { 0 }
         } else {
             self.components[pos]
         }
+    }
+
+    pub fn bump(&self) -> Self {
+        let mut new_v = self.clone();
+        if let Some(last) = new_v.components.iter_mut().filter(|x| **x != WILDCARD).last() {
+            *last = last.saturating_add(1);
+        } else {
+            new_v.components.push(1);
+        }
+        new_v.prerelease = None;
+        new_v.raw = format!("{}.bump", new_v.raw);
+        new_v
     }
 }
 

@@ -355,10 +355,70 @@ pub async fn run_init(
     }).collect();
 
     // 3. 构建依赖声明 + lock 条目（仅顶层模组）
-    let (lock_entries, _warnings) = crate::resolver::build_lock_entries(
-        &identified, &scanned, &embedded_identified,
-        &input.modloader, &input.mc_version, &input.modloader_version,
-    );
+    let mut lock_entries: Vec<crate::lockfile::LockEntry> = identified
+        .iter()
+        .map(|m| {
+            let mut entry = crate::lockfile::LockEntry {
+                name: if !m.mod_id.is_empty() { m.mod_id.clone() } else if !m.mod_name.is_empty() { m.mod_name.clone() } else { m.filename.clone() },
+                version: m.version.clone(),
+                filename: m.filename.clone(),
+                sha256: m.sha256.clone(),
+                sha512: String::new(),
+                dependencies: vec![],
+                implanted: vec![],
+                platform: None,
+                mod_id: None,
+                slug: None,
+                url: None,
+                source_type: None,
+                path: None,
+            };
+
+            match &m.source {
+                crate::identification::IdentifiedSource::Platform { platform, project_id, slug } => {
+                    entry.platform = Some(platform.clone());
+                    entry.mod_id = Some(project_id.clone());
+                    entry.slug = Some(slug.clone());
+                }
+                crate::identification::IdentifiedSource::File { path } => {
+                    entry.source_type = Some("file".into());
+                    entry.path = Some(path.clone());
+                }
+            }
+
+            for (dep_id, constraint, req) in &m.deps {
+                if *req && dep_id != "java" && dep_id != "mixinextras" && dep_id != "minecraft" && dep_id != "fabricloader" {
+                    entry.dependencies.push(crate::lockfile::LockDependency {
+                        name: dep_id.clone(),
+                        version: if constraint.is_empty() { "*".to_string() } else { constraint.to_string() },
+                    });
+                }
+            }
+            entry
+        })
+        .collect();
+
+    for m in &embedded_identified {
+        let matching_parents: Vec<&str> = scanned.iter()
+            .filter(|s| s.filename == m.filename && s.embedded_parent.is_some())
+            .filter_map(|s| s.embedded_parent.as_deref())
+            .collect();
+
+        for parent_name in matching_parents {
+            if let Some(parent_entry) = lock_entries.iter_mut().find(|e| e.filename == parent_name) {
+                if parent_entry.implanted.iter().any(|imp| imp.filename == m.filename) {
+                    continue;
+                }
+                parent_entry.implanted.push(crate::lockfile::ImplantedMod {
+                    name: if !m.mod_id.is_empty() { m.mod_id.clone() } else if !m.mod_name.is_empty() { m.mod_name.clone() } else { m.filename.clone() },
+                    version: m.version.clone(),
+                    sha256: m.sha256.clone(),
+                    filename: m.filename.clone(),
+                });
+            }
+        }
+    }
+
     let mc_ver = input.mc_version.clone();
     let loader_name = input.modloader.clone();
     let loader_ver = input.modloader_version.clone();
@@ -414,6 +474,15 @@ pub async fn run_init(
         groups: Default::default(),
         overrides: Default::default(),
     };
+
+    // 4. 使用 PubGrub 解析器检查依赖图完整性
+    eprintln!("Verifying dependency graph using PubGrub resolver...");
+    if let Err(err_msg) = crate::resolver::check_local_graph(&manifest, &identified) {
+        eprintln!("\n⚠️  WARNING: Dependency graph verification failed!\n{}\n", err_msg);
+        eprintln!("Please use 'orbit install' or 'orbit sync' to fix missing dependencies.");
+    } else {
+        eprintln!("Dependency graph verified successfully.");
+    }
 
     // 4. 写入 orbit.toml
     let toml_path = input.instance_dir.join("orbit.toml");
