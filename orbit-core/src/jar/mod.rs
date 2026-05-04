@@ -41,6 +41,38 @@ pub fn read_mod_metadata(path: &Path, loader: &str) -> Result<JarModMetadata, Or
         ))))
 }
 
+/// 下载 JAR 并解析 fabric.mod.json。
+/// 校验 SHA-512，失败则返回 `ChecksumMismatch`。
+pub async fn download_and_parse(
+    url: &str,
+    expected_sha512: &str,
+    loader: &str,
+) -> Result<JarModMetadata, crate::error::OrbitError> {
+    let client = reqwest::Client::builder()
+        .user_agent(format!("orbit/{}", env!("CARGO_PKG_VERSION")))
+        .timeout(std::time::Duration::from_secs(60))
+        .build()
+        .map_err(|e| crate::error::OrbitError::Other(e.into()))?;
+
+    let bytes = client.get(url).send().await
+        .map_err(crate::error::OrbitError::Network)?
+        .bytes().await
+        .map_err(crate::error::OrbitError::Network)?;
+
+    if !expected_sha512.is_empty() {
+        let actual = sha512_digest(&bytes);
+        if actual != expected_sha512 {
+            return Err(crate::error::OrbitError::ChecksumMismatch {
+                name: url.to_string(),
+                expected: expected_sha512.to_string(),
+                actual,
+            });
+        }
+    }
+
+    read_mod_metadata_from_bytes(&bytes, loader)
+}
+
 /// 从字节数据读取模组元数据（用于内嵌 JAR）。`loader` 由调用者传入。
 pub fn read_mod_metadata_from_bytes(data: &[u8], loader: &str) -> Result<JarModMetadata, OrbitError> {
     let cursor = std::io::Cursor::new(data);

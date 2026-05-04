@@ -1,78 +1,86 @@
-//! 过时检查核心逻辑（纯函数，无 I/O）。
+//! 过时检查编排层。
 //!
-//! `check_mod_outdated` 供 `outdated` 和 `upgrade` 命令复用。
+//! 拉取版本列表 → 下载候选 JAR → 解析 fabric.mod.json → PubGrub 离线求解。
 
-use std::collections::HashSet;
+use std::collections::HashMap;
 
-use crate::providers::ResolvedMod;
+use crate::error::OrbitError;
+use crate::lockfile::OrbitLockfile;
+use crate::manifest::OrbitManifest;
+use crate::providers::ModProvider;
 
-#[derive(Debug, Clone)]
 pub struct OutdatedMod {
     pub mod_id: String,
     pub current_version: String,
-    /// 最新兼容版本（所有 required 依赖均在 lockfile 中存在）
-    pub latest_compatible: Option<VersionInfo>,
-    /// 最新版本（可能不兼容）
-    pub latest_overall: Option<VersionInfo>,
+    pub new_version: String,
 }
 
-#[derive(Debug, Clone)]
-pub struct VersionInfo {
-    pub version_number: String,
-    pub date_published: String,
-}
+/// 检查所有已安装 modrinth mod 的可用更新。
+pub async fn check_all_outdated(
+    manifest: &OrbitManifest,
+    lockfile: &OrbitLockfile,
+    providers: &[Box<dyn ModProvider>],
+) -> Result<Vec<OutdatedMod>, OrbitError> {
+    let loader = &manifest.project.modloader;
+    let mc_version = &manifest.project.mc_version;
+    let provider = &providers[0];
 
-/// 对单个模组的版本列表判断是否有可用更新。
-///
-/// - `versions` 应为已过滤（mc_version + loader）并按 date_published 降序排列的列表
-/// - `current_version_number` 为 lockfile 中记录的 modrinth.version（即 version_number）
-/// - `installed_ids` 为当前 lockfile 中所有 mod_id 的集合（用于依赖兼容性检查）
-pub fn check_mod_outdated(
-    mod_id: &str,
-    current_version_number: &str,
-    versions: &[ResolvedMod],
-    installed_ids: &HashSet<&str>,
-) -> Option<OutdatedMod> {
-    if versions.is_empty() {
-        return None;
+    // mod_id → [(jar_version, deps)]，从新到旧
+    let mut candidates: HashMap<String, Vec<(String, Vec<(String, String, bool)>)>> = HashMap::new();
+
+    for entry in &lockfile.packages {
+        let Some(mr) = &entry.modrinth else { continue; };
+
+        let mut versions = match provider.get_versions(&mr.slug, Some(mc_version), Some(loader)).await {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        versions.sort_by(|a, b| b.date_published.cmp(&a.date_published));
+
+        let current_date = versions.iter()
+            .find(|v| v.modrinth.as_ref().map(|m| m.version_id.as_str()) == Some(mr.version_id.as_str()))
+            .map(|v| v.date_published.clone());
+
+        let Some(ref cd) = current_date else { continue; };
+
+        // 收集所有更新的版本
+        let newer: Vec<_> = versions.iter()
+            .filter(|v| v.date_published > *cd)
+            .collect();
+
+        if newer.is_empty() { continue; }
+
+        let mut mod_candidates = Vec::new();
+        for v in &newer {
+            match crate::jar::download_and_parse(&v.download_url, &v.sha512, loader).await {
+                Ok(meta) => {
+                    mod_candidates.push((meta.version, meta.dependencies));
+                }
+                Err(_) => continue,
+            }
+        }
+        if !mod_candidates.is_empty() {
+            candidates.insert(entry.mod_id.clone(), mod_candidates);
+        }
     }
 
-    // 找到当前版本的 date_published
-    let current_date = versions.iter()
-        .find(|v| v.modrinth.as_ref()
-            .map(|m| m.version_number.as_str() == current_version_number)
-            .unwrap_or(false))
-        .map(|v| v.date_published.clone());
-
-    let newer: Vec<&ResolvedMod> = if let Some(ref cd) = current_date {
-        versions.iter().filter(|v| v.date_published > *cd).collect()
-    } else {
-        // 找不到当前版本 → 全部视为候选
-        versions.iter().collect()
-    };
-
-    if newer.is_empty() {
-        return None;
+    if candidates.is_empty() {
+        return Ok(vec![]);
     }
 
-    let latest_overall = newer.first().map(|v| VersionInfo {
-        version_number: v.modrinth.as_ref().map(|m| m.version_number.clone()).unwrap_or_default(),
-        date_published: v.date_published.clone(),
-    });
+    // PubGrub 离线求解
+    let upgrades = crate::resolver::resolve_with_candidates(manifest, lockfile, &candidates)
+        .map_err(|e| OrbitError::Other(anyhow::anyhow!("{e}")))?;
 
-    let latest_compatible = newer.iter().find(|v| {
-        v.dependencies.iter()
-            .filter(|d| d.required)
-            .all(|d| d.slug.as_ref().map(|s| installed_ids.contains(s.as_str())).unwrap_or(false))
-    }).map(|v| VersionInfo {
-        version_number: v.modrinth.as_ref().map(|m| m.version_number.clone()).unwrap_or_default(),
-        date_published: v.date_published.clone(),
-    });
-
-    Some(OutdatedMod {
-        mod_id: mod_id.to_string(),
-        current_version: current_version_number.to_string(),
-        latest_compatible,
-        latest_overall,
-    })
+    let mut results: Vec<OutdatedMod> = upgrades.into_iter()
+        .map(|(mod_id, new_version)| OutdatedMod {
+            current_version: lockfile.find(&mod_id)
+                .and_then(|e| e.modrinth.as_ref().map(|m| m.version.clone()))
+                .unwrap_or_default(),
+            new_version,
+            mod_id,
+        })
+        .collect();
+    results.sort_by(|a, b| a.mod_id.cmp(&b.mod_id));
+    Ok(results)
 }

@@ -35,4 +35,4 @@ pub use lockfile::{OrbitLockfile, PackageEntry, ModrinthInfo, FileInfo, LockMeta
 pub use metadata::{ModLoader, mojang::McVersion};
 pub use providers::ModProvider;
 pub use installer::{install_to_instance, remove_from_instance, list_dependencies, list_installed, InstallReport, RemoveReport, InstalledMod, ListOutput, ListedPackage};
-pub use outdated::{check_mod_outdated, OutdatedMod, VersionInfo};
+pub use outdated::{check_all_outdated, OutdatedMod};

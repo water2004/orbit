@@ -280,3 +280,92 @@ fn inject_lockfile(
         }
     }
 }
+
+/// 离线 PubGrub 求解：给定候选版本（已从 JAR 解析出真实版本号和依赖约束），
+/// 判断哪些 mod 可安全升级。返回 `mod_id → new_version`。
+///
+/// `candidates`: mod_id → [(jar_version, deps)]，每个元素对应一个候选版本（从新到旧排序）
+pub fn resolve_with_candidates(
+    manifest: &OrbitManifest,
+    lockfile: &crate::lockfile::OrbitLockfile,
+    candidates: &HashMap<String, Vec<(String, Vec<(String, String, bool)>)>>,
+) -> Result<HashMap<String, String>, String> {
+    let loader = &manifest.project.modloader;
+
+    let mut provider = OrbitDependencyProvider::new();
+
+    // 注入 lockfile 条目（含实际依赖），跳过有候选版本的 mod
+    for entry in &lockfile.packages {
+        if candidates.contains_key(&entry.mod_id) { continue; }
+        let ver = Version::parse(&entry.version, loader);
+        let deps: Vec<_> = entry.dependencies.iter().map(|d| {
+            (d.name.clone(), Version::parse_constraint(&d.version, loader))
+        }).collect();
+        provider.add_package_versions(entry.mod_id.clone(), vec![ver.clone()]);
+        provider.add_package_deps(entry.mod_id.clone(), ver, deps);
+        for imp in &entry.implanted {
+            let iver = Version::parse(&imp.version, loader);
+            let ideps: Vec<_> = imp.dependencies.iter().map(|d| {
+                (d.name.clone(), Version::parse_constraint(&d.version, loader))
+            }).collect();
+            provider.add_package_versions(imp.name.clone(), vec![iver.clone()]);
+            provider.add_package_deps(imp.name.clone(), iver, ideps);
+        }
+    }
+
+    // 注入候选版本
+    for (mod_id, versions) in candidates {
+        let mut vers = Vec::new();
+        for (jar_ver, deps) in versions {
+            let v = Version::parse(jar_ver, loader);
+            let d: Vec<_> = deps.iter()
+                .filter(|(_, _, req)| *req)
+                .map(|(name, constraint, _)| (name.clone(), Version::parse_constraint(constraint, loader)))
+                .collect();
+            vers.push(v.clone());
+            provider.add_package_deps(mod_id.clone(), v, d);
+        }
+        provider.add_package_versions(mod_id.clone(), vers);
+    }
+
+    // Root deps
+    let root_pkg = "___orbit_root___".to_string();
+    let root_version = Version::zero();
+    let mut root_deps = Vec::new();
+    for (name, spec) in &manifest.dependencies {
+        let constraint = match spec {
+            crate::manifest::DependencySpec::Short(v) => Version::parse_constraint(v, loader),
+            crate::manifest::DependencySpec::Full { version, .. } => {
+                let v = version.as_deref().unwrap_or("*");
+                Version::parse_constraint(v, loader)
+            }
+        };
+        root_deps.push((name.clone(), constraint));
+    }
+    provider.add_package_versions(root_pkg.clone(), vec![root_version.clone()]);
+    provider.add_package_deps(root_pkg.clone(), root_version.clone(), root_deps);
+
+    let solution = match pubgrub::solver::resolve(&provider, root_pkg, root_version) {
+        Ok(s) => s,
+        Err(pubgrub::error::PubGrubError::NoSolution(tree)) => {
+            use pubgrub::report::{DefaultStringReporter, Reporter};
+            return Err(DefaultStringReporter::report(&tree));
+        }
+        Err(e) => return Err(e.to_string()),
+    };
+
+    // 对比 lockfile，找出升级
+    let mut upgrades = HashMap::new();
+    for (mod_id, _) in candidates {
+        if let Some(ver) = solution.get(mod_id.as_str()) {
+            let entry = lockfile.find(mod_id);
+            let current = entry.map(|e| e.version.as_str()).unwrap_or("?");
+            let new_ver = ver.to_string();
+            if new_ver != current {
+                upgrades.insert(mod_id.clone(), new_ver);
+            }
+        }
+    }
+
+    Ok(upgrades)
+}
