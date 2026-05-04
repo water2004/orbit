@@ -28,7 +28,7 @@ pub use config::{GlobalConfig, InstancesRegistry, InstanceEntry, orbit_data_dir,
 pub use detection::LoaderDetectionService;
 pub use error::OrbitError;
 pub use manifest::OrbitManifest;
-pub use lockfile::{OrbitLockfile, LockEntry, LockMeta};
+pub use lockfile::{OrbitLockfile, PackageEntry, ModrinthInfo, FileInfo, LockMeta, LockDependency, ImplantedMod};
 pub use metadata::{ModLoader, mojang::McVersion};
 pub use providers::ModProvider;
 pub use installer::{install_to_instance, remove_from_instance, list_dependencies, InstallReport, RemoveReport, InstalledMod};

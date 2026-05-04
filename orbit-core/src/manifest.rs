@@ -56,21 +56,17 @@ impl Default for ResolverConfig {
     }
 }
 
-/// 依赖声明值 —— 可以是简写字符串或完整内联表
+/// 依赖声明值 —— 简写字符串或内联表（extra fields）
 ///
 /// ```toml
-/// sodium = "*"                              # → Short
-/// jei = { platform = "curseforge", ... }   # → Full
+/// sodium = "^0.5"                          # → Short
+/// zoomify = { version = "*", optional = true }  # → Full
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum DependencySpec {
     Short(String),
     Full {
-        #[serde(skip_serializing_if = "Option::is_none")]
-        platform: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        slug: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         version: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -79,19 +75,10 @@ pub enum DependencySpec {
         env: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         exclude: Option<Vec<String>>,
-        #[serde(skip_serializing_if = "Option::is_none", rename = "type")]
-        source_type: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        path: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        url: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        sha256: Option<String>,
     },
 }
 
 impl DependencySpec {
-    /// 返回此依赖声明的版本约束字符串（Short 或 Full 形式）
     pub fn version_constraint(&self) -> Option<&str> {
         match self {
             DependencySpec::Short(v) => Some(v.as_str()),
@@ -99,23 +86,6 @@ impl DependencySpec {
         }
     }
 
-    /// 返回显式指定的平台
-    pub fn platform(&self) -> Option<&str> {
-        match self {
-            DependencySpec::Short(_) => None,
-            DependencySpec::Full { platform, .. } => platform.as_deref(),
-        }
-    }
-
-    /// 返回显式指定的 slug
-    pub fn slug(&self) -> Option<&str> {
-        match self {
-            DependencySpec::Short(_) => None,
-            DependencySpec::Full { slug, .. } => slug.as_deref(),
-        }
-    }
-
-    /// 返回 env 限制
     pub fn env(&self) -> Option<&str> {
         match self {
             DependencySpec::Short(_) => None,
@@ -191,15 +161,13 @@ modloader = "fabric"
 modloader_version = "0.15.7"
 
 [dependencies]
-jei = { platform = "curseforge", slug = "238222", version = "^12" }
-zoomify = { platform = "modrinth", optional = true, env = "client" }
-my-mod = { type = "file", path = "mods/custom/mymod.jar" }
+jei = { version = "^12" }
+zoomify = { version = "*", optional = true, env = "client" }
 "#;
         let manifest: OrbitManifest = toml::from_str(toml_str).unwrap();
-        assert_eq!(manifest.dependencies.len(), 3);
+        assert_eq!(manifest.dependencies.len(), 2);
 
         let jei = &manifest.dependencies["jei"];
-        assert_eq!(jei.platform(), Some("curseforge"));
         assert_eq!(jei.version_constraint(), Some("^12"));
 
         let zoomify = &manifest.dependencies["zoomify"];

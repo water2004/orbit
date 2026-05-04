@@ -5,7 +5,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::error::OrbitError;
-use crate::lockfile::{LockDependency, LockEntry, OrbitLockfile};
+use crate::lockfile::{LockDependency, PackageEntry, OrbitLockfile, ModrinthInfo, FileInfo};
 use crate::manifest::{DependencySpec, OrbitManifest};
 use crate::providers::{ModProvider, ResolvedMod};
 
@@ -28,10 +28,15 @@ pub struct InstallReport {
 #[derive(Debug, Clone)]
 pub struct InstalledMod {
     pub slug: String,
-    pub key: String,
+    pub mod_id: String,
+    /// fabric.mod.json 的 version
     pub version: String,
     pub filename: String,
     pub provider: String,
+    pub project_id: String,
+    pub version_id: String,
+    /// Modrinth version_number（写入 [package.modrinth].version）
+    pub modrinth_version: String,
     /// 从 JAR 提取的真实依赖: (mod_id, version_constraint, required)
     pub jar_deps: Vec<(String, String, bool)>,
 }
@@ -64,7 +69,7 @@ pub async fn install_to_instance(
                 modloader: manifest.project.modloader.clone(),
                 modloader_version: manifest.project.modloader_version.clone(),
             },
-            entries: vec![],
+            packages: vec![],
         }
     };
 
@@ -97,10 +102,10 @@ pub fn remove_from_instance(
     let mut manifest = OrbitManifest::from_path(&toml_path)?;
 
     // 查找依赖
-    let key = find_by_slug(input, &manifest)
+    let key = find_by_mod_id(input, &manifest)
         .ok_or_else(|| OrbitError::ModNotFound(input.to_string()))?;
 
-    let spec = manifest.dependencies.swap_remove(&key)
+    manifest.dependencies.swap_remove(&key)
         .expect("dependency entry should exist");
 
     let lock_path = instance_dir.join("orbit.lock");
@@ -111,8 +116,8 @@ pub fn remove_from_instance(
     };
 
     // 反查依赖图
-    let slug = spec.slug().unwrap_or(&key);
-    let dependents = crate::resolver::dependents(slug, &lockfile.entries);
+    let slug = &key;
+    let dependents = crate::resolver::dependents(slug, &lockfile.packages);
     if !dependents.is_empty() {
         return Err(OrbitError::Conflict(format!(
             "'{key}' is required by: {}\nRemove those mods first.",
@@ -120,20 +125,43 @@ pub fn remove_from_instance(
         )));
     }
 
-    // 找到 lock 条目
-    let filename = lockfile.entries.iter()
-        .find(|e| e.name == key || e.mod_id.as_deref() == Some(slug))
-        .map(|e| e.filename.clone());
+    // 找到 JAR 文件名: 优先从 file.path 取，modrinth 条目则扫描 mods/ 目录
+    let mods_dir = instance_dir.join("mods");
+    let filename: Option<String> = lockfile.packages.iter()
+        .find(|e| e.mod_id == key)
+        .and_then(|e| {
+            e.file.as_ref().map(|f| {
+                std::path::Path::new(&f.path)
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_default()
+            })
+        })
+        .or_else(|| {
+            // modrinth 条目没有 file.path，扫描 mods/ 查找匹配的 JAR
+            if let Ok(dir_entries) = std::fs::read_dir(&mods_dir) {
+                dir_entries
+                    .filter_map(|e| e.ok())
+                    .find(|e| {
+                        let name = e.file_name().to_string_lossy().to_string();
+                        e.path().extension().map(|ext| ext == "jar").unwrap_or(false)
+                            && name.contains(key.as_str())
+                    })
+                    .map(|e| e.file_name().to_string_lossy().to_string())
+            } else {
+                None
+            }
+        });
 
     // 删除 JAR
     if let Some(ref fname) = filename {
-        let jar_path = instance_dir.join("mods").join(fname);
+        let jar_path = instance_dir.join(fname);
         if jar_path.exists() && !dry_run {
             std::fs::remove_file(&jar_path).map_err(OrbitError::Io)?;
         }
     }
 
-    lockfile.entries.retain(|e| e.name != key);
+    lockfile.packages.retain(|e| e.mod_id != key);
 
     if !dry_run {
         std::fs::write(&toml_path, manifest.to_toml_string()?).map_err(OrbitError::Io)?;
@@ -141,22 +169,22 @@ pub fn remove_from_instance(
     }
 
     Ok(RemoveReport {
-        key,
+        mod_id: key,
         jar_deleted: filename.is_some(),
     })
 }
 
 #[derive(Debug, Clone)]
 pub struct RemoveReport {
-    pub key: String,
+    pub mod_id: String,
     pub jar_deleted: bool,
 }
 
 /// 列出实例中所有依赖（供 remove 找不到时交互选择）
 pub fn list_dependencies(instance_dir: &Path) -> Result<Vec<(String, String)>, OrbitError> {
     let manifest = OrbitManifest::from_path(&instance_dir.join("orbit.toml"))?;
-    Ok(manifest.dependencies.iter().map(|(k, spec)| {
-        (k.clone(), spec.slug().unwrap_or(k).to_string())
+    Ok(manifest.dependencies.iter().map(|(k, _)| {
+        (k.clone(), k.clone())
     }).collect())
 }
 
@@ -173,7 +201,7 @@ async fn install_mod(
     existing_ok: bool,
     dry_run: bool,
 ) -> Result<InstallReport, OrbitError> {
-    if !existing_ok && crate::resolver::find_entry(slug, &lockfile.entries).is_some() {
+    if !existing_ok && crate::resolver::find_entry(slug, &lockfile.packages).is_some() {
         return Err(OrbitError::Conflict(format!(
             "'{slug}' already in lockfile. Use 'orbit upgrade {slug}' to update it."
         )));
@@ -215,8 +243,9 @@ async fn install_mod(
     let mut already_satisfied = Vec::new();
 
     for (pkg, resolved_mod) in solution {
-        if let Some(entry) = crate::resolver::find_entry(&pkg, &lockfile.entries) {
-            if entry.version == resolved_mod.version {
+        if let Some(existing) = crate::resolver::find_entry(&pkg, &lockfile.packages) {
+            let needs_update = existing.modrinth.as_ref().map(|m| m.version_id.is_empty()).unwrap_or(false);
+            if !needs_update && existing.version == resolved_mod.version {
                 already_satisfied.push(pkg.clone());
                 continue;
             }
@@ -231,18 +260,26 @@ async fn install_mod(
     if !dry_run {
         for m in &to_install {
             let dest_path = download_mod(m, mods_dir).await?;
-            let jar_deps = parse_jar_deps(&dest_path)?;
+            let (jar_mod_id, jar_version, jar_deps) = parse_jar_metadata(&dest_path)?;
             installed.push(InstalledMod {
-                slug: m.name.clone(), key: m.name.clone(), version: m.version.clone(),
-                filename: m.filename.clone(), provider: "modrinth".to_string(), jar_deps,
+                slug: m.slug.clone(),
+                mod_id: if jar_mod_id.is_empty() { m.mod_id.clone() } else { jar_mod_id },
+                version: if jar_version.is_empty() { m.version.clone() } else { jar_version },
+                filename: m.filename.clone(), provider: "modrinth".to_string(),
+                project_id: m.project_id.clone(), version_id: m.version_id.clone(),
+                modrinth_version: m.modrinth_version.clone(),
+                jar_deps,
             });
         }
         apply_to_manifest_and_lock(manifest, lockfile, &installed, mods_dir);
     } else {
         for m in &to_install {
             installed.push(InstalledMod {
-                slug: m.name.clone(), key: m.name.clone(), version: m.version.clone(),
-                filename: m.filename.clone(), provider: "modrinth".to_string(), jar_deps: vec![],
+                slug: m.slug.clone(), mod_id: m.mod_id.clone(), version: m.version.clone(),
+                filename: m.filename.clone(), provider: "modrinth".to_string(),
+                project_id: m.project_id.clone(), version_id: m.version_id.clone(),
+                modrinth_version: m.modrinth_version.clone(),
+                jar_deps: vec![],
             });
         }
     }
@@ -250,9 +287,9 @@ async fn install_mod(
     Ok(InstallReport { installed, already_satisfied, skipped_optional: vec![] })
 }
 
-fn find_by_slug(name: &str, manifest: &OrbitManifest) -> Option<String> {
-    manifest.dependencies.iter().find_map(|(key, spec)| {
-        if key == name || spec.slug() == Some(name) { Some(key.clone()) } else { None }
+fn find_by_mod_id(mod_id: &str, manifest: &OrbitManifest) -> Option<String> {
+    manifest.dependencies.iter().find_map(|(key, _)| {
+        if key == mod_id { Some(key.clone()) } else { None }
     })
 }
 
@@ -283,7 +320,8 @@ async fn download_mod(m: &ResolvedMod, mods_dir: &Path) -> Result<PathBuf, Orbit
     Ok(final_path)
 }
 
-fn parse_jar_deps(jar_path: &Path) -> Result<Vec<(String, String, bool)>, OrbitError> {
+/// 解析 JAR 的 fabric.mod.json，返回 (mod_id, version, dependencies)
+fn parse_jar_metadata(jar_path: &Path) -> Result<(String, String, Vec<(String, String, bool)>), OrbitError> {
     let file = std::fs::File::open(jar_path).map_err(OrbitError::Io)?;
     let mut archive = zip::ZipArchive::new(file).map_err(OrbitError::Zip)?;
     match archive.by_name("fabric.mod.json") {
@@ -292,9 +330,10 @@ fn parse_jar_deps(jar_path: &Path) -> Result<Vec<(String, String, bool)>, OrbitE
             std::io::Read::read_to_string(&mut entry, &mut content).map_err(|e| OrbitError::Io(e.into()))?;
             let parser = crate::metadata::fabric::FabricParser;
             let meta = crate::metadata::MetadataParser::parse(&parser, &content)?;
-            Ok(meta.dependencies.into_iter().map(|(k, v)| (k, v, true)).collect())
+            let deps: Vec<(String, String, bool)> = meta.dependencies.into_iter().map(|(k, v)| (k, v, true)).collect();
+            Ok((meta.id, meta.version, deps))
         }
-        Err(_) => Ok(vec![]),
+        Err(_) => Ok((String::new(), String::new(), vec![])),
     }
 }
 
@@ -305,22 +344,42 @@ fn apply_to_manifest_and_lock(
     mods_dir: &Path,
 ) {
     for inst in installed {
-        let key = &inst.key;
-        manifest.dependencies.entry(key.clone()).or_insert_with(|| {
+        let key = &inst.mod_id;
+        manifest.dependencies.insert(key.clone(),
             DependencySpec::Short(if inst.version.is_empty() { "*".into() } else { inst.version.clone() })
-        });
-        lockfile.entries.retain(|e| e.name != *key);
+        );
+        lockfile.packages.retain(|e| e.mod_id != *key);
         let lock_deps: Vec<LockDependency> = inst.jar_deps.iter().map(|(dep_id, constraint, _)| LockDependency {
             name: dep_id.clone(),
             version: if constraint.is_empty() { "*".into() } else { constraint.clone() },
         }).collect();
-        let sha256 = if inst.filename.is_empty() { String::new() }
-            else { crate::jar::compute_sha256(&mods_dir.join(&inst.filename)).unwrap_or_default() };
-        lockfile.entries.push(LockEntry {
-            name: key.clone(), platform: Some(inst.provider.clone()),
-            version: inst.version.clone(), filename: inst.filename.clone(),
-            sha256, sha512: String::new(), dependencies: lock_deps, implanted: vec![],
-            source_type: None, path: None, mod_id: None, slug: Some(key.clone()), url: None,
+        let jar_path = mods_dir.join(&inst.filename);
+        let sha256 = crate::jar::compute_sha256(&jar_path).unwrap_or_default();
+        let sha512 = crate::jar::compute_sha512(&jar_path).unwrap_or_default();
+        lockfile.packages.push(PackageEntry {
+            mod_id: key.clone(),
+            version: inst.version.clone(),
+            sha1: String::new(),
+            sha256,
+            sha512,
+            provider: inst.provider.clone(),
+            modrinth: if inst.provider == "modrinth" {
+                Some(ModrinthInfo {
+                    project_id: inst.project_id.clone(),
+                    version_id: inst.version_id.clone(),
+                    version: inst.modrinth_version.clone(),
+                    slug: inst.slug.clone(),
+                })
+            } else {
+                None
+            },
+            file: if inst.provider == "file" {
+                Some(FileInfo { path: format!("mods/{}", inst.filename) })
+            } else {
+                None
+            },
+            dependencies: lock_deps,
+            implanted: vec![],
         });
     }
 }

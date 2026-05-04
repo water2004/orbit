@@ -20,11 +20,11 @@ pub async fn handle(
     match install_to_instance(slug, &constraint, &instance_dir, &providers, no_deps, ctx.dry_run).await {
         Ok(report) => {
             if ctx.dry_run {
-                for m in &report.installed { println!("  [dry-run] would install {} v{}", m.key, m.version); }
+                for m in &report.installed { println!("  [dry-run] would install {} v{}", m.mod_id, m.version); }
                 return Ok(());
             }
             for m in &report.installed {
-                println!("  + installed {} v{}", m.key, m.version);
+                println!("  + installed {} v{}", m.mod_id, m.version);
                 for (dep_id, dep_ver, _) in &m.jar_deps { println!("      ↳ {dep_id} {dep_ver}"); }
             }
             for dep in &report.already_satisfied { println!("  ✓ {dep} (already satisfied)"); }

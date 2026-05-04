@@ -186,7 +186,6 @@ impl ModProvider for ModrinthProvider {
                         let pid = d.project_id.clone().unwrap_or_default();
                         let resolved_slug = id_to_slug.get(&pid).cloned();
                         ResolvedDependency {
-                            name: resolved_slug.clone().unwrap_or_else(|| pid.clone()),
                             slug: resolved_slug,
                             required: d.dependency_type == "required",
                         }
@@ -194,12 +193,16 @@ impl ModProvider for ModrinthProvider {
                     .unwrap_or_default();
 
                 Ok(ResolvedMod {
-                    name: slug.to_string(),
-                    mod_id: v.project_id.clone(),
+                    mod_id: slug.to_string(),
                     version: v.version_number.clone(),
+                    sha1: file.hashes.sha1.clone(),
+                    sha512: file.hashes.sha512.clone(),
+                    project_id: v.project_id.clone(),
+                    version_id: v.id.clone(),
+                    modrinth_version: v.version_number.clone(),
+                    slug: slug.to_string(),
                     download_url: file.url.clone(),
                     filename: file.filename.clone(),
-                    sha512: file.hashes.sha512.clone(),
                     dependencies: deps,
                     client_side: None,
                     server_side: None,
@@ -238,18 +241,21 @@ impl ModProvider for ModrinthProvider {
                 let pid = d.project_id.clone().unwrap_or_default();
                 let resolved_slug = id_to_slug.get(&pid).cloned();
                 ResolvedDependency {
-                    name: resolved_slug.clone().unwrap_or_else(|| pid.clone()),
                     slug: resolved_slug,
                     required: d.dependency_type == "required",
                 }
             }).collect()).unwrap_or_default();
             ResolvedMod {
-                name: slug.to_string(),
-                mod_id: v.project_id.clone(),
+                mod_id: slug.to_string(),
                 version: v.version_number.clone(),
+                sha1: file.map(|f| f.hashes.sha1.clone()).unwrap_or_default(),
+                sha512: file.map(|f| f.hashes.sha512.clone()).unwrap_or_default(),
+                project_id: v.project_id.clone(),
+                version_id: v.id.clone(),
+                modrinth_version: v.version_number.clone(),
+                slug: slug.to_string(),
                 download_url: file.map(|f| f.url.clone()).unwrap_or_default(),
                 filename: file.map(|f| f.filename.clone()).unwrap_or_default(),
-                sha512: file.map(|f| f.hashes.sha512.clone()).unwrap_or_default(),
                 dependencies: deps,
                 client_side: None,
                 server_side: None,
@@ -267,7 +273,6 @@ impl ModProvider for ModrinthProvider {
         let deps = self.client.get_project_dependencies(project_id).await
             .map_err(|e| OrbitError::Other(e.into()))?;
         Ok(deps.projects.into_iter().map(|p| ResolvedDependency {
-            name: p.title.clone(),
             slug: Some(p.slug),
             required: true,
         }).collect())
@@ -279,25 +284,32 @@ impl ModProvider for ModrinthProvider {
         let strs: Vec<&str> = hashes.iter().map(|s| s.as_str()).collect();
         let map = self.client.get_versions_from_hashes(&strs, Some("sha512")).await
             .map_err(|e| OrbitError::Other(e.into()))?;
-        // 批量查 dep project_id → slug
-        let all_dep_ids: Vec<&str> = map.values()
+        // 批量查 project_id → slug（包含主项目 + 依赖项目）
+        let mut all_ids: Vec<&str> = map.values().map(|v| v.project_id.as_str()).collect();
+        let dep_ids: Vec<&str> = map.values()
             .flat_map(|v| v.dependencies.as_ref().map(|d| d.as_slice()).unwrap_or(&[]))
             .filter_map(|d| d.project_id.as_deref())
             .collect();
-        let id_to_slug: HashMap<String, String> = self.lookup_project_slugs(&all_dep_ids).await;
+        all_ids.extend(dep_ids);
+        let id_to_slug: HashMap<String, String> = self.lookup_project_slugs(&all_ids).await;
         Ok(map.into_values().map(|v| {
             let file = v.files.first();
+            let main_slug = id_to_slug.get(&v.project_id).cloned().unwrap_or_else(|| v.project_id.clone());
             ResolvedMod {
-                name: v.project_id.clone(), mod_id: v.project_id.clone(),
+                mod_id: main_slug.clone(),
                 version: v.version_number.clone(),
+                sha1: file.map(|f| f.hashes.sha1.clone()).unwrap_or_default(),
+                sha512: file.map(|f| f.hashes.sha512.clone()).unwrap_or_default(),
+                project_id: v.project_id.clone(),
+                version_id: v.id.clone(),
+                modrinth_version: v.version_number.clone(),
+                slug: main_slug,
                 download_url: file.map(|f| f.url.clone()).unwrap_or_default(),
                 filename: file.map(|f| f.filename.clone()).unwrap_or_default(),
-                sha512: file.map(|f| f.hashes.sha512.clone()).unwrap_or_default(),
                 dependencies: v.dependencies.unwrap_or_default().into_iter().map(|d| {
                     let pid = d.project_id.clone().unwrap_or_default();
                     let resolved_slug = id_to_slug.get(&pid).cloned();
                     ResolvedDependency {
-                        name: resolved_slug.clone().unwrap_or_else(|| pid.clone()),
                         slug: resolved_slug,
                         required: d.dependency_type == "required",
                     }
@@ -314,23 +326,29 @@ impl ModProvider for ModrinthProvider {
                 let ver = v.version_number.clone();
                 let file = v.files.first();
                 let dep_ids: Vec<&str> = v.dependencies.as_ref().map(|d| d.iter().filter_map(|x| x.project_id.as_deref()).collect()).unwrap_or_default();
-                let id_to_slug: HashMap<String, String> = self.lookup_project_slugs(&dep_ids).await;
+                let mut all_ids = dep_ids.clone();
+                all_ids.push(&v.project_id);
+                let id_to_slug: HashMap<String, String> = self.lookup_project_slugs(&all_ids).await;
+                let main_slug = id_to_slug.get(&v.project_id).cloned().unwrap_or_else(|| v.project_id.clone());
                 let deps = v.dependencies.unwrap_or_default().into_iter().map(|d| {
                     let pid = d.project_id.clone().unwrap_or_default();
                     let resolved_slug = id_to_slug.get(&pid).cloned();
                     ResolvedDependency {
-                        name: resolved_slug.clone().unwrap_or_else(|| pid.clone()),
                         slug: resolved_slug,
                         required: d.dependency_type == "required",
                     }
                 }).collect();
                 Ok(Some(ResolvedMod {
-                    name: v.project_id.clone(),
-                    mod_id: v.project_id.clone(),
+                    mod_id: main_slug.clone(),
                     version: ver,
+                    sha1: file.map(|f| f.hashes.sha1.clone()).unwrap_or_default(),
+                    sha512: file.map(|f| f.hashes.sha512.clone()).unwrap_or_default(),
+                    project_id: v.project_id.clone(),
+                    version_id: v.id.clone(),
+                    modrinth_version: v.version_number.clone(),
+                    slug: main_slug,
                     download_url: file.map(|f| f.url.clone()).unwrap_or_default(),
                     filename: file.map(|f| f.filename.clone()).unwrap_or_default(),
-                    sha512: file.map(|f| f.hashes.sha512.clone()).unwrap_or_default(),
                     dependencies: deps,
                     client_side: None,
                     server_side: None,

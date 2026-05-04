@@ -4,7 +4,7 @@ pub mod provider;
 
 use std::collections::HashMap;
 
-use crate::lockfile::LockEntry;
+use crate::lockfile::PackageEntry;
 
 use self::types::PackageId;
 use crate::versions::Version;
@@ -54,10 +54,10 @@ pub async fn resolve_manifest(
     // 注入 lockfile 中已有条目作为本地可用版本。
     // 这些 mod 已安装，依赖已满足——只注册为"可用版本"不携带它们的依赖，
     // 这样 PubGrub 只需解析新添加的包的依赖，不会因已安装 mod 的内部依赖链报错。
-    for entry in &lockfile.entries {
+    for entry in &lockfile.packages {
         let ver = Version::parse(&entry.version, &loader);
-        provider.add_package_versions(entry.name.clone(), vec![ver.clone()]);
-        provider.add_package_deps(entry.name.clone(), ver, vec![]);
+        provider.add_package_versions(entry.mod_id.clone(), vec![ver.clone()]);
+        provider.add_package_deps(entry.mod_id.clone(), ver, vec![]);
         for imp in &entry.implanted {
             let iver = Version::parse(&imp.version, &loader);
             provider.add_package_versions(imp.name.clone(), vec![iver.clone()]);
@@ -116,7 +116,7 @@ pub async fn resolve_manifest(
                                     let mut deps = Vec::new();
                                     for dep in &rm.dependencies {
                                         if !dep.required { continue; } // ignore optional for now
-                                        let dep_pkg = dep.slug.clone().unwrap_or(dep.name.clone());
+                                        let dep_pkg = dep.slug.clone().unwrap_or_default();
                                         deps.push((dep_pkg, pubgrub::range::Range::any()));
                                     }
                                     provider.add_package_deps(missing_pkg.clone(), nv.clone(), deps);
@@ -175,7 +175,7 @@ pub fn check_local_graph(
     for m in local_mods {
         let pkg = if !m.mod_id.is_empty() { m.mod_id.clone() } else if !m.mod_name.is_empty() { m.mod_name.clone() } else { m.filename.clone() };
         // 使用 fabric.mod.json 里的自声明版本，与 Fabric Loader 行为一致
-        let nv = Version::parse(&m.local_version, &loader);
+        let nv = Version::parse(&m.version, &loader);
         provider.add_package_versions(pkg.clone(), vec![nv.clone()]);
         pkg_local_versions.insert(pkg.clone(), nv.clone());
 
@@ -235,28 +235,27 @@ pub fn check_local_graph(
     }
 }
 
-pub fn dependents<'a>(slug: &str, entries: &'a [LockEntry]) -> Vec<&'a str> {
+pub fn dependents<'a>(slug: &str, entries: &'a [PackageEntry]) -> Vec<&'a str> {
     entries
         .iter()
         .filter(|e| e.dependencies.iter().any(|d| d.name == slug))
-        .map(|e| e.name.as_str())
+        .map(|e| e.mod_id.as_str())
         .collect()
 }
 
-pub fn find_entry<'a>(slug: &str, entries: &'a [LockEntry]) -> Option<&'a LockEntry> {
+pub fn find_entry<'a>(slug: &str, entries: &'a [PackageEntry]) -> Option<&'a PackageEntry> {
     entries.iter().find(|e| {
-        e.name == slug 
-        || e.mod_id.as_deref() == Some(slug) 
-        || e.slug.as_deref() == Some(slug)
+        e.mod_id == slug
+        || e.modrinth.as_ref().map(|m| m.slug.as_str()) == Some(slug)
     })
 }
 
-pub fn check_version_conflict(slug: &str, new_version: &str, entries: &[LockEntry]) -> Result<(), String> {
+pub fn check_version_conflict(slug: &str, new_version: &str, entries: &[PackageEntry]) -> Result<(), String> {
     if let Some(entry) = find_entry(slug, entries) {
         if entry.version != new_version {
             return Err(format!(
                 "'{}' version conflict: lock has '{}', resolved '{}'",
-                entry.name, entry.version, new_version
+                entry.mod_id, entry.version, new_version
             ));
         }
     }

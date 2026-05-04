@@ -8,11 +8,11 @@ pub async fn handle(input: String, ctx: &CliContext) -> Result<()> {
     match remove_from_instance(&input, &instance_dir, ctx.dry_run) {
         Ok(report) => {
             if ctx.dry_run {
-                println!("[dry-run] would remove '{}'.", report.key);
+                println!("[dry-run] would remove '{}'.", report.mod_id);
                 return Ok(());
             }
             println!("Removed '{}'{}.",
-                report.key,
+                report.mod_id,
                 if report.jar_deleted { " and its JAR file" } else { "" });
             Ok(())
         }

@@ -48,18 +48,26 @@ pub fn create_providers_default() -> Result<Vec<Box<dyn ModProvider>>, crate::er
 /// 平台解析后的统一模组信息
 #[derive(Debug, Clone)]
 pub struct ResolvedMod {
-    /// orbit.toml [dependencies] 中的键名
-    pub name: String,
-    /// 平台内唯一 ID
+    /// fabric.mod.json 的 `id`（即 mod_id，PubGrub 用此作为 PackageId）
     pub mod_id: String,
-    /// 实际安装的版本号
+    /// fabric.mod.json 的 `version`
     pub version: String,
+    /// SHA-1
+    pub sha1: String,
+    /// SHA-512（Modrinth 原生提供，用于下载校验）
+    pub sha512: String,
+    /// Modrinth 专属: project_id
+    pub project_id: String,
+    /// Modrinth 专属: version_id
+    pub version_id: String,
+    /// Modrinth 专属: version_number（如 "mc26.1.2-0.8.10-fabric"）
+    pub modrinth_version: String,
+    /// Modrinth 专属: slug
+    pub slug: String,
     /// 下载 URL
     pub download_url: String,
     /// jar 文件名
     pub filename: String,
-    /// SHA-512 校验值（Modrinth 原生提供）
-    pub sha512: String,
     /// 前置依赖
     pub dependencies: Vec<ResolvedDependency>,
     /// 平台元数据声明的 client_side
@@ -70,7 +78,7 @@ pub struct ResolvedMod {
 
 #[derive(Debug, Clone)]
 pub struct ResolvedDependency {
-    pub name: String,
+    /// 依赖的 slug（Modrinth 解析后），或 mod_id
     pub slug: Option<String>,
     pub required: bool,
 }

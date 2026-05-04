@@ -30,6 +30,7 @@ pub struct ScannedMod {
     pub mod_id: Option<String>,
     pub mod_name: Option<String>,
     pub version: Option<String>,
+    pub sha1: String,
     pub sha256: String,
     pub sha512: String,
     /// 从 fabric.mod.json 提取的依赖: (mod_id, version_constraint, required)
@@ -80,7 +81,6 @@ fn scan_mods_dir(
 
         eprintln!("  → {filename}:");
 
-        // SHA-256 + SHA-512（平台哈希反查用 SHA-512）
         let sha256 = crate::jar::compute_sha256(&path).map_err(|e| {
             OrbitError::Other(anyhow::anyhow!("cannot hash {}: {e}", path.display()))
         })?;
@@ -106,6 +106,7 @@ fn scan_mods_dir(
             mod_id: mod_id.clone().or_else(|| mod_name.clone()),
             mod_name,
             version,
+            sha1: String::new(),
             sha256,
             sha512,
             jar_deps,
@@ -166,7 +167,7 @@ fn scan_embedded_jars(
             new_mods.push(ScannedMod {
                 filename, mod_id: mod_id.clone().or_else(|| mod_name.clone()), mod_name,
                 version: if version.is_empty() { None } else { Some(version) },
-                sha256, sha512, jar_deps, embedded_jars: vec![],
+                sha1: String::new(), sha256, sha512, jar_deps, embedded_jars: vec![],
                 embedded_parent: Some(parent.filename.clone()),
             });
         }
@@ -348,7 +349,9 @@ pub async fn run_init(
             mod_id: s.mod_id.clone().unwrap_or_default(),
             mod_name: s.mod_name.clone().unwrap_or_default(),
             version: s.version.clone().unwrap_or_default(),
-            local_version: s.version.clone().unwrap_or_default(),
+            modrinth_version: String::new(),
+            sha1: s.sha1.clone(),
+            sha512: s.sha512.clone(),
             sha256: s.sha256.clone(),
             source: crate::identification::IdentifiedSource::File { path: format!("mods/{}", s.filename) },
             deps: s.jar_deps.clone(),
@@ -356,34 +359,38 @@ pub async fn run_init(
     }).collect();
 
     // 3. 构建依赖声明 + lock 条目（仅顶层模组）
-    let mut lock_entries: Vec<crate::lockfile::LockEntry> = identified
+    let mut lock_entries: Vec<crate::lockfile::PackageEntry> = identified
         .iter()
         .map(|m| {
-            let mut entry = crate::lockfile::LockEntry {
-                name: if !m.mod_id.is_empty() { m.mod_id.clone() } else if !m.mod_name.is_empty() { m.mod_name.clone() } else { m.filename.clone() },
+            let key = if !m.mod_id.is_empty() { m.mod_id.clone() } else if !m.mod_name.is_empty() { m.mod_name.clone() } else { m.filename.clone() };
+            let mut entry = crate::lockfile::PackageEntry {
+                mod_id: key,
                 version: m.version.clone(),
-                filename: m.filename.clone(),
+                sha1: m.sha1.clone(),
                 sha256: m.sha256.clone(),
-                sha512: String::new(),
+                sha512: m.sha512.clone(),
+                provider: String::new(),
+                modrinth: None,
+                file: None,
                 dependencies: vec![],
                 implanted: vec![],
-                platform: None,
-                mod_id: None,
-                slug: None,
-                url: None,
-                source_type: None,
-                path: None,
             };
 
             match &m.source {
-                crate::identification::IdentifiedSource::Platform { platform, project_id, slug } => {
-                    entry.platform = Some(platform.clone());
-                    entry.mod_id = Some(project_id.clone());
-                    entry.slug = Some(slug.clone());
+                crate::identification::IdentifiedSource::Platform { platform, project_id, version_id, slug } => {
+                    entry.provider = platform.clone();
+                    entry.modrinth = Some(crate::lockfile::ModrinthInfo {
+                        project_id: project_id.clone(),
+                        version_id: version_id.clone(),
+                        version: m.modrinth_version.clone(),
+                        slug: slug.clone(),
+                    });
                 }
                 crate::identification::IdentifiedSource::File { path } => {
-                    entry.source_type = Some("file".into());
-                    entry.path = Some(path.clone());
+                    entry.provider = "file".to_string();
+                    entry.file = Some(crate::lockfile::FileInfo {
+                        path: path.clone(),
+                    });
                 }
             }
 
@@ -406,7 +413,14 @@ pub async fn run_init(
             .collect();
 
         for parent_name in matching_parents {
-            if let Some(parent_entry) = lock_entries.iter_mut().find(|e| e.filename == parent_name) {
+            if let Some(parent_entry) = lock_entries.iter_mut().find(|e| {
+                e.file.as_ref().map(|f| {
+                    std::path::Path::new(&f.path)
+                        .file_name()
+                        .map(|n| n.to_string_lossy() == parent_name)
+                        .unwrap_or(false)
+                }).unwrap_or(false)
+            }) {
                 if parent_entry.implanted.iter().any(|imp| imp.filename == m.filename) {
                     continue;
                 }
@@ -426,35 +440,11 @@ pub async fn run_init(
     let mut dependencies = indexmap::IndexMap::new();
     for m in &identified {
         let key = if !m.mod_id.is_empty() { m.mod_id.clone() } else if !m.mod_name.is_empty() { m.mod_name.clone() } else { m.filename.clone() };
-        let spec = match &m.source {
-            crate::identification::IdentifiedSource::Platform { platform, slug, .. } => {
-                DependencySpec::Full {
-                    platform: Some(platform.clone()),
-                    slug: Some(slug.clone()),
-                    version: if m.version.is_empty() { None } else { Some(m.version.clone()) },
-                    optional: None,
-                    env: None,
-                    exclude: None,
-                    source_type: None,
-                    path: None,
-                    url: None,
-                    sha256: None,
-                }
-            }
-            crate::identification::IdentifiedSource::File { path } => {
-                DependencySpec::Full {
-                    platform: None,
-                    slug: if m.mod_id.is_empty() { None } else { Some(m.mod_id.clone()) },
-                    version: if m.version.is_empty() { None } else { Some(m.version.clone()) },
-                    optional: None,
-                    env: None,
-                    exclude: None,
-                    source_type: Some("file".into()),
-                    path: Some(path.clone()),
-                    url: None,
-                    sha256: Some(m.sha256.clone()),
-                }
-            }
+        let spec = DependencySpec::Full {
+            version: if m.version.is_empty() { None } else { Some(m.version.clone()) },
+            optional: None,
+            env: None,
+            exclude: None,
         };
         dependencies.insert(key, spec);
     }
@@ -502,7 +492,7 @@ pub async fn run_init(
             modloader: loader_name,
             modloader_version: loader_ver,
         },
-        entries: lock_entries,
+        packages: lock_entries,
     };
     let lock_path = input.instance_dir.join("orbit.lock");
     let lock_content = lockfile.to_toml_string()?;
