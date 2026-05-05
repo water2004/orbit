@@ -48,7 +48,11 @@ pub fn check_local_graph(
     };
     let loader_ver = Version::parse(&manifest.project.modloader_version, &loader);
     provider.add_package_versions(loader_pkg.clone(), vec![loader_ver.clone()]);
-    provider.add_package_deps(loader_pkg.to_string(), loader_ver, vec![]);
+    provider.add_package_deps(loader_pkg.to_string(), loader_ver.clone(), vec![]);
+    if loader == "fabric" {
+        provider.add_package_versions("fabric".to_string(), vec![loader_ver.clone()]);
+        provider.add_package_deps("fabric".to_string(), loader_ver, vec![]);
+    }
 
     // key: pkg id → local_version（用于 root_deps 的 exact 约束）
     let mut pkg_local_versions: std::collections::HashMap<String, Version> = Default::default();
@@ -168,7 +172,12 @@ pub async fn resolve_with_candidates(
         else { loader };
     let loader_ver = Version::parse(&manifest.project.modloader_version, loader);
     provider.add_package_versions(loader_pkg.to_string(), vec![loader_ver.clone()]);
-    provider.add_package_deps(loader_pkg.to_string(), loader_ver, vec![]);
+    provider.add_package_deps(loader_pkg.to_string(), loader_ver.clone(), vec![]);
+    // "fabric" 是 "fabricloader" 的别名
+    if loader == "fabric" {
+        provider.add_package_versions("fabric".to_string(), vec![loader_ver.clone()]);
+        provider.add_package_deps("fabric".to_string(), loader_ver, vec![]);
+    }
 
     let zero = Version::zero();
     provider.add_package_versions("java".to_string(), vec![zero.clone()]);
