@@ -207,11 +207,10 @@ pub async fn resolve_with_candidates(
                 .map(|(name, constraint, _)| (name.clone(), Version::parse_constraint(constraint, loader)))
                 .collect();
             
-            // Add exact constraints for implanted mods so they are pulled in when this version is chosen
+            // Register implanted mod versions (constraints already in cand.deps)
             for imp in &cand.implanted {
                 let imp_ver = Version::parse(&imp.version, loader);
-                d.push((imp.mod_id.clone(), pubgrub::range::Range::exact(imp_ver.clone())));
-                
+
                 // Register implanted mod in provider
                 let imp_d: Vec<_> = imp.deps.iter()
                     .filter(|(_, _, req)| *req)
@@ -355,13 +354,12 @@ pub async fn resolve_with_candidates(
                         
                         for imp in &cand.implanted {
                             let imp_ver = Version::parse(&imp.version, loader);
-                            d.push((imp.mod_id.clone(), pubgrub::range::Range::exact(imp_ver.clone())));
-                            
+
                             let imp_d: Vec<_> = imp.deps.iter()
                                 .filter(|(n, _, req)| *req && n != "java" && n != "mixinextras")
                                 .map(|(n, c, _)| (n.clone(), Version::parse_constraint(c, loader)))
                                 .collect();
-                            
+
                             let mut imp_existing = provider.versions.get(&imp.mod_id).cloned().unwrap_or_default();
                             if !imp_existing.contains(&imp_ver) {
                                 imp_existing.push(imp_ver.clone());
