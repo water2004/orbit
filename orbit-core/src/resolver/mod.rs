@@ -202,7 +202,7 @@ pub async fn resolve_with_candidates(
         let mut all_vers = Vec::new();
         for cand in versions {
             let v = Version::parse(&cand.jar_version, loader);
-            let mut d: Vec<_> = cand.deps.iter()
+            let d: Vec<_> = cand.deps.iter()
                 .filter(|(_, _, req)| *req)
                 .map(|(name, constraint, _)| (name.clone(), Version::parse_constraint(constraint, loader)))
                 .collect();

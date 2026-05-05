@@ -291,70 +291,21 @@ async fn install_mod(
     let loader = &manifest.project.modloader;
     let mc_version = &manifest.project.mc_version;
 
-    // 1. API 查询依赖 closure（不下载 JAR），收集所有需要下载的版本
-    let mut to_download: Vec<ResolvedMod> = Vec::new();
-    let mut seen_projects: std::collections::HashSet<String> = std::collections::HashSet::new();
-    let provider = &providers[0];
-
-    // BFS：从目标 slug 开始，收集所有依赖项目的版本
-    let mut queue: Vec<String> = vec![slug.to_string()];
-    while let Some(pid) = queue.pop() {
-        if !seen_projects.insert(pid.clone()) { continue; }
-        let versions = match provider.get_versions(&pid, Some(mc_version), Some(loader)).await {
-            Ok(v) => v,
-            Err(e) => { eprintln!("  ! API error for {}: {}", pid, e); continue; }
-        };
-        for v in &versions {
-            for dep in &v.dependencies {
-                if dep.required {
-                    if let Some(ref pid) = dep.project_id {
-                        if !seen_projects.contains(pid.as_str()) {
-                            queue.push(pid.clone());
-                        }
-                    }
-                }
-            }
-            to_download.push(v.clone());
-        }
-    }
-    eprintln!("  API query done: {} versions across {} projects to download", to_download.len(), seen_projects.len());
-
-    // 2. 统一下载所有版本 JAR，解析构建 candidates
-    let mut jar_ver_to_v: HashMap<String, &ResolvedMod> = HashMap::new();
-    let mut candidates: HashMap<String, Vec<crate::resolver::types::CandidateVersion>> = HashMap::new();
-    for v in &to_download {
-        let label = v.modrinth.as_ref().map(|m| m.version_number.as_str()).unwrap_or("?");
-        match crate::jar::download_and_parse(&v.download_url, &v.sha512, loader).await {
-            Ok(m) => {
-                let mod_id = if m.mod_id.is_empty() { slug.to_string() } else { m.mod_id.clone() };
-                eprintln!("    {} → mod_id={}, version={}, deps={}", label, mod_id, m.version, m.dependencies.len());
-                jar_ver_to_v.insert(m.version.clone(), v);
-                
-                let imp_cands = m.implanted_mods.into_iter().map(|im| {
-                    crate::resolver::types::ImplantedCandidate {
-                        mod_id: im.mod_id,
-                        version: im.version,
-                        deps: im.dependencies,
-                    }
-                }).collect();
-                
-                candidates.entry(mod_id).or_default().push(crate::resolver::types::CandidateVersion {
-                    jar_version: m.version,
-                    deps: m.dependencies,
-                    implanted: imp_cands,
-                });
-            }
-            Err(e) => {
-                eprintln!("    {} → download/parse failed: {e}", label);
-            }
-        };
-    }
+    // 1-2. BFS download all JARs
+    let seeds = vec![slug.to_string()];
+    let (mut candidates, mut jar_ver_to_v_owned) = crate::outdated::download_candidates_bfs(
+        providers[0].as_ref(), &seeds, lockfile, mc_version, loader
+    ).await?;
+    // Convert String→ResolvedMod to &ResolvedMod for compatibility
+    let jar_ver_to_v: HashMap<String, &ResolvedMod> = jar_ver_to_v_owned.iter()
+        .map(|(k, v)| (k.clone(), v))
+        .collect();
     if candidates.is_empty() {
         return Err(OrbitError::ModNotFound(slug.to_string()));
     }
 
     // 3. Resolve offline
-    eprintln!("  resolving with {} candidate(s) from {} mod(s)...", to_download.len(), candidates.len());
+    eprintln!("  resolving with {} mod(s) in candidates...", candidates.len());
     let upgrades = match crate::resolver::resolve_with_candidates(manifest, lockfile, &mut candidates, providers).await {
         Ok(u) => {
             eprintln!("  resolved: {:?}", u);
