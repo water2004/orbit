@@ -403,16 +403,77 @@ pub async fn resolve_with_candidates(
         }
     };
 
-    eprintln!("    solution: {:?}", solution.keys().collect::<Vec<_>>());
+    eprintln!("    solution: {:?}", solution.iter().map(|(k,v)| format!("{}:{}", k, v)).collect::<Vec<_>>());
     let mut upgrades = HashMap::new();
-    for (mod_id, _) in candidates {
-        eprintln!("    check {}: in_solution={}", mod_id, solution.contains_key(mod_id.as_str()));
+    for (mod_id, _) in candidates.iter() {
         if let Some(ver) = solution.get(mod_id.as_str()) {
             let entry = lockfile.find(mod_id);
             let current = entry.map(|e| e.version.as_str()).unwrap_or("?");
             let new_ver = ver.to_string();
             if new_ver != current {
                 upgrades.insert(mod_id.clone(), new_ver);
+            } else if let Some(cand) = candidates.get(mod_id).and_then(|v| v.first()) {
+                if cand.jar_version == current { continue; }
+                // 密室困境：锁死 solution 里其他包为 exact，强制要求新版本
+                eprintln!("    {} not upgraded to {} — checking why...", mod_id, cand.jar_version);
+                let mut solo_provider = OrbitDependencyProvider::new();
+                let root = "___solo___".to_string();
+                let rv = Version::zero();
+                // 注册 version 0（不放任何 deps，全部通过 root 的 exact 约束注入）
+                solo_provider.add_package_versions(root.clone(), vec![rv.clone()]);
+
+                // 注册候选版本 + 植入模组
+                let cv = Version::parse(&cand.jar_version, loader);
+                let cv_for_range = cv.clone();
+                let cd: Vec<_> = cand.deps.iter()
+                    .filter(|(n, _, req)| *req && n != "java" && n != "mixinextras")
+                    .map(|(n, c, _)| (n.clone(), Version::parse_constraint(c, loader)))
+                    .collect();
+                solo_provider.add_package_versions(mod_id.clone(), vec![cv.clone()]);
+                solo_provider.add_package_deps(mod_id.clone(), cv, cd);
+                // 植入模组：注册版本，加入锁死列表
+                for imp in &cand.implanted {
+                    let iv = Version::parse(&imp.version, loader);
+                    let id: Vec<_> = imp.deps.iter()
+                        .filter(|(n, _, req)| *req && n != "java" && n != "mixinextras")
+                        .map(|(n, c, _)| (n.clone(), Version::parse_constraint(c, loader)))
+                        .collect();
+                    solo_provider.add_package_versions(imp.mod_id.clone(), vec![iv.clone()]);
+                    solo_provider.add_package_deps(imp.mod_id.clone(), iv, id);
+                }
+
+                // 锁死 solution 中所有包为 exact，并强制要求候选版本
+                let mut rd: Vec<(String, pubgrub::Ranges<Version>)> = Vec::new();
+                rd.push((mod_id.clone(), pubgrub::Ranges::higher_than(cv_for_range)));
+                for (chosen_id, chosen_ver) in solution.iter() {
+                    if chosen_id != mod_id.as_str() && chosen_id.as_str() != root.as_str() {
+                        solo_provider.add_package_versions(chosen_id.clone(), vec![chosen_ver.clone()]);
+                        let real_deps = lockfile.find(chosen_id).map(|e| {
+                            e.dependencies.iter().map(|d| {
+                                (d.name.clone(), Version::parse_constraint(&d.version, loader))
+                            }).collect::<Vec<_>>()
+                        }).unwrap_or_default();
+                        solo_provider.add_package_deps(chosen_id.clone(), chosen_ver.clone(), real_deps);
+                        rd.push((chosen_id.clone(), pubgrub::Ranges::singleton(chosen_ver.clone())));
+                    }
+                }
+                // 植入模组也锁死
+                for imp in &cand.implanted {
+                    let iv = Version::parse(&imp.version, loader);
+                    if !rd.iter().any(|(n, _)| n == &imp.mod_id) {
+                        rd.push((imp.mod_id.clone(), pubgrub::Ranges::singleton(iv)));
+                    }
+                }
+                solo_provider.add_package_deps(root.clone(), rv.clone(), rd);
+
+                match pubgrub::resolve(&solo_provider, root.clone(), rv) {
+                    Ok(_) => eprintln!("      (resolved OK — logic bug?)"),
+                    Err(pubgrub::PubGrubError::NoSolution(tree)) => {
+                        use pubgrub::{DefaultStringReporter, Reporter};
+                        eprintln!("      blocked:\n{}", DefaultStringReporter::report(&tree));
+                    }
+                    Err(e) => eprintln!("      error: {}", e),
+                }
             }
         }
     }
