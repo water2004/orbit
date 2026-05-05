@@ -17,7 +17,7 @@ hex = "0.4"
 # HTTP
 reqwest = { version = "0.13.2", features = ["json"] }
 # 异步
-tokio = { version = "1.51.0", features = ["macros", "rt-multi-thread"] }
+tokio = { version = "1.51.0", features = ["macros", "rt-multi-thread", "sync"] }
 async-trait = "0.1"
 # CLI
 clap = { version = "4.6.0", features = ["derive"] }

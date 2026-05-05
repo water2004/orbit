@@ -48,35 +48,49 @@ pub async fn download_candidates_bfs(
     }
     eprintln!("  BFS query done: {} versions across {} projects", to_download.len(), seen.len());
 
-    let mut jar_ver_to_v: HashMap<String, crate::providers::ResolvedMod> = HashMap::new();
-    let mut candidates: HashMap<String, Vec<CandidateVersion>> = HashMap::new();
+    let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(10));
+    let mut handles = Vec::new();
 
     for v in &to_download {
-        let label = v.modrinth.as_ref().map(|m| m.version_number.as_str()).unwrap_or("?");
-        match crate::jar::download_and_parse(&v.download_url, &v.sha512, loader).await {
-            Ok(meta) => {
-                let imp_cands = meta.implanted_mods.into_iter().map(|im| {
-                    crate::resolver::types::ImplantedCandidate {
-                        mod_id: im.mod_id, version: im.version, deps: im.dependencies,
-                    }
-                }).collect();
-                // 用 lockfile 中的 mod_id 作为 key
-                let key = if meta.mod_id.is_empty() {
-                    lockfile.packages.iter()
-                        .find(|e| e.modrinth.as_ref().map(|m| m.slug.as_str()) == Some(label)
-                            || e.modrinth.as_ref().map(|m| m.project_id.as_str()) == Some(v.modrinth.as_ref().map(|m| m.project_id.as_str()).unwrap_or("")))
-                        .map(|e| e.mod_id.clone())
-                        .unwrap_or_default()
-                } else {
-                    meta.mod_id.clone()
-                };
-                if key.is_empty() { continue; }
-                jar_ver_to_v.insert(meta.version.clone(), v.clone());
-                candidates.entry(key).or_default().push(CandidateVersion {
-                    jar_version: meta.version, deps: meta.dependencies, implanted: imp_cands,
-                });
+        let v = v.clone();
+        let loader = loader.to_string();
+        let sem = semaphore.clone();
+        let lockfile_packages = lockfile.packages.clone();
+        handles.push(tokio::spawn(async move {
+            let _permit = sem.acquire().await;
+            let label = v.modrinth.as_ref().map(|m| m.version_number.clone()).unwrap_or_default();
+            match crate::jar::download_and_parse(&v.download_url, &v.sha512, &loader).await {
+                Ok(meta) => {
+                    let key = if meta.mod_id.is_empty() {
+                        lockfile_packages.iter()
+                            .find(|e| e.modrinth.as_ref().map(|m| m.slug.as_str()) == Some(&label)
+                                || e.modrinth.as_ref().map(|m| m.project_id.as_str()) == Some(v.modrinth.as_ref().map(|m| m.project_id.as_str()).unwrap_or("")))
+                            .map(|e| e.mod_id.clone())
+                            .unwrap_or_default()
+                    } else {
+                        meta.mod_id.clone()
+                    };
+                    if key.is_empty() { return None; }
+                    let imp_cands = meta.implanted_mods.into_iter().map(|im| {
+                        crate::resolver::types::ImplantedCandidate {
+                            mod_id: im.mod_id, version: im.version, deps: im.dependencies,
+                        }
+                    }).collect();
+                    Some((key, meta.version, meta.dependencies, imp_cands, v))
+                }
+                Err(_) => None,
             }
-            Err(_) => continue,
+        }));
+    }
+
+    let mut jar_ver_to_v: HashMap<String, crate::providers::ResolvedMod> = HashMap::new();
+    let mut candidates: HashMap<String, Vec<CandidateVersion>> = HashMap::new();
+    for handle in handles {
+        if let Ok(Some((key, ver, deps, imp, resolved))) = handle.await {
+            jar_ver_to_v.insert(ver.clone(), resolved);
+            candidates.entry(key).or_default().push(CandidateVersion {
+                jar_version: ver, deps, implanted: imp,
+            });
         }
     }
     Ok((candidates, jar_ver_to_v))
