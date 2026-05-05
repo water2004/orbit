@@ -291,7 +291,7 @@ pub fn parse_constraint(constraint: &str) -> Ranges<Version> {
     let mut final_range: Option<Ranges<Version>> = None;
 
     for or_group in constraint.split("||") {
-        let mut group_range = Ranges::any();
+        let mut group_range = Ranges::full();
         let mut parts = or_group.split_whitespace().peekable();
         while let Some(part) = parts.next() {
             let part = part.trim();
@@ -313,7 +313,7 @@ pub fn parse_constraint(constraint: &str) -> Ranges<Version> {
                     "<=" => Ranges::strictly_lower_than(Version::Fabric(ref_ver.bump())),
                     ">"  => Ranges::higher_than(Version::Fabric(ref_ver.bump())),
                     "<"  => Ranges::strictly_lower_than(Version::Fabric(ref_ver)),
-                    "="  => Ranges::exact(Version::Fabric(ref_ver)),
+                    "="  => Ranges::singleton(Version::Fabric(ref_ver)),
                     "~"  => {
                         let lower = Version::Fabric(ref_ver.clone());
                         let mut upper_comp = ref_ver.components.clone();
@@ -361,11 +361,11 @@ pub fn parse_constraint(constraint: &str) -> Ranges<Version> {
                         upper_ver.raw = format!("{}^upper", ref_ver.raw);
                         Ranges::between(lower, Version::Fabric(upper_ver))
                     }
-                    _ => Ranges::exact(Version::Fabric(ref_ver)),
+                    _ => Ranges::singleton(Version::Fabric(ref_ver)),
                 };
                 group_range = group_range.intersection(&r);
             } else {
-                group_range = group_range.intersection(&Ranges::exact(Version::Generic(combined.clone())));
+                group_range = group_range.intersection(&Ranges::singleton(Version::Generic(combined.clone())));
             }
         }
 
@@ -376,7 +376,7 @@ pub fn parse_constraint(constraint: &str) -> Ranges<Version> {
         }
     }
 
-    final_range.unwrap_or_else(|| Ranges::any())
+    final_range.unwrap_or_else(|| Ranges::full())
 }
 
 #[cfg(test)]

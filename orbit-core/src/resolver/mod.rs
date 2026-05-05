@@ -95,7 +95,7 @@ pub fn check_local_graph(
         // root 依赖使用本地已安装的 local_version 做 exact 约束
         // 这样 root 和 mod 自己声明的版本永远一致，不受 Modrinth 版本名影响
         if let Some(installed_ver) = pkg_local_versions.get(name) {
-            root_deps.push((name.clone(), pubgrub::Ranges::exact(installed_ver.clone())));
+            root_deps.push((name.clone(), pubgrub::Ranges::singleton(installed_ver.clone())));
         }
         // 如果本地没有安装，missing_deps 已经把它注册为空版本列表，PubGrub 会自动报错
     }

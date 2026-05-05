@@ -71,7 +71,7 @@ impl DependencyProvider for OrbitDependencyProvider {
                 }
                 Ok(None)
             }
-            None => Err(Box::new(FetchRetryError::MissingVersions(package.clone()))),
+            None => Err(FetchRetryError::MissingVersions(package.clone())),
         }
     }
 
@@ -81,8 +81,8 @@ impl DependencyProvider for OrbitDependencyProvider {
         version: &Self::V,
     ) -> Result<Dependencies<Self::P, Self::VS, Self::M>, Self::Err> {
         match self.dependencies.get(&(package.clone(), version.clone())) {
-            Some(deps) => Ok(Dependencies::Known(deps.iter().cloned().collect())),
-            None => Err(Box::new(FetchRetryError::MissingDependencies(package.clone(), version.clone()))),
+            Some(deps) => Ok(Dependencies::Available(deps.iter().cloned().collect())),
+            None => Err(FetchRetryError::MissingDependencies(package.clone(), version.clone())),
         }
     }
 }
