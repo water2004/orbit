@@ -293,7 +293,7 @@ async fn install_mod(
 
     // 1-2. BFS download all JARs
     let seeds = vec![slug.to_string()];
-    let (mut candidates, mut jar_ver_to_v_owned) = crate::outdated::download_candidates_bfs(
+    let (mut candidates, jar_ver_to_v_owned) = crate::outdated::download_candidates_bfs(
         providers[0].as_ref(), &seeds, lockfile, mc_version, loader
     ).await?;
     // Convert String→ResolvedMod to &ResolvedMod for compatibility

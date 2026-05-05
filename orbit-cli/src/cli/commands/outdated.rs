@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use orbit_core::{check_all_outdated, ManifestFile};
+use orbit_core::ManifestFile;
 use orbit_core::providers::create_providers_default;
 use super::CliContext;
 

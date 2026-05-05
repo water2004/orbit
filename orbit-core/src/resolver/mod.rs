@@ -345,7 +345,7 @@ pub async fn resolve_with_candidates(
                     all_vers.extend(existing);
                     for cand in &new_candidates {
                         let v = Version::parse(&cand.jar_version, loader);
-                        let mut d: Vec<_> = cand.deps.iter()
+                        let d: Vec<_> = cand.deps.iter()
                             .filter(|(n, _, req)| *req && n != "java" && n != "mixinextras")
                             .map(|(n, c, _)| (n.clone(), Version::parse_constraint(c, loader)))
                             .collect();
@@ -377,7 +377,7 @@ pub async fn resolve_with_candidates(
                     return Err(DefaultStringReporter::report(&_derivation_tree));
                 }
             }
-            Err(pubgrub::PubGrubError::ErrorChoosingVersion { package, source: err }) => {
+            Err(pubgrub::PubGrubError::ErrorChoosingVersion { package, source: _err }) => {
                 return Err(format!("internal error: no version of '{}' matches constraint", package));
             }
             Err(pubgrub::PubGrubError::ErrorRetrievingDependencies { package, version, source: err }) => {
