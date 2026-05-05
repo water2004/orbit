@@ -312,7 +312,14 @@ pub async fn resolve_with_candidates(
                 for dep in &needed_deps {
                     if candidates.contains_key(dep) { eprintln!("    {} already in candidates, skip", dep); continue; }
                     let entry = lockfile.find(dep);
-                    if entry.is_none() { eprintln!("    {} not in lockfile, skip", dep); continue; }
+                    if entry.is_none() {
+                        // 检查是否为某条目的植入模组（已注册在 provider 中）
+                        let is_implanted = lockfile.packages.iter()
+                            .any(|e| e.implanted.iter().any(|i| i.name == *dep));
+                        if is_implanted { continue; }
+                        eprintln!("    {} not in lockfile, skip", dep);
+                        continue;
+                    }
                     let Some(mr) = entry.and_then(|e| e.modrinth.as_ref()) else { eprintln!("    {} no modrinth info, skip", dep); continue; };
                     eprintln!("    fetching dep {} versions (project={})...", dep, mr.project_id);
                     let versions = match providers[0].get_versions(&mr.project_id, Some(mc_version), Some(loader)).await {
