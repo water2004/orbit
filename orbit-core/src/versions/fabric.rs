@@ -284,14 +284,14 @@ fn parse_operator(predicate: &str) -> (&str, &str) {
 // 测试
 // ═══════════════════════════════════════════════════════════════
 
-use pubgrub::range::Range;
+use pubgrub::Ranges;
 use super::Version;
 
-pub fn parse_constraint(constraint: &str) -> Range<Version> {
-    let mut final_range: Option<Range<Version>> = None;
+pub fn parse_constraint(constraint: &str) -> Ranges<Version> {
+    let mut final_range: Option<Ranges<Version>> = None;
 
     for or_group in constraint.split("||") {
-        let mut group_range = Range::any();
+        let mut group_range = Ranges::any();
         let mut parts = or_group.split_whitespace().peekable();
         while let Some(part) = parts.next() {
             let part = part.trim();
@@ -309,11 +309,11 @@ pub fn parse_constraint(constraint: &str) -> Range<Version> {
             let (op, ver_str) = parse_operator(&combined);
             if let Ok(ref_ver) = SemanticVersion::parse(ver_str, true) {
                 let r = match op {
-                    ">=" => Range::higher_than(Version::Fabric(ref_ver)),
-                    "<=" => Range::strictly_lower_than(Version::Fabric(ref_ver.bump())),
-                    ">"  => Range::higher_than(Version::Fabric(ref_ver.bump())),
-                    "<"  => Range::strictly_lower_than(Version::Fabric(ref_ver)),
-                    "="  => Range::exact(Version::Fabric(ref_ver)),
+                    ">=" => Ranges::higher_than(Version::Fabric(ref_ver)),
+                    "<=" => Ranges::strictly_lower_than(Version::Fabric(ref_ver.bump())),
+                    ">"  => Ranges::higher_than(Version::Fabric(ref_ver.bump())),
+                    "<"  => Ranges::strictly_lower_than(Version::Fabric(ref_ver)),
+                    "="  => Ranges::exact(Version::Fabric(ref_ver)),
                     "~"  => {
                         let lower = Version::Fabric(ref_ver.clone());
                         let mut upper_comp = ref_ver.components.clone();
@@ -333,7 +333,7 @@ pub fn parse_constraint(constraint: &str) -> Range<Version> {
                         upper_ver.prerelease = None;
                         upper_ver.has_wildcard = false;
                         upper_ver.raw = format!("{}~upper", ref_ver.raw);
-                        Range::between(lower, Version::Fabric(upper_ver))
+                        Ranges::between(lower, Version::Fabric(upper_ver))
                     }
                     "^"  => {
                         let lower = Version::Fabric(ref_ver.clone());
@@ -359,13 +359,13 @@ pub fn parse_constraint(constraint: &str) -> Range<Version> {
                         upper_ver.prerelease = None;
                         upper_ver.has_wildcard = false;
                         upper_ver.raw = format!("{}^upper", ref_ver.raw);
-                        Range::between(lower, Version::Fabric(upper_ver))
+                        Ranges::between(lower, Version::Fabric(upper_ver))
                     }
-                    _ => Range::exact(Version::Fabric(ref_ver)),
+                    _ => Ranges::exact(Version::Fabric(ref_ver)),
                 };
                 group_range = group_range.intersection(&r);
             } else {
-                group_range = group_range.intersection(&Range::exact(Version::Generic(combined.clone())));
+                group_range = group_range.intersection(&Ranges::exact(Version::Generic(combined.clone())));
             }
         }
 
@@ -376,7 +376,7 @@ pub fn parse_constraint(constraint: &str) -> Range<Version> {
         }
     }
 
-    final_range.unwrap_or_else(|| Range::any())
+    final_range.unwrap_or_else(|| Ranges::any())
 }
 
 #[cfg(test)]

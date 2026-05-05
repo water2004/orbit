@@ -1,7 +1,6 @@
-use pubgrub::solver::{DependencyProvider, Dependencies};
-use pubgrub::range::Range;
+use pubgrub::{DependencyProvider, Dependencies};
+use pubgrub::Ranges;
 use std::collections::HashMap;
-use std::error::Error;
 
 use crate::resolver::types::PackageId;
 use crate::versions::Version;
@@ -13,7 +12,7 @@ pub struct OrbitDependencyProvider {
     /// package → 已知可用版本列表（从新到旧排序）
     pub versions: HashMap<PackageId, Vec<Version>>,
     /// (package, version) → 前置依赖列表
-    pub dependencies: HashMap<(PackageId, Version), Vec<(PackageId, Range<Version>)>>,
+    pub dependencies: HashMap<(PackageId, Version), Vec<(PackageId, Ranges<Version>)>>,
     /// (package, version) → 解析后的完整 Mod 数据
     pub resolved_mods: HashMap<(PackageId, Version), crate::providers::ResolvedMod>,
 }
@@ -33,41 +32,56 @@ impl OrbitDependencyProvider {
         &mut self,
         pkg: PackageId,
         version: Version,
-        deps: Vec<(PackageId, Range<Version>)>,
+        deps: Vec<(PackageId, Ranges<Version>)>,
     ) {
         self.dependencies.insert((pkg, version), deps);
     }
 }
 
-impl DependencyProvider<PackageId, Version> for OrbitDependencyProvider {
-    fn choose_package_version<T: std::borrow::Borrow<PackageId>, U: std::borrow::Borrow<Range<Version>>>(
+impl DependencyProvider for OrbitDependencyProvider {
+    type P = PackageId;
+    type V = Version;
+    type VS = Ranges<Version>;
+    type Priority = usize;
+    type M = String;
+    type Err = FetchRetryError;
+
+    fn prioritize(
         &self,
-        potential_packages: impl Iterator<Item = (T, U)>,
-    ) -> Result<(T, Option<Version>), Box<dyn Error>> {
-        for (pkg, range) in potential_packages {
-            if let Some(versions) = self.versions.get(pkg.borrow()) {
+        _package: &Self::P,
+        range: &Self::VS,
+        _package_conflicts_counts: &pubgrub::PackageResolutionStatistics,
+    ) -> Self::Priority {
+        // Lower = less specific = higher priority. Ranges with fewer segments first.
+        if range == &Ranges::full() { return 0; }
+        range.bounding_range().map(|_| 1).unwrap_or(0)
+    }
+
+    fn choose_version(
+        &self,
+        package: &Self::P,
+        range: &Self::VS,
+    ) -> Result<Option<Self::V>, Self::Err> {
+        match self.versions.get(package) {
+            Some(versions) => {
                 for v in versions {
-                    if range.borrow().contains(v) {
-                        return Ok((pkg, Some(v.clone())));
+                    if range.contains(v) {
+                        return Ok(Some(v.clone()));
                     }
                 }
-                return Ok((pkg, None));
-            } else {
-                return Err(Box::new(FetchRetryError::MissingVersions(pkg.borrow().clone())));
+                Ok(None)
             }
+            None => Err(Box::new(FetchRetryError::MissingVersions(package.clone()))),
         }
-        Err("Empty potential packages".into())
     }
 
     fn get_dependencies(
         &self,
-        package: &PackageId,
-        version: &Version,
-    ) -> Result<Dependencies<PackageId, Version>, Box<dyn Error>> {
+        package: &Self::P,
+        version: &Self::V,
+    ) -> Result<Dependencies<Self::P, Self::VS, Self::M>, Self::Err> {
         match self.dependencies.get(&(package.clone(), version.clone())) {
-            Some(deps) => {
-                Ok(Dependencies::Known(deps.clone().into_iter().collect()))
-            }
+            Some(deps) => Ok(Dependencies::Known(deps.iter().cloned().collect())),
             None => Err(Box::new(FetchRetryError::MissingDependencies(package.clone(), version.clone()))),
         }
     }

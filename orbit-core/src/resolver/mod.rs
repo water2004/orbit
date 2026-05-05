@@ -95,21 +95,21 @@ pub fn check_local_graph(
         // root 依赖使用本地已安装的 local_version 做 exact 约束
         // 这样 root 和 mod 自己声明的版本永远一致，不受 Modrinth 版本名影响
         if let Some(installed_ver) = pkg_local_versions.get(name) {
-            root_deps.push((name.clone(), pubgrub::range::Range::exact(installed_ver.clone())));
+            root_deps.push((name.clone(), pubgrub::Ranges::exact(installed_ver.clone())));
         }
         // 如果本地没有安装，missing_deps 已经把它注册为空版本列表，PubGrub 会自动报错
     }
     provider.add_package_versions(root_pkg.clone(), vec![root_version.clone()]);
     provider.add_package_deps(root_pkg.clone(), root_version.clone(), root_deps);
 
-    match pubgrub::solver::resolve(&provider, root_pkg, root_version) {
+    match pubgrub::resolve(&provider, root_pkg, root_version) {
         Ok(_) => Ok(()),
-        Err(pubgrub::error::PubGrubError::NoSolution(tree)) => {
-            use pubgrub::report::{DefaultStringReporter, Reporter};
-            Err(DefaultStringReporter::report(&tree))
+        Err(pubgrub::PubGrubError::NoSolution(derivation_tree)) => {
+            use pubgrub::{DefaultStringReporter, Reporter};
+            Err(DefaultStringReporter::report(&derivation_tree))
         }
-        Err(pubgrub::error::PubGrubError::ErrorChoosingPackageVersion(err)) |
-        Err(pubgrub::error::PubGrubError::ErrorRetrievingDependencies { source: err, .. }) => {
+        Err(pubgrub::PubGrubError::ErrorChoosingVersion { source: err, .. }) |
+        Err(pubgrub::PubGrubError::ErrorRetrievingDependencies { source: err, .. }) => {
             Err(format!("Internal resolver error: {}", err))
         }
         Err(e) => Err(e.to_string()),
@@ -260,7 +260,7 @@ pub async fn resolve_with_candidates(
     let mut root_deps = Vec::new();
     for (name, _spec) in &manifest.dependencies {
         let constraint = if candidates.contains_key(name) {
-            pubgrub::range::Range::any()
+            pubgrub::Ranges::full()
         } else {
             match _spec {
                 crate::manifest::DependencySpec::Short(v) => Version::parse_constraint(v, loader),
@@ -275,19 +275,17 @@ pub async fn resolve_with_candidates(
     // 候选 mod 不在 manifest 中的也加入 root deps（如 `orbit add` 的新 mod）
     for mod_id in candidates.keys() {
         if !manifest.dependencies.contains_key(mod_id) {
-            root_deps.push((mod_id.clone(), pubgrub::range::Range::any()));
+            root_deps.push((mod_id.clone(), pubgrub::Ranges::full()));
         }
     }
     provider.add_package_versions(root_pkg.clone(), vec![root_version.clone()]);
     provider.add_package_deps(root_pkg.clone(), root_version.clone(), root_deps);
 
     let solution = loop {
-        match pubgrub::solver::resolve(&provider, root_pkg.clone(), root_version.clone()) {
+        match pubgrub::resolve(&provider, root_pkg.clone(), root_version.clone()) {
             Ok(s) => break s,
-            Err(pubgrub::error::PubGrubError::NoSolution(_tree)) => {
+            Err(pubgrub::PubGrubError::NoSolution(_derivation_tree)) => {
                 // 缺依赖 → 从 lockfile 找到 project_id → provider 下载 JAR → 加入 candidates 重试
-                // 从已注册的包中找出版本列表为空的（即缺失的）
-                // 收集候选版本引用的依赖，只下载这些依赖的 JAR
                 let mut needed_deps: std::collections::HashSet<String> = std::collections::HashSet::new();
                 for (_, versions) in candidates.iter() {
                     for cand in versions {
@@ -375,17 +373,17 @@ pub async fn resolve_with_candidates(
                     added = true;
                 }
                 if !added {
-                    use pubgrub::report::{DefaultStringReporter, Reporter};
-                    return Err(DefaultStringReporter::report(&_tree));
+                    use pubgrub::{DefaultStringReporter, Reporter};
+                    return Err(DefaultStringReporter::report(&_derivation_tree));
                 }
             }
-            Err(pubgrub::error::PubGrubError::ErrorChoosingPackageVersion(err)) => {
-                if let Some(fetch) = err.downcast_ref::<FetchRetryError>() {
-                    return Err(format!("internal error: package '{}' is missing from resolver", fetch));
-                }
-                return Err(format!("internal error: {}", err));
+            Err(pubgrub::PubGrubError::ErrorChoosingVersion { package, source: err }) => {
+                return Err(format!("internal error: no version of '{}' matches constraint", package));
             }
-            Err(e) => return Err(e.to_string()),
+            Err(pubgrub::PubGrubError::ErrorRetrievingDependencies { package, version, source: err }) => {
+                return Err(format!("internal error: deps of '{}' v{}: {}", package, version, err));
+            }
+            Err(pubgrub::PubGrubError::ErrorInShouldCancel(err)) => return Err(err.to_string()),
         }
     };
 

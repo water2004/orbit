@@ -6,7 +6,7 @@ pub mod fabric;
 
 use std::cmp::Ordering;
 use std::hash::{Hash, Hasher};
-use pubgrub::range::Range;
+use pubgrub::Ranges;
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub enum Version {
@@ -63,20 +63,6 @@ impl std::fmt::Display for Version {
     }
 }
 
-impl pubgrub::version::Version for Version {
-    fn lowest() -> Self {
-        Self::Lowest
-    }
-
-    fn bump(&self) -> Self {
-        match self {
-            Self::Lowest => Self::Generic("0.0.0-lowest~".to_string()),
-            Self::Fabric(f) => Self::Fabric(f.bump()),
-            Self::Generic(s) => Self::Generic(format!("{}~", s)),
-        }
-    }
-}
-
 impl Version {
     pub fn zero() -> Self {
         Self::Generic("0.0.0".to_string())
@@ -97,15 +83,15 @@ impl Version {
         }
     }
 
-    pub fn parse_constraint(raw: &str, loader: &str) -> Range<Self> {
+    pub fn parse_constraint(raw: &str, loader: &str) -> Ranges<Self> {
         let constraint = raw.trim();
         if constraint.is_empty() || constraint == "*" {
-            return Range::any();
+            return Ranges::full();
         }
 
         match loader {
             "fabric" | "quilt" => fabric::parse_constraint(constraint),
-            _ => Range::exact(Self::parse(constraint, loader)),
+            _ => Ranges::singleton(Self::parse(constraint, loader)),
         }
     }
 }
