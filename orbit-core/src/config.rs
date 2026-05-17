@@ -189,7 +189,10 @@ impl GlobalConfig {
                 OrbitError::Other(anyhow::anyhow!("failed to parse config.toml: {e}"))
             })?
         } else {
-            Self::default()
+            let cfg = Self::default();
+            // 首次运行时自动写入默认配置
+            let _ = cfg.save();
+            cfg
         };
 
         // Layer 2: 环境变量覆盖

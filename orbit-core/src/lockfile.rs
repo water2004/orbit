@@ -33,6 +33,7 @@ pub struct PackageEntry {
     #[serde(skip_serializing_if = "String::is_empty", default)]
     pub sha512: String,
     /// JAR 文件名（不含路径），用于升级/删除时定位旧文件
+    #[serde(default)]
     pub filename: String,
     /// "modrinth" | "file"
     pub provider: String,

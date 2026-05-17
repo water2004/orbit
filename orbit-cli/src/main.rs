@@ -5,6 +5,9 @@ use clap::Parser;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // 加载全局配置（首次运行自动创建 config.toml）
+    let _global_config = orbit_core::GlobalConfig::load()?;
+
     let cli = Cli::parse();
     let ctx = CliContext {
         verbose: cli.verbose,

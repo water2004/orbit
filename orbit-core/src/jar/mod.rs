@@ -45,11 +45,20 @@ pub fn read_mod_metadata(path: &Path, loader: &str) -> Result<JarModMetadata, Or
 
 /// 下载 JAR 并解析 fabric.mod.json。
 /// 校验 SHA-512，失败则返回 `ChecksumMismatch`。
+/// 优先从全局缓存读取，未命中才走 HTTP；下载后自动存入缓存。
 pub async fn download_and_parse(
     url: &str,
+    filename: &str,
     expected_sha512: &str,
     loader: &str,
 ) -> Result<JarModMetadata, crate::error::OrbitError> {
+    // 缓存查询
+    if let Ok(cache) = crate::jar_cache::JarCache::load() {
+        if let Some(bytes) = cache.get_bytes(expected_sha512) {
+            return read_mod_metadata_from_bytes(&bytes, loader);
+        }
+    }
+
     let client = reqwest::Client::builder()
         .user_agent(format!("orbit/{}", env!("CARGO_PKG_VERSION")))
         .timeout(std::time::Duration::from_secs(60))
@@ -71,6 +80,11 @@ pub async fn download_and_parse(
             });
         }
     }
+
+    // 存入缓存
+    let _ = crate::jar_cache::JarCache::load().map(|mut c| {
+        let _ = c.store_bytes(expected_sha512, filename, &bytes);
+    });
 
     read_mod_metadata_from_bytes(&bytes, loader)
 }
@@ -156,6 +170,14 @@ pub fn compute_sha256(path: &Path) -> Result<String, std::io::Error> {
 pub fn sha512_digest(data: &[u8]) -> String {
     use sha2::Sha512;
     let mut hasher = Sha512::new();
+    hasher.update(data);
+    hex::encode(hasher.finalize())
+}
+
+/// 计算字节数据的 SHA-1
+pub fn sha1_digest(data: &[u8]) -> String {
+    use sha1::{Digest, Sha1};
+    let mut hasher = Sha1::new();
     hasher.update(data);
     hex::encode(hasher.finalize())
 }

@@ -25,6 +25,7 @@ pub mod checker;
 pub mod purge;
 pub mod workspace;
 pub mod outdated;
+pub mod jar_cache;
 
 pub use config::{GlobalConfig, InstancesRegistry, InstanceEntry, orbit_data_dir, config_path};
 pub use workspace::{ManifestFile, Lockfile};

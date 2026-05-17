@@ -399,6 +399,14 @@ async fn download_mod(m: &ResolvedMod, mods_dir: &Path) -> Result<PathBuf, Orbit
             if meta.len() > 0 { return Ok(final_path); }
         }
     }
+
+    // 查全局缓存
+    if let Ok(cache) = crate::jar_cache::JarCache::load() {
+        if cache.copy_to(&m.sha512, &final_path) && final_path.exists() {
+            return Ok(final_path);
+        }
+    }
+
     let client = download_client();
     let bytes = client.get(&m.download_url).send().await.map_err(OrbitError::Network)?.bytes().await.map_err(OrbitError::Network)?;
     if !m.sha512.is_empty() {
@@ -407,6 +415,12 @@ async fn download_mod(m: &ResolvedMod, mods_dir: &Path) -> Result<PathBuf, Orbit
             return Err(OrbitError::ChecksumMismatch { name: m.filename.clone(), expected: m.sha512.clone(), actual });
         }
     }
+
+    // 存入全局缓存
+    let _ = crate::jar_cache::JarCache::load().map(|mut c| {
+        let _ = c.store_bytes(&m.sha512, &m.filename, &bytes);
+    });
+
     let tmp_path = mods_dir.join(format!(".{}.tmp", m.filename));
     std::fs::write(&tmp_path, &bytes).map_err(OrbitError::Io)?;
     std::fs::rename(&tmp_path, &final_path).map_err(OrbitError::Io)?;

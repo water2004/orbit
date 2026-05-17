@@ -337,7 +337,7 @@ pub async fn resolve_with_candidates(
                     };
                     let mut new_candidates = Vec::new();
                     for v in &versions {
-                        if let Ok(meta) = crate::jar::download_and_parse(&v.download_url, &v.sha512, loader).await {
+                        if let Ok(meta) = crate::jar::download_and_parse(&v.download_url, &v.filename, &v.sha512, loader).await {
                             let imp_cands = meta.implanted_mods.into_iter().map(|im| {
                                 crate::resolver::types::ImplantedCandidate {
                                     mod_id: im.mod_id,

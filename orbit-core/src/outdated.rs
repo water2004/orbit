@@ -59,7 +59,7 @@ pub async fn download_candidates_bfs(
         handles.push(tokio::spawn(async move {
             let _permit = sem.acquire().await;
             let label = v.modrinth.as_ref().map(|m| m.version_number.clone()).unwrap_or_default();
-            match crate::jar::download_and_parse(&v.download_url, &v.sha512, &loader).await {
+            match crate::jar::download_and_parse(&v.download_url, &v.filename, &v.sha512, &loader).await {
                 Ok(meta) => {
                     let key = if meta.mod_id.is_empty() {
                         lockfile_packages.iter()
