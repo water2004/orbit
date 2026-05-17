@@ -7,13 +7,12 @@
 ## 目录
 
 1. [模块结构](#1-模块结构)
-2. [PubGrub 求解器集成](#2-pubgrub-求解器集成)
-3. [Fetch-and-Retry 懒加载](#3-fetch-and-retry-懒加载)
-4. [ProviderVersionResolver 版本比较](#4-providerversionresolver-版本比较)
-5. [版本比较规则](#5-版本比较规则)
+2. [PubGrub 离线求解（resolve_with_candidates）](#2-pubgrub-离线求解resolve_with_candidates)
+3. [注入与约束构建](#3-注入与约束构建)
+4. [Fetch-and-Retry 缺失依赖补全](#4-fetch-and-retry-缺失依赖补全)
+5. [密室困境诊断（Trapped Room）](#5-密室困境诊断trapped-room)
 6. [本地检查（check_local_graph）](#6-本地检查check_local_graph)
 7. [Lockfile 查询 API](#7-lockfile-查询-api)
-8. [版本号系统](#8-版本号系统)
 
 ---
 
@@ -21,27 +20,29 @@
 
 ```
 orbit-core/src/resolver/
-├── mod.rs                 # resolve_manifest(), check_local_graph(), 查询 API
-├── types.rs               # PackageId 类型别名
-├── provider.rs            # OrbitDependencyProvider impl DependencyProvider
-├── provider_version.rs    # ProviderVersionResolver trait + FallbackResolver
-├── modrinth_version.rs    # ModrinthVersionResolver — date_published 排序
-│                          # inject_lockfile() + dependents() / find_entry()
+├── mod.rs                 # resolve_with_candidates() + check_local_graph() + 查询 API
+├── types.rs               # PackageId + CandidateVersion + ImplantedCandidate
+├── provider.rs            # OrbitDependencyProvider (PubGrub 0.3) + FetchRetryError
+│                          # 辅助函数:
+│                          #   inject_builtins / inject_lockfile_entries
+│                          #   register_candidate_version / inject_candidates
+│                          #   trapped_room_test / retry_fetch_missing_deps
 ```
 
 与 `versions/` 模块紧密协作——`Version` 枚举和 `parse_constraint()` 在 `versions/mod.rs` 中定义。
 
 ---
 
-## 2. PubGrub 求解器集成
+## 2. PubGrub 离线求解（resolve_with_candidates）
 
-`resolve_manifest(manifest, lockfile, providers)` 对 `orbit.toml` 中声明的顶层依赖执行 PubGrub 求解：
+`resolve_with_candidates(manifest, lockfile, candidates, providers)`
 
-- 输入：`OrbitManifest`（顶层依赖 + MC version + loader）+ `OrbitLockfile` + Provider 列表
-- 通过 `inject_lockfile()` 将 lockfile 已有条目注入 PubGrub（条目不携带依赖，避免重解析已安装 mod 的内部链）
-- 输出：`HashMap<PackageId, ResolvedMod>` —— 每个包被选中的版本（含下载 URL、SHA-512 等）
-- 版本约束通过 `Version::parse_constraint()` 转换为 PubGrub `Range<Version>`
-- 冲突时返回人类可读的冲突报告（PubGrub `DefaultStringReporter`）
+- 输入：manifest + lockfile + 从 JAR 解析的候选版本（含真实版本号和依赖约束）
+- 注入流水线：builtins → lockfile 条目 → candidates → missing deps → root deps
+- 有候选版本的 mod 的 root 约束放宽为 `Range::full()`，让 PubGrub 自由选择新旧版本
+- 候选版本排在 lockfile 版本之前，PubGrub 优先选取新版本
+- 冲突时返回 PubGrub `DefaultStringReporter` 人类可读报告
+- 升级受阻 mod 通过"密室困境"诊断分析原因
 
 ---
 

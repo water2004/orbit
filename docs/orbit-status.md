@@ -34,8 +34,9 @@ orbit-cli ──→ orbit-core ──→ modrinth-wrapper
 | `manifest.rs` | ✅ | orbit.toml serde + 3 单测 |
 | `lockfile.rs` | ✅ | orbit.lock serde (PackageEntry with mod_id/sha256/sha512/modrinth/file sub-tables) |
 | `error.rs` | ✅ | OrbitError 枚举 (thiserror) |
-| `jar.rs` | ✅ | SHA-256/512 哈希计算（FabricModInfo 已删除，统一走 metadata/） |
-| `config.rs` | ✅ | GlobalConfig (分层加载) + InstancesRegistry + 4 单测 |
+| `jar/` | ✅ | SHA-1/256/512 哈希 + 按 loader 分发元数据提取（fabric.mod.json） |
+| `jar_cache.rs` | ✅ | 全局 JAR 缓存：SHA-1/256/512 三元索引 + index.toml |
+| `config.rs` | ✅ | GlobalConfig (分层加载 + 首次运行自动保存) + InstancesRegistry + 4 单测 |
 | `metadata/mod.rs` | ✅ | MetadataParser trait + ModMetadata + Extractor (纯内存) |
 | `metadata/fabric.rs` | ✅ | FabricParser — per-field fallback + 7 单测 |
 | `metadata/mojang.rs` | ✅ | McVersion::from_json — version.json + 1 单测 |
@@ -52,13 +53,12 @@ orbit-cli ──→ orbit-core ──→ modrinth-wrapper
 | `providers/curseforge.rs` | 🚧 | 骨架（待 curseforge-wrapper） |
 | `versions/mod.rs` | ✅ | Version enum（Lowest/Fabric/Generic）+ parse() + parse_constraint() |
 | `versions/fabric.rs` | ✅ | SemanticVersion + satisfies() + parse_constraint() + 11 单测 |
-| `resolver/mod.rs` | ✅ | PubGrub resolve_manifest + check_local_graph + FetchRetry with ProviderVersionResolver |
-| `resolver/provider.rs` | ✅ | OrbitDependencyProvider（PubGrub 内存数据源） |
-| `resolver/types.rs` | ✅ | PackageId 类型别名 |
-| `resolver/provider_version.rs` | ✅ | ProviderVersionResolver trait + FallbackResolver |
-| `resolver/modrinth_version.rs` | ✅ | ModrinthVersionResolver（date_published sort） |
+| `resolver/mod.rs` | ✅ | resolve_with_candidates + check_local_graph + FetchRetry + trapped_room diagnostic |
+| `resolver/provider.rs` | ✅ | OrbitDependencyProvider（PubGrub 0.3） + FetchRetryError |
+| `resolver/types.rs` | ✅ | PackageId + CandidateVersion + ImplantedCandidate |
 | `sync.rs` | 🚧 | 算法占位（todo! 已改为 Err） |
-| `installer.rs` | ✅ | install_to_instance + remove_from_instance + JAR-based version |
+| `installer.rs` | ✅ | install_to_instance + remove_from_instance + upgrade_all_in_instance + BFS dep download |
+| `outdated.rs` | ✅ | check_all_outdated + download_candidates_bfs（并发下载 + BFS 依赖）|
 | `checker.rs` | 🚧 | 逻辑占位（todo! 已改为 Err） |
 | `purge.rs` | 🚧 | 逻辑占位（todo! 已改为 Err） |
 
@@ -72,7 +72,10 @@ orbit-cli ──→ orbit-core ──→ modrinth-wrapper
 | `cli/commands/add.rs` | ✅ | 单模组安装：PubGrub 求解 → dep check → 下载 → JAR 解析 → toml/lock |
 | `cli/commands/install.rs` | 🚧 | stub（exit 2） |
 | `cli/commands/remove.rs` | ✅ | 按 slug 删除 + 反查依赖图阻断 + 找不到时列出候选交互式选择 |
-| `cli/commands/*` | 🚧 | 其余 12 个 handler 全部 `eprintln! + exit(2)` |
+| `cli/commands/outdated.rs` | ✅ | check_all_outdated + PubGrub 离线解析 + 进度输出 |
+| `cli/commands/upgrade.rs` | ✅ | 单模组升级 + 全局升级（逐个贪心） |
+| `cli/commands/list.rs` | ✅ | 扁平/树形列表 + 递归依赖展示 |
+| `cli/commands/*` | 🚧 | 其余 9 个 handler 全部 `eprintln! + exit(2)` |
 | `adaptors/` | — | ❌ 已删除 |
 | `models/` | — | ❌ 已删除 |
 | Cargo.toml | ✅ | 依赖 `orbit-core` + `clap` + `tokio` + `anyhow`（toml 已删除） |

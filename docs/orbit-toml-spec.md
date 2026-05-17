@@ -277,6 +277,7 @@ path = "mods/fabric-carpet-26.1+v260402.jar"
 | `sha1` | `String` | 本地 JAR 计算 | SHA-1 校验值 |
 | `sha256` | `String` | 本地 JAR 计算 | SHA-256 校验值 |
 | `sha512` | `String` | 本地 JAR 计算 | SHA-512 校验值 |
+| `filename` | `String` | JAR 扫描/下载时 | JAR 文件名（不含路径），用于升级时定位旧文件 |
 | `provider` | `String` | 安装时确定 | `"modrinth"` \| `"file"` |
 
 **子表字段**：

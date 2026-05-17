@@ -109,6 +109,7 @@ ORBIT/
 │       ├── checker.rs            #   跨版本预检 (Err 占位)
 │       ├── purge.rs              #   深度清理 (Err 占位)
 │       ├── workspace.rs          #   ManifestFile / Lockfile 文件 I/O 封装
+│       ├── jar_cache.rs          #   全局 JAR 缓存（SHA-1/256/512 索引） 
 │       ├── jar/                  #   JAR 文件处理 (哈希 + loader 分发元数据提取)
 │       │   ├── mod.rs            #     JarModMetadata + 哈希函数 + loader 分发
 │       │   └── fabric.rs         #     fabric.mod.json 查找与解析 (ZIP → 内容)
@@ -408,6 +409,7 @@ lib.rs                    ← 公共 API 入口，暴露 install_to_instance / r
 ├── checker.rs            ← 跨版本预检 (Err 占位)
 ├── purge.rs              ← 深度清理 (Err 占位)
 ├── workspace.rs          ← ManifestFile / Lockfile 文件 I/O 封装
+├── jar_cache.rs          ← 全局 JAR 缓存（SHA-1/256/512 索引）
 ├── jar/                  ← JAR 文件处理 (哈希 + loader 分发元数据提取)
 │   ├── mod.rs            ← JarModMetadata + 哈希 + loader 分发
 │   └── fabric.rs         ← fabric.mod.json 查找与解析

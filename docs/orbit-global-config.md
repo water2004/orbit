@@ -136,7 +136,31 @@ progress_bar = "modern"
 | `eviction_policy` | `String` | `"size"` | 清理策略：`"size"` 按大小，`"time"` 按时间过期，`"none"` 不自动清理 |
 | `max_size_gb` | `f64` | `5.0` | 最大缓存占用（GB），`eviction_policy = "size"` 时生效 |
 
-> **全局缓存的收益**：玩家可能有 3 个 1.20.1 整合包都装了 Sodium。开启缓存后 Orbit 只下载一次，在各实例间使用硬链接（或 copy）部署，节省时间和磁盘。
+> **全局缓存的收益**：玩家可能有 3 个 1.20.1 整合包都装了 Sodium。开启缓存后 Orbit 只下载一次，在各实例间使用 copy 部署，节省时间和磁盘。
+
+#### 缓存结构
+
+```
+{cache_dir}/
+  index.toml        # 哈希 → 文件名索引
+  jars/             # JAR 文件（保留原始名）
+    sodium-fabric-0.8.7.jar
+```
+
+`index.toml` 结构：
+
+```toml
+[sha1]
+"a6ae6273..." = "sodium-fabric-0.8.7.jar"
+
+[sha256]
+"b4a1c3d2..." = "sodium-fabric-0.8.7.jar"
+
+[sha512]
+"6189b8c2..." = "sodium-fabric-0.8.7.jar"
+```
+
+> 三种哈希均从下载字节自算，不依赖平台 API。任一哈希命中即可从缓存取回文件。
 
 ### [ui] — 终端界面
 
@@ -287,14 +311,16 @@ impl OrbitGlobalConfig {
     pub fn load() -> Result<Self, OrbitError> {
         let path = orbit_data_dir().join("config.toml");
 
-        // Layer 1: 文件（如果存在）
+        // Layer 1: 文件（如果存在），不存在则自动创建默认配置
         let mut config = if path.exists() {
             let content = std::fs::read_to_string(&path)
                 .map_err(|e| OrbitError::Other(anyhow::anyhow!("failed to read config.toml: {e}")))?;
             toml::from_str(&content)
                 .map_err(|e| OrbitError::Other(anyhow::anyhow!("failed to parse config.toml: {e}")))?
         } else {
-            Self::default()
+            let cfg = Self::default();
+            let _ = cfg.save(); // 首次运行自动写入默认配置
+            cfg
         };
 
         // Layer 2: 环境变量覆盖
