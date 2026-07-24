@@ -6,7 +6,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::OrbitError;
 use crate::metadata::{
-    DependencyExpression, EmbeddedArtifact, Environment, LanguageLoaderRequirement, ProvidedMod,
+    DependencyExpression, EmbeddedArtifact, Environment, LanguageLoaderRequirement,
+    ModLoadCondition, ProvidedMod,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -59,7 +60,7 @@ pub struct PackageEntry {
     pub language_loader: Option<LanguageLoaderRequirement>,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub embedded_artifacts: Vec<EmbeddedArtifact>,
-    /// 同一物理文件提供的其他逻辑模组。
+    /// 顶层包内容中声明的其他模组模块。
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub bundled: Vec<BundledMod>,
 }
@@ -91,6 +92,8 @@ pub struct FileInfo {
 pub struct BundledMod {
     pub mod_id: String,
     pub version: String,
+    pub load_condition: ModLoadCondition,
+    pub origin: crate::jar::JarModOrigin,
     #[serde(default)]
     pub environment: Environment,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
@@ -110,6 +113,8 @@ impl BundledMod {
         Self {
             mod_id: metadata.mod_id.clone(),
             version: metadata.version.clone(),
+            load_condition: metadata.load_condition,
+            origin: metadata.origin.clone(),
             environment: metadata.environment,
             dependencies: metadata.dependencies.clone(),
             provides: metadata.provides.clone(),
@@ -127,6 +132,8 @@ impl BundledMod {
         Self {
             mod_id: metadata.mod_id.clone(),
             version: metadata.version.clone(),
+            load_condition: metadata.load_condition,
+            origin: metadata.origin.clone(),
             environment: metadata.environment,
             dependencies: metadata.dependencies.clone(),
             provides: metadata.provides.clone(),

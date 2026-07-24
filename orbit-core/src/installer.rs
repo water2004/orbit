@@ -29,19 +29,35 @@ pub struct InstallInteraction {
 pub struct InstallOptions {
     pub no_deps: bool,
     pub dry_run: bool,
-    pub existing_ok: bool,
+    pub intent: InstallIntent,
     pub optional: bool,
     pub env: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum InstallIntent {
+    #[default]
+    Add,
+    Upgrade,
 }
 
 /// 单次 install 报告
 #[derive(Debug, Clone)]
 pub struct InstallReport {
     pub installed: Vec<InstalledMod>,
+    pub removed: Vec<RemovedPackage>,
+    pub changes: Vec<crate::resolver::types::PackageChange>,
     pub already_satisfied: Vec<String>,
     pub skipped_optional: Vec<String>,
     pub diagnostics: Vec<CandidateDiagnostic>,
     pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemovedPackage {
+    pub mod_id: String,
+    pub version: String,
+    pub filename: String,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -56,6 +72,7 @@ pub struct RestoreOptions {
 #[derive(Debug, Clone, Default)]
 pub struct RestoreReport {
     pub restored: Vec<String>,
+    pub removed: Vec<RemovedPackage>,
     pub already_present: Vec<String>,
     pub skipped: Vec<String>,
     pub diagnostics: Vec<CandidateDiagnostic>,
@@ -64,6 +81,8 @@ pub struct RestoreReport {
 
 #[derive(Debug, Clone)]
 pub struct InstalledMod {
+    /// Remote candidate identity used only while materializing this plan.
+    pub candidate_id: Option<String>,
     pub slug: String,
     pub mod_id: String,
     /// JAR loader 元数据声明的版本
@@ -123,7 +142,7 @@ pub async fn install_to_instance(
     })
     .await?;
 
-    if !dry_run && !report.installed.is_empty() {
+    if !dry_run && (!report.installed.is_empty() || !report.removed.is_empty()) {
         manifest_file.save()?;
         lock.save()?;
     }
@@ -159,6 +178,11 @@ pub async fn restore_instance(
         },
     );
     reconcile_lock_metadata(&manifest.inner, &mut lock.inner, options.locked)?;
+    let InstallInteraction {
+        select_resolution,
+        confirm_install,
+    } = interaction;
+    let mods_dir = instance_dir.join("mods");
 
     let mut report = RestoreReport::default();
     let missing_roots: Vec<_> = manifest
@@ -189,33 +213,39 @@ pub async fn restore_instance(
                 lock_graph_error.unwrap_or_else(|| "missing lock entry".to_string())
             )));
         }
-        if options.dry_run {
-            if missing_roots.is_empty() {
-                report
-                    .restored
-                    .extend(manifest.inner.dependencies.keys().cloned());
-            } else {
-                report.restored.extend(missing_roots);
-            }
-            report.restored.sort();
-            return Ok(report);
-        }
         let resolution = resolve_missing_lock_entries(
             &manifest.inner,
             &mut lock.inner,
             providers,
             jar_cache,
-            interaction.select_resolution,
+            select_resolution,
         )
         .await?;
+        let removals = package_removals(&resolution.changes);
+        if confirm_install.is_some_and(|confirm| {
+            !confirm(&InstallReport {
+                installed: Vec::new(),
+                removed: removals.clone(),
+                changes: resolution.changes.clone(),
+                already_satisfied: Vec::new(),
+                skipped_optional: Vec::new(),
+                diagnostics: resolution.diagnostics.clone(),
+                warnings: resolution.warnings.clone(),
+            })
+        }) {
+            return Ok(report);
+        }
+        if !options.dry_run {
+            remove_packages(&mods_dir, &removals, &[])?;
+            lock.save()?;
+        }
+        report.removed = removals;
         report.diagnostics = resolution.diagnostics;
         report.warnings = resolution.warnings;
-        lock.save()?;
     }
 
     let (selected, skipped) = selected_packages(&manifest.inner, &lock.inner, &options)?;
     report.skipped = skipped;
-    let mods_dir = instance_dir.join("mods");
     if !options.dry_run {
         std::fs::create_dir_all(&mods_dir)?;
     }
@@ -280,8 +310,10 @@ pub async fn upgrade_all_in_instance(
     );
 
     let crate::outdated::OutdatedReport {
-        updates: outdated,
+        updates: _,
         resolved: resolved_candidates,
+        changes: _,
+        resolution,
         diagnostics,
         warnings,
     } = crate::outdated::check_all_outdated(
@@ -293,9 +325,11 @@ pub async fn upgrade_all_in_instance(
     )
     .await?;
 
-    if outdated.is_empty() {
+    if !resolution.has_upgrade() {
         return Ok(InstallReport {
             installed: vec![],
+            removed: vec![],
+            changes: vec![],
             already_satisfied: vec![],
             skipped_optional: vec![],
             diagnostics,
@@ -310,15 +344,17 @@ pub async fn upgrade_all_in_instance(
 
     let loader = &manifest_file.inner.project.modloader;
     let mut planned = Vec::new();
-
-    for o in &outdated {
-        let key = (o.mod_id.clone(), o.new_version.clone());
-        let resolved = resolved_candidate(&resolved_candidates, &key.0, &key.1)?;
-        planned.push(plan_from_resolved(&o.mod_id, &o.new_version, resolved));
+    for (package, candidate_id) in &resolution.selected_candidates {
+        let version = &resolution.selected_versions[package];
+        let resolved = resolved_candidate(&resolved_candidates, candidate_id)?;
+        planned.push(plan_from_resolved(package, version, candidate_id, resolved));
     }
+    let removals = package_removals(&resolution.changes);
 
     let report = InstallReport {
         installed: planned.clone(),
+        removed: removals.clone(),
+        changes: resolution.changes.clone(),
         already_satisfied: vec![],
         skipped_optional: vec![],
         diagnostics: diagnostics.clone(),
@@ -330,6 +366,8 @@ pub async fn upgrade_all_in_instance(
     {
         return Ok(InstallReport {
             installed: vec![],
+            removed: vec![],
+            changes: vec![],
             already_satisfied: vec![],
             skipped_optional: vec![],
             diagnostics,
@@ -350,16 +388,20 @@ pub async fn upgrade_all_in_instance(
         jar_cache,
     )
     .await?;
+    remove_packages(&mods_dir, &removals, &installed)?;
+    retain_selected_lock_entries(&mut lock.inner, &resolution.selected_sources);
 
     apply_to_lockfile(&mut lock.inner, &installed, &mods_dir);
 
-    if !installed.is_empty() {
+    if !installed.is_empty() || !removals.is_empty() {
         manifest_file.save()?;
         lock.save()?;
     }
 
     Ok(InstallReport {
         installed,
+        removed: removals,
+        changes: resolution.changes,
         already_satisfied: vec![],
         skipped_optional: vec![],
         diagnostics,
@@ -459,7 +501,7 @@ pub struct ListedPackage {
     pub optional: bool,
     /// 依赖的 mod_id 列表
     pub dependencies: Vec<String>,
-    /// 同一物理 JAR 提供的其他逻辑模组 (mod_id, version)
+    /// 顶层包内容中声明的其他模组模块 (mod_id, version)
     pub bundled: Vec<(String, String)>,
 }
 
@@ -586,7 +628,9 @@ async fn install_mod(input: InstallModInput<'_>) -> Result<InstallReport, OrbitE
         interaction,
     } = input;
 
-    if !options.existing_ok && crate::resolver::find_entry(slug, &lockfile.packages).is_some() {
+    if options.intent == InstallIntent::Add
+        && crate::resolver::find_entry(slug, &lockfile.packages).is_some()
+    {
         return Err(OrbitError::Conflict(format!(
             "'{slug}' already in lockfile. Use 'orbit upgrade {slug}' to update it."
         )));
@@ -612,6 +656,17 @@ async fn install_mod(input: InstallModInput<'_>) -> Result<InstallReport, OrbitE
                 .filter(|package| catalog.candidates.contains_key(package))
         })
         .ok_or_else(|| OrbitError::ModNotFound(slug.to_string()))?;
+    if options.intent == InstallIntent::Add
+        && lockfile
+            .packages
+            .iter()
+            .any(|entry| entry.mod_id == requested_package)
+    {
+        return Err(OrbitError::Conflict(format!(
+            "downloaded JAR declares package '{requested_package}', which is already installed; \
+             use 'orbit upgrade {requested_package}' to update it"
+        )));
+    }
 
     let mut resolution_manifest = manifest.clone();
     let requested_requirement =
@@ -623,7 +678,7 @@ async fn install_mod(input: InstallModInput<'_>) -> Result<InstallReport, OrbitE
     );
 
     // 3. Resolve offline
-    let portfolio = match crate::resolver::resolve_candidate_portfolio(
+    let mut portfolio = match crate::resolver::resolve_candidate_portfolio(
         &resolution_manifest,
         lockfile,
         &catalog,
@@ -633,35 +688,50 @@ async fn install_mod(input: InstallModInput<'_>) -> Result<InstallReport, OrbitE
         Ok(portfolio) => portfolio,
         Err(e) => return Err(OrbitError::Conflict(e)),
     };
+    if options.intent == InstallIntent::Upgrade {
+        portfolio
+            .alternatives
+            .retain(crate::resolver::types::ResolutionReport::has_upgrade);
+        if portfolio.alternatives.is_empty() {
+            return Ok(InstallReport {
+                installed: Vec::new(),
+                removed: Vec::new(),
+                changes: Vec::new(),
+                already_satisfied: Vec::new(),
+                skipped_optional: Vec::new(),
+                diagnostics: Vec::new(),
+                warnings: Vec::new(),
+            });
+        }
+    }
     let resolution = crate::resolver::select_resolution(portfolio, interaction.select_resolution)
         .map_err(OrbitError::Conflict)?;
-    let upgrades = resolution.upgrades;
+    let selected_versions = resolution.selected_versions.clone();
+    let selected_sources = resolution.selected_sources.clone();
+    let selected_candidates = resolution.selected_candidates.clone();
+    let removals = package_removals(&resolution.changes);
+    let changes = resolution.changes;
     let diagnostics = resolution.diagnostics;
     let warnings = resolution.warnings;
 
     // 4. Download resolved versions and apply
     let mut planned = Vec::new();
-    let mut already_satisfied = Vec::new();
+    let already_satisfied = Vec::new();
 
-    for (mod_id, new_ver) in &upgrades {
-        let key = (mod_id.clone(), new_ver.clone());
-        let resolved = resolved_candidate(&catalog.resolved, &key.0, &key.1)?;
-
-        if let Some(existing) = crate::resolver::find_entry(mod_id, &lockfile.packages)
-            && existing.version == *new_ver
-        {
-            already_satisfied.push(mod_id.clone());
-            continue;
-        }
+    for (mod_id, candidate_id) in &selected_candidates {
+        let new_ver = &selected_versions[mod_id];
+        let resolved = resolved_candidate(&catalog.resolved, candidate_id)?;
         if options.no_deps && mod_id != &requested_package {
             continue;
         }
 
-        planned.push(plan_from_resolved(mod_id, new_ver, resolved));
+        planned.push(plan_from_resolved(mod_id, new_ver, candidate_id, resolved));
     }
 
     let report = InstallReport {
         installed: planned.clone(),
+        removed: removals.clone(),
+        changes: changes.clone(),
         already_satisfied: already_satisfied.clone(),
         skipped_optional: vec![],
         diagnostics: diagnostics.clone(),
@@ -673,6 +743,8 @@ async fn install_mod(input: InstallModInput<'_>) -> Result<InstallReport, OrbitE
     {
         return Ok(InstallReport {
             installed: vec![],
+            removed: vec![],
+            changes: vec![],
             already_satisfied,
             skipped_optional: vec![],
             diagnostics,
@@ -684,15 +756,6 @@ async fn install_mod(input: InstallModInput<'_>) -> Result<InstallReport, OrbitE
         return Ok(report);
     }
 
-    for plan in &planned {
-        // 升级时删旧 JAR
-        if options.existing_ok
-            && let Some(old) = lockfile.find(&plan.mod_id)
-            && !old.filename.is_empty()
-        {
-            let _ = std::fs::remove_file(mods_dir.join(&old.filename));
-        }
-    }
     let installed = materialize_plans(
         planned,
         &catalog.resolved,
@@ -702,6 +765,8 @@ async fn install_mod(input: InstallModInput<'_>) -> Result<InstallReport, OrbitE
         jar_cache,
     )
     .await?;
+    remove_packages(mods_dir, &removals, &installed)?;
+    retain_selected_lock_entries(lockfile, &selected_sources);
 
     if installed
         .iter()
@@ -713,6 +778,8 @@ async fn install_mod(input: InstallModInput<'_>) -> Result<InstallReport, OrbitE
 
     Ok(InstallReport {
         installed,
+        removed: removals,
+        changes,
         already_satisfied,
         skipped_optional: vec![],
         diagnostics,
@@ -774,25 +841,19 @@ async fn resolve_missing_lock_entries(
     )
     .await?;
 
-    let mut resolution_manifest = manifest.clone();
-    for entry in &lockfile.packages {
-        resolution_manifest
-            .overrides
-            .entry(entry.mod_id.clone())
-            .or_insert_with(|| DependencySpec::Short(entry.version.clone()));
-    }
-    let portfolio =
-        crate::resolver::resolve_candidate_portfolio(&resolution_manifest, lockfile, &catalog)
-            .await
-            .map_err(|error| OrbitError::Conflict(error.to_string()))?;
+    let portfolio = crate::resolver::resolve_candidate_portfolio(manifest, lockfile, &catalog)
+        .await
+        .map_err(|error| OrbitError::Conflict(error.to_string()))?;
     let resolution =
         crate::resolver::select_resolution(portfolio, selector).map_err(OrbitError::Conflict)?;
-    for (package, version) in &resolution.upgrades {
-        let resolved = resolved_candidate(&catalog.resolved, package, version)?;
+    retain_selected_lock_entries(lockfile, &resolution.selected_sources);
+    for (package, candidate_id) in &resolution.selected_candidates {
+        let version = &resolution.selected_versions[package];
+        let resolved = resolved_candidate(&catalog.resolved, candidate_id)?;
         let candidate = catalog.candidates.get(package).and_then(|versions| {
             versions
                 .iter()
-                .find(|candidate| candidate.jar_version == *version)
+                .find(|candidate| candidate.id == *candidate_id)
         });
         lockfile.packages.retain(|entry| entry.mod_id != *package);
         lockfile.packages.push(lock_entry_from_candidate(
@@ -1151,8 +1212,14 @@ fn package_filename(entry: &PackageEntry) -> String {
         .unwrap_or_default()
 }
 
-fn plan_from_resolved(mod_id: &str, version: &str, artifact: &RemoteArtifact) -> InstalledMod {
+fn plan_from_resolved(
+    mod_id: &str,
+    version: &str,
+    candidate_id: &str,
+    artifact: &RemoteArtifact,
+) -> InstalledMod {
     InstalledMod {
+        candidate_id: Some(candidate_id.to_string()),
         slug: artifact.slug.clone(),
         mod_id: mod_id.to_string(),
         version: version.to_string(),
@@ -1189,8 +1256,13 @@ async fn materialize_plans(
 ) -> Result<Vec<InstalledMod>, OrbitError> {
     let mut installed = Vec::new();
     for mut plan in planned {
-        let key = (plan.mod_id.clone(), plan.version.clone());
-        let resolved = resolved_candidate(resolved_candidates, &key.0, &key.1)?;
+        let candidate_id = plan.candidate_id.as_deref().ok_or_else(|| {
+            OrbitError::Other(anyhow::anyhow!(
+                "remote install plan for '{}' has no candidate identity",
+                plan.mod_id
+            ))
+        })?;
+        let resolved = resolved_candidate(resolved_candidates, candidate_id)?;
         let provider =
             crate::providers::find_provider(providers, &resolved.provider).ok_or_else(|| {
                 OrbitError::Other(anyhow::anyhow!(
@@ -1228,16 +1300,67 @@ async fn materialize_plans(
 
 fn resolved_candidate<'a>(
     candidates: &'a crate::resolver::types::ResolvedCandidates,
-    package: &str,
-    version: &str,
+    candidate_id: &str,
 ) -> Result<&'a RemoteArtifact, OrbitError> {
-    candidates
-        .get(&(package.to_string(), version.to_string()))
-        .ok_or_else(|| {
-            OrbitError::Other(anyhow::anyhow!(
-                "solver selected JAR identity '{package} {version}' without a download artifact"
-            ))
+    candidates.get(candidate_id).ok_or_else(|| {
+        OrbitError::Other(anyhow::anyhow!(
+            "solver selected package candidate '{candidate_id}' without a download artifact"
+        ))
+    })
+}
+
+fn package_removals(changes: &[crate::resolver::types::PackageChange]) -> Vec<RemovedPackage> {
+    let mut removals: Vec<_> = changes
+        .iter()
+        .filter_map(|change| {
+            Some(RemovedPackage {
+                mod_id: change.package.clone(),
+                version: change.current_version.clone()?,
+                filename: change.filename.clone()?,
+            })
         })
+        .collect();
+    removals.sort_by(|left, right| {
+        left.mod_id
+            .cmp(&right.mod_id)
+            .then_with(|| left.version.cmp(&right.version))
+            .then_with(|| left.filename.cmp(&right.filename))
+    });
+    removals.dedup_by(|left, right| left.filename == right.filename);
+    removals
+}
+
+fn remove_packages(
+    mods_dir: &Path,
+    removals: &[RemovedPackage],
+    installed: &[InstalledMod],
+) -> Result<(), OrbitError> {
+    let installed_filenames: std::collections::HashSet<_> = installed
+        .iter()
+        .map(|package| package.filename.as_str())
+        .collect();
+    for removal in removals {
+        if installed_filenames.contains(removal.filename.as_str()) {
+            continue;
+        }
+        let filename = safe_artifact_filename(&removal.filename)?;
+        let path = mods_dir.join(filename);
+        if path.exists() {
+            std::fs::remove_file(path).map_err(OrbitError::Io)?;
+        }
+    }
+    Ok(())
+}
+
+fn retain_selected_lock_entries(
+    lockfile: &mut OrbitLockfile,
+    selected_sources: &std::collections::BTreeMap<String, String>,
+) {
+    lockfile.packages.retain(|entry| {
+        selected_sources
+            .get(&entry.mod_id)
+            .is_some_and(|source| crate::resolver::locked_source(entry) == *source)
+    });
 }
 
 async fn download_mod(

@@ -1,6 +1,8 @@
 use super::CliContext;
 use anyhow::{Context, Result};
-use orbit_core::{InstallOptions, OrbitError, install_local_file_to_instance, install_to_instance};
+use orbit_core::{
+    InstallIntent, InstallOptions, OrbitError, install_local_file_to_instance, install_to_instance,
+};
 
 pub async fn handle(
     mod_name: String,
@@ -36,7 +38,7 @@ pub async fn handle(
             InstallOptions {
                 no_deps,
                 dry_run: ctx.dry_run,
-                existing_ok: false,
+                intent: InstallIntent::Add,
                 optional,
                 env,
             },
@@ -53,12 +55,14 @@ pub async fn handle(
                     installed.mod_id, installed.version
                 );
             }
+            print_dry_run_removals(&report.removed);
         } else if report.installed.is_empty() {
             println!("Add cancelled.");
         } else {
             println!(
-                "Successfully added local mod and {} dependency mod(s).",
-                report.installed.len().saturating_sub(1)
+                "Successfully added local mod and {} dependency mod(s); removed {} unselected package version(s).",
+                report.installed.len().saturating_sub(1),
+                report.removed.len()
             );
         }
         return Ok(());
@@ -82,7 +86,7 @@ pub async fn handle(
         InstallOptions {
             no_deps,
             dry_run: ctx.dry_run,
-            existing_ok: false,
+            intent: InstallIntent::Add,
             optional,
             env: env.clone(),
         },
@@ -97,14 +101,16 @@ pub async fn handle(
                 for m in &report.installed {
                     println!("  [dry-run] would install {} v{}", m.mod_id, m.version);
                 }
+                print_dry_run_removals(&report.removed);
                 return Ok(());
             }
-            if report.installed.is_empty() {
+            if report.installed.is_empty() && report.removed.is_empty() {
                 println!("No new mods were installed.");
             } else {
                 println!(
-                    "\nSuccessfully installed {} mod(s).",
-                    report.installed.len()
+                    "\nSuccessfully installed {} mod(s) and removed {} unselected package version(s).",
+                    report.installed.len(),
+                    report.removed.len()
                 );
             }
             Ok(())
@@ -171,6 +177,15 @@ pub async fn handle(
         }
         Err(OrbitError::Conflict(msg)) => anyhow::bail!("Dependency conflict:\n\n  {msg}"),
         Err(e) => anyhow::bail!("Add failed: {e}"),
+    }
+}
+
+fn print_dry_run_removals(removals: &[orbit_core::RemovedPackage]) {
+    for package in removals {
+        println!(
+            "  [dry-run] would remove {} v{} ({})",
+            package.mod_id, package.version, package.filename
+        );
     }
 }
 

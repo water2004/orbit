@@ -4,7 +4,15 @@ use anyhow::Result;
 pub async fn handle(ctx: &CliContext) -> Result<()> {
     let instance_dir = ctx.instance_dir()?;
     let providers = super::create_instance_providers(&instance_dir, None, &ctx.runtime)?;
-    let report = orbit_core::sync_instance(&instance_dir, &providers, ctx.dry_run).await?;
+    let report = orbit_core::sync_instance(
+        &instance_dir,
+        &providers,
+        ctx.dry_run,
+        super::install_interaction(ctx.dry_run, ctx.yes),
+    )
+    .await?;
+    super::print_resolution_diagnostics(&report.diagnostics);
+    super::print_resolution_warnings(&report.warnings);
 
     for package in &report.added {
         println!("  + added      {package}");
@@ -18,11 +26,18 @@ pub async fn handle(ctx: &CliContext) -> Result<()> {
     for package in &report.unlocked {
         println!("  ? unlocked   {package}");
     }
+    for package in &report.removed {
+        println!(
+            "  - removed    {} {} ({})",
+            package.mod_id, package.version, package.filename
+        );
+    }
     println!(
-        "Sync {}: {} added, {} changed, {} missing, {} unlocked.",
+        "Sync {}: {} added, {} changed, {} removed, {} missing, {} unlocked.",
         if ctx.dry_run { "preview" } else { "complete" },
         report.added.len(),
         report.changed.len(),
+        report.removed.len(),
         report.missing.len(),
         report.unlocked.len()
     );

@@ -8,8 +8,8 @@ use serde::Deserialize;
 
 use super::{
     DependencyExpression, DependencyKind, DependencyOrdering, Environment,
-    LanguageLoaderRequirement, MetadataParser, ModDependency, ModFileMetadata, ModLoader,
-    ModMetadata,
+    LanguageLoaderRequirement, MetadataParser, ModDependency, ModFileMetadata, ModLoadCondition,
+    ModLoader, ModMetadata,
 };
 use crate::error::OrbitError;
 
@@ -177,6 +177,7 @@ pub(crate) fn parse_for_loader(
             },
             dependencies,
             provides: Vec::new(),
+            load_condition: ModLoadCondition::Always,
         });
     }
 

@@ -1,14 +1,15 @@
 //! Reconciles the manifest, lockfile, and local `mods/` directory without downloading JARs.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::path::Path;
 
 use crate::error::OrbitError;
-use crate::identification::{IdentifiedMod, IdentifiedPlatform, IdentifiedSource, identify_mods};
-use crate::lockfile::{CurseForgeInfo, FileInfo, LockMeta, ModrinthInfo, PackageEntry};
+use crate::identification::{IdentifiedMod, identify_mods};
+use crate::lockfile::LockMeta;
 use crate::manifest::DependencySpec;
 use crate::providers::ModProvider;
 use crate::workspace::{Lockfile, ManifestFile};
+use crate::{InstallInteraction, RemovedPackage};
 
 #[derive(Debug, Clone, Default)]
 pub struct SyncReport {
@@ -16,12 +17,16 @@ pub struct SyncReport {
     pub changed: Vec<String>,
     pub missing: Vec<String>,
     pub unlocked: Vec<String>,
+    pub removed: Vec<RemovedPackage>,
+    pub diagnostics: Vec<crate::resolver::types::CandidateDiagnostic>,
+    pub warnings: Vec<String>,
 }
 
 pub async fn sync_instance(
     instance_dir: &Path,
     providers: &[Box<dyn ModProvider>],
     dry_run: bool,
+    interaction: InstallInteraction,
 ) -> Result<SyncReport, OrbitError> {
     let mut manifest = ManifestFile::open(instance_dir)?;
     let mut lockfile = Lockfile::open_or_default(
@@ -34,193 +39,138 @@ pub async fn sync_instance(
     );
     let scanned = crate::init::scan_mods_dir(instance_dir, &manifest.inner.project.modloader)?;
     let identified = identify_mods(&scanned, providers).await?;
-
-    let by_filename: HashMap<_, _> = identified
+    let local_entries: Vec<_> = identified
         .iter()
-        .map(|identified| (identified.filename.as_str(), identified))
+        .map(IdentifiedMod::to_package_entry)
         .collect();
-    let by_package: HashMap<_, _> = identified
-        .iter()
-        .filter_map(|identified| {
-            let package = package_id(identified);
-            (!package.is_empty()).then_some((package, identified))
-        })
-        .collect();
-    let mut represented_files = HashSet::new();
-    let mut report = SyncReport::default();
 
-    for package in manifest.inner.dependencies.keys() {
-        let Some(entry) = lockfile.inner.find(package) else {
-            report.unlocked.push(package.clone());
-            if let Some(local) = by_package.get(package.as_str()) {
-                represented_files.insert(local.filename.clone());
+    let InstallInteraction {
+        select_resolution,
+        confirm_install,
+    } = interaction;
+    let selection = match crate::package_reconciliation::select_local_packages(
+        &manifest.inner,
+        &local_entries,
+        select_resolution,
+    )
+    .await
+    {
+        Ok(selection) => selection,
+        Err(error) => {
+            let discovered: HashSet<_> = local_entries
+                .iter()
+                .map(|entry| entry.mod_id.as_str())
+                .collect();
+            let mut report = SyncReport::default();
+            for package in manifest.inner.dependencies.keys() {
+                if discovered.contains(package.as_str()) {
+                    continue;
+                }
+                if lockfile.inner.find(package).is_some() {
+                    report.missing.push(package.clone());
+                } else {
+                    report.unlocked.push(package.clone());
+                }
             }
-            continue;
-        };
-        let local = by_filename
-            .get(entry.filename.as_str())
-            .copied()
-            .or_else(|| by_package.get(package.as_str()).copied());
-        let Some(local) = local else {
-            report.missing.push(package.clone());
-            continue;
-        };
-        represented_files.insert(local.filename.clone());
-        if !local.sha256.is_empty() && entry.sha256 != local.sha256 {
-            report.changed.push(package.clone());
+            if report.missing.is_empty() && report.unlocked.is_empty() {
+                return Err(OrbitError::Conflict(error));
+            }
+            report.missing.sort();
+            report.unlocked.sort();
+            return Ok(report);
+        }
+    };
+    if confirm_install.is_some_and(|confirm| {
+        !confirm(&crate::package_reconciliation::confirmation_report(
+            &selection,
+        ))
+    }) {
+        return Ok(SyncReport::default());
+    }
+    let crate::package_reconciliation::LocalPackageSelection {
+        selected_entries,
+        removed,
+        resolution,
+    } = selection;
+
+    let mut report = SyncReport {
+        removed: removed.clone(),
+        diagnostics: resolution.diagnostics.clone(),
+        warnings: resolution.warnings.clone(),
+        ..SyncReport::default()
+    };
+    for entry in &selected_entries {
+        if !manifest.inner.dependencies.contains_key(&entry.mod_id) {
+            report.added.push(entry.mod_id.clone());
+        }
+        match lockfile.inner.find(&entry.mod_id) {
+            Some(locked)
+                if locked.sha256 != entry.sha256
+                    || locked.filename != entry.filename
+                    || locked.version != entry.version =>
+            {
+                report.changed.push(entry.mod_id.clone());
+            }
+            None if manifest.inner.dependencies.contains_key(&entry.mod_id) => {
+                report.unlocked.push(entry.mod_id.clone());
+            }
+            _ => {}
         }
     }
-
-    let locked_files: HashSet<_> = lockfile
-        .inner
-        .packages
-        .iter()
-        .map(|entry| entry.filename.as_str())
-        .filter(|filename| !filename.is_empty())
-        .collect();
-    for local in &identified {
-        let package = package_id(local);
-        if package.is_empty()
-            || represented_files.contains(&local.filename)
-            || locked_files.contains(local.filename.as_str())
-            || manifest.inner.dependencies.contains_key(&package)
-        {
-            continue;
-        }
-        report.added.push(package);
-    }
-
     report.added.sort();
+    report.added.dedup();
     report.changed.sort();
-    report.missing.sort();
+    report.changed.dedup();
     report.unlocked.sort();
+    report.unlocked.dedup();
 
-    if !dry_run {
-        apply_changes(&mut manifest, &mut lockfile, &identified, &report)?;
+    if dry_run {
+        return Ok(report);
     }
-    Ok(report)
-}
 
-fn apply_changes(
-    manifest: &mut ManifestFile,
-    lockfile: &mut Lockfile,
-    identified: &[IdentifiedMod],
-    report: &SyncReport,
-) -> Result<(), OrbitError> {
-    for package in &report.changed {
-        let Some(local) = identified
-            .iter()
-            .find(|identified| package_id(identified) == *package)
-        else {
-            continue;
-        };
-        if let Some(entry) = lockfile
-            .inner
-            .packages
-            .iter_mut()
-            .find(|entry| entry.mod_id == *package)
-        {
-            *entry = package_entry(local);
-        }
-    }
-    for package in &report.added {
-        let Some(local) = identified
-            .iter()
-            .find(|identified| package_id(identified) == *package)
-        else {
-            continue;
-        };
+    crate::package_reconciliation::remove_unselected_packages(instance_dir, &removed)?;
+    for entry in &selected_entries {
         manifest
             .inner
             .dependencies
-            .entry(package.clone())
-            .or_insert_with(|| {
-                DependencySpec::Short(if local.version.is_empty() {
-                    "*".to_string()
-                } else {
-                    local.version.clone()
-                })
-            });
-        lockfile
-            .inner
-            .packages
-            .retain(|entry| entry.mod_id != *package);
-        lockfile.inner.packages.push(package_entry(local));
+            .entry(entry.mod_id.clone())
+            .or_insert_with(|| DependencySpec::Short(entry.version.clone()));
     }
-    if !report.added.is_empty() || !report.changed.is_empty() {
-        lockfile
-            .inner
-            .packages
-            .sort_by(|left, right| left.mod_id.cmp(&right.mod_id));
-        manifest.save()?;
-        lockfile.save()?;
-    }
-    Ok(())
-}
-
-fn package_entry(local: &IdentifiedMod) -> PackageEntry {
-    let mod_id = package_id(local);
-    let common = |provider: String,
-                  modrinth: Option<ModrinthInfo>,
-                  curseforge: Option<CurseForgeInfo>,
-                  file: Option<FileInfo>| PackageEntry {
-        mod_id: mod_id.clone(),
-        version: local.version.clone(),
-        sha1: local.sha1.clone(),
-        sha256: local.sha256.clone(),
-        sha512: local.sha512.clone(),
-        filename: local.filename.clone(),
-        provider,
-        modrinth,
-        curseforge,
-        file,
-        dependencies: local.dependencies.clone(),
-        environment: local.environment,
-        provides: local.provides.clone(),
-        language_loader: local.language_loader.clone(),
-        embedded_artifacts: local.embedded_artifacts.clone(),
-        bundled: local.bundled.clone(),
-    };
-    match &local.source {
-        IdentifiedSource::Platform(IdentifiedPlatform::Modrinth(metadata)) => {
-            common("modrinth".to_string(), Some(metadata.clone()), None, None)
-        }
-        IdentifiedSource::Platform(IdentifiedPlatform::CurseForge(metadata)) => {
-            common("curseforge".to_string(), None, Some(metadata.clone()), None)
-        }
-        IdentifiedSource::File { .. } => common(
-            "file".to_string(),
-            None,
-            None,
-            Some(FileInfo {
-                path: format!("mods/{}", local.filename),
-            }),
-        ),
-    }
-}
-
-fn package_id(local: &IdentifiedMod) -> String {
-    if !local.mod_id.is_empty() {
-        local.mod_id.clone()
-    } else if !local.mod_name.is_empty() {
-        local.mod_name.clone()
-    } else {
-        local
-            .filename
-            .strip_suffix(".jar")
-            .unwrap_or(&local.filename)
-            .to_string()
-    }
+    lockfile.inner.packages = selected_entries;
+    lockfile
+        .inner
+        .packages
+        .sort_by(|left, right| left.mod_id.cmp(&right.mod_id));
+    manifest.save()?;
+    lockfile.save()?;
+    Ok(report)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::lockfile::OrbitLockfile;
+    use crate::lockfile::{FileInfo, OrbitLockfile, PackageEntry};
     use crate::manifest::{OrbitManifest, ProjectMeta, ResolverConfig};
+    use std::io::Write;
+    use std::sync::{Arc, Mutex};
+    use zip::write::SimpleFileOptions;
 
     fn test_dir(name: &str) -> std::path::PathBuf {
         std::env::temp_dir().join(format!("orbit-sync-test-{name}-{}", std::process::id()))
+    }
+
+    fn write_fabric_jar(path: &Path, version: &str) {
+        let file = std::fs::File::create(path).unwrap();
+        let mut archive = zip::ZipWriter::new(file);
+        archive
+            .start_file("fabric.mod.json", SimpleFileOptions::default())
+            .unwrap();
+        write!(
+            archive,
+            r#"{{"schemaVersion":1,"id":"alpha","version":"{version}","name":"Alpha"}}"#
+        )
+        .unwrap();
+        archive.finish().unwrap();
     }
 
     #[tokio::test]
@@ -285,10 +235,94 @@ mod tests {
         .save()
         .unwrap();
 
-        let report = sync_instance(&directory, &[], true).await.unwrap();
+        let report = sync_instance(&directory, &[], true, InstallInteraction::default())
+            .await
+            .unwrap();
 
         assert_eq!(report.missing, vec!["missing"]);
         assert_eq!(report.unlocked, vec!["unlocked"]);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[tokio::test]
+    async fn duplicate_package_versions_are_confirmed_and_removed_as_top_level_packages() {
+        let directory = test_dir("duplicates");
+        let mods = directory.join("mods");
+        std::fs::create_dir_all(&mods).unwrap();
+        write_fabric_jar(&mods.join("a-1.jar"), "1");
+        write_fabric_jar(&mods.join("a-2.jar"), "2");
+        assert_eq!(
+            crate::jar::read_mod_metadata(&mods.join("a-1.jar"), "fabric")
+                .unwrap()
+                .mod_id,
+            "alpha"
+        );
+        let manifest: OrbitManifest = toml::from_str(
+            r#"
+[project]
+name = "test"
+mc_version = "1.20.1"
+modloader = "fabric"
+modloader_version = "0.16.10"
+[dependencies]
+alpha = "*"
+"#,
+        )
+        .unwrap();
+        ManifestFile::new(&directory, manifest).save().unwrap();
+        let scanned = crate::init::scan_mods_dir(&directory, "fabric").unwrap();
+        assert_eq!(
+            scanned
+                .iter()
+                .filter_map(|package| package.mod_id.as_deref())
+                .collect::<Vec<_>>(),
+            vec!["alpha", "alpha"]
+        );
+
+        let preview = Arc::new(Mutex::new(Vec::new()));
+        let captured = Arc::clone(&preview);
+        let aborted = sync_instance(
+            &directory,
+            &[],
+            false,
+            InstallInteraction {
+                select_resolution: None,
+                confirm_install: Some(Box::new(move |report| {
+                    assert!(!report.removed.is_empty(), "{report:?}");
+                    *captured.lock().unwrap() = report.removed.clone();
+                    false
+                })),
+            },
+        )
+        .await
+        .unwrap();
+        assert!(aborted.removed.is_empty());
+        assert_eq!(preview.lock().unwrap()[0].filename, "a-1.jar");
+        assert!(mods.join("a-1.jar").exists());
+
+        let applied = sync_instance(
+            &directory,
+            &[],
+            false,
+            InstallInteraction {
+                select_resolution: None,
+                confirm_install: Some(Box::new(|_| true)),
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(applied.removed[0].filename, "a-1.jar");
+        assert!(!mods.join("a-1.jar").exists());
+        assert!(mods.join("a-2.jar").exists());
+        assert_eq!(
+            Lockfile::open(&directory)
+                .unwrap()
+                .inner
+                .find("alpha")
+                .unwrap()
+                .version,
+            "2"
+        );
         std::fs::remove_dir_all(directory).unwrap();
     }
 }

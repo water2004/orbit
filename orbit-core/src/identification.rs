@@ -2,7 +2,7 @@
 
 use crate::error::OrbitError;
 use crate::init::ScannedMod;
-use crate::lockfile::{CurseForgeInfo, ModrinthInfo};
+use crate::lockfile::{CurseForgeInfo, FileInfo, ModrinthInfo, PackageEntry};
 use crate::providers::{ArtifactFingerprint, ModProvider};
 
 #[derive(Debug, Clone)]
@@ -44,6 +44,48 @@ pub struct IdentifiedMod {
     pub language_loader: Option<crate::metadata::LanguageLoaderRequirement>,
     pub embedded_artifacts: Vec<crate::metadata::EmbeddedArtifact>,
     pub bundled: Vec<crate::lockfile::BundledMod>,
+}
+
+impl IdentifiedMod {
+    pub(crate) fn package_id(&self) -> String {
+        debug_assert!(!self.mod_id.is_empty());
+        self.mod_id.clone()
+    }
+
+    pub(crate) fn to_package_entry(&self) -> PackageEntry {
+        let (provider, modrinth, curseforge, file) = match &self.source {
+            IdentifiedSource::Platform(IdentifiedPlatform::Modrinth(metadata)) => {
+                ("modrinth".to_string(), Some(metadata.clone()), None, None)
+            }
+            IdentifiedSource::Platform(IdentifiedPlatform::CurseForge(metadata)) => {
+                ("curseforge".to_string(), None, Some(metadata.clone()), None)
+            }
+            IdentifiedSource::File { path } => (
+                "file".to_string(),
+                None,
+                None,
+                Some(FileInfo { path: path.clone() }),
+            ),
+        };
+        PackageEntry {
+            mod_id: self.package_id(),
+            version: self.version.clone(),
+            sha1: self.sha1.clone(),
+            sha256: self.sha256.clone(),
+            sha512: self.sha512.clone(),
+            filename: self.filename.clone(),
+            provider,
+            modrinth,
+            curseforge,
+            file,
+            dependencies: self.dependencies.clone(),
+            environment: self.environment,
+            provides: self.provides.clone(),
+            language_loader: self.language_loader.clone(),
+            embedded_artifacts: self.embedded_artifacts.clone(),
+            bundled: self.bundled.clone(),
+        }
+    }
 }
 
 fn build_identified(

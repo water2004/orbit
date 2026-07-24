@@ -51,12 +51,19 @@ pub async fn handle(file: String, merge_strategy: Option<String>, ctx: &CliConte
             if !ctx.dry_run && !report.extracted.is_empty() {
                 let providers =
                     super::create_instance_providers(&instance_dir, None, &ctx.runtime)?;
-                let sync = orbit_core::sync_instance(&instance_dir, &providers, false).await?;
+                let sync = orbit_core::sync_instance(
+                    &instance_dir,
+                    &providers,
+                    false,
+                    super::install_interaction(false, ctx.yes),
+                )
+                .await?;
                 println!(
-                    "Imported {} JAR(s); sync added {} and changed {} package(s).",
+                    "Imported {} JAR(s); sync added {}, changed {}, and removed {} package version(s).",
                     report.extracted.len(),
                     sync.added.len(),
-                    sync.changed.len()
+                    sync.changed.len(),
+                    sync.removed.len()
                 );
             } else {
                 println!(

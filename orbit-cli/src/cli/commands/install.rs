@@ -37,16 +37,24 @@ pub async fn handle(
         for package in &report.restored {
             println!("  [dry-run] would restore {package}");
         }
+        for package in &report.removed {
+            println!(
+                "  [dry-run] would remove {} {} ({})",
+                package.mod_id, package.version, package.filename
+            );
+        }
         println!(
-            "Restore preview: {} to restore, {} already present, {} skipped.",
+            "Restore preview: {} to restore, {} to remove, {} already present, {} skipped.",
             report.restored.len(),
+            report.removed.len(),
             report.already_present.len(),
             report.skipped.len()
         );
     } else {
         println!(
-            "Installed {} mods, skipped {} already present and {} excluded by policy.",
+            "Installed {} mods, removed {} unselected package version(s), skipped {} already present and {} excluded by policy.",
             report.restored.len(),
+            report.removed.len(),
             report.already_present.len(),
             report.skipped.len()
         );

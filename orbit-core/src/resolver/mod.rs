@@ -18,12 +18,14 @@ use crate::metadata::Environment;
 use crate::resolver::graph::{build_solver_graph, build_solver_graph_for_target};
 use crate::resolver::ordering::resolution_warnings;
 use crate::resolver::types::{
-    CandidateCatalog, CandidateVersion, ResolutionPortfolio, ResolutionReport, ResolutionSelector,
-    SolverPackage, SolverVersion,
+    CandidateCatalog, CandidateIdentity, CandidateLocation, CandidateVersion, PackageChange,
+    PackageChangeKind, ResolutionPortfolio, ResolutionReport, ResolutionSelector, SolverPackage,
+    SolverVersion, solver_range,
 };
 use crate::versions::Version;
 
 pub(crate) use graph::is_platform_package;
+pub(crate) use graph::locked_source;
 
 pub(crate) fn select_resolution(
     mut portfolio: ResolutionPortfolio,
@@ -144,7 +146,7 @@ pub async fn resolve_candidate_portfolio(
         .collect();
     maximized_mods.sort();
     maximized_mods.dedup();
-    let maximized_packages = maximized_mods.into_iter().map(SolverPackage::top_level);
+    let maximized_packages = maximized_mods.into_iter().map(SolverPackage::logical);
     let watched_candidates = highest_candidates(&catalog.candidates, &manifest.project.modloader);
     let mut trace = diagnostics::ResolutionTrace::new(watched_candidates);
     let solutions = match pubgrub::resolve_maximal_solutions_with_observer(
@@ -152,7 +154,12 @@ pub async fn resolve_candidate_portfolio(
         graph.root_package.clone(),
         graph.root_version.clone(),
         maximized_packages,
-        |version| Ranges::strictly_higher_than(version.clone()),
+        |version| {
+            version.domain().map_or_else(
+                || Ranges::strictly_higher_than(version.clone()),
+                |semantic| solver_range(Ranges::strictly_higher_than(semantic.clone())),
+            )
+        },
         &mut trace,
     ) {
         Ok(solutions) => solutions,
@@ -222,53 +229,195 @@ fn collect_report(
         context.target,
     );
 
-    let mut upgrades = BTreeMap::new();
+    let mut selected_versions = BTreeMap::new();
+    let mut selected_sources = BTreeMap::new();
+    let mut selected_candidates = BTreeMap::new();
+    let mut selected_identities = BTreeMap::new();
+    for (package, version) in solution.iter() {
+        let SolverPackage::Mod(mod_id) = package else {
+            continue;
+        };
+        let Some(identity) = version
+            .candidate_identity()
+            .filter(|identity| identity.path.is_empty() && identity.owner == *mod_id)
+        else {
+            continue;
+        };
+        let Some(semantic) = version.domain() else {
+            continue;
+        };
+        selected_versions.insert(mod_id.clone(), semantic.to_string());
+        selected_sources.insert(mod_id.clone(), identity.source.clone());
+        selected_identities.insert(mod_id.clone(), identity.clone());
+        if context.candidates.get(mod_id).is_some_and(|candidates| {
+            candidates
+                .iter()
+                .any(|candidate| candidate.id == identity.source)
+        }) {
+            selected_candidates.insert(mod_id.clone(), identity.source.clone());
+        }
+    }
+
+    let mut changes = Vec::new();
+    let mut retained_lock_entries = std::collections::HashSet::new();
+    for (package, selected_version) in &selected_versions {
+        let identity = &selected_identities[package];
+        let installed: Vec<_> = context
+            .lockfile
+            .packages
+            .iter()
+            .enumerate()
+            .filter(|(_, entry)| entry.mod_id == *package)
+            .collect();
+        if installed.is_empty() {
+            changes.push(PackageChange {
+                package: package.clone(),
+                current_version: None,
+                selected_version: Some(selected_version.clone()),
+                filename: None,
+                selected_filename: selected_candidate_filename(
+                    context.candidates,
+                    package,
+                    &identity.source,
+                ),
+                kind: PackageChangeKind::Install,
+            });
+            continue;
+        }
+
+        if identity.installed
+            && let Some((selected_index, _)) = installed
+                .iter()
+                .copied()
+                .find(|(_, entry)| locked_source(entry) == identity.source)
+        {
+            retained_lock_entries.insert(selected_index);
+            for (index, entry) in installed {
+                if index != selected_index {
+                    changes.push(removal_change(entry));
+                }
+            }
+            continue;
+        }
+
+        let (active_index, active) = installed
+            .iter()
+            .copied()
+            .max_by_key(|(_, entry)| Version::parse(&entry.version, context.loader))
+            .expect("installed is not empty");
+        let current = Version::parse(&active.version, context.loader);
+        let selected = Version::parse(selected_version, context.loader);
+        let kind = match selected.cmp(&current) {
+            std::cmp::Ordering::Greater => PackageChangeKind::Upgrade,
+            std::cmp::Ordering::Less => PackageChangeKind::Downgrade,
+            std::cmp::Ordering::Equal => PackageChangeKind::Replace,
+        };
+        changes.push(PackageChange {
+            package: package.clone(),
+            current_version: Some(active.version.clone()),
+            selected_version: Some(selected_version.clone()),
+            filename: (!active.filename.is_empty()).then(|| active.filename.clone()),
+            selected_filename: selected_candidate_filename(
+                context.candidates,
+                package,
+                &identity.source,
+            ),
+            kind,
+        });
+        for (index, entry) in installed {
+            if index != active_index {
+                changes.push(removal_change(entry));
+            }
+        }
+    }
+    for (index, entry) in context.lockfile.packages.iter().enumerate() {
+        if !selected_versions.contains_key(&entry.mod_id) && !retained_lock_entries.contains(&index)
+        {
+            changes.push(removal_change(entry));
+        }
+    }
+    changes.sort_by(|left, right| {
+        left.package
+            .cmp(&right.package)
+            .then_with(|| left.current_version.cmp(&right.current_version))
+            .then_with(|| left.filename.cmp(&right.filename))
+    });
+
     let mut diagnostics = Vec::new();
     let mut packages: Vec<_> = context.candidates.keys().collect();
     packages.sort();
     for package in packages {
-        let Some(selected) = solution.get(&SolverPackage::top_level(package)) else {
+        let Some(selected) = solution.get(&SolverPackage::logical(package)) else {
             continue;
         };
-        let current = context
-            .lockfile
-            .find(package)
-            .map(|entry| entry.version.as_str())
-            .unwrap_or("?");
-        let selected_version = selected.to_string();
-        if selected_version != current {
-            upgrades.insert(package.clone(), selected_version);
-            continue;
-        }
-
+        let selected_semantic = selected.domain();
         let Some(candidate) = highest_candidate(
             context.candidates.get(package).map(Vec::as_slice),
             context.loader,
         ) else {
             continue;
         };
-        if candidate.jar_version != current {
+        if selected_semantic.is_some_and(|selected| {
+            Version::parse(&candidate.jar_version, context.loader) > *selected
+        }) {
             diagnostics.push(trace.diagnose_skipped(package, selected));
         }
     }
     ResolutionReport {
-        upgrades,
+        selected_versions,
+        selected_sources,
+        selected_candidates,
+        changes,
         diagnostics,
         warnings,
     }
 }
 
+fn removal_change(entry: &PackageEntry) -> PackageChange {
+    PackageChange {
+        package: entry.mod_id.clone(),
+        current_version: Some(entry.version.clone()),
+        selected_version: None,
+        filename: (!entry.filename.is_empty()).then(|| entry.filename.clone()),
+        selected_filename: None,
+        kind: PackageChangeKind::Remove,
+    }
+}
+
+fn selected_candidate_filename(
+    candidates: &HashMap<String, Vec<CandidateVersion>>,
+    package: &str,
+    source: &str,
+) -> Option<String> {
+    candidates.get(package).and_then(|versions| {
+        versions
+            .iter()
+            .find(|candidate| candidate.id == source)
+            .map(|candidate| candidate.filename.clone())
+            .filter(|filename| !filename.is_empty())
+    })
+}
+
 fn highest_candidates(
     candidates: &HashMap<String, Vec<CandidateVersion>>,
     loader: &str,
-) -> impl Iterator<Item = (String, Version)> {
+) -> impl Iterator<Item = (String, SolverVersion)> {
     let mut watched: Vec<_> = candidates
         .iter()
         .filter_map(|(package, versions)| {
             highest_candidate(Some(versions.as_slice()), loader).map(|candidate| {
                 (
                     package.clone(),
-                    Version::parse(&candidate.jar_version, loader),
+                    SolverVersion::candidate(
+                        Version::parse(&candidate.jar_version, loader),
+                        CandidateIdentity {
+                            owner: package.clone(),
+                            source: candidate.id.clone(),
+                            path: Vec::new(),
+                            location: CandidateLocation::Root,
+                            installed: false,
+                        },
+                    ),
                 )
             })
         })
@@ -331,6 +480,8 @@ b = "*"
 
     fn candidate(version: &str, dependencies: Vec<ModDependency>) -> CandidateVersion {
         CandidateVersion {
+            id: format!("candidate-{version}"),
+            filename: format!("candidate-{version}.jar"),
             jar_version: version.to_string(),
             dependencies: dependencies.into_iter().map(Into::into).collect(),
             environment: Environment::Both,
@@ -352,6 +503,20 @@ b = "*"
         }
     }
 
+    fn upgrades(report: &ResolutionReport) -> BTreeMap<String, String> {
+        report
+            .changes
+            .iter()
+            .filter(|change| change.kind == PackageChangeKind::Upgrade)
+            .map(|change| {
+                (
+                    change.package.clone(),
+                    change.selected_version.clone().unwrap(),
+                )
+            })
+            .collect()
+    }
+
     #[tokio::test]
     async fn candidate_portfolio_contains_every_upgrade_tradeoff() {
         let mut catalog = CandidateCatalog::default();
@@ -370,11 +535,8 @@ b = "*"
         let portfolio = resolve_candidate_portfolio(&manifest(), &lockfile(), &catalog)
             .await
             .unwrap();
-        let upgrades: std::collections::BTreeSet<_> = portfolio
-            .alternatives
-            .iter()
-            .map(|alternative| alternative.upgrades.clone())
-            .collect();
+        let upgrades: std::collections::BTreeSet<_> =
+            portfolio.alternatives.iter().map(upgrades).collect();
 
         assert_eq!(upgrades.len(), 2);
         assert!(upgrades.contains(&BTreeMap::from([("a".to_string(), "2".to_string())])));
@@ -419,12 +581,111 @@ b = "*"
         )
         .unwrap();
         assert_eq!(
-            selected.upgrades,
+            upgrades(&selected),
             BTreeMap::from([
                 ("a".to_string(), "2".to_string()),
                 ("b".to_string(), "2".to_string()),
             ])
         );
+    }
+
+    #[tokio::test]
+    async fn an_upgrade_solution_may_include_a_dependency_downgrade() {
+        let mut current = lockfile();
+        current
+            .packages
+            .iter_mut()
+            .find(|entry| entry.mod_id == "b")
+            .unwrap()
+            .version = "2".to_string();
+        let mut catalog = CandidateCatalog::default();
+        catalog.candidates.insert(
+            "a".to_string(),
+            vec![
+                candidate("1", Vec::new()),
+                candidate("2", vec![ModDependency::required("b", "[1]")]),
+            ],
+        );
+        catalog.candidates.insert(
+            "b".to_string(),
+            vec![candidate("1", Vec::new()), candidate("2", Vec::new())],
+        );
+
+        let portfolio = resolve_candidate_portfolio(&manifest(), &current, &catalog)
+            .await
+            .unwrap();
+        let alternative = portfolio
+            .alternatives
+            .iter()
+            .find(|alternative| alternative.has_upgrade())
+            .unwrap();
+
+        assert!(
+            alternative.changes.iter().any(|change| {
+                change.package == "a" && change.kind == PackageChangeKind::Upgrade
+            })
+        );
+        assert!(alternative.changes.iter().any(|change| {
+            change.package == "b" && change.kind == PackageChangeKind::Downgrade
+        }));
+    }
+
+    #[tokio::test]
+    async fn a_different_candidate_at_the_same_declared_version_is_not_an_upgrade() {
+        let mut current = lockfile();
+        current.packages.retain(|entry| entry.mod_id == "a");
+        let mut only_a = manifest();
+        only_a.dependencies.shift_remove("b");
+        let mut catalog = CandidateCatalog::default();
+        catalog
+            .candidates
+            .insert("a".to_string(), vec![candidate("1", Vec::new())]);
+
+        let portfolio = resolve_candidate_portfolio(&only_a, &current, &catalog)
+            .await
+            .unwrap();
+
+        assert!(
+            portfolio
+                .alternatives
+                .iter()
+                .all(|alternative| !alternative.has_upgrade())
+        );
+        assert!(portfolio.alternatives.iter().any(|alternative| {
+            alternative
+                .changes
+                .iter()
+                .any(|change| change.package == "a" && change.kind == PackageChangeKind::Replace)
+        }));
+    }
+
+    #[tokio::test]
+    async fn duplicate_installed_package_versions_plan_removal_of_the_unselected_file() {
+        let mut older = locked("a");
+        older.filename = "a-1.jar".to_string();
+        let mut newer = locked("a");
+        newer.version = "2".to_string();
+        newer.filename = "a-2.jar".to_string();
+        let current = OrbitLockfile {
+            meta: lockfile().meta,
+            packages: vec![older, newer],
+        };
+        let mut only_a = manifest();
+        only_a.dependencies.shift_remove("b");
+
+        let portfolio =
+            resolve_candidate_portfolio(&only_a, &current, &CandidateCatalog::default())
+                .await
+                .unwrap();
+
+        assert_eq!(portfolio.alternatives.len(), 1);
+        let selected = &portfolio.alternatives[0];
+        assert_eq!(selected.selected_versions["a"], "2");
+        assert!(selected.changes.iter().any(|change| {
+            change.kind == PackageChangeKind::Remove
+                && change.current_version.as_deref() == Some("1")
+                && change.filename.as_deref() == Some("a-1.jar")
+        }));
     }
 
     #[tokio::test]
@@ -454,11 +715,11 @@ b = "*"
     #[test]
     fn multiple_solutions_use_the_selected_alternative() {
         let first = ResolutionReport {
-            upgrades: BTreeMap::from([("a".to_string(), "2".to_string())]),
+            selected_versions: BTreeMap::from([("a".to_string(), "2".to_string())]),
             ..ResolutionReport::default()
         };
         let second = ResolutionReport {
-            upgrades: BTreeMap::from([("b".to_string(), "2".to_string())]),
+            selected_versions: BTreeMap::from([("b".to_string(), "2".to_string())]),
             ..ResolutionReport::default()
         };
         let portfolio = ResolutionPortfolio {
@@ -474,7 +735,7 @@ b = "*"
         )
         .unwrap();
 
-        assert_eq!(selected.upgrades, second.upgrades);
+        assert_eq!(selected.selected_versions, second.selected_versions);
     }
 
     #[test]

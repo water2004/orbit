@@ -1,6 +1,8 @@
 use super::CliContext;
 use anyhow::Result;
-use orbit_core::{InstallOptions, OrbitError, install_to_instance, upgrade_all_in_instance};
+use orbit_core::{
+    InstallIntent, InstallOptions, OrbitError, install_to_instance, upgrade_all_in_instance,
+};
 
 pub async fn handle(mod_name: Option<String>, ctx: &CliContext) -> Result<()> {
     let instance_dir = ctx.instance_dir()?;
@@ -34,7 +36,7 @@ pub async fn handle(mod_name: Option<String>, ctx: &CliContext) -> Result<()> {
             InstallOptions {
                 no_deps: false,
                 dry_run: ctx.dry_run,
-                existing_ok: true,
+                intent: InstallIntent::Upgrade,
                 optional: false,
                 env: None,
             },
@@ -47,14 +49,19 @@ pub async fn handle(mod_name: Option<String>, ctx: &CliContext) -> Result<()> {
                 super::print_resolution_warnings(&report.warnings);
                 if ctx.dry_run {
                     for m in &report.installed {
-                        println!("  [dry-run] would upgrade {} to v{}", m.mod_id, m.version);
+                        println!("  [dry-run] would select {} v{}", m.mod_id, m.version);
                     }
+                    print_dry_run_removals(&report.removed);
                     return Ok(());
                 }
-                if report.installed.is_empty() {
+                if report.installed.is_empty() && report.removed.is_empty() {
                     println!("No new versions were installed.");
                 } else {
-                    println!("\nSuccessfully upgraded {} mod(s).", report.installed.len());
+                    println!(
+                        "\nApplied {} selected package version(s) and removed {} unselected package version(s).",
+                        report.installed.len(),
+                        report.removed.len()
+                    );
                 }
                 Ok(())
             }
@@ -82,19 +89,33 @@ pub async fn handle(mod_name: Option<String>, ctx: &CliContext) -> Result<()> {
                 super::print_resolution_warnings(&report.warnings);
                 if ctx.dry_run {
                     for m in &report.installed {
-                        println!("  [dry-run] would upgrade {} to v{}", m.mod_id, m.version);
+                        println!("  [dry-run] would select {} v{}", m.mod_id, m.version);
                     }
+                    print_dry_run_removals(&report.removed);
                     return Ok(());
                 }
-                if report.installed.is_empty() {
+                if report.installed.is_empty() && report.removed.is_empty() {
                     println!("No new versions were installed. All mods are up to date.");
                 } else {
-                    println!("\nSuccessfully upgraded {} mod(s).", report.installed.len());
+                    println!(
+                        "\nApplied {} selected package version(s) and removed {} unselected package version(s).",
+                        report.installed.len(),
+                        report.removed.len()
+                    );
                 }
                 Ok(())
             }
             Err(OrbitError::Conflict(msg)) => anyhow::bail!("Dependency conflict:\n\n  {msg}"),
             Err(e) => anyhow::bail!("Upgrade failed: {e}"),
         }
+    }
+}
+
+fn print_dry_run_removals(removals: &[orbit_core::RemovedPackage]) {
+    for package in removals {
+        println!(
+            "  [dry-run] would remove {} v{} ({})",
+            package.mod_id, package.version, package.filename
+        );
     }
 }

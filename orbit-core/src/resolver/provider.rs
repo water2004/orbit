@@ -4,12 +4,24 @@ use pubgrub::Ranges;
 use pubgrub::{Dependencies, DependencyProvider, IncompatibilityConstraint};
 use std::collections::HashMap;
 
+use crate::resolver::types::{CandidateLocation, VersionIdentity};
 use crate::resolver::types::{SolverPackage, SolverVersion};
 
 type PackageVersionKey = (SolverPackage, SolverVersion);
 type PackageDependencies = Vec<(SolverPackage, Ranges<SolverVersion>)>;
 pub(crate) type PackageIncompatibilities =
     Vec<IncompatibilityConstraint<SolverPackage, Ranges<SolverVersion>, String>>;
+
+#[derive(Debug, Clone)]
+pub(crate) struct ModulePriority {
+    pub(crate) mod_id: String,
+    pub(crate) version: crate::versions::Version,
+}
+
+#[derive(Debug, Clone, Default)]
+struct CandidatePriority {
+    parents: Vec<ModulePriority>,
+}
 
 #[derive(Debug)]
 pub(crate) enum ProviderError {
@@ -38,6 +50,7 @@ pub(crate) struct OrbitDependencyProvider {
     /// Exact package version to its dependency ranges.
     pub(crate) dependencies: HashMap<PackageVersionKey, PackageDependencies>,
     pub(crate) incompatibilities: HashMap<PackageVersionKey, PackageIncompatibilities>,
+    candidate_priorities: HashMap<crate::resolver::types::CandidateIdentity, CandidatePriority>,
 }
 
 impl OrbitDependencyProvider {
@@ -70,6 +83,15 @@ impl OrbitDependencyProvider {
     ) {
         self.incompatibilities
             .insert((pkg, version), incompatibilities);
+    }
+
+    pub(crate) fn add_candidate_priority(
+        &mut self,
+        identity: crate::resolver::types::CandidateIdentity,
+        parents: Vec<ModulePriority>,
+    ) {
+        self.candidate_priorities
+            .insert(identity, CandidatePriority { parents });
     }
 
     pub(crate) fn extend_package_incompatibilities(
@@ -115,7 +137,9 @@ impl DependencyProvider for OrbitDependencyProvider {
             Some(versions) => Ok(versions
                 .iter()
                 .filter(|version| range.contains(version))
-                .max()
+                .max_by(|left, right| {
+                    compare_versions(package, left, right, &self.candidate_priorities)
+                })
                 .cloned()),
             None => Err(ProviderError::MissingVersions(package.clone())),
         }
@@ -146,4 +170,77 @@ impl DependencyProvider for OrbitDependencyProvider {
             .cloned()
             .unwrap_or_default())
     }
+}
+
+fn compare_versions(
+    package: &SolverPackage,
+    left: &SolverVersion,
+    right: &SolverVersion,
+    priorities: &HashMap<crate::resolver::types::CandidateIdentity, CandidatePriority>,
+) -> std::cmp::Ordering {
+    match (package, left, right) {
+        (
+            SolverPackage::Mod(_),
+            SolverVersion::Version {
+                semantic: left_semantic,
+                identity: VersionIdentity::Candidate(left_identity),
+            },
+            SolverVersion::Version {
+                semantic: right_semantic,
+                identity: VersionIdentity::Candidate(right_identity),
+            },
+        ) => {
+            let left_direct = left_identity.location != CandidateLocation::Nested;
+            let right_direct = right_identity.location != CandidateLocation::Nested;
+            left_direct
+                .cmp(&right_direct)
+                .then_with(|| left_semantic.cmp(right_semantic))
+                .then_with(|| right_identity.path.len().cmp(&left_identity.path.len()))
+                .then_with(|| {
+                    compare_parent_priorities(
+                        priorities.get(left_identity),
+                        priorities.get(right_identity),
+                    )
+                })
+                .then_with(|| left_identity.installed.cmp(&right_identity.installed))
+                .then_with(|| left_identity.cmp(right_identity))
+        }
+        (
+            SolverPackage::EmbeddedArtifact(_),
+            SolverVersion::Version {
+                semantic: left_semantic,
+                identity: VersionIdentity::Candidate(left_identity),
+            },
+            SolverVersion::Version {
+                semantic: right_semantic,
+                identity: VersionIdentity::Candidate(right_identity),
+            },
+        ) => left_semantic
+            .cmp(right_semantic)
+            .then_with(|| left_identity.installed.cmp(&right_identity.installed))
+            .then_with(|| left_identity.cmp(right_identity)),
+        _ => left.cmp(right),
+    }
+}
+
+fn compare_parent_priorities(
+    left: Option<&CandidatePriority>,
+    right: Option<&CandidatePriority>,
+) -> std::cmp::Ordering {
+    let left = left
+        .map(|priority| priority.parents.as_slice())
+        .unwrap_or_default();
+    let right = right
+        .map(|priority| priority.parents.as_slice())
+        .unwrap_or_default();
+    for (left, right) in left.iter().zip(right) {
+        let ordering = right
+            .mod_id
+            .cmp(&left.mod_id)
+            .then_with(|| left.version.cmp(&right.version));
+        if ordering != std::cmp::Ordering::Equal {
+            return ordering;
+        }
+    }
+    right.len().cmp(&left.len())
 }

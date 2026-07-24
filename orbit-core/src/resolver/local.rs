@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 
 use crate::identification::IdentifiedMod;
-use crate::lockfile::{LockMeta, OrbitLockfile, PackageEntry};
+use crate::lockfile::{LockMeta, OrbitLockfile};
 use crate::manifest::OrbitManifest;
 use crate::resolver::diagnostics::describe_no_solution;
 use crate::resolver::graph::build_solver_graph;
@@ -18,7 +18,10 @@ pub(crate) fn check_local_graph(
             modloader: manifest.project.modloader.clone(),
             modloader_version: manifest.project.modloader_version.clone(),
         },
-        packages: local_mods.iter().map(package_entry).collect(),
+        packages: local_mods
+            .iter()
+            .map(IdentifiedMod::to_package_entry)
+            .collect(),
     };
     let graph = build_solver_graph(manifest, &lockfile, &HashMap::new());
 
@@ -32,37 +35,6 @@ pub(crate) fn check_local_graph(
             Err(format!("internal resolver error: {source}"))
         }
         Err(error) => Err(error.to_string()),
-    }
-}
-
-fn package_entry(local_mod: &IdentifiedMod) -> PackageEntry {
-    PackageEntry {
-        mod_id: package_name(local_mod),
-        version: local_mod.version.clone(),
-        sha1: local_mod.sha1.clone(),
-        sha256: local_mod.sha256.clone(),
-        sha512: local_mod.sha512.clone(),
-        filename: local_mod.filename.clone(),
-        provider: "file".to_string(),
-        modrinth: None,
-        curseforge: None,
-        file: None,
-        dependencies: local_mod.dependencies.clone(),
-        environment: local_mod.environment,
-        provides: local_mod.provides.clone(),
-        language_loader: local_mod.language_loader.clone(),
-        embedded_artifacts: local_mod.embedded_artifacts.clone(),
-        bundled: local_mod.bundled.clone(),
-    }
-}
-
-fn package_name(local_mod: &IdentifiedMod) -> String {
-    if !local_mod.mod_id.is_empty() {
-        local_mod.mod_id.clone()
-    } else if !local_mod.mod_name.is_empty() {
-        local_mod.mod_name.clone()
-    } else {
-        local_mod.filename.clone()
     }
 }
 

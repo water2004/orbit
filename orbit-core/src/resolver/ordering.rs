@@ -9,7 +9,10 @@ use crate::metadata::{
     DependencyExpression, DependencyKind, DependencyOrdering, Environment, ProvidedMod,
 };
 use crate::resolver::provider::OrbitDependencyProvider;
-use crate::resolver::types::{BundledCandidate, CandidateVersion, SolverPackage, SolverVersion};
+use crate::resolver::types::{
+    BundledCandidate, CandidateIdentity, CandidateLocation, CandidateVersion, SolverPackage,
+    SolverVersion,
+};
 use crate::versions::Version;
 
 use super::constraints::relation_reason;
@@ -20,6 +23,7 @@ use super::graph::{
 #[derive(Clone)]
 struct ModuleRecord {
     package: SolverPackage,
+    solver_version: SolverVersion,
     mod_id: String,
     version: Version,
     dependencies: Vec<DependencyExpression>,
@@ -90,7 +94,7 @@ pub(crate) fn register_ordering_cycles(
                 let record = &records[*index];
                 IncompatibilityConstraintTerm::Positive(
                     record.package.clone(),
-                    Ranges::singleton(SolverVersion::Domain(record.version.clone())),
+                    Ranges::singleton(record.solver_version.clone()),
                 )
             })
             .collect();
@@ -101,7 +105,7 @@ pub(crate) fn register_ordering_cycles(
         route.push(first.mod_id.as_str());
         provider.extend_package_incompatibilities(
             first.package.clone(),
-            first.version.clone().into(),
+            first.solver_version.clone(),
             vec![IncompatibilityConstraint {
                 terms,
                 reason: format!("load ordering cycle: {}", route.join(" -> ")),
@@ -116,111 +120,134 @@ fn module_records(
     loader: &str,
 ) -> Vec<ModuleRecord> {
     fn insert_bundled_lock(
-        records: &mut HashMap<(SolverPackage, Version), ModuleRecord>,
+        records: &mut HashMap<(SolverPackage, SolverVersion), ModuleRecord>,
         bundled: &[BundledMod],
         owner: &str,
-        owner_version: &Version,
+        source: &str,
         prefix: &[usize],
         loader: &str,
     ) {
         for (index, metadata) in bundled.iter().enumerate() {
             let mut path = prefix.to_vec();
             path.push(index);
+            let identity = CandidateIdentity {
+                owner: owner.to_string(),
+                source: source.to_string(),
+                path: path.clone(),
+                location: candidate_location(&metadata.origin),
+                installed: true,
+            };
+            let version = Version::parse(&metadata.version, loader);
             let record = ModuleRecord {
-                package: SolverPackage::Bundled {
-                    owner: owner.to_string(),
-                    owner_version: owner_version.clone(),
-                    path: path.clone(),
-                    mod_id: metadata.mod_id.clone(),
-                },
+                package: SolverPackage::Mod(metadata.mod_id.clone()),
+                solver_version: SolverVersion::candidate(version.clone(), identity),
                 mod_id: metadata.mod_id.clone(),
-                version: Version::parse(&metadata.version, loader),
+                version,
                 dependencies: metadata.dependencies.clone(),
                 provides: metadata.provides.clone(),
             };
-            records.insert((record.package.clone(), record.version.clone()), record);
-            insert_bundled_lock(
-                records,
-                &metadata.bundled,
-                owner,
-                owner_version,
-                &path,
-                loader,
+            records.insert(
+                (record.package.clone(), record.solver_version.clone()),
+                record,
             );
+            insert_bundled_lock(records, &metadata.bundled, owner, source, &path, loader);
         }
     }
 
     fn insert_bundled_candidate(
-        records: &mut HashMap<(SolverPackage, Version), ModuleRecord>,
+        records: &mut HashMap<(SolverPackage, SolverVersion), ModuleRecord>,
         bundled: &[BundledCandidate],
         owner: &str,
-        owner_version: &Version,
+        source: &str,
         prefix: &[usize],
         loader: &str,
     ) {
         for (index, metadata) in bundled.iter().enumerate() {
             let mut path = prefix.to_vec();
             path.push(index);
+            let identity = CandidateIdentity {
+                owner: owner.to_string(),
+                source: source.to_string(),
+                path: path.clone(),
+                location: candidate_location(&metadata.origin),
+                installed: false,
+            };
+            let version = Version::parse(&metadata.version, loader);
             let record = ModuleRecord {
-                package: SolverPackage::Bundled {
-                    owner: owner.to_string(),
-                    owner_version: owner_version.clone(),
-                    path: path.clone(),
-                    mod_id: metadata.mod_id.clone(),
-                },
+                package: SolverPackage::Mod(metadata.mod_id.clone()),
+                solver_version: SolverVersion::candidate(version.clone(), identity),
                 mod_id: metadata.mod_id.clone(),
-                version: Version::parse(&metadata.version, loader),
+                version,
                 dependencies: metadata.dependencies.clone(),
                 provides: metadata.provides.clone(),
             };
-            records.insert((record.package.clone(), record.version.clone()), record);
-            insert_bundled_candidate(
-                records,
-                &metadata.bundled,
-                owner,
-                owner_version,
-                &path,
-                loader,
+            records.insert(
+                (record.package.clone(), record.solver_version.clone()),
+                record,
             );
+            insert_bundled_candidate(records, &metadata.bundled, owner, source, &path, loader);
         }
     }
 
     let mut records = HashMap::new();
     for entry in &lockfile.packages {
+        let source = super::graph::locked_source(entry);
+        let identity = CandidateIdentity {
+            owner: entry.mod_id.clone(),
+            source: source.clone(),
+            path: Vec::new(),
+            location: CandidateLocation::Root,
+            installed: true,
+        };
+        let version = Version::parse(&entry.version, loader);
         let record = ModuleRecord {
-            package: SolverPackage::top_level(&entry.mod_id),
+            package: SolverPackage::Mod(entry.mod_id.clone()),
+            solver_version: SolverVersion::candidate(version.clone(), identity),
             mod_id: entry.mod_id.clone(),
-            version: Version::parse(&entry.version, loader),
+            version,
             dependencies: entry.dependencies.clone(),
             provides: entry.provides.clone(),
         };
-        let owner_version = record.version.clone();
-        records.insert((record.package.clone(), record.version.clone()), record);
+        records.insert(
+            (record.package.clone(), record.solver_version.clone()),
+            record,
+        );
         insert_bundled_lock(
             &mut records,
             &entry.bundled,
             &entry.mod_id,
-            &owner_version,
+            &source,
             &[],
             loader,
         );
     }
     for (package, versions) in candidates {
         for candidate in versions {
+            let identity = CandidateIdentity {
+                owner: package.clone(),
+                source: candidate.id.clone(),
+                path: Vec::new(),
+                location: CandidateLocation::Root,
+                installed: false,
+            };
+            let version = Version::parse(&candidate.jar_version, loader);
             let record = ModuleRecord {
-                package: SolverPackage::top_level(package),
+                package: SolverPackage::Mod(package.clone()),
+                solver_version: SolverVersion::candidate(version.clone(), identity),
                 mod_id: package.clone(),
-                version: Version::parse(&candidate.jar_version, loader),
+                version,
                 dependencies: candidate.dependencies.clone(),
                 provides: candidate.provides.clone(),
             };
-            let owner_version = record.version.clone();
-            records.insert((record.package.clone(), record.version.clone()), record);
+            records.insert(
+                (record.package.clone(), record.solver_version.clone()),
+                record,
+            );
             insert_bundled_candidate(
                 &mut records,
                 &candidate.bundled,
                 package,
-                &owner_version,
+                &candidate.id,
                 &[],
                 loader,
             );
@@ -247,11 +274,7 @@ pub(crate) fn resolution_warnings(
     let records = module_records(lockfile, candidates, loader);
     let mut warnings = Vec::new();
     for record in records {
-        if solution
-            .get(&record.package)
-            .and_then(SolverVersion::domain)
-            != Some(&record.version)
-        {
+        if solution.get(&record.package) != Some(&record.solver_version) {
             continue;
         }
         for relation in record
@@ -300,19 +323,33 @@ fn provides_matching_version(
     range: &Ranges<SolverVersion>,
     loader: &str,
 ) -> bool {
-    if record.mod_id == id && range.contains(&SolverVersion::Domain(record.version.clone())) {
+    if record.mod_id == id && range.contains(&record.solver_version) {
         return true;
     }
     record.provides.iter().any(|provided| {
+        let Some(identity) = record.solver_version.candidate_identity() else {
+            return false;
+        };
         provided.id == id
-            && range.contains(&SolverVersion::Domain(Version::parse(
-                provided
-                    .version
-                    .as_deref()
-                    .unwrap_or(&record.version.to_string()),
-                loader,
-            )))
+            && range.contains(&SolverVersion::candidate(
+                Version::parse(
+                    provided
+                        .version
+                        .as_deref()
+                        .unwrap_or(&record.version.to_string()),
+                    loader,
+                ),
+                identity.clone(),
+            ))
     })
+}
+
+fn candidate_location(origin: &crate::jar::JarModOrigin) -> CandidateLocation {
+    match origin {
+        crate::jar::JarModOrigin::Root => CandidateLocation::Root,
+        crate::jar::JarModOrigin::SameFile => CandidateLocation::SameFile,
+        crate::jar::JarModOrigin::Nested { .. } => CandidateLocation::Nested,
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -322,7 +359,7 @@ fn find_ordering_cycles(
     adjacency: &[Vec<usize>],
     records: &[ModuleRecord],
     path: &mut Vec<usize>,
-    seen: &mut HashSet<Vec<(SolverPackage, Version)>>,
+    seen: &mut HashSet<Vec<(SolverPackage, SolverVersion)>>,
     output: &mut Vec<Vec<usize>>,
 ) {
     if path.contains(&current) {
@@ -350,7 +387,7 @@ fn find_ordering_cycles(
                     .map(|index| {
                         (
                             records[*index].package.clone(),
-                            records[*index].version.clone(),
+                            records[*index].solver_version.clone(),
                         )
                     })
                     .collect();

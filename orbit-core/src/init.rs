@@ -15,12 +15,15 @@ pub struct InitInput {
     pub modloader_version: String,
     /// 实例目录（即当前目录）
     pub instance_dir: std::path::PathBuf,
+    pub dry_run: bool,
 }
 
 /// init 输出
 pub struct InitOutput {
     pub manifest: OrbitManifest,
     pub scanned_mods: Vec<ScannedMod>,
+    pub removed: Vec<crate::installer::RemovedPackage>,
+    pub locked_packages: usize,
     pub dependency_error: Option<String>,
 }
 
@@ -47,7 +50,7 @@ pub struct ScannedMod {
 /// 扫描 mods/ 目录并提取元数据。
 ///
 /// 遍历 `{instance_dir}/mods/` 下所有 .jar 文件，
-/// 读取 fabric.mod.json 并计算 SHA-256。
+/// 按实例 loader 读取元数据并计算内容哈希。
 pub(crate) fn scan_mods_dir(
     instance_dir: &Path,
     loader: &str,
@@ -93,58 +96,33 @@ pub(crate) fn scan_mods_dir(
                     path.display()
                 ))
             })?;
-        let metadata = crate::jar::read_mod_metadata(&path, loader).ok();
+        let metadata = crate::jar::read_mod_metadata(&path, loader).map_err(|error| {
+            OrbitError::Other(anyhow::anyhow!(
+                "cannot treat top-level package '{}' as a {loader} mod: {error}",
+                path.display()
+            ))
+        })?;
 
         results.push(ScannedMod {
             filename,
-            mod_id: metadata
-                .as_ref()
-                .map(|metadata| metadata.mod_id.clone())
-                .filter(|id| !id.is_empty()),
-            mod_name: metadata
-                .as_ref()
-                .map(|metadata| metadata.name.clone())
-                .filter(|name| !name.is_empty()),
-            version: metadata
-                .as_ref()
-                .map(|metadata| metadata.version.clone())
-                .filter(|version| !version.is_empty()),
+            mod_id: Some(metadata.mod_id.clone()),
+            mod_name: Some(metadata.name.clone()).filter(|name| !name.is_empty()),
+            version: Some(metadata.version.clone()),
             sha1,
             sha256,
             sha512,
             curseforge_fingerprint,
-            dependencies: metadata
-                .as_ref()
-                .map(|metadata| metadata.dependencies.clone())
-                .unwrap_or_default(),
-            environment: metadata
-                .as_ref()
-                .map(|metadata| metadata.environment)
-                .unwrap_or_default(),
-            provides: metadata
-                .as_ref()
-                .map(|metadata| metadata.provides.clone())
-                .unwrap_or_default(),
-            language_loader: metadata
-                .as_ref()
-                .and_then(|metadata| metadata.language_loader.clone()),
-            embedded_artifacts: metadata
-                .as_ref()
-                .map(|metadata| metadata.embedded_artifacts.clone())
-                .unwrap_or_default(),
+            dependencies: metadata.dependencies.clone(),
+            environment: metadata.environment,
+            provides: metadata.provides.clone(),
+            language_loader: metadata.language_loader.clone(),
+            embedded_artifacts: metadata.embedded_artifacts.clone(),
             bundled: metadata
-                .as_ref()
-                .map(|metadata| {
-                    metadata
-                        .bundled_mods
-                        .iter()
-                        .map(crate::lockfile::BundledMod::from_jar_metadata)
-                        .collect()
-                })
-                .unwrap_or_default(),
-            embedded_jars: metadata
-                .map(|metadata| metadata.embedded_jars)
-                .unwrap_or_default(),
+                .bundled_mods
+                .iter()
+                .map(crate::lockfile::BundledMod::from_jar_metadata)
+                .collect(),
+            embedded_jars: metadata.embedded_jars,
         });
     }
 
@@ -226,6 +204,7 @@ fn read_version_json_from_jar(
 pub async fn run_init(
     input: InitInput,
     providers: &[Box<dyn crate::providers::ModProvider>],
+    interaction: crate::installer::InstallInteraction,
 ) -> Result<InitOutput, OrbitError> {
     if input.instance_dir.join("orbit.toml").exists() {
         return Err(OrbitError::Other(anyhow::anyhow!(
@@ -236,59 +215,14 @@ pub async fn run_init(
     // 1. 扫描 mods/
     let scanned = scan_mods_dir(&input.instance_dir, &input.modloader)?;
 
-    // 2. 识别物理 JAR；同文件提供的模组已经由 JAR 层归入 bundled。
+    // 2. Identify top-level package JARs. Modules contained in one package are
+    // already represented by the JAR layer as bundled metadata.
     let identified = crate::identification::identify_mods(&scanned, providers).await?;
 
-    // 3. 构建依赖声明 + lock 条目（仅顶层模组）
+    // 3. Build root declarations and concrete top-level package candidates.
     let lock_entries: Vec<crate::lockfile::PackageEntry> = identified
         .iter()
-        .map(|m| {
-            let key = if !m.mod_id.is_empty() {
-                m.mod_id.clone()
-            } else if !m.mod_name.is_empty() {
-                m.mod_name.clone()
-            } else {
-                m.filename.clone()
-            };
-            let mut entry = crate::lockfile::PackageEntry {
-                mod_id: key,
-                version: m.version.clone(),
-                sha1: m.sha1.clone(),
-                sha256: m.sha256.clone(),
-                sha512: m.sha512.clone(),
-                filename: m.filename.clone(),
-                provider: String::new(),
-                modrinth: None,
-                curseforge: None,
-                file: None,
-                dependencies: m.dependencies.clone(),
-                environment: m.environment,
-                provides: m.provides.clone(),
-                language_loader: m.language_loader.clone(),
-                embedded_artifacts: m.embedded_artifacts.clone(),
-                bundled: m.bundled.clone(),
-            };
-
-            match &m.source {
-                crate::identification::IdentifiedSource::Platform(platform) => {
-                    entry.provider = platform.name().to_string();
-                    match platform {
-                        crate::identification::IdentifiedPlatform::Modrinth(metadata) => {
-                            entry.modrinth = Some(metadata.clone());
-                        }
-                        crate::identification::IdentifiedPlatform::CurseForge(metadata) => {
-                            entry.curseforge = Some(metadata.clone());
-                        }
-                    }
-                }
-                crate::identification::IdentifiedSource::File { path } => {
-                    entry.provider = "file".to_string();
-                    entry.file = Some(crate::lockfile::FileInfo { path: path.clone() });
-                }
-            }
-
-            entry
-        })
+        .map(crate::identification::IdentifiedMod::to_package_entry)
         .collect();
 
     let mc_ver = input.mc_version.clone();
@@ -296,19 +230,9 @@ pub async fn run_init(
     let loader_ver = input.modloader_version.clone();
     let mut dependencies = indexmap::IndexMap::new();
     for m in &identified {
-        let key = if !m.mod_id.is_empty() {
-            m.mod_id.clone()
-        } else if !m.mod_name.is_empty() {
-            m.mod_name.clone()
-        } else {
-            m.filename.clone()
-        };
+        let key = m.package_id();
         let spec = DependencySpec::Full {
-            version: if m.version.is_empty() {
-                None
-            } else {
-                Some(m.version.clone())
-            },
+            version: Some("*".to_string()),
             optional: None,
             env: None,
             exclude: None,
@@ -333,27 +257,60 @@ pub async fn run_init(
         overrides: Default::default(),
     };
 
-    // 4. 使用 PubGrub 解析器检查依赖图完整性
-    let dependency_error = crate::resolver::check_local_graph(&manifest, &identified).err();
+    // 4. Resolve the local candidate set through the same portfolio path used
+    // by sync. Duplicate files for one mod_id are versions of one package.
+    let crate::installer::InstallInteraction {
+        select_resolution,
+        confirm_install,
+    } = interaction;
+    let (selected_lock_entries, removed, dependency_error) =
+        match crate::package_reconciliation::select_local_packages(
+            &manifest,
+            &lock_entries,
+            select_resolution,
+        )
+        .await
+        {
+            Ok(selection) => {
+                if confirm_install.is_some_and(|confirm| {
+                    !confirm(&crate::package_reconciliation::confirmation_report(
+                        &selection,
+                    ))
+                }) {
+                    return Err(OrbitError::Other(anyhow::anyhow!(
+                        "initialization cancelled before removing unselected package versions"
+                    )));
+                }
+                (selection.selected_entries, selection.removed, None)
+            }
+            Err(error) => (lock_entries, Vec::new(), Some(error)),
+        };
 
-    // 4. 写入 orbit.toml + orbit.lock
+    // 5. Write the selected package graph. If the graph is incomplete, retain
+    // every local file and report the resolver error without guessing a cleanup.
     let lockfile = crate::lockfile::OrbitLockfile {
         meta: crate::lockfile::LockMeta {
             mc_version: mc_ver,
             modloader: loader_name,
             modloader_version: loader_ver,
         },
-        packages: lock_entries,
+        packages: selected_lock_entries,
     };
+    let locked_packages = lockfile.packages.len();
 
     let manifest_file = crate::workspace::ManifestFile::new(&input.instance_dir, manifest.clone());
     let lock = crate::workspace::Lockfile::new(&input.instance_dir, lockfile);
-    manifest_file.save()?;
-    lock.save()?;
+    if !input.dry_run {
+        manifest_file.save()?;
+        lock.save()?;
+        crate::package_reconciliation::remove_unselected_packages(&input.instance_dir, &removed)?;
+    }
 
     Ok(InitOutput {
         manifest,
         scanned_mods: scanned,
+        removed,
+        locked_packages,
         dependency_error,
     })
 }
@@ -396,6 +353,16 @@ mod tests {
 
     fn write_jar(path: &Path, bytes: &[u8]) {
         std::fs::write(path, bytes).unwrap();
+    }
+
+    fn write_fabric_package(path: &Path, mod_id: &str, version: &str) {
+        let metadata = format!(
+            r#"{{"schemaVersion":1,"id":"{mod_id}","version":"{version}","name":"Example"}}"#
+        );
+        write_jar(
+            path,
+            &jar_bytes(&[("fabric.mod.json", metadata.as_bytes())]),
+        );
     }
 
     #[test]
@@ -474,6 +441,23 @@ mod tests {
         std::fs::remove_dir_all(instance).ok();
     }
 
+    #[test]
+    fn scan_mods_dir_rejects_a_top_level_jar_without_loader_metadata() {
+        let instance = temp_instance_dir("invalid-top-level-package");
+        let mods_dir = instance.join("mods");
+        std::fs::create_dir_all(&mods_dir).unwrap();
+        write_jar(
+            &mods_dir.join("library-only.jar"),
+            &jar_bytes(&[("example.txt", b"not a mod")]),
+        );
+
+        let error = scan_mods_dir(&instance, "fabric").unwrap_err();
+
+        assert!(error.to_string().contains("top-level package"));
+        assert!(error.to_string().contains("fabric"));
+        std::fs::remove_dir_all(instance).ok();
+    }
+
     #[tokio::test]
     async fn init_refuses_to_overwrite_an_existing_manifest() {
         let directory = temp_instance_dir("existing-manifest");
@@ -489,18 +473,99 @@ mod tests {
             modloader: "fabric".to_string(),
             modloader_version: "0.16.0".to_string(),
             instance_dir: directory.clone(),
+            dry_run: false,
         };
 
-        let error = match run_init(input, &[]).await {
-            Ok(_) => panic!("init unexpectedly overwrote an existing manifest"),
-            Err(error) => error.to_string(),
-        };
+        let error =
+            match run_init(input, &[], crate::installer::InstallInteraction::default()).await {
+                Ok(_) => panic!("init unexpectedly overwrote an existing manifest"),
+                Err(error) => error.to_string(),
+            };
 
         assert!(error.contains("already exists"));
         assert!(
             std::fs::read_to_string(directory.join("orbit.toml"))
                 .unwrap()
                 .contains("keep-me")
+        );
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[tokio::test]
+    async fn init_confirms_and_removes_unselected_versions_of_one_package() {
+        let directory = temp_instance_dir("duplicate-packages");
+        let mods = directory.join("mods");
+        std::fs::create_dir_all(&mods).unwrap();
+        write_fabric_package(&mods.join("alpha-1.jar"), "alpha", "1");
+        write_fabric_package(&mods.join("alpha-2.jar"), "alpha", "2");
+        let input = |dry_run| InitInput {
+            name: "test".to_string(),
+            mc_version: "1.20.1".to_string(),
+            modloader: "fabric".to_string(),
+            modloader_version: "0.16.10".to_string(),
+            instance_dir: directory.clone(),
+            dry_run,
+        };
+
+        let preview = run_init(
+            input(true),
+            &[],
+            crate::installer::InstallInteraction::default(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(preview.removed[0].filename, "alpha-1.jar");
+        assert!(!directory.join("orbit.toml").exists());
+        assert!(mods.join("alpha-1.jar").exists());
+
+        let error = match run_init(
+            input(false),
+            &[],
+            crate::installer::InstallInteraction {
+                select_resolution: None,
+                confirm_install: Some(Box::new(|report| {
+                    assert_eq!(report.removed.len(), 1);
+                    assert_eq!(report.removed[0].filename, "alpha-1.jar");
+                    false
+                })),
+            },
+        )
+        .await
+        {
+            Ok(_) => panic!("init unexpectedly ignored rejected package cleanup"),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("initialization cancelled"));
+        assert!(!directory.join("orbit.toml").exists());
+        assert!(mods.join("alpha-1.jar").exists());
+
+        let output = run_init(
+            input(false),
+            &[],
+            crate::installer::InstallInteraction {
+                select_resolution: None,
+                confirm_install: Some(Box::new(|_| true)),
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(output.locked_packages, 1);
+        assert_eq!(output.removed[0].filename, "alpha-1.jar");
+        assert!(!mods.join("alpha-1.jar").exists());
+        assert!(mods.join("alpha-2.jar").exists());
+        assert_eq!(
+            crate::workspace::Lockfile::open(&directory)
+                .unwrap()
+                .inner
+                .find("alpha")
+                .unwrap()
+                .version,
+            "2"
+        );
+        assert_eq!(
+            output.manifest.dependencies["alpha"].version_constraint(),
+            Some("*")
         );
         std::fs::remove_dir_all(directory).unwrap();
     }

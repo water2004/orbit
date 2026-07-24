@@ -14,7 +14,8 @@ pub mod version_profile;
 use crate::error::OrbitError;
 pub use model::{
     DependencyExpression, DependencyKind, DependencyOrdering, EmbeddedArtifact, Environment,
-    LanguageLoaderRequirement, ModDependency, ModFileMetadata, ModMetadata, ProvidedMod,
+    LanguageLoaderRequirement, ModDependency, ModFileMetadata, ModLoadCondition, ModMetadata,
+    ProvidedMod,
 };
 
 // ---------------------------------------------------------------------------

@@ -132,19 +132,39 @@ pub fn install_interaction(dry_run: bool, yes: bool) -> orbit_core::InstallInter
     }
 }
 
-pub fn resolution_selector(dry_run: bool, yes: bool) -> Option<orbit_core::ResolutionSelector> {
-    (!dry_run && !yes).then(|| Box::new(prompt_resolution) as orbit_core::ResolutionSelector)
+pub fn resolution_selector(_dry_run: bool, yes: bool) -> Option<orbit_core::ResolutionSelector> {
+    (!yes).then(|| Box::new(prompt_resolution) as orbit_core::ResolutionSelector)
 }
 
 fn prompt_resolution(alternatives: &[orbit_core::ResolutionReport]) -> usize {
     eprintln!("\nMultiple dependency solutions are available:");
     for (index, alternative) in alternatives.iter().enumerate() {
         eprintln!("\n  {}.", index + 1);
-        if alternative.upgrades.is_empty() {
+        if alternative.changes.is_empty() {
             eprintln!("     keep all currently selected versions");
         } else {
-            for (package, version) in &alternative.upgrades {
-                eprintln!("     {package} → {version}");
+            for change in &alternative.changes {
+                let current = change.current_version.as_deref().unwrap_or("not installed");
+                let selected = change.selected_version.as_deref().unwrap_or("removed");
+                let current_file = change
+                    .filename
+                    .as_deref()
+                    .map(|filename| format!(" [{filename}]"))
+                    .unwrap_or_default();
+                let selected_file = change
+                    .selected_filename
+                    .as_deref()
+                    .map(|filename| format!(" [{filename}]"))
+                    .unwrap_or_default();
+                eprintln!(
+                    "     {}: {}{} → {}{} ({})",
+                    change.package,
+                    current,
+                    current_file,
+                    selected,
+                    selected_file,
+                    change_label(change.kind)
+                );
             }
         }
         if !alternative.warnings.is_empty() {
@@ -173,22 +193,59 @@ fn prompt_resolution(alternatives: &[orbit_core::ResolutionReport]) -> usize {
 }
 
 pub fn prompt_install_report(report: &orbit_core::InstallReport, yes: bool) -> bool {
-    if report.installed.is_empty() {
+    if report.installed.is_empty() && report.removed.is_empty() && report.changes.is_empty() {
         return true;
     }
-    eprintln!("\nThe following mods will be installed/upgraded:");
-    for m in &report.installed {
-        eprintln!("  + {} v{}", m.mod_id, m.version);
-        for expression in &m.dependencies {
-            for dependency in expression.relations() {
-                eprintln!(
-                    "      ↳ {} {} ({:?})",
-                    dependency.id, dependency.requirement, dependency.kind
-                );
+    if !report.changes.is_empty() {
+        eprintln!("\nPlanned package transaction:");
+        for change in &report.changes {
+            let current = change.current_version.as_deref().unwrap_or("not installed");
+            let selected = change.selected_version.as_deref().unwrap_or("removed");
+            let current_file = change
+                .filename
+                .as_deref()
+                .map(|filename| format!(" [{filename}]"))
+                .unwrap_or_default();
+            let selected_file = change
+                .selected_filename
+                .as_deref()
+                .map(|filename| format!(" [{filename}]"))
+                .unwrap_or_default();
+            eprintln!(
+                "  {} {}{} → {}{} ({})",
+                change.package,
+                current,
+                current_file,
+                selected,
+                selected_file,
+                change_label(change.kind)
+            );
+        }
+    }
+    if !report.installed.is_empty() {
+        eprintln!("\nSelected package contents:");
+        for m in &report.installed {
+            eprintln!("  {} v{}", m.mod_id, m.version);
+            for expression in &m.dependencies {
+                for dependency in expression.relations() {
+                    eprintln!(
+                        "      ↳ {} {} ({:?})",
+                        dependency.id, dependency.requirement, dependency.kind
+                    );
+                }
+            }
+            for bundled in &m.bundled {
+                print_bundled_mod(bundled, 1);
             }
         }
-        for bundled in &m.bundled {
-            print_bundled_mod(bundled, 1);
+    }
+    if report.changes.is_empty() && !report.removed.is_empty() {
+        eprintln!("\nThe following unselected package versions will be removed:");
+        for package in &report.removed {
+            eprintln!(
+                "  - {} v{} ({})",
+                package.mod_id, package.version, package.filename
+            );
         }
     }
     if !report.already_satisfied.is_empty() {
@@ -207,6 +264,16 @@ pub fn prompt_install_report(report: &orbit_core::InstallReport, yes: bool) -> b
     std::io::stdin().read_line(&mut input).ok();
     let input = input.trim().to_lowercase();
     input.is_empty() || input == "y" || input == "yes"
+}
+
+fn change_label(kind: orbit_core::PackageChangeKind) -> &'static str {
+    match kind {
+        orbit_core::PackageChangeKind::Install => "install",
+        orbit_core::PackageChangeKind::Upgrade => "upgrade",
+        orbit_core::PackageChangeKind::Downgrade => "downgrade",
+        orbit_core::PackageChangeKind::Replace => "replace",
+        orbit_core::PackageChangeKind::Remove => "remove",
+    }
 }
 
 fn print_bundled_mod(bundled: &orbit_core::BundledMod, depth: usize) {

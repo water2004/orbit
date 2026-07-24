@@ -9,19 +9,23 @@ use crate::lockfile::OrbitLockfile;
 use crate::manifest::OrbitManifest;
 use crate::providers::{ModProvider, RemoteArtifact};
 use crate::resolver::types::{
-    CandidateCatalog, CandidateDiagnostic, ResolutionSelector, ResolvedCandidates,
+    CandidateCatalog, CandidateDiagnostic, PackageChange, PackageChangeKind, ResolutionReport,
+    ResolutionSelector, ResolvedCandidates,
 };
 
 pub struct OutdatedMod {
     pub mod_id: String,
     pub current_version: String,
     pub new_version: String,
+    pub candidate_id: String,
 }
 
 #[derive(Default)]
 pub struct OutdatedReport {
     pub updates: Vec<OutdatedMod>,
     pub resolved: ResolvedCandidates,
+    pub changes: Vec<PackageChange>,
+    pub resolution: ResolutionReport,
     pub diagnostics: Vec<CandidateDiagnostic>,
     pub warnings: Vec<String>,
 }
@@ -267,30 +271,38 @@ pub async fn check_all_outdated(
     }
 
     // 3. Resolve
-    let portfolio = crate::resolver::resolve_candidate_portfolio(manifest, lockfile, &catalog)
+    let mut portfolio = crate::resolver::resolve_candidate_portfolio(manifest, lockfile, &catalog)
         .await
         .map_err(|e| OrbitError::Other(anyhow::anyhow!("{e}")))?;
+    portfolio.alternatives.retain(ResolutionReport::has_upgrade);
+    if portfolio.alternatives.is_empty() {
+        return Ok(OutdatedReport {
+            resolved: catalog.resolved,
+            ..OutdatedReport::default()
+        });
+    }
     let resolution = crate::resolver::select_resolution(portfolio, selector)
         .map_err(|e| OrbitError::Other(anyhow::anyhow!("{e}")))?;
 
     let mut updates: Vec<OutdatedMod> = resolution
-        .upgrades
-        .into_iter()
-        .map(|(mod_id, new_version)| OutdatedMod {
-            current_version: lockfile
-                .find(&mod_id)
-                .map(|entry| entry.version.clone())
-                .unwrap_or_default(),
-            new_version,
-            mod_id,
+        .changes
+        .iter()
+        .filter(|change| change.kind == PackageChangeKind::Upgrade)
+        .map(|change| OutdatedMod {
+            candidate_id: resolution.selected_candidates[&change.package].clone(),
+            current_version: change.current_version.clone().unwrap_or_default(),
+            new_version: change.selected_version.clone().unwrap_or_default(),
+            mod_id: change.package.clone(),
         })
         .collect();
     updates.sort_by(|a, b| a.mod_id.cmp(&b.mod_id));
     Ok(OutdatedReport {
         updates,
         resolved: catalog.resolved,
-        diagnostics: resolution.diagnostics,
-        warnings: resolution.warnings,
+        changes: resolution.changes.clone(),
+        diagnostics: resolution.diagnostics.clone(),
+        warnings: resolution.warnings.clone(),
+        resolution,
     })
 }
 
@@ -482,6 +494,8 @@ mod tests {
                     dependencies: Vec::new(),
                     provides: Vec::new(),
                     language_loader: None,
+                    load_condition: crate::metadata::ModLoadCondition::IfPossible,
+                    origin: crate::jar::JarModOrigin::Root,
                     embedded_jars: Vec::new(),
                     embedded_artifacts: Vec::new(),
                     bundled_mods: Vec::new(),
@@ -499,6 +513,8 @@ mod tests {
                     dependencies: Vec::new(),
                     provides: Vec::new(),
                     language_loader: None,
+                    load_condition: crate::metadata::ModLoadCondition::IfPossible,
+                    origin: crate::jar::JarModOrigin::Root,
                     embedded_jars: Vec::new(),
                     embedded_artifacts: Vec::new(),
                     bundled_mods: Vec::new(),
@@ -511,12 +527,14 @@ mod tests {
         assert!(
             download
                 .resolved
-                .contains_key(&("actual-a".to_string(), "1".to_string()))
+                .values()
+                .any(|artifact| artifact.slug == "source-a")
         );
         assert!(
             download
                 .resolved
-                .contains_key(&("actual-b".to_string(), "1".to_string()))
+                .values()
+                .any(|artifact| artifact.slug == "source-b")
         );
         assert_eq!(
             download.source_packages[&("modrinth".to_string(), "source-a".to_string())],
@@ -529,7 +547,7 @@ mod tests {
     }
 
     #[test]
-    fn candidate_catalog_deduplicates_equal_jar_identities_but_rejects_conflicts() {
+    fn candidate_catalog_preserves_duplicate_mod_versions_as_distinct_package_candidates() {
         fn metadata(
             dependencies: Vec<crate::metadata::ModDependency>,
         ) -> crate::jar::JarModMetadata {
@@ -544,6 +562,8 @@ mod tests {
                     .collect(),
                 provides: Vec::new(),
                 language_loader: None,
+                load_condition: crate::metadata::ModLoadCondition::IfPossible,
+                origin: crate::jar::JarModOrigin::Root,
                 embedded_jars: Vec::new(),
                 embedded_artifacts: Vec::new(),
                 bundled_mods: Vec::new(),
@@ -558,28 +578,31 @@ mod tests {
             .record(metadata(Vec::new()), artifact("mirror", "project-b"))
             .unwrap();
 
-        assert_eq!(catalog.candidates["actual"].len(), 1);
-        assert_eq!(catalog.resolved.len(), 1);
-        assert_eq!(
-            catalog
-                .resolved
-                .get(&("actual".to_string(), "1".to_string()))
-                .unwrap()
-                .slug,
-            "first"
-        );
+        assert_eq!(catalog.candidates["actual"].len(), 2);
+        assert_eq!(catalog.resolved.len(), 2);
         assert_eq!(
             catalog.package_for_locator("mirror").unwrap().as_deref(),
             Some("actual")
         );
 
-        let error = catalog
+        catalog
             .record(
                 metadata(vec![crate::metadata::ModDependency::required(
                     "different",
                     "*",
                 )]),
                 artifact("conflict", "project-c"),
+            )
+            .unwrap();
+        assert_eq!(catalog.candidates["actual"].len(), 3);
+
+        let error = catalog
+            .record(
+                metadata(vec![crate::metadata::ModDependency::required(
+                    "same-artifact-different-metadata",
+                    "*",
+                )]),
+                artifact("same-artifact", "project-c"),
             )
             .unwrap_err();
         assert!(error.to_string().contains("different metadata"));

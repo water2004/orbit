@@ -113,7 +113,7 @@ pub struct ArtifactFingerprint {
     pub curseforge: u32,
 }
 
-/// Provider 返回的可下载物理 artifact。
+/// Provider 返回的可下载 artifact locator。
 ///
 /// 这里故意不包含 mod ID、模组版本、依赖、运行环境或 provides。这些
 /// package metadata 只能在下载后从 JAR loader metadata 中取得。
@@ -140,6 +140,24 @@ pub struct RemoteArtifact {
 }
 
 impl RemoteArtifact {
+    /// Stable identity for one provider artifact within a candidate catalog.
+    ///
+    /// Provider IDs are preferred; hashes and the URL keep anonymous/file-like
+    /// artifacts distinct without trusting the remote display version.
+    pub fn candidate_id(&self) -> String {
+        format!(
+            "{}:{}:{}:{}",
+            self.provider,
+            self.version_id().unwrap_or_default(),
+            if self.sha512.is_empty() {
+                &self.sha1
+            } else {
+                &self.sha512
+            },
+            self.download_url
+        )
+    }
+
     pub fn project_id(&self) -> Option<String> {
         self.modrinth
             .as_ref()

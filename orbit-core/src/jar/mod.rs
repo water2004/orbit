@@ -19,6 +19,22 @@ use crate::error::OrbitError;
 
 // ── 统一元数据结构 ──────────────────────────────────────────────
 
+/// How a mod module is contained by its top-level package metadata.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum JarModOrigin {
+    /// Primary module of the top-level package JAR.
+    Root,
+    /// Additional mod declared by the same loader metadata file.
+    SameFile,
+    /// Mod metadata discovered in a loader-declared nested JAR.
+    Nested {
+        path: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        artifact: Option<crate::metadata::EmbeddedArtifact>,
+    },
+}
+
 /// 从 JAR 中提取的模组元数据（与 loader 无关的公共结构）
 #[derive(Debug, Clone)]
 pub struct JarModMetadata {
@@ -29,9 +45,11 @@ pub struct JarModMetadata {
     pub dependencies: Vec<crate::metadata::DependencyExpression>,
     pub provides: Vec<crate::metadata::ProvidedMod>,
     pub language_loader: Option<crate::metadata::LanguageLoaderRequirement>,
+    pub load_condition: crate::metadata::ModLoadCondition,
+    pub origin: JarModOrigin,
     pub embedded_jars: Vec<String>,
     pub embedded_artifacts: Vec<crate::metadata::EmbeddedArtifact>,
-    /// 同一物理 JAR 提供的其他模组，包括多模组声明和嵌套 JAR。
+    /// 顶层包内容中的其他模组模块，包括多模组声明和嵌套 JAR。
     pub bundled_mods: Vec<JarModMetadata>,
 }
 
@@ -52,6 +70,8 @@ pub(super) fn from_mod_file(
             dependencies: metadata.dependencies,
             provides: metadata.provides,
             language_loader: file.language_loader.clone(),
+            load_condition: metadata.load_condition,
+            origin: JarModOrigin::SameFile,
             embedded_jars: Vec::new(),
             embedded_artifacts: Vec::new(),
             bundled_mods: Vec::new(),
@@ -66,6 +86,8 @@ pub(super) fn from_mod_file(
         dependencies: primary.dependencies,
         provides: primary.provides,
         language_loader: file.language_loader,
+        load_condition: primary.load_condition,
+        origin: JarModOrigin::Root,
         embedded_jars: file.embedded_jars,
         embedded_artifacts: Vec::new(),
         bundled_mods,
@@ -190,7 +212,15 @@ fn read_mod_metadata_from_archive<R: std::io::Read + std::io::Seek>(
             entry.read_to_end(&mut bytes).map_err(OrbitError::Io)?;
             let cursor = std::io::Cursor::new(bytes);
             let mut embedded = zip::ZipArchive::new(cursor).map_err(OrbitError::Zip)?;
-            if let Some(inner_meta) = read_mod_metadata_from_archive(&mut embedded, loader)? {
+            if let Some(mut inner_meta) = read_mod_metadata_from_archive(&mut embedded, loader)? {
+                inner_meta.origin = JarModOrigin::Nested {
+                    path: emb_path.clone(),
+                    artifact: meta
+                        .embedded_artifacts
+                        .iter()
+                        .find(|artifact| artifact.path == *emb_path)
+                        .cloned(),
+                };
                 bundled.push(inner_meta);
             }
         }
@@ -530,6 +560,14 @@ mod tests {
         let bundled = &meta.bundled_mods[0];
         assert_eq!(bundled.mod_id, "litematica-printer");
         assert_eq!(bundled.version, "2.4+20260330.10");
+        assert_eq!(
+            bundled.load_condition,
+            crate::metadata::ModLoadCondition::IfPossible
+        );
+        assert!(matches!(
+            &bundled.origin,
+            JarModOrigin::Nested { path, artifact: None } if path == embedded_path
+        ));
         assert_eq!(
             bundled.embedded_jars,
             vec!["META-INF/jars/pinyin4j-2.5.1.jar"]

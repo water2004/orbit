@@ -3,6 +3,7 @@ use pubgrub::{Ranges, resolve_with_observer};
 use super::*;
 use crate::resolver::provider::OrbitDependencyProvider;
 use crate::resolver::types::{CandidateDiagnosticKind, SolverPackage, SolverVersion};
+use crate::versions::Version;
 
 fn domain_version(value: &str) -> Version {
     Version::Generic(value.to_string())
@@ -38,7 +39,7 @@ fn explains_a_candidate_excluded_before_selection() {
         vec![(package("a"), Ranges::singleton(version("1")))],
     );
 
-    let mut trace = ResolutionTrace::new([("a".to_string(), domain_version("2"))]);
+    let mut trace = ResolutionTrace::new([("a".to_string(), version("2"))]);
     let solution =
         resolve_with_observer(&provider, package("root"), version("1"), &mut trace).unwrap();
 
@@ -83,7 +84,7 @@ fn explains_a_candidate_rejected_after_conflicting_choices() {
     provider.add_package_deps(package("b"), version("2"), vec![]);
     provider.add_package_deps(package("b"), version("1"), vec![]);
 
-    let mut trace = ResolutionTrace::new([("a".to_string(), domain_version("2"))]);
+    let mut trace = ResolutionTrace::new([("a".to_string(), version("2"))]);
     let solution =
         resolve_with_observer(&provider, package("root"), version("1"), &mut trace).unwrap();
 

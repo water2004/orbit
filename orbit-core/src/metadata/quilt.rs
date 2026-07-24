@@ -4,7 +4,7 @@ use serde_json::Value;
 
 use super::{
     DependencyExpression, DependencyKind, DependencyOrdering, Environment, MetadataParser,
-    ModDependency, ModFileMetadata, ModLoader, ModMetadata, ProvidedMod,
+    ModDependency, ModFileMetadata, ModLoadCondition, ModLoader, ModMetadata, ProvidedMod,
 };
 use crate::error::OrbitError;
 
@@ -67,10 +67,22 @@ pub(crate) fn parse_quilt(content: &str) -> Result<ModFileMetadata, OrbitError> 
                 .unwrap_or(Environment::Both),
             dependencies,
             provides: parse_provides(loader.get("provides"), &version)?,
+            load_condition: parse_load_condition(loader.get("load_type"))?,
         }],
         embedded_jars: parse_jars(loader.get("jars").or_else(|| root.get("jars"))),
         substitution_properties: Default::default(),
     })
+}
+
+fn parse_load_condition(value: Option<&Value>) -> Result<ModLoadCondition, OrbitError> {
+    match value.and_then(Value::as_str).unwrap_or("if_required") {
+        "always" => Ok(ModLoadCondition::Always),
+        "if_possible" => Ok(ModLoadCondition::IfPossible),
+        "if_required" => Ok(ModLoadCondition::IfRequired),
+        value => Err(OrbitError::Other(anyhow::anyhow!(
+            "quilt load_type must be always, if_possible, or if_required, got '{value}'"
+        ))),
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -336,5 +348,39 @@ mod tests {
         ));
         assert_eq!(metadata.provides[0].id, "alias");
         assert_eq!(metadata.provides[1].version.as_deref(), Some("2"));
+    }
+
+    #[test]
+    fn parses_loader_load_conditions_and_defaults_to_if_required() {
+        let metadata = |load_type: Option<&str>| {
+            let field = load_type
+                .map(|value| format!(r#","load_type":"{value}""#))
+                .unwrap_or_default();
+            parse_quilt(&format!(
+                r#"{{
+  "quilt_loader": {{
+    "id": "example",
+    "version": "1"{field}
+  }}
+}}"#
+            ))
+            .unwrap()
+            .mods
+            .remove(0)
+            .load_condition
+        };
+
+        assert_eq!(metadata(None), ModLoadCondition::IfRequired);
+        assert_eq!(metadata(Some("always")), ModLoadCondition::Always);
+        assert_eq!(metadata(Some("if_possible")), ModLoadCondition::IfPossible);
+        assert_eq!(metadata(Some("if_required")), ModLoadCondition::IfRequired);
+        assert!(
+            parse_quilt(
+                r#"{"quilt_loader":{"id":"example","version":"1","load_type":"sometimes"}}"#
+            )
+            .unwrap_err()
+            .to_string()
+            .contains("load_type")
+        );
     }
 }

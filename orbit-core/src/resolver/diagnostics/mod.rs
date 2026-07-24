@@ -9,7 +9,6 @@ use std::collections::HashMap;
 use pubgrub::{DerivationTree, Ranges, SolverEvent, SolverObserver};
 
 use crate::resolver::types::{CandidateDiagnostic, SolverPackage, SolverVersion};
-use crate::versions::Version;
 
 pub(super) type Cause = DerivationTree<SolverPackage, Ranges<SolverVersion>, String>;
 
@@ -21,7 +20,7 @@ pub(super) enum SkippedVersionReason {
 
 #[derive(Debug, Clone)]
 pub(super) struct WatchedVersion {
-    pub(super) version: Version,
+    pub(super) version: SolverVersion,
     decision_level: Option<u32>,
     pub(super) reason: Option<SkippedVersionReason>,
 }
@@ -72,7 +71,7 @@ pub(crate) struct ResolutionSnapshot {
 }
 
 impl ResolutionTrace {
-    pub(crate) fn new(candidates: impl IntoIterator<Item = (String, Version)>) -> Self {
+    pub(crate) fn new(candidates: impl IntoIterator<Item = (String, SolverVersion)>) -> Self {
         Self {
             watched: candidates
                 .into_iter()
@@ -119,7 +118,7 @@ impl SolverObserver<SolverPackage, Ranges<SolverVersion>, String> for Resolution
         match event {
             SolverEvent::PackageChoice { package, allowed } => {
                 if let Some(watched) = self.watched.get_mut(package)
-                    && allowed.contains(&SolverVersion::Domain(watched.version.clone()))
+                    && allowed.contains(&watched.version)
                 {
                     // A previous exclusion may have been undone by backtracking.
                     watched.decision_level = None;
@@ -132,7 +131,7 @@ impl SolverObserver<SolverPackage, Ranges<SolverVersion>, String> for Resolution
                 allowed: _,
             } => {
                 if let Some(watched) = self.watched.get_mut(package)
-                    && version.domain() == Some(&watched.version)
+                    && version == &watched.version
                 {
                     watched.reason = None;
                 }
@@ -143,7 +142,7 @@ impl SolverObserver<SolverPackage, Ranges<SolverVersion>, String> for Resolution
                 decision_level,
             } => {
                 if let Some(watched) = self.watched.get_mut(package)
-                    && version.domain() == Some(&watched.version)
+                    && version == &watched.version
                 {
                     watched.decision_level = Some(decision_level);
                     watched.reason = None;
@@ -156,9 +155,8 @@ impl SolverObserver<SolverPackage, Ranges<SolverVersion>, String> for Resolution
                 cause,
             } => {
                 if let Some(watched) = self.watched.get_mut(package) {
-                    let watched_version = SolverVersion::Domain(watched.version.clone());
-                    let was_allowed = previous.is_none_or(|term| term.contains(&watched_version));
-                    if was_allowed && !current.contains(&watched_version) {
+                    let was_allowed = previous.is_none_or(|term| term.contains(&watched.version));
+                    if was_allowed && !current.contains(&watched.version) {
                         watched.decision_level = None;
                         if !matches!(watched.reason, Some(SkippedVersionReason::Backtracked(_)))
                             || render::has_domain_facts(cause)

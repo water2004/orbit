@@ -94,21 +94,36 @@ pub async fn handle(
         modloader: loader.clone(),
         modloader_version: loader_ver,
         instance_dir,
+        dry_run: ctx.dry_run,
     };
 
     let providers = create_identification_providers(&ctx.runtime.config().auth)?;
-    let output = run_init(input, &providers).await?;
+    let output = run_init(
+        input,
+        &providers,
+        super::install_interaction(ctx.dry_run, ctx.yes),
+    )
+    .await?;
 
     // ── 4. 输出结果 ────────────────────────────
-    println!(
-        "✓ Initialized Orbit project '{name}' ({loader}, MC {})",
-        output.manifest.project.mc_version
-    );
-    println!("  orbit.toml created");
-    println!(
-        "  orbit.lock created ({} entries)",
-        output.scanned_mods.len()
-    );
+    if ctx.dry_run {
+        println!(
+            "[dry-run] would initialize Orbit project '{name}' ({loader}, MC {})",
+            output.manifest.project.mc_version
+        );
+        println!("  [dry-run] would create orbit.toml");
+        println!(
+            "  [dry-run] would create orbit.lock ({} entries)",
+            output.locked_packages
+        );
+    } else {
+        println!(
+            "✓ Initialized Orbit project '{name}' ({loader}, MC {})",
+            output.manifest.project.mc_version
+        );
+        println!("  orbit.toml created");
+        println!("  orbit.lock created ({} entries)", output.locked_packages);
+    }
     if output.scanned_mods.is_empty() {
         println!("  No mods found in mods/ directory.");
     } else {
@@ -129,17 +144,32 @@ pub async fn handle(
         eprintln!("Dependency graph verification failed:\n{error}");
         eprintln!("Use 'orbit install' or 'orbit sync' to fix missing dependencies.");
     }
-    orbit_core::register_instance(
-        ctx.runtime.paths(),
-        orbit_core::InstanceEntry {
-            name: name.clone(),
-            path: registered_path.to_string_lossy().into_owned(),
-            mc_version: output.manifest.project.mc_version.clone(),
-            modloader: loader.clone(),
-            is_default: false,
-        },
-    )?;
-    println!("  Run 'orbit install' to restore missing mods.");
+    for package in &output.removed {
+        if ctx.dry_run {
+            println!(
+                "  [dry-run] would remove unselected package {} v{} ({})",
+                package.mod_id, package.version, package.filename
+            );
+        } else {
+            println!(
+                "  Removed unselected package {} v{} ({})",
+                package.mod_id, package.version, package.filename
+            );
+        }
+    }
+    if !ctx.dry_run {
+        orbit_core::register_instance(
+            ctx.runtime.paths(),
+            orbit_core::InstanceEntry {
+                name: name.clone(),
+                path: registered_path.to_string_lossy().into_owned(),
+                mc_version: output.manifest.project.mc_version.clone(),
+                modloader: loader.clone(),
+                is_default: false,
+            },
+        )?;
+        println!("  Run 'orbit install' to restore missing mods.");
+    }
 
     Ok(())
 }

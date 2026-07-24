@@ -60,6 +60,22 @@ pub enum DependencyOrdering {
     None,
 }
 
+/// Loader policy for a mod discovered inside a top-level package JAR.
+///
+/// Top-level files are selected by Orbit's package graph. This policy only
+/// affects contained candidates after their owner has been selected.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ModLoadCondition {
+    /// The owner requires one loaded candidate for this mod ID.
+    Always,
+    /// Prefer loading one provider, but allow omitting it when no candidate is compatible.
+    #[default]
+    IfPossible,
+    /// Make the candidate available only when another loaded mod requires it.
+    IfRequired,
+}
+
 /// A normalized dependency relation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ModDependency {
@@ -147,7 +163,7 @@ pub struct EmbeddedArtifact {
     pub obfuscated: bool,
 }
 
-/// A single logical mod declared by a metadata file.
+/// A single mod module declared by a loader metadata file.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModMetadata {
     pub id: String,
@@ -159,6 +175,8 @@ pub struct ModMetadata {
     pub dependencies: Vec<DependencyExpression>,
     /// Loader-level aliases satisfied by this mod (for example Fabric `provides`).
     pub provides: Vec<ProvidedMod>,
+    /// Selection policy when this metadata is discovered as a contained mod.
+    pub load_condition: ModLoadCondition,
 }
 
 /// The language provider requested by a Forge-family metadata file.

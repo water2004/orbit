@@ -2,7 +2,8 @@ use std::collections::{BTreeMap, HashMap};
 use std::ops::Bound;
 
 use crate::metadata::{
-    DependencyExpression, EmbeddedArtifact, Environment, LanguageLoaderRequirement, ProvidedMod,
+    DependencyExpression, EmbeddedArtifact, Environment, LanguageLoaderRequirement,
+    ModLoadCondition, ProvidedMod,
 };
 use crate::providers::RemoteArtifact;
 use crate::versions::Version;
@@ -10,30 +11,96 @@ use pubgrub::Ranges;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub(crate) enum SolverVersion {
-    Domain(Version),
-    ProviderChoice(u32),
+    Version {
+        semantic: Version,
+        identity: VersionIdentity,
+    },
+    LoadPreference(bool),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub(crate) enum VersionIdentity {
+    LowerBound,
+    Platform,
+    Candidate(CandidateIdentity),
+    UpperBound,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub(crate) struct CandidateIdentity {
+    pub(crate) owner: String,
+    pub(crate) source: String,
+    pub(crate) path: Vec<usize>,
+    pub(crate) location: CandidateLocation,
+    pub(crate) installed: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub(crate) enum CandidateLocation {
+    Nested,
+    SameFile,
+    Root,
 }
 
 impl SolverVersion {
+    pub(crate) fn platform(version: Version) -> Self {
+        Self::Version {
+            semantic: version,
+            identity: VersionIdentity::Platform,
+        }
+    }
+
+    pub(crate) fn candidate(version: Version, identity: CandidateIdentity) -> Self {
+        Self::Version {
+            semantic: version,
+            identity: VersionIdentity::Candidate(identity),
+        }
+    }
+
+    fn lower_bound(version: Version) -> Self {
+        Self::Version {
+            semantic: version,
+            identity: VersionIdentity::LowerBound,
+        }
+    }
+
+    fn upper_bound(version: Version) -> Self {
+        Self::Version {
+            semantic: version,
+            identity: VersionIdentity::UpperBound,
+        }
+    }
+
     pub(crate) fn domain(&self) -> Option<&Version> {
         match self {
-            Self::Domain(version) => Some(version),
-            Self::ProviderChoice(_) => None,
+            Self::Version { semantic, .. } => Some(semantic),
+            Self::LoadPreference(_) => None,
+        }
+    }
+
+    pub(crate) fn candidate_identity(&self) -> Option<&CandidateIdentity> {
+        match self {
+            Self::Version {
+                identity: VersionIdentity::Candidate(identity),
+                ..
+            } => Some(identity),
+            _ => None,
         }
     }
 }
 
 impl From<Version> for SolverVersion {
     fn from(version: Version) -> Self {
-        Self::Domain(version)
+        Self::platform(version)
     }
 }
 
 impl std::fmt::Display for SolverVersion {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Domain(version) => version.fmt(f),
-            Self::ProviderChoice(choice) => write!(f, "provider choice {choice}"),
+            Self::Version { semantic, .. } => semantic.fmt(f),
+            Self::LoadPreference(true) => f.write_str("load"),
+            Self::LoadPreference(false) => f.write_str("omit"),
         }
     }
 }
@@ -41,53 +108,45 @@ impl std::fmt::Display for SolverVersion {
 pub(crate) fn solver_range(range: Ranges<Version>) -> Ranges<SolverVersion> {
     range
         .into_iter()
-        .map(|(start, end)| (map_bound(start), map_bound(end)))
+        .map(|(start, end)| (map_start_bound(start), map_end_bound(end)))
         .collect()
 }
 
-fn map_bound(bound: Bound<Version>) -> Bound<SolverVersion> {
+fn map_start_bound(bound: Bound<Version>) -> Bound<SolverVersion> {
     match bound {
-        Bound::Included(version) => Bound::Included(version.into()),
-        Bound::Excluded(version) => Bound::Excluded(version.into()),
+        Bound::Included(version) => Bound::Included(SolverVersion::lower_bound(version)),
+        Bound::Excluded(version) => Bound::Excluded(SolverVersion::upper_bound(version)),
         Bound::Unbounded => Bound::Unbounded,
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub(crate) enum LogicalPackage {
-    Capability(String),
-    EmbeddedArtifact(String),
+fn map_end_bound(bound: Bound<Version>) -> Bound<SolverVersion> {
+    match bound {
+        Bound::Included(version) => Bound::Included(SolverVersion::upper_bound(version)),
+        Bound::Excluded(version) => Bound::Excluded(SolverVersion::lower_bound(version)),
+        Bound::Unbounded => Bound::Unbounded,
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub(crate) enum SolverPackage {
     Root,
     Mod(String),
-    Bundled {
-        owner: String,
-        owner_version: Version,
-        path: Vec<usize>,
+    EmbeddedArtifact(String),
+    LoadPreference {
+        parent: CandidateIdentity,
         mod_id: String,
-    },
-    Logical(LogicalPackage),
-    ProviderChoice {
-        logical: LogicalPackage,
-        logical_version: Version,
     },
     Platform(String),
 }
 
 impl SolverPackage {
-    pub(crate) fn top_level(package: impl Into<String>) -> Self {
-        Self::Mod(package.into())
-    }
-
     pub(crate) fn logical(package: impl Into<String>) -> Self {
         let package = package.into();
         if crate::resolver::graph::is_platform_package(&package) {
             Self::Platform(package)
         } else {
-            Self::Logical(LogicalPackage::Capability(package))
+            Self::Mod(package)
         }
     }
 
@@ -101,14 +160,10 @@ impl SolverPackage {
     pub(crate) fn user_label(&self) -> &str {
         match self {
             Self::Root => "the project",
-            Self::Mod(mod_id) | Self::Bundled { mod_id, .. } | Self::Platform(mod_id) => mod_id,
-            Self::Logical(LogicalPackage::Capability(mod_id))
-            | Self::Logical(LogicalPackage::EmbeddedArtifact(mod_id))
-            | Self::ProviderChoice {
-                logical:
-                    LogicalPackage::Capability(mod_id) | LogicalPackage::EmbeddedArtifact(mod_id),
-                ..
-            } => mod_id,
+            Self::Mod(mod_id)
+            | Self::EmbeddedArtifact(mod_id)
+            | Self::LoadPreference { mod_id, .. }
+            | Self::Platform(mod_id) => mod_id,
         }
     }
 }
@@ -117,34 +172,15 @@ impl std::fmt::Display for SolverPackage {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Root => write!(f, "the project"),
-            Self::Mod(mod_id) => write!(f, "{mod_id}"),
-            Self::Bundled {
-                owner,
-                owner_version,
-                path,
-                mod_id,
-            } => write!(
-                f,
-                "{mod_id} bundled in {owner} {owner_version} at {}",
-                path.iter()
-                    .map(usize::to_string)
-                    .collect::<Vec<_>>()
-                    .join(".")
-            ),
-            Self::Logical(LogicalPackage::Capability(id)) => write!(f, "{id} capability"),
-            Self::Logical(LogicalPackage::EmbeddedArtifact(id)) => {
+            Self::Mod(id) => write!(f, "{id}"),
+            Self::EmbeddedArtifact(id) => {
                 write!(f, "{id} embedded artifact")
             }
-            Self::ProviderChoice {
-                logical,
-                logical_version,
-            } => {
-                let kind = match logical {
-                    LogicalPackage::Capability(_) => "capability",
-                    LogicalPackage::EmbeddedArtifact(_) => "embedded artifact",
-                };
-                write!(f, "{} {logical_version} {kind} provider", self.user_label())
-            }
+            Self::LoadPreference { parent, mod_id } => write!(
+                f,
+                "{mod_id} nested load preference in {} from {}",
+                parent.owner, parent.source
+            ),
             Self::Platform(id) => write!(f, "{id}"),
         }
     }
@@ -152,6 +188,10 @@ impl std::fmt::Display for SolverPackage {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CandidateVersion {
+    /// Provider-artifact identity; independent from JAR-declared mod ID/version.
+    pub id: String,
+    /// Download filename used to distinguish concrete package candidates in plans.
+    pub filename: String,
     pub jar_version: String,
     pub dependencies: Vec<DependencyExpression>,
     pub environment: Environment,
@@ -161,8 +201,7 @@ pub struct CandidateVersion {
     pub bundled: Vec<BundledCandidate>,
 }
 
-pub type ResolvedCandidateKey = (String, String);
-pub type ResolvedCandidates = HashMap<ResolvedCandidateKey, RemoteArtifact>;
+pub type ResolvedCandidates = HashMap<String, RemoteArtifact>;
 
 #[derive(Debug, Clone, Default)]
 pub struct CandidateCatalog {
@@ -176,6 +215,8 @@ pub struct CandidateCatalog {
 pub struct BundledCandidate {
     pub mod_id: String,
     pub version: String,
+    pub load_condition: ModLoadCondition,
+    pub origin: crate::jar::JarModOrigin,
     pub environment: Environment,
     pub dependencies: Vec<DependencyExpression>,
     pub provides: Vec<ProvidedMod>,
@@ -185,8 +226,14 @@ pub struct BundledCandidate {
 }
 
 impl CandidateVersion {
-    pub fn from_jar_metadata(metadata: crate::jar::JarModMetadata) -> Self {
+    pub fn from_jar_metadata(
+        id: String,
+        filename: String,
+        metadata: crate::jar::JarModMetadata,
+    ) -> Self {
         Self {
+            id,
+            filename,
             jar_version: metadata.version,
             dependencies: metadata.dependencies,
             environment: metadata.environment,
@@ -221,18 +268,20 @@ impl CandidateCatalog {
             )));
         }
         let package = metadata.mod_id.clone();
-        let candidate = CandidateVersion::from_jar_metadata(metadata);
-        let identity = (package.clone(), candidate.jar_version.clone());
-        let existing = self.candidates.get(&package).and_then(|versions| {
-            versions
-                .iter()
-                .find(|existing| existing.jar_version == candidate.jar_version)
-        });
+        let candidate_id = artifact.candidate_id();
+        let candidate = CandidateVersion::from_jar_metadata(
+            candidate_id.clone(),
+            artifact.filename.clone(),
+            metadata,
+        );
+        let existing = self
+            .candidates
+            .get(&package)
+            .and_then(|versions| versions.iter().find(|existing| existing.id == candidate.id));
         if existing.is_some_and(|existing| existing != &candidate) {
             return Err(crate::error::OrbitError::Other(anyhow::anyhow!(
-                "multiple JARs declare identity '{} {}' with different metadata",
-                identity.0,
-                identity.1
+                "provider artifact '{}' was parsed with different metadata from its JAR",
+                candidate.id
             )));
         }
         let duplicate = existing.is_some();
@@ -246,7 +295,7 @@ impl CandidateCatalog {
                 .or_default()
                 .push(candidate);
         }
-        self.resolved.entry(identity).or_insert(artifact);
+        self.resolved.entry(candidate_id).or_insert(artifact);
         Ok(package)
     }
 
@@ -297,6 +346,8 @@ impl BundledCandidate {
         Self {
             mod_id: metadata.mod_id,
             version: metadata.version,
+            load_condition: metadata.load_condition,
+            origin: metadata.origin,
             environment: metadata.environment,
             dependencies: metadata.dependencies,
             provides: metadata.provides,
@@ -355,9 +406,45 @@ impl std::fmt::Display for CandidateDiagnostic {
 
 #[derive(Debug, Clone, Default)]
 pub struct ResolutionReport {
-    pub upgrades: BTreeMap<String, String>,
+    /// Selected semantic version per top-level package.
+    pub selected_versions: BTreeMap<String, String>,
+    /// Selected candidate identity per top-level package, including installed candidates.
+    pub selected_sources: BTreeMap<String, String>,
+    /// Selected remote candidate per top-level package; installed candidates are omitted.
+    pub selected_candidates: BTreeMap<String, String>,
+    /// Complete top-level package changes relative to the installed set.
+    pub changes: Vec<PackageChange>,
     pub diagnostics: Vec<CandidateDiagnostic>,
     pub warnings: Vec<String>,
+}
+
+impl ResolutionReport {
+    pub fn has_upgrade(&self) -> bool {
+        self.changes
+            .iter()
+            .any(|change| change.kind == PackageChangeKind::Upgrade)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PackageChangeKind {
+    Install,
+    Upgrade,
+    Downgrade,
+    Replace,
+    Remove,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PackageChange {
+    pub package: String,
+    pub current_version: Option<String>,
+    pub selected_version: Option<String>,
+    /// Existing top-level JAR removed or replaced by this change.
+    pub filename: Option<String>,
+    /// Concrete top-level JAR selected for installation, when known.
+    pub selected_filename: Option<String>,
+    pub kind: PackageChangeKind,
 }
 
 #[derive(Debug, Clone, Default)]

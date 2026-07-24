@@ -24,6 +24,7 @@ pub mod checker;
 pub mod installer;
 pub mod jar_cache;
 pub mod outdated;
+mod package_reconciliation;
 pub mod purge;
 pub mod resolver;
 pub mod sync;
@@ -41,10 +42,10 @@ pub use config::{
 pub use detection::LoaderDetectionService;
 pub use error::OrbitError;
 pub use installer::{
-    InstallInteraction, InstallOptions, InstallPrompt, InstallReport, InstalledMod, ListOutput,
-    ListedPackage, RemoveReport, RestoreOptions, RestoreReport, install_local_file_to_instance,
-    install_to_instance, list_dependencies, list_installed, list_installed_for_target,
-    remove_from_instance, restore_instance, upgrade_all_in_instance,
+    InstallIntent, InstallInteraction, InstallOptions, InstallPrompt, InstallReport, InstalledMod,
+    ListOutput, ListedPackage, RemoveReport, RemovedPackage, RestoreOptions, RestoreReport,
+    install_local_file_to_instance, install_to_instance, list_dependencies, list_installed,
+    list_installed_for_target, remove_from_instance, restore_instance, upgrade_all_in_instance,
 };
 pub use jar_cache::{CacheSummary, JarCache, clean_cache, inspect_cache};
 pub use lockfile::{
@@ -55,7 +56,7 @@ pub use metadata::{ModLoader, mojang::McVersion};
 pub use outdated::{OutdatedMod, check_all_outdated};
 pub use providers::ModProvider;
 pub use purge::{CandidateConfig, find_config_candidates, remove_config_candidates};
-pub use resolver::types::{ResolutionReport, ResolutionSelector};
+pub use resolver::types::{PackageChange, PackageChangeKind, ResolutionReport, ResolutionSelector};
 pub use runtime::{
     NativeRuntimeEnvironment, PathLayout, RuntimeContext, RuntimeEnvironment, RuntimePathOptions,
     RuntimePaths, compiled_default_layout,

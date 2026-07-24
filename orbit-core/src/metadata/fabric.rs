@@ -4,7 +4,7 @@ use serde_json::Value;
 
 use super::{
     DependencyExpression, DependencyKind, DependencyOrdering, Environment, MetadataParser,
-    ModDependency, ModFileMetadata, ModLoader, ModMetadata, ProvidedMod,
+    ModDependency, ModFileMetadata, ModLoadCondition, ModLoader, ModMetadata, ProvidedMod,
 };
 use crate::error::OrbitError;
 
@@ -74,6 +74,8 @@ impl MetadataParser for FabricParser {
                 environment: parse_environment(object.get("environment"))?,
                 dependencies,
                 provides,
+                // Fabric Loader treats nested candidates as greedy optional mods.
+                load_condition: ModLoadCondition::IfPossible,
             }],
             embedded_jars,
             substitution_properties: Default::default(),

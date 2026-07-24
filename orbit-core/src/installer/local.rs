@@ -10,8 +10,8 @@ use crate::workspace::{Lockfile, ManifestFile};
 
 use super::{
     InstallInteraction, InstallOptions, InstallReport, InstalledMod, ensure_root_requirement,
-    package_filename, package_is_present, requested_requirement, resolve_missing_lock_entries,
-    restore_package,
+    package_filename, package_is_present, package_removals, remove_packages, requested_requirement,
+    resolve_missing_lock_entries, restore_package,
 };
 
 pub async fn install_local_file_to_instance(
@@ -80,13 +80,6 @@ pub async fn install_local_file_to_instance(
         bundled: bundled.clone(),
     });
 
-    let original_packages: HashSet<_> = lockfile
-        .inner
-        .packages
-        .iter()
-        .filter(|entry| entry.mod_id != metadata.mod_id)
-        .map(|entry| entry.mod_id.clone())
-        .collect();
     let resolution = resolve_dependencies(
         &manifest,
         &mut lockfile,
@@ -102,7 +95,6 @@ pub async fn install_local_file_to_instance(
         PreviewContext {
             bundled,
             lockfile: &lockfile,
-            original_packages: &original_packages,
             no_dependencies: options.no_deps,
             resolution,
         },
@@ -113,6 +105,8 @@ pub async fn install_local_file_to_instance(
     {
         return Ok(InstallReport {
             installed: Vec::new(),
+            removed: Vec::new(),
+            changes: Vec::new(),
             already_satisfied: Vec::new(),
             skipped_optional: Vec::new(),
             diagnostics: preview.diagnostics,
@@ -129,11 +123,20 @@ pub async fn install_local_file_to_instance(
         filename: &filename,
         sha256: &sha256,
         package: &metadata.mod_id,
-        original_packages: &original_packages,
+        planned_packages: preview
+            .installed
+            .iter()
+            .map(|package| package.mod_id.clone())
+            .collect(),
         providers,
         jar_cache,
     };
     materialize_new_packages(materialize, &mut lockfile).await?;
+    remove_packages(
+        &instance_dir.join("mods"),
+        &preview.removed,
+        &preview.installed,
+    )?;
     manifest.save()?;
     lockfile.save()?;
     Ok(preview)
@@ -226,7 +229,6 @@ async fn resolve_dependencies(
 struct PreviewContext<'a> {
     bundled: Vec<BundledMod>,
     lockfile: &'a Lockfile,
-    original_packages: &'a HashSet<String>,
     no_dependencies: bool,
     resolution: crate::resolver::types::ResolutionReport,
 }
@@ -239,11 +241,11 @@ fn build_preview(
     let PreviewContext {
         bundled,
         lockfile,
-        original_packages,
         no_dependencies,
         resolution,
     } = context;
     let local = InstalledMod {
+        candidate_id: None,
         slug: metadata.mod_id.clone(),
         mod_id: metadata.mod_id.clone(),
         version: metadata.version.clone(),
@@ -260,20 +262,39 @@ fn build_preview(
     };
     let mut planned = vec![local];
     if !no_dependencies {
+        let selected_changes: HashSet<_> = resolution
+            .changes
+            .iter()
+            .filter(|change| change.selected_version.is_some())
+            .map(|change| change.package.as_str())
+            .collect();
         planned.extend(
             lockfile
                 .inner
                 .packages
                 .iter()
                 .filter(|entry| {
-                    entry.mod_id != metadata.mod_id && !original_packages.contains(&entry.mod_id)
+                    entry.mod_id != metadata.mod_id
+                        && selected_changes.contains(entry.mod_id.as_str())
                 })
                 .map(installed_mod_from_entry),
         );
     }
     planned.sort_by(|left, right| left.mod_id.cmp(&right.mod_id));
+    let mut changes = resolution.changes;
+    changes.push(crate::resolver::types::PackageChange {
+        package: metadata.mod_id.clone(),
+        current_version: None,
+        selected_version: Some(metadata.version.clone()),
+        filename: None,
+        selected_filename: Some(filename.to_string()),
+        kind: crate::resolver::types::PackageChangeKind::Install,
+    });
+    changes.sort_by(|left, right| left.package.cmp(&right.package));
     InstallReport {
         installed: planned,
+        removed: package_removals(&changes),
+        changes,
         already_satisfied: Vec::new(),
         skipped_optional: Vec::new(),
         diagnostics: resolution.diagnostics,
@@ -283,6 +304,7 @@ fn build_preview(
 
 fn installed_mod_from_entry(entry: &PackageEntry) -> InstalledMod {
     InstalledMod {
+        candidate_id: None,
         slug: entry
             .source_slug()
             .map(str::to_string)
@@ -308,7 +330,7 @@ struct LocalMaterialization<'a> {
     filename: &'a str,
     sha256: &'a str,
     package: &'a str,
-    original_packages: &'a HashSet<String>,
+    planned_packages: HashSet<String>,
     providers: &'a [Box<dyn ModProvider>],
     jar_cache: &'a crate::jar_cache::JarCache,
 }
@@ -321,7 +343,7 @@ async fn materialize_new_packages(
     std::fs::create_dir_all(&mods_dir)?;
     copy_local_jar(input.source, &mods_dir.join(input.filename), input.sha256)?;
     for entry in &mut lockfile.inner.packages {
-        if entry.mod_id == input.package || input.original_packages.contains(&entry.mod_id) {
+        if entry.mod_id == input.package || !input.planned_packages.contains(&entry.mod_id) {
             continue;
         }
         if !package_is_present(entry, &mods_dir)? {
@@ -373,7 +395,9 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use super::*;
+    use crate::lockfile::OrbitLockfile;
     use crate::manifest::OrbitManifest;
+    use crate::{PackageChange, PackageChangeKind};
 
     static NEXT_TEST_DIRECTORY: AtomicUsize = AtomicUsize::new(0);
 
@@ -469,6 +493,87 @@ versionRange = "[1,)"
                 ..
             }) if id == "forge"
         ));
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn local_add_preview_includes_selected_changes_to_existing_packages() {
+        let directory = test_directory("local-preview");
+        let selected_dependency = PackageEntry {
+            mod_id: "dependency".to_string(),
+            version: "1".to_string(),
+            sha1: String::new(),
+            sha256: String::new(),
+            sha512: String::new(),
+            filename: "dependency-1.jar".to_string(),
+            provider: "file".to_string(),
+            modrinth: None,
+            curseforge: None,
+            file: Some(FileInfo {
+                path: "mods/dependency-1.jar".to_string(),
+            }),
+            dependencies: Vec::new(),
+            environment: crate::metadata::Environment::Both,
+            provides: Vec::new(),
+            language_loader: None,
+            embedded_artifacts: Vec::new(),
+            bundled: Vec::new(),
+        };
+        let lockfile = Lockfile::new(
+            &directory,
+            OrbitLockfile {
+                meta: LockMeta {
+                    mc_version: "1".to_string(),
+                    modloader: "fabric".to_string(),
+                    modloader_version: "1".to_string(),
+                },
+                packages: vec![selected_dependency],
+            },
+        );
+        let metadata = crate::jar::JarModMetadata {
+            mod_id: "local".to_string(),
+            name: "Local".to_string(),
+            version: "1".to_string(),
+            environment: crate::metadata::Environment::Both,
+            dependencies: Vec::new(),
+            provides: Vec::new(),
+            language_loader: None,
+            load_condition: crate::metadata::ModLoadCondition::Always,
+            origin: crate::jar::JarModOrigin::Root,
+            embedded_jars: Vec::new(),
+            embedded_artifacts: Vec::new(),
+            bundled_mods: Vec::new(),
+        };
+        let resolution = crate::resolver::types::ResolutionReport {
+            changes: vec![PackageChange {
+                package: "dependency".to_string(),
+                current_version: Some("2".to_string()),
+                selected_version: Some("1".to_string()),
+                filename: Some("dependency-2.jar".to_string()),
+                selected_filename: Some("dependency-1.jar".to_string()),
+                kind: PackageChangeKind::Downgrade,
+            }],
+            ..Default::default()
+        };
+
+        let preview = build_preview(
+            &metadata,
+            "local.jar",
+            PreviewContext {
+                bundled: Vec::new(),
+                lockfile: &lockfile,
+                no_dependencies: false,
+                resolution,
+            },
+        );
+
+        assert!(
+            preview
+                .installed
+                .iter()
+                .any(|package| { package.mod_id == "dependency" && package.version == "1" })
+        );
+        assert_eq!(preview.removed[0].filename, "dependency-2.jar");
         std::fs::remove_dir_all(directory).unwrap();
     }
 }

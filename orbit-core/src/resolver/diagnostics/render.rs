@@ -55,7 +55,7 @@ fn facts_for_cause(cause: &Cause) -> Vec<String> {
         let mut packages: Vec<_> = cause
             .packages()
             .into_iter()
-            .filter(|package| !matches!(package, SolverPackage::ProviderChoice { .. }))
+            .filter(|package| !matches!(package, SolverPackage::LoadPreference { .. }))
             .map(|package| package.user_label().to_string())
             .collect();
         packages.sort();
@@ -94,26 +94,15 @@ fn collect_external_facts(cause: &Cause, facts: &mut Vec<String>) {
                     "{} {version} is not the project root",
                     package.user_label()
                 )),
-                External::NoVersions(
-                    SolverPackage::Mod(_)
-                    | SolverPackage::Bundled { .. }
-                    | SolverPackage::ProviderChoice { .. },
-                    _,
-                ) => None,
+                External::NoVersions(SolverPackage::LoadPreference { .. }, _) => None,
                 External::NoVersions(package, versions) => Some(format!(
                     "no available version of {} matches {versions}",
                     package.user_label()
                 )),
                 External::FromDependencyOf(package, _, dependency, _)
-                    if matches!(package, SolverPackage::ProviderChoice { .. })
-                        || matches!(dependency, SolverPackage::ProviderChoice { .. })
-                        || matches!(
-                            (package, dependency),
-                            (
-                                SolverPackage::Mod(_) | SolverPackage::Bundled { .. },
-                                SolverPackage::Mod(_) | SolverPackage::Bundled { .. }
-                            )
-                        ) =>
+                    if matches!(package, SolverPackage::LoadPreference { .. })
+                        || matches!(dependency, SolverPackage::LoadPreference { .. })
+                        || package == dependency =>
                 {
                     None
                 }
