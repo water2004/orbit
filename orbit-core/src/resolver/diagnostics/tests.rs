@@ -2,6 +2,7 @@ use pubgrub::{Ranges, resolve_with_observer};
 
 use super::*;
 use crate::resolver::provider::OrbitDependencyProvider;
+use crate::resolver::types::CandidateDiagnosticKind;
 
 fn version(value: &str) -> Version {
     Version::Generic(value.to_string())
@@ -34,9 +35,17 @@ fn explains_a_candidate_excluded_before_selection() {
         resolve_with_observer(&provider, "root".to_string(), version("1"), &mut trace).unwrap();
 
     assert_eq!(solution.get(&"a".to_string()), Some(&version("1")));
-    let message = trace.describe_skipped("a", &version("1"));
-    assert!(message.contains("excluded by dependency propagation"));
-    assert!(message.contains("b 1 requires a 1"));
+    let diagnostic = trace.diagnose_skipped("a", &version("1"));
+    assert_eq!(
+        diagnostic.kind,
+        CandidateDiagnosticKind::ExcludedByPropagation
+    );
+    assert!(
+        diagnostic
+            .facts
+            .iter()
+            .any(|fact| fact == "b 1 requires a 1")
+    );
 }
 
 #[test]
@@ -71,10 +80,10 @@ fn explains_a_candidate_discarded_by_backtracking() {
         resolve_with_observer(&provider, "root".to_string(), version("1"), &mut trace).unwrap();
 
     assert_eq!(solution.get(&"a".to_string()), Some(&version("1")));
-    let message = trace.describe_skipped("a", &version("1"));
-    assert!(message.contains("tried, then backtracked"));
-    assert!(message.contains("a"));
-    assert!(message.contains("b"));
+    let diagnostic = trace.diagnose_skipped("a", &version("1"));
+    assert_eq!(diagnostic.kind, CandidateDiagnosticKind::Backtracked);
+    assert!(diagnostic.facts.iter().any(|fact| fact.contains('a')));
+    assert!(diagnostic.facts.iter().any(|fact| fact.contains('b')));
 }
 
 #[test]
@@ -95,7 +104,7 @@ fn explains_when_provider_order_prefers_another_allowed_version() {
         resolve_with_observer(&provider, "root".to_string(), version("1"), &mut trace).unwrap();
 
     assert_eq!(solution.get(&"a".to_string()), Some(&version("1")));
-    let message = trace.describe_skipped("a", &version("1"));
-    assert!(message.contains("was allowed"));
-    assert!(message.contains("version selection preferred 1"));
+    let diagnostic = trace.diagnose_skipped("a", &version("1"));
+    assert_eq!(diagnostic.kind, CandidateDiagnosticKind::ProviderPreferred);
+    assert_eq!(diagnostic.preferred_version.as_deref(), Some("1"));
 }

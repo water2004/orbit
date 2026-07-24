@@ -8,12 +8,19 @@ use crate::error::OrbitError;
 use crate::lockfile::OrbitLockfile;
 use crate::manifest::OrbitManifest;
 use crate::providers::{ModProvider, ResolvedMod};
-use crate::resolver::types::{CandidateVersion, ImplantedCandidate};
+use crate::resolver::types::{CandidateDiagnostic, CandidateVersion, ImplantedCandidate};
 
 pub struct OutdatedMod {
     pub mod_id: String,
     pub current_version: String,
     pub new_version: String,
+}
+
+#[derive(Default)]
+pub struct OutdatedReport {
+    pub updates: Vec<OutdatedMod>,
+    pub resolved: ResolvedCandidates,
+    pub diagnostics: Vec<CandidateDiagnostic>,
 }
 
 pub type ResolvedCandidateKey = (String, String);
@@ -63,12 +70,6 @@ pub async fn download_candidates_bfs(
             to_download.push(v.clone());
         }
     }
-    eprintln!(
-        "  BFS query done: {} versions across {} projects",
-        to_download.len(),
-        seen.len()
-    );
-
     let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(10));
     let mut handles = Vec::new();
 
@@ -179,7 +180,7 @@ pub async fn check_all_outdated(
     manifest: &OrbitManifest,
     lockfile: &OrbitLockfile,
     providers: &[Box<dyn ModProvider>],
-) -> Result<(Vec<OutdatedMod>, ResolvedCandidates), OrbitError> {
+) -> Result<OutdatedReport, OrbitError> {
     let loader = &manifest.project.modloader;
     let mc_version = &manifest.project.mc_version;
     let provider = &providers[0];
@@ -191,29 +192,19 @@ pub async fn check_all_outdated(
         .collect();
 
     if modrinth_entries.is_empty() {
-        eprintln!("  (no modrinth-sourced mods to check)");
-        return Ok((vec![], HashMap::new()));
+        return Ok(OutdatedReport::default());
     }
 
     // 1. Find outdated mods
     let mut seeds: Vec<String> = Vec::new();
-    for (i, entry) in modrinth_entries.iter().enumerate() {
+    for entry in modrinth_entries {
         let mr = entry.modrinth.as_ref().unwrap();
-        eprintln!(
-            "  [{}/{}] {} — checking versions...",
-            i + 1,
-            modrinth_entries.len(),
-            entry.mod_id
-        );
         let mut versions = match provider
             .get_versions(&mr.project_id, Some(mc_version), Some(loader))
             .await
         {
             Ok(v) => v,
-            Err(e) => {
-                eprintln!("    ! API error: {e}");
-                continue;
-            }
+            Err(_) => continue,
         };
         versions.sort_by(|a, b| b.date_published.cmp(&a.date_published));
         let current_date = versions
@@ -223,21 +214,16 @@ pub async fn check_all_outdated(
             })
             .map(|v| v.date_published.clone());
         let Some(ref cd) = current_date else {
-            eprintln!("    ! current version not found in API results, skipping");
             continue;
         };
         let newer: Vec<_> = versions.iter().filter(|v| v.date_published > *cd).collect();
-        if newer.is_empty() {
-            eprintln!("    up to date (current: {})", mr.version);
-        } else {
-            eprintln!("    {} newer version(s) found", newer.len());
+        if !newer.is_empty() {
             seeds.push(mr.project_id.clone());
         }
     }
 
     if seeds.is_empty() {
-        eprintln!("\n  all mods up to date.");
-        return Ok((vec![], HashMap::new()));
+        return Ok(OutdatedReport::default());
     }
 
     // 2. BFS download
@@ -247,20 +233,21 @@ pub async fn check_all_outdated(
         ..
     } = download_candidates_bfs(provider.as_ref(), &seeds, lockfile, mc_version, loader).await?;
     if candidates.is_empty() {
-        return Ok((vec![], HashMap::new()));
+        return Ok(OutdatedReport::default());
     }
 
     // 3. Resolve
-    eprintln!(
-        "\n  resolving dependency graph with {} candidate(s)...",
-        candidates.len()
-    );
-    let upgrades =
-        crate::resolver::resolve_with_candidates(manifest, lockfile, &mut candidates, providers)
-            .await
-            .map_err(|e| OrbitError::Other(anyhow::anyhow!("{e}")))?;
+    let resolution = crate::resolver::resolve_with_candidates_report(
+        manifest,
+        lockfile,
+        &mut candidates,
+        providers,
+    )
+    .await
+    .map_err(|e| OrbitError::Other(anyhow::anyhow!("{e}")))?;
 
-    let mut results: Vec<OutdatedMod> = upgrades
+    let mut updates: Vec<OutdatedMod> = resolution
+        .upgrades
         .into_iter()
         .map(|(mod_id, new_version)| OutdatedMod {
             current_version: lockfile
@@ -271,8 +258,12 @@ pub async fn check_all_outdated(
             mod_id,
         })
         .collect();
-    results.sort_by(|a, b| a.mod_id.cmp(&b.mod_id));
-    Ok((results, resolved))
+    updates.sort_by(|a, b| a.mod_id.cmp(&b.mod_id));
+    Ok(OutdatedReport {
+        updates,
+        resolved,
+        diagnostics: resolution.diagnostics,
+    })
 }
 
 #[cfg(test)]

@@ -2,10 +2,11 @@
 
 use std::collections::{HashMap, HashSet};
 
-use pubgrub::{DefaultStringReporter, Ranges, Reporter};
+use pubgrub::Ranges;
 
 use crate::identification::IdentifiedMod;
 use crate::manifest::OrbitManifest;
+use crate::resolver::diagnostics::describe_no_solution;
 use crate::resolver::graph::{ROOT_PACKAGE, register_platform_packages};
 use crate::resolver::provider::OrbitDependencyProvider;
 use crate::versions::Version;
@@ -67,7 +68,7 @@ pub(crate) fn check_local_graph(
     match pubgrub::resolve(&provider, root_package, root_version) {
         Ok(_) => Ok(()),
         Err(pubgrub::PubGrubError::NoSolution(derivation_tree)) => {
-            Err(DefaultStringReporter::report(&derivation_tree))
+            Err(describe_no_solution(&derivation_tree))
         }
         Err(pubgrub::PubGrubError::ErrorChoosingVersion { source, .. })
         | Err(pubgrub::PubGrubError::ErrorRetrievingDependencies { source, .. }) => {
@@ -136,6 +137,7 @@ missing-mod = "*"
 
         let error = check_local_graph(&manifest, &[]).unwrap_err();
 
+        assert!(error.starts_with("dependency resolution failed"));
         assert!(error.contains("missing-mod"));
     }
 }

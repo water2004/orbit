@@ -103,3 +103,11 @@ pub fn prompt_install_report(report: &orbit_core::InstallReport, yes: bool) -> b
     let input = input.trim().to_lowercase();
     input.is_empty() || input == "y" || input == "yes"
 }
+
+pub fn print_resolution_diagnostics(
+    diagnostics: &[orbit_core::resolver::types::CandidateDiagnostic],
+) {
+    for diagnostic in diagnostics {
+        eprintln!("{diagnostic}");
+    }
+}

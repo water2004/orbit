@@ -14,7 +14,7 @@ use crate::manifest::OrbitManifest;
 use crate::providers::ModProvider;
 use crate::resolver::graph::build_solver_graph;
 use crate::resolver::retry::{SolveOutcome, SolveRequest, solve_with_fetch_retry};
-use crate::resolver::types::CandidateVersion;
+use crate::resolver::types::{CandidateVersion, ResolutionReport};
 
 pub use provider::ProviderError as FetchRetryError;
 
@@ -74,6 +74,20 @@ pub async fn resolve_with_candidates(
     candidates: &mut HashMap<String, Vec<CandidateVersion>>,
     providers: &[Box<dyn ModProvider>],
 ) -> Result<HashMap<String, String>, String> {
+    Ok(
+        resolve_with_candidates_report(manifest, lockfile, candidates, providers)
+            .await?
+            .upgrades,
+    )
+}
+
+/// Resolve candidates and retain structured explanations for skipped versions.
+pub async fn resolve_with_candidates_report(
+    manifest: &OrbitManifest,
+    lockfile: &OrbitLockfile,
+    candidates: &mut HashMap<String, Vec<CandidateVersion>>,
+    providers: &[Box<dyn ModProvider>],
+) -> Result<ResolutionReport, String> {
     let graph = build_solver_graph(manifest, lockfile, candidates);
     let mut provider = graph.provider;
     let outcome = solve_with_fetch_retry(SolveRequest {
@@ -88,24 +102,18 @@ pub async fn resolve_with_candidates(
     })
     .await?;
 
-    Ok(collect_upgrades(lockfile, candidates, outcome))
+    Ok(collect_report(lockfile, candidates, outcome))
 }
 
-fn collect_upgrades(
+fn collect_report(
     lockfile: &OrbitLockfile,
     candidates: &HashMap<String, Vec<CandidateVersion>>,
     outcome: SolveOutcome,
-) -> HashMap<String, String> {
+) -> ResolutionReport {
     let SolveOutcome { solution, trace } = outcome;
-    eprintln!(
-        "    solution: {:?}",
-        solution
-            .iter()
-            .map(|(package, version)| format!("{package}:{version}"))
-            .collect::<Vec<_>>()
-    );
 
     let mut upgrades = HashMap::new();
+    let mut diagnostics = Vec::new();
     for package in candidates.keys() {
         let Some(selected) = solution.get(package) else {
             continue;
@@ -127,8 +135,11 @@ fn collect_upgrades(
             continue;
         };
         if candidate.jar_version != current {
-            eprintln!("{}", trace.describe_skipped(package, selected));
+            diagnostics.push(trace.diagnose_skipped(package, selected));
         }
     }
-    upgrades
+    ResolutionReport {
+        upgrades,
+        diagnostics,
+    }
 }

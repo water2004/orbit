@@ -8,6 +8,7 @@ use std::collections::HashMap;
 
 use pubgrub::{DerivationTree, Ranges, SolverEvent, SolverObserver};
 
+use crate::resolver::types::CandidateDiagnostic;
 use crate::versions::Version;
 
 pub(super) type Cause = DerivationTree<String, Ranges<Version>, String>;
@@ -50,9 +51,17 @@ impl ResolutionTrace {
         }
     }
 
-    pub(crate) fn describe_skipped(&self, package: &str, selected: &Version) -> String {
-        render::describe(package, selected, self.watched.get(package))
+    pub(crate) fn diagnose_skipped(
+        &self,
+        package: &str,
+        selected: &Version,
+    ) -> CandidateDiagnostic {
+        render::diagnose(package, selected, self.watched.get(package))
     }
+}
+
+pub(crate) fn describe_no_solution(cause: &Cause) -> String {
+    render::describe_no_solution(cause)
 }
 
 impl SolverObserver<String, Ranges<Version>, String> for ResolutionTrace {

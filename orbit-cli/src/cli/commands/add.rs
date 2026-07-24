@@ -41,6 +41,7 @@ pub async fn handle(
     .await
     {
         Ok(report) => {
+            super::print_resolution_diagnostics(&report.diagnostics);
             if ctx.dry_run {
                 for m in &report.installed {
                     println!("  [dry-run] would install {} v{}", m.mod_id, m.version);

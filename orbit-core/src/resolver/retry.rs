@@ -2,11 +2,11 @@
 
 use std::collections::HashMap;
 
-use pubgrub::{DefaultStringReporter, Reporter, SelectedDependencies};
+use pubgrub::SelectedDependencies;
 
 use crate::lockfile::OrbitLockfile;
 use crate::providers::ModProvider;
-use crate::resolver::diagnostics::ResolutionTrace;
+use crate::resolver::diagnostics::{ResolutionTrace, describe_no_solution};
 use crate::resolver::graph::{register_candidate_versions, required_candidate_packages};
 use crate::resolver::provider::OrbitDependencyProvider;
 use crate::resolver::types::{CandidateVersion, ImplantedCandidate};
@@ -71,7 +71,7 @@ pub(crate) async fn solve_with_fetch_retry(
                 )
                 .await?;
                 if !added {
-                    return Err(DefaultStringReporter::report(&derivation_tree));
+                    return Err(describe_no_solution(&derivation_tree));
                 }
             }
             Err(pubgrub::PubGrubError::ErrorChoosingVersion { package, source: _ }) => {
@@ -104,7 +104,6 @@ async fn fetch_missing_candidates(
     loader: &str,
 ) -> Result<bool, String> {
     let needed = required_candidate_packages(candidates);
-    eprintln!("    needed deps from candidates: {needed:?}");
 
     let mut added = false;
     for package in needed {
@@ -112,11 +111,9 @@ async fn fetch_missing_candidates(
             continue;
         }
         let Some(entry) = lockfile.find(&package) else {
-            eprintln!("    {package} not in lockfile, skip");
             continue;
         };
         let Some(modrinth) = entry.modrinth.as_ref() else {
-            eprintln!("    {package} has no Modrinth metadata, skip");
             continue;
         };
         let Some(mod_provider) = providers.first() else {
@@ -125,19 +122,12 @@ async fn fetch_missing_candidates(
             );
         };
 
-        eprintln!(
-            "    fetching dep {package} versions (project={})...",
-            modrinth.project_id
-        );
         let versions = match mod_provider
             .get_versions(&modrinth.project_id, Some(minecraft_version), Some(loader))
             .await
         {
             Ok(versions) => versions,
-            Err(error) => {
-                eprintln!("    ! API error for {package}: {error}");
-                continue;
-            }
+            Err(_) => continue,
         };
 
         let mut downloaded = Vec::new();
@@ -170,7 +160,6 @@ async fn fetch_missing_candidates(
             continue;
         }
 
-        eprintln!("    downloaded {} versions for {package}", downloaded.len());
         register_candidate_versions(provider, &package, &downloaded, loader);
         candidates.entry(package).or_default().extend(downloaded);
         added = true;

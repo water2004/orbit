@@ -21,6 +21,7 @@ pub struct InitInput {
 pub struct InitOutput {
     pub manifest: OrbitManifest,
     pub scanned_mods: Vec<ScannedMod>,
+    pub dependency_error: Option<String>,
 }
 
 /// 一个扫描到的模组
@@ -71,50 +72,34 @@ fn scan_mods_dir(instance_dir: &Path, loader: &str) -> Result<Vec<ScannedMod>, O
             .to_string_lossy()
             .to_string();
 
-        eprintln!("  → {filename}:");
-
         let sha256 = crate::jar::compute_sha256(&path).map_err(|e| {
             OrbitError::Other(anyhow::anyhow!("cannot hash {}: {e}", path.display()))
         })?;
         let sha512 = crate::jar::compute_sha512(&path).map_err(|e| {
             OrbitError::Other(anyhow::anyhow!("cannot hash {}: {e}", path.display()))
         })?;
-        eprintln!("    SHA-256: {}", &sha256[..16]);
-
         let (mod_id, mod_name, version, jar_deps, embedded) =
             match crate::jar::read_mod_metadata(&path, loader) {
-                Ok(meta) => {
-                    eprintln!(
-                        "    id={} name={} version={} deps={}",
-                        meta.mod_id,
-                        meta.name,
-                        meta.version,
-                        meta.dependencies.len()
-                    );
-                    (
-                        if meta.mod_id.is_empty() {
-                            None
-                        } else {
-                            Some(meta.mod_id)
-                        },
-                        if meta.name.is_empty() {
-                            None
-                        } else {
-                            Some(meta.name)
-                        },
-                        if meta.version.is_empty() {
-                            None
-                        } else {
-                            Some(meta.version)
-                        },
-                        meta.dependencies,
-                        meta.embedded_jars,
-                    )
-                }
-                Err(e) => {
-                    eprintln!("    ⚠ cannot read mod metadata: {e}");
-                    (None, None, None, vec![], vec![])
-                }
+                Ok(meta) => (
+                    if meta.mod_id.is_empty() {
+                        None
+                    } else {
+                        Some(meta.mod_id)
+                    },
+                    if meta.name.is_empty() {
+                        None
+                    } else {
+                        Some(meta.name)
+                    },
+                    if meta.version.is_empty() {
+                        None
+                    } else {
+                        Some(meta.version)
+                    },
+                    meta.dependencies,
+                    meta.embedded_jars,
+                ),
+                Err(_) => (None, None, None, vec![], vec![]),
             };
 
         results.push(ScannedMod {
@@ -159,13 +144,9 @@ fn scan_embedded_jars(
         })?;
 
         for emb_path in &parent.embedded_jars {
-            eprintln!("    ↳ [{}] embedded: {emb_path}", parent.filename);
             let mut entry = match archive.by_name(emb_path) {
                 Ok(e) => e,
-                Err(_) => {
-                    eprintln!("      ⚠ not found in JAR");
-                    continue;
-                }
+                Err(_) => continue,
             };
             let mut bytes = Vec::new();
             std::io::Read::read_to_end(&mut entry, &mut bytes)
@@ -177,7 +158,6 @@ fn scan_embedded_jars(
                 .unwrap_or_default()
                 .to_string_lossy()
                 .to_string();
-            eprintln!("      SHA-256: {}", &sha256[..16]);
             let (mod_id, mod_name, version, jar_deps) =
                 match crate::jar::read_mod_metadata_from_bytes(&bytes, loader) {
                     Ok(meta) => (
@@ -198,10 +178,7 @@ fn scan_embedded_jars(
                         },
                         meta.dependencies,
                     ),
-                    Err(e) => {
-                        eprintln!("      ⚠ cannot read mod metadata from embedded: {e}");
-                        (None, None, None, vec![])
-                    }
+                    Err(_) => (None, None, None, vec![]),
                 };
             new_mods.push(ScannedMod {
                 filename,
@@ -298,16 +275,13 @@ pub async fn run_init(
     providers: &[Box<dyn crate::providers::ModProvider>],
 ) -> Result<InitOutput, OrbitError> {
     // 1. 扫描 mods/
-    eprintln!("Scanning mods/ ...");
     let scanned = scan_mods_dir(&input.instance_dir, &input.modloader)?;
-    eprintln!("  found {} jar(s)\n", scanned.len());
 
     // 2. 分离内嵌模组：只对顶层模组调 API
     let (top_level, embedded): (Vec<_>, Vec<_>) =
         scanned.iter().partition(|s| s.embedded_parent.is_none());
 
     // 2a. 识别顶层模组
-    eprintln!("Identifying top-level mods via Modrinth ...");
     let ctx = crate::identification::IdentificationContext {
         mc_version: input.mc_version.clone(),
         loader: input.modloader.clone(),
@@ -515,19 +489,9 @@ pub async fn run_init(
     };
 
     // 4. 使用 PubGrub 解析器检查依赖图完整性
-    eprintln!("Verifying dependency graph using PubGrub resolver...");
     let mut all_local_mods = identified.clone();
     all_local_mods.extend(embedded_identified.clone());
-
-    if let Err(err_msg) = crate::resolver::check_local_graph(&manifest, &all_local_mods) {
-        eprintln!(
-            "\n⚠️  WARNING: Dependency graph verification failed!\n{}\n",
-            err_msg
-        );
-        eprintln!("Please use 'orbit install' or 'orbit sync' to fix missing dependencies.");
-    } else {
-        eprintln!("Dependency graph verified successfully.");
-    }
+    let dependency_error = crate::resolver::check_local_graph(&manifest, &all_local_mods).err();
 
     // 4. 写入 orbit.toml + orbit.lock
     let lockfile = crate::lockfile::OrbitLockfile {
@@ -547,6 +511,7 @@ pub async fn run_init(
     Ok(InitOutput {
         manifest,
         scanned_mods: scanned,
+        dependency_error,
     })
 }
 

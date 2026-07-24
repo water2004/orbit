@@ -24,12 +24,8 @@ pub fn create_providers(
                     Box::new(modrinth::ModrinthProvider::new(&ua, 3)?) as Box<dyn ModProvider>
                 );
             }
-            "curseforge" => {
-                eprintln!("warning: CurseForge support is not yet implemented, skipping");
-            }
-            other => {
-                eprintln!("warning: unknown platform '{other}', skipped");
-            }
+            "curseforge" => {}
+            _ => {}
         }
     }
     if providers.is_empty() {

@@ -1,72 +1,79 @@
 use pubgrub::{DerivationTree, External};
 
 use super::{Cause, SkippedVersionReason, WatchedVersion};
+use crate::resolver::types::{CandidateDiagnostic, CandidateDiagnosticKind};
 use crate::versions::Version;
 
-pub(super) fn describe(
+pub(super) fn diagnose(
     package: &str,
     selected: &Version,
     watched: Option<&WatchedVersion>,
-) -> String {
+) -> CandidateDiagnostic {
     let Some(watched) = watched else {
-        return format!("    {package} stayed at {selected}; no candidate trace was recorded");
+        return CandidateDiagnostic {
+            package: package.to_string(),
+            selected_version: selected.to_string(),
+            candidate_version: "?".to_string(),
+            kind: CandidateDiagnosticKind::Unexplained,
+            preferred_version: None,
+            facts: vec!["no candidate trace was recorded".to_string()],
+        };
     };
 
-    let mut output = match &watched.reason {
-        Some(SkippedVersionReason::ExcludedByPropagation(_)) => format!(
-            "    {package} stayed at {selected}; candidate {} was excluded by dependency propagation:",
-            watched.version
+    let (kind, preferred_version, facts) = match &watched.reason {
+        Some(SkippedVersionReason::ExcludedByPropagation(cause)) => (
+            CandidateDiagnosticKind::ExcludedByPropagation,
+            None,
+            facts_for_cause(cause),
         ),
-        Some(SkippedVersionReason::Backtracked(_)) => format!(
-            "    {package} stayed at {selected}; candidate {} was tried, then backtracked after a conflict:",
-            watched.version
+        Some(SkippedVersionReason::Backtracked(cause)) => (
+            CandidateDiagnosticKind::Backtracked,
+            None,
+            facts_for_cause(cause),
         ),
-        Some(SkippedVersionReason::ProviderPreferred(preferred)) => {
-            return format!(
-                "    {package} stayed at {selected}; candidate {} was allowed, but version selection preferred {preferred}",
-                watched.version
-            );
-        }
-        None => {
-            return format!(
-                "    {package} stayed at {selected}; candidate {} was not selected, but no excluding derivation was recorded",
-                watched.version
-            );
-        }
+        Some(SkippedVersionReason::ProviderPreferred(preferred)) => (
+            CandidateDiagnosticKind::ProviderPreferred,
+            Some(preferred.to_string()),
+            Vec::new(),
+        ),
+        None => (CandidateDiagnosticKind::Unexplained, None, Vec::new()),
     };
 
-    let cause = match watched.reason.as_ref() {
-        Some(SkippedVersionReason::ExcludedByPropagation(cause))
-        | Some(SkippedVersionReason::Backtracked(cause)) => cause,
-        _ => unreachable!(),
-    };
-    append_facts(&mut output, cause);
+    CandidateDiagnostic {
+        package: package.to_string(),
+        selected_version: selected.to_string(),
+        candidate_version: watched.version.to_string(),
+        kind,
+        preferred_version,
+        facts,
+    }
+}
+
+pub(super) fn describe_no_solution(cause: &Cause) -> String {
+    let facts = facts_for_cause(cause);
+    let mut output = "dependency resolution failed".to_string();
+    for fact in facts {
+        output.push_str("\n  - ");
+        output.push_str(&fact);
+    }
     output
 }
 
-fn append_facts(output: &mut String, cause: &Cause) {
-    let facts = external_facts(cause);
+fn facts_for_cause(cause: &Cause) -> Vec<String> {
+    let mut facts = external_facts(cause);
     if facts.is_empty() {
         let mut packages: Vec<_> = cause.packages().into_iter().cloned().collect();
         packages.sort();
-        output.push_str(&format!(
-            "\n      - conflict involved {}",
-            packages.join(", ")
-        ));
-        return;
+        facts.push(format!("conflict involved {}", packages.join(", ")));
     }
 
     const MAX_FACTS: usize = 8;
-    for fact in facts.iter().take(MAX_FACTS) {
-        output.push_str("\n      - ");
-        output.push_str(fact);
-    }
     if facts.len() > MAX_FACTS {
-        output.push_str(&format!(
-            "\n      - and {} more dependency fact(s)",
-            facts.len() - MAX_FACTS
-        ));
+        let remaining = facts.len() - MAX_FACTS;
+        facts.truncate(MAX_FACTS);
+        facts.push(format!("and {remaining} more dependency fact(s)"));
     }
+    facts
 }
 
 fn external_facts(cause: &Cause) -> Vec<String> {

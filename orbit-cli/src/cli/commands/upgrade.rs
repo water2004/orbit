@@ -35,6 +35,7 @@ pub async fn handle(mod_name: Option<String>, ctx: &CliContext) -> Result<()> {
         .await
         {
             Ok(report) => {
+                super::print_resolution_diagnostics(&report.diagnostics);
                 if ctx.dry_run {
                     for m in &report.installed {
                         println!("  [dry-run] would upgrade {} to v{}", m.mod_id, m.version);
@@ -59,6 +60,7 @@ pub async fn handle(mod_name: Option<String>, ctx: &CliContext) -> Result<()> {
     } else {
         match upgrade_all_in_instance(&instance_dir, &providers, ctx.dry_run, prompt_fn).await {
             Ok(report) => {
+                super::print_resolution_diagnostics(&report.diagnostics);
                 if ctx.dry_run {
                     for m in &report.installed {
                         println!("  [dry-run] would upgrade {} to v{}", m.mod_id, m.version);

@@ -102,6 +102,10 @@ pub async fn handle(
             unknown,
         );
     }
+    if let Some(error) = &output.dependency_error {
+        eprintln!("Dependency graph verification failed:\n{error}");
+        eprintln!("Use 'orbit install' or 'orbit sync' to fix missing dependencies.");
+    }
     println!("  Run 'orbit install' to restore missing mods.");
 
     Ok(())

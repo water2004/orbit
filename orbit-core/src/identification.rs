@@ -107,12 +107,6 @@ pub async fn identify_mods(
             for &idx in &unrecognized {
                 let m = &scanned[idx];
                 if let Some(resolved) = hash_to_mod.get(m.sha512.as_str()) {
-                    eprintln!(
-                        "    ✓ identified as {}/{} v{} (hash match)",
-                        p.name(),
-                        m.mod_id.as_deref().unwrap_or("?"),
-                        resolved.version
-                    );
                     results[idx] = Some(build_identified(m, p.name(), resolved, false));
                 } else {
                     still_unrecognized.push(idx);
@@ -127,12 +121,6 @@ pub async fn identify_mods(
             let m = &scanned[idx];
             match p.get_version_by_hash(&m.sha512).await {
                 Ok(Some(resolved)) => {
-                    eprintln!(
-                        "    ✓ identified as {}/{} v{} (hash match)",
-                        p.name(),
-                        m.mod_id.as_deref().unwrap_or("?"),
-                        resolved.version
-                    );
                     results[idx] = Some(build_identified(m, p.name(), &resolved, false));
                 }
                 _ => {
@@ -146,12 +134,6 @@ pub async fn identify_mods(
                             .as_ref()
                             .and_then(|ver| versions.iter().find(|v| v.version == *ver));
                         if let Some(v) = matched {
-                            eprintln!(
-                                "    ✓ identified as {}/{} v{} (version match)",
-                                p.name(),
-                                mod_id,
-                                v.version
-                            );
                             results[idx] = Some(build_identified(m, p.name(), v, true));
                             continue;
                         }
@@ -168,10 +150,6 @@ pub async fn identify_mods(
         if let Some(ident) = results[i].take() {
             final_results.push(ident);
         } else {
-            eprintln!(
-                "    ? unrecognized → recording as file ({} jar deps)",
-                m.jar_deps.len()
-            );
             final_results.push(IdentifiedMod {
                 filename: m.filename.clone(),
                 mod_id: m.mod_id.clone().unwrap_or_default(),

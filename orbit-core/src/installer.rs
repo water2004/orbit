@@ -10,6 +10,7 @@ use crate::lockfile::{
 };
 use crate::manifest::{DependencySpec, OrbitManifest};
 use crate::providers::{ModProvider, ResolvedMod};
+use crate::resolver::types::CandidateDiagnostic;
 use crate::workspace::{Lockfile, ManifestFile};
 
 pub type InstallPrompt = Box<dyn FnOnce(&InstallReport) -> bool + Send>;
@@ -35,6 +36,7 @@ pub struct InstallReport {
     pub installed: Vec<InstalledMod>,
     pub already_satisfied: Vec<String>,
     pub skipped_optional: Vec<String>,
+    pub diagnostics: Vec<CandidateDiagnostic>,
 }
 
 #[derive(Debug, Clone)]
@@ -119,14 +121,18 @@ pub async fn upgrade_all_in_instance(
         },
     );
 
-    let (outdated, resolved_candidates) =
-        crate::outdated::check_all_outdated(&manifest_file.inner, &lock.inner, providers).await?;
+    let crate::outdated::OutdatedReport {
+        updates: outdated,
+        resolved: resolved_candidates,
+        diagnostics,
+    } = crate::outdated::check_all_outdated(&manifest_file.inner, &lock.inner, providers).await?;
 
     if outdated.is_empty() {
         return Ok(InstallReport {
             installed: vec![],
             already_satisfied: vec![],
             skipped_optional: vec![],
+            diagnostics,
         });
     }
 
@@ -173,6 +179,7 @@ pub async fn upgrade_all_in_instance(
         installed: planned.clone(),
         already_satisfied: vec![],
         skipped_optional: vec![],
+        diagnostics: diagnostics.clone(),
     };
 
     if let Some(prompt) = prompt_fn
@@ -182,6 +189,7 @@ pub async fn upgrade_all_in_instance(
             installed: vec![],
             already_satisfied: vec![],
             skipped_optional: vec![],
+            diagnostics,
         }); // aborted
     }
 
@@ -253,6 +261,7 @@ pub async fn upgrade_all_in_instance(
         installed,
         already_satisfied: vec![],
         skipped_optional: vec![],
+        diagnostics,
     })
 }
 
@@ -438,11 +447,7 @@ async fn install_mod(input: InstallModInput<'_>) -> Result<InstallReport, OrbitE
     ensure_root_requirement(&mut resolution_manifest, &requested_package, constraint);
 
     // 3. Resolve offline
-    eprintln!(
-        "  resolving with {} mod(s) in candidates...",
-        candidates.len()
-    );
-    let upgrades = match crate::resolver::resolve_with_candidates(
+    let resolution = match crate::resolver::resolve_with_candidates_report(
         &resolution_manifest,
         lockfile,
         &mut candidates,
@@ -450,12 +455,11 @@ async fn install_mod(input: InstallModInput<'_>) -> Result<InstallReport, OrbitE
     )
     .await
     {
-        Ok(u) => {
-            eprintln!("  resolved: {:?}", u);
-            u
-        }
+        Ok(resolution) => resolution,
         Err(e) => return Err(OrbitError::Conflict(e)),
     };
+    let upgrades = resolution.upgrades;
+    let diagnostics = resolution.diagnostics;
 
     // 4. Download resolved versions and apply
     let mut planned = Vec::new();
@@ -507,6 +511,7 @@ async fn install_mod(input: InstallModInput<'_>) -> Result<InstallReport, OrbitE
         installed: planned.clone(),
         already_satisfied: already_satisfied.clone(),
         skipped_optional: vec![],
+        diagnostics: diagnostics.clone(),
     };
 
     if let Some(prompt) = prompt_fn
@@ -516,6 +521,7 @@ async fn install_mod(input: InstallModInput<'_>) -> Result<InstallReport, OrbitE
             installed: vec![],
             already_satisfied,
             skipped_optional: vec![],
+            diagnostics,
         }); // aborted
     }
 
@@ -590,6 +596,7 @@ async fn install_mod(input: InstallModInput<'_>) -> Result<InstallReport, OrbitE
         installed,
         already_satisfied,
         skipped_optional: vec![],
+        diagnostics,
     })
 }
 
