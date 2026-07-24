@@ -25,7 +25,13 @@ pub async fn install_local_file_to_instance(
 ) -> Result<InstallReport, OrbitError> {
     let source = validate_source(source)?;
     let mut manifest = ManifestFile::open(instance_dir)?;
-    let loader = manifest.inner.project.modloader.clone();
+    let platform = crate::platform::discover_install_platform(
+        instance_dir,
+        &manifest.inner.project.mc_version,
+    )?;
+    crate::platform::apply_to_manifest(instance_dir, &mut manifest.inner, &platform)?;
+    let loader = platform.loader.clone();
+    let loader_package = platform.loader_package;
     let metadata = crate::jar::read_mod_metadata(&source, &loader)?;
     validate_metadata(&metadata, &loader, &manifest, instance_dir)?;
 
@@ -86,6 +92,7 @@ pub async fn install_local_file_to_instance(
         providers,
         jar_cache,
         options.no_deps,
+        loader_package,
         interaction.select_resolution,
     )
     .await?;
@@ -208,6 +215,7 @@ async fn resolve_dependencies(
     providers: &[Box<dyn ModProvider>],
     jar_cache: &crate::jar_cache::JarCache,
     no_dependencies: bool,
+    loader_package: Option<crate::resolver::types::PlatformCandidate>,
     selector: Option<crate::resolver::types::ResolutionSelector>,
 ) -> Result<crate::resolver::types::ResolutionReport, OrbitError> {
     if no_dependencies {
@@ -218,11 +226,16 @@ async fn resolve_dependencies(
         &mut lockfile.inner,
         providers,
         jar_cache,
+        loader_package.clone(),
         selector,
     )
     .await?;
-    crate::resolver::check_lockfile_graph(&manifest.inner, &lockfile.inner)
-        .map_err(OrbitError::Conflict)?;
+    crate::resolver::check_lockfile_graph_with_loader(
+        &manifest.inner,
+        &lockfile.inner,
+        loader_package.as_ref(),
+    )
+    .map_err(OrbitError::Conflict)?;
     Ok(resolution)
 }
 
@@ -414,6 +427,7 @@ mod tests {
     #[tokio::test]
     async fn local_file_add_copies_jar_and_records_metadata() {
         let directory = test_directory("local-add");
+        crate::platform::test_support::write_platform(&directory, "1", "forge", "1");
         let manifest: OrbitManifest = toml::from_str(
             r#"
 [project]
@@ -421,6 +435,9 @@ name = "test"
 mc_version = "1"
 modloader = "forge"
 modloader_version = "1"
+[platform]
+minecraft_jar = { path = "minecraft.jar", sha256 = "test" }
+loader_jar = { path = "loader.jar", sha256 = "test" }
 "#,
         )
         .unwrap();

@@ -9,57 +9,54 @@ pub(super) struct ProfileSignature {
     pub group: &'static str,
     pub artifacts: &'static [&'static str],
     pub main_class_markers: &'static [&'static str],
+    pub component_uids: &'static [&'static str],
 }
 
 pub(super) fn detect_profile_loader(
     instance_dir: &Path,
+    mc_version: Option<&str>,
     loader: ModLoader,
     signature: &ProfileSignature,
 ) -> Result<LoaderInfo, OrbitError> {
-    let mut search_dirs = vec![instance_dir.to_path_buf()];
-    let versions_dir = instance_dir.join("versions");
-    if versions_dir.is_dir() {
-        let entries = std::fs::read_dir(&versions_dir).map_err(|error| {
-            OrbitError::Other(anyhow::anyhow!(
-                "cannot read {}: {error}",
-                versions_dir.display()
-            ))
-        })?;
-        for entry in entries {
-            let entry = entry.map_err(|error| {
-                OrbitError::Other(anyhow::anyhow!("cannot read directory entry: {error}"))
-            })?;
-            if entry.path().is_dir() {
-                search_dirs.push(entry.path());
-            }
+    let layout = crate::launcher::LauncherLayout::discover(instance_dir)?;
+    let mut versions = Vec::new();
+    let mut evidence = Vec::new();
+
+    for component in &layout.components {
+        if signature.component_uids.contains(&component.uid.as_str()) {
+            versions.push(component.version.clone());
+            evidence.push(format!(
+                "found {} {} in mmc-pack.json",
+                component.uid, component.version
+            ));
         }
     }
 
-    let mut weak_evidence = Vec::new();
-    for directory in search_dirs {
-        let Some(scan) = scan_directory(&directory, signature) else {
+    for profile_path in &layout.profile_paths {
+        let Some(scan) = scan_profile(profile_path, mc_version, signature) else {
             continue;
         };
         if let Some(version) = scan.version {
-            return Ok(LoaderInfo {
-                loader,
-                version: Some(version),
-                confidence: Confidence::Certain,
-                evidence: scan.evidence,
-            });
+            versions.push(version);
         }
-        weak_evidence.extend(scan.evidence);
+        evidence.extend(scan.evidence);
     }
 
+    versions.sort();
+    versions.dedup();
+    evidence.sort();
+    evidence.dedup();
     Ok(LoaderInfo {
         loader,
-        version: None,
-        confidence: if weak_evidence.is_empty() {
+        confidence: if !versions.is_empty() {
+            Confidence::Certain
+        } else if evidence.is_empty() {
             Confidence::None
         } else {
             Confidence::Low
         },
-        evidence: weak_evidence,
+        versions,
+        evidence,
     })
 }
 
@@ -85,37 +82,37 @@ struct ProfileScan {
     evidence: Vec<String>,
 }
 
-fn scan_directory(directory: &Path, signature: &ProfileSignature) -> Option<ProfileScan> {
-    let entries = std::fs::read_dir(directory).ok()?;
+fn scan_profile(
+    path: &Path,
+    mc_version: Option<&str>,
+    signature: &ProfileSignature,
+) -> Option<ProfileScan> {
     let mut evidence = Vec::new();
-    for entry in entries.filter_map(Result::ok) {
-        let path = entry.path();
-        if !path
-            .extension()
-            .is_some_and(|extension| extension.eq_ignore_ascii_case("json"))
-        {
-            continue;
+    let profile = VersionProfile::from_path(path).ok()?;
+    if let Some(expected) = mc_version
+        && profile
+            .inherits_from
+            .as_deref()
+            .is_some_and(|actual| actual != expected)
+    {
+        return None;
+    }
+    let filename = path.file_name().unwrap_or_default().to_string_lossy();
+    for marker in signature.main_class_markers {
+        if profile.main_class_contains(marker) {
+            evidence.push(format!("mainClass contains '{marker}' in {filename}"));
         }
-        let Ok(profile) = VersionProfile::from_path(&path) else {
-            continue;
-        };
-        let filename = path.file_name().unwrap_or_default().to_string_lossy();
-        for marker in signature.main_class_markers {
-            if profile.main_class_contains(marker) {
-                evidence.push(format!("mainClass contains '{marker}' in {filename}"));
-            }
-        }
-        for artifact in signature.artifacts {
-            if let Some(version) = profile.find_library(signature.group, artifact) {
-                evidence.push(format!(
-                    "found {}:{}:{} in {}",
-                    signature.group, artifact, version, filename
-                ));
-                return Some(ProfileScan {
-                    version: Some(version),
-                    evidence,
-                });
-            }
+    }
+    for artifact in signature.artifacts {
+        if let Some(version) = profile.find_library(signature.group, artifact) {
+            evidence.push(format!(
+                "found {}:{}:{} in {}",
+                signature.group, artifact, version, filename
+            ));
+            return Some(ProfileScan {
+                version: Some(version),
+                evidence,
+            });
         }
     }
     (!evidence.is_empty()).then_some(ProfileScan {
@@ -155,17 +152,19 @@ mod tests {
 
         let result = detect_profile_loader(
             &root,
+            Some("1.21.11"),
             ModLoader::Quilt,
             &ProfileSignature {
                 group: "org.quiltmc",
                 artifacts: &["quilt-loader"],
                 main_class_markers: &["quiltmc"],
+                component_uids: &["org.quiltmc.quilt-loader"],
             },
         )
         .unwrap();
 
         assert_eq!(result.confidence, Confidence::Certain);
-        assert_eq!(result.version.as_deref(), Some("0.28.0"));
+        assert_eq!(result.versions, vec!["0.28.0"]);
         std::fs::remove_dir_all(root).unwrap();
     }
 
@@ -180,17 +179,19 @@ mod tests {
 
         let result = detect_profile_loader(
             &root,
+            None,
             ModLoader::Forge,
             &ProfileSignature {
                 group: "net.minecraftforge",
                 artifacts: &["forge"],
                 main_class_markers: &["minecraftforge"],
+                component_uids: &["net.minecraftforge"],
             },
         )
         .unwrap();
 
         assert_eq!(result.confidence, Confidence::Low);
-        assert!(result.version.is_none());
+        assert!(result.versions.is_empty());
         std::fs::remove_dir_all(root).unwrap();
     }
 

@@ -13,19 +13,29 @@ impl LoaderDetector for ForgeDetector {
         ModLoader::Forge
     }
 
-    fn detect(&self, instance_dir: &std::path::Path) -> Result<LoaderInfo, OrbitError> {
+    fn detect(
+        &self,
+        instance_dir: &std::path::Path,
+        mc_version: Option<&str>,
+    ) -> Result<LoaderInfo, OrbitError> {
         let mut info = super::profile::detect_profile_loader(
             instance_dir,
+            mc_version,
             ModLoader::Forge,
             &super::profile::ProfileSignature {
                 group: "net.minecraftforge",
                 artifacts: &["forge"],
                 main_class_markers: &["minecraftforge"],
+                component_uids: &["net.minecraftforge"],
             },
         )?;
-        info.version = info
-            .version
-            .map(super::profile::strip_minecraft_version_prefix);
+        info.versions = info
+            .versions
+            .into_iter()
+            .map(super::profile::strip_minecraft_version_prefix)
+            .collect();
+        info.versions.sort();
+        info.versions.dedup();
         Ok(info)
     }
 }

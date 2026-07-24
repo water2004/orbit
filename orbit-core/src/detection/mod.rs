@@ -20,7 +20,7 @@ use crate::metadata::ModLoader;
 #[derive(Debug, Clone)]
 pub struct LoaderInfo {
     pub loader: ModLoader,
-    pub version: Option<String>,
+    pub versions: Vec<String>,
     pub confidence: Confidence,
     pub evidence: Vec<String>,
 }
@@ -51,7 +51,11 @@ pub trait LoaderDetector: Send + Sync {
     fn loader_type(&self) -> ModLoader;
 
     /// 检测目标目录，返回该加载器的证据和置信度
-    fn detect(&self, instance_dir: &std::path::Path) -> Result<LoaderInfo, OrbitError>;
+    fn detect(
+        &self,
+        instance_dir: &std::path::Path,
+        mc_version: Option<&str>,
+    ) -> Result<LoaderInfo, OrbitError>;
 }
 
 // ---------------------------------------------------------------------------
@@ -78,11 +82,12 @@ impl LoaderDetectionService {
     pub fn detect_all(
         &self,
         instance_dir: &std::path::Path,
+        mc_version: Option<&str>,
     ) -> Result<Vec<LoaderInfo>, OrbitError> {
         let mut results: Vec<LoaderInfo> = self
             .detectors
             .iter()
-            .map(|d| d.detect(instance_dir))
+            .map(|d| d.detect(instance_dir, mc_version))
             .collect::<Result<_, _>>()?;
 
         results.sort_by(|a, b| b.confidence.cmp(&a.confidence));

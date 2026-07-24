@@ -14,6 +14,12 @@ pub async fn handle(ctx: &CliContext) -> Result<()> {
     super::print_resolution_diagnostics(&report.diagnostics);
     super::print_resolution_warnings(&report.warnings);
 
+    for change in &report.platform_changes {
+        println!(
+            "  ~ platform   {}: {} -> {}",
+            change.field, change.previous, change.current
+        );
+    }
     for package in &report.added {
         println!("  + added      {package}");
     }
@@ -33,8 +39,9 @@ pub async fn handle(ctx: &CliContext) -> Result<()> {
         );
     }
     println!(
-        "Sync {}: {} added, {} changed, {} removed, {} missing, {} unlocked.",
+        "Sync {}: {} platform, {} added, {} changed, {} removed, {} missing, {} unlocked.",
         if ctx.dry_run { "preview" } else { "complete" },
+        report.platform_changes.len(),
         report.added.len(),
         report.changed.len(),
         report.removed.len(),

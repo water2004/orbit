@@ -11,6 +11,7 @@ use crate::error::OrbitError;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OrbitManifest {
     pub project: ProjectMeta,
+    pub platform: PlatformArtifacts,
     #[serde(default)]
     pub resolver: ResolverConfig,
     #[serde(default)]
@@ -19,6 +20,23 @@ pub struct OrbitManifest {
     pub groups: IndexMap<String, GroupSpec>,
     #[serde(default)]
     pub overrides: IndexMap<String, DependencySpec>,
+}
+
+/// Concrete runtime artifacts used by the selected launcher instance.
+///
+/// Versions alone are insufficient: launchers may keep multiple Minecraft and
+/// loader versions in shared directories. Orbit therefore pins the exact files
+/// it inspected, while `sync` may deliberately refresh these pins.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PlatformArtifacts {
+    pub minecraft_jar: PlatformArtifact,
+    pub loader_jar: PlatformArtifact,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PlatformArtifact {
+    pub path: String,
+    pub sha256: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -154,6 +172,10 @@ mc_version = "1.20.1"
 modloader = "fabric"
 modloader_version = "0.15.7"
 
+[platform]
+minecraft_jar = { path = "minecraft.jar", sha256 = "test" }
+loader_jar = { path = "loader.jar", sha256 = "test" }
+
 [dependencies]
 sodium = "*"
 lithium = ">=0.11, <0.14"
@@ -180,6 +202,10 @@ mc_version = "1.20.1"
 modloader = "fabric"
 modloader_version = "0.15.7"
 
+[platform]
+minecraft_jar = { path = "minecraft.jar", sha256 = "test" }
+loader_jar = { path = "loader.jar", sha256 = "test" }
+
 [dependencies]
 jei = { version = "^12" }
 zoomify = { version = "*", optional = true, env = "client" }
@@ -202,6 +228,10 @@ name = "test"
 mc_version = "1.20.1"
 modloader = "fabric"
 modloader_version = "0.15.7"
+
+[platform]
+minecraft_jar = { path = "minecraft.jar", sha256 = "test" }
+loader_jar = { path = "loader.jar", sha256 = "test" }
 "#;
         let manifest: OrbitManifest = toml::from_str(toml_str).unwrap();
         assert_eq!(manifest.resolver.platforms, vec!["modrinth"]);

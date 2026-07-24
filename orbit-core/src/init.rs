@@ -129,51 +129,113 @@ pub(crate) fn scan_mods_dir(
     Ok(results)
 }
 
-/// 从实例目录的 JAR 中自动检测 MC 版本。
-///
-/// 先查 versions/ 子目录（标准 MC 启动器布局），再回退到当前目录。
-/// 避免 mod JAR 中的 version.json 干扰检测。
+/// Detects the single unambiguous Minecraft version for an instance.
 pub fn detect_mc_version(
     instance_dir: &std::path::Path,
 ) -> Result<crate::metadata::mojang::McVersion, OrbitError> {
-    let mut search_dirs = Vec::new();
+    let versions = detect_mc_versions(instance_dir)?;
+    match versions.as_slice() {
+        [version] => Ok(version.clone()),
+        [] => Err(OrbitError::Other(anyhow::anyhow!(
+            "no Minecraft client JAR with version.json was found for '{}'",
+            instance_dir.display()
+        ))),
+        versions => {
+            let ids = versions
+                .iter()
+                .map(|version| version.id.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            Err(OrbitError::Other(anyhow::anyhow!(
+                "multiple Minecraft versions are available for '{}': {ids}; pass --mc-version",
+                instance_dir.display()
+            )))
+        }
+    }
+}
 
-    let versions_dir = instance_dir.join("versions");
-    if versions_dir.is_dir()
-        && let Ok(entries) = std::fs::read_dir(&versions_dir)
-    {
-        for entry in entries.filter_map(|e| e.ok()) {
-            if entry.path().is_dir() {
-                search_dirs.push(entry.path());
+/// Returns every actual Minecraft client version visible to this one game
+/// directory. Mod JARs are never scanned.
+pub fn detect_mc_versions(
+    instance_dir: &std::path::Path,
+) -> Result<Vec<crate::metadata::mojang::McVersion>, OrbitError> {
+    let layout = crate::launcher::LauncherLayout::discover(instance_dir)?;
+    let configured_versions = layout.configured_minecraft_versions();
+    let expected_version =
+        (configured_versions.len() == 1).then(|| configured_versions[0].as_str());
+    let mut jar_paths = Vec::new();
+    for directory in &layout.game_jar_directories {
+        collect_direct_jars(directory, &mut jar_paths)?;
+    }
+    for library_root in &layout.library_roots {
+        let minecraft_root = library_root.join("com").join("mojang").join("minecraft");
+        if !minecraft_root.is_dir() {
+            continue;
+        }
+        for version_dir in std::fs::read_dir(&minecraft_root)? {
+            let version_dir = version_dir?.path();
+            if version_dir.is_dir() {
+                collect_direct_jars(&version_dir, &mut jar_paths)?;
             }
         }
     }
-    search_dirs.push(instance_dir.to_path_buf());
-
-    for dir in &search_dirs {
-        if let Ok(entries) = std::fs::read_dir(dir) {
-            for entry in entries.filter_map(|e| e.ok()) {
-                let path = entry.path();
-                if path.extension().map(|e| e != "jar").unwrap_or(true) {
-                    continue;
-                }
-                // 尝试从 JAR 中提取 version.json
-                if let Ok(version) = read_version_json_from_jar(&path) {
-                    return Ok(version);
-                }
+    if let Some(version) = expected_version {
+        for profile_path in &layout.profile_paths {
+            if let Some(versions_root) =
+                profile_path.parent().and_then(Path::parent).filter(|path| {
+                    path.file_name()
+                        .and_then(|name| name.to_str())
+                        .is_some_and(|name| name.eq_ignore_ascii_case("versions"))
+                })
+            {
+                collect_direct_jars(&versions_root.join(version), &mut jar_paths)?;
             }
         }
     }
+    jar_paths.sort();
+    jar_paths.dedup();
 
-    Err(OrbitError::Other(anyhow::anyhow!(
-        "no Minecraft version.json found in any JAR under {} or its versions/ subdirectories.\n\
-         Specify --mc-version manually.",
-        instance_dir.display()
-    )))
+    let mut versions = Vec::new();
+    for path in jar_paths {
+        let Ok(version) = read_version_json_from_jar(&path) else {
+            continue;
+        };
+        if expected_version.is_some_and(|expected| expected != version.id) {
+            continue;
+        }
+        if !versions
+            .iter()
+            .any(|existing: &crate::metadata::mojang::McVersion| existing.id == version.id)
+        {
+            versions.push(version);
+        }
+    }
+    versions.sort_by(|left, right| left.id.cmp(&right.id));
+    Ok(versions)
+}
+
+fn collect_direct_jars(
+    directory: &Path,
+    paths: &mut Vec<std::path::PathBuf>,
+) -> Result<(), OrbitError> {
+    if !directory.is_dir() {
+        return Ok(());
+    }
+    for entry in std::fs::read_dir(directory)? {
+        let path = entry?.path();
+        if path.is_file()
+            && path
+                .extension()
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("jar"))
+        {
+            paths.push(path);
+        }
+    }
+    Ok(())
 }
 
 /// 从游戏 JAR 中提取 version.json
-fn read_version_json_from_jar(
+pub(crate) fn read_version_json_from_jar(
     jar_path: &std::path::Path,
 ) -> Result<crate::metadata::mojang::McVersion, OrbitError> {
     let file = std::fs::File::open(jar_path).map_err(|e| {
@@ -212,8 +274,18 @@ pub async fn run_init(
         )));
     }
 
+    // Platform discovery is the validity gate for an instance. The caller's
+    // values select a candidate; the paths and metadata always come from disk.
+    let platform = crate::platform::discover_platform(
+        &input.instance_dir,
+        Some(&input.mc_version),
+        Some(&input.modloader),
+        Some(&input.modloader_version),
+    )?;
+    let platform_artifacts = platform.artifacts(&input.instance_dir)?;
+
     // 1. 扫描 mods/
-    let scanned = scan_mods_dir(&input.instance_dir, &input.modloader)?;
+    let scanned = scan_mods_dir(&input.instance_dir, &platform.loader)?;
 
     // 2. Identify top-level package JARs. Modules contained in one package are
     // already represented by the JAR layer as bundled metadata.
@@ -225,9 +297,9 @@ pub async fn run_init(
         .map(crate::identification::IdentifiedMod::to_package_entry)
         .collect();
 
-    let mc_ver = input.mc_version.clone();
-    let loader_name = input.modloader.clone();
-    let loader_ver = input.modloader_version.clone();
+    let mc_ver = platform.minecraft_version.id.clone();
+    let loader_name = platform.loader.clone();
+    let loader_ver = platform.loader_version.clone();
     let mut dependencies = indexmap::IndexMap::new();
     for m in &identified {
         let key = m.package_id();
@@ -251,6 +323,7 @@ pub async fn run_init(
             authors: None,
             version: None,
         },
+        platform: platform_artifacts,
         resolver: ResolverConfig::default(),
         dependencies,
         groups: Default::default(),
@@ -260,13 +333,16 @@ pub async fn run_init(
     // 4. Resolve the local candidate set through the same portfolio path used
     // by sync. Duplicate files for one mod_id are versions of one package.
     let crate::installer::InstallInteraction {
+        select_package: _,
         select_resolution,
         confirm_install,
     } = interaction;
+    let loader_package = platform.loader_package;
     let (selected_lock_entries, removed, dependency_error) =
         match crate::package_reconciliation::select_local_packages(
             &manifest,
             &lock_entries,
+            loader_package,
             select_resolution,
         )
         .await
@@ -494,6 +570,7 @@ mod tests {
     #[tokio::test]
     async fn init_confirms_and_removes_unselected_versions_of_one_package() {
         let directory = temp_instance_dir("duplicate-packages");
+        crate::platform::test_support::write_platform(&directory, "1.20.1", "fabric", "0.16.10");
         let mods = directory.join("mods");
         std::fs::create_dir_all(&mods).unwrap();
         write_fabric_package(&mods.join("alpha-1.jar"), "alpha", "1");
@@ -522,6 +599,7 @@ mod tests {
             input(false),
             &[],
             crate::installer::InstallInteraction {
+                select_package: None,
                 select_resolution: None,
                 confirm_install: Some(Box::new(|report| {
                     assert_eq!(report.removed.len(), 1);
@@ -543,6 +621,7 @@ mod tests {
             input(false),
             &[],
             crate::installer::InstallInteraction {
+                select_package: None,
                 select_resolution: None,
                 confirm_install: Some(Box::new(|_| true)),
             },

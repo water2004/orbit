@@ -1,7 +1,7 @@
 use super::CliContext;
 use anyhow::Result;
 use orbit_core::detection::LoaderDetectionService;
-use orbit_core::init::{InitInput, detect_mc_version, run_init};
+use orbit_core::init::{InitInput, detect_mc_versions, run_init};
 use orbit_core::providers::create_identification_providers;
 
 pub async fn handle(
@@ -17,21 +17,42 @@ pub async fn handle(
     // ── 1. 确定 MC 版本 ────────────────────────
     let mc_ver = match mc_version {
         Some(v) => v,
-        None => match detect_mc_version(&instance_dir) {
-            Ok(ver) => {
+        None => match detect_mc_versions(&instance_dir) {
+            Ok(versions) if versions.len() == 1 => {
+                let ver = &versions[0];
                 println!(
                     "✓ Detected Minecraft version: {} ({})",
                     ver.id,
                     if ver.stable { "stable" } else { "snapshot" }
                 );
-                ver.id
+                ver.id.clone()
             }
-            Err(_) if ctx.yes => {
+            Ok(versions) if versions.len() > 1 && ctx.yes => {
                 anyhow::bail!(
-                    "could not detect the Minecraft version; pass --mc-version when using --yes"
+                    "multiple Minecraft versions were detected: {}; \
+                     pass --mc-version when using --yes",
+                    versions
+                        .iter()
+                        .map(|version| version.id.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
                 )
             }
-            Err(_) => prompt_mc_version()?,
+            Ok(versions) if versions.len() > 1 => select_mc_version(&versions)?,
+            Ok(_) if ctx.yes => anyhow::bail!(
+                "could not detect the Minecraft version; pass --mc-version when using --yes"
+            ),
+            Ok(_) => prompt_mc_version()?,
+            Err(error) if ctx.yes => {
+                anyhow::bail!(
+                    "could not detect the Minecraft version: {error}; \
+                     pass --mc-version when using --yes"
+                )
+            }
+            Err(error) => {
+                eprintln!("? Automatic Minecraft detection failed: {error}");
+                prompt_mc_version()?
+            }
         },
     };
 
@@ -47,20 +68,24 @@ pub async fn handle(
                 .join(", ");
             anyhow::anyhow!("unknown modloader: '{requested_loader}'. Supported: {supported}")
         })?;
-        let detected = detector.detect(&instance_dir)?;
+        let detected = detector.detect(&instance_dir, Some(&mc_ver))?;
         let loader = detector.loader_type().as_str().to_string();
-        let version = choose_loader_version(modloader_version, detected.version, &loader, ctx.yes)?;
+        let version =
+            choose_loader_version(modloader_version, detected.versions, &loader, ctx.yes)?;
         (loader, version)
     } else {
-        let results = service.detect_all(&instance_dir)?;
-        let best = results.first();
+        let results = service.detect_all(&instance_dir, Some(&mc_ver))?;
+        let certain = results
+            .iter()
+            .filter(|info| info.confidence >= orbit_core::detection::Confidence::Certain)
+            .collect::<Vec<_>>();
 
-        match best {
-            Some(info) if info.confidence >= orbit_core::detection::Confidence::Certain => {
+        match certain.as_slice() {
+            [info] => {
                 let loader = info.loader.as_str().to_string();
                 let ver = choose_loader_version(
                     modloader_version,
-                    info.version.clone(),
+                    info.versions.clone(),
                     &loader,
                     ctx.yes,
                 )?;
@@ -72,6 +97,16 @@ pub async fn handle(
                 );
                 (loader, ver)
             }
+            infos if infos.len() > 1 => {
+                let candidates = infos
+                    .iter()
+                    .map(|info| info.loader.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                anyhow::bail!(
+                    "multiple modloaders match Minecraft {mc_ver}: {candidates}; pass --modloader"
+                );
+            }
             _ => {
                 if ctx.yes {
                     anyhow::bail!(
@@ -80,7 +115,7 @@ pub async fn handle(
                     );
                 }
                 let (l, name) = select_loader_interactive(&service)?;
-                let ver = choose_loader_version(modloader_version, None, &l, ctx.yes)?;
+                let ver = choose_loader_version(modloader_version, Vec::new(), &l, ctx.yes)?;
                 eprintln!("  Using {} loader {}", name, ver);
                 (l, ver)
             }
@@ -214,14 +249,69 @@ fn prompt_mc_version() -> Result<String> {
     Ok(version.to_string())
 }
 
+fn select_mc_version(versions: &[orbit_core::McVersion]) -> Result<String> {
+    eprintln!("? Multiple Minecraft versions are available:");
+    for (index, version) in versions.iter().enumerate() {
+        eprintln!("  [{}] {}", index + 1, version.id);
+    }
+    eprint!("Choose a Minecraft version [1]: ");
+    let mut input = String::new();
+    std::io::stdin().read_line(&mut input)?;
+    let index = if input.trim().is_empty() {
+        0
+    } else {
+        input
+            .trim()
+            .parse::<usize>()
+            .ok()
+            .and_then(|index| index.checked_sub(1))
+            .filter(|index| *index < versions.len())
+            .ok_or_else(|| anyhow::anyhow!("invalid Minecraft version choice"))?
+    };
+    Ok(versions[index].id.clone())
+}
+
 fn choose_loader_version(
     explicit: Option<String>,
-    detected: Option<String>,
+    mut detected: Vec<String>,
     loader: &str,
     non_interactive: bool,
 ) -> Result<String> {
-    if let Some(version) = explicit.or(detected) {
+    if let Some(version) = explicit {
         return Ok(version);
+    }
+    detected.sort();
+    detected.dedup();
+    if detected.len() == 1 {
+        return Ok(detected.remove(0));
+    }
+    if detected.len() > 1 {
+        if non_interactive {
+            anyhow::bail!(
+                "multiple {loader} loader versions were detected: {}; \
+                 pass --modloader-version when using --yes",
+                detected.join(", ")
+            );
+        }
+        eprintln!("? Multiple {loader} loader versions are available:");
+        for (index, version) in detected.iter().enumerate() {
+            eprintln!("  [{}] {version}", index + 1);
+        }
+        eprint!("Choose a loader version [1]: ");
+        let mut input = String::new();
+        std::io::stdin().read_line(&mut input)?;
+        let index = if input.trim().is_empty() {
+            0
+        } else {
+            input
+                .trim()
+                .parse::<usize>()
+                .ok()
+                .and_then(|index| index.checked_sub(1))
+                .filter(|index| *index < detected.len())
+                .ok_or_else(|| anyhow::anyhow!("invalid loader version choice"))?
+        };
+        return Ok(detected[index].clone());
     }
     if non_interactive {
         anyhow::bail!(

@@ -36,6 +36,7 @@ pub async fn handle(mod_name: Option<String>, ctx: &CliContext) -> Result<()> {
     );
 
     let report = orbit_core::outdated::check_all_outdated(
+        &dir,
         &manifest_file.inner,
         &lock.inner,
         &providers,

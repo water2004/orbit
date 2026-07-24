@@ -12,8 +12,8 @@ use crate::metadata::{
 };
 use crate::resolver::provider::{ModulePriority, OrbitDependencyProvider};
 use crate::resolver::types::{
-    BundledCandidate, CandidateIdentity, CandidateLocation, CandidateVersion, SolverPackage,
-    SolverVersion, solver_range,
+    BundledCandidate, CandidateIdentity, CandidateLocation, CandidateVersion, PlatformCandidate,
+    SolverPackage, SolverVersion, solver_range,
 };
 use crate::versions::Version;
 
@@ -80,14 +80,22 @@ pub(crate) fn build_solver_graph(
     manifest: &OrbitManifest,
     lockfile: &OrbitLockfile,
     candidates: &HashMap<String, Vec<CandidateVersion>>,
+    loader_package: Option<&PlatformCandidate>,
 ) -> SolverGraph {
-    build_solver_graph_for_target(manifest, lockfile, candidates, Environment::Both)
+    build_solver_graph_for_target(
+        manifest,
+        lockfile,
+        candidates,
+        loader_package,
+        Environment::Both,
+    )
 }
 
 pub(crate) fn build_solver_graph_for_target(
     manifest: &OrbitManifest,
     lockfile: &OrbitLockfile,
     candidates: &HashMap<String, Vec<CandidateVersion>>,
+    loader_package: Option<&PlatformCandidate>,
     target: Environment,
 ) -> SolverGraph {
     let loader = &manifest.project.modloader;
@@ -101,7 +109,7 @@ pub(crate) fn build_solver_graph_for_target(
         target,
     };
 
-    register_platform_packages(&mut provider, manifest);
+    register_platform_packages(&mut provider, manifest, loader_package, &context);
     register_lockfile(&mut provider, lockfile, &context);
     register_candidate_map(&mut provider, candidates, &context);
     register_ordering_cycles(
@@ -135,9 +143,11 @@ pub(crate) fn build_solver_graph_for_target(
     }
 }
 
-pub(crate) fn register_platform_packages(
+fn register_platform_packages(
     provider: &mut OrbitDependencyProvider,
     manifest: &OrbitManifest,
+    loader_package: Option<&PlatformCandidate>,
+    context: &GraphContext<'_>,
 ) {
     let loader = &manifest.project.modloader;
     register_leaf(
@@ -146,13 +156,20 @@ pub(crate) fn register_platform_packages(
         Version::parse(&manifest.project.mc_version, loader),
     );
 
-    let loader_package = match loader.as_str() {
+    let canonical_loader = match loader.as_str() {
         "fabric" => "fabricloader",
         "quilt" => "quilt_loader",
         other => other,
     };
     let loader_version = Version::parse(&manifest.project.modloader_version, loader);
-    register_leaf(provider, loader_package, loader_version.clone());
+    if let Some(metadata) = loader_package
+        .filter(|metadata| metadata.mod_id == canonical_loader)
+        .filter(|metadata| Version::parse(&metadata.version, loader) == loader_version)
+    {
+        register_platform_candidate(provider, metadata, context);
+    } else {
+        register_leaf(provider, canonical_loader, loader_version.clone());
+    }
 
     match loader.as_str() {
         "fabric" => register_leaf(provider, "fabric", loader_version),
@@ -186,6 +203,62 @@ pub(crate) fn register_platform_packages(
             loader,
         ),
     );
+}
+
+fn register_platform_candidate(
+    provider: &mut OrbitDependencyProvider,
+    candidate: &PlatformCandidate,
+    context: &GraphContext<'_>,
+) {
+    let version = Version::parse(&candidate.version, context.loader);
+    let source = format!("platform:{}:{}", candidate.mod_id, candidate.version);
+    let identity = CandidateIdentity {
+        owner: candidate.mod_id.clone(),
+        source: source.clone(),
+        path: Vec::new(),
+        location: CandidateLocation::Root,
+        installed: true,
+    };
+    let package = SolverPackage::Platform(candidate.mod_id.clone());
+    let solver_version = SolverVersion::platform(version.clone());
+    register_module(
+        provider,
+        ModuleRegistration {
+            package: package.clone(),
+            solver_version: solver_version.clone(),
+            mod_id: &candidate.mod_id,
+            version: version.clone(),
+            dependencies: &candidate.dependencies,
+            environment: candidate.environment,
+            provides: &candidate.provides,
+            language_loader: candidate.language_loader.as_ref(),
+            embedded_artifacts: &candidate.embedded_artifacts,
+            source_artifact: None,
+            owner: None,
+            identity: identity.clone(),
+            parent_priority: Vec::new(),
+            bundled: candidate_bundled_links(&candidate.bundled, &identity, context.loader),
+        },
+        context,
+    );
+    for (index, bundled) in candidate.bundled.iter().enumerate() {
+        register_bundled_candidate(
+            provider,
+            bundled,
+            ContainedRegistration {
+                owner: &candidate.mod_id,
+                source: &source,
+                path: vec![index],
+                installed: true,
+                parent: (package.clone(), solver_version.clone()),
+                parent_priority: vec![ModulePriority {
+                    mod_id: candidate.mod_id.clone(),
+                    version: version.clone(),
+                }],
+            },
+            context,
+        );
+    }
 }
 
 fn register_leaf(provider: &mut OrbitDependencyProvider, package: &str, version: Version) {
@@ -944,6 +1017,9 @@ name = "test"
 mc_version = "1.20.1"
 modloader = "forge"
 modloader_version = "47.2.0"
+[platform]
+minecraft_jar = { path = "minecraft.jar", sha256 = "test" }
+loader_jar = { path = "loader.jar", sha256 = "test" }
 [dependencies]
 a = "*"
 b = "*"
@@ -988,6 +1064,77 @@ b = "*"
     }
 
     #[test]
+    fn loader_bundled_module_satisfies_regular_mod_dependency() {
+        let manifest: OrbitManifest = toml::from_str(
+            r#"
+[project]
+name = "test"
+mc_version = "1.21.1"
+modloader = "fabric"
+modloader_version = "0.19.2"
+[platform]
+minecraft_jar = { path = "minecraft.jar", sha256 = "test" }
+loader_jar = { path = "loader.jar", sha256 = "test" }
+[dependencies]
+carpet_tis = "*"
+"#,
+        )
+        .unwrap();
+        let lockfile = OrbitLockfile {
+            meta: LockMeta {
+                mc_version: "1.21.1".to_string(),
+                modloader: "fabric".to_string(),
+                modloader_version: "0.19.2".to_string(),
+            },
+            packages: vec![package(
+                "carpet_tis",
+                "1",
+                vec![dependency(
+                    "mixinextras",
+                    ">=0.3.0",
+                    DependencyKind::Required,
+                )],
+            )],
+        };
+        let loader_package = PlatformCandidate {
+            mod_id: "fabricloader".to_string(),
+            version: "0.19.2".to_string(),
+            dependencies: Vec::new(),
+            environment: Environment::Both,
+            provides: Vec::new(),
+            language_loader: None,
+            embedded_artifacts: Vec::new(),
+            bundled: vec![BundledCandidate {
+                mod_id: "mixinextras".to_string(),
+                version: "0.5.4".to_string(),
+                load_condition: ModLoadCondition::IfPossible,
+                origin: crate::jar::JarModOrigin::Nested {
+                    path: "META-INF/jars/mixinextras-fabric-0.5.4.jar".to_string(),
+                    artifact: None,
+                },
+                environment: Environment::Both,
+                dependencies: Vec::new(),
+                provides: Vec::new(),
+                language_loader: None,
+                embedded_artifacts: Vec::new(),
+                bundled: Vec::new(),
+            }],
+        };
+
+        let graph =
+            build_solver_graph(&manifest, &lockfile, &HashMap::new(), Some(&loader_package));
+        let solution =
+            pubgrub::resolve(&graph.provider, graph.root_package, graph.root_version).unwrap();
+
+        assert!(
+            solution
+                .get(&SolverPackage::Mod("mixinextras".to_string()))
+                .is_some(),
+            "{solution:?}"
+        );
+    }
+
+    #[test]
     fn provided_capability_selects_one_of_multiple_providers() {
         let mut manifest = manifest();
         manifest.dependencies.clear();
@@ -1014,7 +1161,7 @@ b = "*"
             packages: vec![first, second],
         };
 
-        let graph = build_solver_graph(&manifest, &lockfile, &HashMap::new());
+        let graph = build_solver_graph(&manifest, &lockfile, &HashMap::new(), None);
         let solution =
             pubgrub::resolve(&graph.provider, graph.root_package, graph.root_version).unwrap();
         let selected_providers = ["provider_one", "provider_two"]
@@ -1053,7 +1200,7 @@ b = "*"
                 package("b", "1", Vec::new()),
             ],
         };
-        let graph = build_solver_graph(&manifest, &lockfile, &HashMap::new());
+        let graph = build_solver_graph(&manifest, &lockfile, &HashMap::new(), None);
         assert!(pubgrub::resolve(&graph.provider, graph.root_package, graph.root_version).is_err());
     }
 
@@ -1075,7 +1222,7 @@ b = "*"
                 package("b", "1", Vec::new()),
             ],
         };
-        let graph = build_solver_graph(&manifest, &lockfile, &HashMap::new());
+        let graph = build_solver_graph(&manifest, &lockfile, &HashMap::new(), None);
         assert!(pubgrub::resolve(&graph.provider, graph.root_package, graph.root_version).is_err());
     }
 
@@ -1098,7 +1245,7 @@ b = "*"
                 ])],
             )],
         };
-        let graph = build_solver_graph(&manifest, &lockfile, &HashMap::new());
+        let graph = build_solver_graph(&manifest, &lockfile, &HashMap::new(), None);
         assert!(pubgrub::resolve(&graph.provider, graph.root_package, graph.root_version).is_ok());
     }
 
@@ -1125,11 +1272,11 @@ b = "*"
                 package("c", "1", Vec::new()),
             ],
         };
-        let graph = build_solver_graph(&manifest, &lockfile, &HashMap::new());
+        let graph = build_solver_graph(&manifest, &lockfile, &HashMap::new(), None);
         assert!(pubgrub::resolve(&graph.provider, graph.root_package, graph.root_version).is_err());
 
         manifest.dependencies.shift_remove("c");
-        let graph = build_solver_graph(&manifest, &lockfile, &HashMap::new());
+        let graph = build_solver_graph(&manifest, &lockfile, &HashMap::new(), None);
         assert!(pubgrub::resolve(&graph.provider, graph.root_package, graph.root_version).is_ok());
     }
 
@@ -1154,6 +1301,7 @@ b = "*"
             &manifest,
             &lockfile,
             &HashMap::new(),
+            None,
             Environment::Server,
         );
         assert!(
@@ -1163,6 +1311,7 @@ b = "*"
             &manifest,
             &lockfile,
             &HashMap::new(),
+            None,
             Environment::Client,
         );
         assert!(
@@ -1261,7 +1410,7 @@ b = "*"
             vec![candidate("2", vec![artifact("2", "[2]")])],
         )]);
 
-        let graph = build_solver_graph(&manifest, &lockfile, &candidates);
+        let graph = build_solver_graph(&manifest, &lockfile, &candidates, None);
 
         assert!(
             pubgrub::resolve(&graph.provider, graph.root_package, graph.root_version).is_err(),
@@ -1302,7 +1451,7 @@ b = "*"
             packages: vec![a, b],
         };
 
-        let graph = build_solver_graph(&manifest, &lockfile, &HashMap::new());
+        let graph = build_solver_graph(&manifest, &lockfile, &HashMap::new(), None);
         let occurrences = graph
             .provider
             .versions
@@ -1356,6 +1505,7 @@ b = "*"
                 packages: Vec::new(),
             },
             &candidates,
+            None,
         );
         let solution =
             pubgrub::resolve(&graph.provider, graph.root_package, graph.root_version).unwrap();
@@ -1380,6 +1530,9 @@ name = "test"
 mc_version = "1.20.1"
 modloader = "fabric"
 modloader_version = "0.16.10"
+[platform]
+minecraft_jar = { path = "minecraft.jar", sha256 = "test" }
+loader_jar = { path = "loader.jar", sha256 = "test" }
 [dependencies]
 wrapper = "*"
 "#,
@@ -1418,6 +1571,7 @@ wrapper = "*"
                 packages: Vec::new(),
             },
             &candidates,
+            None,
         );
 
         let solution =
@@ -1444,6 +1598,9 @@ name = "test"
 mc_version = "1.20.1"
 modloader = "fabric"
 modloader_version = "0.16.10"
+[platform]
+minecraft_jar = { path = "minecraft.jar", sha256 = "test" }
+loader_jar = { path = "loader.jar", sha256 = "test" }
 [dependencies]
 wrapper = "*"
 "#,
@@ -1477,6 +1634,7 @@ wrapper = "*"
                 packages: Vec::new(),
             },
             &HashMap::from([("wrapper".to_string(), vec![wrapper])]),
+            None,
         );
 
         let solution =
@@ -1503,6 +1661,9 @@ name = "test"
 mc_version = "1.20.1"
 modloader = "fabric"
 modloader_version = "0.16.10"
+[platform]
+minecraft_jar = { path = "minecraft.jar", sha256 = "test" }
+loader_jar = { path = "loader.jar", sha256 = "test" }
 [dependencies]
 a_parent = "*"
 z_parent = "*"
@@ -1544,6 +1705,7 @@ z_parent = "*"
                 ("a_parent".to_string(), vec![a_parent]),
                 ("z_parent".to_string(), vec![z_parent]),
             ]),
+            None,
         );
 
         let solution =
@@ -1577,7 +1739,7 @@ z_parent = "*"
                 package("b", "1", Vec::new()),
             ],
         };
-        let graph = build_solver_graph(&manifest, &lockfile, &HashMap::new());
+        let graph = build_solver_graph(&manifest, &lockfile, &HashMap::new(), None);
         let solution = pubgrub::resolve(
             &graph.provider,
             graph.root_package.clone(),

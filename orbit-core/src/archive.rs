@@ -170,8 +170,14 @@ pub fn export_instance(
             "unsupported export format '{format}'; expected zip or mrpack"
         )));
     }
-    let manifest = ManifestFile::open(instance_dir)?;
+    let mut manifest = ManifestFile::open(instance_dir)?;
     let lockfile = Lockfile::open(instance_dir)?;
+    let platform = crate::platform::discover_install_platform(
+        instance_dir,
+        &manifest.inner.project.mc_version,
+    )?;
+    crate::platform::apply_to_manifest(instance_dir, &mut manifest.inner, &platform)?;
+    let loader_package = platform.loader_package;
     let (selected, _) = crate::installer::selected_packages(
         &manifest.inner,
         &lockfile.inner,
@@ -179,6 +185,7 @@ pub fn export_instance(
             target,
             ..RestoreOptions::default()
         },
+        loader_package.as_ref(),
     )?;
     let mut sources = Vec::new();
     for package in selected {
@@ -321,6 +328,16 @@ mod tests {
                 authors: None,
                 version: None,
             },
+            platform: crate::manifest::PlatformArtifacts {
+                minecraft_jar: crate::manifest::PlatformArtifact {
+                    path: "minecraft.jar".to_string(),
+                    sha256: "test".to_string(),
+                },
+                loader_jar: crate::manifest::PlatformArtifact {
+                    path: "loader.jar".to_string(),
+                    sha256: "test".to_string(),
+                },
+            },
             resolver: ResolverConfig::default(),
             dependencies: indexmap::IndexMap::from([(
                 dependency.to_string(),
@@ -389,6 +406,7 @@ mod tests {
     #[test]
     fn zip_export_contains_manifest_lock_and_selected_jar() {
         let directory = test_dir("zip-export");
+        crate::platform::test_support::write_platform(&directory, "1", "fabric", "1");
         std::fs::create_dir_all(directory.join("mods")).unwrap();
         ManifestFile::new(&directory, manifest("example"))
             .save()
@@ -442,6 +460,7 @@ mod tests {
     #[test]
     fn mrpack_references_online_files_and_embeds_local_overrides() {
         let directory = test_dir("mrpack-export");
+        crate::platform::test_support::write_platform(&directory, "1", "fabric", "1");
         std::fs::create_dir_all(directory.join("mods")).unwrap();
         let mut project = manifest("online");
         project

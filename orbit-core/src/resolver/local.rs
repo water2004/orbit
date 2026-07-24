@@ -23,7 +23,7 @@ pub(crate) fn check_local_graph(
             .map(IdentifiedMod::to_package_entry)
             .collect(),
     };
-    let graph = build_solver_graph(manifest, &lockfile, &HashMap::new());
+    let graph = build_solver_graph(manifest, &lockfile, &HashMap::new(), None);
 
     match pubgrub::resolve(&graph.provider, graph.root_package, graph.root_version) {
         Ok(_) => Ok(()),
@@ -83,6 +83,10 @@ mc_version = "1.21.1"
 modloader = "fabric"
 modloader_version = "0.16.0"
 
+[platform]
+minecraft_jar = { path = "minecraft.jar", sha256 = "test" }
+loader_jar = { path = "loader.jar", sha256 = "test" }
+
 [dependencies]
 missing-mod = "*"
 "#,
@@ -104,6 +108,10 @@ name = "test"
 mc_version = "1.21.1"
 modloader = "fabric"
 modloader_version = "0.16.0"
+
+[platform]
+minecraft_jar = { path = "minecraft.jar", sha256 = "test" }
+loader_jar = { path = "loader.jar", sha256 = "test" }
 
 [dependencies]
 a = "*"
@@ -131,6 +139,10 @@ mc_version = "1.21.1"
 modloader = "fabric"
 modloader_version = "0.16.0"
 
+[platform]
+minecraft_jar = { path = "minecraft.jar", sha256 = "test" }
+loader_jar = { path = "loader.jar", sha256 = "test" }
+
 [dependencies]
 a = { version = "*", exclude = ["b"] }
 "#,
@@ -150,6 +162,10 @@ name = "test"
 mc_version = "1.21.1"
 modloader = "fabric"
 modloader_version = "0.16.0"
+
+[platform]
+minecraft_jar = { path = "minecraft.jar", sha256 = "test" }
+loader_jar = { path = "loader.jar", sha256 = "test" }
 
 [dependencies]
 a = ">=2"

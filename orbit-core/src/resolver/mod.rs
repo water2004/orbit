@@ -24,7 +24,6 @@ use crate::resolver::types::{
 };
 use crate::versions::Version;
 
-pub(crate) use graph::is_platform_package;
 pub(crate) use graph::locked_source;
 
 pub(crate) fn select_resolution(
@@ -62,7 +61,15 @@ pub fn check_lockfile_graph(
     manifest: &OrbitManifest,
     lockfile: &OrbitLockfile,
 ) -> Result<(), String> {
-    let graph = build_solver_graph(manifest, lockfile, &HashMap::new());
+    check_lockfile_graph_with_loader(manifest, lockfile, None)
+}
+
+pub(crate) fn check_lockfile_graph_with_loader(
+    manifest: &OrbitManifest,
+    lockfile: &OrbitLockfile,
+    loader_package: Option<&types::PlatformCandidate>,
+) -> Result<(), String> {
+    let graph = build_solver_graph(manifest, lockfile, &HashMap::new(), loader_package);
     match pubgrub::resolve(&graph.provider, graph.root_package, graph.root_version) {
         Ok(_) => Ok(()),
         Err(pubgrub::PubGrubError::NoSolution(derivation_tree)) => {
@@ -80,8 +87,10 @@ pub(crate) fn resolve_lockfile_for_target(
     manifest: &OrbitManifest,
     lockfile: &OrbitLockfile,
     target: Environment,
+    loader_package: Option<&types::PlatformCandidate>,
 ) -> Result<pubgrub::SelectedDependencies<SolverPackage, SolverVersion>, String> {
-    let graph = build_solver_graph_for_target(manifest, lockfile, &HashMap::new(), target);
+    let graph =
+        build_solver_graph_for_target(manifest, lockfile, &HashMap::new(), loader_package, target);
     match pubgrub::resolve(&graph.provider, graph.root_package, graph.root_version) {
         Ok(solution) => Ok(solution),
         Err(pubgrub::PubGrubError::NoSolution(derivation_tree)) => {
@@ -137,7 +146,12 @@ pub async fn resolve_candidate_portfolio(
     lockfile: &OrbitLockfile,
     catalog: &CandidateCatalog,
 ) -> Result<ResolutionPortfolio, String> {
-    let graph = build_solver_graph(manifest, lockfile, &catalog.candidates);
+    let graph = build_solver_graph(
+        manifest,
+        lockfile,
+        &catalog.candidates,
+        catalog.loader_package.as_ref(),
+    );
     let mut maximized_mods: Vec<_> = catalog
         .candidates
         .keys()
@@ -449,6 +463,9 @@ name = "test"
 mc_version = "1.20.1"
 modloader = "forge"
 modloader_version = "47.2.0"
+[platform]
+minecraft_jar = { path = "minecraft.jar", sha256 = "test" }
+loader_jar = { path = "loader.jar", sha256 = "test" }
 [dependencies]
 a = "*"
 b = "*"
@@ -710,6 +727,46 @@ b = "*"
             .unwrap_err();
 
         assert!(error.contains("jar-only-id"), "{error}");
+    }
+
+    #[test]
+    fn fabric_wildcard_conflict_hides_internal_range_sentinels() {
+        let manifest: OrbitManifest = toml::from_str(
+            r#"
+[project]
+name = "test"
+mc_version = "26.1.2"
+modloader = "fabric"
+modloader_version = "0.19.2"
+
+[platform]
+minecraft_jar = { path = "minecraft.jar", sha256 = "test" }
+loader_jar = { path = "loader.jar", sha256 = "test" }
+
+[dependencies]
+iris = "*"
+"#,
+        )
+        .unwrap();
+        let mut iris = locked("iris");
+        iris.version = "1.11.2+mc26.1.2".to_string();
+        iris.dependencies = vec![ModDependency::required("sodium", "0.9.x").into()];
+        let mut sodium = locked("sodium");
+        sodium.version = "0.8.12+mc26.1.2".to_string();
+        let lockfile = OrbitLockfile {
+            meta: LockMeta {
+                mc_version: "26.1.2".to_string(),
+                modloader: "fabric".to_string(),
+                modloader_version: "0.19.2".to_string(),
+            },
+            packages: vec![iris, sodium],
+        };
+
+        let error = check_lockfile_graph(&manifest, &lockfile).unwrap_err();
+
+        assert!(error.contains("sodium 0.9.x"), "{error}");
+        assert!(!error.contains("x-upper"), "{error}");
+        assert!(!error.contains("<1.11.2"), "{error}");
     }
 
     #[test]

@@ -207,8 +207,25 @@ pub type ResolvedCandidates = HashMap<String, RemoteArtifact>;
 pub struct CandidateCatalog {
     pub candidates: HashMap<String, Vec<CandidateVersion>>,
     pub resolved: ResolvedCandidates,
-    /// Provider lookup key (slug or project id) to the JAR-declared package id.
-    pub source_packages: HashMap<(String, String), String>,
+    /// Loader package metadata read from the actual launcher library JAR.
+    pub loader_package: Option<PlatformCandidate>,
+    /// Provider lookup key (slug or project id) to every JAR-declared package id.
+    ///
+    /// A provider project is only a download locator. Its artifacts may change
+    /// `mod_id` over time, so it must not impose a single package identity.
+    pub source_packages: HashMap<(String, String), std::collections::BTreeSet<String>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlatformCandidate {
+    pub mod_id: String,
+    pub version: String,
+    pub dependencies: Vec<DependencyExpression>,
+    pub environment: Environment,
+    pub provides: Vec<ProvidedMod>,
+    pub language_loader: Option<LanguageLoaderRequirement>,
+    pub embedded_artifacts: Vec<EmbeddedArtifact>,
+    pub bundled: Vec<BundledCandidate>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -235,6 +252,25 @@ impl CandidateVersion {
             id,
             filename,
             jar_version: metadata.version,
+            dependencies: metadata.dependencies,
+            environment: metadata.environment,
+            provides: metadata.provides,
+            language_loader: metadata.language_loader,
+            embedded_artifacts: metadata.embedded_artifacts,
+            bundled: metadata
+                .bundled_mods
+                .into_iter()
+                .map(BundledCandidate::from_jar)
+                .collect(),
+        }
+    }
+}
+
+impl PlatformCandidate {
+    pub(crate) fn from_jar_metadata(metadata: crate::jar::JarModMetadata) -> Self {
+        Self {
+            mod_id: metadata.mod_id,
+            version: metadata.version,
             dependencies: metadata.dependencies,
             environment: metadata.environment,
             provides: metadata.provides,
@@ -285,9 +321,9 @@ impl CandidateCatalog {
             )));
         }
         let duplicate = existing.is_some();
-        self.record_source_alias(&artifact.provider, &artifact.slug, &package)?;
+        self.record_source_alias(&artifact.provider, &artifact.slug, &package);
         if let Some(project_id) = artifact.project_id() {
-            self.record_source_alias(&artifact.provider, &project_id, &package)?;
+            self.record_source_alias(&artifact.provider, &project_id, &package);
         }
         if !duplicate {
             self.candidates
@@ -299,45 +335,22 @@ impl CandidateCatalog {
         Ok(package)
     }
 
-    fn record_source_alias(
-        &mut self,
-        provider: &str,
-        alias: &str,
-        package: &str,
-    ) -> Result<(), crate::error::OrbitError> {
+    fn record_source_alias(&mut self, provider: &str, alias: &str, package: &str) {
         let key = (provider.to_string(), alias.to_string());
-        if let Some(existing) = self.source_packages.get(&key)
-            && existing != package
-        {
-            return Err(crate::error::OrbitError::Other(anyhow::anyhow!(
-                "{provider} locator '{alias}' returned JARs declaring different mod IDs: \
-                 '{existing}' and '{package}'"
-            )));
-        }
-        self.source_packages.insert(key, package.to_string());
-        Ok(())
+        self.source_packages
+            .entry(key)
+            .or_default()
+            .insert(package.to_string());
     }
 
-    pub(crate) fn package_for_locator(
-        &self,
-        locator: &str,
-    ) -> Result<Option<String>, crate::error::OrbitError> {
-        let mut packages = self
-            .source_packages
+    pub(crate) fn packages_for_locator(&self, locator: &str) -> Vec<String> {
+        self.source_packages
             .iter()
-            .filter_map(|((_, alias), package)| (alias == locator).then_some(package))
-            .collect::<std::collections::BTreeSet<_>>();
-        if packages.len() > 1 {
-            return Err(crate::error::OrbitError::Other(anyhow::anyhow!(
-                "provider locator '{locator}' is ambiguous after JAR inspection: {}",
-                packages
-                    .iter()
-                    .map(|package| package.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            )));
-        }
-        Ok(packages.pop_first().cloned())
+            .filter(|((_, alias), _)| alias == locator)
+            .flat_map(|(_, packages)| packages.iter().cloned())
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect()
     }
 }
 

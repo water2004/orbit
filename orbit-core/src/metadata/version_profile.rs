@@ -14,6 +14,7 @@ pub struct MavenCoord {
     pub group_id: String,
     pub artifact_id: String,
     pub version: String,
+    pub classifier: Option<String>,
 }
 
 impl MavenCoord {
@@ -27,6 +28,7 @@ impl MavenCoord {
             group_id: parts[0].to_string(),
             artifact_id: parts[1].to_string(),
             version: parts[2].to_string(),
+            classifier: parts.get(3).map(|classifier| (*classifier).to_string()),
         })
     }
 }
@@ -124,6 +126,11 @@ mod tests {
         assert_eq!(coord.group_id, "net.fabricmc");
         assert_eq!(coord.artifact_id, "fabric-loader");
         assert_eq!(coord.version, "0.16.10");
+        assert_eq!(coord.classifier, None);
+
+        let classified =
+            MavenCoord::parse("net.minecraftforge:forge:1.20.1-47.2.0:universal").unwrap();
+        assert_eq!(classified.classifier.as_deref(), Some("universal"));
     }
 
     #[test]

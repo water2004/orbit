@@ -23,8 +23,10 @@ pub mod archive;
 pub mod checker;
 pub mod installer;
 pub mod jar_cache;
+mod launcher;
 pub mod outdated;
 mod package_reconciliation;
+mod platform;
 pub mod purge;
 pub mod resolver;
 pub mod sync;
@@ -43,15 +45,16 @@ pub use detection::LoaderDetectionService;
 pub use error::OrbitError;
 pub use installer::{
     InstallIntent, InstallInteraction, InstallOptions, InstallPrompt, InstallReport, InstalledMod,
-    ListOutput, ListedPackage, RemoveReport, RemovedPackage, RestoreOptions, RestoreReport,
-    install_local_file_to_instance, install_to_instance, list_dependencies, list_installed,
-    list_installed_for_target, remove_from_instance, restore_instance, upgrade_all_in_instance,
+    ListOutput, ListedPackage, PackageSelector, RemoveReport, RemovedPackage, RestoreOptions,
+    RestoreReport, install_local_file_to_instance, install_to_instance, list_dependencies,
+    list_installed, list_installed_for_target, remove_from_instance, restore_instance,
+    upgrade_all_in_instance,
 };
 pub use jar_cache::{CacheSummary, JarCache, clean_cache, inspect_cache};
 pub use lockfile::{
     BundledMod, CurseForgeInfo, FileInfo, LockMeta, ModrinthInfo, OrbitLockfile, PackageEntry,
 };
-pub use manifest::OrbitManifest;
+pub use manifest::{OrbitManifest, PlatformArtifact, PlatformArtifacts};
 pub use metadata::{ModLoader, mojang::McVersion};
 pub use outdated::{OutdatedMod, check_all_outdated};
 pub use providers::ModProvider;
@@ -61,5 +64,5 @@ pub use runtime::{
     NativeRuntimeEnvironment, PathLayout, RuntimeContext, RuntimeEnvironment, RuntimePathOptions,
     RuntimePaths, compiled_default_layout,
 };
-pub use sync::{SyncReport, sync_instance};
+pub use sync::{PlatformChange, SyncReport, sync_instance};
 pub use workspace::{Lockfile, ManifestFile};

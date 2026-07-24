@@ -13,14 +13,20 @@ impl LoaderDetector for QuiltDetector {
         ModLoader::Quilt
     }
 
-    fn detect(&self, instance_dir: &std::path::Path) -> Result<LoaderInfo, OrbitError> {
+    fn detect(
+        &self,
+        instance_dir: &std::path::Path,
+        mc_version: Option<&str>,
+    ) -> Result<LoaderInfo, OrbitError> {
         super::profile::detect_profile_loader(
             instance_dir,
+            mc_version,
             ModLoader::Quilt,
             &super::profile::ProfileSignature {
                 group: "org.quiltmc",
                 artifacts: &["quilt-loader"],
                 main_class_markers: &["quiltmc"],
+                component_uids: &["org.quiltmc.quilt-loader"],
             },
         )
     }

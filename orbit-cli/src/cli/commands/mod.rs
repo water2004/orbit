@@ -124,11 +124,41 @@ pub use upgrade::handle as handle_upgrade;
 
 pub fn install_interaction(dry_run: bool, yes: bool) -> orbit_core::InstallInteraction {
     orbit_core::InstallInteraction {
+        select_package: package_selector(yes),
         select_resolution: resolution_selector(dry_run, yes),
         confirm_install: (!dry_run).then(|| {
             Box::new(move |report: &orbit_core::InstallReport| prompt_install_report(report, yes))
                 as orbit_core::InstallPrompt
         }),
+    }
+}
+
+fn package_selector(yes: bool) -> Option<orbit_core::PackageSelector> {
+    (!yes).then(|| Box::new(prompt_package) as orbit_core::PackageSelector)
+}
+
+fn prompt_package(packages: &[String]) -> usize {
+    eprintln!("\nThe provider project contains multiple feasible JAR-declared packages:");
+    for (index, package) in packages.iter().enumerate() {
+        eprintln!("  {}. {package}", index + 1);
+    }
+    loop {
+        eprint!(
+            "\nChoose the package to add [1-{}] (default 1): ",
+            packages.len()
+        );
+        use std::io::Write;
+        std::io::stderr().flush().ok();
+        let mut input = String::new();
+        if std::io::stdin().read_line(&mut input).is_err() || input.trim().is_empty() {
+            return 0;
+        }
+        if let Ok(choice) = input.trim().parse::<usize>()
+            && (1..=packages.len()).contains(&choice)
+        {
+            return choice - 1;
+        }
+        eprintln!("Please enter a number from 1 to {}.", packages.len());
     }
 }
 

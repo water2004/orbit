@@ -254,18 +254,25 @@ pub(crate) async fn download_lockfile_candidate_catalog(
 
 /// 检查所有已安装平台模组的可用更新。
 pub async fn check_all_outdated(
+    instance_dir: &std::path::Path,
     manifest: &OrbitManifest,
     lockfile: &OrbitLockfile,
     providers: &[Box<dyn ModProvider>],
     selector: Option<ResolutionSelector>,
     jar_cache: &crate::jar_cache::JarCache,
 ) -> Result<OutdatedReport, OrbitError> {
+    let platform =
+        crate::platform::discover_install_platform(instance_dir, &manifest.project.mc_version)?;
+    let mut effective_manifest = manifest.clone();
+    crate::platform::apply_to_manifest(instance_dir, &mut effective_manifest, &platform)?;
+    let manifest = &effective_manifest;
     let loader = &manifest.project.modloader;
     let mc_version = &manifest.project.mc_version;
 
-    let catalog =
+    let mut catalog =
         download_lockfile_candidate_catalog(providers, lockfile, mc_version, loader, jar_cache)
             .await?;
+    catalog.loader_package = platform.loader_package;
     if catalog.candidates.is_empty() {
         return Ok(OutdatedReport::default());
     }
@@ -538,11 +545,50 @@ mod tests {
         );
         assert_eq!(
             download.source_packages[&("modrinth".to_string(), "source-a".to_string())],
-            "actual-a"
+            std::collections::BTreeSet::from(["actual-a".to_string()])
         );
         assert_eq!(
             download.source_packages[&("modrinth".to_string(), "project-b".to_string())],
-            "actual-b"
+            std::collections::BTreeSet::from(["actual-b".to_string()])
+        );
+    }
+
+    #[test]
+    fn candidate_catalog_partitions_project_artifacts_by_actual_mod_id() {
+        let mut catalog = CandidateCatalog::default();
+        for (mod_id, version) in [("gca-wrapper", "1.0.1"), ("gca_wrapper", "1.0.6")] {
+            let mut remote = artifact("gca", "UHjbX5mk");
+            remote.modrinth.as_mut().unwrap().version_id = version.to_string();
+            catalog
+                .record(
+                    crate::jar::JarModMetadata {
+                        mod_id: mod_id.to_string(),
+                        name: "GCA wrapper".to_string(),
+                        version: version.to_string(),
+                        environment: Default::default(),
+                        dependencies: Vec::new(),
+                        provides: Vec::new(),
+                        language_loader: None,
+                        load_condition: crate::metadata::ModLoadCondition::IfPossible,
+                        origin: crate::jar::JarModOrigin::Root,
+                        embedded_jars: Vec::new(),
+                        embedded_artifacts: Vec::new(),
+                        bundled_mods: Vec::new(),
+                    },
+                    remote,
+                )
+                .unwrap();
+        }
+
+        assert_eq!(catalog.candidates["gca-wrapper"].len(), 1);
+        assert_eq!(catalog.candidates["gca_wrapper"].len(), 1);
+        assert_eq!(
+            catalog.packages_for_locator("gca"),
+            vec!["gca-wrapper", "gca_wrapper"]
+        );
+        assert_eq!(
+            catalog.packages_for_locator("UHjbX5mk"),
+            vec!["gca-wrapper", "gca_wrapper"]
         );
     }
 
@@ -580,10 +626,7 @@ mod tests {
 
         assert_eq!(catalog.candidates["actual"].len(), 2);
         assert_eq!(catalog.resolved.len(), 2);
-        assert_eq!(
-            catalog.package_for_locator("mirror").unwrap().as_deref(),
-            Some("actual")
-        );
+        assert_eq!(catalog.packages_for_locator("mirror"), vec!["actual"]);
 
         catalog
             .record(

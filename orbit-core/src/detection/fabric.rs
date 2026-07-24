@@ -15,14 +15,20 @@ impl LoaderDetector for FabricDetector {
         ModLoader::Fabric
     }
 
-    fn detect(&self, instance_dir: &std::path::Path) -> Result<LoaderInfo, OrbitError> {
+    fn detect(
+        &self,
+        instance_dir: &std::path::Path,
+        mc_version: Option<&str>,
+    ) -> Result<LoaderInfo, OrbitError> {
         super::profile::detect_profile_loader(
             instance_dir,
+            mc_version,
             ModLoader::Fabric,
             &super::profile::ProfileSignature {
                 group: "net.fabricmc",
                 artifacts: &["fabric-loader"],
                 main_class_markers: &["fabricmc"],
+                component_uids: &["net.fabricmc.fabric-loader"],
             },
         )
     }

@@ -5,6 +5,7 @@ use std::path::Path;
 use crate::error::OrbitError;
 use crate::lockfile::{LockMeta, PackageEntry};
 use crate::manifest::{DependencySpec, OrbitManifest};
+use crate::resolver::types::PlatformCandidate;
 use crate::resolver::types::{ResolutionReport, ResolutionSelector};
 use crate::{InstallReport, RemovedPackage};
 
@@ -17,6 +18,7 @@ pub(crate) struct LocalPackageSelection {
 pub(crate) async fn select_local_packages(
     manifest: &OrbitManifest,
     local_entries: &[PackageEntry],
+    loader_package: Option<PlatformCandidate>,
     selector: Option<ResolutionSelector>,
 ) -> Result<LocalPackageSelection, String> {
     let local_lockfile = crate::lockfile::OrbitLockfile {
@@ -37,7 +39,10 @@ pub(crate) async fn select_local_packages(
     let portfolio = crate::resolver::resolve_candidate_portfolio(
         &resolution_manifest,
         &local_lockfile,
-        &Default::default(),
+        &crate::resolver::types::CandidateCatalog {
+            loader_package,
+            ..Default::default()
+        },
     )
     .await?;
     let resolution = crate::resolver::select_resolution(portfolio, selector)?;
