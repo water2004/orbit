@@ -551,3 +551,129 @@ pub async fn run_init(
         scanned_mods: scanned,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::{Cursor, Write};
+    use std::path::{Path, PathBuf};
+    use zip::ZipWriter;
+    use zip::write::SimpleFileOptions;
+
+    const SODIUM_LIKE: &str = include_str!("../tests/fixtures/sodium_like.fabric.mod.json");
+    const PRINTER_PARENT: &str = include_str!("../tests/fixtures/printer_parent.fabric.mod.json");
+    const PRINTER_EMBEDDED: &str =
+        include_str!("../tests/fixtures/printer_embedded.fabric.mod.json");
+
+    fn jar_bytes(entries: &[(&str, &[u8])]) -> Vec<u8> {
+        let cursor = Cursor::new(Vec::new());
+        let mut zip = ZipWriter::new(cursor);
+        let options = SimpleFileOptions::default();
+
+        for (name, contents) in entries {
+            zip.start_file(*name, options).unwrap();
+            zip.write_all(contents).unwrap();
+        }
+
+        zip.finish().unwrap().into_inner()
+    }
+
+    fn temp_instance_dir(test_name: &str) -> PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../target/test-tmp")
+            .join(format!("orbit-{test_name}-{}-{nanos}", std::process::id()))
+    }
+
+    fn write_jar(path: &Path, bytes: &[u8]) {
+        std::fs::write(path, bytes).unwrap();
+    }
+
+    #[test]
+    fn scan_mods_dir_ignores_old_and_disabled_jars() {
+        let instance = temp_instance_dir("scan-ignores-disabled");
+        let mods_dir = instance.join("mods");
+        std::fs::create_dir_all(&mods_dir).unwrap();
+
+        let active = jar_bytes(&[("fabric.mod.json", SODIUM_LIKE.as_bytes())]);
+        write_jar(
+            &mods_dir.join("sodium-fabric-0.8.11+mc1.21.11.jar"),
+            &active,
+        );
+        write_jar(
+            &mods_dir.join("sodium-fabric-0.8.10+mc1.21.11.jar.old"),
+            &active,
+        );
+        write_jar(
+            &mods_dir.join("sodium-fabric-0.8.9+mc1.21.11.jar.disabled"),
+            &active,
+        );
+
+        let scanned = scan_mods_dir(&instance, "fabric").unwrap();
+
+        assert_eq!(scanned.len(), 1);
+        assert_eq!(scanned[0].filename, "sodium-fabric-0.8.11+mc1.21.11.jar");
+        assert_eq!(scanned[0].mod_id.as_deref(), Some("sodium"));
+        assert_eq!(scanned[0].embedded_jars.len(), 9);
+
+        std::fs::remove_dir_all(instance).ok();
+    }
+
+    #[test]
+    fn scan_mods_dir_records_embedded_fabric_jars() {
+        let instance = temp_instance_dir("scan-embedded");
+        let mods_dir = instance.join("mods");
+        std::fs::create_dir_all(&mods_dir).unwrap();
+
+        let embedded_path = "META-INF/jars/litematica-printer-1.21.11-2.4+20260330.10.jar";
+        let embedded = jar_bytes(&[("fabric.mod.json", PRINTER_EMBEDDED.as_bytes())]);
+        let parent_entries: [(&str, &[u8]); 2] = [
+            ("fabric.mod.json", PRINTER_PARENT.as_bytes()),
+            (embedded_path, embedded.as_slice()),
+        ];
+        let parent = jar_bytes(&parent_entries);
+        write_jar(
+            &mods_dir.join("litematica-printer-all-2.4+20260330.10.jar"),
+            &parent,
+        );
+
+        let scanned = scan_mods_dir(&instance, "fabric").unwrap();
+
+        assert_eq!(scanned.len(), 2);
+        let parent_mod = scanned
+            .iter()
+            .find(|m| m.embedded_parent.is_none())
+            .expect("parent mod should be scanned");
+        assert_eq!(parent_mod.mod_id.as_deref(), Some("litematica-printer-all"));
+        assert_eq!(parent_mod.embedded_jars.len(), 13);
+        assert!(
+            parent_mod
+                .embedded_jars
+                .iter()
+                .any(|path| path == embedded_path)
+        );
+
+        let embedded_mod = scanned
+            .iter()
+            .find(|m| m.embedded_parent.is_some())
+            .expect("embedded mod should be scanned");
+        assert_eq!(embedded_mod.mod_id.as_deref(), Some("litematica-printer"));
+        assert_eq!(
+            embedded_mod.embedded_parent.as_deref(),
+            Some("litematica-printer-all-2.4+20260330.10.jar")
+        );
+        assert!(
+            embedded_mod
+                .jar_deps
+                .iter()
+                .any(|(name, version, required)| name == "minecraft"
+                    && version == "1.21.11"
+                    && *required)
+        );
+
+        std::fs::remove_dir_all(instance).ok();
+    }
+}

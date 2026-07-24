@@ -201,3 +201,113 @@ pub fn sha256_digest(data: &[u8]) -> String {
     hasher.update(data);
     hex::encode(hasher.finalize())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::{Cursor, Write};
+    use zip::ZipWriter;
+    use zip::write::SimpleFileOptions;
+
+    const SODIUM_LIKE: &str = include_str!("../../tests/fixtures/sodium_like.fabric.mod.json");
+    const SODIUM_FABRIC_API_BASE: &str =
+        include_str!("../../tests/fixtures/sodium_fabric_api_base.fabric.mod.json");
+    const PRINTER_PARENT: &str =
+        include_str!("../../tests/fixtures/printer_parent.fabric.mod.json");
+    const PRINTER_EMBEDDED: &str =
+        include_str!("../../tests/fixtures/printer_embedded.fabric.mod.json");
+
+    fn jar_bytes(entries: &[(&str, &[u8])]) -> Vec<u8> {
+        let cursor = Cursor::new(Vec::new());
+        let mut zip = ZipWriter::new(cursor);
+        let options = SimpleFileOptions::default();
+
+        for (name, contents) in entries {
+            zip.start_file(*name, options).unwrap();
+            zip.write_all(contents).unwrap();
+        }
+
+        zip.finish().unwrap().into_inner()
+    }
+
+    #[test]
+    fn reads_realistic_fabric_metadata_from_jar_bytes() {
+        let bytes = jar_bytes(&[("fabric.mod.json", SODIUM_LIKE.as_bytes())]);
+
+        let meta = read_mod_metadata_from_bytes(&bytes, "fabric").unwrap();
+
+        assert_eq!(meta.mod_id, "sodium");
+        assert_eq!(meta.version, "0.8.11+mc1.21.11");
+        assert_eq!(meta.name, "Sodium");
+        assert!(meta.dependencies.iter().any(|(name, version, required)| {
+            name == "fabric-rendering-fluids-v1" && version == ">=2.0.0" && *required
+        }));
+        assert_eq!(meta.embedded_jars.len(), 9);
+        assert_eq!(
+            meta.embedded_jars[0],
+            "META-INF/jars/fabric-api-base-1.0.5+4ebb5c083e.jar"
+        );
+        assert!(meta.implanted_mods.is_empty());
+    }
+
+    #[test]
+    fn reads_realistic_sodium_embedded_fabric_modules() {
+        let embedded_path = "META-INF/jars/fabric-api-base-1.0.5+4ebb5c083e.jar";
+        let embedded = jar_bytes(&[("fabric.mod.json", SODIUM_FABRIC_API_BASE.as_bytes())]);
+        let parent_entries: [(&str, &[u8]); 2] = [
+            ("fabric.mod.json", SODIUM_LIKE.as_bytes()),
+            (embedded_path, embedded.as_slice()),
+        ];
+        let parent = jar_bytes(&parent_entries);
+
+        let meta = read_mod_metadata_from_bytes(&parent, "fabric").unwrap();
+
+        assert_eq!(meta.mod_id, "sodium");
+        assert_eq!(meta.embedded_jars.len(), 9);
+        assert_eq!(meta.implanted_mods.len(), 1);
+        let implanted = &meta.implanted_mods[0];
+        assert_eq!(implanted.mod_id, "fabric-api-base");
+        assert_eq!(implanted.version, "1.0.5+4ebb5c083e");
+        assert!(
+            implanted
+                .dependencies
+                .iter()
+                .any(|(name, version, required)| name == "fabricloader"
+                    && version == ">=0.17.3"
+                    && *required)
+        );
+    }
+
+    #[test]
+    fn reads_implanted_fabric_jars_declared_by_parent_metadata() {
+        let embedded_path = "META-INF/jars/litematica-printer-1.21.11-2.4+20260330.10.jar";
+        let embedded = jar_bytes(&[("fabric.mod.json", PRINTER_EMBEDDED.as_bytes())]);
+        let parent_entries: [(&str, &[u8]); 2] = [
+            ("fabric.mod.json", PRINTER_PARENT.as_bytes()),
+            (embedded_path, embedded.as_slice()),
+        ];
+        let parent = jar_bytes(&parent_entries);
+
+        let meta = read_mod_metadata_from_bytes(&parent, "fabric").unwrap();
+
+        assert_eq!(meta.mod_id, "litematica-printer-all");
+        assert_eq!(meta.embedded_jars.len(), 13);
+        assert!(meta.embedded_jars.iter().any(|path| path == embedded_path));
+        assert_eq!(meta.implanted_mods.len(), 1);
+        let implanted = &meta.implanted_mods[0];
+        assert_eq!(implanted.mod_id, "litematica-printer");
+        assert_eq!(implanted.version, "2.4+20260330.10");
+        assert_eq!(
+            implanted.embedded_jars,
+            vec!["META-INF/jars/pinyin4j-2.5.1.jar"]
+        );
+        assert!(
+            implanted
+                .dependencies
+                .iter()
+                .any(|(name, version, required)| name == "minecraft"
+                    && version == "1.21.11"
+                    && *required)
+        );
+    }
+}

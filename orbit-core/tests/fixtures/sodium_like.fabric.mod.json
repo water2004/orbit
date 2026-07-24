@@ -1,0 +1,88 @@
+{
+  "schemaVersion": 1,
+  "id": "sodium",
+  "version": "0.8.11+mc1.21.11",
+  "name": "Sodium",
+  "description": "Sodium is a powerful rendering engine for Minecraft which greatly improves frame rates and micro-stutter, while fixing many graphical issues",
+  "authors": [
+    {
+      "name": "JellySquid (jellysquid3)",
+      "contact": {
+        "email": "jellysquid@pm.me",
+        "homepage": "https://jellysquid.me"
+      }
+    }
+  ],
+  "contributors": [
+    "IMS212",
+    "bytzo",
+    "PepperCode1"
+  ],
+  "contact": {
+    "homepage": "https://github.com/CaffeineMC/sodium",
+    "sources": "https://github.com/CaffeineMC/sodium",
+    "issues": "https://github.com/CaffeineMC/sodium/issues"
+  },
+  "license": "Polyform-Shield-1.0.0",
+  "icon": "sodium-icon.png",
+  "environment": "client",
+  "entrypoints": {
+    "client": [
+      "net.caffeinemc.mods.sodium.fabric.SodiumFabricMod"
+    ],
+    "preLaunch": [
+      "net.caffeinemc.mods.sodium.fabric.SodiumPreLaunch"
+    ]
+  },
+  "accessWidener": "sodium-fabric.accesswidener",
+  "mixins": [
+    "sodium-common.mixins.json",
+    "sodium-frapi.mixins.json",
+    "sodium-fabric.mixins.json"
+  ],
+  "depends": {
+    "fabricloader": ">=0.16.0",
+    "fabric-block-view-api-v2": "*",
+    "fabric-rendering-fluids-v1": ">=2.0.0",
+    "fabric-resource-loader-v0": "*"
+  },
+  "breaks": {
+    "embeddium": "*",
+    "optifabric": "*",
+    "iris": "<=1.10.6",
+    "fabric-api": "<0.140.0",
+    "sodium-extra": "<0.8.0"
+  },
+  "provides": [
+    "indium"
+  ],
+  "jars": [
+    {
+      "file": "META-INF/jars/fabric-api-base-1.0.5+4ebb5c083e.jar"
+    },
+    {
+      "file": "META-INF/jars/fabric-block-view-api-v2-1.0.39+4ebb5c083e.jar"
+    },
+    {
+      "file": "META-INF/jars/fabric-lifecycle-events-v1-2.6.15+4ebb5c083e.jar"
+    },
+    {
+      "file": "META-INF/jars/fabric-renderer-api-v1-8.0.0+f4ffd2e53e.jar"
+    },
+    {
+      "file": "META-INF/jars/fabric-rendering-fluids-v1-3.1.43+4ebb5c083e.jar"
+    },
+    {
+      "file": "META-INF/jars/fabric-rendering-v1-16.2.7+f4ffd2e53e.jar"
+    },
+    {
+      "file": "META-INF/jars/fabric-resource-loader-v0-3.3.4+4fc5413f3e.jar"
+    },
+    {
+      "file": "META-INF/jars/fabric-resource-loader-v1-1.0.10+78c8b4663e.jar"
+    },
+    {
+      "file": "META-INF/jars/fabric-transitive-access-wideners-v1-7.0.8+0107c3da3e.jar"
+    }
+  ]
+}
