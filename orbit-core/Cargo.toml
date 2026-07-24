@@ -23,4 +23,4 @@ async-trait.workspace = true
 anyhow.workspace = true
 thiserror.workspace = true
 indexmap.workspace = true
-pubgrub = { path = "../pubgrub-fork" }
+pubgrub = { git = "https://github.com/water2004/pubgrub.git", rev = "c3c4326a7e7ced4077e831285c4408c60c52ea32" }
