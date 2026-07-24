@@ -7,6 +7,7 @@ orbit-cli       参数、交互和展示
     ↓
 orbit-core      领域模型、编排、JAR、求解、文件事务
     ├── modrinth-wrapper
+    ├── CurseForge typed client（core provider 边界内）
     └── pubgrub-fork（本地 path dependency）
 ```
 
@@ -16,8 +17,8 @@ ZIP 和文件系统位于边界模块。
 `pubgrub-fork` 是独立 Git 仓库，目前不加入根 workspace。它先保留本地有序历史；
 用户提供 fork 远端后再接远端历史。
 
-不存在可用的 CurseForge provider。`providers/curseforge.rs` 只提供一致的明确拒绝，
-避免把“不支持”伪装成空结果。
+CurseForge 的 HTTP/JSON 位于 `providers/curseforge/{client,models}.rs`，平台映射位于
+同目录 `mod.rs`。它只产出统一领域类型；不会复制安装器或 resolver。
 
 ## 2. core 分层
 
@@ -133,5 +134,5 @@ Orbit 不能仅凭字节码完整证明：
 |---|---|
 | Modrinth | 可用 |
 | 本地 `file:` | 可用 |
-| CurseForge | 明确暂不支持 |
+| CurseForge | 可用；需要用户 API Key，受项目 API 下载许可约束 |
 | PubGrub fork 远端 | 等用户提供 fork 历史后接入 |

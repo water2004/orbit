@@ -13,7 +13,7 @@ Orbit 是一个专为 Minecraft 打造的现代化命令行模组包管理器。
 - **📂 非侵入式与多实例管理**：无需改变原有启动器结构。直接 `cd` 进入任意 `.minecraft` 目录即可初始化管理。
 - **🔄 拥抱混乱的双向同步**：手动往 `mods` 文件夹拖入了新 mod？启动器自动删除了文件？只需 `orbit sync`，Orbit 会识别变更并对齐状态。
 - **🧹 彻底的深度清理 (`purge`)**：卸载模组时一并清理 `config/` 目录下残留的配置文件，保持环境绝对纯净。
-- **🌐 可扩展来源**：当前支持 Modrinth 与本地 `file:` JAR，并自动处理前置依赖；CurseForge 暂不支持。
+- **🌐 多来源**：支持 Modrinth、CurseForge 与本地 `file:` JAR；不同平台只负责候选发现，最终统一验证 JAR 并求解依赖。
 - **🧩 完整 Loader 语义**：Fabric、Quilt、Forge、NeoForge 共享同一解析与求解路径，支持端侧、软/硬依赖、`provides`、加载顺序、内嵌模组与 Jar-in-Jar。
 - **🔎 可解释求解**：依赖原因直接参与 PubGrub 的真实传播和回溯；不会用第二次反事实求解或日志解析猜原因。
 - **☕ 字节码下限检查**：根据目标 Minecraft 与 JAR class major 校验最低 Java；该检查不宣称能证明 API、Mixin 或运行时行为完全兼容。
@@ -37,6 +37,7 @@ orbit init survival
 
 # 3. 搜索并添加模组 (自动匹配当前 MC 版本与 Loader)
 orbit add sodium
+orbit add cf:jei   # 需要先配置 CurseForge API Key
 orbit add file:./my-local-mod.jar
 
 # 4. 添加客户端专用模组 (开服时自动跳过)
@@ -76,7 +77,7 @@ Orbit 采用**目录优先**的上下文逻辑。命令会默认作用于当前�
 
 | 命令 | 描述 |
 | :--- | :--- |
-| `orbit sync` | **本地状态双向对齐**。扫描实际的 `mods/` 文件夹，识别用户手动增删的 `.jar` 文件并更新记录。不下载 JAR；哈希识别可能查询 Modrinth。 |
+| `orbit sync` | **本地状态双向对齐**。扫描实际的 `mods/` 文件夹，识别用户手动增删的 `.jar` 文件并更新记录。不下载 JAR；来源识别可能查询 Modrinth SHA-512 或 CurseForge fingerprint。 |
 | `orbit outdated` | **检查过时模组（只读）**。联网检查所有已安装模组是否有新版本，并输出过时报告。不修改任何文件。 |
 | `orbit upgrade [mod]` | **执行更新**。下载并替换可更新的 `.jar` 文件，并更新 `orbit.lock`。如果不带参数，则升级所有可升级的模组。 |
 
@@ -84,9 +85,9 @@ Orbit 采用**目录优先**的上下文逻辑。命令会默认作用于当前�
 
 | 命令 | 描述 |
 | :--- | :--- |
-| `orbit search <query>` | 在已配置来源中搜索模组；当前在线来源为 Modrinth。 |
+| `orbit search <query>` | 在已配置来源中搜索模组；支持 Modrinth 与 CurseForge。 |
 | `orbit info <mod>` | 查看模组详细信息（描述、作者、版本历史、前置依赖、端侧支持等）。无需安装，直接请求平台 API。 |
-| `orbit add <mod>` | 添加新模组。支持自动查找、`mr:name` 或 `file:./my-mod.jar`；`cf:` 当前会明确报暂不支持。使用 `--env client\|server` 标记端侧。 |
+| `orbit add <mod>` | 添加新模组。支持自动查找、`mr:name`、`cf:name` 或 `file:./my-mod.jar`。使用 `--env client\|server` 标记端侧。 |
 | `orbit install` | 根据 `orbit.toml` 和 `orbit.lock`，下载并补齐所有缺失的 `.jar` 文件。默认全量安装；使用 `--target server`/`--target client` 过滤端侧；使用 `--locked` 严格按 lock 文件还原，不发起网络解析。 |
 | `orbit remove <mod>` | 卸载模组。删除对应的 `.jar` 文件并移除 `orbit.toml` 中的记录。 |
 | `orbit purge <mod>` | **深度清理**。在 `remove` 的基础上，启发式搜索并交互式询问以**彻底删除** `config/` 下的配置文件。 |
@@ -135,6 +136,22 @@ lithium = ">=0.11 <0.14"
 ```
 
 > **提示**：强烈建议将 `orbit.toml` 和 `orbit.lock` 一同纳入 Git 版本控制！结合 `orbit install --target server`，你可以在任何机器上一键还原完整的模组环境。
+
+### CurseForge API Key
+
+CurseForge Core API 不提供匿名访问。使用 `cf:` 或把 `curseforge` 加入
+`[resolver].platforms` 前，任选一种方式配置：
+
+```toml
+# %APPDATA%/orbit/config.toml（Windows）
+# ~/.orbit/config.toml（Linux）
+[auth]
+curseforge_api_key = "YOUR_API_KEY"
+```
+
+或设置环境变量 `ORBIT_CURSEFORGE_API_KEY`。API Key 需要按
+[CurseForge 官方说明](https://support.curseforge.com/support/solutions/articles/9000208346-about-the-curseforge-api-and-how-to-apply-for-a-key)
+申请；Orbit 不内置共享 Key。
 
 ---
 

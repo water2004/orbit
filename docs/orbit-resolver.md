@@ -128,7 +128,8 @@ PubGrub 证明。
 6. 成功时返回升级结果、候选诊断和软依赖 warnings。
 
 未知依赖预先注册为空版本列表，因此正常表现为可解释的 `NoVersions`，而不是 provider
-缓存异常。补抓当前只使用已有 lockfile 的 Modrinth 来源；CurseForge 仍明确不支持。
+缓存异常。补抓读取已有 lockfile 的原始 provider 与 project ID；Modrinth 和
+CurseForge 使用同一重试/注册路径，不跨平台猜别名。
 
 ## 7. 本地、安装与恢复路径
 
@@ -153,7 +154,8 @@ PubGrub 证明。
 
 ## 9. 产品边界
 
-- CurseForge：暂不支持；`cf:` 和显式 provider 配置返回可恢复的明确错误。
+- CurseForge：需要用户 API Key；API 没有可用下载 URL 时返回可恢复的明确错误，不
+  猜测 CDN 地址。
 - 远端 fork：当前仍是本地 path dependency；拿到用户 fork 的远端历史后再接远端，
   不提前伪造提交关系。
 - 静态字节码判断：只给出必要条件，不宣称能完整证明模组运行时兼容。

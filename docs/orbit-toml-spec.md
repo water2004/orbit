@@ -107,10 +107,10 @@ prerelease = false         # 是否使用 alpha/beta/预发布版本
 | 字段 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `platforms` | `[String]` | `["modrinth"]` | 当依赖未显式指定平台时，按此顺序查找 |
-| `prerelease` | `bool` | `false` | `true` 时解析器会考虑 alpha/beta 版本 |
+| `prerelease` | `bool` | `false` | 预发布偏好 schema；当前 provider 查询尚未消费 |
 
-> **当前边界**：编排层按 `platforms[0]` → `platforms[1]` → … 回退，但目前只有
-> `modrinth` 可用。显式配置 `curseforge` 会返回明确错误；它不会被静默跳过。
+> 编排层按 `platforms[0]` → `platforms[1]` → … 回退。`modrinth` 与
+> `curseforge` 均可用；后者需要全局 CurseForge API Key。未知名称不会被静默跳过。
 
 ---
 
@@ -242,6 +242,14 @@ version = "platform display version"
 slug = "example"
 download_url = "https://cdn.example/..."
 
+# CurseForge 来源改用独立子表（与上面的 Modrinth 示例二选一）
+# [package.curseforge]
+# project_id = 123456
+# file_id = 789012
+# display_name = "Example 1.2.3"
+# slug = "example"
+# download_url = "https://example.invalid/example.jar"
+
 [[package.dependencies]]
 expression = "only"
 [package.dependencies.value]
@@ -280,7 +288,7 @@ environment = "both"
 | `mod_id` / `version` | loader 元数据声明的逻辑 ID 与版本 |
 | `sha1` / `sha256` / `sha512` | 同一个物理 JAR 的哈希 |
 | `filename` | 实例中的物理文件名 |
-| `provider` | 当前为 `modrinth` 或 `file` |
+| `provider` | 当前为 `modrinth`、`curseforge` 或 `file` |
 | `environment` | `client`、`server`、`both` |
 | `dependencies` | 递归 `DependencyExpression` |
 | `provides` | 该逻辑模组提供的能力 ID/版本 |
@@ -299,8 +307,9 @@ environment = "both"
 与顶层逻辑模组相同的 environment、dependencies、provides、language loader、
 embedded artifacts 和递归 bundled。
 
-provider 专属字段只进入 `[package.modrinth]` 或 `[package.file]`，不扁平污染公共
-schema。CurseForge 尚未支持，因此没有 `[package.curseforge]`。
+provider 专属字段只进入 `[package.modrinth]`、`[package.curseforge]` 或
+`[package.file]`，不扁平污染公共 schema。CurseForge 的数字 project/file ID 与平台
+展示名不会占用公共 JAR 版本字段。
 
 ## 5. 字段速查表
 
@@ -334,6 +343,7 @@ schema。CurseForge 尚未支持，因此没有 `[package.curseforge]`。
 | `sha1` / `sha256` / `sha512` | — | 本地 JAR 计算 |
 | `provider` | — | 安装时确定 |
 | `[package.modrinth]` | — | Modrinth API 数据 |
+| `[package.curseforge]` | — | CurseForge project/file 数据 |
 | `[package.file]` | — | 文件路径 |
 | `[[package.dependencies]]` | — | JAR 声明的依赖 |
 | `[[package.bundled]]` | — | 同一 JAR 内的其他逻辑模组 |
@@ -372,14 +382,15 @@ Orbit 的版本约束借鉴 Cargo/npm，但针对 Minecraft 模组的非标准�
 3. 第一个返回有效结果的平台即为该依赖的来源。
 4. 若所有可用平台均无匹配，命令报错退出。
 
-当前可用平台只有 Modrinth，因此默认值是 `["modrinth"]`。列表与回退抽象为未来
-provider 保留，但 CurseForge 当前明确暂不支持。
+当前可用平台为 Modrinth 与 CurseForge。默认值仍是 `["modrinth"]`，避免没有
+CurseForge API Key 的用户在普通工作流中遇到认证失败。显式加入 `curseforge` 后按列表
+顺序回退；已有 lockfile 来源会在恢复、检查和升级时自动补入 provider 集合。
 
 ### 6.3 依赖来源类型
 
 | 类型 | `orbit.toml` | `orbit.lock` `provider` | jar 获取方式 |
 |------|-------------|------------------------|-------------|
-| 平台在线 | 仅声明 `mod_id` + 版本约束 | `"modrinth"` | 通过平台 API 下载 |
+| 平台在线 | 仅声明 `mod_id` + 版本约束 | `"modrinth"` / `"curseforge"` | 通过原始平台 API 下载 |
 | 本地文件 | 仅声明 `mod_id` + 版本约束 | `"file"` | 已存在于本地 `mods/` 目录 |
 
 > **设计原则**：`orbit.toml` 中不再出现 `type`、`path`、`url`、`sha256` 字段。文件路径和校验值只在 `orbit.lock` 的 `[package.file]` 子表中出现。这保持了 manifest 和 lockfile 的职责分离。

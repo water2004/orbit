@@ -4,8 +4,9 @@
 
 ## 1. 当前结论
 
-除 CurseForge 外，仓库现有命令已接入 core 逻辑。Fabric、Quilt、Forge、NeoForge
-都从真实 JAR 元数据进入同一个规范化模型、lockfile 和 PubGrub 图。
+仓库现有命令已接入 core 逻辑。Fabric、Quilt、Forge、NeoForge 都从真实 JAR 元数据
+进入同一个规范化模型、lockfile 和 PubGrub 图；Modrinth 与 CurseForge 也共享安装、
+识别、恢复、检查和升级编排。
 
 | 能力 | 状态 | 说明 |
 |---|---|---|
@@ -16,8 +17,7 @@
 | 原因 | ✅ | 自定义 reason 参与原始推导；成功候选用同次 observer |
 | 本地校验 | ✅ | 转 Fat Lockfile 后复用统一建图 |
 | 安装/恢复/升级 | ✅ | 由求解结果选择物理 JAR |
-| Modrinth / `file:` | ✅ | 查询、下载、识别、锁定 |
-| CurseForge | ⏸ | 明确暂不支持，不静默回退 |
+| Modrinth / CurseForge / `file:` | ✅ | 查询、下载、识别、锁定；CurseForge 需要 API Key |
 | fork 远端 | ⏳ | 本地提交完成后等待用户远端历史 |
 
 ## 2. 保留的正确规范
@@ -31,7 +31,7 @@
 - JAR 解析只能通过 `jar` 层；
 - provider 专属数据位于专属子结构；
 - CLI 不承载业务逻辑；
-- CurseForge 未实现时必须明确报错。
+- 平台不可用、缺认证或文件禁止 API 下载时必须明确报错。
 
 ## 3. 已迁移的过时文档
 
@@ -53,18 +53,21 @@
 | 命令 | 状态 |
 |---|---|
 | `init` | 扫描并验证真实实例 |
-| `add` | Modrinth、搜索名和本地 JAR；`cf:` 明确失败 |
+| `add` | Modrinth、CurseForge、搜索名和本地 JAR |
 | `install` / `restore` | 共享求解图，按 target 选择 |
 | `remove` / `upgrade` / `outdated` | 使用 Fat Lockfile 和结构化报告 |
 | `sync` | 重新扫描、识别、对账 |
 | `check` | 实例目标兼容性预检 |
-| `list` / `info` / `why` | 展示逻辑依赖和 bundled |
+| `list` / `info` | 展示包信息、逻辑依赖和 bundled |
 | `export` / `import` | Orbit archive 与 Modrinth pack |
 | `cache` / `config` / `instance` / `purge` | 已接 core |
 
 ## 5. 已知边界
 
-- CurseForge 下载、搜索、识别和升级均不支持。
+- CurseForge Core API 需要用户申请 Key；仓库自动测试使用 mock server，不读取开发者
+  私人 Key。live smoke test 需要显式提供 `ORBIT_CURSEFORGE_API_KEY`。
+- CurseForge API 未公开本地 fingerprint 算法；实现明确依据 Prism Launcher 的公开
+  源码并用 golden vectors 固定行为。
 - 字节码扫描只能证明 class major 下限，不能证明 API/Mixin/反射兼容。
 - PubGrub fork 当前是本地 path dependency；接远端要保留用户 fork 的历史。
 - 补抓传递候选依赖已有 lockfile 来源信息；不会凭别名猜远端项目。

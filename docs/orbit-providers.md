@@ -6,37 +6,30 @@
 
 | Provider | 状态 | 说明 |
 |----------|:---:|------|
-| Modrinth | ✅ | 搜索、详情、解析、哈希反查、版本批量查询、依赖查询 |
+| Modrinth | ✅ | 搜索、详情、版本、依赖、SHA-512 批量识别 |
+| CurseForge | ✅ | 搜索、详情、版本、依赖、下载 URL、文件指纹批量识别 |
 | 本地 `file:` | ✅ | 由 `installer/local.rs` 处理，不是网络 provider |
-| CurseForge | ⏸ | 明确暂不支持；不会注册空 provider |
 
-Provider 抽象支持按 `[resolver].platforms` 顺序回退，但“抽象支持多个平台”不等于已有
-多个可用实现。当前默认值仅为 `["modrinth"]`；显式配置 `curseforge` 或未知名称会在
-创建 provider 时返回可读错误。
+默认平台仍是 `["modrinth"]`，因为 CurseForge Core API 要求用户自己的 API Key。
+配置 Key 后，可将 `curseforge` 单独使用或放入 `[resolver].platforms` 的回退顺序。
 
 ## 2. 模块边界
 
 ```text
 providers/
-├── mod.rs             trait、统一类型、provider factory
-├── modrinth.rs        Modrinth SDK 到领域类型的适配
-├── rate_limiter.rs    单 provider 的 semaphore
-└── curseforge.rs      统一“暂不支持”错误边界
+├── mod.rs                 trait、统一类型、provider factory
+├── modrinth.rs            Modrinth SDK → 领域类型
+├── rate_limiter.rs        单 provider 的 semaphore
+└── curseforge/
+    ├── client.rs          HTTP、认证、分页、状态错误
+    ├── models.rs          REST JSON 与官方枚举
+    └── mod.rs             CurseForge → 领域类型
 ```
 
-`modrinth-wrapper` 只封装 HTTP 与平台 JSON。`ModrinthProvider` 负责：
-
-- 将 Orbit 的 Minecraft/loader/版本约束映射为 API 查询；
-- 选择主 JAR 文件；
-- 将 project/version/file/dependency 响应归一化为领域类型；
-- 从下载后的 JAR 获取真实 `mod_id`、版本和依赖；
-- 为批量 hash/project 查询使用平台批量端点。
-
-CLI 和 resolver 不直接调用 wrapper。
+平台实现只负责查询和归一化。CLI、安装器和 resolver 不直接调用平台 SDK；所有来源下载
+后都进入同一个 JAR reader、候选图、PubGrub 求解、lockfile 和恢复路径。
 
 ## 3. 统一接口
-
-`ModProvider` 当前提供：
 
 ```rust
 #[async_trait]
@@ -44,9 +37,10 @@ pub trait ModProvider: Send + Sync {
     fn name(&self) -> &'static str;
     async fn search(...) -> Result<Vec<SearchResultItem>, OrbitError>;
     async fn get_mod_info(...) -> Result<ModInfo, OrbitError>;
-    async fn resolve(...) -> Result<ResolvedMod, OrbitError>;
-    async fn get_version_by_hash(...) -> Result<Option<ResolvedMod>, OrbitError>;
-    async fn get_versions_by_hashes(...) -> Result<Vec<ResolvedMod>, OrbitError>;
+    async fn identify_artifacts(
+        &self,
+        artifacts: &[ArtifactFingerprint],
+    ) -> Result<Vec<ResolvedMod>, OrbitError>;
     async fn get_versions(...) -> Result<Vec<ResolvedMod>, OrbitError>;
     async fn get_versions_batch(...) -> Result<Vec<ResolvedMod>, OrbitError>;
     async fn get_categories(...) -> Result<Vec<String>, OrbitError>;
@@ -54,88 +48,100 @@ pub trait ModProvider: Send + Sync {
 }
 ```
 
-批量方法有逐项默认实现，支持的平台应覆盖为真正的批量 API，避免 N+1 请求。
+`ArtifactFingerprint` 同时携带 SHA-1、SHA-512 和 CurseForge fingerprint。平台自己选择
+官方查询所需摘要：公共编排不再把所有 provider 强行塞进
+`get_version_by_hash(sha512)`。
 
 ## 4. 统一类型与来源事实
 
-`ResolvedMod` 的公共字段包括：
+`ResolvedMod` 的公共字段包括查询别名、来源名、文件名、下载 URL、发布日期、平台依赖
+提示和可用哈希；专属字段分别位于：
 
-| 字段 | 含义 |
-|------|------|
-| `mod_id` / `version` | 下载 JAR 自声明的包 ID 与版本 |
-| `slug` / `provider` | 用户查询标识与来源名称 |
-| `sha1` / `sha512` | 平台提供或已验证的文件哈希 |
-| `download_url` / `filename` | 选定主文件 |
-| `date_published` | 候选排序信息 |
-| `dependencies` | 平台可提供的依赖提示 |
-| `client_side` / `server_side` | 平台端侧元数据 |
-| `modrinth` | Modrinth 专属 project/version 信息 |
+- `modrinth: Option<ModrinthResolvedInfo>`；
+- `curseforge: Option<CurseForgeResolvedInfo>`。
 
-平台结果只是候选来源。下载后必须读取 JAR 元数据，以真实 `mod_id`、版本、完整
-`DependencyExpression` 和递归 `bundled` 构建求解图。平台的 `version_number`
-可能是展示字符串，不能代替 JAR 版本。
+lockfile 同样使用 `[package.modrinth]` 和 `[package.curseforge]` 子表。公共层通过
+`source_slug()`、`source_project_id()`、`source_version_id()` 等方法读取，不按平台
+复制 install/restore/outdated/check/retry 逻辑。
 
-同样，lockfile 公共字段不扁平存储 `project_id` 等平台字段，而是使用
-`[package.modrinth]` 子表。未来新增 provider 时应添加自己的子结构。
+平台的版本展示名不能代替 JAR 版本。Orbit 下载候选后读取 loader 元数据，用真实
+`mod_id`、版本、`DependencyExpression` 与递归 `bundled` 构建求解图。平台依赖只用于
+发现需要下载的项目；最终证明来自同一物理 JAR。
 
-## 5. 并发限制
+## 5. Provider 选择与认证
 
-每个网络 provider 自己持有 `RateLimiter`。当前 Modrinth factory 使用并发数 3：
+`create_providers()` 保持 `[resolver].platforms` 的顺序。候选发现选择第一个返回有效
+候选的来源；已锁定包的恢复、补抓、检查和升级按 lockfile 记录的原始 provider，不跨
+平台猜同名项目。
 
-```text
-request
-  → acquire owned semaphore permit
-  → call SDK
-  → permit drops
-```
+`orbit init` 尚无 manifest 可提供来源列表，因此使用专门的 identification factory：
+Modrinth 始终参与，只有已配置 API Key 时才加入 CurseForge。它不会因为用户没有 Key
+而破坏默认初始化，也不会跳过一个已显式配置但认证失败的 provider 错误。
 
-这样 limiter 生命周期覆盖完整请求，不依赖调用方记得释放。批量 API 只占用一个 permit。
-候选下载的任务并发与 provider API 限流是两层不同控制：前者控制文件验证任务，后者控制
-平台请求。
+- `mr:` → 只用 Modrinth；
+- `cf:` → 只用 CurseForge；
+- `file:` → 本地安装，不进入 provider factory。
 
-全局配置存在 `max_concurrent_downloads`，但尚未接到全部下载编排；这是有效配置规范与
-实现之间的剩余差距。
+CurseForge 使用 Core API 的 `x-api-key`，配置项为
+`auth.curseforge_api_key`，环境变量为 `ORBIT_CURSEFORGE_API_KEY`。没有 Key 时只有
+创建 CurseForge provider 会失败；默认的 Modrinth 工作流不受影响。
 
-## 6. Provider 选择
+## 6. CurseForge API 映射
 
-`create_providers(platforms)` 保持传入顺序：
+实现以 [CurseForge Core REST API](https://docs.curseforge.com/rest-api/) 为规格：
 
-```text
-["modrinth"] → [ModrinthProvider]
-["curseforge"] → error
-["unknown"] → error
-[] → error
-```
+- base URL 为 `https://api.curseforge.com/v1/`；
+- 分页每页最多 50 条，且 `index + pageSize <= 10000`；
+- 通过 `/games` 和 `/categories` 查找 Minecraft game ID 与 Mods class ID，不硬编码
+  社区常见数字；
+- 搜索使用 `/mods/search`，slug 与 class ID 联合定位项目；
+- 文件使用 `/mods/{modId}/files`，loader 枚举为 Forge=1、Fabric=4、Quilt=5、
+  NeoForge=6；
+- 文件没有内联 URL 时调用
+  `/mods/{modId}/files/{fileId}/download-url`；不可用响应不会被替换成猜测的 CDN 地址；
+- `relationType=3` 作为 required，`relationType=2` 作为 optional 候选发现提示；
+- 文件 SHA-1 用于下载校验，下载后再计算 SHA-256/SHA-512 写入 lockfile 和缓存。
 
-候选发现依次询问 provider，选择第一个返回有效候选的来源。resolver 后续补抓已锁定
-依赖时按 lockfile 的来源字段选择 provider，不跨平台猜测同名项目。
+API 没有 license 和 client/server side 字段，因此 CurseForge `info` 对这三项显示
+unknown；不会从分类或文件名猜测。
 
-显式 CLI 前缀的归一化：
+## 7. CurseForge 文件指纹
 
-- `mr:` → `modrinth`
-- `cf:` → `curseforge`，随后返回暂不支持
-- `file:` → 本地安装路径，不进入 provider factory
+官方 REST 文档定义了 `/fingerprints/{gameId}` 和 `fileFingerprint`，但没有写出本地
+计算算法。Orbit 没有凭印象实现：代码采用
+[Prism Launcher 的公开实现](https://github.com/PrismLauncher/PrismLauncher/blob/develop/libraries/murmur2/src/MurmurHash2.cpp)
+及其
+[CurseForge 特定的空白过滤调用](https://github.com/PrismLauncher/PrismLauncher/blob/develop/launcher/modplatform/helpers/HashUtils.cpp)
+作为可审计来源。
 
-## 7. 哈希与批量识别
+算法先移除字节 `9`、`10`、`13`、`32`，再以 seed 1 计算 32 位 MurmurHash2。单元测试
+包含 golden vectors；provider 合同测试验证指纹批量请求与项目映射。`init` / `sync`
+因此可以识别手动放入的 CurseForge JAR。识别只接受平台的精确 hash/fingerprint
+匹配；批量接口失败会保留 provider 名称并报错，不会按文件名或展示版本猜来源。
 
-`sync` / `init` 对实际 JAR 计算哈希，并优先调用批量反查。Modrinth 使用 SHA-512。
-平台识别结果写入来源子表，JAR 自身字段仍由本地解析与哈希结果决定。
+## 8. 下载限制与错误
 
-不同平台的哈希算法不可由公共层硬编码成同一种。真正接入新 provider 时，必须同时定义
-该平台的哈希生成与 API 参数，不能只实现搜索。
+CurseForge 项目可以没有第三方可用的下载 URL。Orbit 只使用 API 返回的内联 URL 或
+download-url 端点；若目标版本没有任何 API 可下载且带 SHA-1 的文件，会明确报告
+`matching files, but none is API-downloadable with a SHA-1 checksum`。完全没有匹配文件
+仍返回空候选，使 provider 回退和 `orbit check` 的“不兼容”结果保持正常。Orbit 不会
+拼接 CDN URL，也不会把 HTML 错误页当 JAR。
 
-## 8. CurseForge 的接入门槛
+API 状态错误保留 HTTP 状态和最多 500 字符响应正文；API Key 不进入日志或错误文本。
+候选批量验证允许忽略个别坏的历史文件，但当所有候选都失败时返回第一个具体下载、
+校验或 JAR 解析错误，不降级成不可读的“未找到”。
 
-CurseForge 继续保持暂不支持。完整接入至少需要：
+## 9. 测试边界
 
-1. 可测试的 SDK/HTTP 客户端与认证；
-2. 搜索、详情、版本、主文件和依赖映射；
-3. CurseForge 指定的文件哈希算法与批量识别策略；
-4. loader/game version 过滤和 release channel 规则；
-5. `ResolvedMod` 与 lockfile 的 CurseForge 专属子结构；
-6. restore、sync、outdated、upgrade、check 的端到端测试；
-7. 最后才修改 factory、默认平台和文档。
+仓库测试通过本地 mock HTTP server 验证：
 
-在这些边界完成前，`CurseForgeProvider` 的方法统一返回
-`CurseForge support is not yet implemented`。这是一条显式产品边界，不是可吞掉的
-fallback。
+- `x-api-key` 与官方 query 参数；
+- game/class 动态发现；
+- loader/game version 搜索；
+- download-url 回退；
+- fingerprint 批量识别；
+- `[package.curseforge]` roundtrip；
+- provider 顺序和缺 Key 错误。
+
+测试不依赖开发者私人 Key。需要上线前 smoke test 时，设置
+`ORBIT_CURSEFORGE_API_KEY` 后执行实际 `search`、`info` 与 `add cf:<slug>`。

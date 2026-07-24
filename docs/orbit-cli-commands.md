@@ -52,7 +52,8 @@ orbit init <name>
 2. 从游戏 JAR 的 `version.json` 检测 Minecraft 版本；
 3. 从 launcher version profile 的 Maven 坐标检测 loader 及版本；
 4. 扫描 `mods/*.jar`，忽略 `.old` / `.disabled`，解析对应 loader 元数据与内嵌 JAR；
-5. 计算 SHA-1/SHA-256/SHA-512，并批量向 Modrinth 做 SHA-512 来源识别；
+5. 计算 SHA-1/SHA-256/SHA-512 和 CurseForge fingerprint；Modrinth 始终参与批量识别，
+   已配置 API Key 时 CurseForge 也参与；
 6. 生成 manifest 与 Fat Lockfile，再做本地依赖图验证；
 7. 将实例注册到全局 `instances.toml`。
 
@@ -96,8 +97,11 @@ orbit add <mod>
 |------|------|
 | `sodium` | 按 manifest 的 provider 顺序解析 |
 | `mr:sodium` | 只用 Modrinth |
+| `cf:jei` | 只用 CurseForge；需要 API Key |
 | `file:./mod.jar` | 解析并复制本地 JAR |
-| `cf:jei` | 明确返回 CurseForge 暂不支持 |
+
+来源前缀与 `--platform` 同时出现时必须指向同一 provider；冲突会直接报错，不会把
+`cf:` slug 交给 Modrinth 或反向处理。
 
 在线流程先取得并验证候选 JAR，再以 JAR 的真实 `mod_id`、版本和 required dependencies
 求解。确认后写入 `mods/`、manifest 和 lockfile。顶层 constraint、`optional`、`env`
@@ -136,7 +140,7 @@ orbit install
 orbit remove <mod>
 ```
 
-按 `mod_id` 或 Modrinth slug 查找顶层依赖。若仍有其它 package 依赖它则拒绝删除；
+按 `mod_id` 或平台 slug 查找顶层依赖。若仍有其它 package 依赖它则拒绝删除；
 否则删除已校验的 JAR，并从 manifest/lockfile 移除条目。输入不匹配时，交互模式列出
 可选依赖；`--yes` 要求精确标识，不进行猜测。dry-run 只报告计划。
 
@@ -162,7 +166,7 @@ orbit purge <mod>
 | `missing` | manifest/lockfile 期望的 JAR 不在磁盘 |
 | `unlocked` | manifest 有顶层声明但 lockfile 无对应 package |
 
-它不下载 JAR；为识别手动加入的文件，批量哈希反查可能访问 Modrinth。dry-run 不保存对账
+它不下载 JAR；为识别手动加入的文件，批量反查可能访问 Modrinth SHA-512 或 CurseForge fingerprint 接口。dry-run 不保存对账
 结果。
 
 ### `orbit outdated [mod]`
@@ -192,8 +196,9 @@ orbit list [--tree] [--target client|server|both]
 - `list` 从 lockfile 展示版本、provider、manifest env/optional；`--tree` 展示依赖，
   `--target` 过滤根并保留传递闭包。
 
-当前在线查询只有 Modrinth。`cf:` 与 `--platform curseforge` 返回暂不支持，不回退到
-Modrinth。
+在线查询支持 Modrinth 与 CurseForge。`cf:` 和 `--platform curseforge` 只选择
+CurseForge，不回退到 Modrinth；缺少 API Key 或目标文件没有 API 下载 URL 时返回明确
+错误。
 
 ## 6. 导入、导出与检查
 
@@ -265,4 +270,6 @@ orbit cache clean
 - 默认实例的修改型命令安全阻断；
 - 非交互 init 不猜 loader/版本，重复 init 不覆盖项目。
 
-CurseForge 是单独的产品边界，继续保持暂不支持。
+CurseForge 已接入 search/info/add/install/sync/check/outdated/upgrade/restore 的共享
+路径。它仍受 Core API Key 和项目第三方下载许可约束；这些是外部服务边界，不会用
+硬编码 ID 或猜测 CDN URL 规避。

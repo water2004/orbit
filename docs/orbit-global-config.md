@@ -45,7 +45,7 @@ schema、默认值、文件加载/保存和环境变量覆盖已经实现，但�
 | `max_concurrent_downloads` | 已持久化，尚未接到下载编排 |
 | `network.*` | 已持久化，HTTP 客户端仍使用各模块固定超时，代理/重试尚未统一接入 |
 | `auth.modrinth_token` | 已持久化，尚未传入 Modrinth 客户端 |
-| `auth.curseforge_token` | 仅为未来 schema 保留；CurseForge 当前暂不支持 |
+| `auth.curseforge_api_key` | 创建 CurseForge provider 时作为 `x-api-key` 使用 |
 | `cache.enable` / 淘汰策略 / 大小 | 已持久化，开关和自动淘汰尚未执行 |
 | `language` / `[ui]` | 已持久化，CLI 本地化和样式消费尚未实现 |
 
@@ -95,8 +95,8 @@ max_retries = 3
 
 # ── 平台认证 ──────────────────────────────
 [auth]
-# CurseForge API Key（未来接入保留；当前不会启用 CurseForge）
-# curseforge_token = "cf_YOUR_API_KEY_HERE"
+# CurseForge Core API Key（启用 curseforge provider 时必填）
+# curseforge_api_key = "YOUR_API_KEY_HERE"
 # Modrinth Token（可选，用于操作私有项目）
 # modrinth_token = "mrp_YOUR_TOKEN_HERE"
 
@@ -126,7 +126,7 @@ progress_bar = "modern"
 |------|------|--------|------|
 | `default_instance` | `Option<String>` | `None` | 全局默认实例名。等价于 `orbit instances default <name>` |
 | `max_concurrent_downloads` | `usize` | `8` | 并发下载上限。网络差时可调低 |
-| `language` | `String` | `"en"` | 终端输出语言 + 平台 API 搜索结果偏好 |
+| `language` | `String` | `"en"` | 语言偏好；当前已持久化，CLI 尚未消费 |
 
 ### [network] — 网络设置
 
@@ -134,13 +134,13 @@ progress_bar = "modern"
 |------|------|--------|------|
 | `timeout` | `u64` | `30` | HTTP 请求超时（秒） |
 | `max_retries` | `u32` | `3` | 网络错误自动重试次数 |
-| `proxy` | `Option<String>` | `None` | HTTP 代理 URL。设置后所有 Orbit 发起的请求都走代理 |
+| `proxy` | `Option<String>` | `None` | HTTP 代理 URL；当前 HTTP 客户端尚未统一消费 |
 
 ### [auth] — 平台认证
 
 | 字段 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `curseforge_token` | `Option<String>` | `None` | 为未来 CurseForge provider 保留，当前不使用 |
+| `curseforge_api_key` | `Option<String>` | `None` | CurseForge Core API 的 `x-api-key`；仅启用该 provider 时必填 |
 | `modrinth_token` | `Option<String>` | `None` | Modrinth API Token；当前已加载但尚未传给客户端 |
 
 > **安全警告**：API Key 以明文存储在 `config.toml` 中。请勿将此文件纳入 Git 或分享给他人。
@@ -150,7 +150,7 @@ progress_bar = "modern"
 
 | 字段 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `enable` | `bool` | `true` | 是否开启全局 JAR 缓存 |
+| `enable` | `bool` | `true` | 缓存开关 schema；当前缓存路径仍会使用，开关尚未执行 |
 | `dir` | `Option<String>` | `None` | 自定义缓存目录。留空则使用 `{数据目录}/cache`。适合系统盘空间紧张时指向其他硬盘 |
 | `eviction_policy` | `String` | `"size"` | 清理策略：`"size"` 按大小，`"time"` 按时间过期，`"none"` 不自动清理 |
 | `max_size_gb` | `f64` | `5.0` | 最大缓存占用（GB），`eviction_policy = "size"` 时生效 |
@@ -195,10 +195,9 @@ progress_bar = "modern"
 Orbit 按以下优先级合并配置（高优先级覆盖低优先级）：
 
 ```
-1. 命令行参数          --proxy http://127.0.0.1:1080
-2. 环境变量            ORBIT_PROXY=http://127.0.0.1:1080
-3. config.toml         ~/.orbit/config.toml 中的 [network] proxy
-4. 代码默认值           NetworkConfig::default()
+1. 环境变量            ORBIT_PROXY=http://127.0.0.1:1080
+2. config.toml         ~/.orbit/config.toml 中的 [network] proxy
+3. 代码默认值           NetworkConfig::default()
 ```
 
 **环境变量映射**：
@@ -209,11 +208,11 @@ Orbit 按以下优先级合并配置（高优先级覆盖低优先级）：
 | `ORBIT_TIMEOUT` | `network.timeout` |
 | `ORBIT_RETRIES` | `network.max_retries` |
 | `ORBIT_LANGUAGE` | `core.language` |
-| `ORBIT_CURSEFORGE_TOKEN` | `auth.curseforge_token` |
+| `ORBIT_CURSEFORGE_API_KEY` | `auth.curseforge_api_key` |
 | `ORBIT_MODRINTH_TOKEN` | `auth.modrinth_token` |
 
-> **设计原则**：不为每个字段都做 CLI 参数——只对 `--proxy` 这种临时需要覆盖的字段提供命令行开关。
-> 大部分配置建议用户写在 `config.toml` 里，一次设置永久生效。
+> 当前没有全局 `--proxy` 参数。临时覆盖请使用环境变量；长期配置写入
+> `config.toml`。代理字段本身仍属于“规范有效、HTTP 客户端尚未统一接入”的差距。
 
 ---
 
@@ -275,7 +274,7 @@ impl Default for NetworkConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct AuthConfig {
-    pub curseforge_token: Option<String>,
+    pub curseforge_api_key: Option<String>,
     pub modrinth_token: Option<String>,
 }
 
@@ -349,8 +348,8 @@ impl OrbitGlobalConfig {
         if let Ok(lang) = std::env::var("ORBIT_LANGUAGE") {
             config.core.language = lang;
         }
-        if let Ok(cf) = std::env::var("ORBIT_CURSEFORGE_TOKEN") {
-            config.auth.curseforge_token = Some(cf);
+        if let Ok(cf) = std::env::var("ORBIT_CURSEFORGE_API_KEY") {
+            config.auth.curseforge_api_key = Some(cf);
         }
         if let Ok(mr) = std::env::var("ORBIT_MODRINTH_TOKEN") {
             config.auth.modrinth_token = Some(mr);
@@ -379,8 +378,8 @@ impl Default for OrbitGlobalConfig {
 
 1. **`config.toml` 应设为 `0600` 权限**（仅所有者可读写）——其中 `[auth]` 块包含 API Token。
 2. **不要将 `config.toml` 纳入 Git 版本控制**——Orbit 会将其放在 `orbit/` 数据目录下，而非项目目录。
-3. 环境变量中的 token 优先于 `config.toml`；其中 `ORBIT_CURSEFORGE_TOKEN` 当前只会被
-   解析和保存，CurseForge provider 未实现前不会发起认证请求。
+3. 环境变量中的 Key/Token 优先于 `config.toml`。CurseForge Key 只作为
+   `x-api-key` 请求头发送，不写入错误或日志。
 4. 未来计划使用 `keyring` crate 将 Token 存入操作系统凭据管理器，届时 `config.toml` 中的 `[auth]` 将只作为回退方案。
 
 ---

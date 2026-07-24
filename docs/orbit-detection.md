@@ -89,7 +89,8 @@ JAR 版本。
 - 游戏 `version.json` 的 Java 信息用于检测展示；resolver 依据目标 Minecraft 版本
   注册 `java` 平台包，并用模组 feature 与 class major 校验最低 Java。它不探测用户
   当前 shell 的 Java，因为安装目标应由实例版本决定；
-- CurseForge 是下载 provider 边界，与实例 loader 检测无关，当前仍不支持。
+- CurseForge 是下载 provider 边界，与实例 loader 检测无关；启用它不会改变 loader
+  profile 的检测规则。
 
 ## 7. 扩展检测策略
 

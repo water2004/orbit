@@ -10,13 +10,13 @@
 2. **core 层不输出到 stderr/stdout**。调试用 `tracing`，用户可见进度通过返回值传递给 CLI 层展示。
 3. **依赖方向**：`cli → core → wrapper`。wrapper 之间不互相依赖。core 不依赖 cli。
 4. **lockfile 是已安装依赖图查询的唯一数据源**。`find_entry`、`dependents`、`check_version_conflict` 集中在 `resolver/`；候选求解图则明确组合 manifest 根约束、lockfile 当前图和候选 JAR 元数据。CLI 不手工重建依赖图。
-5. **主键使用 JAR `mod_id`，slug 只作平台查找别名**。manifest dependency key 和 `PackageEntry.mod_id` 是图中的键；`package.modrinth.slug` 仅供 `find_entry` 等用户输入匹配。human-readable name 不可靠。
+5. **主键使用 JAR `mod_id`，slug 只作平台查找别名**。manifest dependency key 和 `PackageEntry.mod_id` 是图中的键；平台子表的 slug 仅供 `find_entry` 等用户输入匹配。human-readable name 不可靠。
 
 ---
 
 ## 编码规范
 
-6. **`todo!()` 和不可达的空壳函数禁止进入业务 crate**。暂不支持的产品边界必须返回包含恢复建议的显式 `OrbitError`（例如 CurseForge），不能伪造成功。
+6. **`todo!()` 和不可达的空壳函数禁止进入业务 crate**。外部服务边界（缺认证、无 API 下载许可等）必须返回包含恢复建议的显式 `OrbitError`，不能伪造成功。
 7. **CLI handler 必须接入 core 的真实入口**。参数错误交给 clap；业务失败返回错误，不能以 `println! + Ok(())` 掩盖。
 8. **写入 manifest/lockfile 时传 `mods_dir` 作为参数**——禁止硬编码 `Path::new("mods")`。
 9. **`apply_to_lockfile` 使用每个 `InstalledMod.provider` 的真实来源**——禁止硬编码 `"modrinth"`；传递依赖只写 lockfile，不得自动提升为 manifest 顶级声明。
@@ -27,7 +27,7 @@
 ## API 调用规范
 
 11. **先调 API 确认返回值再编码**。不确定字段是否存在/什么格式时，用 curl 调一下看实际响应。
-12. **优先使用批量 API**。`get_versions_from_hashes`、`get_projects` 等批量端点将 N 次请求压缩为 1 次。逐个调 `get_version_by_hash` 是 N+1 反模式。
+12. **优先使用批量 API**。Modrinth hash/project 与 CurseForge fingerprint/project 等批量端点将 N 次请求压缩为 1 次。公共识别入口是 `identify_artifacts`，不能退化成逐文件 N+1 查询。
 13. **404 转 `ModNotFound`**。`map_api_error()` 统一处理，CLI 收到后触发搜索回退。
 14. **错误响应保留 body**。`error_for_status()` 会丢弃 body。先读 body 再检查状态码。
 
@@ -37,8 +37,9 @@
 
 15. **用 `create_providers()` 工厂**，不直接 `ModrinthProvider::new("orbit", 3)`。
 16. **`RateLimiter::acquire()` 返回 `Result`**，调用方加 `?`。内部方法（如 `lookup_project_slugs`）不获取 permit。
-17. **`ResolvedMod.sha512` 存的是 SHA-512**（Modrinth 原生哈希），不是 SHA-256。下载校验用 sha512_digest。
-18. **下载完必须 SHA-512 校验**，已存在的 JAR 也要比对。
+17. **哈希字段必须名实一致**。`ResolvedMod.sha512` 只存 SHA-512；Modrinth 优先用 SHA-512，CurseForge API 只提供 SHA-1 时用 SHA-1 校验，下载后再计算三种哈希。
+18. **下载必须校验来源提供的强哈希**。Modrinth 校验 SHA-512，CurseForge 校验
+    SHA-1；写入 lockfile 后，已存在的 JAR 优先比对本地计算的 SHA-256。
 
 ---
 
@@ -60,7 +61,7 @@
 
 ## 数据结构设计
 
-25. **Provider 专属字段进子 struct**。公共类型（`ResolvedMod`、`PackageEntry`）不扁平存放平台专属字段。Modrinth 的 `project_id`/`version_id`/`version_number` 放在 `modrinth: Option<ModrinthInfo>` 子 struct 中。未来加 CurseForge 时加 `curseforge: Option<CurseForgeInfo>`，不影响现有字段。
+25. **Provider 专属字段进子 struct**。公共类型（`ResolvedMod`、`PackageEntry`）不扁平存放平台专属字段。Modrinth 的 project/version 数据放在 `modrinth`，CurseForge 的 project/file 数据放在 `curseforge`；公共编排通过统一 source helpers 读取。
 26. **key 统一用 JAR loader 元数据声明的 ID**（即 `mod_id`）。slug 只在 `find_entry` 中作为备选匹配键，不用作主键。
 
 ## JAR 模块
