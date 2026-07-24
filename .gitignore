@@ -24,3 +24,6 @@ fabric-loader-master/
 *.jar
 *.zip
 .claude/
+
+# Local customized PubGrub checkout
+pubgrub-fork/

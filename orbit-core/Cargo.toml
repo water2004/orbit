@@ -23,4 +23,4 @@ async-trait.workspace = true
 anyhow.workspace = true
 thiserror.workspace = true
 indexmap.workspace = true
-pubgrub = "0.3"
+pubgrub = { path = "../pubgrub-fork" }
