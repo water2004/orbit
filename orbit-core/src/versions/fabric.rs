@@ -10,6 +10,7 @@
 //! - 复合约束按空格拆分，全部满足才算通过
 
 use std::cmp::Ordering;
+use std::hash::{Hash, Hasher};
 
 // ═══════════════════════════════════════════════════════════════
 // SemanticVersion — 对应 Fabric 的 SemanticVersionImpl
@@ -17,7 +18,7 @@ use std::cmp::Ordering;
 
 pub const WILDCARD: i32 = i32::MIN;
 
-#[derive(Debug, Clone, Hash)]
+#[derive(Debug, Clone)]
 pub struct SemanticVersion {
     pub raw: String,
     /// 数字组件（不含通配符），长度至少 1
@@ -147,6 +148,13 @@ impl PartialEq for SemanticVersion {
     }
 }
 impl Eq for SemanticVersion {}
+
+impl Hash for SemanticVersion {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.components.hash(state);
+        self.prerelease.hash(state);
+    }
+}
 
 impl PartialOrd for SemanticVersion {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
@@ -467,6 +475,14 @@ mod tests {
         // build metadata ignored for comparison
         assert_eq!(v("0.8.10"), v("0.8.10+mc26.1.2"));
         assert_eq!(v("26.1+v260402"), v("26.1"));
+    }
+
+    #[test]
+    fn test_hash_ignores_build_metadata_like_equality() {
+        let mut versions = std::collections::HashSet::new();
+        versions.insert(v("0.8.10"));
+
+        assert!(versions.contains(&v("0.8.10+mc26.1.2")));
     }
 
     #[test]
