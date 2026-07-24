@@ -277,6 +277,12 @@ pub async fn run_init(
     input: InitInput,
     providers: &[Box<dyn crate::providers::ModProvider>],
 ) -> Result<InitOutput, OrbitError> {
+    if input.instance_dir.join("orbit.toml").exists() {
+        return Err(OrbitError::Other(anyhow::anyhow!(
+            "orbit.toml already exists in this directory; use 'orbit sync' to reconcile it"
+        )));
+    }
+
     // 1. 扫描 mods/
     let scanned = scan_mods_dir(&input.instance_dir, &input.modloader)?;
 
@@ -643,5 +649,36 @@ mod tests {
         );
 
         std::fs::remove_dir_all(instance).ok();
+    }
+
+    #[tokio::test]
+    async fn init_refuses_to_overwrite_an_existing_manifest() {
+        let directory = temp_instance_dir("existing-manifest");
+        std::fs::create_dir_all(&directory).unwrap();
+        std::fs::write(
+            directory.join("orbit.toml"),
+            "[project]\nname = \"keep-me\"\n",
+        )
+        .unwrap();
+        let input = InitInput {
+            name: "replacement".to_string(),
+            mc_version: "1.21.1".to_string(),
+            modloader: "fabric".to_string(),
+            modloader_version: "0.16.0".to_string(),
+            instance_dir: directory.clone(),
+        };
+
+        let error = match run_init(input, &[]).await {
+            Ok(_) => panic!("init unexpectedly overwrote an existing manifest"),
+            Err(error) => error.to_string(),
+        };
+
+        assert!(error.contains("already exists"));
+        assert!(
+            std::fs::read_to_string(directory.join("orbit.toml"))
+                .unwrap()
+                .contains("keep-me")
+        );
+        std::fs::remove_dir_all(directory).unwrap();
     }
 }
