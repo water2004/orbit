@@ -17,7 +17,7 @@ pub mod metadata;
 pub mod providers;
 pub mod versions;
 
-// 业务逻辑模块（逐步实现中）
+// 业务逻辑模块
 pub mod archive;
 pub mod checker;
 pub mod installer;
@@ -30,7 +30,7 @@ pub mod workspace;
 
 pub use archive::{
     ExportReport, ImportMergeStrategy, ImportReport, export_instance, import_archive,
-    import_manifest,
+    import_manifest, import_mrpack,
 };
 pub use checker::{CheckResult, check_compatibility};
 pub use config::{

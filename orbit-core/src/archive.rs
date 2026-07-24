@@ -3,13 +3,15 @@
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
-use serde_json::json;
 use zip::write::SimpleFileOptions;
 
 use crate::error::OrbitError;
 use crate::installer::RestoreOptions;
 use crate::manifest::DependencySpec;
 use crate::workspace::{Lockfile, ManifestFile};
+
+mod mrpack;
+pub use mrpack::import_mrpack;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ImportMergeStrategy {
@@ -232,30 +234,35 @@ pub fn export_instance(
     let file = std::fs::File::create(&temporary)?;
     let mut archive = zip::ZipWriter::new(file);
     let options = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
-    add_file(
-        &mut archive,
-        "orbit.toml",
-        &instance_dir.join("orbit.toml"),
-        options,
-    )?;
-    add_file(
-        &mut archive,
-        "orbit.lock",
-        &instance_dir.join("orbit.lock"),
-        options,
-    )?;
-    for (entry, source) in &sources {
+    if format == "mrpack" {
+        mrpack::write_contents(
+            &mut archive,
+            options,
+            &manifest.inner,
+            &sources,
+            instance_dir,
+        )?;
+    } else {
         add_file(
             &mut archive,
-            &format!("mods/{}", entry.filename),
-            source,
+            "orbit.toml",
+            &instance_dir.join("orbit.toml"),
             options,
         )?;
-    }
-    if format == "mrpack" {
-        let index = build_mrpack_index(&manifest.inner, &sources);
-        archive.start_file("modrinth.index.json", options)?;
-        archive.write_all(serde_json::to_string_pretty(&index)?.as_bytes())?;
+        add_file(
+            &mut archive,
+            "orbit.lock",
+            &instance_dir.join("orbit.lock"),
+            options,
+        )?;
+        for (entry, source) in &sources {
+            add_file(
+                &mut archive,
+                &format!("mods/{}", entry.filename),
+                source,
+                options,
+            )?;
+        }
     }
     archive.finish()?;
     if output.exists() {
@@ -284,54 +291,6 @@ fn add_file(
     Ok(())
 }
 
-fn build_mrpack_index(
-    manifest: &crate::manifest::OrbitManifest,
-    sources: &[(&crate::lockfile::PackageEntry, PathBuf)],
-) -> serde_json::Value {
-    let files: Vec<_> = sources
-        .iter()
-        .map(|(entry, source)| {
-            let downloads: Vec<_> = entry
-                .modrinth
-                .as_ref()
-                .map(|modrinth| modrinth.download_url.clone())
-                .filter(|url| !url.is_empty())
-                .into_iter()
-                .collect();
-            json!({
-                "path": format!("mods/{}", entry.filename),
-                "hashes": {
-                    "sha1": entry.sha1,
-                    "sha512": entry.sha512,
-                },
-                "env": { "client": "required", "server": "required" },
-                "downloads": downloads,
-                "fileSize": std::fs::metadata(source).map(|metadata| metadata.len()).unwrap_or(0),
-            })
-        })
-        .collect();
-    let loader_key = match manifest.project.modloader.as_str() {
-        "fabric" => "fabric-loader",
-        "quilt" => "quilt-loader",
-        other => other,
-    };
-    let mut dependencies = serde_json::Map::new();
-    dependencies.insert("minecraft".to_string(), json!(manifest.project.mc_version));
-    dependencies.insert(
-        loader_key.to_string(),
-        json!(manifest.project.modloader_version),
-    );
-    json!({
-        "formatVersion": 1,
-        "game": "minecraft",
-        "versionId": manifest.project.version.as_deref().unwrap_or("1.0.0"),
-        "name": manifest.project.name,
-        "summary": manifest.project.description.as_deref().unwrap_or(""),
-        "files": files,
-        "dependencies": dependencies,
-    })
-}
-
 fn temporary_output_path(output: &Path) -> PathBuf {
     let filename = output
         .file_name()
@@ -343,8 +302,9 @@ fn temporary_output_path(output: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::lockfile::{FileInfo, LockMeta, OrbitLockfile, PackageEntry};
+    use crate::lockfile::{FileInfo, LockMeta, ModrinthInfo, OrbitLockfile, PackageEntry};
     use crate::manifest::{OrbitManifest, ProjectMeta, ResolverConfig};
+    use serde_json::json;
 
     fn test_dir(name: &str) -> PathBuf {
         std::env::temp_dir().join(format!("orbit-archive-test-{name}-{}", std::process::id()))
@@ -471,6 +431,185 @@ mod tests {
         assert!(archive.by_name("orbit.toml").is_ok());
         assert!(archive.by_name("orbit.lock").is_ok());
         assert!(archive.by_name("mods/example.jar").is_ok());
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn mrpack_references_online_files_and_embeds_local_overrides() {
+        let directory = test_dir("mrpack-export");
+        std::fs::create_dir_all(directory.join("mods")).unwrap();
+        let mut project = manifest("online");
+        project
+            .dependencies
+            .insert("local".to_string(), DependencySpec::Short("*".to_string()));
+        project.dependencies.insert(
+            "online".to_string(),
+            DependencySpec::Full {
+                version: Some("*".to_string()),
+                optional: Some(true),
+                env: Some("client".to_string()),
+                exclude: None,
+            },
+        );
+        ManifestFile::new(&directory, project).save().unwrap();
+        let online_jar = directory.join("mods/online.jar");
+        let local_jar = directory.join("mods/local.jar");
+        std::fs::write(&online_jar, b"online").unwrap();
+        std::fs::write(&local_jar, b"local").unwrap();
+        let online_bytes = std::fs::read(&online_jar).unwrap();
+        let local_bytes = std::fs::read(&local_jar).unwrap();
+        Lockfile::new(
+            &directory,
+            OrbitLockfile {
+                meta: LockMeta {
+                    mc_version: "1".to_string(),
+                    modloader: "fabric".to_string(),
+                    modloader_version: "1".to_string(),
+                },
+                packages: vec![
+                    PackageEntry {
+                        mod_id: "online".to_string(),
+                        version: "1".to_string(),
+                        sha1: crate::jar::sha1_digest(&online_bytes),
+                        sha256: crate::jar::sha256_digest(&online_bytes),
+                        sha512: crate::jar::sha512_digest(&online_bytes),
+                        filename: "online.jar".to_string(),
+                        provider: "modrinth".to_string(),
+                        modrinth: Some(ModrinthInfo {
+                            project_id: "online-project".to_string(),
+                            version_id: "online-version".to_string(),
+                            version: "1".to_string(),
+                            slug: "online".to_string(),
+                            download_url: "https://cdn.modrinth.com/online.jar".to_string(),
+                        }),
+                        file: None,
+                        dependencies: Vec::new(),
+                        implanted: Vec::new(),
+                    },
+                    PackageEntry {
+                        mod_id: "local".to_string(),
+                        version: "1".to_string(),
+                        sha1: crate::jar::sha1_digest(&local_bytes),
+                        sha256: crate::jar::sha256_digest(&local_bytes),
+                        sha512: crate::jar::sha512_digest(&local_bytes),
+                        filename: "local.jar".to_string(),
+                        provider: "file".to_string(),
+                        modrinth: None,
+                        file: Some(FileInfo {
+                            path: "mods/local.jar".to_string(),
+                        }),
+                        dependencies: Vec::new(),
+                        implanted: Vec::new(),
+                    },
+                ],
+            },
+        )
+        .save()
+        .unwrap();
+        let output = directory.join("pack.mrpack");
+
+        export_instance(&directory, &output, None, "mrpack", false).unwrap();
+        let mut archive = zip::ZipArchive::new(std::fs::File::open(&output).unwrap()).unwrap();
+        let index: serde_json::Value = {
+            let mut entry = archive.by_name("modrinth.index.json").unwrap();
+            serde_json::from_reader(&mut entry).unwrap()
+        };
+
+        assert_eq!(index["files"].as_array().unwrap().len(), 1);
+        assert_eq!(index["files"][0]["path"], "mods/online.jar");
+        assert_eq!(index["files"][0]["env"]["client"], "optional");
+        assert_eq!(index["files"][0]["env"]["server"], "unsupported");
+        assert!(archive.by_name("mods/online.jar").is_err());
+        assert!(archive.by_name("overrides/mods/local.jar").is_ok());
+        assert!(archive.by_name("overrides/orbit.toml").is_ok());
+        assert!(archive.by_name("overrides/orbit.lock").is_ok());
+        assert!(archive.by_name("orbit.toml").is_err());
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[tokio::test]
+    async fn mrpack_import_prefers_a_bundled_override_to_its_download_entry() {
+        let directory = test_dir("mrpack-import-override");
+        std::fs::create_dir_all(&directory).unwrap();
+        let source = directory.join("input.mrpack");
+        let file = std::fs::File::create(&source).unwrap();
+        let mut archive = zip::ZipWriter::new(file);
+        let options = SimpleFileOptions::default();
+        archive.start_file("modrinth.index.json", options).unwrap();
+        archive
+            .write_all(
+                serde_json::to_string(&json!({
+                    "formatVersion": 1,
+                    "game": "minecraft",
+                    "versionId": "test",
+                    "name": "test",
+                    "files": [{
+                        "path": "mods/bundled.jar",
+                        "hashes": { "sha1": "unused", "sha512": "unused" },
+                        "downloads": ["https://invalid.example/bundled.jar"],
+                        "fileSize": 999
+                    }],
+                    "dependencies": { "minecraft": "1.21.1" }
+                }))
+                .unwrap()
+                .as_bytes(),
+            )
+            .unwrap();
+        archive
+            .start_file("overrides/mods/bundled.jar", options)
+            .unwrap();
+        archive.write_all(b"bundled bytes").unwrap();
+        archive.finish().unwrap();
+
+        let report = import_mrpack(&directory, &source, false, false)
+            .await
+            .unwrap();
+
+        assert_eq!(report.extracted, vec!["bundled.jar"]);
+        assert_eq!(
+            std::fs::read(directory.join("mods/bundled.jar")).unwrap(),
+            b"bundled bytes"
+        );
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[tokio::test]
+    async fn mrpack_import_rejects_unsafe_index_paths() {
+        let directory = test_dir("mrpack-import-unsafe");
+        std::fs::create_dir_all(&directory).unwrap();
+        let source = directory.join("unsafe.mrpack");
+        let file = std::fs::File::create(&source).unwrap();
+        let mut archive = zip::ZipWriter::new(file);
+        let options = SimpleFileOptions::default();
+        archive.start_file("modrinth.index.json", options).unwrap();
+        archive
+            .write_all(
+                serde_json::to_string(&json!({
+                    "formatVersion": 1,
+                    "game": "minecraft",
+                    "versionId": "test",
+                    "name": "test",
+                    "files": [{
+                        "path": "../mods/escape.jar",
+                        "hashes": { "sha1": "unused", "sha512": "unused" },
+                        "downloads": ["https://cdn.modrinth.com/escape.jar"],
+                        "fileSize": 1
+                    }],
+                    "dependencies": { "minecraft": "1.21.1" }
+                }))
+                .unwrap()
+                .as_bytes(),
+            )
+            .unwrap();
+        archive.finish().unwrap();
+
+        let error = import_mrpack(&directory, &source, false, false)
+            .await
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("unsafe path"));
+        assert!(!directory.join("escape.jar").exists());
         std::fs::remove_dir_all(directory).unwrap();
     }
 }

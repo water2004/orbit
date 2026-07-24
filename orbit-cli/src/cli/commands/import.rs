@@ -43,8 +43,11 @@ pub async fn handle(file: String, merge_strategy: Option<String>, ctx: &CliConte
         }
         "zip" | "mrpack" => {
             let overwrite = strategy == orbit_core::ImportMergeStrategy::PreferImport;
-            let report =
-                orbit_core::import_archive(&instance_dir, &source, overwrite, ctx.dry_run)?;
+            let report = if extension == "mrpack" {
+                orbit_core::import_mrpack(&instance_dir, &source, overwrite, ctx.dry_run).await?
+            } else {
+                orbit_core::import_archive(&instance_dir, &source, overwrite, ctx.dry_run)?
+            };
             if !ctx.dry_run && !report.extracted.is_empty() {
                 let providers = super::create_instance_providers(&instance_dir, None)?;
                 let sync = orbit_core::sync_instance(&instance_dir, &providers, false).await?;
