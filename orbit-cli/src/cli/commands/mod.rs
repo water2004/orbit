@@ -75,6 +75,30 @@ impl CliContext {
         }
         Ok(path)
     }
+
+    /// Prevent an instance-mutating command from silently using the global
+    /// default while the user is standing in an unrelated directory.
+    pub fn require_explicit_mutation_target(&self) -> Result<()> {
+        if self.instance.is_some() {
+            return Ok(());
+        }
+        let current_dir = std::env::current_dir().context("failed to get current directory")?;
+        if current_dir.join("orbit.toml").exists() {
+            return Ok(());
+        }
+        let registry =
+            orbit_core::InstancesRegistry::load().context("failed to load instances registry")?;
+        if let Some(instance) = registry.default_instance() {
+            anyhow::bail!(
+                "refusing to modify the default instance '{}' from outside its project \
+                 directory; pass --instance '{}' or change to {}",
+                instance.name,
+                instance.name,
+                instance.path
+            );
+        }
+        Ok(())
+    }
 }
 
 pub trait CommandHandler {

@@ -214,6 +214,9 @@ pub enum CacheCommands {
 impl CommandHandler for Commands {
     async fn execute(self, ctx: &commands::CliContext) -> Result<()> {
         use crate::cli::commands::*;
+        if self.mutates_instance() {
+            ctx.require_explicit_mutation_target()?;
+        }
         match self {
             Commands::Init {
                 name,
@@ -266,6 +269,21 @@ impl CommandHandler for Commands {
     }
 }
 
+impl Commands {
+    fn mutates_instance(&self) -> bool {
+        matches!(
+            self,
+            Self::Install { .. }
+                | Self::Add { .. }
+                | Self::Remove { .. }
+                | Self::Purge { .. }
+                | Self::Sync
+                | Self::Upgrade { .. }
+                | Self::Import { .. }
+        )
+    }
+}
+
 impl CommandHandler for InstanceCommands {
     async fn execute(self, ctx: &commands::CliContext) -> Result<()> {
         use crate::cli::commands::instances::*;
@@ -283,5 +301,40 @@ impl CommandHandler for CacheCommands {
         match self {
             CacheCommands::Clean => clean::handle(ctx).await,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Commands;
+
+    #[test]
+    fn classifies_instance_mutations_for_default_fallback_safety() {
+        assert!(
+            Commands::Install {
+                target: None,
+                group: None,
+                no_optional: false,
+                locked: false,
+                frozen: false,
+            }
+            .mutates_instance()
+        );
+        assert!(
+            Commands::Import {
+                file: "pack.zip".to_string(),
+                merge_strategy: None,
+            }
+            .mutates_instance()
+        );
+        assert!(!Commands::Outdated { mod_name: None }.mutates_instance());
+        assert!(
+            !Commands::Export {
+                file: None,
+                target: None,
+                format: "zip".to_string(),
+            }
+            .mutates_instance()
+        );
     }
 }
