@@ -33,7 +33,8 @@ loader metadata
 上游 `DependencyProvider::get_dependencies()` 只能表达“包版本依赖另一个包的版本
 范围”，不能表达 Orbit 所需的 n 元互斥、条件依赖、Quilt 分组和加载顺序环。
 
-本地 `pubgrub-fork` 增加：
+[`water2004/pubgrub`](https://github.com/water2004/pubgrub/tree/codex/solver-observer)
+增加：
 
 ```rust
 fn get_incompatibilities(
@@ -156,6 +157,6 @@ CurseForge 使用同一重试/注册路径，不跨平台猜别名。
 
 - CurseForge：需要用户 API Key；API 没有可用下载 URL 时返回可恢复的明确错误，不
   猜测 CDN 地址。
-- 远端 fork：当前仍是本地 path dependency；拿到用户 fork 的远端历史后再接远端，
-  不提前伪造提交关系。
+- 远端 fork：功能分支已发布；Orbit 通过完整 commit SHA
+  `c3c4326a7e7ced4077e831285c4408c60c52ea32` 固定依赖，不跟随可移动分支头。
 - 静态字节码判断：只给出必要条件，不宣称能完整证明模组运行时兼容。

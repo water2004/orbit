@@ -8,14 +8,17 @@ orbit-cli       参数、交互和展示
 orbit-core      领域模型、编排、JAR、求解、文件事务
     ├── modrinth-wrapper
     ├── CurseForge typed client（core provider 边界内）
-    └── pubgrub-fork（本地 path dependency）
+    └── water2004/pubgrub（固定 Git revision）
 ```
 
 CLI 不实现业务规则。core 不打印 UI 文本，而是返回结构化报告或错误。平台 SDK、网络、
 ZIP 和文件系统位于边界模块。
 
-`pubgrub-fork` 是独立 Git 仓库，目前不加入根 workspace。它先保留本地有序历史；
-用户提供 fork 远端后再接远端历史。
+PubGrub fork 位于
+[`water2004/pubgrub`](https://github.com/water2004/pubgrub/tree/codex/solver-observer) 的
+`codex/solver-observer` 分支。Orbit 使用完整 commit SHA 固定 Git dependency，避免
+分支后续移动导致构建结果变化。仓库内的 `pubgrub-fork` 仍是独立 checkout，不加入根
+workspace，仅供继续开发和向 fork 推送。
 
 CurseForge 的 HTTP/JSON 位于 `providers/curseforge/{client,models}.rs`，平台映射位于
 同目录 `mod.rs`。`providers/download.rs` 是所有平台共用的 artifact transport；
@@ -136,4 +139,4 @@ Orbit 不能仅凭字节码完整证明：
 | Modrinth | 可用 |
 | 本地 `file:` | 可用 |
 | CurseForge | 可用；无 API Key 时 provider 无法创建，Core API 与 CDN 下载均认证 |
-| PubGrub fork 远端 | 等用户提供 fork 历史后接入 |
+| PubGrub fork | 已发布并固定到 `c3c4326a7e7ced4077e831285c4408c60c52ea32` |

@@ -18,7 +18,7 @@
 | 本地校验 | ✅ | 转 Fat Lockfile 后复用统一建图 |
 | 安装/恢复/升级 | ✅ | 由求解结果选择物理 JAR |
 | Modrinth / CurseForge / `file:` | ✅ | 查询、下载、识别、锁定；CurseForge 无 API Key 时拒绝创建 |
-| fork 远端 | ⏳ | 本地提交完成后等待用户远端历史 |
+| PubGrub fork 远端 | ✅ | 功能分支已发布，Orbit 固定到完整 commit SHA |
 
 ## 2. 保留的正确规范
 
@@ -71,7 +71,8 @@
 - CurseForge API 未公开本地 fingerprint 算法；实现明确依据 Prism Launcher 的公开
   源码并用 golden vectors 固定行为。
 - 字节码扫描只能证明 class major 下限，不能证明 API/Mixin/反射兼容。
-- PubGrub fork 当前是本地 path dependency；接远端要保留用户 fork 的历史。
+- PubGrub fork 已发布到 `water2004/pubgrub` 的 `codex/solver-observer` 分支；
+  Orbit 固定到 `c3c4326a7e7ced4077e831285c4408c60c52ea32`。
 - 补抓传递候选依赖已有 lockfile 来源信息；不会凭别名猜远端项目。
 
 ## 6. 文档索引
