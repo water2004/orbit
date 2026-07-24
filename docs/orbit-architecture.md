@@ -18,7 +18,8 @@ ZIP 和文件系统位于边界模块。
 用户提供 fork 远端后再接远端历史。
 
 CurseForge 的 HTTP/JSON 位于 `providers/curseforge/{client,models}.rs`，平台映射位于
-同目录 `mod.rs`。它只产出统一领域类型；不会复制安装器或 resolver。
+同目录 `mod.rs`。`providers/download.rs` 是所有平台共用的 artifact transport；
+provider 只配置自己的运行时认证策略，不会复制安装器或 resolver。
 
 ## 2. core 分层
 
@@ -26,7 +27,7 @@ CurseForge 的 HTTP/JSON 位于 `providers/curseforge/{client,models}.rs`，平�
 metadata/     loader 文件 → 规范化逻辑元数据
 jar/          ZIP、manifest、嵌套 JAR、Jar-in-Jar、class major
 identification/
-providers/    来源查询与下载
+providers/    来源查询、统一下载与受限运行时认证
 lockfile      可复现的 Fat Lockfile
 versions/     Fabric predicate 与 Maven version range
 resolver/
@@ -134,5 +135,5 @@ Orbit 不能仅凭字节码完整证明：
 |---|---|
 | Modrinth | 可用 |
 | 本地 `file:` | 可用 |
-| CurseForge | 可用；需要用户 API Key，受项目 API 下载许可约束 |
+| CurseForge | 可用；无 API Key 时 provider 无法创建，Core API 与 CDN 下载均认证 |
 | PubGrub fork 远端 | 等用户提供 fork 历史后接入 |

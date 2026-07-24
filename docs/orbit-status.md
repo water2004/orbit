@@ -17,7 +17,7 @@
 | 原因 | ✅ | 自定义 reason 参与原始推导；成功候选用同次 observer |
 | 本地校验 | ✅ | 转 Fat Lockfile 后复用统一建图 |
 | 安装/恢复/升级 | ✅ | 由求解结果选择物理 JAR |
-| Modrinth / CurseForge / `file:` | ✅ | 查询、下载、识别、锁定；CurseForge 需要 API Key |
+| Modrinth / CurseForge / `file:` | ✅ | 查询、下载、识别、锁定；CurseForge 无 API Key 时拒绝创建 |
 | fork 远端 | ⏳ | 本地提交完成后等待用户远端历史 |
 
 ## 2. 保留的正确规范
@@ -64,8 +64,10 @@
 
 ## 5. 已知边界
 
-- CurseForge Core API 需要用户申请 Key；仓库自动测试使用 mock server，不读取开发者
-  私人 Key。live smoke test 需要显式提供 `ORBIT_CURSEFORGE_API_KEY`。
+- CurseForge Core API 和 CDN 下载需要用户申请的 Key；provider 不提供匿名降级。
+  Key 仅在运行时下载客户端中存在，并限定为 HTTPS `forgecdn.net` 域名。仓库自动测试
+  使用 mock server，不读取开发者私人 Key。live smoke test 需要显式提供
+  `ORBIT_CURSEFORGE_API_KEY`。
 - CurseForge API 未公开本地 fingerprint 算法；实现明确依据 Prism Launcher 的公开
   源码并用 golden vectors 固定行为。
 - 字节码扫描只能证明 class major 下限，不能证明 API/Mixin/反射兼容。

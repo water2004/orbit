@@ -97,3 +97,7 @@
 
 39. **代码改动后同步更新 docs/**：`orbit-resolver.md`、`orbit-status.md`、`orbit-architecture.md`。
 40. **modrinth-docs 是 API wrapper 的规格来源**，模型字段变更时同步更新。
+41. **CurseForge provider 没有 API Key 就不能创建或使用**。Core API 与 artifact
+    下载都使用用户配置的 Key；Key 仅保存在运行时 downloader 中，不进入
+    `ResolvedMod`、lockfile、日志或错误正文，并且只能通过 HTTPS 发往
+    `forgecdn.net` 及其子域。重定向必须逐跳重新校验。

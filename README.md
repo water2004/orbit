@@ -139,8 +139,9 @@ lithium = ">=0.11 <0.14"
 
 ### CurseForge API Key
 
-CurseForge Core API 不提供匿名访问。使用 `cf:` 或把 `curseforge` 加入
-`[resolver].platforms` 前，任选一种方式配置：
+CurseForge provider 不支持匿名或降级运行。使用 `cf:`、把 `curseforge` 加入
+`[resolver].platforms`，或者操作含 CurseForge 锁定包的实例前，必须任选一种方式
+配置 API Key：
 
 ```toml
 # %APPDATA%/orbit/config.toml（Windows）
@@ -151,7 +152,8 @@ curseforge_api_key = "YOUR_API_KEY"
 
 或设置环境变量 `ORBIT_CURSEFORGE_API_KEY`。API Key 需要按
 [CurseForge 官方说明](https://support.curseforge.com/support/solutions/articles/9000208346-about-the-curseforge-api-and-how-to-apply-for-a-key)
-申请；Orbit 不内置共享 Key。
+申请；Orbit 不内置共享 Key。Key 同时用于 Core API 与 CurseForge CDN 下载，只在
+运行时保存，不写入 `orbit.toml` 或 `orbit.lock`。
 
 ---
 

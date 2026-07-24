@@ -140,11 +140,12 @@ progress_bar = "modern"
 
 | 字段 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `curseforge_api_key` | `Option<String>` | `None` | CurseForge Core API 的 `x-api-key`；仅启用该 provider 时必填 |
+| `curseforge_api_key` | `Option<String>` | `None` | CurseForge Core API/CDN 的 `x-api-key`；创建或使用该 provider 时硬性必填 |
 | `modrinth_token` | `Option<String>` | `None` | Modrinth API Token；当前已加载但尚未传给客户端 |
 
 > **安全警告**：API Key 以明文存储在 `config.toml` 中。请勿将此文件纳入 Git 或分享给他人。
 > 未来版本计划使用 OS 凭据管理器（Windows Credential Manager / Linux Secret Service）存储敏感信息。
+> Key 不会写入项目 manifest 或 lockfile；下载时仅向 HTTPS `forgecdn.net` 域名发送。
 
 ### [cache] — 缓存设置
 

@@ -7,7 +7,7 @@
 | Provider | 状态 | 说明 |
 |----------|:---:|------|
 | Modrinth | ✅ | 搜索、详情、版本、依赖、SHA-512 批量识别 |
-| CurseForge | ✅ | 搜索、详情、版本、依赖、下载 URL、文件指纹批量识别 |
+| CurseForge | ✅ | 搜索、详情、版本、依赖、认证下载、文件指纹批量识别；API Key 必填 |
 | 本地 `file:` | ✅ | 由 `installer/local.rs` 处理，不是网络 provider |
 
 默认平台仍是 `["modrinth"]`，因为 CurseForge Core API 要求用户自己的 API Key。
@@ -18,6 +18,7 @@
 ```text
 providers/
 ├── mod.rs                 trait、统一类型、provider factory
+├── download.rs            统一 artifact 下载、域名限定认证与重定向校验
 ├── modrinth.rs            Modrinth SDK → 领域类型
 ├── rate_limiter.rs        单 provider 的 semaphore
 └── curseforge/
@@ -35,6 +36,7 @@ providers/
 #[async_trait]
 pub trait ModProvider: Send + Sync {
     fn name(&self) -> &'static str;
+    fn artifact_downloader(&self) -> &ArtifactDownloadClient;
     async fn search(...) -> Result<Vec<SearchResultItem>, OrbitError>;
     async fn get_mod_info(...) -> Result<ModInfo, OrbitError>;
     async fn identify_artifacts(
@@ -82,9 +84,11 @@ Modrinth 始终参与，只有已配置 API Key 时才加入 CurseForge。它不
 - `cf:` → 只用 CurseForge；
 - `file:` → 本地安装，不进入 provider factory。
 
-CurseForge 使用 Core API 的 `x-api-key`，配置项为
-`auth.curseforge_api_key`，环境变量为 `ORBIT_CURSEFORGE_API_KEY`。没有 Key 时只有
-创建 CurseForge provider 会失败；默认的 Modrinth 工作流不受影响。
+CurseForge 使用 `x-api-key`，配置项为 `auth.curseforge_api_key`，环境变量为
+`ORBIT_CURSEFORGE_API_KEY`。CurseForge provider 在 factory 和直接构造入口都会拒绝
+缺失、空白 Key；不会提供匿名网页抓取或无 Key 降级模式。实例 manifest 或 lockfile
+只要要求创建 CurseForge provider，缺 Key 就会在任何查询、恢复或检查开始前失败。
+默认的 Modrinth 工作流不受影响。
 
 ## 6. CurseForge API 映射
 
@@ -127,6 +131,13 @@ download-url 端点；若目标版本没有任何 API 可下载且带 SHA-1 的�
 仍返回空候选，使 provider 回退和 `orbit check` 的“不兼容”结果保持正常。Orbit 不会
 拼接 CDN URL，也不会把 HTML 错误页当 JAR。
 
+根据 CurseForge 的
+[文件下载认证公告](https://blog.curseforge.com/introducing-api-key-authentication-for-curseforge-file-downloads/)，
+直接 CDN 下载从 2026-07-16 起也需要 `x-api-key`。所有 provider 共用
+`ArtifactDownloadClient` 下载路径；CurseForge 只在运行时为 HTTPS
+`forgecdn.net` 及其子域添加 Key，每一跳重定向都重新校验。Key 不进入
+`ResolvedMod`、`InstalledMod` 或 lockfile，也不会被发送给任意 API 返回 URL。
+
 API 状态错误保留 HTTP 状态和最多 500 字符响应正文；API Key 不进入日志或错误文本。
 候选批量验证允许忽略个别坏的历史文件，但当所有候选都失败时返回第一个具体下载、
 校验或 JAR 解析错误，不降级成不可读的“未找到”。
@@ -136,6 +147,7 @@ API 状态错误保留 HTTP 状态和最多 500 字符响应正文；API Key 不
 仓库测试通过本地 mock HTTP server 验证：
 
 - `x-api-key` 与官方 query 参数；
+- 下载 Key 的 HTTPS/域名范围，以及匿名下载不携带 Key；
 - game/class 动态发现；
 - loader/game version 搜索；
 - download-url 回退；
@@ -144,4 +156,5 @@ API 状态错误保留 HTTP 状态和最多 500 字符响应正文；API Key 不
 - provider 顺序和缺 Key 错误。
 
 测试不依赖开发者私人 Key。需要上线前 smoke test 时，设置
-`ORBIT_CURSEFORGE_API_KEY` 后执行实际 `search`、`info` 与 `add cf:<slug>`。
+`ORBIT_CURSEFORGE_API_KEY` 后执行实际 `search`、`info` 与 `add cf:<slug>`；最后一项
+同时覆盖真实 CDN 认证。
