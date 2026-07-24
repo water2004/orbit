@@ -1,0 +1,876 @@
+mod client;
+mod models;
+
+use std::collections::{HashMap, HashSet};
+
+use async_trait::async_trait;
+use reqwest::StatusCode;
+use tokio::sync::OnceCell;
+
+use self::client::{ApiError, Client, MAX_RESULTS};
+use self::models::{File, GetFilesParams, Mod, ModLoaderType, SearchModsParams};
+use super::rate_limiter::RateLimiter;
+use super::{
+    ArtifactFingerprint, CurseForgeResolvedInfo, ModInfo, ModProvider, ModVersionInfo,
+    ResolvedDependency, ResolvedMod, SearchResultItem,
+};
+use crate::error::OrbitError;
+
+const OPTIONAL_DEPENDENCY: u8 = 2;
+const REQUIRED_DEPENDENCY: u8 = 3;
+
+#[derive(Debug)]
+struct MinecraftContext {
+    game_id: u32,
+    mods_class_id: u32,
+    categories: Vec<models::Category>,
+}
+
+pub struct CurseForgeProvider {
+    client: Client,
+    rate_limiter: RateLimiter,
+    minecraft: OnceCell<MinecraftContext>,
+}
+
+impl CurseForgeProvider {
+    pub fn new(
+        api_key: &str,
+        user_agent: &str,
+        max_concurrency: usize,
+    ) -> Result<Self, OrbitError> {
+        Ok(Self {
+            client: Client::new(api_key, user_agent).map_err(map_client_error)?,
+            rate_limiter: RateLimiter::new(max_concurrency),
+            minecraft: OnceCell::new(),
+        })
+    }
+
+    #[cfg(test)]
+    fn with_base_url(
+        api_key: &str,
+        user_agent: &str,
+        max_concurrency: usize,
+        base_url: &str,
+    ) -> Result<Self, OrbitError> {
+        Ok(Self {
+            client: Client::with_base_url(api_key, user_agent, base_url)
+                .map_err(map_client_error)?,
+            rate_limiter: RateLimiter::new(max_concurrency),
+            minecraft: OnceCell::new(),
+        })
+    }
+
+    async fn minecraft(&self) -> Result<&MinecraftContext, OrbitError> {
+        self.minecraft
+            .get_or_try_init(|| async {
+                let games = self.client.games().await.map_err(map_client_error)?;
+                let game = games
+                    .into_iter()
+                    .find(|game| game.slug.eq_ignore_ascii_case("minecraft"))
+                    .ok_or_else(|| {
+                        OrbitError::Other(anyhow::anyhow!(
+                            "CurseForge API key does not expose a game with slug 'minecraft'"
+                        ))
+                    })?;
+                let categories = self
+                    .client
+                    .categories(game.id)
+                    .await
+                    .map_err(map_client_error)?;
+                let mods_class = categories
+                    .iter()
+                    .find(|category| {
+                        category.is_class == Some(true)
+                            && (category.name.eq_ignore_ascii_case("mods")
+                                || category.slug.eq_ignore_ascii_case("mods")
+                                || category.slug.eq_ignore_ascii_case("mc-mods"))
+                    })
+                    .ok_or_else(|| {
+                        OrbitError::Other(anyhow::anyhow!(
+                            "CurseForge returned no top-level Minecraft Mods class"
+                        ))
+                    })?;
+                Ok(MinecraftContext {
+                    game_id: game.id,
+                    mods_class_id: mods_class.id,
+                    categories,
+                })
+            })
+            .await
+    }
+
+    async fn project(&self, slug_or_id: &str) -> Result<Mod, OrbitError> {
+        if let Ok(project_id) = slug_or_id.parse::<u32>() {
+            return self
+                .client
+                .get_mod(project_id)
+                .await
+                .map_err(|error| map_project_error(error, slug_or_id));
+        }
+        let context = self.minecraft().await?;
+        let mut projects = self
+            .client
+            .search_mods(SearchModsParams {
+                game_id: context.game_id,
+                class_id: context.mods_class_id,
+                slug: Some(slug_or_id),
+                page_size: 50,
+                ..SearchModsParams::default()
+            })
+            .await
+            .map_err(|error| map_project_error(error, slug_or_id))?
+            .data;
+        projects
+            .drain(..)
+            .find(|project| project.slug.eq_ignore_ascii_case(slug_or_id))
+            .ok_or_else(|| OrbitError::ModNotFound(slug_or_id.to_string()))
+    }
+
+    async fn dependency_slugs(&self, files: &[File]) -> Result<HashMap<u32, String>, OrbitError> {
+        let ids: HashSet<u32> = files
+            .iter()
+            .flat_map(|file| &file.dependencies)
+            .filter(|dependency| {
+                matches!(
+                    dependency.relation_type,
+                    OPTIONAL_DEPENDENCY | REQUIRED_DEPENDENCY
+                )
+            })
+            .map(|dependency| dependency.mod_id)
+            .collect();
+        if ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        self.client
+            .get_mods(&ids.into_iter().collect::<Vec<_>>())
+            .await
+            .map_err(map_client_error)
+            .map(|projects| {
+                projects
+                    .into_iter()
+                    .map(|project| (project.id, project.slug))
+                    .collect()
+            })
+    }
+
+    async fn resolved_file(
+        &self,
+        project: &Mod,
+        file: &File,
+        dependency_slugs: &HashMap<u32, String>,
+        require_download: bool,
+    ) -> Result<Option<ResolvedMod>, OrbitError> {
+        if !file.is_available {
+            return Ok(None);
+        }
+        let sha1 = file.sha1();
+        if require_download && sha1.is_empty() {
+            return Ok(None);
+        }
+        let download_url = match &file.download_url {
+            Some(url) if !url.is_empty() => Some(url.clone()),
+            _ if !require_download => None,
+            _ => match self.client.download_url(project.id, file.id).await {
+                Ok(url) => Some(url),
+                Err(error)
+                    if matches!(
+                        error.status(),
+                        Some(StatusCode::FORBIDDEN | StatusCode::NOT_FOUND)
+                    ) =>
+                {
+                    None
+                }
+                Err(error) => return Err(map_client_error(error)),
+            },
+        };
+        if require_download && download_url.is_none() {
+            return Ok(None);
+        }
+        let dependencies = file
+            .dependencies
+            .iter()
+            .filter(|dependency| {
+                matches!(
+                    dependency.relation_type,
+                    OPTIONAL_DEPENDENCY | REQUIRED_DEPENDENCY
+                )
+            })
+            .map(|dependency| ResolvedDependency {
+                slug: dependency_slugs.get(&dependency.mod_id).cloned(),
+                required: dependency.relation_type == REQUIRED_DEPENDENCY,
+                project_id: Some(dependency.mod_id.to_string()),
+            })
+            .collect();
+        Ok(Some(ResolvedMod {
+            mod_id: project.slug.clone(),
+            version: file.display_name.clone(),
+            sha1,
+            sha512: String::new(),
+            slug: project.slug.clone(),
+            provider: "curseforge".to_string(),
+            modrinth: None,
+            curseforge: Some(CurseForgeResolvedInfo {
+                project_id: project.id,
+                file_id: file.id,
+                display_name: file.display_name.clone(),
+                fingerprint: u32::try_from(file.file_fingerprint).unwrap_or_default(),
+            }),
+            date_published: file.file_date.clone(),
+            download_url: download_url.unwrap_or_default(),
+            filename: file.file_name.clone(),
+            dependencies,
+            client_side: None,
+            server_side: None,
+        }))
+    }
+
+    async fn versions_for_project(
+        &self,
+        project: &Mod,
+        mc_version: Option<&str>,
+        loader: Option<&str>,
+    ) -> Result<Vec<ResolvedMod>, OrbitError> {
+        let mod_loader_type = loader.map(parse_loader).transpose()?;
+        let files = self
+            .client
+            .get_files(
+                project.id,
+                GetFilesParams {
+                    game_version: mc_version,
+                    mod_loader_type,
+                },
+            )
+            .await
+            .map_err(map_client_error)?;
+        if files.is_empty() {
+            return Ok(Vec::new());
+        }
+        let dependency_slugs = self.dependency_slugs(&files).await?;
+        let mut versions = Vec::new();
+        for file in files {
+            if let Some(resolved) = self
+                .resolved_file(project, &file, &dependency_slugs, true)
+                .await?
+            {
+                versions.push(resolved);
+            }
+        }
+        versions.sort_by(|left, right| right.date_published.cmp(&left.date_published));
+        if versions.is_empty() {
+            return Err(OrbitError::Other(anyhow::anyhow!(
+                "CurseForge project '{}' has matching files, but none is API-downloadable with a \
+                 SHA-1 checksum",
+                project.slug
+            )));
+        }
+        Ok(versions)
+    }
+}
+
+fn map_client_error(error: ApiError) -> OrbitError {
+    OrbitError::Other(error.into())
+}
+
+fn map_project_error(error: ApiError, slug: &str) -> OrbitError {
+    if error.status() == Some(StatusCode::NOT_FOUND) {
+        OrbitError::ModNotFound(slug.to_string())
+    } else {
+        map_client_error(error)
+    }
+}
+
+fn parse_loader(loader: &str) -> Result<ModLoaderType, OrbitError> {
+    ModLoaderType::parse(loader).ok_or_else(|| {
+        OrbitError::Other(anyhow::anyhow!(
+            "CurseForge does not define a loader enum for '{loader}'"
+        ))
+    })
+}
+
+fn project_versions(project: &Mod, loader: Option<ModLoaderType>) -> Vec<String> {
+    let requested_loader = loader.map(|value| value as u8);
+    let mut versions = Vec::new();
+    for index in &project.latest_files_indexes {
+        if requested_loader.is_none_or(|loader| index.mod_loader == 0 || index.mod_loader == loader)
+            && !versions.contains(&index.game_version)
+        {
+            versions.push(index.game_version.clone());
+        }
+    }
+    versions
+}
+
+fn file_loader(file: &File) -> String {
+    file.game_versions
+        .iter()
+        .find_map(|version| ModLoaderType::parse(version).map(|loader| loader as u8))
+        .map(ModLoaderType::name)
+        .unwrap_or_default()
+        .to_string()
+}
+
+fn file_game_versions(file: &File) -> Vec<String> {
+    let mut versions = Vec::new();
+    for version in &file.sortable_game_versions {
+        if !versions.contains(&version.game_version_name) {
+            versions.push(version.game_version_name.clone());
+        }
+    }
+    if versions.is_empty() {
+        for version in &file.game_versions {
+            if ModLoaderType::parse(version).is_none() && !versions.contains(version) {
+                versions.push(version.clone());
+            }
+        }
+    }
+    versions
+}
+
+#[async_trait]
+impl ModProvider for CurseForgeProvider {
+    fn name(&self) -> &'static str {
+        "curseforge"
+    }
+
+    async fn search(
+        &self,
+        query: &str,
+        mc_version: Option<&str>,
+        loader: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<SearchResultItem>, OrbitError> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+        let _permit = self.rate_limiter.acquire().await?;
+        let context = self.minecraft().await?;
+        let loader_type = loader.map(parse_loader).transpose()?;
+        let mut index = 0;
+        let mut results = Vec::new();
+        while results.len() < limit {
+            let response = self
+                .client
+                .search_mods(SearchModsParams {
+                    game_id: context.game_id,
+                    class_id: context.mods_class_id,
+                    search_filter: Some(query),
+                    game_version: mc_version,
+                    mod_loader_type: mc_version.and(loader_type),
+                    index,
+                    page_size: 50,
+                    ..SearchModsParams::default()
+                })
+                .await
+                .map_err(map_client_error)?;
+            let done = response.pagination.result_count == 0
+                || u64::from(response.pagination.index + response.pagination.result_count)
+                    >= response.pagination.total_count
+                || response.pagination.index + response.pagination.page_size >= MAX_RESULTS;
+            for project in response.data.into_iter().filter(|project| {
+                project.is_available
+                    && loader_type.is_none_or(|loader| {
+                        project
+                            .latest_files_indexes
+                            .iter()
+                            .any(|index| index.mod_loader == 0 || index.mod_loader == loader as u8)
+                    })
+            }) {
+                let mc_versions = project_versions(&project, loader_type);
+                let latest_version = project
+                    .latest_files
+                    .iter()
+                    .max_by_key(|file| &file.file_date)
+                    .map(|file| file.display_name.clone())
+                    .unwrap_or_default();
+                results.push(SearchResultItem {
+                    mod_id: project.id.to_string(),
+                    slug: project.slug,
+                    name: project.name,
+                    description: project.summary,
+                    latest_version,
+                    downloads: project.download_count,
+                    mc_versions,
+                    client_side: None,
+                    server_side: None,
+                    categories: project
+                        .categories
+                        .into_iter()
+                        .map(|category| category.name)
+                        .collect(),
+                });
+                if results.len() == limit {
+                    break;
+                }
+            }
+            if done {
+                break;
+            }
+            index = response.pagination.index + response.pagination.page_size;
+        }
+        Ok(results)
+    }
+
+    async fn get_mod_info(&self, slug: &str) -> Result<ModInfo, OrbitError> {
+        let _permit = self.rate_limiter.acquire().await?;
+        let project = self.project(slug).await?;
+        let mut files = self
+            .client
+            .get_files(project.id, GetFilesParams::default())
+            .await
+            .map_err(map_client_error)?;
+        files.sort_by(|left, right| right.file_date.cmp(&left.file_date));
+        let dependencies = files
+            .first()
+            .map(|file| file.dependencies.clone())
+            .unwrap_or_default();
+        let dependency_projects = self.dependency_slugs(&files).await?;
+        Ok(ModInfo {
+            project_id: project.id.to_string(),
+            slug: project.slug,
+            name: project.name,
+            description: project.summary,
+            authors: project
+                .authors
+                .into_iter()
+                .map(|author| author.name)
+                .collect(),
+            latest_version: files
+                .first()
+                .map(|file| file.display_name.clone())
+                .unwrap_or_default(),
+            downloads: project.download_count,
+            license: None,
+            client_side: None,
+            server_side: None,
+            categories: project
+                .categories
+                .into_iter()
+                .map(|category| category.name)
+                .collect(),
+            recent_versions: files
+                .iter()
+                .take(5)
+                .map(|file| ModVersionInfo {
+                    version: file.display_name.clone(),
+                    mc_versions: file_game_versions(file),
+                    loader: file_loader(file),
+                    released_at: file.file_date.clone(),
+                })
+                .collect(),
+            dependencies: dependencies
+                .into_iter()
+                .filter(|dependency| {
+                    matches!(
+                        dependency.relation_type,
+                        OPTIONAL_DEPENDENCY | REQUIRED_DEPENDENCY
+                    )
+                })
+                .map(|dependency| ResolvedDependency {
+                    slug: dependency_projects.get(&dependency.mod_id).cloned(),
+                    required: dependency.relation_type == REQUIRED_DEPENDENCY,
+                    project_id: Some(dependency.mod_id.to_string()),
+                })
+                .collect(),
+        })
+    }
+
+    async fn identify_artifacts(
+        &self,
+        artifacts: &[ArtifactFingerprint],
+    ) -> Result<Vec<ResolvedMod>, OrbitError> {
+        let _permit = self.rate_limiter.acquire().await?;
+        let fingerprints: Vec<u32> = artifacts
+            .iter()
+            .map(|artifact| artifact.curseforge)
+            .filter(|fingerprint| *fingerprint != 0)
+            .collect();
+        if fingerprints.is_empty() {
+            return Ok(Vec::new());
+        }
+        let context = self.minecraft().await?;
+        let matches = self
+            .client
+            .fingerprint_matches(context.game_id, &fingerprints)
+            .await
+            .map_err(map_client_error)?;
+        let project_ids: HashSet<u32> = matches
+            .exact_matches
+            .iter()
+            .map(|matched| matched.file.mod_id)
+            .collect();
+        let projects: HashMap<u32, Mod> = self
+            .client
+            .get_mods(&project_ids.into_iter().collect::<Vec<_>>())
+            .await
+            .map_err(map_client_error)?
+            .into_iter()
+            .map(|project| (project.id, project))
+            .collect();
+        let files: Vec<File> = matches
+            .exact_matches
+            .iter()
+            .map(|matched| matched.file.clone())
+            .collect();
+        let dependency_slugs = self.dependency_slugs(&files).await?;
+        let mut identified = Vec::new();
+        for matched in matches.exact_matches {
+            let Some(project) = projects.get(&matched.file.mod_id) else {
+                continue;
+            };
+            if let Some(resolved) = self
+                .resolved_file(project, &matched.file, &dependency_slugs, false)
+                .await?
+            {
+                identified.push(resolved);
+            }
+        }
+        Ok(identified)
+    }
+
+    async fn get_versions(
+        &self,
+        slug: &str,
+        mc_version: Option<&str>,
+        loader: Option<&str>,
+    ) -> Result<Vec<ResolvedMod>, OrbitError> {
+        let _permit = self.rate_limiter.acquire().await?;
+        let project = self.project(slug).await?;
+        self.versions_for_project(&project, mc_version, loader)
+            .await
+    }
+
+    async fn get_categories(&self) -> Result<Vec<String>, OrbitError> {
+        let _permit = self.rate_limiter.acquire().await?;
+        let context = self.minecraft().await?;
+        let mut categories: Vec<String> = context
+            .categories
+            .iter()
+            .filter(|category| category.class_id == Some(context.mods_class_id))
+            .map(|category| category.name.clone())
+            .collect();
+        categories.sort();
+        categories.dedup();
+        Ok(categories)
+    }
+
+    async fn fetch_dependencies(
+        &self,
+        project_id: &str,
+    ) -> Result<Vec<ResolvedDependency>, OrbitError> {
+        let _permit = self.rate_limiter.acquire().await?;
+        let project = self.project(project_id).await?;
+        let mut files = self
+            .client
+            .get_files(project.id, GetFilesParams::default())
+            .await
+            .map_err(map_client_error)?;
+        files.sort_by(|left, right| right.file_date.cmp(&left.file_date));
+        let Some(file) = files.first() else {
+            return Ok(Vec::new());
+        };
+        let dependency_slugs = self.dependency_slugs(&files).await?;
+        Ok(file
+            .dependencies
+            .iter()
+            .filter(|dependency| {
+                matches!(
+                    dependency.relation_type,
+                    OPTIONAL_DEPENDENCY | REQUIRED_DEPENDENCY
+                )
+            })
+            .map(|dependency| ResolvedDependency {
+                slug: dependency_slugs.get(&dependency.mod_id).cloned(),
+                required: dependency.relation_type == REQUIRED_DEPENDENCY,
+                project_id: Some(dependency.mod_id.to_string()),
+            })
+            .collect())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::thread::JoinHandle;
+
+    use super::*;
+
+    // Windows can reset several short-lived loopback HTTP connections when
+    // these contract tests close their mock listeners concurrently.
+    static MOCK_SERVER_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+    struct MockResponse {
+        request_contains: &'static str,
+        status: &'static str,
+        body: &'static str,
+    }
+
+    fn mock_server(responses: Vec<MockResponse>) -> (String, JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let handle = std::thread::spawn(move || {
+            for expected in responses {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut request = Vec::new();
+                let mut buffer = [0_u8; 4096];
+                loop {
+                    let count = stream.read(&mut buffer).unwrap();
+                    if count == 0 {
+                        break;
+                    }
+                    request.extend_from_slice(&buffer[..count]);
+                    if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                        break;
+                    }
+                }
+                let header_end = request
+                    .windows(4)
+                    .position(|window| window == b"\r\n\r\n")
+                    .map(|position| position + 4)
+                    .unwrap();
+                let content_length = String::from_utf8_lossy(&request[..header_end])
+                    .lines()
+                    .find_map(|line| {
+                        line.to_ascii_lowercase()
+                            .strip_prefix("content-length:")
+                            .and_then(|value| value.trim().parse::<usize>().ok())
+                    })
+                    .unwrap_or_default();
+                while request.len() < header_end + content_length {
+                    let count = stream.read(&mut buffer).unwrap();
+                    if count == 0 {
+                        break;
+                    }
+                    request.extend_from_slice(&buffer[..count]);
+                }
+                let request = String::from_utf8_lossy(&request);
+                assert!(
+                    request.contains(expected.request_contains),
+                    "request did not contain {:?}:\n{}",
+                    expected.request_contains,
+                    request
+                );
+                assert!(
+                    request.to_ascii_lowercase().contains("x-api-key: test-key"),
+                    "API key header missing:\n{request}"
+                );
+                let response = format!(
+                    "HTTP/1.1 {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\
+                     Connection: close\r\n\r\n{}",
+                    expected.status,
+                    expected.body.len(),
+                    expected.body
+                );
+                stream.write_all(response.as_bytes()).unwrap();
+                stream.flush().unwrap();
+                stream.shutdown(std::net::Shutdown::Write).unwrap();
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+        });
+        (format!("http://{address}/v1/"), handle)
+    }
+
+    #[tokio::test]
+    async fn discovers_ids_and_searches_with_official_filters() {
+        let _guard = MOCK_SERVER_LOCK.lock().await;
+        let (base_url, server) = mock_server(vec![
+            MockResponse {
+                request_contains: "GET /v1/games?index=0&pageSize=50 ",
+                status: "200 OK",
+                body: r#"{"data":[{"id":432,"name":"Minecraft","slug":"minecraft"}],"pagination":{"index":0,"pageSize":50,"resultCount":1,"totalCount":1}}"#,
+            },
+            MockResponse {
+                request_contains: "GET /v1/categories?gameId=432 ",
+                status: "200 OK",
+                body: r#"{"data":[{"id":6,"name":"Mods","slug":"mc-mods","isClass":true,"classId":null},{"id":421,"name":"API and Library","slug":"api-and-library","isClass":false,"classId":6}]}"#,
+            },
+            MockResponse {
+                request_contains: "GET /v1/mods/search?gameId=432&classId=6&index=0&pageSize=50&searchFilter=sodium&gameVersion=1.21.1&modLoaderType=4 ",
+                status: "200 OK",
+                body: r#"{"data":[{"id":394468,"name":"Sodium","slug":"sodium","summary":"Renderer","downloadCount":42,"categories":[{"id":421,"name":"API and Library","slug":"api-and-library","isClass":false,"classId":6}],"authors":[{"name":"jellysquid"}],"latestFiles":[{"id":1,"modId":394468,"isAvailable":true,"displayName":"Sodium 1","fileName":"sodium.jar","hashes":[{"value":"abc","algo":1}],"fileDate":"2026-01-01T00:00:00Z","downloadUrl":"https://example.invalid/sodium.jar","gameVersions":["1.21.1","Fabric"],"sortableGameVersions":[{"gameVersionName":"1.21.1"}],"dependencies":[],"fileFingerprint":123}],"latestFilesIndexes":[{"gameVersion":"1.21.1","fileId":1,"filename":"sodium.jar","releaseType":1,"modLoader":4}],"isAvailable":true}],"pagination":{"index":0,"pageSize":5,"resultCount":1,"totalCount":1}}"#,
+            },
+        ]);
+        let provider =
+            CurseForgeProvider::with_base_url("test-key", "orbit-test", 1, &base_url).unwrap();
+
+        let results = provider
+            .search("sodium", Some("1.21.1"), Some("fabric"), 5)
+            .await
+            .unwrap();
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].slug, "sodium");
+        assert_eq!(results[0].mc_versions, vec!["1.21.1"]);
+        server.join().unwrap();
+    }
+
+    #[tokio::test]
+    async fn resolves_missing_file_url_through_download_endpoint() {
+        let _guard = MOCK_SERVER_LOCK.lock().await;
+        let project = r#"{"id":123,"name":"Example","slug":"example","summary":"Example","downloadCount":1,"categories":[],"authors":[],"latestFiles":[],"latestFilesIndexes":[],"isAvailable":true}"#;
+        let file = r#"{"id":456,"modId":123,"isAvailable":true,"displayName":"Example 2","fileName":"example.jar","hashes":[{"value":"deadbeef","algo":1}],"fileDate":"2026-02-01T00:00:00Z","downloadUrl":null,"gameVersions":["1.21.1","NeoForge"],"sortableGameVersions":[{"gameVersionName":"1.21.1"}],"dependencies":[],"fileFingerprint":987}"#;
+        let project_response: &'static str =
+            Box::leak(format!(r#"{{"data":{project}}}"#).into_boxed_str());
+        let files_response: &'static str = Box::leak(
+            format!(
+                r#"{{"data":[{file}],"pagination":{{"index":0,"pageSize":50,"resultCount":1,"totalCount":1}}}}"#
+            )
+            .into_boxed_str(),
+        );
+        let (base_url, server) = mock_server(vec![
+            MockResponse {
+                request_contains: "GET /v1/mods/123 ",
+                status: "200 OK",
+                body: project_response,
+            },
+            MockResponse {
+                request_contains: "GET /v1/mods/123/files?index=0&pageSize=50&gameVersion=1.21.1&modLoaderType=6 ",
+                status: "200 OK",
+                body: files_response,
+            },
+            MockResponse {
+                request_contains: "GET /v1/mods/123/files/456/download-url ",
+                status: "200 OK",
+                body: r#"{"data":"https://example.invalid/example.jar"}"#,
+            },
+        ]);
+        let provider =
+            CurseForgeProvider::with_base_url("test-key", "orbit-test", 1, &base_url).unwrap();
+
+        let versions = provider
+            .get_versions("123", Some("1.21.1"), Some("neoforge"))
+            .await
+            .unwrap();
+
+        assert_eq!(versions.len(), 1);
+        assert_eq!(versions[0].sha1, "deadbeef");
+        assert_eq!(
+            versions[0].download_url,
+            "https://example.invalid/example.jar"
+        );
+        assert_eq!(versions[0].version_id().as_deref(), Some("456"));
+        server.join().unwrap();
+    }
+
+    #[tokio::test]
+    async fn reports_files_blocked_from_api_downloads() {
+        let _guard = MOCK_SERVER_LOCK.lock().await;
+        let project = r#"{"id":123,"name":"Example","slug":"example","summary":"Example","downloadCount":1,"categories":[],"authors":[],"latestFiles":[],"latestFilesIndexes":[],"isAvailable":true}"#;
+        let file = r#"{"id":456,"modId":123,"isAvailable":true,"displayName":"Example 2","fileName":"example.jar","hashes":[{"value":"deadbeef","algo":1}],"fileDate":"2026-02-01T00:00:00Z","downloadUrl":null,"gameVersions":["1.21.1","Fabric"],"sortableGameVersions":[{"gameVersionName":"1.21.1"}],"dependencies":[],"fileFingerprint":987}"#;
+        let project_response: &'static str =
+            Box::leak(format!(r#"{{"data":{project}}}"#).into_boxed_str());
+        let files_response: &'static str = Box::leak(
+            format!(
+                r#"{{"data":[{file}],"pagination":{{"index":0,"pageSize":50,"resultCount":1,"totalCount":1}}}}"#
+            )
+            .into_boxed_str(),
+        );
+        let (base_url, server) = mock_server(vec![
+            MockResponse {
+                request_contains: "GET /v1/mods/123 ",
+                status: "200 OK",
+                body: project_response,
+            },
+            MockResponse {
+                request_contains: "GET /v1/mods/123/files?index=0&pageSize=50&gameVersion=1.21.1&modLoaderType=4 ",
+                status: "200 OK",
+                body: files_response,
+            },
+            MockResponse {
+                request_contains: "GET /v1/mods/123/files/456/download-url ",
+                status: "404 Not Found",
+                body: r#"{"error":"download unavailable"}"#,
+            },
+        ]);
+        let provider =
+            CurseForgeProvider::with_base_url("test-key", "orbit-test", 1, &base_url).unwrap();
+
+        let error = provider
+            .get_versions("123", Some("1.21.1"), Some("fabric"))
+            .await
+            .unwrap_err();
+
+        assert!(
+            error.to_string().contains("none is API-downloadable"),
+            "unexpected error: {error}"
+        );
+        server.join().unwrap();
+    }
+
+    #[tokio::test]
+    async fn returns_an_empty_version_set_when_no_files_match() {
+        let _guard = MOCK_SERVER_LOCK.lock().await;
+        let (base_url, server) = mock_server(vec![
+            MockResponse {
+                request_contains: "GET /v1/mods/123 ",
+                status: "200 OK",
+                body: r#"{"data":{"id":123,"name":"Example","slug":"example","summary":"Example","downloadCount":1,"categories":[],"authors":[],"latestFiles":[],"latestFilesIndexes":[],"isAvailable":true}}"#,
+            },
+            MockResponse {
+                request_contains: "GET /v1/mods/123/files?index=0&pageSize=50&gameVersion=1.21.1&modLoaderType=4 ",
+                status: "200 OK",
+                body: r#"{"data":[],"pagination":{"index":0,"pageSize":50,"resultCount":0,"totalCount":0}}"#,
+            },
+        ]);
+        let provider =
+            CurseForgeProvider::with_base_url("test-key", "orbit-test", 1, &base_url).unwrap();
+
+        let versions = provider
+            .get_versions("123", Some("1.21.1"), Some("fabric"))
+            .await
+            .unwrap();
+
+        assert!(versions.is_empty());
+        server.join().unwrap();
+    }
+
+    #[tokio::test]
+    async fn identifies_local_artifacts_with_the_fingerprint_endpoint() {
+        let _guard = MOCK_SERVER_LOCK.lock().await;
+        let (base_url, server) = mock_server(vec![
+            MockResponse {
+                request_contains: "GET /v1/games?index=0&pageSize=50 ",
+                status: "200 OK",
+                body: r#"{"data":[{"id":432,"slug":"minecraft"}],"pagination":{"index":0,"pageSize":50,"resultCount":1,"totalCount":1}}"#,
+            },
+            MockResponse {
+                request_contains: "GET /v1/categories?gameId=432 ",
+                status: "200 OK",
+                body: r#"{"data":[{"id":6,"name":"Mods","slug":"mc-mods","isClass":true,"classId":null}]}"#,
+            },
+            MockResponse {
+                request_contains: "POST /v1/fingerprints/432 ",
+                status: "200 OK",
+                body: r#"{"data":{"exactMatches":[{"id":456,"file":{"id":456,"modId":123,"isAvailable":true,"displayName":"Example 2","fileName":"example.jar","hashes":[{"value":"deadbeef","algo":1}],"fileDate":"2026-02-01T00:00:00Z","downloadUrl":null,"gameVersions":["1.21.1","Fabric"],"sortableGameVersions":[{"gameVersionName":"1.21.1"}],"dependencies":[],"fileFingerprint":987},"latestFiles":[]}],"exactFingerprints":[987],"partialMatches":[],"unmatchedFingerprints":[]}}"#,
+            },
+            MockResponse {
+                request_contains: "POST /v1/mods ",
+                status: "200 OK",
+                body: r#"{"data":[{"id":123,"name":"Example","slug":"example","summary":"Example","downloadCount":1,"categories":[],"authors":[],"latestFiles":[],"latestFilesIndexes":[],"isAvailable":true}]}"#,
+            },
+        ]);
+        let provider =
+            CurseForgeProvider::with_base_url("test-key", "orbit-test", 1, &base_url).unwrap();
+
+        let identified = provider
+            .identify_artifacts(&[ArtifactFingerprint {
+                sha1: String::new(),
+                sha512: String::new(),
+                curseforge: 987,
+            }])
+            .await
+            .unwrap();
+
+        assert_eq!(identified.len(), 1);
+        assert_eq!(identified[0].slug, "example");
+        assert!(identified[0].download_url.is_empty());
+        assert_eq!(
+            identified[0]
+                .curseforge
+                .as_ref()
+                .map(|metadata| metadata.fingerprint),
+            Some(987)
+        );
+        server.join().unwrap();
+    }
+}

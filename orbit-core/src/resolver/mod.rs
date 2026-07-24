@@ -82,14 +82,9 @@ pub fn dependents<'a>(slug: &str, entries: &'a [PackageEntry]) -> Vec<&'a str> {
 }
 
 pub fn find_entry<'a>(slug: &str, entries: &'a [PackageEntry]) -> Option<&'a PackageEntry> {
-    entries.iter().find(|entry| {
-        entry.mod_id == slug
-            || entry
-                .modrinth
-                .as_ref()
-                .map(|modrinth| modrinth.slug.as_str())
-                == Some(slug)
-    })
+    entries
+        .iter()
+        .find(|entry| entry.mod_id == slug || entry.source_slug() == Some(slug))
 }
 
 pub fn check_version_conflict(

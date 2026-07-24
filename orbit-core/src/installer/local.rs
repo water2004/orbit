@@ -67,6 +67,7 @@ pub async fn install_local_file_to_instance(
         filename: filename.clone(),
         provider: "file".to_string(),
         modrinth: None,
+        curseforge: None,
         file: Some(FileInfo {
             path: format!("mods/{filename}"),
         }),
@@ -228,10 +229,8 @@ fn build_preview(
         version: metadata.version.clone(),
         filename: filename.to_string(),
         provider: "file".to_string(),
-        project_id: String::new(),
-        version_id: String::new(),
-        modrinth_version: String::new(),
-        download_url: String::new(),
+        modrinth: None,
+        curseforge: None,
         dependencies: metadata.dependencies.clone(),
         environment: metadata.environment,
         provides: metadata.provides.clone(),
@@ -263,27 +262,17 @@ fn build_preview(
 }
 
 fn installed_mod_from_entry(entry: &PackageEntry) -> InstalledMod {
-    let modrinth = entry.modrinth.as_ref();
     InstalledMod {
-        slug: modrinth
-            .map(|metadata| metadata.slug.clone())
+        slug: entry
+            .source_slug()
+            .map(str::to_string)
             .unwrap_or_else(|| entry.mod_id.clone()),
         mod_id: entry.mod_id.clone(),
         version: entry.version.clone(),
         filename: package_filename(entry),
         provider: entry.provider.clone(),
-        project_id: modrinth
-            .map(|metadata| metadata.project_id.clone())
-            .unwrap_or_default(),
-        version_id: modrinth
-            .map(|metadata| metadata.version_id.clone())
-            .unwrap_or_default(),
-        modrinth_version: modrinth
-            .map(|metadata| metadata.version.clone())
-            .unwrap_or_default(),
-        download_url: modrinth
-            .map(|metadata| metadata.download_url.clone())
-            .unwrap_or_default(),
+        modrinth: entry.modrinth.clone(),
+        curseforge: entry.curseforge.clone(),
         dependencies: entry.dependencies.clone(),
         environment: entry.environment,
         provides: entry.provides.clone(),

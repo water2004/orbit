@@ -765,6 +765,7 @@ b = "*"
             filename: format!("{id}.jar"),
             provider: "file".to_string(),
             modrinth: None,
+            curseforge: None,
             file: None,
             dependencies,
             environment: Environment::Both,

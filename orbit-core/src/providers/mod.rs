@@ -2,7 +2,8 @@
 //!
 //! 定义 `ModProvider` trait 与统一的跨平台数据类型（`ResolvedMod`、`SearchResult` 等）。
 //! 可用平台各自实现此 trait，`resolver` 模块仅依赖此 trait，不耦合具体 SDK。
-//! 当前只有 Modrinth 可用；CurseForge 保留明确的暂不支持边界。
+//! 平台差异只保留在 provider 实现和各自的专属元数据中；安装、解析和锁文件编排
+//! 统一消费这里的领域类型。
 
 pub mod curseforge;
 pub mod modrinth;
@@ -15,6 +16,14 @@ use async_trait::async_trait;
 pub fn create_providers(
     platforms: &[String],
 ) -> Result<Vec<Box<dyn ModProvider>>, crate::error::OrbitError> {
+    let config = crate::config::GlobalConfig::load()?;
+    create_providers_with_auth(platforms, &config.auth)
+}
+
+pub fn create_providers_with_auth(
+    platforms: &[String],
+    auth: &crate::config::AuthConfig,
+) -> Result<Vec<Box<dyn ModProvider>>, crate::error::OrbitError> {
     let ua = format!("orbit/{}", env!("CARGO_PKG_VERSION"));
     let mut providers: Vec<Box<dyn ModProvider>> = Vec::new();
     for name in platforms {
@@ -24,7 +33,22 @@ pub fn create_providers(
                     Box::new(modrinth::ModrinthProvider::new(&ua, 3)?) as Box<dyn ModProvider>
                 );
             }
-            "curseforge" => return Err(curseforge::cf_not_ready()),
+            "curseforge" => {
+                let api_key = auth
+                    .curseforge_api_key
+                    .as_deref()
+                    .filter(|key| !key.trim().is_empty())
+                    .ok_or_else(|| {
+                        crate::error::OrbitError::Other(anyhow::anyhow!(
+                            "CurseForge requires an API key; set \
+                             ORBIT_CURSEFORGE_API_KEY or auth.curseforge_api_key in config.toml"
+                        ))
+                    })?;
+                providers.push(
+                    Box::new(curseforge::CurseForgeProvider::new(api_key, &ua, 3)?)
+                        as Box<dyn ModProvider>,
+                );
+            }
             other => {
                 return Err(crate::error::OrbitError::Other(anyhow::anyhow!(
                     "unsupported provider '{other}' in [resolver].platforms"
@@ -43,6 +67,24 @@ pub fn create_providers(
 /// 默认仅 Modrinth 的 provider 列表。
 pub fn create_providers_default() -> Result<Vec<Box<dyn ModProvider>>, crate::error::OrbitError> {
     create_providers(&["modrinth".into()])
+}
+
+/// Create every provider that can safely participate in source identification
+/// before a manifest exists. Modrinth is always available; authenticated
+/// providers are added only when their credentials are configured.
+pub fn create_identification_providers()
+-> Result<Vec<Box<dyn ModProvider>>, crate::error::OrbitError> {
+    let config = crate::config::GlobalConfig::load()?;
+    let mut platforms = vec!["modrinth".to_string()];
+    if config
+        .auth
+        .curseforge_api_key
+        .as_deref()
+        .is_some_and(|key| !key.trim().is_empty())
+    {
+        platforms.push("curseforge".to_string());
+    }
+    create_providers_with_auth(&platforms, &config.auth)
 }
 
 pub fn find_provider<'a>(
@@ -68,16 +110,35 @@ pub struct ModrinthResolvedInfo {
     pub version_number: String,
 }
 
+/// CurseForge 平台专属字段
+#[derive(Debug, Clone)]
+pub struct CurseForgeResolvedInfo {
+    pub project_id: u32,
+    pub file_id: u32,
+    /// CurseForge 的文件展示版本；JAR 自声明版本仍存放在 `ResolvedMod::version`。
+    pub display_name: String,
+    /// CurseForge 文件指纹，用于批量识别本地 JAR。
+    pub fingerprint: u32,
+}
+
+/// 一个本地物理文件可用于各平台识别的摘要。
+#[derive(Debug, Clone)]
+pub struct ArtifactFingerprint {
+    pub sha1: String,
+    pub sha512: String,
+    pub curseforge: u32,
+}
+
 /// 平台解析后的统一模组信息
 #[derive(Debug, Clone)]
 pub struct ResolvedMod {
-    /// JAR loader 元数据声明的模组 ID（PubGrub 用此作为 PackageId）
+    /// Provider 查询阶段的项目别名；下载后以 JAR 的 mod_id 建图。
     pub mod_id: String,
-    /// JAR loader 元数据声明的版本
+    /// Provider 展示版本；下载后以 JAR 自声明版本建图。
     pub version: String,
-    /// SHA-1
+    /// 来源提供的 SHA-1；缺失时为空。
     pub sha1: String,
-    /// SHA-512（Modrinth 原生提供，用于下载校验）
+    /// 来源提供的 SHA-512；缺失时为空。
     pub sha512: String,
     /// slug
     pub slug: String,
@@ -85,6 +146,8 @@ pub struct ResolvedMod {
     pub provider: String,
     /// Modrinth 专属字段
     pub modrinth: Option<ModrinthResolvedInfo>,
+    /// CurseForge 专属字段
+    pub curseforge: Option<CurseForgeResolvedInfo>,
     /// 发布时间（ISO 8601），provider 版本排序用
     pub date_published: String,
     /// 下载 URL
@@ -99,12 +162,55 @@ pub struct ResolvedMod {
     pub server_side: Option<SideSupport>,
 }
 
+impl ResolvedMod {
+    pub fn project_id(&self) -> Option<String> {
+        self.modrinth
+            .as_ref()
+            .map(|metadata| metadata.project_id.clone())
+            .or_else(|| {
+                self.curseforge
+                    .as_ref()
+                    .map(|metadata| metadata.project_id.to_string())
+            })
+    }
+
+    pub fn version_id(&self) -> Option<String> {
+        self.modrinth
+            .as_ref()
+            .map(|metadata| metadata.version_id.clone())
+            .or_else(|| {
+                self.curseforge
+                    .as_ref()
+                    .map(|metadata| metadata.file_id.to_string())
+            })
+    }
+
+    pub fn platform_version(&self) -> Option<&str> {
+        self.modrinth
+            .as_ref()
+            .map(|metadata| metadata.version_number.as_str())
+            .or_else(|| {
+                self.curseforge
+                    .as_ref()
+                    .map(|metadata| metadata.display_name.as_str())
+            })
+    }
+
+    pub fn matches_artifact(&self, artifact: &ArtifactFingerprint) -> bool {
+        (!self.sha512.is_empty() && self.sha512.eq_ignore_ascii_case(&artifact.sha512))
+            || (!self.sha1.is_empty() && self.sha1.eq_ignore_ascii_case(&artifact.sha1))
+            || self.curseforge.as_ref().is_some_and(|metadata| {
+                metadata.fingerprint != 0 && metadata.fingerprint == artifact.curseforge
+            })
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ResolvedDependency {
-    /// 依赖的 slug（Modrinth 解析后），或 mod_id
+    /// 依赖在来源平台上的 slug，或 JAR 元数据中的 mod_id。
     pub slug: Option<String>,
     pub required: bool,
-    /// Modrinth project_id（用于 API 查询）
+    /// 来源平台的 project ID，用于继续查询依赖候选。
     pub project_id: Option<String>,
 }
 
@@ -192,32 +298,13 @@ pub trait ModProvider: Send + Sync {
     /// 获取模组详细信息（供 orbit info 使用）
     async fn get_mod_info(&self, slug: &str) -> Result<ModInfo, OrbitError>;
 
-    /// 解析模组：给定 slug 和版本约束，找到最匹配的版本
-    async fn resolve(
+    /// 批量识别本地物理文件。各平台选择自己的摘要：
+    /// Modrinth 使用 SHA-512，CurseForge 使用其文件指纹。
+    async fn identify_artifacts(
         &self,
-        slug: &str,
-        version_constraint: &str,
-        mc_version: &str,
-        loader: &str,
-    ) -> Result<ResolvedMod, OrbitError>;
-
-    /// 根据哈希反查版本（供 orbit sync 识别手动拖入的 jar）。
-    /// 调用方必须传入当前 provider 所要求的哈希；Modrinth 使用 SHA-512。
-    async fn get_version_by_hash(&self, hash: &str) -> Result<Option<ResolvedMod>, OrbitError>;
-
-    /// 批量哈希反查（一次请求查所有 hash，避免 N+1 查询）
-    async fn get_versions_by_hashes(
-        &self,
-        hashes: &[String],
+        _artifacts: &[ArtifactFingerprint],
     ) -> Result<Vec<ResolvedMod>, OrbitError> {
-        // 默认回退：逐个调用 get_version_by_hash
-        let mut results = Vec::new();
-        for hash in hashes {
-            if let Some(m) = self.get_version_by_hash(hash).await? {
-                results.push(m);
-            }
-        }
-        Ok(results)
+        Ok(Vec::new())
     }
 
     /// 获取模组的所有版本列表
@@ -229,7 +316,7 @@ pub trait ModProvider: Send + Sync {
     ) -> Result<Vec<ResolvedMod>, OrbitError>;
 
     /// 批量获取多个 project 的版本列表（按 project_id）。
-    /// 默认逐个调用 `get_versions`，Modrinth 等 provider 覆盖为高效批量实现。
+    /// 默认逐个调用 `get_versions`；有批量端点的 provider 可覆盖此实现。
     async fn get_versions_batch(
         &self,
         project_ids: &[String],
@@ -238,9 +325,7 @@ pub trait ModProvider: Send + Sync {
     ) -> Result<Vec<ResolvedMod>, OrbitError> {
         let mut results = Vec::new();
         for pid in project_ids {
-            if let Ok(versions) = self.get_versions(pid, mc_version, loader).await {
-                results.extend(versions);
-            }
+            results.extend(self.get_versions(pid, mc_version, loader).await?);
         }
         Ok(results)
     }
@@ -255,5 +340,38 @@ pub trait ModProvider: Send + Sync {
         _project_id: &str,
     ) -> Result<Vec<ResolvedDependency>, OrbitError> {
         Ok(vec![])
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::AuthConfig;
+
+    #[test]
+    fn curseforge_requires_an_explicit_api_key() {
+        let error = create_providers_with_auth(&["curseforge".to_string()], &AuthConfig::default())
+            .err()
+            .expect("missing key should fail");
+        assert!(error.to_string().contains("ORBIT_CURSEFORGE_API_KEY"));
+    }
+
+    #[test]
+    fn provider_order_is_preserved_when_curseforge_is_enabled() {
+        let providers = create_providers_with_auth(
+            &["modrinth".to_string(), "curseforge".to_string()],
+            &AuthConfig {
+                curseforge_api_key: Some("test-key".to_string()),
+                modrinth_token: None,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            providers
+                .iter()
+                .map(|provider| provider.name())
+                .collect::<Vec<_>>(),
+            vec!["modrinth", "curseforge"]
+        );
     }
 }

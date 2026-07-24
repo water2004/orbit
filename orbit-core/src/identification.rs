@@ -2,21 +2,28 @@
 
 use crate::error::OrbitError;
 use crate::init::ScannedMod;
-use crate::providers::ModProvider;
-use std::collections::HashMap;
+use crate::lockfile::{CurseForgeInfo, ModrinthInfo};
+use crate::providers::{ArtifactFingerprint, ModProvider};
 
 #[derive(Debug, Clone)]
 pub enum IdentifiedSource {
-    Platform {
-        platform: String,
-        project_id: String,
-        version_id: String,
-        slug: String,
-        download_url: String,
-    },
-    File {
-        path: String,
-    },
+    Platform(IdentifiedPlatform),
+    File { path: String },
+}
+
+#[derive(Debug, Clone)]
+pub enum IdentifiedPlatform {
+    Modrinth(ModrinthInfo),
+    CurseForge(CurseForgeInfo),
+}
+
+impl IdentifiedPlatform {
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::Modrinth(_) => "modrinth",
+            Self::CurseForge(_) => "curseforge",
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -27,8 +34,6 @@ pub struct IdentifiedMod {
     pub mod_name: String,
     /// JAR loader 元数据声明的版本
     pub version: String,
-    /// Modrinth version_number
-    pub modrinth_version: String,
     pub sha1: String,
     pub sha256: String,
     pub sha512: String,
@@ -41,20 +46,32 @@ pub struct IdentifiedMod {
     pub bundled: Vec<crate::lockfile::BundledMod>,
 }
 
-pub struct IdentificationContext {
-    pub mc_version: String,
-    pub loader: String,
-}
-
 fn build_identified(
     m: &ScannedMod,
-    platform: &str,
     resolved: &crate::providers::ResolvedMod,
-    _version_match: bool,
-) -> IdentifiedMod {
+) -> Option<IdentifiedMod> {
     let slug = resolved.slug.clone();
     let jar_ver = m.version.clone().unwrap_or_default();
-    IdentifiedMod {
+    let source = if let Some(metadata) = &resolved.modrinth {
+        IdentifiedPlatform::Modrinth(ModrinthInfo {
+            project_id: metadata.project_id.clone(),
+            version_id: metadata.version_id.clone(),
+            version: metadata.version_number.clone(),
+            slug,
+            download_url: resolved.download_url.clone(),
+        })
+    } else if let Some(metadata) = &resolved.curseforge {
+        IdentifiedPlatform::CurseForge(CurseForgeInfo {
+            project_id: metadata.project_id,
+            file_id: metadata.file_id,
+            display_name: metadata.display_name.clone(),
+            slug,
+            download_url: resolved.download_url.clone(),
+        })
+    } else {
+        return None;
+    };
+    Some(IdentifiedMod {
         filename: m.filename.clone(),
         mod_id: m.mod_id.clone().unwrap_or_default(),
         mod_name: m.mod_name.clone().unwrap_or_default(),
@@ -63,42 +80,22 @@ fn build_identified(
         } else {
             jar_ver
         },
-        modrinth_version: resolved
-            .modrinth
-            .as_ref()
-            .map(|m| m.version_number.clone())
-            .unwrap_or_default(),
         sha1: m.sha1.clone(),
         sha256: m.sha256.clone(),
         sha512: m.sha512.clone(),
-        source: IdentifiedSource::Platform {
-            platform: platform.to_string(),
-            project_id: resolved
-                .modrinth
-                .as_ref()
-                .map(|m| m.project_id.clone())
-                .unwrap_or_default(),
-            version_id: resolved
-                .modrinth
-                .as_ref()
-                .map(|m| m.version_id.clone())
-                .unwrap_or_default(),
-            slug,
-            download_url: resolved.download_url.clone(),
-        },
+        source: IdentifiedSource::Platform(source),
         dependencies: m.dependencies.clone(),
         environment: m.environment,
         provides: m.provides.clone(),
         language_loader: m.language_loader.clone(),
         embedded_artifacts: m.embedded_artifacts.clone(),
         bundled: m.bundled.clone(),
-    }
+    })
 }
 
 pub async fn identify_mods(
     scanned: &[ScannedMod],
     providers: &[Box<dyn ModProvider>],
-    ctx: &IdentificationContext,
 ) -> Result<Vec<IdentifiedMod>, OrbitError> {
     let mut results: Vec<Option<IdentifiedMod>> = scanned.iter().map(|_| None).collect();
     let mut unrecognized: Vec<usize> = (0..scanned.len()).collect();
@@ -108,50 +105,36 @@ pub async fn identify_mods(
             break;
         }
 
-        let hashes: Vec<String> = unrecognized
+        let artifacts: Vec<ArtifactFingerprint> = unrecognized
             .iter()
-            .map(|&i| scanned[i].sha512.clone())
+            .map(|&i| ArtifactFingerprint {
+                sha1: scanned[i].sha1.clone(),
+                sha512: scanned[i].sha512.clone(),
+                curseforge: scanned[i].curseforge_fingerprint,
+            })
             .collect();
-        if let Ok(found) = p.get_versions_by_hashes(&hashes).await {
-            let hash_to_mod: HashMap<&str, &crate::providers::ResolvedMod> =
-                found.iter().map(|m| (m.sha512.as_str(), m)).collect();
-            let mut still_unrecognized = Vec::new();
-            for &idx in &unrecognized {
-                let m = &scanned[idx];
-                if let Some(resolved) = hash_to_mod.get(m.sha512.as_str()) {
-                    results[idx] = Some(build_identified(m, p.name(), resolved, false));
-                } else {
-                    still_unrecognized.push(idx);
-                }
-            }
-            unrecognized = still_unrecognized;
-            continue;
-        }
-
+        let found = p.identify_artifacts(&artifacts).await.map_err(|error| {
+            OrbitError::Other(anyhow::anyhow!(
+                "failed to identify local artifacts with {}: {error}",
+                p.name()
+            ))
+        })?;
         let mut still_unrecognized = Vec::new();
         for &idx in &unrecognized {
             let m = &scanned[idx];
-            match p.get_version_by_hash(&m.sha512).await {
-                Ok(Some(resolved)) => {
-                    results[idx] = Some(build_identified(m, p.name(), &resolved, false));
-                }
-                _ => {
-                    if let Some(ref mod_id) = m.mod_id
-                        && let Ok(versions) = p
-                            .get_versions(mod_id, Some(&ctx.mc_version), Some(&ctx.loader))
-                            .await
-                    {
-                        let matched = m
-                            .version
-                            .as_ref()
-                            .and_then(|ver| versions.iter().find(|v| v.version == *ver));
-                        if let Some(v) = matched {
-                            results[idx] = Some(build_identified(m, p.name(), v, true));
-                            continue;
-                        }
-                    }
-                    still_unrecognized.push(idx);
-                }
+            let artifact = ArtifactFingerprint {
+                sha1: m.sha1.clone(),
+                sha512: m.sha512.clone(),
+                curseforge: m.curseforge_fingerprint,
+            };
+            if let Some(resolved) = found
+                .iter()
+                .find(|resolved| resolved.matches_artifact(&artifact))
+                && let Some(identified) = build_identified(m, resolved)
+            {
+                results[idx] = Some(identified);
+            } else {
+                still_unrecognized.push(idx);
             }
         }
         unrecognized = still_unrecognized;
@@ -167,7 +150,6 @@ pub async fn identify_mods(
                 mod_id: m.mod_id.clone().unwrap_or_default(),
                 mod_name: m.mod_name.clone().unwrap_or_default(),
                 version: m.version.clone().unwrap_or_default(),
-                modrinth_version: String::new(),
                 sha1: m.sha1.clone(),
                 sha256: m.sha256.clone(),
                 sha512: m.sha512.clone(),

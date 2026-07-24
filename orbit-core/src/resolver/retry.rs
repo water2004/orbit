@@ -142,39 +142,55 @@ async fn fetch_missing_candidates(request: FetchRequest<'_>) -> Result<bool, Str
         let Some(entry) = lockfile.find(&package) else {
             continue;
         };
-        let Some(modrinth) = entry.modrinth.as_ref() else {
+        if entry.provider == "file" {
+            continue;
+        }
+        let Some(project_id) = entry.source_project_id() else {
             continue;
         };
-        let Some(mod_provider) = crate::providers::find_provider(providers, "modrinth") else {
-            return Err(
-                "cannot fetch missing Modrinth dependencies: no Modrinth provider configured"
-                    .to_string(),
-            );
+        let Some(mod_provider) = crate::providers::find_provider(providers, &entry.provider) else {
+            return Err(format!(
+                "cannot fetch missing {} dependencies: provider is not configured",
+                entry.provider
+            ));
         };
 
-        let versions = match mod_provider
-            .get_versions(&modrinth.project_id, Some(minecraft_version), Some(loader))
+        let versions = mod_provider
+            .get_versions(&project_id, Some(minecraft_version), Some(loader))
             .await
-        {
-            Ok(versions) => versions,
-            Err(_) => continue,
-        };
+            .map_err(|error| {
+                format!(
+                    "failed to query {} candidates for '{package}' (project {project_id}): \
+                     {error}",
+                    entry.provider
+                )
+            })?;
 
         let mut downloaded = Vec::new();
+        let mut first_error = None;
         for version in versions {
-            let Ok(metadata) = crate::jar::download_and_parse(
+            match crate::jar::download_and_parse(
                 &version.download_url,
                 &version.filename,
+                &version.sha1,
                 &version.sha512,
                 loader,
             )
             .await
-            else {
-                continue;
-            };
-            downloaded.push(CandidateVersion::from_jar_metadata(metadata));
+            {
+                Ok(metadata) => downloaded.push(CandidateVersion::from_jar_metadata(metadata)),
+                Err(error) => {
+                    first_error.get_or_insert(error);
+                }
+            }
         }
         if downloaded.is_empty() {
+            if let Some(error) = first_error {
+                return Err(format!(
+                    "failed to fetch candidate metadata for '{package}' from {}: {error}",
+                    entry.provider
+                ));
+            }
             continue;
         }
 
@@ -326,7 +342,7 @@ slug = "b"
 
         assert_eq!(
             error,
-            "cannot fetch missing Modrinth dependencies: no Modrinth provider configured"
+            "cannot fetch missing modrinth dependencies: provider is not configured"
         );
     }
 }

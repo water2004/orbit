@@ -38,11 +38,14 @@ pub struct PackageEntry {
     /// JAR 文件名（不含路径），用于升级/删除时定位旧文件
     #[serde(default)]
     pub filename: String,
-    /// "modrinth" | "file"
+    /// "modrinth" | "curseforge" | "file"
     pub provider: String,
     /// Modrinth provider 专属字段
     #[serde(skip_serializing_if = "Option::is_none")]
     pub modrinth: Option<ModrinthInfo>,
+    /// CurseForge provider 专属字段
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub curseforge: Option<CurseForgeInfo>,
     /// File provider 专属字段
     #[serde(skip_serializing_if = "Option::is_none")]
     pub file: Option<FileInfo>,
@@ -67,6 +70,17 @@ pub struct ModrinthInfo {
     pub version_id: String,
     /// Modrinth 的 `version_number`
     pub version: String,
+    pub slug: String,
+    #[serde(skip_serializing_if = "String::is_empty", default)]
+    pub download_url: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CurseForgeInfo {
+    pub project_id: u32,
+    pub file_id: u32,
+    /// CurseForge 文件的展示名称，不代替 JAR 自声明版本。
+    pub display_name: String,
     pub slug: String,
     #[serde(skip_serializing_if = "String::is_empty", default)]
     pub download_url: String,
@@ -151,6 +165,63 @@ impl OrbitLockfile {
     }
 }
 
+impl PackageEntry {
+    pub fn source_slug(&self) -> Option<&str> {
+        self.modrinth
+            .as_ref()
+            .map(|metadata| metadata.slug.as_str())
+            .or_else(|| {
+                self.curseforge
+                    .as_ref()
+                    .map(|metadata| metadata.slug.as_str())
+            })
+    }
+
+    pub fn source_project_id(&self) -> Option<String> {
+        self.modrinth
+            .as_ref()
+            .map(|metadata| metadata.project_id.clone())
+            .or_else(|| {
+                self.curseforge
+                    .as_ref()
+                    .map(|metadata| metadata.project_id.to_string())
+            })
+    }
+
+    pub fn source_version_id(&self) -> Option<String> {
+        self.modrinth
+            .as_ref()
+            .map(|metadata| metadata.version_id.clone())
+            .or_else(|| {
+                self.curseforge
+                    .as_ref()
+                    .map(|metadata| metadata.file_id.to_string())
+            })
+    }
+
+    pub fn source_version(&self) -> Option<&str> {
+        self.modrinth
+            .as_ref()
+            .map(|metadata| metadata.version.as_str())
+            .or_else(|| {
+                self.curseforge
+                    .as_ref()
+                    .map(|metadata| metadata.display_name.as_str())
+            })
+    }
+
+    pub fn source_download_url(&self) -> Option<&str> {
+        self.modrinth
+            .as_ref()
+            .map(|metadata| metadata.download_url.as_str())
+            .or_else(|| {
+                self.curseforge
+                    .as_ref()
+                    .map(|metadata| metadata.download_url.as_str())
+            })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -226,6 +297,48 @@ path = "mods/fabric-carpet-26.1+v260402.jar"
     }
 
     #[test]
+    fn curseforge_metadata_roundtrips_in_its_own_subtable() {
+        let source = r#"
+[meta]
+mc_version = "1.21.1"
+modloader = "neoforge"
+modloader_version = "21.1.0"
+
+[[package]]
+mod_id = "example"
+version = "2.0.0"
+sha1 = "deadbeef"
+sha256 = "cafebabe"
+filename = "example.jar"
+provider = "curseforge"
+
+[package.curseforge]
+project_id = 123
+file_id = 456
+display_name = "Example 2"
+slug = "example"
+download_url = "https://example.invalid/example.jar"
+"#;
+
+        let lockfile: OrbitLockfile = toml::from_str(source).unwrap();
+        let entry = lockfile.find("example").unwrap();
+        assert_eq!(entry.source_slug(), Some("example"));
+        assert_eq!(entry.source_project_id().as_deref(), Some("123"));
+        assert_eq!(entry.source_version_id().as_deref(), Some("456"));
+
+        let serialized = lockfile.to_toml_string().unwrap();
+        let roundtrip: OrbitLockfile = toml::from_str(&serialized).unwrap();
+        assert_eq!(
+            roundtrip.packages[0]
+                .curseforge
+                .as_ref()
+                .unwrap()
+                .display_name,
+            "Example 2"
+        );
+    }
+
+    #[test]
     fn lockfile_roundtrip() {
         let lockfile = OrbitLockfile {
             meta: LockMeta {
@@ -248,6 +361,7 @@ path = "mods/fabric-carpet-26.1+v260402.jar"
                     slug: "sodium".into(),
                     download_url: String::new(),
                 }),
+                curseforge: None,
                 file: None,
                 dependencies: vec![],
                 environment: Environment::Both,

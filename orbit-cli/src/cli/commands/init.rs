@@ -2,7 +2,7 @@ use super::CliContext;
 use anyhow::Result;
 use orbit_core::detection::LoaderDetectionService;
 use orbit_core::init::{InitInput, detect_mc_version, run_init};
-use orbit_core::providers::create_providers_default;
+use orbit_core::providers::create_identification_providers;
 
 pub async fn handle(
     name: String,
@@ -96,7 +96,7 @@ pub async fn handle(
         instance_dir,
     };
 
-    let providers = create_providers_default()?;
+    let providers = create_identification_providers()?;
     let output = run_init(input, &providers).await?;
 
     // ── 4. 输出结果 ────────────────────────────

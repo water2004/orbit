@@ -1,12 +1,15 @@
 //! JAR 文件处理模块。
 //!
 //! 提供：
-//! - 哈希计算（SHA-256 / SHA-512）
+//! - 哈希计算（SHA-1 / SHA-256 / SHA-512 / CurseForge fingerprint）
 //! - 模组元数据提取：根据 loader 类型分发到对应 reader（fabric → fabric.mod.json, etc.）
 
 pub mod fabric;
+pub mod fingerprint;
 pub mod forge;
 pub mod quilt;
+
+pub use fingerprint::{compute_curseforge_fingerprint, curseforge_fingerprint};
 
 use sha2::{Digest, Sha256};
 use std::io::Read;
@@ -87,18 +90,20 @@ pub fn read_mod_metadata(path: &Path, loader: &str) -> Result<JarModMetadata, Or
         })
 }
 
-/// 下载 JAR 并解析 fabric.mod.json。
-/// 校验 SHA-512，失败则返回 `ChecksumMismatch`。
+/// 下载 JAR 并按实例 loader 解析元数据。
+/// 校验来源提供的 SHA-512 或 SHA-1，失败则返回 `ChecksumMismatch`。
 /// 优先从全局缓存读取，未命中才走 HTTP；下载后自动存入缓存。
 pub async fn download_and_parse(
     url: &str,
     filename: &str,
+    expected_sha1: &str,
     expected_sha512: &str,
     loader: &str,
 ) -> Result<JarModMetadata, crate::error::OrbitError> {
     // 缓存查询
     if let Ok(cache) = crate::jar_cache::JarCache::load()
-        && let Some(bytes) = cache.get_bytes(expected_sha512)
+        && let Some(bytes) = cache.get_bytes(expected_sha512, expected_sha1)
+        && verify_source_hash(&bytes, expected_sha1, expected_sha512, filename).is_ok()
     {
         return read_mod_metadata_from_bytes(&bytes, loader);
     }
@@ -109,32 +114,56 @@ pub async fn download_and_parse(
         .build()
         .map_err(|e| crate::error::OrbitError::Other(e.into()))?;
 
-    let bytes = client
+    let response = client
         .get(url)
         .send()
         .await
-        .map_err(crate::error::OrbitError::Network)?
+        .map_err(crate::error::OrbitError::Network)?;
+    let status = response.status();
+    if !status.is_success() {
+        let body = response.text().await.unwrap_or_default();
+        let body: String = body.chars().take(500).collect();
+        return Err(crate::error::OrbitError::Other(anyhow::anyhow!(
+            "download of '{filename}' failed with HTTP {status}: {body}"
+        )));
+    }
+    let bytes = response
         .bytes()
         .await
         .map_err(crate::error::OrbitError::Network)?;
 
-    if !expected_sha512.is_empty() {
-        let actual = sha512_digest(&bytes);
-        if actual != expected_sha512 {
-            return Err(crate::error::OrbitError::ChecksumMismatch {
-                name: url.to_string(),
-                expected: expected_sha512.to_string(),
-                actual,
-            });
-        }
-    }
+    verify_source_hash(&bytes, expected_sha1, expected_sha512, url)?;
 
     // 存入缓存
     let _ = crate::jar_cache::JarCache::load().map(|mut c| {
-        let _ = c.store_bytes(expected_sha512, filename, &bytes);
+        let _ = c.store_bytes(filename, &bytes);
     });
 
     read_mod_metadata_from_bytes(&bytes, loader)
+}
+
+pub(crate) fn verify_source_hash(
+    bytes: &[u8],
+    expected_sha1: &str,
+    expected_sha512: &str,
+    name: &str,
+) -> Result<(), OrbitError> {
+    let (expected, actual) = if !expected_sha512.is_empty() {
+        (expected_sha512, sha512_digest(bytes))
+    } else if !expected_sha1.is_empty() {
+        (expected_sha1, sha1_digest(bytes))
+    } else {
+        return Ok(());
+    };
+    if actual.eq_ignore_ascii_case(expected) {
+        Ok(())
+    } else {
+        Err(OrbitError::ChecksumMismatch {
+            name: name.to_string(),
+            expected: expected.to_string(),
+            actual,
+        })
+    }
 }
 
 /// 从字节数据读取模组元数据（用于内嵌 JAR）。`loader` 由调用者传入。
@@ -351,6 +380,21 @@ pub fn sha1_digest(data: &[u8]) -> String {
     let mut hasher = Sha1::new();
     hasher.update(data);
     hex::encode(hasher.finalize())
+}
+
+#[cfg(test)]
+mod source_hash_tests {
+    use super::verify_source_hash;
+
+    #[test]
+    fn verifies_whichever_source_hash_is_available() {
+        let bytes = b"orbit";
+        assert!(
+            verify_source_hash(bytes, "", &super::sha512_digest(bytes), "artifact.jar").is_ok()
+        );
+        assert!(verify_source_hash(bytes, &super::sha1_digest(bytes), "", "artifact.jar").is_ok());
+        assert!(verify_source_hash(bytes, "wrong", "", "artifact.jar").is_err());
+    }
 }
 
 /// 计算字节数据的 SHA-256

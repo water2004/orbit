@@ -6,7 +6,6 @@ use orbit_core::{
 
 pub async fn handle(mod_name: Option<String>, ctx: &CliContext) -> Result<()> {
     let instance_dir = ctx.instance_dir()?;
-    let providers = super::create_instance_providers(&instance_dir, None)?;
 
     let yes = ctx.yes;
     let prompt_fn: Option<InstallPrompt> = if ctx.dry_run {
@@ -26,16 +25,14 @@ pub async fn handle(mod_name: Option<String>, ctx: &CliContext) -> Result<()> {
                     "Mod '{name}' is not installed. Use 'orbit add {name}' to install it."
                 )
             })?;
-        let slug = entry
-            .modrinth
-            .as_ref()
-            .map(|metadata| metadata.slug.clone())
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "Mod '{}' is a local file and has no online source to upgrade",
-                    entry.mod_id
-                )
-            })?;
+        let slug = entry.source_slug().map(str::to_string).ok_or_else(|| {
+            anyhow::anyhow!(
+                "Mod '{}' is a local file and has no online source to upgrade",
+                entry.mod_id
+            )
+        })?;
+        let providers =
+            super::create_instance_providers(&instance_dir, Some(entry.provider.as_str()))?;
         match install_to_instance(
             &slug,
             "*",
@@ -77,6 +74,7 @@ pub async fn handle(mod_name: Option<String>, ctx: &CliContext) -> Result<()> {
             Err(e) => anyhow::bail!("Upgrade failed: {e}"),
         }
     } else {
+        let providers = super::create_instance_providers(&instance_dir, None)?;
         match upgrade_all_in_instance(&instance_dir, &providers, ctx.dry_run, prompt_fn).await {
             Ok(report) => {
                 super::print_resolution_diagnostics(&report.diagnostics);

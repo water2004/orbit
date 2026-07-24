@@ -4,10 +4,8 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use crate::error::OrbitError;
-use crate::identification::{
-    IdentificationContext, IdentifiedMod, IdentifiedSource, identify_mods,
-};
-use crate::lockfile::{FileInfo, LockMeta, ModrinthInfo, PackageEntry};
+use crate::identification::{IdentifiedMod, IdentifiedPlatform, IdentifiedSource, identify_mods};
+use crate::lockfile::{CurseForgeInfo, FileInfo, LockMeta, ModrinthInfo, PackageEntry};
 use crate::manifest::DependencySpec;
 use crate::providers::ModProvider;
 use crate::workspace::{Lockfile, ManifestFile};
@@ -35,15 +33,7 @@ pub async fn sync_instance(
         },
     );
     let scanned = crate::init::scan_mods_dir(instance_dir, &manifest.inner.project.modloader)?;
-    let identified = identify_mods(
-        &scanned,
-        providers,
-        &IdentificationContext {
-            mc_version: manifest.inner.project.mc_version.clone(),
-            loader: manifest.inner.project.modloader.clone(),
-        },
-    )
-    .await?;
+    let identified = identify_mods(&scanned, providers).await?;
 
     let by_filename: HashMap<_, _> = identified
         .iter()
@@ -170,44 +160,37 @@ fn apply_changes(
 
 fn package_entry(local: &IdentifiedMod) -> PackageEntry {
     let mod_id = package_id(local);
-    let common =
-        |provider: String, modrinth: Option<ModrinthInfo>, file: Option<FileInfo>| PackageEntry {
-            mod_id: mod_id.clone(),
-            version: local.version.clone(),
-            sha1: local.sha1.clone(),
-            sha256: local.sha256.clone(),
-            sha512: local.sha512.clone(),
-            filename: local.filename.clone(),
-            provider,
-            modrinth,
-            file,
-            dependencies: local.dependencies.clone(),
-            environment: local.environment,
-            provides: local.provides.clone(),
-            language_loader: local.language_loader.clone(),
-            embedded_artifacts: local.embedded_artifacts.clone(),
-            bundled: local.bundled.clone(),
-        };
+    let common = |provider: String,
+                  modrinth: Option<ModrinthInfo>,
+                  curseforge: Option<CurseForgeInfo>,
+                  file: Option<FileInfo>| PackageEntry {
+        mod_id: mod_id.clone(),
+        version: local.version.clone(),
+        sha1: local.sha1.clone(),
+        sha256: local.sha256.clone(),
+        sha512: local.sha512.clone(),
+        filename: local.filename.clone(),
+        provider,
+        modrinth,
+        curseforge,
+        file,
+        dependencies: local.dependencies.clone(),
+        environment: local.environment,
+        provides: local.provides.clone(),
+        language_loader: local.language_loader.clone(),
+        embedded_artifacts: local.embedded_artifacts.clone(),
+        bundled: local.bundled.clone(),
+    };
     match &local.source {
-        IdentifiedSource::Platform {
-            platform,
-            project_id,
-            version_id,
-            slug,
-            download_url,
-        } if platform == "modrinth" => common(
-            platform.clone(),
-            Some(ModrinthInfo {
-                project_id: project_id.clone(),
-                version_id: version_id.clone(),
-                version: local.modrinth_version.clone(),
-                slug: slug.clone(),
-                download_url: download_url.clone(),
-            }),
-            None,
-        ),
-        _ => common(
+        IdentifiedSource::Platform(IdentifiedPlatform::Modrinth(metadata)) => {
+            common("modrinth".to_string(), Some(metadata.clone()), None, None)
+        }
+        IdentifiedSource::Platform(IdentifiedPlatform::CurseForge(metadata)) => {
+            common("curseforge".to_string(), None, Some(metadata.clone()), None)
+        }
+        IdentifiedSource::File { .. } => common(
             "file".to_string(),
+            None,
             None,
             Some(FileInfo {
                 path: format!("mods/{}", local.filename),
@@ -286,6 +269,7 @@ mod tests {
                     filename: "missing.jar".to_string(),
                     provider: "file".to_string(),
                     modrinth: None,
+                    curseforge: None,
                     file: Some(FileInfo {
                         path: "mods/missing.jar".to_string(),
                     }),

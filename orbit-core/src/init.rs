@@ -34,6 +34,7 @@ pub struct ScannedMod {
     pub sha1: String,
     pub sha256: String,
     pub sha512: String,
+    pub curseforge_fingerprint: u32,
     pub dependencies: Vec<crate::metadata::DependencyExpression>,
     pub environment: crate::metadata::Environment,
     pub provides: Vec<crate::metadata::ProvidedMod>,
@@ -79,9 +80,19 @@ pub(crate) fn scan_mods_dir(
         let sha256 = crate::jar::compute_sha256(&path).map_err(|e| {
             OrbitError::Other(anyhow::anyhow!("cannot hash {}: {e}", path.display()))
         })?;
+        let sha1 = crate::jar::compute_sha1(&path).map_err(|e| {
+            OrbitError::Other(anyhow::anyhow!("cannot hash {}: {e}", path.display()))
+        })?;
         let sha512 = crate::jar::compute_sha512(&path).map_err(|e| {
             OrbitError::Other(anyhow::anyhow!("cannot hash {}: {e}", path.display()))
         })?;
+        let curseforge_fingerprint =
+            crate::jar::compute_curseforge_fingerprint(&path).map_err(|e| {
+                OrbitError::Other(anyhow::anyhow!(
+                    "cannot fingerprint {} for CurseForge: {e}",
+                    path.display()
+                ))
+            })?;
         let metadata = crate::jar::read_mod_metadata(&path, loader).ok();
 
         results.push(ScannedMod {
@@ -98,9 +109,10 @@ pub(crate) fn scan_mods_dir(
                 .as_ref()
                 .map(|metadata| metadata.version.clone())
                 .filter(|version| !version.is_empty()),
-            sha1: String::new(),
+            sha1,
             sha256,
             sha512,
+            curseforge_fingerprint,
             dependencies: metadata
                 .as_ref()
                 .map(|metadata| metadata.dependencies.clone())
@@ -225,11 +237,7 @@ pub async fn run_init(
     let scanned = scan_mods_dir(&input.instance_dir, &input.modloader)?;
 
     // 2. 识别物理 JAR；同文件提供的模组已经由 JAR 层归入 bundled。
-    let ctx = crate::identification::IdentificationContext {
-        mc_version: input.mc_version.clone(),
-        loader: input.modloader.clone(),
-    };
-    let identified = crate::identification::identify_mods(&scanned, providers, &ctx).await?;
+    let identified = crate::identification::identify_mods(&scanned, providers).await?;
 
     // 3. 构建依赖声明 + lock 条目（仅顶层模组）
     let lock_entries: Vec<crate::lockfile::PackageEntry> = identified
@@ -251,6 +259,7 @@ pub async fn run_init(
                 filename: m.filename.clone(),
                 provider: String::new(),
                 modrinth: None,
+                curseforge: None,
                 file: None,
                 dependencies: m.dependencies.clone(),
                 environment: m.environment,
@@ -261,21 +270,16 @@ pub async fn run_init(
             };
 
             match &m.source {
-                crate::identification::IdentifiedSource::Platform {
-                    platform,
-                    project_id,
-                    version_id,
-                    slug,
-                    download_url,
-                } => {
-                    entry.provider = platform.clone();
-                    entry.modrinth = Some(crate::lockfile::ModrinthInfo {
-                        project_id: project_id.clone(),
-                        version_id: version_id.clone(),
-                        version: m.modrinth_version.clone(),
-                        slug: slug.clone(),
-                        download_url: download_url.clone(),
-                    });
+                crate::identification::IdentifiedSource::Platform(platform) => {
+                    entry.provider = platform.name().to_string();
+                    match platform {
+                        crate::identification::IdentifiedPlatform::Modrinth(metadata) => {
+                            entry.modrinth = Some(metadata.clone());
+                        }
+                        crate::identification::IdentifiedPlatform::CurseForge(metadata) => {
+                            entry.curseforge = Some(metadata.clone());
+                        }
+                    }
                 }
                 crate::identification::IdentifiedSource::File { path } => {
                     entry.provider = "file".to_string();

@@ -74,16 +74,9 @@ pub async fn handle(
     }
 
     let constraint = version.unwrap_or_else(|| "*".into());
-    let (prefix_platform, slug) = if let Some(slug) = mod_name.strip_prefix("mr:") {
-        (Some("modrinth"), slug)
-    } else if let Some(slug) = mod_name.strip_prefix("cf:") {
-        (Some("curseforge"), slug)
-    } else {
-        (None, mod_name.as_str())
-    };
-    let selected_platform = platform.as_deref().or(prefix_platform);
+    let (selected_platform, slug) = super::resolve_platform_target(&mod_name, platform.as_deref())?;
     let instance_dir = ctx.instance_dir()?;
-    let providers = super::create_instance_providers(&instance_dir, selected_platform)?;
+    let providers = super::create_instance_providers(&instance_dir, selected_platform.as_deref())?;
 
     let yes = ctx.yes;
     let prompt_fn: Option<InstallPrompt> = if ctx.dry_run {

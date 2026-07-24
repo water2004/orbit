@@ -25,21 +25,22 @@ pub async fn check_compatibility(
 ) -> Result<Vec<CheckResult>, OrbitError> {
     let mut results = Vec::new();
     for entry in &lockfile.packages {
-        let Some(modrinth) = &entry.modrinth else {
+        if entry.provider == "file" {
+            continue;
+        }
+        let Some(project_id) = entry.source_project_id() else {
             continue;
         };
-        let provider = crate::providers::find_provider(providers, "modrinth").ok_or_else(|| {
-            OrbitError::Other(anyhow::anyhow!(
-                "cannot check Modrinth package '{}': Modrinth provider is not configured",
-                entry.mod_id
-            ))
-        })?;
+        let provider =
+            crate::providers::find_provider(providers, &entry.provider).ok_or_else(|| {
+                OrbitError::Other(anyhow::anyhow!(
+                    "cannot check {} package '{}': provider is not configured",
+                    entry.provider,
+                    entry.mod_id,
+                ))
+            })?;
         let mut versions = provider
-            .get_versions(
-                &modrinth.project_id,
-                Some(target_mc_version),
-                Some(target_loader),
-            )
+            .get_versions(&project_id, Some(target_mc_version), Some(target_loader))
             .await?;
         versions.sort_by(|left, right| right.date_published.cmp(&left.date_published));
         results.push(CheckResult {

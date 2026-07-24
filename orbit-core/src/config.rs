@@ -112,7 +112,7 @@ impl Default for NetworkConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct AuthConfig {
-    pub curseforge_token: Option<String>,
+    pub curseforge_api_key: Option<String>,
     pub modrinth_token: Option<String>,
 }
 
@@ -234,8 +234,8 @@ impl GlobalConfig {
         if let Ok(v) = std::env::var("ORBIT_LANGUAGE") {
             config.core.language = v;
         }
-        if let Ok(v) = std::env::var("ORBIT_CURSEFORGE_TOKEN") {
-            config.auth.curseforge_token = Some(v);
+        if let Ok(v) = std::env::var("ORBIT_CURSEFORGE_API_KEY") {
+            config.auth.curseforge_api_key = Some(v);
         }
         if let Ok(v) = std::env::var("ORBIT_MODRINTH_TOKEN") {
             config.auth.modrinth_token = Some(v);

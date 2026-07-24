@@ -5,7 +5,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::error::OrbitError;
-use crate::lockfile::OrbitLockfile;
+use crate::lockfile::{OrbitLockfile, PackageEntry};
 use crate::manifest::OrbitManifest;
 use crate::providers::{ModProvider, ResolvedMod};
 use crate::resolver::types::{CandidateDiagnostic, CandidateVersion};
@@ -52,13 +52,9 @@ pub async fn download_candidates_bfs(
         if !seen.insert(pid.clone()) {
             continue;
         }
-        let versions = match provider
+        let versions = provider
             .get_versions(&pid, Some(mc_version), Some(loader))
-            .await
-        {
-            Ok(v) => v,
-            Err(_) => continue,
-        };
+            .await?;
         for v in &versions {
             for dep in &v.dependencies {
                 if dep.required
@@ -81,48 +77,59 @@ pub async fn download_candidates_bfs(
         let lockfile_packages = lockfile.packages.clone();
         handles.push(tokio::spawn(async move {
             let _permit = sem.acquire().await;
-            let label = v
-                .modrinth
-                .as_ref()
-                .map(|m| m.version_number.clone())
-                .unwrap_or_default();
-            match crate::jar::download_and_parse(&v.download_url, &v.filename, &v.sha512, &loader)
-                .await
-            {
-                Ok(meta) => {
-                    let key = if meta.mod_id.is_empty() {
-                        lockfile_packages
-                            .iter()
-                            .find(|e| {
-                                e.modrinth.as_ref().map(|m| m.slug.as_str()) == Some(&label)
-                                    || e.modrinth.as_ref().map(|m| m.project_id.as_str())
-                                        == Some(
-                                            v.modrinth
-                                                .as_ref()
-                                                .map(|m| m.project_id.as_str())
-                                                .unwrap_or(""),
-                                        )
-                            })
-                            .map(|e| e.mod_id.clone())
-                            .unwrap_or_default()
-                    } else {
-                        meta.mod_id.clone()
-                    };
-                    if key.is_empty() {
-                        return None;
-                    }
-                    Some((key, CandidateVersion::from_jar_metadata(meta), v))
-                }
-                Err(_) => None,
+            let metadata = crate::jar::download_and_parse(
+                &v.download_url,
+                &v.filename,
+                &v.sha1,
+                &v.sha512,
+                &loader,
+            )
+            .await?;
+            let key = if metadata.mod_id.is_empty() {
+                lockfile_packages
+                    .iter()
+                    .find(|entry| {
+                        entry.source_slug() == Some(v.slug.as_str())
+                            || entry.source_project_id() == v.project_id()
+                    })
+                    .map(|entry| entry.mod_id.clone())
+                    .unwrap_or_default()
+            } else {
+                metadata.mod_id.clone()
+            };
+            if key.is_empty() {
+                return Ok(None);
             }
+            Ok(Some((
+                key,
+                CandidateVersion::from_jar_metadata(metadata),
+                v,
+            )))
         }));
     }
 
     let mut download = CandidateDownload::default();
+    let mut first_error = None;
     for handle in handles {
-        if let Ok(Some((package, candidate, resolved))) = handle.await {
-            record_candidate(&mut download, package, candidate, resolved);
+        match handle.await {
+            Ok(Ok(Some((package, candidate, resolved)))) => {
+                record_candidate(&mut download, package, candidate, resolved);
+            }
+            Ok(Ok(None)) => {}
+            Ok(Err(error)) => {
+                first_error.get_or_insert(error);
+            }
+            Err(error) => {
+                first_error.get_or_insert_with(|| {
+                    OrbitError::Other(anyhow::anyhow!("candidate download task failed: {error}"))
+                });
+            }
         }
+    }
+    if download.candidates.is_empty()
+        && let Some(error) = first_error
+    {
+        return Err(error);
     }
     Ok(download)
 }
@@ -135,10 +142,11 @@ pub async fn download_candidates_with_fallback(
     loader: &str,
 ) -> Result<CandidateDownload, OrbitError> {
     for provider in providers {
-        let download =
-            download_candidates_bfs(provider.as_ref(), seeds, lockfile, mc_version, loader).await?;
-        if !download.candidates.is_empty() {
-            return Ok(download);
+        match download_candidates_bfs(provider.as_ref(), seeds, lockfile, mc_version, loader).await
+        {
+            Ok(download) if !download.candidates.is_empty() => return Ok(download),
+            Ok(_) | Err(OrbitError::ModNotFound(_)) => continue,
+            Err(error) => return Err(error),
         }
     }
     Err(OrbitError::ModNotFound(
@@ -158,10 +166,8 @@ fn record_candidate(
     download
         .source_packages
         .insert(resolved.mod_id.clone(), package.clone());
-    if let Some(modrinth) = &resolved.modrinth {
-        download
-            .source_packages
-            .insert(modrinth.project_id.clone(), package.clone());
+    if let Some(project_id) = resolved.project_id() {
+        download.source_packages.insert(project_id, package.clone());
     }
     download
         .resolved
@@ -173,7 +179,7 @@ fn record_candidate(
         .push(candidate);
 }
 
-/// 检查所有已安装 modrinth mod 的可用更新。
+/// 检查所有已安装平台模组的可用更新。
 pub async fn check_all_outdated(
     manifest: &OrbitManifest,
     lockfile: &OrbitLockfile,
@@ -182,58 +188,68 @@ pub async fn check_all_outdated(
     let loader = &manifest.project.modloader;
     let mc_version = &manifest.project.mc_version;
 
-    let modrinth_entries: Vec<_> = lockfile
+    let mut seeds_by_provider: HashMap<String, Vec<String>> = HashMap::new();
+    for entry in lockfile
         .packages
         .iter()
-        .filter(|e| e.modrinth.is_some())
-        .collect();
-
-    if modrinth_entries.is_empty() {
-        return Ok(OutdatedReport::default());
-    }
-    let provider = crate::providers::find_provider(providers, "modrinth").ok_or_else(|| {
-        OrbitError::Other(anyhow::anyhow!(
-            "lockfile contains Modrinth packages but no Modrinth provider is configured"
-        ))
-    })?;
-
-    // 1. Find outdated mods
-    let mut seeds: Vec<String> = Vec::new();
-    for entry in modrinth_entries {
-        let mr = entry.modrinth.as_ref().unwrap();
-        let mut versions = match provider
-            .get_versions(&mr.project_id, Some(mc_version), Some(loader))
-            .await
-        {
-            Ok(v) => v,
-            Err(_) => continue,
-        };
-        versions.sort_by(|a, b| b.date_published.cmp(&a.date_published));
-        let current_date = versions
-            .iter()
-            .find(|v| {
-                v.modrinth.as_ref().map(|m| m.version_id.as_str()) == Some(mr.version_id.as_str())
-            })
-            .map(|v| v.date_published.clone());
-        let Some(ref cd) = current_date else {
+        .filter(|entry| entry.provider != "file")
+    {
+        let provider =
+            crate::providers::find_provider(providers, &entry.provider).ok_or_else(|| {
+                OrbitError::Other(anyhow::anyhow!(
+                    "lockfile contains {} packages but that provider is not configured",
+                    entry.provider
+                ))
+            })?;
+        let Some(project_id) = entry.source_project_id() else {
             continue;
         };
-        let newer: Vec<_> = versions.iter().filter(|v| v.date_published > *cd).collect();
-        if !newer.is_empty() {
-            seeds.push(mr.project_id.clone());
+        let Some(version_id) = entry.source_version_id() else {
+            continue;
+        };
+        let mut versions = provider
+            .get_versions(&project_id, Some(mc_version), Some(loader))
+            .await?;
+        versions.sort_by(|left, right| right.date_published.cmp(&left.date_published));
+        let Some(current_date) = versions
+            .iter()
+            .find(|version| version.version_id().as_deref() == Some(version_id.as_str()))
+            .map(|version| version.date_published.as_str())
+        else {
+            continue;
+        };
+        if versions
+            .iter()
+            .any(|version| version.date_published.as_str() > current_date)
+        {
+            seeds_by_provider
+                .entry(entry.provider.clone())
+                .or_default()
+                .push(project_id);
         }
     }
 
-    if seeds.is_empty() {
+    if seeds_by_provider.is_empty() {
         return Ok(OutdatedReport::default());
     }
 
-    // 2. BFS download
-    let CandidateDownload {
-        mut candidates,
-        resolved,
-        ..
-    } = download_candidates_bfs(provider, &seeds, lockfile, mc_version, loader).await?;
+    // 2. Download candidates from each package's original provider, then solve once.
+    let mut candidates = HashMap::new();
+    let mut resolved = HashMap::new();
+    for (provider_name, seeds) in seeds_by_provider {
+        let Some(provider) = crate::providers::find_provider(providers, &provider_name) else {
+            continue;
+        };
+        let download =
+            download_candidates_bfs(provider, &seeds, lockfile, mc_version, loader).await?;
+        for (package, versions) in download.candidates {
+            candidates
+                .entry(package)
+                .or_insert_with(Vec::new)
+                .extend(versions);
+        }
+        resolved.extend(download.resolved);
+    }
     if candidates.is_empty() {
         return Ok(OutdatedReport::default());
     }
@@ -254,8 +270,9 @@ pub async fn check_all_outdated(
         .map(|(mod_id, new_version)| OutdatedMod {
             current_version: lockfile
                 .find(&mod_id)
-                .and_then(|e| e.modrinth.as_ref().map(|m| m.version.clone()))
-                .unwrap_or_default(),
+                .and_then(PackageEntry::source_version)
+                .unwrap_or_default()
+                .to_string(),
             new_version,
             mod_id,
         })
@@ -287,6 +304,7 @@ mod tests {
                 version_id: format!("{project_id}-version"),
                 version_number: "provider-version".to_string(),
             }),
+            curseforge: None,
             date_published: String::new(),
             download_url: String::new(),
             filename: String::new(),

@@ -12,7 +12,7 @@ pub async fn handle(mod_name: Option<String>, ctx: &CliContext) -> Result<()> {
             let entry = lock
                 .find_entry(name)
                 .ok_or_else(|| anyhow::anyhow!("'{name}' was not found in orbit.lock"))?;
-            if entry.modrinth.is_none() {
+            if entry.provider == "file" {
                 anyhow::bail!(
                     "'{}' is a local file and has no online source to check",
                     entry.mod_id
@@ -28,7 +28,7 @@ pub async fn handle(mod_name: Option<String>, ctx: &CliContext) -> Result<()> {
         .inner
         .packages
         .iter()
-        .filter(|e| e.modrinth.is_some())
+        .filter(|entry| entry.provider != "file")
         .count();
     eprintln!(
         "Checking {total} mod(s) for updates (mc={}, loader={})...\n  This may download candidate JARs for verification.",

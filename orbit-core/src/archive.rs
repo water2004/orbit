@@ -412,6 +412,7 @@ mod tests {
                     filename: "example.jar".to_string(),
                     provider: "file".to_string(),
                     modrinth: None,
+                    curseforge: None,
                     file: Some(FileInfo {
                         path: "mods/example.jar".to_string(),
                     }),
@@ -486,6 +487,7 @@ mod tests {
                             slug: "online".to_string(),
                             download_url: "https://cdn.modrinth.com/online.jar".to_string(),
                         }),
+                        curseforge: None,
                         file: None,
                         dependencies: Vec::new(),
                         environment: crate::metadata::Environment::Both,
@@ -503,6 +505,7 @@ mod tests {
                         filename: "local.jar".to_string(),
                         provider: "file".to_string(),
                         modrinth: None,
+                        curseforge: None,
                         file: Some(FileInfo {
                             path: "mods/local.jar".to_string(),
                         }),

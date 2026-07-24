@@ -186,7 +186,7 @@ pub fn create_instance_providers(
     instance_dir: &Path,
     platform: Option<&str>,
 ) -> Result<Vec<Box<dyn orbit_core::ModProvider>>> {
-    let platforms = if let Some(platform) = platform {
+    let mut platforms = if let Some(platform) = platform {
         vec![normalize_platform(platform).to_string()]
     } else {
         match orbit_core::ManifestFile::open(instance_dir) {
@@ -195,7 +195,47 @@ pub fn create_instance_providers(
             Err(error) => return Err(error).context("failed to read orbit.toml"),
         }
     };
+    if platform.is_none()
+        && let Ok(lockfile) = orbit_core::Lockfile::open(instance_dir)
+    {
+        for entry in &lockfile.inner.packages {
+            if entry.provider != "file" && !platforms.contains(&entry.provider) {
+                platforms.push(entry.provider.clone());
+            }
+        }
+    }
     orbit_core::providers::create_providers(&platforms).context("failed to create providers")
+}
+
+pub fn resolve_platform_target<'a>(
+    input: &'a str,
+    requested_platform: Option<&str>,
+) -> Result<(Option<String>, &'a str)> {
+    let (prefixed_platform, target) = if let Some(target) = input.strip_prefix("mr:") {
+        (Some("modrinth"), target)
+    } else if let Some(target) = input.strip_prefix("cf:") {
+        (Some("curseforge"), target)
+    } else {
+        (None, input)
+    };
+    if target.is_empty() {
+        anyhow::bail!("platform prefix must be followed by a project slug or ID");
+    }
+
+    let requested_platform = requested_platform.map(normalize_platform);
+    if let (Some(prefixed), Some(requested)) = (prefixed_platform, requested_platform)
+        && prefixed != requested
+    {
+        anyhow::bail!(
+            "'{input}' selects {prefixed}, but --platform selects {requested}; use one platform"
+        );
+    }
+    Ok((
+        prefixed_platform
+            .or(requested_platform)
+            .map(ToString::to_string),
+        target,
+    ))
 }
 
 fn normalize_platform(platform: &str) -> &str {
@@ -203,5 +243,28 @@ fn normalize_platform(platform: &str) -> &str {
         "mr" => "modrinth",
         "cf" => "curseforge",
         other => other,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_platform_target;
+
+    #[test]
+    fn platform_prefix_selects_one_provider() {
+        assert_eq!(
+            resolve_platform_target("cf:jei", None).unwrap(),
+            (Some("curseforge".to_string()), "jei")
+        );
+        assert_eq!(
+            resolve_platform_target("mr:sodium", Some("modrinth")).unwrap(),
+            (Some("modrinth".to_string()), "sodium")
+        );
+    }
+
+    #[test]
+    fn conflicting_platform_selectors_are_rejected() {
+        let error = resolve_platform_target("cf:jei", Some("modrinth")).unwrap_err();
+        assert!(error.to_string().contains("selects curseforge"));
     }
 }

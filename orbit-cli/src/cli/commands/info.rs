@@ -2,16 +2,9 @@ use super::CliContext;
 use anyhow::Result;
 
 pub async fn handle(mod_name: String, platform: Option<String>, ctx: &CliContext) -> Result<()> {
-    let (prefix_platform, slug) = if let Some(slug) = mod_name.strip_prefix("mr:") {
-        (Some("modrinth"), slug)
-    } else if let Some(slug) = mod_name.strip_prefix("cf:") {
-        (Some("curseforge"), slug)
-    } else {
-        (None, mod_name.as_str())
-    };
+    let (selected_platform, slug) = super::resolve_platform_target(&mod_name, platform.as_deref())?;
     let instance_dir = ctx.instance_dir()?;
-    let providers =
-        super::create_instance_providers(&instance_dir, platform.as_deref().or(prefix_platform))?;
+    let providers = super::create_instance_providers(&instance_dir, selected_platform.as_deref())?;
 
     for provider in providers {
         match provider.get_mod_info(slug).await {

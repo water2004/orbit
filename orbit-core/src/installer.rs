@@ -5,7 +5,9 @@
 use std::path::{Path, PathBuf};
 
 use crate::error::OrbitError;
-use crate::lockfile::{FileInfo, LockMeta, ModrinthInfo, OrbitLockfile, PackageEntry};
+use crate::lockfile::{
+    CurseForgeInfo, FileInfo, LockMeta, ModrinthInfo, OrbitLockfile, PackageEntry,
+};
 use crate::manifest::{DependencySpec, OrbitManifest};
 use crate::providers::{ModProvider, ResolvedMod};
 use crate::resolver::types::CandidateDiagnostic;
@@ -70,11 +72,8 @@ pub struct InstalledMod {
     pub version: String,
     pub filename: String,
     pub provider: String,
-    pub project_id: String,
-    pub version_id: String,
-    /// Modrinth version_number（写入 [package.modrinth].version）
-    pub modrinth_version: String,
-    pub download_url: String,
+    pub modrinth: Option<ModrinthInfo>,
+    pub curseforge: Option<CurseForgeInfo>,
     pub dependencies: Vec<crate::metadata::DependencyExpression>,
     pub environment: crate::metadata::Environment,
     pub provides: Vec<crate::metadata::ProvidedMod>,
@@ -348,7 +347,7 @@ pub async fn upgrade_all_in_instance(
 /// 顶层 API：从指定实例目录移除模组。
 ///
 /// `input` 可以是 JAR loader 元数据声明的 `mod_id` 或平台 slug。
-/// 先从 lockfile 查找（同时匹配 mod_id 和 modrinth.slug），
+/// 先从 lockfile 查找（同时匹配 mod_id 和平台 slug），
 /// 再同步更新 manifest、lockfile、JAR 文件。
 pub fn remove_from_instance(
     input: &str,
@@ -400,8 +399,8 @@ pub struct RemoveReport {
 }
 
 /// 列出实例中所有依赖（供 remove 找不到时交互选择）
-/// 返回 (mod_id, slug)，slug 从 lockfile 的 [package.modrinth] 读取，
-/// 若 lockfile 不存在或无 modrinth 信息则回退到 mod_id。
+/// 返回 (mod_id, slug)，slug 从 lockfile 的平台专属子表读取，
+/// 若 lockfile 不存在或无平台来源信息则回退到 mod_id。
 pub fn list_dependencies(instance_dir: &Path) -> Result<Vec<(String, String)>, OrbitError> {
     let manifest_file = ManifestFile::open(instance_dir)?;
     let lock = Lockfile::open(instance_dir).ok();
@@ -413,8 +412,8 @@ pub fn list_dependencies(instance_dir: &Path) -> Result<Vec<(String, String)>, O
             let slug = lock
                 .as_ref()
                 .and_then(|l| l.find(k))
-                .and_then(|e| e.modrinth.as_ref())
-                .map(|m| m.slug.clone())
+                .and_then(PackageEntry::source_slug)
+                .map(str::to_string)
                 .unwrap_or_else(|| k.clone());
             (k.clone(), slug)
         })
@@ -482,10 +481,7 @@ fn list_output(
             ListedPackage {
                 mod_id: entry.mod_id.clone(),
                 version: entry.version.clone(),
-                slug: entry
-                    .modrinth
-                    .as_ref()
-                    .map(|metadata| metadata.slug.clone()),
+                slug: entry.source_slug().map(str::to_string),
                 provider: entry.provider.clone(),
                 environment: requirement
                     .and_then(DependencySpec::env)
@@ -762,9 +758,8 @@ async fn resolve_missing_lock_entries(
             lockfile.find(package).and_then(|entry| {
                 (entry.provider != "file").then(|| {
                     entry
-                        .modrinth
-                        .as_ref()
-                        .map(|metadata| metadata.slug.clone())
+                        .source_slug()
+                        .map(str::to_string)
                         .unwrap_or_else(|| package.clone())
                 })
             })
@@ -856,6 +851,16 @@ fn lock_entry_from_candidate(
             slug: resolved.slug.clone(),
             download_url: resolved.download_url.clone(),
         }),
+        curseforge: resolved
+            .curseforge
+            .as_ref()
+            .map(|curseforge| CurseForgeInfo {
+                project_id: curseforge.project_id,
+                file_id: curseforge.file_id,
+                display_name: curseforge.display_name.clone(),
+                slug: resolved.slug.clone(),
+                download_url: resolved.download_url.clone(),
+            }),
         file: None,
         dependencies,
         environment: candidate
@@ -950,6 +955,9 @@ fn package_is_present(entry: &PackageEntry, mods_dir: &Path) -> Result<bool, Orb
     if !entry.sha512.is_empty() {
         return Ok(crate::jar::compute_sha512(&path)? == entry.sha512);
     }
+    if !entry.sha1.is_empty() {
+        return Ok(crate::jar::compute_sha1(&path)?.eq_ignore_ascii_case(&entry.sha1));
+    }
     Ok(std::fs::metadata(path)?.len() > 0)
 }
 
@@ -962,7 +970,9 @@ async fn restore_package(
 ) -> Result<(), OrbitError> {
     match entry.provider.as_str() {
         "file" => restore_file_package(entry, instance_dir, mods_dir),
-        "modrinth" => restore_modrinth_package(entry, mods_dir, providers, locked).await,
+        "modrinth" | "curseforge" => {
+            restore_platform_package(entry, mods_dir, providers, locked).await
+        }
         provider => Err(OrbitError::Other(anyhow::anyhow!(
             "unsupported lockfile provider '{provider}' for '{}'",
             entry.mod_id
@@ -1009,23 +1019,32 @@ fn restore_file_package(
     Ok(())
 }
 
-async fn restore_modrinth_package(
+async fn restore_platform_package(
     entry: &mut PackageEntry,
     mods_dir: &Path,
     providers: &[Box<dyn ModProvider>],
     locked: bool,
 ) -> Result<(), OrbitError> {
-    let metadata = entry.modrinth.clone().ok_or_else(|| {
+    let project_id = entry.source_project_id().ok_or_else(|| {
         OrbitError::Other(anyhow::anyhow!(
-            "Modrinth package '{}' has no Modrinth metadata",
+            "{} package '{}' has no provider metadata",
+            entry.provider,
             entry.mod_id
         ))
     })?;
+    let version_id = entry.source_version_id().ok_or_else(|| {
+        OrbitError::Other(anyhow::anyhow!(
+            "{} package '{}' has no file/version id",
+            entry.provider,
+            entry.mod_id
+        ))
+    })?;
+    let download_url = entry.source_download_url().unwrap_or_default().to_string();
     let filename = package_filename(entry);
-    if !entry.sha512.is_empty() && !filename.is_empty() {
+    if (!entry.sha512.is_empty() || !entry.sha1.is_empty()) && !filename.is_empty() {
         let destination = mods_dir.join(&filename);
         if let Ok(cache) = crate::jar_cache::JarCache::load()
-            && cache.copy_to(&entry.sha512, &destination)
+            && cache.copy_to(&entry.sha512, &entry.sha1, &destination)
         {
             verify_package_hash(entry, &destination)?;
             entry.filename = filename;
@@ -1033,52 +1052,31 @@ async fn restore_modrinth_package(
         }
     }
 
-    let resolved = if metadata.download_url.is_empty() {
+    let resolved = if download_url.is_empty() {
         if locked {
             return Err(OrbitError::Other(anyhow::anyhow!(
                 "--locked: '{}' has no download_url and is not available in cache",
                 entry.mod_id
             )));
         }
-        let provider = crate::providers::find_provider(providers, "modrinth").ok_or_else(|| {
-            OrbitError::Other(anyhow::anyhow!(
-                "Modrinth provider is required to restore '{}'",
-                entry.mod_id
-            ))
-        })?;
+        let provider =
+            crate::providers::find_provider(providers, &entry.provider).ok_or_else(|| {
+                OrbitError::Other(anyhow::anyhow!(
+                    "{} provider is required to restore '{}'",
+                    entry.provider,
+                    entry.mod_id,
+                ))
+            })?;
         provider
-            .get_versions(&metadata.project_id, None, None)
+            .get_versions(&project_id, None, None)
             .await?
             .into_iter()
-            .find(|version| {
-                version
-                    .modrinth
-                    .as_ref()
-                    .is_some_and(|modrinth| modrinth.version_id == metadata.version_id)
-            })
+            .find(|version| version.version_id().as_deref() == Some(version_id.as_str()))
             .ok_or_else(|| {
-                OrbitError::ModNotFound(format!("{} version {}", entry.mod_id, metadata.version_id))
+                OrbitError::ModNotFound(format!("{} version {}", entry.mod_id, version_id))
             })?
     } else {
-        ResolvedMod {
-            mod_id: entry.mod_id.clone(),
-            version: entry.version.clone(),
-            sha1: entry.sha1.clone(),
-            sha512: entry.sha512.clone(),
-            slug: metadata.slug.clone(),
-            provider: "modrinth".to_string(),
-            modrinth: Some(crate::providers::ModrinthResolvedInfo {
-                project_id: metadata.project_id.clone(),
-                version_id: metadata.version_id.clone(),
-                version_number: metadata.version.clone(),
-            }),
-            date_published: String::new(),
-            download_url: metadata.download_url.clone(),
-            filename: filename.clone(),
-            dependencies: Vec::new(),
-            client_side: None,
-            server_side: None,
-        }
+        resolved_from_lock_entry(entry, download_url, filename.clone())?
     };
     let destination = download_mod(&resolved, mods_dir).await?;
     verify_package_hash(entry, &destination)?;
@@ -1087,20 +1085,76 @@ async fn restore_modrinth_package(
     entry.sha256 = crate::jar::compute_sha256(&destination)?;
     entry.sha512 = crate::jar::compute_sha512(&destination)?;
     if let Some(modrinth) = &mut entry.modrinth {
-        modrinth.download_url = resolved.download_url;
+        modrinth.download_url = resolved.download_url.clone();
+    }
+    if let Some(curseforge) = &mut entry.curseforge {
+        curseforge.download_url = resolved.download_url;
     }
     Ok(())
 }
 
-fn verify_package_hash(entry: &PackageEntry, path: &Path) -> Result<(), OrbitError> {
-    if entry.sha256.is_empty() {
-        return Ok(());
+fn resolved_from_lock_entry(
+    entry: &PackageEntry,
+    download_url: String,
+    filename: String,
+) -> Result<ResolvedMod, OrbitError> {
+    let modrinth = entry
+        .modrinth
+        .as_ref()
+        .map(|metadata| crate::providers::ModrinthResolvedInfo {
+            project_id: metadata.project_id.clone(),
+            version_id: metadata.version_id.clone(),
+            version_number: metadata.version.clone(),
+        });
+    let curseforge =
+        entry
+            .curseforge
+            .as_ref()
+            .map(|metadata| crate::providers::CurseForgeResolvedInfo {
+                project_id: metadata.project_id,
+                file_id: metadata.file_id,
+                display_name: metadata.display_name.clone(),
+                fingerprint: 0,
+            });
+    if modrinth.is_none() && curseforge.is_none() {
+        return Err(OrbitError::Other(anyhow::anyhow!(
+            "{} package '{}' has no provider metadata",
+            entry.provider,
+            entry.mod_id
+        )));
     }
-    let actual = crate::jar::compute_sha256(path)?;
-    if actual != entry.sha256 {
+    Ok(ResolvedMod {
+        mod_id: entry.mod_id.clone(),
+        version: entry.version.clone(),
+        sha1: entry.sha1.clone(),
+        sha512: entry.sha512.clone(),
+        slug: entry.source_slug().unwrap_or(&entry.mod_id).to_string(),
+        provider: entry.provider.clone(),
+        modrinth,
+        curseforge,
+        date_published: String::new(),
+        download_url,
+        filename,
+        dependencies: Vec::new(),
+        client_side: None,
+        server_side: None,
+    })
+}
+
+fn verify_package_hash(entry: &PackageEntry, path: &Path) -> Result<(), OrbitError> {
+    let (expected, actual) = if !entry.sha256.is_empty() {
+        (&entry.sha256, crate::jar::compute_sha256(path)?)
+    } else if !entry.sha512.is_empty() {
+        (&entry.sha512, crate::jar::compute_sha512(path)?)
+    } else if !entry.sha1.is_empty() {
+        (&entry.sha1, crate::jar::compute_sha1(path)?)
+    } else {
+        return Ok(());
+    };
+    if !actual.eq_ignore_ascii_case(expected) {
         return Err(OrbitError::ChecksumMismatch {
             name: entry.mod_id.clone(),
-            expected: entry.sha256.clone(),
+            expected: expected.clone(),
             actual,
         });
     }
@@ -1126,22 +1180,20 @@ fn plan_from_resolved(mod_id: &str, version: &str, resolved: &ResolvedMod) -> In
         version: version.to_string(),
         filename: resolved.filename.clone(),
         provider: resolved.provider.clone(),
-        project_id: resolved
-            .modrinth
-            .as_ref()
-            .map(|modrinth| modrinth.project_id.clone())
-            .unwrap_or_default(),
-        version_id: resolved
-            .modrinth
-            .as_ref()
-            .map(|modrinth| modrinth.version_id.clone())
-            .unwrap_or_default(),
-        modrinth_version: resolved
-            .modrinth
-            .as_ref()
-            .map(|modrinth| modrinth.version_number.clone())
-            .unwrap_or_default(),
-        download_url: resolved.download_url.clone(),
+        modrinth: resolved.modrinth.as_ref().map(|metadata| ModrinthInfo {
+            project_id: metadata.project_id.clone(),
+            version_id: metadata.version_id.clone(),
+            version: metadata.version_number.clone(),
+            slug: resolved.slug.clone(),
+            download_url: resolved.download_url.clone(),
+        }),
+        curseforge: resolved.curseforge.as_ref().map(|metadata| CurseForgeInfo {
+            project_id: metadata.project_id,
+            file_id: metadata.file_id,
+            display_name: metadata.display_name.clone(),
+            slug: resolved.slug.clone(),
+            download_url: resolved.download_url.clone(),
+        }),
         dependencies: Vec::new(),
         environment: crate::metadata::Environment::Both,
         provides: Vec::new(),
@@ -1194,6 +1246,11 @@ async fn download_mod(m: &ResolvedMod, mods_dir: &Path) -> Result<PathBuf, Orbit
             if existing_sha == m.sha512 {
                 return Ok(final_path);
             }
+        } else if !m.sha1.is_empty() {
+            let existing_sha = crate::jar::compute_sha1(&final_path).unwrap_or_default();
+            if existing_sha.eq_ignore_ascii_case(&m.sha1) {
+                return Ok(final_path);
+            }
         } else {
             let meta = std::fs::metadata(&final_path).map_err(OrbitError::Io)?;
             if meta.len() > 0 {
@@ -1204,10 +1261,13 @@ async fn download_mod(m: &ResolvedMod, mods_dir: &Path) -> Result<PathBuf, Orbit
 
     // 查全局缓存
     if let Ok(cache) = crate::jar_cache::JarCache::load()
-        && cache.copy_to(&m.sha512, &final_path)
+        && cache.copy_to(&m.sha512, &m.sha1, &final_path)
         && final_path.exists()
     {
-        return Ok(final_path);
+        let cached = std::fs::read(&final_path)?;
+        if crate::jar::verify_source_hash(&cached, &m.sha1, &m.sha512, &m.filename).is_ok() {
+            return Ok(final_path);
+        }
     }
 
     let client = download_client();
@@ -1219,6 +1279,7 @@ async fn download_mod(m: &ResolvedMod, mods_dir: &Path) -> Result<PathBuf, Orbit
     let status = response.status();
     if !status.is_success() {
         let body = response.text().await.unwrap_or_default();
+        let body: String = body.chars().take(500).collect();
         return Err(OrbitError::Other(anyhow::anyhow!(
             "download of '{}' failed with HTTP {}: {}",
             m.filename,
@@ -1227,20 +1288,11 @@ async fn download_mod(m: &ResolvedMod, mods_dir: &Path) -> Result<PathBuf, Orbit
         )));
     }
     let bytes = response.bytes().await.map_err(OrbitError::Network)?;
-    if !m.sha512.is_empty() {
-        let actual = crate::jar::sha512_digest(&bytes);
-        if actual != m.sha512 {
-            return Err(OrbitError::ChecksumMismatch {
-                name: m.filename.clone(),
-                expected: m.sha512.clone(),
-                actual,
-            });
-        }
-    }
+    crate::jar::verify_source_hash(&bytes, &m.sha1, &m.sha512, &m.filename)?;
 
     // 存入全局缓存
     let _ = crate::jar_cache::JarCache::load().map(|mut c| {
-        let _ = c.store_bytes(&m.sha512, &m.filename, &bytes);
+        let _ = c.store_bytes(&m.filename, &bytes);
     });
 
     let tmp_path = mods_dir.join(format!(".{}.tmp", m.filename));
@@ -1268,17 +1320,8 @@ fn apply_to_lockfile(lockfile: &mut OrbitLockfile, installed: &[InstalledMod], m
             sha512,
             filename: inst.filename.clone(),
             provider: inst.provider.clone(),
-            modrinth: if inst.provider == "modrinth" {
-                Some(ModrinthInfo {
-                    project_id: inst.project_id.clone(),
-                    version_id: inst.version_id.clone(),
-                    version: inst.modrinth_version.clone(),
-                    slug: inst.slug.clone(),
-                    download_url: inst.download_url.clone(),
-                })
-            } else {
-                None
-            },
+            modrinth: inst.modrinth.clone(),
+            curseforge: inst.curseforge.clone(),
             file: if inst.provider == "file" {
                 Some(FileInfo {
                     path: format!("mods/{}", inst.filename),
@@ -1363,6 +1406,7 @@ modloader_version = "1"
             filename: format!("{mod_id}.jar"),
             provider: "file".to_string(),
             modrinth: None,
+            curseforge: None,
             file: Some(FileInfo {
                 path: format!("mods/{mod_id}.jar"),
             }),

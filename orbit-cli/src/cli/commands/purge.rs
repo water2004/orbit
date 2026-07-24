@@ -8,10 +8,7 @@ pub async fn handle(mod_name: String, ctx: &CliContext) -> Result<()> {
         .find_entry(&mod_name)
         .ok_or_else(|| anyhow::anyhow!("'{mod_name}' is not installed"))?;
     let mod_id = entry.mod_id.clone();
-    let slug = entry
-        .modrinth
-        .as_ref()
-        .map(|modrinth| modrinth.slug.clone());
+    let slug = entry.source_slug().map(str::to_string);
     let config_dir = instance_dir.join("config");
     let candidates = orbit_core::find_config_candidates(&mod_id, slug.as_deref(), &config_dir)?;
     let selected = select_candidates(&candidates, ctx)?;

@@ -65,31 +65,32 @@ impl JarCache {
         self.index.sha512.get(sha512).map(|f| self.jar_dir.join(f))
     }
 
+    fn get_by_sha1(&self, sha1: &str) -> Option<PathBuf> {
+        self.index.sha1.get(sha1).map(|f| self.jar_dir.join(f))
+    }
+
     /// 从缓存取字节，未命中返回 None
-    pub fn get_bytes(&self, sha512: &str) -> Option<Vec<u8>> {
-        if sha512.is_empty() {
-            return None;
-        }
-        let path = self.get_by_sha512(sha512)?;
+    pub fn get_bytes(&self, sha512: &str, sha1: &str) -> Option<Vec<u8>> {
+        let path = if sha512.is_empty() {
+            self.get_by_sha1(sha1)?
+        } else {
+            self.get_by_sha512(sha512)?
+        };
         std::fs::read(&path).ok()
     }
 
     /// 存入 JAR 并更新三种哈希索引（哈希全部从 bytes 自算）
-    pub fn store_bytes(
-        &mut self,
-        sha512: &str,
-        filename: &str,
-        bytes: &[u8],
-    ) -> Result<(), OrbitError> {
-        if sha512.is_empty() {
-            return Ok(());
-        }
+    pub fn store_bytes(&mut self, filename: &str, bytes: &[u8]) -> Result<(), OrbitError> {
         std::fs::create_dir_all(&self.jar_dir)?;
         let dest = self.jar_dir.join(filename);
         std::fs::write(&dest, bytes)?;
 
+        self.index.sha1.retain(|_, value| value != filename);
+        self.index.sha256.retain(|_, value| value != filename);
+        self.index.sha512.retain(|_, value| value != filename);
         let sha1 = crate::jar::sha1_digest(bytes);
         let sha256 = crate::jar::sha256_digest(bytes);
+        let sha512 = crate::jar::sha512_digest(bytes);
         if !sha1.is_empty() {
             self.index.sha1.insert(sha1, filename.to_string());
         }
@@ -103,8 +104,13 @@ impl JarCache {
     }
 
     /// 复制缓存文件到目标路径，未命中返回 false
-    pub fn copy_to(&self, sha512: &str, dest: &Path) -> bool {
-        if let Some(ref src) = self.get_by_sha512(sha512)
+    pub fn copy_to(&self, sha512: &str, sha1: &str, dest: &Path) -> bool {
+        let source = if sha512.is_empty() {
+            self.get_by_sha1(sha1)
+        } else {
+            self.get_by_sha512(sha512)
+        };
+        if let Some(ref src) = source
             && src.exists()
         {
             if let Some(parent) = dest.parent() {
@@ -203,5 +209,22 @@ mod tests {
     fn unsafe_cache_roots_are_rejected() {
         let root = std::path::Path::new(std::path::MAIN_SEPARATOR_STR);
         assert!(validate_cache_dir(root).is_err());
+    }
+
+    #[test]
+    fn replacing_a_same_named_jar_removes_stale_hash_entries() {
+        let directory = test_dir("replace");
+        let mut cache = JarCache::load_from(directory.clone()).unwrap();
+        let old = b"old artifact";
+        let new = b"new artifact";
+        let old_sha512 = crate::jar::sha512_digest(old);
+        let new_sha512 = crate::jar::sha512_digest(new);
+
+        cache.store_bytes("example.jar", old).unwrap();
+        cache.store_bytes("example.jar", new).unwrap();
+
+        assert!(cache.get_bytes(&old_sha512, "").is_none());
+        assert_eq!(cache.get_bytes(&new_sha512, "").unwrap(), new);
+        std::fs::remove_dir_all(directory).unwrap();
     }
 }
