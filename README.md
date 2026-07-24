@@ -25,7 +25,14 @@ Orbit 是一个专为 Minecraft 打造的现代化命令行模组包管理器。
 ## 🚀 快速开始
 
 ### 安装
-根据你的操作系统，在release页面下载安装
+
+Windows x64 用户可以从 release 页面下载
+`orbit-<version>-x86_64.msi`。MSI 会把 Orbit 安装到
+`%ProgramFiles%\Orbit\bin`；安装向导默认勾选加入系统 `PATH`，也可以取消。
+安装需要管理员权限。
+
+从源码构建 MSI 的方法见
+[Windows MSI](docs/windows-msi.md)。
 
 ### 体验丝滑工作流
 

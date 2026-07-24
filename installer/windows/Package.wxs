@@ -1,0 +1,97 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Wix
+  xmlns="http://wixtoolset.org/schemas/v4/wxs"
+  RequiredVersion="7.0.0">
+  <Package
+    Name="Orbit"
+    Manufacturer="water2004"
+    Version="$(var.OrbitVersion)"
+    Language="1033"
+    Scope="perMachine"
+    ProductCode="$(var.OrbitProductCode)"
+    UpgradeCode="D702E25B-F168-46F4-922F-797235883C37">
+
+    <SummaryInformation
+      Description="Orbit Minecraft mod package manager"
+      Comments="Installs the Orbit command-line application." />
+
+    <MajorUpgrade
+      DowngradeErrorMessage="A newer version of Orbit is already installed."
+      Schedule="afterInstallInitialize" />
+
+    <MediaTemplate EmbedCab="yes" />
+
+    <Property Id="ARPCOMMENTS" Value="Minecraft mod package manager" />
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/water2004/orbit" />
+    <Property Id="ADD_TO_PATH" Value="1" Secure="yes" />
+
+    <UIRef Id="OrbitInstallUI" />
+    <WixVariable
+      Id="WixUILicenseRtf"
+      Value="$(var.OrbitLicenseRtf)" />
+
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="Orbit">
+        <Directory Id="BINDIR" Name="bin">
+          <Component
+            Id="OrbitExecutableComponent"
+            Guid="E95362F5-0597-433F-B6E9-097580F3D55D"
+            Bitness="always64">
+            <File
+              Id="OrbitExecutable"
+              Source="$(var.OrbitExecutable)"
+              Name="orbit.exe"
+              KeyPath="yes" />
+          </Component>
+
+          <Component
+            Id="OrbitPathComponent"
+            Guid="8478E52C-B686-4283-8CFF-229B36AECEE5"
+            Bitness="always64">
+            <Environment
+              Id="OrbitSystemPath"
+              Name="PATH"
+              Value="[BINDIR]"
+              Action="set"
+              Part="last"
+              Permanent="no"
+              System="yes" />
+            <RegistryValue
+              Root="HKLM"
+              Key="Software\water2004\Orbit"
+              Name="PathIntegration"
+              Type="integer"
+              Value="1"
+              KeyPath="yes" />
+          </Component>
+        </Directory>
+
+        <Component
+          Id="OrbitLicenseComponent"
+          Guid="71FCFDC9-5FA3-4030-8588-E30C357B50F4">
+          <File
+            Id="OrbitLicense"
+            Source="$(var.OrbitLicense)"
+            Name="LICENSE.txt"
+            KeyPath="yes" />
+        </Component>
+      </Directory>
+    </StandardDirectory>
+
+    <Feature Id="OrbitFeature" Title="Orbit" Level="1">
+      <ComponentRef Id="OrbitExecutableComponent" />
+      <ComponentRef Id="OrbitLicenseComponent" />
+    </Feature>
+
+    <Feature
+      Id="PathFeature"
+      Title="Add Orbit to the system PATH"
+      Description="Makes the orbit command available in new terminals."
+      Level="1"
+      AllowAbsent="yes"
+      AllowAdvertise="no">
+      <Level Condition="ADD_TO_PATH &lt;&gt; &quot;1&quot;" Value="0" />
+      <ComponentRef Id="OrbitPathComponent" />
+    </Feature>
+  </Package>
+</Wix>

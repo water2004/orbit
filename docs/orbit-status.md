@@ -23,6 +23,7 @@
 | 远端身份边界 | ✅ | provider 只给下载 locator；所有包元数据来自实际 JAR |
 | Provider 分层 | ✅ | Modrinth / CurseForge HTTP 与 DTO 各在独立 wrapper，core 只做领域适配 |
 | 跨平台全局路径 | ✅ | RuntimeEnvironment + 显式路径；system/executable 布局 |
+| Windows MSI | ✅ | x64 per-machine 向导、可选系统 PATH、修改/修复/卸载、major upgrade；发布产物仍需项目证书签名 |
 
 ## 2. 保留的正确规范
 
