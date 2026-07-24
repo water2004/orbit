@@ -131,3 +131,18 @@
     `strictly_higher` 和 maximal-solution enumeration 已由 fork 原生支持。若新的依赖
     语义无法由通用 constraint/observer/enumeration 表达，应在 fork 增加通用能力并
     测试，禁止在 Orbit 侧反事实求解、黑盒探测或结果后修补。
+51. **一个 provider locator 可以对应多个真实包身份**。catalog 必须按每个 artifact
+    的 JAR `mod_id` 分区；add 分别求可行解并在多个可行身份间交互选择，upgrade 固定
+    lockfile 身份。禁止重新引入“一 locator 一 mod_id”的校验。
+52. **loader 本身也服从真实 JAR 元数据规则**。从 launcher profile 定位实际 loader
+    library JAR，把其依赖、provides 和 contained 模块注册到共享平台图。不得把 loader
+    永久建成无依赖叶子，也不得硬编码某个 loader 自带模块作为例外。
+53. **平台路径是快照，不是发现索引**。`sync` 必须从当前游戏目录、launcher
+    profile/组件和 libraries 重新探测 Minecraft/loader JAR，再刷新 `[platform]`
+    的路径与 SHA-256；不能依赖旧 TOML 文件名。
+54. **平台版本变化分级处理**。`install` 发现实际 Minecraft 版本与 manifest 不一致时
+    拒绝并要求先 sync；loader 版本变化本身不拒绝，必须用实际 loader JAR 进入共享图，
+    由真实依赖约束决定是否兼容。
+55. **init 只接受合法游戏目录**。支持标准共享根、`versions/<实例>` 隔离目录、
+    Prism/MultiMC、CurseForge 和 GDLauncher 的实际 game directory；空目录或任意
+    `mods/` 目录不得仅凭命令行参数初始化。多候选必须消歧，不按扫描顺序取第一个。

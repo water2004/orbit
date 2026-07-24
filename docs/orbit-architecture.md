@@ -34,6 +34,8 @@ jar/          ZIP、manifest、嵌套 JAR、Jar-in-Jar、class major
 identification/
 providers/    来源查询、统一下载与受限运行时认证
 runtime       跨平台目录发现、显式路径覆盖与运行时服务注入
+launcher      标准/HMCL/Prism/MultiMC/CurseForge/GDLauncher 游戏目录归一化
+platform      fresh discovery、Minecraft/loader JAR 定位、哈希与运行时事实
 lockfile      可复现的 Fat Lockfile
 versions/     Fabric predicate 与 Maven version range
 resolver/
@@ -66,6 +68,7 @@ init/sync/    实例扫描与对账
 
 ```text
 命令
+  → launcher layout / fresh platform discovery
   → manifest / instance
   → provider project 闭包发现
   → 完整 artifact 队列
@@ -86,6 +89,9 @@ init/sync/    实例扫描与对账
 3. resolver 纯离线消费 JAR 候选，缺少实际依赖时产生正常的无解证明。
 
 JAR `mod_id` 不会被拿去猜 provider slug，resolver 也没有联网补抓入口。
+一个远端 locator 可以跨版本映射到多个真实 `mod_id`；下载后按 JAR 身份分区。新包
+添加先比较各身份的可行 portfolio，已有包升级则保持 lockfile 身份，不把项目改名
+伪装成普通版本升级。
 
 求解包的身份恒为 JAR 声明的 `mod_id`。同一 ID 的多个顶层 `mods/*.jar` 是同一个包
 的多个候选，最终每包只选一个。文件名、slug 和 project ID 只是候选来源事实，不能
@@ -109,6 +115,15 @@ JAR `mod_id` 不会被拿去猜 provider slug，resolver 也没有联网补抓�
 依赖表达式在 `constraints.rs` 编译；加载顺序在 `ordering.rs`；平台、mod_id 候选、
 `provides`、load condition 和 Jar-in-Jar 在 `graph.rs` 注册。这种拆分按职责而不是
 按 loader 切开。
+
+launcher profile 指向的实际 loader library JAR 也通过公共 JAR reader 进入平台图。
+loader 自身仍是平台包，但其声明的 contained 模块使用与普通顶层包相同的
+owner/source/path 绑定规则参与求解；它们不成为磁盘事务目标。
+
+`orbit.toml [platform]` 是上次探测的路径/哈希快照，不是发现索引。`sync` 每次从 launcher
+profile、Prism/MultiMC component 和当前 libraries 重新建候选集，因此允许 launcher
+改名、移动或替换 JAR。`install`同样 fresh scan：Minecraft 变化是需要先 sync 的硬
+边界；loader 版本变化是求解事实，不先验等同于不兼容。
 
 PubGrub fork 允许 provider 在选择包版本时注入带 reason 的自定义 incompatibility。
 条件原因因此属于真正的传播/回溯路径。observer 只补充成功解中的候选淘汰原因，不承担

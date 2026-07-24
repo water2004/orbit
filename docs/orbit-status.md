@@ -10,7 +10,8 @@
 
 | 能力 | 状态 | 说明 |
 |---|---|---|
-| 初始化与检测 | ✅ | Minecraft 与四种 loader/version |
+| 初始化与检测 | ✅ | 合法游戏目录校验；标准/HMCL/Prism/MultiMC/CurseForge/GDLauncher；Minecraft 与四种 loader/version/JAR |
+| 平台工件同步 | ✅ | fresh scan 后刷新 Minecraft/loader JAR 路径、SHA-256 和版本；旧 TOML 路径不是发现入口 |
 | JAR 元数据 | ✅ | 四种 loader、多逻辑 mod、嵌套 JAR、JarJar |
 | 版本语义 | ✅ | Fabric predicate；Maven ComparableVersion/range |
 | 依赖求解 | ✅ | 强类型 occurrence 图、完整极大解枚举、any/all/unless、环境、provides、ordering、Java、JarJar |
@@ -21,16 +22,17 @@
 | PubGrub fork 远端 | ✅ | 功能分支已发布，Orbit 固定到完整 commit SHA |
 | 多解选择 | ✅ | fork 原生枚举单包极大解；唯一解自动选择，多解交互 |
 | 本地重复包 | ✅ | init/sync 按 mod_id 合并为候选；确认后删除未选中的顶层包版本 |
-| 远端身份边界 | ✅ | provider 只给下载 locator；所有包元数据来自实际 JAR |
+| 远端身份边界 | ✅ | provider 只给下载 locator；一个 locator 的多种真实 mod_id 按 JAR 身份分区并选择 |
 | Provider 分层 | ✅ | Modrinth / CurseForge HTTP 与 DTO 各在独立 wrapper，core 只做领域适配 |
 | 跨平台全局路径 | ✅ | RuntimeEnvironment + 显式路径；system/executable 布局 |
-| Windows MSI | ✅ | x64 per-machine 向导、可选系统 PATH、修改/修复/卸载、major upgrade；发布产物仍需项目证书签名 |
+| Windows MSI | ✅ | x64 per-machine 向导、可选系统 PATH、同版本重建升级、维护模式、可选清理默认 AppData；发布产物仍需项目证书签名 |
 
 ## 2. 保留的正确规范
 
 下列旧文档原则是正确的，问题曾经是代码没有遵守；本轮按规范修复，而不是删除规范：
 
 - 所有 loader 共享同一解析后数据流和 resolver；
+- launcher 实际 loader JAR 的依赖和内嵌模块必须进入同一平台图；
 - 本地校验与联网候选不能走两套规则；
 - 依赖原因必须来自实际推导路径；
 - 不允许第二次反事实求解或日志解析充当证明；
@@ -66,11 +68,11 @@
 
 | 命令 | 状态 |
 |---|---|
-| `init` | 扫描真实实例，经共享候选组合选择并确认重复包清理 |
+| `init` | 拒绝空/任意目录，定位真实平台 JAR，扫描实例并确认重复包清理 |
 | `add` | Modrinth、CurseForge、搜索名和本地 JAR |
-| `install` / `restore` | 共享求解图，按 target 选择 |
+| `install` / `restore` | fresh platform scan；Minecraft 变化拒绝，loader 变化由共享图判定 |
 | `remove` / `upgrade` / `outdated` | 使用 Fat Lockfile 和结构化报告 |
-| `sync` | 重新扫描、识别、按包选择候选并确认移除未选版本 |
+| `sync` | 重新探测平台并扫描 mods，刷新工件快照，按包选择候选并确认移除未选版本 |
 | `check` | 实例目标兼容性预检 |
 | `list` / `info` | 展示包信息、逻辑依赖和 bundled |
 | `export` / `import` | Orbit archive 与 Modrinth pack |
@@ -92,6 +94,10 @@
   改动。upgrade 的“至少一个包变新、其他包可降级”是对同批极大解的操作分类。
 - 远端 project relation 会递归构造下载闭包；JAR `mod_id` 从不作为 slug/project
   查询。闭包缺少实际 required identity 时由 resolver 正常证明无解。
+- `sync` 保持本地对账且不下载修复；`install` 才构造远端候选闭包修复依赖图。
+- 共享游戏根目录若同时暴露多个 Minecraft/loader 候选，没有通用办法从目录本身判断
+  launcher 下一次会启动哪一个；Orbit 明确报歧义，要求使用隔离实例或在 init 显式选择，
+  不按目录顺序猜测。
 - JAR 缓存按本地 SHA-512 寻址，SHA-1 只作别名；provider 文件名不作为缓存键。
 
 ## 6. 文档索引

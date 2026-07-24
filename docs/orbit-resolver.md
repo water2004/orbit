@@ -136,6 +136,13 @@ provider slug、project ID、下载 URL 和嵌套路径都不能成为 `SolverPa
 - Forge family 的 `javafml` / `lowcodefml`
 - `java`
 
+当前 loader 不是只凭 manifest 版本注册成无依赖叶子。Orbit 从 launcher version
+profile 找到实际 Maven library JAR，再通过同一个 JAR reader 读取 loader 自身的
+依赖、provides 与内嵌模块。loader 根包使用平台版本身份，内嵌的 MixinExtras 等真实
+模块则以 owner-bound contained 候选进入普通 `Mod(mod_id)` 图，可以满足其它模组的
+正常依赖，同时不会出现在安装、删除或 lockfile 事务中。找不到实际 library JAR 时
+才退化为只注册 loader 版本；不会硬编码某个 loader 附带的具体模块。
+
 Java 版本由目标 Minecraft 版本确定；JAR 根目录 class 文件的最高 class major
 又会产生模组到 `java` 的最低版本依赖。因此声明式 Java feature 和实际字节码下限都
 走正常依赖边。多版本 JAR 的 `META-INF/versions/` 变体不被误当作基础运行下限。
@@ -169,6 +176,10 @@ provider 的 dependency relation 仅用于定位下一批 project，不携带可
 `resolve_candidate_portfolio()` 不持有 provider、下载器或缓存，也不会动态联网。
 这保证下载失败、JAR 解析和依赖求解是三个清楚的错误边界。
 
+同一 provider locator 可能跨 artifact 声明多个 `mod_id`。catalog 对它们按包身份
+分区；`add` 对每个真实身份独立求可行 portfolio 后选择身份，upgrade 则固定现有
+lockfile 身份。这个选择发生在下载完成、纯离线求解开始之后，不把 slug 当包名。
+
 多解的定义是：在保持其他用户包版本不变时，不存在任何一个包还能单独升级。候选来源
 不是“更高版本”的第二条坐标。交互界面列出每个方案的安装、升级、降级、同版本替换和
 删除，以及已知的旧/新顶层文件名；只有一个方案时不读取 stdin。dry-run 仍会在多解时
@@ -185,6 +196,9 @@ provider 的 dependency relation 仅用于定位下一批 project，不携带可
 同一种 `ResolutionReport`。多个极大解统一选择；选择完成后统一生成包事务计划。
 未选中的顶层包版本会列出精确 `mod_id`、版本和文件名，实际写入或删除前必须确认；
 即使方案唯一也不能跳过破坏性计划确认。嵌套 JAR 从不作为独立删除目标。
+
+`sync` 只对本地 `mods/`、manifest 与 lockfile 对账，不联网下载候选来修复冲突；
+`install` 才会通过完整远端 artifact 闭包重建候选并修复缺失或不兼容的包。
 
 ## 8. 可读错误的约束
 

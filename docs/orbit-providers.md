@@ -81,6 +81,13 @@ identity 时，纯离线 solver 将其证明为无解。
 配置顺序稳定去重；依赖、环境、provides 或 bundled 不一致时报告 JAR 身份碰撞，不让
 后到的远端记录静默覆盖。
 
+反过来，一个 provider locator 在不同 artifact 中可能声明多个真实 `mod_id`，例如
+项目改名或同时发布历史身份。`CandidateCatalog` 按真实 `mod_id` 分区，不要求
+“一个 locator 等于一个包”。已有包的 upgrade 固定跟随 lockfile 的 `mod_id`；若该
+身份已不再发布，明确要求按替换处理。新 `add` 会分别对每个真实身份做完整可行性求解：
+只剩一个可行身份时自动采用，多个可行身份时先让用户选择包身份，再进行正常的多解
+方案选择。provider slug/project ID 始终只是下载定位符。
+
 ## 5. Provider 选择与认证
 
 `create_providers()` 保持 `[resolver].platforms` 的顺序。候选发现选择第一个返回有效

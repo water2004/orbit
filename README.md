@@ -30,7 +30,8 @@ Orbit 是一个专为 Minecraft 打造的现代化命令行模组包管理器。
 Windows x64 用户可以从 release 页面下载
 `orbit-<version>-x86_64.msi`。MSI 会把 Orbit 安装到
 `%ProgramFiles%\Orbit\bin`；安装向导默认勾选加入系统 `PATH`，也可以取消。
-安装需要管理员权限。
+安装需要管理员权限。重复运行同一安装包会进入修改/修复/卸载界面；同版本的新构建
+也能覆盖旧构建。卸载时可选择是否删除默认 AppData 中的 Orbit 配置和缓存。
 
 从源码构建 MSI 的方法见
 [Windows MSI](docs/windows-msi.md)。
@@ -75,7 +76,7 @@ Orbit 采用**目录优先**的上下文逻辑。命令会默认作用于当前�
 
 | 命令 | 描述 |
 | :--- | :--- |
-| `orbit init <name>` | 初始化当前目录，扫描现有 `mods/`；同 ID 文件作为候选求解，确认后移除未选版本。 |
+| `orbit init <name>` | 在合法游戏目录中初始化实例，扫描现有 `mods/`；同 ID 文件作为候选求解，确认后移除未选版本。 |
 | `orbit instances list` | 列出所有被 Orbit 托管的 MC 实例及其路径（当前/默认实例会有 `*` 标记）。 |
 | `orbit instances default <name>`| 将指定实例设为全局默认。在任意目录下执行命令都将默认作用于它。 |
 | `orbit instances remove <name>` | 从 Orbit 全局列表中移除对该实例的追踪（**绝不会**删除硬盘上的文件）。 |
@@ -86,7 +87,7 @@ Orbit 采用**目录优先**的上下文逻辑。命令会默认作用于当前�
 
 | 命令 | 描述 |
 | :--- | :--- |
-| `orbit sync` | **本地状态双向对齐**。扫描 `mods/`，同 ID 文件统一求解并确认清理未选版本。不下载 JAR；来源识别可能查询平台哈希接口。 |
+| `orbit sync` | **本地状态双向对齐**。重新探测 Minecraft/loader 工件并扫描 `mods/`，同 ID 文件统一求解并确认清理未选版本。不下载 JAR；来源识别可能查询平台哈希接口。 |
 | `orbit outdated` | **检查过时模组（只读）**。联网检查所有已安装模组是否有新版本，并输出过时报告。不修改任何文件。 |
 | `orbit upgrade [mod]` | **执行更新**。方案至少让一个包变新，也可包含依赖降级/替换/删除；确认后更新文件与 lock。 |
 
@@ -97,7 +98,7 @@ Orbit 采用**目录优先**的上下文逻辑。命令会默认作用于当前�
 | `orbit search <query>` | 在已配置来源中搜索模组；支持 Modrinth 与 CurseForge。 |
 | `orbit info <mod>` | 查看模组详细信息（描述、作者、版本历史、前置依赖、端侧支持等）。无需安装，直接请求平台 API。 |
 | `orbit add <mod>` | 添加新模组。支持自动查找、`mr:name`、`cf:name` 或 `file:./my-mod.jar`。使用 `--env client\|server` 标记端侧。 |
-| `orbit install` | 根据 `orbit.toml` 和 `orbit.lock`，下载并补齐所有缺失的 `.jar` 文件。默认全量安装；使用 `--target server`/`--target client` 过滤端侧；使用 `--locked` 严格按 lock 文件还原，不发起网络解析。 |
+| `orbit install` | 重新探测实际平台后按 `orbit.toml`/lock 补齐缺失 JAR。Minecraft 版本变化时要求先 sync；loader 版本变化交给真实依赖分析。 |
 | `orbit remove <mod>` | 卸载模组。删除对应的 `.jar` 文件并移除 `orbit.toml` 中的记录。 |
 | `orbit purge <mod>` | **深度清理**。在 `remove` 的基础上，启发式搜索并交互式询问以**彻底删除** `config/` 下的配置文件。 |
 | `orbit list` | 列出当前实例记录的所有模组及版本；支持 `--tree` 和 `--target`。 |
@@ -127,6 +128,10 @@ mc_version = "1.20.1"
 modloader = "fabric"
 modloader_version = "0.15.7"
 
+[platform]
+minecraft_jar = { path = "../../1.20.1/1.20.1.jar", sha256 = "..." }
+loader_jar = { path = "../../libraries/net/fabricmc/fabric-loader/0.15.7/fabric-loader-0.15.7.jar", sha256 = "..." }
+
 [resolver]
 platforms = ["modrinth"]
 prerelease = false
@@ -140,7 +145,7 @@ lithium = ">=0.11 <0.14"
 "inventory-hud" = { version = "*", env = "client" }
 
 # `orbit add file:./my-local-mod.jar` 后仍只声明 mod_id 与版本；
-# 文件路径和哈希记录在 orbit.lock
+# 模组文件路径和哈希记录在 orbit.lock；上面的 platform 路径只描述游戏/loader 工件
 "my-local-mod" = "1.0.0"
 ```
 

@@ -11,10 +11,11 @@
 2. [文件关系](#2-文件关系)
 3. [`orbit.toml` 完整 Schema](#3-orbittoml-完整-schema)
    - [3.1 `[project]` — 项目元数据](#31-project--项目元数据)
-   - [3.2 `[resolver]` — 解析策略](#32-resolver--解析策略)
-   - [3.3 `[dependencies]` — 模组依赖](#33-dependencies--模组依赖)
-   - [3.4 `[groups]` — 模组分组](#34-groups--模组分组)
-   - [3.5 `[overrides]` — 依赖覆盖](#35-overrides--依赖覆盖)
+   - [3.2 `[platform]` — 实际平台工件](#32-platform--实际平台工件)
+   - [3.3 `[resolver]` — 解析策略](#33-resolver--解析策略)
+   - [3.4 `[dependencies]` — 模组依赖](#34-dependencies--模组依赖)
+   - [3.5 `[groups]` — 模组分组](#35-groups--模组分组)
+   - [3.6 `[overrides]` — 依赖覆盖](#36-overrides--依赖覆盖)
 4. [`orbit.lock` 完整 Schema](#4-orbitlock-完整-schema)
 5. [字段速查表](#5-字段速查表)
 6. [语义规则](#6-语义规则)
@@ -30,11 +31,15 @@
 
 ## 1. 概述
 
-`orbit.toml` 是 Orbit 项目目录的**唯一真实数据源 (Single Source of Truth)**。它记录：
+`orbit.toml` 是 Orbit 项目的声明文件。它记录：
 
 - **项目元数据**：Minecraft 版本、模组加载器类型
+- **平台工件快照**：上次 `init`/`sync` 实际分析的 Minecraft 与 loader JAR
 - **模组声明**：需要哪些模组、版本约束
 - **解析策略**：多平台优先级、预发布版本的取舍
+
+平台工件不是发现入口。启动器可能更新 profile、改名或移动 JAR，因此 `sync`
+必须从当前游戏目录和启动器元数据重新探测，再刷新该快照；不能从旧路径反推当前环境。
 
 `orbit.toml` 由**用户手动编辑**（或通过 `orbit add/remove` 等命令自动维护），纳入 Git 版本控制。
 
@@ -87,14 +92,41 @@ modloader_version = "0.16.10"     # 必填。加载器版本，直接影响 API 
 | `name` | `String` | **是** | 实例名，仅允许 `[a-zA-Z0-9_-]+`，长度 1–64 |
 | `mc_version` | `String` | **是** | Minecraft 版本，如 `1.20.1`、`1.21` |
 | `modloader` | `String` | **是** | 枚举值：`fabric` \| `forge` \| `neoforge` \| `quilt` |
-| `modloader_version` | `String` | **是** | 加载器版本号，如 `0.16.10`。Fabric Loader / Forge 的 API 随此版本变动，锁定它是可复现构建的前提 |
+| `modloader_version` | `String` | **是** | 上次探测到的加载器版本，如 `0.16.10`；加载器升级后由 `sync` 刷新 |
 | `description` | `String` | 否 | 自由文本，单行 |
 | `authors` | `[String]` | 否 | 作者列表 |
 | `version` | `String` | 否 | 整合包版本，推荐 semver |
 
+### 3.2 `[platform]` — 实际平台工件
+
+```toml
+[platform]
+minecraft_jar = { path = "../../1.21.5/1.21.5.jar", sha256 = "..." }
+loader_jar = { path = "../../libraries/net/fabricmc/fabric-loader/0.16.10/fabric-loader-0.16.10.jar", sha256 = "..." }
+```
+
+两个字段均为必填的内联表：
+
+| 字段 | 子字段 | 说明 |
+|---|---|---|
+| `minecraft_jar` | `path`, `sha256` | 实际含 `version.json` 的 Minecraft client JAR |
+| `loader_jar` | `path`, `sha256` | 实际 loader JAR；其中的 loader/嵌套模块元数据参与求解 |
+
+路径优先相对于 Orbit 实例目录保存，并统一使用 `/`；跨卷等无法相对表示时使用绝对路径。
+哈希来自本地文件内容。`init` 只接受能定位这两个工件的合法游戏目录，不接受空目录。
+
+命令语义：
+
+- `sync` 忽略这里的旧路径，从当前 launcher profile/组件和 libraries 重新探测，刷新
+  路径、哈希、Minecraft 版本及 loader 版本。
+- `install` 也重新探测。实际 Minecraft 版本与 `[project].mc_version` 不同时拒绝执行，
+  要求先运行 `sync`。
+- loader 版本变化本身不拒绝安装。求解器使用实际 loader JAR 的版本、依赖和 bundled
+  模块；只有真实依赖约束不兼容时才报冲突。
+
 ---
 
-### 3.2 `[resolver]` — 解析策略
+### 3.3 `[resolver]` — 解析策略
 
 ```toml
 [resolver]
@@ -114,13 +146,15 @@ prerelease = false         # 是否使用 alpha/beta/预发布版本
 
 ---
 
-### 3.3 `[dependencies]` — 模组依赖
+### 3.4 `[dependencies]` — 模组依赖
 
 每个依赖的**键**是 JAR 元数据声明的模组 ID（统一记为 `mod_id`），**值**可以是简写字符串或内联表 (inline table)。
 
-> **重要**：`orbit.toml` 中不包含 `platform`、`slug`、`type`、`path`、`url`、`sha256` 字段。这些字段属于 `orbit.lock` 锁文件。manifest 仅声明"我要哪个模组 + 什么版本"，具体来源和校验由 lock 文件负责。
+> **重要**：依赖项中不包含 provider、slug、type、path、url 或 sha256。这些属于
+> `orbit.lock` 的包来源事实。顶级 `[platform]` 是 Minecraft/loader 运行时工件快照，
+> 与模组 provider 无关。
 
-#### 3.3.1 简写形式
+#### 3.4.1 简写形式
 
 ```toml
 [dependencies]
@@ -139,7 +173,7 @@ fabric-api = "^0.92"
 
 当使用简写形式时，`optional` 和 `env` 取默认值（`false` 和 `"both"`）。
 
-#### 3.3.2 完整内联表形式
+#### 3.4.2 完整内联表形式
 
 ```toml
 [dependencies]
@@ -164,9 +198,9 @@ some-bloated-mod = { version = "^2", exclude = ["annoying-library"] }
 
 ---
 
-### 3.4 `[groups]` — 模组分组 (高级场景)
+### 3.5 `[groups]` — 模组分组 (高级场景)
 
-分组用于**自定义安装场景**（如基准测试、调试工具集等）。对于基础的端侧分离（客户端/服务端），**优先使用内联 `env` 字段**（见 [§3.3.2](#332-完整内联表形式)），内聚性更好，无需在两个表之间跳转。
+分组用于**自定义安装场景**（如基准测试、调试工具集等）。对于基础的端侧分离（客户端/服务端），**优先使用内联 `env` 字段**（见 [§3.4.2](#342-完整内联表形式)），内聚性更好，无需在两个表之间跳转。
 
 ```toml
 # 基础端侧分离 — 用 env 字段（推荐）
@@ -195,7 +229,7 @@ dependencies = ["spark", "ledger"]
 
 ---
 
-### 3.5 `[overrides]` — 依赖覆盖
+### 3.6 `[overrides]` — 依赖覆盖
 
 用于紧急情况下**强制指定**某个传递依赖的版本，覆盖上游解析结果。
 
@@ -327,6 +361,7 @@ project/version-file ID、slug 和 URL；不保存或信任平台展示版本。
 | 表 | 必填 | 说明 |
 |----|------|------|
 | `[project]` | **是** | 项目元数据 |
+| `[platform]` | **是** | 上次实际探测的 Minecraft/loader JAR 路径与 SHA-256 |
 | `[resolver]` | 否 | 全局解析策略（有默认值） |
 | `[dependencies]` | 否 | 模组依赖声明 |
 | `[groups.<name>]` | 否 | 按场景分组 |
@@ -349,7 +384,7 @@ project/version-file ID、slug 和 URL；不保存或信任平台展示版本。
 | `env` | 声明意图 | — |
 | `exclude` | 声明意图 | — |
 | `mod_id` | 作为键使用 | 存储 JAR loader 元数据声明的 ID |
-| `sha1` / `sha256` / `sha512` | — | 本地 JAR 计算 |
+| 模组包 `sha1` / `sha256` / `sha512` | — | 本地模组 JAR 计算 |
 | `provider` | — | 安装时确定 |
 | `[package.modrinth]` | — | Modrinth 下载定位信息 |
 | `[package.curseforge]` | — | CurseForge 下载定位信息 |
@@ -526,6 +561,10 @@ modloader_version = "0.16.10"
 description = "优化原版体验的轻量整合包"
 authors = ["GBwater"]
 version = "1.0.0"
+
+[platform]
+minecraft_jar = { path = "../../1.21.5/1.21.5.jar", sha256 = "0123456789abcdef..." }
+loader_jar = { path = "../../libraries/net/fabricmc/fabric-loader/0.16.10/fabric-loader-0.16.10.jar", sha256 = "fedcba9876543210..." }
 
 [resolver]
 platforms = ["modrinth"]

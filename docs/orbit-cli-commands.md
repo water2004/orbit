@@ -58,24 +58,28 @@ orbit init <name>
 行为：
 
 1. 若 `orbit.toml` 已存在，在扫描、联网和写入前拒绝覆盖；
-2. 从游戏 JAR 的 `version.json` 检测 Minecraft 版本；
-3. 从 launcher version profile 的 Maven 坐标检测 loader 及版本；
+2. 验证当前目录是实际游戏目录；空目录或只有 `mods/` 的任意目录会拒绝；
+3. 从游戏 JAR 的 `version.json`、launcher version profile 或 Prism/MultiMC component
+   检测 Minecraft 与 loader；定位并解析实际 Minecraft/loader JAR；
 4. 扫描 `mods/*.jar`，忽略 `.old` / `.disabled`，解析对应 loader 元数据与内嵌 JAR；
 5. 计算 SHA-1/SHA-256/SHA-512 和 CurseForge fingerprint；Modrinth 始终参与批量识别，
    已配置 API Key 时 CurseForge 也参与；
 6. 同一 `mod_id` 的顶层 JAR 作为一个包的候选，经共享 PubGrub portfolio 选择；
 7. 多解时请求方案选择；未选中的顶层包版本列入删除计划并在写盘前确认；
-8. 生成 manifest 与 Fat Lockfile，再将实例注册到全局 `instances.toml`。
+8. 将实际平台 JAR 的相对路径与 SHA-256 写入 manifest，生成 Fat Lockfile，再将实例
+   注册到全局 `instances.toml`。
 
 无法识别平台来源的 JAR 作为 `provider = "file"` 写入 lockfile；manifest 始终只保存
 `mod_id` 与开放版本约束。同一顶层包 JAR 中的其他模块只进入父 package 的
 `bundled`。若依赖图本身无解，init 保留所有文件、写出诊断，不猜测应该删除哪个包。
 
-显式参数优先于检测。交互模式在检测失败时请求输入；`--yes` 模式不读取 stdin，缺少
-Minecraft、loader 或 loader 版本时要求显式参数，不静默选择 Fabric 或固定版本。
+支持标准共享游戏根目录、`versions/<实例>` 隔离目录、Prism/MultiMC 的
+`.minecraft`/`minecraft`、CurseForge profile 和 GDLauncher 的 `instance/`。
+隔离布局只扫描当前实例，不读取 sibling profile；共享根目录出现多个 Minecraft 或
+loader 候选时必须显式选择，不能按目录顺序猜测。
 
-当前未实现 `.minecraft` 目录结构的单独预警；只要参数与目录内容足够，空目录也可用于
-创建新项目。这属于规范体验差距，不影响生成数据的正确性。
+显式参数用于筛选实际候选，不能凭空创建平台工件。交互模式在多个候选时请求选择；
+`--yes` 模式不读取 stdin，歧义或缺少实际 JAR 时要求显式参数/修复启动器安装。
 
 ### `orbit instances`
 
@@ -118,6 +122,10 @@ orbit add <mod>
 求解。确认后写入 `mods/`、manifest 和 lockfile。顶层 constraint、`optional`、`env`
 持久化到 manifest；传递依赖只进入 lockfile。`--no-deps` 禁止传递安装。
 
+若同一个 provider locator 的不同候选 JAR 声明了多个真实 `mod_id`，会分别剔除无解
+身份。唯一可行身份自动采用；多个可行身份会先询问要添加哪一个包。upgrade 不允许借此
+静默改名：它只跟随已安装 `mod_id`，项目改名必须作为 remove/add 的包替换。
+
 本地 `file:` 同样解析 loader 元数据、哈希、内嵌模组并校验依赖图，不绕过锁文件。
 在线与本地添加都使用同一个方案选择和包事务报告；若选中方案替换或淘汰已有顶层包
 版本，会与新安装项一起展示并确认。
@@ -132,7 +140,10 @@ orbit install
   [--locked | --frozen]
 ```
 
-这是实例还原命令，不接受模组名，也不修改 manifest 顶级声明。
+这是实例还原命令，不接受模组名。开始前重新探测实际平台，不从 manifest 中记录的旧
+文件名寻找 JAR。Minecraft 版本与 manifest 不一致时拒绝并要求先 `orbit sync`。
+loader 版本不一致不直接拒绝：实际 loader JAR 的版本和 bundled 模块进入同一次求解，
+只在真实依赖约束不兼容时失败；成功写盘时刷新平台快照。
 
 选择顺序：
 
@@ -146,6 +157,9 @@ orbit install
 `--locked` 与 `--frozen` 同义：要求 lockfile 与 manifest 完整一致，禁止重新解析来源
 元数据。它不表示物理离线；缓存未命中时仍可使用 lockfile 已锁定的下载 URL。旧 lockfile
 没有 URL 且缓存未命中时，locked 模式返回错误。
+
+非 locked `install` 是依赖修复入口：lock 图不完整或冲突时会下载远端完整候选闭包，
+再按 JAR 元数据重新求解。`sync` 则只做本地对账，不承担联网修复。
 
 ### `orbit remove`
 
@@ -170,15 +184,20 @@ orbit purge <mod>
 
 ### `orbit sync`
 
-扫描真实 `mods/` 并对账 manifest/lockfile，报告：
+先从当前 launcher 布局重新探测平台，再扫描真实 `mods/` 并对账
+manifest/lockfile。旧 `[platform]` 路径不参与发现。报告：
 
 | 分类 | 含义 |
 |------|------|
+| `platform` | Minecraft/loader 版本、JAR 路径或内容哈希发生变化 |
 | `added` | 磁盘新增 JAR，已识别并写入声明/锁 |
 | `changed` | 已锁文件内容或元数据变化，锁记录已更新 |
 | `missing` | manifest/lockfile 期望的 JAR 不在磁盘 |
 | `unlocked` | manifest 有顶层声明但 lockfile 无对应 package |
 | `removed` | 同一 `mod_id` 下未被所选方案采用的顶层包版本 |
+
+平台刷新和包求解使用同一次实际 loader JAR 分析。loader 版本变化不被先验判为错误；
+若某个 mod 对新 loader 的真实约束不成立，正常返回依赖无解。
 
 它不下载 JAR；为识别手动加入的文件，批量反查可能访问 Modrinth SHA-512 或 CurseForge fingerprint 接口。dry-run 不保存对账
 结果。同 ID 的所有本地文件先作为候选统一求解；不会按扫描顺序让后一个覆盖前一个。

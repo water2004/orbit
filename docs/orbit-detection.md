@@ -1,14 +1,15 @@
 # Orbit 实例环境检测
 
-> 实现位置：`orbit-core/src/detection/`、`orbit-core/src/metadata/version_profile.rs`
-> 与 `orbit-core/src/init.rs`
+> 实现位置：`orbit-core/src/launcher.rs`、`orbit-core/src/platform.rs`、
+> `orbit-core/src/detection/` 与 `orbit-core/src/init.rs`
 
 ## 1. 职责边界
 
 检测层只回答两个问题：
 
-1. 当前目录使用哪一种模组加载器，以及能否从 launcher profile 得到版本；
-2. 当前实例的 Minecraft JAR 是否包含可解析的 `version.json`。
+1. 当前目录是不是受支持的实际 Minecraft game directory；
+2. launcher 当前选择了哪些 Minecraft/loader 候选；
+3. 哪两个实际 Minecraft/loader JAR 对应该实例。
 
 它不解析模组 JAR，不查询下载平台，也不替安装流程选择兼容版本。模组元数据由
 `metadata/` 与 `jar/` 处理；平台版本由 provider 处理。
@@ -21,20 +22,37 @@
 pub trait LoaderDetector: Send + Sync {
     fn name(&self) -> &'static str;
     fn loader_type(&self) -> ModLoader;
-    fn detect(&self, instance_dir: &Path) -> Result<LoaderInfo, OrbitError>;
+    fn detect(
+        &self,
+        instance_dir: &Path,
+        mc_version: Option<&str>,
+    ) -> Result<LoaderInfo, OrbitError>;
 }
 ```
 
 `LoaderDetectionService::new()` 当前注册 Fabric、Forge、NeoForge 和 Quilt 四个
-detector。`detect_all()` 执行全部策略，并按置信度降序返回；手动传入
+detector。`LoaderInfo.versions` 保留全部候选，不在 detector 内提前取第一个。
+`detect_all()` 执行全部策略，并按置信度降序返回；手动传入
 `--modloader` 时，CLI 通过 `find_by_name()` 只运行对应 detector。
 
-## 3. Launcher profile 扫描
+## 3. Launcher 布局与 profile 扫描
 
-四个 detector 复用 `profile::detect_profile_loader()`。扫描范围为：
+`LauncherLayout` 将常见启动器归一化成 profile、Minecraft JAR 搜索目录、共享
+libraries 和组件列表：
 
-- 实例根目录中的 `*.json`；
-- `versions/` 下每个直接子目录中的 `*.json`。
+- 标准/官方 launcher 的共享游戏根；
+- HMCL 等使用的 `versions/<实例>` 隔离 game directory；
+- Prism Launcher/MultiMC 的实例 `.minecraft` 或 `minecraft`，读取 `mmc-pack.json`；
+- CurseForge profile（`minecraftinstance.json`）；
+- GDLauncher 的 `instance/`（父目录 `instance.json`）；
+- 带实际 version profile/JAR 的 standalone 目录和 dedicated server marker。
+
+空目录、任意目录和只有 `mods/` 的目录不是合法实例。隔离目录只读取当前
+`versions/<实例>` 的 profile，不扫描 sibling 实例。
+
+四个 detector 复用 `profile::detect_profile_loader()`，只消费 `LauncherLayout`
+给出的 profile/组件。若提供 Minecraft 版本，`inheritsFrom` 指向其它版本的 profile
+不会进入候选。
 
 JSON 按 Minecraft Launcher version profile 解析，主要读取 `libraries[].name` 和
 `mainClass`：
@@ -45,6 +63,10 @@ JSON 按 Minecraft Launcher version profile 解析，主要读取 `libraries[].n
 | Forge | `net.minecraftforge:forge` | `minecraftforge` |
 | NeoForge | `net.neoforged:neoforge` 或 `net.neoforged:forge` | `neoforged` |
 | Quilt | `org.quiltmc:quilt-loader` | `quiltmc` |
+
+Prism/MultiMC 同时识别 component UID：
+`net.fabricmc.fabric-loader`、`net.minecraftforge`、`net.neoforged` 和
+`org.quiltmc.quilt-loader`。
 
 找到 Maven 坐标时返回加载器版本和 `Confidence::Certain`。只命中 `mainClass` 时没有
 足够信息确定版本，因此返回 `Confidence::Low`；没有证据时返回
@@ -60,9 +82,9 @@ Forge/NeoForge profile 的坐标版本有时包含 Minecraft 前缀，例如
 加载器选择顺序如下：
 
 1. 显式 `--modloader` 始终优先，并验证名称是否受支持；
-2. 未显式指定时，只自动接受 `Confidence::Certain` 的最佳检测结果；
+2. 未显式指定时，只自动接受唯一的 `Confidence::Certain` loader；
 3. 没有确定结果时，交互模式要求用户选择加载器；
-4. 加载器版本按“显式参数 → 检测版本 → 交互输入”选择；
+4. 加载器版本按“显式参数筛选实际候选 → 唯一检测版本 → 多候选交互”选择；
 5. 使用 `--yes` 且无法确定版本时，必须显式提供
    `--modloader-version`，不会伪造版本。
 
@@ -71,26 +93,30 @@ Forge/NeoForge profile 的坐标版本有时包含 Minecraft 前缀，例如
 
 ## 5. Minecraft 版本检测
 
-`init::detect_mc_version(instance_dir)` 先扫描 `versions/` 的直接子目录，再回退扫描
-实例根目录中的 JAR，读取其中的 `version.json`，并交给
+`init::detect_mc_versions(instance_dir)` 只扫描布局声明的游戏 JAR 目录和
+`libraries/com/mojang/minecraft`，读取 `version.json` 并交给
 `metadata::mojang::McVersion` 解析。返回值除 `id` 外还保留
 world/protocol/pack/Java 版本和稳定版标志。
 
-该检测只接受真实 `version.json`；无法检测时由 CLI 请求 `--mc-version` 或交互输入。
-它不会从目录名猜版本，也不会把 loader profile 的 `inheritsFrom` 当作已经验证的游戏
-JAR 版本。
+profile 的 `inheritsFrom` 或 Prism component 只用于筛选；最终仍必须找到并解析对应
+真实 JAR。多个版本不会按扫描顺序取第一个。
+
+`platform::discover_platform()` 随后定位 loader Maven 目录并扫描实际 JAR，而不是假设
+固定文件名/classifier。Fabric/Quilt loader 元数据必须可解析；所有能解析的 loader
+bundled 模块进入平台候选图。最终路径和 SHA-256 写入 `[platform]`。
 
 ## 6. 已知边界
 
-- 只扫描根目录和 `versions/` 的一层子目录，不解析各启动器的私有配置数据库；
+- 不解析启动器的私有数据库；只读取实例内稳定的 profile/组件/marker 文件和现有
+  libraries。没有这些信息时明确报错；
 - launcher profile 的 `mainClass` 仅是弱证据，不足以自动确定 loader 版本；
-- 多个加载器同时有确定证据时，当前按 detector 注册顺序稳定选择第一个结果，没有额外
-  的冲突询问；
+- 多个 Minecraft、loader 或 loader version 候选均视为歧义；交互 init 可选择，
+  非交互 fresh scan 不猜测；
 - 游戏 `version.json` 的 Java 信息用于检测展示；resolver 依据目标 Minecraft 版本
   注册 `java` 平台包，并用模组 feature 与 class major 校验最低 Java。它不探测用户
   当前 shell 的 Java，因为安装目标应由实例版本决定；
-- CurseForge 是下载 provider 边界，与实例 loader 检测无关；启用它不会改变 loader
-  profile 的检测规则。
+- CurseForge 下载 provider 与 CurseForge launcher 布局是两个独立边界；前者需要 API
+  Key，后者只读取本地实例 marker/profile，不需要网络。
 
 ## 7. 扩展检测策略
 
