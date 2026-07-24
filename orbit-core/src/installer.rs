@@ -689,8 +689,8 @@ async fn install_mod(input: InstallModInput<'_>) -> Result<InstallReport, OrbitE
 
     // 1-2. BFS download all JARs
     let seeds = vec![slug.to_string()];
-    let mut catalog = crate::outdated::download_candidates_with_fallback(
-        providers, &seeds, mc_version, loader, jar_cache,
+    let mut catalog = crate::outdated::download_transaction_candidate_catalog(
+        providers, &seeds, lockfile, mc_version, loader, jar_cache,
     )
     .await?;
     catalog.loader_package = loader_package;

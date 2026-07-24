@@ -648,6 +648,71 @@ b = "*"
     }
 
     #[tokio::test]
+    async fn add_can_select_an_older_existing_package_with_a_compatible_dependency_range() {
+        let manifest: OrbitManifest = toml::from_str(
+            r#"
+[project]
+name = "test"
+mc_version = "26.1.2"
+modloader = "fabric"
+modloader_version = "0.19.2"
+[platform]
+minecraft_jar = { path = "minecraft.jar", sha256 = "test" }
+loader_jar = { path = "loader.jar", sha256 = "test" }
+[dependencies]
+reeses-sodium-options = "*"
+voxy = "*"
+"#,
+        )
+        .unwrap();
+        let mut installed_reeses = locked("reeses-sodium-options");
+        installed_reeses.version = "2".to_string();
+        installed_reeses.dependencies = vec![ModDependency::required("sodium", ">=0.9.1").into()];
+        let mut installed_sodium = locked("sodium");
+        installed_sodium.version = "0.9.1".to_string();
+        let lockfile = OrbitLockfile {
+            meta: LockMeta {
+                mc_version: "26.1.2".to_string(),
+                modloader: "fabric".to_string(),
+                modloader_version: "0.19.2".to_string(),
+            },
+            packages: vec![installed_reeses, installed_sodium],
+        };
+        let mut catalog = CandidateCatalog::default();
+        catalog.candidates.insert(
+            "reeses-sodium-options".to_string(),
+            vec![
+                candidate("1", vec![ModDependency::required("sodium", ">=0.8.7")]),
+                candidate("2", vec![ModDependency::required("sodium", ">=0.9.1")]),
+            ],
+        );
+        catalog.candidates.insert(
+            "voxy".to_string(),
+            vec![candidate(
+                "0.2.16-beta",
+                vec![ModDependency::required("sodium", "=0.8.9")],
+            )],
+        );
+        catalog.candidates.insert(
+            "sodium".to_string(),
+            vec![
+                candidate("0.8.9", Vec::new()),
+                candidate("0.9.1", Vec::new()),
+            ],
+        );
+
+        let portfolio = resolve_candidate_portfolio(&manifest, &lockfile, &catalog)
+            .await
+            .unwrap();
+
+        assert!(portfolio.alternatives.iter().any(|solution| {
+            solution.selected_versions["reeses-sodium-options"] == "1"
+                && solution.selected_versions["voxy"] == "0.2.16-beta"
+                && solution.selected_versions["sodium"] == "0.8.9"
+        }));
+    }
+
+    #[tokio::test]
     async fn a_different_candidate_at_the_same_declared_version_is_not_an_upgrade() {
         let mut current = lockfile();
         current.packages.retain(|entry| entry.mod_id == "a");

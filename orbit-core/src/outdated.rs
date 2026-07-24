@@ -30,41 +30,6 @@ pub struct OutdatedReport {
     pub warnings: Vec<String>,
 }
 
-/// Discover the complete remote project closure, then download that artifact
-/// queue as one bounded batch. JAR dependencies are deliberately outside this
-/// layer; only the solver consumes them after every artifact has been parsed.
-/// 供 `install_mod` 和 `check_all_outdated` 共用。
-pub async fn download_candidates_bfs(
-    provider: &dyn ModProvider,
-    seeds: &[String],
-    mc_version: &str,
-    loader: &str,
-    jar_cache: &crate::jar_cache::JarCache,
-) -> Result<CandidateCatalog, OrbitError> {
-    let mut seen_lookups: HashSet<String> = HashSet::new();
-    let mut seen_artifacts: HashSet<String> = HashSet::new();
-    let artifacts = discover_artifact_closure(
-        provider,
-        seeds.to_vec(),
-        mc_version,
-        loader,
-        &mut seen_lookups,
-        &mut seen_artifacts,
-    )
-    .await?;
-    let downloader = provider.artifact_downloader().clone();
-    let jobs = artifacts
-        .into_iter()
-        .map(|artifact| (downloader.clone(), artifact))
-        .collect();
-    let parsed = download_artifact_queue(jobs, loader, jar_cache).await?;
-    let mut catalog = CandidateCatalog::default();
-    for (metadata, artifact) in parsed {
-        catalog.record(metadata, artifact)?;
-    }
-    Ok(catalog)
-}
-
 async fn discover_artifact_closure(
     provider: &dyn ModProvider,
     initial_lookups: Vec<String>,
@@ -174,24 +139,132 @@ async fn download_artifact_queue(
     Ok(parsed)
 }
 
-pub async fn download_candidates_with_fallback(
+/// Build the complete candidate universe needed by an add/upgrade transaction.
+///
+/// A transaction is allowed to move already-installed packages to other
+/// versions. Consequently the requested provider project alone is not a
+/// complete solver input: every online project already represented by the
+/// lockfile must contribute all of its matching artifacts as well. Discovery
+/// finishes for every project before the combined queue is downloaded.
+pub(crate) async fn download_transaction_candidate_catalog(
     providers: &[Box<dyn ModProvider>],
-    seeds: &[String],
+    requested_seeds: &[String],
+    lockfile: &OrbitLockfile,
     mc_version: &str,
     loader: &str,
     jar_cache: &crate::jar_cache::JarCache,
 ) -> Result<CandidateCatalog, OrbitError> {
+    let jobs = discover_transaction_artifact_queue(
+        providers,
+        requested_seeds,
+        lockfile,
+        mc_version,
+        loader,
+    )
+    .await?;
+    let mut catalog = CandidateCatalog::default();
+    for (metadata, artifact) in download_artifact_queue(jobs, loader, jar_cache).await? {
+        catalog.record(metadata, artifact)?;
+    }
+    Ok(catalog)
+}
+
+async fn discover_transaction_artifact_queue(
+    providers: &[Box<dyn ModProvider>],
+    requested_seeds: &[String],
+    lockfile: &OrbitLockfile,
+    mc_version: &str,
+    loader: &str,
+) -> Result<Vec<(crate::providers::ArtifactDownloadClient, RemoteArtifact)>, OrbitError> {
+    #[derive(Default)]
+    struct ProviderDiscovery {
+        seen_lookups: HashSet<String>,
+        seen_artifacts: HashSet<String>,
+    }
+
+    let mut states: HashMap<String, ProviderDiscovery> = HashMap::new();
+    let mut jobs = Vec::new();
+    let mut requested_provider = None;
     for provider in providers {
-        match download_candidates_bfs(provider.as_ref(), seeds, mc_version, loader, jar_cache).await
+        let state = states.entry(provider.name().to_string()).or_default();
+        match discover_artifact_closure(
+            provider.as_ref(),
+            requested_seeds.to_vec(),
+            mc_version,
+            loader,
+            &mut state.seen_lookups,
+            &mut state.seen_artifacts,
+        )
+        .await
         {
-            Ok(download) if !download.candidates.is_empty() => return Ok(download),
-            Ok(_) | Err(OrbitError::ModNotFound(_)) => continue,
+            Ok(artifacts) if !artifacts.is_empty() => {
+                let downloader = provider.artifact_downloader().clone();
+                jobs.extend(
+                    artifacts
+                        .into_iter()
+                        .map(|artifact| (downloader.clone(), artifact)),
+                );
+                requested_provider = Some(provider.name());
+                break;
+            }
+            Ok(_) | Err(OrbitError::ModNotFound(_)) => {}
             Err(error) => return Err(error),
         }
     }
-    Err(OrbitError::ModNotFound(
-        seeds.first().cloned().unwrap_or_default(),
-    ))
+    if requested_provider.is_none() {
+        return Err(OrbitError::ModNotFound(
+            requested_seeds.first().cloned().unwrap_or_default(),
+        ));
+    }
+
+    let mut seeds_by_provider: HashMap<String, Vec<String>> = HashMap::new();
+    for entry in lockfile
+        .packages
+        .iter()
+        .filter(|entry| entry.provider != "file")
+    {
+        let project_id = entry.source_project_id().ok_or_else(|| {
+            OrbitError::Other(anyhow::anyhow!(
+                "lockfile package '{}' uses provider '{}' but has no project locator",
+                entry.mod_id,
+                entry.provider
+            ))
+        })?;
+        seeds_by_provider
+            .entry(entry.provider.clone())
+            .or_default()
+            .push(project_id);
+    }
+    for seeds in seeds_by_provider.values_mut() {
+        seeds.sort();
+        seeds.dedup();
+    }
+
+    for (provider_name, seeds) in seeds_by_provider {
+        let provider =
+            crate::providers::find_provider(providers, &provider_name).ok_or_else(|| {
+                OrbitError::Other(anyhow::anyhow!(
+                    "lockfile contains {provider_name} packages but that provider is not configured"
+                ))
+            })?;
+        let state = states.entry(provider_name).or_default();
+        let artifacts = discover_artifact_closure(
+            provider,
+            seeds,
+            mc_version,
+            loader,
+            &mut state.seen_lookups,
+            &mut state.seen_artifacts,
+        )
+        .await?;
+        let downloader = provider.artifact_downloader().clone();
+        jobs.extend(
+            artifacts
+                .into_iter()
+                .map(|artifact| (downloader.clone(), artifact)),
+        );
+    }
+    Ok(jobs)
 }
 
 pub(crate) async fn download_lockfile_candidate_catalog(
@@ -456,6 +529,91 @@ mod tests {
                 "child".to_string(),
                 "grandchild".to_string(),
             ])
+        );
+    }
+
+    #[tokio::test]
+    async fn add_discovery_includes_every_version_of_existing_online_packages() {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let provider = DiscoveryProvider {
+            downloader: ArtifactDownloadClient::anonymous("orbit-test").unwrap(),
+            projects: HashMap::from([
+                (
+                    "requested".to_string(),
+                    vec![related_artifact(
+                        "requested",
+                        "requested-project",
+                        "1",
+                        None,
+                    )],
+                ),
+                (
+                    "existing-project".to_string(),
+                    vec![
+                        related_artifact("existing", "existing-project", "old", None),
+                        related_artifact("existing", "existing-project", "compatible", None),
+                    ],
+                ),
+            ]),
+            calls: calls.clone(),
+        };
+        let providers: Vec<Box<dyn ModProvider>> = vec![Box::new(provider)];
+        let lockfile = OrbitLockfile {
+            meta: crate::lockfile::LockMeta {
+                mc_version: "26.1".to_string(),
+                modloader: "fabric".to_string(),
+                modloader_version: "0.19.2".to_string(),
+            },
+            packages: vec![crate::lockfile::PackageEntry {
+                mod_id: "existing".to_string(),
+                version: "old".to_string(),
+                sha1: String::new(),
+                sha256: "hash".to_string(),
+                sha512: String::new(),
+                filename: "existing-old.jar".to_string(),
+                provider: "modrinth".to_string(),
+                modrinth: Some(crate::lockfile::ModrinthInfo {
+                    project_id: "existing-project".to_string(),
+                    version_id: "existing-old".to_string(),
+                    slug: "existing".to_string(),
+                    download_url: String::new(),
+                }),
+                curseforge: None,
+                file: None,
+                dependencies: Vec::new(),
+                environment: crate::metadata::Environment::Both,
+                provides: Vec::new(),
+                language_loader: None,
+                embedded_artifacts: Vec::new(),
+                bundled: Vec::new(),
+            }],
+        };
+
+        let jobs = discover_transaction_artifact_queue(
+            &providers,
+            &["requested".to_string()],
+            &lockfile,
+            "26.1",
+            "fabric",
+        )
+        .await
+        .unwrap();
+        let filenames = jobs
+            .into_iter()
+            .map(|(_, artifact)| artifact.filename)
+            .collect::<HashSet<_>>();
+
+        assert_eq!(
+            filenames,
+            HashSet::from([
+                "requested-project-1.jar".to_string(),
+                "existing-project-old.jar".to_string(),
+                "existing-project-compatible.jar".to_string(),
+            ])
+        );
+        assert_eq!(
+            calls.lock().unwrap().as_slice(),
+            &["requested".to_string(), "existing-project".to_string()]
         );
     }
 
