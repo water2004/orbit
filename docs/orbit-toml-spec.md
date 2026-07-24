@@ -276,23 +276,28 @@ obfuscated = false
 [[package.bundled]]
 mod_id = "example_internal"
 version = "1.2.3"
+load_condition = "if_possible"
 environment = "both"
+
+[package.bundled.origin]
+kind = "nested"
+path = "META-INF/jars/example-internal.jar"
 ```
 
 顶层 `[[package]]` 字段：
 
 | 字段 | 说明 |
 |---|---|
-| `mod_id` / `version` | loader 元数据声明的逻辑 ID 与版本 |
-| `sha1` / `sha256` / `sha512` | 同一个物理 JAR 的哈希 |
-| `filename` | 实例中的物理文件名 |
+| `mod_id` / `version` | loader 元数据声明的包 ID 与版本 |
+| `sha1` / `sha256` / `sha512` | 顶层包 JAR 的哈希 |
+| `filename` | 实例中的顶层包文件名 |
 | `provider` | 当前为 `modrinth`、`curseforge` 或 `file` |
 | `environment` | `client`、`server`、`both` |
 | `dependencies` | 递归 `DependencyExpression` |
 | `provides` | 该逻辑模组提供的能力 ID/版本 |
 | `language_loader` | Forge-family language provider 要求 |
 | `embedded_artifacts` | Jar-in-Jar Maven artifact |
-| `bundled` | 同一物理文件提供的其他逻辑模组，可递归 |
+| `bundled` | 包内容中的同文件模块或嵌套模组，可递归 |
 
 `DependencyExpression` 使用 serde tagged enum：
 
@@ -301,9 +306,15 @@ environment = "both"
 - 单一关系保留 `id`、`requirement`、`kind`、`environment`、`ordering`、
   可选 `reason` 和可选递归 `unless`。
 
-`[[package.bundled]]` 不含哈希、provider 或 filename，因为它不是独立物理文件。它保存
-与顶层逻辑模组相同的 environment、dependencies、provides、language loader、
-embedded artifacts 和递归 bundled。
+`[[package.bundled]]` 不含哈希、provider 或 filename，因为它不是独立顶层包文件。
+它保存 `load_condition`、带类型的 `origin`，以及 environment、dependencies、
+provides、language loader、embedded artifacts 和递归 bundled。`origin.kind` 为
+`same_file` 或 `nested`；nested 还保存 owner 内路径，并可带 Forge-family artifact
+事实。
+
+lockfile 正常稳定状态下每个顶层 `mod_id` 只有一个 `[[package]]`。init/sync 扫描时
+可以暂时看到同 ID 的多个 JAR 候选，但它们先经过统一求解和用户确认，未选文件删除后
+才写回稳定 lockfile。
 
 provider 专属字段只进入 `[package.modrinth]`、`[package.curseforge]` 或
 `[package.file]`，不扁平污染公共 schema。远端子表只保存恢复下载所需的

@@ -16,10 +16,11 @@
 | 依赖求解 | ✅ | 强类型 occurrence 图、完整极大解枚举、any/all/unless、环境、provides、ordering、Java、JarJar |
 | 原因 | ✅ | 自定义 reason 参与原始推导；成功候选用同次 observer |
 | 本地校验 | ✅ | 转 Fat Lockfile 后复用统一建图 |
-| 安装/恢复/升级 | ✅ | 由求解结果选择物理 JAR |
+| 安装/恢复/升级 | ✅ | 由求解结果选择顶层包候选并生成统一事务计划 |
 | Modrinth / CurseForge / `file:` | ✅ | 查询、下载、识别、锁定；CurseForge 无 API Key 时拒绝创建 |
 | PubGrub fork 远端 | ✅ | 功能分支已发布，Orbit 固定到完整 commit SHA |
-| 多解选择 | ✅ | 唯一解自动选择；多个单包不可升级解才交互 |
+| 多解选择 | ✅ | fork 原生枚举单包极大解；唯一解自动选择，多解交互 |
+| 本地重复包 | ✅ | init/sync 按 mod_id 合并为候选；确认后删除未选中的顶层包版本 |
 | 远端身份边界 | ✅ | provider 只给下载 locator；所有包元数据来自实际 JAR |
 | Provider 分层 | ✅ | Modrinth / CurseForge HTTP 与 DTO 各在独立 wrapper，core 只做领域适配 |
 | 跨平台全局路径 | ✅ | RuntimeEnvironment + 显式路径；system/executable 布局 |
@@ -54,6 +55,10 @@
   提供，未选中候选不能提供内容。
 - “resolver 动态补抓候选”：下载层先按远端 project relation 构造完整 artifact
   队列并统一解析，resolver 此后严格离线。
+- “每个物理 JAR 是独立求解包”：求解包现为 JAR 声明的 `mod_id`，文件与嵌套路径
+  只区分候选；顶层文件才是安装/删除单元。
+- “同一 ID 的嵌套版本必须全部满足”：现在按 Fabric/Quilt load condition 选择一个
+  loader 可加载候选，Forge-family JarJar 按 artifact range 选择。
 
 不提供旧 lockfile schema 的兼容读取层；目前没有外部 Orbit 用户需要承担这种迁移债。
 
@@ -61,11 +66,11 @@
 
 | 命令 | 状态 |
 |---|---|
-| `init` | 扫描并验证真实实例 |
+| `init` | 扫描真实实例，经共享候选组合选择并确认重复包清理 |
 | `add` | Modrinth、CurseForge、搜索名和本地 JAR |
 | `install` / `restore` | 共享求解图，按 target 选择 |
 | `remove` / `upgrade` / `outdated` | 使用 Fat Lockfile 和结构化报告 |
-| `sync` | 重新扫描、识别、对账 |
+| `sync` | 重新扫描、识别、按包选择候选并确认移除未选版本 |
 | `check` | 实例目标兼容性预检 |
 | `list` / `info` | 展示包信息、逻辑依赖和 bundled |
 | `export` / `import` | Orbit archive 与 Modrinth pack |
@@ -82,6 +87,9 @@
 - 字节码扫描只能证明 class major 下限，不能证明 API/Mixin/反射兼容。
 - PubGrub fork 已发布到 `water2004/pubgrub` 的 `codex/solver-observer` 分支；
   Orbit 固定到 `0c260ff2528a6c09c683cc7270b3b97c2ea114f3`。
+- 当前 fork 原生支持 `P = mod_id`、不透明复合候选版本、调用方定义
+  `strictly_higher` 和完整单包极大解枚举；这部分不需要 Orbit 侧旁路或新的 fork
+  改动。upgrade 的“至少一个包变新、其他包可降级”是对同批极大解的操作分类。
 - 远端 project relation 会递归构造下载闭包；JAR `mod_id` 从不作为 slug/project
   查询。闭包缺少实际 required identity 时由 resolver 正常证明无解。
 - JAR 缓存按本地 SHA-512 寻址，SHA-1 只作别名；provider 文件名不作为缓存键。

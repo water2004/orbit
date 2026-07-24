@@ -7,7 +7,7 @@
 ```text
 resolver/
 ├── mod.rs          公共 API 与求解编排
-├── graph.rs        注册平台、物理模组、能力、内嵌模组和 Jar-in-Jar
+├── graph.rs        注册包候选、模块、provides、load condition 和 Jar-in-Jar
 ├── constraints.rs  将规范化 any/all/unless 表达式编译为 PubGrub 子句
 ├── ordering.rs     加载顺序环约束与软依赖告警
 ├── local.rs        把本地扫描结果转换为 lockfile 后复用统一建图
@@ -65,6 +65,16 @@ fork 还提供 `resolve_maximal_solutions_with_observer()`。它在同一个 sol
 这些 API 仍然只理解通用 package/version/constraint，不包含 Jar-in-Jar、loader 或
 Orbit 类型。
 
+Orbit 已核对过这项 API 与当前包语义的边界：`P` 可以直接使用 JAR 声明的 `mod_id`，
+`V` 是求解器视为不透明值的复合候选，`strictly_higher(V)` 也由 Orbit 定义。因此同一
+声明版本的不同 JAR 候选不会被误判为升级，而更高的 JAR 内版本会包含该版本的所有来源
+候选。包/候选建模与单包极大解枚举均由 fork 原生抽象覆盖，不需要在 Orbit 中做第二次
+求解，也不需要为 Minecraft 领域再修改 fork。
+
+`upgrade` 另有一个操作层条件：相对当前安装集合，方案中至少存在一个
+`PackageChangeKind::Upgrade`。这只是对 fork 一次性返回的极大解做分类；方案中的其他包
+允许降级、替换或删除。它不改变可行性定义，也不产生另一条证明路径。
+
 ## 3. 规范化依赖语义
 
 `constraints.rs` 处理 loader-neutral 的 `DependencyExpression`：
@@ -89,25 +99,33 @@ Orbit 类型。
 `BEFORE`/`AFTER` 会变为版本精确的有向图；选中组合构成环时，环本身是 PubGrub
 自定义不相容关系，错误会显示完整路线。
 
-## 4. `provides` 与多 provider
+## 4. 包、候选与 `provides`
 
-依赖指向的是逻辑能力，不直接绑死某个物理 JAR。求解图使用强类型
-`SolverPackage`，明确区分：
+求解器中的模组包只有一个身份轴：JAR loader 元数据声明的 `mod_id`。物理文件名、
+provider slug、project ID、下载 URL 和嵌套路径都不能成为 `SolverPackage`。
 
-- 顶层物理 mod；
-- 带 owner/version/path 的 bundled occurrence；
-- 逻辑 capability；
-- Jar-in-Jar artifact；
-- 平台包；
-- provider witness。
+一个包可以有多个候选版本。私有 `SolverVersion` 同时保存：
 
-每个逻辑 capability/version 依赖一个 provider witness；每个 witness 版本又精确
-依赖一个真实物理 occurrence。因此同一能力有多个 provider 时不会被后注册者覆盖，
-未选中的外层 JAR 也不能凭空提供 bundled mod 或 Jar-in-Jar。witness 的版本属于私有
-`SolverVersion`，不会污染 loader `Version`、lockfile 或公共 API。
+- loader 语义版本；
+- `CandidateIdentity { owner, source, path, location, installed }`。
 
-诊断观察逻辑 capability 的候选版本，而不是内部 witness。渲染器按强类型过滤
-capability-to-witness 和 witness-to-occurrence 基础设施边，只呈现领域依赖事实。
+顶层 `mods/*.jar` 是包的具体候选，身份中的 `path` 为空且 `owner == mod_id`。同一
+`mod_id` 的多个顶层 JAR 是同一个包的不同候选，即使它们声明了相同版本也不能互相
+覆盖，因为依赖元数据或文件来源可能不同。最终解每个包只选择一个候选。
+
+一个顶层包 JAR 可以包含多个同文件模块或嵌套 JAR；并不是每个嵌套 JAR 都是包。
+只有含 loader 模组元数据的模块才进入 `Mod(mod_id)` 候选，普通库只作为包内容随 owner
+移动。contained 候选带 owner/source/path，并精确依赖 owner 候选，所以不能脱离外层包
+单独安装或删除：
+
+- 同一元数据文件声明的模块与 owner 原子选择；
+- Fabric 嵌套模组按 `if_possible` 优先加载，无兼容候选时可以省略；
+- Quilt 使用 `always` / `if_possible` / `if_required`；
+- Forge-family JarJar 先按 Maven `group:artifact` 区间选 artifact；若 artifact 本身
+  声明模组，再把相应模块绑定到同一个 owner。
+
+`provides` 也不创建“物理包”。它在被提供的 `mod_id` 下注册一个代理候选，并精确依赖
+实际 owner 候选。因此多个 provider 可以正常竞争，未选中的顶层包不能凭空提供能力。
 
 ## 5. 平台与运行时约束
 
@@ -126,7 +144,7 @@ Java 版本由目标 Minecraft 版本确定；JAR 根目录 class 文件的最�
 兼容。
 
 Forge-family Jar-in-Jar 的 Maven 坐标是逻辑 artifact 包。每个内嵌 artifact 是其
-外层 mod occurrence 提供的一个版本；artifact witness 精确依赖这个 owner/version。
+外层包候选提供的一个版本；artifact 候选精确依赖这个 owner/version。
 父模组依赖声明 range，所以两个父 JAR 对同一坐标要求不相交时冲突由 PubGrub 证明，
 而候选 `a@1` 绝不能借用未选中 `a@2` 里的 artifact。
 
@@ -151,17 +169,22 @@ provider 的 dependency relation 仅用于定位下一批 project，不携带可
 `resolve_candidate_portfolio()` 不持有 provider、下载器或缓存，也不会动态联网。
 这保证下载失败、JAR 解析和依赖求解是三个清楚的错误边界。
 
-多解的定义是：在保持其他投影包版本不变时，不存在任何一个包还能单独升级。交互界面
-列出每个方案的实际升级集合；只有一个方案时不读取 stdin。`--yes` 和 dry-run 不
-交互，稳定选择枚举顺序中的第一个方案。
+多解的定义是：在保持其他用户包版本不变时，不存在任何一个包还能单独升级。候选来源
+不是“更高版本”的第二条坐标。交互界面列出每个方案的安装、升级、降级、同版本替换和
+删除，以及已知的旧/新顶层文件名；只有一个方案时不读取 stdin。dry-run 仍会在多解时
+请求选择，因为它预览的必须是一个确定方案；`--yes` 才稳定选择枚举顺序中的第一个。
 
 ## 7. 本地、安装与恢复路径
 
 `check_local_graph()` 不维护第二套手写解析器或检查器。它把 `IdentifiedMod` 转成同一
-`OrbitLockfile` 结构，再调用 `build_solver_graph()`。
+`OrbitLockfile` 结构，再调用 `build_solver_graph()`。`init` 与 `sync` 进一步通过
+`package_reconciliation` 共享 `select_local_packages()`：本地同 ID 文件进入同一个
+候选集合，而不是按扫描顺序覆盖。
 
-`install`、`restore`、`sync`、`outdated` 使用相同的依赖表达式和目标环境。安装选择
-也由求解结果过滤，不再用手写传递闭包推测该复制哪些 JAR。
+`add`、非 locked `install`、`restore`、`upgrade`、`sync`、`init` 和 `outdated` 都消费
+同一种 `ResolutionReport`。多个极大解统一选择；选择完成后统一生成包事务计划。
+未选中的顶层包版本会列出精确 `mod_id`、版本和文件名，实际写入或删除前必须确认；
+即使方案唯一也不能跳过破坏性计划确认。嵌套 JAR 从不作为独立删除目标。
 
 ## 8. 可读错误的约束
 
@@ -173,9 +196,9 @@ provider 的 dependency relation 仅用于定位下一批 project，不携带可
 - 哪个 Jar-in-Jar 坐标区间冲突；
 - 哪个环境或 Java 下限不兼容。
 
-内部根、capability、provider witness 和物理 occurrence 边按类型隐藏；代码中不再
-存在包名前缀或字符串反解析。测试断言结构化 reason 或领域文本，并明确拒绝 witness
-编号、`capability` 等内部术语，不断言 PubGrub debug 输出。
+内部根、候选身份、load preference 和 artifact 绑定边按类型隐藏；代码中不再存在
+包名前缀或字符串反解析。测试断言结构化 reason 或领域文本，不断言 PubGrub debug
+输出。
 
 ## 9. 产品边界
 

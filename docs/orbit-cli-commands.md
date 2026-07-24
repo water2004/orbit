@@ -23,6 +23,12 @@ add install remove purge sync upgrade import
 `init` 始终初始化当前目录；实例注册表和 cache 命令操作全局数据；`export` 读取实例但只
 写用户指定的输出文件。
 
+凡是命令会确定一个包集合，都遵守同一策略：求解包键是 JAR 的 `mod_id`；唯一极大解
+自动选择，多个极大解必须选择（dry-run 也一样，只有 `--yes` 自动选稳定的第一个）。
+选择之后，安装、升级、降级、同版本替换和删除合并成一个计划。只要计划会替换或删除
+顶层 `mods/*.jar`，即使求解只有唯一方案也必须先展示精确包版本与文件名并确认。
+contained JAR 不是独立删除目标。
+
 全局标志：
 
 | 标志 | 说明 |
@@ -57,11 +63,13 @@ orbit init <name>
 4. 扫描 `mods/*.jar`，忽略 `.old` / `.disabled`，解析对应 loader 元数据与内嵌 JAR；
 5. 计算 SHA-1/SHA-256/SHA-512 和 CurseForge fingerprint；Modrinth 始终参与批量识别，
    已配置 API Key 时 CurseForge 也参与；
-6. 生成 manifest 与 Fat Lockfile，再做本地依赖图验证；
-7. 将实例注册到全局 `instances.toml`。
+6. 同一 `mod_id` 的顶层 JAR 作为一个包的候选，经共享 PubGrub portfolio 选择；
+7. 多解时请求方案选择；未选中的顶层包版本列入删除计划并在写盘前确认；
+8. 生成 manifest 与 Fat Lockfile，再将实例注册到全局 `instances.toml`。
 
 无法识别平台来源的 JAR 作为 `provider = "file"` 写入 lockfile；manifest 始终只保存
-`mod_id` 与版本约束。同一物理 JAR 中的其他逻辑模组只进入父 package 的 `bundled`。
+`mod_id` 与开放版本约束。同一顶层包 JAR 中的其他模块只进入父 package 的
+`bundled`。若依赖图本身无解，init 保留所有文件、写出诊断，不猜测应该删除哪个包。
 
 显式参数优先于检测。交互模式在检测失败时请求输入；`--yes` 模式不读取 stdin，缺少
 Minecraft、loader 或 loader 版本时要求显式参数，不静默选择 Fabric 或固定版本。
@@ -111,6 +119,8 @@ orbit add <mod>
 持久化到 manifest；传递依赖只进入 lockfile。`--no-deps` 禁止传递安装。
 
 本地 `file:` 同样解析 loader 元数据、哈希、内嵌模组并校验依赖图，不绕过锁文件。
+在线与本地添加都使用同一个方案选择和包事务报告；若选中方案替换或淘汰已有顶层包
+版本，会与新安装项一起展示并确认。
 
 ### `orbit install`
 
@@ -168,23 +178,27 @@ orbit purge <mod>
 | `changed` | 已锁文件内容或元数据变化，锁记录已更新 |
 | `missing` | manifest/lockfile 期望的 JAR 不在磁盘 |
 | `unlocked` | manifest 有顶层声明但 lockfile 无对应 package |
+| `removed` | 同一 `mod_id` 下未被所选方案采用的顶层包版本 |
 
 它不下载 JAR；为识别手动加入的文件，批量反查可能访问 Modrinth SHA-512 或 CurseForge fingerprint 接口。dry-run 不保存对账
-结果。
+结果。同 ID 的所有本地文件先作为候选统一求解；不会按扫描顺序让后一个覆盖前一个。
+实际删除 `removed` 前总会展示文件名并确认。
 
 ### `orbit outdated [mod]`
 
 只读查询在线 package 的最新兼容版本。可按真实 `mod_id` 或 slug 限定单包；不存在的
 输入、未安装的包和 `file:` 包返回明确结果，不会静默当作“已是最新”。
 若存在多个“其它包不变时已无法单独升级”的方案，只在交互模式列出升级集合并请求
-选择；唯一方案自动采用。`--yes` 和 dry-run 不读取 stdin，稳定选择第一个方案。
+选择；唯一方案自动采用。dry-run 仍需选择具体方案；`--yes` 才稳定选择第一个方案。
 
 ### `orbit upgrade [mod]`
 
 无参数时升级所有允许升级的在线 package；有参数时要求该包已经安装且有在线来源。
 升级复用候选下载、真实 JAR 解析、PubGrub 诊断、确认与原子文件替换。manifest 中的版本
 约束保持不变，只更新 lockfile 的实际版本与来源事实。多解规则与 `outdated` 相同；
-方案选择发生在安装确认之前。dry-run 不替换文件。
+方案选择发生在安装确认之前。一个 upgrade 方案只要求至少一个包比当前安装版本更新，
+允许为满足依赖而让其他包降级、同版本换源或被删除；这些变化全部列入同一个确认计划。
+若没有任何包变新则 upgrade 是 no-op。dry-run 不替换文件。
 
 ## 5. 查询
 

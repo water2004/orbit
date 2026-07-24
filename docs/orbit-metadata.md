@@ -32,6 +32,7 @@ JAR/ZIP I/O（jar）
 - `environment`
 - `dependencies: Vec<DependencyExpression>`
 - `provides`
+- `load_condition`
 
 依赖不再使用 `(id, version, required)` 元组。`ModDependency` 明确保留：
 
@@ -41,8 +42,9 @@ JAR/ZIP I/O（jar）
 - `reason`
 - `unless`
 
-Quilt 的嵌套 `any` / `all` 通过递归 `DependencyExpression` 保真。一个物理 JAR
-声明的其他逻辑模组或嵌套模组写入 `bundled`，不伪装成独立顶层文件。
+Quilt 的嵌套 `any` / `all` 通过递归 `DependencyExpression` 保真。一个顶层包 JAR
+声明的其他模块或嵌套模组写入 `bundled`，并记录 `origin` 与 `load_condition`，不
+伪装成独立顶层文件。
 
 ## 3. loader 适配
 
@@ -87,6 +89,22 @@ Fabric 映射：
 Quilt 递归保存依赖组。`unless` 是条件表达式而不是字符串标记；`breaks` 进入硬冲突。
 带 group 前缀的依赖和 provides ID 在适配层归一化为实际 mod ID。
 
+嵌套加载规则按 loader 保真：Fabric 嵌套候选为 `if_possible`；Quilt 读取
+`load_type = always | if_possible | if_required`，缺省为 `if_required`。同一个 ID
+存在多个嵌套候选时由共享求解图选择一个兼容候选，而不是要求全部候选同时成立。
+Fabric 的候选优先级还保留 root 优先、版本降序、较浅嵌套优先以及递归 parent priority。
+
+这些规则以 loader 实现而非平台展示信息为准：
+
+- Fabric：
+  [`ModLoadCondition`](https://github.com/FabricMC/fabric-loader/blob/master/src/main/java/net/fabricmc/loader/impl/discovery/ModLoadCondition.java)、
+  [`ModSolver`](https://github.com/FabricMC/fabric-loader/blob/master/src/main/java/net/fabricmc/loader/impl/discovery/ModSolver.java)、
+  [`ModPrioSorter`](https://github.com/FabricMC/fabric-loader/blob/master/src/main/java/net/fabricmc/loader/impl/discovery/ModPrioSorter.java)；
+- Quilt：
+  [`OptionalModIdDefintion`](https://github.com/QuiltMC/quilt-loader/blob/develop/src/main/java/org/quiltmc/loader/impl/plugin/quilt/OptionalModIdDefintion.java)；
+- Forge-family JarJar：
+  [`JarSelector`](https://github.com/MinecraftForge/JarJar/blob/main/selector/src/main/java/net/minecraftforge/jarjar/selection/JarSelector.java)。
+
 ## 6. Forge 与 NeoForge
 
 Forge-family parser 共享 TOML 骨架，但保留格式真实差异：
@@ -101,7 +119,8 @@ Forge-family parser 共享 TOML 骨架，但保留格式真实差异：
 
 `META-INF/jarjar/metadata.json` 保存 Maven `group:artifact`、range、
 artifactVersion、path 和 obfuscated。它与普通 bundled mod 是两个概念：
-前者参与 artifact 版本求解，后者是同一物理文件内的逻辑模组。
+前者参与 artifact 版本求解，后者是顶层包内容中的模组模块。普通没有 loader 元数据的
+内嵌库不会被误当作模组包。
 
 ## 7. 内嵌与字节码
 

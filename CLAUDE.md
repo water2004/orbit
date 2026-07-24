@@ -112,3 +112,22 @@
 44. **全局路径必须注入**。配置、实例注册表和 JAR 缓存通过 `RuntimeContext` /
     `RuntimePaths` 传递；业务模块禁止读取 `APPDATA`、`HOME`、XDG 或
     `current_exe()`。平台目录发现只存在于 `RuntimeEnvironment` 实现。
+45. **求解包恒为 JAR 声明的 `mod_id`**。文件名、provider slug/project ID、下载
+    URL、owner/path 都只能区分候选，禁止重新引入“一个物理 JAR 一个求解包”的轴。
+    同一 `mod_id` 的多个顶层 JAR 是同一个包的候选版本；同声明版本不同来源仍是不同
+    候选，但不是升级。
+46. **包内容与操作单元必须分开**。一个顶层包可以包含多个同文件模块、嵌套模组 JAR
+    和普通库；不是每个 JAR 都是包。contained 模块必须绑定 owner 候选，普通库不单独
+    求解。安装和删除只作用于顶层 `mods/*.jar` 包文件，禁止独立删除嵌套内容。
+47. **loader 加载条件必须进入共享图**。Fabric nested 使用 `if_possible`；Quilt 保留
+    `always` / `if_possible` / `if_required`；Forge-family JarJar 按 artifact range
+    选择。相同 ID 的多版本嵌套候选选择一个兼容项，不能要求所有候选同时成立。
+48. **所有包集合变更共享 portfolio 与事务报告**。add、本地 add、非 locked restore、
+    upgrade、sync、init 等不得各写选择规则。唯一极大解自动选择，多解交给交互层；
+    降级、替换和未选包删除即使在唯一解中也必须展示精确文件并在写盘前确认。
+49. **upgrade 的定义是至少一个包相对当前安装版本变新**。允许同一方案中的其他包
+    降级、换源或删除；不得要求所有包都不降级，也不得把同版本不同候选算作升级。
+50. **优先使用 fork 的通用求解抽象**。`P = mod_id`、不透明复合 `V`、调用方定义
+    `strictly_higher` 和 maximal-solution enumeration 已由 fork 原生支持。若新的依赖
+    语义无法由通用 constraint/observer/enumeration 表达，应在 fork 增加通用能力并
+    测试，禁止在 Orbit 侧反事实求解、黑盒探测或结果后修补。

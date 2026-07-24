@@ -42,6 +42,8 @@ resolver/
   ordering    顺序环与软依赖 warning
   diagnostics 同次求解的原因
 installer/    事务、复制和恢复
+package_reconciliation
+              init/sync 共用的本地包候选选择与清理计划
 init/sync/    实例扫描与对账
 ```
 
@@ -85,10 +87,14 @@ init/sync/    实例扫描与对账
 
 JAR `mod_id` 不会被拿去猜 provider slug，resolver 也没有联网补抓入口。
 
-一个物理 JAR 可以包含多个逻辑模组。顶层 `PackageEntry` 对应物理文件的主逻辑包，
-其余逻辑模组递归位于 `bundled`。它们参与同一求解图，但不会生成不存在的独立文件。
-求解层用 owner/version/path 标识每个 bundled occurrence；相同 mod ID/version 位于
-两个不同 owner 时仍是两个物理实体。
+求解包的身份恒为 JAR 声明的 `mod_id`。同一 ID 的多个顶层 `mods/*.jar` 是同一个包
+的多个候选，最终每包只选一个。文件名、slug 和 project ID 只是候选来源事实，不能
+变成求解包。
+
+一个顶层包 JAR 可以包含多个同文件模块、嵌套模组 JAR 和普通库；并不是所有内嵌 JAR
+都是包。含 loader 元数据的 contained 模块用 owner/source/path 绑定所选顶层候选，
+普通库随 owner 一起移动而不单独求解。事务只安装或删除顶层包文件，绝不删除包内部的
+单个 JAR。
 
 ## 4. 统一求解
 
@@ -100,17 +106,23 @@ JAR `mod_id` 不会被拿去猜 provider slug，resolver 也没有联网补抓�
 - lockfile 校验；
 - outdated。
 
-依赖表达式在 `constraints.rs` 编译；加载顺序在 `ordering.rs`；平台、capability、
-Jar-in-Jar 和物理包注册在 `graph.rs`。这种拆分按职责而不是按 loader 切开。
+依赖表达式在 `constraints.rs` 编译；加载顺序在 `ordering.rs`；平台、mod_id 候选、
+`provides`、load condition 和 Jar-in-Jar 在 `graph.rs` 注册。这种拆分按职责而不是
+按 loader 切开。
 
 PubGrub fork 允许 provider 在选择包版本时注入带 reason 的自定义 incompatibility。
 条件原因因此属于真正的传播/回溯路径。observer 只补充成功解中的候选淘汰原因，不承担
-另一条证明路径。fork 的最大解枚举只接收通用投影包；Jar-in-Jar 由 Orbit 的强类型
-逻辑包、物理 occurrence 和 provider witness 建模，不向求解器库加入领域特例。
+另一条证明路径。fork 的最大解枚举只接收通用投影包；Orbit 直接把 `mod_id` 作为投影
+包，把语义版本与来源身份组成私有候选版本。`strictly_higher` 只比较 loader 语义版本，
+所以同版本不同 JAR 不是升级。该抽象由 fork 原生支持，不需要领域特判。
 
-`SolverPackage` 与私有 `SolverVersion` 承载所有内部身份。逻辑 capability 和
-Jar-in-Jar artifact 通过 witness 绑定真实 occurrence；公共 loader `Version` 不包含
-求解器选择编号。诊断同样按这些类型折叠内部边，不解析名称前缀。
+Jar-in-Jar artifact 使用独立的 Maven 坐标包并精确绑定 owner 候选；`provides` 使用
+同一 mod_id 包下的代理候选。公共 loader `Version` 不包含来源编号，诊断也按强类型
+折叠内部边，不解析名称前缀。
+
+所有会形成新包集合的入口先得到同一种 `ResolutionReport`，再形成事务计划。唯一解
+自动选择，多解由调用方选择；任何降级、替换或删除都在写盘前展示并确认。upgrade
+方案只要求至少一个包相对当前版本变新，允许其他包降级。
 
 ## 5. loader 支持矩阵
 
@@ -159,7 +171,7 @@ Orbit 不能仅凭字节码完整证明：
 | 本地 `file:` | 可用 |
 | CurseForge | `curseforge-wrapper` + core adapter，可用；无 API Key 时 provider 无法创建，Core API 与 CDN 下载均认证 |
 | PubGrub fork | 已发布并固定到 `0c260ff2528a6c09c683cc7270b3b97c2ea114f3` |
-| 多个极大解 | 完整枚举；唯一解自动选择，多解交给调用方选择 |
+| 多个极大解 | fork 原生完整枚举；唯一解自动选择，多解交给调用方选择 |
 
 ## 9. 跨平台运行环境
 
