@@ -26,6 +26,11 @@ pub async fn handle(
                 );
                 ver.id
             }
+            Err(_) if ctx.yes => {
+                anyhow::bail!(
+                    "could not detect the Minecraft version; pass --mc-version when using --yes"
+                )
+            }
             Err(_) => prompt_mc_version()?,
         },
     };
@@ -68,7 +73,13 @@ pub async fn handle(
                 (loader, ver)
             }
             _ => {
-                let (l, name) = select_loader_interactive(&service, ctx.yes)?;
+                if ctx.yes {
+                    anyhow::bail!(
+                        "could not auto-detect the modloader; pass --modloader and \
+                         --modloader-version when using --yes"
+                    );
+                }
+                let (l, name) = select_loader_interactive(&service)?;
                 let ver = choose_loader_version(modloader_version, None, &l, ctx.yes)?;
                 eprintln!("  Using {} loader {}", name, ver);
                 (l, ver)
@@ -132,10 +143,7 @@ pub async fn handle(
 
 // ── 交互式辅助 ──────────────────────────────────
 
-fn select_loader_interactive(
-    service: &LoaderDetectionService,
-    non_interactive: bool,
-) -> Result<(String, &'static str)> {
+fn select_loader_interactive(service: &LoaderDetectionService) -> Result<(String, &'static str)> {
     let loaders = service.known_loaders();
     if loaders.is_empty() {
         anyhow::bail!("no modloaders available for detection");
@@ -143,11 +151,6 @@ fn select_loader_interactive(
     eprintln!("? Could not auto-detect modloader. Available loaders:");
     for (i, (loader, name)) in loaders.iter().enumerate() {
         eprintln!("  [{}] {} ({})", i + 1, name, loader.as_str());
-    }
-    if non_interactive {
-        let (loader, name) = &loaders[0];
-        eprintln!("  --yes selected the default loader: {name}");
-        return Ok((loader.as_str().to_string(), *name));
     }
     eprint!("Choose a loader [1]: ");
     let mut input = String::new();
@@ -168,16 +171,14 @@ fn select_loader_interactive(
 }
 
 fn prompt_mc_version() -> Result<String> {
-    let default = "1.21.5";
-    eprint!("? Minecraft version [{}]: ", default);
+    eprint!("? Minecraft version: ");
     let mut input = String::new();
     std::io::stdin().read_line(&mut input)?;
-    let input = input.trim();
-    if input.is_empty() {
-        Ok(default.to_string())
-    } else {
-        Ok(input.to_string())
+    let version = input.trim();
+    if version.is_empty() {
+        anyhow::bail!("Minecraft version is required; pass --mc-version");
     }
+    Ok(version.to_string())
 }
 
 fn choose_loader_version(
