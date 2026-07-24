@@ -128,7 +128,6 @@ pub(crate) fn parse_for_loader(
             dependencies: dependency_map,
             embedded_jars: Vec::new(),
             loader,
-            sha256: String::new(),
         },
         dependencies,
     })

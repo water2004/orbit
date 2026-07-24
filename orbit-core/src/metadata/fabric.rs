@@ -39,7 +39,6 @@ impl MetadataParser for FabricParser {
             dependencies: get_depends(&v),
             embedded_jars: get_jars(&v),
             loader: ModLoader::Fabric,
-            sha256: String::new(),
         })
     }
 }

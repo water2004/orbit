@@ -54,7 +54,6 @@ pub struct ModMetadata {
     pub dependencies: IndexMap<String, String>,
     pub embedded_jars: Vec<String>,
     pub loader: ModLoader,
-    pub sha256: String,
 }
 
 // ---------------------------------------------------------------------------

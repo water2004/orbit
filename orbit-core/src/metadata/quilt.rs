@@ -60,7 +60,6 @@ pub(crate) fn parse_quilt(content: &str) -> Result<ParsedQuiltMetadata, OrbitErr
             dependencies: dependency_map,
             embedded_jars,
             loader: ModLoader::Quilt,
-            sha256: String::new(),
         },
         dependencies,
     })
