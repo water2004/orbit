@@ -1,213 +1,187 @@
-# Orbit 依赖解析引擎设计
+# Orbit 依赖解析引擎
 
-> 本文档定义 `orbit-core/src/resolver/` 的 PubGrub 集成架构及 lockfile 查询 API。
-
----
-
-## 目录
-
-1. [模块结构](#1-模块结构)
-2. [PubGrub 离线求解（resolve_with_candidates）](#2-pubgrub-离线求解resolve_with_candidates)
-3. [注入与约束构建](#3-注入与约束构建)
-4. [Fetch-and-Retry 缺失依赖补全](#4-fetch-and-retry-缺失依赖补全)
-5. [密室困境诊断（Trapped Room）](#5-密室困境诊断trapped-room)
-6. [本地检查（check_local_graph）](#6-本地检查check_local_graph)
-7. [Lockfile 查询 API](#7-lockfile-查询-api)
+> 本文档同时记录 `orbit-core/src/resolver/` 的当前实现和仍然有效的设计约束。
+> “当前实现”用于解释代码；“规范未满足”不能通过修改文档来合理化，必须在代码中修复。
 
 ---
 
 ## 1. 模块结构
 
-```
+```text
 orbit-core/src/resolver/
-├── mod.rs                 # resolve_with_candidates() + check_local_graph() + 查询 API
+├── mod.rs                 # 公共 API 与顶层编排
+├── graph.rs               # 构建 PubGrub 输入图、注册候选与内嵌模组
+├── retry.rs               # 求解循环与缺失依赖补抓
+├── local.rs               # 不联网的本地安装图校验
+├── provider.rs            # OrbitDependencyProvider + ProviderError
 ├── types.rs               # PackageId + CandidateVersion + ImplantedCandidate
-├── provider.rs            # OrbitDependencyProvider (PubGrub 0.3) + FetchRetryError
-│                          # 辅助函数:
-│                          #   inject_builtins / inject_lockfile_entries
-│                          #   register_candidate_version / inject_candidates
-│                          #   trapped_room_test / retry_fetch_missing_deps
+└── diagnostics/
+    ├── mod.rs             # 从类型化 SolverEvent 采集候选淘汰原因
+    ├── render.rs          # 将 DerivationTree 渲染为 Orbit 文案
+    └── tests.rs           # 三种实际求解路径的契约测试
 ```
 
-与 `versions/` 模块紧密协作——`Version` 枚举和 `parse_constraint()` 在 `versions/mod.rs` 中定义。
+`mod.rs` 不构造依赖图，也不实现重试细节。它只暴露查询 API、调用各阶段并将最终解转换成升级结果。
+
+Orbit 当前使用仓库根目录下的 `pubgrub-fork`，其基础版本是 PubGrub `0.4.0`。该 fork 增加了不改变默认 `resolve()` 行为的 `resolve_with_observer()`、`SolverObserver` 和类型化 `SolverEvent`。
 
 ---
 
-## 2. PubGrub 离线求解（resolve_with_candidates）
-
-`resolve_with_candidates(manifest, lockfile, candidates, providers)`
-
-- 输入：manifest + lockfile + 从 JAR 解析的候选版本（含真实版本号和依赖约束）
-- 注入流水线：builtins → lockfile 条目 → candidates → missing deps → root deps
-- 有候选版本的 mod 的 root 约束放宽为 `Range::full()`，让 PubGrub 自由选择新旧版本
-- 候选版本排在 lockfile 版本之前，PubGrub 优先选取新版本
-- 冲突时返回 PubGrub `DefaultStringReporter` 人类可读报告
-- 升级受阻 mod 通过"密室困境"诊断分析原因
-
----
-
-## 3. Fetch-and-Retry 懒加载
-
-PubGrub 是同步的，但 API 调用是异步的。`resolve_manifest()` 使用 Fetch-and-Retry 模式：
-
-1. 先注册顶层依赖的版本列表（一次 `get_versions()` API 调用）
-2. 调用 `pubgrub::solver::resolve()`
-3. 若 PubGrub 返回 `FetchRetryError`（缓存未命中）→ 仅获取该包的版本列表和依赖 → 填充缓存 → 重试
-4. 循环直到求解成功或冲突
-
-这避免了全量预获取导致的请求海啸：Sodium 150 个版本 x 5 个前置 x 100 版本 = 650 次 → Fetch-and-Retry 只需 ~6 次。
-
----
-
-## 4. ProviderVersionResolver 版本比较
-
-Provider 版本解析器仅在 `resolve_manifest()` 的 Fetch-and-Retry 循环中使用，处理 API 返回的依赖版本排序和约束检查。与 `versions/` 的字符串比较不同，Provider resolver 使用 provider 特定逻辑。
-
-### ProviderVersionResolver trait
+## 2. `resolve_with_candidates`
 
 ```rust
-/// Provider 版本比较与约束检查。
-pub trait ProviderVersionResolver: Send + Sync {
-    fn provider_name(&self) -> &str;
-
-    /// 从最新到最旧排序（会修改传入的 slice）
-    fn sort_newest_first(&self, versions: &mut [ResolvedMod]);
-
-    /// 检查版本是否满足约束（provider 特定逻辑）
-    fn satisfies(&self, version: &ResolvedMod, constraint: &str) -> bool;
-
-    /// 从列表中选出满足约束的最新版本（默认实现：filter + sort + first）
-    fn pick_best(&self, versions: &[ResolvedMod], constraint: &str) -> Option<ResolvedMod>;
-}
+resolve_with_candidates(manifest, lockfile, candidates, providers)
 ```
 
-### ModrinthVersionResolver
+输入包括：
 
-位于 `modrinth_version.rs`，使用 `date_published` 时间戳排序。
+- `manifest`：项目、加载器和顶层依赖声明；
+- `lockfile`：当前已安装版本、真实 JAR 依赖和内嵌模组；
+- `candidates`：从候选 JAR 解析出的真实 `mod_id`、版本、依赖和内嵌模组；
+- `providers`：缺失候选需要联网补抓时使用的平台 provider。
 
-- **`sort_newest_first()`**: 按 `date_published` 降序排列。ISO 8601 格式天然可字符串排序，无需额外解析。
-- **`satisfies()`**: 优先用 `modrinth.version_number` 做 SemVer 约束检查，若不存在或为空则回退到 `version` 字段。约束为 `*` 或空时始终返回 `true`。
+处理阶段如下：
+
+```text
+build_solver_graph
+  → solve_with_fetch_retry
+    → collect_upgrades
+```
+
+候选 JAR 的初次发现和批量下载目前发生在 `outdated::download_candidates_bfs()`；resolver 本身只会在求解失败后补抓候选所引用、且 lockfile 已知的缺失依赖。因此“离线求解”只描述单次 PubGrub 运行，不代表整个 API 绝不访问网络。
+
+---
+
+## 3. 求解图构建
+
+`graph.rs` 按以下顺序构建 `OrbitDependencyProvider`：
+
+1. 注册平台内置包：`minecraft`、实际 loader、Fabric loader 别名、`java`，以及 Fabric 的 `mixinextras`；
+2. 注册 lockfile 中的包、真实依赖和内嵌模组；
+3. 注册候选版本和候选内嵌模组；
+4. 构造内部根包 `___orbit_root___`；
+5. 将所有被引用但尚无已知版本的包注册为空版本列表。
+
+最后一步很重要：未知依赖应成为 PubGrub 的正常 `NoVersions` 推导，而不是 `DependencyProvider` 的缓存错误。
+
+同一个包的版本顺序为：
+
+```text
+候选版本（调用方给定顺序，去重） → lockfile 版本
+```
+
+`OrbitDependencyProvider::choose_version()` 选择该顺序中第一个满足当前范围的版本。
+
+当前根约束行为：
+
+- manifest 中没有候选的包使用 manifest 版本约束；
+- 有候选的包暂时使用 `Ranges::full()`；
+- 不在 manifest 中的候选也以 `Ranges::full()` 加入根依赖，供 `orbit add` 使用。
+
+“有候选即放宽为 full”是当前实现，不是最终规范；它会绕过用户声明的版本约束，见第 8 节。
+
+---
+
+## 4. 求解与缺失依赖补抓
+
+`retry.rs` 每次尝试都会：
+
+1. 为每个包的首个候选建立 `ResolutionTrace`；
+2. 调用 `pubgrub::resolve_with_observer()`；
+3. 成功时返回解和本次实际求解路径的 trace；
+4. `NoSolution` 时检查候选及其内嵌模组声明的 required dependencies；
+5. 对尚无候选、不是内嵌模组、且能在 lockfile 找到 Modrinth 元数据的包，获取版本、下载 JAR、解析元数据并注册；
+6. 有新增候选则重新求解，否则用 `DefaultStringReporter` 返回原始不可解证明。
+
+补抓得到的候选走 `graph::register_candidate_versions()`，与初始候选共享同一套版本去重、依赖注册和未知传递依赖注册逻辑。
+
+这不是旧文档描述的“PubGrub 返回 `FetchRetryError` 后按缓存缺口抓取”。`ProviderError` 只表示图构造漏掉了包版本或版本依赖，是内部错误；正常的未知依赖已注册为空版本列表，并表现为 `NoSolution`。
+
+目前补抓只使用 `providers.first()`。这与 `[resolver].platforms` 的顺序回退规范尚不一致。
+
+---
+
+## 5. 成功求解中的候选淘汰原因
+
+不可解时的 `DerivationTree` 证明“没有解”。它不能回答“这次成功求解为什么没有选择某个候选版本”，因为后者与求解器实际走过的路径有关。
+
+Orbit 不再运行第二次反事实求解，也不解析 debug 日志。定制 PubGrub 在同一次求解中发送类型化事件：
+
+| 事件 | Orbit 使用方式 |
+|------|----------------|
+| `PackageChoice` | 确认被观察候选在本轮选择前仍被允许 |
+| `VersionChoice` | 区分 provider 选择顺序导致的版本偏好 |
+| `Decision` | 记录候选真正进入 partial solution 的 decision level |
+| `Derivation` | 找到候选由允许变为排除的精确传播步骤及原因树 |
+| `Backtrack` | 记录已提交候选因冲突被回退及其学习到的原因树 |
+
+最终原因分为：
+
+- `ExcludedByPropagation`：候选在成为 decision 前被依赖传播排除；
+- `Backtracked`：候选被提交后因冲突回溯；
+- `ProviderPreferred`：候选仍允许，但 provider 顺序选择了另一个版本。
+
+渲染器从事件携带的 `DerivationTree` 提取外部依赖事实，隐藏内部根包名称，并限制输出事实数量。
+
+`diagnostics/tests.rs` 使用最小、确定性的依赖图分别触发上述三条路径。测试断言的是类型化事件生成的领域解释，不解析日志，也不运行第二条证明路径。
+
+当前诊断只覆盖“求解成功但首个候选未被选择”的场景。真正不可解时仍返回 `DefaultStringReporter` 的字符串，见第 8 节。
+
+---
+
+## 6. 本地图校验
 
 ```rust
-pub struct ModrinthVersionResolver;
-
-impl ProviderVersionResolver for ModrinthVersionResolver {
-    fn provider_name(&self) -> &str { "modrinth" }
-
-    fn sort_newest_first(&self, versions: &mut [ResolvedMod]) {
-        versions.sort_by(|a, b| b.date_published.cmp(&a.date_published));
-    }
-
-    fn satisfies(&self, version: &ResolvedMod, constraint: &str) -> bool {
-        if constraint == "*" || constraint.is_empty() { return true; }
-        let ver_str = match &version.modrinth {
-            Some(m) if !m.version_number.is_empty() => &m.version_number,
-            _ => &version.version,
-        };
-        // fabric::SemanticVersion::parse + fabric::satisfies
-        // 回退到字符串完全匹配
-    }
-}
+check_local_graph(manifest, local_mods)
 ```
 
-### FallbackResolver
+该路径不访问 provider：
 
-位于 `provider_version.rs`，默认回退实现——使用 `fabric::SemanticVersion` 字符串比较。
+1. 注册 Minecraft、loader 等平台包；
+2. 使用 JAR 自声明的 `mod_id` 和版本注册本地模组；
+3. 注入本地 JAR 的 required dependencies；
+4. 将被依赖但未安装的包注册为空版本列表；
+5. 根包精确依赖已安装的 manifest 包，并以 full range 依赖缺失的 manifest 包；
+6. 调用普通 `pubgrub::resolve()`。
 
-- **`sort_newest_first()`**: 解析 SemanticVersion 后降序排列。解析失败则回退到字符串比较（`Ord`）。
-- **`satisfies()`**: 使用 `fabric::satisfies()` 做 SemVer 约束检查。解析失败则回退到字符串完全匹配。
+缺失的 manifest 顶层依赖必须进入根约束，否则空版本列表不会被求解器访问。该行为有单元测试保护。
 
-```rust
-pub struct FallbackResolver;
-
-impl ProviderVersionResolver for FallbackResolver {
-    fn provider_name(&self) -> &str { "fallback" }
-
-    fn sort_newest_first(&self, versions: &mut [ResolvedMod]) {
-        versions.sort_by(|a, b| {
-            let va = fabric::SemanticVersion::parse(&a.version, true);
-            let vb = fabric::SemanticVersion::parse(&b.version, true);
-            match (va, vb) {
-                (Ok(sva), Ok(svb)) => svb.cmp(&sva),
-                _ => b.version.cmp(&a.version),
-            }
-        });
-    }
-}
-```
-
-### 在 Fetch-and-Retry 中的集成
-
-`resolve_manifest()` 在 Fetch-and-Retry 循环中按 provider name 动态选择 resolver：
-
-```rust
-// 使用 provider 特定的版本排序（Modrinth → date_published，fallback → SemVer）
-let pvr: &dyn ProviderVersionResolver = if p.name() == "modrinth" {
-    &ModrinthVersionResolver
-} else {
-    &FallbackResolver
-};
-pvr.sort_newest_first(&mut versions);
-```
-
-排序后的版本按序注入 PubGrub 的 `OrbitDependencyProvider`，`choose_package_version` 选取第一个满足范围约束的版本。
+当前 `init` 使用此函数验证扫描结果；`check` 和 `sync` 命令仍未实现，不能写成已经接入。
 
 ---
 
-## 5. 版本比较规则
+## 7. 公共 API
 
-| 场景 | 比较方式 | 说明 |
-|------|----------|------|
-| **add 同 provider** | `date_published` 排序 | Modrinth+Modrinth 依赖链使用 `ModrinthVersionResolver` |
-| **add 跨 provider / fallback** | SemanticVersion 字符串 | 其他所有情况使用 `FallbackResolver` |
-| **check_local_graph** | SemanticVersion 字符串 | 永远不调用 provider resolver，仅使用 `versions/` 的 `Version` 和 PubGrub 内建约束 |
+| 函数 | 当前行为 |
+|------|----------|
+| `find_entry(input, entries)` | 匹配 `mod_id`，或备选匹配 `package.modrinth.slug` |
+| `dependents(mod_id, entries)` | 从 lockfile 真实依赖中反查直接依赖者 |
+| `check_version_conflict(mod_id, version, entries)` | 检查 lockfile 已有版本是否冲突 |
+| `resolve_with_candidates(...)` | 构图、求解、必要时补抓依赖，并返回实际升级版本 |
+| `check_local_graph(...)` | 不联网验证本地安装图 |
 
-`check_local_graph()` 不访问网络，无 Provider 参与，所有版本比较均通过 `Version::parse()` 和 `Version::parse_constraint()` 在 PubGrub 内部完成。
-
----
-
-## 6. 本地检查（check_local_graph）
-
-`check_local_graph(manifest, local_mods)` 在不联网的情况下，仅凭本地已安装模组验证依赖图是否可解：
-
-- 将本地已识别模组的 `fabric.mod.json` 依赖注入 `OrbitDependencyProvider`
-- 注入虚拟依赖（minecraft, fabricloader）
-- 缺失依赖注册空版本列表，让 PubGrub 给出完整冲突报告
-- `orbit check` / `orbit sync` 使用此函数
+不存在 `resolve_manifest()`、`ProviderVersionResolver`、`ModrinthVersionResolver` 或 `trapped_room_test()`。
 
 ---
 
-## 7. Lockfile 查询 API
+## 8. 仍然有效但代码尚未满足的规范
 
-查询函数直接从 `resolver/mod.rs` 导出：
+以下条目不是过时文档，不能为了匹配现状而删除：
 
-| 函数 | 签名 | 说明 |
-|------|------|------|
-| `find_entry(slug, entries)` | `-> Option<&LockEntry>` | 按 slug 查 lockfile（匹配 name/mod_id/slug） |
-| `dependents(slug, entries)` | `-> Vec<&str>` | 反查谁依赖了 slug |
-| `check_version_conflict(slug, ver, entries)` | `-> Result<(), String>` | 版本冲突检查 |
-| `resolve_manifest(manifest, providers)` | `-> Result<HashMap<...>, String>` | PubGrub 依赖求解 |
-| `check_local_graph(manifest, local_mods)` | `-> Result<(), String>` | 本地依赖图验证 |
-
----
-
-## 8. 版本号系统
-
-`orbit-core/src/versions/` 提供 PubGrub 所需的版本抽象：
-
-```rust
-pub enum Version {
-    Lowest,                      // PubGrub 要求的无限小版本
-    Fabric(SemanticVersion),     // Fabric 1:1 复刻
-    Generic(String),             // 未知 loader 回退
-}
-```
-
-`Version::parse_constraint(raw, loader)` 将 orbit.toml 中的约束字符串转换为 PubGrub `Range<Version>`。Fabric loader 使用 `fabric::parse_constraint()` 解析 `>=0.5, <1.0` 等格式。
+| 规范 | 当前代码差距 |
+|------|--------------|
+| 用户声明的版本约束必须生效 | `install_to_instance()` 尚未使用传入的 constraint；有候选的根约束被放宽为 `Ranges::full()` |
+| `[resolver].platforms` 应按顺序回退 | add、outdated、BFS 下载和 resolver 补抓目前只使用第一个 provider |
+| `orbit-core` 不直接输出 UI/进度文本 | `resolver/mod.rs` 和 `retry.rs` 仍有 `eprintln!`；诊断应通过结构化返回值交给 CLI |
+| 冲突报告应面向用户且可读 | 成功但跳过候选已有领域化解释；真正 `NoSolution` 和本地校验仍直接返回 `DefaultStringReporter` 字符串 |
+| `[overrides]`、`optional`、`env`、`exclude` 应影响解析或安装 | manifest 已能反序列化这些字段，但当前候选求解路径未应用它们 |
+| Java 依赖必须有明确语义 | 联网候选图把 `java` 注册为 `0.0.0`，本地校验却忽略 Java 依赖；两条路径尚未统一为“检测运行时版本”或“明确忽略” |
 
 ---
 
-> **关联文档**
-> - [orbit-versions.md](orbit-versions.md) — 版本号解析（Fabric SemanticVersion 1:1）
-> - [orbit-architecture.md](orbit-architecture.md) — resolver 在项目中的位置
-> - [orbit-cli-commands.md](orbit-cli-commands.md) — add/install/upgrade 的 resolver 调用方式
+## 9. 相关文档
+
+- [orbit-versions.md](orbit-versions.md)：版本解析和约束语义
+- [orbit-toml-spec.md](orbit-toml-spec.md)：manifest/lockfile 的规范行为
+- [orbit-architecture.md](orbit-architecture.md)：crate 与模块边界
+- [orbit-status.md](orbit-status.md)：实现进度与已知偏差

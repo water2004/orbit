@@ -9,8 +9,8 @@
 1. **CLI 不包含任何业务逻辑**。`orbit-cli` 只做：clap 参数解析 + 调 core API + 格式化输出。TOML 解析、文件 I/O、依赖图操作全部在 `orbit-core`。
 2. **core 层不输出到 stderr/stdout**。调试用 `tracing`，用户可见进度通过返回值传递给 CLI 层展示。
 3. **依赖方向**：`cli → core → wrapper`。wrapper 之间不互相依赖。core 不依赖 cli。
-4. **lockfile 是依赖图的唯一数据源**。所有依赖图查询（`find_entry`、`dependents`、`check_version_conflict`）都在 `resolver.rs` 中，通过 lockfile 重建图。不允许在 CLI 或其他模块手工遍历 lockfile/manifest 做依赖判断。
-5. **使用 slug 匹配，不用 name**。`DependencySpec::slug` 和 `LockEntry::mod_id`/`LockEntry::slug` 是匹配键。human-readable name 不可靠。
+4. **lockfile 是已安装依赖图查询的唯一数据源**。`find_entry`、`dependents`、`check_version_conflict` 集中在 `resolver/`；候选求解图则明确组合 manifest 根约束、lockfile 当前图和候选 JAR 元数据。CLI 不手工重建依赖图。
+5. **主键使用 JAR `mod_id`，slug 只作平台查找别名**。manifest dependency key 和 `PackageEntry.mod_id` 是图中的键；`package.modrinth.slug` 仅供 `find_entry` 等用户输入匹配。human-readable name 不可靠。
 
 ---
 
@@ -75,23 +75,24 @@
 
 ## Resolver
 
-31. **lockfile 注入 PubGrub 的逻辑复用 `inject_lockfile()`**。`resolve_manifest` 和 `check_local_graph` 都通过此函数注入，不手写 for 循环。
-32. **lockfile 条目不携带依赖注入（避免重解析已安装 mod），之后由 `check_local_graph` 单独校验完整性**。两步分离：注入时 empty deps → PubGrub 只解析新包；校验时带全量 deps → 检测缺失。
+31. **联网候选求解统一通过 `graph::build_solver_graph()` 构图**。平台包、lockfile、候选、root 和未知引用包的注册不得重新散落到求解循环。动态补抓候选必须复用 `graph::register_candidate_versions()`。
+32. **lockfile 条目必须携带真实依赖进入候选求解图**。否则升级求解无法解释当前版本和候选版本之间的传递依赖冲突。`check_local_graph()` 是另一条纯本地输入路径，共享平台包注册规则，但不伪造或注入 lockfile。
+33. **成功求解中的候选淘汰原因只来自同一次求解的类型化 `SolverEvent`**。禁止解析 debug 日志，禁止用第二次反事实求解替代实际的传播、decision 和 backtrack 路径。
 
 ## 代码卫生
 
-33. **写完功能立即检查是否有死代码**：未用的函数、struct、trait、import、依赖项全部删除。
-34. **字段命名必须准确**：存 SHA-512 就叫 `sha512`，不叫 `sha256`。
-35. **`expect()` / `unwrap()` 只在不可能失败时使用**。library crate 优先返回 `Result`。
-36. **修复一个问题时检查所有同类问题**（如一个 stub 改 exit(2) 就要全部改）。
+34. **写完功能立即检查是否有死代码**：未用的函数、struct、trait、import、依赖项全部删除。
+35. **字段命名必须准确**：存 SHA-512 就叫 `sha512`，不叫 `sha256`。
+36. **`expect()` / `unwrap()` 只在不可能失败时使用**。library crate 优先返回 `Result`。
+37. **修复一个问题时检查所有同类问题**（如一个 stub 改 exit(2) 就要全部改）。
 
 ## core 层输出（待整改）
 
-37. **当前 `init.rs`、`identification.rs`、`providers/mod.rs` 中存在 `eprintln!`，违反规则 2**。后续需将这些输出改为 `tracing::debug!` / `tracing::info!`，或通过返回值传递给 CLI 层。
+38. **当前 `init.rs`、`identification.rs`、`installer.rs`、`outdated.rs`、`providers/mod.rs` 和 `resolver/` 中存在 `eprintln!`，违反规则 2**。用户可见结果和依赖诊断应通过结构化返回值传递给 CLI；纯调试信息改用 `tracing`。
 
 ---
 
 ## 文档同步
 
-29. **代码改动后同步更新 docs/**：`orbit-resolver.md`、`orbit-status.md`、`orbit-architecture.md`。
-30. **modrinth-docs 是 API wrapper 的规格来源**，模型字段变更时同步更新。
+39. **代码改动后同步更新 docs/**：`orbit-resolver.md`、`orbit-status.md`、`orbit-architecture.md`。
+40. **modrinth-docs 是 API wrapper 的规格来源**，模型字段变更时同步更新。

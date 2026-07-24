@@ -2,6 +2,7 @@
 
 > 本文档定义 Orbit Monorepo 的目录布局、各 crate 职责边界、内部依赖关系及核心抽象接口。
 > 这是项目开发的**唯一架构参照**——所有模块边界和依赖方向必须与此文档一致。
+> 文中“不得包含”和“依赖铁律”是规范；若当前代码不满足，应记录为实现缺口，不能反向修改规范。
 
 ---
 
@@ -20,13 +21,14 @@
 7. [核心抽象：Provider 特质](#7-核心抽象provider-特质)
 8. [Provider 实现示例](#8-provider-实现示例)
 9. [数据流全景](#9-数据流全景)
-10. [迁移路线图 (从当前状态)](#10-迁移路线图-从当前状态)
+10. [历史迁移路线与剩余工作](#10-历史迁移路线与剩余工作)
 
 ---
 
 ## 1. 设计总览
 
-Orbit 采用 **Monorepo + 分层架构**，四个 crate 各司其职：
+Orbit 采用 **Monorepo + 分层架构**。当前 workspace 有三个 crate；另有一个暂时排除在
+workspace 外的定制 PubGrub 源码目录：
 
 ```
                     ┌──────────────┐
@@ -44,6 +46,9 @@ Orbit 采用 **Monorepo + 分层架构**，四个 crate 各司其职：
     └──────────────────┘    └────────────────────┘
 ```
 
+`curseforge-wrapper` 是目标架构，当前尚未创建。`orbit-core` 还通过 path 依赖
+`pubgrub-fork`；等 fork 远端和发布方式稳定后，应改为可复现的远端 revision 或发布版本。
+
 **核心原则**：
 
 - **Wrapper 不知道 Orbit 的存在**。它们是通用的、可独立发布的平台 API 客户端。
@@ -58,6 +63,7 @@ Orbit 采用 **Monorepo + 分层架构**，四个 crate 各司其职：
 ORBIT/
 ├── Cargo.toml                    # 根工作区配置 (定义 members, workspace.dependencies)
 ├── Cargo.lock                    # 整个工作区共享的锁文件
+├── pubgrub-fork/                 # 定制 PubGrub 0.4（暂时 exclude，不是 workspace member）
 ├── README.md
 ├── LICENSE
 ├── docs/                         # 设计文档
@@ -99,13 +105,16 @@ ORBIT/
 │       │   ├── mod.rs            #     Version enum + parse() + parse_constraint()
 │       │   └── fabric.rs         #     SemanticVersion + satisfies() + parse_constraint()
 │       ├── resolver/             #   依赖解析引擎 (PubGrub)
-│       │   ├── mod.rs            #     resolve_manifest + check_local_graph + 查询 API
-│       │   ├── types.rs          #     PackageId
-│       │   ├── provider.rs       #     OrbitDependencyProvider
-│       │   ├── provider_version.rs #   ProviderVersionResolver trait + FallbackResolver
-│       │   └── modrinth_version.rs #   ModrinthVersionResolver (date_published sort)
+│       │   ├── mod.rs            #     公共 API + 顶层编排
+│       │   ├── graph.rs          #     求解图构建与候选注册
+│       │   ├── retry.rs          #     求解循环与缺失依赖补抓
+│       │   ├── local.rs          #     纯本地依赖图校验
+│       │   ├── diagnostics/      #     SolverEvent 采集、解释渲染和契约测试
+│       │   ├── provider.rs       #     OrbitDependencyProvider + ProviderError
+│       │   └── types.rs          #     PackageId + CandidateVersion + ImplantedCandidate
 │       ├── sync.rs               #   双向同步 (Err 占位)
 │       ├── installer.rs          #   install_to_instance + remove_from_instance
+│       ├── outdated.rs           #   候选发现、BFS 下载与可升级集合查询
 │       ├── checker.rs            #   跨版本预检 (Err 占位)
 │       ├── purge.rs              #   深度清理 (Err 占位)
 │       ├── workspace.rs          #   ManifestFile / Lockfile 文件 I/O 封装
@@ -167,40 +176,33 @@ ORBIT/
 ```toml
 [workspace]
 members = [
-    "modrinth-wrapper",
-    # "curseforge-wrapper",  # 待创建
-    "orbit-core",
     "orbit-cli",
+    "orbit-core",
+    "modrinth-wrapper",
 ]
+exclude = ["pubgrub-fork"]
 resolver = "2"
 
 [workspace.dependencies]
-# 异步运行时
-tokio = { version = "1", features = ["full"] }
-# HTTP 客户端
-reqwest = { version = "0.12", features = ["json"] }
-# 序列化
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
 toml = "0.8"
-# 加密
 sha2 = "0.10"
 hex = "0.4"
-# CLI
-clap = { version = "4", features = ["derive"] }
-# 错误处理
-anyhow = "1"
-thiserror = "2"
-# URL 解析
-url = "2"
-# 异步 trait
+reqwest = { version = "0.13.2", features = ["json"] }
+tokio = { version = "1.51.0", features = ["macros", "rt-multi-thread", "sync"] }
 async-trait = "0.1"
-# ZIP 处理
-zip = "3"
-# 依赖求解
-pubgrub = "0.5"
-indexmap = { version = "2", features = ["serde"] }
+clap = { version = "4.6.0", features = ["derive"] }
+anyhow = "1.0.102"
+thiserror = "2.0.18"
+url = "2.5.8"
+zip = "3.0.0"
+indexmap = { version = "2.0", features = ["serde"] }
 ```
+
+PubGrub 当前不是 workspace dependency。`orbit-core/Cargo.toml` 直接使用
+`pubgrub = { path = "../pubgrub-fork" }`，对应带类型化 solver observer 的定制
+`0.4.0`。这是远端确定前的过渡接法，不应误写成 crates.io 的 `0.5`。
 
 ---
 
@@ -245,7 +247,8 @@ thiserror = { workspace = true }
 
 **职责**：与 `modrinth-wrapper` 对称——封装 CurseForge API 的所有端点。
 
-**当前状态**：尚未创建。目前 CurseForge 的逻辑以 inline struct 形式散落在 `orbit-cli/src/adaptors/curseforge.rs` 中，需要提取。
+**当前状态**：尚未创建。旧的 `orbit-cli/src/adaptors/` 已删除；
+`orbit-core/src/providers/curseforge.rs` 仅保留返回未实现错误的骨架。
 
 **`Cargo.toml` 依赖**（规划）：
 ```toml
@@ -267,7 +270,8 @@ thiserror = { workspace = true }
 
 ### orbit-core
 
-**定位**：Orbit 的全部业务逻辑。可独立发布到 crates.io（允许第三方构建自己的 Orbit 前端）。
+**定位**：Orbit 的全部业务逻辑。目标是可独立发布到 crates.io（允许第三方构建自己的
+Orbit 前端）；当前本地 `pubgrub-fork` path 依赖尚未满足这一发布条件。
 
 **职责**：
 - `orbit.toml` 和 `orbit.lock` 的解析、序列化、校验
@@ -311,6 +315,7 @@ zip = { workspace = true }
 async-trait = { workspace = true }
 anyhow = { workspace = true }
 thiserror = { workspace = true }
+pubgrub = { path = "../pubgrub-fork" } # 过渡状态；远端确定后固定 revision
 ```
 
 > **关于 path + version 双重指定的说明**：当 `orbit-core` 在 Workspace 内开发时，Cargo 使用 `path` 指向本地源码（wrapper 修改立即生效）。当 `orbit-core` 作为独立 crate 发布到 crates.io 时，Cargo 忽略 `path`，仅使用 `version` 从注册中心拉取 `modrinth-wrapper`。这是 Monorepo 的标准实践。
@@ -385,6 +390,10 @@ anyhow = { workspace = true }
 - `core` 不得依赖 `cli`
 - wrapper 不得依赖 `core` 或 `cli`
 
+这些规则是规范，不是现状快照。当前已知偏差包括：`orbit-core` 的若干模块仍直接
+`eprintln!`，resolver/provider 调用链尚未完整实现多平台顺序回退，以及本地 PubGrub
+path 依赖尚不可独立发布。修复方向是让代码回到本节边界，而不是放宽本节。
+
 ---
 
 ## 6. orbit-core 内部模块
@@ -399,13 +408,17 @@ lib.rs                    ← 公共 API 入口，暴露 install_to_instance / r
 ├── init.rs               ← init 编排: scan_mods_dir + run_init (JAR id/version as source of truth)
 ├── versions/             ← Version enum + parse + parse_constraint
 │   └── fabric.rs         ← SemanticVersion + satisfies()
-├── resolver/             ← PubGrub 求解器 (resolve_manifest + check_local_graph)
-│   ├── mod.rs            ← FetchRetry + 查询 API
-│   ├── provider.rs       ← OrbitDependencyProvider
-│   ├── provider_version.rs ← ProviderVersionResolver trait + FallbackResolver
-│   └── modrinth_version.rs ← ModrinthVersionResolver (date_published sort)
+├── resolver/             ← 定制 PubGrub 求解器
+│   ├── mod.rs            ← resolve_with_candidates + check_local_graph + 查询 API
+│   ├── graph.rs          ← 求解图构建、候选与 lockfile 真实依赖注入
+│   ├── retry.rs          ← resolve_with_observer + 缺失依赖补抓
+│   ├── local.rs          ← 不联网的本地安装图校验
+│   ├── diagnostics/      ← 类型化事件采集、领域渲染和测试
+│   ├── provider.rs       ← OrbitDependencyProvider + ProviderError
+│   └── types.rs          ← CandidateVersion + ImplantedCandidate
 ├── sync.rs               ← 双向同步 (Err 占位)
 ├── installer.rs          ← install_to_instance + remove_from_instance
+├── outdated.rs           ← 候选 BFS 下载 + 可升级集合查询
 ├── checker.rs            ← 跨版本预检 (Err 占位)
 ├── purge.rs              ← 深度清理 (Err 占位)
 ├── workspace.rs          ← ManifestFile / Lockfile 文件 I/O 封装
@@ -920,51 +933,37 @@ fn map_side(side: Option<&str>) -> Option<SideSupport> {
 
 ## 9. 数据流全景
 
-以 `orbit add sodium` 为例，展示一次完整的命令执行链路：
+以当前 `orbit add sodium` 为例：
 
+```text
+orbit-cli/commands/add.rs
+  → 解析命令参数，创建 provider 与确认回调
+  → installer::install_to_instance
+      → 打开 ManifestFile / Lockfile
+      → outdated::download_candidates_bfs
+          → 查询 provider[0] 的兼容版本及平台依赖
+          → 并发下载候选 JAR，解析真实 mod_id / version / dependencies
+      → resolver::resolve_with_candidates
+          → graph::build_solver_graph
+          → retry::solve_with_fetch_retry
+              → pubgrub::resolve_with_observer
+              → 必要时补抓 lockfile 已知的缺失依赖
+          → 返回选中的升级版本
+      → 通过注入的回调让 CLI 确认计划
+      → 下载最终选中 JAR、再次读取元数据并更新 manifest/lockfile
+  → orbit-cli 格式化结果
 ```
-用户输入：orbit add sodium --version "^0.5"
 
-┌─ orbit-cli ─────────────────────────────────────────────────────┐
-│ 1. clap 解析参数                                                 │
-│ 2. commands/add.rs 调用 orbit-core                              │
-└────────────────────┬────────────────────────────────────────────┘
-                     │
-┌─ orbit-core ───────▼────────────────────────────────────────────┐
-│ 3. resolver.rs:                                                 │
-│    a. 读取 orbit.toml → OrbitManifest                           │
-│    b. 检查 sodium 是否已存在 → 未存在，继续                        │
-│    c. 遍历 [resolver].platforms: ["modrinth", "curseforge"]     │
-│    d. 调用 ModrinthProvider::resolve("sodium", "^0.5", ...)     │
-│                                                                  │
-│ 4. providers/modrinth.rs:                                       │
-│    a. 将 resolve 请求翻译为 modrinth-wrapper 的 API 调用           │
-│    b. modrinth_wrapper::Client::get_project("sodium")           │
-│    c. 匹配版本约束 ^0.5 → 选择 0.5.11                            │
-│    d. 构造 ResolvedMod 返回                                      │
-│                                                                  │
-│ 5. resolver.rs (继续):                                          │
-│    a. 检查传递依赖 (sodium 无前置依赖，跳过)                        │
-│    b. 更新 orbit.toml: 添加 sodium = "^0.5"                     │
-│    c. 更新 orbit.lock: 添加 [[lock]] 条目                        │
-│                                                                  │
-│ 6. installer.rs:                                                │
-│    a. 下载 sodium-0.5.11.jar                                    │
-│    b. 计算 SHA-256 → 校验                                        │
-│    c. 写入 mods/sodium-fabric-mc1.20.1-0.5.11.jar              │
-└────────────────────┬────────────────────────────────────────────┘
-                     │
-┌─ orbit-cli ───────▼────────────────────────────────────────────┐
-│ 7. 格式化输出：                                                   │
-│    Added sodium 0.5.11 (modrinth)                               │
-└─────────────────────────────────────────────────────────────────┘
-```
+这里描述的是现状，不代表所有规范已经满足：`--version` 已传入 core 但尚未参与候选根约束，
+`--platform`、`--env` 和 `--optional` 仍被 CLI handler 忽略，provider 回退也只使用首个
+provider。它们是实现缺口，详见 [orbit-resolver.md](orbit-resolver.md#8-仍然有效但代码尚未满足的规范)。
 
 ---
 
-## 10. 迁移路线图 (从当前状态)
+## 10. 历史迁移路线与剩余工作
 
-当前 `orbit-cli` 承担了太多职责——adaptors、models、以及所有命令的占位逻辑。迁移到目标架构分三步：
+下面三阶段最初用于从旧 CLI 架构迁移。Phase 1 和 CLI 中的 `adaptors/models` 清理已经完成；
+保留清单用于说明历史，不再把它称为“当前状态”。
 
 ### Phase 1：创建 `orbit-core` 骨架
 

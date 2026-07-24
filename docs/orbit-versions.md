@@ -28,13 +28,18 @@ orbit-core/src/versions/
 
 ```rust
 pub enum Version {
-    Lowest,                      // PubGrub 要求的无限小版本
+    Lowest,                      // 旧版集成遗留，目前没有调用方构造
     Fabric(SemanticVersion),     // Fabric 1:1 复刻
     Generic(String),             // 未知 loader 回退
 }
 ```
 
-`Version` 实现了 `pubgrub::version::Version` trait（`lowest()` + `bump()`）。
+当前定制 PubGrub 基于 `0.4.0`，不再要求旧版的 `pubgrub::version::Version` trait 或
+`lowest()` / `bump()`。`Version` 通过 `Eq`、`Ord`、`Hash` 和 `Display` 作为
+`DependencyProvider::V` 使用。
+
+`Lowest` 是旧版集成遗留的未使用变体，不是 PubGrub 0.4 的要求；应在后续代码清理中删除，
+而不是继续用文档为它背书。
 
 **核心原则**：不发明版本规则，只搬运官方实现。Fabric 怎么做，Orbit 就怎么做。`VersionScheme` trait 已删除，改用 `Version` 枚举统一抽象。
 

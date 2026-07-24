@@ -1,6 +1,9 @@
 # Orbit 项目状态
 
-> 最后更新: 2026-05-03 (sync with code)
+> 最后更新: 2026-07-24
+>
+> 本文只记录实现状态。`orbit-architecture.md`、`orbit-toml-spec.md` 和
+> `orbit-cli-commands.md` 中的规范不会因为代码尚未完成而自动失效。
 
 ---
 
@@ -11,7 +14,8 @@ orbit-cli ──→ orbit-core ──→ modrinth-wrapper
                               (curseforge-wrapper 待创建)
 ```
 
-三层 Monorepo，Workspace 成员: `orbit-cli`, `orbit-core`, `modrinth-wrapper`
+三层 Monorepo，Workspace 成员: `orbit-cli`, `orbit-core`, `modrinth-wrapper`。
+另有暂时排除在 workspace 外的 `pubgrub-fork`（定制 PubGrub 0.4）。
 
 ---
 
@@ -25,9 +29,9 @@ orbit-cli ──→ orbit-core ──→ modrinth-wrapper
 | `api.rs` | ✅ | 所有端点 + SearchParams/ListVersionsParams builder |
 | `models.rs` | ✅ | Project, Version, SearchHit（含 author_id/organization）, VersionFile（含 id） |
 | `error.rs` | ✅ | ModrinthError 枚举 |
-| 集成测试 | ✅ | 14/14 通过（对接真实 API） |
+| 集成测试 | ✅ | 14 个 live API 测试；默认跳过网络，设置 `MODRINTH_LIVE_TESTS=1` 才实际请求 |
 
-### orbit-core — 🚧 Phase 1 完成，Phase 2 推进中（35 单测）
+### orbit-core — 🚧 Phase 1 完成，Phase 2 推进中（50 单测）
 
 | 模块 | 状态 | 说明 |
 |------|------|------|
@@ -53,8 +57,12 @@ orbit-cli ──→ orbit-core ──→ modrinth-wrapper
 | `providers/curseforge.rs` | 🚧 | 骨架（待 curseforge-wrapper） |
 | `versions/mod.rs` | ✅ | Version enum（Lowest/Fabric/Generic）+ parse() + parse_constraint() |
 | `versions/fabric.rs` | ✅ | SemanticVersion + satisfies() + parse_constraint() + 11 单测 |
-| `resolver/mod.rs` | ✅ | resolve_with_candidates + check_local_graph + FetchRetry + trapped_room diagnostic |
-| `resolver/provider.rs` | ✅ | OrbitDependencyProvider（PubGrub 0.3） + FetchRetryError |
+| `resolver/mod.rs` | ✅ | resolve_with_candidates + check_local_graph + 公共查询 API |
+| `resolver/graph.rs` | ✅ | 平台、lockfile 真实依赖、候选、root 和未知引用包统一构图 |
+| `resolver/retry.rs` | ✅ | resolve_with_observer + NoSolution 后缺失依赖补抓 |
+| `resolver/local.rs` | ✅ | 不联网校验本地 JAR 图和缺失 manifest 依赖 |
+| `resolver/diagnostics/` | ✅ | 实际 SolverEvent 路径采集 + 领域渲染；无反事实重跑/日志解析 |
+| `resolver/provider.rs` | ✅ | OrbitDependencyProvider + ProviderError（兼容重导出 FetchRetryError） |
 | `resolver/types.rs` | ✅ | PackageId + CandidateVersion + ImplantedCandidate |
 | `sync.rs` | 🚧 | 算法占位（todo! 已改为 Err） |
 | `installer.rs` | ✅ | install_to_instance + remove_from_instance + upgrade_all_in_instance + BFS dep download |
@@ -90,20 +98,37 @@ orbit-cli ──→ orbit-core ──→ modrinth-wrapper
 | `orbit instances list` | ✅ | 🚧 config::InstancesRegistry | 需实现格式化输出 |
 | `orbit instances default` | ✅ | 🚧 config | 需 UI |
 | `orbit instances remove` | ✅ | 🚧 config | 需 UI |
-| `orbit add` | ✅ | ✅ installer::install_to_instance + resolver::resolve_manifest | PubGrub 求解 → dep check → 下载 → JAR 解析 → toml/lock |
+| `orbit add` | ✅ | ⚠️ installer::install_to_instance + resolver::resolve_with_candidates | 主流程可用；version/platform/env/optional 规范尚未完整生效 |
 | `orbit install` | ✅ | 🚧 installer | stub（exit 2），全量还原待实现 |
 | `orbit remove` | ✅ | ✅ resolver::dependents | 反查依赖图 + 删除 JAR + 更新 toml/lock |
 | `orbit purge` | ✅ | 🚧 purge + manifest | 需启发式搜索 |
 | `orbit sync` | ✅ | 🚧 sync | **核心功能** |
-| `orbit outdated` | ✅ | 🚧 resolver (只读) | 需版本比对 |
-| `orbit upgrade` | ✅ | 🚧 resolver + installer | **核心功能** |
+| `orbit outdated` | ✅ | ⚠️ outdated + resolver | 可查询候选；manifest 版本约束尚未约束候选根范围 |
+| `orbit upgrade` | ✅ | ⚠️ outdated + resolver + installer | 可升级；同样受版本约束缺口影响，单模组入口仍走全局检查 |
 | `orbit search` | ✅ | ✅ provider::search | CLI handler + facets 过滤 + 格式化输出 |
 | `orbit info` | ✅ | 🚧 provider::get_mod_info | 需格式化输出 |
-| `orbit list` | ✅ | 🚧 lockfile | 需 --tree 算法 |
+| `orbit list` | ✅ | ✅ installer::list_installed | 扁平和树形展示已实现 |
 | `orbit import` | ✅ | 🚧 manifest | 需合并逻辑 |
 | `orbit export` | ✅ | 🚧 lockfile + zip | 需打包逻辑 |
 | `orbit check` | ✅ | 🚧 checker | 需 API 查询 |
 | `orbit cache clean` | ✅ | 🚧 config | 需 UI |
+
+---
+
+## 规范仍正确、实现尚未遵守
+
+这些项目不能标成“文档过时”：
+
+| 优先级 | 规范 | 当前差距 |
+|:---:|------|----------|
+| P0 | add/upgrade 必须遵守用户版本约束 | `install_to_instance` 忽略 constraint，候选根范围使用 full |
+| P1 | core 不直接承担 UI 输出 | resolver、outdated、installer、init 等仍直接 `eprintln!` |
+| P1 | provider 按 `[resolver].platforms` 顺序回退 | add/outdated/BFS/retry 只使用首个 provider |
+| P1 | 冲突信息应可读且由 CLI 展示 | skipped candidate 已结构化采集但直接打印；NoSolution 仍返回默认 reporter 字符串 |
+| P1 | manifest 高级字段必须生效 | overrides/optional/env/exclude 已可解析，但当前安装/候选求解未完整应用 |
+| P2 | `Version` 只保留实际需要的模型 | `Lowest` 是 PubGrub 旧版遗留的未使用变体 |
+
+详细说明见 [orbit-resolver.md 第 8 节](orbit-resolver.md#8-仍然有效但代码尚未满足的规范)。
 
 ---
 
@@ -124,12 +149,13 @@ orbit-cli ──→ orbit-core ──→ modrinth-wrapper
 ### Phase 2 — 🔜 进行中
 
 - [x] Resolver 设计文档（`docs/orbit-resolver.md`）
-- [x] `resolver/` PubGrub 求解器（resolve_manifest + check_local_graph + FetchRetry）
+- [x] `resolver/` PubGrub 求解器（resolve_with_candidates + check_local_graph + Fetch-and-Retry）
 - [x] `resolver/` 依赖图查询 API（find_entry / dependents / check_version_conflict）
 - [x] `versions/` Version enum + parse_constraint 用于 PubGrub
 - [x] `installer.rs` install_to_instance + remove_from_instance
-- [x] `resolver/provider_version.rs` ProviderVersionResolver trait + FallbackResolver
-- [x] `resolver/modrinth_version.rs` ModrinthVersionResolver（date_published sort）
+- [x] 定制 PubGrub 类型化 observer（proposal / decision / derivation / backtrack）
+- [x] 成功求解中被跳过候选的实际路径诊断
+- [x] resolver 按 graph / retry / local / diagnostics 职责拆分
 - [x] `cli add <slug>` 单模组安装（含搜索回退 + 交互式选择）
 - [x] `cli remove <mod>` 按 slug 删除（含反查依赖图 + 候选列表）
 - [ ] 实现 `sync.rs` 五态比对
