@@ -1,361 +1,104 @@
-# Orbit 实例环境检测层设计
+# Orbit 实例环境检测
 
-> 本文档定义 `orbit-core/src/detection/` 的策略模式架构、
-> MC 版本检测流程、以及 `orbit init` 的完整编排逻辑。
+> 实现位置：`orbit-core/src/detection/`、`orbit-core/src/metadata/version_profile.rs`
+> 与 `orbit-core/src/init.rs`
 
----
+## 1. 职责边界
 
-## 目录
+检测层只回答两个问题：
 
-1. [设计概述](#1-设计概述)
-2. [目录结构](#2-目录结构)
-3. [核心抽象](#3-核心抽象)
-   - [DetectionResult — 检测结果](#detectionresult--检测结果)
-   - [LoaderInfo — 加载器信息](#loaderinfo--加载器信息)
-   - [Confidence — 置信度](#confidence--置信度)
-   - [LoaderDetector trait](#loaderdetector-trait)
-   - [LoaderDetectionService — 编排层](#loaderdetectionservice--编排层)
-4. [MC 版本检测流程](#4-mc-版本检测流程)
-5. [`init` 命令编排流程](#5-init-命令编排流程)
-6. [Rust 实现参考](#6-rust-实现参考)
-7. [Phase 策略](#7-phase-策略)
+1. 当前目录使用哪一种模组加载器，以及能否从 launcher profile 得到版本；
+2. 当前实例的 Minecraft JAR 是否包含可解析的 `version.json`。
 
----
+它不解析模组 JAR，不查询下载平台，也不替安装流程选择兼容版本。模组元数据由
+`metadata/` 与 `jar/` 处理；平台版本由 provider 处理。
 
-## 1. 设计概述
+## 2. Loader detector
 
-`orbit init` 需要自动识别目标目录的 Minecraft 环境——**MC 版本**是什么、**模组加载器**是什么。
-
-| 检测目标 | 信息来源 | 方案 |
-|---------|---------|------|
-| MC 版本 | 游戏 JAR 内的 `version.json` | `jar.rs` 提取 → `metadata/mojang.rs` 解析 |
-| 模组加载器 | 各加载器特有的痕迹文件 | **策略模式**，每个加载器一个 `LoaderDetector` |
-
-**两层分离**：
-
-```
-jar.rs（负责打开 JAR / 遍历文件系统）
-  ├─ 提取 version.json 字符串 → metadata/mojang.rs（纯解析）
-  ├─ 遍历 mods/ 下 JAR → metadata/ mod.rs（策略：Extractor）
-  └─ 加载器检测文件 → detection/（策略：LoaderDetector）
-```
-
-**当前策略**：FabricDetector 已实现真实检测（扫描 JSON libraries 匹配 fabric-loader），返回 `Confidence::Certain`。Forge/NeoForge/Quilt detector 待实现。
-
----
-
-## 2. 目录结构
-
-```
-orbit-core/src/detection/
-├── mod.rs              # DetectionResult + LoaderInfo + LoaderDetector trait + Service
-├── fabric.rs           # FabricDetector
-├── forge.rs            # ForgeDetector
-├── neoforge.rs         # NeoForgeDetector
-└── quilt.rs            # QuiltDetector
-```
-
-与 `metadata/`、`providers/` 完全对称的策略模式结构。
-
----
-
-## 3. 核心抽象
-
-### DetectionResult — 检测结果
+每种加载器实现同一个策略接口：
 
 ```rust
-pub struct DetectionResult {
-    /// MC 版本（从游戏 JAR 提取，总是有值）
-    pub mc_version: McVersion,
-    /// 加载器信息（Phase 1 可能为 None，由交互式选择填充）
-    pub loader: Option<LoaderInfo>,
-    /// 每个探测器的原始输出（用于日志/verbose）
-    pub candidates: Vec<LoaderInfo>,
-}
-```
-
-### LoaderInfo — 加载器信息
-
-```rust
-pub struct LoaderInfo {
-    pub loader: ModLoader,
-    pub version: Option<String>,
-    pub confidence: Confidence,
-    pub evidence: Vec<String>,
-}
-```
-
-### Confidence — 置信度
-
-```rust
-pub enum Confidence {
-    /// 确定 — 找到了加载器专属 JAR（如 fabric-loader-0.15.7.jar）
-    Certain,
-    /// 很可能 — mods/ 下全部是特定加载器的模组
-    High,
-    /// 猜测 — 目录名或版本名包含 "fabric"/"forge" 关键词
-    Low,
-    /// 无任何线索 — 走交互式选择
-    None,
-}
-```
-
-### LoaderDetector trait
-
-```rust
-/// 每个加载器实现此 trait
-pub trait LoaderDetector: Send + Sync {
-    /// 探测器名称
-    fn name(&self) -> &'static str;
-
-    /// 对应的加载器类型
-    fn loader_type(&self) -> ModLoader;
-
-    /// 检测目标目录，返回该加载器的存在证据和置信度
-    fn detect(&self, instance_dir: &std::path::Path) -> Result<LoaderInfo, OrbitError>;
-}
-```
-
-### LoaderDetectionService — 编排层
-
-```rust
-pub struct LoaderDetectionService {
-    detectors: Vec<Box<dyn LoaderDetector>>,
-}
-
-impl LoaderDetectionService {
-    pub fn new() -> Self { /* 注册所有 detector */ }
-
-    /// 遍历所有 detector，收集结果，选置信度最高的
-    pub fn detect_all(
-        &self,
-        instance_dir: &std::path::Path,
-    ) -> Result<Vec<LoaderInfo>, OrbitError> {
-        let results: Vec<LoaderInfo> = self.detectors
-            .iter()
-            .map(|d| d.detect(instance_dir))
-            .collect::<Result<_, _>>()?;
-
-        // 按置信度降序排列
-        // 后续 init 逻辑取 results[0]，if confidence < Certain → 交互式
-        Ok(results)
-    }
-}
-```
-
----
-
-## 4. MC 版本检测流程
-
-MC 版本不经过策略模式——它只有一个来源，检测逻辑是固定的：
-
-```
-detect_mc_version(instance_dir)
-  │
-  ├─ 1. 定位游戏 JAR
-  │      可能的路径（按顺序尝试）：
-  │        - {instance_dir}/versions/{jar_dir}/{jar_dir}.jar  (MC Launcher 标准)
-  │        - {instance_dir}/.minecraft/versions/{id}/{id}.jar  (HMCL 等启动器)
-  │      如何知道版本号？
-  │        - 列出 versions/ 下所有目录 → 取第一个 → 用目录名作为 jar_dir
-  │        - 或读取启动器配置文件（如 HMCL 的 hmcl.json）获得 version id
-  │
-  ├─ 2. 打开 JAR → archive.by_name("version.json") (O(1))
-  │
-  ├─ 3. 读取字符串内容 → metadata::mojang::McVersion::from_json(content)
-  │
-  └─ 4. 返回 McVersion
-```
-
-> **Phase 1 简化**：用户必须通过 `--mc-version` 手动指定。自动探测逻辑后续实现。
-
----
-
-## 5. `init` 命令编排流程
-
-```
-orbit init <name> [--mc-version <ver>] [--modloader <loader>]
-
-  ┌─ 1. 获取 MC 版本 ───────────────────────────┐
-  │   if --mc-version 指定                       │
-  │     → 直接使用                               │
-  │   else                                       │
-  │     → detect_mc_version(dir)                  │
-  │     → 失败则报错退出                          │
-  └──────────────────────────────────────────────┘
-                    │
-  ┌─ 2. 检测加载器 ───────────────────────────────┐
-  │   if --modloader 指定                         │
-  │     → 直接使用                               │
-  │   else                                       │
-  │     → LoaderDetectionService::detect_all()    │
-  │     → 选置信度最高的                          │
-  │     → if confidence >= Certain → 自动使用     │
-  │     → else → 交互式列表选择                   │
-  └──────────────────────────────────────────────┘
-                    │
-  ┌─ 3. 生成 orbit.toml ──────────────────────────┐
-  │   OrbitManifest {                             │
-  │     project: ProjectMeta {                    │
-  │       name, mc_version,                       │
-  │       modloader, modloader_version,            │
-  │     },                                        │
-  │     resolver: default,                        │
-  │     dependencies: {}                          │
-  │   }                                           │
-  │   → toml::to_string_pretty → 写入文件          │
-  └──────────────────────────────────────────────┘
-                    │
-  ┌─ 4. 注册实例 ─────────────────────────────────┐
-  │   InstancesRegistry::load()                   │
-  │   → 添加当前目录的条目                        │
-  │   → save()                                    │
-  └──────────────────────────────────────────────┘
-```
-
-**交互式选择（Phase 1 的兜底）**：
-
-CLI 输出一个选择列表让用户选加载器：
-
-```
-? Could not auto-detect modloader. Please select one:
-  [1] Fabric
-  [2] Forge
-  [3] NeoForge
-  [4] Quilt
-  [5] None (vanilla / unknown)
-```
-
----
-
-## 6. Rust 实现参考
-
-### mod.rs
-
-```rust
-// orbit-core/src/detection/mod.rs
-
-use crate::error::OrbitError;
-use crate::metadata::{ModLoader, mojang::McVersion};
-
-// ── 类型 ───────────────────────────────────
-
-pub struct DetectionResult {
-    pub mc_version: Option<McVersion>,
-    pub loader: Option<LoaderInfo>,
-    pub candidates: Vec<LoaderInfo>,
-}
-
-pub struct LoaderInfo {
-    pub loader: ModLoader,
-    pub version: Option<String>,
-    pub confidence: Confidence,
-    pub evidence: Vec<String>,
-}
-
-pub enum Confidence {
-    Certain,
-    High,
-    Low,
-    None,
-}
-
-// ── trait ──────────────────────────────────
-
 pub trait LoaderDetector: Send + Sync {
     fn name(&self) -> &'static str;
     fn loader_type(&self) -> ModLoader;
-    fn detect(&self, instance_dir: &std::path::Path) -> Result<LoaderInfo, OrbitError>;
-}
-
-// ── 编排 ───────────────────────────────────
-
-pub struct LoaderDetectionService {
-    detectors: Vec<Box<dyn LoaderDetector>>,
-}
-
-impl LoaderDetectionService {
-    pub fn new() -> Self {
-        Self {
-            detectors: vec![
-                Box::new(super::fabric::FabricDetector),
-                // Box::new(super::forge::ForgeDetector),
-                // Box::new(super::neoforge::NeoForgeDetector),
-                // Box::new(super::quilt::QuiltDetector),
-            ],
-        }
-    }
-
-    pub fn detect_all(
-        &self,
-        instance_dir: &std::path::Path,
-    ) -> Result<Vec<LoaderInfo>, OrbitError> {
-        let mut results: Vec<LoaderInfo> = self.detectors
-            .iter()
-            .map(|d| d.detect(instance_dir))
-            .collect::<Result<_, _>>()?;
-
-        // 按置信度降序
-        results.sort_by(|a, b| confidence_rank(&b.confidence).cmp(&confidence_rank(&a.confidence)));
-        Ok(results)
-    }
-
-    /// 返回已知加载器名称列表（用于交互式选择）
-    pub fn known_loaders(&self) -> Vec<(ModLoader, &'static str)> {
-        self.detectors.iter()
-            .map(|d| (d.loader_type(), d.name()))
-            .collect()
-    }
-}
-
-fn confidence_rank(c: &Confidence) -> u8 {
-    match c { Confidence::Certain => 3, Confidence::High => 2, Confidence::Low => 1, Confidence::None => 0 }
+    fn detect(&self, instance_dir: &Path) -> Result<LoaderInfo, OrbitError>;
 }
 ```
 
-### fabric.rs (Phase 1 占位)
+`LoaderDetectionService::new()` 当前注册 Fabric、Forge、NeoForge 和 Quilt 四个
+detector。`detect_all()` 执行全部策略，并按置信度降序返回；手动传入
+`--modloader` 时，CLI 通过 `find_by_name()` 只运行对应 detector。
 
-```rust
-// orbit-core/src/detection/fabric.rs
+## 3. Launcher profile 扫描
 
-use super::{Confidence, LoaderDetector, LoaderInfo};
-use crate::error::OrbitError;
-use crate::metadata::ModLoader;
+四个 detector 复用 `profile::detect_profile_loader()`。扫描范围为：
 
-pub struct FabricDetector;
+- 实例根目录中的 `*.json`；
+- `versions/` 下每个直接子目录中的 `*.json`。
 
-impl LoaderDetector for FabricDetector {
-    fn name(&self) -> &'static str { "Fabric" }
-    fn loader_type(&self) -> ModLoader { ModLoader::Fabric }
+JSON 按 Minecraft Launcher version profile 解析，主要读取 `libraries[].name` 和
+`mainClass`：
 
-    fn detect(&self, _dir: &std::path::Path) -> Result<LoaderInfo, OrbitError> {
-        // TODO: Phase 2 — 实际检测逻辑：
-        // - 检查 versions/ 下是否有 fabric-loader-*.jar
-        // - 检查 mods/ 下 JAR 的 fabric.mod.json
-        Ok(LoaderInfo {
-            loader: ModLoader::Fabric,
-            version: None,
-            confidence: Confidence::None,
-            evidence: vec![],
-        })
-    }
-}
-```
+| Loader | 确定性 Maven 坐标 | 弱证据 `mainClass` 标记 |
+|--------|-------------------|-------------------------|
+| Fabric | `net.fabricmc:fabric-loader` | `fabricmc` |
+| Forge | `net.minecraftforge:forge` | `minecraftforge` |
+| NeoForge | `net.neoforged:neoforge` 或 `net.neoforged:forge` | `neoforged` |
+| Quilt | `org.quiltmc:quilt-loader` | `quiltmc` |
 
----
+找到 Maven 坐标时返回加载器版本和 `Confidence::Certain`。只命中 `mainClass` 时没有
+足够信息确定版本，因此返回 `Confidence::Low`；没有证据时返回
+`Confidence::None`。当前 detector 不产生 `Confidence::High`，该枚举值为其它检测
+策略保留。
 
-## 7. Phase 策略
+Forge/NeoForge profile 的坐标版本有时包含 Minecraft 前缀，例如
+`1.21.1-52.0.0`。只有前半段确实是纯数字点分 Minecraft 版本时，检测层才将其归一化
+为 `52.0.0`，避免破坏 `21.1.0-beta` 这样的正常预发布版本。
 
-| Phase | 内容 |
-|-------|------|
-| **当前** | FabricDetector 返回 `Confidence::Certain`（扫描 JSON libraries）。MC 版本通过 JAR 内 `version.json` 自动检测 |
-| **Phase 2** | 实现 `FabricDetector.detect()`：查找 fabric-loader jar、遍历 mods/ 下 JAR 读取 fabric.mod.json |
-| **Phase 3** | 实现 Forge / NeoForge / Quilt detector |
-| **Phase 4** | 自动探测 MC 版本：遍历 `versions/` 目录 → 读 JAR 中的 `version.json` |
+## 4. `orbit init` 的选择规则
 
----
+加载器选择顺序如下：
 
-> **关联文档**
-> - [orbit-metadata.md](orbit-metadata.md) — 文件元数据解析（McVersion、ModMetadata、各加载器格式）
-> - [orbit-architecture.md](orbit-architecture.md) — detection/ 模块在项目中的位置
-> - [orbit-cli-commands.md](orbit-cli-commands.md) — `init` 命令的行为规格
+1. 显式 `--modloader` 始终优先，并验证名称是否受支持；
+2. 未显式指定时，只自动接受 `Confidence::Certain` 的最佳检测结果；
+3. 没有确定结果时，交互模式要求用户选择加载器；
+4. 加载器版本按“显式参数 → 检测版本 → 交互输入”选择；
+5. 使用 `--yes` 且无法确定版本时，必须显式提供
+   `--modloader-version`，不会伪造版本。
+
+`LoaderInfo.evidence` 保留命中的坐标、profile 文件名或 `mainClass` 标记，CLI 在
+自动检测成功时显示这些证据。检测失败与“检测到某个版本”是两种可区分的结果。
+
+## 5. Minecraft 版本检测
+
+`init::detect_mc_version(instance_dir)` 先扫描 `versions/` 的直接子目录，再回退扫描
+实例根目录中的 JAR，读取其中的 `version.json`，并交给
+`metadata::mojang::McVersion` 解析。返回值除 `id` 外还保留
+world/protocol/pack/Java 版本和稳定版标志。
+
+该检测只接受真实 `version.json`；无法检测时由 CLI 请求 `--mc-version` 或交互输入。
+它不会从目录名猜版本，也不会把 loader profile 的 `inheritsFrom` 当作已经验证的游戏
+JAR 版本。
+
+## 6. 已知边界
+
+- 只扫描根目录和 `versions/` 的一层子目录，不解析各启动器的私有配置数据库；
+- launcher profile 的 `mainClass` 仅是弱证据，不足以自动确定 loader 版本；
+- 多个加载器同时有确定证据时，当前按 detector 注册顺序稳定选择第一个结果，没有额外
+  的冲突询问；
+- Java 元数据可以从游戏 JAR 读取，但尚未探测实际运行时，因此 resolver 仍明确忽略
+  模组声明的 Java 依赖；
+- CurseForge 是下载 provider 边界，与实例 loader 检测无关，当前仍不支持。
+
+## 7. 扩展检测策略
+
+新增 loader 时需要同时完成：
+
+1. 添加 `LoaderDetector` 实现；
+2. 在 `LoaderDetectionService::new()` 注册；
+3. 定义能够确定版本的强证据，并将猜测保留为低置信度；
+4. 在 `metadata/`、`jar/` 和 `versions/` 接入对应格式；
+5. 添加根目录、`versions/` 子目录、弱证据和版本归一化测试。
+
+不能用固定版本、空字符串或默认 `0.0.0` 代替检测失败。无法获得可复现所需信息时，
+应要求用户显式输入。

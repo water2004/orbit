@@ -66,7 +66,7 @@ pub struct RestoreReport {
 pub struct InstalledMod {
     pub slug: String,
     pub mod_id: String,
-    /// fabric.mod.json 的 version
+    /// JAR loader 元数据声明的版本
     pub version: String,
     pub filename: String,
     pub provider: String,
@@ -336,7 +336,7 @@ pub async fn upgrade_all_in_instance(
 
 /// 顶层 API：从指定实例目录移除模组。
 ///
-/// `input` 可以是 mod_id（JAR 内 fabric.mod.json 的 `id`）或 slug。
+/// `input` 可以是 JAR loader 元数据声明的 `mod_id` 或平台 slug。
 /// 先从 lockfile 查找（同时匹配 mod_id 和 modrinth.slug），
 /// 再同步更新 manifest、lockfile、JAR 文件。
 pub fn remove_from_instance(

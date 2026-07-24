@@ -30,7 +30,26 @@ Orbit 有两级配置文件：
 | `orbit.toml` | 项目级 | 该 Minecraft 实例装了什么模组 |
 | `config.toml` | 全局级 | Orbit 这个工具本身该如何运行 |
 
-`config.toml` **不关心你装了什么模组**，只控制 Orbit CLI 的运行时行为——代理、缓存、并发数、认证等。
+`config.toml` **不关心你装了什么模组**，保存 Orbit CLI 的全局运行参数。
+
+### 当前接入状态
+
+schema、默认值、文件加载/保存和环境变量覆盖已经实现，但并非每个字段都已被运行路径
+消费：
+
+| 范围 | 当前状态 |
+|------|----------|
+| `core.default_instance` | 已用于实例选择，并与 `instances.toml` 默认标记同步 |
+| `cache.dir` | 已用于缓存读取、写入、检查和清理 |
+| 环境变量覆盖 | 已写入加载后的 `GlobalConfig` |
+| `max_concurrent_downloads` | 已持久化，尚未接到下载编排 |
+| `network.*` | 已持久化，HTTP 客户端仍使用各模块固定超时，代理/重试尚未统一接入 |
+| `auth.modrinth_token` | 已持久化，尚未传入 Modrinth 客户端 |
+| `auth.curseforge_token` | 仅为未来 schema 保留；CurseForge 当前暂不支持 |
+| `cache.enable` / 淘汰策略 / 大小 | 已持久化，开关和自动淘汰尚未执行 |
+| `language` / `[ui]` | 已持久化，CLI 本地化和样式消费尚未实现 |
+
+后两类是“规范仍有效但代码尚未遵守”，不是可以宣称已经生效的当前行为。
 
 ---
 
@@ -71,12 +90,12 @@ language = "zh-CN"
 timeout = 30
 # 遇到网络错误时的最大重试次数
 max_retries = 3
-# 可选的 HTTP 代理（对国内玩家拉取 CurseForge 至关重要）
+# 可选的 HTTP 代理（当前 schema 已保留，HTTP 客户端尚未统一接入）
 # proxy = "http://127.0.0.1:7890"
 
 # ── 平台认证 ──────────────────────────────
 [auth]
-# CurseForge API Key（使用第三方客户端时必须提供）
+# CurseForge API Key（未来接入保留；当前不会启用 CurseForge）
 # curseforge_token = "cf_YOUR_API_KEY_HERE"
 # Modrinth Token（可选，用于操作私有项目）
 # modrinth_token = "mrp_YOUR_TOKEN_HERE"
@@ -121,8 +140,8 @@ progress_bar = "modern"
 
 | 字段 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `curseforge_token` | `Option<String>` | `None` | CurseForge API Key |
-| `modrinth_token` | `Option<String>` | `None` | Modrinth API Token |
+| `curseforge_token` | `Option<String>` | `None` | 为未来 CurseForge provider 保留，当前不使用 |
+| `modrinth_token` | `Option<String>` | `None` | Modrinth API Token；当前已加载但尚未传给客户端 |
 
 > **安全警告**：API Key 以明文存储在 `config.toml` 中。请勿将此文件纳入 Git 或分享给他人。
 > 未来版本计划使用 OS 凭据管理器（Windows Credential Manager / Linux Secret Service）存储敏感信息。
@@ -360,7 +379,8 @@ impl Default for OrbitGlobalConfig {
 
 1. **`config.toml` 应设为 `0600` 权限**（仅所有者可读写）——其中 `[auth]` 块包含 API Token。
 2. **不要将 `config.toml` 纳入 Git 版本控制**——Orbit 会将其放在 `orbit/` 数据目录下，而非项目目录。
-3. **环境变量 `ORBIT_CURSEFORGE_TOKEN`** 提供的值优先级高于 `config.toml`，适合 CI/CD 或临时使用。
+3. 环境变量中的 token 优先于 `config.toml`；其中 `ORBIT_CURSEFORGE_TOKEN` 当前只会被
+   解析和保存，CurseForge provider 未实现前不会发起认证请求。
 4. 未来计划使用 `keyring` crate 将 Token 存入操作系统凭据管理器，届时 `config.toml` 中的 `[auth]` 将只作为回退方案。
 
 ---

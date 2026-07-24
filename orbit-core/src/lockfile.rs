@@ -20,12 +20,12 @@ pub struct LockMeta {
     pub modloader_version: String,
 }
 
-/// [[package]] 条目。`mod_id` 为 fabric.mod.json 的 `id` 字段，是 lockfile 的键。
+/// `[[package]]` 条目。`mod_id` 为 loader 元数据声明的模组 ID，是 lockfile 的键。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PackageEntry {
-    /// fabric.mod.json 的 `id` 字段
+    /// JAR loader 元数据声明的模组 ID
     pub mod_id: String,
-    /// fabric.mod.json 的 `version` 字段
+    /// JAR loader 元数据声明的版本
     pub version: String,
     #[serde(skip_serializing_if = "String::is_empty", default)]
     pub sha1: String,

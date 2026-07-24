@@ -22,10 +22,10 @@ pub enum IdentifiedSource {
 #[derive(Debug, Clone)]
 pub struct IdentifiedMod {
     pub filename: String,
-    /// fabric.mod.json 的 `id`
+    /// JAR loader 元数据声明的模组 ID
     pub mod_id: String,
     pub mod_name: String,
-    /// fabric.mod.json 的 `version`
+    /// JAR loader 元数据声明的版本
     pub version: String,
     /// Modrinth version_number
     pub modrinth_version: String,

@@ -98,24 +98,25 @@ modloader_version = "0.16.10"     # 必填。加载器版本，直接影响 API 
 
 ```toml
 [resolver]
-platforms = ["modrinth", "curseforge"]   # 平台优先级，依次尝试直到找到匹配
-prerelease = false                        # 是否使用 alpha/beta/预发布版本
+platforms = ["modrinth"]   # 平台优先级，依次尝试直到找到匹配
+prerelease = false         # 是否使用 alpha/beta/预发布版本
 ```
 
 **字段规范**：
 
 | 字段 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `platforms` | `[String]` | `["modrinth", "curseforge"]` | 当依赖未显式指定平台时，按此顺序查找 |
+| `platforms` | `[String]` | `["modrinth"]` | 当依赖未显式指定平台时，按此顺序查找 |
 | `prerelease` | `bool` | `false` | `true` 时解析器会考虑 alpha/beta 版本 |
 
-> **解析逻辑**：Orbit 依次查询 `platforms[0]` → `platforms[1]` → …，返回第一个匹配成功的结果。
+> **当前边界**：编排层按 `platforms[0]` → `platforms[1]` → … 回退，但目前只有
+> `modrinth` 可用。显式配置 `curseforge` 会返回明确错误；它不会被静默跳过。
 
 ---
 
 ### 3.3 `[dependencies]` — 模组依赖
 
-每个依赖的**键**是 JAR 内 `fabric.mod.json` 的 `id` 字段（即 `mod_id`），**值**可以是简写字符串或内联表 (inline table)。
+每个依赖的**键**是 JAR 元数据声明的模组 ID（统一记为 `mod_id`），**值**可以是简写字符串或内联表 (inline table)。
 
 > **重要**：`orbit.toml` 中不包含 `platform`、`slug`、`type`、`path`、`url`、`sha256` 字段。这些字段属于 `orbit.lock` 锁文件。manifest 仅声明"我要哪个模组 + 什么版本"，具体来源和校验由 lock 文件负责。
 
@@ -127,7 +128,7 @@ prerelease = false                        # 是否使用 alpha/beta/预发布版
 sodium = "*"
 
 # 语义化版本约束
-lithium = ">=0.11, <0.14"
+lithium = ">=0.11 <0.14"
 
 # 精确版本（= 前缀）
 iris = "=1.7.0"
@@ -228,8 +229,8 @@ modloader_version = "0.16.10"     # 锁定时的加载器版本
 # --- 每个已解析的模组一个 [[package]] 条目 ---
 
 [[package]]
-mod_id = "sodium"                              # JAR 的 fabric.mod.json `id` 字段（包的键）
-version = "0.8.10"                              # JAR 的 fabric.mod.json `version` 字段
+mod_id = "sodium"                              # JAR loader 元数据声明的 ID（包的键）
+version = "0.8.10"                             # JAR loader 元数据声明的版本
 sha1 = "355b37c1..."                            # JAR 文件的 SHA-1 校验值
 sha256 = "e3b0c442..."                          # JAR 文件的 SHA-256 校验值
 sha512 = "ac09f0bd..."                          # JAR 文件的 SHA-512 校验值
@@ -241,13 +242,14 @@ project_id = "AANobbMI"                         # Modrinth 项目 ID
 version_id = "SIrB5bCM"                         # Modrinth 版本 ID
 version = "mc26.1.2-0.8.10-fabric"              # Modrinth version_number（API 返回的原始版本字符串）
 slug = "sodium"                                 # Modrinth slug
+download_url = "https://cdn.modrinth.com/..."   # 锁定的主文件下载地址
 
-# --- 前置依赖（来自 JAR 的 fabric.mod.json `depends`） ---
+# --- required 前置依赖（来自 JAR loader 元数据） ---
 [[package.dependencies]]
 name = "fabric-api"
 version = ">=0.92"
 
-# --- 内嵌子模组（从 META-INF/jars/ 提取） ---
+# --- 内嵌子模组（从 loader 声明的内嵌路径提取） ---
 [[package.implanted]]
 name = "fabric-api-base"
 version = "2.0.3"
@@ -272,8 +274,8 @@ path = "mods/fabric-carpet-26.1+v260402.jar"
 
 | 字段 | 类型 | 来源 | 说明 |
 |------|------|------|------|
-| `mod_id` | `String` | JAR `fabric.mod.json` `id` | 包的唯一标识符，对应 `orbit.toml` `[dependencies]` 中的键名 |
-| `version` | `String` | JAR `fabric.mod.json` `version` | 模组自身声明的版本号 |
+| `mod_id` | `String` | JAR loader 元数据 | 包的唯一标识符，对应 `orbit.toml` `[dependencies]` 中的键名 |
+| `version` | `String` | JAR loader 元数据 | 模组自身声明的版本号 |
 | `sha1` | `String` | 本地 JAR 计算 | SHA-1 校验值 |
 | `sha256` | `String` | 本地 JAR 计算 | SHA-256 校验值 |
 | `sha512` | `String` | 本地 JAR 计算 | SHA-512 校验值 |
@@ -286,8 +288,8 @@ path = "mods/fabric-carpet-26.1+v260402.jar"
 |------|------|----------|------|
 | `[package.modrinth]` | 子表 | `provider = "modrinth"` | Modrinth API 专属数据 |
 | `[package.file]` | 子表 | `provider = "file"` | 本地文件路径 |
-| `[[package.dependencies]]` | 数组表 | 有前置依赖时 | 来源：JAR `fabric.mod.json` `depends` |
-| `[[package.implanted]]` | 数组表 | 有内嵌子模组时 | 从 `META-INF/jars/` 提取 |
+| `[[package.dependencies]]` | 数组表 | 有前置依赖时 | 来源：JAR loader 元数据中的 required dependencies |
+| `[[package.implanted]]` | 数组表 | 有内嵌子模组时 | 从 loader 声明的内嵌路径提取 |
 
 **`[package.modrinth]` 子表字段**：
 
@@ -297,6 +299,7 @@ path = "mods/fabric-carpet-26.1+v260402.jar"
 | `version_id` | `String` | Modrinth API | 版本 ID |
 | `version` | `String` | Modrinth API | Modrinth 的 `version_number`（与 `package.version` 不同） |
 | `slug` | `String` | Modrinth API | 项目 slug |
+| `download_url` | `String` | Modrinth API | 锁定的主文件下载 URL；旧锁文件缺失时可在非 `--locked` 模式重新查询 |
 
 **`[package.file]` 子表字段**：
 
@@ -322,9 +325,8 @@ path = "mods/fabric-carpet-26.1+v260402.jar"
 | `dependencies` | `[LockDependency]` | 内嵌子模组自身声明的依赖列表（可选，从 JAR 提取） |
 
 > **关键规则**：
-> - 除 `[package.modrinth]` 子表外，所有字段均来自 JAR 的 `fabric.mod.json`。
-> - `mod_id` = JAR `id`，`version` = JAR `version`。
-> - `dependencies` = JAR `depends` 条目。
+> - 除 provider 子表外，模组 ID、版本、依赖和内嵌声明来自对应 loader 的 JAR 元数据。
+> - Fabric/Quilt、Forge/NeoForge 的字段差异在 metadata 层归一化，不进入 lockfile schema。
 > - `sha1`/`sha256`/`sha512` 由本地 JAR 文件实时计算得出。
 > - 仅 `[package.modrinth]` 子表使用 Modrinth API 返回的数据。
 > - `[[package]]` 替代了旧格式的 `[[lock]]`；`PackageEntry` 替代了旧格式的 `LockEntry`。
@@ -359,7 +361,7 @@ path = "mods/fabric-carpet-26.1+v260402.jar"
 | `optional` | 声明意图 | — |
 | `env` | 声明意图 | — |
 | `exclude` | 声明意图 | — |
-| `mod_id` | 作为键使用 | 存储 JAR 的 fabric.mod.json `id` |
+| `mod_id` | 作为键使用 | 存储 JAR loader 元数据声明的 ID |
 | `sha1` / `sha256` / `sha512` | — | 本地 JAR 计算 |
 | `provider` | — | 安装时确定 |
 | `[package.modrinth]` | — | Modrinth API 数据 |
@@ -378,12 +380,15 @@ Orbit 的版本约束借鉴 Cargo/npm，但针对 Minecraft 模组的非标准�
 | 表达式 | 含义 | 示例（匹配/不匹配） |
 |--------|------|---------------------|
 | `*` | 任意版本 | 匹配一切 |
-| `>=X.Y.Z, <A.B.C` | 范围约束 | `>=0.5, <1.0` |
-| `^X.Y.Z` | 兼容更新（左起第一个非零位不变） | `^0.5.8` ≡ `>=0.5.8, <0.6.0` |
-| `~X.Y.Z` | 补丁更新（仅允许最后一位变化） | `~0.5.8` ≡ `>=0.5.8, <0.5.9` |
+| `>=X.Y.Z <A.B.C` | Fabric/Quilt 范围约束（空格为 AND） | `>=0.5 <1.0` |
+| `^X.Y.Z` | 兼容更新 | `^0.5.8` ≡ `>=0.5.8 <0.6.0` |
+| `~X.Y.Z` | 固定前两个组件 | `~0.5.8` ≡ `>=0.5.8 <0.6.0` |
 | `=X.Y.Z` | 精确版本 | 仅匹配 `X.Y.Z` |
+| `[A,B)` | Forge/NeoForge Maven 范围 | `>=A` 且 `<B` |
 
-**MC 模组特殊处理**：许多模组版本形如 `mc1.20.1-0.5.8` 或 `1.20.1-0.5.8`。Orbit 解析时先提取版本号中**可解析为 semver 的尾部**进行约束比较。若无法提取，则回退为字符串精确匹配。
+版本模型按项目 loader 选择。Fabric/Quilt 使用 Fabric predicate；Forge/NeoForge
+使用 Maven range。Orbit 不从平台展示名猜测 semver 尾部，实际比较值来自 JAR
+自声明版本；无法解析的 Fabric/Quilt 版本回退为原始字符串精确匹配。
 
 ### 6.2 平台自动解析
 
@@ -392,9 +397,10 @@ Orbit 的版本约束借鉴 Cargo/npm，但针对 Minecraft 模组的非标准�
 1. 遍历 `[resolver].platforms` 列表。
 2. 对每个平台，使用依赖的键名（即 `mod_id`）作为平台内的搜索标识符。
 3. 第一个返回有效结果的平台即为该依赖的来源。
-4. 若所有平台均无匹配，`orbit install` 报错退出。
+4. 若所有可用平台均无匹配，命令报错退出。
 
-> **示例**：`platforms = ["modrinth", "curseforge"]`，依赖写 `sodium = "*"`。先在 Modrinth 搜 `sodium`；若未找到，再在 CurseForge 搜 `sodium`。
+当前可用平台只有 Modrinth，因此默认值是 `["modrinth"]`。列表与回退抽象为未来
+provider 保留，但 CurseForge 当前明确暂不支持。
 
 ### 6.3 依赖来源类型
 
@@ -529,14 +535,14 @@ authors = ["GBwater"]
 version = "1.0.0"
 
 [resolver]
-platforms = ["modrinth", "curseforge"]
+platforms = ["modrinth"]
 prerelease = false
 
 [dependencies]
-# 键名 = JAR 的 fabric.mod.json `id` 字段（mod_id）
+# 键名 = JAR loader 元数据声明的 mod_id
 # 简写形式 — 版本约束字符串
 sodium = "^0.5"
-lithium = ">=0.11, <0.14"
+lithium = ">=0.11 <0.14"
 fabric-api = "*"
 
 # 完整内联表形式 — version, optional, env, exclude

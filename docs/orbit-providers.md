@@ -1,322 +1,141 @@
-# Orbit 平台 Provider 层设计
+# Orbit Provider 层
 
-> 本文档定义 `orbit-core/src/providers/` 中 `RateLimiter` 任务队列和 `ModProvider` trait 的完整规格。
+> 实现位置：`orbit-core/src/providers/`
 
----
+## 1. 当前支持状态
 
-## 目录
+| Provider | 状态 | 说明 |
+|----------|:---:|------|
+| Modrinth | ✅ | 搜索、详情、解析、哈希反查、版本批量查询、依赖查询 |
+| 本地 `file:` | ✅ | 由 `installer/local.rs` 处理，不是网络 provider |
+| CurseForge | ⏸ | 明确暂不支持；不会注册空 provider |
 
-1. [设计原则](#1-设计原则)
-2. [模块结构](#2-模块结构)
-3. [RateLimiter — 并发控制](#3-ratelimiter--并发控制)
-4. [ModProvider trait 集成](#4-modprovider-trait-集成)
-5. [统一数据类型](#5-统一数据类型)
-6. [Provider 工厂函数](#6-provider-工厂函数)
-7. [调用方视角](#7-调用方视角)
-8. [Rust 实现参考](#8-rust-实现参考)
+Provider 抽象支持按 `[resolver].platforms` 顺序回退，但“抽象支持多个平台”不等于已有
+多个可用实现。当前默认值仅为 `["modrinth"]`；显式配置 `curseforge` 或未知名称会在
+创建 provider 时返回可读错误。
 
----
+## 2. 模块边界
 
-## 1. 设计原则
-
-| 原则 | 说明 |
-|------|------|
-| **并发归 Provider** | 速率限制是平台 API 的实现细节，完全封装在 `ModProvider` impl 内部 |
-| **对外透明** | 调用方只需 `spawn` 并发任务，队列和排队由 Provider 内部 Semaphore 自动处理 |
-| **独立控制** | 每个平台持有自己的 `RateLimiter`，Modrinth 限 3 和 CurseForge 限 3 互不干扰 |
-
-```
-调用方: spawn 50 个任务并发调用 provider.get_version_by_hash()
-    │
-    ▼
-Provider 内部:
-    RateLimiter(Semaphore(3))
-    ┌────┐ ┌────┐ ┌────┐
-    │ T1 │ │ T2 │ │ T3 │  ← 同时最多 3 个
-    └────┘ └────┘ └────┘
-    ┌────┐ ┌────┐ ...    ← T4-T50 在 Semaphore 上排队阻塞
-    │ T4 │ │ T5 │
-    └────┘ └────┘
+```text
+providers/
+├── mod.rs             trait、统一类型、provider factory
+├── modrinth.rs        Modrinth SDK 到领域类型的适配
+├── rate_limiter.rs    单 provider 的 semaphore
+└── curseforge.rs      统一“暂不支持”错误边界
 ```
 
----
+`modrinth-wrapper` 只封装 HTTP 与平台 JSON。`ModrinthProvider` 负责：
 
-## 2. 模块结构
+- 将 Orbit 的 Minecraft/loader/版本约束映射为 API 查询；
+- 选择主 JAR 文件；
+- 将 project/version/file/dependency 响应归一化为领域类型；
+- 从下载后的 JAR 获取真实 `mod_id`、版本和依赖；
+- 为批量 hash/project 查询使用平台批量端点。
 
-```
-orbit-core/src/providers/
-├── mod.rs           # ModProvider trait + create_providers() + 统一数据类型
-├── rate_limiter.rs  # RateLimiter — Semaphore 封装
-├── modrinth.rs      # ModrinthProvider（持有 RateLimiter）
-└── curseforge.rs    # CurseForgeProvider（持有 RateLimiter）
-```
+CLI 和 resolver 不直接调用 wrapper。
 
----
+## 3. 统一接口
 
-## 3. RateLimiter — 并发控制
-
-### 核心实现
-
-```rust
-use std::sync::Arc;
-use tokio::sync::{OwnedSemaphorePermit, Semaphore};
-
-/// 平台 API 并发控制工具。
-///
-/// 基于 tokio Semaphore 实现：
-/// - `acquire()` 获取一个 permit，所有槽位被占时自动阻塞等待
-/// - permit drop 时自动释放槽位
-/// - 内部持有一个 permit 意味着"正在发起一个 HTTP 请求"
-pub struct RateLimiter {
-    semaphore: Arc<Semaphore>,
-}
-
-impl RateLimiter {
-    /// `max_concurrency` — 最大并发请求数
-    ///
-    /// 建议值：
-    ///   Modrinth:  3-4  (API 无官方速率限制文档，实测 4 并发安全)
-    ///   CurseForge: 2-3 (需要 API Key，限制较严)
-    pub fn new(max_concurrency: usize) -> Self {
-        Self { semaphore: Arc::new(Semaphore::new(max_concurrency)) }
-    }
-
-    /// 获取一个并发槽位。所有槽位被占时自动 await 等待。
-    /// Semaphore 关闭时返回错误（正常运行时不会发生）。
-    pub async fn acquire(&self) -> Result<OwnedSemaphorePermit, OrbitError> {
-        self.semaphore.clone().acquire_owned().await
-            .map_err(|_| OrbitError::Other(anyhow!("RateLimiter semaphore unexpectedly closed")))
-    }
-}
-```
-
-### 为什么不用 crate
-
-- `governor` / `ratelimit` 等 crate 侧重时间窗口限流（如 60 次/分钟），实现的是"令牌桶"
-- Orbit 的需求是**控制并发连接数**，不是时间窗口阈值
-- `tokio::sync::Semaphore` 是标准库级别的并发原语，零额外依赖，恰好满足需求
-
----
-
-## 4. ModProvider trait 集成
-
-### 当前 trait
+`ModProvider` 当前提供：
 
 ```rust
 #[async_trait]
 pub trait ModProvider: Send + Sync {
     fn name(&self) -> &'static str;
     async fn search(...) -> Result<Vec<SearchResultItem>, OrbitError>;
-    async fn get_mod_info(&self, slug: &str) -> Result<ModInfo, OrbitError>;
+    async fn get_mod_info(...) -> Result<ModInfo, OrbitError>;
     async fn resolve(...) -> Result<ResolvedMod, OrbitError>;
-    async fn get_version_by_hash(&self, hash: &str) -> Result<Option<ResolvedMod>, OrbitError>;
-    async fn get_versions_by_hashes(&self, hashes: &[String]) -> Result<Vec<ResolvedMod>, OrbitError>;
+    async fn get_version_by_hash(...) -> Result<Option<ResolvedMod>, OrbitError>;
+    async fn get_versions_by_hashes(...) -> Result<Vec<ResolvedMod>, OrbitError>;
     async fn get_versions(...) -> Result<Vec<ResolvedMod>, OrbitError>;
-    async fn get_categories(&self) -> Result<Vec<String>, OrbitError>;
-    async fn fetch_dependencies(&self, project_id: &str) -> Result<Vec<ResolvedDependency>, OrbitError>;
+    async fn get_versions_batch(...) -> Result<Vec<ResolvedMod>, OrbitError>;
+    async fn get_categories(...) -> Result<Vec<String>, OrbitError>;
+    async fn fetch_dependencies(...) -> Result<Vec<ResolvedDependency>, OrbitError>;
 }
 ```
 
-### Provider 实现模式（以 Modrinth 为例）
+批量方法有逐项默认实现，支持的平台应覆盖为真正的批量 API，避免 N+1 请求。
 
-```rust
-pub struct ModrinthProvider {
-    client: Client,
-    rate_limiter: RateLimiter,
-}
+## 4. 统一类型与来源事实
 
-impl ModrinthProvider {
-    pub fn new(user_agent: &str, max_concurrency: usize) -> Result<Self, OrbitError> {
-        Ok(Self {
-            client: Client::new(user_agent).map_err(...)?,
-            rate_limiter: RateLimiter::new(max_concurrency),
-        })
-    }
-}
+`ResolvedMod` 的公共字段包括：
 
-#[async_trait]
-impl ModProvider for ModrinthProvider {
-    fn name(&self) -> &'static str { "modrinth" }
+| 字段 | 含义 |
+|------|------|
+| `mod_id` / `version` | 下载 JAR 自声明的包 ID 与版本 |
+| `slug` / `provider` | 用户查询标识与来源名称 |
+| `sha1` / `sha512` | 平台提供或已验证的文件哈希 |
+| `download_url` / `filename` | 选定主文件 |
+| `date_published` | 候选排序信息 |
+| `dependencies` | 平台可提供的依赖提示 |
+| `client_side` / `server_side` | 平台端侧元数据 |
+| `modrinth` | Modrinth 专属 project/version 信息 |
 
-    async fn get_version_by_hash(&self, hash: &str) -> Result<Option<ResolvedMod>, OrbitError> {
-        let _permit = self.rate_limiter.acquire().await?;  // ← 排队
-        match self.client.get_version_from_hash(hash, Some("sha512"), None).await {
-            Ok(v) => Ok(Some(...)),
-            Err(_) => Ok(None),
-        }
-    }
+平台结果只是候选来源。下载后必须读取 JAR 元数据，以真实 `mod_id`、版本、required
+dependencies 和 implanted mods 构建求解图。平台的 `version_number` 可能是展示字符串，
+不能代替 JAR 版本。
 
-    async fn get_versions(&self, slug: &str, mc: Option<&str>, loader: Option<&str>) -> ... {
-        let _permit = self.rate_limiter.acquire().await?;  // ← 排队
-        // ...
-    }
+同样，lockfile 公共字段不扁平存储 `project_id` 等平台字段，而是使用
+`[package.modrinth]` 子表。未来新增 provider 时应添加自己的子结构。
 
-    // 所有 async fn 都在第一行 acquire，Result 用 ? 传播
-}
+## 5. 并发限制
+
+每个网络 provider 自己持有 `RateLimiter`。当前 Modrinth factory 使用并发数 3：
+
+```text
+request
+  → acquire owned semaphore permit
+  → call SDK
+  → permit drops
 ```
 
-**CurseForgeProvider 同理**，仅在构造时指定不同的 `max_concurrency`。
+这样 limiter 生命周期覆盖完整请求，不依赖调用方记得释放。批量 API 只占用一个 permit。
+候选下载的任务并发与 provider API 限流是两层不同控制：前者控制文件验证任务，后者控制
+平台请求。
 
----
+全局配置存在 `max_concurrent_downloads`，但尚未接到全部下载编排；这是有效配置规范与
+实现之间的剩余差距。
 
-## 5. 统一数据类型
+## 6. Provider 选择
 
-### ResolvedMod
+`create_providers(platforms)` 保持传入顺序：
 
-平台解析后的统一模组信息。
-
-```rust
-#[derive(Debug, Clone)]
-pub struct ResolvedMod {
-    /// fabric.mod.json 的 `id`（即 mod_id，PubGrub 用此作为 PackageId）
-    pub mod_id: String,
-    /// fabric.mod.json 的 `version`
-    pub version: String,
-    /// SHA-1 哈希
-    pub sha1: String,
-    /// SHA-512 哈希（Modrinth 原生提供，用于下载校验）
-    pub sha512: String,
-    /// slug
-    pub slug: String,
-    /// 来源平台名称（"modrinth"、"curseforge" 等）
-    pub provider: String,
-    /// Modrinth 专属字段
-    pub modrinth: Option<ModrinthResolvedInfo>,
-    /// 发布时间（ISO 8601），provider 版本排序用
-    pub date_published: String,
-    /// 下载 URL
-    pub download_url: String,
-    /// jar 文件名
-    pub filename: String,
-    /// 前置依赖
-    pub dependencies: Vec<ResolvedDependency>,
-    /// 平台元数据声明的 client_side
-    pub client_side: Option<SideSupport>,
-    /// 平台元数据声明的 server_side
-    pub server_side: Option<SideSupport>,
-}
-
-/// Modrinth 平台专属字段
-#[derive(Debug, Clone)]
-pub struct ModrinthResolvedInfo {
-    pub project_id: String,
-    pub version_id: String,
-    /// Modrinth 的 version_number（如 "mc26.1.2-0.8.10-fabric"）
-    pub version_number: String,
-}
+```text
+["modrinth"] → [ModrinthProvider]
+["curseforge"] → error
+["unknown"] → error
+[] → error
 ```
 
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `mod_id` | `String` | fabric.mod.json 的 `id`，PubGrub 的 PackageId |
-| `version` | `String` | fabric.mod.json 的 `version`（语义版本号） |
-| `sha1` | `String` | SHA-1 哈希值 |
-| `sha512` | `String` | SHA-512 哈希值（Modrinth 原生，下载校验） |
-| `slug` | `String` | slug |
-| `provider` | `String` | 来源平台名称（"modrinth"、"curseforge" 等） |
-| `modrinth` | `Option<ModrinthResolvedInfo>` | Modrinth 专属字段（其他 provider 为 None） |
-| `date_published` | `String` | ISO 8601 发布时间，provider resolver 排序依据 |
-| `download_url` | `String` | 可直接下载的 URL |
-| `filename` | `String` | 下载文件名 |
-| `dependencies` | `Vec<ResolvedDependency>` | 前置依赖列表 |
-| `client_side` | `Option<SideSupport>` | Required / Optional / Unsupported |
-| `server_side` | `Option<SideSupport>` | Required / Optional / Unsupported |
+候选发现依次询问 provider，选择第一个返回有效候选的来源。resolver 后续补抓已锁定
+依赖时按 lockfile 的来源字段选择 provider，不跨平台猜测同名项目。
 
-### ResolvedDependency
+显式 CLI 前缀的归一化：
 
-```rust
-#[derive(Debug, Clone)]
-pub struct ResolvedDependency {
-    /// 依赖的 slug（Modrinth 解析后），或 mod_id
-    pub slug: Option<String>,
-    pub required: bool,
-}
-```
+- `mr:` → `modrinth`
+- `cf:` → `curseforge`，随后返回暂不支持
+- `file:` → 本地安装路径，不进入 provider factory
 
-仅包含 `slug` 和 `required` 两个字段。`slug` 为 `Option<String>`——当 API 返回 `project_id` 时通过 `lookup_project_slugs()` 批量解析填充；无法解析时为 `None`，此时调用方回退到 `mod_id`。
+## 7. 哈希与批量识别
 
-### SideSupport
+`sync` / `init` 对实际 JAR 计算哈希，并优先调用批量反查。Modrinth 使用 SHA-512。
+平台识别结果写入来源子表，JAR 自身字段仍由本地解析与哈希结果决定。
 
-```rust
-#[derive(Debug, Clone, PartialEq)]
-pub enum SideSupport {
-    Required,
-    Optional,
-    Unsupported,
-}
-```
+不同平台的哈希算法不可由公共层硬编码成同一种。真正接入新 provider 时，必须同时定义
+该平台的哈希生成与 API 参数，不能只实现搜索。
 
----
+## 8. CurseForge 的接入门槛
 
-## 6. Provider 工厂函数
+CurseForge 继续保持暂不支持。完整接入至少需要：
 
-定义在 `providers/mod.rs` 中。
+1. 可测试的 SDK/HTTP 客户端与认证；
+2. 搜索、详情、版本、主文件和依赖映射；
+3. CurseForge 指定的文件哈希算法与批量识别策略；
+4. loader/game version 过滤和 release channel 规则；
+5. `ResolvedMod` 与 lockfile 的 CurseForge 专属子结构；
+6. restore、sync、outdated、upgrade、check 的端到端测试；
+7. 最后才修改 factory、默认平台和文档。
 
-```rust
-/// 根据配置创建 provider 列表，按 `resolver.platforms` 顺序。
-pub fn create_providers(platforms: &[String]) -> Result<Vec<Box<dyn ModProvider>>, OrbitError> {
-    let ua = format!("orbit/{}", env!("CARGO_PKG_VERSION"));
-    // 按 platforms 顺序构造，modrinth → ModrinthProvider::new(&ua, 3)
-    // curseforge / 未知平台 → 当前尚无可用实现，不加入返回列表
-    // 若结果为空则返回 Err
-}
-
-/// 默认仅 Modrinth 的 provider 列表。
-pub fn create_providers_default() -> Result<Vec<Box<dyn ModProvider>>, OrbitError> {
-    create_providers(&["modrinth".into()])
-}
-```
-
-- `create_providers()` 接收平台名称列表，返回 `Vec<Box<dyn ModProvider>>`
-- core 不直接输出 warning；如果所有配置项都不可用，则返回可展示的错误
-- 通过 trait object 擦除具体类型，`resolver` 只依赖 `ModProvider` trait
-- `create_providers_default()` 提供仅 Modrinth 的便捷构造
-
----
-
-## 7. 调用方视角
-
-```rust
-// 调用方（如 identification.rs）使用工厂创建 provider：
-let providers = create_providers(&["modrinth".into()])?;
-
-// 批量 API 避免 N+1：
-let found = providers[0].get_versions_by_hashes(&hashes).await?;
-```
-
-**推荐**：`identification.rs` 使用 `get_versions_by_hashes()` 批量端点，将 30 个 mod 的识别从 60+ 次请求压缩到 1 次。
-
-**多平台并行**：ModrinthProvider(Semaphore(3)) + CurseForgeProvider(Semaphore(2)) = 两个独立 Semaphore，共 5 个并发请求同时进行，互不阻塞。
-
----
-
-## 8. Rust 实现参考
-
-### 单元测试
-
-```rust
-#[tokio::test]
-async fn rate_limiter_serializes_requests() {
-    let limiter = RateLimiter::new(1);
-    let counter = Arc::new(AtomicU32::new(0));
-    let mut handles = vec![];
-    for _ in 0..10 {
-        let limiter = &limiter;
-        let counter = &counter;
-        handles.push(tokio::spawn(async move {
-            let _permit = limiter.acquire().await?;
-            let prev = counter.fetch_add(1, Ordering::SeqCst);
-            assert_eq!(prev, 0);
-            tokio::time::sleep(Duration::from_millis(1)).await;
-            counter.fetch_sub(1, Ordering::SeqCst);
-        }));
-    }
-    for h in handles { h.await.unwrap(); }
-}
-```
-
----
-
-> **关联文档**
-> - [orbit-architecture.md](orbit-architecture.md) — providers/ 在项目中的位置
-> - [orbit-toml-spec.md](orbit-toml-spec.md) — DependencySpec 的 platform 格式
+在这些边界完成前，`CurseForgeProvider` 的方法统一返回
+`CurseForge support is not yet implemented`。这是一条显式产品边界，不是可吞掉的
+fallback。

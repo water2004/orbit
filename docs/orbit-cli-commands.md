@@ -1,770 +1,268 @@
-# Orbit CLI 命令设计文档
+# Orbit CLI 命令规范
 
-> 本文档是 Orbit CLI 开发的**唯一参照标准**——每个命令的行为、参数、错误条件必须与此文档一致。
+> 本文同时标明当前行为和仍有效的规范差距。数据格式见
+> [orbit-toml-spec.md](orbit-toml-spec.md)，实现快照见
+> [orbit-status.md](orbit-status.md)。
 
----
+## 1. 全局上下文
 
-## 目录
+实例选择优先级：
 
-1. [全局约定](#1-全局约定)
-2. [实例管理](#2-实例管理)
-   - [orbit init](#orbit-init)
-   - [orbit instances list](#orbit-instances-list)
-   - [orbit instances default](#orbit-instances-default)
-   - [orbit instances remove](#orbit-instances-remove)
-3. [模组增删](#3-模组增删)
-   - [orbit add](#orbit-add)
-   - [orbit install](#orbit-install)
-   - [orbit remove](#orbit-remove)
-   - [orbit purge](#orbit-purge)
-4. [同步与更新](#4-同步与更新)
-   - [orbit sync](#orbit-sync)
-   - [orbit outdated](#orbit-outdated)
-   - [orbit upgrade](#orbit-upgrade)
-5. [查询与搜索](#5-查询与搜索)
-   - [orbit search](#orbit-search)
-   - [orbit info](#orbit-info)
-   - [orbit list](#orbit-list)
-6. [导入、导出与工具](#6-导入导出与工具)
-   - [orbit import](#orbit-import)
-   - [orbit export](#orbit-export)
-   - [orbit check](#orbit-check)
-   - [orbit cache clean](#orbit-cache-clean)
-7. [核心动词速查](#7-核心动词速查)
+1. 显式 `-i <name>` / `--instance <name>`；
+2. 当前目录含 `orbit.toml`；
+3. `instances.toml` 中的全局默认实例；
+4. 都没有时保留当前目录，由需要项目的命令返回缺少 manifest/lockfile。
 
----
+只读命令可以静默使用全局默认实例。会修改实例的命令在从非项目目录回退到默认实例时
+拒绝执行，要求显式 `--instance` 或进入项目目录。当前受保护的命令是：
 
-## 1. 全局约定
-
-### 1.1 项目上下文解析
-
-Orbit 所有命令遵循三级上下文优先级：
-
-1. 当前工作目录下存在 `orbit.toml` → 使用当前项目
-2. 不存在 → 使用 `~/.orbit/instances.toml` 中记录的**全局默认实例**
-3. 用户通过 `-i <name>` / `--instance <name>` 显式指定 → 覆盖以上两者
-
-**全局回退安全规则（Global Fallback Safety）**：
-
-当命令因当前目录无 `orbit.toml` 而回退到全局默认实例时，按命令类型区分行为：
-
-| 命令类型 | 命令 | 回退行为 |
-|---------|------|---------|
-| **只读** | `search`, `list`, `check`, `outdated`, `info` | 静默回退，正常执行 |
-| **修改状态** | `add`, `remove`, `purge`, `upgrade`, `sync` | **阻断**：输出黄色警告，要求用户显式传入 `-i <name>` 或 `cd` 到项目目录。若已传 `-i`，正常执行 |
-
-```
-⚠ orbit: not in an Orbit project directory, and '<name>' is the global default instance.
-  Destructive operations require an explicit target. Use:
-    orbit <command> -i <name>
-  or cd into the project directory.
+```text
+add install remove purge sync upgrade import
 ```
 
-> **设计意图**：防止用户在桌面或其他无关目录执行 `orbit purge sodium --yes` 时意外破坏全局默认实例。
+`init` 始终初始化当前目录；实例注册表和 cache 命令操作全局数据；`export` 读取实例但只
+写用户指定的输出文件。
 
-### 1.2 全局标志
+全局标志：
 
-| 标志 | 简写 | 类型 | 说明 |
-|------|------|------|------|
-| `--instance` | `-i` | `String` | 指定操作的实例名称（而非当前目录或默认实例） |
-| `--verbose` | `-v` | `bool` | 输出详细日志（API 请求、文件操作、解析过程） |
-| `--quiet` | `-q` | `bool` | 静默模式，仅输出错误信息 |
-| `--yes` | `-y` | `bool` | 跳过所有交互式确认（危险操作需要） |
-| `--dry-run` | — | `bool` | 仅模拟执行，不修改任何文件 |
+| 标志 | 说明 |
+|------|------|
+| `-i, --instance <name>` | 显式选择注册实例 |
+| `-v, --verbose` | 显示实例选择等额外上下文 |
+| `-q, --quiet` | 规范要求仅输出错误；当前只有部分上下文输出遵守，见 §8 |
+| `-y, --yes` | 跳过确认；不会替缺失的可复现元数据猜值 |
+| `--dry-run` | 返回操作预览，不写目标状态 |
 
-### 1.3 输出约定
+正常结果写 stdout，错误、警告、搜索进度和交互提示写 stderr。
 
-- **正常输出**到 stdout
-- **错误/警告**到 stderr
-- **交互式提示**到 stderr（这样 `orbit list --tree > mods.txt` 不会被污染）
-- 破坏性操作（`remove`、`purge`、`upgrade`）默认要求用户确认，除非指定 `--yes`
+## 2. 初始化与实例
 
-### 1.4 退出码
+### `orbit init`
 
-| 退出码 | 含义 |
-|--------|------|
-| `0` | 成功 |
-| `1` | 一般错误（文件不存在、网络错误、版本冲突等） |
-| `2` | 参数错误（非法标志、缺少必填参数） |
-| `3` | 用户取消（交互式确认选择了 No） |
-
----
-
-## 2. 实例管理
-
-### orbit init
-
-```
-orbit init <name> [--mc-version <ver>] [--modloader <loader>] [--modloader-version <ver>]
+```text
+orbit init <name>
+  [--mc-version <version>]
+  [--modloader fabric|forge|neoforge|quilt]
+  [--modloader-version <version>]
 ```
 
-初始化当前目录为 Orbit 项目。
+行为：
 
-**行为**：
+1. 若 `orbit.toml` 已存在，在扫描、联网和写入前拒绝覆盖；
+2. 从游戏 JAR 的 `version.json` 检测 Minecraft 版本；
+3. 从 launcher version profile 的 Maven 坐标检测 loader 及版本；
+4. 扫描 `mods/*.jar`，忽略 `.old` / `.disabled`，解析对应 loader 元数据与内嵌 JAR；
+5. 计算 SHA-1/SHA-256/SHA-512，并批量向 Modrinth 做 SHA-512 来源识别；
+6. 生成 manifest 与 Fat Lockfile，再做本地依赖图验证；
+7. 将实例注册到全局 `instances.toml`。
 
-1. 检查当前目录下是否已存在 `orbit.toml` → 若存在，报错退出（错误码 2）
-2. 探测当前目录环境：
-   - 检查 `mods/` 是否存在 → 若存在，扫描所有 `.jar` 文件
-   - 对每个 jar 计算 SHA-256，调用各平台适配器的 `get_version_by_hash()` 尝试识别
-   - 识别成功的模组写入 `[dependencies]`（platform + slug + 检测到的版本），无法识别的以 `type = "file"` 形式记录
-3. 检测 MC 版本和 Modloader（优先级：用户显式指定 → 从 fabric.mod.json / forge 相关文件探测 → 要求用户手动输入）
-4. 生成 `orbit.toml`（使用探测到的信息 + 用户指定的参数）
-5. 将实例注册到 `~/.orbit/instances.toml` 全局实例列表
-6. 输出创建摘要：实例名、MC 版本、Loader、自动识别/未识别的模组数量
+无法识别平台来源的 JAR 作为 `provider = "file"` 写入 lockfile；manifest 始终只保存
+`mod_id` 与版本约束。内嵌模组只进入父 package 的 `implanted`。
 
-**错误条件**：
+显式参数优先于检测。交互模式在检测失败时请求输入；`--yes` 模式不读取 stdin，缺少
+Minecraft、loader 或 loader 版本时要求显式参数，不静默选择 Fabric 或固定版本。
 
-| 条件 | 错误信息 |
-|------|---------|
-| `orbit.toml` 已存在 | `Error: orbit.toml already exists in this directory. Use 'orbit sync' to reconcile.` |
-| 无法探测 MC 版本且用户未指定 | `Error: Could not detect Minecraft version. Specify with --mc-version.` |
-| 目录不是 `.minecraft` 结构（无 `mods/` 且无 `versions/`） | `Warning: This doesn't look like a .minecraft directory. Continue? [y/N]` |
+当前未实现 `.minecraft` 目录结构的单独预警；只要参数与目录内容足够，空目录也可用于
+创建新项目。这属于规范体验差距，不影响生成数据的正确性。
 
-**示例**：
+### `orbit instances`
 
-```bash
-orbit init my-survival
-orbit init my-pack --mc-version 1.20.1 --modloader fabric --modloader-version 0.15.7
-```
-
----
-
-### orbit instances list
-
-```
+```text
 orbit instances list
-```
-
-列出所有被 Orbit 托管的实例。
-
-**行为**：
-
-1. 读取 `~/.orbit/instances.toml`
-2. 逐行输出，格式：`[当前/默认标记] <name>  <path>  <mc_version>  <modloader>`
-3. 标记规则：
-   - 当前目录对应的实例 → `*` （当前）
-   - 全局默认实例 → `(default)` 
-   - 两者重合 → `* (default)`
-
-**输出格式**：
-
-```
-  current  name             path                              mc        loader
-*          my-survival      D:/Games/HMCL/.../.minecraft     1.20.1    fabric
-  (default) creative-pack   D:/Games/HMCL/.../.minecraft     1.21      forge
-```
-
-**错误条件**：无。列表为空时输出 `No instances registered. Use 'orbit init' to get started.`
-
----
-
-### orbit instances default
-
-```
 orbit instances default <name>
-```
-
-设置全局默认实例。
-
-**行为**：
-
-1. 在 `~/.orbit/instances.toml` 中查找 `<name>`
-2. 若找到，将其标记为默认（仅允许一个默认实例）
-3. 输出 `Default instance set to '<name>'`
-
-**错误条件**：
-
-| 条件 | 错误信息 |
-|------|---------|
-| 实例名不存在 | `Error: Instance '<name>' not found. Use 'orbit instances list' to see registered instances.` |
-
----
-
-### orbit instances remove
-
-```
 orbit instances remove <name>
 ```
 
-从 Orbit 全局追踪中移除实例。**绝不删除硬盘上的文件。**
+- `list` 展示名称、路径、Minecraft、loader 以及当前/默认标记；
+- `default` 保证只有一个默认实例，并同步 `config.toml` 的 `default_instance`；
+- `remove` 只移除全局追踪，绝不删除实例目录；若移除默认实例，同时清除默认值。
 
-**行为**：
+## 3. 添加、还原与删除
 
-1. 在 `~/.orbit/instances.toml` 中查找并移除 `<name>`
-2. 如果该实例是默认实例，清除默认标记
-3. 如果该实例的路径是当前工作目录，输出警告但不阻止操作
-4. 输出确认：`Removed '<name>' from Orbit tracking. Files on disk were NOT deleted.`
+### `orbit add`
 
-**错误条件**：
-
-| 条件 | 错误信息 |
-|------|---------|
-| 实例名不存在 | `Error: Instance '<name>' not found.` |
-
----
-
-## 3. 模组增删
-
-### orbit add
-
-```
-orbit add <mod> [--platform <p>] [--version <constraint>] [--env client|server|both] 
-               [--optional] [--no-deps]
+```text
+orbit add <mod>
+  [--platform <provider>]
+  [--version <constraint>]
+  [--env client|server|both]
+  [--optional]
+  [--no-deps]
 ```
 
-添加新模组。**修改 `orbit.toml` 和 `orbit.lock`**，并下载 jar 到 `mods/`。
-核心流程：resolve slug → 检查依赖 → 下载 → JAR 校验 → 写入 toml/lock。
-找不到 slug 时搜索并交互式选择。`--dry-run` 仅解析不下载，`-y` 跳过交互。
+输入形式：
 
-**行为**：
+| 形式 | 行为 |
+|------|------|
+| `sodium` | 按 manifest 的 provider 顺序解析 |
+| `mr:sodium` | 只用 Modrinth |
+| `file:./mod.jar` | 解析并复制本地 JAR |
+| `cf:jei` | 明确返回 CurseForge 暂不支持 |
 
-1. 解析 `<mod>` 的前缀语法：
-   - `mr:sodium` → platform=modrinth, slug=sodium
-   - `cf:jei` → platform=curseforge, slug=jei
-   - `file:./path.jar` → type=file, path=...
-   - `sodium`（无前缀） → 按 `[resolver].platforms` 自动搜索
-2. 查询平台 API，找到满足版本约束的最新兼容版本
-3. 若该模组名已存在于 `orbit.toml` 的 `[dependencies]` → 报错（用 `orbit upgrade <mod>` 升级已有依赖）
-4. 下载/定位 jar 文件，计算 SHA-256
-5. 将依赖写入 `orbit.toml` 的 `[dependencies]` 表
-6. 更新/生成 `orbit.lock` 条目
-7. 除非指定 `--no-deps`，否则递归解析并安装传递依赖
-8. 输出：`Added <name> <version> [platform] [env]`
+在线流程先取得并验证候选 JAR，再以 JAR 的真实 `mod_id`、版本和 required dependencies
+求解。确认后写入 `mods/`、manifest 和 lockfile。顶层 constraint、`optional`、`env`
+持久化到 manifest；传递依赖只进入 lockfile。`--no-deps` 禁止传递安装。
 
-**错误条件**：
+本地 `file:` 同样解析 loader 元数据、哈希、内嵌模组并校验依赖图，不绕过锁文件。
 
-| 条件 | 错误信息 |
-|------|---------|
-| 模组已存在于 orbit.toml | `Error: '<mod>' already exists. Use 'orbit upgrade <mod>' to update it.` |
-| 模组在全部平台上都找不到 | `Error: Could not find '<mod>' on any platform.` |
-| 版本约束无匹配 | `Error: No version of '<mod>' satisfies constraint '<c>'. Available: ...` |
-| URL 下载失败 | `Error: Failed to download '<mod>' from <url>: <http_error>` |
-| SHA-256 校验失败 | `Error: Checksum mismatch for '<mod>': expected <...>, got <...>` |
-| 传递依赖冲突 | `Error: Dependency conflict: <mod-a> requires <dep> >= X, but <mod-b> requires <dep> < X.` |
+### `orbit install`
 
-**示例**：
-
-```bash
-orbit add sodium                                           # 自动匹配平台
-orbit add cf:jei                                           # 显式 CurseForge
-orbit add mr:sodium --version "^0.5"                       # 版本约束
-orbit add zoomify --env client                             # 客户端专用
-orbit add file:./my-mod.jar                                # 本地文件
-orbit add sodium --no-deps                                 # 不装传递依赖
+```text
+orbit install
+  [--target client|server|both]
+  [--group <name>]
+  [--no-optional]
+  [--locked | --frozen]
 ```
 
-**设计语义**：`add` = 修改声明文件（toml）+ 下载 jar + 更新 lock。对标 `cargo add` / `yarn add`。
+这是实例还原命令，不接受模组名，也不修改 manifest 顶级声明。
 
----
+选择顺序：
 
-### orbit install
+1. 根据 target、group 和 optional 过滤 manifest 根依赖；
+2. 保留已选根的传递依赖闭包；
+3. 校验 manifest/lockfile 图；
+4. 已存在且 SHA-256 正确的 JAR跳过；
+5. 缺失 JAR 从缓存、本地 `file:` 或 provider 来源恢复；
+6. 下载/复制后再次校验，并按需更新 lockfile。
 
-```
-orbit install [--target client|server|both] [--group <group>] [--no-optional]
-              [--locked] [--frozen]
-```
+`--locked` 与 `--frozen` 同义：要求 lockfile 与 manifest 完整一致，禁止重新解析来源
+元数据。它不表示物理离线；缓存未命中时仍可使用 lockfile 已锁定的下载 URL。旧 lockfile
+没有 URL 且缓存未命中时，locked 模式返回错误。
 
-根据 `orbit.toml` 和 `orbit.lock` 还原完整的模组环境。**不接受任何模组名称参数。**
+### `orbit remove`
 
-> ⚠️ 全量还原待实现。单个模组安装请用 `orbit add <slug>`。
-
-**行为**：
-
-1. 读取 `orbit.toml`，解析依赖树
-2. 若 `orbit.lock` 存在，优先使用 lock 中锁定的版本（而非重新解析）
-3. 按 `--target` 过滤：`client` → 安装 `env=client` + `env=both`；`server` → 安装 `env=server` + `env=both`；默认 `both` → 全部
-4. 若指定 `--group`，取该分组与过滤结果的交集
-5. 若指定 `--no-optional`，跳过 `optional = true` 的依赖
-6. 对满足过滤条件的每个依赖：
-   - 若 `orbit.lock` 有该条目且 `sha256` 匹配磁盘上的 jar → 跳过
-   - 若不在 lock 中 → 解析版本、下载 jar、计算 SHA-256、写入 `orbit.lock`
-   - 若在 lock 中但磁盘缺失 → 使用 lock 中的 URL 重新下载
-7. 对每个在线依赖，解析其传递依赖并递归安装（除非被 `exclude` 排除）
-8. 安装完成后输出摘要：`Installed X mods, skipped Y (already up to date), failed Z`
-
-**`--locked` 标志**：
-
-启用时，Orbit **仅使用 `orbit.lock`** 中的精确版本和 URL，不发起任何新的元数据解析。如果：
-
-- `orbit.lock` 不存在 → 致命错误：`Error: --locked requires orbit.lock, but it doesn't exist. Run without --locked first.`
-- `orbit.toml` 中的依赖在 lock 中没有对应条目 → 致命错误：`Error: --locked: orbit.toml has '<mod>' which is missing from orbit.lock. Run without --locked to resolve.`
-
-**`--frozen` 标志**：
-
-`--frozen` 是 `--locked` 的别名，行为完全一致。提供此别名是为了兼容 npm/pnpm 用户习惯。
-
-**错误条件**：
-
-| 条件 | 错误信息 |
-|------|---------|
-| `--locked` 但 `orbit.lock` 不存在 | `Error: --locked requires orbit.lock, but it doesn't exist.` |
-| `--locked` 但 toml 与 lock 不一致 | `Error: --locked: orbit.toml has '<mod>' which is missing from orbit.lock.` |
-| URL 下载失败 | `Error: Failed to download '<mod>' from <url>: <http_error>` |
-| SHA-256 校验失败 | `Error: Checksum mismatch for '<mod>': expected <...>, got <...>` |
-| 传递依赖冲突 | `Error: Dependency conflict: <mod-a> requires <dep> >= X, but <mod-b> requires <dep> < X.` |
-
-**示例**：
-
-```bash
-orbit install                                              # 全量安装
-orbit install --target server                               # 仅服务端依赖
-orbit install --target client --no-optional                 # 轻量客户端
-orbit install --locked --target server                      # 生产环境严格还原
+```text
+orbit remove <mod>
 ```
 
-**设计语义**：`install` = 状态还原，不修改声明文件。对标 `npm ci` / `yarn install --frozen-lockfile`。
+按 `mod_id` 或 Modrinth slug 查找顶层依赖。若仍有其它 package 依赖它则拒绝删除；
+否则删除已校验的 JAR，并从 manifest/lockfile 移除条目。输入不匹配时，交互模式列出
+可选依赖；`--yes` 要求精确标识，不进行猜测。dry-run 只报告计划。
 
----
+### `orbit purge`
 
-### orbit remove
-
-```
-orbit remove <mod> [--yes]
-```
-
-卸载模组。
-
-**行为**：
-
-1. 在 `orbit.toml` 的 `[dependencies]` 中查找 `<mod>`
-2. 若找到：
-   - 删除 `mods/` 下对应的 jar 文件（从 `orbit.lock` 中查找文件名）
-   - 从 `orbit.toml` 的 `[dependencies]` 中移除该条目
-   - 从 `orbit.lock` 中移除该条目
-   - 输出：`Removed <mod> <version>`
-3. 若未找到：报错
-
-**错误条件**：
-
-| 条件 | 错误信息 |
-|------|---------|
-| 依赖不存于 orbit.toml | `Error: '<mod>' is not in orbit.toml.` |
-| 用户未确认 | `Aborted.` (退出码 3) |
-
----
-
-### orbit purge
-
-```
-orbit purge <mod> [--yes]
+```text
+orbit purge <mod>
 ```
 
-深度清理。在 `remove` 的基础上，启发式搜索 `config/` 目录并交互式删除关联配置文件。
-
-**行为**：
-
-1. 执行 `orbit remove <mod>` 的全部步骤
-2. 启发式扫描 `config/` 目录：
-   - 按模组名称匹配（大小写不敏感、连字符/下划线模糊匹配）
-   - 按模组 slug 匹配
-   - 列出所有候选配置文件及其路径
-3. 交互式逐个询问用户是否删除每个候选文件
-4. 若指定 `--yes`，直接删除所有候选文件
-5. 输出清理摘要：`Purged <mod>: removed 1 jar and N config files.`
-
-**错误条件**：同 `remove`。
-
-**示例**：
-
-```bash
-orbit purge voxelmap
-# Found 3 candidate config files:
-#   config/voxelmap.properties         [y/N]? y
-#   config/voxelmap/waypoints.db       [y/N]? y
-#   config/voxelmap-settings.json      [y/N]? n
-# Purged voxelmap: removed 1 jar and 2 config files.
-```
-
----
+先按 mod ID/slug 在 `config/` 下寻找归一化名称候选，逐项确认后执行 remove 和配置清理。
+候选路径必须位于 config 根目录。`--yes` 选择全部候选；dry-run 展示全部但不删除。
 
 ## 4. 同步与更新
 
-### orbit sync
+### `orbit sync`
 
-```
-orbit sync [--yes]
-```
+扫描真实 `mods/` 并对账 manifest/lockfile，报告：
 
-本地状态双向对齐。不产生网络下载。
+| 分类 | 含义 |
+|------|------|
+| `added` | 磁盘新增 JAR，已识别并写入声明/锁 |
+| `changed` | 已锁文件内容或元数据变化，锁记录已更新 |
+| `missing` | manifest/lockfile 期望的 JAR 不在磁盘 |
+| `unlocked` | manifest 有顶层声明但 lockfile 无对应 package |
 
-**行为**：
+它不下载 JAR；为识别手动加入的文件，批量哈希反查可能访问 Modrinth。dry-run 不保存对账
+结果。
 
-1. 扫描 `mods/` 目录下所有 `.jar` 文件，计算 SHA-256
-2. 读取 `orbit.toml` 和 `orbit.lock`
-3. 三方比对，识别差异：
+### `orbit outdated [mod]`
 
-   | 状态 | 处理 |
-   |------|------|
-   | toml 有，mods/ 没有 | 标记为 MISSING（等待 `orbit install` 修复） |
-   | toml 没有，mods/ 有 | 标记为 NEW：尝试 SHA-256 匹配已知模组；成功则添加到 toml + lock；失败则以 `type = "file"` 添加 |
-   | toml 有，mods/ 有，SHA-256 匹配 lock | 无变化 |
-   | toml 有，mods/ 有，SHA-256 不同于 lock | 标记为 CHANGED：更新 lock 中的 SHA-256 和版本号 |
-   | toml 有，lock 没有 | 标记为 UNLOCKED：需要 `orbit install` 下载并生成 lock |
+只读查询在线 package 的最新兼容版本。可按真实 `mod_id` 或 slug 限定单包；不存在的
+输入、未安装的包和 `file:` 包返回明确结果，不会静默当作“已是最新”。
 
-4. 将变更写入 `orbit.toml` 和 `orbit.lock`
-5. 输出同步报告
+### `orbit upgrade [mod]`
 
-**输出格式**：
+无参数时升级所有允许升级的在线 package；有参数时要求该包已经安装且有在线来源。
+升级复用候选下载、真实 JAR 解析、PubGrub 诊断、确认与原子文件替换。manifest 中的版本
+约束保持不变，只更新 lockfile 的实际版本与来源事实。dry-run 不替换文件。
 
-```
-Syncing...
-  + added       journeymap (modrinth, 5.9.8)    ← 手动拖入，自动识别
-  + added       unknown-mod (file)               ← 手动拖入，无法识别
-  ~ changed     my-tweaks (file, SHA-256 updated) ← 本地文件已更新
-  - missing     sodium (expected in mods/)        ← toml 声明了但文件丢了
-  ? unlocked    lithium                           ← toml 有但 lock 无，需 install
+## 5. 查询
 
-Sync complete: 2 added, 1 changed, 1 missing, 1 unlocked.
-Run 'orbit install' to restore missing mods.
-```
+```text
+orbit search <query>
+  [--platform <provider>] [--limit <n>]
+  [--mc-version <version>] [--modloader <loader>]
 
-**错误条件**：
-
-| 条件 | 错误信息 |
-|------|---------|
-| `mods/` 目录不存在 | `Warning: mods/ directory not found. Nothing to sync.` |
-
----
-
-### orbit outdated
-
-```
-orbit outdated [<mod>]
-```
-
-检查过时模组（只读）。联网比对已安装版本与平台最新版本，**不修改任何文件**。
-
-**行为**：
-
-1. 若指定 `<mod>`，仅检查该模组；否则遍历 `orbit.lock` 中的所有在线依赖
-2. 对每个模组，查询其平台 API 获取最新兼容版本
-3. 比对当前版本与最新版本
-4. 输出过时报告
-
-**输出格式**：
-
-```
-Checking for outdated mods...
-  sodium          0.5.8   → 0.5.11  (modrinth)
-  lithium         0.12.1  → 0.13.0  (modrinth)  ⚠ breaking change
-  jei             12.0.0  ✓ up to date
-  journeymap      5.9.18  → 5.9.20  (curseforge)
-
-3 outdated mods. Run 'orbit upgrade' to apply.
-⚠ lithium 0.13.0 is a major update. Review changelog before upgrading.
-```
-
-**错误条件**：
-
-| 条件 | 错误信息 |
-|------|---------|
-| 模组不在 lock 中 | `Error: '<mod>' not found in orbit.lock.` |
-| 网络不可达 | `Error: Could not reach <platform> API. Check your connection.` |
-| 平台 API 返回错误 | `Error: <platform> API error: <message>` |
-
-**设计语义**：对标 `npm outdated` / `cargo outdated`。只读检查，不改文件。
-
----
-
-### orbit upgrade
-
-```
-orbit upgrade [<mod>] [--yes] [--dry-run]
-```
-
-执行更新。下载并替换可更新的 jar 文件。
-
-**行为**：
-
-1. 若指定 `<mod>`，仅升级该模组；否则升级所有可升级的依赖
-2. 执行与 `orbit outdated` 相同的查询逻辑
-3. 对每个有更新的模组：
-   - 下载新版本 jar
-   - 删除旧 jar
-   - 更新 `orbit.lock` 条目（版本、URL、SHA-256、依赖树）
-   - 若 `orbit.toml` 中指定的是精确版本 `=X.Y.Z`，跳过该模组并警告
-4. 若 `orbit.toml` 中使用的是约束（非 `=`），保留约束表达式不变（如 `^0.5`），lock 指向新版本
-5. 输出升级摘要
-
-**错误条件**：同 `outdated`，外加 `remove` 的文件操作错误。
-
-**与 `outdated` 的区别**：`outdated` 只看不改；`upgrade` 实际下载替换。
-
----
-
-## 5. 查询与搜索
-
-### orbit search
-
-```
-orbit search <query> [--platform <p>] [--limit <n>] [--mc-version <ver>] [--modloader <loader>]
-```
-
-搜索模组。
-
-**行为**：
-
-1. 若 `--platform` 指定，仅搜索该平台；否则搜索 `[resolver].platforms` 中全部平台，合并结果
-2. 为每个搜索结果标注：模组名、平台、简介（截断到一行）、最新版本、下载量
-3. 兼容当前 MC 版本的结果高亮显示（绿色 `✓`）
-4. 按相关度排序，`--limit` 默认 20
-
-**输出格式**：
-
-```
-Searching for "sodium" on modrinth, curseforge...
-
-  ✓ sodium (modrinth)          ⬇ 12.3M   v0.5.8    mc1.20.1
-    Sodium is a free and open-source rendering engine...
-  ✓ sodium-extra (modrinth)    ⬇ 2.1M    v0.4.0    mc1.20.1
-    Extra features for Sodium.
-    sodium (curseforge)        ⬇ 8.7M    v0.5.8    mc1.20.1
-    ...
-```
-
-**错误条件**：
-
-| 条件 | 错误信息 |
-|------|---------|
-| 所有平台均无结果 | `No results found for '<query>'.` |
-
----
-
-### orbit info
-
-```
-orbit info <mod> [--platform <p>] [--mc-version <ver>] [--modloader <loader>]
-```
-
-查看模组详细信息（无需安装）。直接请求平台 API，打印该模组的完整元数据。
-
-**行为**：
-
-1. 若 `--platform` 指定，仅查询该平台；否则按 `[resolver].platforms` 顺序搜索
-2. 请求平台 API 获取模组详情
-3. 输出详细信息
-
-**输出格式**：
-
-```
-sodium (modrinth)
-  id: AANobbMI
-  slug: sodium
-  description: Sodium is a free and open-source rendering engine designed
-               to improve frame rates and reduce micro-stutter in Minecraft.
-  authors: jellysquid3, IMS
-  latest version: 0.5.11 (mc 1.20.1, fabric)
-  client side: required   server side: unsupported
-  license: LGPL-3.0
-  downloads: 12,340,000
-  categories: graphics, optimization
-
-  Recent versions:
-    0.5.11   mc 1.20.1, 1.20.4   fabric   released 2026-03-15
-    0.5.8    mc 1.20.1           fabric   released 2025-12-01
-    0.5.3    mc 1.20.1           fabric   released 2025-09-10
-
-  Dependencies:
-    (none)
-```
-
-**错误条件**：
-
-| 条件 | 错误信息 |
-|------|---------|
-| 模组在全部平台上都找不到 | `Error: Could not find '<mod>' on any platform.` |
-| 网络不可达 | `Error: Could not reach <platform> API.` |
-
-**设计语义**：对标 `npm view` / `cargo search <pkg> --limit 1`。用于在 `add` 之前了解模组详情。
-
----
-
-### orbit list
-
-```
+orbit info <mod> [--platform <provider>]
 orbit list [--tree] [--target client|server|both]
 ```
 
-列出当前实例已安装的模组。
+- `search` 合并已配置 provider 的结果并应用可选的 Minecraft/loader 过滤；
+- `info` 按 provider 顺序查询详情；`mr:` / `cf:` 前缀可显式选择来源；
+- `list` 从 lockfile 展示版本、provider、manifest env/optional；`--tree` 展示依赖，
+  `--target` 过滤根并保留传递闭包。
 
-**行为**：
+当前在线查询只有 Modrinth。`cf:` 与 `--platform curseforge` 返回暂不支持，不回退到
+Modrinth。
 
-1. 读取 `orbit.lock`（若不存在则报错）
-2. 默认输出为扁平表格：名称、版本、平台、env
-3. `--tree` 模式：以树状结构展示，每个模组下方缩进显示其传递依赖
+## 6. 导入、导出与检查
 
-**扁平输出**：
+### `orbit import`
 
-```
-  name            version    platform      env
-  sodium          0.5.8      modrinth      both
-  lithium         0.12.1     modrinth      server
-  journeymap      5.9.18     curseforge    client
-  jei             12.0.0     curseforge    both
-  zoomify         2.11.1     modrinth      client (optional)
-  my-tweaks       1.0        file          both
-
-6 mods installed (2 client-only, 1 server-only, 1 optional)
+```text
+orbit import <file>
+  [--merge-strategy prefer-existing|prefer-import|interactive]
 ```
 
-**树状输出** (`--tree`)：
+- `.toml`：合并 manifest 依赖，冲突按策略处理；
+- `.zip`：只提取安全的 `mods/*.jar` 路径；
+- `.mrpack`：先应用 bundled overrides，再按 index 从官方允许的 HTTPS 来源下载缺失
+  JAR，并验证 file size、SHA-1 与 SHA-512；
+- `--yes` 未指定策略时等同 `prefer-import`；
+- dry-run 不写 manifest、JAR 或 lockfile。
 
-```
-  sodium 0.5.8 (modrinth, both)
-  lithium 0.12.1 (modrinth, server)
-  journeymap 5.9.18 (curseforge, client)
-  ├── journeymap-api 1.0.2 (modrinth, both)
-  └── journeymap-icons 1.0.0 (modrinth, both)
-  jei 12.0.0 (curseforge, both)
-  zoomify 2.11.1 (modrinth, client, optional)
-  my-tweaks 1.0 (file, both)
-```
+ZIP 与 mrpack index 路径都经过规范化，绝对路径、`..` 与非 mods JAR 不会写入实例；
+导入完成后统一触发 sync。
 
-**错误条件**：
+### `orbit export`
 
-| 条件 | 错误信息 |
-|------|---------|
-| `orbit.lock` 不存在 | `Error: No orbit.lock found. Run 'orbit install' first.` |
-
----
-
-## 6. 导入、导出与工具
-
-### orbit import
-
-```
-orbit import <file> [--merge-strategy prefer-existing|prefer-import|interactive]
+```text
+orbit export [output] [--target client|server|both] [--format zip|mrpack]
 ```
 
-合并外部模组清单。
+导出 manifest、lockfile 与目标选择中校验通过的 JAR。未指定文件名时使用安全化的项目
+名称和版本。`mrpack` 生成 Modrinth index；在线文件可成为 downloads，必须内嵌的本地
+文件放入 overrides。dry-run 只统计计划。
 
-**支持格式**：
+### `orbit check`
 
-| 扩展名 | 处理方式 |
-|--------|---------|
-| `.toml` | 解析为 orbit.toml，合并 `[dependencies]` |
-| `.zip` / `.mrpack` | 提取 `mods/` 目录中的 jar，隐式触发 `orbit sync` |
-
-**TOML 合并行为**：
-
-1. 解析导入文件
-2. 逐条比对 `<file>` 的 `[dependencies]` 与当前 `orbit.toml`：
-   - 若键名仅存在于导入文件中 → 添加
-   - 若键名同时存在，版本约束不同 → 按 `--merge-strategy` 决定
-3. 写入合并后的 `orbit.toml`
-4. 输出合并摘要
-
-**ZIP 导入行为**：
-
-1. 解压到临时目录
-2. 提取所有 `.jar` 文件到 `mods/`
-3. 触发 `orbit sync` 识别新 jar
-4. 清理临时目录
-
-**错误条件**：
-
-| 条件 | 错误信息 |
-|------|---------|
-| 文件不存在 | `Error: '<file>' not found.` |
-| 格式不支持 | `Error: Unsupported file format. Expected .toml, .zip, or .mrpack.` |
-| TOML 解析失败 | `Error: Failed to parse '<file>': <parse_error>` |
-
----
-
-### orbit export
-
-```
-orbit export [<output>] [--target client|server|both] [--format zip|mrpack]
+```text
+orbit check <mc-version> [--modloader <loader>]
 ```
 
-打包导出整合包。
+对 lockfile 中在线 package 查询目标 Minecraft/loader 的兼容版本并返回逐包矩阵。本地
+`file:` package 没有平台兼容性事实，会明确标为无法在线判断。
 
-**行为**：
+## 7. Cache
 
-1. 若未指定 `<output>`，默认文件名为 `<project.name>-<project.version>.zip`
-2. 按 `--target` 过滤依赖（默认 `both` = 全量）
-3. 将过滤后的 jar 文件 + `orbit.toml` + `orbit.lock` 打包为 zip
-4. 若 `--format mrpack`，输出为 Modrinth 整合包格式（含 `modrinth.index.json`）
-
-**错误条件**：
-
-| 条件 | 错误信息 |
-|------|---------|
-| 无写入权限 | `Error: Permission denied: cannot write to '<output>'` |
-
----
-
-### orbit check
-
-```
-orbit check <mc_version> [--modloader <loader>]
+```text
+orbit cache clean
 ```
 
-跨版本升级预检。检查当前模组集合是否已有目标 MC 版本的兼容版本。
+先检查配置解析后的缓存目录、文件数和大小；空缓存直接成功。非 `--yes` 时确认，dry-run
+不删除。core 会拒绝清理文件系统根、当前目录或 Orbit 数据目录本身。
 
-**行为**：
+当前命令清空整个 cache；配置中的自动淘汰策略和大小上限尚未执行。
 
-1. 遍历 `orbit.lock` 中所有在线平台依赖
-2. 对每个模组，查询其平台 API：是否存在兼容 `<mc_version>` + 当前 `modloader` 的版本
-3. 输出兼容性矩阵
+## 8. 正确规范与剩余差距
 
-**输出格式**：
+以下不是“历史文档已过时”，而是仍正确但代码尚未完全遵守的 CLI 规范：
 
-```
-Checking compatibility with Minecraft 1.21 (fabric)...
+| 规范 | 当前差距 |
+|------|----------|
+| `--quiet` 只输出错误 | 多数 handler 仍直接 `println!`，只有实例上下文日志检查 quiet |
+| `--verbose` 展示网络/解析细节 | 当前主要展示实例选择，没有统一结构化日志层 |
+| 用户取消使用独立退出码 3 | clap 参数错误为 2、普通错误为 1；部分取消当前为成功或普通错误 |
+| 全局运行配置控制网络/并发/UI | schema 已加载，但代理、重试、语言、样式和下载并发尚未全部接入 |
+| 大规模 restore 有界并发 | 候选验证并发，最终 JAR 物化仍按确定顺序执行 |
 
-  sodium          0.5.8     ✓ 0.6.0 available on modrinth
-  lithium         0.12.1    ✓ 0.14.0 available on modrinth
-  journeymap      5.9.18    ✗ no compatible version yet
-  jei             12.0.0    ✓ 14.0.0 available on curseforge
+已经实现、旧文档不应再标为缺失的内容：
 
-3 of 4 mods are ready for Minecraft 1.21.
-journeymap is blocking the upgrade.
-```
+- 全部命令 handler 已接入 core，不再是 `exit(2)` 占位；
+- Forge、NeoForge、Quilt 检测和 JAR 解析；
+- `file:` 添加、全量 restore、target/group/optional；
+- list target、sync/check/purge、导入导出、实例与 cache；
+- 默认实例的修改型命令安全阻断；
+- 非交互 init 不猜 loader/版本，重复 init 不覆盖项目。
 
-**错误条件**：
-
-| 条件 | 错误信息 |
-|------|---------|
-| `orbit.lock` 不存在 | `Error: No orbit.lock found. Run 'orbit install' first.` |
-
----
-
-### orbit cache clean
-
-```
-orbit cache clean [--yes]
-```
-
-清理全局下载缓存。
-
-**行为**：
-
-1. 列出 `~/.orbit/cache/` 的内容及大小
-2. 交互式确认（除非 `--yes`）
-3. 删除缓存目录下的所有文件
-4. 输出：`Cleaned cache: freed <size>.`
-
-**错误条件**：无。缓存为空时输出 `Cache is already empty.`
-
----
-
-## 7. 核心动词速查
-
-| 意图 | 命令 | 对标 | 修改文件？ |
-|:---|:---|:---|:---:|
-| 找模组 | `orbit search <query>` | `npm search` | 否 |
-| 看详情 | `orbit info <mod>` | `npm view` / `cargo search --limit 1` | 否 |
-| 加模组 | `orbit add <mod>` | `yarn add` / `cargo add` | **是** |
-| 删模组 | `orbit remove <mod>` | `yarn remove` | **是** |
-| 深度清理 | `orbit purge <mod>` | — | **是** |
-| 看列表 | `orbit list` | `npm list` | 否 |
-| 查过时 | `orbit outdated` | `npm outdated` | 否 |
-| 做更新 | `orbit upgrade [<mod>]` | `yarn upgrade` | **是** |
-| 按清单还原 | `orbit install [--locked]` | `npm ci` / `yarn install --frozen-lockfile` | 否* |
-
-> \* `install` 仅写入 `orbit.lock`（若无），不修改 `orbit.toml`。
-
----
-
-> 本文档与 `orbit-toml-spec.md` 共同构成 Orbit CLI 的完整开发规范。两文档冲突时，以本文档为准（命令行为 > 数据格式）。
+CurseForge 是单独的产品边界，继续保持暂不支持。

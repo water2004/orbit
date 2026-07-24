@@ -166,7 +166,9 @@ check_local_graph(manifest, local_mods)
 缺失的 manifest 顶层依赖和不满足 manifest 约束的本地版本都必须产生不可解结果。
 override/exclude 在本地与联网路径一致的行为也有单元测试保护。
 
-当前 `init` 使用此函数验证扫描结果；`check` 和 `sync` 命令仍未实现，不能写成已经接入。
+当前 `init` 使用此函数验证刚扫描出的真实 JAR 图。`install` 和本地 `file:` 添加使用
+`check_lockfile_graph()` 验证 Fat Lockfile 中保存的依赖图；`sync` 负责重新扫描与
+对账。CLI 的 `check` 是目标 Minecraft/loader 兼容性预检，不等同于本地图校验。
 
 ---
 
@@ -179,7 +181,8 @@ override/exclude 在本地与联网路径一致的行为也有单元测试保护
 | `check_version_conflict(mod_id, version, entries)` | 检查 lockfile 已有版本是否冲突 |
 | `resolve_with_candidates(...)` | 构图、求解、必要时补抓依赖，并返回实际升级版本 |
 | `resolve_with_candidates_report(...)` | 在升级结果之外返回类型化候选诊断 |
-| `check_local_graph(...)` | 不联网验证本地安装图 |
+| `check_local_graph(...)` | 不联网验证刚扫描出的本地 JAR 图 |
+| `check_lockfile_graph(...)` | 不联网验证 manifest 与 Fat Lockfile 的依赖图 |
 
 不存在 `resolve_manifest()`、`ProviderVersionResolver`、`ModrinthVersionResolver` 或 `trapped_room_test()`。
 
@@ -193,15 +196,15 @@ override/exclude 在本地与联网路径一致的行为也有单元测试保护
 | `orbit-core` 不输出 UI 文本 | core 返回报告和错误，stdout/stderr 只由 CLI 使用 |
 | 冲突信息可读且可测试 | 成功路径返回类型化候选原因；不可解路径渲染领域依赖事实 |
 | `[overrides]` / `exclude` | 候选图和本地图共用规则；override 不新增依赖，exclude 按声明者移除边 |
-| `optional` / `env` | `orbit add` 已持久化字段；它们按 Fat Lockfile 设计不改变求解图 |
+| `optional` / `env` | `orbit add` 持久化字段；restore 按目标环境和 `--no-optional` 过滤根依赖，但它们不改变传递求解图 |
 | Java 依赖 | 联网和本地路径均明确忽略，不再注入虚假的 `0.0.0` |
 
 仍未完成但不能从规范中删除的边界：
 
 - CurseForge provider 和对应 lockfile 来源元数据尚未实现，因此多平台回退框架目前只有
   Modrinth 可实际使用；
-- `orbit install` 全量还原尚未实现，所以 `--target`、`--no-optional` 和 groups 对实际
-  文件安装的过滤仍未落地；
+- restore 已实现 `--target`、`--group`、`--no-optional`、`--locked`，并在过滤根
+  依赖时保留已选根所需的传递依赖；最终 JAR 落盘目前仍按包顺序执行，尚未做批量并发；
 - 实际 Java 运行时探测属于后续能力；当前策略是明确且一致地忽略元数据中的 Java 约束。
 
 ---

@@ -1,8 +1,8 @@
 //! 平台提供者抽象层。
 //!
 //! 定义 `ModProvider` trait 与统一的跨平台数据类型（`ResolvedMod`、`SearchResult` 等）。
-//! 每个平台（Modrinth、CurseForge）各自实现此 trait，`resolver` 模块仅依赖此 trait，
-//! 不耦合任何具体平台的 SDK。
+//! 可用平台各自实现此 trait，`resolver` 模块仅依赖此 trait，不耦合具体 SDK。
+//! 当前只有 Modrinth 可用；CurseForge 保留明确的暂不支持边界。
 
 pub mod curseforge;
 pub mod modrinth;
@@ -71,9 +71,9 @@ pub struct ModrinthResolvedInfo {
 /// 平台解析后的统一模组信息
 #[derive(Debug, Clone)]
 pub struct ResolvedMod {
-    /// fabric.mod.json 的 `id`（即 mod_id，PubGrub 用此作为 PackageId）
+    /// JAR loader 元数据声明的模组 ID（PubGrub 用此作为 PackageId）
     pub mod_id: String,
-    /// fabric.mod.json 的 `version`
+    /// JAR loader 元数据声明的版本
     pub version: String,
     /// SHA-1
     pub sha1: String,
@@ -173,7 +173,7 @@ pub struct ModVersionInfo {
 
 /// 统一平台提供者接口。
 ///
-/// 每个支持的平台（Modrinth、CurseForge）各自实现此 trait。
+/// 每个可用平台各自实现此 trait。
 /// `resolver` 只需依赖此 trait，无需绑定具体 SDK。
 #[async_trait]
 pub trait ModProvider: Send + Sync {
@@ -202,7 +202,7 @@ pub trait ModProvider: Send + Sync {
     ) -> Result<ResolvedMod, OrbitError>;
 
     /// 根据哈希反查版本（供 orbit sync 识别手动拖入的 jar）。
-    /// 注意：Modrinth 使用 SHA-512，CurseForge 使用 murmur2。调用方应传入对应平台的哈希值。
+    /// 调用方必须传入当前 provider 所要求的哈希；Modrinth 使用 SHA-512。
     async fn get_version_by_hash(&self, hash: &str) -> Result<Option<ResolvedMod>, OrbitError>;
 
     /// 批量哈希反查（一次请求查所有 hash，避免 N+1 查询）

@@ -16,8 +16,8 @@
 
 ## 编码规范
 
-6. **`todo!()` 禁止在 library crate 中使用**。所有未实现函数返回 `Err(OrbitError::Other(anyhow!("not yet implemented")))`。
-7. **空壳 CLI 命令用 `eprintln! + exit(2)`**，不允许 `println! + Ok(())`。
+6. **`todo!()` 和不可达的空壳函数禁止进入业务 crate**。暂不支持的产品边界必须返回包含恢复建议的显式 `OrbitError`（例如 CurseForge），不能伪造成功。
+7. **CLI handler 必须接入 core 的真实入口**。参数错误交给 clap；业务失败返回错误，不能以 `println! + Ok(())` 掩盖。
 8. **写入 manifest/lockfile 时传 `mods_dir` 作为参数**——禁止硬编码 `Path::new("mods")`。
 9. **`apply_to_lockfile` 使用每个 `InstalledMod.provider` 的真实来源**——禁止硬编码 `"modrinth"`；传递依赖只写 lockfile，不得自动提升为 manifest 顶级声明。
 10. **每模组独立记录 provider 来源**——`InstalledMod.provider` 字段，不能假设所有 deps 来自同一平台。
@@ -61,11 +61,11 @@
 ## 数据结构设计
 
 25. **Provider 专属字段进子 struct**。公共类型（`ResolvedMod`、`PackageEntry`）不扁平存放平台专属字段。Modrinth 的 `project_id`/`version_id`/`version_number` 放在 `modrinth: Option<ModrinthInfo>` 子 struct 中。未来加 CurseForge 时加 `curseforge: Option<CurseForgeInfo>`，不影响现有字段。
-26. **key 统一用 JAR 内 `fabric.mod.json` 的 `id`**（即 `mod_id`）。slug 只在 `find_entry` 中作为备选匹配键，不用作主键。
+26. **key 统一用 JAR loader 元数据声明的 ID**（即 `mod_id`）。slug 只在 `find_entry` 中作为备选匹配键，不用作主键。
 
 ## JAR 模块
 
-27. **所有 JAR 元数据读取走 `jar` 模块**。`init.rs`、`installer.rs` 不直接打开 ZIP、不直接调 `FabricParser`。调用 `jar::read_mod_metadata(path, loader)`，由 jar 模块按 loader 分发到对应 reader（`jar/fabric.rs` → fabric.mod.json）。未来加 Forge 只需加 `jar/forge.rs`。
+27. **所有 JAR 元数据读取走 `jar` 模块**。`init.rs`、`installer.rs` 不直接打开 ZIP、不直接调用具体 parser。调用 `jar::read_mod_metadata(path, loader)`，由 jar 模块按 Fabric、Forge、NeoForge、Quilt 分发到对应 reader。
 28. **`loader` 参数由调用者传入，禁止 auto-detect**。一个 JAR 可能同时兼容多个 loader（同时含 fabric.mod.json 和 META-INF/mods.toml），auto-detect 会选错。
 
 ## 文件 I/O

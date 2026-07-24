@@ -34,9 +34,9 @@ pub struct ScannedMod {
     pub sha1: String,
     pub sha256: String,
     pub sha512: String,
-    /// 从 fabric.mod.json 提取的依赖: (mod_id, version_constraint, required)
+    /// 从 JAR loader 元数据提取的依赖: (mod_id, version_constraint, required)
     pub jar_deps: Vec<(String, String, bool)>,
-    /// META-INF/jars/ 下的内嵌 JAR 路径（只有父模组才有值）
+    /// loader 元数据声明的内嵌 JAR 路径（只有父模组才有值）
     pub embedded_jars: Vec<String>,
     /// 如果此模组是从某个父 JAR 解出的内嵌模组，记录父 JAR 的文件名
     pub embedded_parent: Option<String>,
@@ -119,7 +119,7 @@ pub(crate) fn scan_mods_dir(
         });
     }
 
-    // 扫描内嵌 JAR（META-INF/jars/ 下的子模组）
+    // 扫描 loader 元数据声明的内嵌 JAR。
     scan_embedded_jars(instance_dir, &mut results, loader)?;
 
     Ok(results)

@@ -25,7 +25,7 @@ pub struct JarModMetadata {
     /// (mod_id, version_constraint, required)
     pub dependencies: Vec<(String, String, bool)>,
     pub embedded_jars: Vec<String>,
-    /// 从 META-INF/jars/ 中解出的内嵌子模组元数据
+    /// 从 loader 声明路径中解出的内嵌子模组元数据
     pub implanted_mods: Vec<JarModMetadata>,
 }
 
