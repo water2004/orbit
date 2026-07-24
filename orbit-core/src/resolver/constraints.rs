@@ -4,10 +4,10 @@ use pubgrub::{IncompatibilityConstraint, IncompatibilityConstraintTerm, Ranges};
 
 use crate::metadata::{DependencyExpression, DependencyKind, Environment, ModDependency};
 use crate::resolver::provider::PackageIncompatibilities;
-use crate::versions::Version;
+use crate::resolver::types::{SolverPackage, SolverVersion};
 
 use super::graph::{
-    ExclusionMap, OverrideMap, constraint_package, dependency_constraint, is_excluded,
+    ExclusionMap, OverrideMap, dependency_constraint, is_excluded, logical_package,
 };
 
 pub(super) fn compile_dependency_constraints(
@@ -66,7 +66,7 @@ pub(super) fn compile_dependency_constraints(
                         overrides,
                     );
                     let mut bad = Formula::Atom {
-                        package: constraint_package(&relation.id),
+                        package: logical_package(&relation.id),
                         versions: Box::new(allowed.complement()),
                     };
                     if let Some(unless) = &relation.unless {
@@ -109,7 +109,7 @@ fn kind_formula(
                 && !is_excluded(exclusions, package, &relation.id) =>
         {
             let atom = Formula::Atom {
-                package: constraint_package(&relation.id),
+                package: logical_package(&relation.id),
                 versions: Box::new(dependency_constraint(
                     &relation.id,
                     &relation.requirement,
@@ -179,7 +179,7 @@ fn required_formula(
                 && !is_excluded(exclusions, package, &relation.id) =>
         {
             let atom = Formula::Atom {
-                package: constraint_package(&relation.id),
+                package: logical_package(&relation.id),
                 versions: Box::new(dependency_constraint(
                     &relation.id,
                     &relation.requirement,
@@ -224,7 +224,7 @@ fn presence_formula(
     match expression {
         DependencyExpression::Only(relation) => {
             let atom = Formula::Atom {
-                package: constraint_package(&relation.id),
+                package: logical_package(&relation.id),
                 versions: Box::new(dependency_constraint(
                     &relation.id,
                     &relation.requirement,
@@ -259,8 +259,8 @@ enum Formula {
     True,
     False,
     Atom {
-        package: String,
-        versions: Box<Ranges<Version>>,
+        package: SolverPackage,
+        versions: Box<Ranges<SolverVersion>>,
     },
     Not(Box<Formula>),
     And(Vec<Formula>),
@@ -269,12 +269,12 @@ enum Formula {
 
 #[derive(Clone)]
 enum Literal {
-    Positive(String, Ranges<Version>),
-    Negative(String, Ranges<Version>),
+    Positive(SolverPackage, Ranges<SolverVersion>),
+    Negative(SolverPackage, Ranges<SolverVersion>),
 }
 
 impl Literal {
-    fn term(self) -> IncompatibilityConstraintTerm<String, Ranges<Version>> {
+    fn term(self) -> IncompatibilityConstraintTerm<SolverPackage, Ranges<SolverVersion>> {
         match self {
             Self::Positive(package, versions) => {
                 IncompatibilityConstraintTerm::Positive(package, versions)
@@ -285,7 +285,7 @@ impl Literal {
         }
     }
 
-    fn negated_term(self) -> IncompatibilityConstraintTerm<String, Ranges<Version>> {
+    fn negated_term(self) -> IncompatibilityConstraintTerm<SolverPackage, Ranges<SolverVersion>> {
         match self {
             Self::Positive(package, versions) => {
                 IncompatibilityConstraintTerm::Negative(package, versions)

@@ -1,20 +1,9 @@
 use super::CliContext;
 use anyhow::Result;
-use orbit_core::{
-    InstallOptions, InstallPrompt, OrbitError, install_to_instance, upgrade_all_in_instance,
-};
+use orbit_core::{InstallOptions, OrbitError, install_to_instance, upgrade_all_in_instance};
 
 pub async fn handle(mod_name: Option<String>, ctx: &CliContext) -> Result<()> {
     let instance_dir = ctx.instance_dir()?;
-
-    let yes = ctx.yes;
-    let prompt_fn: Option<InstallPrompt> = if ctx.dry_run {
-        None
-    } else {
-        Some(Box::new(move |report| {
-            super::prompt_install_report(report, yes)
-        }))
-    };
 
     if let Some(name) = mod_name {
         let lockfile = orbit_core::Lockfile::open(&instance_dir)?;
@@ -45,7 +34,7 @@ pub async fn handle(mod_name: Option<String>, ctx: &CliContext) -> Result<()> {
                 optional: false,
                 env: None,
             },
-            prompt_fn,
+            super::install_interaction(ctx.dry_run, ctx.yes),
         )
         .await
         {
@@ -75,7 +64,14 @@ pub async fn handle(mod_name: Option<String>, ctx: &CliContext) -> Result<()> {
         }
     } else {
         let providers = super::create_instance_providers(&instance_dir, None)?;
-        match upgrade_all_in_instance(&instance_dir, &providers, ctx.dry_run, prompt_fn).await {
+        match upgrade_all_in_instance(
+            &instance_dir,
+            &providers,
+            ctx.dry_run,
+            super::install_interaction(ctx.dry_run, ctx.yes),
+        )
+        .await
+        {
             Ok(report) => {
                 super::print_resolution_diagnostics(&report.diagnostics);
                 super::print_resolution_warnings(&report.warnings);

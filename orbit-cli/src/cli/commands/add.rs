@@ -1,8 +1,6 @@
 use super::CliContext;
 use anyhow::{Context, Result};
-use orbit_core::{
-    InstallOptions, InstallPrompt, OrbitError, install_local_file_to_instance, install_to_instance,
-};
+use orbit_core::{InstallOptions, OrbitError, install_local_file_to_instance, install_to_instance};
 
 pub async fn handle(
     mod_name: String,
@@ -29,14 +27,6 @@ pub async fn handle(
         } else {
             super::create_instance_providers(&instance_dir, None)?
         };
-        let yes = ctx.yes;
-        let prompt_fn: Option<InstallPrompt> = if ctx.dry_run {
-            None
-        } else {
-            Some(Box::new(move |report| {
-                super::prompt_install_report(report, yes)
-            }))
-        };
         let report = install_local_file_to_instance(
             std::path::Path::new(path),
             version.as_deref(),
@@ -49,7 +39,7 @@ pub async fn handle(
                 optional,
                 env,
             },
-            prompt_fn,
+            super::install_interaction(ctx.dry_run, ctx.yes),
         )
         .await
         .map_err(|error| anyhow::anyhow!("Add failed: {error}"))?;
@@ -78,15 +68,6 @@ pub async fn handle(
     let instance_dir = ctx.instance_dir()?;
     let providers = super::create_instance_providers(&instance_dir, selected_platform.as_deref())?;
 
-    let yes = ctx.yes;
-    let prompt_fn: Option<InstallPrompt> = if ctx.dry_run {
-        None
-    } else {
-        Some(Box::new(move |report| {
-            super::prompt_install_report(report, yes)
-        }))
-    };
-
     match install_to_instance(
         slug,
         &constraint,
@@ -99,7 +80,7 @@ pub async fn handle(
             optional,
             env: env.clone(),
         },
-        prompt_fn,
+        super::install_interaction(ctx.dry_run, ctx.yes),
     )
     .await
     {

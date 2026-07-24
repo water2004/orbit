@@ -18,6 +18,8 @@ pub enum ApiError {
     InvalidApiKey(#[source] reqwest::header::InvalidHeaderValue),
     #[error("failed to build CurseForge HTTP client: {0}")]
     Client(#[source] reqwest::Error),
+    #[error("invalid CurseForge API base URL: {0}")]
+    BaseUrl(#[source] url::ParseError),
     #[error("CurseForge request failed: {0}")]
     Request(#[source] reqwest::Error),
     #[error("CurseForge API returned HTTP {status}: {message}")]
@@ -28,9 +30,11 @@ impl ApiError {
     pub fn status(&self) -> Option<StatusCode> {
         match self {
             Self::Status { status, .. } => Some(*status),
-            Self::MissingApiKey | Self::InvalidApiKey(_) | Self::Client(_) | Self::Request(_) => {
-                None
-            }
+            Self::MissingApiKey
+            | Self::InvalidApiKey(_)
+            | Self::Client(_)
+            | Self::BaseUrl(_)
+            | Self::Request(_) => None,
         }
     }
 }
@@ -68,18 +72,33 @@ impl Client {
             reqwest::header::ACCEPT,
             reqwest::header::HeaderValue::from_static("application/json"),
         );
+        let base_url = format!("{}/", base_url.trim_end_matches('/'));
+        let retry_host = url::Url::parse(&base_url)
+            .map_err(ApiError::BaseUrl)?
+            .host_str()
+            .expect("an HTTP API base URL has a host")
+            .to_string();
+        let retry_policy = reqwest::retry::for_host(retry_host)
+            .no_budget()
+            .max_retries_per_request(5)
+            .classify_fn(|request| {
+                if request.error().is_some() {
+                    request.retryable()
+                } else {
+                    request.success()
+                }
+            });
         let http = reqwest::Client::builder()
             .user_agent(user_agent)
             .default_headers(headers)
             .timeout(std::time::Duration::from_secs(30))
             // Never forward x-api-key through an unvalidated redirect.
             .redirect(reqwest::redirect::Policy::none())
+            // CurseForge operations are read-only, including its POST lookup endpoints.
+            .retry(retry_policy)
             .build()
             .map_err(ApiError::Client)?;
-        Ok(Self {
-            http,
-            base_url: format!("{}/", base_url.trim_end_matches('/')),
-        })
+        Ok(Self { http, base_url })
     }
 
     fn url(&self, path: &str) -> String {

@@ -120,6 +120,56 @@ pub use search::handle as handle_search;
 pub use sync::handle as handle_sync;
 pub use upgrade::handle as handle_upgrade;
 
+pub fn install_interaction(dry_run: bool, yes: bool) -> orbit_core::InstallInteraction {
+    orbit_core::InstallInteraction {
+        select_resolution: resolution_selector(dry_run, yes),
+        confirm_install: (!dry_run).then(|| {
+            Box::new(move |report: &orbit_core::InstallReport| prompt_install_report(report, yes))
+                as orbit_core::InstallPrompt
+        }),
+    }
+}
+
+pub fn resolution_selector(dry_run: bool, yes: bool) -> Option<orbit_core::ResolutionSelector> {
+    (!dry_run && !yes).then(|| Box::new(prompt_resolution) as orbit_core::ResolutionSelector)
+}
+
+fn prompt_resolution(alternatives: &[orbit_core::ResolutionReport]) -> usize {
+    eprintln!("\nMultiple dependency solutions are available:");
+    for (index, alternative) in alternatives.iter().enumerate() {
+        eprintln!("\n  {}.", index + 1);
+        if alternative.upgrades.is_empty() {
+            eprintln!("     keep all currently selected versions");
+        } else {
+            for (package, version) in &alternative.upgrades {
+                eprintln!("     {package} → {version}");
+            }
+        }
+        if !alternative.warnings.is_empty() {
+            eprintln!("     {} warning(s)", alternative.warnings.len());
+        }
+    }
+
+    loop {
+        eprint!(
+            "\nChoose a dependency solution [1-{}] (default 1): ",
+            alternatives.len()
+        );
+        use std::io::Write;
+        std::io::stderr().flush().ok();
+        let mut input = String::new();
+        if std::io::stdin().read_line(&mut input).is_err() || input.trim().is_empty() {
+            return 0;
+        }
+        if let Ok(choice) = input.trim().parse::<usize>()
+            && (1..=alternatives.len()).contains(&choice)
+        {
+            return choice - 1;
+        }
+        eprintln!("Please enter a number from 1 to {}.", alternatives.len());
+    }
+}
+
 pub fn prompt_install_report(report: &orbit_core::InstallReport, yes: bool) -> bool {
     if report.installed.is_empty() {
         return true;

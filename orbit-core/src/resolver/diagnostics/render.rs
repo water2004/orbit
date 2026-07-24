@@ -2,11 +2,11 @@ use pubgrub::{DerivationTree, External};
 
 use super::{Cause, SkippedVersionReason, WatchedVersion};
 use crate::resolver::types::{CandidateDiagnostic, CandidateDiagnosticKind};
-use crate::versions::Version;
+use crate::resolver::types::{SolverPackage, SolverVersion};
 
 pub(super) fn diagnose(
     package: &str,
-    selected: &Version,
+    selected: &SolverVersion,
     watched: Option<&WatchedVersion>,
 ) -> CandidateDiagnostic {
     let Some(watched) = watched else {
@@ -15,28 +15,19 @@ pub(super) fn diagnose(
             selected_version: selected.to_string(),
             candidate_version: "?".to_string(),
             kind: CandidateDiagnosticKind::Unexplained,
-            preferred_version: None,
             facts: vec!["no candidate trace was recorded".to_string()],
         };
     };
 
-    let (kind, preferred_version, facts) = match &watched.reason {
+    let (kind, facts) = match &watched.reason {
         Some(SkippedVersionReason::ExcludedByPropagation(cause)) => (
             CandidateDiagnosticKind::ExcludedByPropagation,
-            None,
             facts_for_cause(cause),
         ),
-        Some(SkippedVersionReason::Backtracked(cause)) => (
-            CandidateDiagnosticKind::Backtracked,
-            None,
-            facts_for_cause(cause),
-        ),
-        Some(SkippedVersionReason::ProviderPreferred(preferred)) => (
-            CandidateDiagnosticKind::ProviderPreferred,
-            Some(preferred.to_string()),
-            Vec::new(),
-        ),
-        None => (CandidateDiagnosticKind::Unexplained, None, Vec::new()),
+        Some(SkippedVersionReason::Backtracked(cause)) => {
+            (CandidateDiagnosticKind::Backtracked, facts_for_cause(cause))
+        }
+        None => (CandidateDiagnosticKind::Unexplained, Vec::new()),
     };
 
     CandidateDiagnostic {
@@ -44,7 +35,6 @@ pub(super) fn diagnose(
         selected_version: selected.to_string(),
         candidate_version: watched.version.to_string(),
         kind,
-        preferred_version,
         facts,
     }
 }
@@ -62,9 +52,19 @@ pub(super) fn describe_no_solution(cause: &Cause) -> String {
 fn facts_for_cause(cause: &Cause) -> Vec<String> {
     let mut facts = external_facts(cause);
     if facts.is_empty() {
-        let mut packages: Vec<_> = cause.packages().into_iter().cloned().collect();
+        let mut packages: Vec<_> = cause
+            .packages()
+            .into_iter()
+            .filter(|package| !matches!(package, SolverPackage::ProviderChoice { .. }))
+            .map(|package| package.user_label().to_string())
+            .collect();
         packages.sort();
-        facts.push(format!("conflict involved {}", packages.join(", ")));
+        packages.dedup();
+        if packages.is_empty() {
+            facts.push("the selected versions are mutually incompatible".to_string());
+        } else {
+            facts.push(format!("conflict involved {}", packages.join(", ")));
+        }
     }
 
     const MAX_FACTS: usize = 8;
@@ -74,6 +74,10 @@ fn facts_for_cause(cause: &Cause) -> Vec<String> {
         facts.push(format!("and {remaining} more dependency fact(s)"));
     }
     facts
+}
+
+pub(super) fn has_domain_facts(cause: &Cause) -> bool {
+    !external_facts(cause).is_empty()
 }
 
 fn external_facts(cause: &Cause) -> Vec<String> {
@@ -86,37 +90,57 @@ fn collect_external_facts(cause: &Cause, facts: &mut Vec<String>) {
     match cause {
         DerivationTree::External(external) => {
             let fact = match external {
-                External::NotRoot(package, version) => {
-                    format!(
-                        "{} {version} is not the project root",
-                        package_name(package)
-                    )
-                }
-                External::NoVersions(package, versions) => format!(
+                External::NotRoot(package, version) => Some(format!(
+                    "{} {version} is not the project root",
+                    package.user_label()
+                )),
+                External::NoVersions(
+                    SolverPackage::Mod(_)
+                    | SolverPackage::Bundled { .. }
+                    | SolverPackage::ProviderChoice { .. },
+                    _,
+                ) => None,
+                External::NoVersions(package, versions) => Some(format!(
                     "no available version of {} matches {versions}",
-                    package_name(package)
-                ),
+                    package.user_label()
+                )),
+                External::FromDependencyOf(package, _, dependency, _)
+                    if matches!(package, SolverPackage::ProviderChoice { .. })
+                        || matches!(dependency, SolverPackage::ProviderChoice { .. })
+                        || matches!(
+                            (package, dependency),
+                            (
+                                SolverPackage::Mod(_) | SolverPackage::Bundled { .. },
+                                SolverPackage::Mod(_) | SolverPackage::Bundled { .. }
+                            )
+                        ) =>
+                {
+                    None
+                }
                 External::FromDependencyOf(package, versions, dependency, required) => {
-                    if is_internal_root(package) {
-                        format!(
+                    if package == &SolverPackage::Root {
+                        Some(format!(
                             "the project requires {} {required}",
-                            package_name(dependency)
-                        )
+                            dependency.user_label()
+                        ))
                     } else {
-                        format!(
+                        Some(format!(
                             "{} {versions} requires {} {required}",
-                            package_name(package),
-                            package_name(dependency)
-                        )
+                            package.user_label(),
+                            dependency.user_label()
+                        ))
                     }
                 }
-                External::Custom(package, versions, message) => format!(
+                External::Custom(package, versions, message) => Some(format!(
                     "{} {versions} is unavailable: {message}",
-                    package_name(package)
-                ),
-                External::CustomClause { metadata, .. } => metadata.clone(),
+                    package.user_label()
+                )),
+                External::CustomClause { metadata, .. } => Some(metadata.clone()),
+                External::ExcludedSolution { .. } => return,
             };
-            if !facts.contains(&fact) {
+            if let Some(fact) = fact
+                && !facts.contains(&fact)
+            {
                 facts.push(fact);
             }
         }
@@ -124,23 +148,5 @@ fn collect_external_facts(cause: &Cause, facts: &mut Vec<String>) {
             collect_external_facts(&derived.cause1, facts);
             collect_external_facts(&derived.cause2, facts);
         }
-    }
-}
-
-fn is_internal_root(package: &str) -> bool {
-    package.starts_with("___") && package.ends_with("___")
-}
-
-fn package_name(package: &str) -> &str {
-    if is_internal_root(package) {
-        "the project"
-    } else if let Some(capability) = package.strip_prefix("___orbit_capability___") {
-        capability
-    } else if let Some(choice) = package.strip_prefix("___orbit_provider_choice___") {
-        choice.split("___").next().unwrap_or(choice)
-    } else if let Some(artifact) = package.strip_prefix("___orbit_jarjar___") {
-        artifact
-    } else {
-        package
     }
 }

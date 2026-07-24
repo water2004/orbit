@@ -10,7 +10,7 @@ use crate::lockfile::{
 };
 use crate::manifest::{DependencySpec, OrbitManifest};
 use crate::providers::{ModProvider, ResolvedMod};
-use crate::resolver::types::CandidateDiagnostic;
+use crate::resolver::types::{CandidateDiagnostic, ResolutionSelector};
 use crate::workspace::{Lockfile, ManifestFile};
 
 mod local;
@@ -18,6 +18,12 @@ mod local;
 pub use local::install_local_file_to_instance;
 
 pub type InstallPrompt = Box<dyn FnOnce(&InstallReport) -> bool + Send>;
+
+#[derive(Default)]
+pub struct InstallInteraction {
+    pub select_resolution: Option<ResolutionSelector>,
+    pub confirm_install: Option<InstallPrompt>,
+}
 
 #[derive(Debug, Clone, Default)]
 pub struct InstallOptions {
@@ -85,7 +91,7 @@ pub async fn install_to_instance(
     instance_dir: &Path,
     providers: &[Box<dyn ModProvider>],
     options: InstallOptions,
-    prompt_fn: Option<InstallPrompt>,
+    interaction: InstallInteraction,
 ) -> Result<InstallReport, OrbitError> {
     let dry_run = options.dry_run;
     let mut manifest_file = ManifestFile::open(instance_dir)?;
@@ -111,7 +117,7 @@ pub async fn install_to_instance(
         lockfile: &mut lock.inner,
         mods_dir: &mods_dir,
         options,
-        prompt_fn,
+        interaction,
     })
     .await?;
 
@@ -131,6 +137,7 @@ pub async fn restore_instance(
     instance_dir: &Path,
     providers: &[Box<dyn ModProvider>],
     options: RestoreOptions,
+    interaction: InstallInteraction,
 ) -> Result<RestoreReport, OrbitError> {
     validate_restore_options(&options)?;
     let manifest = ManifestFile::open(instance_dir)?;
@@ -162,7 +169,7 @@ pub async fn restore_instance(
         required_dependency_ids(&entry.dependencies)
             .into_iter()
             .any(|dependency| {
-                !crate::resolver::is_builtin_package(dependency)
+                !crate::resolver::is_platform_package(dependency)
                     && lock.inner.find(dependency).is_none()
             })
     });
@@ -190,8 +197,13 @@ pub async fn restore_instance(
             report.restored.sort();
             return Ok(report);
         }
-        let resolution =
-            resolve_missing_lock_entries(&manifest.inner, &mut lock.inner, providers).await?;
+        let resolution = resolve_missing_lock_entries(
+            &manifest.inner,
+            &mut lock.inner,
+            providers,
+            interaction.select_resolution,
+        )
+        .await?;
         report.diagnostics = resolution.diagnostics;
         report.warnings = resolution.warnings;
         lock.save()?;
@@ -249,7 +261,7 @@ pub async fn upgrade_all_in_instance(
     instance_dir: &Path,
     providers: &[Box<dyn ModProvider>],
     dry_run: bool,
-    prompt_fn: Option<InstallPrompt>,
+    interaction: InstallInteraction,
 ) -> Result<InstallReport, OrbitError> {
     let manifest_file = ManifestFile::open(instance_dir)?;
     let mut lock = Lockfile::open_or_default(
@@ -266,7 +278,13 @@ pub async fn upgrade_all_in_instance(
         resolved: resolved_candidates,
         diagnostics,
         warnings,
-    } = crate::outdated::check_all_outdated(&manifest_file.inner, &lock.inner, providers).await?;
+    } = crate::outdated::check_all_outdated(
+        &manifest_file.inner,
+        &lock.inner,
+        providers,
+        interaction.select_resolution,
+    )
+    .await?;
 
     if outdated.is_empty() {
         return Ok(InstallReport {
@@ -302,7 +320,7 @@ pub async fn upgrade_all_in_instance(
         warnings: warnings.clone(),
     };
 
-    if let Some(prompt) = prompt_fn
+    if let Some(prompt) = interaction.confirm_install
         && !prompt(&report)
     {
         return Ok(InstallReport {
@@ -539,7 +557,7 @@ struct InstallModInput<'a> {
     lockfile: &'a mut OrbitLockfile,
     mods_dir: &'a Path,
     options: InstallOptions,
-    prompt_fn: Option<InstallPrompt>,
+    interaction: InstallInteraction,
 }
 
 async fn install_mod(input: InstallModInput<'_>) -> Result<InstallReport, OrbitError> {
@@ -551,7 +569,7 @@ async fn install_mod(input: InstallModInput<'_>) -> Result<InstallReport, OrbitE
         lockfile,
         mods_dir,
         options,
-        prompt_fn,
+        interaction,
     } = input;
 
     if !options.existing_ok && crate::resolver::find_entry(slug, &lockfile.packages).is_some() {
@@ -565,24 +583,21 @@ async fn install_mod(input: InstallModInput<'_>) -> Result<InstallReport, OrbitE
 
     // 1-2. BFS download all JARs
     let seeds = vec![slug.to_string()];
-    let crate::outdated::CandidateDownload {
-        mut candidates,
-        resolved,
-        source_packages,
-    } = crate::outdated::download_candidates_with_fallback(
+    let mut catalog = crate::outdated::download_candidates_with_fallback(
         providers, &seeds, lockfile, mc_version, loader,
     )
     .await?;
-    if candidates.is_empty() {
+    if catalog.candidates.is_empty() {
         return Err(OrbitError::ModNotFound(slug.to_string()));
     }
-    let requested_package = source_packages
+    let requested_package = catalog
+        .source_packages
         .get(slug)
         .cloned()
         .or_else(|| {
             crate::resolver::find_entry(slug, &lockfile.packages)
                 .map(|entry| entry.mod_id.clone())
-                .filter(|package| candidates.contains_key(package))
+                .filter(|package| catalog.candidates.contains_key(package))
         })
         .ok_or_else(|| OrbitError::ModNotFound(slug.to_string()))?;
 
@@ -596,17 +611,19 @@ async fn install_mod(input: InstallModInput<'_>) -> Result<InstallReport, OrbitE
     );
 
     // 3. Resolve offline
-    let resolution = match crate::resolver::resolve_with_candidates_report(
+    let portfolio = match crate::resolver::resolve_candidate_portfolio(
         &resolution_manifest,
         lockfile,
-        &mut candidates,
+        &mut catalog,
         providers,
     )
     .await
     {
-        Ok(resolution) => resolution,
+        Ok(portfolio) => portfolio,
         Err(e) => return Err(OrbitError::Conflict(e)),
     };
+    let resolution = crate::resolver::select_resolution(portfolio, interaction.select_resolution)
+        .map_err(OrbitError::Conflict)?;
     let upgrades = resolution.upgrades;
     let diagnostics = resolution.diagnostics;
     let warnings = resolution.warnings;
@@ -617,7 +634,7 @@ async fn install_mod(input: InstallModInput<'_>) -> Result<InstallReport, OrbitE
 
     for (mod_id, new_ver) in &upgrades {
         let key = (mod_id.clone(), new_ver.clone());
-        let Some(resolved) = resolved.get(&key) else {
+        let Some(resolved) = catalog.resolved.get(&key) else {
             continue;
         };
 
@@ -642,7 +659,7 @@ async fn install_mod(input: InstallModInput<'_>) -> Result<InstallReport, OrbitE
         warnings: warnings.clone(),
     };
 
-    if let Some(prompt) = prompt_fn
+    if let Some(prompt) = interaction.confirm_install
         && !prompt(&report)
     {
         return Ok(InstallReport {
@@ -667,7 +684,8 @@ async fn install_mod(input: InstallModInput<'_>) -> Result<InstallReport, OrbitE
             let _ = std::fs::remove_file(mods_dir.join(&old.filename));
         }
     }
-    let installed = materialize_plans(planned, &resolved, mods_dir, loader, providers).await?;
+    let installed =
+        materialize_plans(planned, &catalog.resolved, mods_dir, loader, providers).await?;
 
     if installed
         .iter()
@@ -728,6 +746,7 @@ async fn resolve_missing_lock_entries(
     manifest: &OrbitManifest,
     lockfile: &mut OrbitLockfile,
     providers: &[Box<dyn ModProvider>],
+    selector: Option<ResolutionSelector>,
 ) -> Result<crate::resolver::types::ResolutionReport, OrbitError> {
     let mut seeds: std::collections::HashSet<String> = manifest
         .dependencies
@@ -740,7 +759,7 @@ async fn resolve_missing_lock_entries(
             required_dependency_ids(&entry.dependencies)
                 .into_iter()
                 .filter(|dependency| {
-                    !crate::resolver::is_builtin_package(dependency)
+                    !crate::resolver::is_platform_package(dependency)
                         && lockfile.find(dependency).is_none()
                 })
                 .map(str::to_string),
@@ -763,11 +782,7 @@ async fn resolve_missing_lock_entries(
     if seeds.is_empty() {
         return Ok(crate::resolver::types::ResolutionReport::default());
     }
-    let crate::outdated::CandidateDownload {
-        mut candidates,
-        resolved,
-        ..
-    } = crate::outdated::download_candidates_with_fallback(
+    let mut catalog = crate::outdated::download_candidates_with_fallback(
         providers,
         &seeds,
         lockfile,
@@ -783,19 +798,21 @@ async fn resolve_missing_lock_entries(
             .entry(entry.mod_id.clone())
             .or_insert_with(|| DependencySpec::Short(entry.version.clone()));
     }
-    let resolution = crate::resolver::resolve_with_candidates_report(
+    let portfolio = crate::resolver::resolve_candidate_portfolio(
         &resolution_manifest,
         lockfile,
-        &mut candidates,
+        &mut catalog,
         providers,
     )
     .await
     .map_err(|error| OrbitError::Conflict(error.to_string()))?;
+    let resolution =
+        crate::resolver::select_resolution(portfolio, selector).map_err(OrbitError::Conflict)?;
     for (package, version) in &resolution.upgrades {
-        let Some(resolved) = resolved.get(&(package.clone(), version.clone())) else {
+        let Some(resolved) = catalog.resolved.get(&(package.clone(), version.clone())) else {
             continue;
         };
-        let candidate = candidates.get(package).and_then(|versions| {
+        let candidate = catalog.candidates.get(package).and_then(|versions| {
             versions
                 .iter()
                 .find(|candidate| candidate.jar_version == *version)
@@ -924,9 +941,9 @@ pub(crate) fn selected_packages(
             .map_err(|error| OrbitError::Conflict(error.to_string()))?;
     let mut selected: Vec<_> = solution
         .iter()
-        .map(|(package, _)| package)
+        .filter_map(|(package, _)| package.top_level_mod_id())
         .filter(|package| lockfile.find(package).is_some())
-        .cloned()
+        .map(str::to_string)
         .collect();
     selected.sort();
     skipped.sort();
@@ -1198,7 +1215,7 @@ fn plan_from_resolved(mod_id: &str, version: &str, resolved: &ResolvedMod) -> In
 
 async fn materialize_plans(
     planned: Vec<InstalledMod>,
-    resolved_candidates: &crate::outdated::ResolvedCandidates,
+    resolved_candidates: &crate::resolver::types::ResolvedCandidates,
     mods_dir: &Path,
     loader: &str,
     providers: &[Box<dyn ModProvider>],

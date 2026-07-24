@@ -4,18 +4,17 @@ use pubgrub::Ranges;
 use pubgrub::{Dependencies, DependencyProvider, IncompatibilityConstraint};
 use std::collections::HashMap;
 
-use crate::resolver::types::PackageId;
-use crate::versions::Version;
+use crate::resolver::types::{SolverPackage, SolverVersion};
 
-type PackageVersionKey = (PackageId, Version);
-type PackageDependencies = Vec<(PackageId, Ranges<Version>)>;
+type PackageVersionKey = (SolverPackage, SolverVersion);
+type PackageDependencies = Vec<(SolverPackage, Ranges<SolverVersion>)>;
 pub(crate) type PackageIncompatibilities =
-    Vec<IncompatibilityConstraint<PackageId, Ranges<Version>, String>>;
+    Vec<IncompatibilityConstraint<SolverPackage, Ranges<SolverVersion>, String>>;
 
 #[derive(Debug)]
-pub enum ProviderError {
-    MissingVersions(PackageId),
-    MissingDependencies(PackageId, Version),
+pub(crate) enum ProviderError {
+    MissingVersions(SolverPackage),
+    MissingDependencies(SolverPackage, SolverVersion),
 }
 
 impl std::fmt::Display for ProviderError {
@@ -31,52 +30,52 @@ impl std::fmt::Display for ProviderError {
 
 impl std::error::Error for ProviderError {}
 
-/// PubGrub 的数据源——一个只读的内存视图
+/// Immutable in-memory view consumed by PubGrub after graph construction.
 #[derive(Default)]
-pub struct OrbitDependencyProvider {
-    /// package → 已知可用版本列表（从新到旧排序）
-    pub versions: HashMap<PackageId, Vec<Version>>,
-    /// (package, version) → 前置依赖列表
-    pub dependencies: HashMap<PackageVersionKey, PackageDependencies>,
-    pub incompatibilities: HashMap<PackageVersionKey, PackageIncompatibilities>,
-    /// (package, version) → 解析后的完整 Mod 数据
-    pub resolved_mods: HashMap<(PackageId, Version), crate::providers::ResolvedMod>,
+pub(crate) struct OrbitDependencyProvider {
+    /// package → known available versions. Selection is ordered semantically, not by insertion.
+    pub(crate) versions: HashMap<SolverPackage, Vec<SolverVersion>>,
+    /// Exact package version to its dependency ranges.
+    pub(crate) dependencies: HashMap<PackageVersionKey, PackageDependencies>,
+    pub(crate) incompatibilities: HashMap<PackageVersionKey, PackageIncompatibilities>,
 }
 
 impl OrbitDependencyProvider {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self::default()
     }
 
-    /// 向缓存中添加一个包及其版本信息（由编排层在求解前调用）
-    pub fn add_package_versions(&mut self, pkg: PackageId, versions: Vec<Version>) {
+    pub(crate) fn add_package_versions(
+        &mut self,
+        pkg: SolverPackage,
+        versions: Vec<SolverVersion>,
+    ) {
         self.versions.insert(pkg, versions);
     }
 
-    /// 仅在 PubGrub 返回 UnknownDependencies 时调用，添加具体版本的依赖
-    pub fn add_package_deps(
+    pub(crate) fn add_package_deps(
         &mut self,
-        pkg: PackageId,
-        version: Version,
-        deps: Vec<(PackageId, Ranges<Version>)>,
+        pkg: SolverPackage,
+        version: SolverVersion,
+        deps: Vec<(SolverPackage, Ranges<SolverVersion>)>,
     ) {
         self.dependencies.insert((pkg, version), deps);
     }
 
-    pub fn add_package_incompatibilities(
+    pub(crate) fn add_package_incompatibilities(
         &mut self,
-        pkg: PackageId,
-        version: Version,
+        pkg: SolverPackage,
+        version: SolverVersion,
         incompatibilities: PackageIncompatibilities,
     ) {
         self.incompatibilities
             .insert((pkg, version), incompatibilities);
     }
 
-    pub fn extend_package_incompatibilities(
+    pub(crate) fn extend_package_incompatibilities(
         &mut self,
-        pkg: PackageId,
-        version: Version,
+        pkg: SolverPackage,
+        version: SolverVersion,
         incompatibilities: PackageIncompatibilities,
     ) {
         self.incompatibilities
@@ -87,9 +86,9 @@ impl OrbitDependencyProvider {
 }
 
 impl DependencyProvider for OrbitDependencyProvider {
-    type P = PackageId;
-    type V = Version;
-    type VS = Ranges<Version>;
+    type P = SolverPackage;
+    type V = SolverVersion;
+    type VS = Ranges<SolverVersion>;
     type Priority = usize;
     type M = String;
     type Err = ProviderError;
@@ -100,7 +99,7 @@ impl DependencyProvider for OrbitDependencyProvider {
         range: &Self::VS,
         _package_conflicts_counts: &pubgrub::PackageResolutionStatistics,
     ) -> Self::Priority {
-        // Lower = less specific = higher priority. Ranges with fewer segments first.
+        // Prefer constrained packages over packages that still allow every version.
         if range == &Ranges::full() {
             return 0;
         }
@@ -113,14 +112,11 @@ impl DependencyProvider for OrbitDependencyProvider {
         range: &Self::VS,
     ) -> Result<Option<Self::V>, Self::Err> {
         match self.versions.get(package) {
-            Some(versions) => {
-                for v in versions {
-                    if range.contains(v) {
-                        return Ok(Some(v.clone()));
-                    }
-                }
-                Ok(None)
-            }
+            Some(versions) => Ok(versions
+                .iter()
+                .filter(|version| range.contains(version))
+                .max()
+                .cloned()),
             None => Err(ProviderError::MissingVersions(package.clone())),
         }
     }

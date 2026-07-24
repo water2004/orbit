@@ -23,4 +23,11 @@ async-trait.workspace = true
 anyhow.workspace = true
 thiserror.workspace = true
 indexmap.workspace = true
-pubgrub = { git = "https://github.com/water2004/pubgrub.git", rev = "c3c4326a7e7ced4077e831285c4408c60c52ea32" }
+pubgrub = { git = "https://github.com/water2004/pubgrub.git", rev = "0c260ff2528a6c09c683cc7270b3b97c2ea114f3" }
+
+[dev-dependencies]
+bytes = "1.11"
+http-body-util = "0.1"
+hyper = { version = "1.9", features = ["http1", "server"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+tokio = { workspace = true, features = ["net"] }

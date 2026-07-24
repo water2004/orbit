@@ -35,10 +35,14 @@ pub async fn handle(mod_name: Option<String>, ctx: &CliContext) -> Result<()> {
         manifest_file.inner.project.mc_version, manifest_file.inner.project.modloader,
     );
 
-    let report =
-        orbit_core::outdated::check_all_outdated(&manifest_file.inner, &lock.inner, &providers)
-            .await
-            .context("failed to check for updates")?;
+    let report = orbit_core::outdated::check_all_outdated(
+        &manifest_file.inner,
+        &lock.inner,
+        &providers,
+        super::resolution_selector(ctx.dry_run, ctx.yes),
+    )
+    .await
+    .context("failed to check for updates")?;
     super::print_resolution_diagnostics(&report.diagnostics);
     super::print_resolution_warnings(&report.warnings);
     let mut results = report.updates;

@@ -9,7 +9,7 @@ use crate::providers::ModProvider;
 use crate::workspace::{Lockfile, ManifestFile};
 
 use super::{
-    InstallOptions, InstallPrompt, InstallReport, InstalledMod, ensure_root_requirement,
+    InstallInteraction, InstallOptions, InstallReport, InstalledMod, ensure_root_requirement,
     package_filename, package_is_present, requested_requirement, resolve_missing_lock_entries,
     restore_package,
 };
@@ -20,7 +20,7 @@ pub async fn install_local_file_to_instance(
     instance_dir: &Path,
     providers: &[Box<dyn ModProvider>],
     options: InstallOptions,
-    prompt_fn: Option<InstallPrompt>,
+    interaction: InstallInteraction,
 ) -> Result<InstallReport, OrbitError> {
     let source = validate_source(source)?;
     let mut manifest = ManifestFile::open(instance_dir)?;
@@ -86,8 +86,14 @@ pub async fn install_local_file_to_instance(
         .filter(|entry| entry.mod_id != metadata.mod_id)
         .map(|entry| entry.mod_id.clone())
         .collect();
-    let resolution =
-        resolve_dependencies(&manifest, &mut lockfile, providers, options.no_deps).await?;
+    let resolution = resolve_dependencies(
+        &manifest,
+        &mut lockfile,
+        providers,
+        options.no_deps,
+        interaction.select_resolution,
+    )
+    .await?;
     let preview = build_preview(
         &metadata,
         &filename,
@@ -99,7 +105,10 @@ pub async fn install_local_file_to_instance(
             resolution,
         },
     );
-    if prompt_fn.is_some_and(|prompt| !prompt(&preview)) {
+    if interaction
+        .confirm_install
+        .is_some_and(|prompt| !prompt(&preview))
+    {
         return Ok(InstallReport {
             installed: Vec::new(),
             already_satisfied: Vec::new(),
@@ -192,12 +201,14 @@ async fn resolve_dependencies(
     lockfile: &mut Lockfile,
     providers: &[Box<dyn ModProvider>],
     no_dependencies: bool,
+    selector: Option<crate::resolver::types::ResolutionSelector>,
 ) -> Result<crate::resolver::types::ResolutionReport, OrbitError> {
     if no_dependencies {
         return Ok(crate::resolver::types::ResolutionReport::default());
     }
     let resolution =
-        resolve_missing_lock_entries(&manifest.inner, &mut lockfile.inner, providers).await?;
+        resolve_missing_lock_entries(&manifest.inner, &mut lockfile.inner, providers, selector)
+            .await?;
     crate::resolver::check_lockfile_graph(&manifest.inner, &lockfile.inner)
         .map_err(OrbitError::Conflict)?;
     Ok(resolution)
@@ -412,7 +423,7 @@ versionRange = "[1,)"
                 env: Some("client".to_string()),
                 ..InstallOptions::default()
             },
-            None,
+            InstallInteraction::default(),
         )
         .await
         .unwrap();

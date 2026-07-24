@@ -620,85 +620,124 @@ impl ModProvider for CurseForgeProvider {
 
 #[cfg(test)]
 mod tests {
-    use std::io::{Read, Write};
-    use std::net::TcpListener;
-    use std::thread::JoinHandle;
+    use std::collections::VecDeque;
+    use std::convert::Infallible;
+    use std::sync::Arc;
+
+    use bytes::Bytes;
+    use http_body_util::{BodyExt, Full};
+    use hyper::server::conn::http1;
+    use hyper::service::service_fn;
+    use hyper::{Request, Response, body::Incoming};
+    use hyper_util::rt::TokioIo;
+    use tokio::task::JoinHandle;
 
     use super::*;
 
-    // Windows can reset several short-lived loopback HTTP connections when
-    // these contract tests close their mock listeners concurrently.
-    static MOCK_SERVER_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
-
+    #[derive(Clone, Copy)]
     struct MockResponse {
         request_contains: &'static str,
         status: &'static str,
         body: &'static str,
     }
 
-    fn mock_server(responses: Vec<MockResponse>) -> (String, JoinHandle<()>) {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    async fn mock_server(responses: Vec<MockResponse>) -> (String, JoinHandle<()>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
-        let handle = std::thread::spawn(move || {
-            for expected in responses {
-                let (mut stream, _) = listener.accept().unwrap();
-                let mut request = Vec::new();
-                let mut buffer = [0_u8; 4096];
-                loop {
-                    let count = stream.read(&mut buffer).unwrap();
-                    if count == 0 {
-                        break;
+        let handle = tokio::spawn(async move {
+            let responses = Arc::new(tokio::sync::Mutex::new((
+                VecDeque::from(responses),
+                None::<MockResponse>,
+            )));
+            let mut connections = tokio::task::JoinSet::new();
+            loop {
+                tokio::select! {
+                    accepted = listener.accept() => {
+                        let (stream, _) = accepted.unwrap();
+                        let service_responses = responses.clone();
+                        connections.spawn(async move {
+                            http1::Builder::new()
+                                .serve_connection(
+                                    TokioIo::new(stream),
+                                    service_fn(move |request: Request<Incoming>| {
+                                        let responses = service_responses.clone();
+                                        async move {
+                                            let request_line =
+                                                format!("{} {} ", request.method(), request.uri());
+                                            let expected = {
+                                                let mut responses = responses.lock().await;
+                                                if responses
+                                                    .0
+                                                    .front()
+                                                    .is_some_and(|expected| {
+                                                        request_line
+                                                            .contains(expected.request_contains)
+                                                    })
+                                                {
+                                                    let expected = responses.0.pop_front().unwrap();
+                                                    responses.1 = Some(expected);
+                                                    expected
+                                                } else if responses
+                                                    .1
+                                                    .is_some_and(|expected| {
+                                                        request_line
+                                                            .contains(expected.request_contains)
+                                                    })
+                                                {
+                                                    responses.1.unwrap()
+                                                } else {
+                                                    panic!("unexpected HTTP request: {request_line}")
+                                                }
+                                            };
+                                            assert!(
+                                                request_line.contains(expected.request_contains),
+                                                "request did not contain {:?}: {request_line}",
+                                                expected.request_contains
+                                            );
+                                            assert_eq!(
+                                                request
+                                                    .headers()
+                                                    .get("x-api-key")
+                                                    .and_then(|value| value.to_str().ok()),
+                                                Some("test-key"),
+                                                "API key header missing"
+                                            );
+                                            let _ = request.into_body().collect().await.unwrap();
+                                            let status = expected
+                                                .status
+                                                .split_once(' ')
+                                                .map(|(code, _)| code)
+                                                .unwrap_or(expected.status)
+                                                .parse::<u16>()
+                                                .unwrap();
+                                            Ok::<_, Infallible>(
+                                                Response::builder()
+                                                    .status(status)
+                                                    .header("content-type", "application/json")
+                                                    .body(Full::new(Bytes::from_static(
+                                                        expected.body.as_bytes(),
+                                                    )))
+                                                    .unwrap(),
+                                            )
+                                        }
+                                    }),
+                                )
+                                .await
+                                .unwrap();
+                        });
                     }
-                    request.extend_from_slice(&buffer[..count]);
-                    if request.windows(4).any(|window| window == b"\r\n\r\n") {
-                        break;
+                    Some(result) = connections.join_next(), if !connections.is_empty() => {
+                        result.unwrap();
                     }
                 }
-                let header_end = request
-                    .windows(4)
-                    .position(|window| window == b"\r\n\r\n")
-                    .map(|position| position + 4)
-                    .unwrap();
-                let content_length = String::from_utf8_lossy(&request[..header_end])
-                    .lines()
-                    .find_map(|line| {
-                        line.to_ascii_lowercase()
-                            .strip_prefix("content-length:")
-                            .and_then(|value| value.trim().parse::<usize>().ok())
-                    })
-                    .unwrap_or_default();
-                while request.len() < header_end + content_length {
-                    let count = stream.read(&mut buffer).unwrap();
-                    if count == 0 {
-                        break;
-                    }
-                    request.extend_from_slice(&buffer[..count]);
-                }
-                let request = String::from_utf8_lossy(&request);
-                assert!(
-                    request.contains(expected.request_contains),
-                    "request did not contain {:?}:\n{}",
-                    expected.request_contains,
-                    request
-                );
-                assert!(
-                    request.to_ascii_lowercase().contains("x-api-key: test-key"),
-                    "API key header missing:\n{request}"
-                );
-                let response = format!(
-                    "HTTP/1.1 {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\
-                     Connection: close\r\n\r\n{}",
-                    expected.status,
-                    expected.body.len(),
-                    expected.body
-                );
-                stream.write_all(response.as_bytes()).unwrap();
-                stream.flush().unwrap();
-                stream.shutdown(std::net::Shutdown::Write).unwrap();
-                std::thread::sleep(std::time::Duration::from_millis(10));
             }
         });
         (format!("http://{address}/v1/"), handle)
+    }
+
+    async fn stop_mock_server(server: JoinHandle<()>) {
+        server.abort();
+        assert!(server.await.unwrap_err().is_cancelled());
     }
 
     #[test]
@@ -728,7 +767,6 @@ mod tests {
 
     #[tokio::test]
     async fn discovers_ids_and_searches_with_official_filters() {
-        let _guard = MOCK_SERVER_LOCK.lock().await;
         let (base_url, server) = mock_server(vec![
             MockResponse {
                 request_contains: "GET /v1/games?index=0&pageSize=50 ",
@@ -745,7 +783,8 @@ mod tests {
                 status: "200 OK",
                 body: r#"{"data":[{"id":394468,"name":"Sodium","slug":"sodium","summary":"Renderer","downloadCount":42,"categories":[{"id":421,"name":"API and Library","slug":"api-and-library","isClass":false,"classId":6}],"authors":[{"name":"jellysquid"}],"latestFiles":[{"id":1,"modId":394468,"isAvailable":true,"displayName":"Sodium 1","fileName":"sodium.jar","hashes":[{"value":"abc","algo":1}],"fileDate":"2026-01-01T00:00:00Z","downloadUrl":"https://example.invalid/sodium.jar","gameVersions":["1.21.1","Fabric"],"sortableGameVersions":[{"gameVersionName":"1.21.1"}],"dependencies":[],"fileFingerprint":123}],"latestFilesIndexes":[{"gameVersion":"1.21.1","fileId":1,"filename":"sodium.jar","releaseType":1,"modLoader":4}],"isAvailable":true}],"pagination":{"index":0,"pageSize":5,"resultCount":1,"totalCount":1}}"#,
             },
-        ]);
+        ])
+        .await;
         let provider =
             CurseForgeProvider::with_base_url("test-key", "orbit-test", 1, &base_url).unwrap();
 
@@ -757,12 +796,11 @@ mod tests {
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].slug, "sodium");
         assert_eq!(results[0].mc_versions, vec!["1.21.1"]);
-        server.join().unwrap();
+        stop_mock_server(server).await;
     }
 
     #[tokio::test]
     async fn resolves_missing_file_url_through_download_endpoint() {
-        let _guard = MOCK_SERVER_LOCK.lock().await;
         let project = r#"{"id":123,"name":"Example","slug":"example","summary":"Example","downloadCount":1,"categories":[],"authors":[],"latestFiles":[],"latestFilesIndexes":[],"isAvailable":true}"#;
         let file = r#"{"id":456,"modId":123,"isAvailable":true,"displayName":"Example 2","fileName":"example.jar","hashes":[{"value":"deadbeef","algo":1}],"fileDate":"2026-02-01T00:00:00Z","downloadUrl":null,"gameVersions":["1.21.1","NeoForge"],"sortableGameVersions":[{"gameVersionName":"1.21.1"}],"dependencies":[],"fileFingerprint":987}"#;
         let project_response: &'static str =
@@ -789,7 +827,8 @@ mod tests {
                 status: "200 OK",
                 body: r#"{"data":"https://example.invalid/example.jar"}"#,
             },
-        ]);
+        ])
+        .await;
         let provider =
             CurseForgeProvider::with_base_url("test-key", "orbit-test", 1, &base_url).unwrap();
 
@@ -805,12 +844,11 @@ mod tests {
             "https://example.invalid/example.jar"
         );
         assert_eq!(versions[0].version_id().as_deref(), Some("456"));
-        server.join().unwrap();
+        stop_mock_server(server).await;
     }
 
     #[tokio::test]
     async fn reports_files_blocked_from_api_downloads() {
-        let _guard = MOCK_SERVER_LOCK.lock().await;
         let project = r#"{"id":123,"name":"Example","slug":"example","summary":"Example","downloadCount":1,"categories":[],"authors":[],"latestFiles":[],"latestFilesIndexes":[],"isAvailable":true}"#;
         let file = r#"{"id":456,"modId":123,"isAvailable":true,"displayName":"Example 2","fileName":"example.jar","hashes":[{"value":"deadbeef","algo":1}],"fileDate":"2026-02-01T00:00:00Z","downloadUrl":null,"gameVersions":["1.21.1","Fabric"],"sortableGameVersions":[{"gameVersionName":"1.21.1"}],"dependencies":[],"fileFingerprint":987}"#;
         let project_response: &'static str =
@@ -837,7 +875,8 @@ mod tests {
                 status: "404 Not Found",
                 body: r#"{"error":"download unavailable"}"#,
             },
-        ]);
+        ])
+        .await;
         let provider =
             CurseForgeProvider::with_base_url("test-key", "orbit-test", 1, &base_url).unwrap();
 
@@ -850,12 +889,11 @@ mod tests {
             error.to_string().contains("none is API-downloadable"),
             "unexpected error: {error}"
         );
-        server.join().unwrap();
+        stop_mock_server(server).await;
     }
 
     #[tokio::test]
     async fn returns_an_empty_version_set_when_no_files_match() {
-        let _guard = MOCK_SERVER_LOCK.lock().await;
         let (base_url, server) = mock_server(vec![
             MockResponse {
                 request_contains: "GET /v1/mods/123 ",
@@ -867,7 +905,8 @@ mod tests {
                 status: "200 OK",
                 body: r#"{"data":[],"pagination":{"index":0,"pageSize":50,"resultCount":0,"totalCount":0}}"#,
             },
-        ]);
+        ])
+        .await;
         let provider =
             CurseForgeProvider::with_base_url("test-key", "orbit-test", 1, &base_url).unwrap();
 
@@ -877,12 +916,11 @@ mod tests {
             .unwrap();
 
         assert!(versions.is_empty());
-        server.join().unwrap();
+        stop_mock_server(server).await;
     }
 
     #[tokio::test]
     async fn identifies_local_artifacts_with_the_fingerprint_endpoint() {
-        let _guard = MOCK_SERVER_LOCK.lock().await;
         let (base_url, server) = mock_server(vec![
             MockResponse {
                 request_contains: "GET /v1/games?index=0&pageSize=50 ",
@@ -904,7 +942,8 @@ mod tests {
                 status: "200 OK",
                 body: r#"{"data":[{"id":123,"name":"Example","slug":"example","summary":"Example","downloadCount":1,"categories":[],"authors":[],"latestFiles":[],"latestFilesIndexes":[],"isAvailable":true}]}"#,
             },
-        ]);
+        ])
+        .await;
         let provider =
             CurseForgeProvider::with_base_url("test-key", "orbit-test", 1, &base_url).unwrap();
 
@@ -927,6 +966,6 @@ mod tests {
                 .map(|metadata| metadata.fingerprint),
             Some(987)
         );
-        server.join().unwrap();
+        stop_mock_server(server).await;
     }
 }

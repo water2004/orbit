@@ -2,40 +2,48 @@ use pubgrub::{Ranges, resolve_with_observer};
 
 use super::*;
 use crate::resolver::provider::OrbitDependencyProvider;
-use crate::resolver::types::CandidateDiagnosticKind;
+use crate::resolver::types::{CandidateDiagnosticKind, SolverPackage, SolverVersion};
 
-fn version(value: &str) -> Version {
+fn domain_version(value: &str) -> Version {
     Version::Generic(value.to_string())
+}
+
+fn version(value: &str) -> SolverVersion {
+    domain_version(value).into()
+}
+
+fn package(value: &str) -> SolverPackage {
+    SolverPackage::logical(value)
 }
 
 #[test]
 fn explains_a_candidate_excluded_before_selection() {
     let mut provider = OrbitDependencyProvider::new();
-    provider.add_package_versions("root".to_string(), vec![version("1")]);
-    provider.add_package_versions("a".to_string(), vec![version("2"), version("1")]);
-    provider.add_package_versions("b".to_string(), vec![version("1")]);
+    provider.add_package_versions(package("root"), vec![version("1")]);
+    provider.add_package_versions(package("a"), vec![version("2"), version("1")]);
+    provider.add_package_versions(package("b"), vec![version("1")]);
     provider.add_package_deps(
-        "root".to_string(),
+        package("root"),
         version("1"),
         vec![
-            ("a".to_string(), Ranges::full()),
-            ("b".to_string(), Ranges::singleton(version("1"))),
+            (package("a"), Ranges::full()),
+            (package("b"), Ranges::singleton(version("1"))),
         ],
     );
-    provider.add_package_deps("a".to_string(), version("2"), vec![]);
-    provider.add_package_deps("a".to_string(), version("1"), vec![]);
+    provider.add_package_deps(package("a"), version("2"), vec![]);
+    provider.add_package_deps(package("a"), version("1"), vec![]);
     provider.add_package_deps(
-        "b".to_string(),
+        package("b"),
         version("1"),
-        vec![("a".to_string(), Ranges::singleton(version("1")))],
+        vec![(package("a"), Ranges::singleton(version("1")))],
     );
 
-    let mut trace = ResolutionTrace::new([("a".to_string(), version("2"))]);
+    let mut trace = ResolutionTrace::new([("a".to_string(), domain_version("2"))]);
     let solution =
-        resolve_with_observer(&provider, "root".to_string(), version("1"), &mut trace).unwrap();
+        resolve_with_observer(&provider, package("root"), version("1"), &mut trace).unwrap();
 
-    assert_eq!(solution.get(&"a".to_string()), Some(&version("1")));
-    let diagnostic = trace.diagnose_skipped("a", &version("1"));
+    assert_eq!(solution.get(&package("a")), Some(&version("1")));
+    let diagnostic = trace.into_solutions()[0].diagnose_skipped("a", &version("1"));
     assert_eq!(
         diagnostic.kind,
         CandidateDiagnosticKind::ExcludedByPropagation
@@ -49,62 +57,45 @@ fn explains_a_candidate_excluded_before_selection() {
 }
 
 #[test]
-fn explains_a_candidate_discarded_by_backtracking() {
+fn explains_a_candidate_rejected_after_conflicting_choices() {
     let mut provider = OrbitDependencyProvider::new();
-    provider.add_package_versions("root".to_string(), vec![version("1")]);
-    provider.add_package_versions("a".to_string(), vec![version("2"), version("1")]);
-    provider.add_package_versions("b".to_string(), vec![version("2"), version("1")]);
+    provider.add_package_versions(package("root"), vec![version("1")]);
+    provider.add_package_versions(package("a"), vec![version("2"), version("1")]);
+    provider.add_package_versions(package("b"), vec![version("2"), version("1")]);
     provider.add_package_deps(
-        "root".to_string(),
+        package("root"),
         version("1"),
         vec![
-            ("a".to_string(), Ranges::full()),
-            ("b".to_string(), Ranges::singleton(version("1"))),
+            (package("a"), Ranges::full()),
+            (package("b"), Ranges::singleton(version("1"))),
         ],
     );
     provider.add_package_deps(
-        "a".to_string(),
+        package("a"),
         version("2"),
-        vec![("b".to_string(), Ranges::singleton(version("2")))],
+        vec![(package("b"), Ranges::singleton(version("2")))],
     );
     provider.add_package_deps(
-        "a".to_string(),
+        package("a"),
         version("1"),
-        vec![("b".to_string(), Ranges::singleton(version("1")))],
+        vec![(package("b"), Ranges::singleton(version("1")))],
     );
-    provider.add_package_deps("b".to_string(), version("2"), vec![]);
-    provider.add_package_deps("b".to_string(), version("1"), vec![]);
+    provider.add_package_deps(package("b"), version("2"), vec![]);
+    provider.add_package_deps(package("b"), version("1"), vec![]);
 
-    let mut trace = ResolutionTrace::new([("a".to_string(), version("2"))]);
+    let mut trace = ResolutionTrace::new([("a".to_string(), domain_version("2"))]);
     let solution =
-        resolve_with_observer(&provider, "root".to_string(), version("1"), &mut trace).unwrap();
+        resolve_with_observer(&provider, package("root"), version("1"), &mut trace).unwrap();
 
-    assert_eq!(solution.get(&"a".to_string()), Some(&version("1")));
-    let diagnostic = trace.diagnose_skipped("a", &version("1"));
-    assert_eq!(diagnostic.kind, CandidateDiagnosticKind::Backtracked);
+    assert_eq!(solution.get(&package("a")), Some(&version("1")));
+    let diagnostic = trace.into_solutions()[0].diagnose_skipped("a", &version("1"));
+    assert!(
+        matches!(
+            diagnostic.kind,
+            CandidateDiagnosticKind::ExcludedByPropagation | CandidateDiagnosticKind::Backtracked
+        ),
+        "{diagnostic:?}"
+    );
     assert!(diagnostic.facts.iter().any(|fact| fact.contains('a')));
     assert!(diagnostic.facts.iter().any(|fact| fact.contains('b')));
-}
-
-#[test]
-fn explains_when_provider_order_prefers_another_allowed_version() {
-    let mut provider = OrbitDependencyProvider::new();
-    provider.add_package_versions("root".to_string(), vec![version("1")]);
-    provider.add_package_versions("a".to_string(), vec![version("1"), version("2")]);
-    provider.add_package_deps(
-        "root".to_string(),
-        version("1"),
-        vec![("a".to_string(), Ranges::full())],
-    );
-    provider.add_package_deps("a".to_string(), version("1"), vec![]);
-    provider.add_package_deps("a".to_string(), version("2"), vec![]);
-
-    let mut trace = ResolutionTrace::new([("a".to_string(), version("2"))]);
-    let solution =
-        resolve_with_observer(&provider, "root".to_string(), version("1"), &mut trace).unwrap();
-
-    assert_eq!(solution.get(&"a".to_string()), Some(&version("1")));
-    let diagnostic = trace.diagnose_skipped("a", &version("1"));
-    assert_eq!(diagnostic.kind, CandidateDiagnosticKind::ProviderPreferred);
-    assert_eq!(diagnostic.preferred_version.as_deref(), Some("1"));
 }

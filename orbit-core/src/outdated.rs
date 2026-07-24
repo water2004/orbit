@@ -8,7 +8,9 @@ use crate::error::OrbitError;
 use crate::lockfile::{OrbitLockfile, PackageEntry};
 use crate::manifest::OrbitManifest;
 use crate::providers::{ModProvider, ResolvedMod};
-use crate::resolver::types::{CandidateDiagnostic, CandidateVersion};
+use crate::resolver::types::{
+    CandidateCatalog, CandidateDiagnostic, CandidateVersion, ResolutionSelector, ResolvedCandidates,
+};
 
 pub struct OutdatedMod {
     pub mod_id: String,
@@ -24,17 +26,6 @@ pub struct OutdatedReport {
     pub warnings: Vec<String>,
 }
 
-pub type ResolvedCandidateKey = (String, String);
-pub type ResolvedCandidates = HashMap<ResolvedCandidateKey, ResolvedMod>;
-
-#[derive(Default)]
-pub struct CandidateDownload {
-    pub candidates: HashMap<String, Vec<CandidateVersion>>,
-    pub resolved: ResolvedCandidates,
-    /// Provider 查询标识（slug 或 project_id）到 JAR 自声明 mod_id 的映射。
-    pub source_packages: HashMap<String, String>,
-}
-
 /// BFS 下载 JAR 并构建候选图、候选元数据和 provider 标识映射。
 /// 供 `install_mod` 和 `check_all_outdated` 共用。
 pub async fn download_candidates_bfs(
@@ -43,7 +34,7 @@ pub async fn download_candidates_bfs(
     lockfile: &OrbitLockfile,
     mc_version: &str,
     loader: &str,
-) -> Result<CandidateDownload, OrbitError> {
+) -> Result<CandidateCatalog, OrbitError> {
     let mut seen: HashSet<String> = HashSet::new();
     let mut to_download: Vec<ResolvedMod> = Vec::new();
     let mut queue: Vec<String> = seeds.to_vec();
@@ -111,12 +102,12 @@ pub async fn download_candidates_bfs(
         }));
     }
 
-    let mut download = CandidateDownload::default();
+    let mut download = CandidateCatalog::default();
     let mut first_error = None;
     for handle in handles {
         match handle.await {
             Ok(Ok(Some((package, candidate, resolved)))) => {
-                record_candidate(&mut download, package, candidate, resolved);
+                download.record(package, candidate, resolved);
             }
             Ok(Ok(None)) => {}
             Ok(Err(error)) => {
@@ -143,7 +134,7 @@ pub async fn download_candidates_with_fallback(
     lockfile: &OrbitLockfile,
     mc_version: &str,
     loader: &str,
-) -> Result<CandidateDownload, OrbitError> {
+) -> Result<CandidateCatalog, OrbitError> {
     for provider in providers {
         match download_candidates_bfs(provider.as_ref(), seeds, lockfile, mc_version, loader).await
         {
@@ -157,36 +148,12 @@ pub async fn download_candidates_with_fallback(
     ))
 }
 
-fn record_candidate(
-    download: &mut CandidateDownload,
-    package: String,
-    candidate: CandidateVersion,
-    resolved: ResolvedMod,
-) {
-    download
-        .source_packages
-        .insert(resolved.slug.clone(), package.clone());
-    download
-        .source_packages
-        .insert(resolved.mod_id.clone(), package.clone());
-    if let Some(project_id) = resolved.project_id() {
-        download.source_packages.insert(project_id, package.clone());
-    }
-    download
-        .resolved
-        .insert((package.clone(), candidate.jar_version.clone()), resolved);
-    download
-        .candidates
-        .entry(package)
-        .or_default()
-        .push(candidate);
-}
-
 /// 检查所有已安装平台模组的可用更新。
 pub async fn check_all_outdated(
     manifest: &OrbitManifest,
     lockfile: &OrbitLockfile,
     providers: &[Box<dyn ModProvider>],
+    selector: Option<ResolutionSelector>,
 ) -> Result<OutdatedReport, OrbitError> {
     let loader = &manifest.project.modloader;
     let mc_version = &manifest.project.mc_version;
@@ -237,8 +204,7 @@ pub async fn check_all_outdated(
     }
 
     // 2. Download candidates from each package's original provider, then solve once.
-    let mut candidates = HashMap::new();
-    let mut resolved = HashMap::new();
+    let mut catalog = CandidateCatalog::default();
     for (provider_name, seeds) in seeds_by_provider {
         let Some(provider) = crate::providers::find_provider(providers, &provider_name) else {
             continue;
@@ -246,26 +212,26 @@ pub async fn check_all_outdated(
         let download =
             download_candidates_bfs(provider, &seeds, lockfile, mc_version, loader).await?;
         for (package, versions) in download.candidates {
-            candidates
+            catalog
+                .candidates
                 .entry(package)
                 .or_insert_with(Vec::new)
                 .extend(versions);
         }
-        resolved.extend(download.resolved);
+        catalog.resolved.extend(download.resolved);
+        catalog.source_packages.extend(download.source_packages);
     }
-    if candidates.is_empty() {
+    if catalog.candidates.is_empty() {
         return Ok(OutdatedReport::default());
     }
 
     // 3. Resolve
-    let resolution = crate::resolver::resolve_with_candidates_report(
-        manifest,
-        lockfile,
-        &mut candidates,
-        providers,
-    )
-    .await
-    .map_err(|e| OrbitError::Other(anyhow::anyhow!("{e}")))?;
+    let portfolio =
+        crate::resolver::resolve_candidate_portfolio(manifest, lockfile, &mut catalog, providers)
+            .await
+            .map_err(|e| OrbitError::Other(anyhow::anyhow!("{e}")))?;
+    let resolution = crate::resolver::select_resolution(portfolio, selector)
+        .map_err(|e| OrbitError::Other(anyhow::anyhow!("{e}")))?;
 
     let mut updates: Vec<OutdatedMod> = resolution
         .upgrades
@@ -283,7 +249,7 @@ pub async fn check_all_outdated(
     updates.sort_by(|a, b| a.mod_id.cmp(&b.mod_id));
     Ok(OutdatedReport {
         updates,
-        resolved,
+        resolved: catalog.resolved,
         diagnostics: resolution.diagnostics,
         warnings: resolution.warnings,
     })
@@ -319,10 +285,9 @@ mod tests {
 
     #[test]
     fn candidate_catalog_uses_actual_package_and_version_as_its_key() {
-        let mut download = CandidateDownload::default();
+        let mut download = CandidateCatalog::default();
 
-        record_candidate(
-            &mut download,
+        download.record(
             "actual-a".to_string(),
             CandidateVersion {
                 jar_version: "1".to_string(),
@@ -335,8 +300,7 @@ mod tests {
             },
             resolved("source-a", "project-a"),
         );
-        record_candidate(
-            &mut download,
+        download.record(
             "actual-b".to_string(),
             CandidateVersion {
                 jar_version: "1".to_string(),
