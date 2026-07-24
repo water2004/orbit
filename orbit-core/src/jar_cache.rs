@@ -40,7 +40,11 @@ impl JarCache {
         } else {
             CacheIndex::default()
         };
-        Ok(Self { jar_dir, index, index_path })
+        Ok(Self {
+            jar_dir,
+            index,
+            index_path,
+        })
     }
 
     fn save(&self) -> Result<(), OrbitError> {
@@ -60,23 +64,38 @@ impl JarCache {
 
     /// 从缓存取字节，未命中返回 None
     pub fn get_bytes(&self, sha512: &str) -> Option<Vec<u8>> {
-        if sha512.is_empty() { return None; }
+        if sha512.is_empty() {
+            return None;
+        }
         let path = self.get_by_sha512(sha512)?;
         std::fs::read(&path).ok()
     }
 
     /// 存入 JAR 并更新三种哈希索引（哈希全部从 bytes 自算）
-    pub fn store_bytes(&mut self, sha512: &str, filename: &str, bytes: &[u8]) -> Result<(), OrbitError> {
-        if sha512.is_empty() { return Ok(()); }
+    pub fn store_bytes(
+        &mut self,
+        sha512: &str,
+        filename: &str,
+        bytes: &[u8],
+    ) -> Result<(), OrbitError> {
+        if sha512.is_empty() {
+            return Ok(());
+        }
         std::fs::create_dir_all(&self.jar_dir)?;
         let dest = self.jar_dir.join(filename);
         std::fs::write(&dest, bytes)?;
 
         let sha1 = crate::jar::sha1_digest(bytes);
         let sha256 = crate::jar::sha256_digest(bytes);
-        if !sha1.is_empty() { self.index.sha1.insert(sha1, filename.to_string()); }
-        if !sha256.is_empty() { self.index.sha256.insert(sha256, filename.to_string()); }
-        self.index.sha512.insert(sha512.to_string(), filename.to_string());
+        if !sha1.is_empty() {
+            self.index.sha1.insert(sha1, filename.to_string());
+        }
+        if !sha256.is_empty() {
+            self.index.sha256.insert(sha256, filename.to_string());
+        }
+        self.index
+            .sha512
+            .insert(sha512.to_string(), filename.to_string());
         self.save()
     }
 

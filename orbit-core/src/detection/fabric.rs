@@ -34,11 +34,13 @@ impl LoaderDetector for FabricDetector {
         let versions_dir = instance_dir.join("versions");
         if versions_dir.is_dir() {
             for entry in std::fs::read_dir(&versions_dir).map_err(|e| {
-                OrbitError::Other(anyhow::anyhow!("cannot read {}: {e}", versions_dir.display()))
+                OrbitError::Other(anyhow::anyhow!(
+                    "cannot read {}: {e}",
+                    versions_dir.display()
+                ))
             })? {
-                let entry = entry.map_err(|e| {
-                    OrbitError::Other(anyhow::anyhow!("cannot read entry: {e}"))
-                })?;
+                let entry = entry
+                    .map_err(|e| OrbitError::Other(anyhow::anyhow!("cannot read entry: {e}")))?;
                 if entry.path().is_dir() {
                     if let Some((ver, ev)) = scan_for_fabric(&entry.path()) {
                         return Ok(LoaderInfo {
@@ -89,9 +91,7 @@ fn scan_for_fabric(dir: &std::path::Path) -> Option<(String, Vec<String>)> {
 
         // libraries 中有 fabric-loader → 确凿证据 + 版本号
         if let Some(ver) = profile.find_library(FABRIC_GROUP, FABRIC_ARTIFACT) {
-            evidence.push(format!(
-                "found {FABRIC_GROUP}:{FABRIC_ARTIFACT}:{ver}"
-            ));
+            evidence.push(format!("found {FABRIC_GROUP}:{FABRIC_ARTIFACT}:{ver}"));
             return Some((ver, evidence));
         }
     }

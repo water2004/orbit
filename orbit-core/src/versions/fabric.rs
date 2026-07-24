@@ -76,7 +76,9 @@ impl SemanticVersion {
                 }
                 components[i] = WILDCARD;
                 has_wildcard = true;
-                if first_wildcard.is_none() { first_wildcard = Some(i); }
+                if first_wildcard.is_none() {
+                    first_wildcard = Some(i);
+                }
                 if i > 0 && components[i - 1] == WILDCARD {
                     // already wildcard, keep going
                 }
@@ -85,7 +87,9 @@ impl SemanticVersion {
                 if trimmed.is_empty() {
                     return Err("missing version component".into());
                 }
-                components[i] = trimmed.parse::<i32>().map_err(|_| format!("invalid component '{cs}'"))?;
+                components[i] = trimmed
+                    .parse::<i32>()
+                    .map_err(|_| format!("invalid component '{cs}'"))?;
                 if components[i] < 0 {
                     return Err(format!("negative component '{cs}'"));
                 }
@@ -102,7 +106,13 @@ impl SemanticVersion {
             }
         }
 
-        Ok(Self { raw: raw.to_string(), components, prerelease, build, has_wildcard })
+        Ok(Self {
+            raw: raw.to_string(),
+            components,
+            prerelease,
+            build,
+            has_wildcard,
+        })
     }
 
     fn component(&self, pos: usize) -> i32 {
@@ -115,7 +125,12 @@ impl SemanticVersion {
 
     pub fn bump(&self) -> Self {
         let mut new_v = self.clone();
-        if let Some(last) = new_v.components.iter_mut().filter(|x| **x != WILDCARD).last() {
+        if let Some(last) = new_v
+            .components
+            .iter_mut()
+            .filter(|x| **x != WILDCARD)
+            .last()
+        {
             *last = last.saturating_add(1);
         } else {
             new_v.components.push(1);
@@ -134,7 +149,9 @@ impl PartialEq for SemanticVersion {
 impl Eq for SemanticVersion {}
 
 impl PartialOrd for SemanticVersion {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> { Some(self.cmp(other)) }
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
 }
 
 impl Ord for SemanticVersion {
@@ -144,7 +161,9 @@ impl Ord for SemanticVersion {
         for i in 0..max {
             let a = self.component(i);
             let b = other.component(i);
-            if a == WILDCARD || b == WILDCARD { continue; }
+            if a == WILDCARD || b == WILDCARD {
+                continue;
+            }
             match a.cmp(&b) {
                 Ordering::Equal => continue,
                 o => return o,
@@ -153,8 +172,20 @@ impl Ord for SemanticVersion {
         // 2. prerelease
         match (&self.prerelease, &other.prerelease) {
             (Some(pa), Some(pb)) => compare_prerelease(pa, pb),
-            (Some(_), None) => if other.has_wildcard { Ordering::Equal } else { Ordering::Less },
-            (None, Some(_)) => if self.has_wildcard { Ordering::Equal } else { Ordering::Greater },
+            (Some(_), None) => {
+                if other.has_wildcard {
+                    Ordering::Equal
+                } else {
+                    Ordering::Less
+                }
+            }
+            (None, Some(_)) => {
+                if self.has_wildcard {
+                    Ordering::Equal
+                } else {
+                    Ordering::Greater
+                }
+            }
             (None, None) => Ordering::Equal,
         }
     }
@@ -175,11 +206,17 @@ fn compare_prerelease(a: &str, b: &str) -> Ordering {
                             Ordering::Equal => {}
                             o => return o,
                         }
-                        match pa.cmp(pb) { Ordering::Equal => {}, o => return o }
+                        match pa.cmp(pb) {
+                            Ordering::Equal => {}
+                            o => return o,
+                        }
                     }
                     (true, false) => return Ordering::Less,
                     (false, true) => return Ordering::Greater,
-                    (false, false) => match pa.cmp(pb) { Ordering::Equal => {}, o => return o },
+                    (false, false) => match pa.cmp(pb) {
+                        Ordering::Equal => {}
+                        o => return o,
+                    },
                 }
             }
             (Some(_), None) => return Ordering::Greater,
@@ -190,10 +227,11 @@ fn compare_prerelease(a: &str, b: &str) -> Ordering {
 }
 
 fn is_dot_separated_id(s: &str) -> bool {
-    if s.is_empty() { return true; }
-    s.split('.').all(|part| {
-        !part.is_empty() && part.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
-    })
+    if s.is_empty() {
+        return true;
+    }
+    s.split('.')
+        .all(|part| !part.is_empty() && part.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'))
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -242,10 +280,14 @@ fn satisfies_single(version: &SemanticVersion, predicate: &str) -> bool {
             has_wildcard: false,
         };
         // 检查下界: >= lower
-        if version.cmp(&ref_ver) == Ordering::Less { return false; }
+        if version.cmp(&ref_ver) == Ordering::Less {
+            return false;
+        }
         // 检查上界: < upper (bump last component)
         let mut upper = ref_ver.clone();
-        if let Some(last) = upper.components.last_mut() { *last += 1; }
+        if let Some(last) = upper.components.last_mut() {
+            *last += 1;
+        }
         return version.cmp(&upper) == Ordering::Less;
     }
 
@@ -257,10 +299,7 @@ fn satisfies_single(version: &SemanticVersion, predicate: &str) -> bool {
                 && version.component(0) == ref_ver.component(0)
                 && version.component(1) == ref_ver.component(1)
         }
-        "^" => {
-            version >= &ref_ver
-                && version.component(0) == ref_ver.component(0)
-        }
+        "^" => version >= &ref_ver && version.component(0) == ref_ver.component(0),
         ">=" => version >= &ref_ver,
         ">" => version > &ref_ver,
         "<=" => version <= &ref_ver,
@@ -284,8 +323,8 @@ fn parse_operator(predicate: &str) -> (&str, &str) {
 // 测试
 // ═══════════════════════════════════════════════════════════════
 
-use pubgrub::Ranges;
 use super::Version;
+use pubgrub::Ranges;
 
 pub fn parse_constraint(constraint: &str) -> Ranges<Version> {
     let mut final_range: Option<Ranges<Version>> = None;
@@ -311,10 +350,10 @@ pub fn parse_constraint(constraint: &str) -> Ranges<Version> {
                 let r = match op {
                     ">=" => Ranges::higher_than(Version::Fabric(ref_ver)),
                     "<=" => Ranges::strictly_lower_than(Version::Fabric(ref_ver.bump())),
-                    ">"  => Ranges::higher_than(Version::Fabric(ref_ver.bump())),
-                    "<"  => Ranges::strictly_lower_than(Version::Fabric(ref_ver)),
-                    "="  => Ranges::singleton(Version::Fabric(ref_ver)),
-                    "~"  => {
+                    ">" => Ranges::higher_than(Version::Fabric(ref_ver.bump())),
+                    "<" => Ranges::strictly_lower_than(Version::Fabric(ref_ver)),
+                    "=" => Ranges::singleton(Version::Fabric(ref_ver)),
+                    "~" => {
                         let lower = Version::Fabric(ref_ver.clone());
                         let mut upper_comp = ref_ver.components.clone();
                         if upper_comp.len() >= 2 {
@@ -335,7 +374,7 @@ pub fn parse_constraint(constraint: &str) -> Ranges<Version> {
                         upper_ver.raw = format!("{}~upper", ref_ver.raw);
                         Ranges::between(lower, Version::Fabric(upper_ver))
                     }
-                    "^"  => {
+                    "^" => {
                         let lower = Version::Fabric(ref_ver.clone());
                         let mut upper_comp = ref_ver.components.clone();
                         if !upper_comp.is_empty() {
@@ -365,7 +404,8 @@ pub fn parse_constraint(constraint: &str) -> Ranges<Version> {
                 };
                 group_range = group_range.intersection(&r);
             } else {
-                group_range = group_range.intersection(&Ranges::singleton(Version::Generic(combined.clone())));
+                group_range = group_range
+                    .intersection(&Ranges::singleton(Version::Generic(combined.clone())));
             }
         }
 
@@ -383,7 +423,9 @@ pub fn parse_constraint(constraint: &str) -> Ranges<Version> {
 mod tests {
     use super::*;
 
-    fn v(s: &str) -> SemanticVersion { SemanticVersion::parse(s, true).unwrap() }
+    fn v(s: &str) -> SemanticVersion {
+        SemanticVersion::parse(s, true).unwrap()
+    }
 
     #[test]
     fn test_parse_basic() {

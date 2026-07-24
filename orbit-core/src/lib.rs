@@ -10,33 +10,35 @@ pub mod detection;
 pub mod error;
 pub mod identification;
 pub mod init;
-pub mod manifest;
-pub mod lockfile;
 pub mod jar;
+pub mod lockfile;
+pub mod manifest;
 pub mod metadata;
 pub mod providers;
 pub mod versions;
 
 // 业务逻辑模块（逐步实现中）
+pub mod checker;
+pub mod installer;
+pub mod jar_cache;
+pub mod outdated;
+pub mod purge;
 pub mod resolver;
 pub mod sync;
-pub mod installer;
-pub mod checker;
-pub mod purge;
 pub mod workspace;
-pub mod outdated;
-pub mod jar_cache;
 
-pub use config::{GlobalConfig, InstancesRegistry, InstanceEntry, orbit_data_dir, config_path};
-pub use workspace::{ManifestFile, Lockfile};
+pub use config::{GlobalConfig, InstanceEntry, InstancesRegistry, config_path, orbit_data_dir};
 pub use detection::LoaderDetectionService;
 pub use error::OrbitError;
-pub use manifest::OrbitManifest;
-pub use lockfile::{OrbitLockfile, PackageEntry, ModrinthInfo, FileInfo, LockMeta, LockDependency, ImplantedMod};
-pub use metadata::{ModLoader, mojang::McVersion};
-pub use providers::ModProvider;
 pub use installer::{
-    install_to_instance, remove_from_instance, list_dependencies, list_installed, upgrade_all_in_instance,
-    InstallReport, RemoveReport, InstalledMod, ListOutput, ListedPackage,
+    InstallReport, InstalledMod, ListOutput, ListedPackage, RemoveReport, install_to_instance,
+    list_dependencies, list_installed, remove_from_instance, upgrade_all_in_instance,
 };
-pub use outdated::{check_all_outdated, OutdatedMod};
+pub use lockfile::{
+    FileInfo, ImplantedMod, LockDependency, LockMeta, ModrinthInfo, OrbitLockfile, PackageEntry,
+};
+pub use manifest::OrbitManifest;
+pub use metadata::{ModLoader, mojang::McVersion};
+pub use outdated::{OutdatedMod, check_all_outdated};
+pub use providers::ModProvider;
+pub use workspace::{Lockfile, ManifestFile};

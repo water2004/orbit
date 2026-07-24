@@ -1,7 +1,7 @@
-use anyhow::{Context, Result};
-use orbit_core::{list_installed, OrbitManifest};
-use std::collections::{HashMap, HashSet};
 use super::CliContext;
+use anyhow::{Context, Result};
+use orbit_core::{OrbitManifest, list_installed};
+use std::collections::{HashMap, HashSet};
 
 pub async fn handle(tree: bool, _target: Option<String>, _ctx: &CliContext) -> Result<()> {
     let dir = std::env::current_dir().context("failed to get current directory")?;
@@ -34,16 +34,15 @@ fn print_flat(output: &orbit_core::ListOutput) {
 
 fn print_tree(dir: &std::path::Path, output: &orbit_core::ListOutput) -> Result<()> {
     // 构建 mod_id → Package 的索引
-    let index: HashMap<&str, &orbit_core::ListedPackage> = output.packages.iter()
+    let index: HashMap<&str, &orbit_core::ListedPackage> = output
+        .packages
+        .iter()
         .map(|p| (p.mod_id.as_str(), p))
         .collect();
 
     // 找出顶层包：在 manifest 中声明的
-    let manifest = OrbitManifest::from_dir(dir)
-        .context("failed to read orbit.toml")?;
-    let top_level: Vec<&str> = manifest.dependencies.keys()
-        .map(|k| k.as_str())
-        .collect();
+    let manifest = OrbitManifest::from_dir(dir).context("failed to read orbit.toml")?;
+    let top_level: Vec<&str> = manifest.dependencies.keys().map(|k| k.as_str()).collect();
 
     let mut visited = HashSet::new();
 
@@ -84,7 +83,9 @@ fn print_node(
         println!("{prefix}  + embedded: {name} v{ver}");
     }
 
-    let deps: Vec<&str> = pkg.dependencies.iter()
+    let deps: Vec<&str> = pkg
+        .dependencies
+        .iter()
         .filter(|d| index.contains_key(d.as_str()))
         .map(|d| d.as_str())
         .collect();
@@ -112,7 +113,9 @@ fn print_children(
         return;
     }
 
-    let deps: Vec<&str> = pkg.dependencies.iter()
+    let deps: Vec<&str> = pkg
+        .dependencies
+        .iter()
         .filter(|d| index.contains_key(d.as_str()))
         .map(|d| d.as_str())
         .collect();

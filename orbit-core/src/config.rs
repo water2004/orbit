@@ -83,7 +83,11 @@ pub struct CoreConfig {
 
 impl Default for CoreConfig {
     fn default() -> Self {
-        Self { default_instance: None, max_concurrent_downloads: 8, language: "en".into() }
+        Self {
+            default_instance: None,
+            max_concurrent_downloads: 8,
+            language: "en".into(),
+        }
     }
 }
 
@@ -98,7 +102,11 @@ pub struct NetworkConfig {
 
 impl Default for NetworkConfig {
     fn default() -> Self {
-        Self { timeout: 30, max_retries: 3, proxy: None }
+        Self {
+            timeout: 30,
+            max_retries: 3,
+            proxy: None,
+        }
     }
 }
 
@@ -132,7 +140,12 @@ impl CacheConfig {
 
 impl Default for CacheConfig {
     fn default() -> Self {
-        Self { enable: true, dir: None, eviction_policy: "size".into(), max_size_gb: 5.0 }
+        Self {
+            enable: true,
+            dir: None,
+            eviction_policy: "size".into(),
+            max_size_gb: 5.0,
+        }
     }
 }
 
@@ -146,20 +159,41 @@ pub struct UiConfig {
 
 impl Default for UiConfig {
     fn default() -> Self {
-        Self { color: "auto".into(), progress_bar: "modern".into() }
+        Self {
+            color: "auto".into(),
+            progress_bar: "modern".into(),
+        }
     }
 }
 
 // 辅助默认值函数
-fn default_max_downloads() -> usize { 8 }
-fn default_language() -> String { "en".into() }
-fn default_timeout() -> u64 { 30 }
-fn default_max_retries() -> u32 { 3 }
-fn default_true() -> bool { true }
-fn default_eviction_policy() -> String { "size".into() }
-fn default_max_size() -> f64 { 5.0 }
-fn default_color() -> String { "auto".into() }
-fn default_progress_bar() -> String { "modern".into() }
+fn default_max_downloads() -> usize {
+    8
+}
+fn default_language() -> String {
+    "en".into()
+}
+fn default_timeout() -> u64 {
+    30
+}
+fn default_max_retries() -> u32 {
+    3
+}
+fn default_true() -> bool {
+    true
+}
+fn default_eviction_policy() -> String {
+    "size".into()
+}
+fn default_max_size() -> f64 {
+    5.0
+}
+fn default_color() -> String {
+    "auto".into()
+}
+fn default_progress_bar() -> String {
+    "modern".into()
+}
 
 impl Default for GlobalConfig {
     fn default() -> Self {
@@ -200,10 +234,14 @@ impl GlobalConfig {
             config.network.proxy = Some(v);
         }
         if let Ok(v) = std::env::var("ORBIT_TIMEOUT") {
-            if let Ok(n) = v.parse() { config.network.timeout = n; }
+            if let Ok(n) = v.parse() {
+                config.network.timeout = n;
+            }
         }
         if let Ok(v) = std::env::var("ORBIT_RETRIES") {
-            if let Ok(n) = v.parse() { config.network.max_retries = n; }
+            if let Ok(n) = v.parse() {
+                config.network.max_retries = n;
+            }
         }
         if let Ok(v) = std::env::var("ORBIT_LANGUAGE") {
             config.core.language = v;
@@ -264,9 +302,8 @@ impl InstancesRegistry {
         if !path.exists() {
             return Ok(Self::default());
         }
-        let content = std::fs::read_to_string(&path).map_err(|_| {
-            OrbitError::Other(anyhow::anyhow!("failed to read instances.toml"))
-        })?;
+        let content = std::fs::read_to_string(&path)
+            .map_err(|_| OrbitError::Other(anyhow::anyhow!("failed to read instances.toml")))?;
         let registry: Self = toml::from_str(&content).map_err(|e| {
             OrbitError::Other(anyhow::anyhow!("failed to parse instances.toml: {e}"))
         })?;
@@ -328,9 +365,12 @@ proxy = "http://127.0.0.1:7890"
 "#;
         let config: GlobalConfig = toml::from_str(toml_str).unwrap();
         assert_eq!(config.core.language, "zh-CN");
-        assert_eq!(config.network.proxy.as_deref(), Some("http://127.0.0.1:7890"));
-        assert_eq!(config.network.timeout, 30);      // 未指定 → 默认值
-        assert!(config.cache.enable);                 // 未指定 → 默认值
+        assert_eq!(
+            config.network.proxy.as_deref(),
+            Some("http://127.0.0.1:7890")
+        );
+        assert_eq!(config.network.timeout, 30); // 未指定 → 默认值
+        assert!(config.cache.enable); // 未指定 → 默认值
     }
 
     #[test]

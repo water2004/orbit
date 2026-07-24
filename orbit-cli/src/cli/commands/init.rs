@@ -1,8 +1,8 @@
+use super::CliContext;
 use anyhow::Result;
 use orbit_core::detection::LoaderDetectionService;
-use orbit_core::init::{detect_mc_version, InitInput, run_init};
+use orbit_core::init::{InitInput, detect_mc_version, run_init};
 use orbit_core::providers::create_providers_default;
-use super::CliContext;
 
 pub async fn handle(
     name: String,
@@ -18,7 +18,11 @@ pub async fn handle(
         Some(v) => v,
         None => match detect_mc_version(&instance_dir) {
             Ok(ver) => {
-                println!("✓ Detected Minecraft version: {} ({})", ver.id, if ver.stable { "stable" } else { "snapshot" });
+                println!(
+                    "✓ Detected Minecraft version: {} ({})",
+                    ver.id,
+                    if ver.stable { "stable" } else { "snapshot" }
+                );
                 ver.id
             }
             Err(_) => prompt_mc_version()?,
@@ -78,11 +82,18 @@ pub async fn handle(
         output.manifest.project.mc_version
     );
     println!("  orbit.toml created");
-    println!("  orbit.lock created ({} entries)", output.scanned_mods.len());
+    println!(
+        "  orbit.lock created ({} entries)",
+        output.scanned_mods.len()
+    );
     if output.scanned_mods.is_empty() {
         println!("  No mods found in mods/ directory.");
     } else {
-        let identified = output.scanned_mods.iter().filter(|m| m.mod_id.is_some()).count();
+        let identified = output
+            .scanned_mods
+            .iter()
+            .filter(|m| m.mod_id.is_some())
+            .count();
         let unknown = output.scanned_mods.len() - identified;
         println!(
             "  Scanned {} mods ({} identified, {} unknown)",
@@ -98,9 +109,7 @@ pub async fn handle(
 
 // ── 交互式辅助 ──────────────────────────────────
 
-fn select_loader_interactive(
-    service: &LoaderDetectionService,
-) -> Result<(String, &'static str)> {
+fn select_loader_interactive(service: &LoaderDetectionService) -> Result<(String, &'static str)> {
     let loaders = service.known_loaders();
     if loaders.is_empty() {
         anyhow::bail!("no modloaders available for detection");

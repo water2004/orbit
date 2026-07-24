@@ -6,10 +6,12 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use crate::error::OrbitError;
-use crate::lockfile::{LockDependency, LockMeta, OrbitLockfile, PackageEntry, ModrinthInfo, FileInfo};
+use crate::lockfile::{
+    FileInfo, LockDependency, LockMeta, ModrinthInfo, OrbitLockfile, PackageEntry,
+};
 use crate::manifest::{DependencySpec, OrbitManifest};
 use crate::providers::{ModProvider, ResolvedMod};
-use crate::workspace::{ManifestFile, Lockfile};
+use crate::workspace::{Lockfile, ManifestFile};
 
 fn download_client() -> reqwest::Client {
     reqwest::Client::builder()
@@ -59,18 +61,33 @@ pub async fn install_to_instance(
     prompt_fn: Option<Box<dyn FnOnce(&InstallReport) -> bool + Send>>,
 ) -> Result<InstallReport, OrbitError> {
     let mut manifest_file = ManifestFile::open(instance_dir)?;
-    let mut lock = Lockfile::open_or_default(instance_dir, LockMeta {
-        mc_version: manifest_file.inner.project.mc_version.clone(),
-        modloader: manifest_file.inner.project.modloader.clone(),
-        modloader_version: manifest_file.inner.project.modloader_version.clone(),
-    });
+    let mut lock = Lockfile::open_or_default(
+        instance_dir,
+        LockMeta {
+            mc_version: manifest_file.inner.project.mc_version.clone(),
+            modloader: manifest_file.inner.project.modloader.clone(),
+            modloader_version: manifest_file.inner.project.modloader_version.clone(),
+        },
+    );
 
     let mods_dir = instance_dir.join("mods");
     if !mods_dir.exists() && !dry_run {
         std::fs::create_dir_all(&mods_dir).map_err(OrbitError::Io)?;
     }
 
-    let report = install_mod(slug, constraint, &providers[..], &mut manifest_file.inner, &mut lock.inner, &mods_dir, no_deps, existing_ok, dry_run, prompt_fn).await?;
+    let report = install_mod(
+        slug,
+        constraint,
+        &providers[..],
+        &mut manifest_file.inner,
+        &mut lock.inner,
+        &mods_dir,
+        no_deps,
+        existing_ok,
+        dry_run,
+        prompt_fn,
+    )
+    .await?;
 
     if !dry_run && !report.installed.is_empty() {
         manifest_file.save()?;
@@ -88,44 +105,77 @@ pub async fn upgrade_all_in_instance(
     prompt_fn: Option<Box<dyn FnOnce(&InstallReport) -> bool + Send>>,
 ) -> Result<InstallReport, OrbitError> {
     let mut manifest_file = ManifestFile::open(instance_dir)?;
-    let mut lock = Lockfile::open_or_default(instance_dir, LockMeta {
-        mc_version: manifest_file.inner.project.mc_version.clone(),
-        modloader: manifest_file.inner.project.modloader.clone(),
-        modloader_version: manifest_file.inner.project.modloader_version.clone(),
-    });
+    let mut lock = Lockfile::open_or_default(
+        instance_dir,
+        LockMeta {
+            mc_version: manifest_file.inner.project.mc_version.clone(),
+            modloader: manifest_file.inner.project.modloader.clone(),
+            modloader_version: manifest_file.inner.project.modloader_version.clone(),
+        },
+    );
 
-    let (outdated, jar_ver_to_v) = crate::outdated::check_all_outdated(&manifest_file.inner, &lock.inner, providers).await?;
-    
+    let (outdated, jar_ver_to_v) =
+        crate::outdated::check_all_outdated(&manifest_file.inner, &lock.inner, providers).await?;
+
     if outdated.is_empty() {
-        return Ok(InstallReport { installed: vec![], already_satisfied: vec![], skipped_optional: vec![] });
+        return Ok(InstallReport {
+            installed: vec![],
+            already_satisfied: vec![],
+            skipped_optional: vec![],
+        });
     }
 
     let mods_dir = instance_dir.join("mods");
     if !mods_dir.exists() && !dry_run {
         std::fs::create_dir_all(&mods_dir).map_err(OrbitError::Io)?;
     }
-    
+
     let loader = &manifest_file.inner.project.modloader;
     let mut planned = Vec::new();
-    
+
     for o in &outdated {
-        let Some(resolved) = jar_ver_to_v.get(&o.new_version) else { continue };
+        let Some(resolved) = jar_ver_to_v.get(&o.new_version) else {
+            continue;
+        };
         planned.push(InstalledMod {
-            slug: resolved.slug.clone(), mod_id: o.mod_id.clone(), version: o.new_version.clone(),
-            filename: resolved.filename.clone(), provider: resolved.provider.clone(),
-            project_id: resolved.modrinth.as_ref().map(|mr| mr.project_id.clone()).unwrap_or_default(),
-            version_id: resolved.modrinth.as_ref().map(|mr| mr.version_id.clone()).unwrap_or_default(),
-            modrinth_version: resolved.modrinth.as_ref().map(|mr| mr.version_number.clone()).unwrap_or_default(),
+            slug: resolved.slug.clone(),
+            mod_id: o.mod_id.clone(),
+            version: o.new_version.clone(),
+            filename: resolved.filename.clone(),
+            provider: resolved.provider.clone(),
+            project_id: resolved
+                .modrinth
+                .as_ref()
+                .map(|mr| mr.project_id.clone())
+                .unwrap_or_default(),
+            version_id: resolved
+                .modrinth
+                .as_ref()
+                .map(|mr| mr.version_id.clone())
+                .unwrap_or_default(),
+            modrinth_version: resolved
+                .modrinth
+                .as_ref()
+                .map(|mr| mr.version_number.clone())
+                .unwrap_or_default(),
             jar_deps: vec![],
             implanted: vec![],
         });
     }
 
-    let report = InstallReport { installed: planned.clone(), already_satisfied: vec![], skipped_optional: vec![] };
+    let report = InstallReport {
+        installed: planned.clone(),
+        already_satisfied: vec![],
+        skipped_optional: vec![],
+    };
 
     if let Some(prompt) = prompt_fn {
         if !prompt(&report) {
-            return Ok(InstallReport { installed: vec![], already_satisfied: vec![], skipped_optional: vec![] }); // aborted
+            return Ok(InstallReport {
+                installed: vec![],
+                already_satisfied: vec![],
+                skipped_optional: vec![],
+            }); // aborted
         }
     }
 
@@ -135,36 +185,68 @@ pub async fn upgrade_all_in_instance(
 
     let mut installed = Vec::new();
     for mut plan in planned {
-        let Some(resolved) = jar_ver_to_v.get(&plan.version).cloned() else { continue };
+        let Some(resolved) = jar_ver_to_v.get(&plan.version).cloned() else {
+            continue;
+        };
         let dest_path = download_mod(&resolved, &mods_dir).await?;
         let meta = crate::jar::read_mod_metadata(&dest_path, loader)?;
 
-        plan.mod_id = if meta.mod_id.is_empty() { plan.mod_id } else { meta.mod_id };
-        plan.version = if meta.version.is_empty() { plan.version } else { meta.version };
+        plan.mod_id = if meta.mod_id.is_empty() {
+            plan.mod_id
+        } else {
+            meta.mod_id
+        };
+        plan.version = if meta.version.is_empty() {
+            plan.version
+        } else {
+            meta.version
+        };
         plan.jar_deps = meta.dependencies;
-        plan.implanted = meta.implanted_mods.into_iter().map(|im| {
-            crate::lockfile::ImplantedMod {
-                name: if !im.mod_id.is_empty() { im.mod_id } else { im.name },
+        plan.implanted = meta
+            .implanted_mods
+            .into_iter()
+            .map(|im| crate::lockfile::ImplantedMod {
+                name: if !im.mod_id.is_empty() {
+                    im.mod_id
+                } else {
+                    im.name
+                },
                 version: im.version,
                 sha256: String::new(),
                 filename: String::new(),
-                dependencies: im.dependencies.into_iter()
-                    .filter(|(n, _, req)| *req && n != "java" && n != "mixinextras" && n != "minecraft" && n != "fabricloader")
+                dependencies: im
+                    .dependencies
+                    .into_iter()
+                    .filter(|(n, _, req)| {
+                        *req && n != "java"
+                            && n != "mixinextras"
+                            && n != "minecraft"
+                            && n != "fabricloader"
+                    })
                     .map(|(name, version, _)| crate::lockfile::LockDependency { name, version })
                     .collect(),
-            }
-        }).collect();
+            })
+            .collect();
         installed.push(plan);
     }
 
-    apply_to_manifest_and_lock(&mut manifest_file.inner, &mut lock.inner, &installed, &mods_dir);
+    apply_to_manifest_and_lock(
+        &mut manifest_file.inner,
+        &mut lock.inner,
+        &installed,
+        &mods_dir,
+    );
 
     if !installed.is_empty() {
         manifest_file.save()?;
         lock.save()?;
     }
 
-    Ok(InstallReport { installed, already_satisfied: vec![], skipped_optional: vec![] })
+    Ok(InstallReport {
+        installed,
+        already_satisfied: vec![],
+        skipped_optional: vec![],
+    })
 }
 
 /// 顶层 API：从指定实例目录移除模组。
@@ -187,7 +269,10 @@ pub fn remove_from_instance(
     if !manifest_file.inner.dependencies.contains_key(&key) {
         return Err(OrbitError::ModNotFound(input.to_string()));
     }
-    manifest_file.inner.dependencies.swap_remove(&key)
+    manifest_file
+        .inner
+        .dependencies
+        .swap_remove(&key)
         .expect("dependency entry should exist");
 
     let dependents = crate::resolver::dependents(&key, &lock.inner.packages);
@@ -224,14 +309,20 @@ pub struct RemoveReport {
 pub fn list_dependencies(instance_dir: &Path) -> Result<Vec<(String, String)>, OrbitError> {
     let manifest_file = ManifestFile::open(instance_dir)?;
     let lock = Lockfile::open(instance_dir).ok();
-    Ok(manifest_file.inner.dependencies.iter().map(|(k, _)| {
-        let slug = lock.as_ref()
-            .and_then(|l| l.find(k))
-            .and_then(|e| e.modrinth.as_ref())
-            .map(|m| m.slug.clone())
-            .unwrap_or_else(|| k.clone());
-        (k.clone(), slug)
-    }).collect())
+    Ok(manifest_file
+        .inner
+        .dependencies
+        .iter()
+        .map(|(k, _)| {
+            let slug = lock
+                .as_ref()
+                .and_then(|l| l.find(k))
+                .and_then(|e| e.modrinth.as_ref())
+                .map(|m| m.slug.clone())
+                .unwrap_or_else(|| k.clone());
+            (k.clone(), slug)
+        })
+        .collect())
 }
 
 /// `orbit list` 输出结构
@@ -255,16 +346,23 @@ pub struct ListedPackage {
 /// 读取 lockfile 中所有已安装模组供 list 命令展示。
 pub fn list_installed(instance_dir: &Path) -> Result<ListOutput, OrbitError> {
     let lock = Lockfile::open(instance_dir)?;
-    let packages: Vec<ListedPackage> = lock.inner.packages.iter().map(|e| {
-        ListedPackage {
+    let packages: Vec<ListedPackage> = lock
+        .inner
+        .packages
+        .iter()
+        .map(|e| ListedPackage {
             mod_id: e.mod_id.clone(),
             version: e.version.clone(),
             slug: e.modrinth.as_ref().map(|m| m.slug.clone()),
             provider: e.provider.clone(),
             dependencies: e.dependencies.iter().map(|d| d.name.clone()).collect(),
-            implanted: e.implanted.iter().map(|i| (i.name.clone(), i.version.clone())).collect(),
-        }
-    }).collect();
+            implanted: e
+                .implanted
+                .iter()
+                .map(|i| (i.name.clone(), i.version.clone()))
+                .collect(),
+        })
+        .collect();
     Ok(ListOutput { packages })
 }
 
@@ -294,10 +392,16 @@ async fn install_mod(
     // 1-2. BFS download all JARs
     let seeds = vec![slug.to_string()];
     let (mut candidates, jar_ver_to_v_owned) = crate::outdated::download_candidates_bfs(
-        providers[0].as_ref(), &seeds, lockfile, mc_version, loader
-    ).await?;
+        providers[0].as_ref(),
+        &seeds,
+        lockfile,
+        mc_version,
+        loader,
+    )
+    .await?;
     // Convert String→ResolvedMod to &ResolvedMod for compatibility
-    let jar_ver_to_v: HashMap<String, &ResolvedMod> = jar_ver_to_v_owned.iter()
+    let jar_ver_to_v: HashMap<String, &ResolvedMod> = jar_ver_to_v_owned
+        .iter()
         .map(|(k, v)| (k.clone(), v))
         .collect();
     if candidates.is_empty() {
@@ -305,8 +409,18 @@ async fn install_mod(
     }
 
     // 3. Resolve offline
-    eprintln!("  resolving with {} mod(s) in candidates...", candidates.len());
-    let upgrades = match crate::resolver::resolve_with_candidates(manifest, lockfile, &mut candidates, providers).await {
+    eprintln!(
+        "  resolving with {} mod(s) in candidates...",
+        candidates.len()
+    );
+    let upgrades = match crate::resolver::resolve_with_candidates(
+        manifest,
+        lockfile,
+        &mut candidates,
+        providers,
+    )
+    .await
+    {
         Ok(u) => {
             eprintln!("  resolved: {:?}", u);
             u
@@ -319,29 +433,59 @@ async fn install_mod(
     let mut already_satisfied = Vec::new();
 
     for (mod_id, new_ver) in &upgrades {
-        let Some(resolved) = jar_ver_to_v.get(new_ver).copied() else { continue };
+        let Some(resolved) = jar_ver_to_v.get(new_ver).copied() else {
+            continue;
+        };
 
         if let Some(existing) = crate::resolver::find_entry(mod_id, &lockfile.packages) {
-            if existing.version == *new_ver { already_satisfied.push(mod_id.clone()); continue; }
+            if existing.version == *new_ver {
+                already_satisfied.push(mod_id.clone());
+                continue;
+            }
         }
-        if no_deps && mod_id != slug { continue; }
+        if no_deps && mod_id != slug {
+            continue;
+        }
 
         planned.push(InstalledMod {
-            slug: resolved.slug.clone(), mod_id: mod_id.clone(), version: new_ver.clone(),
-            filename: resolved.filename.clone(), provider: resolved.provider.clone(),
-            project_id: resolved.modrinth.as_ref().map(|mr| mr.project_id.clone()).unwrap_or_default(),
-            version_id: resolved.modrinth.as_ref().map(|mr| mr.version_id.clone()).unwrap_or_default(),
-            modrinth_version: resolved.modrinth.as_ref().map(|mr| mr.version_number.clone()).unwrap_or_default(),
+            slug: resolved.slug.clone(),
+            mod_id: mod_id.clone(),
+            version: new_ver.clone(),
+            filename: resolved.filename.clone(),
+            provider: resolved.provider.clone(),
+            project_id: resolved
+                .modrinth
+                .as_ref()
+                .map(|mr| mr.project_id.clone())
+                .unwrap_or_default(),
+            version_id: resolved
+                .modrinth
+                .as_ref()
+                .map(|mr| mr.version_id.clone())
+                .unwrap_or_default(),
+            modrinth_version: resolved
+                .modrinth
+                .as_ref()
+                .map(|mr| mr.version_number.clone())
+                .unwrap_or_default(),
             jar_deps: vec![],
             implanted: vec![],
         });
     }
 
-    let report = InstallReport { installed: planned.clone(), already_satisfied: already_satisfied.clone(), skipped_optional: vec![] };
+    let report = InstallReport {
+        installed: planned.clone(),
+        already_satisfied: already_satisfied.clone(),
+        skipped_optional: vec![],
+    };
 
     if let Some(prompt) = prompt_fn {
         if !prompt(&report) {
-            return Ok(InstallReport { installed: vec![], already_satisfied, skipped_optional: vec![] }); // aborted
+            return Ok(InstallReport {
+                installed: vec![],
+                already_satisfied,
+                skipped_optional: vec![],
+            }); // aborted
         }
     }
 
@@ -359,31 +503,58 @@ async fn install_mod(
                 }
             }
         }
-        let Some(resolved) = jar_ver_to_v.get(&plan.version).copied() else { continue };
+        let Some(resolved) = jar_ver_to_v.get(&plan.version).copied() else {
+            continue;
+        };
         let dest_path = download_mod(resolved, mods_dir).await?;
         let meta = crate::jar::read_mod_metadata(&dest_path, loader)?;
 
-        plan.mod_id = if meta.mod_id.is_empty() { plan.mod_id } else { meta.mod_id };
-        plan.version = if meta.version.is_empty() { plan.version } else { meta.version };
+        plan.mod_id = if meta.mod_id.is_empty() {
+            plan.mod_id
+        } else {
+            meta.mod_id
+        };
+        plan.version = if meta.version.is_empty() {
+            plan.version
+        } else {
+            meta.version
+        };
         plan.jar_deps = meta.dependencies;
-        plan.implanted = meta.implanted_mods.into_iter().map(|im| {
-            crate::lockfile::ImplantedMod {
-                name: if !im.mod_id.is_empty() { im.mod_id } else { im.name },
+        plan.implanted = meta
+            .implanted_mods
+            .into_iter()
+            .map(|im| crate::lockfile::ImplantedMod {
+                name: if !im.mod_id.is_empty() {
+                    im.mod_id
+                } else {
+                    im.name
+                },
                 version: im.version,
                 sha256: String::new(),
                 filename: String::new(),
-                dependencies: im.dependencies.into_iter()
-                    .filter(|(n, _, req)| *req && n != "java" && n != "mixinextras" && n != "minecraft" && n != "fabricloader")
+                dependencies: im
+                    .dependencies
+                    .into_iter()
+                    .filter(|(n, _, req)| {
+                        *req && n != "java"
+                            && n != "mixinextras"
+                            && n != "minecraft"
+                            && n != "fabricloader"
+                    })
                     .map(|(name, version, _)| crate::lockfile::LockDependency { name, version })
                     .collect(),
-            }
-        }).collect();
+            })
+            .collect();
         installed.push(plan);
     }
 
     apply_to_manifest_and_lock(manifest, lockfile, &installed, mods_dir);
 
-    Ok(InstallReport { installed, already_satisfied, skipped_optional: vec![] })
+    Ok(InstallReport {
+        installed,
+        already_satisfied,
+        skipped_optional: vec![],
+    })
 }
 
 // ── download / jar / manifest helpers ─────────────────────────────────
@@ -393,10 +564,14 @@ async fn download_mod(m: &ResolvedMod, mods_dir: &Path) -> Result<PathBuf, Orbit
     if final_path.exists() {
         if !m.sha512.is_empty() {
             let existing_sha = crate::jar::compute_sha512(&final_path).unwrap_or_default();
-            if existing_sha == m.sha512 { return Ok(final_path); }
+            if existing_sha == m.sha512 {
+                return Ok(final_path);
+            }
         } else {
             let meta = std::fs::metadata(&final_path).map_err(OrbitError::Io)?;
-            if meta.len() > 0 { return Ok(final_path); }
+            if meta.len() > 0 {
+                return Ok(final_path);
+            }
         }
     }
 
@@ -408,11 +583,22 @@ async fn download_mod(m: &ResolvedMod, mods_dir: &Path) -> Result<PathBuf, Orbit
     }
 
     let client = download_client();
-    let bytes = client.get(&m.download_url).send().await.map_err(OrbitError::Network)?.bytes().await.map_err(OrbitError::Network)?;
+    let bytes = client
+        .get(&m.download_url)
+        .send()
+        .await
+        .map_err(OrbitError::Network)?
+        .bytes()
+        .await
+        .map_err(OrbitError::Network)?;
     if !m.sha512.is_empty() {
         let actual = crate::jar::sha512_digest(&bytes);
         if actual != m.sha512 {
-            return Err(OrbitError::ChecksumMismatch { name: m.filename.clone(), expected: m.sha512.clone(), actual });
+            return Err(OrbitError::ChecksumMismatch {
+                name: m.filename.clone(),
+                expected: m.sha512.clone(),
+                actual,
+            });
         }
     }
 
@@ -435,14 +621,27 @@ fn apply_to_manifest_and_lock(
 ) {
     for inst in installed {
         let key = &inst.mod_id;
-        manifest.dependencies.insert(key.clone(),
-            DependencySpec::Short(if inst.version.is_empty() { "*".into() } else { inst.version.clone() })
+        manifest.dependencies.insert(
+            key.clone(),
+            DependencySpec::Short(if inst.version.is_empty() {
+                "*".into()
+            } else {
+                inst.version.clone()
+            }),
         );
         lockfile.packages.retain(|e| e.mod_id != *key);
-        let lock_deps: Vec<LockDependency> = inst.jar_deps.iter().map(|(dep_id, constraint, _)| LockDependency {
-            name: dep_id.clone(),
-            version: if constraint.is_empty() { "*".into() } else { constraint.clone() },
-        }).collect();
+        let lock_deps: Vec<LockDependency> = inst
+            .jar_deps
+            .iter()
+            .map(|(dep_id, constraint, _)| LockDependency {
+                name: dep_id.clone(),
+                version: if constraint.is_empty() {
+                    "*".into()
+                } else {
+                    constraint.clone()
+                },
+            })
+            .collect();
         let jar_path = mods_dir.join(&inst.filename);
         let sha256 = crate::jar::compute_sha256(&jar_path).unwrap_or_default();
         let sha512 = crate::jar::compute_sha512(&jar_path).unwrap_or_default();
@@ -465,7 +664,9 @@ fn apply_to_manifest_and_lock(
                 None
             },
             file: if inst.provider == "file" {
-                Some(FileInfo { path: format!("mods/{}", inst.filename) })
+                Some(FileInfo {
+                    path: format!("mods/{}", inst.filename),
+                })
             } else {
                 None
             },

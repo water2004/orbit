@@ -28,7 +28,10 @@ impl ManifestFile {
 
     /// 用预先构建的 manifest 创建（用于 init）。
     pub fn new(dir: &Path, inner: OrbitManifest) -> Self {
-        Self { path: dir.join("orbit.toml"), inner }
+        Self {
+            path: dir.join("orbit.toml"),
+            inner,
+        }
     }
 
     /// 写入 orbit.toml。
@@ -72,7 +75,10 @@ impl Lockfile {
 
     /// 用预先构建的 lockfile 创建（用于 init）。
     pub fn new(dir: &Path, inner: OrbitLockfile) -> Self {
-        Self { path: dir.join("orbit.lock"), inner }
+        Self {
+            path: dir.join("orbit.lock"),
+            inner,
+        }
     }
 
     /// 写入 orbit.lock。
@@ -93,14 +99,21 @@ impl Lockfile {
 
     /// 通过 mod_id 找到 JAR 文件路径（同时校验 SHA-256）。
     pub fn find_jar_path(&self, mod_id: &str, mods_dir: &Path) -> Result<PathBuf, OrbitError> {
-        let entry = self.inner.find(mod_id)
+        let entry = self
+            .inner
+            .find(mod_id)
             .ok_or_else(|| OrbitError::ModNotFound(mod_id.to_string()))?;
         if entry.filename.is_empty() {
-            return Err(OrbitError::Other(anyhow::anyhow!("no filename recorded for '{mod_id}'")));
+            return Err(OrbitError::Other(anyhow::anyhow!(
+                "no filename recorded for '{mod_id}'"
+            )));
         }
         let path = mods_dir.join(&entry.filename);
         if !path.exists() {
-            return Err(OrbitError::Other(anyhow::anyhow!("JAR not found: {}", path.display())));
+            return Err(OrbitError::Other(anyhow::anyhow!(
+                "JAR not found: {}",
+                path.display()
+            )));
         }
         if !entry.sha256.is_empty() {
             let actual = crate::jar::compute_sha256(&path)?;

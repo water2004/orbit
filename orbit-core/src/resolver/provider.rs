@@ -1,10 +1,10 @@
-use pubgrub::{DependencyProvider, Dependencies};
 use pubgrub::Ranges;
+use pubgrub::{Dependencies, DependencyProvider};
 use std::collections::HashMap;
 
+use crate::resolver::FetchRetryError;
 use crate::resolver::types::PackageId;
 use crate::versions::Version;
-use crate::resolver::FetchRetryError;
 
 /// PubGrub 的数据源——一个只读的内存视图
 #[derive(Default)]
@@ -53,7 +53,9 @@ impl DependencyProvider for OrbitDependencyProvider {
         _package_conflicts_counts: &pubgrub::PackageResolutionStatistics,
     ) -> Self::Priority {
         // Lower = less specific = higher priority. Ranges with fewer segments first.
-        if range == &Ranges::full() { return 0; }
+        if range == &Ranges::full() {
+            return 0;
+        }
         range.bounding_range().map(|_| 1).unwrap_or(0)
     }
 
@@ -82,7 +84,10 @@ impl DependencyProvider for OrbitDependencyProvider {
     ) -> Result<Dependencies<Self::P, Self::VS, Self::M>, Self::Err> {
         match self.dependencies.get(&(package.clone(), version.clone())) {
             Some(deps) => Ok(Dependencies::Available(deps.iter().cloned().collect())),
-            None => Err(FetchRetryError::MissingDependencies(package.clone(), version.clone())),
+            None => Err(FetchRetryError::MissingDependencies(
+                package.clone(),
+                version.clone(),
+            )),
         }
     }
 }

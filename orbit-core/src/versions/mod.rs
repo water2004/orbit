@@ -4,9 +4,9 @@
 
 pub mod fabric;
 
+use pubgrub::Ranges;
 use std::cmp::Ordering;
 use std::hash::{Hash, Hasher};
-use pubgrub::Ranges;
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub enum Version {
@@ -39,9 +39,15 @@ impl PartialOrd for Version {
 
 impl Ord for Version {
     fn cmp(&self, other: &Self) -> Ordering {
-        if let (Self::Lowest, Self::Lowest) = (self, other) { return Ordering::Equal; }
-        if let Self::Lowest = self { return Ordering::Less; }
-        if let Self::Lowest = other { return Ordering::Greater; }
+        if let (Self::Lowest, Self::Lowest) = (self, other) {
+            return Ordering::Equal;
+        }
+        if let Self::Lowest = self {
+            return Ordering::Less;
+        }
+        if let Self::Lowest = other {
+            return Ordering::Greater;
+        }
 
         match (self, other) {
             (Self::Fabric(a), Self::Fabric(b)) => a.cmp(b),

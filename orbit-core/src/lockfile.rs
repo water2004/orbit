@@ -82,8 +82,7 @@ pub struct LockDependency {
 
 impl OrbitLockfile {
     pub fn from_path(path: &std::path::Path) -> Result<Self, OrbitError> {
-        let content =
-            std::fs::read_to_string(path).map_err(|_| OrbitError::LockfileNotFound)?;
+        let content = std::fs::read_to_string(path).map_err(|_| OrbitError::LockfileNotFound)?;
         let lockfile: Self = toml::from_str(&content)
             .map_err(|e| OrbitError::Other(anyhow::anyhow!("failed to parse orbit.lock: {e}")))?;
         Ok(lockfile)
@@ -173,7 +172,10 @@ path = "mods/fabric-carpet-26.1+v260402.jar"
         let lockfile: OrbitLockfile = toml::from_str(toml_str).unwrap();
         let carpet = lockfile.find("carpet").unwrap();
         assert_eq!(carpet.provider, "file");
-        assert_eq!(carpet.file.as_ref().unwrap().path, "mods/fabric-carpet-26.1+v260402.jar");
+        assert_eq!(
+            carpet.file.as_ref().unwrap().path,
+            "mods/fabric-carpet-26.1+v260402.jar"
+        );
     }
 
     #[test]

@@ -2,8 +2,8 @@
 //!
 //! 格式规格参见 docs/orbit-toml-spec.md
 
-use serde::{Deserialize, Serialize};
 use indexmap::IndexMap;
+use serde::{Deserialize, Serialize};
 
 use crate::error::OrbitError;
 
@@ -102,8 +102,7 @@ pub struct GroupSpec {
 impl OrbitManifest {
     /// 从文件路径解析 orbit.toml
     pub fn from_path(path: &std::path::Path) -> Result<Self, OrbitError> {
-        let content = std::fs::read_to_string(path)
-            .map_err(|_| OrbitError::ManifestNotFound)?;
+        let content = std::fs::read_to_string(path).map_err(|_| OrbitError::ManifestNotFound)?;
         let manifest: Self = toml::from_str(&content)?;
         Ok(manifest)
     }
@@ -146,7 +145,11 @@ lithium = ">=0.11, <0.14"
         assert_eq!(manifest.project.name, "test");
         assert_eq!(manifest.dependencies.len(), 2);
         assert_eq!(
-            manifest.dependencies.get("sodium").unwrap().version_constraint(),
+            manifest
+                .dependencies
+                .get("sodium")
+                .unwrap()
+                .version_constraint(),
             Some("*")
         );
     }

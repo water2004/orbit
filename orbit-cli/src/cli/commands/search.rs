@@ -1,6 +1,6 @@
+use super::CliContext;
 use anyhow::Result;
 use orbit_core::providers::create_providers_default;
-use super::CliContext;
 
 pub async fn handle(
     query: String,
@@ -11,7 +11,8 @@ pub async fn handle(
     _ctx: &CliContext,
 ) -> Result<()> {
     // Determine reference MC version for compatibility ✓ marks
-    let ref_mc = mc_version.clone()
+    let ref_mc = mc_version
+        .clone()
         .or_else(|| orbit_core::OrbitManifest::mc_version_from_dir(&std::env::current_dir().ok()?));
 
     let providers = create_providers_default()?;
@@ -61,13 +62,11 @@ pub async fn handle(
             .description
             .chars()
             .take(80)
-            .chain(
-                if item.description.chars().count() > 80 {
-                    Some('\u{2026}') // …
-                } else {
-                    None
-                },
-            )
+            .chain(if item.description.chars().count() > 80 {
+                Some('\u{2026}') // …
+            } else {
+                None
+            })
             .collect();
 
         // Show the latest few MC versions (search API doesn't return mod version)

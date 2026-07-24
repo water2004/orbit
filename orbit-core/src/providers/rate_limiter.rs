@@ -9,14 +9,17 @@ pub struct RateLimiter {
 
 impl RateLimiter {
     pub fn new(max_concurrency: usize) -> Self {
-        Self { semaphore: Arc::new(Semaphore::new(max_concurrency)) }
+        Self {
+            semaphore: Arc::new(Semaphore::new(max_concurrency)),
+        }
     }
 
     /// 获取并发槽位。Semaphore 关闭时返回错误（正常运行时不会发生）。
     pub async fn acquire(&self) -> Result<OwnedSemaphorePermit, crate::error::OrbitError> {
-        self.semaphore.clone().acquire_owned().await
-            .map_err(|_| crate::error::OrbitError::Other(
-                anyhow::anyhow!("RateLimiter semaphore unexpectedly closed")
+        self.semaphore.clone().acquire_owned().await.map_err(|_| {
+            crate::error::OrbitError::Other(anyhow::anyhow!(
+                "RateLimiter semaphore unexpectedly closed"
             ))
+        })
     }
 }

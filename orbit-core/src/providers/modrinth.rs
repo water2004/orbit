@@ -1,10 +1,13 @@
-use std::collections::HashMap;
 use async_trait::async_trait;
-use modrinth_wrapper::{Client as MRClient, models as mr_models};
 use modrinth_wrapper::api::SearchParams;
+use modrinth_wrapper::{Client as MRClient, models as mr_models};
+use std::collections::HashMap;
 
-use super::{ModInfo, ModProvider, ModrinthResolvedInfo, ResolvedDependency, ResolvedMod, SearchResultItem, SideSupport};
 use super::rate_limiter::RateLimiter;
+use super::{
+    ModInfo, ModProvider, ModrinthResolvedInfo, ResolvedDependency, ResolvedMod, SearchResultItem,
+    SideSupport,
+};
 use crate::error::OrbitError;
 
 pub struct ModrinthProvider {
@@ -14,8 +17,7 @@ pub struct ModrinthProvider {
 
 impl ModrinthProvider {
     pub fn new(user_agent: &str, max_concurrency: usize) -> Result<Self, OrbitError> {
-        let client = MRClient::new(user_agent)
-            .map_err(|e| OrbitError::Other(e.into()))?;
+        let client = MRClient::new(user_agent).map_err(|e| OrbitError::Other(e.into()))?;
         Ok(Self {
             client,
             rate_limiter: RateLimiter::new(max_concurrency),
@@ -32,14 +34,15 @@ impl ModrinthProvider {
             Err(_) => HashMap::new(),
         }
     }
-
 }
 
 /// 将 Modrinth API 错误转为 OrbitError，404 → ModNotFound
 fn map_api_error(e: modrinth_wrapper::ModrinthError, slug: &str) -> OrbitError {
     use modrinth_wrapper::ModrinthError;
     match &e {
-        ModrinthError::Reqwest(req_err) if req_err.status() == Some(reqwest::StatusCode::NOT_FOUND) => {
+        ModrinthError::Reqwest(req_err)
+            if req_err.status() == Some(reqwest::StatusCode::NOT_FOUND) =>
+        {
             OrbitError::ModNotFound(slug.to_string())
         }
         _ => OrbitError::Other(e.into()),
@@ -95,18 +98,22 @@ impl ModProvider for ModrinthProvider {
             .await
             .map_err(|e| OrbitError::Other(e.into()))?;
 
-        Ok(res.hits.into_iter().map(|hit| SearchResultItem {
-            mod_id: hit.project_id,
-            slug: hit.slug,
-            name: hit.title,
-            description: hit.description,
-            latest_version: hit.latest_version.unwrap_or_default(),
-            downloads: hit.downloads as u64,
-            mc_versions: hit.versions,
-            client_side: map_side(&hit.client_side),
-            server_side: map_side(&hit.server_side),
-            categories: hit.categories.unwrap_or_default(),
-        }).collect())
+        Ok(res
+            .hits
+            .into_iter()
+            .map(|hit| SearchResultItem {
+                mod_id: hit.project_id,
+                slug: hit.slug,
+                name: hit.title,
+                description: hit.description,
+                latest_version: hit.latest_version.unwrap_or_default(),
+                downloads: hit.downloads as u64,
+                mc_versions: hit.versions,
+                client_side: map_side(&hit.client_side),
+                server_side: map_side(&hit.server_side),
+                categories: hit.categories.unwrap_or_default(),
+            })
+            .collect())
     }
 
     async fn get_mod_info(&self, slug: &str) -> Result<ModInfo, OrbitError> {
@@ -118,15 +125,25 @@ impl ModProvider for ModrinthProvider {
             .map_err(|e| map_api_error(e, slug))?;
 
         // Fetch recent versions for a richer display
-        let recent: Vec<super::ModVersionInfo> = self.client.list_versions_with_params(&project.slug,
-            modrinth_wrapper::api::ListVersionsParams::new().include_changelog(false))
+        let recent: Vec<super::ModVersionInfo> = self
+            .client
+            .list_versions_with_params(
+                &project.slug,
+                modrinth_wrapper::api::ListVersionsParams::new().include_changelog(false),
+            )
             .await
-            .map(|versions| versions.into_iter().take(5).map(|v| super::ModVersionInfo {
-                version: v.version_number,
-                mc_versions: v.game_versions,
-                loader: v.loaders.first().cloned().unwrap_or_default(),
-                released_at: v.date_published,
-            }).collect())
+            .map(|versions| {
+                versions
+                    .into_iter()
+                    .take(5)
+                    .map(|v| super::ModVersionInfo {
+                        version: v.version_number,
+                        mc_versions: v.game_versions,
+                        loader: v.loaders.first().cloned().unwrap_or_default(),
+                        released_at: v.date_published,
+                    })
+                    .collect()
+            })
             .unwrap_or_default();
 
         Ok(ModInfo {
@@ -134,7 +151,10 @@ impl ModProvider for ModrinthProvider {
             name: project.title,
             description: project.description,
             authors: vec![],
-            latest_version: recent.first().map(|v| v.version.clone()).unwrap_or_default(),
+            latest_version: recent
+                .first()
+                .map(|v| v.version.clone())
+                .unwrap_or_default(),
             downloads: project.downloads as u64,
             license: project.license.map(|l| l.id),
             client_side: map_side(&project.client_side),
@@ -155,42 +175,62 @@ impl ModProvider for ModrinthProvider {
         let _permit = self.rate_limiter.acquire().await?;
         let versions = self
             .client
-            .list_versions_with_params(slug,
+            .list_versions_with_params(
+                slug,
                 modrinth_wrapper::api::ListVersionsParams::new()
                     .loaders(&[loader])
                     .game_versions(&[mc_version])
-                    .include_changelog(false))
+                    .include_changelog(false),
+            )
             .await
             .map_err(|e| map_api_error(e, slug))?;
 
         let candidate = versions
             .iter()
-            .filter(|v| version_constraint == "*" || version_constraint.is_empty()
-                || crate::versions::fabric::SemanticVersion::parse(&v.version_number, true)
-                    .map(|sv| crate::versions::fabric::satisfies(&sv, version_constraint))
-                    .unwrap_or(false))
+            .filter(|v| {
+                version_constraint == "*"
+                    || version_constraint.is_empty()
+                    || crate::versions::fabric::SemanticVersion::parse(&v.version_number, true)
+                        .map(|sv| crate::versions::fabric::satisfies(&sv, version_constraint))
+                        .unwrap_or(false)
+            })
             .max_by_key(|v| v.date_published.clone());
 
         match candidate {
             Some(v) => {
-                let file = v.files.first().ok_or_else(|| OrbitError::ModNotFound(slug.to_string()))?;
+                let file = v
+                    .files
+                    .first()
+                    .ok_or_else(|| OrbitError::ModNotFound(slug.to_string()))?;
 
                 // Resolve dependency project_ids → slugs via batch lookup
-                let dep_ids: Vec<&str> = v.dependencies.as_ref()
-                    .map(|deps| deps.iter().filter_map(|d| d.project_id.as_deref()).collect())
+                let dep_ids: Vec<&str> = v
+                    .dependencies
+                    .as_ref()
+                    .map(|deps| {
+                        deps.iter()
+                            .filter_map(|d| d.project_id.as_deref())
+                            .collect()
+                    })
                     .unwrap_or_default();
                 let id_to_slug: HashMap<String, String> = self.lookup_project_slugs(&dep_ids).await;
 
-                let deps: Vec<ResolvedDependency> = v.dependencies.as_ref()
-                    .map(|deps| deps.iter().map(|d| {
-                        let pid = d.project_id.clone().unwrap_or_default();
-                        let resolved_slug = id_to_slug.get(&pid).cloned();
-                        ResolvedDependency {
-                            slug: resolved_slug,
-                            required: d.dependency_type == "required",
-                            project_id: d.project_id.clone(),
-                        }
-                    }).collect())
+                let deps: Vec<ResolvedDependency> = v
+                    .dependencies
+                    .as_ref()
+                    .map(|deps| {
+                        deps.iter()
+                            .map(|d| {
+                                let pid = d.project_id.clone().unwrap_or_default();
+                                let resolved_slug = id_to_slug.get(&pid).cloned();
+                                ResolvedDependency {
+                                    slug: resolved_slug,
+                                    required: d.dependency_type == "required",
+                                    project_id: d.project_id.clone(),
+                                }
+                            })
+                            .collect()
+                    })
                     .unwrap_or_default();
 
                 Ok(ResolvedMod {
@@ -225,8 +265,12 @@ impl ModProvider for ModrinthProvider {
     ) -> Result<Vec<ResolvedMod>, OrbitError> {
         let _permit = self.rate_limiter.acquire().await?;
         let mut params = modrinth_wrapper::api::ListVersionsParams::new().include_changelog(false);
-        if let Some(l) = loader { params = params.loaders(&[l]); }
-        if let Some(mc) = mc_version { params = params.game_versions(&[mc]); }
+        if let Some(l) = loader {
+            params = params.loaders(&[l]);
+        }
+        if let Some(mc) = mc_version {
+            params = params.game_versions(&[mc]);
+        }
         let versions = self
             .client
             .list_versions_with_params(slug, params)
@@ -234,43 +278,55 @@ impl ModProvider for ModrinthProvider {
             .map_err(|e| map_api_error(e, slug))?;
 
         // 收集所有依赖的 project_id → 批量查 slug
-        let all_dep_ids: Vec<&str> = versions.iter()
+        let all_dep_ids: Vec<&str> = versions
+            .iter()
             .flat_map(|v| v.dependencies.as_ref().map(|d| d.as_slice()).unwrap_or(&[]))
             .filter_map(|d| d.project_id.as_deref())
             .collect();
         let id_to_slug: HashMap<String, String> = self.lookup_project_slugs(&all_dep_ids).await;
 
-        Ok(versions.iter().map(|v| {
-            let file = v.files.first();
-            let deps = v.dependencies.as_ref().map(|deps| deps.iter().map(|d| {
-                let pid = d.project_id.clone().unwrap_or_default();
-                let resolved_slug = id_to_slug.get(&pid).cloned();
-                ResolvedDependency {
-                    slug: resolved_slug,
-                    required: d.dependency_type == "required",
-                    project_id: d.project_id.clone(),
+        Ok(versions
+            .iter()
+            .map(|v| {
+                let file = v.files.first();
+                let deps = v
+                    .dependencies
+                    .as_ref()
+                    .map(|deps| {
+                        deps.iter()
+                            .map(|d| {
+                                let pid = d.project_id.clone().unwrap_or_default();
+                                let resolved_slug = id_to_slug.get(&pid).cloned();
+                                ResolvedDependency {
+                                    slug: resolved_slug,
+                                    required: d.dependency_type == "required",
+                                    project_id: d.project_id.clone(),
+                                }
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                ResolvedMod {
+                    mod_id: slug.to_string(),
+                    version: v.version_number.clone(),
+                    sha1: file.map(|f| f.hashes.sha1.clone()).unwrap_or_default(),
+                    sha512: file.map(|f| f.hashes.sha512.clone()).unwrap_or_default(),
+                    slug: slug.to_string(),
+                    provider: "modrinth".to_string(),
+                    modrinth: Some(ModrinthResolvedInfo {
+                        project_id: v.project_id.clone(),
+                        version_id: v.id.clone(),
+                        version_number: v.version_number.clone(),
+                    }),
+                    date_published: v.date_published.clone(),
+                    download_url: file.map(|f| f.url.clone()).unwrap_or_default(),
+                    filename: file.map(|f| f.filename.clone()).unwrap_or_default(),
+                    dependencies: deps,
+                    client_side: None,
+                    server_side: None,
                 }
-            }).collect()).unwrap_or_default();
-            ResolvedMod {
-                mod_id: slug.to_string(),
-                version: v.version_number.clone(),
-                sha1: file.map(|f| f.hashes.sha1.clone()).unwrap_or_default(),
-                sha512: file.map(|f| f.hashes.sha512.clone()).unwrap_or_default(),
-                slug: slug.to_string(),
-                provider: "modrinth".to_string(),
-                modrinth: Some(ModrinthResolvedInfo {
-                    project_id: v.project_id.clone(),
-                    version_id: v.id.clone(),
-                    version_number: v.version_number.clone(),
-                }),
-                date_published: v.date_published.clone(),
-                download_url: file.map(|f| f.url.clone()).unwrap_or_default(),
-                filename: file.map(|f| f.filename.clone()).unwrap_or_default(),
-                dependencies: deps,
-                client_side: None,
-                server_side: None,
-            }
-        }).collect())
+            })
+            .collect())
     }
 
     async fn get_versions_batch(
@@ -294,83 +350,130 @@ impl ModProvider for ModrinthProvider {
         Ok(vec![])
     }
 
-    async fn fetch_dependencies(&self, project_id: &str) -> Result<Vec<ResolvedDependency>, OrbitError> {
+    async fn fetch_dependencies(
+        &self,
+        project_id: &str,
+    ) -> Result<Vec<ResolvedDependency>, OrbitError> {
         let _permit = self.rate_limiter.acquire().await?;
-        let deps = self.client.get_project_dependencies(project_id).await
+        let deps = self
+            .client
+            .get_project_dependencies(project_id)
+            .await
             .map_err(|e| OrbitError::Other(e.into()))?;
-        Ok(deps.projects.into_iter().map(|p| ResolvedDependency {
-            slug: Some(p.slug),
-            required: true,
-            project_id: Some(p.id),
-        }).collect())
+        Ok(deps
+            .projects
+            .into_iter()
+            .map(|p| ResolvedDependency {
+                slug: Some(p.slug),
+                required: true,
+                project_id: Some(p.id),
+            })
+            .collect())
     }
 
-    async fn get_versions_by_hashes(&self, hashes: &[String]) -> Result<Vec<ResolvedMod>, OrbitError> {
+    async fn get_versions_by_hashes(
+        &self,
+        hashes: &[String],
+    ) -> Result<Vec<ResolvedMod>, OrbitError> {
         let _permit = self.rate_limiter.acquire().await?;
-        if hashes.is_empty() { return Ok(vec![]); }
+        if hashes.is_empty() {
+            return Ok(vec![]);
+        }
         let strs: Vec<&str> = hashes.iter().map(|s| s.as_str()).collect();
-        let map = self.client.get_versions_from_hashes(&strs, Some("sha512")).await
+        let map = self
+            .client
+            .get_versions_from_hashes(&strs, Some("sha512"))
+            .await
             .map_err(|e| OrbitError::Other(e.into()))?;
         // 批量查 project_id → slug（包含主项目 + 依赖项目）
         let mut all_ids: Vec<&str> = map.values().map(|v| v.project_id.as_str()).collect();
-        let dep_ids: Vec<&str> = map.values()
+        let dep_ids: Vec<&str> = map
+            .values()
             .flat_map(|v| v.dependencies.as_ref().map(|d| d.as_slice()).unwrap_or(&[]))
             .filter_map(|d| d.project_id.as_deref())
             .collect();
         all_ids.extend(dep_ids);
         let id_to_slug: HashMap<String, String> = self.lookup_project_slugs(&all_ids).await;
-        Ok(map.into_values().map(|v| {
-            let file = v.files.first();
-            let main_slug = id_to_slug.get(&v.project_id).cloned().unwrap_or_else(|| v.project_id.clone());
-            ResolvedMod {
-                mod_id: main_slug.clone(),
-                version: v.version_number.clone(),
-                sha1: file.map(|f| f.hashes.sha1.clone()).unwrap_or_default(),
-                sha512: file.map(|f| f.hashes.sha512.clone()).unwrap_or_default(),
-                slug: main_slug,
-                provider: "modrinth".to_string(),
-                modrinth: Some(ModrinthResolvedInfo {
-                    project_id: v.project_id.clone(),
-                    version_id: v.id.clone(),
-                    version_number: v.version_number.clone(),
-                }),
-                date_published: v.date_published.clone(),
-                download_url: file.map(|f| f.url.clone()).unwrap_or_default(),
-                filename: file.map(|f| f.filename.clone()).unwrap_or_default(),
-                dependencies: v.dependencies.unwrap_or_default().into_iter().map(|d| {
-                    let pid = d.project_id.clone().unwrap_or_default();
-                    let resolved_slug = id_to_slug.get(&pid).cloned();
-                    ResolvedDependency {
-                        slug: resolved_slug,
-                        required: d.dependency_type == "required",
-                        project_id: d.project_id.clone(),
-                    }
-                }).collect(),
-                client_side: None, server_side: None,
-            }
-        }).collect())
+        Ok(map
+            .into_values()
+            .map(|v| {
+                let file = v.files.first();
+                let main_slug = id_to_slug
+                    .get(&v.project_id)
+                    .cloned()
+                    .unwrap_or_else(|| v.project_id.clone());
+                ResolvedMod {
+                    mod_id: main_slug.clone(),
+                    version: v.version_number.clone(),
+                    sha1: file.map(|f| f.hashes.sha1.clone()).unwrap_or_default(),
+                    sha512: file.map(|f| f.hashes.sha512.clone()).unwrap_or_default(),
+                    slug: main_slug,
+                    provider: "modrinth".to_string(),
+                    modrinth: Some(ModrinthResolvedInfo {
+                        project_id: v.project_id.clone(),
+                        version_id: v.id.clone(),
+                        version_number: v.version_number.clone(),
+                    }),
+                    date_published: v.date_published.clone(),
+                    download_url: file.map(|f| f.url.clone()).unwrap_or_default(),
+                    filename: file.map(|f| f.filename.clone()).unwrap_or_default(),
+                    dependencies: v
+                        .dependencies
+                        .unwrap_or_default()
+                        .into_iter()
+                        .map(|d| {
+                            let pid = d.project_id.clone().unwrap_or_default();
+                            let resolved_slug = id_to_slug.get(&pid).cloned();
+                            ResolvedDependency {
+                                slug: resolved_slug,
+                                required: d.dependency_type == "required",
+                                project_id: d.project_id.clone(),
+                            }
+                        })
+                        .collect(),
+                    client_side: None,
+                    server_side: None,
+                }
+            })
+            .collect())
     }
 
     async fn get_version_by_hash(&self, hash: &str) -> Result<Option<ResolvedMod>, OrbitError> {
         let _permit = self.rate_limiter.acquire().await?;
-        match self.client.get_version_from_hash(hash, Some("sha512"), None).await {
+        match self
+            .client
+            .get_version_from_hash(hash, Some("sha512"), None)
+            .await
+        {
             Ok(v) => {
                 let ver = v.version_number.clone();
                 let file = v.files.first();
-                let dep_ids: Vec<&str> = v.dependencies.as_ref().map(|d| d.iter().filter_map(|x| x.project_id.as_deref()).collect()).unwrap_or_default();
+                let dep_ids: Vec<&str> = v
+                    .dependencies
+                    .as_ref()
+                    .map(|d| d.iter().filter_map(|x| x.project_id.as_deref()).collect())
+                    .unwrap_or_default();
                 let mut all_ids = dep_ids.clone();
                 all_ids.push(&v.project_id);
                 let id_to_slug: HashMap<String, String> = self.lookup_project_slugs(&all_ids).await;
-                let main_slug = id_to_slug.get(&v.project_id).cloned().unwrap_or_else(|| v.project_id.clone());
-                let deps = v.dependencies.unwrap_or_default().into_iter().map(|d| {
-                    let pid = d.project_id.clone().unwrap_or_default();
-                    let resolved_slug = id_to_slug.get(&pid).cloned();
-                    ResolvedDependency {
-                        slug: resolved_slug,
-                        required: d.dependency_type == "required",
-                        project_id: d.project_id.clone(),
-                    }
-                }).collect();
+                let main_slug = id_to_slug
+                    .get(&v.project_id)
+                    .cloned()
+                    .unwrap_or_else(|| v.project_id.clone());
+                let deps = v
+                    .dependencies
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|d| {
+                        let pid = d.project_id.clone().unwrap_or_default();
+                        let resolved_slug = id_to_slug.get(&pid).cloned();
+                        ResolvedDependency {
+                            slug: resolved_slug,
+                            required: d.dependency_type == "required",
+                            project_id: d.project_id.clone(),
+                        }
+                    })
+                    .collect();
                 Ok(Some(ResolvedMod {
                     mod_id: main_slug.clone(),
                     version: ver,

@@ -1,5 +1,5 @@
-pub mod types;
 pub mod provider;
+pub mod types;
 
 use std::collections::HashMap;
 
@@ -8,8 +8,8 @@ use crate::manifest::OrbitManifest;
 use crate::providers::ModProvider;
 
 use self::types::PackageId;
-use crate::versions::Version;
 use crate::resolver::provider::OrbitDependencyProvider;
+use crate::versions::Version;
 
 #[derive(Debug)]
 pub enum FetchRetryError {
@@ -21,7 +21,9 @@ impl std::fmt::Display for FetchRetryError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             FetchRetryError::MissingVersions(pkg) => write!(f, "Missing versions for {}", pkg),
-            FetchRetryError::MissingDependencies(pkg, ver) => write!(f, "Missing dependencies for {} {}", pkg, ver),
+            FetchRetryError::MissingDependencies(pkg, ver) => {
+                write!(f, "Missing dependencies for {} {}", pkg, ver)
+            }
         }
     }
 }
@@ -34,7 +36,7 @@ pub fn check_local_graph(
 ) -> Result<(), String> {
     let mut provider = OrbitDependencyProvider::new();
     let loader = manifest.project.modloader.clone();
-    
+
     let mc_ver = Version::parse(&manifest.project.mc_version, &loader);
     provider.add_package_versions("minecraft".to_string(), vec![mc_ver.clone()]);
     provider.add_package_deps("minecraft".to_string(), mc_ver, vec![]);
@@ -58,7 +60,13 @@ pub fn check_local_graph(
     let mut pkg_local_versions: std::collections::HashMap<String, Version> = Default::default();
 
     for m in local_mods {
-        let pkg = if !m.mod_id.is_empty() { m.mod_id.clone() } else if !m.mod_name.is_empty() { m.mod_name.clone() } else { m.filename.clone() };
+        let pkg = if !m.mod_id.is_empty() {
+            m.mod_id.clone()
+        } else if !m.mod_name.is_empty() {
+            m.mod_name.clone()
+        } else {
+            m.filename.clone()
+        };
         // 使用 fabric.mod.json 里的自声明版本，与 Fabric Loader 行为一致
         let nv = Version::parse(&m.version, &loader);
         provider.add_package_versions(pkg.clone(), vec![nv.clone()]);
@@ -67,7 +75,10 @@ pub fn check_local_graph(
         let mut deps = Vec::new();
         for (dep_id, constraint, req) in &m.deps {
             if *req && dep_id != "java" && dep_id != "mixinextras" {
-                deps.push((dep_id.clone(), Version::parse_constraint(constraint, &loader)));
+                deps.push((
+                    dep_id.clone(),
+                    Version::parse_constraint(constraint, &loader),
+                ));
             }
         }
         provider.add_package_deps(pkg, nv, deps);
@@ -78,7 +89,11 @@ pub fn check_local_graph(
     let mut missing_deps = std::collections::HashSet::new();
     for m in local_mods {
         for (dep_id, _, req) in &m.deps {
-            if *req && !provider.versions.contains_key(dep_id) && dep_id != "java" && dep_id != "mixinextras" {
+            if *req
+                && !provider.versions.contains_key(dep_id)
+                && dep_id != "java"
+                && dep_id != "mixinextras"
+            {
                 missing_deps.insert(dep_id.clone());
             }
         }
@@ -99,7 +114,10 @@ pub fn check_local_graph(
         // root 依赖使用本地已安装的 local_version 做 exact 约束
         // 这样 root 和 mod 自己声明的版本永远一致，不受 Modrinth 版本名影响
         if let Some(installed_ver) = pkg_local_versions.get(name) {
-            root_deps.push((name.clone(), pubgrub::Ranges::singleton(installed_ver.clone())));
+            root_deps.push((
+                name.clone(),
+                pubgrub::Ranges::singleton(installed_ver.clone()),
+            ));
         }
         // 如果本地没有安装，missing_deps 已经把它注册为空版本列表，PubGrub 会自动报错
     }
@@ -112,8 +130,8 @@ pub fn check_local_graph(
             use pubgrub::{DefaultStringReporter, Reporter};
             Err(DefaultStringReporter::report(&derivation_tree))
         }
-        Err(pubgrub::PubGrubError::ErrorChoosingVersion { source: err, .. }) |
-        Err(pubgrub::PubGrubError::ErrorRetrievingDependencies { source: err, .. }) => {
+        Err(pubgrub::PubGrubError::ErrorChoosingVersion { source: err, .. })
+        | Err(pubgrub::PubGrubError::ErrorRetrievingDependencies { source: err, .. }) => {
             Err(format!("Internal resolver error: {}", err))
         }
         Err(e) => Err(e.to_string()),
@@ -129,13 +147,16 @@ pub fn dependents<'a>(slug: &str, entries: &'a [PackageEntry]) -> Vec<&'a str> {
 }
 
 pub fn find_entry<'a>(slug: &str, entries: &'a [PackageEntry]) -> Option<&'a PackageEntry> {
-    entries.iter().find(|e| {
-        e.mod_id == slug
-        || e.modrinth.as_ref().map(|m| m.slug.as_str()) == Some(slug)
-    })
+    entries
+        .iter()
+        .find(|e| e.mod_id == slug || e.modrinth.as_ref().map(|m| m.slug.as_str()) == Some(slug))
 }
 
-pub fn check_version_conflict(slug: &str, new_version: &str, entries: &[PackageEntry]) -> Result<(), String> {
+pub fn check_version_conflict(
+    slug: &str,
+    new_version: &str,
+    entries: &[PackageEntry],
+) -> Result<(), String> {
     if let Some(entry) = find_entry(slug, entries) {
         if entry.version != new_version {
             return Err(format!(
@@ -167,9 +188,13 @@ pub async fn resolve_with_candidates(
     provider.add_package_versions("minecraft".to_string(), vec![mc_ver.clone()]);
     provider.add_package_deps("minecraft".to_string(), mc_ver, vec![]);
 
-    let loader_pkg = if loader == "fabric" { "fabricloader" }
-        else if loader == "quilt" { "quiltloader" }
-        else { loader };
+    let loader_pkg = if loader == "fabric" {
+        "fabricloader"
+    } else if loader == "quilt" {
+        "quiltloader"
+    } else {
+        loader
+    };
     let loader_ver = Version::parse(&manifest.project.modloader_version, loader);
     provider.add_package_versions(loader_pkg.to_string(), vec![loader_ver.clone()]);
     provider.add_package_deps(loader_pkg.to_string(), loader_ver.clone(), vec![]);
@@ -190,16 +215,30 @@ pub async fn resolve_with_candidates(
     // 注入 lockfile 所有条目（含实际依赖）
     for entry in &lockfile.packages {
         let ver = Version::parse(&entry.version, loader);
-        let deps: Vec<_> = entry.dependencies.iter().map(|d| {
-            (d.name.clone(), Version::parse_constraint(&d.version, loader))
-        }).collect();
+        let deps: Vec<_> = entry
+            .dependencies
+            .iter()
+            .map(|d| {
+                (
+                    d.name.clone(),
+                    Version::parse_constraint(&d.version, loader),
+                )
+            })
+            .collect();
         provider.add_package_versions(entry.mod_id.clone(), vec![ver.clone()]);
         provider.add_package_deps(entry.mod_id.clone(), ver, deps);
         for imp in &entry.implanted {
             let iver = Version::parse(&imp.version, loader);
-            let ideps: Vec<_> = imp.dependencies.iter().map(|d| {
-                (d.name.clone(), Version::parse_constraint(&d.version, loader))
-            }).collect();
+            let ideps: Vec<_> = imp
+                .dependencies
+                .iter()
+                .map(|d| {
+                    (
+                        d.name.clone(),
+                        Version::parse_constraint(&d.version, loader),
+                    )
+                })
+                .collect();
             provider.add_package_versions(imp.name.clone(), vec![iver.clone()]);
             provider.add_package_deps(imp.name.clone(), iver, ideps);
         }
@@ -207,33 +246,49 @@ pub async fn resolve_with_candidates(
 
     // 候选版本放前面（已从新到旧），lockfile 版本垫底，PubGrub 优先选新版本
     for (mod_id, versions) in &*candidates {
-        let existing = provider.versions.get(mod_id.as_str()).cloned().unwrap_or_default();
+        let existing = provider
+            .versions
+            .get(mod_id.as_str())
+            .cloned()
+            .unwrap_or_default();
         let mut all_vers = Vec::new();
         for cand in versions {
             let v = Version::parse(&cand.jar_version, loader);
-            let d: Vec<_> = cand.deps.iter()
+            let d: Vec<_> = cand
+                .deps
+                .iter()
                 .filter(|(_, _, req)| *req)
-                .map(|(name, constraint, _)| (name.clone(), Version::parse_constraint(constraint, loader)))
+                .map(|(name, constraint, _)| {
+                    (name.clone(), Version::parse_constraint(constraint, loader))
+                })
                 .collect();
-            
+
             // Register implanted mod versions (constraints already in cand.deps)
             for imp in &cand.implanted {
                 let imp_ver = Version::parse(&imp.version, loader);
 
                 // Register implanted mod in provider
-                let imp_d: Vec<_> = imp.deps.iter()
+                let imp_d: Vec<_> = imp
+                    .deps
+                    .iter()
                     .filter(|(_, _, req)| *req)
-                    .map(|(name, constraint, _)| (name.clone(), Version::parse_constraint(constraint, loader)))
+                    .map(|(name, constraint, _)| {
+                        (name.clone(), Version::parse_constraint(constraint, loader))
+                    })
                     .collect();
-                
-                let mut imp_existing = provider.versions.get(&imp.mod_id).cloned().unwrap_or_default();
+
+                let mut imp_existing = provider
+                    .versions
+                    .get(&imp.mod_id)
+                    .cloned()
+                    .unwrap_or_default();
                 if !imp_existing.contains(&imp_ver) {
                     imp_existing.push(imp_ver.clone());
                     provider.add_package_versions(imp.mod_id.clone(), imp_existing);
                 }
                 provider.add_package_deps(imp.mod_id.clone(), imp_ver, imp_d);
             }
-            
+
             all_vers.push(v.clone());
             provider.add_package_deps(mod_id.clone(), v, d);
         }
@@ -244,16 +299,28 @@ pub async fn resolve_with_candidates(
     // 收集所有被依赖但不在 provider 中的包，注册空版本（使 PubGrub 报清晰错误）
     let mut referenced: std::collections::HashSet<String> = std::collections::HashSet::new();
     for entry in &lockfile.packages {
-        for d in &entry.dependencies { referenced.insert(d.name.clone()); }
+        for d in &entry.dependencies {
+            referenced.insert(d.name.clone());
+        }
         for imp in &entry.implanted {
-            for d in &imp.dependencies { referenced.insert(d.name.clone()); }
+            for d in &imp.dependencies {
+                referenced.insert(d.name.clone());
+            }
         }
     }
     for (_, versions) in candidates.iter() {
         for cand in versions {
-            for (name, _, req) in &cand.deps { if *req { referenced.insert(name.clone()); } }
+            for (name, _, req) in &cand.deps {
+                if *req {
+                    referenced.insert(name.clone());
+                }
+            }
             for imp in &cand.implanted {
-                for (name, _, req) in &imp.deps { if *req { referenced.insert(name.clone()); } }
+                for (name, _, req) in &imp.deps {
+                    if *req {
+                        referenced.insert(name.clone());
+                    }
+                }
             }
         }
     }
@@ -295,20 +362,27 @@ pub async fn resolve_with_candidates(
             Ok(s) => break s,
             Err(pubgrub::PubGrubError::NoSolution(_derivation_tree)) => {
                 // 缺依赖 → 从 lockfile 找到 project_id → provider 下载 JAR → 加入 candidates 重试
-                let mut needed_deps: std::collections::HashSet<String> = std::collections::HashSet::new();
+                let mut needed_deps: std::collections::HashSet<String> =
+                    std::collections::HashSet::new();
                 for (_, versions) in candidates.iter() {
                     for cand in versions {
                         for (name, _, req) in &cand.deps {
-                            if *req && name != "java" && name != "mixinextras"
-                                && name != "minecraft" && name != "fabricloader"
+                            if *req
+                                && name != "java"
+                                && name != "mixinextras"
+                                && name != "minecraft"
+                                && name != "fabricloader"
                             {
                                 needed_deps.insert(name.clone());
                             }
                         }
                         for imp in &cand.implanted {
                             for (name, _, req) in &imp.deps {
-                                if *req && name != "java" && name != "mixinextras"
-                                    && name != "minecraft" && name != "fabricloader"
+                                if *req
+                                    && name != "java"
+                                    && name != "mixinextras"
+                                    && name != "minecraft"
+                                    && name != "fabricloader"
                                 {
                                     needed_deps.insert(name.clone());
                                 }
@@ -316,35 +390,66 @@ pub async fn resolve_with_candidates(
                         }
                     }
                 }
-                eprintln!("    needed deps from candidates: {:?}", needed_deps.iter().collect::<Vec<_>>());
+                eprintln!(
+                    "    needed deps from candidates: {:?}",
+                    needed_deps.iter().collect::<Vec<_>>()
+                );
                 let mut added = false;
                 for dep in &needed_deps {
-                    if candidates.contains_key(dep) { eprintln!("    {} already in candidates, skip", dep); continue; }
+                    if candidates.contains_key(dep) {
+                        eprintln!("    {} already in candidates, skip", dep);
+                        continue;
+                    }
                     let entry = lockfile.find(dep);
                     if entry.is_none() {
                         // 检查是否为某条目的植入模组（已注册在 provider 中）
-                        let is_implanted = lockfile.packages.iter()
+                        let is_implanted = lockfile
+                            .packages
+                            .iter()
                             .any(|e| e.implanted.iter().any(|i| i.name == *dep));
-                        if is_implanted { continue; }
+                        if is_implanted {
+                            continue;
+                        }
                         eprintln!("    {} not in lockfile, skip", dep);
                         continue;
                     }
-                    let Some(mr) = entry.and_then(|e| e.modrinth.as_ref()) else { eprintln!("    {} no modrinth info, skip", dep); continue; };
-                    eprintln!("    fetching dep {} versions (project={})...", dep, mr.project_id);
-                    let versions = match providers[0].get_versions(&mr.project_id, Some(mc_version), Some(loader)).await {
+                    let Some(mr) = entry.and_then(|e| e.modrinth.as_ref()) else {
+                        eprintln!("    {} no modrinth info, skip", dep);
+                        continue;
+                    };
+                    eprintln!(
+                        "    fetching dep {} versions (project={})...",
+                        dep, mr.project_id
+                    );
+                    let versions = match providers[0]
+                        .get_versions(&mr.project_id, Some(mc_version), Some(loader))
+                        .await
+                    {
                         Ok(v) => v,
-                        Err(e) => { eprintln!("    ! API error for {}: {}", dep, e); continue; }
+                        Err(e) => {
+                            eprintln!("    ! API error for {}: {}", dep, e);
+                            continue;
+                        }
                     };
                     let mut new_candidates = Vec::new();
                     for v in &versions {
-                        if let Ok(meta) = crate::jar::download_and_parse(&v.download_url, &v.filename, &v.sha512, loader).await {
-                            let imp_cands = meta.implanted_mods.into_iter().map(|im| {
-                                crate::resolver::types::ImplantedCandidate {
+                        if let Ok(meta) = crate::jar::download_and_parse(
+                            &v.download_url,
+                            &v.filename,
+                            &v.sha512,
+                            loader,
+                        )
+                        .await
+                        {
+                            let imp_cands = meta
+                                .implanted_mods
+                                .into_iter()
+                                .map(|im| crate::resolver::types::ImplantedCandidate {
                                     mod_id: im.mod_id,
                                     version: im.version,
                                     deps: im.dependencies,
-                                }
-                            }).collect();
+                                })
+                                .collect();
                             new_candidates.push(crate::resolver::types::CandidateVersion {
                                 jar_version: meta.version,
                                 deps: meta.dependencies,
@@ -352,40 +457,58 @@ pub async fn resolve_with_candidates(
                             });
                         }
                     }
-                    if new_candidates.is_empty() { continue; }
-                    eprintln!("    downloaded {} versions for {}", new_candidates.len(), dep);
+                    if new_candidates.is_empty() {
+                        continue;
+                    }
+                    eprintln!(
+                        "    downloaded {} versions for {}",
+                        new_candidates.len(),
+                        dep
+                    );
                     let existing = provider.versions.get(dep).cloned().unwrap_or_default();
-                    let mut all_vers: Vec<Version> = new_candidates.iter()
+                    let mut all_vers: Vec<Version> = new_candidates
+                        .iter()
                         .map(|cand| Version::parse(&cand.jar_version, loader))
                         .collect();
                     all_vers.extend(existing);
                     for cand in &new_candidates {
                         let v = Version::parse(&cand.jar_version, loader);
-                        let d: Vec<_> = cand.deps.iter()
+                        let d: Vec<_> = cand
+                            .deps
+                            .iter()
                             .filter(|(n, _, req)| *req && n != "java" && n != "mixinextras")
                             .map(|(n, c, _)| (n.clone(), Version::parse_constraint(c, loader)))
                             .collect();
-                        
+
                         for imp in &cand.implanted {
                             let imp_ver = Version::parse(&imp.version, loader);
 
-                            let imp_d: Vec<_> = imp.deps.iter()
+                            let imp_d: Vec<_> = imp
+                                .deps
+                                .iter()
                                 .filter(|(n, _, req)| *req && n != "java" && n != "mixinextras")
                                 .map(|(n, c, _)| (n.clone(), Version::parse_constraint(c, loader)))
                                 .collect();
 
-                            let mut imp_existing = provider.versions.get(&imp.mod_id).cloned().unwrap_or_default();
+                            let mut imp_existing = provider
+                                .versions
+                                .get(&imp.mod_id)
+                                .cloned()
+                                .unwrap_or_default();
                             if !imp_existing.contains(&imp_ver) {
                                 imp_existing.push(imp_ver.clone());
                                 provider.add_package_versions(imp.mod_id.clone(), imp_existing);
                             }
                             provider.add_package_deps(imp.mod_id.clone(), imp_ver, imp_d);
                         }
-                        
+
                         provider.add_package_deps(dep.clone(), v, d);
                     }
                     provider.add_package_versions(dep.clone(), all_vers);
-                    candidates.entry(dep.clone()).or_default().extend(new_candidates);
+                    candidates
+                        .entry(dep.clone())
+                        .or_default()
+                        .extend(new_candidates);
                     added = true;
                 }
                 if !added {
@@ -393,17 +516,36 @@ pub async fn resolve_with_candidates(
                     return Err(DefaultStringReporter::report(&_derivation_tree));
                 }
             }
-            Err(pubgrub::PubGrubError::ErrorChoosingVersion { package, source: _err }) => {
-                return Err(format!("internal error: no version of '{}' matches constraint", package));
+            Err(pubgrub::PubGrubError::ErrorChoosingVersion {
+                package,
+                source: _err,
+            }) => {
+                return Err(format!(
+                    "internal error: no version of '{}' matches constraint",
+                    package
+                ));
             }
-            Err(pubgrub::PubGrubError::ErrorRetrievingDependencies { package, version, source: err }) => {
-                return Err(format!("internal error: deps of '{}' v{}: {}", package, version, err));
+            Err(pubgrub::PubGrubError::ErrorRetrievingDependencies {
+                package,
+                version,
+                source: err,
+            }) => {
+                return Err(format!(
+                    "internal error: deps of '{}' v{}: {}",
+                    package, version, err
+                ));
             }
             Err(pubgrub::PubGrubError::ErrorInShouldCancel(err)) => return Err(err.to_string()),
         }
     };
 
-    eprintln!("    solution: {:?}", solution.iter().map(|(k,v)| format!("{}:{}", k, v)).collect::<Vec<_>>());
+    eprintln!(
+        "    solution: {:?}",
+        solution
+            .iter()
+            .map(|(k, v)| format!("{}:{}", k, v))
+            .collect::<Vec<_>>()
+    );
     let mut upgrades = HashMap::new();
     for (mod_id, _) in candidates.iter() {
         if let Some(ver) = solution.get(mod_id.as_str()) {
@@ -413,9 +555,14 @@ pub async fn resolve_with_candidates(
             if new_ver != current {
                 upgrades.insert(mod_id.clone(), new_ver);
             } else if let Some(cand) = candidates.get(mod_id).and_then(|v| v.first()) {
-                if cand.jar_version == current { continue; }
+                if cand.jar_version == current {
+                    continue;
+                }
                 // 密室困境：锁死 solution 里其他包为 exact，强制要求新版本
-                eprintln!("    {} not upgraded to {} — checking why...", mod_id, cand.jar_version);
+                eprintln!(
+                    "    {} not upgraded to {} — checking why...",
+                    mod_id, cand.jar_version
+                );
                 let mut solo_provider = OrbitDependencyProvider::new();
                 let root = "___solo___".to_string();
                 let rv = Version::zero();
@@ -425,7 +572,9 @@ pub async fn resolve_with_candidates(
                 // 注册候选版本 + 植入模组
                 let cv = Version::parse(&cand.jar_version, loader);
                 let cv_for_range = cv.clone();
-                let cd: Vec<_> = cand.deps.iter()
+                let cd: Vec<_> = cand
+                    .deps
+                    .iter()
                     .filter(|(n, _, req)| *req && n != "java" && n != "mixinextras")
                     .map(|(n, c, _)| (n.clone(), Version::parse_constraint(c, loader)))
                     .collect();
@@ -434,7 +583,9 @@ pub async fn resolve_with_candidates(
                 // 植入模组：注册版本，加入锁死列表
                 for imp in &cand.implanted {
                     let iv = Version::parse(&imp.version, loader);
-                    let id: Vec<_> = imp.deps.iter()
+                    let id: Vec<_> = imp
+                        .deps
+                        .iter()
                         .filter(|(n, _, req)| *req && n != "java" && n != "mixinextras")
                         .map(|(n, c, _)| (n.clone(), Version::parse_constraint(c, loader)))
                         .collect();
@@ -447,14 +598,31 @@ pub async fn resolve_with_candidates(
                 rd.push((mod_id.clone(), pubgrub::Ranges::higher_than(cv_for_range)));
                 for (chosen_id, chosen_ver) in solution.iter() {
                     if chosen_id != mod_id.as_str() && chosen_id.as_str() != root.as_str() {
-                        solo_provider.add_package_versions(chosen_id.clone(), vec![chosen_ver.clone()]);
-                        let real_deps = lockfile.find(chosen_id).map(|e| {
-                            e.dependencies.iter().map(|d| {
-                                (d.name.clone(), Version::parse_constraint(&d.version, loader))
-                            }).collect::<Vec<_>>()
-                        }).unwrap_or_default();
-                        solo_provider.add_package_deps(chosen_id.clone(), chosen_ver.clone(), real_deps);
-                        rd.push((chosen_id.clone(), pubgrub::Ranges::singleton(chosen_ver.clone())));
+                        solo_provider
+                            .add_package_versions(chosen_id.clone(), vec![chosen_ver.clone()]);
+                        let real_deps = lockfile
+                            .find(chosen_id)
+                            .map(|e| {
+                                e.dependencies
+                                    .iter()
+                                    .map(|d| {
+                                        (
+                                            d.name.clone(),
+                                            Version::parse_constraint(&d.version, loader),
+                                        )
+                                    })
+                                    .collect::<Vec<_>>()
+                            })
+                            .unwrap_or_default();
+                        solo_provider.add_package_deps(
+                            chosen_id.clone(),
+                            chosen_ver.clone(),
+                            real_deps,
+                        );
+                        rd.push((
+                            chosen_id.clone(),
+                            pubgrub::Ranges::singleton(chosen_ver.clone()),
+                        ));
                     }
                 }
                 // 植入模组也锁死

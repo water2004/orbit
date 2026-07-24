@@ -1,6 +1,6 @@
-use std::time::Duration;
-use reqwest::{Client as ReqwestClient, header};
 use crate::error::Result;
+use reqwest::{Client as ReqwestClient, header};
+use std::time::Duration;
 
 pub struct Client {
     pub(crate) http: ReqwestClient,
@@ -25,14 +25,24 @@ impl Client {
             .timeout(timeout)
             .build()?;
 
-        Ok(Self { http, base_url: "https://api.modrinth.com/v2".to_string() })
+        Ok(Self {
+            http,
+            base_url: "https://api.modrinth.com/v2".to_string(),
+        })
     }
 
     /// 检查 HTTP 响应状态，保留 body 文本用于错误报告
-    pub(crate) async fn check_response(&self, resp: reqwest::Response) -> Result<reqwest::Response> {
+    pub(crate) async fn check_response(
+        &self,
+        resp: reqwest::Response,
+    ) -> Result<reqwest::Response> {
         let status = resp.status();
-        if status.is_success() { return Ok(resp); }
+        if status.is_success() {
+            return Ok(resp);
+        }
         let body = resp.text().await.unwrap_or_default();
-        Err(crate::error::ModrinthError::Api(format!("HTTP {status}: {body}")))
+        Err(crate::error::ModrinthError::Api(format!(
+            "HTTP {status}: {body}"
+        )))
     }
 }

@@ -36,11 +36,13 @@ pub fn read_mod_metadata(path: &Path, loader: &str) -> Result<JarModMetadata, Or
 
     read_mod_metadata_from_archive(&mut archive, loader)
         .transpose()
-        .unwrap_or_else(|| Err(OrbitError::Other(anyhow::anyhow!(
-            "no {} mod metadata found in {}",
-            loader,
-            path.display()
-        ))))
+        .unwrap_or_else(|| {
+            Err(OrbitError::Other(anyhow::anyhow!(
+                "no {} mod metadata found in {}",
+                loader,
+                path.display()
+            )))
+        })
 }
 
 /// 下载 JAR 并解析 fabric.mod.json。
@@ -65,9 +67,13 @@ pub async fn download_and_parse(
         .build()
         .map_err(|e| crate::error::OrbitError::Other(e.into()))?;
 
-    let bytes = client.get(url).send().await
+    let bytes = client
+        .get(url)
+        .send()
+        .await
         .map_err(crate::error::OrbitError::Network)?
-        .bytes().await
+        .bytes()
+        .await
         .map_err(crate::error::OrbitError::Network)?;
 
     if !expected_sha512.is_empty() {
@@ -90,16 +96,21 @@ pub async fn download_and_parse(
 }
 
 /// 从字节数据读取模组元数据（用于内嵌 JAR）。`loader` 由调用者传入。
-pub fn read_mod_metadata_from_bytes(data: &[u8], loader: &str) -> Result<JarModMetadata, OrbitError> {
+pub fn read_mod_metadata_from_bytes(
+    data: &[u8],
+    loader: &str,
+) -> Result<JarModMetadata, OrbitError> {
     let cursor = std::io::Cursor::new(data);
     let mut archive = zip::ZipArchive::new(cursor).map_err(OrbitError::Zip)?;
 
     read_mod_metadata_from_archive(&mut archive, loader)
         .transpose()
-        .unwrap_or_else(|| Err(OrbitError::Other(anyhow::anyhow!(
-            "no {} mod metadata found in embedded JAR",
-            loader
-        ))))
+        .unwrap_or_else(|| {
+            Err(OrbitError::Other(anyhow::anyhow!(
+                "no {} mod metadata found in embedded JAR",
+                loader
+            )))
+        })
 }
 
 /// 根据 loader 分发到对应 reader
@@ -109,9 +120,11 @@ fn read_mod_metadata_from_archive<R: std::io::Read + std::io::Seek>(
 ) -> Result<Option<JarModMetadata>, OrbitError> {
     let meta_opt = match loader {
         "fabric" | "quilt" => fabric::try_read(archive)?,
-        _ => return Err(OrbitError::Other(anyhow::anyhow!(
-            "unsupported mod loader: {loader}"
-        ))),
+        _ => {
+            return Err(OrbitError::Other(anyhow::anyhow!(
+                "unsupported mod loader: {loader}"
+            )));
+        }
     };
 
     if let Some(mut meta) = meta_opt {

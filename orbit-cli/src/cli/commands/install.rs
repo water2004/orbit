@@ -1,5 +1,5 @@
-use anyhow::Result;
 use super::CliContext;
+use anyhow::Result;
 
 /// `orbit install` — 根据 orbit.toml + orbit.lock 还原全部模组。
 /// 不接受 mod 名称参数（单个模组安装请用 `orbit add`）。

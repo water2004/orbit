@@ -5,7 +5,7 @@
 
 use indexmap::IndexMap;
 
-use super::{ModLoader, ModMetadata, MetadataParser};
+use super::{MetadataParser, ModLoader, ModMetadata};
 use crate::error::OrbitError;
 
 // ── Parser ──────────────────────────────────────
@@ -22,8 +22,9 @@ impl MetadataParser for FabricParser {
     }
 
     fn parse(&self, content: &str) -> Result<ModMetadata, OrbitError> {
-        let v: serde_json::Value = serde_json::from_str(content)
-            .map_err(|e| OrbitError::Other(anyhow::anyhow!("invalid JSON in fabric.mod.json: {e}")))?;
+        let v: serde_json::Value = serde_json::from_str(content).map_err(|e| {
+            OrbitError::Other(anyhow::anyhow!("invalid JSON in fabric.mod.json: {e}"))
+        })?;
 
         Ok(ModMetadata {
             id: get_str(&v, "id"),
@@ -32,7 +33,9 @@ impl MetadataParser for FabricParser {
             description: get_str(&v, "description"),
             authors: get_authors(&v),
             license: v.get("license").and_then(|l| l.as_str()).map(String::from),
-            environment: map_environment(v.get("environment").and_then(|e| e.as_str()).unwrap_or("*")),
+            environment: map_environment(
+                v.get("environment").and_then(|e| e.as_str()).unwrap_or("*"),
+            ),
             dependencies: get_depends(&v),
             embedded_jars: get_jars(&v),
             loader: ModLoader::Fabric,
@@ -57,16 +60,18 @@ fn get_authors(v: &serde_json::Value) -> Vec<String> {
     match v.get("authors") {
         None | Some(serde_json::Value::Null) => vec![],
         Some(serde_json::Value::String(s)) => vec![s.clone()],
-        Some(serde_json::Value::Array(arr)) => arr.iter().map(|elem| match elem {
-            serde_json::Value::String(s) => s.clone(),
-            serde_json::Value::Object(obj) => {
-                obj.get("name")
+        Some(serde_json::Value::Array(arr)) => arr
+            .iter()
+            .map(|elem| match elem {
+                serde_json::Value::String(s) => s.clone(),
+                serde_json::Value::Object(obj) => obj
+                    .get("name")
                     .and_then(|n| n.as_str())
                     .map(String::from)
-                    .unwrap_or_else(|| format!("{obj:?}"))
-            }
-            other => other.to_string(),
-        }).collect(),
+                    .unwrap_or_else(|| format!("{obj:?}")),
+                other => other.to_string(),
+            })
+            .collect(),
         _ => vec![],
     }
 }
@@ -75,10 +80,12 @@ fn get_authors(v: &serde_json::Value) -> Vec<String> {
 fn get_jars(v: &serde_json::Value) -> Vec<String> {
     v.get("jars")
         .and_then(|j| j.as_array())
-        .map(|arr| arr.iter()
-            .filter_map(|entry| entry.get("file").and_then(|f| f.as_str()))
-            .map(String::from)
-            .collect())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|entry| entry.get("file").and_then(|f| f.as_str()))
+                .map(String::from)
+                .collect()
+        })
         .unwrap_or_default()
 }
 
@@ -93,9 +100,7 @@ fn get_depends(v: &serde_json::Value) -> IndexMap<String, String> {
         let constraint = match val {
             serde_json::Value::String(s) => s.clone(),
             serde_json::Value::Array(arr) => {
-                let parts: Vec<&str> = arr.iter()
-                    .filter_map(|v| v.as_str())
-                    .collect();
+                let parts: Vec<&str> = arr.iter().filter_map(|v| v.as_str()).collect();
                 if parts.len() == 1 {
                     parts[0].to_string()
                 } else {
@@ -115,7 +120,8 @@ fn map_environment(raw: &str) -> String {
         "client" => "client",
         "server" => "server",
         other => other,
-    }.into()
+    }
+    .into()
 }
 
 // ── 测试 ──────────────────────────────────────
@@ -166,7 +172,10 @@ mod tests {
         assert_eq!(meta.id, "voxy");
         assert_eq!(meta.version, "0.2.14-alpha");
         assert_eq!(meta.name, "Voxy");
-        assert_eq!(meta.description, "Far distance rendering mod utilising LoDs");
+        assert_eq!(
+            meta.description,
+            "Far distance rendering mod utilising LoDs"
+        );
         assert_eq!(meta.authors, vec!["Cortex"]);
         assert_eq!(meta.license.as_deref(), Some("All-Rights-Reserved"));
         assert_eq!(meta.environment, "both");
@@ -227,7 +236,10 @@ mod tests {
         assert_eq!(meta.authors, vec!["JellySquid (jellysquid3)"]);
         assert_eq!(meta.environment, "client");
         assert_eq!(meta.dependencies.get("fabricloader").unwrap(), ">=0.16.0");
-        assert_eq!(meta.dependencies.get("fabric-rendering-fluids-v1").unwrap(), ">=2.0.0");
+        assert_eq!(
+            meta.dependencies.get("fabric-rendering-fluids-v1").unwrap(),
+            ">=2.0.0"
+        );
     }
 
     #[test]

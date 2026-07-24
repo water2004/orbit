@@ -145,20 +145,48 @@ pub struct Project {
 }
 
 impl ProjectInfo for Project {
-    fn get_id(&self) -> &str { &self.id }
-    fn get_slug(&self) -> &str { &self.slug }
-    fn get_title(&self) -> &str { &self.title }
-    fn get_description(&self) -> &str { &self.description }
-    fn get_categories(&self) -> &[String] { &self.categories }
-    fn get_client_side(&self) -> &str { &self.client_side }
-    fn get_server_side(&self) -> &str { &self.server_side }
-    fn get_project_type(&self) -> &str { &self.project_type }
-    fn get_downloads(&self) -> i64 { self.downloads }
-    fn get_versions(&self) -> &[String] { self.versions.as_deref().unwrap_or(&[]) }
-    fn get_followers(&self) -> i64 { self.followers }
-    fn get_author(&self) -> &str { &self.team }
-    fn get_date_created(&self) -> &str { &self.published }
-    fn get_date_modified(&self) -> &str { &self.updated }
+    fn get_id(&self) -> &str {
+        &self.id
+    }
+    fn get_slug(&self) -> &str {
+        &self.slug
+    }
+    fn get_title(&self) -> &str {
+        &self.title
+    }
+    fn get_description(&self) -> &str {
+        &self.description
+    }
+    fn get_categories(&self) -> &[String] {
+        &self.categories
+    }
+    fn get_client_side(&self) -> &str {
+        &self.client_side
+    }
+    fn get_server_side(&self) -> &str {
+        &self.server_side
+    }
+    fn get_project_type(&self) -> &str {
+        &self.project_type
+    }
+    fn get_downloads(&self) -> i64 {
+        self.downloads
+    }
+    fn get_versions(&self) -> &[String] {
+        self.versions.as_deref().unwrap_or(&[])
+    }
+    fn get_followers(&self) -> i64 {
+        self.followers
+    }
+    fn get_author(&self) -> &str {
+        &self.team
+    }
+    fn get_date_created(&self) -> &str {
+        &self.published
+    }
+    fn get_date_modified(&self) -> &str {
+        &self.updated
+    }
 }
 
 // ─────────────────────────────────────────────
@@ -227,20 +255,48 @@ pub struct SearchHit {
 }
 
 impl ProjectInfo for SearchHit {
-    fn get_id(&self) -> &str { &self.project_id }
-    fn get_slug(&self) -> &str { &self.slug }
-    fn get_title(&self) -> &str { &self.title }
-    fn get_description(&self) -> &str { &self.description }
-    fn get_categories(&self) -> &[String] { self.categories.as_deref().unwrap_or(&[]) }
-    fn get_client_side(&self) -> &str { &self.client_side }
-    fn get_server_side(&self) -> &str { &self.server_side }
-    fn get_project_type(&self) -> &str { &self.project_type }
-    fn get_downloads(&self) -> i64 { self.downloads }
-    fn get_versions(&self) -> &[String] { &self.versions }
-    fn get_followers(&self) -> i64 { self.follows }
-    fn get_author(&self) -> &str { &self.author }
-    fn get_date_created(&self) -> &str { &self.date_created }
-    fn get_date_modified(&self) -> &str { &self.date_modified }
+    fn get_id(&self) -> &str {
+        &self.project_id
+    }
+    fn get_slug(&self) -> &str {
+        &self.slug
+    }
+    fn get_title(&self) -> &str {
+        &self.title
+    }
+    fn get_description(&self) -> &str {
+        &self.description
+    }
+    fn get_categories(&self) -> &[String] {
+        self.categories.as_deref().unwrap_or(&[])
+    }
+    fn get_client_side(&self) -> &str {
+        &self.client_side
+    }
+    fn get_server_side(&self) -> &str {
+        &self.server_side
+    }
+    fn get_project_type(&self) -> &str {
+        &self.project_type
+    }
+    fn get_downloads(&self) -> i64 {
+        self.downloads
+    }
+    fn get_versions(&self) -> &[String] {
+        &self.versions
+    }
+    fn get_followers(&self) -> i64 {
+        self.follows
+    }
+    fn get_author(&self) -> &str {
+        &self.author
+    }
+    fn get_date_created(&self) -> &str {
+        &self.date_created
+    }
+    fn get_date_modified(&self) -> &str {
+        &self.date_modified
+    }
 }
 
 /// 搜索接口的顶层响应。

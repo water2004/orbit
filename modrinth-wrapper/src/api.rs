@@ -165,7 +165,10 @@ impl Client {
 
     /// Get all of a project's dependencies.
     /// `GET /project/{id|slug}/dependencies`
-    pub async fn get_project_dependencies(&self, id_or_slug: &str) -> Result<ProjectDependencyList> {
+    pub async fn get_project_dependencies(
+        &self,
+        id_or_slug: &str,
+    ) -> Result<ProjectDependencyList> {
         let url = format!("{}/project/{}/dependencies", self.base_url, id_or_slug);
         let resp = self.http.get(&url).send().await?;
         let resp = self.check_response(resp).await?;
@@ -218,8 +221,15 @@ impl Client {
 
     /// Get a version given a project ID/slug and a version ID or number.
     /// `GET /project/{id|slug}/version/{id|number}`
-    pub async fn get_version(&self, project_id: &str, version_id_or_number: &str) -> Result<Version> {
-        let url = format!("{}/project/{}/version/{}", self.base_url, project_id, version_id_or_number);
+    pub async fn get_version(
+        &self,
+        project_id: &str,
+        version_id_or_number: &str,
+    ) -> Result<Version> {
+        let url = format!(
+            "{}/project/{}/version/{}",
+            self.base_url, project_id, version_id_or_number
+        );
         let resp = self.http.get(&url).send().await?;
         let resp = self.check_response(resp).await?;
         let res = resp.json::<Version>().await?;
@@ -249,13 +259,23 @@ impl Client {
 
     /// List versions of a project with filtering via [`ListVersionsParams`] builder.
     /// `GET /project/{id|slug}/version?loaders=...&game_versions=...&featured=...&include_changelog=...`
-    pub async fn list_versions_with_params(&self, project_id: &str, params: ListVersionsParams) -> Result<Vec<Version>> {
+    pub async fn list_versions_with_params(
+        &self,
+        project_id: &str,
+        params: ListVersionsParams,
+    ) -> Result<Vec<Version>> {
         let mut query_params: Vec<(&str, String)> = Vec::new();
         if let Some(ref loaders) = params.loaders {
-            query_params.push(("loaders", serde_json::to_string(loaders).unwrap_or_default()));
+            query_params.push((
+                "loaders",
+                serde_json::to_string(loaders).unwrap_or_default(),
+            ));
         }
         if let Some(ref gv) = params.game_versions {
-            query_params.push(("game_versions", serde_json::to_string(gv).unwrap_or_default()));
+            query_params.push((
+                "game_versions",
+                serde_json::to_string(gv).unwrap_or_default(),
+            ));
         }
         if let Some(featured) = params.featured {
             query_params.push(("featured", featured.to_string()));
@@ -280,7 +300,12 @@ impl Client {
     ///
     /// If `algorithm` is `None`, defaults to `sha1`.
     /// If `multiple` is `true`, returns the version even if multiple files share the same hash.
-    pub async fn get_version_from_hash(&self, hash: &str, algorithm: Option<&str>, multiple: Option<bool>) -> Result<Version> {
+    pub async fn get_version_from_hash(
+        &self,
+        hash: &str,
+        algorithm: Option<&str>,
+        multiple: Option<bool>,
+    ) -> Result<Version> {
         let algo = algorithm.unwrap_or("sha1");
         let mut query_params: Vec<(&str, String)> = vec![("algorithm", algo.to_string())];
         if let Some(true) = multiple {
@@ -296,7 +321,11 @@ impl Client {
 
     /// Get versions from multiple file hashes.
     /// `POST /version_files`
-    pub async fn get_versions_from_hashes(&self, hashes: &[&str], algorithm: Option<&str>) -> Result<HashMap<String, Version>> {
+    pub async fn get_versions_from_hashes(
+        &self,
+        hashes: &[&str],
+        algorithm: Option<&str>,
+    ) -> Result<HashMap<String, Version>> {
         let algo = algorithm.unwrap_or("sha1");
         let url = format!("{}/version_files", self.base_url);
         let body = serde_json::json!({
@@ -311,7 +340,13 @@ impl Client {
 
     /// Get the latest version of a project from a file hash, loader(s), and game version(s).
     /// `POST /version_file/{hash}/update?algorithm=...`
-    pub async fn get_latest_version_from_hash(&self, hash: &str, loaders: &[&str], game_versions: &[&str], algorithm: Option<&str>) -> Result<Version> {
+    pub async fn get_latest_version_from_hash(
+        &self,
+        hash: &str,
+        loaders: &[&str],
+        game_versions: &[&str],
+        algorithm: Option<&str>,
+    ) -> Result<Version> {
         let algo = algorithm.unwrap_or("sha1");
         let path = format!("/version_file/{}/update", hash);
         let url = build_url(&self.base_url, &path, &[("algorithm", algo.to_string())]);
@@ -327,7 +362,13 @@ impl Client {
 
     /// Get the latest versions of multiple projects from file hashes, loader(s), and game version(s).
     /// `POST /version_files/update`
-    pub async fn get_latest_versions_from_hashes(&self, hashes: &[&str], loaders: &[&str], game_versions: &[&str], algorithm: Option<&str>) -> Result<HashMap<String, Version>> {
+    pub async fn get_latest_versions_from_hashes(
+        &self,
+        hashes: &[&str],
+        loaders: &[&str],
+        game_versions: &[&str],
+        algorithm: Option<&str>,
+    ) -> Result<HashMap<String, Version>> {
         let algo = algorithm.unwrap_or("sha1");
         let url = format!("{}/version_files/update", self.base_url);
         let body = serde_json::json!({

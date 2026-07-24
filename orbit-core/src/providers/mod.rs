@@ -4,21 +4,25 @@
 //! 每个平台（Modrinth、CurseForge）各自实现此 trait，`resolver` 模块仅依赖此 trait，
 //! 不耦合任何具体平台的 SDK。
 
-pub mod rate_limiter;
-pub mod modrinth;
 pub mod curseforge;
+pub mod modrinth;
+pub mod rate_limiter;
 
-use async_trait::async_trait;
 use crate::error::OrbitError;
+use async_trait::async_trait;
 
 /// 根据配置创建 provider 列表，按 `resolver.platforms` 顺序。
-pub fn create_providers(platforms: &[String]) -> Result<Vec<Box<dyn ModProvider>>, crate::error::OrbitError> {
+pub fn create_providers(
+    platforms: &[String],
+) -> Result<Vec<Box<dyn ModProvider>>, crate::error::OrbitError> {
     let ua = format!("orbit/{}", env!("CARGO_PKG_VERSION"));
     let mut providers: Vec<Box<dyn ModProvider>> = Vec::new();
     for name in platforms {
         match name.as_str() {
             "modrinth" => {
-                providers.push(Box::new(modrinth::ModrinthProvider::new(&ua, 3)?) as Box<dyn ModProvider>);
+                providers.push(
+                    Box::new(modrinth::ModrinthProvider::new(&ua, 3)?) as Box<dyn ModProvider>
+                );
             }
             "curseforge" => {
                 eprintln!("warning: CurseForge support is not yet implemented, skipping");
@@ -177,10 +181,7 @@ pub trait ModProvider: Send + Sync {
 
     /// 根据哈希反查版本（供 orbit sync 识别手动拖入的 jar）。
     /// 注意：Modrinth 使用 SHA-512，CurseForge 使用 murmur2。调用方应传入对应平台的哈希值。
-    async fn get_version_by_hash(
-        &self,
-        hash: &str,
-    ) -> Result<Option<ResolvedMod>, OrbitError>;
+    async fn get_version_by_hash(&self, hash: &str) -> Result<Option<ResolvedMod>, OrbitError>;
 
     /// 批量哈希反查（一次请求查所有 hash，避免 N+1 查询）
     async fn get_versions_by_hashes(
@@ -227,7 +228,10 @@ pub trait ModProvider: Send + Sync {
 
     /// 获取项目的完整依赖列表（含可读名称/slug）
     /// 默认返回空，各平台可覆盖实现
-    async fn fetch_dependencies(&self, _project_id: &str) -> Result<Vec<ResolvedDependency>, OrbitError> {
+    async fn fetch_dependencies(
+        &self,
+        _project_id: &str,
+    ) -> Result<Vec<ResolvedDependency>, OrbitError> {
         Ok(vec![])
     }
 }

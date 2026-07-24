@@ -4,17 +4,17 @@
 //! 识别差异并更新声明文件和锁文件（不产生网络下载）。
 
 use crate::error::OrbitError;
-use crate::manifest::OrbitManifest;
 use crate::lockfile::OrbitLockfile;
+use crate::manifest::OrbitManifest;
 use crate::providers::ModProvider;
 
 /// 同步报告
 #[derive(Debug, Clone, Default)]
 pub struct SyncReport {
-    pub added: Vec<String>,        // 手动拖入的新 jar
-    pub changed: Vec<String>,      // SHA-256 变化的 jar
-    pub missing: Vec<String>,      // toml 声明了但文件缺失
-    pub unlocked: Vec<String>,     // toml 有但 lock 无
+    pub added: Vec<String>,    // 手动拖入的新 jar
+    pub changed: Vec<String>,  // SHA-256 变化的 jar
+    pub missing: Vec<String>,  // toml 声明了但文件缺失
+    pub unlocked: Vec<String>, // toml 有但 lock 无
 }
 
 /// 执行双向同步。
@@ -31,5 +31,7 @@ pub async fn sync(
     _providers: &[Box<dyn ModProvider>],
 ) -> Result<SyncReport, OrbitError> {
     // TODO: Phase 2 — 实现完整的同步逻辑
-    Err(OrbitError::Other(anyhow::anyhow!("sync algorithm not yet implemented")))
+    Err(OrbitError::Other(anyhow::anyhow!(
+        "sync algorithm not yet implemented"
+    )))
 }

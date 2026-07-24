@@ -21,5 +21,7 @@ pub async fn check_compatibility(
     _target_loader: &str,
 ) -> Result<Vec<CheckResult>, OrbitError> {
     // TODO: Phase 2
-    Err(OrbitError::Other(anyhow::anyhow!("compatibility checker not yet implemented")))
+    Err(OrbitError::Other(anyhow::anyhow!(
+        "compatibility checker not yet implemented"
+    )))
 }

@@ -1,7 +1,7 @@
 pub mod commands;
-use clap::{Parser, Subcommand};
 use crate::cli::commands::CommandHandler;
 use anyhow::Result;
+use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
 #[command(name = "orbit")]
@@ -215,28 +215,51 @@ impl CommandHandler for Commands {
     async fn execute(self, ctx: &commands::CliContext) -> Result<()> {
         use crate::cli::commands::*;
         match self {
-            Commands::Init { name, mc_version, modloader, modloader_version } => {
-                handle_init(name, mc_version, modloader, modloader_version, ctx).await
-            }
+            Commands::Init {
+                name,
+                mc_version,
+                modloader,
+                modloader_version,
+            } => handle_init(name, mc_version, modloader, modloader_version, ctx).await,
             Commands::Instances { command } => command.execute(ctx).await,
-            Commands::Install { target, group, no_optional, locked, frozen } => {
-                handle_install(target, group, no_optional, locked || frozen, ctx).await
-            }
-            Commands::Add { mod_name, platform, version, env, optional, no_deps } => {
-                handle_add(mod_name, platform, version, env, optional, no_deps, ctx).await
-            }
+            Commands::Install {
+                target,
+                group,
+                no_optional,
+                locked,
+                frozen,
+            } => handle_install(target, group, no_optional, locked || frozen, ctx).await,
+            Commands::Add {
+                mod_name,
+                platform,
+                version,
+                env,
+                optional,
+                no_deps,
+            } => handle_add(mod_name, platform, version, env, optional, no_deps, ctx).await,
             Commands::Remove { mod_name } => handle_remove(mod_name, ctx).await,
             Commands::Purge { mod_name } => handle_purge(mod_name, ctx).await,
             Commands::Sync => handle_sync(ctx).await,
             Commands::Outdated { mod_name } => handle_outdated(mod_name, ctx).await,
             Commands::Upgrade { mod_name } => handle_upgrade(mod_name, ctx).await,
-            Commands::Search { query, platform, limit, mc_version, modloader } => {
-                handle_search(query, platform, limit, mc_version, modloader, ctx).await
-            }
+            Commands::Search {
+                query,
+                platform,
+                limit,
+                mc_version,
+                modloader,
+            } => handle_search(query, platform, limit, mc_version, modloader, ctx).await,
             Commands::Info { mod_name, platform } => handle_info(mod_name, platform, ctx).await,
             Commands::List { tree, target } => handle_list(tree, target, ctx).await,
-            Commands::Import { file, merge_strategy } => handle_import(file, merge_strategy, ctx).await,
-            Commands::Export { file, target, format } => handle_export(file, target, format, ctx).await,
+            Commands::Import {
+                file,
+                merge_strategy,
+            } => handle_import(file, merge_strategy, ctx).await,
+            Commands::Export {
+                file,
+                target,
+                format,
+            } => handle_export(file, target, format, ctx).await,
             Commands::Check { version, modloader } => handle_check(version, modloader, ctx).await,
             Commands::Cache { command } => command.execute(ctx).await,
         }

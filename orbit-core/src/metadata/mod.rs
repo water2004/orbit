@@ -93,7 +93,9 @@ impl MetadataExtractorBuilder {
     }
 
     pub fn build(self) -> MetadataExtractor {
-        MetadataExtractor { parsers: self.parsers }
+        MetadataExtractor {
+            parsers: self.parsers,
+        }
     }
 }
 
@@ -146,8 +148,11 @@ impl MetadataExtractor {
                 Err(OrbitError::Other(anyhow::anyhow!(
                     "ambiguous JAR: contains multiple metadata files ({}). \
                      Specify --modloader to disambiguate.",
-                    candidates.iter().map(|(p, _)| p.target_file())
-                        .collect::<Vec<_>>().join(", ")
+                    candidates
+                        .iter()
+                        .map(|(p, _)| p.target_file())
+                        .collect::<Vec<_>>()
+                        .join(", ")
                 )))
             }
         }

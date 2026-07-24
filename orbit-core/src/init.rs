@@ -45,10 +45,7 @@ pub struct ScannedMod {
 ///
 /// 遍历 `{instance_dir}/mods/` 下所有 .jar 文件，
 /// 读取 fabric.mod.json 并计算 SHA-256。
-fn scan_mods_dir(
-    instance_dir: &Path,
-    loader: &str,
-) -> Result<Vec<ScannedMod>, OrbitError> {
+fn scan_mods_dir(instance_dir: &Path, loader: &str) -> Result<Vec<ScannedMod>, OrbitError> {
     let mods_dir = instance_dir.join("mods");
     if !mods_dir.is_dir() {
         return Ok(vec![]);
@@ -56,12 +53,11 @@ fn scan_mods_dir(
 
     let mut results = vec![];
 
-    for entry in std::fs::read_dir(&mods_dir).map_err(|e| {
-        OrbitError::Other(anyhow::anyhow!("cannot read mods/ directory: {e}"))
-    })? {
-        let entry = entry.map_err(|e| {
-            OrbitError::Other(anyhow::anyhow!("cannot read directory entry: {e}"))
-        })?;
+    for entry in std::fs::read_dir(&mods_dir)
+        .map_err(|e| OrbitError::Other(anyhow::anyhow!("cannot read mods/ directory: {e}")))?
+    {
+        let entry = entry
+            .map_err(|e| OrbitError::Other(anyhow::anyhow!("cannot read directory entry: {e}")))?;
         let path = entry.path();
 
         // 只处理 .jar 文件
@@ -85,20 +81,41 @@ fn scan_mods_dir(
         })?;
         eprintln!("    SHA-256: {}", &sha256[..16]);
 
-        let (mod_id, mod_name, version, jar_deps, embedded) = match crate::jar::read_mod_metadata(&path, loader) {
-            Ok(meta) => {
-                eprintln!("    id={} name={} version={} deps={}", meta.mod_id, meta.name, meta.version, meta.dependencies.len());
-                (if meta.mod_id.is_empty() { None } else { Some(meta.mod_id) },
-                 if meta.name.is_empty() { None } else { Some(meta.name) },
-                 if meta.version.is_empty() { None } else { Some(meta.version) },
-                 meta.dependencies,
-                 meta.embedded_jars)
-            }
-            Err(e) => {
-                eprintln!("    ⚠ cannot read mod metadata: {e}");
-                (None, None, None, vec![], vec![])
-            }
-        };
+        let (mod_id, mod_name, version, jar_deps, embedded) =
+            match crate::jar::read_mod_metadata(&path, loader) {
+                Ok(meta) => {
+                    eprintln!(
+                        "    id={} name={} version={} deps={}",
+                        meta.mod_id,
+                        meta.name,
+                        meta.version,
+                        meta.dependencies.len()
+                    );
+                    (
+                        if meta.mod_id.is_empty() {
+                            None
+                        } else {
+                            Some(meta.mod_id)
+                        },
+                        if meta.name.is_empty() {
+                            None
+                        } else {
+                            Some(meta.name)
+                        },
+                        if meta.version.is_empty() {
+                            None
+                        } else {
+                            Some(meta.version)
+                        },
+                        meta.dependencies,
+                        meta.embedded_jars,
+                    )
+                }
+                Err(e) => {
+                    eprintln!("    ⚠ cannot read mod metadata: {e}");
+                    (None, None, None, vec![], vec![])
+                }
+            };
 
         results.push(ScannedMod {
             filename,
@@ -135,7 +152,10 @@ fn scan_embedded_jars(
             OrbitError::Other(anyhow::anyhow!("cannot open {}: {e}", parent_jar.display()))
         })?;
         let mut archive = zip::ZipArchive::new(file).map_err(|e| {
-            OrbitError::Other(anyhow::anyhow!("cannot open {} as ZIP: {e}", parent_jar.display()))
+            OrbitError::Other(anyhow::anyhow!(
+                "cannot open {} as ZIP: {e}",
+                parent_jar.display()
+            ))
         })?;
 
         for emb_path in &parent.embedded_jars {
@@ -148,30 +168,51 @@ fn scan_embedded_jars(
                 }
             };
             let mut bytes = Vec::new();
-            std::io::Read::read_to_end(&mut entry, &mut bytes).map_err(|e| {
-                OrbitError::Other(anyhow::anyhow!("cannot read {emb_path}: {e}"))
-            })?;
+            std::io::Read::read_to_end(&mut entry, &mut bytes)
+                .map_err(|e| OrbitError::Other(anyhow::anyhow!("cannot read {emb_path}: {e}")))?;
             let sha256 = crate::jar::sha256_digest(&bytes);
             let sha512 = crate::jar::sha512_digest(&bytes);
             let filename = std::path::Path::new(emb_path)
-                .file_name().unwrap_or_default().to_string_lossy().to_string();
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string();
             eprintln!("      SHA-256: {}", &sha256[..16]);
-            let (mod_id, mod_name, version, jar_deps) = match crate::jar::read_mod_metadata_from_bytes(&bytes, loader) {
-                Ok(meta) => {
-                    (if meta.mod_id.is_empty() { None } else { Some(meta.mod_id) },
-                     if meta.name.is_empty() { None } else { Some(meta.name) },
-                     if meta.version.is_empty() { None } else { Some(meta.version) },
-                     meta.dependencies)
-                }
-                Err(e) => {
-                    eprintln!("      ⚠ cannot read mod metadata from embedded: {e}");
-                    (None, None, None, vec![])
-                }
-            };
+            let (mod_id, mod_name, version, jar_deps) =
+                match crate::jar::read_mod_metadata_from_bytes(&bytes, loader) {
+                    Ok(meta) => (
+                        if meta.mod_id.is_empty() {
+                            None
+                        } else {
+                            Some(meta.mod_id)
+                        },
+                        if meta.name.is_empty() {
+                            None
+                        } else {
+                            Some(meta.name)
+                        },
+                        if meta.version.is_empty() {
+                            None
+                        } else {
+                            Some(meta.version)
+                        },
+                        meta.dependencies,
+                    ),
+                    Err(e) => {
+                        eprintln!("      ⚠ cannot read mod metadata from embedded: {e}");
+                        (None, None, None, vec![])
+                    }
+                };
             new_mods.push(ScannedMod {
-                filename, mod_id: mod_id.clone().or_else(|| mod_name.clone()), mod_name,
+                filename,
+                mod_id: mod_id.clone().or_else(|| mod_name.clone()),
+                mod_name,
                 version,
-                sha1: String::new(), sha256, sha512, jar_deps, embedded_jars: vec![],
+                sha1: String::new(),
+                sha256,
+                sha512,
+                jar_deps,
+                embedded_jars: vec![],
                 embedded_parent: Some(parent.filename.clone()),
             });
         }
@@ -186,7 +227,9 @@ fn scan_embedded_jars(
 ///
 /// 先查 versions/ 子目录（标准 MC 启动器布局），再回退到当前目录。
 /// 避免 mod JAR 中的 version.json 干扰检测。
-pub fn detect_mc_version(instance_dir: &std::path::Path) -> Result<crate::metadata::mojang::McVersion, OrbitError> {
+pub fn detect_mc_version(
+    instance_dir: &std::path::Path,
+) -> Result<crate::metadata::mojang::McVersion, OrbitError> {
     let mut search_dirs = Vec::new();
 
     let versions_dir = instance_dir.join("versions");
@@ -231,14 +274,20 @@ fn read_version_json_from_jar(
         OrbitError::Other(anyhow::anyhow!("cannot open {}: {e}", jar_path.display()))
     })?;
     let mut archive = zip::ZipArchive::new(file).map_err(|e| {
-        OrbitError::Other(anyhow::anyhow!("cannot open {} as ZIP: {e}", jar_path.display()))
+        OrbitError::Other(anyhow::anyhow!(
+            "cannot open {} as ZIP: {e}",
+            jar_path.display()
+        ))
     })?;
     let mut entry = archive.by_name("version.json").map_err(|_| {
         OrbitError::Other(anyhow::anyhow!("no version.json in {}", jar_path.display()))
     })?;
     let mut content = String::new();
     std::io::Read::read_to_string(&mut entry, &mut content).map_err(|e| {
-        OrbitError::Other(anyhow::anyhow!("cannot read version.json from {}: {e}", jar_path.display()))
+        OrbitError::Other(anyhow::anyhow!(
+            "cannot read version.json from {}: {e}",
+            jar_path.display()
+        ))
     })?;
     crate::metadata::mojang::McVersion::from_json(&content)
 }
@@ -256,7 +305,8 @@ pub async fn run_init(
     eprintln!("  found {} jar(s)\n", scanned.len());
 
     // 2. 分离内嵌模组：只对顶层模组调 API
-    let (top_level, embedded): (Vec<_>, Vec<_>) = scanned.iter().partition(|s| s.embedded_parent.is_none());
+    let (top_level, embedded): (Vec<_>, Vec<_>) =
+        scanned.iter().partition(|s| s.embedded_parent.is_none());
 
     // 2a. 识别顶层模组
     eprintln!("Identifying top-level mods via Modrinth ...");
@@ -268,8 +318,9 @@ pub async fn run_init(
     let identified = crate::identification::identify_mods(&top_slice, providers, &ctx).await?;
 
     // 2b. 内嵌模组不调 API，直接用 JAR metadata（不加入顶层，仅用于 lock 的 implanted）
-    let embedded_identified: Vec<_> = embedded.iter().map(|s| {
-        crate::identification::IdentifiedMod {
+    let embedded_identified: Vec<_> = embedded
+        .iter()
+        .map(|s| crate::identification::IdentifiedMod {
             filename: s.filename.clone(),
             mod_id: s.mod_id.clone().unwrap_or_default(),
             mod_name: s.mod_name.clone().unwrap_or_default(),
@@ -278,16 +329,24 @@ pub async fn run_init(
             sha1: s.sha1.clone(),
             sha512: s.sha512.clone(),
             sha256: s.sha256.clone(),
-            source: crate::identification::IdentifiedSource::File { path: format!("mods/{}", s.filename) },
+            source: crate::identification::IdentifiedSource::File {
+                path: format!("mods/{}", s.filename),
+            },
             deps: s.jar_deps.clone(),
-        }
-    }).collect();
+        })
+        .collect();
 
     // 3. 构建依赖声明 + lock 条目（仅顶层模组）
     let mut lock_entries: Vec<crate::lockfile::PackageEntry> = identified
         .iter()
         .map(|m| {
-            let key = if !m.mod_id.is_empty() { m.mod_id.clone() } else if !m.mod_name.is_empty() { m.mod_name.clone() } else { m.filename.clone() };
+            let key = if !m.mod_id.is_empty() {
+                m.mod_id.clone()
+            } else if !m.mod_name.is_empty() {
+                m.mod_name.clone()
+            } else {
+                m.filename.clone()
+            };
             let mut entry = crate::lockfile::PackageEntry {
                 mod_id: key,
                 version: m.version.clone(),
@@ -303,7 +362,12 @@ pub async fn run_init(
             };
 
             match &m.source {
-                crate::identification::IdentifiedSource::Platform { platform, project_id, version_id, slug } => {
+                crate::identification::IdentifiedSource::Platform {
+                    platform,
+                    project_id,
+                    version_id,
+                    slug,
+                } => {
                     entry.provider = platform.clone();
                     entry.modrinth = Some(crate::lockfile::ModrinthInfo {
                         project_id: project_id.clone(),
@@ -314,17 +378,24 @@ pub async fn run_init(
                 }
                 crate::identification::IdentifiedSource::File { path } => {
                     entry.provider = "file".to_string();
-                    entry.file = Some(crate::lockfile::FileInfo {
-                        path: path.clone(),
-                    });
+                    entry.file = Some(crate::lockfile::FileInfo { path: path.clone() });
                 }
             }
 
             for (dep_id, constraint, req) in &m.deps {
-                if *req && dep_id != "java" && dep_id != "mixinextras" && dep_id != "minecraft" && dep_id != "fabricloader" {
+                if *req
+                    && dep_id != "java"
+                    && dep_id != "mixinextras"
+                    && dep_id != "minecraft"
+                    && dep_id != "fabricloader"
+                {
                     entry.dependencies.push(crate::lockfile::LockDependency {
                         name: dep_id.clone(),
-                        version: if constraint.is_empty() { "*".to_string() } else { constraint.to_string() },
+                        version: if constraint.is_empty() {
+                            "*".to_string()
+                        } else {
+                            constraint.to_string()
+                        },
                     });
                 }
             }
@@ -334,36 +405,67 @@ pub async fn run_init(
 
     for m in &embedded_identified {
         // 找到父 JAR 文件名
-        let parent_name = scanned.iter()
+        let parent_name = scanned
+            .iter()
             .find(|s| s.filename == m.filename && s.embedded_parent.is_some())
             .and_then(|s| s.embedded_parent.as_deref());
 
-        let Some(parent_name) = parent_name else { continue; };
+        let Some(parent_name) = parent_name else {
+            continue;
+        };
 
         // 在顶层 identified 中找到父模组，推导 key 后按 mod_id 匹配 lock_entry
-        let parent_key = identified.iter()
+        let parent_key = identified
+            .iter()
             .find(|im| im.filename == parent_name)
             .map(|im| {
-                if !im.mod_id.is_empty() { im.mod_id.clone() }
-                else if !im.mod_name.is_empty() { im.mod_name.clone() }
-                else { im.filename.clone() }
+                if !im.mod_id.is_empty() {
+                    im.mod_id.clone()
+                } else if !im.mod_name.is_empty() {
+                    im.mod_name.clone()
+                } else {
+                    im.filename.clone()
+                }
             });
 
-        let Some(parent_key) = parent_key else { continue; };
+        let Some(parent_key) = parent_key else {
+            continue;
+        };
 
         if let Some(parent_entry) = lock_entries.iter_mut().find(|e| e.mod_id == parent_key) {
-            if parent_entry.implanted.iter().any(|imp| imp.filename == m.filename) {
+            if parent_entry
+                .implanted
+                .iter()
+                .any(|imp| imp.filename == m.filename)
+            {
                 continue;
             }
-            let imp_deps: Vec<crate::lockfile::LockDependency> = m.deps.iter()
-                .filter(|(id, _, req)| *req && id != "java" && id != "mixinextras" && id != "minecraft" && id != "fabricloader")
+            let imp_deps: Vec<crate::lockfile::LockDependency> = m
+                .deps
+                .iter()
+                .filter(|(id, _, req)| {
+                    *req && id != "java"
+                        && id != "mixinextras"
+                        && id != "minecraft"
+                        && id != "fabricloader"
+                })
                 .map(|(dep_id, constraint, _)| crate::lockfile::LockDependency {
                     name: dep_id.clone(),
-                    version: if constraint.is_empty() { "*".to_string() } else { constraint.clone() },
+                    version: if constraint.is_empty() {
+                        "*".to_string()
+                    } else {
+                        constraint.clone()
+                    },
                 })
                 .collect();
             parent_entry.implanted.push(crate::lockfile::ImplantedMod {
-                name: if !m.mod_id.is_empty() { m.mod_id.clone() } else if !m.mod_name.is_empty() { m.mod_name.clone() } else { m.filename.clone() },
+                name: if !m.mod_id.is_empty() {
+                    m.mod_id.clone()
+                } else if !m.mod_name.is_empty() {
+                    m.mod_name.clone()
+                } else {
+                    m.filename.clone()
+                },
                 version: m.version.clone(),
                 sha256: m.sha256.clone(),
                 filename: m.filename.clone(),
@@ -377,9 +479,19 @@ pub async fn run_init(
     let loader_ver = input.modloader_version.clone();
     let mut dependencies = indexmap::IndexMap::new();
     for m in &identified {
-        let key = if !m.mod_id.is_empty() { m.mod_id.clone() } else if !m.mod_name.is_empty() { m.mod_name.clone() } else { m.filename.clone() };
+        let key = if !m.mod_id.is_empty() {
+            m.mod_id.clone()
+        } else if !m.mod_name.is_empty() {
+            m.mod_name.clone()
+        } else {
+            m.filename.clone()
+        };
         let spec = DependencySpec::Full {
-            version: if m.version.is_empty() { None } else { Some(m.version.clone()) },
+            version: if m.version.is_empty() {
+                None
+            } else {
+                Some(m.version.clone())
+            },
             optional: None,
             env: None,
             exclude: None,
@@ -408,9 +520,12 @@ pub async fn run_init(
     eprintln!("Verifying dependency graph using PubGrub resolver...");
     let mut all_local_mods = identified.clone();
     all_local_mods.extend(embedded_identified.clone());
-    
+
     if let Err(err_msg) = crate::resolver::check_local_graph(&manifest, &all_local_mods) {
-        eprintln!("\n⚠️  WARNING: Dependency graph verification failed!\n{}\n", err_msg);
+        eprintln!(
+            "\n⚠️  WARNING: Dependency graph verification failed!\n{}\n",
+            err_msg
+        );
         eprintln!("Please use 'orbit install' or 'orbit sync' to fix missing dependencies.");
     } else {
         eprintln!("Dependency graph verified successfully.");
