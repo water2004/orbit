@@ -10,7 +10,6 @@ use std::hash::{Hash, Hasher};
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub enum Version {
-    Lowest,
     Fabric(fabric::SemanticVersion),
     Generic(String),
 }
@@ -18,13 +17,12 @@ pub enum Version {
 impl Hash for Version {
     fn hash<H: Hasher>(&self, state: &mut H) {
         match self {
-            Self::Lowest => state.write_u8(0),
             Self::Fabric(f) => {
-                state.write_u8(1);
+                state.write_u8(0);
                 f.hash(state);
             }
             Self::Generic(s) => {
-                state.write_u8(2);
+                state.write_u8(1);
                 s.hash(state);
             }
         }
@@ -39,22 +37,11 @@ impl PartialOrd for Version {
 
 impl Ord for Version {
     fn cmp(&self, other: &Self) -> Ordering {
-        if let (Self::Lowest, Self::Lowest) = (self, other) {
-            return Ordering::Equal;
-        }
-        if let Self::Lowest = self {
-            return Ordering::Less;
-        }
-        if let Self::Lowest = other {
-            return Ordering::Greater;
-        }
-
         match (self, other) {
             (Self::Fabric(a), Self::Fabric(b)) => a.cmp(b),
             (Self::Generic(a), Self::Generic(b)) => a.cmp(b),
             (Self::Fabric(_), Self::Generic(_)) => Ordering::Less,
             (Self::Generic(_), Self::Fabric(_)) => Ordering::Greater,
-            _ => unreachable!(),
         }
     }
 }
@@ -62,7 +49,6 @@ impl Ord for Version {
 impl std::fmt::Display for Version {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Lowest => write!(f, "0.0.0-lowest"),
             Self::Fabric(v) => write!(f, "{}", v.raw),
             Self::Generic(s) => write!(f, "{}", s),
         }
