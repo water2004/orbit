@@ -5,11 +5,11 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::error::OrbitError;
-use crate::lockfile::{OrbitLockfile, PackageEntry};
+use crate::lockfile::OrbitLockfile;
 use crate::manifest::OrbitManifest;
-use crate::providers::{ModProvider, ResolvedMod};
+use crate::providers::{ModProvider, RemoteArtifact};
 use crate::resolver::types::{
-    CandidateCatalog, CandidateDiagnostic, CandidateVersion, ResolutionSelector, ResolvedCandidates,
+    CandidateCatalog, CandidateDiagnostic, ResolutionSelector, ResolvedCandidates,
 };
 
 pub struct OutdatedMod {
@@ -26,90 +26,134 @@ pub struct OutdatedReport {
     pub warnings: Vec<String>,
 }
 
-/// BFS 下载 JAR 并构建候选图、候选元数据和 provider 标识映射。
+/// Discover the complete remote project closure, then download that artifact
+/// queue as one bounded batch. JAR dependencies are deliberately outside this
+/// layer; only the solver consumes them after every artifact has been parsed.
 /// 供 `install_mod` 和 `check_all_outdated` 共用。
 pub async fn download_candidates_bfs(
     provider: &dyn ModProvider,
     seeds: &[String],
-    lockfile: &OrbitLockfile,
     mc_version: &str,
     loader: &str,
+    jar_cache: &crate::jar_cache::JarCache,
 ) -> Result<CandidateCatalog, OrbitError> {
-    let mut seen: HashSet<String> = HashSet::new();
-    let mut to_download: Vec<ResolvedMod> = Vec::new();
-    let mut queue: Vec<String> = seeds.to_vec();
+    let mut seen_lookups: HashSet<String> = HashSet::new();
+    let mut seen_artifacts: HashSet<String> = HashSet::new();
+    let artifacts = discover_artifact_closure(
+        provider,
+        seeds.to_vec(),
+        mc_version,
+        loader,
+        &mut seen_lookups,
+        &mut seen_artifacts,
+    )
+    .await?;
+    let downloader = provider.artifact_downloader().clone();
+    let jobs = artifacts
+        .into_iter()
+        .map(|artifact| (downloader.clone(), artifact))
+        .collect();
+    let parsed = download_artifact_queue(jobs, loader, jar_cache).await?;
+    let mut catalog = CandidateCatalog::default();
+    for (metadata, artifact) in parsed {
+        catalog.record(metadata, artifact)?;
+    }
+    Ok(catalog)
+}
 
-    while let Some(pid) = queue.pop() {
-        if !seen.insert(pid.clone()) {
+async fn discover_artifact_closure(
+    provider: &dyn ModProvider,
+    initial_lookups: Vec<String>,
+    mc_version: &str,
+    loader: &str,
+    seen_lookups: &mut HashSet<String>,
+    seen_artifacts: &mut HashSet<String>,
+) -> Result<Vec<RemoteArtifact>, OrbitError> {
+    let mut queue: Vec<_> = initial_lookups
+        .into_iter()
+        .map(|lookup| (lookup, None::<String>))
+        .collect();
+    let mut discovered = Vec::new();
+    while let Some((lookup, referenced_by)) = queue.pop() {
+        if !seen_lookups.insert(lookup.clone()) {
             continue;
         }
-        let versions = provider
-            .get_versions(&pid, Some(mc_version), Some(loader))
-            .await?;
-        for v in &versions {
-            for dep in &v.dependencies {
-                if dep.required
-                    && let Some(ref pid) = dep.project_id
-                    && !seen.contains(pid.as_str())
-                {
-                    queue.push(pid.clone());
+        let artifacts = match provider
+            .get_versions(&lookup, Some(mc_version), Some(loader))
+            .await
+        {
+            Ok(artifacts) => artifacts,
+            Err(OrbitError::ModNotFound(_)) if referenced_by.is_some() => {
+                return Err(OrbitError::Other(anyhow::anyhow!(
+                    "{} project '{}' references missing project '{}'; the artifact closure is incomplete",
+                    provider.name(),
+                    referenced_by.unwrap_or_default(),
+                    lookup
+                )));
+            }
+            Err(error) => return Err(error),
+        };
+
+        for artifact in artifacts {
+            for related in &artifact.related_projects {
+                if let Some(project_id) = related.project_id.as_ref() {
+                    queue.push((project_id.clone(), Some(lookup.clone())));
+                } else if let Some(slug) = related.slug.as_ref() {
+                    queue.push((slug.clone(), Some(lookup.clone())));
                 }
             }
-            to_download.push(v.clone());
+            let artifact_key = format!(
+                "{}:{}:{}:{}",
+                artifact.provider,
+                artifact.version_id().unwrap_or_default(),
+                artifact.download_url,
+                artifact.filename
+            );
+            if !seen_artifacts.insert(artifact_key) {
+                continue;
+            }
+            discovered.push(artifact);
         }
     }
-    let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(10));
-    let downloader = provider.artifact_downloader().clone();
-    let mut handles = Vec::new();
+    Ok(discovered)
+}
 
-    for v in &to_download {
-        let v = v.clone();
+async fn download_artifact_queue(
+    jobs: Vec<(crate::providers::ArtifactDownloadClient, RemoteArtifact)>,
+    loader: &str,
+    jar_cache: &crate::jar_cache::JarCache,
+) -> Result<Vec<(crate::jar::JarModMetadata, RemoteArtifact)>, OrbitError> {
+    let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(10));
+    let mut handles = Vec::with_capacity(jobs.len());
+    for (downloader, artifact) in jobs {
         let loader = loader.to_string();
-        let sem = semaphore.clone();
-        let downloader = downloader.clone();
-        let lockfile_packages = lockfile.packages.clone();
+        let cache = jar_cache.clone();
+        let semaphore = semaphore.clone();
         handles.push(tokio::spawn(async move {
-            let _permit = sem.acquire().await;
+            let _permit = semaphore.acquire_owned().await.map_err(|error| {
+                OrbitError::Other(anyhow::anyhow!(
+                    "candidate download queue was closed: {error}"
+                ))
+            })?;
             let metadata = crate::jar::download_and_parse(
+                &cache,
                 &downloader,
-                &v.download_url,
-                &v.filename,
-                &v.sha1,
-                &v.sha512,
+                &artifact.download_url,
+                &artifact.filename,
+                &artifact.sha1,
+                &artifact.sha512,
                 &loader,
             )
             .await?;
-            let key = if metadata.mod_id.is_empty() {
-                lockfile_packages
-                    .iter()
-                    .find(|entry| {
-                        entry.source_slug() == Some(v.slug.as_str())
-                            || entry.source_project_id() == v.project_id()
-                    })
-                    .map(|entry| entry.mod_id.clone())
-                    .unwrap_or_default()
-            } else {
-                metadata.mod_id.clone()
-            };
-            if key.is_empty() {
-                return Ok(None);
-            }
-            Ok(Some((
-                key,
-                CandidateVersion::from_jar_metadata(metadata),
-                v,
-            )))
+            Ok::<_, OrbitError>((metadata, artifact))
         }));
     }
 
-    let mut download = CandidateCatalog::default();
+    let mut parsed = Vec::with_capacity(handles.len());
     let mut first_error = None;
     for handle in handles {
         match handle.await {
-            Ok(Ok(Some((package, candidate, resolved)))) => {
-                download.record(package, candidate, resolved);
-            }
-            Ok(Ok(None)) => {}
+            Ok(Ok(candidate)) => parsed.push(candidate),
             Ok(Err(error)) => {
                 first_error.get_or_insert(error);
             }
@@ -120,23 +164,21 @@ pub async fn download_candidates_bfs(
             }
         }
     }
-    if download.candidates.is_empty()
-        && let Some(error) = first_error
-    {
+    if let Some(error) = first_error {
         return Err(error);
     }
-    Ok(download)
+    Ok(parsed)
 }
 
 pub async fn download_candidates_with_fallback(
     providers: &[Box<dyn ModProvider>],
     seeds: &[String],
-    lockfile: &OrbitLockfile,
     mc_version: &str,
     loader: &str,
+    jar_cache: &crate::jar_cache::JarCache,
 ) -> Result<CandidateCatalog, OrbitError> {
     for provider in providers {
-        match download_candidates_bfs(provider.as_ref(), seeds, lockfile, mc_version, loader).await
+        match download_candidates_bfs(provider.as_ref(), seeds, mc_version, loader, jar_cache).await
         {
             Ok(download) if !download.candidates.is_empty() => return Ok(download),
             Ok(_) | Err(OrbitError::ModNotFound(_)) => continue,
@@ -148,50 +190,26 @@ pub async fn download_candidates_with_fallback(
     ))
 }
 
-/// 检查所有已安装平台模组的可用更新。
-pub async fn check_all_outdated(
-    manifest: &OrbitManifest,
-    lockfile: &OrbitLockfile,
+pub(crate) async fn download_lockfile_candidate_catalog(
     providers: &[Box<dyn ModProvider>],
-    selector: Option<ResolutionSelector>,
-) -> Result<OutdatedReport, OrbitError> {
-    let loader = &manifest.project.modloader;
-    let mc_version = &manifest.project.mc_version;
-
+    lockfile: &OrbitLockfile,
+    mc_version: &str,
+    loader: &str,
+    jar_cache: &crate::jar_cache::JarCache,
+) -> Result<CandidateCatalog, OrbitError> {
     let mut seeds_by_provider: HashMap<String, Vec<String>> = HashMap::new();
     for entry in lockfile
         .packages
         .iter()
         .filter(|entry| entry.provider != "file")
     {
-        let provider =
-            crate::providers::find_provider(providers, &entry.provider).ok_or_else(|| {
-                OrbitError::Other(anyhow::anyhow!(
-                    "lockfile contains {} packages but that provider is not configured",
-                    entry.provider
-                ))
-            })?;
-        let Some(project_id) = entry.source_project_id() else {
-            continue;
-        };
-        let Some(version_id) = entry.source_version_id() else {
-            continue;
-        };
-        let mut versions = provider
-            .get_versions(&project_id, Some(mc_version), Some(loader))
-            .await?;
-        versions.sort_by(|left, right| right.date_published.cmp(&left.date_published));
-        let Some(current_date) = versions
-            .iter()
-            .find(|version| version.version_id().as_deref() == Some(version_id.as_str()))
-            .map(|version| version.date_published.as_str())
-        else {
-            continue;
-        };
-        if versions
-            .iter()
-            .any(|version| version.date_published.as_str() > current_date)
-        {
+        crate::providers::find_provider(providers, &entry.provider).ok_or_else(|| {
+            OrbitError::Other(anyhow::anyhow!(
+                "lockfile contains {} packages but that provider is not configured",
+                entry.provider
+            ))
+        })?;
+        if let Some(project_id) = entry.source_project_id() {
             seeds_by_provider
                 .entry(entry.provider.clone())
                 .or_default()
@@ -199,37 +217,59 @@ pub async fn check_all_outdated(
         }
     }
 
-    if seeds_by_provider.is_empty() {
-        return Ok(OutdatedReport::default());
-    }
-
-    // 2. Download candidates from each package's original provider, then solve once.
+    let mut jobs = Vec::new();
     let mut catalog = CandidateCatalog::default();
-    for (provider_name, seeds) in seeds_by_provider {
-        let Some(provider) = crate::providers::find_provider(providers, &provider_name) else {
+    for provider in providers {
+        let Some(seeds) = seeds_by_provider.remove(provider.name()) else {
             continue;
         };
-        let download =
-            download_candidates_bfs(provider, &seeds, lockfile, mc_version, loader).await?;
-        for (package, versions) in download.candidates {
-            catalog
-                .candidates
-                .entry(package)
-                .or_insert_with(Vec::new)
-                .extend(versions);
-        }
-        catalog.resolved.extend(download.resolved);
-        catalog.source_packages.extend(download.source_packages);
+        let mut seen_lookups = HashSet::new();
+        let mut seen_artifacts = HashSet::new();
+        let artifacts = discover_artifact_closure(
+            provider.as_ref(),
+            seeds,
+            mc_version,
+            loader,
+            &mut seen_lookups,
+            &mut seen_artifacts,
+        )
+        .await?;
+        let downloader = provider.artifact_downloader().clone();
+        jobs.extend(
+            artifacts
+                .into_iter()
+                .map(|artifact| (downloader.clone(), artifact)),
+        );
     }
+    debug_assert!(seeds_by_provider.is_empty());
+    for (metadata, artifact) in download_artifact_queue(jobs, loader, jar_cache).await? {
+        catalog.record(metadata, artifact)?;
+    }
+    Ok(catalog)
+}
+
+/// 检查所有已安装平台模组的可用更新。
+pub async fn check_all_outdated(
+    manifest: &OrbitManifest,
+    lockfile: &OrbitLockfile,
+    providers: &[Box<dyn ModProvider>],
+    selector: Option<ResolutionSelector>,
+    jar_cache: &crate::jar_cache::JarCache,
+) -> Result<OutdatedReport, OrbitError> {
+    let loader = &manifest.project.modloader;
+    let mc_version = &manifest.project.mc_version;
+
+    let catalog =
+        download_lockfile_candidate_catalog(providers, lockfile, mc_version, loader, jar_cache)
+            .await?;
     if catalog.candidates.is_empty() {
         return Ok(OutdatedReport::default());
     }
 
     // 3. Resolve
-    let portfolio =
-        crate::resolver::resolve_candidate_portfolio(manifest, lockfile, &mut catalog, providers)
-            .await
-            .map_err(|e| OrbitError::Other(anyhow::anyhow!("{e}")))?;
+    let portfolio = crate::resolver::resolve_candidate_portfolio(manifest, lockfile, &catalog)
+        .await
+        .map_err(|e| OrbitError::Other(anyhow::anyhow!("{e}")))?;
     let resolution = crate::resolver::select_resolution(portfolio, selector)
         .map_err(|e| OrbitError::Other(anyhow::anyhow!("{e}")))?;
 
@@ -239,9 +279,8 @@ pub async fn check_all_outdated(
         .map(|(mod_id, new_version)| OutdatedMod {
             current_version: lockfile
                 .find(&mod_id)
-                .and_then(PackageEntry::source_version)
-                .unwrap_or_default()
-                .to_string(),
+                .map(|entry| entry.version.clone())
+                .unwrap_or_default(),
             new_version,
             mod_id,
         })
@@ -258,12 +297,59 @@ pub async fn check_all_outdated(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::providers::ModrinthResolvedInfo;
+    use crate::providers::{
+        ArtifactDownloadClient, ModInfo, ModrinthResolvedInfo, RemoteProjectLocator,
+        SearchResultItem,
+    };
+    use async_trait::async_trait;
+    use std::sync::{Arc, Mutex};
 
-    fn resolved(source: &str, project_id: &str) -> ResolvedMod {
-        ResolvedMod {
-            mod_id: source.to_string(),
-            version: "provider-version".to_string(),
+    struct DiscoveryProvider {
+        downloader: ArtifactDownloadClient,
+        projects: HashMap<String, Vec<RemoteArtifact>>,
+        calls: Arc<Mutex<Vec<String>>>,
+    }
+
+    #[async_trait]
+    impl ModProvider for DiscoveryProvider {
+        fn name(&self) -> &'static str {
+            "modrinth"
+        }
+
+        fn artifact_downloader(&self) -> &ArtifactDownloadClient {
+            &self.downloader
+        }
+
+        async fn search(
+            &self,
+            _query: &str,
+            _mc_version: Option<&str>,
+            _loader: Option<&str>,
+            _limit: usize,
+        ) -> Result<Vec<SearchResultItem>, OrbitError> {
+            Ok(Vec::new())
+        }
+
+        async fn get_mod_info(&self, slug: &str) -> Result<ModInfo, OrbitError> {
+            Err(OrbitError::ModNotFound(slug.to_string()))
+        }
+
+        async fn get_versions(
+            &self,
+            slug: &str,
+            _mc_version: Option<&str>,
+            _loader: Option<&str>,
+        ) -> Result<Vec<RemoteArtifact>, OrbitError> {
+            self.calls.lock().unwrap().push(slug.to_string());
+            self.projects
+                .get(slug)
+                .cloned()
+                .ok_or_else(|| OrbitError::ModNotFound(slug.to_string()))
+        }
+    }
+
+    fn artifact(source: &str, project_id: &str) -> RemoteArtifact {
+        RemoteArtifact {
             sha1: String::new(),
             sha512: String::new(),
             slug: source.to_string(),
@@ -271,48 +357,155 @@ mod tests {
             modrinth: Some(ModrinthResolvedInfo {
                 project_id: project_id.to_string(),
                 version_id: format!("{project_id}-version"),
-                version_number: "provider-version".to_string(),
             }),
             curseforge: None,
-            date_published: String::new(),
             download_url: String::new(),
             filename: String::new(),
-            dependencies: Vec::new(),
-            client_side: None,
-            server_side: None,
+            related_projects: Vec::new(),
         }
+    }
+
+    fn related_artifact(
+        source: &str,
+        project_id: &str,
+        version: &str,
+        related_project: Option<&str>,
+    ) -> RemoteArtifact {
+        let mut artifact = artifact(source, project_id);
+        artifact.filename = format!("{project_id}-{version}.jar");
+        artifact.download_url = format!("https://example.invalid/{}", artifact.filename);
+        artifact.modrinth.as_mut().unwrap().version_id = format!("{project_id}-{version}");
+        artifact.related_projects = related_project
+            .map(|project_id| {
+                vec![RemoteProjectLocator {
+                    slug: None,
+                    project_id: Some(project_id.to_string()),
+                }]
+            })
+            .unwrap_or_default();
+        artifact
+    }
+
+    #[tokio::test]
+    async fn discovery_recurses_projects_and_queues_every_matching_version_before_download() {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let provider = DiscoveryProvider {
+            downloader: ArtifactDownloadClient::anonymous("orbit-test").unwrap(),
+            projects: HashMap::from([
+                (
+                    "root".to_string(),
+                    vec![
+                        related_artifact("root", "root", "1", Some("child")),
+                        related_artifact("root", "root", "2", Some("child")),
+                    ],
+                ),
+                (
+                    "child".to_string(),
+                    vec![related_artifact("child", "child", "1", Some("grandchild"))],
+                ),
+                (
+                    "grandchild".to_string(),
+                    vec![related_artifact("grandchild", "grandchild", "1", None)],
+                ),
+            ]),
+            calls: calls.clone(),
+        };
+        let mut seen_lookups = HashSet::new();
+        let mut seen_artifacts = HashSet::new();
+
+        let artifacts = discover_artifact_closure(
+            &provider,
+            vec!["root".to_string()],
+            "1.21.1",
+            "fabric",
+            &mut seen_lookups,
+            &mut seen_artifacts,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(artifacts.len(), 4);
+        assert_eq!(
+            calls
+                .lock()
+                .unwrap()
+                .iter()
+                .cloned()
+                .collect::<HashSet<_>>(),
+            HashSet::from([
+                "root".to_string(),
+                "child".to_string(),
+                "grandchild".to_string(),
+            ])
+        );
+    }
+
+    #[tokio::test]
+    async fn discovery_rejects_a_missing_related_project() {
+        let provider = DiscoveryProvider {
+            downloader: ArtifactDownloadClient::anonymous("orbit-test").unwrap(),
+            projects: HashMap::from([(
+                "root".to_string(),
+                vec![related_artifact("root", "root", "1", Some("missing"))],
+            )]),
+            calls: Arc::new(Mutex::new(Vec::new())),
+        };
+        let mut seen_lookups = HashSet::new();
+        let mut seen_artifacts = HashSet::new();
+
+        let error = discover_artifact_closure(
+            &provider,
+            vec!["root".to_string()],
+            "1.21.1",
+            "fabric",
+            &mut seen_lookups,
+            &mut seen_artifacts,
+        )
+        .await
+        .unwrap_err();
+
+        assert!(error.to_string().contains("artifact closure is incomplete"));
+        assert!(error.to_string().contains("missing"));
     }
 
     #[test]
     fn candidate_catalog_uses_actual_package_and_version_as_its_key() {
         let mut download = CandidateCatalog::default();
 
-        download.record(
-            "actual-a".to_string(),
-            CandidateVersion {
-                jar_version: "1".to_string(),
-                dependencies: Vec::new(),
-                environment: Default::default(),
-                provides: Vec::new(),
-                language_loader: None,
-                embedded_artifacts: Vec::new(),
-                bundled: Vec::new(),
-            },
-            resolved("source-a", "project-a"),
-        );
-        download.record(
-            "actual-b".to_string(),
-            CandidateVersion {
-                jar_version: "1".to_string(),
-                dependencies: Vec::new(),
-                environment: Default::default(),
-                provides: Vec::new(),
-                language_loader: None,
-                embedded_artifacts: Vec::new(),
-                bundled: Vec::new(),
-            },
-            resolved("source-b", "project-b"),
-        );
+        download
+            .record(
+                crate::jar::JarModMetadata {
+                    mod_id: "actual-a".to_string(),
+                    name: "Actual A".to_string(),
+                    version: "1".to_string(),
+                    environment: Default::default(),
+                    dependencies: Vec::new(),
+                    provides: Vec::new(),
+                    language_loader: None,
+                    embedded_jars: Vec::new(),
+                    embedded_artifacts: Vec::new(),
+                    bundled_mods: Vec::new(),
+                },
+                artifact("source-a", "project-a"),
+            )
+            .unwrap();
+        download
+            .record(
+                crate::jar::JarModMetadata {
+                    mod_id: "actual-b".to_string(),
+                    name: "Actual B".to_string(),
+                    version: "1".to_string(),
+                    environment: Default::default(),
+                    dependencies: Vec::new(),
+                    provides: Vec::new(),
+                    language_loader: None,
+                    embedded_jars: Vec::new(),
+                    embedded_artifacts: Vec::new(),
+                    bundled_mods: Vec::new(),
+                },
+                artifact("source-b", "project-b"),
+            )
+            .unwrap();
 
         assert_eq!(download.resolved.len(), 2);
         assert!(
@@ -325,7 +518,70 @@ mod tests {
                 .resolved
                 .contains_key(&("actual-b".to_string(), "1".to_string()))
         );
-        assert_eq!(download.source_packages["source-a"], "actual-a");
-        assert_eq!(download.source_packages["project-b"], "actual-b");
+        assert_eq!(
+            download.source_packages[&("modrinth".to_string(), "source-a".to_string())],
+            "actual-a"
+        );
+        assert_eq!(
+            download.source_packages[&("modrinth".to_string(), "project-b".to_string())],
+            "actual-b"
+        );
+    }
+
+    #[test]
+    fn candidate_catalog_deduplicates_equal_jar_identities_but_rejects_conflicts() {
+        fn metadata(
+            dependencies: Vec<crate::metadata::ModDependency>,
+        ) -> crate::jar::JarModMetadata {
+            crate::jar::JarModMetadata {
+                mod_id: "actual".to_string(),
+                name: "Actual".to_string(),
+                version: "1".to_string(),
+                environment: Default::default(),
+                dependencies: dependencies
+                    .into_iter()
+                    .map(crate::metadata::DependencyExpression::Only)
+                    .collect(),
+                provides: Vec::new(),
+                language_loader: None,
+                embedded_jars: Vec::new(),
+                embedded_artifacts: Vec::new(),
+                bundled_mods: Vec::new(),
+            }
+        }
+
+        let mut catalog = CandidateCatalog::default();
+        catalog
+            .record(metadata(Vec::new()), artifact("first", "project-a"))
+            .unwrap();
+        catalog
+            .record(metadata(Vec::new()), artifact("mirror", "project-b"))
+            .unwrap();
+
+        assert_eq!(catalog.candidates["actual"].len(), 1);
+        assert_eq!(catalog.resolved.len(), 1);
+        assert_eq!(
+            catalog
+                .resolved
+                .get(&("actual".to_string(), "1".to_string()))
+                .unwrap()
+                .slug,
+            "first"
+        );
+        assert_eq!(
+            catalog.package_for_locator("mirror").unwrap().as_deref(),
+            Some("actual")
+        );
+
+        let error = catalog
+            .record(
+                metadata(vec![crate::metadata::ModDependency::required(
+                    "different",
+                    "*",
+                )]),
+                artifact("conflict", "project-c"),
+            )
+            .unwrap_err();
+        assert!(error.to_string().contains("different metadata"));
     }
 }

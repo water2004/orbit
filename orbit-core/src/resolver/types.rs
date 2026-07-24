@@ -4,7 +4,7 @@ use std::ops::Bound;
 use crate::metadata::{
     DependencyExpression, EmbeddedArtifact, Environment, LanguageLoaderRequirement, ProvidedMod,
 };
-use crate::providers::ResolvedMod;
+use crate::providers::RemoteArtifact;
 use crate::versions::Version;
 use pubgrub::Ranges;
 
@@ -150,7 +150,7 @@ impl std::fmt::Display for SolverPackage {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CandidateVersion {
     pub jar_version: String,
     pub dependencies: Vec<DependencyExpression>,
@@ -162,17 +162,17 @@ pub struct CandidateVersion {
 }
 
 pub type ResolvedCandidateKey = (String, String);
-pub type ResolvedCandidates = HashMap<ResolvedCandidateKey, ResolvedMod>;
+pub type ResolvedCandidates = HashMap<ResolvedCandidateKey, RemoteArtifact>;
 
 #[derive(Debug, Clone, Default)]
 pub struct CandidateCatalog {
     pub candidates: HashMap<String, Vec<CandidateVersion>>,
     pub resolved: ResolvedCandidates,
-    /// Provider lookup key (slug, mod id, or project id) to the JAR-declared package id.
-    pub source_packages: HashMap<String, String>,
+    /// Provider lookup key (slug or project id) to the JAR-declared package id.
+    pub source_packages: HashMap<(String, String), String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BundledCandidate {
     pub mod_id: String,
     pub version: String,
@@ -205,20 +205,90 @@ impl CandidateVersion {
 impl CandidateCatalog {
     pub(crate) fn record(
         &mut self,
-        package: String,
-        candidate: CandidateVersion,
-        resolved: ResolvedMod,
-    ) {
-        self.source_packages
-            .insert(resolved.slug.clone(), package.clone());
-        self.source_packages
-            .insert(resolved.mod_id.clone(), package.clone());
-        if let Some(project_id) = resolved.project_id() {
-            self.source_packages.insert(project_id, package.clone());
+        metadata: crate::jar::JarModMetadata,
+        artifact: RemoteArtifact,
+    ) -> Result<String, crate::error::OrbitError> {
+        if metadata.mod_id.is_empty() {
+            return Err(crate::error::OrbitError::Other(anyhow::anyhow!(
+                "downloaded artifact '{}' has an empty JAR mod_id",
+                artifact.filename
+            )));
         }
-        self.resolved
-            .insert((package.clone(), candidate.jar_version.clone()), resolved);
-        self.candidates.entry(package).or_default().push(candidate);
+        if metadata.version.is_empty() {
+            return Err(crate::error::OrbitError::Other(anyhow::anyhow!(
+                "downloaded artifact '{}' has an empty JAR version",
+                artifact.filename
+            )));
+        }
+        let package = metadata.mod_id.clone();
+        let candidate = CandidateVersion::from_jar_metadata(metadata);
+        let identity = (package.clone(), candidate.jar_version.clone());
+        let existing = self.candidates.get(&package).and_then(|versions| {
+            versions
+                .iter()
+                .find(|existing| existing.jar_version == candidate.jar_version)
+        });
+        if existing.is_some_and(|existing| existing != &candidate) {
+            return Err(crate::error::OrbitError::Other(anyhow::anyhow!(
+                "multiple JARs declare identity '{} {}' with different metadata",
+                identity.0,
+                identity.1
+            )));
+        }
+        let duplicate = existing.is_some();
+        self.record_source_alias(&artifact.provider, &artifact.slug, &package)?;
+        if let Some(project_id) = artifact.project_id() {
+            self.record_source_alias(&artifact.provider, &project_id, &package)?;
+        }
+        if !duplicate {
+            self.candidates
+                .entry(package.clone())
+                .or_default()
+                .push(candidate);
+        }
+        self.resolved.entry(identity).or_insert(artifact);
+        Ok(package)
+    }
+
+    fn record_source_alias(
+        &mut self,
+        provider: &str,
+        alias: &str,
+        package: &str,
+    ) -> Result<(), crate::error::OrbitError> {
+        let key = (provider.to_string(), alias.to_string());
+        if let Some(existing) = self.source_packages.get(&key)
+            && existing != package
+        {
+            return Err(crate::error::OrbitError::Other(anyhow::anyhow!(
+                "{provider} locator '{alias}' returned JARs declaring different mod IDs: \
+                 '{existing}' and '{package}'"
+            )));
+        }
+        self.source_packages.insert(key, package.to_string());
+        Ok(())
+    }
+
+    pub(crate) fn package_for_locator(
+        &self,
+        locator: &str,
+    ) -> Result<Option<String>, crate::error::OrbitError> {
+        let mut packages = self
+            .source_packages
+            .iter()
+            .filter_map(|((_, alias), package)| (alias == locator).then_some(package))
+            .collect::<std::collections::BTreeSet<_>>();
+        if packages.len() > 1 {
+            return Err(crate::error::OrbitError::Other(anyhow::anyhow!(
+                "provider locator '{locator}' is ambiguous after JAR inspection: {}",
+                packages
+                    .iter()
+                    .map(|package| package.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )));
+        }
+        Ok(packages.pop_first().cloned())
     }
 }
 

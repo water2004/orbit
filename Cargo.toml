@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "orbit-cli",
     "orbit-core",
+    "curseforge-wrapper",
     "modrinth-wrapper",
 ]
 exclude = ["pubgrub-fork"]

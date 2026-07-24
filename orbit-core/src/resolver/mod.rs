@@ -1,6 +1,5 @@
 //! Dependency resolution orchestration and public resolver utilities.
 
-mod catalog;
 mod constraints;
 mod diagnostics;
 mod graph;
@@ -16,8 +15,6 @@ use pubgrub::Ranges;
 use crate::lockfile::{OrbitLockfile, PackageEntry};
 use crate::manifest::OrbitManifest;
 use crate::metadata::Environment;
-use crate::providers::ModProvider;
-use crate::resolver::catalog::{CatalogRequest, complete_candidate_catalog};
 use crate::resolver::graph::{build_solver_graph, build_solver_graph_for_target};
 use crate::resolver::ordering::resolution_warnings;
 use crate::resolver::types::{
@@ -136,21 +133,8 @@ pub fn check_version_conflict(
 pub async fn resolve_candidate_portfolio(
     manifest: &OrbitManifest,
     lockfile: &OrbitLockfile,
-    catalog: &mut CandidateCatalog,
-    providers: &[Box<dyn ModProvider>],
+    catalog: &CandidateCatalog,
 ) -> Result<ResolutionPortfolio, String> {
-    let initial_graph = build_solver_graph(manifest, lockfile, &catalog.candidates);
-    complete_candidate_catalog(CatalogRequest {
-        catalog,
-        lockfile,
-        providers,
-        minecraft_version: &manifest.project.mc_version,
-        loader: &manifest.project.modloader,
-        exclusions: &initial_graph.exclusions,
-        target: initial_graph.target,
-    })
-    .await?;
-
     let graph = build_solver_graph(manifest, lockfile, &catalog.candidates);
     let mut maximized_mods: Vec<_> = catalog
         .candidates
@@ -383,7 +367,7 @@ b = "*"
             vec![candidate("1", Vec::new()), candidate("2", Vec::new())],
         );
 
-        let portfolio = resolve_candidate_portfolio(&manifest(), &lockfile(), &mut catalog, &[])
+        let portfolio = resolve_candidate_portfolio(&manifest(), &lockfile(), &catalog)
             .await
             .unwrap();
         let upgrades: std::collections::BTreeSet<_> = portfolio
@@ -422,7 +406,7 @@ b = "*"
                 vec![candidate("1", Vec::new()), candidate("2", Vec::new())],
             );
         }
-        let portfolio = resolve_candidate_portfolio(&manifest(), &lockfile(), &mut catalog, &[])
+        let portfolio = resolve_candidate_portfolio(&manifest(), &lockfile(), &catalog)
             .await
             .unwrap();
         assert_eq!(portfolio.alternatives.len(), 1);
@@ -441,6 +425,30 @@ b = "*"
                 ("b".to_string(), "2".to_string()),
             ])
         );
+    }
+
+    #[tokio::test]
+    async fn jar_dependency_without_a_downloaded_project_is_no_solution() {
+        let mut manifest = manifest();
+        manifest.dependencies.shift_remove("b");
+        let lockfile = OrbitLockfile {
+            meta: lockfile().meta,
+            packages: Vec::new(),
+        };
+        let mut catalog = CandidateCatalog::default();
+        catalog.candidates.insert(
+            "a".to_string(),
+            vec![candidate(
+                "1",
+                vec![ModDependency::required("jar-only-id", "*")],
+            )],
+        );
+
+        let error = resolve_candidate_portfolio(&manifest, &lockfile, &catalog)
+            .await
+            .unwrap_err();
+
+        assert!(error.contains("jar-only-id"), "{error}");
     }
 
     #[test]

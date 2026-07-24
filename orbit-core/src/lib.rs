@@ -15,6 +15,7 @@ pub mod lockfile;
 pub mod manifest;
 pub mod metadata;
 pub mod providers;
+pub mod runtime;
 pub mod versions;
 
 // 业务逻辑模块
@@ -34,8 +35,8 @@ pub use archive::{
 };
 pub use checker::{CheckResult, check_compatibility};
 pub use config::{
-    GlobalConfig, InstanceEntry, InstancesRegistry, config_path, orbit_data_dir, register_instance,
-    remove_instance, set_default_instance,
+    GlobalConfig, InstanceEntry, InstancesRegistry, register_instance, remove_instance,
+    set_default_instance,
 };
 pub use detection::LoaderDetectionService;
 pub use error::OrbitError;
@@ -45,7 +46,7 @@ pub use installer::{
     install_to_instance, list_dependencies, list_installed, list_installed_for_target,
     remove_from_instance, restore_instance, upgrade_all_in_instance,
 };
-pub use jar_cache::{CacheSummary, clean_cache, inspect_cache};
+pub use jar_cache::{CacheSummary, JarCache, clean_cache, inspect_cache};
 pub use lockfile::{
     BundledMod, CurseForgeInfo, FileInfo, LockMeta, ModrinthInfo, OrbitLockfile, PackageEntry,
 };
@@ -55,5 +56,9 @@ pub use outdated::{OutdatedMod, check_all_outdated};
 pub use providers::ModProvider;
 pub use purge::{CandidateConfig, find_config_candidates, remove_config_candidates};
 pub use resolver::types::{ResolutionReport, ResolutionSelector};
+pub use runtime::{
+    NativeRuntimeEnvironment, PathLayout, RuntimeContext, RuntimeEnvironment, RuntimePathOptions,
+    RuntimePaths, compiled_default_layout,
+};
 pub use sync::{SyncReport, sync_instance};
 pub use workspace::{Lockfile, ManifestFile};

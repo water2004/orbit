@@ -1,14 +1,14 @@
 use reqwest::StatusCode;
 use serde::de::DeserializeOwned;
 
-use super::models::{
+use crate::models::{
     ApiResponse, Category, File, FingerprintMatches, FingerprintsRequest, Game, GetFilesParams,
     GetModsRequest, Mod, PagedResponse, SearchModsParams,
 };
 
 const DEFAULT_BASE_URL: &str = "https://api.curseforge.com/v1/";
 const PAGE_SIZE: u32 = 50;
-pub(super) const MAX_RESULTS: u32 = 10_000;
+pub const MAX_RESULTS: u32 = 10_000;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ApiError {
@@ -50,8 +50,10 @@ impl Client {
         Self::build(api_key, user_agent, DEFAULT_BASE_URL)
     }
 
-    #[cfg(test)]
-    pub(crate) fn with_base_url(
+    /// Creates a client for a compatible API endpoint.
+    ///
+    /// This is primarily useful for integration tests and self-hosted proxies.
+    pub fn with_base_url(
         api_key: &str,
         user_agent: &str,
         base_url: &str,

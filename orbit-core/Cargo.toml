@@ -4,8 +4,15 @@ version = "0.1.0"
 edition = "2024"
 description = "Core business logic for Orbit — the Minecraft mod package manager"
 
+[features]
+default = []
+# Select executable-adjacent paths as the compiled default. Runtime callers can
+# still choose the system layout or pass exact paths.
+portable = []
+
 [dependencies]
 # 内部依赖
+curseforge-wrapper = { path = "../curseforge-wrapper" }
 modrinth-wrapper = { path = "../modrinth-wrapper" }
 
 # 工作区共享依赖

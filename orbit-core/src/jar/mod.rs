@@ -94,6 +94,7 @@ pub fn read_mod_metadata(path: &Path, loader: &str) -> Result<JarModMetadata, Or
 /// 校验来源提供的 SHA-512 或 SHA-1，失败则返回 `ChecksumMismatch`。
 /// 优先从全局缓存读取，未命中才走 HTTP；下载后自动存入缓存。
 pub async fn download_and_parse(
+    cache: &crate::jar_cache::JarCache,
     downloader: &crate::providers::ArtifactDownloadClient,
     url: &str,
     filename: &str,
@@ -102,8 +103,7 @@ pub async fn download_and_parse(
     loader: &str,
 ) -> Result<JarModMetadata, crate::error::OrbitError> {
     // 缓存查询
-    if let Ok(cache) = crate::jar_cache::JarCache::load()
-        && let Some(bytes) = cache.get_bytes(expected_sha512, expected_sha1)
+    if let Some(bytes) = cache.get_bytes(expected_sha512, expected_sha1)
         && verify_source_hash(&bytes, expected_sha1, expected_sha512, filename).is_ok()
     {
         return read_mod_metadata_from_bytes(&bytes, loader);
@@ -114,9 +114,7 @@ pub async fn download_and_parse(
     verify_source_hash(&bytes, expected_sha1, expected_sha512, url)?;
 
     // 存入缓存
-    let _ = crate::jar_cache::JarCache::load().map(|mut c| {
-        let _ = c.store_bytes(filename, &bytes);
-    });
+    cache.store_bytes(&bytes)?;
 
     read_mod_metadata_from_bytes(&bytes, loader)
 }
@@ -449,6 +447,32 @@ mod tests {
             "META-INF/jars/fabric-api-base-1.0.5+4ebb5c083e.jar"
         );
         assert!(meta.bundled_mods.is_empty());
+    }
+
+    #[tokio::test]
+    async fn cached_artifact_is_parsed_without_contacting_its_remote_url() {
+        let bytes = jar_bytes(&[("fabric.mod.json", PRINTER_EMBEDDED.as_bytes())]);
+        let cache_dir =
+            std::env::temp_dir().join(format!("orbit-download-cache-test-{}", std::process::id()));
+        let cache = crate::jar_cache::JarCache::open(cache_dir.clone()).unwrap();
+        cache.store_bytes(&bytes).unwrap();
+        let sha512 = sha512_digest(&bytes);
+        let downloader = crate::providers::ArtifactDownloadClient::anonymous("orbit-test").unwrap();
+
+        let metadata = download_and_parse(
+            &cache,
+            &downloader,
+            "https://example.invalid/must-not-be-requested.jar",
+            "cached.jar",
+            "",
+            &sha512,
+            "fabric",
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(metadata.mod_id, "litematica-printer");
+        std::fs::remove_dir_all(cache_dir).unwrap();
     }
 
     #[test]

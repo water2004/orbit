@@ -362,6 +362,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "curseforge-wrapper"
+version = "0.1.0"
+dependencies = [
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "url",
+]
+
+[[package]]
 name = "deflate64"
 version = "0.1.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1046,6 +1057,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "bytes",
+ "curseforge-wrapper",
  "hex",
  "http-body-util",
  "hyper",

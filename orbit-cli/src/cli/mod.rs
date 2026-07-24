@@ -2,6 +2,7 @@ pub mod commands;
 use crate::cli::commands::CommandHandler;
 use anyhow::Result;
 use clap::{Parser, Subcommand};
+use std::path::PathBuf;
 
 #[derive(Parser)]
 #[command(name = "orbit")]
@@ -13,6 +14,18 @@ pub struct Cli {
     /// 指定操作的实例名称
     #[arg(short = 'i', long, global = true)]
     pub instance: Option<String>,
+
+    /// 全局配置文件的精确路径
+    #[arg(long, global = true)]
+    pub config: Option<PathBuf>,
+
+    /// 全局 JAR 缓存目录的精确路径
+    #[arg(long, global = true)]
+    pub cache_dir: Option<PathBuf>,
+
+    /// 默认路径布局: system / executable
+    #[arg(long, global = true)]
+    pub data_layout: Option<orbit_core::PathLayout>,
 
     /// 输出详细日志
     #[arg(short, long, global = true)]

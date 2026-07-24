@@ -5,8 +5,8 @@ use std::collections::HashMap;
 
 use super::rate_limiter::RateLimiter;
 use super::{
-    ArtifactDownloadClient, ArtifactFingerprint, ModInfo, ModProvider, ModrinthResolvedInfo,
-    ResolvedDependency, ResolvedMod, SearchResultItem, SideSupport,
+    ArtifactDownloadClient, ArtifactFingerprint, CatalogDependency, ModInfo, ModProvider,
+    ModrinthResolvedInfo, RemoteArtifact, RemoteProjectLocator, SearchResultItem, SideSupport,
 };
 use crate::error::OrbitError;
 
@@ -44,7 +44,7 @@ impl ModrinthProvider {
     async fn lookup_project_dependencies(
         &self,
         project_id: &str,
-    ) -> Result<Vec<ResolvedDependency>, OrbitError> {
+    ) -> Result<Vec<CatalogDependency>, OrbitError> {
         let dependencies = self
             .client
             .get_project_dependencies(project_id)
@@ -53,12 +53,37 @@ impl ModrinthProvider {
         Ok(dependencies
             .projects
             .into_iter()
-            .map(|project| ResolvedDependency {
+            .map(|project| CatalogDependency {
                 slug: Some(project.slug),
                 required: true,
                 project_id: Some(project.id),
             })
             .collect())
+    }
+
+    async fn dependency_version_projects(
+        &self,
+        versions: &[mr_models::Version],
+    ) -> Result<HashMap<String, String>, OrbitError> {
+        let version_ids: Vec<&str> = versions
+            .iter()
+            .flat_map(|version| version.dependencies.as_deref().unwrap_or(&[]))
+            .filter(|dependency| dependency.project_id.is_none())
+            .filter_map(|dependency| dependency.version_id.as_deref())
+            .collect();
+        if version_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        self.client
+            .get_versions_by_ids(&version_ids)
+            .await
+            .map(|versions| {
+                versions
+                    .into_iter()
+                    .map(|version| (version.id, version.project_id))
+                    .collect()
+            })
+            .map_err(|error| OrbitError::Other(error.into()))
     }
 }
 
@@ -99,6 +124,19 @@ fn build_facets(mc_version: Option<&str>, loader: Option<&str>) -> Option<String
     }
 }
 
+fn primary_jar(version: &mr_models::Version) -> Option<&mr_models::VersionFile> {
+    version
+        .files
+        .iter()
+        .find(|file| file.primary && file.filename.ends_with(".jar"))
+        .or_else(|| {
+            version
+                .files
+                .iter()
+                .find(|file| file.filename.ends_with(".jar"))
+        })
+}
+
 #[async_trait]
 impl ModProvider for ModrinthProvider {
     fn name(&self) -> &'static str {
@@ -132,7 +170,7 @@ impl ModProvider for ModrinthProvider {
             .hits
             .into_iter()
             .map(|hit| SearchResultItem {
-                mod_id: hit.project_id,
+                project_id: hit.project_id,
                 slug: hit.slug,
                 name: hit.title,
                 description: hit.description,
@@ -200,7 +238,7 @@ impl ModProvider for ModrinthProvider {
         slug: &str,
         mc_version: Option<&str>,
         loader: Option<&str>,
-    ) -> Result<Vec<ResolvedMod>, OrbitError> {
+    ) -> Result<Vec<RemoteArtifact>, OrbitError> {
         let _permit = self.rate_limiter.acquire().await?;
         let mut params = modrinth_wrapper::api::ListVersionsParams::new().include_changelog(false);
         if let Some(l) = loader {
@@ -214,91 +252,64 @@ impl ModProvider for ModrinthProvider {
             .list_versions_with_params(slug, params)
             .await
             .map_err(|e| map_api_error(e, slug))?;
+        let version_projects = self.dependency_version_projects(&versions).await?;
 
-        // 收集所有依赖的 project_id → 批量查 slug
-        let all_dep_ids: Vec<&str> = versions
+        let artifacts: Vec<_> = versions
             .iter()
-            .flat_map(|v| v.dependencies.as_deref().unwrap_or(&[]))
-            .filter_map(|d| d.project_id.as_deref())
-            .collect();
-        let id_to_slug: HashMap<String, String> = self.lookup_project_slugs(&all_dep_ids).await?;
-
-        Ok(versions
-            .iter()
-            .map(|v| {
-                let file = v.files.first();
+            .filter_map(|v| {
+                let file = primary_jar(v)?;
                 let deps = v
                     .dependencies
                     .as_ref()
                     .map(|deps| {
                         deps.iter()
-                            .map(|d| {
-                                let pid = d.project_id.clone().unwrap_or_default();
-                                let resolved_slug = id_to_slug.get(&pid).cloned();
-                                ResolvedDependency {
-                                    slug: resolved_slug,
-                                    required: d.dependency_type == "required",
-                                    project_id: d.project_id.clone(),
-                                }
+                            .filter_map(|d| {
+                                let project_id = d.project_id.clone().or_else(|| {
+                                    d.version_id
+                                        .as_ref()
+                                        .and_then(|id| version_projects.get(id).cloned())
+                                });
+                                project_id.map(|project_id| RemoteProjectLocator {
+                                    slug: None,
+                                    project_id: Some(project_id),
+                                })
                             })
                             .collect()
                     })
                     .unwrap_or_default();
-                ResolvedMod {
-                    mod_id: slug.to_string(),
-                    version: v.version_number.clone(),
-                    sha1: file.map(|f| f.hashes.sha1.clone()).unwrap_or_default(),
-                    sha512: file.map(|f| f.hashes.sha512.clone()).unwrap_or_default(),
+                Some(RemoteArtifact {
+                    sha1: file.hashes.sha1.clone(),
+                    sha512: file.hashes.sha512.clone(),
                     slug: slug.to_string(),
                     provider: "modrinth".to_string(),
                     modrinth: Some(ModrinthResolvedInfo {
                         project_id: v.project_id.clone(),
                         version_id: v.id.clone(),
-                        version_number: v.version_number.clone(),
                     }),
                     curseforge: None,
-                    date_published: v.date_published.clone(),
-                    download_url: file.map(|f| f.url.clone()).unwrap_or_default(),
-                    filename: file.map(|f| f.filename.clone()).unwrap_or_default(),
-                    dependencies: deps,
-                    client_side: None,
-                    server_side: None,
-                }
+                    download_url: file.url.clone(),
+                    filename: file.filename.clone(),
+                    related_projects: deps,
+                })
             })
-            .collect())
-    }
-
-    async fn get_versions_batch(
-        &self,
-        project_ids: &[String],
-        mc_version: Option<&str>,
-        loader: Option<&str>,
-    ) -> Result<Vec<ResolvedMod>, OrbitError> {
-        // 逐个调 get_versions（内部已按 mc_version + loader 过滤，每次返回版本数很少）
-        let mut results = Vec::new();
-        for pid in project_ids {
-            results.extend(self.get_versions(pid, mc_version, loader).await?);
+            .collect();
+        if let Some(artifact) = artifacts
+            .iter()
+            .find(|artifact| artifact.sha512.is_empty() || artifact.download_url.is_empty())
+        {
+            return Err(OrbitError::Other(anyhow::anyhow!(
+                "Modrinth project '{}' returned JAR '{}' without a SHA-512 checksum or download URL",
+                slug,
+                artifact.filename
+            )));
         }
-        Ok(results)
-    }
-
-    async fn get_categories(&self) -> Result<Vec<String>, OrbitError> {
-        let _permit = self.rate_limiter.acquire().await?;
-        Ok(vec![])
-    }
-
-    async fn fetch_dependencies(
-        &self,
-        project_id: &str,
-    ) -> Result<Vec<ResolvedDependency>, OrbitError> {
-        let _permit = self.rate_limiter.acquire().await?;
-        self.lookup_project_dependencies(project_id).await
+        Ok(artifacts)
     }
 
     async fn identify_artifacts(
         &self,
         artifacts: &[ArtifactFingerprint],
-    ) -> Result<Vec<ResolvedMod>, OrbitError> {
+    ) -> Result<Vec<RemoteArtifact>, OrbitError> {
         let _permit = self.rate_limiter.acquire().await?;
         if artifacts.is_empty() {
             return Ok(vec![]);
@@ -316,56 +327,52 @@ impl ModProvider for ModrinthProvider {
             .get_versions_from_hashes(&strs, Some("sha512"))
             .await
             .map_err(|e| OrbitError::Other(e.into()))?;
-        // 批量查 project_id → slug（包含主项目 + 依赖项目）
-        let mut all_ids: Vec<&str> = map.values().map(|v| v.project_id.as_str()).collect();
-        let dep_ids: Vec<&str> = map
-            .values()
-            .flat_map(|v| v.dependencies.as_deref().unwrap_or(&[]))
-            .filter_map(|d| d.project_id.as_deref())
-            .collect();
-        all_ids.extend(dep_ids);
+        let matched_versions: Vec<_> = map.values().cloned().collect();
+        let version_projects = self.dependency_version_projects(&matched_versions).await?;
+        let all_ids: Vec<&str> = map.values().map(|v| v.project_id.as_str()).collect();
         let id_to_slug: HashMap<String, String> = self.lookup_project_slugs(&all_ids).await?;
+        let requested_hashes: std::collections::HashSet<_> =
+            strs.into_iter().map(str::to_ascii_lowercase).collect();
         Ok(map
             .into_values()
-            .map(|v| {
-                let file = v.files.first();
+            .filter_map(|v| {
+                let file = v.files.iter().find(|file| {
+                    requested_hashes.contains(&file.hashes.sha512.to_ascii_lowercase())
+                })?;
                 let main_slug = id_to_slug
                     .get(&v.project_id)
                     .cloned()
                     .unwrap_or_else(|| v.project_id.clone());
-                ResolvedMod {
-                    mod_id: main_slug.clone(),
-                    version: v.version_number.clone(),
-                    sha1: file.map(|f| f.hashes.sha1.clone()).unwrap_or_default(),
-                    sha512: file.map(|f| f.hashes.sha512.clone()).unwrap_or_default(),
+                Some(RemoteArtifact {
+                    sha1: file.hashes.sha1.clone(),
+                    sha512: file.hashes.sha512.clone(),
                     slug: main_slug,
                     provider: "modrinth".to_string(),
                     modrinth: Some(ModrinthResolvedInfo {
                         project_id: v.project_id.clone(),
                         version_id: v.id.clone(),
-                        version_number: v.version_number.clone(),
                     }),
                     curseforge: None,
-                    date_published: v.date_published.clone(),
-                    download_url: file.map(|f| f.url.clone()).unwrap_or_default(),
-                    filename: file.map(|f| f.filename.clone()).unwrap_or_default(),
-                    dependencies: v
+                    download_url: file.url.clone(),
+                    filename: file.filename.clone(),
+                    related_projects: v
                         .dependencies
                         .unwrap_or_default()
                         .into_iter()
-                        .map(|d| {
-                            let pid = d.project_id.clone().unwrap_or_default();
-                            let resolved_slug = id_to_slug.get(&pid).cloned();
-                            ResolvedDependency {
-                                slug: resolved_slug,
-                                required: d.dependency_type == "required",
-                                project_id: d.project_id.clone(),
-                            }
+                        .filter_map(|dependency| {
+                            let project_id = dependency.project_id.or_else(|| {
+                                dependency
+                                    .version_id
+                                    .as_ref()
+                                    .and_then(|id| version_projects.get(id).cloned())
+                            });
+                            project_id.map(|project_id| RemoteProjectLocator {
+                                slug: None,
+                                project_id: Some(project_id),
+                            })
                         })
                         .collect(),
-                    client_side: None,
-                    server_side: None,
-                }
+                })
             })
             .collect())
     }

@@ -483,7 +483,6 @@ mod tests {
                         modrinth: Some(ModrinthInfo {
                             project_id: "online-project".to_string(),
                             version_id: "online-version".to_string(),
-                            version: "1".to_string(),
                             slug: "online".to_string(),
                             download_url: "https://cdn.modrinth.com/online.jar".to_string(),
                         }),

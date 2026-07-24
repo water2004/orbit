@@ -26,13 +26,15 @@ pub struct CliContext {
     pub yes: bool,
     pub dry_run: bool,
     pub instance: Option<String>,
+    pub runtime: orbit_core::RuntimeContext,
 }
 
 impl CliContext {
     pub fn instance_dir(&self) -> Result<PathBuf> {
         if let Some(name) = &self.instance {
-            let registry = orbit_core::InstancesRegistry::load()
-                .context("failed to load instances registry")?;
+            let registry =
+                orbit_core::InstancesRegistry::load(self.runtime.paths().instances_file())
+                    .context("failed to load instances registry")?;
             let entry = registry.find(name).ok_or_else(|| {
                 anyhow::anyhow!(
                     "unknown instance '{name}'. Run 'orbit instances list' to see registered instances."
@@ -53,8 +55,8 @@ impl CliContext {
             return Ok(path);
         }
 
-        let registry =
-            orbit_core::InstancesRegistry::load().context("failed to load instances registry")?;
+        let registry = orbit_core::InstancesRegistry::load(self.runtime.paths().instances_file())
+            .context("failed to load instances registry")?;
         if let Some(instance) = registry.default_instance() {
             let default_path = PathBuf::from(&instance.path);
             if self.verbose && !self.quiet {
@@ -86,8 +88,8 @@ impl CliContext {
         if current_dir.join("orbit.toml").exists() {
             return Ok(());
         }
-        let registry =
-            orbit_core::InstancesRegistry::load().context("failed to load instances registry")?;
+        let registry = orbit_core::InstancesRegistry::load(self.runtime.paths().instances_file())
+            .context("failed to load instances registry")?;
         if let Some(instance) = registry.default_instance() {
             anyhow::bail!(
                 "refusing to modify the default instance '{}' from outside its project \
@@ -235,6 +237,7 @@ pub fn print_resolution_warnings(warnings: &[String]) {
 pub fn create_instance_providers(
     instance_dir: &Path,
     platform: Option<&str>,
+    runtime: &orbit_core::RuntimeContext,
 ) -> Result<Vec<Box<dyn orbit_core::ModProvider>>> {
     let mut platforms = if let Some(platform) = platform {
         vec![normalize_platform(platform).to_string()]
@@ -254,7 +257,8 @@ pub fn create_instance_providers(
             }
         }
     }
-    orbit_core::providers::create_providers(&platforms).context("failed to create providers")
+    orbit_core::providers::create_providers(&platforms, &runtime.config().auth)
+        .context("failed to create providers")
 }
 
 pub fn resolve_platform_target<'a>(

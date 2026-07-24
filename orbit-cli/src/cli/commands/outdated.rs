@@ -22,7 +22,7 @@ pub async fn handle(mod_name: Option<String>, ctx: &CliContext) -> Result<()> {
         })
         .transpose()?;
 
-    let providers = super::create_instance_providers(&dir, None)?;
+    let providers = super::create_instance_providers(&dir, None, &ctx.runtime)?;
 
     let total = lock
         .inner
@@ -40,6 +40,7 @@ pub async fn handle(mod_name: Option<String>, ctx: &CliContext) -> Result<()> {
         &lock.inner,
         &providers,
         super::resolution_selector(ctx.dry_run, ctx.yes),
+        ctx.runtime.jar_cache(),
     )
     .await
     .context("failed to check for updates")?;

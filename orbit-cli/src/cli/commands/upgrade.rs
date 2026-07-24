@@ -20,13 +20,17 @@ pub async fn handle(mod_name: Option<String>, ctx: &CliContext) -> Result<()> {
                 entry.mod_id
             )
         })?;
-        let providers =
-            super::create_instance_providers(&instance_dir, Some(entry.provider.as_str()))?;
+        let providers = super::create_instance_providers(
+            &instance_dir,
+            Some(entry.provider.as_str()),
+            &ctx.runtime,
+        )?;
         match install_to_instance(
             &slug,
             "*",
             &instance_dir,
             &providers,
+            ctx.runtime.jar_cache(),
             InstallOptions {
                 no_deps: false,
                 dry_run: ctx.dry_run,
@@ -63,10 +67,11 @@ pub async fn handle(mod_name: Option<String>, ctx: &CliContext) -> Result<()> {
             Err(e) => anyhow::bail!("Upgrade failed: {e}"),
         }
     } else {
-        let providers = super::create_instance_providers(&instance_dir, None)?;
+        let providers = super::create_instance_providers(&instance_dir, None, &ctx.runtime)?;
         match upgrade_all_in_instance(
             &instance_dir,
             &providers,
+            ctx.runtime.jar_cache(),
             ctx.dry_run,
             super::install_interaction(ctx.dry_run, ctx.yes),
         )

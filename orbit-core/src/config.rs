@@ -4,55 +4,12 @@
 //! - `config.toml` — 全局运行时配置（代理、缓存、并发等）
 //! - `instances.toml` — 实例注册表
 //!
-//! 两个文件同存放于 `orbit/` 数据目录下。
+//! 文件位置由 [`crate::runtime::RuntimePaths`] 注入。
 
 use serde::{Deserialize, Serialize};
+use std::path::Path;
 
 use crate::error::OrbitError;
-
-// ---------------------------------------------------------------------------
-// 数据目录路径
-// ---------------------------------------------------------------------------
-
-/// Orbit 全局数据目录。
-///
-/// | 平台     | 路径                                      |
-/// |----------|-------------------------------------------|
-/// | Windows  | `%APPDATA%\orbit\`                        |
-/// | Linux    | `~/.orbit/`                                |
-/// | macOS    | `~/Library/Application Support/orbit/`     |
-pub fn orbit_data_dir() -> std::path::PathBuf {
-    #[cfg(target_os = "windows")]
-    {
-        let base = std::env::var("APPDATA").unwrap_or_else(|_| ".".into());
-        std::path::PathBuf::from(base).join("orbit")
-    }
-    #[cfg(target_os = "macos")]
-    {
-        let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
-        std::path::PathBuf::from(home)
-            .join("Library")
-            .join("Application Support")
-            .join("orbit")
-    }
-    #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
-    {
-        let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
-        std::path::PathBuf::from(home).join(".orbit")
-    }
-}
-
-pub fn config_path() -> std::path::PathBuf {
-    orbit_data_dir().join("config.toml")
-}
-
-pub fn instances_path() -> std::path::PathBuf {
-    orbit_data_dir().join("instances.toml")
-}
-
-pub fn default_cache_dir() -> std::path::PathBuf {
-    orbit_data_dir().join("cache")
-}
 
 // ---------------------------------------------------------------------------
 // config.toml — 全局运行时配置
@@ -120,22 +77,12 @@ pub struct AuthConfig {
 pub struct CacheConfig {
     #[serde(default = "default_true")]
     pub enable: bool,
-    /// 自定义缓存目录。`None` 时使用 `default_cache_dir()`
+    /// 自定义缓存目录。`None` 时使用运行环境解析出的缓存目录。
     pub dir: Option<String>,
     #[serde(default = "default_eviction_policy")]
     pub eviction_policy: String,
     #[serde(default = "default_max_size")]
     pub max_size_gb: f64,
-}
-
-impl CacheConfig {
-    /// 解析后的缓存目录——自定义路径优先，否则回退默认路径
-    pub fn resolved_dir(&self) -> std::path::PathBuf {
-        self.dir
-            .as_ref()
-            .map(std::path::PathBuf::from)
-            .unwrap_or_else(default_cache_dir)
-    }
 }
 
 impl Default for CacheConfig {
@@ -199,12 +146,10 @@ impl GlobalConfig {
     /// 分层加载：config.toml → 环境变量覆盖 → 返回
     ///
     /// 优先级：环境变量 > config.toml > 代码默认值
-    pub fn load() -> Result<Self, OrbitError> {
-        let path = config_path();
-
+    pub fn load(path: &Path) -> Result<Self, OrbitError> {
         // Layer 1: 文件（如果存在）
         let mut config = if path.exists() {
-            let content = std::fs::read_to_string(&path).map_err(|e| {
+            let content = std::fs::read_to_string(path).map_err(|e| {
                 OrbitError::Other(anyhow::anyhow!("failed to read config.toml: {e}"))
             })?;
             toml::from_str(&content).map_err(|e| {
@@ -213,7 +158,7 @@ impl GlobalConfig {
         } else {
             let cfg = Self::default();
             // 首次运行时自动写入默认配置
-            let _ = cfg.save();
+            cfg.save(path)?;
             cfg
         };
 
@@ -245,22 +190,24 @@ impl GlobalConfig {
     }
 
     /// 保存到 config.toml
-    pub fn save(&self) -> Result<(), OrbitError> {
-        let path = config_path();
-        if let Some(parent) = path.parent() {
+    pub fn save(&self, path: &Path) -> Result<(), OrbitError> {
+        if let Some(parent) = path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+        {
             std::fs::create_dir_all(parent)?;
         }
         let content = toml::to_string_pretty(self).map_err(|e| {
             OrbitError::Other(anyhow::anyhow!("failed to serialize config.toml: {e}"))
         })?;
-        std::fs::write(&path, content)?;
+        std::fs::write(path, content)?;
         Ok(())
     }
 
     /// 写入默认配置（首次使用时）
-    pub fn init_default() -> Result<Self, OrbitError> {
+    pub fn init_default(path: &Path) -> Result<Self, OrbitError> {
         let config = Self::default();
-        config.save()?;
+        config.save(path)?;
         Ok(config)
     }
 }
@@ -285,12 +232,11 @@ pub struct InstancesRegistry {
 }
 
 impl InstancesRegistry {
-    pub fn load() -> Result<Self, OrbitError> {
-        let path = instances_path();
+    pub fn load(path: &Path) -> Result<Self, OrbitError> {
         if !path.exists() {
             return Ok(Self::default());
         }
-        let content = std::fs::read_to_string(&path)
+        let content = std::fs::read_to_string(path)
             .map_err(|_| OrbitError::Other(anyhow::anyhow!("failed to read instances.toml")))?;
         let registry: Self = toml::from_str(&content).map_err(|e| {
             OrbitError::Other(anyhow::anyhow!("failed to parse instances.toml: {e}"))
@@ -298,15 +244,17 @@ impl InstancesRegistry {
         Ok(registry)
     }
 
-    pub fn save(&self) -> Result<(), OrbitError> {
-        let path = instances_path();
-        if let Some(parent) = path.parent() {
+    pub fn save(&self, path: &Path) -> Result<(), OrbitError> {
+        if let Some(parent) = path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+        {
             std::fs::create_dir_all(parent)?;
         }
         let content = toml::to_string_pretty(self).map_err(|e| {
             OrbitError::Other(anyhow::anyhow!("failed to serialize instances.toml: {e}"))
         })?;
-        std::fs::write(&path, content)?;
+        std::fs::write(path, content)?;
         Ok(())
     }
 
@@ -350,38 +298,47 @@ impl InstancesRegistry {
     }
 }
 
-pub fn register_instance(entry: InstanceEntry) -> Result<(), OrbitError> {
-    let mut registry = InstancesRegistry::load()?;
+pub fn register_instance(
+    paths: &crate::runtime::RuntimePaths,
+    entry: InstanceEntry,
+) -> Result<(), OrbitError> {
+    let mut registry = InstancesRegistry::load(paths.instances_file())?;
     registry.upsert(entry);
-    registry.save()
+    registry.save(paths.instances_file())
 }
 
-pub fn set_default_instance(name: &str) -> Result<InstanceEntry, OrbitError> {
-    let mut registry = InstancesRegistry::load()?;
+pub fn set_default_instance(
+    paths: &crate::runtime::RuntimePaths,
+    name: &str,
+) -> Result<InstanceEntry, OrbitError> {
+    let mut registry = InstancesRegistry::load(paths.instances_file())?;
     let selected = registry.set_default(name).ok_or_else(|| {
         OrbitError::Other(anyhow::anyhow!(
             "instance '{name}' not found; run 'orbit instances list' to see registered instances"
         ))
     })?;
-    registry.save()?;
+    registry.save(paths.instances_file())?;
 
-    let mut config = GlobalConfig::load()?;
+    let mut config = GlobalConfig::load(paths.config_file())?;
     config.core.default_instance = Some(name.to_string());
-    config.save()?;
+    config.save(paths.config_file())?;
     Ok(selected)
 }
 
-pub fn remove_instance(name: &str) -> Result<InstanceEntry, OrbitError> {
-    let mut registry = InstancesRegistry::load()?;
+pub fn remove_instance(
+    paths: &crate::runtime::RuntimePaths,
+    name: &str,
+) -> Result<InstanceEntry, OrbitError> {
+    let mut registry = InstancesRegistry::load(paths.instances_file())?;
     let removed = registry
         .remove(name)
         .ok_or_else(|| OrbitError::Other(anyhow::anyhow!("instance '{name}' not found")))?;
-    registry.save()?;
+    registry.save(paths.instances_file())?;
 
-    let mut config = GlobalConfig::load()?;
+    let mut config = GlobalConfig::load(paths.config_file())?;
     if config.core.default_instance.as_deref() == Some(name) {
         config.core.default_instance = None;
-        config.save()?;
+        config.save(paths.config_file())?;
     }
     Ok(removed)
 }
@@ -437,10 +394,6 @@ dir = "D:/Games/OrbitCache"
 "#;
         let config: GlobalConfig = toml::from_str(toml_str).unwrap();
         assert_eq!(config.cache.dir.as_deref(), Some("D:/Games/OrbitCache"));
-        assert_eq!(
-            config.cache.resolved_dir(),
-            std::path::PathBuf::from("D:/Games/OrbitCache")
-        );
     }
 
     #[test]
@@ -450,6 +403,19 @@ dir = "D:/Games/OrbitCache"
         let deserialized: GlobalConfig = toml::from_str(&serialized).unwrap();
         assert_eq!(deserialized.core.max_concurrent_downloads, 8);
         assert_eq!(deserialized.cache.max_size_gb, 5.0);
+    }
+
+    #[test]
+    fn config_can_use_a_bare_relative_filename() {
+        let path = std::path::PathBuf::from(format!(
+            "orbit-config-relative-test-{}.toml",
+            std::process::id()
+        ));
+
+        GlobalConfig::default().save(&path).unwrap();
+
+        assert!(path.is_file());
+        std::fs::remove_file(path).unwrap();
     }
 
     fn instance(name: &str, is_default: bool) -> InstanceEntry {

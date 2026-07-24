@@ -48,25 +48,22 @@ pub struct IdentifiedMod {
 
 fn build_identified(
     m: &ScannedMod,
-    resolved: &crate::providers::ResolvedMod,
+    artifact: &crate::providers::RemoteArtifact,
 ) -> Option<IdentifiedMod> {
-    let slug = resolved.slug.clone();
-    let jar_ver = m.version.clone().unwrap_or_default();
-    let source = if let Some(metadata) = &resolved.modrinth {
+    let slug = artifact.slug.clone();
+    let source = if let Some(metadata) = &artifact.modrinth {
         IdentifiedPlatform::Modrinth(ModrinthInfo {
             project_id: metadata.project_id.clone(),
             version_id: metadata.version_id.clone(),
-            version: metadata.version_number.clone(),
             slug,
-            download_url: resolved.download_url.clone(),
+            download_url: artifact.download_url.clone(),
         })
-    } else if let Some(metadata) = &resolved.curseforge {
+    } else if let Some(metadata) = &artifact.curseforge {
         IdentifiedPlatform::CurseForge(CurseForgeInfo {
             project_id: metadata.project_id,
             file_id: metadata.file_id,
-            display_name: metadata.display_name.clone(),
             slug,
-            download_url: resolved.download_url.clone(),
+            download_url: artifact.download_url.clone(),
         })
     } else {
         return None;
@@ -75,11 +72,7 @@ fn build_identified(
         filename: m.filename.clone(),
         mod_id: m.mod_id.clone().unwrap_or_default(),
         mod_name: m.mod_name.clone().unwrap_or_default(),
-        version: if jar_ver.is_empty() {
-            resolved.version.clone()
-        } else {
-            jar_ver
-        },
+        version: m.version.clone().unwrap_or_default(),
         sha1: m.sha1.clone(),
         sha256: m.sha256.clone(),
         sha512: m.sha512.clone(),

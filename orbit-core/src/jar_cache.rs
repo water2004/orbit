@@ -1,124 +1,100 @@
-//! 基于哈希的 JAR 文件缓存。
+//! Content-addressed JAR cache.
 //!
-//! 索引文件 `index.toml` 记录三种哈希（sha1/sha256/sha512）→ JAR 文件名的映射。
-//! JAR 以原始文件名存放在 `{cache_dir}/jars/` 下。
+//! Provider filenames are not trusted as cache keys. Artifacts are stored by
+//! their locally computed SHA-512; a SHA-1 alias is only an index into that
+//! content-addressed store.
 
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-
-use serde::{Deserialize, Serialize};
 
 use crate::error::OrbitError;
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-struct CacheIndex {
-    #[serde(default)]
-    sha1: HashMap<String, String>,
-    #[serde(default)]
-    sha256: HashMap<String, String>,
-    #[serde(default)]
-    sha512: HashMap<String, String>,
-}
-
+#[derive(Debug, Clone)]
 pub struct JarCache {
-    jar_dir: PathBuf,
-    index: CacheIndex,
-    index_path: PathBuf,
+    root: PathBuf,
 }
 
 impl JarCache {
-    pub fn load() -> Result<Self, OrbitError> {
-        let dir = crate::config::GlobalConfig::load()?.cache.resolved_dir();
-        Self::load_from(dir)
-    }
-
-    fn load_from(dir: PathBuf) -> Result<Self, OrbitError> {
-        let jar_dir = dir.join("jars");
-        let index_path = dir.join("index.toml");
-        let index = if index_path.exists() {
-            let content = std::fs::read_to_string(&index_path).map_err(|e| {
-                OrbitError::Other(anyhow::anyhow!("failed to read cache index: {e}"))
-            })?;
-            toml::from_str(&content).unwrap_or_default()
-        } else {
-            CacheIndex::default()
-        };
-        Ok(Self {
-            jar_dir,
-            index,
-            index_path,
-        })
-    }
-
-    fn save(&self) -> Result<(), OrbitError> {
-        if let Some(parent) = self.index_path.parent() {
-            std::fs::create_dir_all(parent)?;
+    pub fn open(root: PathBuf) -> Result<Self, OrbitError> {
+        if root.as_os_str().is_empty() {
+            return Err(OrbitError::Other(anyhow::anyhow!(
+                "JAR cache path must not be empty"
+            )));
         }
-        let content = toml::to_string_pretty(&self.index).map_err(|e| {
-            OrbitError::Other(anyhow::anyhow!("failed to serialize cache index: {e}"))
-        })?;
-        std::fs::write(&self.index_path, content)?;
-        Ok(())
+        Ok(Self { root })
+    }
+
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
+    fn sha512_path(&self, sha512: &str) -> PathBuf {
+        self.root.join("jars").join("sha512").join(sha512)
+    }
+
+    fn sha1_alias_path(&self, sha1: &str) -> PathBuf {
+        self.root.join("aliases").join("sha1").join(sha1)
     }
 
     fn get_by_sha512(&self, sha512: &str) -> Option<PathBuf> {
-        self.index.sha512.get(sha512).map(|f| self.jar_dir.join(f))
+        (!sha512.is_empty()).then(|| self.sha512_path(sha512))
     }
 
     fn get_by_sha1(&self, sha1: &str) -> Option<PathBuf> {
-        self.index.sha1.get(sha1).map(|f| self.jar_dir.join(f))
+        if sha1.is_empty() {
+            return None;
+        }
+        let target_hash = std::fs::read_to_string(self.sha1_alias_path(sha1)).ok()?;
+        let target_hash = target_hash.trim();
+        if target_hash.is_empty() {
+            return None;
+        }
+        Some(self.sha512_path(target_hash))
     }
 
-    /// 从缓存取字节，未命中返回 None
+    /// Read an artifact from cache. A missing or stale entry is a cache miss.
     pub fn get_bytes(&self, sha512: &str, sha1: &str) -> Option<Vec<u8>> {
-        let path = if sha512.is_empty() {
-            self.get_by_sha1(sha1)?
-        } else {
-            self.get_by_sha512(sha512)?
-        };
-        std::fs::read(&path).ok()
+        let path = self
+            .get_by_sha512(sha512)
+            .filter(|path| path.is_file())
+            .or_else(|| self.get_by_sha1(sha1).filter(|path| path.is_file()))?;
+        std::fs::read(path).ok()
     }
 
-    /// 存入 JAR 并更新三种哈希索引（哈希全部从 bytes 自算）
-    pub fn store_bytes(&mut self, filename: &str, bytes: &[u8]) -> Result<(), OrbitError> {
-        std::fs::create_dir_all(&self.jar_dir)?;
-        let dest = self.jar_dir.join(filename);
-        std::fs::write(&dest, bytes)?;
-
-        self.index.sha1.retain(|_, value| value != filename);
-        self.index.sha256.retain(|_, value| value != filename);
-        self.index.sha512.retain(|_, value| value != filename);
+    /// Store bytes under locally computed hashes.
+    pub fn store_bytes(&self, bytes: &[u8]) -> Result<(), OrbitError> {
         let sha1 = crate::jar::sha1_digest(bytes);
-        let sha256 = crate::jar::sha256_digest(bytes);
         let sha512 = crate::jar::sha512_digest(bytes);
-        if !sha1.is_empty() {
-            self.index.sha1.insert(sha1, filename.to_string());
+        let artifact_path = self.sha512_path(&sha512);
+        if let Some(parent) = artifact_path.parent() {
+            std::fs::create_dir_all(parent)?;
         }
-        if !sha256.is_empty() {
-            self.index.sha256.insert(sha256, filename.to_string());
+        if !artifact_path.is_file() {
+            std::fs::write(&artifact_path, bytes)?;
         }
-        self.index
-            .sha512
-            .insert(sha512.to_string(), filename.to_string());
-        self.save()
+
+        let alias_path = self.sha1_alias_path(&sha1);
+        if let Some(parent) = alias_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(alias_path, sha512)?;
+        Ok(())
     }
 
-    /// 复制缓存文件到目标路径，未命中返回 false
-    pub fn copy_to(&self, sha512: &str, sha1: &str, dest: &Path) -> bool {
-        let source = if sha512.is_empty() {
-            self.get_by_sha1(sha1)
-        } else {
-            self.get_by_sha512(sha512)
+    /// Copy a cached artifact to an installation path.
+    pub fn copy_to(&self, sha512: &str, sha1: &str, destination: &Path) -> bool {
+        let source = self
+            .get_by_sha512(sha512)
+            .filter(|path| path.is_file())
+            .or_else(|| self.get_by_sha1(sha1).filter(|path| path.is_file()));
+        let Some(source) = source else {
+            return false;
         };
-        if let Some(ref src) = source
-            && src.exists()
+        if let Some(parent) = destination.parent()
+            && std::fs::create_dir_all(parent).is_err()
         {
-            if let Some(parent) = dest.parent() {
-                std::fs::create_dir_all(parent).ok();
-            }
-            return std::fs::copy(src, dest).is_ok();
+            return false;
         }
-        false
+        std::fs::copy(source, destination).is_ok()
     }
 }
 
@@ -129,17 +105,18 @@ pub struct CacheSummary {
     pub bytes: u64,
 }
 
-pub fn inspect_cache() -> Result<CacheSummary, OrbitError> {
-    let path = crate::config::GlobalConfig::load()?.cache.resolved_dir();
-    inspect_cache_dir(&path)
+pub fn inspect_cache(path: &Path, protected_paths: &[&Path]) -> Result<CacheSummary, OrbitError> {
+    if path.exists() {
+        validate_cache_dir(path, protected_paths)?;
+    }
+    inspect_cache_dir(path)
 }
 
-pub fn clean_cache() -> Result<CacheSummary, OrbitError> {
-    let summary = inspect_cache()?;
+pub fn clean_cache(path: &Path, protected_paths: &[&Path]) -> Result<CacheSummary, OrbitError> {
+    let summary = inspect_cache(path, protected_paths)?;
     if !summary.path.exists() {
         return Ok(summary);
     }
-    validate_cache_dir(&summary.path)?;
     std::fs::remove_dir_all(&summary.path)?;
     Ok(summary)
 }
@@ -168,12 +145,17 @@ fn inspect_cache_dir(path: &Path) -> Result<CacheSummary, OrbitError> {
     Ok(summary)
 }
 
-fn validate_cache_dir(path: &Path) -> Result<(), OrbitError> {
+fn validate_cache_dir(path: &Path, protected_paths: &[&Path]) -> Result<(), OrbitError> {
     let resolved = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-    if resolved.parent().is_none()
-        || resolved == std::env::current_dir().unwrap_or_default()
-        || resolved == crate::config::orbit_data_dir()
-    {
+    let current = std::env::current_dir().unwrap_or_default();
+    let contains_current = current.starts_with(&resolved);
+    let contains_protected_path = protected_paths.iter().any(|protected| {
+        protected
+            .canonicalize()
+            .unwrap_or_else(|_| protected.to_path_buf())
+            .starts_with(&resolved)
+    });
+    if resolved.parent().is_none() || contains_current || contains_protected_path {
         return Err(OrbitError::Other(anyhow::anyhow!(
             "refusing to clear unsafe cache directory '{}'",
             resolved.display()
@@ -195,8 +177,8 @@ mod tests {
         let directory = test_dir("inspect");
         let nested = directory.join("jars");
         std::fs::create_dir_all(&nested).unwrap();
-        std::fs::write(directory.join("index.toml"), b"1234").unwrap();
-        std::fs::write(nested.join("a.jar"), b"123456").unwrap();
+        std::fs::write(directory.join("alias"), b"1234").unwrap();
+        std::fs::write(nested.join("artifact"), b"123456").unwrap();
 
         let summary = inspect_cache_dir(&directory).unwrap();
 
@@ -208,23 +190,37 @@ mod tests {
     #[test]
     fn unsafe_cache_roots_are_rejected() {
         let root = std::path::Path::new(std::path::MAIN_SEPARATOR_STR);
-        assert!(validate_cache_dir(root).is_err());
+        assert!(validate_cache_dir(root, &[]).is_err());
     }
 
     #[test]
-    fn replacing_a_same_named_jar_removes_stale_hash_entries() {
-        let directory = test_dir("replace");
-        let mut cache = JarCache::load_from(directory.clone()).unwrap();
-        let old = b"old artifact";
-        let new = b"new artifact";
-        let old_sha512 = crate::jar::sha512_digest(old);
-        let new_sha512 = crate::jar::sha512_digest(new);
+    fn cache_cleanup_rejects_a_directory_containing_protected_data() {
+        let directory = test_dir("protected");
+        let config = directory.join("config.toml");
+        std::fs::create_dir_all(&directory).unwrap();
+        std::fs::write(&config, b"").unwrap();
 
-        cache.store_bytes("example.jar", old).unwrap();
-        cache.store_bytes("example.jar", new).unwrap();
+        assert!(validate_cache_dir(&directory, &[&config]).is_err());
 
-        assert!(cache.get_bytes(&old_sha512, "").is_none());
-        assert_eq!(cache.get_bytes(&new_sha512, "").unwrap(), new);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn artifacts_are_addressed_by_content_not_provider_filename() {
+        let directory = test_dir("content");
+        let cache = JarCache::open(directory.clone()).unwrap();
+        let bytes = b"artifact";
+        let sha1 = crate::jar::sha1_digest(bytes);
+        let sha512 = crate::jar::sha512_digest(bytes);
+
+        cache.store_bytes(bytes).unwrap();
+
+        assert_eq!(cache.get_bytes(&sha512, "").unwrap(), bytes);
+        assert_eq!(cache.get_bytes("", &sha1).unwrap(), bytes);
+        assert_eq!(
+            cache.sha512_path(&sha512),
+            directory.join("jars").join("sha512").join(sha512)
+        );
         std::fs::remove_dir_all(directory).unwrap();
     }
 }

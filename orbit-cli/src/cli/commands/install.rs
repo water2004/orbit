@@ -14,11 +14,12 @@ pub async fn handle(
     let providers = if locked {
         Vec::new()
     } else {
-        super::create_instance_providers(&instance_dir, None)?
+        super::create_instance_providers(&instance_dir, None, &ctx.runtime)?
     };
     let report = orbit_core::restore_instance(
         &instance_dir,
         &providers,
+        ctx.runtime.jar_cache(),
         orbit_core::RestoreOptions {
             target,
             group,

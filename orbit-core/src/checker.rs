@@ -22,33 +22,41 @@ pub async fn check_compatibility(
     target_mc_version: &str,
     target_loader: &str,
     providers: &[Box<dyn ModProvider>],
+    jar_cache: &crate::jar_cache::JarCache,
 ) -> Result<Vec<CheckResult>, OrbitError> {
+    let catalog = crate::outdated::download_lockfile_candidate_catalog(
+        providers,
+        lockfile,
+        target_mc_version,
+        target_loader,
+        jar_cache,
+    )
+    .await?;
     let mut results = Vec::new();
     for entry in &lockfile.packages {
         if entry.provider == "file" {
             continue;
         }
-        let Some(project_id) = entry.source_project_id() else {
+        if entry.source_project_id().is_none() {
             continue;
-        };
-        let provider =
-            crate::providers::find_provider(providers, &entry.provider).ok_or_else(|| {
-                OrbitError::Other(anyhow::anyhow!(
-                    "cannot check {} package '{}': provider is not configured",
-                    entry.provider,
-                    entry.mod_id,
-                ))
-            })?;
-        let mut versions = provider
-            .get_versions(&project_id, Some(target_mc_version), Some(target_loader))
-            .await?;
-        versions.sort_by(|left, right| right.date_published.cmp(&left.date_published));
+        }
+        let available_version = catalog
+            .candidates
+            .get(&entry.mod_id)
+            .and_then(|candidates| {
+                candidates
+                    .iter()
+                    .max_by_key(|candidate| {
+                        crate::versions::Version::parse(&candidate.jar_version, target_loader)
+                    })
+                    .map(|candidate| candidate.jar_version.clone())
+            });
         results.push(CheckResult {
             mod_name: entry.mod_id.clone(),
             current_version: entry.version.clone(),
-            provider: provider.name().to_string(),
-            compatible: !versions.is_empty(),
-            available_version: versions.first().map(|version| version.version.clone()),
+            provider: entry.provider.clone(),
+            compatible: available_version.is_some(),
+            available_version,
         });
     }
     results.sort_by(|left, right| left.mod_name.cmp(&right.mod_name));
@@ -71,7 +79,10 @@ mod tests {
             packages: Vec::new(),
         };
 
-        let result = check_compatibility(&lockfile, "2", "fabric", &[])
+        let cache =
+            crate::jar_cache::JarCache::open(std::env::temp_dir().join("orbit-check-local-test"))
+                .unwrap();
+        let result = check_compatibility(&lockfile, "2", "fabric", &[], &cache)
             .await
             .unwrap();
 

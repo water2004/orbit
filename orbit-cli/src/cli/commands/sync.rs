@@ -3,7 +3,7 @@ use anyhow::Result;
 
 pub async fn handle(ctx: &CliContext) -> Result<()> {
     let instance_dir = ctx.instance_dir()?;
-    let providers = super::create_instance_providers(&instance_dir, None)?;
+    let providers = super::create_instance_providers(&instance_dir, None, &ctx.runtime)?;
     let report = orbit_core::sync_instance(&instance_dir, &providers, ctx.dry_run).await?;
 
     for package in &report.added {

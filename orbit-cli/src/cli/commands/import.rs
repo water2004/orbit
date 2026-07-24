@@ -49,7 +49,8 @@ pub async fn handle(file: String, merge_strategy: Option<String>, ctx: &CliConte
                 orbit_core::import_archive(&instance_dir, &source, overwrite, ctx.dry_run)?
             };
             if !ctx.dry_run && !report.extracted.is_empty() {
-                let providers = super::create_instance_providers(&instance_dir, None)?;
+                let providers =
+                    super::create_instance_providers(&instance_dir, None, &ctx.runtime)?;
                 let sync = orbit_core::sync_instance(&instance_dir, &providers, false).await?;
                 println!(
                     "Imported {} JAR(s); sync added {} and changed {} package(s).",

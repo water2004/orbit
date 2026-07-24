@@ -68,8 +68,6 @@ pub struct PackageEntry {
 pub struct ModrinthInfo {
     pub project_id: String,
     pub version_id: String,
-    /// Modrinth 的 `version_number`
-    pub version: String,
     pub slug: String,
     #[serde(skip_serializing_if = "String::is_empty", default)]
     pub download_url: String,
@@ -79,8 +77,6 @@ pub struct ModrinthInfo {
 pub struct CurseForgeInfo {
     pub project_id: u32,
     pub file_id: u32,
-    /// CurseForge 文件的展示名称，不代替 JAR 自声明版本。
-    pub display_name: String,
     pub slug: String,
     #[serde(skip_serializing_if = "String::is_empty", default)]
     pub download_url: String,
@@ -199,17 +195,6 @@ impl PackageEntry {
             })
     }
 
-    pub fn source_version(&self) -> Option<&str> {
-        self.modrinth
-            .as_ref()
-            .map(|metadata| metadata.version.as_str())
-            .or_else(|| {
-                self.curseforge
-                    .as_ref()
-                    .map(|metadata| metadata.display_name.as_str())
-            })
-    }
-
     pub fn source_download_url(&self) -> Option<&str> {
         self.modrinth
             .as_ref()
@@ -243,7 +228,6 @@ provider = "modrinth"
 [package.modrinth]
 project_id = "AANobbMI"
 version_id = "abc123mod"
-version = "mc1.20.1-0.5.8-fabric"
 slug = "sodium"
 
 [[package]]
@@ -256,7 +240,6 @@ provider = "modrinth"
 [package.modrinth]
 project_id = "P7dR8mSH"
 version_id = "def456ver"
-version = "0.92.0+1.20.1"
 slug = "fabric-api"
 "#;
         let lockfile: OrbitLockfile = toml::from_str(toml_str).unwrap();
@@ -315,7 +298,6 @@ provider = "curseforge"
 [package.curseforge]
 project_id = 123
 file_id = 456
-display_name = "Example 2"
 slug = "example"
 download_url = "https://example.invalid/example.jar"
 "#;
@@ -329,12 +311,8 @@ download_url = "https://example.invalid/example.jar"
         let serialized = lockfile.to_toml_string().unwrap();
         let roundtrip: OrbitLockfile = toml::from_str(&serialized).unwrap();
         assert_eq!(
-            roundtrip.packages[0]
-                .curseforge
-                .as_ref()
-                .unwrap()
-                .display_name,
-            "Example 2"
+            roundtrip.packages[0].curseforge.as_ref().unwrap().file_id,
+            456
         );
     }
 
@@ -357,7 +335,6 @@ download_url = "https://example.invalid/example.jar"
                 modrinth: Some(ModrinthInfo {
                     project_id: "AANobbMI".into(),
                     version_id: "abc123mod".into(),
-                    version: "mc1.20.1-0.5.8-fabric".into(),
                     slug: "sodium".into(),
                     download_url: String::new(),
                 }),

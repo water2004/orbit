@@ -216,28 +216,6 @@ fn register_candidate_versions(
     }
 }
 
-pub(crate) fn required_candidate_packages(
-    candidates: &HashMap<String, Vec<CandidateVersion>>,
-    exclusions: &ExclusionMap,
-    target: Environment,
-) -> Vec<String> {
-    let mut required = HashSet::new();
-    for (package, versions) in candidates {
-        for candidate in versions {
-            collect_required_names(
-                &candidate.dependencies,
-                exclusions.get(package),
-                target,
-                &mut required,
-            );
-            collect_bundled_required_names(&candidate.bundled, exclusions, target, &mut required);
-        }
-    }
-    let mut required: Vec<_> = required.into_iter().collect();
-    required.sort();
-    required
-}
-
 fn register_lockfile(
     provider: &mut OrbitDependencyProvider,
     availability: &mut AvailabilityMap,
@@ -626,42 +604,6 @@ fn register_availability(provider: &mut OrbitDependencyProvider, availability: A
             vec![(choice_package, Ranges::full())],
         );
         provider.add_package_incompatibilities(logical_package, logical_version.into(), Vec::new());
-    }
-}
-
-fn collect_required_names(
-    dependencies: &[DependencyExpression],
-    excluded: Option<&HashSet<String>>,
-    target: Environment,
-    required: &mut HashSet<String>,
-) {
-    for dependency in dependencies {
-        for relation in dependency.relations() {
-            if relation.kind.installs_target()
-                && relation.environment.applies_to(target)
-                && !is_platform_package(&relation.id)
-                && !excluded.is_some_and(|names| names.contains(&relation.id))
-            {
-                required.insert(relation.id.clone());
-            }
-        }
-    }
-}
-
-fn collect_bundled_required_names(
-    bundled: &[BundledCandidate],
-    exclusions: &ExclusionMap,
-    target: Environment,
-    required: &mut HashSet<String>,
-) {
-    for metadata in bundled {
-        collect_required_names(
-            &metadata.dependencies,
-            exclusions.get(&metadata.mod_id),
-            target,
-            required,
-        );
-        collect_bundled_required_names(&metadata.bundled, exclusions, target, required);
     }
 }
 

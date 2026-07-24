@@ -1,18 +1,15 @@
-mod client;
-mod models;
-
 use std::collections::{HashMap, HashSet};
 
 use async_trait::async_trait;
+use curseforge_wrapper::models::{File, GetFilesParams, Mod, ModLoaderType, SearchModsParams};
+use curseforge_wrapper::{ApiError, Client, MAX_RESULTS};
 use reqwest::StatusCode;
 use tokio::sync::OnceCell;
 
-use self::client::{ApiError, Client, MAX_RESULTS};
-use self::models::{File, GetFilesParams, Mod, ModLoaderType, SearchModsParams};
 use super::rate_limiter::RateLimiter;
 use super::{
-    ArtifactDownloadClient, ArtifactFingerprint, CurseForgeResolvedInfo, ModInfo, ModProvider,
-    ModVersionInfo, ResolvedDependency, ResolvedMod, SearchResultItem,
+    ArtifactDownloadClient, ArtifactFingerprint, CatalogDependency, CurseForgeResolvedInfo,
+    ModInfo, ModProvider, ModVersionInfo, RemoteArtifact, RemoteProjectLocator, SearchResultItem,
 };
 use crate::error::OrbitError;
 
@@ -23,7 +20,6 @@ const REQUIRED_DEPENDENCY: u8 = 3;
 struct MinecraftContext {
     game_id: u32,
     mods_class_id: u32,
-    categories: Vec<models::Category>,
 }
 
 pub struct CurseForgeProvider {
@@ -108,7 +104,6 @@ impl CurseForgeProvider {
                 Ok(MinecraftContext {
                     game_id: game.id,
                     mods_class_id: mods_class.id,
-                    categories,
                 })
             })
             .await
@@ -145,12 +140,6 @@ impl CurseForgeProvider {
         let ids: HashSet<u32> = files
             .iter()
             .flat_map(|file| &file.dependencies)
-            .filter(|dependency| {
-                matches!(
-                    dependency.relation_type,
-                    OPTIONAL_DEPENDENCY | REQUIRED_DEPENDENCY
-                )
-            })
             .map(|dependency| dependency.mod_id)
             .collect();
         if ids.is_empty() {
@@ -172,9 +161,8 @@ impl CurseForgeProvider {
         &self,
         project: &Mod,
         file: &File,
-        dependency_slugs: &HashMap<u32, String>,
         require_download: bool,
-    ) -> Result<Option<ResolvedMod>, OrbitError> {
+    ) -> Result<Option<RemoteArtifact>, OrbitError> {
         if !file.is_available {
             return Ok(None);
         }
@@ -204,21 +192,12 @@ impl CurseForgeProvider {
         let dependencies = file
             .dependencies
             .iter()
-            .filter(|dependency| {
-                matches!(
-                    dependency.relation_type,
-                    OPTIONAL_DEPENDENCY | REQUIRED_DEPENDENCY
-                )
-            })
-            .map(|dependency| ResolvedDependency {
-                slug: dependency_slugs.get(&dependency.mod_id).cloned(),
-                required: dependency.relation_type == REQUIRED_DEPENDENCY,
+            .map(|dependency| RemoteProjectLocator {
+                slug: None,
                 project_id: Some(dependency.mod_id.to_string()),
             })
             .collect();
-        Ok(Some(ResolvedMod {
-            mod_id: project.slug.clone(),
-            version: file.display_name.clone(),
+        Ok(Some(RemoteArtifact {
             sha1,
             sha512: String::new(),
             slug: project.slug.clone(),
@@ -227,15 +206,11 @@ impl CurseForgeProvider {
             curseforge: Some(CurseForgeResolvedInfo {
                 project_id: project.id,
                 file_id: file.id,
-                display_name: file.display_name.clone(),
                 fingerprint: u32::try_from(file.file_fingerprint).unwrap_or_default(),
             }),
-            date_published: file.file_date.clone(),
             download_url: download_url.unwrap_or_default(),
             filename: file.file_name.clone(),
-            dependencies,
-            client_side: None,
-            server_side: None,
+            related_projects: dependencies,
         }))
     }
 
@@ -244,7 +219,7 @@ impl CurseForgeProvider {
         project: &Mod,
         mc_version: Option<&str>,
         loader: Option<&str>,
-    ) -> Result<Vec<ResolvedMod>, OrbitError> {
+    ) -> Result<Vec<RemoteArtifact>, OrbitError> {
         let mod_loader_type = loader.map(parse_loader).transpose()?;
         let files = self
             .client
@@ -260,22 +235,22 @@ impl CurseForgeProvider {
         if files.is_empty() {
             return Ok(Vec::new());
         }
-        let dependency_slugs = self.dependency_slugs(&files).await?;
         let mut versions = Vec::new();
+        let mut unavailable = Vec::new();
         for file in files {
-            if let Some(resolved) = self
-                .resolved_file(project, &file, &dependency_slugs, true)
-                .await?
-            {
+            if let Some(resolved) = self.resolved_file(project, &file, true).await? {
                 versions.push(resolved);
+            } else {
+                unavailable.push(format!("{} ({})", file.file_name, file.id));
             }
         }
-        versions.sort_by(|left, right| right.date_published.cmp(&left.date_published));
-        if versions.is_empty() {
+        if !unavailable.is_empty() {
             return Err(OrbitError::Other(anyhow::anyhow!(
-                "CurseForge project '{}' has matching files, but none is API-downloadable with a \
-                 SHA-1 checksum",
-                project.slug
+                "CurseForge project '{}' has matching files that cannot be included in a complete \
+                 candidate queue because they are unavailable, lack SHA-1, or have no API download \
+                 URL: {}",
+                project.slug,
+                unavailable.join(", ")
             )));
         }
         Ok(versions)
@@ -386,7 +361,7 @@ impl ModProvider for CurseForgeProvider {
                     class_id: context.mods_class_id,
                     search_filter: Some(query),
                     game_version: mc_version,
-                    mod_loader_type: mc_version.and(loader_type),
+                    mod_loader_type: loader_type,
                     index,
                     page_size: 50,
                     ..SearchModsParams::default()
@@ -414,7 +389,7 @@ impl ModProvider for CurseForgeProvider {
                     .map(|file| file.display_name.clone())
                     .unwrap_or_default();
                 results.push(SearchResultItem {
-                    mod_id: project.id.to_string(),
+                    project_id: project.id.to_string(),
                     slug: project.slug,
                     name: project.name,
                     description: project.summary,
@@ -496,7 +471,7 @@ impl ModProvider for CurseForgeProvider {
                         OPTIONAL_DEPENDENCY | REQUIRED_DEPENDENCY
                     )
                 })
-                .map(|dependency| ResolvedDependency {
+                .map(|dependency| CatalogDependency {
                     slug: dependency_projects.get(&dependency.mod_id).cloned(),
                     required: dependency.relation_type == REQUIRED_DEPENDENCY,
                     project_id: Some(dependency.mod_id.to_string()),
@@ -508,7 +483,7 @@ impl ModProvider for CurseForgeProvider {
     async fn identify_artifacts(
         &self,
         artifacts: &[ArtifactFingerprint],
-    ) -> Result<Vec<ResolvedMod>, OrbitError> {
+    ) -> Result<Vec<RemoteArtifact>, OrbitError> {
         let _permit = self.rate_limiter.acquire().await?;
         let fingerprints: Vec<u32> = artifacts
             .iter()
@@ -537,21 +512,12 @@ impl ModProvider for CurseForgeProvider {
             .into_iter()
             .map(|project| (project.id, project))
             .collect();
-        let files: Vec<File> = matches
-            .exact_matches
-            .iter()
-            .map(|matched| matched.file.clone())
-            .collect();
-        let dependency_slugs = self.dependency_slugs(&files).await?;
         let mut identified = Vec::new();
         for matched in matches.exact_matches {
             let Some(project) = projects.get(&matched.file.mod_id) else {
                 continue;
             };
-            if let Some(resolved) = self
-                .resolved_file(project, &matched.file, &dependency_slugs, false)
-                .await?
-            {
+            if let Some(resolved) = self.resolved_file(project, &matched.file, false).await? {
                 identified.push(resolved);
             }
         }
@@ -563,58 +529,11 @@ impl ModProvider for CurseForgeProvider {
         slug: &str,
         mc_version: Option<&str>,
         loader: Option<&str>,
-    ) -> Result<Vec<ResolvedMod>, OrbitError> {
+    ) -> Result<Vec<RemoteArtifact>, OrbitError> {
         let _permit = self.rate_limiter.acquire().await?;
         let project = self.project(slug).await?;
         self.versions_for_project(&project, mc_version, loader)
             .await
-    }
-
-    async fn get_categories(&self) -> Result<Vec<String>, OrbitError> {
-        let _permit = self.rate_limiter.acquire().await?;
-        let context = self.minecraft().await?;
-        let mut categories: Vec<String> = context
-            .categories
-            .iter()
-            .filter(|category| category.class_id == Some(context.mods_class_id))
-            .map(|category| category.name.clone())
-            .collect();
-        categories.sort();
-        categories.dedup();
-        Ok(categories)
-    }
-
-    async fn fetch_dependencies(
-        &self,
-        project_id: &str,
-    ) -> Result<Vec<ResolvedDependency>, OrbitError> {
-        let _permit = self.rate_limiter.acquire().await?;
-        let project = self.project(project_id).await?;
-        let mut files = self
-            .client
-            .get_files(project.id, GetFilesParams::default())
-            .await
-            .map_err(map_client_error)?;
-        files.sort_by(|left, right| right.file_date.cmp(&left.file_date));
-        let Some(file) = files.first() else {
-            return Ok(Vec::new());
-        };
-        let dependency_slugs = self.dependency_slugs(&files).await?;
-        Ok(file
-            .dependencies
-            .iter()
-            .filter(|dependency| {
-                matches!(
-                    dependency.relation_type,
-                    OPTIONAL_DEPENDENCY | REQUIRED_DEPENDENCY
-                )
-            })
-            .map(|dependency| ResolvedDependency {
-                slug: dependency_slugs.get(&dependency.mod_id).cloned(),
-                required: dependency.relation_type == REQUIRED_DEPENDENCY,
-                project_id: Some(dependency.mod_id.to_string()),
-            })
-            .collect())
     }
 }
 
@@ -848,14 +767,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn reports_files_blocked_from_api_downloads() {
+    async fn rejects_a_partial_candidate_queue_when_one_file_is_blocked() {
         let project = r#"{"id":123,"name":"Example","slug":"example","summary":"Example","downloadCount":1,"categories":[],"authors":[],"latestFiles":[],"latestFilesIndexes":[],"isAvailable":true}"#;
-        let file = r#"{"id":456,"modId":123,"isAvailable":true,"displayName":"Example 2","fileName":"example.jar","hashes":[{"value":"deadbeef","algo":1}],"fileDate":"2026-02-01T00:00:00Z","downloadUrl":null,"gameVersions":["1.21.1","Fabric"],"sortableGameVersions":[{"gameVersionName":"1.21.1"}],"dependencies":[],"fileFingerprint":987}"#;
+        let available = r#"{"id":455,"modId":123,"isAvailable":true,"displayName":"Example 1","fileName":"example-1.jar","hashes":[{"value":"cafebabe","algo":1}],"fileDate":"2026-01-01T00:00:00Z","downloadUrl":"https://example.invalid/example-1.jar","gameVersions":["1.21.1","Fabric"],"sortableGameVersions":[{"gameVersionName":"1.21.1"}],"dependencies":[],"fileFingerprint":986}"#;
+        let blocked = r#"{"id":456,"modId":123,"isAvailable":true,"displayName":"Example 2","fileName":"example-2.jar","hashes":[{"value":"deadbeef","algo":1}],"fileDate":"2026-02-01T00:00:00Z","downloadUrl":null,"gameVersions":["1.21.1","Fabric"],"sortableGameVersions":[{"gameVersionName":"1.21.1"}],"dependencies":[],"fileFingerprint":987}"#;
         let project_response: &'static str =
             Box::leak(format!(r#"{{"data":{project}}}"#).into_boxed_str());
         let files_response: &'static str = Box::leak(
             format!(
-                r#"{{"data":[{file}],"pagination":{{"index":0,"pageSize":50,"resultCount":1,"totalCount":1}}}}"#
+                r#"{{"data":[{available},{blocked}],"pagination":{{"index":0,"pageSize":50,"resultCount":2,"totalCount":2}}}}"#
             )
             .into_boxed_str(),
         );
@@ -886,7 +806,8 @@ mod tests {
             .unwrap_err();
 
         assert!(
-            error.to_string().contains("none is API-downloadable"),
+            error.to_string().contains("complete candidate queue")
+                && error.to_string().contains("example-2.jar"),
             "unexpected error: {error}"
         );
         stop_mock_server(server).await;

@@ -96,7 +96,7 @@ pub async fn handle(
         instance_dir,
     };
 
-    let providers = create_identification_providers()?;
+    let providers = create_identification_providers(&ctx.runtime.config().auth)?;
     let output = run_init(input, &providers).await?;
 
     // ── 4. 输出结果 ────────────────────────────
@@ -129,13 +129,16 @@ pub async fn handle(
         eprintln!("Dependency graph verification failed:\n{error}");
         eprintln!("Use 'orbit install' or 'orbit sync' to fix missing dependencies.");
     }
-    orbit_core::register_instance(orbit_core::InstanceEntry {
-        name: name.clone(),
-        path: registered_path.to_string_lossy().into_owned(),
-        mc_version: output.manifest.project.mc_version.clone(),
-        modloader: loader.clone(),
-        is_default: false,
-    })?;
+    orbit_core::register_instance(
+        ctx.runtime.paths(),
+        orbit_core::InstanceEntry {
+            name: name.clone(),
+            path: registered_path.to_string_lossy().into_owned(),
+            mc_version: output.manifest.project.mc_version.clone(),
+            modloader: loader.clone(),
+            is_default: false,
+        },
+    )?;
     println!("  Run 'orbit install' to restore missing mods.");
 
     Ok(())

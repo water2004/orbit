@@ -19,6 +19,7 @@ pub async fn install_local_file_to_instance(
     constraint: Option<&str>,
     instance_dir: &Path,
     providers: &[Box<dyn ModProvider>],
+    jar_cache: &crate::jar_cache::JarCache,
     options: InstallOptions,
     interaction: InstallInteraction,
 ) -> Result<InstallReport, OrbitError> {
@@ -90,6 +91,7 @@ pub async fn install_local_file_to_instance(
         &manifest,
         &mut lockfile,
         providers,
+        jar_cache,
         options.no_deps,
         interaction.select_resolution,
     )
@@ -129,6 +131,7 @@ pub async fn install_local_file_to_instance(
         package: &metadata.mod_id,
         original_packages: &original_packages,
         providers,
+        jar_cache,
     };
     materialize_new_packages(materialize, &mut lockfile).await?;
     manifest.save()?;
@@ -200,15 +203,21 @@ async fn resolve_dependencies(
     manifest: &ManifestFile,
     lockfile: &mut Lockfile,
     providers: &[Box<dyn ModProvider>],
+    jar_cache: &crate::jar_cache::JarCache,
     no_dependencies: bool,
     selector: Option<crate::resolver::types::ResolutionSelector>,
 ) -> Result<crate::resolver::types::ResolutionReport, OrbitError> {
     if no_dependencies {
         return Ok(crate::resolver::types::ResolutionReport::default());
     }
-    let resolution =
-        resolve_missing_lock_entries(&manifest.inner, &mut lockfile.inner, providers, selector)
-            .await?;
+    let resolution = resolve_missing_lock_entries(
+        &manifest.inner,
+        &mut lockfile.inner,
+        providers,
+        jar_cache,
+        selector,
+    )
+    .await?;
     crate::resolver::check_lockfile_graph(&manifest.inner, &lockfile.inner)
         .map_err(OrbitError::Conflict)?;
     Ok(resolution)
@@ -301,6 +310,7 @@ struct LocalMaterialization<'a> {
     package: &'a str,
     original_packages: &'a HashSet<String>,
     providers: &'a [Box<dyn ModProvider>],
+    jar_cache: &'a crate::jar_cache::JarCache,
 }
 
 async fn materialize_new_packages(
@@ -315,7 +325,15 @@ async fn materialize_new_packages(
             continue;
         }
         if !package_is_present(entry, &mods_dir)? {
-            restore_package(entry, input.instance_dir, &mods_dir, input.providers, false).await?;
+            restore_package(
+                entry,
+                input.instance_dir,
+                &mods_dir,
+                input.providers,
+                input.jar_cache,
+                false,
+            )
+            .await?;
         }
     }
     lockfile
@@ -411,12 +429,14 @@ versionRange = "[1,)"
         .unwrap();
         jar.finish().unwrap();
         let providers: Vec<Box<dyn ModProvider>> = Vec::new();
+        let cache = crate::jar_cache::JarCache::open(directory.join(".test-cache")).unwrap();
 
         let report = install_local_file_to_instance(
             &source,
             None,
             &directory,
             &providers,
+            &cache,
             InstallOptions {
                 no_deps: true,
                 optional: true,

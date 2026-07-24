@@ -16,7 +16,8 @@ pub async fn handle(
         None => orbit_core::OrbitManifest::mc_version_from_dir(&instance_dir),
     };
 
-    let providers = super::create_instance_providers(&instance_dir, platform.as_deref())?;
+    let providers =
+        super::create_instance_providers(&instance_dir, platform.as_deref(), &ctx.runtime)?;
 
     eprintln!(
         "Searching for \"{query}\" on {}{}...",

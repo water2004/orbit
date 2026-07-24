@@ -8,11 +8,17 @@ pub async fn handle(version: String, modloader: Option<String>, ctx: &CliContext
     let lockfile =
         orbit_core::Lockfile::open(&instance_dir).context("failed to read orbit.lock")?;
     let loader = modloader.unwrap_or_else(|| manifest.inner.project.modloader.clone());
-    let providers = super::create_instance_providers(&instance_dir, None)?;
+    let providers = super::create_instance_providers(&instance_dir, None, &ctx.runtime)?;
 
     eprintln!("Checking compatibility with Minecraft {version} ({loader})...");
-    let results =
-        orbit_core::check_compatibility(&lockfile.inner, &version, &loader, &providers).await?;
+    let results = orbit_core::check_compatibility(
+        &lockfile.inner,
+        &version,
+        &loader,
+        &providers,
+        ctx.runtime.jar_cache(),
+    )
+    .await?;
     if results.is_empty() {
         println!("No online packages in orbit.lock to check.");
         return Ok(());

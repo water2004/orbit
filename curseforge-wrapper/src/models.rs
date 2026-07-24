@@ -190,3 +190,44 @@ pub struct GetFilesParams<'a> {
     pub game_version: Option<&'a str>,
     pub mod_loader_type: Option<ModLoaderType>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn loader_names_roundtrip_to_official_enum_values() {
+        for (name, value) in [("forge", 1), ("fabric", 4), ("quilt", 5), ("neoforge", 6)] {
+            let loader = ModLoaderType::parse(name).unwrap();
+            assert_eq!(loader as u8, value);
+            assert_eq!(ModLoaderType::name(value), name);
+        }
+        assert!(ModLoaderType::parse("unknown").is_none());
+    }
+
+    #[test]
+    fn file_sha1_uses_the_hash_algorithm_tag() {
+        let file: File = serde_json::from_str(
+            r#"{
+                "id": 1,
+                "modId": 2,
+                "isAvailable": true,
+                "displayName": "Example",
+                "fileName": "example.jar",
+                "hashes": [
+                    {"value": "md5", "algo": 2},
+                    {"value": "sha1", "algo": 1}
+                ],
+                "fileDate": "2026-01-01T00:00:00Z",
+                "downloadUrl": null,
+                "gameVersions": [],
+                "sortableGameVersions": [],
+                "dependencies": [],
+                "fileFingerprint": 3
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(file.sha1(), "sha1");
+    }
+}

@@ -3,6 +3,10 @@ name = "orbit"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+default = []
+portable = ["orbit-core/portable"]
+
 [dependencies]
 # 内部依赖
 orbit-core = { path = "../orbit-core" }
@@ -11,4 +15,3 @@ orbit-core = { path = "../orbit-core" }
 tokio.workspace = true
 clap.workspace = true
 anyhow.workspace = true
-

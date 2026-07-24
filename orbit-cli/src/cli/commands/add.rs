@@ -25,13 +25,14 @@ pub async fn handle(
         let providers = if no_deps {
             Vec::new()
         } else {
-            super::create_instance_providers(&instance_dir, None)?
+            super::create_instance_providers(&instance_dir, None, &ctx.runtime)?
         };
         let report = install_local_file_to_instance(
             std::path::Path::new(path),
             version.as_deref(),
             &instance_dir,
             &providers,
+            ctx.runtime.jar_cache(),
             InstallOptions {
                 no_deps,
                 dry_run: ctx.dry_run,
@@ -66,13 +67,18 @@ pub async fn handle(
     let constraint = version.unwrap_or_else(|| "*".into());
     let (selected_platform, slug) = super::resolve_platform_target(&mod_name, platform.as_deref())?;
     let instance_dir = ctx.instance_dir()?;
-    let providers = super::create_instance_providers(&instance_dir, selected_platform.as_deref())?;
+    let providers = super::create_instance_providers(
+        &instance_dir,
+        selected_platform.as_deref(),
+        &ctx.runtime,
+    )?;
 
     match install_to_instance(
         slug,
         &constraint,
         &instance_dir,
         &providers,
+        ctx.runtime.jar_cache(),
         InstallOptions {
             no_deps,
             dry_run: ctx.dry_run,

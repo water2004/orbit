@@ -1,8 +1,8 @@
 use crate::cli::commands::CliContext;
 use anyhow::Result;
 
-pub async fn handle(name: String, _ctx: &CliContext) -> Result<()> {
-    let removed = orbit_core::remove_instance(&name)?;
+pub async fn handle(name: String, ctx: &CliContext) -> Result<()> {
+    let removed = orbit_core::remove_instance(ctx.runtime.paths(), &name)?;
     let current = std::env::current_dir()
         .ok()
         .and_then(|path| path.canonicalize().ok());
