@@ -74,11 +74,12 @@ build_solver_graph
 
 当前根约束行为：
 
-- manifest 中没有候选的包使用 manifest 版本约束；
-- 有候选的包暂时使用 `Ranges::full()`；
+- manifest 中的包始终使用 manifest 版本约束，无论该包是否有候选；
 - 不在 manifest 中的候选也以 `Ranges::full()` 加入根依赖，供 `orbit add` 使用。
 
-“有候选即放宽为 full”是当前实现，不是最终规范；它会绕过用户声明的版本约束，见第 8 节。
+`orbit add` 会先把 provider 查询标识映射到候选 JAR 自声明的 `mod_id`，再把命令行
+constraint 临时加入求解 manifest。安装成功后，该 constraint 写入真实 `mod_id` 对应的
+manifest 条目；后续升级只更新 lockfile 版本，不覆盖原约束。
 
 ---
 
@@ -170,7 +171,6 @@ check_local_graph(manifest, local_mods)
 
 | 规范 | 当前代码差距 |
 |------|--------------|
-| 用户声明的版本约束必须生效 | `install_to_instance()` 尚未使用传入的 constraint；有候选的根约束被放宽为 `Ranges::full()` |
 | `[resolver].platforms` 应按顺序回退 | add、outdated、BFS 下载和 resolver 补抓目前只使用第一个 provider |
 | `orbit-core` 不直接输出 UI/进度文本 | `resolver/mod.rs` 和 `retry.rs` 仍有 `eprintln!`；诊断应通过结构化返回值交给 CLI |
 | 冲突报告应面向用户且可读 | 成功但跳过候选已有领域化解释；真正 `NoSolution` 和本地校验仍直接返回 `DefaultStringReporter` 字符串 |

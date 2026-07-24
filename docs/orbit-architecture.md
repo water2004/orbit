@@ -954,9 +954,10 @@ orbit-cli/commands/add.rs
   → orbit-cli 格式化结果
 ```
 
-这里描述的是现状，不代表所有规范已经满足：`--version` 已传入 core 但尚未参与候选根约束，
-`--platform`、`--env` 和 `--optional` 仍被 CLI handler 忽略，provider 回退也只使用首个
-provider。它们是实现缺口，详见 [orbit-resolver.md](orbit-resolver.md#8-仍然有效但代码尚未满足的规范)。
+这里描述的是现状，不代表所有规范已经满足：`--version` 已绑定到候选 JAR 的真实
+`mod_id` 并参与根约束；`--platform`、`--env` 和 `--optional` 仍被 CLI handler 忽略，
+provider 回退也只使用首个 provider。后者仍是实现缺口，详见
+[orbit-resolver.md](orbit-resolver.md#8-仍然有效但代码尚未满足的规范)。
 
 ---
 

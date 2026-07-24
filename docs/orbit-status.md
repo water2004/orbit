@@ -31,7 +31,7 @@ orbit-cli ──→ orbit-core ──→ modrinth-wrapper
 | `error.rs` | ✅ | ModrinthError 枚举 |
 | 集成测试 | ✅ | 14 个 live API 测试；默认跳过网络，设置 `MODRINTH_LIVE_TESTS=1` 才实际请求 |
 
-### orbit-core — 🚧 Phase 1 完成，Phase 2 推进中（50 单测）
+### orbit-core — 🚧 Phase 1 完成，Phase 2 推进中（54 单测）
 
 | 模块 | 状态 | 说明 |
 |------|------|------|
@@ -98,13 +98,13 @@ orbit-cli ──→ orbit-core ──→ modrinth-wrapper
 | `orbit instances list` | ✅ | 🚧 config::InstancesRegistry | 需实现格式化输出 |
 | `orbit instances default` | ✅ | 🚧 config | 需 UI |
 | `orbit instances remove` | ✅ | 🚧 config | 需 UI |
-| `orbit add` | ✅ | ⚠️ installer::install_to_instance + resolver::resolve_with_candidates | 主流程可用；version/platform/env/optional 规范尚未完整生效 |
+| `orbit add` | ✅ | ⚠️ installer::install_to_instance + resolver::resolve_with_candidates | version 约束已生效并绑定真实 mod_id；platform/env/optional 尚未完整生效 |
 | `orbit install` | ✅ | 🚧 installer | stub（exit 2），全量还原待实现 |
 | `orbit remove` | ✅ | ✅ resolver::dependents | 反查依赖图 + 删除 JAR + 更新 toml/lock |
 | `orbit purge` | ✅ | 🚧 purge + manifest | 需启发式搜索 |
 | `orbit sync` | ✅ | 🚧 sync | **核心功能** |
-| `orbit outdated` | ✅ | ⚠️ outdated + resolver | 可查询候选；manifest 版本约束尚未约束候选根范围 |
-| `orbit upgrade` | ✅ | ⚠️ outdated + resolver + installer | 可升级；同样受版本约束缺口影响，单模组入口仍走全局检查 |
+| `orbit outdated` | ✅ | ✅ outdated + resolver | 候选受 manifest 版本约束限制 |
+| `orbit upgrade` | ✅ | ⚠️ outdated + resolver + installer | 保留 manifest 原约束；单模组入口仍走全局检查 |
 | `orbit search` | ✅ | ✅ provider::search | CLI handler + facets 过滤 + 格式化输出 |
 | `orbit info` | ✅ | 🚧 provider::get_mod_info | 需格式化输出 |
 | `orbit list` | ✅ | ✅ installer::list_installed | 扁平和树形展示已实现 |
@@ -121,7 +121,6 @@ orbit-cli ──→ orbit-core ──→ modrinth-wrapper
 
 | 优先级 | 规范 | 当前差距 |
 |:---:|------|----------|
-| P0 | add/upgrade 必须遵守用户版本约束 | `install_to_instance` 忽略 constraint，候选根范围使用 full |
 | P1 | core 不直接承担 UI 输出 | resolver、outdated、installer、init 等仍直接 `eprintln!` |
 | P1 | provider 按 `[resolver].platforms` 顺序回退 | add/outdated/BFS/retry 只使用首个 provider |
 | P1 | 冲突信息应可读且由 CLI 展示 | skipped candidate 已结构化采集但直接打印；NoSolution 仍返回默认 reporter 字符串 |
@@ -156,6 +155,7 @@ orbit-cli ──→ orbit-core ──→ modrinth-wrapper
 - [x] 定制 PubGrub 类型化 observer（proposal / decision / derivation / backtrack）
 - [x] 成功求解中被跳过候选的实际路径诊断
 - [x] resolver 按 graph / retry / local / diagnostics 职责拆分
+- [x] add/upgrade 候选遵守 manifest/命令行版本约束，并在升级时保留原约束
 - [x] `cli add <slug>` 单模组安装（含搜索回退 + 交互式选择）
 - [x] `cli remove <mod>` 按 slug 删除（含反查依赖图 + 候选列表）
 - [ ] 实现 `sync.rs` 五态比对
