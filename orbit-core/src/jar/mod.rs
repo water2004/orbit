@@ -22,11 +22,51 @@ pub struct JarModMetadata {
     pub mod_id: String,
     pub name: String,
     pub version: String,
-    /// (mod_id, version_constraint, required)
-    pub dependencies: Vec<(String, String, bool)>,
+    pub environment: crate::metadata::Environment,
+    pub dependencies: Vec<crate::metadata::DependencyExpression>,
+    pub provides: Vec<crate::metadata::ProvidedMod>,
+    pub language_loader: Option<crate::metadata::LanguageLoaderRequirement>,
     pub embedded_jars: Vec<String>,
-    /// 从 loader 声明路径中解出的内嵌子模组元数据
-    pub implanted_mods: Vec<JarModMetadata>,
+    pub embedded_artifacts: Vec<crate::metadata::EmbeddedArtifact>,
+    /// 同一物理 JAR 提供的其他模组，包括多模组声明和嵌套 JAR。
+    pub bundled_mods: Vec<JarModMetadata>,
+}
+
+pub(super) fn from_mod_file(
+    mut file: crate::metadata::ModFileMetadata,
+) -> Result<JarModMetadata, OrbitError> {
+    let primary = file.mods.drain(..1).next().ok_or_else(|| {
+        OrbitError::Other(anyhow::anyhow!("loader metadata does not declare any mods"))
+    })?;
+    let bundled_mods = file
+        .mods
+        .into_iter()
+        .map(|metadata| JarModMetadata {
+            mod_id: metadata.id,
+            name: metadata.name,
+            version: metadata.version,
+            environment: metadata.environment,
+            dependencies: metadata.dependencies,
+            provides: metadata.provides,
+            language_loader: file.language_loader.clone(),
+            embedded_jars: Vec::new(),
+            embedded_artifacts: Vec::new(),
+            bundled_mods: Vec::new(),
+        })
+        .collect();
+
+    Ok(JarModMetadata {
+        mod_id: primary.id,
+        name: primary.name,
+        version: primary.version,
+        environment: primary.environment,
+        dependencies: primary.dependencies,
+        provides: primary.provides,
+        language_loader: file.language_loader,
+        embedded_jars: file.embedded_jars,
+        embedded_artifacts: Vec::new(),
+        bundled_mods,
+    })
 }
 
 // ── 顶层 API ────────────────────────────────────────────────────
@@ -134,22 +174,78 @@ fn read_mod_metadata_from_archive<R: std::io::Read + std::io::Seek>(
     };
 
     if let Some(mut meta) = meta_opt {
-        let mut implanted = Vec::new();
+        inject_bytecode_requirement(archive, &mut meta, &normalized_loader)?;
+        let mut bundled = Vec::new();
         for emb_path in &meta.embedded_jars {
-            if let Ok(mut entry) = archive.by_name(emb_path) {
-                let mut bytes = Vec::new();
-                if std::io::Read::read_to_end(&mut entry, &mut bytes).is_ok()
-                    && let Ok(inner_meta) = read_mod_metadata_from_bytes(&bytes, loader)
-                {
-                    implanted.push(inner_meta);
-                }
+            let Ok(mut entry) = archive.by_name(emb_path) else {
+                continue;
+            };
+            let mut bytes = Vec::new();
+            entry.read_to_end(&mut bytes).map_err(OrbitError::Io)?;
+            let cursor = std::io::Cursor::new(bytes);
+            let mut embedded = zip::ZipArchive::new(cursor).map_err(OrbitError::Zip)?;
+            if let Some(inner_meta) = read_mod_metadata_from_archive(&mut embedded, loader)? {
+                bundled.push(inner_meta);
             }
         }
-        meta.implanted_mods = implanted;
+        meta.bundled_mods.extend(bundled);
         return Ok(Some(meta));
     }
 
     Ok(None)
+}
+
+fn inject_bytecode_requirement<R: std::io::Read + std::io::Seek>(
+    archive: &mut zip::ZipArchive<R>,
+    metadata: &mut JarModMetadata,
+    loader: &str,
+) -> Result<(), OrbitError> {
+    let mut highest_major = None;
+    for index in 0..archive.len() {
+        let mut entry = archive.by_index(index).map_err(OrbitError::Zip)?;
+        let name = entry.name();
+        if !name.ends_with(".class") || name.starts_with("META-INF/versions/") {
+            continue;
+        }
+        let mut header = [0_u8; 8];
+        if entry.read_exact(&mut header).is_ok() && header[..4] == [0xca, 0xfe, 0xba, 0xbe] {
+            let major = u16::from_be_bytes([header[6], header[7]]);
+            highest_major = Some(highest_major.map_or(major, |current: u16| current.max(major)));
+        }
+    }
+
+    let Some(java_version) = highest_major.and_then(class_major_to_java) else {
+        return Ok(());
+    };
+    let requirement = if matches!(loader, "forge" | "neoforge") {
+        format!("[{java_version},)")
+    } else {
+        format!(">={java_version}")
+    };
+    metadata.dependencies.push(
+        crate::metadata::ModDependency {
+            id: "java".to_string(),
+            requirement,
+            kind: crate::metadata::DependencyKind::Required,
+            environment: crate::metadata::Environment::Both,
+            ordering: crate::metadata::DependencyOrdering::None,
+            reason: Some(format!(
+                "class-file major version {} requires Java {java_version} or newer",
+                highest_major.expect("checked above")
+            )),
+            unless: None,
+        }
+        .into(),
+    );
+    Ok(())
+}
+
+fn class_major_to_java(major: u16) -> Option<u16> {
+    match major {
+        45 => Some(1),
+        46.. => Some(major - 44),
+        _ => None,
+    }
 }
 
 /// Read the first matching UTF-8 metadata entry.
@@ -292,6 +388,23 @@ mod tests {
         zip.finish().unwrap().into_inner()
     }
 
+    fn has_dependency(
+        metadata: &JarModMetadata,
+        id: &str,
+        requirement: &str,
+        required: bool,
+    ) -> bool {
+        metadata
+            .dependencies
+            .iter()
+            .flat_map(|dependency| dependency.relations())
+            .any(|dependency| {
+                dependency.id == id
+                    && dependency.requirement == requirement
+                    && dependency.kind.installs_target() == required
+            })
+    }
+
     #[test]
     fn reads_realistic_fabric_metadata_from_jar_bytes() {
         let bytes = jar_bytes(&[("fabric.mod.json", SODIUM_LIKE.as_bytes())]);
@@ -301,15 +414,33 @@ mod tests {
         assert_eq!(meta.mod_id, "sodium");
         assert_eq!(meta.version, "0.8.11+mc1.21.11");
         assert_eq!(meta.name, "Sodium");
-        assert!(meta.dependencies.iter().any(|(name, version, required)| {
-            name == "fabric-rendering-fluids-v1" && version == ">=2.0.0" && *required
-        }));
+        assert!(has_dependency(
+            &meta,
+            "fabric-rendering-fluids-v1",
+            ">=2.0.0",
+            true
+        ));
         assert_eq!(meta.embedded_jars.len(), 9);
         assert_eq!(
             meta.embedded_jars[0],
             "META-INF/jars/fabric-api-base-1.0.5+4ebb5c083e.jar"
         );
-        assert!(meta.implanted_mods.is_empty());
+        assert!(meta.bundled_mods.is_empty());
+    }
+
+    #[test]
+    fn derives_java_requirement_from_root_class_bytecode() {
+        let class = [0xca, 0xfe, 0xba, 0xbe, 0, 0, 0, 65];
+        let multi_release = [0xca, 0xfe, 0xba, 0xbe, 0, 0, 0, 66];
+        let entries: [(&str, &[u8]); 3] = [
+            ("fabric.mod.json", PRINTER_EMBEDDED.as_bytes()),
+            ("example/Main.class", &class),
+            ("META-INF/versions/22/example/Main.class", &multi_release),
+        ];
+
+        let metadata = read_mod_metadata_from_bytes(&jar_bytes(&entries), "fabric").unwrap();
+
+        assert!(has_dependency(&metadata, "java", ">=21", true));
     }
 
     #[test]
@@ -326,22 +457,15 @@ mod tests {
 
         assert_eq!(meta.mod_id, "sodium");
         assert_eq!(meta.embedded_jars.len(), 9);
-        assert_eq!(meta.implanted_mods.len(), 1);
-        let implanted = &meta.implanted_mods[0];
-        assert_eq!(implanted.mod_id, "fabric-api-base");
-        assert_eq!(implanted.version, "1.0.5+4ebb5c083e");
-        assert!(
-            implanted
-                .dependencies
-                .iter()
-                .any(|(name, version, required)| name == "fabricloader"
-                    && version == ">=0.17.3"
-                    && *required)
-        );
+        assert_eq!(meta.bundled_mods.len(), 1);
+        let bundled = &meta.bundled_mods[0];
+        assert_eq!(bundled.mod_id, "fabric-api-base");
+        assert_eq!(bundled.version, "1.0.5+4ebb5c083e");
+        assert!(has_dependency(bundled, "fabricloader", ">=0.17.3", true));
     }
 
     #[test]
-    fn reads_implanted_fabric_jars_declared_by_parent_metadata() {
+    fn reads_bundled_fabric_jars_declared_by_parent_metadata() {
         let embedded_path = "META-INF/jars/litematica-printer-1.21.11-2.4+20260330.10.jar";
         let embedded = jar_bytes(&[("fabric.mod.json", PRINTER_EMBEDDED.as_bytes())]);
         let parent_entries: [(&str, &[u8]); 2] = [
@@ -355,27 +479,23 @@ mod tests {
         assert_eq!(meta.mod_id, "litematica-printer-all");
         assert_eq!(meta.embedded_jars.len(), 13);
         assert!(meta.embedded_jars.iter().any(|path| path == embedded_path));
-        assert_eq!(meta.implanted_mods.len(), 1);
-        let implanted = &meta.implanted_mods[0];
-        assert_eq!(implanted.mod_id, "litematica-printer");
-        assert_eq!(implanted.version, "2.4+20260330.10");
+        assert_eq!(meta.bundled_mods.len(), 1);
+        let bundled = &meta.bundled_mods[0];
+        assert_eq!(bundled.mod_id, "litematica-printer");
+        assert_eq!(bundled.version, "2.4+20260330.10");
         assert_eq!(
-            implanted.embedded_jars,
+            bundled.embedded_jars,
             vec!["META-INF/jars/pinyin4j-2.5.1.jar"]
         );
-        assert!(
-            implanted
-                .dependencies
-                .iter()
-                .any(|(name, version, required)| name == "minecraft"
-                    && version == "1.21.11"
-                    && *required)
-        );
+        assert!(has_dependency(bundled, "minecraft", "1.21.11", true));
     }
 
     #[test]
     fn reads_forge_metadata_and_jarjar_children() {
         let child_metadata = br#"
+modLoader = "javafml"
+loaderVersion = "[47,)"
+license = "MIT"
 [[mods]]
 modId = "child"
 version = "1"
@@ -383,6 +503,8 @@ displayName = "Child"
 "#;
         let child = jar_bytes(&[("META-INF/mods.toml", child_metadata)]);
         let parent_metadata = br#"
+modLoader = "javafml"
+loaderVersion = "[47,)"
 license = "MIT"
 [[mods]]
 modId = "parent"
@@ -394,10 +516,15 @@ modId = "forge"
 mandatory = true
 versionRange = "[47,)"
 [[dependencies.parent]]
-modId = "optional-api"
+modId = "optional_api"
 mandatory = false
 "#;
-        let jarjar = br#"{"jars":[{"path":"META-INF/jarjar/child.jar"}]}"#;
+        let jarjar = br#"{"jars":[{
+            "identifier":{"group":"org.example","artifact":"child"},
+            "version":{"range":"[1,2)","artifactVersion":"1"},
+            "path":"META-INF/jarjar/child.jar",
+            "isObfuscated":false
+        }]}"#;
         let manifest = b"Manifest-Version: 1.0\r\nImplementation-Version: 2.0.1\r\n";
         let entries: [(&str, &[u8]); 4] = [
             ("META-INF/mods.toml", parent_metadata),
@@ -410,25 +537,22 @@ mandatory = false
 
         assert_eq!(metadata.mod_id, "parent");
         assert_eq!(metadata.version, "2.0.1");
-        assert_eq!(
-            metadata.dependencies,
-            [
-                ("forge".to_string(), "[47,)".to_string(), true),
-                ("optional-api".to_string(), "*".to_string(), false),
-            ]
-        );
-        assert_eq!(metadata.implanted_mods.len(), 1);
-        assert_eq!(metadata.implanted_mods[0].mod_id, "child");
+        assert!(has_dependency(&metadata, "forge", "[47,)", true));
+        assert!(has_dependency(&metadata, "optional_api", "*", false));
+        assert_eq!(metadata.bundled_mods.len(), 1);
+        assert_eq!(metadata.bundled_mods[0].mod_id, "child");
+        assert_eq!(metadata.embedded_artifacts[0].id, "org.example:child");
     }
 
     #[test]
     fn reads_modern_and_legacy_neoforge_metadata_names() {
         let metadata = br#"
+license = "MIT"
 [[mods]]
-modId = "neo-example"
+modId = "neo_example"
 version = "1"
 displayName = "Neo Example"
-[[dependencies.neo-example]]
+[[dependencies.neo_example]]
 modId = "neoforge"
 type = "required"
 versionRange = "[21,)"
@@ -436,8 +560,13 @@ versionRange = "[21,)"
         for target in ["META-INF/neoforge.mods.toml", "META-INF/mods.toml"] {
             let jar = jar_bytes(&[(target, metadata)]);
             let parsed = read_mod_metadata_from_bytes(&jar, "neoforge").unwrap();
-            assert_eq!(parsed.mod_id, "neo-example");
-            assert!(parsed.dependencies[0].2);
+            assert_eq!(parsed.mod_id, "neo_example");
+            assert!(
+                parsed.dependencies[0]
+                    .relations()
+                    .iter()
+                    .any(|dependency| dependency.kind.installs_target())
+            );
         }
     }
 

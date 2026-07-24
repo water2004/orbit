@@ -8,7 +8,7 @@ use crate::error::OrbitError;
 use crate::lockfile::OrbitLockfile;
 use crate::manifest::OrbitManifest;
 use crate::providers::{ModProvider, ResolvedMod};
-use crate::resolver::types::{CandidateDiagnostic, CandidateVersion, ImplantedCandidate};
+use crate::resolver::types::{CandidateDiagnostic, CandidateVersion};
 
 pub struct OutdatedMod {
     pub mod_id: String,
@@ -21,6 +21,7 @@ pub struct OutdatedReport {
     pub updates: Vec<OutdatedMod>,
     pub resolved: ResolvedCandidates,
     pub diagnostics: Vec<CandidateDiagnostic>,
+    pub warnings: Vec<String>,
 }
 
 pub type ResolvedCandidateKey = (String, String);
@@ -110,16 +111,7 @@ pub async fn download_candidates_bfs(
                     if key.is_empty() {
                         return None;
                     }
-                    let imp_cands = meta
-                        .implanted_mods
-                        .into_iter()
-                        .map(|im| crate::resolver::types::ImplantedCandidate {
-                            mod_id: im.mod_id,
-                            version: im.version,
-                            deps: im.dependencies,
-                        })
-                        .collect();
-                    Some((key, meta.version, meta.dependencies, imp_cands, v))
+                    Some((key, CandidateVersion::from_jar_metadata(meta), v))
                 }
                 Err(_) => None,
             }
@@ -128,15 +120,8 @@ pub async fn download_candidates_bfs(
 
     let mut download = CandidateDownload::default();
     for handle in handles {
-        if let Ok(Some((package, version, dependencies, implanted, resolved))) = handle.await {
-            record_candidate(
-                &mut download,
-                package,
-                version,
-                dependencies,
-                implanted,
-                resolved,
-            );
+        if let Ok(Some((package, candidate, resolved))) = handle.await {
+            record_candidate(&mut download, package, candidate, resolved);
         }
     }
     Ok(download)
@@ -164,9 +149,7 @@ pub async fn download_candidates_with_fallback(
 fn record_candidate(
     download: &mut CandidateDownload,
     package: String,
-    version: String,
-    dependencies: Vec<(String, String, bool)>,
-    implanted: Vec<ImplantedCandidate>,
+    candidate: CandidateVersion,
     resolved: ResolvedMod,
 ) {
     download
@@ -182,16 +165,12 @@ fn record_candidate(
     }
     download
         .resolved
-        .insert((package.clone(), version.clone()), resolved);
+        .insert((package.clone(), candidate.jar_version.clone()), resolved);
     download
         .candidates
         .entry(package)
         .or_default()
-        .push(CandidateVersion {
-            jar_version: version,
-            deps: dependencies,
-            implanted,
-        });
+        .push(candidate);
 }
 
 /// 检查所有已安装 modrinth mod 的可用更新。
@@ -286,6 +265,7 @@ pub async fn check_all_outdated(
         updates,
         resolved,
         diagnostics: resolution.diagnostics,
+        warnings: resolution.warnings,
     })
 }
 
@@ -323,17 +303,29 @@ mod tests {
         record_candidate(
             &mut download,
             "actual-a".to_string(),
-            "1".to_string(),
-            Vec::new(),
-            Vec::new(),
+            CandidateVersion {
+                jar_version: "1".to_string(),
+                dependencies: Vec::new(),
+                environment: Default::default(),
+                provides: Vec::new(),
+                language_loader: None,
+                embedded_artifacts: Vec::new(),
+                bundled: Vec::new(),
+            },
             resolved("source-a", "project-a"),
         );
         record_candidate(
             &mut download,
             "actual-b".to_string(),
-            "1".to_string(),
-            Vec::new(),
-            Vec::new(),
+            CandidateVersion {
+                jar_version: "1".to_string(),
+                dependencies: Vec::new(),
+                environment: Default::default(),
+                provides: Vec::new(),
+                language_loader: None,
+                embedded_artifacts: Vec::new(),
+                bundled: Vec::new(),
+            },
             resolved("source-b", "project-b"),
         );
 

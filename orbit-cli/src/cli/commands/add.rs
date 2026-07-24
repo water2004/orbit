@@ -54,6 +54,7 @@ pub async fn handle(
         .await
         .map_err(|error| anyhow::anyhow!("Add failed: {error}"))?;
         super::print_resolution_diagnostics(&report.diagnostics);
+        super::print_resolution_warnings(&report.warnings);
         if ctx.dry_run {
             for installed in &report.installed {
                 println!(
@@ -111,6 +112,7 @@ pub async fn handle(
     {
         Ok(report) => {
             super::print_resolution_diagnostics(&report.diagnostics);
+            super::print_resolution_warnings(&report.warnings);
             if ctx.dry_run {
                 for m in &report.installed {
                     println!("  [dry-run] would install {} v{}", m.mod_id, m.version);

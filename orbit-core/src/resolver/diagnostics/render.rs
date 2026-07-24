@@ -114,6 +114,7 @@ fn collect_external_facts(cause: &Cause, facts: &mut Vec<String>) {
                     "{} {versions} is unavailable: {message}",
                     package_name(package)
                 ),
+                External::CustomClause { metadata, .. } => metadata.clone(),
             };
             if !facts.contains(&fact) {
                 facts.push(fact);
@@ -133,6 +134,12 @@ fn is_internal_root(package: &str) -> bool {
 fn package_name(package: &str) -> &str {
     if is_internal_root(package) {
         "the project"
+    } else if let Some(capability) = package.strip_prefix("___orbit_capability___") {
+        capability
+    } else if let Some(choice) = package.strip_prefix("___orbit_provider_choice___") {
+        choice.split("___").next().unwrap_or(choice)
+    } else if let Some(artifact) = package.strip_prefix("___orbit_jarjar___") {
+        artifact
     } else {
         package
     }

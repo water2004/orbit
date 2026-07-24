@@ -1,4 +1,4 @@
-//! Maven-style version ordering and range parsing used by Forge and NeoForge.
+//! Maven `ComparableVersion` ordering and version ranges used by Forge-family loaders.
 
 use std::cmp::Ordering;
 use std::hash::{Hash, Hasher};
@@ -13,17 +13,19 @@ pub struct MavenVersion {
     items: Vec<Item>,
 }
 
-#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+#[derive(Debug, Clone, Hash)]
 enum Item {
     Number(String),
     Qualifier(String),
+    List(Vec<Item>),
+    Combination { qualifier: String, number: String },
 }
 
 impl MavenVersion {
     pub fn parse(raw: &str) -> Self {
         Self {
             raw: raw.to_string(),
-            items: tokenize(raw),
+            items: parse_items(raw),
         }
     }
 }
@@ -36,7 +38,7 @@ impl std::fmt::Display for MavenVersion {
 
 impl PartialEq for MavenVersion {
     fn eq(&self, other: &Self) -> bool {
-        self.items == other.items
+        compare_lists(&self.items, &other.items) == Ordering::Equal
     }
 }
 
@@ -56,69 +58,185 @@ impl PartialOrd for MavenVersion {
 
 impl Ord for MavenVersion {
     fn cmp(&self, other: &Self) -> Ordering {
-        let length = self.items.len().max(other.items.len());
-        for index in 0..length {
-            let ordering = compare_optional(self.items.get(index), other.items.get(index));
-            if ordering != Ordering::Equal {
-                return ordering;
-            }
-        }
-        Ordering::Equal
+        compare_lists(&self.items, &other.items)
     }
 }
 
-fn tokenize(raw: &str) -> Vec<Item> {
-    let mut items = Vec::new();
-    let mut token = String::new();
-    let mut token_is_numeric = None;
-    for character in raw.trim().chars() {
-        if matches!(character, '.' | '-' | '_' | '+') {
-            push_token(&mut items, &mut token);
-            token_is_numeric = None;
-            continue;
+#[derive(Clone)]
+enum BuilderItem {
+    Value(Item),
+    List(usize),
+}
+
+#[derive(Default)]
+struct ListBuilder {
+    items: Vec<BuilderItem>,
+}
+
+fn parse_items(raw: &str) -> Vec<Item> {
+    let characters: Vec<_> = raw.to_lowercase().chars().collect();
+    let mut lists = vec![ListBuilder::default()];
+    let mut current = 0;
+    let mut is_digit = false;
+    let mut is_combination = false;
+    let mut start = 0;
+
+    for index in 0..characters.len() {
+        let character = characters[index];
+        match character {
+            '.' => {
+                if index == start {
+                    push_value(&mut lists, current, Item::Number("0".to_string()));
+                } else {
+                    push_value(
+                        &mut lists,
+                        current,
+                        parse_item(
+                            is_combination,
+                            is_digit,
+                            substring(&characters, start, index),
+                        ),
+                    );
+                }
+                is_combination = false;
+                start = index + 1;
+            }
+            '-' => {
+                if index == start {
+                    push_value(&mut lists, current, Item::Number("0".to_string()));
+                } else {
+                    if !is_digit
+                        && characters
+                            .get(index + 1)
+                            .is_some_and(|next| next.is_ascii_digit())
+                    {
+                        is_combination = true;
+                        continue;
+                    }
+                    push_value(
+                        &mut lists,
+                        current,
+                        parse_item(
+                            is_combination,
+                            is_digit,
+                            substring(&characters, start, index),
+                        ),
+                    );
+                }
+                start = index + 1;
+                if !lists[current].items.is_empty() {
+                    current = push_list(&mut lists, current);
+                }
+                is_combination = false;
+            }
+            character if character.is_ascii_digit() => {
+                if !is_digit && index > start {
+                    is_combination = true;
+                    if !lists[current].items.is_empty() {
+                        current = push_list(&mut lists, current);
+                    }
+                }
+                is_digit = true;
+            }
+            _ => {
+                if is_digit && index > start {
+                    push_value(
+                        &mut lists,
+                        current,
+                        parse_item(is_combination, true, substring(&characters, start, index)),
+                    );
+                    start = index;
+                    current = push_list(&mut lists, current);
+                    is_combination = false;
+                }
+                is_digit = false;
+            }
         }
-        let numeric = character.is_ascii_digit();
-        if token_is_numeric.is_some_and(|current| current != numeric) {
-            push_token(&mut items, &mut token);
+    }
+
+    if characters.len() > start {
+        if !is_digit && !lists[current].items.is_empty() {
+            current = push_list(&mut lists, current);
         }
-        token_is_numeric = Some(numeric);
-        token.push(character.to_ascii_lowercase());
+        push_value(
+            &mut lists,
+            current,
+            parse_item(
+                is_combination,
+                is_digit,
+                substring(&characters, start, characters.len()),
+            ),
+        );
     }
-    push_token(&mut items, &mut token);
-    while matches!(
-        items.last(),
-        Some(Item::Number(number)) if number == "0"
-    ) || matches!(
-        items.last(),
-        Some(Item::Qualifier(qualifier)) if qualifier.is_empty()
-    ) {
-        items.pop();
-    }
+
+    let mut items = materialize_list(0, &lists);
+    normalize_list(&mut items);
     items
 }
 
-fn push_token(items: &mut Vec<Item>, token: &mut String) {
-    if token.is_empty() {
-        return;
-    }
-    if token.bytes().all(|character| character.is_ascii_digit()) {
-        let normalized = token.trim_start_matches('0');
-        items.push(Item::Number(if normalized.is_empty() {
-            "0".to_string()
-        } else {
-            normalized.to_string()
-        }));
-    } else {
-        items.push(Item::Qualifier(normalize_qualifier(token)));
-    }
-    token.clear();
+fn substring(characters: &[char], start: usize, end: usize) -> String {
+    characters[start..end].iter().collect()
 }
 
-fn normalize_qualifier(qualifier: &str) -> String {
-    match qualifier {
+fn push_value(lists: &mut [ListBuilder], current: usize, item: Item) {
+    lists[current].items.push(BuilderItem::Value(item));
+}
+
+fn push_list(lists: &mut Vec<ListBuilder>, current: usize) -> usize {
+    let child = lists.len();
+    lists.push(ListBuilder::default());
+    lists[current].items.push(BuilderItem::List(child));
+    child
+}
+
+fn materialize_list(index: usize, lists: &[ListBuilder]) -> Vec<Item> {
+    lists[index]
+        .items
+        .iter()
+        .map(|item| match item {
+            BuilderItem::Value(item) => item.clone(),
+            BuilderItem::List(child) => Item::List(materialize_list(*child, lists)),
+        })
+        .collect()
+}
+
+fn parse_item(combination: bool, digit: bool, value: String) -> Item {
+    if combination {
+        let value = value.replace('-', "");
+        let digit_index = value
+            .char_indices()
+            .find_map(|(index, character)| character.is_ascii_digit().then_some(index))
+            .unwrap_or(value.len());
+        let qualifier = normalize_combination_qualifier(&value[..digit_index]);
+        let number = normalize_number(&value[digit_index..]);
+        Item::Combination { qualifier, number }
+    } else if digit {
+        Item::Number(normalize_number(&value))
+    } else {
+        Item::Qualifier(normalize_qualifier_alias(&value))
+    }
+}
+
+fn normalize_number(number: &str) -> String {
+    let number = number.trim_start_matches('0');
+    if number.is_empty() {
+        "0".to_string()
+    } else {
+        number.to_string()
+    }
+}
+
+fn normalize_combination_qualifier(qualifier: &str) -> String {
+    normalize_qualifier_alias(match qualifier {
         "a" => "alpha",
         "b" => "beta",
         "m" => "milestone",
+        other => other,
+    })
+}
+
+fn normalize_qualifier_alias(qualifier: &str) -> String {
+    match qualifier {
         "cr" => "rc",
         "ga" | "final" | "release" => "",
         other => other,
@@ -126,19 +244,127 @@ fn normalize_qualifier(qualifier: &str) -> String {
     .to_string()
 }
 
-fn compare_optional(left: Option<&Item>, right: Option<&Item>) -> Ordering {
-    match (left, right) {
-        (Some(Item::Number(left)), Some(Item::Number(right))) => compare_numbers(left, right),
-        (Some(Item::Qualifier(left)), Some(Item::Qualifier(right))) => {
-            compare_qualifiers(left, right)
+fn normalize_list(items: &mut Vec<Item>) {
+    for item in items.iter_mut() {
+        if let Item::List(children) = item {
+            normalize_list(children);
         }
-        (Some(Item::Number(_)), Some(Item::Qualifier(_))) => Ordering::Greater,
-        (Some(Item::Qualifier(_)), Some(Item::Number(_))) => Ordering::Less,
-        (Some(Item::Number(left)), None) => compare_numbers(left, "0"),
-        (None, Some(Item::Number(right))) => compare_numbers("0", right),
-        (Some(Item::Qualifier(left)), None) => compare_qualifiers(left, ""),
-        (None, Some(Item::Qualifier(right))) => compare_qualifiers("", right),
-        (None, None) => Ordering::Equal,
+    }
+
+    let mut index = items.len();
+    while index > 0 {
+        index -= 1;
+        if !item_is_null(&items[index]) {
+            continue;
+        }
+        let remove = if index + 1 == items.len() {
+            true
+        } else {
+            match &items[index + 1] {
+                Item::Qualifier(_) => true,
+                Item::List(children) => matches!(
+                    children.first(),
+                    Some(Item::Qualifier(_) | Item::Combination { .. })
+                ),
+                _ => false,
+            }
+        };
+        if remove {
+            items.remove(index);
+        }
+    }
+}
+
+fn item_is_null(item: &Item) -> bool {
+    match item {
+        Item::Number(number) => number == "0",
+        Item::Qualifier(qualifier) => qualifier.is_empty(),
+        Item::List(items) => items.is_empty(),
+        Item::Combination { .. } => false,
+    }
+}
+
+fn compare_lists(left: &[Item], right: &[Item]) -> Ordering {
+    let length = left.len().max(right.len());
+    for index in 0..length {
+        let ordering = match (left.get(index), right.get(index)) {
+            (Some(left), right) => compare_item(left, right),
+            (None, Some(right)) => compare_item(right, None).reverse(),
+            (None, None) => Ordering::Equal,
+        };
+        if ordering != Ordering::Equal {
+            return ordering;
+        }
+    }
+    Ordering::Equal
+}
+
+fn compare_item(left: &Item, right: Option<&Item>) -> Ordering {
+    let Some(right) = right else {
+        return match left {
+            Item::Number(number) => compare_numbers(number, "0"),
+            Item::Qualifier(qualifier) => compare_qualifiers(qualifier, ""),
+            Item::Combination { qualifier, .. } => compare_qualifiers(qualifier, ""),
+            Item::List(items) => {
+                for item in items {
+                    let ordering = compare_item(item, None);
+                    if ordering != Ordering::Equal {
+                        return ordering;
+                    }
+                }
+                Ordering::Equal
+            }
+        };
+    };
+
+    match (left, right) {
+        (Item::Number(left), Item::Number(right)) => compare_numbers(left, right),
+        (Item::Number(_), _) => Ordering::Greater,
+        (Item::Qualifier(_), Item::Number(_)) => Ordering::Less,
+        (Item::Qualifier(left), Item::Qualifier(right)) => compare_qualifiers(left, right),
+        (
+            Item::Qualifier(left),
+            Item::Combination {
+                qualifier: right, ..
+            },
+        ) => {
+            let ordering = compare_qualifiers(left, right);
+            if ordering == Ordering::Equal {
+                Ordering::Less
+            } else {
+                ordering
+            }
+        }
+        (Item::Qualifier(_), Item::List(_)) => Ordering::Less,
+        (Item::List(_), Item::Number(_)) => Ordering::Less,
+        (Item::List(_), Item::Qualifier(_) | Item::Combination { .. }) => Ordering::Greater,
+        (Item::List(left), Item::List(right)) => compare_lists(left, right),
+        (Item::Combination { .. }, Item::Number(_)) => Ordering::Less,
+        (
+            Item::Combination {
+                qualifier: left, ..
+            },
+            Item::Qualifier(right),
+        ) => {
+            let ordering = compare_qualifiers(left, right);
+            if ordering == Ordering::Equal {
+                Ordering::Greater
+            } else {
+                ordering
+            }
+        }
+        (Item::Combination { .. }, Item::List(_)) => Ordering::Less,
+        (
+            Item::Combination {
+                qualifier: left_qualifier,
+                number: left_number,
+            },
+            Item::Combination {
+                qualifier: right_qualifier,
+                number: right_number,
+            },
+        ) => compare_qualifiers(left_qualifier, right_qualifier)
+            .then_with(|| compare_numbers(left_number, right_number)),
     }
 }
 
@@ -150,18 +376,17 @@ fn compare_qualifiers(left: &str, right: &str) -> Ordering {
     qualifier_key(left).cmp(&qualifier_key(right))
 }
 
-fn qualifier_key(qualifier: &str) -> (u8, &str) {
-    let rank = match qualifier {
-        "alpha" => 0,
-        "beta" => 1,
-        "milestone" => 2,
-        "rc" => 3,
-        "snapshot" => 4,
-        "" => 5,
-        "sp" => 6,
-        _ => 7,
+fn qualifier_key(qualifier: &str) -> String {
+    let qualifier = match qualifier {
+        "ga" | "final" | "release" => "",
+        other => other,
     };
-    (rank, qualifier)
+    let known = ["alpha", "beta", "milestone", "rc", "snapshot", "", "sp"];
+    known
+        .iter()
+        .position(|known| *known == qualifier)
+        .map(|index| index.to_string())
+        .unwrap_or_else(|| format!("{}-{qualifier}", known.len()))
 }
 
 pub fn parse_constraint(raw: &str) -> Ranges<Version> {
@@ -169,8 +394,13 @@ pub fn parse_constraint(raw: &str) -> Ranges<Version> {
     if raw.is_empty() || raw == "*" {
         return Ranges::full();
     }
+    if let Some(exact) = raw.strip_prefix('=') {
+        return Ranges::singleton(maven_version(exact.trim()));
+    }
     if !matches!(raw.as_bytes().first(), Some(b'[' | b'(')) {
-        return Ranges::singleton(maven_version(raw));
+        // Maven treats a bare version as a recommendation, not a hard
+        // restriction. PubGrub has no preference-only range, so accept all.
+        return Ranges::full();
     }
 
     let mut result = Ranges::empty();
@@ -240,6 +470,37 @@ mod tests {
     }
 
     #[test]
+    fn follows_comparable_version_hyphen_and_qualifier_ordering() {
+        let ordered = [
+            "1-alpha2snapshot",
+            "1-alpha2",
+            "1-beta-2",
+            "1-m2",
+            "1-rc",
+            "1-SNAPSHOT",
+            "1",
+            "1-sp",
+            "1-abc",
+            "1-1",
+            "1-2",
+        ];
+        for pair in ordered.windows(2) {
+            assert!(
+                version(pair[0]) < version(pair[1]),
+                "expected {} < {}",
+                pair[0],
+                pair[1]
+            );
+        }
+        assert_eq!(version("1ga"), version("1"));
+        assert_eq!(version("1final"), version("1"));
+        assert_eq!(version("1cr"), version("1rc"));
+        assert_eq!(version("1a1"), version("1-alpha-1"));
+        assert!(version("1.0.RC2") < version("1.0-RC3"));
+        assert!(version("1.0-RC3") < version("1.0.1"));
+    }
+
+    #[test]
     fn parses_open_and_closed_ranges() {
         let range = parse_constraint("[47,48)");
         assert!(range.contains(&version("47")));
@@ -252,7 +513,7 @@ mod tests {
     }
 
     #[test]
-    fn parses_unions_and_exact_ranges() {
+    fn parses_unions_exact_ranges_and_recommendations() {
         let range = parse_constraint("(,20],[21,)");
         assert!(range.contains(&version("19")));
         assert!(!range.contains(&version("20.5")));
@@ -261,5 +522,13 @@ mod tests {
         let exact = parse_constraint("[47.2.0]");
         assert!(exact.contains(&version("47.2")));
         assert!(!exact.contains(&version("47.3")));
+
+        let recommendation = parse_constraint("47.2.0");
+        assert!(recommendation.contains(&version("1")));
+        assert!(recommendation.contains(&version("999")));
+
+        let orbit_exact = parse_constraint("=47.2.0");
+        assert!(orbit_exact.contains(&version("47.2")));
+        assert!(!orbit_exact.contains(&version("47.3")));
     }
 }

@@ -352,10 +352,45 @@ pub fn parse_constraint(constraint: &str) -> Ranges<Version> {
 
             let (op, ver_str) = parse_operator(&combined);
             if let Ok(ref_ver) = SemanticVersion::parse(ver_str, true) {
+                if ref_ver.has_wildcard {
+                    let wildcard = ref_ver
+                        .components
+                        .iter()
+                        .position(|component| *component == WILDCARD)
+                        .unwrap_or(ref_ver.components.len());
+                    let mut lower_components = ref_ver.components[..wildcard].to_vec();
+                    if lower_components.is_empty() {
+                        continue;
+                    }
+                    let mut upper_components = lower_components.clone();
+                    let last = upper_components.len() - 1;
+                    upper_components[last] = upper_components[last].saturating_add(1);
+                    let lower = Version::Fabric(SemanticVersion {
+                        raw: format!("{ver_str}-"),
+                        components: std::mem::take(&mut lower_components),
+                        prerelease: Some(String::new()),
+                        build: None,
+                        has_wildcard: false,
+                    });
+                    let upper = Version::Fabric(SemanticVersion {
+                        raw: format!("{ver_str}-upper"),
+                        components: upper_components,
+                        prerelease: Some(String::new()),
+                        build: None,
+                        has_wildcard: false,
+                    });
+                    let range = if op == "=" {
+                        Ranges::between(lower, upper)
+                    } else {
+                        Ranges::empty()
+                    };
+                    group_range = group_range.intersection(&range);
+                    continue;
+                }
                 let r = match op {
                     ">=" => Ranges::higher_than(Version::Fabric(ref_ver)),
-                    "<=" => Ranges::strictly_lower_than(Version::Fabric(ref_ver.bump())),
-                    ">" => Ranges::higher_than(Version::Fabric(ref_ver.bump())),
+                    "<=" => Ranges::lower_than(Version::Fabric(ref_ver)),
+                    ">" => Ranges::strictly_higher_than(Version::Fabric(ref_ver)),
                     "<" => Ranges::strictly_lower_than(Version::Fabric(ref_ver)),
                     "=" => Ranges::singleton(Version::Fabric(ref_ver)),
                     "~" => {
@@ -374,7 +409,7 @@ pub fn parse_constraint(constraint: &str) -> Ranges<Version> {
                         }
                         let mut upper_ver = ref_ver.clone();
                         upper_ver.components = upper_comp;
-                        upper_ver.prerelease = None;
+                        upper_ver.prerelease = Some(String::new());
                         upper_ver.has_wildcard = false;
                         upper_ver.raw = format!("{}~upper", ref_ver.raw);
                         Ranges::between(lower, Version::Fabric(upper_ver))
@@ -383,24 +418,14 @@ pub fn parse_constraint(constraint: &str) -> Ranges<Version> {
                         let lower = Version::Fabric(ref_ver.clone());
                         let mut upper_comp = ref_ver.components.clone();
                         if !upper_comp.is_empty() {
-                            if upper_comp[0] == 0 && upper_comp.len() >= 2 {
-                                if upper_comp[1] == WILDCARD {
-                                    upper_comp[0] = upper_comp[0].saturating_add(1);
-                                    upper_comp.truncate(1);
-                                } else {
-                                    upper_comp[1] = upper_comp[1].saturating_add(1);
-                                    upper_comp.truncate(2);
-                                }
-                            } else {
-                                upper_comp[0] = upper_comp[0].saturating_add(1);
-                                upper_comp.truncate(1);
-                            }
+                            upper_comp[0] = upper_comp[0].saturating_add(1);
+                            upper_comp.truncate(1);
                         } else {
                             upper_comp.push(1);
                         }
                         let mut upper_ver = ref_ver.clone();
                         upper_ver.components = upper_comp;
-                        upper_ver.prerelease = None;
+                        upper_ver.prerelease = Some(String::new());
                         upper_ver.has_wildcard = false;
                         upper_ver.raw = format!("{}^upper", ref_ver.raw);
                         Ranges::between(lower, Version::Fabric(upper_ver))
@@ -409,8 +434,12 @@ pub fn parse_constraint(constraint: &str) -> Ranges<Version> {
                 };
                 group_range = group_range.intersection(&r);
             } else {
-                group_range = group_range
-                    .intersection(&Ranges::singleton(Version::Generic(combined.clone())));
+                let range = if op == "=" {
+                    Ranges::singleton(Version::Generic(ver_str.to_string()))
+                } else {
+                    Ranges::empty()
+                };
+                group_range = group_range.intersection(&range);
             }
         }
 
@@ -545,5 +574,20 @@ mod tests {
         assert!(satisfies(&v("1.2.3"), "^1.2"));
         assert!(satisfies(&v("1.9.0"), "^1.2"));
         assert!(!satisfies(&v("2.0.0"), "^1.2"));
+    }
+
+    #[test]
+    fn pubgrub_ranges_match_fabric_predicates() {
+        let wildcard = parse_constraint("1.2.x");
+        assert!(wildcard.contains(&Version::Fabric(v("1.2.99"))));
+        assert!(!wildcard.contains(&Version::Fabric(v("1.3.0-alpha"))));
+
+        let greater = parse_constraint(">1.2.3");
+        assert!(greater.contains(&Version::Fabric(v("1.2.4-alpha"))));
+        assert!(!greater.contains(&Version::Fabric(v("1.2.3"))));
+
+        let caret = parse_constraint("^0.5");
+        assert!(caret.contains(&Version::Fabric(v("0.99"))));
+        assert!(!caret.contains(&Version::Fabric(v("1.0-alpha"))));
     }
 }

@@ -1,64 +1,28 @@
-//! Validates an already-installed mod set without consulting remote providers.
+//! Validates an already-installed mod set through the shared solver graph.
 
-use std::collections::HashSet;
+use std::collections::HashMap;
 
 use crate::identification::IdentifiedMod;
+use crate::lockfile::{LockMeta, OrbitLockfile, PackageEntry};
 use crate::manifest::OrbitManifest;
 use crate::resolver::diagnostics::describe_no_solution;
-use crate::resolver::graph::{
-    ROOT_PACKAGE, dependency_constraint, is_ignored_runtime_dependency, manifest_exclusions,
-    manifest_overrides, parse_required_dependencies, register_platform_packages,
-};
-use crate::resolver::provider::OrbitDependencyProvider;
-use crate::versions::Version;
+use crate::resolver::graph::build_solver_graph;
 
 pub(crate) fn check_local_graph(
     manifest: &OrbitManifest,
     local_mods: &[IdentifiedMod],
 ) -> Result<(), String> {
-    let loader = &manifest.project.modloader;
-    let mut provider = OrbitDependencyProvider::new();
-    let exclusions = manifest_exclusions(manifest);
-    let overrides = manifest_overrides(manifest);
-    register_platform_packages(&mut provider, manifest);
+    let lockfile = OrbitLockfile {
+        meta: LockMeta {
+            mc_version: manifest.project.mc_version.clone(),
+            modloader: manifest.project.modloader.clone(),
+            modloader_version: manifest.project.modloader_version.clone(),
+        },
+        packages: local_mods.iter().map(package_entry).collect(),
+    };
+    let graph = build_solver_graph(manifest, &lockfile, &HashMap::new());
 
-    for local_mod in local_mods {
-        let package = package_name(local_mod);
-        let version = Version::parse(&local_mod.version, loader);
-        let dependencies =
-            parse_required_dependencies(&local_mod.deps, &package, loader, &exclusions, &overrides);
-
-        provider.add_package_versions(package.clone(), vec![version.clone()]);
-        provider.add_package_deps(package.clone(), version.clone(), dependencies);
-    }
-
-    register_missing_dependencies(&mut provider, manifest, local_mods);
-
-    let root_package = ROOT_PACKAGE.to_string();
-    let root_version = Version::zero();
-    let root_dependencies = manifest
-        .dependencies
-        .iter()
-        .map(|(package, spec)| {
-            (
-                package.clone(),
-                dependency_constraint(
-                    package,
-                    spec.version_constraint().unwrap_or("*"),
-                    loader,
-                    &overrides,
-                ),
-            )
-        })
-        .collect();
-    provider.add_package_versions(root_package.clone(), vec![root_version.clone()]);
-    provider.add_package_deps(
-        root_package.clone(),
-        root_version.clone(),
-        root_dependencies,
-    );
-
-    match pubgrub::resolve(&provider, root_package, root_version) {
+    match pubgrub::resolve(&graph.provider, graph.root_package, graph.root_version) {
         Ok(_) => Ok(()),
         Err(pubgrub::PubGrubError::NoSolution(derivation_tree)) => {
             Err(describe_no_solution(&derivation_tree))
@@ -71,29 +35,23 @@ pub(crate) fn check_local_graph(
     }
 }
 
-fn register_missing_dependencies(
-    provider: &mut OrbitDependencyProvider,
-    manifest: &OrbitManifest,
-    local_mods: &[IdentifiedMod],
-) {
-    let mut missing = HashSet::new();
-    for local_mod in local_mods {
-        for (package, _, required) in &local_mod.deps {
-            if *required
-                && !is_ignored_runtime_dependency(package)
-                && !provider.versions.contains_key(package)
-            {
-                missing.insert(package.clone());
-            }
-        }
-    }
-    for package in manifest.dependencies.keys() {
-        if !provider.versions.contains_key(package) {
-            missing.insert(package.clone());
-        }
-    }
-    for package in missing {
-        provider.add_package_versions(package, Vec::new());
+fn package_entry(local_mod: &IdentifiedMod) -> PackageEntry {
+    PackageEntry {
+        mod_id: package_name(local_mod),
+        version: local_mod.version.clone(),
+        sha1: local_mod.sha1.clone(),
+        sha256: local_mod.sha256.clone(),
+        sha512: local_mod.sha512.clone(),
+        filename: local_mod.filename.clone(),
+        provider: "file".to_string(),
+        modrinth: None,
+        file: None,
+        dependencies: local_mod.dependencies.clone(),
+        environment: local_mod.environment,
+        provides: local_mod.provides.clone(),
+        language_loader: local_mod.language_loader.clone(),
+        embedded_artifacts: local_mod.embedded_artifacts.clone(),
+        bundled: local_mod.bundled.clone(),
     }
 }
 
@@ -111,8 +69,13 @@ fn package_name(local_mod: &IdentifiedMod) -> String {
 mod tests {
     use super::*;
     use crate::identification::IdentifiedSource;
+    use crate::metadata::{DependencyExpression, ModDependency};
 
-    fn local_mod(mod_id: &str, version: &str, deps: Vec<(String, String, bool)>) -> IdentifiedMod {
+    fn local_mod(
+        mod_id: &str,
+        version: &str,
+        dependencies: Vec<DependencyExpression>,
+    ) -> IdentifiedMod {
         IdentifiedMod {
             filename: format!("{mod_id}.jar"),
             mod_id: mod_id.to_string(),
@@ -125,8 +88,17 @@ mod tests {
             source: IdentifiedSource::File {
                 path: format!("{mod_id}.jar"),
             },
-            deps,
+            dependencies,
+            environment: crate::metadata::Environment::Both,
+            provides: Vec::new(),
+            language_loader: None,
+            embedded_artifacts: Vec::new(),
+            bundled: Vec::new(),
         }
+    }
+
+    fn required(mod_id: &str, requirement: &str) -> DependencyExpression {
+        ModDependency::required(mod_id, requirement).into()
     }
 
     #[test]
@@ -170,7 +142,7 @@ b = "=1"
         )
         .unwrap();
         let mods = vec![
-            local_mod("a", "1", vec![("b".to_string(), ">=2".to_string(), true)]),
+            local_mod("a", "1", vec![required("b", ">=2")]),
             local_mod("b", "1", Vec::new()),
         ];
 
@@ -192,11 +164,7 @@ a = { version = "*", exclude = ["b"] }
 "#,
         )
         .unwrap();
-        let mods = vec![local_mod(
-            "a",
-            "1",
-            vec![("b".to_string(), "*".to_string(), true)],
-        )];
+        let mods = vec![local_mod("a", "1", vec![required("b", "*")])];
 
         check_local_graph(&manifest, &mods).unwrap();
     }

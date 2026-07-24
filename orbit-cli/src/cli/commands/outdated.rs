@@ -40,6 +40,7 @@ pub async fn handle(mod_name: Option<String>, ctx: &CliContext) -> Result<()> {
             .await
             .context("failed to check for updates")?;
     super::print_resolution_diagnostics(&report.diagnostics);
+    super::print_resolution_warnings(&report.warnings);
     let mut results = report.updates;
 
     if let Some(package) = requested_package {

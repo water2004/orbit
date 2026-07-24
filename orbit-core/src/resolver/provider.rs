@@ -1,7 +1,7 @@
 //! In-memory [`pubgrub::DependencyProvider`] used by Orbit's orchestration layer.
 
 use pubgrub::Ranges;
-use pubgrub::{Dependencies, DependencyProvider};
+use pubgrub::{Dependencies, DependencyProvider, IncompatibilityConstraint};
 use std::collections::HashMap;
 
 use crate::resolver::types::PackageId;
@@ -9,6 +9,8 @@ use crate::versions::Version;
 
 type PackageVersionKey = (PackageId, Version);
 type PackageDependencies = Vec<(PackageId, Ranges<Version>)>;
+pub(crate) type PackageIncompatibilities =
+    Vec<IncompatibilityConstraint<PackageId, Ranges<Version>, String>>;
 
 #[derive(Debug)]
 pub enum ProviderError {
@@ -36,6 +38,7 @@ pub struct OrbitDependencyProvider {
     pub versions: HashMap<PackageId, Vec<Version>>,
     /// (package, version) → 前置依赖列表
     pub dependencies: HashMap<PackageVersionKey, PackageDependencies>,
+    pub incompatibilities: HashMap<PackageVersionKey, PackageIncompatibilities>,
     /// (package, version) → 解析后的完整 Mod 数据
     pub resolved_mods: HashMap<(PackageId, Version), crate::providers::ResolvedMod>,
 }
@@ -58,6 +61,28 @@ impl OrbitDependencyProvider {
         deps: Vec<(PackageId, Ranges<Version>)>,
     ) {
         self.dependencies.insert((pkg, version), deps);
+    }
+
+    pub fn add_package_incompatibilities(
+        &mut self,
+        pkg: PackageId,
+        version: Version,
+        incompatibilities: PackageIncompatibilities,
+    ) {
+        self.incompatibilities
+            .insert((pkg, version), incompatibilities);
+    }
+
+    pub fn extend_package_incompatibilities(
+        &mut self,
+        pkg: PackageId,
+        version: Version,
+        incompatibilities: PackageIncompatibilities,
+    ) {
+        self.incompatibilities
+            .entry((pkg, version))
+            .or_default()
+            .extend(incompatibilities);
     }
 }
 
@@ -112,5 +137,17 @@ impl DependencyProvider for OrbitDependencyProvider {
                 version.clone(),
             )),
         }
+    }
+
+    fn get_incompatibilities(
+        &self,
+        package: &Self::P,
+        version: &Self::V,
+    ) -> Result<PackageIncompatibilities, Self::Err> {
+        Ok(self
+            .incompatibilities
+            .get(&(package.clone(), version.clone()))
+            .cloned()
+            .unwrap_or_default())
     }
 }

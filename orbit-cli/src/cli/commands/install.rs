@@ -29,6 +29,7 @@ pub async fn handle(
     )
     .await?;
     super::print_resolution_diagnostics(&report.diagnostics);
+    super::print_resolution_warnings(&report.warnings);
 
     if ctx.dry_run {
         for package in &report.restored {

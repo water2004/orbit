@@ -17,16 +17,5 @@ pub fn try_read<R: Read + Seek>(
     let parser = crate::metadata::fabric::FabricParser;
     let meta = crate::metadata::MetadataParser::parse(&parser, &content)?;
 
-    Ok(Some(JarModMetadata {
-        mod_id: meta.id,
-        name: meta.name,
-        version: meta.version,
-        dependencies: meta
-            .dependencies
-            .into_iter()
-            .map(|(k, v)| (k, v, true))
-            .collect(),
-        embedded_jars: meta.embedded_jars,
-        implanted_mods: vec![],
-    }))
+    Ok(Some(super::from_mod_file(meta)?))
 }

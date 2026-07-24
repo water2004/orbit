@@ -33,7 +33,12 @@ pub struct IdentifiedMod {
     pub sha256: String,
     pub sha512: String,
     pub source: IdentifiedSource,
-    pub deps: Vec<(String, String, bool)>,
+    pub dependencies: Vec<crate::metadata::DependencyExpression>,
+    pub environment: crate::metadata::Environment,
+    pub provides: Vec<crate::metadata::ProvidedMod>,
+    pub language_loader: Option<crate::metadata::LanguageLoaderRequirement>,
+    pub embedded_artifacts: Vec<crate::metadata::EmbeddedArtifact>,
+    pub bundled: Vec<crate::lockfile::BundledMod>,
 }
 
 pub struct IdentificationContext {
@@ -81,7 +86,12 @@ fn build_identified(
             slug,
             download_url: resolved.download_url.clone(),
         },
-        deps: m.jar_deps.clone(),
+        dependencies: m.dependencies.clone(),
+        environment: m.environment,
+        provides: m.provides.clone(),
+        language_loader: m.language_loader.clone(),
+        embedded_artifacts: m.embedded_artifacts.clone(),
+        bundled: m.bundled.clone(),
     }
 }
 
@@ -164,7 +174,12 @@ pub async fn identify_mods(
                 source: IdentifiedSource::File {
                     path: format!("mods/{}", m.filename),
                 },
-                deps: m.jar_deps.clone(),
+                dependencies: m.dependencies.clone(),
+                environment: m.environment,
+                provides: m.provides.clone(),
+                language_loader: m.language_loader.clone(),
+                embedded_artifacts: m.embedded_artifacts.clone(),
+                bundled: m.bundled.clone(),
             });
         }
     }

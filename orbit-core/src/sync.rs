@@ -7,7 +7,7 @@ use crate::error::OrbitError;
 use crate::identification::{
     IdentificationContext, IdentifiedMod, IdentifiedSource, identify_mods,
 };
-use crate::lockfile::{FileInfo, LockDependency, LockMeta, ModrinthInfo, PackageEntry};
+use crate::lockfile::{FileInfo, LockMeta, ModrinthInfo, PackageEntry};
 use crate::manifest::DependencySpec;
 use crate::providers::ModProvider;
 use crate::workspace::{Lockfile, ManifestFile};
@@ -35,12 +35,8 @@ pub async fn sync_instance(
         },
     );
     let scanned = crate::init::scan_mods_dir(instance_dir, &manifest.inner.project.modloader)?;
-    let physical: Vec<_> = scanned
-        .into_iter()
-        .filter(|candidate| candidate.embedded_parent.is_none())
-        .collect();
     let identified = identify_mods(
-        &physical,
+        &scanned,
         providers,
         &IdentificationContext {
             mc_version: manifest.inner.project.mc_version.clone(),
@@ -174,19 +170,24 @@ fn apply_changes(
 
 fn package_entry(local: &IdentifiedMod) -> PackageEntry {
     let mod_id = package_id(local);
-    let dependencies = local
-        .deps
-        .iter()
-        .filter(|(name, _, required)| *required && !matches!(name.as_str(), "java" | "mixinextras"))
-        .map(|(name, version, _)| LockDependency {
-            name: name.clone(),
-            version: if version.is_empty() {
-                "*".to_string()
-            } else {
-                version.clone()
-            },
-        })
-        .collect();
+    let common =
+        |provider: String, modrinth: Option<ModrinthInfo>, file: Option<FileInfo>| PackageEntry {
+            mod_id: mod_id.clone(),
+            version: local.version.clone(),
+            sha1: local.sha1.clone(),
+            sha256: local.sha256.clone(),
+            sha512: local.sha512.clone(),
+            filename: local.filename.clone(),
+            provider,
+            modrinth,
+            file,
+            dependencies: local.dependencies.clone(),
+            environment: local.environment,
+            provides: local.provides.clone(),
+            language_loader: local.language_loader.clone(),
+            embedded_artifacts: local.embedded_artifacts.clone(),
+            bundled: local.bundled.clone(),
+        };
     match &local.source {
         IdentifiedSource::Platform {
             platform,
@@ -194,40 +195,24 @@ fn package_entry(local: &IdentifiedMod) -> PackageEntry {
             version_id,
             slug,
             download_url,
-        } if platform == "modrinth" => PackageEntry {
-            mod_id,
-            version: local.version.clone(),
-            sha1: local.sha1.clone(),
-            sha256: local.sha256.clone(),
-            sha512: local.sha512.clone(),
-            filename: local.filename.clone(),
-            provider: platform.clone(),
-            modrinth: Some(ModrinthInfo {
+        } if platform == "modrinth" => common(
+            platform.clone(),
+            Some(ModrinthInfo {
                 project_id: project_id.clone(),
                 version_id: version_id.clone(),
                 version: local.modrinth_version.clone(),
                 slug: slug.clone(),
                 download_url: download_url.clone(),
             }),
-            file: None,
-            dependencies,
-            implanted: Vec::new(),
-        },
-        _ => PackageEntry {
-            mod_id,
-            version: local.version.clone(),
-            sha1: local.sha1.clone(),
-            sha256: local.sha256.clone(),
-            sha512: local.sha512.clone(),
-            filename: local.filename.clone(),
-            provider: "file".to_string(),
-            modrinth: None,
-            file: Some(FileInfo {
+            None,
+        ),
+        _ => common(
+            "file".to_string(),
+            None,
+            Some(FileInfo {
                 path: format!("mods/{}", local.filename),
             }),
-            dependencies,
-            implanted: Vec::new(),
-        },
+        ),
     }
 }
 
@@ -305,7 +290,11 @@ mod tests {
                         path: "mods/missing.jar".to_string(),
                     }),
                     dependencies: Vec::new(),
-                    implanted: Vec::new(),
+                    environment: crate::metadata::Environment::Both,
+                    provides: Vec::new(),
+                    language_loader: None,
+                    embedded_artifacts: Vec::new(),
+                    bundled: Vec::new(),
                 }],
             },
         )

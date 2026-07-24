@@ -14,15 +14,6 @@ pub fn try_read<R: Read + Seek>(
         // Quilt Loader can load Fabric metadata, so retain that compatibility.
         return super::fabric::try_read(archive);
     };
-    let parsed = crate::metadata::quilt::parse_quilt(&content)?;
-    let metadata = parsed.metadata;
-
-    Ok(Some(JarModMetadata {
-        mod_id: metadata.id,
-        name: metadata.name,
-        version: metadata.version,
-        dependencies: parsed.dependencies,
-        embedded_jars: metadata.embedded_jars,
-        implanted_mods: Vec::new(),
-    }))
+    let metadata = crate::metadata::quilt::parse_quilt(&content)?;
+    Ok(Some(super::from_mod_file(metadata)?))
 }

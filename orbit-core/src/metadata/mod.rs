@@ -5,14 +5,17 @@
 
 pub mod fabric;
 pub mod forge;
+mod model;
 pub mod mojang;
 pub mod neoforge;
 pub mod quilt;
 pub mod version_profile;
 
-use indexmap::IndexMap;
-
 use crate::error::OrbitError;
+pub use model::{
+    DependencyExpression, DependencyKind, DependencyOrdering, EmbeddedArtifact, Environment,
+    LanguageLoaderRequirement, ModDependency, ModFileMetadata, ModMetadata, ProvidedMod,
+};
 
 // ---------------------------------------------------------------------------
 // 统一类型
@@ -39,23 +42,6 @@ impl ModLoader {
     }
 }
 
-/// 统一模组元数据——所有加载器解析后都归一化为此结构
-#[derive(Debug, Clone)]
-pub struct ModMetadata {
-    pub id: String,
-    pub name: String,
-    pub version: String,
-    pub authors: Vec<String>,
-    pub description: String,
-    pub license: Option<String>,
-    /// 运行环境: "client" | "server" | "both"
-    pub environment: String,
-    /// 依赖映射: mod_id → version_constraint
-    pub dependencies: IndexMap<String, String>,
-    pub embedded_jars: Vec<String>,
-    pub loader: ModLoader,
-}
-
 // ---------------------------------------------------------------------------
 // Parser trait
 // ---------------------------------------------------------------------------
@@ -68,8 +54,8 @@ pub trait MetadataParser: Send + Sync {
     /// 此 parser 对应的加载器类型
     fn loader_type(&self) -> ModLoader;
 
-    /// 解析文件内容为统一元数据
-    fn parse(&self, content: &str) -> Result<ModMetadata, OrbitError>;
+    /// 解析文件内容为统一的文件级元数据。
+    fn parse(&self, content: &str) -> Result<ModFileMetadata, OrbitError>;
 }
 
 // ---------------------------------------------------------------------------
@@ -124,7 +110,7 @@ impl MetadataExtractor {
         &self,
         entries: &[(String, String)],
         modloader_context: Option<&str>,
-    ) -> Result<ModMetadata, OrbitError> {
+    ) -> Result<ModFileMetadata, OrbitError> {
         // 1. 收集所有能匹配的 parser（纯内存操作，无 I/O）
         let mut candidates: Vec<(&dyn MetadataParser, &str)> = vec![];
         for (filename, content) in entries {

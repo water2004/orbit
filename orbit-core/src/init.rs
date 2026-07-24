@@ -34,12 +34,13 @@ pub struct ScannedMod {
     pub sha1: String,
     pub sha256: String,
     pub sha512: String,
-    /// 从 JAR loader 元数据提取的依赖: (mod_id, version_constraint, required)
-    pub jar_deps: Vec<(String, String, bool)>,
-    /// loader 元数据声明的内嵌 JAR 路径（只有父模组才有值）
+    pub dependencies: Vec<crate::metadata::DependencyExpression>,
+    pub environment: crate::metadata::Environment,
+    pub provides: Vec<crate::metadata::ProvidedMod>,
+    pub language_loader: Option<crate::metadata::LanguageLoaderRequirement>,
+    pub embedded_artifacts: Vec<crate::metadata::EmbeddedArtifact>,
+    pub bundled: Vec<crate::lockfile::BundledMod>,
     pub embedded_jars: Vec<String>,
-    /// 如果此模组是从某个父 JAR 解出的内嵌模组，记录父 JAR 的文件名
-    pub embedded_parent: Option<String>,
 }
 
 /// 扫描 mods/ 目录并提取元数据。
@@ -81,124 +82,61 @@ pub(crate) fn scan_mods_dir(
         let sha512 = crate::jar::compute_sha512(&path).map_err(|e| {
             OrbitError::Other(anyhow::anyhow!("cannot hash {}: {e}", path.display()))
         })?;
-        let (mod_id, mod_name, version, jar_deps, embedded) =
-            match crate::jar::read_mod_metadata(&path, loader) {
-                Ok(meta) => (
-                    if meta.mod_id.is_empty() {
-                        None
-                    } else {
-                        Some(meta.mod_id)
-                    },
-                    if meta.name.is_empty() {
-                        None
-                    } else {
-                        Some(meta.name)
-                    },
-                    if meta.version.is_empty() {
-                        None
-                    } else {
-                        Some(meta.version)
-                    },
-                    meta.dependencies,
-                    meta.embedded_jars,
-                ),
-                Err(_) => (None, None, None, vec![], vec![]),
-            };
+        let metadata = crate::jar::read_mod_metadata(&path, loader).ok();
 
         results.push(ScannedMod {
             filename,
-            mod_id: mod_id.clone().or_else(|| mod_name.clone()),
-            mod_name,
-            version,
+            mod_id: metadata
+                .as_ref()
+                .map(|metadata| metadata.mod_id.clone())
+                .filter(|id| !id.is_empty()),
+            mod_name: metadata
+                .as_ref()
+                .map(|metadata| metadata.name.clone())
+                .filter(|name| !name.is_empty()),
+            version: metadata
+                .as_ref()
+                .map(|metadata| metadata.version.clone())
+                .filter(|version| !version.is_empty()),
             sha1: String::new(),
             sha256,
             sha512,
-            jar_deps,
-            embedded_jars: embedded,
-            embedded_parent: None,
+            dependencies: metadata
+                .as_ref()
+                .map(|metadata| metadata.dependencies.clone())
+                .unwrap_or_default(),
+            environment: metadata
+                .as_ref()
+                .map(|metadata| metadata.environment)
+                .unwrap_or_default(),
+            provides: metadata
+                .as_ref()
+                .map(|metadata| metadata.provides.clone())
+                .unwrap_or_default(),
+            language_loader: metadata
+                .as_ref()
+                .and_then(|metadata| metadata.language_loader.clone()),
+            embedded_artifacts: metadata
+                .as_ref()
+                .map(|metadata| metadata.embedded_artifacts.clone())
+                .unwrap_or_default(),
+            bundled: metadata
+                .as_ref()
+                .map(|metadata| {
+                    metadata
+                        .bundled_mods
+                        .iter()
+                        .map(crate::lockfile::BundledMod::from_jar_metadata)
+                        .collect()
+                })
+                .unwrap_or_default(),
+            embedded_jars: metadata
+                .map(|metadata| metadata.embedded_jars)
+                .unwrap_or_default(),
         });
     }
 
-    // 扫描 loader 元数据声明的内嵌 JAR。
-    scan_embedded_jars(instance_dir, &mut results, loader)?;
-
     Ok(results)
-}
-
-/// 扫描所有已发现模组的内嵌 JAR（按父模组分组，每个父 JAR 只打开一次）
-fn scan_embedded_jars(
-    instance_dir: &Path,
-    results: &mut Vec<ScannedMod>,
-    loader: &str,
-) -> Result<(), OrbitError> {
-    let mods_dir = instance_dir.join("mods");
-    let mut new_mods = vec![];
-
-    for parent in results.iter().filter(|p| !p.embedded_jars.is_empty()) {
-        let parent_jar = mods_dir.join(&parent.filename);
-        let file = std::fs::File::open(&parent_jar).map_err(|e| {
-            OrbitError::Other(anyhow::anyhow!("cannot open {}: {e}", parent_jar.display()))
-        })?;
-        let mut archive = zip::ZipArchive::new(file).map_err(|e| {
-            OrbitError::Other(anyhow::anyhow!(
-                "cannot open {} as ZIP: {e}",
-                parent_jar.display()
-            ))
-        })?;
-
-        for emb_path in &parent.embedded_jars {
-            let mut entry = match archive.by_name(emb_path) {
-                Ok(e) => e,
-                Err(_) => continue,
-            };
-            let mut bytes = Vec::new();
-            std::io::Read::read_to_end(&mut entry, &mut bytes)
-                .map_err(|e| OrbitError::Other(anyhow::anyhow!("cannot read {emb_path}: {e}")))?;
-            let sha256 = crate::jar::sha256_digest(&bytes);
-            let sha512 = crate::jar::sha512_digest(&bytes);
-            let filename = std::path::Path::new(emb_path)
-                .file_name()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .to_string();
-            let (mod_id, mod_name, version, jar_deps) =
-                match crate::jar::read_mod_metadata_from_bytes(&bytes, loader) {
-                    Ok(meta) => (
-                        if meta.mod_id.is_empty() {
-                            None
-                        } else {
-                            Some(meta.mod_id)
-                        },
-                        if meta.name.is_empty() {
-                            None
-                        } else {
-                            Some(meta.name)
-                        },
-                        if meta.version.is_empty() {
-                            None
-                        } else {
-                            Some(meta.version)
-                        },
-                        meta.dependencies,
-                    ),
-                    Err(_) => (None, None, None, vec![]),
-                };
-            new_mods.push(ScannedMod {
-                filename,
-                mod_id: mod_id.clone().or_else(|| mod_name.clone()),
-                mod_name,
-                version,
-                sha1: String::new(),
-                sha256,
-                sha512,
-                jar_deps,
-                embedded_jars: vec![],
-                embedded_parent: Some(parent.filename.clone()),
-            });
-        }
-    }
-    results.append(&mut new_mods);
-    Ok(())
 }
 
 /// 从实例目录的 JAR 中自动检测 MC 版本。
@@ -286,39 +224,15 @@ pub async fn run_init(
     // 1. 扫描 mods/
     let scanned = scan_mods_dir(&input.instance_dir, &input.modloader)?;
 
-    // 2. 分离内嵌模组：只对顶层模组调 API
-    let (top_level, embedded): (Vec<_>, Vec<_>) =
-        scanned.iter().partition(|s| s.embedded_parent.is_none());
-
-    // 2a. 识别顶层模组
+    // 2. 识别物理 JAR；同文件提供的模组已经由 JAR 层归入 bundled。
     let ctx = crate::identification::IdentificationContext {
         mc_version: input.mc_version.clone(),
         loader: input.modloader.clone(),
     };
-    let top_slice: Vec<crate::init::ScannedMod> = top_level.into_iter().cloned().collect();
-    let identified = crate::identification::identify_mods(&top_slice, providers, &ctx).await?;
-
-    // 2b. 内嵌模组不调 API，直接用 JAR metadata（不加入顶层，仅用于 lock 的 implanted）
-    let embedded_identified: Vec<_> = embedded
-        .iter()
-        .map(|s| crate::identification::IdentifiedMod {
-            filename: s.filename.clone(),
-            mod_id: s.mod_id.clone().unwrap_or_default(),
-            mod_name: s.mod_name.clone().unwrap_or_default(),
-            version: s.version.clone().unwrap_or_default(),
-            modrinth_version: String::new(),
-            sha1: s.sha1.clone(),
-            sha512: s.sha512.clone(),
-            sha256: s.sha256.clone(),
-            source: crate::identification::IdentifiedSource::File {
-                path: format!("mods/{}", s.filename),
-            },
-            deps: s.jar_deps.clone(),
-        })
-        .collect();
+    let identified = crate::identification::identify_mods(&scanned, providers, &ctx).await?;
 
     // 3. 构建依赖声明 + lock 条目（仅顶层模组）
-    let mut lock_entries: Vec<crate::lockfile::PackageEntry> = identified
+    let lock_entries: Vec<crate::lockfile::PackageEntry> = identified
         .iter()
         .map(|m| {
             let key = if !m.mod_id.is_empty() {
@@ -338,8 +252,12 @@ pub async fn run_init(
                 provider: String::new(),
                 modrinth: None,
                 file: None,
-                dependencies: vec![],
-                implanted: vec![],
+                dependencies: m.dependencies.clone(),
+                environment: m.environment,
+                provides: m.provides.clone(),
+                language_loader: m.language_loader.clone(),
+                embedded_artifacts: m.embedded_artifacts.clone(),
+                bundled: m.bundled.clone(),
             };
 
             match &m.source {
@@ -365,97 +283,9 @@ pub async fn run_init(
                 }
             }
 
-            for (dep_id, constraint, req) in &m.deps {
-                if *req
-                    && dep_id != "java"
-                    && dep_id != "mixinextras"
-                    && dep_id != "minecraft"
-                    && dep_id != "fabricloader"
-                {
-                    entry.dependencies.push(crate::lockfile::LockDependency {
-                        name: dep_id.clone(),
-                        version: if constraint.is_empty() {
-                            "*".to_string()
-                        } else {
-                            constraint.to_string()
-                        },
-                    });
-                }
-            }
             entry
         })
         .collect();
-
-    for m in &embedded_identified {
-        // 找到父 JAR 文件名
-        let parent_name = scanned
-            .iter()
-            .find(|s| s.filename == m.filename && s.embedded_parent.is_some())
-            .and_then(|s| s.embedded_parent.as_deref());
-
-        let Some(parent_name) = parent_name else {
-            continue;
-        };
-
-        // 在顶层 identified 中找到父模组，推导 key 后按 mod_id 匹配 lock_entry
-        let parent_key = identified
-            .iter()
-            .find(|im| im.filename == parent_name)
-            .map(|im| {
-                if !im.mod_id.is_empty() {
-                    im.mod_id.clone()
-                } else if !im.mod_name.is_empty() {
-                    im.mod_name.clone()
-                } else {
-                    im.filename.clone()
-                }
-            });
-
-        let Some(parent_key) = parent_key else {
-            continue;
-        };
-
-        if let Some(parent_entry) = lock_entries.iter_mut().find(|e| e.mod_id == parent_key) {
-            if parent_entry
-                .implanted
-                .iter()
-                .any(|imp| imp.filename == m.filename)
-            {
-                continue;
-            }
-            let imp_deps: Vec<crate::lockfile::LockDependency> = m
-                .deps
-                .iter()
-                .filter(|(id, _, req)| {
-                    *req && id != "java"
-                        && id != "mixinextras"
-                        && id != "minecraft"
-                        && id != "fabricloader"
-                })
-                .map(|(dep_id, constraint, _)| crate::lockfile::LockDependency {
-                    name: dep_id.clone(),
-                    version: if constraint.is_empty() {
-                        "*".to_string()
-                    } else {
-                        constraint.clone()
-                    },
-                })
-                .collect();
-            parent_entry.implanted.push(crate::lockfile::ImplantedMod {
-                name: if !m.mod_id.is_empty() {
-                    m.mod_id.clone()
-                } else if !m.mod_name.is_empty() {
-                    m.mod_name.clone()
-                } else {
-                    m.filename.clone()
-                },
-                version: m.version.clone(),
-                sha256: m.sha256.clone(),
-                filename: m.filename.clone(),
-                dependencies: imp_deps,
-            });
-        }
-    }
 
     let mc_ver = input.mc_version.clone();
     let loader_name = input.modloader.clone();
@@ -500,9 +330,7 @@ pub async fn run_init(
     };
 
     // 4. 使用 PubGrub 解析器检查依赖图完整性
-    let mut all_local_mods = identified.clone();
-    all_local_mods.extend(embedded_identified.clone());
-    let dependency_error = crate::resolver::check_local_graph(&manifest, &all_local_mods).err();
+    let dependency_error = crate::resolver::check_local_graph(&manifest, &identified).err();
 
     // 4. 写入 orbit.toml + orbit.lock
     let lockfile = crate::lockfile::OrbitLockfile {
@@ -616,11 +444,8 @@ mod tests {
 
         let scanned = scan_mods_dir(&instance, "fabric").unwrap();
 
-        assert_eq!(scanned.len(), 2);
-        let parent_mod = scanned
-            .iter()
-            .find(|m| m.embedded_parent.is_none())
-            .expect("parent mod should be scanned");
+        assert_eq!(scanned.len(), 1);
+        let parent_mod = &scanned[0];
         assert_eq!(parent_mod.mod_id.as_deref(), Some("litematica-printer-all"));
         assert_eq!(parent_mod.embedded_jars.len(), 13);
         assert!(
@@ -630,22 +455,16 @@ mod tests {
                 .any(|path| path == embedded_path)
         );
 
-        let embedded_mod = scanned
-            .iter()
-            .find(|m| m.embedded_parent.is_some())
-            .expect("embedded mod should be scanned");
-        assert_eq!(embedded_mod.mod_id.as_deref(), Some("litematica-printer"));
-        assert_eq!(
-            embedded_mod.embedded_parent.as_deref(),
-            Some("litematica-printer-all-2.4+20260330.10.jar")
-        );
+        let embedded_mod = &parent_mod.bundled[0];
+        assert_eq!(embedded_mod.mod_id, "litematica-printer");
         assert!(
             embedded_mod
-                .jar_deps
+                .dependencies
                 .iter()
-                .any(|(name, version, required)| name == "minecraft"
-                    && version == "1.21.11"
-                    && *required)
+                .flat_map(|dependency| dependency.relations())
+                .any(|dependency| dependency.id == "minecraft"
+                    && dependency.requirement == "1.21.11"
+                    && dependency.kind.installs_target())
         );
 
         std::fs::remove_dir_all(instance).ok();

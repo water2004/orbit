@@ -1,20 +1,70 @@
 use std::collections::HashMap;
 
+use crate::metadata::{
+    DependencyExpression, EmbeddedArtifact, Environment, LanguageLoaderRequirement, ProvidedMod,
+};
+
 /// 包标识符
 pub type PackageId = String;
 
 #[derive(Debug, Clone)]
 pub struct CandidateVersion {
     pub jar_version: String,
-    pub deps: Vec<(String, String, bool)>,
-    pub implanted: Vec<ImplantedCandidate>,
+    pub dependencies: Vec<DependencyExpression>,
+    pub environment: Environment,
+    pub provides: Vec<ProvidedMod>,
+    pub language_loader: Option<LanguageLoaderRequirement>,
+    pub embedded_artifacts: Vec<EmbeddedArtifact>,
+    pub bundled: Vec<BundledCandidate>,
 }
 
 #[derive(Debug, Clone)]
-pub struct ImplantedCandidate {
+pub struct BundledCandidate {
     pub mod_id: String,
     pub version: String,
-    pub deps: Vec<(String, String, bool)>,
+    pub environment: Environment,
+    pub dependencies: Vec<DependencyExpression>,
+    pub provides: Vec<ProvidedMod>,
+    pub language_loader: Option<LanguageLoaderRequirement>,
+    pub embedded_artifacts: Vec<EmbeddedArtifact>,
+    pub bundled: Vec<BundledCandidate>,
+}
+
+impl CandidateVersion {
+    pub fn from_jar_metadata(metadata: crate::jar::JarModMetadata) -> Self {
+        Self {
+            jar_version: metadata.version,
+            dependencies: metadata.dependencies,
+            environment: metadata.environment,
+            provides: metadata.provides,
+            language_loader: metadata.language_loader,
+            embedded_artifacts: metadata.embedded_artifacts,
+            bundled: metadata
+                .bundled_mods
+                .into_iter()
+                .map(BundledCandidate::from_jar)
+                .collect(),
+        }
+    }
+}
+
+impl BundledCandidate {
+    fn from_jar(metadata: crate::jar::JarModMetadata) -> Self {
+        Self {
+            mod_id: metadata.mod_id,
+            version: metadata.version,
+            environment: metadata.environment,
+            dependencies: metadata.dependencies,
+            provides: metadata.provides,
+            language_loader: metadata.language_loader,
+            embedded_artifacts: metadata.embedded_artifacts,
+            bundled: metadata
+                .bundled_mods
+                .into_iter()
+                .map(Self::from_jar)
+                .collect(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -73,4 +123,5 @@ impl std::fmt::Display for CandidateDiagnostic {
 pub struct ResolutionReport {
     pub upgrades: HashMap<String, String>,
     pub diagnostics: Vec<CandidateDiagnostic>,
+    pub warnings: Vec<String>,
 }

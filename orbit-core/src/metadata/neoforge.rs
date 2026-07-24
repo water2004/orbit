@@ -1,6 +1,6 @@
 //! NeoForge metadata parser.
 
-use super::{MetadataParser, ModLoader, ModMetadata};
+use super::{MetadataParser, ModFileMetadata, ModLoader};
 use crate::error::OrbitError;
 
 pub struct NeoForgeParser;
@@ -14,17 +14,15 @@ impl MetadataParser for NeoForgeParser {
         ModLoader::NeoForge
     }
 
-    fn parse(&self, content: &str) -> Result<ModMetadata, OrbitError> {
-        Ok(
-            super::forge::parse_for_loader(content, ModLoader::NeoForge, self.target_file())?
-                .metadata,
-        )
+    fn parse(&self, content: &str) -> Result<ModFileMetadata, OrbitError> {
+        super::forge::parse_for_loader(content, ModLoader::NeoForge, self.target_file())
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::metadata::{DependencyExpression, DependencyKind, ModDependency};
 
     #[test]
     fn recognizes_neoforge_dependency_types() {
@@ -39,7 +37,7 @@ modId = "neoforge"
 type = "required"
 versionRange = "[21,)"
 [[dependencies.example]]
-modId = "optional-api"
+modId = "optional_api"
 type = "optional"
 "#;
         let parsed = super::super::forge::parse_for_loader(
@@ -49,8 +47,20 @@ type = "optional"
         )
         .unwrap();
 
-        assert_eq!(parsed.metadata.loader, ModLoader::NeoForge);
-        assert!(parsed.dependencies[0].2);
-        assert!(!parsed.dependencies[1].2);
+        assert_eq!(parsed.loader, ModLoader::NeoForge);
+        assert!(matches!(
+            parsed.mods[0].dependencies[0],
+            DependencyExpression::Only(ModDependency {
+                kind: DependencyKind::Required,
+                ..
+            })
+        ));
+        assert!(matches!(
+            parsed.mods[0].dependencies[1],
+            DependencyExpression::Only(ModDependency {
+                kind: DependencyKind::Optional,
+                ..
+            })
+        ));
     }
 }

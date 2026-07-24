@@ -1,8 +1,10 @@
 //! Dependency resolution orchestration and public resolver utilities.
 
+mod constraints;
 mod diagnostics;
 mod graph;
 mod local;
+mod ordering;
 pub mod provider;
 mod retry;
 pub mod types;
@@ -11,8 +13,10 @@ use std::collections::HashMap;
 
 use crate::lockfile::{OrbitLockfile, PackageEntry};
 use crate::manifest::OrbitManifest;
+use crate::metadata::Environment;
 use crate::providers::ModProvider;
-use crate::resolver::graph::build_solver_graph;
+use crate::resolver::graph::{build_solver_graph, build_solver_graph_for_target};
+use crate::resolver::ordering::resolution_warnings;
 use crate::resolver::retry::{SolveOutcome, SolveRequest, solve_with_fetch_retry};
 use crate::resolver::types::{CandidateVersion, ResolutionReport};
 
@@ -44,6 +48,25 @@ pub fn check_lockfile_graph(
     }
 }
 
+pub(crate) fn resolve_lockfile_for_target(
+    manifest: &OrbitManifest,
+    lockfile: &OrbitLockfile,
+    target: Environment,
+) -> Result<pubgrub::SelectedDependencies<String, crate::versions::Version>, String> {
+    let graph = build_solver_graph_for_target(manifest, lockfile, &HashMap::new(), target);
+    match pubgrub::resolve(&graph.provider, graph.root_package, graph.root_version) {
+        Ok(solution) => Ok(solution),
+        Err(pubgrub::PubGrubError::NoSolution(derivation_tree)) => {
+            Err(diagnostics::describe_no_solution(&derivation_tree))
+        }
+        Err(pubgrub::PubGrubError::ErrorChoosingVersion { source, .. })
+        | Err(pubgrub::PubGrubError::ErrorRetrievingDependencies { source, .. }) => {
+            Err(format!("internal resolver error: {source}"))
+        }
+        Err(error) => Err(error.to_string()),
+    }
+}
+
 pub fn dependents<'a>(slug: &str, entries: &'a [PackageEntry]) -> Vec<&'a str> {
     entries
         .iter()
@@ -51,7 +74,8 @@ pub fn dependents<'a>(slug: &str, entries: &'a [PackageEntry]) -> Vec<&'a str> {
             entry
                 .dependencies
                 .iter()
-                .any(|dependency| dependency.name == slug)
+                .flat_map(|dependency| dependency.relations())
+                .any(|dependency| dependency.kind.installs_target() && dependency.id == slug)
         })
         .map(|entry| entry.mod_id.as_str())
         .collect()
@@ -120,18 +144,34 @@ pub async fn resolve_with_candidates_report(
         loader: &manifest.project.modloader,
         exclusions: &graph.exclusions,
         overrides: &graph.overrides,
+        target: graph.target,
     })
     .await?;
 
-    Ok(collect_report(lockfile, candidates, outcome))
+    Ok(collect_report(
+        lockfile,
+        candidates,
+        outcome,
+        &manifest.project.modloader,
+        &graph.exclusions,
+        &graph.overrides,
+        graph.target,
+    ))
 }
 
 fn collect_report(
     lockfile: &OrbitLockfile,
     candidates: &HashMap<String, Vec<CandidateVersion>>,
     outcome: SolveOutcome,
+    loader: &str,
+    exclusions: &graph::ExclusionMap,
+    overrides: &graph::OverrideMap,
+    target: Environment,
 ) -> ResolutionReport {
     let SolveOutcome { solution, trace } = outcome;
+    let warnings = resolution_warnings(
+        lockfile, candidates, &solution, loader, exclusions, overrides, target,
+    );
 
     let mut upgrades = HashMap::new();
     let mut diagnostics = Vec::new();
@@ -162,5 +202,6 @@ fn collect_report(
     ResolutionReport {
         upgrades,
         diagnostics,
+        warnings,
     }
 }

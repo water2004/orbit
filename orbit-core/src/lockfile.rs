@@ -5,6 +5,9 @@
 use serde::{Deserialize, Serialize};
 
 use crate::error::OrbitError;
+use crate::metadata::{
+    DependencyExpression, EmbeddedArtifact, Environment, LanguageLoaderRequirement, ProvidedMod,
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OrbitLockfile {
@@ -44,10 +47,18 @@ pub struct PackageEntry {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub file: Option<FileInfo>,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
-    pub dependencies: Vec<LockDependency>,
-    /// 内嵌子模组
+    pub dependencies: Vec<DependencyExpression>,
+    #[serde(default)]
+    pub environment: Environment,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
-    pub implanted: Vec<ImplantedMod>,
+    pub provides: Vec<ProvidedMod>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub language_loader: Option<LanguageLoaderRequirement>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub embedded_artifacts: Vec<EmbeddedArtifact>,
+    /// 同一物理文件提供的其他逻辑模组。
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub bundled: Vec<BundledMod>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -67,19 +78,53 @@ pub struct FileInfo {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ImplantedMod {
-    pub name: String,
+pub struct BundledMod {
+    pub mod_id: String,
     pub version: String,
-    pub sha256: String,
-    pub filename: String,
+    #[serde(default)]
+    pub environment: Environment,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
-    pub dependencies: Vec<LockDependency>,
+    pub dependencies: Vec<DependencyExpression>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub provides: Vec<ProvidedMod>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub language_loader: Option<LanguageLoaderRequirement>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub embedded_artifacts: Vec<EmbeddedArtifact>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub bundled: Vec<BundledMod>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LockDependency {
-    pub name: String,
-    pub version: String,
+impl BundledMod {
+    pub fn from_jar_metadata(metadata: &crate::jar::JarModMetadata) -> Self {
+        Self {
+            mod_id: metadata.mod_id.clone(),
+            version: metadata.version.clone(),
+            environment: metadata.environment,
+            dependencies: metadata.dependencies.clone(),
+            provides: metadata.provides.clone(),
+            language_loader: metadata.language_loader.clone(),
+            embedded_artifacts: metadata.embedded_artifacts.clone(),
+            bundled: metadata
+                .bundled_mods
+                .iter()
+                .map(Self::from_jar_metadata)
+                .collect(),
+        }
+    }
+
+    pub(crate) fn from_candidate(metadata: &crate::resolver::types::BundledCandidate) -> Self {
+        Self {
+            mod_id: metadata.mod_id.clone(),
+            version: metadata.version.clone(),
+            environment: metadata.environment,
+            dependencies: metadata.dependencies.clone(),
+            provides: metadata.provides.clone(),
+            language_loader: metadata.language_loader.clone(),
+            embedded_artifacts: metadata.embedded_artifacts.clone(),
+            bundled: metadata.bundled.iter().map(Self::from_candidate).collect(),
+        }
+    }
 }
 
 impl OrbitLockfile {
@@ -205,7 +250,11 @@ path = "mods/fabric-carpet-26.1+v260402.jar"
                 }),
                 file: None,
                 dependencies: vec![],
-                implanted: vec![],
+                environment: Environment::Both,
+                provides: vec![],
+                language_loader: None,
+                embedded_artifacts: vec![],
+                bundled: vec![],
             }],
         };
         let serialized = lockfile.to_toml_string().unwrap();

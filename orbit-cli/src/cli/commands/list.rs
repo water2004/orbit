@@ -32,8 +32,8 @@ fn print_flat(output: &orbit_core::ListOutput) {
             "{} v{} ({}, {}{})",
             pkg.mod_id, pkg.version, pkg.provider, pkg.environment, optional
         );
-        for (name, ver) in &pkg.implanted {
-            println!("  + embedded: {name} v{ver}");
+        for (name, ver) in &pkg.bundled {
+            println!("  + bundled: {name} v{ver}");
         }
     }
 }
@@ -101,8 +101,8 @@ fn print_node(
 
     print_package_line(prefix, pkg);
 
-    for (name, ver) in &pkg.implanted {
-        println!("{prefix}  + embedded: {name} v{ver}");
+    for (name, ver) in &pkg.bundled {
+        println!("{prefix}  + bundled: {name} v{ver}");
     }
 
     let deps: Vec<&str> = pkg

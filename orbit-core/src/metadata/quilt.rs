@@ -1,94 +1,240 @@
-//! Quilt metadata parser for `quilt.mod.json`.
+//! Quilt `quilt.mod.json` adapter.
 
-use indexmap::IndexMap;
+use serde_json::Value;
 
-use super::{MetadataParser, ModLoader, ModMetadata};
+use super::{
+    DependencyExpression, DependencyKind, DependencyOrdering, Environment, MetadataParser,
+    ModDependency, ModFileMetadata, ModLoader, ModMetadata, ProvidedMod,
+};
 use crate::error::OrbitError;
 
-pub(crate) struct ParsedQuiltMetadata {
-    pub metadata: ModMetadata,
-    pub dependencies: Vec<(String, String, bool)>,
-}
-
-pub(crate) fn parse_quilt(content: &str) -> Result<ParsedQuiltMetadata, OrbitError> {
-    let value: serde_json::Value = serde_json::from_str(content).map_err(|error| {
-        OrbitError::Other(anyhow::anyhow!("invalid JSON in quilt.mod.json: {error}"))
+pub(crate) fn parse_quilt(content: &str) -> Result<ModFileMetadata, OrbitError> {
+    let value: Value = serde_json::from_str(content)
+        .map_err(|error| OrbitError::Other(anyhow::anyhow!("invalid quilt.mod.json: {error}")))?;
+    let root = value.as_object().ok_or_else(|| {
+        OrbitError::Other(anyhow::anyhow!("quilt.mod.json must contain a JSON object"))
     })?;
-    let loader = value
+    let loader = root
         .get("quilt_loader")
-        .and_then(serde_json::Value::as_object)
+        .and_then(Value::as_object)
         .ok_or_else(|| {
             OrbitError::Other(anyhow::anyhow!("quilt.mod.json has no quilt_loader object"))
         })?;
-    let metadata = loader
-        .get("metadata")
-        .and_then(serde_json::Value::as_object);
-    let dependencies = parse_dependencies(loader.get("depends"));
-    let dependency_map: IndexMap<_, _> = dependencies
-        .iter()
-        .map(|(id, version, _)| (id.clone(), version.clone()))
-        .collect();
+    let id = required_string(loader, "id")?;
+    let version = required_string(loader, "version")?;
+    let metadata = loader.get("metadata").and_then(Value::as_object);
 
-    let authors = metadata
-        .and_then(|metadata| metadata.get("contributors"))
-        .map(parse_contributors)
-        .unwrap_or_default();
-    let license = metadata
-        .and_then(|metadata| metadata.get("license"))
-        .and_then(first_string);
-    let environment = value
-        .get("minecraft")
-        .and_then(|minecraft| minecraft.get("environment"))
-        .and_then(serde_json::Value::as_str)
-        .map(map_environment)
-        .unwrap_or_else(|| "both".to_string());
-    let embedded_jars = parse_jars(loader.get("jars").or_else(|| value.get("jars")));
+    let mut dependencies = Vec::new();
+    if let Some(depends) = loader.get("depends") {
+        dependencies.extend(parse_top_level_dependencies(
+            depends,
+            DependencyKind::Required,
+            GroupMode::Any,
+        )?);
+    }
+    if let Some(breaks) = loader.get("breaks") {
+        dependencies.extend(parse_top_level_dependencies(
+            breaks,
+            DependencyKind::Incompatible,
+            GroupMode::All,
+        )?);
+    }
 
-    Ok(ParsedQuiltMetadata {
-        metadata: ModMetadata {
-            id: string_field(loader, "id"),
+    Ok(ModFileMetadata {
+        loader: ModLoader::Quilt,
+        license: metadata
+            .and_then(|metadata| metadata.get("license"))
+            .and_then(first_string),
+        language_loader: None,
+        mods: vec![ModMetadata {
+            id: id.clone(),
             name: metadata
-                .map(|metadata| string_field(metadata, "name"))
+                .and_then(|metadata| optional_string(metadata, "name"))
+                .unwrap_or(id),
+            version: version.clone(),
+            authors: metadata
+                .and_then(|metadata| metadata.get("contributors"))
+                .map(parse_contributors)
                 .unwrap_or_default(),
-            version: string_field(loader, "version"),
-            authors,
             description: metadata
-                .map(|metadata| string_field(metadata, "description"))
+                .and_then(|metadata| optional_string(metadata, "description"))
                 .unwrap_or_default(),
-            license,
-            environment,
-            dependencies: dependency_map,
-            embedded_jars,
-            loader: ModLoader::Quilt,
-        },
-        dependencies,
+            environment: root
+                .get("minecraft")
+                .and_then(|minecraft| minecraft.get("environment"))
+                .and_then(Value::as_str)
+                .map(parse_environment)
+                .unwrap_or(Environment::Both),
+            dependencies,
+            provides: parse_provides(loader.get("provides"), &version)?,
+        }],
+        embedded_jars: parse_jars(loader.get("jars").or_else(|| root.get("jars"))),
+        substitution_properties: Default::default(),
     })
 }
 
-fn string_field(object: &serde_json::Map<String, serde_json::Value>, key: &str) -> String {
-    object
-        .get(key)
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or_default()
-        .to_string()
+#[derive(Clone, Copy)]
+enum GroupMode {
+    Any,
+    All,
 }
 
-fn parse_contributors(value: &serde_json::Value) -> Vec<String> {
+fn parse_top_level_dependencies(
+    value: &Value,
+    kind: DependencyKind,
+    nested_group: GroupMode,
+) -> Result<Vec<DependencyExpression>, OrbitError> {
+    let dependencies = value.as_array().ok_or_else(|| {
+        OrbitError::Other(anyhow::anyhow!(
+            "quilt dependency collection must be an array"
+        ))
+    })?;
+    dependencies
+        .iter()
+        .map(|dependency| parse_dependency(dependency, kind, nested_group))
+        .collect()
+}
+
+fn parse_dependency(
+    value: &Value,
+    default_kind: DependencyKind,
+    nested_group: GroupMode,
+) -> Result<DependencyExpression, OrbitError> {
     match value {
-        serde_json::Value::Object(contributors) => contributors.keys().cloned().collect(),
-        serde_json::Value::Array(contributors) => {
-            contributors.iter().filter_map(first_string).collect()
+        Value::String(id) => Ok(ModDependency {
+            id: strip_group(id).to_string(),
+            requirement: "*".to_string(),
+            kind: default_kind,
+            environment: Environment::Both,
+            ordering: DependencyOrdering::None,
+            reason: None,
+            unless: None,
         }
-        serde_json::Value::String(contributor) => vec![contributor.clone()],
+        .into()),
+        Value::Object(dependency) => {
+            let id = strip_group(&required_string(dependency, "id")?).to_string();
+            let kind = if dependency
+                .get("optional")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+                && default_kind == DependencyKind::Required
+            {
+                DependencyKind::Optional
+            } else {
+                default_kind
+            };
+            let unless = dependency
+                .get("unless")
+                .map(|unless| parse_dependency(unless, DependencyKind::Required, GroupMode::Any))
+                .transpose()?
+                .map(Box::new);
+            Ok(ModDependency {
+                id,
+                requirement: version_requirement(
+                    dependency
+                        .get("versions")
+                        .or_else(|| dependency.get("version")),
+                ),
+                kind,
+                environment: Environment::Both,
+                ordering: DependencyOrdering::None,
+                reason: dependency
+                    .get("reason")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+                unless,
+            }
+            .into())
+        }
+        Value::Array(group) => {
+            let expressions = group
+                .iter()
+                .map(|dependency| parse_dependency(dependency, default_kind, nested_group))
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(match nested_group {
+                GroupMode::Any => DependencyExpression::Any(expressions),
+                GroupMode::All => DependencyExpression::All(expressions),
+            })
+        }
+        _ => Err(OrbitError::Other(anyhow::anyhow!(
+            "quilt dependency must be a string, object, or array"
+        ))),
+    }
+}
+
+fn parse_provides(
+    value: Option<&Value>,
+    own_version: &str,
+) -> Result<Vec<ProvidedMod>, OrbitError> {
+    let Some(value) = value else {
+        return Ok(Vec::new());
+    };
+    let values = value
+        .as_array()
+        .ok_or_else(|| OrbitError::Other(anyhow::anyhow!("quilt provides must be an array")))?;
+    values
+        .iter()
+        .map(|provided| match provided {
+            Value::String(id) => Ok(ProvidedMod {
+                id: strip_group(id).to_string(),
+                version: None,
+            }),
+            Value::Object(provided) => {
+                let id = required_string(provided, "id")?;
+                let explicit_version = provided
+                    .get("version")
+                    .and_then(Value::as_str)
+                    .filter(|version| *version != own_version)
+                    .map(str::to_string);
+                Ok(ProvidedMod {
+                    id: strip_group(&id).to_string(),
+                    version: explicit_version,
+                })
+            }
+            _ => Err(OrbitError::Other(anyhow::anyhow!(
+                "quilt provides entries must be strings or objects"
+            ))),
+        })
+        .collect()
+}
+
+fn strip_group(id: &str) -> &str {
+    id.split_once(':').map(|(_, id)| id).unwrap_or(id)
+}
+
+fn required_string(
+    object: &serde_json::Map<String, Value>,
+    key: &str,
+) -> Result<String, OrbitError> {
+    optional_string(object, key).ok_or_else(|| {
+        OrbitError::Other(anyhow::anyhow!(
+            "quilt.mod.json requires a non-empty string field '{key}'"
+        ))
+    })
+}
+
+fn optional_string(object: &serde_json::Map<String, Value>, key: &str) -> Option<String> {
+    object
+        .get(key)
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn parse_contributors(value: &Value) -> Vec<String> {
+    match value {
+        Value::Object(contributors) => contributors.keys().cloned().collect(),
+        Value::Array(contributors) => contributors.iter().filter_map(first_string).collect(),
+        Value::String(contributor) => vec![contributor.clone()],
         _ => Vec::new(),
     }
 }
 
-fn first_string(value: &serde_json::Value) -> Option<String> {
+fn first_string(value: &Value) -> Option<String> {
     match value {
-        serde_json::Value::String(value) => Some(value.clone()),
-        serde_json::Value::Array(values) => values.first().and_then(first_string),
-        serde_json::Value::Object(value) => value
+        Value::String(value) => Some(value.clone()),
+        Value::Array(values) => values.first().and_then(first_string),
+        Value::Object(value) => value
             .get("name")
             .or_else(|| value.get("id"))
             .and_then(first_string),
@@ -96,50 +242,14 @@ fn first_string(value: &serde_json::Value) -> Option<String> {
     }
 }
 
-fn parse_dependencies(value: Option<&serde_json::Value>) -> Vec<(String, String, bool)> {
-    let Some(value) = value else {
-        return Vec::new();
-    };
-    match value {
-        serde_json::Value::Array(dependencies) => {
-            dependencies.iter().filter_map(parse_dependency).collect()
-        }
-        serde_json::Value::Object(dependencies) => dependencies
-            .iter()
-            .map(|(id, version)| (id.clone(), version_constraint(Some(version)), true))
-            .collect(),
-        _ => Vec::new(),
-    }
-}
-
-fn parse_dependency(value: &serde_json::Value) -> Option<(String, String, bool)> {
-    match value {
-        serde_json::Value::String(id) => Some((id.clone(), "*".to_string(), true)),
-        serde_json::Value::Object(dependency) => {
-            let id = dependency.get("id").and_then(first_string)?;
-            let version = version_constraint(
-                dependency
-                    .get("versions")
-                    .or_else(|| dependency.get("version")),
-            );
-            let required = !dependency
-                .get("optional")
-                .and_then(serde_json::Value::as_bool)
-                .unwrap_or(false);
-            Some((id, version, required))
-        }
-        _ => None,
-    }
-}
-
-fn version_constraint(value: Option<&serde_json::Value>) -> String {
+fn version_requirement(value: Option<&Value>) -> String {
     let Some(value) = value else {
         return "*".to_string();
     };
     match value {
-        serde_json::Value::String(version) => version.clone(),
-        serde_json::Value::Array(versions) => {
-            let versions: Vec<_> = versions.iter().filter_map(first_string).collect();
+        Value::String(version) => version.clone(),
+        Value::Array(versions) => {
+            let versions: Vec<_> = versions.iter().filter_map(Value::as_str).collect();
             if versions.is_empty() {
                 "*".to_string()
             } else {
@@ -150,27 +260,25 @@ fn version_constraint(value: Option<&serde_json::Value>) -> String {
     }
 }
 
-fn parse_jars(value: Option<&serde_json::Value>) -> Vec<String> {
+fn parse_jars(value: Option<&Value>) -> Vec<String> {
     value
-        .and_then(serde_json::Value::as_array)
+        .and_then(Value::as_array)
         .into_iter()
         .flatten()
         .filter_map(|jar| match jar {
-            serde_json::Value::String(path) => Some(path.clone()),
-            serde_json::Value::Object(jar) => jar.get("file").and_then(first_string),
+            Value::String(path) => Some(path.clone()),
+            Value::Object(jar) => jar.get("file").and_then(first_string),
             _ => None,
         })
         .collect()
 }
 
-fn map_environment(environment: &str) -> String {
+fn parse_environment(environment: &str) -> Environment {
     match environment {
-        "*" | "universal" => "both",
-        "client" => "client",
-        "dedicated_server" | "server" => "server",
-        other => other,
+        "client" => Environment::Client,
+        "dedicated_server" | "server" => Environment::Server,
+        _ => Environment::Both,
     }
-    .to_string()
 }
 
 pub struct QuiltParser;
@@ -184,8 +292,8 @@ impl MetadataParser for QuiltParser {
         ModLoader::Quilt
     }
 
-    fn parse(&self, content: &str) -> Result<ModMetadata, OrbitError> {
-        Ok(parse_quilt(content)?.metadata)
+    fn parse(&self, content: &str) -> Result<ModFileMetadata, OrbitError> {
+        parse_quilt(content)
     }
 }
 
@@ -194,49 +302,39 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parses_quilt_metadata() {
-        let metadata = r#"{
+    fn preserves_groups_unless_breaks_and_provides() {
+        let parsed = parse_quilt(
+            r#"{
   "schema_version": 1,
   "quilt_loader": {
     "id": "example",
-    "version": "1.0.0",
-    "metadata": {
-      "name": "Example",
-      "description": "A Quilt mod",
-      "contributors": {"Alice": "Owner", "Bob": "Developer"},
-      "license": ["MIT"]
-    },
+    "version": "1.0",
     "depends": [
-      {"id": "minecraft", "versions": [">=1.20", "<1.22"]},
-      {"id": "optional-api", "optional": true}
+      [{"id": "one", "versions": ">=1"}, {"id": "two", "versions": "*"}],
+      {"id": "optional", "optional": true, "unless": "replacement"}
     ],
-    "jars": ["META-INF/jars/inner.jar"]
-  },
-  "minecraft": {"environment": "client"}
-}"#;
-        let parsed = parse_quilt(metadata).unwrap();
-
-        assert_eq!(parsed.metadata.id, "example");
-        assert_eq!(parsed.metadata.authors, ["Alice", "Bob"]);
-        assert_eq!(parsed.metadata.environment, "client");
-        assert_eq!(parsed.metadata.embedded_jars, ["META-INF/jars/inner.jar"]);
-        assert_eq!(parsed.dependencies[0].1, ">=1.20 || <1.22");
-        assert!(!parsed.dependencies[1].2);
-    }
-
-    #[test]
-    fn accepts_legacy_dependency_map() {
-        let metadata = r#"{
-  "quilt_loader": {
-    "id": "example",
-    "version": "1",
-    "depends": {"minecraft": "1.20"}
+    "breaks": [
+      [{"id": "bad_a"}, {"id": "bad_b"}]
+    ],
+    "provides": [
+      "group:alias",
+      {"id": "group:versioned", "version": "2"}
+    ]
   }
-}"#;
-        let parsed = parse_quilt(metadata).unwrap();
-        assert_eq!(
-            parsed.dependencies,
-            [("minecraft".to_string(), "1.20".to_string(), true)]
-        );
+}"#,
+        )
+        .unwrap();
+
+        let metadata = &parsed.mods[0];
+        assert!(matches!(
+            metadata.dependencies[0],
+            DependencyExpression::Any(_)
+        ));
+        assert!(matches!(
+            metadata.dependencies[2],
+            DependencyExpression::All(_)
+        ));
+        assert_eq!(metadata.provides[0].id, "alias");
+        assert_eq!(metadata.provides[1].version.as_deref(), Some("2"));
     }
 }

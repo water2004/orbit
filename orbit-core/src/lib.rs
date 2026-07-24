@@ -46,9 +46,7 @@ pub use installer::{
     remove_from_instance, restore_instance, upgrade_all_in_instance,
 };
 pub use jar_cache::{CacheSummary, clean_cache, inspect_cache};
-pub use lockfile::{
-    FileInfo, ImplantedMod, LockDependency, LockMeta, ModrinthInfo, OrbitLockfile, PackageEntry,
-};
+pub use lockfile::{BundledMod, FileInfo, LockMeta, ModrinthInfo, OrbitLockfile, PackageEntry};
 pub use manifest::OrbitManifest;
 pub use metadata::{ModLoader, mojang::McVersion};
 pub use outdated::{OutdatedMod, check_all_outdated};

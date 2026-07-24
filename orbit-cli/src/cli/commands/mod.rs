@@ -127,11 +127,16 @@ pub fn prompt_install_report(report: &orbit_core::InstallReport, yes: bool) -> b
     eprintln!("\nThe following mods will be installed/upgraded:");
     for m in &report.installed {
         eprintln!("  + {} v{}", m.mod_id, m.version);
-        for (dep_id, dep_ver, _) in &m.jar_deps {
-            eprintln!("      ↳ {} {}", dep_id, dep_ver);
+        for expression in &m.dependencies {
+            for dependency in expression.relations() {
+                eprintln!(
+                    "      ↳ {} {} ({:?})",
+                    dependency.id, dependency.requirement, dependency.kind
+                );
+            }
         }
-        for imp in &m.implanted {
-            eprintln!("      ↳ [implanted] {} {}", imp.name, imp.version);
+        for bundled in &m.bundled {
+            print_bundled_mod(bundled, 1);
         }
     }
     if !report.already_satisfied.is_empty() {
@@ -152,11 +157,28 @@ pub fn prompt_install_report(report: &orbit_core::InstallReport, yes: bool) -> b
     input.is_empty() || input == "y" || input == "yes"
 }
 
+fn print_bundled_mod(bundled: &orbit_core::BundledMod, depth: usize) {
+    let indent = "    ".repeat(depth);
+    eprintln!(
+        "      ↳ {indent}[bundled] {} {}",
+        bundled.mod_id, bundled.version
+    );
+    for child in &bundled.bundled {
+        print_bundled_mod(child, depth + 1);
+    }
+}
+
 pub fn print_resolution_diagnostics(
     diagnostics: &[orbit_core::resolver::types::CandidateDiagnostic],
 ) {
     for diagnostic in diagnostics {
         eprintln!("{diagnostic}");
+    }
+}
+
+pub fn print_resolution_warnings(warnings: &[String]) {
+    for warning in warnings {
+        eprintln!("warning: {warning}");
     }
 }
 

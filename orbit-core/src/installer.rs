@@ -5,9 +5,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::error::OrbitError;
-use crate::lockfile::{
-    FileInfo, LockDependency, LockMeta, ModrinthInfo, OrbitLockfile, PackageEntry,
-};
+use crate::lockfile::{FileInfo, LockMeta, ModrinthInfo, OrbitLockfile, PackageEntry};
 use crate::manifest::{DependencySpec, OrbitManifest};
 use crate::providers::{ModProvider, ResolvedMod};
 use crate::resolver::types::CandidateDiagnostic;
@@ -43,6 +41,7 @@ pub struct InstallReport {
     pub already_satisfied: Vec<String>,
     pub skipped_optional: Vec<String>,
     pub diagnostics: Vec<CandidateDiagnostic>,
+    pub warnings: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -60,6 +59,7 @@ pub struct RestoreReport {
     pub already_present: Vec<String>,
     pub skipped: Vec<String>,
     pub diagnostics: Vec<CandidateDiagnostic>,
+    pub warnings: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -75,9 +75,12 @@ pub struct InstalledMod {
     /// Modrinth version_number（写入 [package.modrinth].version）
     pub modrinth_version: String,
     pub download_url: String,
-    /// 从 JAR 提取的真实依赖: (mod_id, version_constraint, required)
-    pub jar_deps: Vec<(String, String, bool)>,
-    pub implanted: Vec<crate::lockfile::ImplantedMod>,
+    pub dependencies: Vec<crate::metadata::DependencyExpression>,
+    pub environment: crate::metadata::Environment,
+    pub provides: Vec<crate::metadata::ProvidedMod>,
+    pub language_loader: Option<crate::metadata::LanguageLoaderRequirement>,
+    pub embedded_artifacts: Vec<crate::metadata::EmbeddedArtifact>,
+    pub bundled: Vec<crate::lockfile::BundledMod>,
 }
 
 /// 顶层 API：在指定实例目录安装模组。
@@ -165,10 +168,12 @@ pub async fn restore_instance(
         .cloned()
         .collect();
     let has_dangling_lock_edges = lock.inner.packages.iter().any(|entry| {
-        entry.dependencies.iter().any(|dependency| {
-            !crate::resolver::is_builtin_package(&dependency.name)
-                && lock.inner.find(&dependency.name).is_none()
-        })
+        required_dependency_ids(&entry.dependencies)
+            .into_iter()
+            .any(|dependency| {
+                !crate::resolver::is_builtin_package(dependency)
+                    && lock.inner.find(dependency).is_none()
+            })
     });
     let lock_graph_error =
         crate::resolver::check_lockfile_graph(&manifest.inner, &lock.inner).err();
@@ -197,6 +202,7 @@ pub async fn restore_instance(
         let resolution =
             resolve_missing_lock_entries(&manifest.inner, &mut lock.inner, providers).await?;
         report.diagnostics = resolution.diagnostics;
+        report.warnings = resolution.warnings;
         lock.save()?;
     }
 
@@ -268,6 +274,7 @@ pub async fn upgrade_all_in_instance(
         updates: outdated,
         resolved: resolved_candidates,
         diagnostics,
+        warnings,
     } = crate::outdated::check_all_outdated(&manifest_file.inner, &lock.inner, providers).await?;
 
     if outdated.is_empty() {
@@ -276,6 +283,7 @@ pub async fn upgrade_all_in_instance(
             already_satisfied: vec![],
             skipped_optional: vec![],
             diagnostics,
+            warnings,
         });
     }
 
@@ -300,6 +308,7 @@ pub async fn upgrade_all_in_instance(
         already_satisfied: vec![],
         skipped_optional: vec![],
         diagnostics: diagnostics.clone(),
+        warnings: warnings.clone(),
     };
 
     if let Some(prompt) = prompt_fn
@@ -310,6 +319,7 @@ pub async fn upgrade_all_in_instance(
             already_satisfied: vec![],
             skipped_optional: vec![],
             diagnostics,
+            warnings,
         }); // aborted
     }
 
@@ -331,6 +341,7 @@ pub async fn upgrade_all_in_instance(
         already_satisfied: vec![],
         skipped_optional: vec![],
         diagnostics,
+        warnings,
     })
 }
 
@@ -426,8 +437,8 @@ pub struct ListedPackage {
     pub optional: bool,
     /// 依赖的 mod_id 列表
     pub dependencies: Vec<String>,
-    /// 内嵌子模组 (name, version)
-    pub implanted: Vec<(String, String)>,
+    /// 同一物理 JAR 提供的其他逻辑模组 (mod_id, version)
+    pub bundled: Vec<(String, String)>,
 }
 
 /// 读取 lockfile 中所有已安装模组供 list 命令展示。
@@ -481,20 +492,52 @@ fn list_output(
                     .unwrap_or("both")
                     .to_string(),
                 optional: requirement.is_some_and(DependencySpec::optional),
-                dependencies: entry
-                    .dependencies
-                    .iter()
-                    .map(|dependency| dependency.name.clone())
+                dependencies: declared_dependency_ids(&entry.dependencies)
+                    .into_iter()
+                    .map(str::to_string)
                     .collect(),
-                implanted: entry
-                    .implanted
-                    .iter()
-                    .map(|implanted| (implanted.name.clone(), implanted.version.clone()))
-                    .collect(),
+                bundled: bundled_pairs(&entry.bundled),
             }
         })
         .collect();
     ListOutput { packages }
+}
+
+fn declared_dependency_ids(dependencies: &[crate::metadata::DependencyExpression]) -> Vec<&str> {
+    let mut ids = Vec::new();
+    for dependency in dependencies {
+        for relation in dependency.relations() {
+            if !ids.contains(&relation.id.as_str()) {
+                ids.push(relation.id.as_str());
+            }
+        }
+    }
+    ids
+}
+
+fn required_dependency_ids(dependencies: &[crate::metadata::DependencyExpression]) -> Vec<&str> {
+    let mut ids = Vec::new();
+    for dependency in dependencies {
+        for relation in dependency.relations() {
+            if relation.kind.installs_target() && !ids.contains(&relation.id.as_str()) {
+                ids.push(relation.id.as_str());
+            }
+        }
+    }
+    ids
+}
+
+fn bundled_pairs(bundled: &[crate::lockfile::BundledMod]) -> Vec<(String, String)> {
+    fn collect(bundled: &[crate::lockfile::BundledMod], output: &mut Vec<(String, String)>) {
+        for metadata in bundled {
+            output.push((metadata.mod_id.clone(), metadata.version.clone()));
+            collect(&metadata.bundled, output);
+        }
+    }
+
+    let mut output = Vec::new();
+    collect(bundled, &mut output);
+    output
 }
 
 // ── 内部实现 ──────────────────────────────────────────────────────────
@@ -577,6 +620,7 @@ async fn install_mod(input: InstallModInput<'_>) -> Result<InstallReport, OrbitE
     };
     let upgrades = resolution.upgrades;
     let diagnostics = resolution.diagnostics;
+    let warnings = resolution.warnings;
 
     // 4. Download resolved versions and apply
     let mut planned = Vec::new();
@@ -606,6 +650,7 @@ async fn install_mod(input: InstallModInput<'_>) -> Result<InstallReport, OrbitE
         already_satisfied: already_satisfied.clone(),
         skipped_optional: vec![],
         diagnostics: diagnostics.clone(),
+        warnings: warnings.clone(),
     };
 
     if let Some(prompt) = prompt_fn
@@ -616,6 +661,7 @@ async fn install_mod(input: InstallModInput<'_>) -> Result<InstallReport, OrbitE
             already_satisfied,
             skipped_optional: vec![],
             diagnostics,
+            warnings,
         }); // aborted
     }
 
@@ -647,6 +693,7 @@ async fn install_mod(input: InstallModInput<'_>) -> Result<InstallReport, OrbitE
         already_satisfied,
         skipped_optional: vec![],
         diagnostics,
+        warnings,
     })
 }
 
@@ -701,14 +748,13 @@ async fn resolve_missing_lock_entries(
         .collect();
     for entry in &lockfile.packages {
         seeds.extend(
-            entry
-                .dependencies
-                .iter()
+            required_dependency_ids(&entry.dependencies)
+                .into_iter()
                 .filter(|dependency| {
-                    !crate::resolver::is_builtin_package(&dependency.name)
-                        && lockfile.find(&dependency.name).is_none()
+                    !crate::resolver::is_builtin_package(dependency)
+                        && lockfile.find(dependency).is_none()
                 })
-                .map(|dependency| dependency.name.clone()),
+                .map(str::to_string),
         );
     }
     if seeds.is_empty() && crate::resolver::check_lockfile_graph(manifest, lockfile).is_err() {
@@ -784,46 +830,14 @@ fn lock_entry_from_candidate(
     candidate: Option<&crate::resolver::types::CandidateVersion>,
 ) -> PackageEntry {
     let dependencies = candidate
-        .map(|candidate| {
-            candidate
-                .deps
-                .iter()
-                .filter(|(name, _, required)| {
-                    *required && !matches!(name.as_str(), "java" | "mixinextras")
-                })
-                .map(|(name, constraint, _)| LockDependency {
-                    name: name.clone(),
-                    version: if constraint.is_empty() {
-                        "*".to_string()
-                    } else {
-                        constraint.clone()
-                    },
-                })
-                .collect()
-        })
+        .map(|candidate| candidate.dependencies.clone())
         .unwrap_or_default();
-    let implanted = candidate
+    let bundled = candidate
         .map(|candidate| {
             candidate
-                .implanted
+                .bundled
                 .iter()
-                .map(|implanted| crate::lockfile::ImplantedMod {
-                    name: implanted.mod_id.clone(),
-                    version: implanted.version.clone(),
-                    sha256: String::new(),
-                    filename: String::new(),
-                    dependencies: implanted
-                        .deps
-                        .iter()
-                        .filter(|(name, _, required)| {
-                            *required && !matches!(name.as_str(), "java" | "mixinextras")
-                        })
-                        .map(|(name, constraint, _)| LockDependency {
-                            name: name.clone(),
-                            version: constraint.clone(),
-                        })
-                        .collect(),
-                })
+                .map(crate::lockfile::BundledMod::from_candidate)
                 .collect()
         })
         .unwrap_or_default();
@@ -844,7 +858,17 @@ fn lock_entry_from_candidate(
         }),
         file: None,
         dependencies,
-        implanted,
+        environment: candidate
+            .map(|candidate| candidate.environment)
+            .unwrap_or_default(),
+        provides: candidate
+            .map(|candidate| candidate.provides.clone())
+            .unwrap_or_default(),
+        language_loader: candidate.and_then(|candidate| candidate.language_loader.clone()),
+        embedded_artifacts: candidate
+            .map(|candidate| candidate.embedded_artifacts.clone())
+            .unwrap_or_default(),
+        bundled,
     }
 }
 
@@ -887,26 +911,25 @@ pub(crate) fn selected_packages(
         }
     }
 
-    let mut selected = std::collections::HashSet::new();
-    let mut pending = roots;
-    while let Some(package) = pending.pop() {
-        if !selected.insert(package.clone()) {
-            continue;
-        }
-        let entry = lockfile.find(&package).ok_or_else(|| {
-            OrbitError::Other(anyhow::anyhow!(
-                "orbit.lock is missing selected package '{package}'"
-            ))
-        })?;
-        pending.extend(
-            entry
-                .dependencies
-                .iter()
-                .filter(|dependency| !crate::resolver::is_builtin_package(&dependency.name))
-                .map(|dependency| dependency.name.clone()),
-        );
-    }
-    let mut selected: Vec<_> = selected.into_iter().collect();
+    let target = match target {
+        "client" => crate::metadata::Environment::Client,
+        "server" => crate::metadata::Environment::Server,
+        _ => crate::metadata::Environment::Both,
+    };
+    let roots: std::collections::HashSet<_> = roots.into_iter().collect();
+    let mut selected_manifest = manifest.clone();
+    selected_manifest
+        .dependencies
+        .retain(|package, _| roots.contains(package));
+    let solution =
+        crate::resolver::resolve_lockfile_for_target(&selected_manifest, lockfile, target)
+            .map_err(|error| OrbitError::Conflict(error.to_string()))?;
+    let mut selected: Vec<_> = solution
+        .iter()
+        .map(|(package, _)| package)
+        .filter(|package| lockfile.find(package).is_some())
+        .cloned()
+        .collect();
     selected.sort();
     skipped.sort();
     Ok((selected, skipped))
@@ -1119,8 +1142,12 @@ fn plan_from_resolved(mod_id: &str, version: &str, resolved: &ResolvedMod) -> In
             .map(|modrinth| modrinth.version_number.clone())
             .unwrap_or_default(),
         download_url: resolved.download_url.clone(),
-        jar_deps: Vec::new(),
-        implanted: Vec::new(),
+        dependencies: Vec::new(),
+        environment: crate::metadata::Environment::Both,
+        provides: Vec::new(),
+        language_loader: None,
+        embedded_artifacts: Vec::new(),
+        bundled: Vec::new(),
     }
 }
 
@@ -1144,32 +1171,15 @@ async fn materialize_plans(
         if !metadata.version.is_empty() {
             plan.version = metadata.version;
         }
-        plan.jar_deps = metadata.dependencies;
-        plan.implanted = metadata
-            .implanted_mods
-            .into_iter()
-            .map(|implanted| crate::lockfile::ImplantedMod {
-                name: if implanted.mod_id.is_empty() {
-                    implanted.name
-                } else {
-                    implanted.mod_id
-                },
-                version: implanted.version,
-                sha256: String::new(),
-                filename: String::new(),
-                dependencies: implanted
-                    .dependencies
-                    .into_iter()
-                    .filter(|(name, _, required)| {
-                        *required
-                            && !matches!(
-                                name.as_str(),
-                                "java" | "mixinextras" | "minecraft" | "fabricloader"
-                            )
-                    })
-                    .map(|(name, version, _)| LockDependency { name, version })
-                    .collect(),
-            })
+        plan.dependencies = metadata.dependencies;
+        plan.environment = metadata.environment;
+        plan.provides = metadata.provides;
+        plan.language_loader = metadata.language_loader;
+        plan.embedded_artifacts = metadata.embedded_artifacts;
+        plan.bundled = metadata
+            .bundled_mods
+            .iter()
+            .map(crate::lockfile::BundledMod::from_jar_metadata)
             .collect();
         installed.push(plan);
     }
@@ -1246,19 +1256,6 @@ fn apply_to_lockfile(lockfile: &mut OrbitLockfile, installed: &[InstalledMod], m
     for inst in installed {
         let key = &inst.mod_id;
         lockfile.packages.retain(|e| e.mod_id != *key);
-        let lock_deps: Vec<LockDependency> = inst
-            .jar_deps
-            .iter()
-            .filter(|(_, _, required)| *required)
-            .map(|(dep_id, constraint, _)| LockDependency {
-                name: dep_id.clone(),
-                version: if constraint.is_empty() {
-                    "*".into()
-                } else {
-                    constraint.clone()
-                },
-            })
-            .collect();
         let jar_path = mods_dir.join(&inst.filename);
         let sha1 = crate::jar::compute_sha1(&jar_path).unwrap_or_default();
         let sha256 = crate::jar::compute_sha256(&jar_path).unwrap_or_default();
@@ -1289,8 +1286,12 @@ fn apply_to_lockfile(lockfile: &mut OrbitLockfile, installed: &[InstalledMod], m
             } else {
                 None
             },
-            dependencies: lock_deps,
-            implanted: inst.implanted.clone(),
+            dependencies: inst.dependencies.clone(),
+            environment: inst.environment,
+            provides: inst.provides.clone(),
+            language_loader: inst.language_loader.clone(),
+            embedded_artifacts: inst.embedded_artifacts.clone(),
+            bundled: inst.bundled.clone(),
         });
     }
 }
@@ -1367,12 +1368,13 @@ modloader_version = "1"
             }),
             dependencies: dependencies
                 .iter()
-                .map(|dependency| LockDependency {
-                    name: (*dependency).to_string(),
-                    version: "*".to_string(),
-                })
+                .map(|dependency| crate::metadata::ModDependency::required(*dependency, "*").into())
                 .collect(),
-            implanted: Vec::new(),
+            environment: crate::metadata::Environment::Both,
+            provides: Vec::new(),
+            language_loader: None,
+            embedded_artifacts: Vec::new(),
+            bundled: Vec::new(),
         }
     }
 

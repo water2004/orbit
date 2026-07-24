@@ -5,13 +5,15 @@ use std::collections::HashMap;
 use pubgrub::SelectedDependencies;
 
 use crate::lockfile::OrbitLockfile;
+use crate::metadata::Environment;
 use crate::providers::ModProvider;
 use crate::resolver::diagnostics::{ResolutionTrace, describe_no_solution};
 use crate::resolver::graph::{
     ExclusionMap, OverrideMap, register_candidate_versions, required_candidate_packages,
 };
+use crate::resolver::ordering::register_ordering_cycles;
 use crate::resolver::provider::OrbitDependencyProvider;
-use crate::resolver::types::{CandidateVersion, ImplantedCandidate};
+use crate::resolver::types::CandidateVersion;
 use crate::versions::Version;
 
 pub(crate) struct SolveOutcome {
@@ -30,6 +32,7 @@ pub(crate) struct SolveRequest<'a> {
     pub(crate) loader: &'a str,
     pub(crate) exclusions: &'a ExclusionMap,
     pub(crate) overrides: &'a OverrideMap,
+    pub(crate) target: Environment,
 }
 
 pub(crate) async fn solve_with_fetch_retry(
@@ -46,6 +49,7 @@ pub(crate) async fn solve_with_fetch_retry(
         loader,
         exclusions,
         overrides,
+        target,
     } = request;
 
     loop {
@@ -76,6 +80,7 @@ pub(crate) async fn solve_with_fetch_retry(
                     loader,
                     exclusions,
                     overrides,
+                    target,
                 })
                 .await?;
                 if !added {
@@ -112,6 +117,7 @@ struct FetchRequest<'a> {
     loader: &'a str,
     exclusions: &'a ExclusionMap,
     overrides: &'a OverrideMap,
+    target: Environment,
 }
 
 async fn fetch_missing_candidates(request: FetchRequest<'_>) -> Result<bool, String> {
@@ -124,12 +130,13 @@ async fn fetch_missing_candidates(request: FetchRequest<'_>) -> Result<bool, Str
         loader,
         exclusions,
         overrides,
+        target,
     } = request;
-    let needed = required_candidate_packages(candidates, exclusions);
+    let needed = required_candidate_packages(candidates, exclusions, target);
 
     let mut added = false;
     for package in needed {
-        if candidates.contains_key(&package) || is_implanted(lockfile, &package) {
+        if candidates.contains_key(&package) || is_bundled(lockfile, &package) {
             continue;
         }
         let Some(entry) = lockfile.find(&package) else {
@@ -165,19 +172,7 @@ async fn fetch_missing_candidates(request: FetchRequest<'_>) -> Result<bool, Str
             else {
                 continue;
             };
-            downloaded.push(CandidateVersion {
-                jar_version: metadata.version,
-                deps: metadata.dependencies,
-                implanted: metadata
-                    .implanted_mods
-                    .into_iter()
-                    .map(|implanted| ImplantedCandidate {
-                        mod_id: implanted.mod_id,
-                        version: implanted.version,
-                        deps: implanted.dependencies,
-                    })
-                    .collect(),
-            });
+            downloaded.push(CandidateVersion::from_jar_metadata(metadata));
         }
         if downloaded.is_empty() {
             continue;
@@ -190,20 +185,28 @@ async fn fetch_missing_candidates(request: FetchRequest<'_>) -> Result<bool, Str
             loader,
             exclusions,
             overrides,
+            target,
         );
         candidates.entry(package).or_default().extend(downloaded);
         added = true;
     }
+    if added {
+        register_ordering_cycles(
+            provider, lockfile, candidates, loader, exclusions, overrides, target,
+        );
+    }
     Ok(added)
 }
 
-fn is_implanted(lockfile: &OrbitLockfile, package: &str) -> bool {
-    lockfile.packages.iter().any(|entry| {
-        entry
-            .implanted
-            .iter()
-            .any(|implanted| implanted.name == package)
-    })
+fn is_bundled(lockfile: &OrbitLockfile, package: &str) -> bool {
+    fn contains(mods: &[crate::lockfile::BundledMod], package: &str) -> bool {
+        mods.iter()
+            .any(|metadata| metadata.mod_id == package || contains(&metadata.bundled, package))
+    }
+    lockfile
+        .packages
+        .iter()
+        .any(|entry| contains(&entry.bundled, package))
 }
 
 #[cfg(test)]
@@ -233,8 +236,12 @@ mod tests {
             "a".to_string(),
             vec![CandidateVersion {
                 jar_version: "1".to_string(),
-                deps: Vec::new(),
-                implanted: Vec::new(),
+                dependencies: Vec::new(),
+                environment: Default::default(),
+                provides: Vec::new(),
+                language_loader: None,
+                embedded_artifacts: Vec::new(),
+                bundled: Vec::new(),
             }],
         )]);
         let lockfile = OrbitLockfile {
@@ -258,6 +265,7 @@ mod tests {
             loader: "forge",
             exclusions: &ExclusionMap::new(),
             overrides: &OverrideMap::new(),
+            target: Environment::Both,
         })
         .await
         .unwrap();
@@ -272,8 +280,12 @@ mod tests {
             "a".to_string(),
             vec![CandidateVersion {
                 jar_version: "1".to_string(),
-                deps: vec![("b".to_string(), "*".to_string(), true)],
-                implanted: Vec::new(),
+                dependencies: vec![crate::metadata::ModDependency::required("b", "*").into()],
+                environment: Default::default(),
+                provides: Vec::new(),
+                language_loader: None,
+                embedded_artifacts: Vec::new(),
+                bundled: Vec::new(),
             }],
         )]);
         let lockfile: OrbitLockfile = toml::from_str(
@@ -307,6 +319,7 @@ slug = "b"
             loader: "forge",
             exclusions: &ExclusionMap::new(),
             overrides: &OverrideMap::new(),
+            target: Environment::Both,
         })
         .await
         .unwrap_err();
