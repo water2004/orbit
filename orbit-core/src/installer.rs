@@ -422,6 +422,8 @@ pub struct ListedPackage {
     pub version: String,
     pub slug: Option<String>,
     pub provider: String,
+    pub environment: String,
+    pub optional: bool,
     /// 依赖的 mod_id 列表
     pub dependencies: Vec<String>,
     /// 内嵌子模组 (name, version)
@@ -430,8 +432,9 @@ pub struct ListedPackage {
 
 /// 读取 lockfile 中所有已安装模组供 list 命令展示。
 pub fn list_installed(instance_dir: &Path) -> Result<ListOutput, OrbitError> {
+    let manifest = ManifestFile::open(instance_dir)?;
     let lock = Lockfile::open(instance_dir)?;
-    Ok(list_output(&lock.inner, None))
+    Ok(list_output(&manifest.inner, &lock.inner, None))
 }
 
 /// Read installed packages selected for a client/server target.
@@ -451,10 +454,11 @@ pub fn list_installed_for_target(
     validate_restore_options(&options)?;
     let (selected, _) = selected_packages(&manifest.inner, &lock.inner, &options)?;
     let selected: std::collections::HashSet<_> = selected.into_iter().collect();
-    Ok(list_output(&lock.inner, Some(&selected)))
+    Ok(list_output(&manifest.inner, &lock.inner, Some(&selected)))
 }
 
 fn list_output(
+    manifest: &OrbitManifest,
     lockfile: &OrbitLockfile,
     selected: Option<&std::collections::HashSet<String>>,
 ) -> ListOutput {
@@ -462,17 +466,32 @@ fn list_output(
         .packages
         .iter()
         .filter(|entry| selected.is_none_or(|selected| selected.contains(&entry.mod_id)))
-        .map(|e| ListedPackage {
-            mod_id: e.mod_id.clone(),
-            version: e.version.clone(),
-            slug: e.modrinth.as_ref().map(|m| m.slug.clone()),
-            provider: e.provider.clone(),
-            dependencies: e.dependencies.iter().map(|d| d.name.clone()).collect(),
-            implanted: e
-                .implanted
-                .iter()
-                .map(|i| (i.name.clone(), i.version.clone()))
-                .collect(),
+        .map(|entry| {
+            let requirement = manifest.dependencies.get(&entry.mod_id);
+            ListedPackage {
+                mod_id: entry.mod_id.clone(),
+                version: entry.version.clone(),
+                slug: entry
+                    .modrinth
+                    .as_ref()
+                    .map(|metadata| metadata.slug.clone()),
+                provider: entry.provider.clone(),
+                environment: requirement
+                    .and_then(DependencySpec::env)
+                    .unwrap_or("both")
+                    .to_string(),
+                optional: requirement.is_some_and(DependencySpec::optional),
+                dependencies: entry
+                    .dependencies
+                    .iter()
+                    .map(|dependency| dependency.name.clone())
+                    .collect(),
+                implanted: entry
+                    .implanted
+                    .iter()
+                    .map(|implanted| (implanted.name.clone(), implanted.version.clone()))
+                    .collect(),
+            }
         })
         .collect();
     ListOutput { packages }

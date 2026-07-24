@@ -27,9 +27,11 @@ pub async fn handle(tree: bool, target: Option<String>, ctx: &CliContext) -> Res
 
 fn print_flat(output: &orbit_core::ListOutput) {
     for pkg in &output.packages {
-        let slug = pkg.slug.as_deref().unwrap_or(&pkg.mod_id);
-        let provider = if pkg.provider == "file" { "file" } else { slug };
-        println!("{} v{} ({})", pkg.mod_id, pkg.version, provider);
+        let optional = if pkg.optional { ", optional" } else { "" };
+        println!(
+            "{} v{} ({}, {}{})",
+            pkg.mod_id, pkg.version, pkg.provider, pkg.environment, optional
+        );
         for (name, ver) in &pkg.implanted {
             println!("  + embedded: {name} v{ver}");
         }
@@ -97,7 +99,7 @@ fn print_node(
         return;
     }
 
-    println!("{prefix}{} v{}", pkg.mod_id, pkg.version);
+    print_package_line(prefix, pkg);
 
     for (name, ver) in &pkg.implanted {
         println!("{prefix}  + embedded: {name} v{ver}");
@@ -116,7 +118,7 @@ fn print_node(
         let child_prefix = format!("{prefix}{}", if last { "      " } else { "  |   " });
 
         if let Some(child) = index.get(dep_name) {
-            println!("{prefix}{connector}{} v{}", dep_name, child.version);
+            print_package_line(&format!("{prefix}{connector}"), child);
             print_children(child, &child_prefix, index, visited);
         }
     }
@@ -146,8 +148,16 @@ fn print_children(
         let child_prefix = format!("{prefix}{}", if last { "    " } else { "|   " });
 
         if let Some(child) = index.get(dep_name) {
-            println!("{prefix}{connector}{} v{}", dep_name, child.version);
+            print_package_line(&format!("{prefix}{connector}"), child);
             print_children(child, &child_prefix, index, visited);
         }
     }
+}
+
+fn print_package_line(prefix: &str, package: &orbit_core::ListedPackage) {
+    let optional = if package.optional { ", optional" } else { "" };
+    println!(
+        "{prefix}{} v{} ({}, {}{})",
+        package.mod_id, package.version, package.provider, package.environment, optional
+    );
 }

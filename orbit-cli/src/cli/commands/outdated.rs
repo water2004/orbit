@@ -6,6 +6,21 @@ pub async fn handle(mod_name: Option<String>, ctx: &CliContext) -> Result<()> {
     let dir = ctx.instance_dir()?;
     let manifest_file = ManifestFile::open(&dir).context("failed to read orbit.toml")?;
     let lock = orbit_core::workspace::Lockfile::open(&dir).context("failed to read orbit.lock")?;
+    let requested_package = mod_name
+        .as_deref()
+        .map(|name| {
+            let entry = lock
+                .find_entry(name)
+                .ok_or_else(|| anyhow::anyhow!("'{name}' was not found in orbit.lock"))?;
+            if entry.modrinth.is_none() {
+                anyhow::bail!(
+                    "'{}' is a local file and has no online source to check",
+                    entry.mod_id
+                );
+            }
+            Ok(entry.mod_id.clone())
+        })
+        .transpose()?;
 
     let providers = super::create_instance_providers(&dir, None)?;
 
@@ -27,8 +42,8 @@ pub async fn handle(mod_name: Option<String>, ctx: &CliContext) -> Result<()> {
     super::print_resolution_diagnostics(&report.diagnostics);
     let mut results = report.updates;
 
-    if let Some(ref name) = mod_name {
-        results.retain(|m| m.mod_id == *name);
+    if let Some(package) = requested_package {
+        results.retain(|outdated| outdated.mod_id == package);
     }
 
     if results.is_empty() {

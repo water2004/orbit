@@ -18,9 +18,26 @@ pub async fn handle(mod_name: Option<String>, ctx: &CliContext) -> Result<()> {
     };
 
     if let Some(name) = mod_name {
-        let slug = name.trim_start_matches("mr:").trim_start_matches("cf:");
+        let lockfile = orbit_core::Lockfile::open(&instance_dir)?;
+        let entry = lockfile
+            .find_entry(name.trim_start_matches("mr:").trim_start_matches("cf:"))
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Mod '{name}' is not installed. Use 'orbit add {name}' to install it."
+                )
+            })?;
+        let slug = entry
+            .modrinth
+            .as_ref()
+            .map(|metadata| metadata.slug.clone())
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Mod '{}' is a local file and has no online source to upgrade",
+                    entry.mod_id
+                )
+            })?;
         match install_to_instance(
-            slug,
+            &slug,
             "*",
             &instance_dir,
             &providers,
