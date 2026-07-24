@@ -12,6 +12,7 @@ pub async fn handle(
     _ctx: &CliContext,
 ) -> Result<()> {
     let instance_dir = std::env::current_dir()?;
+    let registered_path = instance_dir.clone();
 
     // ── 1. 确定 MC 版本 ────────────────────────
     let mc_ver = match mc_version {
@@ -106,6 +107,13 @@ pub async fn handle(
         eprintln!("Dependency graph verification failed:\n{error}");
         eprintln!("Use 'orbit install' or 'orbit sync' to fix missing dependencies.");
     }
+    orbit_core::register_instance(orbit_core::InstanceEntry {
+        name: name.clone(),
+        path: registered_path.to_string_lossy().into_owned(),
+        mc_version: output.manifest.project.mc_version.clone(),
+        modloader: loader.clone(),
+        is_default: false,
+    })?;
     println!("  Run 'orbit install' to restore missing mods.");
 
     Ok(())

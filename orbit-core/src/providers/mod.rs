@@ -111,6 +111,17 @@ pub enum SideSupport {
     Unsupported,
 }
 
+impl std::fmt::Display for SideSupport {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let value = match self {
+            Self::Required => "required",
+            Self::Optional => "optional",
+            Self::Unsupported => "unsupported",
+        };
+        formatter.write_str(value)
+    }
+}
+
 /// 统一搜索返回结果
 #[derive(Debug, Clone)]
 pub struct SearchResultItem {
@@ -129,6 +140,7 @@ pub struct SearchResultItem {
 /// orbit info 命令的完整输出结构
 #[derive(Debug, Clone)]
 pub struct ModInfo {
+    pub project_id: String,
     pub slug: String,
     pub name: String,
     pub description: String,

@@ -27,7 +27,10 @@ pub mod resolver;
 pub mod sync;
 pub mod workspace;
 
-pub use config::{GlobalConfig, InstanceEntry, InstancesRegistry, config_path, orbit_data_dir};
+pub use config::{
+    GlobalConfig, InstanceEntry, InstancesRegistry, config_path, orbit_data_dir, register_instance,
+    remove_instance, set_default_instance,
+};
 pub use detection::LoaderDetectionService;
 pub use error::OrbitError;
 pub use installer::{
@@ -35,6 +38,7 @@ pub use installer::{
     RemoveReport, install_to_instance, list_dependencies, list_installed, remove_from_instance,
     upgrade_all_in_instance,
 };
+pub use jar_cache::{CacheSummary, clean_cache, inspect_cache};
 pub use lockfile::{
     FileInfo, ImplantedMod, LockDependency, LockMeta, ModrinthInfo, OrbitLockfile, PackageEntry,
 };

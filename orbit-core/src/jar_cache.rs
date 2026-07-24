@@ -8,7 +8,6 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::config::default_cache_dir;
 use crate::error::OrbitError;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -29,7 +28,11 @@ pub struct JarCache {
 
 impl JarCache {
     pub fn load() -> Result<Self, OrbitError> {
-        let dir = default_cache_dir();
+        let dir = crate::config::GlobalConfig::load()?.cache.resolved_dir();
+        Self::load_from(dir)
+    }
+
+    fn load_from(dir: PathBuf) -> Result<Self, OrbitError> {
         let jar_dir = dir.join("jars");
         let index_path = dir.join("index.toml");
         let index = if index_path.exists() {
@@ -110,5 +113,95 @@ impl JarCache {
             return std::fs::copy(src, dest).is_ok();
         }
         false
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CacheSummary {
+    pub path: PathBuf,
+    pub files: usize,
+    pub bytes: u64,
+}
+
+pub fn inspect_cache() -> Result<CacheSummary, OrbitError> {
+    let path = crate::config::GlobalConfig::load()?.cache.resolved_dir();
+    inspect_cache_dir(&path)
+}
+
+pub fn clean_cache() -> Result<CacheSummary, OrbitError> {
+    let summary = inspect_cache()?;
+    if !summary.path.exists() {
+        return Ok(summary);
+    }
+    validate_cache_dir(&summary.path)?;
+    std::fs::remove_dir_all(&summary.path)?;
+    Ok(summary)
+}
+
+fn inspect_cache_dir(path: &Path) -> Result<CacheSummary, OrbitError> {
+    let mut summary = CacheSummary {
+        path: path.to_path_buf(),
+        ..CacheSummary::default()
+    };
+    if !path.exists() {
+        return Ok(summary);
+    }
+    let mut pending = vec![path.to_path_buf()];
+    while let Some(directory) = pending.pop() {
+        for entry in std::fs::read_dir(directory)? {
+            let entry = entry?;
+            let metadata = entry.metadata()?;
+            if metadata.is_dir() {
+                pending.push(entry.path());
+            } else if metadata.is_file() {
+                summary.files += 1;
+                summary.bytes += metadata.len();
+            }
+        }
+    }
+    Ok(summary)
+}
+
+fn validate_cache_dir(path: &Path) -> Result<(), OrbitError> {
+    let resolved = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    if resolved.parent().is_none()
+        || resolved == std::env::current_dir().unwrap_or_default()
+        || resolved == crate::config::orbit_data_dir()
+    {
+        return Err(OrbitError::Other(anyhow::anyhow!(
+            "refusing to clear unsafe cache directory '{}'",
+            resolved.display()
+        )));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_dir(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!("orbit-cache-test-{name}-{}", std::process::id()))
+    }
+
+    #[test]
+    fn cache_inspection_counts_nested_files() {
+        let directory = test_dir("inspect");
+        let nested = directory.join("jars");
+        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::write(directory.join("index.toml"), b"1234").unwrap();
+        std::fs::write(nested.join("a.jar"), b"123456").unwrap();
+
+        let summary = inspect_cache_dir(&directory).unwrap();
+
+        assert_eq!(summary.files, 2);
+        assert_eq!(summary.bytes, 10);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn unsafe_cache_roots_are_rejected() {
+        let root = std::path::Path::new(std::path::MAIN_SEPARATOR_STR);
+        assert!(validate_cache_dir(root).is_err());
     }
 }

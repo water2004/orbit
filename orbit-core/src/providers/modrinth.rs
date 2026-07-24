@@ -117,12 +117,13 @@ impl ModProvider for ModrinthProvider {
     }
 
     async fn get_mod_info(&self, slug: &str) -> Result<ModInfo, OrbitError> {
-        let _permit = self.rate_limiter.acquire().await?;
+        let permit = self.rate_limiter.acquire().await?;
         let project: mr_models::Project = self
             .client
             .get_project(slug)
             .await
             .map_err(|e| map_api_error(e, slug))?;
+        drop(permit);
 
         // Fetch recent versions for a richer display
         let recent: Vec<super::ModVersionInfo> = self
@@ -146,7 +147,13 @@ impl ModProvider for ModrinthProvider {
             })
             .unwrap_or_default();
 
+        let dependencies = self
+            .fetch_dependencies(&project.id)
+            .await
+            .unwrap_or_default();
+
         Ok(ModInfo {
+            project_id: project.id,
             slug: project.slug.clone(),
             name: project.title,
             description: project.description,
@@ -161,7 +168,7 @@ impl ModProvider for ModrinthProvider {
             server_side: map_side(&project.server_side),
             categories: project.categories,
             recent_versions: recent,
-            dependencies: vec![], // 需额外调用 get_project_dependencies
+            dependencies,
         })
     }
 

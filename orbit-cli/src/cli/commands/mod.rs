@@ -46,8 +46,32 @@ impl CliContext {
         }
 
         let path = std::env::current_dir().context("failed to get current directory")?;
+        if path.join("orbit.toml").exists() {
+            if self.verbose && !self.quiet {
+                eprintln!("Using current directory as instance: {}", path.display());
+            }
+            return Ok(path);
+        }
+
+        let registry =
+            orbit_core::InstancesRegistry::load().context("failed to load instances registry")?;
+        if let Some(instance) = registry.default_instance() {
+            let default_path = PathBuf::from(&instance.path);
+            if self.verbose && !self.quiet {
+                eprintln!(
+                    "Using default instance '{}' at {}",
+                    instance.name,
+                    default_path.display()
+                );
+            }
+            return Ok(default_path);
+        }
+
         if self.verbose && !self.quiet {
-            eprintln!("Using current directory as instance: {}", path.display());
+            eprintln!(
+                "No project or default instance found; using {}",
+                path.display()
+            );
         }
         Ok(path)
     }

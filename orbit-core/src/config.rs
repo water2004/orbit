@@ -317,6 +317,73 @@ impl InstancesRegistry {
     pub fn default_instance(&self) -> Option<&InstanceEntry> {
         self.instances.iter().find(|i| i.is_default)
     }
+
+    pub fn upsert(&mut self, mut entry: InstanceEntry) {
+        if let Some(existing) = self
+            .instances
+            .iter_mut()
+            .find(|existing| existing.name == entry.name)
+        {
+            entry.is_default = existing.is_default || entry.is_default;
+            *existing = entry;
+        } else {
+            self.instances.push(entry);
+        }
+        self.instances
+            .sort_by(|left, right| left.name.cmp(&right.name));
+    }
+
+    pub fn set_default(&mut self, name: &str) -> Option<InstanceEntry> {
+        let selected = self.find(name)?.clone();
+        for instance in &mut self.instances {
+            instance.is_default = instance.name == name;
+        }
+        Some(selected)
+    }
+
+    pub fn remove(&mut self, name: &str) -> Option<InstanceEntry> {
+        let index = self
+            .instances
+            .iter()
+            .position(|instance| instance.name == name)?;
+        Some(self.instances.remove(index))
+    }
+}
+
+pub fn register_instance(entry: InstanceEntry) -> Result<(), OrbitError> {
+    let mut registry = InstancesRegistry::load()?;
+    registry.upsert(entry);
+    registry.save()
+}
+
+pub fn set_default_instance(name: &str) -> Result<InstanceEntry, OrbitError> {
+    let mut registry = InstancesRegistry::load()?;
+    let selected = registry.set_default(name).ok_or_else(|| {
+        OrbitError::Other(anyhow::anyhow!(
+            "instance '{name}' not found; run 'orbit instances list' to see registered instances"
+        ))
+    })?;
+    registry.save()?;
+
+    let mut config = GlobalConfig::load()?;
+    config.core.default_instance = Some(name.to_string());
+    config.save()?;
+    Ok(selected)
+}
+
+pub fn remove_instance(name: &str) -> Result<InstanceEntry, OrbitError> {
+    let mut registry = InstancesRegistry::load()?;
+    let removed = registry
+        .remove(name)
+        .ok_or_else(|| OrbitError::Other(anyhow::anyhow!("instance '{name}' not found")))?;
+    registry.save()?;
+
+    let mut config = GlobalConfig::load()?;
+    if config.core.default_instance.as_deref() == Some(name) {
+        config.core.default_instance = None;
+        config.save()?;
+    }
+    Ok(removed)
 }
 
 // ---------------------------------------------------------------------------
@@ -383,5 +450,45 @@ dir = "D:/Games/OrbitCache"
         let deserialized: GlobalConfig = toml::from_str(&serialized).unwrap();
         assert_eq!(deserialized.core.max_concurrent_downloads, 8);
         assert_eq!(deserialized.cache.max_size_gb, 5.0);
+    }
+
+    fn instance(name: &str, is_default: bool) -> InstanceEntry {
+        InstanceEntry {
+            name: name.to_string(),
+            path: format!("/instances/{name}"),
+            mc_version: "1.21.1".to_string(),
+            modloader: "fabric".to_string(),
+            is_default,
+        }
+    }
+
+    #[test]
+    fn registry_upsert_replaces_metadata_without_losing_default() {
+        let mut registry = InstancesRegistry {
+            instances: vec![instance("alpha", true)],
+        };
+        let mut updated = instance("alpha", false);
+        updated.mc_version = "1.21.5".to_string();
+
+        registry.upsert(updated);
+
+        assert_eq!(registry.instances.len(), 1);
+        assert_eq!(registry.instances[0].mc_version, "1.21.5");
+        assert!(registry.instances[0].is_default);
+    }
+
+    #[test]
+    fn registry_default_is_unique_and_remove_returns_entry() {
+        let mut registry = InstancesRegistry {
+            instances: vec![instance("alpha", true), instance("beta", false)],
+        };
+
+        let selected = registry.set_default("beta").unwrap();
+
+        assert_eq!(selected.name, "beta");
+        assert!(!registry.find("alpha").unwrap().is_default);
+        assert!(registry.find("beta").unwrap().is_default);
+        assert_eq!(registry.remove("beta").unwrap().name, "beta");
+        assert!(registry.default_instance().is_none());
     }
 }
