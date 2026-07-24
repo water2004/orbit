@@ -1,217 +1,159 @@
 # Orbit 依赖解析引擎
 
-> 本文档同时记录 `orbit-core/src/resolver/` 的当前实现和仍然有效的设计约束。
-> “当前实现”用于解释代码；“规范未满足”不能通过修改文档来合理化，必须在代码中修复。
+> 本文描述当前实现。依赖语义的来源是 JAR 内的 loader 元数据，所有 loader 都经过同一条求解路径。
 
----
-
-## 1. 模块结构
+## 1. 模块边界
 
 ```text
-orbit-core/src/resolver/
-├── mod.rs                 # 公共 API 与顶层编排
-├── graph.rs               # 构建 PubGrub 输入图、注册候选与内嵌模组
-├── retry.rs               # 求解循环与缺失依赖补抓
-├── local.rs               # 不联网的本地安装图校验
-├── provider.rs            # OrbitDependencyProvider + ProviderError
-├── types.rs               # 候选输入 + 结构化 ResolutionReport / CandidateDiagnostic
-└── diagnostics/
-    ├── mod.rs             # 从类型化 SolverEvent 采集候选淘汰原因
-    ├── render.rs          # 将 DerivationTree 渲染为 Orbit 文案
-    └── tests.rs           # 三种实际求解路径的契约测试
+resolver/
+├── mod.rs          公共 API 与求解编排
+├── graph.rs        注册平台、物理模组、能力、内嵌模组和 Jar-in-Jar
+├── constraints.rs  将规范化 any/all/unless 表达式编译为 PubGrub 子句
+├── ordering.rs     加载顺序环约束与软依赖告警
+├── retry.rs        同一路径上的缺失候选补抓
+├── local.rs        把本地扫描结果转换为 lockfile 后复用统一建图
+├── provider.rs     内存 DependencyProvider
+└── diagnostics/    成功路径观察与不可解证明的领域化渲染
 ```
 
-`mod.rs` 不构造依赖图，也不实现重试细节。它只暴露查询 API、调用各阶段并将最终解转换成升级结果。
+Fabric、Quilt、Forge、NeoForge 不各自拥有 resolver。它们只在
+`metadata/` 和 `versions/` 适配输入，之后统一进入：
 
-Orbit 当前使用仓库根目录下的 `pubgrub-fork`，其基础版本是 PubGrub `0.4.0`。该 fork 增加了不改变默认 `resolve()` 行为的 `resolve_with_observer()`、`SolverObserver` 和类型化 `SolverEvent`。
+```text
+loader metadata
+  → ModFileMetadata / ModMetadata
+  → JarModMetadata
+  → PackageEntry / CandidateVersion
+  → build_solver_graph
+  → PubGrub
+```
 
----
+## 2. 为什么使用 PubGrub fork
 
-## 2. `resolve_with_candidates`
+上游 `DependencyProvider::get_dependencies()` 只能表达“包版本依赖另一个包的版本
+范围”，不能表达 Orbit 所需的 n 元互斥、条件依赖、Quilt 分组和加载顺序环。
+
+本地 `pubgrub-fork` 增加：
 
 ```rust
-resolve_with_candidates(manifest, lockfile, candidates, providers)
+fn get_incompatibilities(
+    &self,
+    package: &Self::P,
+    version: &Self::V,
+) -> Result<Vec<IncompatibilityConstraint<...>>, Self::Err>;
 ```
 
-输入包括：
+每个 provider 子句都带类型化正/负 term 和领域 `reason`。求解器在选择该包版本时，
+把声明者 term 与这些 term 一起加入当前 `State`。因此原因参与原始传播、冲突学习和
+`DerivationTree`，不是求解后再猜测。
 
-- `manifest`：项目、加载器和顶层依赖声明；
-- `lockfile`：当前已安装版本、真实 JAR 依赖和内嵌模组；
-- `candidates`：从候选 JAR 解析出的真实 `mod_id`、版本、依赖和内嵌模组；
-- `providers`：缺失候选需要联网补抓时使用的平台 provider。
+这项定制是必要的：如果推导和解释分别运行，第一次的选择/回溯路径可能与第二次不同，
+就会出现“结果正确，但解释对应另一条路径”的问题。Orbit 不运行反事实第二次求解，
+也不解析 debug 日志。
 
-处理阶段如下：
+fork 仍保留 observer。observer 只解释一次成功求解里“某个候选为何未被选择”：
 
-```text
-build_solver_graph
-  → solve_with_fetch_retry
-    → collect_upgrades
-```
+- `ExcludedByPropagation`
+- `Backtracked`
+- `ProviderPreferred`
 
-候选 JAR 的初次发现和批量下载目前发生在
-`outdated::download_candidates_with_fallback()`（内部复用
-`download_candidates_bfs()`）；resolver 本身只会在求解失败后补抓候选所引用、且
-lockfile 已知的缺失依赖。因此“离线求解”只描述单次 PubGrub 运行，不代表整个 API
-绝不访问网络。
+不可解原因则直接来自同次求解的 `DerivationTree`，其中也包含 Orbit 自定义子句的
+`reason`。
 
----
+## 3. 规范化依赖语义
 
-## 3. 求解图构建
+`constraints.rs` 处理 loader-neutral 的 `DependencyExpression`：
 
-`graph.rs` 按以下顺序构建 `OrbitDependencyProvider`：
+- `Only`：单一关系；
+- `Any`：至少一个分支满足；
+- `All`：全部分支满足；
+- `unless`：条件成立时禁用当前关系。
 
-1. 注册平台内置包：`minecraft`、实际 loader 和 Fabric loader 别名；
-2. 注册 lockfile 中的包、真实依赖和内嵌模组；
-3. 注册候选版本和候选内嵌模组；
-4. 构造内部根包 `___orbit_root___`；
-5. 将所有被引用但尚无已知版本的包注册为空版本列表。
+关系类别：
 
-最后一步很重要：未知依赖应成为 PubGrub 的正常 `NoVersions` 推导，而不是 `DependencyProvider` 的缓存错误。
+| kind | 求解行为 |
+|---|---|
+| `required` | 必须存在且版本匹配 |
+| `optional` | 不主动安装；存在时必须版本匹配 |
+| `recommended` | 不阻止解；缺失或版本不符产生 warning |
+| `suggested` | 仅保留元数据，不影响解 |
+| `incompatible` | 匹配时形成硬冲突 |
+| `discouraged` | 不阻止解；匹配时产生 warning |
 
-同一个包的版本顺序为：
+环境在建图时按 `client`、`server` 或保守的 `both` 目标计算。Forge/NeoForge 的
+`BEFORE`/`AFTER` 会变为版本精确的有向图；选中组合构成环时，环本身是 PubGrub
+自定义不相容关系，错误会显示完整路线。
 
-```text
-候选版本（调用方给定顺序，去重） → lockfile 版本
-```
+## 4. `provides` 与多 provider
 
-`OrbitDependencyProvider::choose_version()` 选择该顺序中第一个满足当前范围的版本。
+依赖指向的是逻辑能力，不直接绑死某个物理 JAR。Orbit 为每个普通 mod ID 建立内部
+capability 包；真实同名模组和 loader 元数据中的 `provides` 都能提供它。
 
-当前根约束行为：
+同一能力、同一版本若有多个 provider，会建立 provider-choice 包。PubGrub 选择其中
+一个具体 provider，而不会由后注册者覆盖前一个。物理模组、能力和选择包相互约束，
+所以 incompatible、optional、warning 和加载顺序看到的是同一“存在性”。
 
-- manifest 中的包始终使用 manifest 版本约束，无论该包是否有候选；
-- 不在 manifest 中的候选只有被已选包依赖时才进入解，不会被提升为顶级依赖；
-- `[overrides]` 替换已有根边或传递边的版本范围，但不会创建新的依赖边；
-- `exclude` 只移除声明该规则的包到指定传递依赖的边；其他包或 manifest
-  显式声明仍可把该依赖带入解。
+内部包名不会写入 lockfile，也不会出现在安装列表；诊断渲染时还原为逻辑 mod ID。
 
-`orbit add` 会先把 provider 查询标识映射到候选 JAR 自声明的 `mod_id`，再把命令行
-constraint 临时加入求解 manifest。安装成功后，该 constraint 写入真实 `mod_id` 对应的
-manifest 条目；`--optional` 和 `--env` 同时保存在完整依赖形式中。传递依赖只进入
-lockfile，不会被自动提升成 manifest 顶级声明；后续升级只更新 lockfile 版本，不覆盖原约束。
+## 5. 平台与运行时约束
 
-`java` 和 `mixinextras` 当前被明确视为运行时提供的依赖，并在联网候选图、本地图和
-缺失候选发现中一致忽略。Orbit 尚未探测实际 Java 运行时版本，因此不会伪造 `0.0.0`
-参与版本比较。
+建图先注册以下内置包：
 
----
+- `minecraft`
+- 当前 loader 及其官方别名
+- Forge family 的 `javafml` / `lowcodefml`
+- `java`
 
-## 4. 求解与缺失依赖补抓
+Java 版本由目标 Minecraft 版本确定；JAR 根目录 class 文件的最高 class major
+又会产生模组到 `java` 的最低版本依赖。因此声明式 Java feature 和实际字节码下限都
+走正常依赖边。多版本 JAR 的 `META-INF/versions/` 变体不被误当作基础运行下限。
 
-`retry.rs` 每次尝试都会：
+这只能发现确定的字节码级不兼容，不能证明 API、Mixin 目标、反射或运行时行为一定
+兼容。
 
-1. 为每个包的首个候选建立 `ResolutionTrace`；
-2. 调用 `pubgrub::resolve_with_observer()`；
-3. 成功时返回解和本次实际求解路径的 trace；
-4. `NoSolution` 时检查候选及其内嵌模组声明的 required dependencies；
-5. 对尚无候选、不是内嵌模组、且能在 lockfile 找到 Modrinth 元数据的包，通过名称选择
-   Modrinth provider，获取版本、下载 JAR、解析元数据并注册；
-6. 有新增候选则重新求解，否则把不可解证明渲染为领域依赖事实。
+Forge-family Jar-in-Jar 每个 Maven 坐标也是内部包。父模组依赖其声明 range，
+内嵌 artifact version 是候选版本；两个父 JAR 对同一坐标要求不相交时，冲突直接由
+PubGrub 证明。
 
-补抓得到的候选走 `graph::register_candidate_versions()`，与初始候选共享同一套版本去重、依赖注册和未知传递依赖注册逻辑。
+## 6. 求解与补抓
 
-这不是旧文档描述的“PubGrub 返回 `FetchRetryError` 后按缓存缺口抓取”。`ProviderError` 只表示图构造漏掉了包版本或版本依赖，是内部错误；正常的未知依赖已注册为空版本列表，并表现为 `NoSolution`。
+`resolve_with_candidates_report()`：
 
-初始候选发现通过 `download_candidates_with_fallback()` 按
-`[resolver].platforms` 顺序选择第一个有有效候选的平台。补抓已有 lockfile 条目时不做
-跨平台猜测，而是按条目的来源元数据选择对应 provider；当前 lockfile 只实现了
-Modrinth 专属元数据。
+1. 从 manifest、lockfile 和候选 JAR 建图；
+2. 在一次 PubGrub 运行中收集候选事件；
+3. 若 `NoSolution` 暴露尚未加载、且 lockfile 已知来源的 required 依赖，则下载并
+   解析真实 JAR；
+4. 通过同一个 `register_candidate_versions()` 增量注册后重新求解；
+5. 无法继续补抓时渲染最终证明；
+6. 成功时返回升级结果、候选诊断和软依赖 warnings。
 
----
+未知依赖预先注册为空版本列表，因此正常表现为可解释的 `NoVersions`，而不是 provider
+缓存异常。补抓当前只使用已有 lockfile 的 Modrinth 来源；CurseForge 仍明确不支持。
 
-## 5. 成功求解中的候选淘汰原因
+## 7. 本地、安装与恢复路径
 
-不可解时的 `DerivationTree` 证明“没有解”。它不能回答“这次成功求解为什么没有选择某个候选版本”，因为后者与求解器实际走过的路径有关。
+`check_local_graph()` 不维护第二套手写解析器或检查器。它把 `IdentifiedMod` 转成同一
+`OrbitLockfile` 结构，再调用 `build_solver_graph()`。
 
-Orbit 不再运行第二次反事实求解，也不解析 debug 日志。定制 PubGrub 在同一次求解中发送类型化事件：
+`install`、`restore`、`sync`、`outdated` 使用相同的依赖表达式和目标环境。安装选择
+也由求解结果过滤，不再用手写传递闭包推测该复制哪些 JAR。
 
-| 事件 | Orbit 使用方式 |
-|------|----------------|
-| `PackageChoice` | 确认被观察候选在本轮选择前仍被允许 |
-| `VersionChoice` | 区分 provider 选择顺序导致的版本偏好 |
-| `Decision` | 记录候选真正进入 partial solution 的 decision level |
-| `Derivation` | 找到候选由允许变为排除的精确传播步骤及原因树 |
-| `Backtrack` | 记录已提交候选因冲突被回退及其学习到的原因树 |
+## 8. 可读错误的约束
 
-最终原因分为：
+错误文本只呈现领域事实：
 
-- `ExcludedByPropagation`：候选在成为 decision 前被依赖传播排除；
-- `Backtracked`：候选被提交后因冲突回溯；
-- `ProviderPreferred`：候选仍允许，但 provider 顺序选择了另一个版本。
+- 哪个模组需要/排斥哪个版本；
+- 哪个 `any`/`all` 组无法满足；
+- 哪条加载顺序形成环；
+- 哪个 Jar-in-Jar 坐标区间冲突；
+- 哪个环境或 Java 下限不兼容。
 
-渲染器从事件携带的 `DerivationTree` 提取外部依赖事实，隐藏内部根包名称，并限制输出事实数量。
+内部根包、capability、provider-choice 和 Jar-in-Jar 前缀会被隐藏。测试断言
+结构化 reason 或领域文本，不断言 PubGrub 内部编号和 debug 输出。
 
-`diagnostics/tests.rs` 使用最小、确定性的依赖图分别触发上述三条路径。测试断言的是类型化事件生成的领域解释，不解析日志，也不运行第二条证明路径。
+## 9. 产品边界
 
-成功求解返回 `ResolutionReport`，其中 `diagnostics` 是类型化
-`CandidateDiagnostic`；CLI 决定如何展示。不可解和本地校验也共用领域事实渲染器，
-不再暴露 PubGrub 默认 reporter 的内部证明格式。
-
----
-
-## 6. 本地图校验
-
-```rust
-check_local_graph(manifest, local_mods)
-```
-
-该路径不访问 provider：
-
-1. 注册 Minecraft、loader 等平台包；
-2. 使用 JAR 自声明的 `mod_id` 和版本注册本地模组；
-3. 使用与候选图相同的 override、exclude 和运行时依赖规则注入 required dependencies；
-4. 将被依赖但未安装的包注册为空版本列表；
-5. 根包按 manifest 的实际版本约束依赖所有顶级包；
-6. 调用普通 `pubgrub::resolve()`。
-
-缺失的 manifest 顶层依赖和不满足 manifest 约束的本地版本都必须产生不可解结果。
-override/exclude 在本地与联网路径一致的行为也有单元测试保护。
-
-当前 `init` 使用此函数验证刚扫描出的真实 JAR 图。`install` 和本地 `file:` 添加使用
-`check_lockfile_graph()` 验证 Fat Lockfile 中保存的依赖图；`sync` 负责重新扫描与
-对账。CLI 的 `check` 是目标 Minecraft/loader 兼容性预检，不等同于本地图校验。
-
----
-
-## 7. 公共 API
-
-| 函数 | 当前行为 |
-|------|----------|
-| `find_entry(input, entries)` | 匹配 `mod_id`，或备选匹配 `package.modrinth.slug` |
-| `dependents(mod_id, entries)` | 从 lockfile 真实依赖中反查直接依赖者 |
-| `check_version_conflict(mod_id, version, entries)` | 检查 lockfile 已有版本是否冲突 |
-| `resolve_with_candidates(...)` | 构图、求解、必要时补抓依赖，并返回实际升级版本 |
-| `resolve_with_candidates_report(...)` | 在升级结果之外返回类型化候选诊断 |
-| `check_local_graph(...)` | 不联网验证刚扫描出的本地 JAR 图 |
-| `check_lockfile_graph(...)` | 不联网验证 manifest 与 Fat Lockfile 的依赖图 |
-
-不存在 `resolve_manifest()`、`ProviderVersionResolver`、`ModrinthVersionResolver` 或 `trapped_room_test()`。
-
----
-
-## 8. 已收口的规范与剩余边界
-
-| 规范 | 当前状态 |
-|------|----------|
-| `[resolver].platforms` 按顺序回退 | add 的候选发现和搜索已按配置顺序工作；补抓按 lockfile 来源选择 provider |
-| `orbit-core` 不输出 UI 文本 | core 返回报告和错误，stdout/stderr 只由 CLI 使用 |
-| 冲突信息可读且可测试 | 成功路径返回类型化候选原因；不可解路径渲染领域依赖事实 |
-| `[overrides]` / `exclude` | 候选图和本地图共用规则；override 不新增依赖，exclude 按声明者移除边 |
-| `optional` / `env` | `orbit add` 持久化字段；restore 按目标环境和 `--no-optional` 过滤根依赖，但它们不改变传递求解图 |
-| Java 依赖 | 联网和本地路径均明确忽略，不再注入虚假的 `0.0.0` |
-
-仍未完成但不能从规范中删除的边界：
-
-- CurseForge provider 和对应 lockfile 来源元数据尚未实现，因此多平台回退框架目前只有
-  Modrinth 可实际使用；
-- restore 已实现 `--target`、`--group`、`--no-optional`、`--locked`，并在过滤根
-  依赖时保留已选根所需的传递依赖；最终 JAR 落盘目前仍按包顺序执行，尚未做批量并发；
-- 实际 Java 运行时探测属于后续能力；当前策略是明确且一致地忽略元数据中的 Java 约束。
-
----
-
-## 9. 相关文档
-
-- [orbit-versions.md](orbit-versions.md)：版本解析和约束语义
-- [orbit-toml-spec.md](orbit-toml-spec.md)：manifest/lockfile 的规范行为
-- [orbit-architecture.md](orbit-architecture.md)：crate 与模块边界
-- [orbit-status.md](orbit-status.md)：实现进度与已知偏差
+- CurseForge：暂不支持；`cf:` 和显式 provider 配置返回可恢复的明确错误。
+- 远端 fork：当前仍是本地 path dependency；拿到用户 fork 的远端历史后再接远端，
+  不提前伪造提交关系。
+- 静态字节码判断：只给出必要条件，不宣称能完整证明模组运行时兼容。

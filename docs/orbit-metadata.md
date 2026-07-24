@@ -1,159 +1,126 @@
-# Orbit 模组元数据解析
+# Orbit 模组元数据
 
-> 实现位置：`orbit-core/src/metadata/` 与 `orbit-core/src/jar/`
+> 实现位置：`orbit-core/src/metadata/` 与 `orbit-core/src/jar/`。
 
-## 1. 分层
-
-元数据处理分为两层：
+## 1. 唯一数据流
 
 ```text
-jar/       打开 ZIP、选择 loader reader、读取内嵌 JAR
-  └─ metadata/   将 JSON/TOML 字符串解析为统一结构，不做文件 I/O
+JAR/ZIP I/O（jar）
+  → loader 格式适配（metadata/fabric|quilt|forge|neoforge）
+  → ModFileMetadata
+  → 一个或多个 ModMetadata
+  → JarModMetadata + bundled_mods
 ```
 
-`metadata::MetadataParser` 是纯解析策略：
+`init`、`sync`、`installer` 不直接打开 ZIP，也不直接调用具体 parser。loader 差异到
+`ModFileMetadata` 为止；锁文件和 resolver 不再按 loader 复制业务路径。
 
-```rust
-pub trait MetadataParser: Send + Sync {
-    fn target_file(&self) -> &str;
-    fn loader_type(&self) -> ModLoader;
-    fn parse(&self, content: &str) -> Result<ModMetadata, OrbitError>;
-}
-```
+## 2. 规范化模型
 
-`jar::read_mod_metadata(path, loader)` 是业务入口。它根据实例 loader 选择 reader，
-读取对应元数据，并递归解析声明的内嵌 JAR。`init`、`sync`、`installer` 不直接打开
-ZIP，也不直接调用具体 parser。
+一个物理元数据文件由 `ModFileMetadata` 表示：
 
-## 2. 支持格式
+- `loader`
+- `license`
+- `language_loader`
+- `mods: Vec<ModMetadata>`
+- `embedded_jars`
+- Forge-family `${file.<key>}` substitution properties
 
-| Loader | 主元数据 | 兼容行为 |
-|--------|----------|----------|
-| Fabric | `fabric.mod.json` | 根目录优先，兼容一层子目录 |
-| Forge | `META-INF/mods.toml` | 读取 `META-INF/jarjar/metadata.json`；`${file.jarVersion}` 从 MANIFEST 替换 |
-| NeoForge | `META-INF/neoforge.mods.toml` | 兼容旧版 `META-INF/mods.toml` |
-| Quilt | `quilt.mod.json` | Quilt JAR 缺少自身元数据时回退读取 Fabric 元数据 |
+每个逻辑 `ModMetadata` 包含：
 
-游戏本体 `version.json` 由 `metadata/mojang.rs` 解析；launcher 版本配置中的
-`libraries` 与 `mainClass` 由 `metadata/version_profile.rs` 解析。它们不是模组
-parser。
+- `id`、`name`、`version`、`authors`、`description`
+- `environment`
+- `dependencies: Vec<DependencyExpression>`
+- `provides`
 
-## 3. 统一结构
+依赖不再使用 `(id, version, required)` 元组。`ModDependency` 明确保留：
 
-`ModMetadata` 保存纯元数据字段：
+- `kind`
+- `environment`
+- `ordering`
+- `reason`
+- `unless`
 
-| 字段 | 含义 |
-|------|------|
-| `id` / `name` / `version` | 模组标识、展示名、自声明版本 |
-| `authors` / `description` / `license` | 展示元数据 |
-| `environment` | `client`、`server` 或 `both` |
-| `dependencies` | `mod_id → 原始版本约束` |
-| `embedded_jars` | 元数据声明的内嵌 JAR 路径 |
-| `loader` | Fabric / Forge / NeoForge / Quilt |
+Quilt 的嵌套 `any` / `all` 通过递归 `DependencyExpression` 保真。一个物理 JAR
+声明的其他逻辑模组或嵌套模组写入 `bundled`，不伪装成独立顶层文件。
 
-哈希不是 metadata parser 的职责。SHA-1/SHA-256/SHA-512 由 `jar` 或安装编排层
-针对真实字节计算，并写入 `orbit.lock`。
+## 3. loader 适配
 
-JAR reader 返回 `JarModMetadata`。该类型额外保留：
+| Loader | 元数据文件 | 完整映射 |
+|---|---|---|
+| Fabric | `fabric.mod.json` | identity、environment、六类依赖、数组版本、provides、jars |
+| Quilt | `quilt.mod.json` | identity、depends/breaks、any/all/unless、optional、provides version、jars；缺失时可读取 Fabric JAR |
+| Forge | `META-INF/mods.toml` | 多 `[[mods]]`、mandatory、versionRange、ordering、side、reason、features、properties、language loader、JarJar |
+| NeoForge | `META-INF/neoforge.mods.toml` | required/optional/incompatible/discouraged、ordering、side、features；兼容旧文件名 |
 
-- 依赖是否 required；
-- 已递归解析的 `implanted_mods`；
-- loader 声明的内嵌 JAR 路径。
+Fabric/Quilt 使用 Fabric predicate；Forge/NeoForge 使用 Maven ComparableVersion 与
+Maven version range。版本约束的解释只发生在 `versions/`，parser 保留原始文本。
 
-## 4. 格式映射
+## 4. 严格解析
 
-### Fabric
+身份和结构字段错误会立即返回带文件名/字段名的错误，不再“尽量猜一个能用的结果”：
 
-- `id`、`name`、`version`、`description` 直接映射；
-- `authors` 兼容字符串、字符串数组和含 `name` 的对象；
-- `environment = "*"` 归一化为 `both`；
-- `depends` 的字符串或数组约束保持原义；
-- `jars[].file` 进入 `embedded_jars`。
+- 缺失或非法 mod ID；
+- 缺失版本；
+- 依赖值既不是合法字符串也不是合法数组/对象；
+- Forge 缺失必需的 `modLoader`、`loaderVersion`、`license` 或旧格式
+  `mandatory`；
+- 未解析的 `${file.*}`；
+- 声明的模组内嵌 JAR 不存在或其元数据损坏；
+- Jar-in-Jar schema 字段为空、路径不存在、artifact version 不在声明 range。
 
-Fabric parser 采用逐字段容错：单个非关键字段格式异常不会丢失其它有效字段；整体
-JSON 无法解析时才返回错误。
+普通内嵌库没有 loader 元数据时可以忽略；被明确声明为模组且元数据损坏时不能静默
+吞掉。
 
-### Forge
+## 5. Fabric 与 Quilt
 
-主模组取第一个 `[[mods]]`：
+Fabric 映射：
 
-- `modId` → `id`
-- `displayName` → `name`
-- `version` → `version`
-- `authors` 同时接受官方常见字符串和字符串数组
-- `description` → `description`
-- 顶层 `license` → `license`
+- `depends` → `required`
+- `recommends` → `recommended`
+- `suggests` → `suggested`
+- `conflicts` → `discouraged`
+- `breaks` → `incompatible`
 
-依赖只读取 `[[dependencies.<主模组 id>]]`，不会把同一个 JAR 中其它 mod 的依赖
-错误并入主模组。`mandatory = false` 被标记为 optional。Forge 的 Maven
-`versionRange` 原样进入依赖图，由 `versions/maven.rs` 解析。
+`environment` 支持字符串和数组。`provides` 继承声明模组版本。
 
-若版本为 `${file.jarVersion}`，JAR reader 从 `META-INF/MANIFEST.MF` 的
-`Implementation-Version` 取实际版本。
+Quilt 递归保存依赖组。`unless` 是条件表达式而不是字符串标记；`breaks` 进入硬冲突。
+带 group 前缀的依赖和 provides ID 在适配层归一化为实际 mod ID。
 
-JarJar 内嵌路径来自 `META-INF/jarjar/metadata.json` 的 `jars[].path`。
+## 6. Forge 与 NeoForge
 
-### NeoForge
+Forge-family parser 共享 TOML 骨架，但保留格式真实差异：
 
-字段结构复用 Forge parser。现代格式使用 `META-INF/neoforge.mods.toml`；旧版
-NeoForge 的 `META-INF/mods.toml` 仍可读取。
+- Forge 旧依赖由 `mandatory` 判定 required/optional；
+- NeoForge 优先使用 `type`，其中 incompatible 是硬冲突，discouraged 是 warning；
+- `ordering = BEFORE/AFTER` 和 `side = CLIENT/SERVER/BOTH` 完整保留；
+- `features.javaVersion` 变为正常的 `java` 依赖；
+- 一个文件的多个 `[[mods]]` 全部保留，不只取第一个；
+- `${file.<key>}` 在展示字段、版本、依赖、reason、license 和 language loader range
+  中统一替换。
 
-依赖优先使用 `type` 判断：
+`META-INF/jarjar/metadata.json` 保存 Maven `group:artifact`、range、
+artifactVersion、path 和 obfuscated。它与普通 bundled mod 是两个概念：
+前者参与 artifact 版本求解，后者是同一物理文件内的逻辑模组。
 
-- `required` → required；
-- `optional`、`incompatible`、`discouraged` → 不作为 required 依赖。
+## 7. 内嵌与字节码
 
-旧格式的 `mandatory` 仍受支持。
+`jar/mod.rs` 统一递归 loader 元数据声明的嵌套 JAR。结果进入
+`JarModMetadata::bundled_mods`，再递归写入 lockfile 的 `bundled`。
 
-### Quilt
+同时扫描根目录 `.class` 文件头的 class major，并推导最低 Java 版本依赖。此检查对
+四种 loader 一致；`META-INF/versions/` 不提高基础要求。
 
-主字段位于 `quilt_loader`：
+## 8. 扩展规则
 
-- `id`、`version` 直接映射；
-- `metadata.name`、`description`、`contributors`、`license` 映射展示字段；
-- `depends` 支持对象数组和旧式映射；
-- `versions` 数组以 ` || ` 保留多个选择；
-- `optional = true` 不作为 required 依赖；
-- `jars` 支持字符串路径和 `{ file = ... }` 形式。
+新增 loader 必须完成：
 
-Quilt Loader 能加载 Fabric 模组，因此 Quilt reader 在没有 `quilt.mod.json` 时会调用
-Fabric reader，而不是把 Quilt 元数据错误地伪装成 Fabric parser 输入。
+1. 纯字符串 parser；
+2. `jar` 分发与元数据文件选择；
+3. 规范化模型映射；
+4. 必要的版本语义；
+5. detector；
+6. parser、真实 JAR、嵌套、求解与错误测试。
 
-## 5. 歧义处理
-
-`MetadataExtractor::extract(entries, modloader_context)` 用于纯内存场景：
-
-1. 收集所有命中目标文件的 parser；
-2. 只有一个候选时直接解析；
-3. 多个候选时按 `modloader_context` 选择；
-4. 无上下文或上下文无法消歧时返回明确错误。
-
-实际实例扫描已知 loader，通常直接走对应 `jar` reader。这样 Forge 与 NeoForge
-共享 TOML 结构时仍能保留正确 loader 语义。
-
-## 6. 内嵌 JAR
-
-父 JAR reader 只声明内嵌路径。`jar/mod.rs` 统一完成递归：
-
-1. 读取父元数据；
-2. 按声明路径提取字节；
-3. 使用同一实例 loader 解析子 JAR；
-4. 成功结果写入 `implanted_mods`；
-5. 非模组库不会导致父模组解析失败。
-
-`init` 与安装流程将 implanted 模组写入父 `[[package.implanted]]`，不会把它们重复
-加入 manifest 顶级依赖。
-
-## 7. 扩展新 Loader
-
-新增 loader 时需要显式完成以下边界，不能只添加 parser：
-
-1. 在 `metadata/` 实现纯字符串 parser；
-2. 在 `metadata::default_extractor()` 注册；
-3. 在 `jar/` 实现 reader，并在 `read_mod_metadata_from_archive` 分发；
-4. 如有独立版本约束语义，在 `versions/` 实现；
-5. 如需自动检测，在 `detection/` 注册 detector；
-6. 添加 parser、JAR 分发、内嵌和歧义测试。
-
-通常无需修改 manifest 或 provider 数据模型；loader 特有的格式差异应留在
-`metadata/`、`jar/`、`versions/` 和 `detection/` 边界内。
+不得在安装器、lockfile 或 resolver 新建 loader 专属分支；只有格式确实不同的适配点
+允许分开。

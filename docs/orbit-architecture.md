@@ -1,229 +1,137 @@
 # Orbit 架构
 
-> 本文描述当前仓库边界，并把尚未落地的目标单独列出。历史迁移步骤不再混入当前模块图。
-
-## 1. Workspace
+## 1. workspace
 
 ```text
-orbit-cli ───────────────→ orbit-core ───────────────→ modrinth-wrapper
-                               │
-                               └─────────────────────→ pubgrub-fork
+orbit-cli       参数、交互和展示
+    ↓
+orbit-core      领域模型、编排、JAR、求解、文件事务
+    ├── modrinth-wrapper
+    └── pubgrub-fork（本地 path dependency）
 ```
 
-Cargo workspace 当前包含：
+CLI 不实现业务规则。core 不打印 UI 文本，而是返回结构化报告或错误。平台 SDK、网络、
+ZIP 和文件系统位于边界模块。
 
-| Crate | 职责 |
-|-------|------|
-| `orbit-cli` | clap 参数、实例上下文、交互和 stdout/stderr |
-| `orbit-core` | manifest/lockfile、JAR、provider、求解、安装与文件业务逻辑 |
-| `modrinth-wrapper` | Modrinth HTTP/JSON SDK，不包含 Orbit 领域逻辑 |
+`pubgrub-fork` 是独立 Git 仓库，目前不加入根 workspace。它先保留本地有序历史；
+用户提供 fork 远端后再接远端历史。
 
-`pubgrub-fork` 位于仓库根目录，但暂时被 workspace 排除；`orbit-core` 通过本地 path
-依赖使用它。该 fork 增加同次求解中的类型化 observer 事件，用于解释候选淘汰原因，
-默认 `pubgrub::resolve()` 行为不变。
+不存在可用的 CurseForge provider。`providers/curseforge.rs` 只提供一致的明确拒绝，
+避免把“不支持”伪装成空结果。
 
-不存在 `curseforge-wrapper`。CurseForge 是保留的 provider 扩展方向，当前明确暂不
-支持。
-
-## 2. 依赖规则
+## 2. core 分层
 
 ```text
-CLI/UI
-  ↓
-orbit-core 领域 API
-  ↓
-provider trait / jar / resolver / workspace I/O
-  ↓
-平台 SDK、ZIP、文件系统、PubGrub
+metadata/     loader 文件 → 规范化逻辑元数据
+jar/          ZIP、manifest、嵌套 JAR、Jar-in-Jar、class major
+identification/
+providers/    来源查询与下载
+lockfile      可复现的 Fat Lockfile
+versions/     Fabric predicate 与 Maven version range
+resolver/
+  graph       loader-neutral 建图
+  constraints 依赖表达式 → PubGrub 子句
+  ordering    顺序环与软依赖 warning
+  retry       候选补抓
+  diagnostics 同次求解的原因
+installer/    事务、复制和恢复
+init/sync/    实例扫描与对账
 ```
 
-边界规则：
+允许出现 loader 分支的位置：
 
-- CLI 可以依赖 core；core 不依赖 CLI；
-- CLI 不直接依赖或调用 Modrinth SDK；
-- resolver 只依赖 `ModProvider` 和统一候选类型，不绑定具体 SDK；
-- 元数据 parser 不做文件 I/O，JAR reader 负责 ZIP 与哈希；
-- manifest/lockfile 的持久化通过 `ManifestFile` / `Lockfile`；
-- core 返回类型化报告或错误，不打印用户界面文本；
-- provider 专属字段放在专属子结构中，不污染公共 lockfile 字段。
+- 元数据文件名与字段映射；
+- loader 自身检测；
+- 版本约束语义；
+- loader 官方定义的嵌套格式。
 
-## 3. `orbit-core` 模块
+不允许出现 loader 分支的位置：
 
-```text
-orbit-core/src/
-├── manifest.rs            orbit.toml serde 模型
-├── lockfile.rs            Fat Lockfile serde 模型
-├── workspace.rs           manifest/lockfile 原子业务封装
-├── config.rs              全局配置与实例注册表
-├── metadata/              纯字符串元数据 parser
-├── jar/                   ZIP reader、下载、哈希、内嵌 JAR
-├── detection/             Minecraft/loader 环境检测
-├── versions/              Fabric 与 Maven 版本约束
-├── providers/             provider trait、Modrinth、CF 拒绝边界
-├── resolver/              PubGrub 构图、补抓、诊断、本地图校验
-├── installer.rs           add/remove/upgrade/restore/list 编排
-├── installer/local.rs     file: JAR 安装
-├── init.rs                接管现有实例
-├── sync.rs                磁盘/manifest/lockfile 对账
-├── checker.rs             目标版本兼容性预检
-├── outdated.rs            可升级候选查询和下载
-├── purge.rs               config 候选发现与安全删除
-├── archive.rs             TOML/ZIP/mrpack 导入导出
-└── jar_cache.rs           缓存检查与清理
-```
+- lockfile 的依赖数据模型；
+- 本地/联网求解；
+- 安装选择；
+- 错误证明路径；
+- sync/outdated 的图语义。
 
-过去把 `sync`、`checker`、`purge`、Forge/NeoForge/Quilt parser 与 detector 标为
-“占位”或 “future” 的目录树已经过时；这些模块现在都有实际实现和测试。
-
-## 4. 数据流
-
-### 初始化
+## 3. 端到端数据流
 
 ```text
-launcher profile / version.json
-  → detection
-mods/*.jar
+命令
+  → manifest / instance
+  → provider 或本地 JAR
   → jar reader
-  → normalized metadata + hashes
-  → provider hash identification
-  → manifest + Fat Lockfile
-  → local dependency graph check
+  → loader adapter
+  → normalized metadata
+  → lock/candidate model
+  → shared solver graph
+  → PubGrub solution + diagnostics + warnings
+  → transaction / report
 ```
 
-无法识别平台来源的真实 JAR 仍可作为 `file` package 管理。内嵌模组记录在父 package
-的 `implanted` 中，不提升为顶层 manifest 依赖。
+一个物理 JAR 可以包含多个逻辑模组。顶层 `PackageEntry` 对应物理文件的主逻辑包，
+其余逻辑模组递归位于 `bundled`。它们参与同一求解图，但不会生成不存在的独立文件。
 
-### 在线添加与升级
+## 4. 统一求解
 
-```text
-manifest constraint + provider candidates
-  → download candidate JAR
-  → parse real mod_id/version/dependencies
-  → PubGrub solve_with_observer
-  → structured diagnostics / selected graph
-  → confirmed file replacement
-  → lockfile update
-```
+所有入口最终调用 `build_solver_graph()` 或带 target 的变体：
 
-平台的 slug 和 version number 不能代替 JAR 自声明 `mod_id` 和版本。求解图只使用
-后者；来源 ID、下载 URL 和平台展示版本保存在 provider 专属字段。
+- 联网候选升级；
+- 本地扫描校验；
+- install / restore 的选择；
+- lockfile 校验；
+- outdated。
 
-### 还原
+依赖表达式在 `constraints.rs` 编译；加载顺序在 `ordering.rs`；平台、capability、
+Jar-in-Jar 和物理包注册在 `graph.rs`。这种拆分按职责而不是按 loader 切开。
 
-```text
-manifest + lockfile
-  → target/group/optional root selection
-  → retain transitive closure
-  → validate lock graph
-  → cache / file: / provider materialization
-  → checksum verification
-```
+PubGrub fork 允许 provider 在选择包版本时注入带 reason 的自定义 incompatibility。
+条件原因因此属于真正的传播/回溯路径。observer 只补充成功解中的候选淘汰原因，不承担
+另一条证明路径。
 
-`--locked`/`--frozen` 禁止重新解析缺失的来源元数据。旧 lockfile 没有
-`download_url` 时，非 locked 模式可以向 Modrinth 重新查询；locked 模式只能使用缓存
-或返回明确错误。
+## 5. loader 支持矩阵
 
-### 同步
+| Loader | 元数据 | 版本 | 嵌套 | 求解 |
+|---|---|---|---|---|
+| Fabric | `fabric.mod.json` | Fabric predicate | `jars` | 完整统一路径 |
+| Quilt | `quilt.mod.json` / Fabric fallback | Fabric predicate | `jars` | 完整统一路径 |
+| Forge | `META-INF/mods.toml` | Maven | JarJar | 完整统一路径 |
+| NeoForge | `META-INF/neoforge.mods.toml` / legacy name | Maven | JarJar | 完整统一路径 |
 
-```text
-mods/ scan + hashes
-  ↔ manifest
-  ↔ lockfile
-```
+“支持”意味着 identity、依赖类别、环境、版本、provides、内嵌和求解都进入真实路径，
+不是只识别文件名。
 
-`sync` 报告 added/changed/missing/unlocked，并写回可确认的本地事实。它不下载 JAR；
-为识别手动拖入的文件，哈希反查可能访问 provider。
+## 6. 可维护性规则
 
-## 5. 元数据和 loader
+- 规范化类型表达语义，不用 tuple/字符串标志隐藏含义。
+- 新字段先进入 metadata model，再向 candidate/lock/solver 传播。
+- 不保留旧 lock schema 的兼容分支；项目尚无外部使用者，schema 直接收敛。
+- parser 对身份和结构错误 fail fast。
+- 测试断言公开行为、结构化 reason 和领域错误，不解析 debug 日志。
+- 暂不支持的产品边界必须显式报错并给出恢复建议。
 
-| Loader | 模组元数据 | 版本约束 | 环境检测 |
-|--------|------------|----------|----------|
-| Fabric | `fabric.mod.json` | Fabric predicate | launcher Maven 坐标 |
-| Quilt | `quilt.mod.json`，兼容 Fabric JAR | Fabric predicate | launcher Maven 坐标 |
-| Forge | `META-INF/mods.toml` + JarJar | Maven range | launcher Maven 坐标 |
-| NeoForge | `META-INF/neoforge.mods.toml`，兼容旧文件名 | Maven range | launcher Maven 坐标 |
+## 7. 静态兼容性边界
 
-新增 loader 必须同时考虑 parser、JAR reader、版本模型和 detector，不能只在一个 switch
-中添加字符串。
+Orbit 能确定：
 
-## 6. Provider
+- loader 元数据声明的版本/端侧冲突；
+- class major 要求的最低 Java；
+- Maven/Fabric 版本范围；
+- Jar-in-Jar artifact 冲突；
+- 加载顺序环。
 
-`ModProvider` 提供 search、info、resolve、hash lookup、version list、batch version 和
-dependency 查询。统一类型包含 `ResolvedMod`、`SearchResultItem`、`ModInfo` 和
-`ResolvedDependency`。
+Orbit 不能仅凭字节码完整证明：
 
-当前只有 `ModrinthProvider` 可创建。每个 provider 自己持有并发限制；调用方不需要
-知道 SDK 客户端。配置出现未知 provider 或 `curseforge` 时立即报错，避免“配置成功
-但运行时所有调用失败”的黑盒状态。
+- Minecraft/loader API 调用一定存在；
+- Mixin 目标和映射一定正确；
+- 反射、native code、配置或其他模组交互一定安全。
 
-`providers/curseforge.rs` 仅定义一致的拒绝错误和未来接口形状，不注册为可用 provider。
-在真正实现 SDK、哈希算法、文件选择、依赖映射和 lockfile 来源字段之前，不能把它加入
-默认平台。
+因此静态扫描只产生可证明的必要条件，不把“没有发现问题”描述为“保证兼容”。
 
-## 7. Resolver 和诊断
+## 8. 当前外部边界
 
-resolver 分为四个职责：
-
-1. `graph` 将 manifest、lockfile 与候选 JAR 变为 PubGrub 输入；
-2. `retry` 在不可解时补抓已知来源的缺失候选；
-3. `diagnostics` 消费 fork 的类型化事件和 `DerivationTree`；
-4. `local` 验证本地 JAR 图，公共入口另提供 lockfile 图校验。
-
-成功求解中的候选淘汰原因必须来自同一次推导路径：
-
-- 传播前排除；
-- decision 后因冲突回溯；
-- 仍允许但 provider 顺序选择其它版本。
-
-这里不能退回反事实二次求解、debug 字符串解析或只看最终证明；这些做法会把“选择路径”
-和“不可解证明路径”混在一起。
-
-## 8. 并发与文件安全
-
-已经实现的安全边界：
-
-- provider 内部使用 semaphore 控制 HTTP 并发；
-- 升级候选的下载与 JAR 验证并发执行；
-- 下载先写临时文件，校验后再替换；
-- ZIP/mrpack 导入拒绝路径穿越；
-- cache/purge 先验证目标位于允许根目录；
-- dry-run 返回计划，不写 manifest、lockfile 或目标文件。
-
-仍有效但尚未完成的性能目标：
-
-- restore 最终物化当前按确定顺序逐包执行；大型实例应增加有界并发，同时保持校验失败
-  时不会留下半写状态；
-- 全局配置中的并发数、代理、重试和 UI 选项目前主要完成了持久化模型，尚未全部接到
-  HTTP/CLI 执行路径。
-
-第二项是代码尚未满足有效配置规范，不能通过删掉配置字段来假装完成。
-
-## 9. 当前发布边界
-
-| 边界 | 当前策略 |
-|------|----------|
-| CurseForge | 明确返回暂不支持；默认仅 Modrinth |
-| Java 依赖 | 所有求解路径一致忽略；不伪造运行时版本 |
-| PubGrub fork | 本地 path 依赖，等待远端历史后再接发布来源 |
-| restore 并发 | 正确但顺序执行，后续做有界并发 |
-| 全局运行时配置 | schema/环境变量覆盖已实现，部分消费者未接入 |
-
-## 10. 扩展检查表
-
-新增 provider：
-
-1. 独立 SDK 或清晰 HTTP 边界；
-2. 实现全部必要 `ModProvider` 方法；
-3. 定义 provider 专属 resolved/lockfile 子结构；
-4. 实现真实平台哈希、主文件选择和依赖映射；
-5. 添加离线契约测试和错误上下文；
-6. 最后才注册到 `create_providers()` 与默认配置。
-
-新增业务命令：
-
-1. core 先定义输入、报告与错误；
-2. I/O 通过 workspace/JAR/cache 安全边界；
-3. CLI 只做参数、交互和展示；
-4. dry-run 与确认语义必须在 core 写入前生效；
-5. 添加成功、无变化、错误和部分状态测试；
-6. 同步更新命令规范与状态快照。
+| 边界 | 状态 |
+|---|---|
+| Modrinth | 可用 |
+| 本地 `file:` | 可用 |
+| CurseForge | 明确暂不支持 |
+| PubGrub fork 远端 | 等用户提供 fork 历史后接入 |

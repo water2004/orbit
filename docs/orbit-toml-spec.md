@@ -213,125 +213,94 @@ dependencies = ["spark", "ledger"]
 
 ---
 
+
 ## 4. `orbit.lock` 完整 Schema
 
-```toml
-# ============================================================
-# 自动生成，禁止手动编辑
-# 由 orbit install / orbit add / orbit sync 维护
-# ============================================================
+`orbit.lock` 是从真实 JAR 元数据生成的 Fat Lockfile。它记录已解析事实，不保存旧
+`implanted` schema，也不按 loader 分裂字段。
 
+```toml
 [meta]
-mc_version = "1.21.5"             # 锁定时的 MC 版本
-modloader = "fabric"              # 锁定时的加载器
-modloader_version = "0.16.10"     # 锁定时的加载器版本
-
-# --- 每个已解析的模组一个 [[package]] 条目 ---
+mc_version = "1.20.1"
+modloader = "fabric"
+modloader_version = "0.16.10"
 
 [[package]]
-mod_id = "sodium"                              # JAR loader 元数据声明的 ID（包的键）
-version = "0.8.10"                             # JAR loader 元数据声明的版本
-sha1 = "355b37c1..."                            # JAR 文件的 SHA-1 校验值
-sha256 = "e3b0c442..."                          # JAR 文件的 SHA-256 校验值
-sha512 = "ac09f0bd..."                          # JAR 文件的 SHA-512 校验值
-provider = "modrinth"                           # 来源："modrinth" | "file"
-
-# --- Modrinth 专属子表 ---
-[package.modrinth]
-project_id = "AANobbMI"                         # Modrinth 项目 ID
-version_id = "SIrB5bCM"                         # Modrinth 版本 ID
-version = "mc26.1.2-0.8.10-fabric"              # Modrinth version_number（API 返回的原始版本字符串）
-slug = "sodium"                                 # Modrinth slug
-download_url = "https://cdn.modrinth.com/..."   # 锁定的主文件下载地址
-
-# --- required 前置依赖（来自 JAR loader 元数据） ---
-[[package.dependencies]]
-name = "fabric-api"
-version = ">=0.92"
-
-# --- 内嵌子模组（从 loader 声明的内嵌路径提取） ---
-[[package.implanted]]
-name = "fabric-api-base"
-version = "2.0.3"
+mod_id = "example"
+version = "1.2.3"
+sha1 = "..."
 sha256 = "..."
-filename = "fabric-api-base-2.0.3.jar"
+sha512 = "..."
+filename = "example-1.2.3.jar"
+provider = "modrinth"
+environment = "both"
+
+[package.modrinth]
+project_id = "project-id"
+version_id = "version-id"
+version = "platform display version"
+slug = "example"
+download_url = "https://cdn.example/..."
+
+[[package.dependencies]]
+expression = "only"
+[package.dependencies.value]
+id = "minecraft"
+requirement = ">=1.20.1"
+kind = "required"
+environment = "both"
+ordering = "none"
+reason = "requires modern game APIs"
+
+[[package.provides]]
+id = "example_api"
+version = "1.2.3"
+
+[package.language_loader]
+id = "javafml"
+requirement = "[47,)"
+
+[[package.embedded_artifacts]]
+id = "org.example:shared"
+requirement = "[1,2)"
+version = "1.5"
+path = "META-INF/jarjar/shared.jar"
+obfuscated = false
+
+[[package.bundled]]
+mod_id = "example_internal"
+version = "1.2.3"
+environment = "both"
 ```
 
-**文件类型依赖**：
+顶层 `[[package]]` 字段：
 
-```toml
-[[package]]
-mod_id = "carpet"
-version = "26.1+v260402"
-sha256 = "e3b0c442..."
-provider = "file"
+| 字段 | 说明 |
+|---|---|
+| `mod_id` / `version` | loader 元数据声明的逻辑 ID 与版本 |
+| `sha1` / `sha256` / `sha512` | 同一个物理 JAR 的哈希 |
+| `filename` | 实例中的物理文件名 |
+| `provider` | 当前为 `modrinth` 或 `file` |
+| `environment` | `client`、`server`、`both` |
+| `dependencies` | 递归 `DependencyExpression` |
+| `provides` | 该逻辑模组提供的能力 ID/版本 |
+| `language_loader` | Forge-family language provider 要求 |
+| `embedded_artifacts` | Jar-in-Jar Maven artifact |
+| `bundled` | 同一物理文件提供的其他逻辑模组，可递归 |
 
-[package.file]
-path = "mods/fabric-carpet-26.1+v260402.jar"
-```
+`DependencyExpression` 使用 serde tagged enum：
 
-**`[[package]]` 条目字段全表**：
+- `expression = "only"` 的 `value` 是 `ModDependency`；
+- `expression = "any"` / `"all"` 的 `value` 是表达式数组；
+- 单一关系保留 `id`、`requirement`、`kind`、`environment`、`ordering`、
+  可选 `reason` 和可选递归 `unless`。
 
-| 字段 | 类型 | 来源 | 说明 |
-|------|------|------|------|
-| `mod_id` | `String` | JAR loader 元数据 | 包的唯一标识符，对应 `orbit.toml` `[dependencies]` 中的键名 |
-| `version` | `String` | JAR loader 元数据 | 模组自身声明的版本号 |
-| `sha1` | `String` | 本地 JAR 计算 | SHA-1 校验值 |
-| `sha256` | `String` | 本地 JAR 计算 | SHA-256 校验值 |
-| `sha512` | `String` | 本地 JAR 计算 | SHA-512 校验值 |
-| `filename` | `String` | JAR 扫描/下载时 | JAR 文件名（不含路径），用于升级时定位旧文件 |
-| `provider` | `String` | 安装时确定 | `"modrinth"` \| `"file"` |
+`[[package.bundled]]` 不含哈希、provider 或 filename，因为它不是独立物理文件。它保存
+与顶层逻辑模组相同的 environment、dependencies、provides、language loader、
+embedded artifacts 和递归 bundled。
 
-**子表字段**：
-
-| 字段 | 类型 | 出现条件 | 说明 |
-|------|------|----------|------|
-| `[package.modrinth]` | 子表 | `provider = "modrinth"` | Modrinth API 专属数据 |
-| `[package.file]` | 子表 | `provider = "file"` | 本地文件路径 |
-| `[[package.dependencies]]` | 数组表 | 有前置依赖时 | 来源：JAR loader 元数据中的 required dependencies |
-| `[[package.implanted]]` | 数组表 | 有内嵌子模组时 | 从 loader 声明的内嵌路径提取 |
-
-**`[package.modrinth]` 子表字段**：
-
-| 字段 | 类型 | 来源 | 说明 |
-|------|------|------|------|
-| `project_id` | `String` | Modrinth API | 项目 ID |
-| `version_id` | `String` | Modrinth API | 版本 ID |
-| `version` | `String` | Modrinth API | Modrinth 的 `version_number`（与 `package.version` 不同） |
-| `slug` | `String` | Modrinth API | 项目 slug |
-| `download_url` | `String` | Modrinth API | 锁定的主文件下载 URL；旧锁文件缺失时可在非 `--locked` 模式重新查询 |
-
-**`[package.file]` 子表字段**：
-
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `path` | `String` | 相对于 `orbit.toml` 所在目录的 jar 文件路径 |
-
-**`[[package.dependencies]]` 条目字段**：
-
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `name` | `String` | 被依赖模组的 `mod_id` |
-| `version` | `String` | 依赖声明的版本约束 |
-
-**`[[package.implanted]]` 条目字段**：
-
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `name` | `String` | 内嵌子模组的名称 |
-| `version` | `String` | 内嵌子模组的版本 |
-| `sha256` | `String` | 内嵌子模组的 SHA-256 |
-| `filename` | `String` | 内嵌子模组的文件名 |
-| `dependencies` | `[LockDependency]` | 内嵌子模组自身声明的依赖列表（可选，从 JAR 提取） |
-
-> **关键规则**：
-> - 除 provider 子表外，模组 ID、版本、依赖和内嵌声明来自对应 loader 的 JAR 元数据。
-> - Fabric/Quilt、Forge/NeoForge 的字段差异在 metadata 层归一化，不进入 lockfile schema。
-> - `sha1`/`sha256`/`sha512` 由本地 JAR 文件实时计算得出。
-> - 仅 `[package.modrinth]` 子表使用 Modrinth API 返回的数据。
-> - `[[package]]` 替代了旧格式的 `[[lock]]`；`PackageEntry` 替代了旧格式的 `LockEntry`。
-
----
+provider 专属字段只进入 `[package.modrinth]` 或 `[package.file]`，不扁平污染公共
+schema。CurseForge 尚未支持，因此没有 `[package.curseforge]`。
 
 ## 5. 字段速查表
 
@@ -367,7 +336,9 @@ path = "mods/fabric-carpet-26.1+v260402.jar"
 | `[package.modrinth]` | — | Modrinth API 数据 |
 | `[package.file]` | — | 文件路径 |
 | `[[package.dependencies]]` | — | JAR 声明的依赖 |
-| `[[package.implanted]]` | — | JAR 内嵌的子模组 |
+| `[[package.bundled]]` | — | 同一 JAR 内的其他逻辑模组 |
+| `[[package.provides]]` | — | loader alias/capability |
+| `[[package.embedded_artifacts]]` | — | Forge-family Jar-in-Jar artifact |
 
 ---
 
@@ -381,14 +352,16 @@ Orbit 的版本约束借鉴 Cargo/npm，但针对 Minecraft 模组的非标准�
 |--------|------|---------------------|
 | `*` | 任意版本 | 匹配一切 |
 | `>=X.Y.Z <A.B.C` | Fabric/Quilt 范围约束（空格为 AND） | `>=0.5 <1.0` |
-| `^X.Y.Z` | 兼容更新 | `^0.5.8` ≡ `>=0.5.8 <0.6.0` |
+| `^X.Y.Z` | Fabric caret | `^0.5.8` ≡ `>=0.5.8 <1.0.0-` |
 | `~X.Y.Z` | 固定前两个组件 | `~0.5.8` ≡ `>=0.5.8 <0.6.0` |
 | `=X.Y.Z` | 精确版本 | 仅匹配 `X.Y.Z` |
 | `[A,B)` | Forge/NeoForge Maven 范围 | `>=A` 且 `<B` |
+| `[A]` | Forge/NeoForge Maven 精确范围 | 仅匹配 `A` |
 
 版本模型按项目 loader 选择。Fabric/Quilt 使用 Fabric predicate；Forge/NeoForge
 使用 Maven range。Orbit 不从平台展示名猜测 semver 尾部，实际比较值来自 JAR
-自声明版本；无法解析的 Fabric/Quilt 版本回退为原始字符串精确匹配。
+自声明版本；无法解析的 Fabric/Quilt 版本回退为原始字符串精确匹配。Maven 裸版本
+是 recommendation（允许任意版本），不是精确范围；精确 Forge 约束写作 `[A]`。
 
 ### 6.2 平台自动解析
 
@@ -555,7 +528,7 @@ zoomify = { version = "*", optional = true, env = "client" }
 dependencies = ["spark", "lithium"]
 ```
 
-### 对应的 orbit.lock（安装后自动生成）
+### 对应的 orbit.lock（节选）
 
 ```toml
 [meta]
@@ -566,94 +539,32 @@ modloader_version = "0.16.10"
 [[package]]
 mod_id = "sodium"
 version = "0.8.10"
-sha1 = "355b37c1d9a8e3f4b256c7890a1b2345678901ab"
-sha256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-sha512 = "ac09f0bde1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef12345678"
+sha256 = "e3b0c442..."
+filename = "sodium-0.8.10.jar"
 provider = "modrinth"
+environment = "client"
 
 [package.modrinth]
 project_id = "AANobbMI"
 version_id = "SIrB5bCM"
 version = "mc1.21.5-0.8.10-fabric"
 slug = "sodium"
+download_url = "https://cdn.modrinth.com/..."
 
 [[package.dependencies]]
-name = "fabric-api"
-version = ">=0.92"
+expression = "only"
+[package.dependencies.value]
+id = "minecraft"
+requirement = ">=1.21.5"
+kind = "required"
+environment = "both"
+ordering = "none"
 
-[[package]]
-mod_id = "lithium"
-version = "0.14.3"
-sha1 = ""
-sha256 = "bb2c3d4e5f67890123456789abcdef0123456789abcdef0123456789abcdef01"
-sha512 = ""
-provider = "modrinth"
-
-[package.modrinth]
-project_id = "gvQqBUqZ"
-version_id = "x98ZyK1m"
-version = "mc1.21.5-0.14.3-fabric"
-slug = "lithium"
-
-[[package]]
-mod_id = "fabric-api"
-version = "0.114.0"
-sha1 = "deadbeef1234567890abcdef1234567890abcdef"
-sha256 = "xyz7890123456789abcdef0123456789abcdef0123456789abcdef0123456789ab"
-sha512 = ""
-provider = "modrinth"
-
-[package.modrinth]
-project_id = "P7dR8mSH"
-version_id = "def456ver"
-version = "0.114.0+1.21.5"
-slug = "fabric-api"
-
-[[package.dependencies]]
-name = "fabric-api-base"
-version = ">=0.4"
-
-[[package]]
-mod_id = "journeymap"
-version = "6.0.0"
-sha1 = ""
-sha256 = "cc3d4e5f67890123456789abcdef0123456789abcdef0123456789abcdef0123456"
-sha512 = ""
-provider = "modrinth"
-
-[package.modrinth]
-project_id = "lfHFW1mp"
-version_id = "abc789xyz"
-version = "1.21.5-6.0.0-fabric"
-slug = "journeymap"
-
-[[package]]
-mod_id = "jei"
-version = "20.0.0"
-sha1 = ""
-sha256 = "dd4e5f67890123456789abcdef0123456789abcdef0123456789abcdef012345678"
-sha512 = ""
-provider = "modrinth"
-
-[package.modrinth]
-project_id = "u6dRKJwZ"
-version_id = "789abc123"
-version = "1.21.5-20.0.0-fabric"
-slug = "jei"
-
-[[package]]
-mod_id = "zoomify"
-version = "2.14.2"
-sha1 = ""
-sha256 = "ee5f67890123456789abcdef0123456789abcdef0123456789abcdef0123456789a"
-sha512 = ""
-provider = "modrinth"
-
-[package.modrinth]
-project_id = "w7ThoJFB"
-version_id = "y8Lt4WnX"
-version = "2.14.2+1.21.5"
-slug = "zoomify"
+[[package.bundled]]
+mod_id = "sodium_internal"
+version = "0.8.10"
+environment = "both"
 ```
 
----
+完整 lockfile 由 Orbit 序列化，不建议手写。示例省略了其他包、哈希和可选元数据；
+真实文件会保留 loader JAR 中的完整依赖表达式。

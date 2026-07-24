@@ -1,10 +1,8 @@
 # Orbit 版本号与约束
 
-> 实现位置：`orbit-core/src/versions/`
+> 实现位置：`orbit-core/src/versions/`。
 
 ## 1. 统一入口
-
-resolver 使用同一个 `Version` 枚举承载不同 loader 的版本语义：
 
 ```rust
 pub enum Version {
@@ -14,122 +12,81 @@ pub enum Version {
 }
 ```
 
-| Loader | 版本模型 | 约束模型 |
-|--------|----------|----------|
-| Fabric / Quilt | Fabric `SemanticVersion` | Fabric predicate |
-| Forge / NeoForge | Maven 风格版本 | Maven range |
-| 其它 | 原始字符串 | 精确匹配 |
+| Loader | 实际版本 | 约束 |
+|---|---|---|
+| Fabric / Quilt | Fabric SemanticVersion | Fabric predicate |
+| Forge / NeoForge | Maven ComparableVersion | Maven VersionRange |
+| 内部选择包 | 原始稳定字符串 | 精确/全集 |
 
-`Version::parse(raw, loader)` 解析实际版本；`Version::parse_constraint(raw, loader)` 生成
-PubGrub 的 `Ranges<Version>`。空约束和 `*` 都表示全集。
+`Version::parse()` 解析候选；`Version::parse_constraint()` 生成 PubGrub
+`Ranges<Version>`。`Version::zero()` 只用于内部根包。
 
-`Version::zero()` 只作为 Orbit 内部根包版本使用，不代表任何真实模组、loader 或 Java
-版本。旧版 PubGrub 所需的 `Lowest` 哨兵已经删除。
+## 2. Fabric / Quilt
 
-## 2. Fabric / Quilt 版本
+实现保留：
 
-`fabric.rs` 实现 Fabric Loader 的数字组件、预发布和 build metadata 规则。
+- 任意长度数字组件；
+- prerelease；
+- build metadata（展示保留，不参与 `Eq`、`Hash`、排序）；
+- 无法解析版本的原始精确匹配。
 
-### 解析
+支持 predicate：
 
-```text
-0.8.10+mc1.21
-  core       = [0, 8, 10]
-  prerelease = None
-  build      = "mc1.21"
-```
+- `=`, `>`, `>=`, `<`, `<=`
+- 空格 AND
+- `||` OR
+- `x` / `X` / `*` 末尾通配
+- `~`
+- `^`
 
-- `+` 后的 build metadata 保留用于展示，但不参与相等、哈希和排序；
-- `-` 后的 prerelease 低于无 prerelease 的同版本；
-- `x`、`X`、`*` 可作为末尾组件通配符；
-- 缺少的数字组件按 `0` 比较；
-- 非数字 core 解析失败时，统一入口回退为 `Version::Generic`。
+边界转换严格保持 Fabric 语义：`>` 不包含下界，`<=` 包含上界；通配、tilde 和 caret
+的上界使用目标版本的最低 prerelease 边界，避免错误包含下一段 prerelease。
 
-Orbit 不会从 `mc1.20.1-0.5.8` 一类平台展示名中猜测版本尾部。传给版本模型的值必须是
-JAR 自声明版本或 manifest 约束；平台的 `version_number` 另存于 provider 专属字段。
-
-### 比较
-
-| 比较 | 结果 |
-|------|------|
-| `0.5.10` 与 `0.5.8` | 前者更大 |
-| `0.8.10+mc1.21` 与 `0.8.10` | 相等 |
-| `1.0-alpha` 与 `1.0` | 前者更小 |
-| `1.0-beta.2` 与 `1.0-beta.1` | 前者更大 |
-
-预发布段按 `.` 拆分。两个数字段先按长度、再按字典序比较；数字段低于文本段；两个文本
-段按字典序比较。
-
-### 约束
-
-空格表示 AND，`||` 表示 OR：
+Fabric 的 caret 固定首个数值组件，不采用 npm 对 `0.x` 的特殊收窄：
 
 ```text
->=0.8 <0.9
->=0.14 <0.15 || >=0.16
+^1.2.3 → >=1.2.3 <2.0.0-
+^0.2.3 → >=0.2.3 <1.0.0-
 ```
 
-支持 `=`、`>`、`>=`、`<`、`<=`、`~`、`^` 和末尾通配符。通配符会展开为半开区间，
-例如 `0.8.x` 等价于 `>=0.8 <0.9`。
+无效 SemanticVersion 只允许精确相等，不能参与有序范围。
 
-`~` 固定前两个组件并允许后续更新；`^` 在首组件为非零时固定首组件，在首组件为零时
-固定第二组件。这些规则同时用于直接 `satisfies()` 检查和 PubGrub range 构建。
+## 3. Forge / NeoForge
 
-## 3. Forge / NeoForge Maven 版本
+`maven.rs` 是 Apache Maven `ComparableVersion` 行为的 Rust 实现，包括：
 
-`maven.rs` 处理 `mods.toml` / `neoforge.mods.toml` 中的 `versionRange`。
+- `.`、`-` 和数字/文本转换形成的嵌套 item list；
+- 任意长度数字比较；
+- `alpha < beta < milestone < rc < snapshot < release < sp`；
+- `a`、`b`、`m`、`cr`、`ga`、`final`、`release` 别名；
+- hyphen 后的子列表和 qualifier-number combination；
+- 尾随零/空 qualifier 规范化；
+- 与比较一致的 `Eq` / `Hash`。
 
-### 排序
+Maven range：
 
-版本按 `. - _ +` 以及数字/文本边界切分。数字段去掉前导零，并按数值位数和字典序比较，
-因此 `47.10 > 47.2`，`47 == 47.0.0`。
+| 表达式 | 行为 |
+|---|---|
+| `1.2.3` | Maven recommendation：允许任意版本 |
+| `=1.2.3` | Orbit 显式精确写法 |
+| `[1.2.3]` | Maven 精确范围 |
+| `[1,2)` | `>=1` 且 `<2` |
+| `(,2]` | `<=2` |
+| `[1,2),[3,)` | 区间并集 |
 
-常见 qualifier 顺序为：
+裸版本不能误当作 Maven 精确依赖；Forge 官方格式把它解释为 recommended version。
+需要精确锁定时使用 `[x]`，manifest 也可使用 Orbit 的 `=x`。
 
-```text
-alpha < beta < milestone < rc < snapshot < release < sp < 未知 qualifier
-```
+## 4. resolver 边界
 
-别名会先归一化：
+- manifest、override、loader 元数据和 Jar-in-Jar range 使用同一个 loader 版本模型；
+- 平台展示版本不参与求解，实际值来自下载 JAR 自声明版本；
+- provider 候选顺序决定多个允许版本中的偏好；
+- 不同 `Version` variant 的总序只服务容器和内部包，普通依赖不会跨 loader 混用。
 
-- `a` → `alpha`
-- `b` → `beta`
-- `m` → `milestone`
-- `cr` → `rc`
-- `ga`、`final`、`release` → 正式版
+## 5. 测试契约
 
-这是一套满足当前 Forge/NeoForge 元数据和 PubGrub 排序需要的 Maven 风格实现，并非对
-Maven `ComparableVersion` 所有边角行为的逐行移植。
-
-### 范围
-
-| 表达式 | 含义 |
-|--------|------|
-| `47.2.0` | 精确版本 |
-| `[47.2.0]` | 精确版本 |
-| `[47,48)` | `>=47` 且 `<48` |
-| `[21,)` | `>=21` |
-| `(,20]` | `<=20` |
-| `(,20],[21,)` | 两个区间的并集 |
-
-格式错误或不是范围语法的输入按精确版本处理，不会偷偷放宽成任意版本。
-
-## 4. 与 resolver 的边界
-
-- manifest 根约束、传递依赖和 overrides 都通过同一 loader 版本模型解析；
-- Forge/NeoForge loader 自身和模组依赖都可使用 Maven range；
-- 候选顺序决定多个允许版本中的 provider 偏好，版本比较只决定范围是否允许；
-- 无法解析的 Fabric/Quilt 版本会保留为 `Generic`，不会改写原始版本文本；
-- 不同 `Version` variant 之间的稳定排序只是满足容器和 PubGrub 的总序要求，正常依赖
-  图不应混用不同 loader 的版本模型。
-
-## 5. 测试重点
-
-当前测试覆盖：
-
-- Fabric build metadata 的相等与哈希一致性；
-- prerelease、通配符、AND/OR、`~` 与 `^`；
-- Maven 数字排序、开放/闭合区间、精确区间和区间并集；
-- Forge loader 依赖在实际 resolver 图中满足 Maven range。
-
-新增版本语义时必须同时验证直接比较、`Eq`/`Hash` 一致性和 PubGrub range 行为。
+- Fabric build metadata 的 `Eq` / `Hash` 一致；
+- prerelease、严格/包含边界、AND/OR、wildcard、tilde、caret；
+- Maven qualifier、hyphen、数字段、精确范围、开闭范围和并集；
+- resolver 中的 Forge/NeoForge、Java 与 Jar-in-Jar 实际范围。

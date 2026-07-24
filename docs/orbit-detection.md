@@ -86,8 +86,9 @@ JAR 版本。
 - launcher profile 的 `mainClass` 仅是弱证据，不足以自动确定 loader 版本；
 - 多个加载器同时有确定证据时，当前按 detector 注册顺序稳定选择第一个结果，没有额外
   的冲突询问；
-- Java 元数据可以从游戏 JAR 读取，但尚未探测实际运行时，因此 resolver 仍明确忽略
-  模组声明的 Java 依赖；
+- 游戏 `version.json` 的 Java 信息用于检测展示；resolver 依据目标 Minecraft 版本
+  注册 `java` 平台包，并用模组 feature 与 class major 校验最低 Java。它不探测用户
+  当前 shell 的 Java，因为安装目标应由实例版本决定；
 - CurseForge 是下载 provider 边界，与实例 loader 检测无关，当前仍不支持。
 
 ## 7. 扩展检测策略

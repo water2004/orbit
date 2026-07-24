@@ -71,9 +71,9 @@ pub trait ModProvider: Send + Sync {
 | `client_side` / `server_side` | 平台端侧元数据 |
 | `modrinth` | Modrinth 专属 project/version 信息 |
 
-平台结果只是候选来源。下载后必须读取 JAR 元数据，以真实 `mod_id`、版本、required
-dependencies 和 implanted mods 构建求解图。平台的 `version_number` 可能是展示字符串，
-不能代替 JAR 版本。
+平台结果只是候选来源。下载后必须读取 JAR 元数据，以真实 `mod_id`、版本、完整
+`DependencyExpression` 和递归 `bundled` 构建求解图。平台的 `version_number`
+可能是展示字符串，不能代替 JAR 版本。
 
 同样，lockfile 公共字段不扁平存储 `project_id` 等平台字段，而是使用
 `[package.modrinth]` 子表。未来新增 provider 时应添加自己的子结构。

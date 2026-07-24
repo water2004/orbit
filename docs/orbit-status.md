@@ -1,115 +1,81 @@
-# Orbit 项目状态
+# Orbit 实现状态
 
-> 最后更新：2026-07-24
->
-> 本文是实现快照。行为规范仍由 `orbit-cli-commands.md`、`orbit-toml-spec.md`
-> 和各专题设计文档定义；快照与规范冲突时，需要判断是历史描述过时，还是代码尚未满足规范。
+> 更新日期：2026-07-24。本文区分“正确规范曾未被代码执行”和“文档本身已经过时”。
 
-## 当前结论
+## 1. 当前结论
 
-除 CurseForge 外，仓库内已有 CLI 命令都已接入实际 core 逻辑，不再保留
-`exit(2)`、`todo!()` 或“返回未实现错误”的命令占位。
+除 CurseForge 外，仓库现有命令已接入 core 逻辑。Fabric、Quilt、Forge、NeoForge
+都从真实 JAR 元数据进入同一个规范化模型、lockfile 和 PubGrub 图。
 
-```
-orbit-cli ──→ orbit-core ──→ modrinth-wrapper
-                  │
-                  └──→ pubgrub-fork（本地定制依赖）
-```
+| 能力 | 状态 | 说明 |
+|---|---|---|
+| 初始化与检测 | ✅ | Minecraft 与四种 loader/version |
+| JAR 元数据 | ✅ | 四种 loader、多逻辑 mod、嵌套 JAR、JarJar |
+| 版本语义 | ✅ | Fabric predicate；Maven ComparableVersion/range |
+| 依赖求解 | ✅ | any/all/unless、六类关系、环境、provides、ordering、Java、JarJar |
+| 原因 | ✅ | 自定义 reason 参与原始推导；成功候选用同次 observer |
+| 本地校验 | ✅ | 转 Fat Lockfile 后复用统一建图 |
+| 安装/恢复/升级 | ✅ | 由求解结果选择物理 JAR |
+| Modrinth / `file:` | ✅ | 查询、下载、识别、锁定 |
+| CurseForge | ⏸ | 明确暂不支持，不静默回退 |
+| fork 远端 | ⏳ | 本地提交完成后等待用户远端历史 |
 
-Workspace 成员为 `orbit-cli`、`orbit-core`、`modrinth-wrapper`。
-`pubgrub-fork` 暂时排除在 workspace 外，等待用户提供 fork 远端历史后再接入发布来源。
+## 2. 保留的正确规范
 
-## 已实现能力
+下列旧文档原则是正确的，问题曾经是代码没有遵守；本轮按规范修复，而不是删除规范：
 
-| 范围 | 状态 | 当前实现 |
-|------|:---:|----------|
-| 实例管理 | ✅ | 注册、列出、设置默认实例、移除追踪 |
-| 初始化与检测 | ✅ | 自动检测 MC；检测 Fabric、Forge、NeoForge、Quilt 及 loader 版本 |
-| JAR 元数据 | ✅ | Fabric JSON、Forge/NeoForge TOML、Quilt JSON、内嵌 JAR/JarJar |
-| 版本约束 | ✅ | Fabric/Quilt 语义约束；Forge/NeoForge Maven 版本区间 |
-| 依赖求解 | ✅ | 定制 PubGrub observer、统一构图、补抓、override/exclude、结构化诊断 |
-| 安装与恢复 | ✅ | add、`file:`、Fat Lockfile、target/group/optional、locked/frozen、校验与缓存 |
-| 本地一致性 | ✅ | sync 四类差异报告、check、remove、purge |
-| 查询与更新 | ✅ | search、info、list/tree/target、outdated、单包/全量 upgrade |
-| 导入导出 | ✅ | TOML 合并、安全 ZIP；mrpack index 下载/双哈希校验与 overrides 导入导出 |
-| 缓存 | ✅ | 检查、确认、dry-run、安全清理 |
-| CurseForge | ⏸ | **明确暂不支持**；不会静默创建不可用 provider |
+- 所有 loader 共享同一解析后数据流和 resolver；
+- 本地校验与联网候选不能走两套规则；
+- 依赖原因必须来自实际推导路径；
+- 不允许第二次反事实求解或日志解析充当证明；
+- JAR 解析只能通过 `jar` 层；
+- provider 专属数据位于专属子结构；
+- CLI 不承载业务逻辑；
+- CurseForge 未实现时必须明确报错。
 
-`orbit-core` 当前有 96 个单元测试，`orbit-cli` 有 1 个上下文安全测试；
-`modrinth-wrapper` 有 14 个默认离线的 API 契约测试，另有 2 个 doctest。全工作区通过：
+## 3. 已迁移的过时文档
 
-```text
-cargo test --workspace
-cargo clippy --workspace --all-targets -- -D warnings
-```
+下列描述本身已经过时，现已从文档和 schema 中删除：
 
-## 命令矩阵
+- `implanted` / `implanted_mods` / `[[package.implanted]]`：改为递归 `bundled`；
+- `(mod_id, version, required)` 依赖 tuple：改为
+  `DependencyExpression` + `ModDependency`；
+- “只取 Forge 第一个 `[[mods]]`”：现在保留全部逻辑模组；
+- “Java 依赖统一忽略”：现在注册 Minecraft 推导 Java，并加入 class major/feature 约束；
+- “fork 只增加 observer”：现在还支持 provider-defined incompatibility clauses；
+- “Forge/NeoForge/Quilt 属于 future phase”：四者已经进入完整路径；
+- “optional/env 不影响传递图”：现在按真实语义和 target 建图。
 
-| 命令 | Core 入口 | 状态与边界 |
-|------|-----------|------------|
-| `orbit init` | `init::run_init` | 四种 loader 检测与现有 mods 扫描 |
-| `orbit instances *` | `config::InstancesRegistry` | 完整 |
-| `orbit add` | `installer` + `resolver` | Modrinth 与 `file:`；`cf:` 返回明确暂不支持错误 |
-| `orbit install` | `installer::restore_instance` | target/group/no-optional/locked/frozen 完整 |
-| `orbit remove` | `installer::remove_from_instance` | 含被依赖检查 |
-| `orbit purge` | `purge` + `installer` | 配置候选逐项确认，限制在 config 根目录内 |
-| `orbit sync` | `sync::sync_instance` | 不下载 JAR；哈希识别可能查询 provider |
-| `orbit outdated` | `outdated::check_all_outdated` | 只读；支持 mod_id/slug 校验 |
-| `orbit upgrade` | `installer` + `outdated` | 单包必须已安装；本地文件没有在线升级源 |
-| `orbit search` / `info` | `ModProvider` | 当前可用 provider 为 Modrinth |
-| `orbit list` | `installer::list_installed*` | 展示 provider/env/optional，target 保留传递闭包 |
-| `orbit import` / `export` | `archive` + `archive::mrpack` | ZIP 路径防护；mrpack URL 白名单、大小/双哈希校验与 overrides |
-| `orbit check` | `checker::check_compatibility` | 在线包预检；本地文件无平台兼容信息 |
-| `orbit cache clean` | `jar_cache` | 安全根校验、确认、dry-run |
+不提供旧 lockfile schema 的兼容读取层；目前没有外部 Orbit 用户需要承担这种迁移债。
 
-## 文档差异分类
+## 4. 当前命令状态
 
-### 已经过时、应删除的历史描述
+| 命令 | 状态 |
+|---|---|
+| `init` | 扫描并验证真实实例 |
+| `add` | Modrinth、搜索名和本地 JAR；`cf:` 明确失败 |
+| `install` / `restore` | 共享求解图，按 target 选择 |
+| `remove` / `upgrade` / `outdated` | 使用 Fat Lockfile 和结构化报告 |
+| `sync` | 重新扫描、识别、对账 |
+| `check` | 实例目标兼容性预检 |
+| `list` / `info` / `why` | 展示逻辑依赖和 bundled |
+| `export` / `import` | Orbit archive 与 Modrinth pack |
+| `cache` / `config` / `instance` / `purge` | 已接 core |
 
-以下描述曾经正确，但现在只会误导维护者：
+## 5. 已知边界
 
-- `install`、`sync`、`check`、`purge`、`import`、`export`、实例管理或缓存命令仍是 stub；
-- Forge、NeoForge、Quilt parser/detector 属于 future phase；
-- `list --target` 被忽略，或 `file:` 只存在于 CLI 语法而没有实现；
-- core 只有 62 个单元测试；
-- `init` 只能检测 Fabric，或为未知 loader 写入假的 `0.0.0` 版本；
-- mrpack 导出只是“普通 ZIP 加一个 index”，或导入忽略 index 下载。
+- CurseForge 下载、搜索、识别和升级均不支持。
+- 字节码扫描只能证明 class major 下限，不能证明 API/Mixin/反射兼容。
+- PubGrub fork 当前是本地 path dependency；接远端要保留用户 fork 的历史。
+- 补抓传递候选依赖已有 lockfile 来源信息；不会凭别名猜远端项目。
 
-这些属于状态快照过时，不代表原行为规范错误。
+## 6. 文档索引
 
-### 规范仍正确、实现仍有明确边界
-
-| 优先级 | 规范/目标 | 当前边界 |
-|:---:|-----------|----------|
-| P1 | 配置的平台应当可实际使用 | CurseForge wrapper/provider 尚未实现；新清单默认只启用 Modrinth，显式配置 CurseForge 会直接报错 |
-| P2 | Java 约束应校验实际运行时 | 候选图和本地图目前一致忽略 Java，避免伪造版本；尚未探测实例实际 Java |
-| P2 | 大规模恢复应并发下载 | 候选验证并发，最终文件恢复目前仍按确定顺序逐个物化 |
-| P2 | core 可独立发布 | 仍使用本地 `pubgrub-fork` path 依赖，需等 fork 远端接入 |
-| P2 | 全局配置应控制运行时 | schema 与环境变量覆盖已实现；代理、重试、认证、语言/UI 和下载并发尚未全部接入 |
-| P3 | CLI 全局输出约定 | `--quiet` / `--verbose` 和用户取消退出码尚未统一到结构化输出层 |
-
-这几项不能因为尚未完成就从规范里删除；它们应作为显式边界保留。
-
-## CurseForge 策略
-
-CurseForge 当前保持暂不支持：
-
-- 不创建 `curseforge-wrapper`；
-- 不把空实现注册成可用 provider；
-- `[resolver].platforms` 默认值仅为 `["modrinth"]`；
-- `cf:` 或显式 `curseforge` 配置返回可读错误；
-- 文档示例不得宣称已支持 CurseForge 下载、查询或升级。
-
-## 文档索引
-
-| 文档 | 定义 |
-|------|------|
-| [orbit-toml-spec.md](orbit-toml-spec.md) | orbit.toml / orbit.lock 数据格式 |
-| [orbit-global-config.md](orbit-global-config.md) | 全局配置 |
-| [orbit-cli-commands.md](orbit-cli-commands.md) | CLI 行为 |
-| [orbit-metadata.md](orbit-metadata.md) | JAR 元数据解析 |
-| [orbit-detection.md](orbit-detection.md) | 实例与 loader 检测 |
-| [orbit-providers.md](orbit-providers.md) | Provider 抽象 |
-| [orbit-versions.md](orbit-versions.md) | 版本与约束 |
-| [orbit-resolver.md](orbit-resolver.md) | PubGrub 求解和诊断 |
-| [orbit-architecture.md](orbit-architecture.md) | 模块边界 |
+- [orbit-architecture.md](orbit-architecture.md)
+- [orbit-metadata.md](orbit-metadata.md)
+- [orbit-resolver.md](orbit-resolver.md)
+- [orbit-versions.md](orbit-versions.md)
+- [orbit-toml-spec.md](orbit-toml-spec.md)
+- [orbit-detection.md](orbit-detection.md)
+- [orbit-cli-commands.md](orbit-cli-commands.md)
+- [orbit-providers.md](orbit-providers.md)

@@ -57,7 +57,7 @@ orbit init <name>
 7. 将实例注册到全局 `instances.toml`。
 
 无法识别平台来源的 JAR 作为 `provider = "file"` 写入 lockfile；manifest 始终只保存
-`mod_id` 与版本约束。内嵌模组只进入父 package 的 `implanted`。
+`mod_id` 与版本约束。同一物理 JAR 中的其他逻辑模组只进入父 package 的 `bundled`。
 
 显式参数优先于检测。交互模式在检测失败时请求输入；`--yes` 模式不读取 stdin，缺少
 Minecraft、loader 或 loader 版本时要求显式参数，不静默选择 Fabric 或固定版本。
