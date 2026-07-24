@@ -1107,16 +1107,25 @@ mod tests {
 
     #[test]
     fn asm_tree_mutations_are_classified() {
-        let call = MemberReference {
-            owner: "org/objectweb/asm/tree/InsnList".to_string(),
-            name: "remove".to_string(),
-            descriptor: "(Lorg/objectweb/asm/tree/AbstractInsnNode;)V".to_string(),
-            kind: MemberKind::Method,
-            is_static: Some(false),
-        };
-        let (kind, exclusive, _) = classify_call(&call, &VecDeque::new()).unwrap();
-        assert_eq!(kind, MutationKind::RemoveInstruction);
-        assert!(exclusive);
+        for (name, expected, exclusive) in [
+            ("add", MutationKind::InsertInstructions, false),
+            ("insert", MutationKind::InsertInstructions, false),
+            ("insertBefore", MutationKind::InsertInstructions, false),
+            ("remove", MutationKind::RemoveInstruction, true),
+            ("set", MutationKind::ReplaceInstruction, true),
+            ("clear", MutationKind::ReplaceMethodBody, true),
+        ] {
+            let call = MemberReference {
+                owner: "org/objectweb/asm/tree/InsnList".to_string(),
+                name: name.to_string(),
+                descriptor: "(Lorg/objectweb/asm/tree/AbstractInsnNode;)V".to_string(),
+                kind: MemberKind::Method,
+                is_static: Some(false),
+            };
+            let (kind, is_exclusive, _) = classify_call(&call, &VecDeque::new()).unwrap();
+            assert_eq!(kind, expected);
+            assert_eq!(is_exclusive, exclusive);
+        }
     }
 
     #[test]
