@@ -185,7 +185,9 @@ orbit purge <mod>
 ### `orbit sync`
 
 先从当前 launcher 布局重新探测平台，再扫描真实 `mods/` 并对账
-manifest/lockfile。旧 `[platform]` 路径不参与发现。报告：
+manifest/lockfile。旧 `[project]` 版本和 `[platform]` 路径都只是用于生成变更报告，
+不作为探测选择器；Minecraft 与 loader JAR 即使改名也按内容及 launcher 元数据重新
+定位。报告：
 
 | 分类 | 含义 |
 |------|------|

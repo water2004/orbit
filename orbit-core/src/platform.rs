@@ -70,11 +70,37 @@ impl PlatformArtifact {
     }
 }
 
-/// Performs a fresh platform scan.
+/// Performs the initial platform scan using the values selected by `init`.
 ///
-/// Requested values are selectors used by `init`; callers such as `sync` pass
-/// none and receive an error if launcher state is ambiguous.
-pub(crate) fn discover_platform(
+/// The selected values only disambiguate launcher-owned candidates. Artifact
+/// paths and metadata are still read from the current instance.
+pub(crate) fn discover_platform_for_init(
+    instance_dir: &Path,
+    mc_version: &str,
+    loader: &str,
+    loader_version: &str,
+) -> Result<DiscoveredPlatform, OrbitError> {
+    discover_platform(
+        instance_dir,
+        Some(mc_version),
+        Some(loader),
+        Some(loader_version),
+    )
+}
+
+/// Re-discovers the current platform without consulting manifest snapshots.
+///
+/// This is the only entry point reconciliation commands should use. In
+/// particular, it deliberately accepts no old version or path values, so a
+/// launcher may rename, move, replace, or upgrade either platform JAR between
+/// invocations.
+pub(crate) fn rediscover_current_platform(
+    instance_dir: &Path,
+) -> Result<DiscoveredPlatform, OrbitError> {
+    discover_platform(instance_dir, None, None, None)
+}
+
+fn discover_platform(
     instance_dir: &Path,
     requested_mc_version: Option<&str>,
     requested_loader: Option<&str>,
@@ -144,7 +170,7 @@ pub(crate) fn discover_install_platform(
     instance_dir: &Path,
     declared_mc_version: &str,
 ) -> Result<DiscoveredPlatform, OrbitError> {
-    let discovered = discover_platform(instance_dir, None, None, None)?;
+    let discovered = rediscover_current_platform(instance_dir)?;
     if discovered.minecraft_version.id != declared_mc_version {
         return Err(OrbitError::Other(anyhow::anyhow!(
             "Minecraft version changed from '{}' in orbit.toml to '{}' in the launcher instance; \
@@ -599,8 +625,7 @@ mod tests {
             vec!["1.21.1"]
         );
         let platform =
-            discover_platform(&version_dir, Some("1.21.1"), Some("fabric"), Some("0.19.2"))
-                .unwrap();
+            discover_platform_for_init(&version_dir, "1.21.1", "fabric", "0.19.2").unwrap();
 
         assert_eq!(platform.minecraft_version.id, "1.21.1");
         assert_eq!(platform.loader_version, "0.19.2");

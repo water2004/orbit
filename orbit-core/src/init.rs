@@ -276,11 +276,11 @@ pub async fn run_init(
 
     // Platform discovery is the validity gate for an instance. The caller's
     // values select a candidate; the paths and metadata always come from disk.
-    let platform = crate::platform::discover_platform(
+    let platform = crate::platform::discover_platform_for_init(
         &input.instance_dir,
-        Some(&input.mc_version),
-        Some(&input.modloader),
-        Some(&input.modloader_version),
+        &input.mc_version,
+        &input.modloader,
+        &input.modloader_version,
     )?;
     let platform_artifacts = platform.artifacts(&input.instance_dir)?;
 

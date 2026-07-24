@@ -101,9 +101,12 @@ world/protocol/pack/Java 版本和稳定版标志。
 profile 的 `inheritsFrom` 或 Prism component 只用于筛选；最终仍必须找到并解析对应
 真实 JAR。多个版本不会按扫描顺序取第一个。
 
-`platform::discover_platform()` 随后定位 loader Maven 目录并扫描实际 JAR，而不是假设
-固定文件名/classifier。Fabric/Quilt loader 元数据必须可解析；所有能解析的 loader
-bundled 模块进入平台候选图。最终路径和 SHA-256 写入 `[platform]`。
+`platform::discover_platform_for_init()` 只把 init 已选择的版本作为消歧条件；
+`platform::rediscover_current_platform()` 不接受任何旧版本或旧路径参数，供 sync 等
+对账流程使用。两者都会定位 loader Maven 目录并枚举其中的实际 JAR，Minecraft JAR
+则以 JAR 内的 `version.json` 识别，均不假设文件名与版本相同。Fabric/Quilt loader
+元数据必须可解析；所有能解析的 loader bundled 模块进入平台候选图。最终实际路径和
+SHA-256 才写入 `[platform]`。
 
 ## 6. 已知边界
 

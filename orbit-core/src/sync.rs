@@ -37,7 +37,10 @@ pub async fn sync_instance(
     interaction: InstallInteraction,
 ) -> Result<SyncReport, OrbitError> {
     let mut manifest = ManifestFile::open(instance_dir)?;
-    let discovered_platform = crate::platform::discover_platform(instance_dir, None, None, None)?;
+    // Reconciliation must observe the launcher as it exists now. The manifest
+    // is only the previous snapshot used to describe changes; none of its
+    // versions or paths may constrain discovery.
+    let discovered_platform = crate::platform::rediscover_current_platform(instance_dir)?;
     let platform_changes =
         describe_platform_changes(&manifest.inner, &discovered_platform, instance_dir)?;
     crate::platform::apply_to_manifest(instance_dir, &mut manifest.inner, &discovered_platform)?;
@@ -496,6 +499,81 @@ alpha = "*"
                 .contains("fabric-loader/0.17.0")
         );
         assert_ne!(refreshed.inner.platform.loader_jar.sha256, "old");
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[tokio::test]
+    async fn rediscovers_renamed_platform_jars_instead_of_following_manifest_paths() {
+        let directory = test_dir("renamed-platform-files");
+        crate::platform::test_support::write_platform(&directory, "1.20.1", "fabric", "0.17.0");
+        let minecraft_jar = directory.join("1.20.1.jar");
+        let renamed_minecraft_jar = directory.join("launcher-client-current.jar");
+        std::fs::rename(&minecraft_jar, &renamed_minecraft_jar).unwrap();
+        let loader_directory = directory
+            .join("libraries")
+            .join("net")
+            .join("fabricmc")
+            .join("fabric-loader")
+            .join("0.17.0");
+        let loader_jar = loader_directory.join("fabric-loader-0.17.0.jar");
+        let renamed_loader_jar = loader_directory.join("launcher-loader-current.jar");
+        std::fs::rename(&loader_jar, &renamed_loader_jar).unwrap();
+
+        let manifest = OrbitManifest {
+            project: ProjectMeta {
+                name: "test".to_string(),
+                mc_version: "1.20.1".to_string(),
+                modloader: "fabric".to_string(),
+                modloader_version: "0.17.0".to_string(),
+                description: None,
+                authors: None,
+                version: None,
+            },
+            platform: crate::manifest::PlatformArtifacts {
+                minecraft_jar: crate::manifest::PlatformArtifact {
+                    path: "deleted-client-name.jar".to_string(),
+                    sha256: "stale".to_string(),
+                },
+                loader_jar: crate::manifest::PlatformArtifact {
+                    path: "deleted-loader-name.jar".to_string(),
+                    sha256: "stale".to_string(),
+                },
+            },
+            resolver: ResolverConfig::default(),
+            dependencies: indexmap::IndexMap::new(),
+            groups: indexmap::IndexMap::new(),
+            overrides: indexmap::IndexMap::new(),
+        };
+        ManifestFile::new(&directory, manifest).save().unwrap();
+
+        let report = sync_instance(&directory, &[], false, InstallInteraction::default())
+            .await
+            .unwrap();
+        let refreshed = ManifestFile::open(&directory).unwrap();
+
+        assert!(report.platform_changes.iter().any(|change| {
+            change.field == "minecraft_jar"
+                && change.current.ends_with("launcher-client-current.jar")
+        }));
+        assert!(report.platform_changes.iter().any(|change| {
+            change.field == "loader_jar" && change.current.ends_with("launcher-loader-current.jar")
+        }));
+        assert!(
+            refreshed
+                .inner
+                .platform
+                .minecraft_jar
+                .path
+                .ends_with("launcher-client-current.jar")
+        );
+        assert!(
+            refreshed
+                .inner
+                .platform
+                .loader_jar
+                .path
+                .ends_with("launcher-loader-current.jar")
+        );
         std::fs::remove_dir_all(directory).unwrap();
     }
 }
