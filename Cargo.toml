@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "orbit-cli",
     "orbit-core",
+    "orbit-bytecode-audit",
     "curseforge-wrapper",
     "modrinth-wrapper",
 ]
@@ -30,3 +31,4 @@ thiserror = "2.0.18"
 url = "2.5.8"
 zip = "3.0.0"
 indexmap = { version = "2.0", features = ["serde"] }
+ristretto_classfile = "0.31.0"

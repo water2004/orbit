@@ -1,0 +1,17 @@
+[package]
+name = "orbit-bytecode-audit"
+version = "0.1.0"
+edition = "2024"
+description = "Static bytecode compatibility risk analysis for Minecraft mod artifacts"
+
+[dependencies]
+hex.workspace = true
+ristretto_classfile.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+zip.workspace = true
+
+[dev-dependencies]
+tempfile = "3.20"
