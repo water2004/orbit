@@ -99,6 +99,8 @@ pub async fn resolve_with_candidates_report(
         providers,
         minecraft_version: &manifest.project.mc_version,
         loader: &manifest.project.modloader,
+        exclusions: &graph.exclusions,
+        overrides: &graph.overrides,
     })
     .await?;
 

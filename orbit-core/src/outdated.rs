@@ -142,6 +142,25 @@ pub async fn download_candidates_bfs(
     Ok(download)
 }
 
+pub async fn download_candidates_with_fallback(
+    providers: &[Box<dyn ModProvider>],
+    seeds: &[String],
+    lockfile: &OrbitLockfile,
+    mc_version: &str,
+    loader: &str,
+) -> Result<CandidateDownload, OrbitError> {
+    for provider in providers {
+        let download =
+            download_candidates_bfs(provider.as_ref(), seeds, lockfile, mc_version, loader).await?;
+        if !download.candidates.is_empty() {
+            return Ok(download);
+        }
+    }
+    Err(OrbitError::ModNotFound(
+        seeds.first().cloned().unwrap_or_default(),
+    ))
+}
+
 fn record_candidate(
     download: &mut CandidateDownload,
     package: String,
@@ -183,7 +202,6 @@ pub async fn check_all_outdated(
 ) -> Result<OutdatedReport, OrbitError> {
     let loader = &manifest.project.modloader;
     let mc_version = &manifest.project.mc_version;
-    let provider = &providers[0];
 
     let modrinth_entries: Vec<_> = lockfile
         .packages
@@ -194,6 +212,11 @@ pub async fn check_all_outdated(
     if modrinth_entries.is_empty() {
         return Ok(OutdatedReport::default());
     }
+    let provider = crate::providers::find_provider(providers, "modrinth").ok_or_else(|| {
+        OrbitError::Other(anyhow::anyhow!(
+            "lockfile contains Modrinth packages but no Modrinth provider is configured"
+        ))
+    })?;
 
     // 1. Find outdated mods
     let mut seeds: Vec<String> = Vec::new();
@@ -231,7 +254,7 @@ pub async fn check_all_outdated(
         mut candidates,
         resolved,
         ..
-    } = download_candidates_bfs(provider.as_ref(), &seeds, lockfile, mc_version, loader).await?;
+    } = download_candidates_bfs(provider, &seeds, lockfile, mc_version, loader).await?;
     if candidates.is_empty() {
         return Ok(OutdatedReport::default());
     }

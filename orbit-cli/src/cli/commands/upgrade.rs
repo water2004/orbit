@@ -1,13 +1,12 @@
 use super::CliContext;
-use anyhow::{Context, Result};
-use orbit_core::providers::create_providers_default;
+use anyhow::Result;
 use orbit_core::{
     InstallOptions, InstallPrompt, OrbitError, install_to_instance, upgrade_all_in_instance,
 };
 
 pub async fn handle(mod_name: Option<String>, ctx: &CliContext) -> Result<()> {
     let instance_dir = ctx.instance_dir()?;
-    let providers = create_providers_default().context("failed to create providers")?;
+    let providers = super::create_instance_providers(&instance_dir, None)?;
 
     let yes = ctx.yes;
     let prompt_fn: Option<InstallPrompt> = if ctx.dry_run {
@@ -29,6 +28,8 @@ pub async fn handle(mod_name: Option<String>, ctx: &CliContext) -> Result<()> {
                 no_deps: false,
                 dry_run: ctx.dry_run,
                 existing_ok: true,
+                optional: false,
+                env: None,
             },
             prompt_fn,
         )

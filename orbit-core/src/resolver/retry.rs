@@ -7,7 +7,9 @@ use pubgrub::SelectedDependencies;
 use crate::lockfile::OrbitLockfile;
 use crate::providers::ModProvider;
 use crate::resolver::diagnostics::{ResolutionTrace, describe_no_solution};
-use crate::resolver::graph::{register_candidate_versions, required_candidate_packages};
+use crate::resolver::graph::{
+    ExclusionMap, OverrideMap, register_candidate_versions, required_candidate_packages,
+};
 use crate::resolver::provider::OrbitDependencyProvider;
 use crate::resolver::types::{CandidateVersion, ImplantedCandidate};
 use crate::versions::Version;
@@ -26,6 +28,8 @@ pub(crate) struct SolveRequest<'a> {
     pub(crate) providers: &'a [Box<dyn ModProvider>],
     pub(crate) minecraft_version: &'a str,
     pub(crate) loader: &'a str,
+    pub(crate) exclusions: &'a ExclusionMap,
+    pub(crate) overrides: &'a OverrideMap,
 }
 
 pub(crate) async fn solve_with_fetch_retry(
@@ -40,6 +44,8 @@ pub(crate) async fn solve_with_fetch_retry(
         providers,
         minecraft_version,
         loader,
+        exclusions,
+        overrides,
     } = request;
 
     loop {
@@ -61,14 +67,16 @@ pub(crate) async fn solve_with_fetch_retry(
         ) {
             Ok(solution) => return Ok(SolveOutcome { solution, trace }),
             Err(pubgrub::PubGrubError::NoSolution(derivation_tree)) => {
-                let added = fetch_missing_candidates(
+                let added = fetch_missing_candidates(FetchRequest {
                     provider,
                     candidates,
                     lockfile,
                     providers,
                     minecraft_version,
                     loader,
-                )
+                    exclusions,
+                    overrides,
+                })
                 .await?;
                 if !added {
                     return Err(describe_no_solution(&derivation_tree));
@@ -95,15 +103,29 @@ pub(crate) async fn solve_with_fetch_retry(
     }
 }
 
-async fn fetch_missing_candidates(
-    provider: &mut OrbitDependencyProvider,
-    candidates: &mut HashMap<String, Vec<CandidateVersion>>,
-    lockfile: &OrbitLockfile,
-    providers: &[Box<dyn ModProvider>],
-    minecraft_version: &str,
-    loader: &str,
-) -> Result<bool, String> {
-    let needed = required_candidate_packages(candidates);
+struct FetchRequest<'a> {
+    provider: &'a mut OrbitDependencyProvider,
+    candidates: &'a mut HashMap<String, Vec<CandidateVersion>>,
+    lockfile: &'a OrbitLockfile,
+    providers: &'a [Box<dyn ModProvider>],
+    minecraft_version: &'a str,
+    loader: &'a str,
+    exclusions: &'a ExclusionMap,
+    overrides: &'a OverrideMap,
+}
+
+async fn fetch_missing_candidates(request: FetchRequest<'_>) -> Result<bool, String> {
+    let FetchRequest {
+        provider,
+        candidates,
+        lockfile,
+        providers,
+        minecraft_version,
+        loader,
+        exclusions,
+        overrides,
+    } = request;
+    let needed = required_candidate_packages(candidates, exclusions);
 
     let mut added = false;
     for package in needed {
@@ -116,9 +138,10 @@ async fn fetch_missing_candidates(
         let Some(modrinth) = entry.modrinth.as_ref() else {
             continue;
         };
-        let Some(mod_provider) = providers.first() else {
+        let Some(mod_provider) = crate::providers::find_provider(providers, "modrinth") else {
             return Err(
-                "cannot fetch missing dependencies: no mod provider configured".to_string(),
+                "cannot fetch missing Modrinth dependencies: no Modrinth provider configured"
+                    .to_string(),
             );
         };
 
@@ -160,7 +183,14 @@ async fn fetch_missing_candidates(
             continue;
         }
 
-        register_candidate_versions(provider, &package, &downloaded, loader);
+        register_candidate_versions(
+            provider,
+            &package,
+            &downloaded,
+            loader,
+            exclusions,
+            overrides,
+        );
         candidates.entry(package).or_default().extend(downloaded);
         added = true;
     }
@@ -226,6 +256,8 @@ mod tests {
             providers: &[],
             minecraft_version: "1",
             loader: "forge",
+            exclusions: &ExclusionMap::new(),
+            overrides: &OverrideMap::new(),
         })
         .await
         .unwrap();
@@ -266,14 +298,22 @@ slug = "b"
         )
         .unwrap();
 
-        let error =
-            fetch_missing_candidates(&mut provider, &mut candidates, &lockfile, &[], "1", "forge")
-                .await
-                .unwrap_err();
+        let error = fetch_missing_candidates(FetchRequest {
+            provider: &mut provider,
+            candidates: &mut candidates,
+            lockfile: &lockfile,
+            providers: &[],
+            minecraft_version: "1",
+            loader: "forge",
+            exclusions: &ExclusionMap::new(),
+            overrides: &OverrideMap::new(),
+        })
+        .await
+        .unwrap_err();
 
         assert_eq!(
             error,
-            "cannot fetch missing dependencies: no mod provider configured"
+            "cannot fetch missing Modrinth dependencies: no Modrinth provider configured"
         );
     }
 }

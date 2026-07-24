@@ -1,14 +1,13 @@
 use super::CliContext;
 use anyhow::{Context, Result};
 use orbit_core::ManifestFile;
-use orbit_core::providers::create_providers_default;
 
 pub async fn handle(mod_name: Option<String>, ctx: &CliContext) -> Result<()> {
     let dir = ctx.instance_dir()?;
     let manifest_file = ManifestFile::open(&dir).context("failed to read orbit.toml")?;
     let lock = orbit_core::workspace::Lockfile::open(&dir).context("failed to read orbit.lock")?;
 
-    let providers = create_providers_default().context("failed to create providers")?;
+    let providers = super::create_instance_providers(&dir, None)?;
 
     let total = lock
         .inner

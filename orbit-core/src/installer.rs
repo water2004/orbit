@@ -15,11 +15,13 @@ use crate::workspace::{Lockfile, ManifestFile};
 
 pub type InstallPrompt = Box<dyn FnOnce(&InstallReport) -> bool + Send>;
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct InstallOptions {
     pub no_deps: bool,
     pub dry_run: bool,
     pub existing_ok: bool,
+    pub optional: bool,
+    pub env: Option<String>,
 }
 
 fn download_client() -> reqwest::Client {
@@ -69,6 +71,7 @@ pub async fn install_to_instance(
     options: InstallOptions,
     prompt_fn: Option<InstallPrompt>,
 ) -> Result<InstallReport, OrbitError> {
+    let dry_run = options.dry_run;
     let mut manifest_file = ManifestFile::open(instance_dir)?;
     let mut lock = Lockfile::open_or_default(
         instance_dir,
@@ -80,7 +83,7 @@ pub async fn install_to_instance(
     );
 
     let mods_dir = instance_dir.join("mods");
-    if !mods_dir.exists() && !options.dry_run {
+    if !mods_dir.exists() && !dry_run {
         std::fs::create_dir_all(&mods_dir).map_err(OrbitError::Io)?;
     }
 
@@ -96,7 +99,7 @@ pub async fn install_to_instance(
     })
     .await?;
 
-    if !options.dry_run && !report.installed.is_empty() {
+    if !dry_run && !report.installed.is_empty() {
         manifest_file.save()?;
         lock.save()?;
     }
@@ -111,7 +114,7 @@ pub async fn upgrade_all_in_instance(
     dry_run: bool,
     prompt_fn: Option<InstallPrompt>,
 ) -> Result<InstallReport, OrbitError> {
-    let mut manifest_file = ManifestFile::open(instance_dir)?;
+    let manifest_file = ManifestFile::open(instance_dir)?;
     let mut lock = Lockfile::open_or_default(
         instance_dir,
         LockMeta {
@@ -245,12 +248,7 @@ pub async fn upgrade_all_in_instance(
         installed.push(plan);
     }
 
-    apply_to_manifest_and_lock(
-        &mut manifest_file.inner,
-        &mut lock.inner,
-        &installed,
-        &mods_dir,
-    );
+    apply_to_lockfile(&mut lock.inner, &installed, &mods_dir);
 
     if !installed.is_empty() {
         manifest_file.save()?;
@@ -422,12 +420,8 @@ async fn install_mod(input: InstallModInput<'_>) -> Result<InstallReport, OrbitE
         mut candidates,
         resolved,
         source_packages,
-    } = crate::outdated::download_candidates_bfs(
-        providers[0].as_ref(),
-        &seeds,
-        lockfile,
-        mc_version,
-        loader,
+    } = crate::outdated::download_candidates_with_fallback(
+        providers, &seeds, lockfile, mc_version, loader,
     )
     .await?;
     if candidates.is_empty() {
@@ -444,7 +438,13 @@ async fn install_mod(input: InstallModInput<'_>) -> Result<InstallReport, OrbitE
         .ok_or_else(|| OrbitError::ModNotFound(slug.to_string()))?;
 
     let mut resolution_manifest = manifest.clone();
-    ensure_root_requirement(&mut resolution_manifest, &requested_package, constraint);
+    let requested_requirement =
+        requested_requirement(constraint, options.optional, options.env.as_deref())?;
+    ensure_root_requirement(
+        &mut resolution_manifest,
+        &requested_package,
+        requested_requirement.clone(),
+    );
 
     // 3. Resolve offline
     let resolution = match crate::resolver::resolve_with_candidates_report(
@@ -588,9 +588,9 @@ async fn install_mod(input: InstallModInput<'_>) -> Result<InstallReport, OrbitE
         .iter()
         .any(|installed| installed.mod_id == requested_package)
     {
-        ensure_root_requirement(manifest, &requested_package, constraint);
+        ensure_root_requirement(manifest, &requested_package, requested_requirement);
     }
-    apply_to_manifest_and_lock(manifest, lockfile, &installed, mods_dir);
+    apply_to_lockfile(lockfile, &installed, mods_dir);
 
     Ok(InstallReport {
         installed,
@@ -657,15 +657,9 @@ async fn download_mod(m: &ResolvedMod, mods_dir: &Path) -> Result<PathBuf, Orbit
     Ok(final_path)
 }
 
-fn apply_to_manifest_and_lock(
-    manifest: &mut OrbitManifest,
-    lockfile: &mut OrbitLockfile,
-    installed: &[InstalledMod],
-    mods_dir: &Path,
-) {
+fn apply_to_lockfile(lockfile: &mut OrbitLockfile, installed: &[InstalledMod], mods_dir: &Path) {
     for inst in installed {
         let key = &inst.mod_id;
-        ensure_root_requirement(manifest, key, &inst.version);
         lockfile.packages.retain(|e| e.mod_id != *key);
         let lock_deps: Vec<LockDependency> = inst
             .jar_deps
@@ -713,17 +707,44 @@ fn apply_to_manifest_and_lock(
     }
 }
 
-fn ensure_root_requirement(manifest: &mut OrbitManifest, package: &str, constraint: &str) {
+fn requested_requirement(
+    constraint: &str,
+    optional: bool,
+    env: Option<&str>,
+) -> Result<DependencySpec, OrbitError> {
+    if let Some(env) = env
+        && !matches!(env, "client" | "server" | "both")
+    {
+        return Err(OrbitError::Other(anyhow::anyhow!(
+            "invalid dependency environment '{env}'; expected client, server, or both"
+        )));
+    }
+    let version = if constraint.is_empty() {
+        "*".to_string()
+    } else {
+        constraint.to_string()
+    };
+    if !optional && env.is_none() {
+        Ok(DependencySpec::Short(version))
+    } else {
+        Ok(DependencySpec::Full {
+            version: Some(version),
+            optional: optional.then_some(true),
+            env: env.map(str::to_string),
+            exclude: None,
+        })
+    }
+}
+
+fn ensure_root_requirement(
+    manifest: &mut OrbitManifest,
+    package: &str,
+    requirement: DependencySpec,
+) {
     manifest
         .dependencies
         .entry(package.to_string())
-        .or_insert_with(|| {
-            DependencySpec::Short(if constraint.is_empty() {
-                "*".to_string()
-            } else {
-                constraint.to_string()
-            })
-        });
+        .or_insert(requirement);
 }
 
 #[cfg(test)]
@@ -747,7 +768,11 @@ modloader_version = "1"
     fn requested_constraint_is_bound_to_the_actual_package_id() {
         let mut manifest = manifest();
 
-        ensure_root_requirement(&mut manifest, "actual-mod-id", "^1");
+        ensure_root_requirement(
+            &mut manifest,
+            "actual-mod-id",
+            requested_requirement("^1", false, None).unwrap(),
+        );
 
         assert_eq!(
             manifest.dependencies["actual-mod-id"].version_constraint(),
@@ -758,13 +783,52 @@ modloader_version = "1"
     #[test]
     fn installed_version_does_not_replace_an_existing_requirement() {
         let mut manifest = manifest();
-        ensure_root_requirement(&mut manifest, "example", "^1");
+        ensure_root_requirement(
+            &mut manifest,
+            "example",
+            requested_requirement("^1", false, None).unwrap(),
+        );
 
-        ensure_root_requirement(&mut manifest, "example", "1.5");
+        ensure_root_requirement(
+            &mut manifest,
+            "example",
+            requested_requirement("1.5", false, None).unwrap(),
+        );
 
         assert_eq!(
             manifest.dependencies["example"].version_constraint(),
             Some("^1")
+        );
+    }
+
+    #[test]
+    fn optional_environment_requirement_uses_full_manifest_form() {
+        let requirement = requested_requirement("^1", true, Some("client")).unwrap();
+
+        match requirement {
+            DependencySpec::Full {
+                version,
+                optional,
+                env,
+                exclude,
+            } => {
+                assert_eq!(version.as_deref(), Some("^1"));
+                assert_eq!(optional, Some(true));
+                assert_eq!(env.as_deref(), Some("client"));
+                assert!(exclude.is_none());
+            }
+            DependencySpec::Short(_) => panic!("expected full dependency form"),
+        }
+    }
+
+    #[test]
+    fn invalid_dependency_environment_is_rejected() {
+        let error = requested_requirement("*", false, Some("desktop")).unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("expected client, server, or both")
         );
     }
 }

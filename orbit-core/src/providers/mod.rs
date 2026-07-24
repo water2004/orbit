@@ -41,6 +41,16 @@ pub fn create_providers_default() -> Result<Vec<Box<dyn ModProvider>>, crate::er
     create_providers(&["modrinth".into()])
 }
 
+pub fn find_provider<'a>(
+    providers: &'a [Box<dyn ModProvider>],
+    name: &str,
+) -> Option<&'a dyn ModProvider> {
+    providers
+        .iter()
+        .find(|provider| provider.name() == name)
+        .map(Box::as_ref)
+}
+
 // ---------------------------------------------------------------------------
 // 统一数据类型
 // ---------------------------------------------------------------------------

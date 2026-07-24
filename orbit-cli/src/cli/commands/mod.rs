@@ -16,7 +16,7 @@ pub mod sync;
 pub mod upgrade;
 
 use anyhow::{Context, Result};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// 全局 CLI 上下文，传递给所有命令 handler。
 #[derive(Debug, Clone)]
@@ -109,5 +109,29 @@ pub fn print_resolution_diagnostics(
 ) {
     for diagnostic in diagnostics {
         eprintln!("{diagnostic}");
+    }
+}
+
+pub fn create_instance_providers(
+    instance_dir: &Path,
+    platform: Option<&str>,
+) -> Result<Vec<Box<dyn orbit_core::ModProvider>>> {
+    let platforms = if let Some(platform) = platform {
+        vec![normalize_platform(platform).to_string()]
+    } else {
+        match orbit_core::ManifestFile::open(instance_dir) {
+            Ok(manifest) => manifest.inner.resolver.platforms,
+            Err(orbit_core::OrbitError::ManifestNotFound) => vec!["modrinth".to_string()],
+            Err(error) => return Err(error).context("failed to read orbit.toml"),
+        }
+    };
+    orbit_core::providers::create_providers(&platforms).context("failed to create providers")
+}
+
+fn normalize_platform(platform: &str) -> &str {
+    match platform {
+        "mr" => "modrinth",
+        "cf" => "curseforge",
+        other => other,
     }
 }

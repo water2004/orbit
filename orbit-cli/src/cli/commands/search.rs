@@ -1,30 +1,30 @@
 use super::CliContext;
 use anyhow::Result;
-use orbit_core::providers::create_providers_default;
 
 pub async fn handle(
     query: String,
-    _platform: Option<String>,
+    platform: Option<String>,
     limit: usize,
     mc_version: Option<String>,
     modloader: Option<String>,
     ctx: &CliContext,
 ) -> Result<()> {
+    let instance_dir = ctx.instance_dir()?;
     // Determine reference MC version for compatibility ✓ marks
     let ref_mc = match mc_version.clone() {
         Some(version) => Some(version),
-        None => {
-            let instance_dir = ctx.instance_dir()?;
-            orbit_core::OrbitManifest::mc_version_from_dir(&instance_dir)
-        }
+        None => orbit_core::OrbitManifest::mc_version_from_dir(&instance_dir),
     };
 
-    let providers = create_providers_default()?;
-    let provider = &providers[0];
+    let providers = super::create_instance_providers(&instance_dir, platform.as_deref())?;
 
     eprintln!(
         "Searching for \"{query}\" on {}{}...",
-        provider.name(),
+        providers
+            .iter()
+            .map(|provider| provider.name())
+            .collect::<Vec<_>>()
+            .join(", "),
         if mc_version.is_some() || modloader.is_some() {
             format!(
                 " (mc={}, loader={})",
@@ -36,9 +36,16 @@ pub async fn handle(
         }
     );
 
-    let results = provider
-        .search(&query, mc_version.as_deref(), modloader.as_deref(), limit)
-        .await?;
+    let mut results = Vec::new();
+    for provider in &providers {
+        for item in provider
+            .search(&query, mc_version.as_deref(), modloader.as_deref(), limit)
+            .await?
+        {
+            results.push((provider.name(), item));
+        }
+    }
+    results.truncate(limit);
 
     if results.is_empty() {
         eprintln!("No results found for '{query}'.");
@@ -46,7 +53,7 @@ pub async fn handle(
     }
 
     println!();
-    for item in &results {
+    for (provider, item) in &results {
         let compatible = ref_mc
             .as_ref()
             .map(|rmc| item.mc_versions.iter().any(|v| v == rmc))
@@ -92,7 +99,7 @@ pub async fn handle(
 
         println!(
             "  {check} {name_part} ({platform})  \u{2b07} {dl}  mc [{mc_list}]",
-            platform = provider.name(),
+            platform = provider,
             dl = dl,
         );
         println!("    {desc}");

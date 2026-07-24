@@ -1,21 +1,27 @@
 use super::CliContext;
 use anyhow::{Context, Result};
-use orbit_core::providers::create_providers_default;
 use orbit_core::{InstallOptions, InstallPrompt, OrbitError, install_to_instance};
 
 pub async fn handle(
     mod_name: String,
-    _platform: Option<String>,
+    platform: Option<String>,
     version: Option<String>,
-    _env: Option<String>,
-    _optional: bool,
+    env: Option<String>,
+    optional: bool,
     no_deps: bool,
     ctx: &CliContext,
 ) -> Result<()> {
     let constraint = version.unwrap_or_else(|| "*".into());
-    let slug = mod_name.trim_start_matches("mr:").trim_start_matches("cf:");
+    let (prefix_platform, slug) = if let Some(slug) = mod_name.strip_prefix("mr:") {
+        (Some("modrinth"), slug)
+    } else if let Some(slug) = mod_name.strip_prefix("cf:") {
+        (Some("curseforge"), slug)
+    } else {
+        (None, mod_name.as_str())
+    };
+    let selected_platform = platform.as_deref().or(prefix_platform);
     let instance_dir = ctx.instance_dir()?;
-    let providers = create_providers_default().context("failed to create providers")?;
+    let providers = super::create_instance_providers(&instance_dir, selected_platform)?;
 
     let yes = ctx.yes;
     let prompt_fn: Option<InstallPrompt> = if ctx.dry_run {
@@ -35,6 +41,8 @@ pub async fn handle(
             no_deps,
             dry_run: ctx.dry_run,
             existing_ok: false,
+            optional,
+            env: env.clone(),
         },
         prompt_fn,
     )
@@ -59,13 +67,20 @@ pub async fn handle(
             Ok(())
         }
         Err(OrbitError::ModNotFound(_)) => {
-            let results = providers[0]
-                .search(slug, None, None, 5)
-                .await
-                .context("search failed")?;
-            if results.is_empty() {
-                anyhow::bail!("No mod found for '{slug}' on any platform.");
+            let mut suggestion = None;
+            for provider in &providers {
+                let results = provider
+                    .search(slug, None, None, 5)
+                    .await
+                    .context("search failed")?;
+                if !results.is_empty() {
+                    suggestion = Some((provider.name().to_string(), results));
+                    break;
+                }
             }
+            let Some((suggestion_platform, results)) = suggestion else {
+                anyhow::bail!("No mod found for '{slug}' on any configured platform.");
+            };
             eprintln!("Could not find '{slug}'. Did you mean:");
             for (i, item) in results.iter().enumerate() {
                 let dl = format_downloads(item.downloads);
@@ -102,10 +117,10 @@ pub async fn handle(
             eprintln!("Installing {}...", slug);
             Box::pin(handle(
                 slug,
-                _platform,
+                Some(suggestion_platform),
                 Some(constraint),
-                _env,
-                _optional,
+                env,
+                optional,
                 no_deps,
                 ctx,
             ))

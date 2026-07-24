@@ -92,6 +92,23 @@ impl DependencySpec {
             DependencySpec::Full { env, .. } => env.as_deref(),
         }
     }
+
+    pub fn optional(&self) -> bool {
+        matches!(
+            self,
+            DependencySpec::Full {
+                optional: Some(true),
+                ..
+            }
+        )
+    }
+
+    pub fn exclusions(&self) -> &[String] {
+        match self {
+            DependencySpec::Short(_) => &[],
+            DependencySpec::Full { exclude, .. } => exclude.as_deref().unwrap_or_default(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
