@@ -13,6 +13,15 @@ use crate::manifest::{DependencySpec, OrbitManifest};
 use crate::providers::{ModProvider, ResolvedMod};
 use crate::workspace::{Lockfile, ManifestFile};
 
+pub type InstallPrompt = Box<dyn FnOnce(&InstallReport) -> bool + Send>;
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct InstallOptions {
+    pub no_deps: bool,
+    pub dry_run: bool,
+    pub existing_ok: bool,
+}
+
 fn download_client() -> reqwest::Client {
     reqwest::Client::builder()
         .user_agent(format!("orbit/{}", env!("CARGO_PKG_VERSION")))
@@ -52,13 +61,11 @@ pub struct InstalledMod {
 /// `dry_run` 为 true 时仅解析不下载不写文件。
 pub async fn install_to_instance(
     slug: &str,
-    constraint: &str,
+    _constraint: &str,
     instance_dir: &Path,
     providers: &[Box<dyn ModProvider>],
-    no_deps: bool,
-    dry_run: bool,
-    existing_ok: bool,
-    prompt_fn: Option<Box<dyn FnOnce(&InstallReport) -> bool + Send>>,
+    options: InstallOptions,
+    prompt_fn: Option<InstallPrompt>,
 ) -> Result<InstallReport, OrbitError> {
     let mut manifest_file = ManifestFile::open(instance_dir)?;
     let mut lock = Lockfile::open_or_default(
@@ -71,25 +78,22 @@ pub async fn install_to_instance(
     );
 
     let mods_dir = instance_dir.join("mods");
-    if !mods_dir.exists() && !dry_run {
+    if !mods_dir.exists() && !options.dry_run {
         std::fs::create_dir_all(&mods_dir).map_err(OrbitError::Io)?;
     }
 
-    let report = install_mod(
+    let report = install_mod(InstallModInput {
         slug,
-        constraint,
-        &providers[..],
-        &mut manifest_file.inner,
-        &mut lock.inner,
-        &mods_dir,
-        no_deps,
-        existing_ok,
-        dry_run,
+        providers,
+        manifest: &mut manifest_file.inner,
+        lockfile: &mut lock.inner,
+        mods_dir: &mods_dir,
+        options,
         prompt_fn,
-    )
+    })
     .await?;
 
-    if !dry_run && !report.installed.is_empty() {
+    if !options.dry_run && !report.installed.is_empty() {
         manifest_file.save()?;
         lock.save()?;
     }
@@ -102,7 +106,7 @@ pub async fn upgrade_all_in_instance(
     instance_dir: &Path,
     providers: &[Box<dyn ModProvider>],
     dry_run: bool,
-    prompt_fn: Option<Box<dyn FnOnce(&InstallReport) -> bool + Send>>,
+    prompt_fn: Option<InstallPrompt>,
 ) -> Result<InstallReport, OrbitError> {
     let mut manifest_file = ManifestFile::open(instance_dir)?;
     let mut lock = Lockfile::open_or_default(
@@ -169,14 +173,14 @@ pub async fn upgrade_all_in_instance(
         skipped_optional: vec![],
     };
 
-    if let Some(prompt) = prompt_fn {
-        if !prompt(&report) {
-            return Ok(InstallReport {
-                installed: vec![],
-                already_satisfied: vec![],
-                skipped_optional: vec![],
-            }); // aborted
-        }
+    if let Some(prompt) = prompt_fn
+        && !prompt(&report)
+    {
+        return Ok(InstallReport {
+            installed: vec![],
+            already_satisfied: vec![],
+            skipped_optional: vec![],
+        }); // aborted
     }
 
     if dry_run {
@@ -368,19 +372,28 @@ pub fn list_installed(instance_dir: &Path) -> Result<ListOutput, OrbitError> {
 
 // ── 内部实现 ──────────────────────────────────────────────────────────
 
-async fn install_mod(
-    slug: &str,
-    _constraint: &str,
-    providers: &[Box<dyn ModProvider>],
-    manifest: &mut OrbitManifest,
-    lockfile: &mut OrbitLockfile,
-    mods_dir: &Path,
-    no_deps: bool,
-    existing_ok: bool,
-    dry_run: bool,
-    prompt_fn: Option<Box<dyn FnOnce(&InstallReport) -> bool + Send>>,
-) -> Result<InstallReport, OrbitError> {
-    if !existing_ok && crate::resolver::find_entry(slug, &lockfile.packages).is_some() {
+struct InstallModInput<'a> {
+    slug: &'a str,
+    providers: &'a [Box<dyn ModProvider>],
+    manifest: &'a mut OrbitManifest,
+    lockfile: &'a mut OrbitLockfile,
+    mods_dir: &'a Path,
+    options: InstallOptions,
+    prompt_fn: Option<InstallPrompt>,
+}
+
+async fn install_mod(input: InstallModInput<'_>) -> Result<InstallReport, OrbitError> {
+    let InstallModInput {
+        slug,
+        providers,
+        manifest,
+        lockfile,
+        mods_dir,
+        options,
+        prompt_fn,
+    } = input;
+
+    if !options.existing_ok && crate::resolver::find_entry(slug, &lockfile.packages).is_some() {
         return Err(OrbitError::Conflict(format!(
             "'{slug}' already in lockfile. Use 'orbit upgrade {slug}' to update it."
         )));
@@ -437,13 +450,13 @@ async fn install_mod(
             continue;
         };
 
-        if let Some(existing) = crate::resolver::find_entry(mod_id, &lockfile.packages) {
-            if existing.version == *new_ver {
-                already_satisfied.push(mod_id.clone());
-                continue;
-            }
+        if let Some(existing) = crate::resolver::find_entry(mod_id, &lockfile.packages)
+            && existing.version == *new_ver
+        {
+            already_satisfied.push(mod_id.clone());
+            continue;
         }
-        if no_deps && mod_id != slug {
+        if options.no_deps && mod_id != slug {
             continue;
         }
 
@@ -479,29 +492,28 @@ async fn install_mod(
         skipped_optional: vec![],
     };
 
-    if let Some(prompt) = prompt_fn {
-        if !prompt(&report) {
-            return Ok(InstallReport {
-                installed: vec![],
-                already_satisfied,
-                skipped_optional: vec![],
-            }); // aborted
-        }
+    if let Some(prompt) = prompt_fn
+        && !prompt(&report)
+    {
+        return Ok(InstallReport {
+            installed: vec![],
+            already_satisfied,
+            skipped_optional: vec![],
+        }); // aborted
     }
 
-    if dry_run {
+    if options.dry_run {
         return Ok(report);
     }
 
     let mut installed = Vec::new();
     for mut plan in planned {
         // 升级时删旧 JAR
-        if existing_ok {
-            if let Some(old) = lockfile.find(&plan.mod_id) {
-                if !old.filename.is_empty() {
-                    let _ = std::fs::remove_file(mods_dir.join(&old.filename));
-                }
-            }
+        if options.existing_ok
+            && let Some(old) = lockfile.find(&plan.mod_id)
+            && !old.filename.is_empty()
+        {
+            let _ = std::fs::remove_file(mods_dir.join(&old.filename));
         }
         let Some(resolved) = jar_ver_to_v.get(&plan.version).copied() else {
             continue;
@@ -576,10 +588,11 @@ async fn download_mod(m: &ResolvedMod, mods_dir: &Path) -> Result<PathBuf, Orbit
     }
 
     // 查全局缓存
-    if let Ok(cache) = crate::jar_cache::JarCache::load() {
-        if cache.copy_to(&m.sha512, &final_path) && final_path.exists() {
-            return Ok(final_path);
-        }
+    if let Ok(cache) = crate::jar_cache::JarCache::load()
+        && cache.copy_to(&m.sha512, &final_path)
+        && final_path.exists()
+    {
+        return Ok(final_path);
     }
 
     let client = download_client();

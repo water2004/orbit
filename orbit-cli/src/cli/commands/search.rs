@@ -8,12 +8,16 @@ pub async fn handle(
     limit: usize,
     mc_version: Option<String>,
     modloader: Option<String>,
-    _ctx: &CliContext,
+    ctx: &CliContext,
 ) -> Result<()> {
     // Determine reference MC version for compatibility ✓ marks
-    let ref_mc = mc_version
-        .clone()
-        .or_else(|| orbit_core::OrbitManifest::mc_version_from_dir(&std::env::current_dir().ok()?));
+    let ref_mc = match mc_version.clone() {
+        Some(version) => Some(version),
+        None => {
+            let instance_dir = ctx.instance_dir()?;
+            orbit_core::OrbitManifest::mc_version_from_dir(&instance_dir)
+        }
+    };
 
     let providers = create_providers_default()?;
     let provider = &providers[0];

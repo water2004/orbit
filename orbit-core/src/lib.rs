@@ -31,8 +31,9 @@ pub use config::{GlobalConfig, InstanceEntry, InstancesRegistry, config_path, or
 pub use detection::LoaderDetectionService;
 pub use error::OrbitError;
 pub use installer::{
-    InstallReport, InstalledMod, ListOutput, ListedPackage, RemoveReport, install_to_instance,
-    list_dependencies, list_installed, remove_from_instance, upgrade_all_in_instance,
+    InstallOptions, InstallPrompt, InstallReport, InstalledMod, ListOutput, ListedPackage,
+    RemoveReport, install_to_instance, list_dependencies, list_installed, remove_from_instance,
+    upgrade_all_in_instance,
 };
 pub use lockfile::{
     FileInfo, ImplantedMod, LockDependency, LockMeta, ModrinthInfo, OrbitLockfile, PackageEntry,

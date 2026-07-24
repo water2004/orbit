@@ -3,8 +3,8 @@ use anyhow::{Context, Result};
 use orbit_core::ManifestFile;
 use orbit_core::providers::create_providers_default;
 
-pub async fn handle(mod_name: Option<String>, _ctx: &CliContext) -> Result<()> {
-    let dir = std::env::current_dir().context("failed to get current directory")?;
+pub async fn handle(mod_name: Option<String>, ctx: &CliContext) -> Result<()> {
+    let dir = ctx.instance_dir()?;
     let manifest_file = ManifestFile::open(&dir).context("failed to read orbit.toml")?;
     let lock = orbit_core::workspace::Lockfile::open(&dir).context("failed to read orbit.lock")?;
 

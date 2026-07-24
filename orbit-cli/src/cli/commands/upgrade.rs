@@ -1,21 +1,22 @@
 use super::CliContext;
 use anyhow::{Context, Result};
 use orbit_core::providers::create_providers_default;
-use orbit_core::{OrbitError, install_to_instance, upgrade_all_in_instance};
+use orbit_core::{
+    InstallOptions, InstallPrompt, OrbitError, install_to_instance, upgrade_all_in_instance,
+};
 
 pub async fn handle(mod_name: Option<String>, ctx: &CliContext) -> Result<()> {
-    let instance_dir = std::env::current_dir().context("failed to get current directory")?;
+    let instance_dir = ctx.instance_dir()?;
     let providers = create_providers_default().context("failed to create providers")?;
 
     let yes = ctx.yes;
-    let prompt_fn: Option<Box<dyn FnOnce(&orbit_core::InstallReport) -> bool + Send>> =
-        if ctx.dry_run {
-            None
-        } else {
-            Some(Box::new(move |report| {
-                super::prompt_install_report(report, yes)
-            }))
-        };
+    let prompt_fn: Option<InstallPrompt> = if ctx.dry_run {
+        None
+    } else {
+        Some(Box::new(move |report| {
+            super::prompt_install_report(report, yes)
+        }))
+    };
 
     if let Some(name) = mod_name {
         let slug = name.trim_start_matches("mr:").trim_start_matches("cf:");
@@ -24,9 +25,11 @@ pub async fn handle(mod_name: Option<String>, ctx: &CliContext) -> Result<()> {
             "*",
             &instance_dir,
             &providers,
-            false,
-            ctx.dry_run,
-            true,
+            InstallOptions {
+                no_deps: false,
+                dry_run: ctx.dry_run,
+                existing_ok: true,
+            },
             prompt_fn,
         )
         .await

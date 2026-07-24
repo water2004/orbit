@@ -3,7 +3,7 @@ use anyhow::{Context, Result};
 use orbit_core::{OrbitError, list_dependencies, remove_from_instance};
 
 pub async fn handle(input: String, ctx: &CliContext) -> Result<()> {
-    let instance_dir = std::env::current_dir().context("failed to get current directory")?;
+    let instance_dir = ctx.instance_dir()?;
 
     match remove_from_instance(&input, &instance_dir, ctx.dry_run) {
         Ok(report) => {

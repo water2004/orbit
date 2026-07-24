@@ -3,8 +3,8 @@ use anyhow::{Context, Result};
 use orbit_core::{OrbitManifest, list_installed};
 use std::collections::{HashMap, HashSet};
 
-pub async fn handle(tree: bool, _target: Option<String>, _ctx: &CliContext) -> Result<()> {
-    let dir = std::env::current_dir().context("failed to get current directory")?;
+pub async fn handle(tree: bool, _target: Option<String>, ctx: &CliContext) -> Result<()> {
+    let dir = ctx.instance_dir()?;
     let output = list_installed(&dir).context("failed to read lockfile")?;
 
     if output.packages.is_empty() {

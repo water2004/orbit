@@ -15,7 +15,8 @@ pub mod search;
 pub mod sync;
 pub mod upgrade;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
+use std::path::PathBuf;
 
 /// 全局 CLI 上下文，传递给所有命令 handler。
 #[derive(Debug, Clone)]
@@ -25,6 +26,31 @@ pub struct CliContext {
     pub yes: bool,
     pub dry_run: bool,
     pub instance: Option<String>,
+}
+
+impl CliContext {
+    pub fn instance_dir(&self) -> Result<PathBuf> {
+        if let Some(name) = &self.instance {
+            let registry = orbit_core::InstancesRegistry::load()
+                .context("failed to load instances registry")?;
+            let entry = registry.find(name).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "unknown instance '{name}'. Run 'orbit instances list' to see registered instances."
+                )
+            })?;
+            let path = PathBuf::from(&entry.path);
+            if self.verbose && !self.quiet {
+                eprintln!("Using instance '{name}' at {}", path.display());
+            }
+            return Ok(path);
+        }
+
+        let path = std::env::current_dir().context("failed to get current directory")?;
+        if self.verbose && !self.quiet {
+            eprintln!("Using current directory as instance: {}", path.display());
+        }
+        Ok(path)
+    }
 }
 
 pub trait CommandHandler {
