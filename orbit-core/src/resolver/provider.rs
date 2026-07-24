@@ -6,13 +6,16 @@ use crate::resolver::FetchRetryError;
 use crate::resolver::types::PackageId;
 use crate::versions::Version;
 
+type PackageVersionKey = (PackageId, Version);
+type PackageDependencies = Vec<(PackageId, Ranges<Version>)>;
+
 /// PubGrub 的数据源——一个只读的内存视图
 #[derive(Default)]
 pub struct OrbitDependencyProvider {
     /// package → 已知可用版本列表（从新到旧排序）
     pub versions: HashMap<PackageId, Vec<Version>>,
     /// (package, version) → 前置依赖列表
-    pub dependencies: HashMap<(PackageId, Version), Vec<(PackageId, Ranges<Version>)>>,
+    pub dependencies: HashMap<PackageVersionKey, PackageDependencies>,
     /// (package, version) → 解析后的完整 Mod 数据
     pub resolved_mods: HashMap<(PackageId, Version), crate::providers::ResolvedMod>,
 }

@@ -58,7 +58,7 @@ pub fn default_cache_dir() -> std::path::PathBuf {
 // config.toml — 全局运行时配置
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct GlobalConfig {
     #[serde(default)]
     pub core: CoreConfig,
@@ -195,18 +195,6 @@ fn default_progress_bar() -> String {
     "modern".into()
 }
 
-impl Default for GlobalConfig {
-    fn default() -> Self {
-        Self {
-            core: CoreConfig::default(),
-            network: NetworkConfig::default(),
-            auth: AuthConfig::default(),
-            cache: CacheConfig::default(),
-            ui: UiConfig::default(),
-        }
-    }
-}
-
 impl GlobalConfig {
     /// 分层加载：config.toml → 环境变量覆盖 → 返回
     ///
@@ -233,15 +221,15 @@ impl GlobalConfig {
         if let Ok(v) = std::env::var("ORBIT_PROXY") {
             config.network.proxy = Some(v);
         }
-        if let Ok(v) = std::env::var("ORBIT_TIMEOUT") {
-            if let Ok(n) = v.parse() {
-                config.network.timeout = n;
-            }
+        if let Ok(v) = std::env::var("ORBIT_TIMEOUT")
+            && let Ok(n) = v.parse()
+        {
+            config.network.timeout = n;
         }
-        if let Ok(v) = std::env::var("ORBIT_RETRIES") {
-            if let Ok(n) = v.parse() {
-                config.network.max_retries = n;
-            }
+        if let Ok(v) = std::env::var("ORBIT_RETRIES")
+            && let Ok(n) = v.parse()
+        {
+            config.network.max_retries = n;
         }
         if let Ok(v) = std::env::var("ORBIT_LANGUAGE") {
             config.core.language = v;

@@ -101,13 +101,13 @@ impl JarCache {
 
     /// 复制缓存文件到目标路径，未命中返回 false
     pub fn copy_to(&self, sha512: &str, dest: &Path) -> bool {
-        if let Some(ref src) = self.get_by_sha512(sha512) {
-            if src.exists() {
-                if let Some(parent) = dest.parent() {
-                    std::fs::create_dir_all(parent).ok();
-                }
-                return std::fs::copy(src, dest).is_ok();
+        if let Some(ref src) = self.get_by_sha512(sha512)
+            && src.exists()
+        {
+            if let Some(parent) = dest.parent() {
+                std::fs::create_dir_all(parent).ok();
             }
+            return std::fs::copy(src, dest).is_ok();
         }
         false
     }

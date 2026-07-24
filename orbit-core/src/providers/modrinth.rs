@@ -280,7 +280,7 @@ impl ModProvider for ModrinthProvider {
         // 收集所有依赖的 project_id → 批量查 slug
         let all_dep_ids: Vec<&str> = versions
             .iter()
-            .flat_map(|v| v.dependencies.as_ref().map(|d| d.as_slice()).unwrap_or(&[]))
+            .flat_map(|v| v.dependencies.as_deref().unwrap_or(&[]))
             .filter_map(|d| d.project_id.as_deref())
             .collect();
         let id_to_slug: HashMap<String, String> = self.lookup_project_slugs(&all_dep_ids).await;
@@ -389,7 +389,7 @@ impl ModProvider for ModrinthProvider {
         let mut all_ids: Vec<&str> = map.values().map(|v| v.project_id.as_str()).collect();
         let dep_ids: Vec<&str> = map
             .values()
-            .flat_map(|v| v.dependencies.as_ref().map(|d| d.as_slice()).unwrap_or(&[]))
+            .flat_map(|v| v.dependencies.as_deref().unwrap_or(&[]))
             .filter_map(|d| d.project_id.as_deref())
             .collect();
         all_ids.extend(dep_ids);

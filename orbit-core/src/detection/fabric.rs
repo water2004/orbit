@@ -41,15 +41,15 @@ impl LoaderDetector for FabricDetector {
             })? {
                 let entry = entry
                     .map_err(|e| OrbitError::Other(anyhow::anyhow!("cannot read entry: {e}")))?;
-                if entry.path().is_dir() {
-                    if let Some((ver, ev)) = scan_for_fabric(&entry.path()) {
-                        return Ok(LoaderInfo {
-                            loader: ModLoader::Fabric,
-                            version: Some(ver),
-                            confidence: Confidence::Certain,
-                            evidence: ev,
-                        });
-                    }
+                if entry.path().is_dir()
+                    && let Some((ver, ev)) = scan_for_fabric(&entry.path())
+                {
+                    return Ok(LoaderInfo {
+                        loader: ModLoader::Fabric,
+                        version: Some(ver),
+                        confidence: Confidence::Certain,
+                        evidence: ev,
+                    });
                 }
             }
         }

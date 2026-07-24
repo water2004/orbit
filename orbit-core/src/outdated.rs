@@ -48,12 +48,11 @@ pub async fn download_candidates_bfs(
         };
         for v in &versions {
             for dep in &v.dependencies {
-                if dep.required {
-                    if let Some(ref pid) = dep.project_id {
-                        if !seen.contains(pid.as_str()) {
-                            queue.push(pid.clone());
-                        }
-                    }
+                if dep.required
+                    && let Some(ref pid) = dep.project_id
+                    && !seen.contains(pid.as_str())
+                {
+                    queue.push(pid.clone());
                 }
             }
             to_download.push(v.clone());

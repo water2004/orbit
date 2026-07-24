@@ -101,10 +101,11 @@ impl SemanticVersion {
             return Err("version 'x' not allowed".into());
         }
         // strip extra wildcards: 1.x.x → 1.x
-        if let Some(fw) = first_wildcard {
-            if fw > 0 && components.len() > fw + 1 {
-                components.truncate(fw + 1);
-            }
+        if let Some(fw) = first_wildcard
+            && fw > 0
+            && components.len() > fw + 1
+        {
+            components.truncate(fw + 1);
         }
 
         Ok(Self {
@@ -276,10 +277,7 @@ fn satisfies_single(version: &SemanticVersion, predicate: &str) -> bool {
             return false;
         }
         let comp_count = ref_ver.components.len();
-        let mut new_components = vec![0i32; comp_count - 1];
-        for i in 0..comp_count - 1 {
-            new_components[i] = ref_ver.component(i);
-        }
+        let new_components = (0..comp_count - 1).map(|i| ref_ver.component(i)).collect();
         ref_ver = SemanticVersion {
             raw: String::new(),
             components: new_components,
@@ -301,7 +299,7 @@ fn satisfies_single(version: &SemanticVersion, predicate: &str) -> bool {
 
     // Fabric: ~ → comp(0)==v.comp(0) && comp(1)==v.comp(1) && >=v
     // Fabric: ^ → comp(0)==v.comp(0) && >=v
-    let check = match op {
+    match op {
         "~" => {
             version >= &ref_ver
                 && version.component(0) == ref_ver.component(0)
@@ -314,14 +312,13 @@ fn satisfies_single(version: &SemanticVersion, predicate: &str) -> bool {
         "<" => version < &ref_ver,
         "=" => version == &ref_ver,
         _ => version == &ref_ver,
-    };
-    check
+    }
 }
 
 fn parse_operator(predicate: &str) -> (&str, &str) {
     for op in &[">=", "<=", "~", "^", ">", "<", "="] {
-        if predicate.starts_with(op) {
-            return (op, predicate[op.len()..].trim());
+        if let Some(stripped) = predicate.strip_prefix(op) {
+            return (op, stripped.trim());
         }
     }
     ("=", predicate)
@@ -347,10 +344,10 @@ pub fn parse_constraint(constraint: &str) -> Ranges<Version> {
             }
 
             let mut combined = part.to_string();
-            if ["<", ">", "<=", ">=", "~", "^", "="].contains(&part) {
-                if let Some(next_part) = parts.next() {
-                    combined.push_str(next_part);
-                }
+            if ["<", ">", "<=", ">=", "~", "^", "="].contains(&part)
+                && let Some(next_part) = parts.next()
+            {
+                combined.push_str(next_part);
             }
 
             let (op, ver_str) = parse_operator(&combined);
@@ -424,7 +421,7 @@ pub fn parse_constraint(constraint: &str) -> Ranges<Version> {
         }
     }
 
-    final_range.unwrap_or_else(|| Ranges::full())
+    final_range.unwrap_or_else(Ranges::full)
 }
 
 #[cfg(test)]

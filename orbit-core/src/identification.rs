@@ -136,25 +136,24 @@ pub async fn identify_mods(
                     results[idx] = Some(build_identified(m, p.name(), &resolved, false));
                 }
                 _ => {
-                    if let Some(ref mod_id) = m.mod_id {
-                        if let Ok(versions) = p
+                    if let Some(ref mod_id) = m.mod_id
+                        && let Ok(versions) = p
                             .get_versions(mod_id, Some(&ctx.mc_version), Some(&ctx.loader))
                             .await
-                        {
-                            let matched = m
-                                .version
-                                .as_ref()
-                                .and_then(|ver| versions.iter().find(|v| v.version == *ver));
-                            if let Some(v) = matched {
-                                eprintln!(
-                                    "    ✓ identified as {}/{} v{} (version match)",
-                                    p.name(),
-                                    mod_id,
-                                    v.version
-                                );
-                                results[idx] = Some(build_identified(m, p.name(), v, true));
-                                continue;
-                            }
+                    {
+                        let matched = m
+                            .version
+                            .as_ref()
+                            .and_then(|ver| versions.iter().find(|v| v.version == *ver));
+                        if let Some(v) = matched {
+                            eprintln!(
+                                "    ✓ identified as {}/{} v{} (version match)",
+                                p.name(),
+                                mod_id,
+                                v.version
+                            );
+                            results[idx] = Some(build_identified(m, p.name(), v, true));
+                            continue;
                         }
                     }
                     still_unrecognized.push(idx);

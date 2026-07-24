@@ -82,6 +82,12 @@ pub struct MetadataExtractorBuilder {
     parsers: Vec<Box<dyn MetadataParser>>,
 }
 
+impl Default for MetadataExtractorBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl MetadataExtractorBuilder {
     pub fn new() -> Self {
         Self { parsers: vec![] }

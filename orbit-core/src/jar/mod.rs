@@ -55,10 +55,10 @@ pub async fn download_and_parse(
     loader: &str,
 ) -> Result<JarModMetadata, crate::error::OrbitError> {
     // 缓存查询
-    if let Ok(cache) = crate::jar_cache::JarCache::load() {
-        if let Some(bytes) = cache.get_bytes(expected_sha512) {
-            return read_mod_metadata_from_bytes(&bytes, loader);
-        }
+    if let Ok(cache) = crate::jar_cache::JarCache::load()
+        && let Some(bytes) = cache.get_bytes(expected_sha512)
+    {
+        return read_mod_metadata_from_bytes(&bytes, loader);
     }
 
     let client = reqwest::Client::builder()
@@ -132,10 +132,10 @@ fn read_mod_metadata_from_archive<R: std::io::Read + std::io::Seek>(
         for emb_path in &meta.embedded_jars {
             if let Ok(mut entry) = archive.by_name(emb_path) {
                 let mut bytes = Vec::new();
-                if std::io::Read::read_to_end(&mut entry, &mut bytes).is_ok() {
-                    if let Ok(inner_meta) = read_mod_metadata_from_bytes(&bytes, loader) {
-                        implanted.push(inner_meta);
-                    }
+                if std::io::Read::read_to_end(&mut entry, &mut bytes).is_ok()
+                    && let Ok(inner_meta) = read_mod_metadata_from_bytes(&bytes, loader)
+                {
+                    implanted.push(inner_meta);
                 }
             }
         }

@@ -221,8 +221,6 @@ fn scan_embedded_jars(
     Ok(())
 }
 
-/// 从字节数组读取 JAR 元数据（用于内嵌 JAR）
-
 /// 从实例目录的 JAR 中自动检测 MC 版本。
 ///
 /// 先查 versions/ 子目录（标准 MC 启动器布局），再回退到当前目录。
@@ -233,12 +231,12 @@ pub fn detect_mc_version(
     let mut search_dirs = Vec::new();
 
     let versions_dir = instance_dir.join("versions");
-    if versions_dir.is_dir() {
-        if let Ok(entries) = std::fs::read_dir(&versions_dir) {
-            for entry in entries.filter_map(|e| e.ok()) {
-                if entry.path().is_dir() {
-                    search_dirs.push(entry.path());
-                }
+    if versions_dir.is_dir()
+        && let Ok(entries) = std::fs::read_dir(&versions_dir)
+    {
+        for entry in entries.filter_map(|e| e.ok()) {
+            if entry.path().is_dir() {
+                search_dirs.push(entry.path());
             }
         }
     }
