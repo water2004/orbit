@@ -9,7 +9,7 @@ pub async fn handle(
     mc_version: Option<String>,
     modloader: Option<String>,
     modloader_version: Option<String>,
-    _ctx: &CliContext,
+    ctx: &CliContext,
 ) -> Result<()> {
     let instance_dir = std::env::current_dir()?;
     let registered_path = instance_dir.clone();
@@ -31,34 +31,45 @@ pub async fn handle(
     };
 
     // ── 2. 确定加载器及其版本 ──────────────────
-    let (loader, loader_ver) = if let Some(ref l) = modloader {
-        let service = LoaderDetectionService::new();
-        if service.find_by_name(l).is_none() {
-            anyhow::bail!("unknown modloader: '{l}'. Supported: fabric");
-        }
-        let ver = modloader_version.unwrap_or_else(|| default_loader_version(l));
-        (l.clone(), ver)
+    let service = LoaderDetectionService::new();
+    let (loader, loader_ver) = if let Some(ref requested_loader) = modloader {
+        let detector = service.find_by_name(requested_loader).ok_or_else(|| {
+            let supported = service
+                .known_loaders()
+                .into_iter()
+                .map(|(loader, _)| loader.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            anyhow::anyhow!("unknown modloader: '{requested_loader}'. Supported: {supported}")
+        })?;
+        let detected = detector.detect(&instance_dir)?;
+        let loader = detector.loader_type().as_str().to_string();
+        let version = choose_loader_version(modloader_version, detected.version, &loader, ctx.yes)?;
+        (loader, version)
     } else {
-        let service = LoaderDetectionService::new();
         let results = service.detect_all(&instance_dir)?;
         let best = results.first();
 
         match best {
             Some(info) if info.confidence >= orbit_core::detection::Confidence::Certain => {
-                let ver = info.version.clone().unwrap_or_else(|| {
-                    modloader_version.unwrap_or_else(|| default_loader_version("fabric"))
-                });
+                let loader = info.loader.as_str().to_string();
+                let ver = choose_loader_version(
+                    modloader_version,
+                    info.version.clone(),
+                    &loader,
+                    ctx.yes,
+                )?;
                 println!(
                     "✓ Detected {} loader {} ({})",
-                    info.loader.as_str(),
+                    loader,
                     ver,
                     info.evidence.join(", ")
                 );
-                (info.loader.as_str().to_string(), ver)
+                (loader, ver)
             }
             _ => {
-                let (l, name) = select_loader_interactive(&service)?;
-                let ver = modloader_version.unwrap_or_else(|| default_loader_version(&l));
+                let (l, name) = select_loader_interactive(&service, ctx.yes)?;
+                let ver = choose_loader_version(modloader_version, None, &l, ctx.yes)?;
                 eprintln!("  Using {} loader {}", name, ver);
                 (l, ver)
             }
@@ -121,7 +132,10 @@ pub async fn handle(
 
 // ── 交互式辅助 ──────────────────────────────────
 
-fn select_loader_interactive(service: &LoaderDetectionService) -> Result<(String, &'static str)> {
+fn select_loader_interactive(
+    service: &LoaderDetectionService,
+    non_interactive: bool,
+) -> Result<(String, &'static str)> {
     let loaders = service.known_loaders();
     if loaders.is_empty() {
         anyhow::bail!("no modloaders available for detection");
@@ -130,8 +144,26 @@ fn select_loader_interactive(service: &LoaderDetectionService) -> Result<(String
     for (i, (loader, name)) in loaders.iter().enumerate() {
         eprintln!("  [{}] {} ({})", i + 1, name, loader.as_str());
     }
-    let (loader, name) = &loaders[0];
-    eprintln!("  Auto-selecting the only option: {name}");
+    if non_interactive {
+        let (loader, name) = &loaders[0];
+        eprintln!("  --yes selected the default loader: {name}");
+        return Ok((loader.as_str().to_string(), *name));
+    }
+    eprint!("Choose a loader [1]: ");
+    let mut input = String::new();
+    std::io::stdin().read_line(&mut input)?;
+    let index = if input.trim().is_empty() {
+        0
+    } else {
+        input
+            .trim()
+            .parse::<usize>()
+            .ok()
+            .and_then(|index| index.checked_sub(1))
+            .filter(|index| *index < loaders.len())
+            .ok_or_else(|| anyhow::anyhow!("invalid modloader choice"))?
+    };
+    let (loader, name) = &loaders[index];
     Ok((loader.as_str().to_string(), *name))
 }
 
@@ -148,9 +180,28 @@ fn prompt_mc_version() -> Result<String> {
     }
 }
 
-fn default_loader_version(loader: &str) -> String {
-    match loader {
-        "fabric" => "0.16.10".into(),
-        _ => "0.0.0".into(),
+fn choose_loader_version(
+    explicit: Option<String>,
+    detected: Option<String>,
+    loader: &str,
+    non_interactive: bool,
+) -> Result<String> {
+    if let Some(version) = explicit.or(detected) {
+        return Ok(version);
     }
+    if non_interactive {
+        anyhow::bail!(
+            "could not detect the {loader} loader version; pass --modloader-version when using --yes"
+        );
+    }
+    eprint!("? {loader} loader version: ");
+    let mut input = String::new();
+    std::io::stdin().read_line(&mut input)?;
+    let version = input.trim();
+    if version.is_empty() {
+        anyhow::bail!(
+            "loader version is required for reproducible installs; pass --modloader-version"
+        );
+    }
+    Ok(version.to_string())
 }

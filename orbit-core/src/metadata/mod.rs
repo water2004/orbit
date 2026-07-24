@@ -4,7 +4,10 @@
 //! `MetadataExtractor` 负责选择合适的 parser 并提取统一元数据。
 
 pub mod fabric;
+pub mod forge;
 pub mod mojang;
+pub mod neoforge;
+pub mod quilt;
 pub mod version_profile;
 
 use indexmap::IndexMap;
@@ -15,7 +18,7 @@ use crate::error::OrbitError;
 // 统一类型
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ModLoader {
     Fabric,
     Forge,
@@ -169,8 +172,8 @@ impl MetadataExtractor {
 pub fn default_extractor() -> MetadataExtractor {
     MetadataExtractor::builder()
         .with(self::fabric::FabricParser)
-        // .with(super::forge::ForgeParser)
-        // .with(super::neoforge::NeoForgeParser)
-        // .with(super::quilt::QuiltParser)
+        .with(self::forge::ForgeParser)
+        .with(self::neoforge::NeoForgeParser)
+        .with(self::quilt::QuiltParser)
         .build()
 }

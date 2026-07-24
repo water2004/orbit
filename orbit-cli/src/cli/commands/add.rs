@@ -1,6 +1,8 @@
 use super::CliContext;
 use anyhow::{Context, Result};
-use orbit_core::{InstallOptions, InstallPrompt, OrbitError, install_to_instance};
+use orbit_core::{
+    InstallOptions, InstallPrompt, OrbitError, install_local_file_to_instance, install_to_instance,
+};
 
 pub async fn handle(
     mod_name: String,
@@ -11,6 +13,65 @@ pub async fn handle(
     no_deps: bool,
     ctx: &CliContext,
 ) -> Result<()> {
+    let local_path = mod_name
+        .strip_prefix("file:")
+        .or_else(|| (platform.as_deref() == Some("file")).then_some(mod_name.as_str()));
+    if let Some(path) = local_path {
+        if platform
+            .as_deref()
+            .is_some_and(|platform| platform != "file")
+        {
+            anyhow::bail!("file: dependencies cannot be combined with --platform");
+        }
+        let instance_dir = ctx.instance_dir()?;
+        let providers = if no_deps {
+            Vec::new()
+        } else {
+            super::create_instance_providers(&instance_dir, None)?
+        };
+        let yes = ctx.yes;
+        let prompt_fn: Option<InstallPrompt> = if ctx.dry_run {
+            None
+        } else {
+            Some(Box::new(move |report| {
+                super::prompt_install_report(report, yes)
+            }))
+        };
+        let report = install_local_file_to_instance(
+            std::path::Path::new(path),
+            version.as_deref(),
+            &instance_dir,
+            &providers,
+            InstallOptions {
+                no_deps,
+                dry_run: ctx.dry_run,
+                existing_ok: false,
+                optional,
+                env,
+            },
+            prompt_fn,
+        )
+        .await
+        .map_err(|error| anyhow::anyhow!("Add failed: {error}"))?;
+        super::print_resolution_diagnostics(&report.diagnostics);
+        if ctx.dry_run {
+            for installed in &report.installed {
+                println!(
+                    "  [dry-run] would install {} v{}",
+                    installed.mod_id, installed.version
+                );
+            }
+        } else if report.installed.is_empty() {
+            println!("Add cancelled.");
+        } else {
+            println!(
+                "Successfully added local mod and {} dependency mod(s).",
+                report.installed.len().saturating_sub(1)
+            );
+        }
+        return Ok(());
+    }
+
     let constraint = version.unwrap_or_else(|| "*".into());
     let (prefix_platform, slug) = if let Some(slug) = mod_name.strip_prefix("mr:") {
         (Some("modrinth"), slug)

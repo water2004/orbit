@@ -13,6 +13,10 @@ use crate::providers::{ModProvider, ResolvedMod};
 use crate::resolver::types::CandidateDiagnostic;
 use crate::workspace::{Lockfile, ManifestFile};
 
+mod local;
+
+pub use local::install_local_file_to_instance;
+
 pub type InstallPrompt = Box<dyn FnOnce(&InstallReport) -> bool + Send>;
 
 #[derive(Debug, Clone, Default)]
@@ -161,10 +165,10 @@ pub async fn restore_instance(
         .cloned()
         .collect();
     let has_dangling_lock_edges = lock.inner.packages.iter().any(|entry| {
-        entry
-            .dependencies
-            .iter()
-            .any(|dependency| lock.inner.find(&dependency.name).is_none())
+        entry.dependencies.iter().any(|dependency| {
+            !crate::resolver::is_builtin_package(&dependency.name)
+                && lock.inner.find(&dependency.name).is_none()
+        })
     });
     let lock_graph_error =
         crate::resolver::check_lockfile_graph(&manifest.inner, &lock.inner).err();
@@ -427,10 +431,37 @@ pub struct ListedPackage {
 /// 读取 lockfile 中所有已安装模组供 list 命令展示。
 pub fn list_installed(instance_dir: &Path) -> Result<ListOutput, OrbitError> {
     let lock = Lockfile::open(instance_dir)?;
-    let packages: Vec<ListedPackage> = lock
-        .inner
+    Ok(list_output(&lock.inner, None))
+}
+
+/// Read installed packages selected for a client/server target.
+///
+/// Environment filters apply to manifest roots; their transitive dependencies
+/// remain visible so the result describes an installable closure.
+pub fn list_installed_for_target(
+    instance_dir: &Path,
+    target: &str,
+) -> Result<ListOutput, OrbitError> {
+    let manifest = ManifestFile::open(instance_dir)?;
+    let lock = Lockfile::open(instance_dir)?;
+    let options = RestoreOptions {
+        target: Some(target.to_string()),
+        ..RestoreOptions::default()
+    };
+    validate_restore_options(&options)?;
+    let (selected, _) = selected_packages(&manifest.inner, &lock.inner, &options)?;
+    let selected: std::collections::HashSet<_> = selected.into_iter().collect();
+    Ok(list_output(&lock.inner, Some(&selected)))
+}
+
+fn list_output(
+    lockfile: &OrbitLockfile,
+    selected: Option<&std::collections::HashSet<String>>,
+) -> ListOutput {
+    let packages: Vec<ListedPackage> = lockfile
         .packages
         .iter()
+        .filter(|entry| selected.is_none_or(|selected| selected.contains(&entry.mod_id)))
         .map(|e| ListedPackage {
             mod_id: e.mod_id.clone(),
             version: e.version.clone(),
@@ -444,7 +475,7 @@ pub fn list_installed(instance_dir: &Path) -> Result<ListOutput, OrbitError> {
                 .collect(),
         })
         .collect();
-    Ok(ListOutput { packages })
+    ListOutput { packages }
 }
 
 // ── 内部实现 ──────────────────────────────────────────────────────────
@@ -643,7 +674,39 @@ async fn resolve_missing_lock_entries(
     lockfile: &mut OrbitLockfile,
     providers: &[Box<dyn ModProvider>],
 ) -> Result<crate::resolver::types::ResolutionReport, OrbitError> {
-    let seeds: Vec<_> = manifest.dependencies.keys().cloned().collect();
+    let mut seeds: std::collections::HashSet<String> = manifest
+        .dependencies
+        .keys()
+        .filter(|package| lockfile.find(package).is_none())
+        .cloned()
+        .collect();
+    for entry in &lockfile.packages {
+        seeds.extend(
+            entry
+                .dependencies
+                .iter()
+                .filter(|dependency| {
+                    !crate::resolver::is_builtin_package(&dependency.name)
+                        && lockfile.find(&dependency.name).is_none()
+                })
+                .map(|dependency| dependency.name.clone()),
+        );
+    }
+    if seeds.is_empty() && crate::resolver::check_lockfile_graph(manifest, lockfile).is_err() {
+        seeds.extend(manifest.dependencies.keys().filter_map(|package| {
+            lockfile.find(package).and_then(|entry| {
+                (entry.provider != "file").then(|| {
+                    entry
+                        .modrinth
+                        .as_ref()
+                        .map(|metadata| metadata.slug.clone())
+                        .unwrap_or_else(|| package.clone())
+                })
+            })
+        }));
+    }
+    let mut seeds: Vec<_> = seeds.into_iter().collect();
+    seeds.sort();
     if seeds.is_empty() {
         return Ok(crate::resolver::types::ResolutionReport::default());
     }
@@ -820,6 +883,7 @@ pub(crate) fn selected_packages(
             entry
                 .dependencies
                 .iter()
+                .filter(|dependency| !crate::resolver::is_builtin_package(&dependency.name))
                 .map(|dependency| dependency.name.clone()),
         );
     }
@@ -1406,6 +1470,35 @@ dependencies = ["client-mod", "optional-mod"]
 
         assert_eq!(selected, vec!["client-mod", "library"]);
         assert_eq!(skipped, vec!["optional-mod", "server-mod"]);
+    }
+
+    #[test]
+    fn restore_selection_does_not_treat_loader_packages_as_jars() {
+        let manifest: OrbitManifest = toml::from_str(
+            r#"
+[project]
+name = "test"
+mc_version = "1.21.1"
+modloader = "neoforge"
+modloader_version = "21.1"
+[dependencies]
+example = "*"
+"#,
+        )
+        .unwrap();
+        let lockfile = OrbitLockfile {
+            meta: LockMeta {
+                mc_version: "1.21.1".to_string(),
+                modloader: "neoforge".to_string(),
+                modloader_version: "21.1".to_string(),
+            },
+            packages: vec![locked_package("example", &["minecraft", "neoforge"])],
+        };
+
+        let (selected, _) =
+            selected_packages(&manifest, &lockfile, &RestoreOptions::default()).unwrap();
+
+        assert_eq!(selected, ["example"]);
     }
 
     #[test]

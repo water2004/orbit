@@ -1,11 +1,15 @@
 use super::CliContext;
 use anyhow::{Context, Result};
-use orbit_core::{OrbitManifest, list_installed};
+use orbit_core::{OrbitManifest, list_installed, list_installed_for_target};
 use std::collections::{HashMap, HashSet};
 
-pub async fn handle(tree: bool, _target: Option<String>, ctx: &CliContext) -> Result<()> {
+pub async fn handle(tree: bool, target: Option<String>, ctx: &CliContext) -> Result<()> {
     let dir = ctx.instance_dir()?;
-    let output = list_installed(&dir).context("failed to read lockfile")?;
+    let output = match target.as_deref() {
+        Some(target) => list_installed_for_target(&dir, target),
+        None => list_installed(&dir),
+    }
+    .context("failed to read installed packages")?;
 
     if output.packages.is_empty() {
         println!("No mods installed.");
@@ -13,7 +17,7 @@ pub async fn handle(tree: bool, _target: Option<String>, ctx: &CliContext) -> Re
     }
 
     if tree {
-        print_tree(&dir, &output)?;
+        print_tree(&dir, &output, target.as_deref())?;
     } else {
         print_flat(&output);
     }
@@ -32,7 +36,11 @@ fn print_flat(output: &orbit_core::ListOutput) {
     }
 }
 
-fn print_tree(dir: &std::path::Path, output: &orbit_core::ListOutput) -> Result<()> {
+fn print_tree(
+    dir: &std::path::Path,
+    output: &orbit_core::ListOutput,
+    target: Option<&str>,
+) -> Result<()> {
     // 构建 mod_id → Package 的索引
     let index: HashMap<&str, &orbit_core::ListedPackage> = output
         .packages
@@ -42,7 +50,19 @@ fn print_tree(dir: &std::path::Path, output: &orbit_core::ListOutput) -> Result<
 
     // 找出顶层包：在 manifest 中声明的
     let manifest = OrbitManifest::from_dir(dir).context("failed to read orbit.toml")?;
-    let top_level: Vec<&str> = manifest.dependencies.keys().map(|k| k.as_str()).collect();
+    let top_level: Vec<&str> = manifest
+        .dependencies
+        .iter()
+        .filter(|(_, spec)| {
+            let environment = spec.env().unwrap_or("both");
+            match target.unwrap_or("both") {
+                "client" => matches!(environment, "client" | "both"),
+                "server" => matches!(environment, "server" | "both"),
+                _ => true,
+            }
+        })
+        .map(|(package, _)| package.as_str())
+        .collect();
 
     let mut visited = HashSet::new();
 

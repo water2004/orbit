@@ -24,8 +24,12 @@ pub fn create_providers(
                     Box::new(modrinth::ModrinthProvider::new(&ua, 3)?) as Box<dyn ModProvider>
                 );
             }
-            "curseforge" => {}
-            _ => {}
+            "curseforge" => return Err(curseforge::cf_not_ready()),
+            other => {
+                return Err(crate::error::OrbitError::Other(anyhow::anyhow!(
+                    "unsupported provider '{other}' in [resolver].platforms"
+                )));
+            }
         }
     }
     if providers.is_empty() {

@@ -4,6 +4,10 @@
 //! `LoaderDetectionService` 负责编排检测并选择置信度最高的结果。
 
 pub mod fabric;
+pub mod forge;
+pub mod neoforge;
+mod profile;
+pub mod quilt;
 
 use crate::error::OrbitError;
 use crate::metadata::ModLoader;
@@ -63,9 +67,9 @@ impl LoaderDetectionService {
         Self {
             detectors: vec![
                 Box::new(self::fabric::FabricDetector),
-                // Phase 2: Box::new(super::forge::ForgeDetector),
-                // Phase 2: Box::new(super::neoforge::NeoForgeDetector),
-                // Phase 2: Box::new(super::quilt::QuiltDetector),
+                Box::new(self::forge::ForgeDetector),
+                Box::new(self::neoforge::NeoForgeDetector),
+                Box::new(self::quilt::QuiltDetector),
             ],
         }
     }

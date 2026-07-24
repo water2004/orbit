@@ -15,7 +15,7 @@ impl CurseForgeProvider {
     }
 }
 
-fn cf_not_ready() -> OrbitError {
+pub(crate) fn cf_not_ready() -> OrbitError {
     OrbitError::Other(anyhow::anyhow!(
         "CurseForge support is not yet implemented. Remove 'curseforge' from [resolver].platforms."
     ))

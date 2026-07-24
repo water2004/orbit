@@ -3,6 +3,7 @@
 //! Provides a unified version representation for the PubGrub resolver.
 
 pub mod fabric;
+pub mod maven;
 
 use pubgrub::Ranges;
 use std::cmp::Ordering;
@@ -11,6 +12,7 @@ use std::hash::{Hash, Hasher};
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub enum Version {
     Fabric(fabric::SemanticVersion),
+    Maven(maven::MavenVersion),
     Generic(String),
 }
 
@@ -21,8 +23,12 @@ impl Hash for Version {
                 state.write_u8(0);
                 f.hash(state);
             }
-            Self::Generic(s) => {
+            Self::Maven(version) => {
                 state.write_u8(1);
+                version.hash(state);
+            }
+            Self::Generic(s) => {
+                state.write_u8(2);
                 s.hash(state);
             }
         }
@@ -39,9 +45,12 @@ impl Ord for Version {
     fn cmp(&self, other: &Self) -> Ordering {
         match (self, other) {
             (Self::Fabric(a), Self::Fabric(b)) => a.cmp(b),
+            (Self::Maven(a), Self::Maven(b)) => a.cmp(b),
             (Self::Generic(a), Self::Generic(b)) => a.cmp(b),
-            (Self::Fabric(_), Self::Generic(_)) => Ordering::Less,
-            (Self::Generic(_), Self::Fabric(_)) => Ordering::Greater,
+            (Self::Fabric(_), _) => Ordering::Less,
+            (Self::Maven(_), Self::Fabric(_)) => Ordering::Greater,
+            (Self::Maven(_), Self::Generic(_)) => Ordering::Less,
+            (Self::Generic(_), _) => Ordering::Greater,
         }
     }
 }
@@ -50,6 +59,7 @@ impl std::fmt::Display for Version {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Fabric(v) => write!(f, "{}", v.raw),
+            Self::Maven(v) => write!(f, "{v}"),
             Self::Generic(s) => write!(f, "{}", s),
         }
     }
@@ -71,6 +81,7 @@ impl Version {
                     Self::Generic(raw.to_string())
                 }
             }
+            "forge" | "neoforge" => Self::Maven(maven::MavenVersion::parse(raw)),
             _ => Self::Generic(raw.to_string()),
         }
     }
@@ -83,6 +94,7 @@ impl Version {
 
         match loader {
             "fabric" | "quilt" => fabric::parse_constraint(constraint),
+            "forge" | "neoforge" => maven::parse_constraint(constraint),
             _ => Ranges::singleton(Self::parse(constraint, loader)),
         }
     }

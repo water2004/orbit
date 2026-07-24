@@ -41,8 +41,9 @@ pub use detection::LoaderDetectionService;
 pub use error::OrbitError;
 pub use installer::{
     InstallOptions, InstallPrompt, InstallReport, InstalledMod, ListOutput, ListedPackage,
-    RemoveReport, RestoreOptions, RestoreReport, install_to_instance, list_dependencies,
-    list_installed, remove_from_instance, restore_instance, upgrade_all_in_instance,
+    RemoveReport, RestoreOptions, RestoreReport, install_local_file_to_instance,
+    install_to_instance, list_dependencies, list_installed, list_installed_for_target,
+    remove_from_instance, restore_instance, upgrade_all_in_instance,
 };
 pub use jar_cache::{CacheSummary, clean_cache, inspect_cache};
 pub use lockfile::{

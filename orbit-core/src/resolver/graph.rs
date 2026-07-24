@@ -70,7 +70,7 @@ pub(crate) fn register_platform_packages(
 
     let loader_package = match loader.as_str() {
         "fabric" => "fabricloader",
-        "quilt" => "quiltloader",
+        "quilt" => "quilt_loader",
         other => other,
     };
     let loader_version = Version::parse(&manifest.project.modloader_version, loader);
@@ -356,17 +356,25 @@ fn push_unique(versions: &mut Vec<Version>, version: Version) {
     }
 }
 
-fn is_builtin_package(package: &str) -> bool {
+pub(crate) fn is_builtin_package(package: &str) -> bool {
     matches!(
         package,
-        "java" | "mixinextras" | "minecraft" | "fabric" | "fabricloader" | "quiltloader"
+        "java"
+            | "mixinextras"
+            | "minecraft"
+            | "fabric"
+            | "fabricloader"
+            | "quilt_loader"
+            | "quiltloader"
+            | "forge"
+            | "neoforge"
     )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::lockfile::LockMeta;
+    use crate::lockfile::{LockDependency, LockMeta, PackageEntry};
 
     fn candidate(version: &str, dependencies: Vec<(String, String, bool)>) -> CandidateVersion {
         CandidateVersion {
@@ -390,10 +398,7 @@ mod tests {
     #[test]
     fn candidate_versions_precede_and_deduplicate_existing_versions() {
         let mut provider = OrbitDependencyProvider::new();
-        provider.add_package_versions(
-            "example".to_string(),
-            vec![Version::Generic("1".to_string())],
-        );
+        provider.add_package_versions("example".to_string(), vec![Version::parse("1", "forge")]);
         let candidates = vec![candidate("2", Vec::new()), candidate("1", Vec::new())];
 
         register_candidate_versions(
@@ -407,10 +412,7 @@ mod tests {
 
         assert_eq!(
             provider.versions["example"],
-            vec![
-                Version::Generic("2".to_string()),
-                Version::Generic("1".to_string())
-            ]
+            vec![Version::parse("2", "forge"), Version::parse("1", "forge")]
         );
     }
 
@@ -472,7 +474,7 @@ provider = "file"
 
         assert_eq!(
             solution.get(&"example".to_string()),
-            Some(&Version::Generic("1".to_string()))
+            Some(&Version::parse("1", "forge"))
         );
     }
 
@@ -516,7 +518,7 @@ unused = "1"
 
         assert_eq!(
             solution.get(&"b".to_string()),
-            Some(&Version::Generic("1".to_string()))
+            Some(&Version::parse("1", "forge"))
         );
         assert!(solution.get(&"unused".to_string()).is_none());
     }
@@ -554,7 +556,7 @@ a = { version = "*", exclude = ["b"] }
 
         assert_eq!(
             solution.get(&"a".to_string()),
-            Some(&Version::Generic("1".to_string()))
+            Some(&Version::parse("1", "forge"))
         );
         assert!(solution.get(&"b".to_string()).is_none());
     }
@@ -598,5 +600,45 @@ a = "*"
         );
         assert!(!graph.provider.versions.contains_key("java"));
         assert!(!graph.provider.versions.contains_key("mixinextras"));
+    }
+
+    #[test]
+    fn forge_loader_satisfies_maven_version_ranges() {
+        let manifest: OrbitManifest = toml::from_str(
+            r#"
+[project]
+name = "test"
+mc_version = "1.20.1"
+modloader = "forge"
+modloader_version = "47.2.0"
+[dependencies]
+example = "*"
+"#,
+        )
+        .unwrap();
+        let mut lockfile = empty_lockfile("1.20.1", "forge", "47.2.0");
+        lockfile.packages.push(PackageEntry {
+            mod_id: "example".to_string(),
+            version: "1".to_string(),
+            sha1: String::new(),
+            sha256: String::new(),
+            sha512: String::new(),
+            filename: "example.jar".to_string(),
+            provider: "file".to_string(),
+            modrinth: None,
+            file: None,
+            dependencies: vec![LockDependency {
+                name: "forge".to_string(),
+                version: "[47,48)".to_string(),
+            }],
+            implanted: Vec::new(),
+        });
+
+        assert!(crate::resolver::check_lockfile_graph(&manifest, &lockfile).is_ok());
+
+        lockfile.meta.modloader_version = "46.0.0".to_string();
+        let mut incompatible = manifest;
+        incompatible.project.modloader_version = "46.0.0".to_string();
+        assert!(crate::resolver::check_lockfile_graph(&incompatible, &lockfile).is_err());
     }
 }

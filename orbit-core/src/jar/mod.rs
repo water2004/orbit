@@ -5,6 +5,8 @@
 //! - 模组元数据提取：根据 loader 类型分发到对应 reader（fabric → fabric.mod.json, etc.）
 
 pub mod fabric;
+pub mod forge;
+pub mod quilt;
 
 use sha2::{Digest, Sha256};
 use std::io::Read;
@@ -118,8 +120,12 @@ fn read_mod_metadata_from_archive<R: std::io::Read + std::io::Seek>(
     archive: &mut zip::ZipArchive<R>,
     loader: &str,
 ) -> Result<Option<JarModMetadata>, OrbitError> {
-    let meta_opt = match loader {
-        "fabric" | "quilt" => fabric::try_read(archive)?,
+    let normalized_loader = loader.to_ascii_lowercase();
+    let meta_opt = match normalized_loader.as_str() {
+        "fabric" => fabric::try_read(archive)?,
+        "quilt" => quilt::try_read(archive)?,
+        "forge" => forge::try_read(archive, crate::metadata::ModLoader::Forge)?,
+        "neoforge" => forge::try_read(archive, crate::metadata::ModLoader::NeoForge)?,
         _ => {
             return Err(OrbitError::Other(anyhow::anyhow!(
                 "unsupported mod loader: {loader}"
@@ -143,6 +149,46 @@ fn read_mod_metadata_from_archive<R: std::io::Read + std::io::Seek>(
         return Ok(Some(meta));
     }
 
+    Ok(None)
+}
+
+/// Read the first matching UTF-8 metadata entry.
+///
+/// Exact paths win. As a compatibility fallback, metadata located one directory
+/// below the archive root is also accepted.
+pub(super) fn read_metadata_entry<R: std::io::Read + std::io::Seek>(
+    archive: &mut zip::ZipArchive<R>,
+    targets: &[&str],
+) -> Result<Option<(String, String)>, OrbitError> {
+    for target in targets {
+        if let Ok(mut entry) = archive.by_name(target) {
+            let mut content = String::new();
+            entry.read_to_string(&mut content).map_err(|error| {
+                OrbitError::Other(anyhow::anyhow!("cannot read {target}: {error}"))
+            })?;
+            return Ok(Some(((*target).to_string(), content)));
+        }
+    }
+
+    for index in 0..archive.len() {
+        let mut entry = archive.by_index(index).map_err(|error| {
+            OrbitError::Other(anyhow::anyhow!("cannot read ZIP entry: {error}"))
+        })?;
+        let name = entry.name().to_string();
+        let Some(target) = targets.iter().find(|target| {
+            name.ends_with(**target)
+                && name
+                    .strip_suffix(**target)
+                    .is_some_and(|prefix| prefix.matches('/').count() <= 1)
+        }) else {
+            continue;
+        };
+        let mut content = String::new();
+        entry
+            .read_to_string(&mut content)
+            .map_err(|error| OrbitError::Other(anyhow::anyhow!("cannot read {target}: {error}")))?;
+        return Ok(Some(((*target).to_string(), content)));
+    }
     Ok(None)
 }
 
@@ -325,5 +371,92 @@ mod tests {
                     && version == "1.21.11"
                     && *required)
         );
+    }
+
+    #[test]
+    fn reads_forge_metadata_and_jarjar_children() {
+        let child_metadata = br#"
+[[mods]]
+modId = "child"
+version = "1"
+displayName = "Child"
+"#;
+        let child = jar_bytes(&[("META-INF/mods.toml", child_metadata)]);
+        let parent_metadata = br#"
+license = "MIT"
+[[mods]]
+modId = "parent"
+version = "${file.jarVersion}"
+displayName = "Parent"
+authors = "Alice"
+[[dependencies.parent]]
+modId = "forge"
+mandatory = true
+versionRange = "[47,)"
+[[dependencies.parent]]
+modId = "optional-api"
+mandatory = false
+"#;
+        let jarjar = br#"{"jars":[{"path":"META-INF/jarjar/child.jar"}]}"#;
+        let manifest = b"Manifest-Version: 1.0\r\nImplementation-Version: 2.0.1\r\n";
+        let entries: [(&str, &[u8]); 4] = [
+            ("META-INF/mods.toml", parent_metadata),
+            ("META-INF/MANIFEST.MF", manifest),
+            ("META-INF/jarjar/metadata.json", jarjar),
+            ("META-INF/jarjar/child.jar", child.as_slice()),
+        ];
+
+        let metadata = read_mod_metadata_from_bytes(&jar_bytes(&entries), "forge").unwrap();
+
+        assert_eq!(metadata.mod_id, "parent");
+        assert_eq!(metadata.version, "2.0.1");
+        assert_eq!(
+            metadata.dependencies,
+            [
+                ("forge".to_string(), "[47,)".to_string(), true),
+                ("optional-api".to_string(), "*".to_string(), false),
+            ]
+        );
+        assert_eq!(metadata.implanted_mods.len(), 1);
+        assert_eq!(metadata.implanted_mods[0].mod_id, "child");
+    }
+
+    #[test]
+    fn reads_modern_and_legacy_neoforge_metadata_names() {
+        let metadata = br#"
+[[mods]]
+modId = "neo-example"
+version = "1"
+displayName = "Neo Example"
+[[dependencies.neo-example]]
+modId = "neoforge"
+type = "required"
+versionRange = "[21,)"
+"#;
+        for target in ["META-INF/neoforge.mods.toml", "META-INF/mods.toml"] {
+            let jar = jar_bytes(&[(target, metadata)]);
+            let parsed = read_mod_metadata_from_bytes(&jar, "neoforge").unwrap();
+            assert_eq!(parsed.mod_id, "neo-example");
+            assert!(parsed.dependencies[0].2);
+        }
+    }
+
+    #[test]
+    fn reads_quilt_metadata_and_falls_back_to_fabric() {
+        let quilt_metadata = br#"{
+  "quilt_loader": {
+    "id": "quilt-example",
+    "version": "1",
+    "metadata": {"name": "Quilt Example"},
+    "depends": [{"id": "quilt_loader", "versions": ">=0.20"}]
+  }
+}"#;
+        let quilt = jar_bytes(&[("quilt.mod.json", quilt_metadata)]);
+        let parsed = read_mod_metadata_from_bytes(&quilt, "quilt").unwrap();
+        assert_eq!(parsed.mod_id, "quilt-example");
+
+        let fabric = jar_bytes(&[("fabric.mod.json", PRINTER_EMBEDDED.as_bytes())]);
+        let parsed = read_mod_metadata_from_bytes(&fabric, "quilt").unwrap();
+        assert_eq!(parsed.mod_id, "litematica-printer");
     }
 }

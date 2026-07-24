@@ -16,6 +16,7 @@ use crate::resolver::graph::build_solver_graph;
 use crate::resolver::retry::{SolveOutcome, SolveRequest, solve_with_fetch_retry};
 use crate::resolver::types::{CandidateVersion, ResolutionReport};
 
+pub(crate) use graph::is_builtin_package;
 pub use provider::ProviderError as FetchRetryError;
 
 pub fn check_local_graph(

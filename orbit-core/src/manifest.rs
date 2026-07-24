@@ -44,7 +44,7 @@ pub struct ResolverConfig {
 }
 
 fn default_platforms() -> Vec<String> {
-    vec!["modrinth".into(), "curseforge".into()]
+    vec!["modrinth".into()]
 }
 
 impl Default for ResolverConfig {
@@ -204,7 +204,7 @@ modloader = "fabric"
 modloader_version = "0.15.7"
 "#;
         let manifest: OrbitManifest = toml::from_str(toml_str).unwrap();
-        assert_eq!(manifest.resolver.platforms, vec!["modrinth", "curseforge"]);
+        assert_eq!(manifest.resolver.platforms, vec!["modrinth"]);
         assert!(!manifest.resolver.prerelease);
     }
 }
