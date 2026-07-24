@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <Wix
   xmlns="http://wixtoolset.org/schemas/v4/wxs"
+  xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util"
   RequiredVersion="7.0.0">
   <Package
     Name="Orbit"
@@ -8,7 +9,7 @@
     Version="$(var.OrbitVersion)"
     Language="1033"
     Scope="perMachine"
-    ProductCode="$(var.OrbitProductCode)"
+    ProductCode="*"
     UpgradeCode="D702E25B-F168-46F4-922F-797235883C37">
 
     <SummaryInformation
@@ -16,6 +17,7 @@
       Comments="Installs the Orbit command-line application." />
 
     <MajorUpgrade
+      AllowSameVersionUpgrades="yes"
       DowngradeErrorMessage="A newer version of Orbit is already installed."
       Schedule="afterInstallInitialize" />
 
@@ -24,6 +26,25 @@
     <Property Id="ARPCOMMENTS" Value="Minecraft mod package manager" />
     <Property Id="ARPURLINFOABOUT" Value="https://github.com/water2004/orbit" />
     <Property Id="ADD_TO_PATH" Value="1" Secure="yes" />
+    <Property Id="REMOVE_APPDATA" Value="0" Secure="yes" />
+    <Property Id="ORBIT_ROAMING_DATA" Secure="yes">
+      <RegistrySearch
+        Id="OrbitRoamingDataPathSearch"
+        Root="HKLM"
+        Key="Software\water2004\Orbit"
+        Name="RoamingDataPath"
+        Type="raw"
+        Bitness="always64" />
+    </Property>
+    <Property Id="ORBIT_LOCAL_DATA" Secure="yes">
+      <RegistrySearch
+        Id="OrbitLocalDataPathSearch"
+        Root="HKLM"
+        Key="Software\water2004\Orbit"
+        Name="LocalDataPath"
+        Type="raw"
+        Bitness="always64" />
+    </Property>
 
     <UIRef Id="OrbitInstallUI" />
     <WixVariable
@@ -42,6 +63,28 @@
               Source="$(var.OrbitExecutable)"
               Name="orbit.exe"
               KeyPath="yes" />
+            <RegistryValue
+              Root="HKLM"
+              Key="Software\water2004\Orbit"
+              Name="RoamingDataPath"
+              Type="string"
+              Value="[AppDataFolder]orbit" />
+            <RegistryValue
+              Root="HKLM"
+              Key="Software\water2004\Orbit"
+              Name="LocalDataPath"
+              Type="string"
+              Value="[LocalAppDataFolder]orbit" />
+            <util:RemoveFolderEx
+              Id="RemoveOrbitRoamingData"
+              Property="ORBIT_ROAMING_DATA"
+              On="uninstall"
+              Condition="REMOVE_APPDATA = &quot;1&quot; AND NOT UPGRADINGPRODUCTCODE" />
+            <util:RemoveFolderEx
+              Id="RemoveOrbitLocalData"
+              Property="ORBIT_LOCAL_DATA"
+              On="uninstall"
+              Condition="REMOVE_APPDATA = &quot;1&quot; AND NOT UPGRADINGPRODUCTCODE" />
           </Component>
 
           <Component

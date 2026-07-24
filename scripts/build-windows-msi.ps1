@@ -61,12 +61,6 @@ if ($versionParts[0] -gt 255 -or
     throw "Cargo version '$version' exceeds Windows Installer version limits (255.255.65535)."
 }
 
-# Keep one ProductCode per released x64 version. This makes rebuilding the same
-# version enter maintenance mode instead of registering a duplicate product.
-$productCodeTail = "{0:X2}{1:X2}{2:X4}A64C" -f `
-    $versionParts[0], $versionParts[1], $versionParts[2]
-$productCode = "F56A3B38-5646-4B0E-A73F-$productCodeTail"
-
 Push-Location $repoRoot
 try {
     if (-not $SkipCargoBuild) {
@@ -92,6 +86,13 @@ try {
         throw "Restoring the pinned WiX UI extension failed."
     }
 
+    dotnet tool run wix -- extension add `
+        "WixToolset.Util.wixext/$wixVersion" `
+        -acceptEula wix7
+    if ($LASTEXITCODE -ne 0) {
+        throw "Restoring the pinned WiX Util extension failed."
+    }
+
     New-Item -ItemType Directory -Force -Path $OutputDirectory | Out-Null
     $outputPath = Join-Path $OutputDirectory "orbit-$version-x86_64.msi"
     $intermediatePath = Join-Path $repoRoot "target\wix\obj"
@@ -102,19 +103,23 @@ try {
         $wixUiSource `
         -arch x64 `
         -d "OrbitVersion=$version" `
-        -d "OrbitProductCode=$productCode" `
         -d "OrbitExecutable=$executable" `
         -d "OrbitLicense=$license" `
         -d "OrbitLicenseRtf=$licenseRtf" `
         -ext WixToolset.UI.wixext `
+        -ext WixToolset.Util.wixext `
         -intermediatefolder $intermediatePath `
         -out $outputPath
     if ($LASTEXITCODE -ne 0) {
         throw "WiX failed to build the MSI."
     }
 
+    # ICE61 warns whenever the upgrade range includes the current three-field
+    # MSI version. That inclusion is intentional: each build receives a fresh
+    # ProductCode and must replace an earlier build with the same Cargo version.
     dotnet tool run wix -- msi validate `
         -acceptEula wix7 `
+        -sice ICE61 `
         $outputPath
     if ($LASTEXITCODE -ne 0) {
         throw "Windows Installer validation failed."
