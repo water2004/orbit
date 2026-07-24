@@ -74,6 +74,7 @@
 | `remove` / `upgrade` / `outdated` | 使用 Fat Lockfile 和结构化报告 |
 | `sync` | 重新探测平台并扫描 mods，刷新工件快照，按包选择候选并确认移除未选版本 |
 | `check` | 实例目标兼容性预检 |
+| `audit` | 只读扫描实际 ClassFile/refmap，输出文本或固定 schema JSON 风险报告 |
 | `list` / `info` | 展示包信息、逻辑依赖和 bundled |
 | `export` / `import` | Orbit archive 与 Modrinth pack |
 | `cache` / `instances` / `purge` | 已接 core |
@@ -86,7 +87,9 @@
   `ORBIT_CURSEFORGE_API_KEY`。
 - CurseForge API 未公开本地 fingerprint 算法；实现明确依据 Prism Launcher 的公开
   源码并用 golden vectors 固定行为。
-- 字节码扫描只能证明 class major 下限，不能证明 API/Mixin/反射兼容。
+- 普通安装扫描只能证明 class major 下限；`orbit audit` 另行分析 Mixin、
+  ModLauncher transformer 和二进制形状风险，但仍只报告潜在风险，不能证明兼容，
+  也不覆盖资源、配置、注册表、网络协议、反射目标或游戏业务逻辑。
 - PubGrub fork 已发布到 `water2004/pubgrub` 的 `codex/solver-observer` 分支；
   Orbit 固定到 `0c260ff2528a6c09c683cc7270b3b97c2ea114f3`。
 - 当前 fork 原生支持 `P = mod_id`、不透明复合候选版本、调用方定义
@@ -110,3 +113,4 @@
 - [orbit-detection.md](orbit-detection.md)
 - [orbit-cli-commands.md](orbit-cli-commands.md)
 - [orbit-providers.md](orbit-providers.md)
+- [orbit-bytecode-audit.md](orbit-bytecode-audit.md)

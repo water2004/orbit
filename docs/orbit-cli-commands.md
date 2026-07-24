@@ -279,6 +279,35 @@ orbit check <mc-version> [--modloader <loader>]
 对 lockfile 中在线 package 查询目标 Minecraft/loader 的兼容版本并返回逐包矩阵。本地
 `file:` package 没有平台兼容性事实，会明确标为无法在线判断。
 
+### `orbit audit`
+
+```text
+orbit audit
+  [--format text|json]
+  [--min-severity low|medium|high|critical]
+  [--fail-on low|medium|high|critical]
+  [--mod <id-or-name>]
+```
+
+只读分析当前实例实际存在的 Minecraft、Loader、运行时依赖和 Mod JAR。它与
+`orbit check` 不同：`check` 查询目标版本是否有远端文件，`audit` 不联网、不读取
+provider 兼容声明，也不修改 manifest、lockfile、下载缓存或实例文件。
+
+`--min-severity` 只控制报告展示；`--fail-on` 在完整分析后按等级决定是否返回非零退出
+码。`--mod` 只匹配已安装 Mod 的 ID、展示名或文件名并过滤报告；没有匹配项会明确报错，
+但有匹配项时分析仍加载完整实例。JSON 顶层固定包含
+`schema_version`、`environment`、`readiness`、`artifacts`、`risks`、`coverage` 和
+`warnings`。没有达到阈值的结果只表述为
+“未发现达到当前阈值的字节码兼容风险”，不宣称全部 Mod 兼容。
+
+执行前根据实际 classpath 进行 capability probe。Fabric/Quilt 需要 Loader 与 Mixin
+ABI；现代 Forge/NeoForge 还必须具有可识别的 ModLauncher `ITransformer`、
+`Target` 和 `ITransformationService` ABI。Legacy LaunchWrapper 明确拒绝，不提供
+`--force`。单个坏 Mod、缺少 refmap、自定义 InjectionPoint 和解释预算耗尽进入
+warning/coverage；缺失基础游戏或运行库则停止。
+
+详细证据边界见 [orbit-bytecode-audit.md](orbit-bytecode-audit.md)。
+
 ## 7. Cache
 
 ```text
