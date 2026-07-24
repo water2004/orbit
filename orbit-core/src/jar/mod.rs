@@ -94,6 +94,7 @@ pub fn read_mod_metadata(path: &Path, loader: &str) -> Result<JarModMetadata, Or
 /// 校验来源提供的 SHA-512 或 SHA-1，失败则返回 `ChecksumMismatch`。
 /// 优先从全局缓存读取，未命中才走 HTTP；下载后自动存入缓存。
 pub async fn download_and_parse(
+    downloader: &crate::providers::ArtifactDownloadClient,
     url: &str,
     filename: &str,
     expected_sha1: &str,
@@ -108,29 +109,7 @@ pub async fn download_and_parse(
         return read_mod_metadata_from_bytes(&bytes, loader);
     }
 
-    let client = reqwest::Client::builder()
-        .user_agent(format!("orbit/{}", env!("CARGO_PKG_VERSION")))
-        .timeout(std::time::Duration::from_secs(60))
-        .build()
-        .map_err(|e| crate::error::OrbitError::Other(e.into()))?;
-
-    let response = client
-        .get(url)
-        .send()
-        .await
-        .map_err(crate::error::OrbitError::Network)?;
-    let status = response.status();
-    if !status.is_success() {
-        let body = response.text().await.unwrap_or_default();
-        let body: String = body.chars().take(500).collect();
-        return Err(crate::error::OrbitError::Other(anyhow::anyhow!(
-            "download of '{filename}' failed with HTTP {status}: {body}"
-        )));
-    }
-    let bytes = response
-        .bytes()
-        .await
-        .map_err(crate::error::OrbitError::Network)?;
+    let bytes = downloader.download(url, filename).await?;
 
     verify_source_hash(&bytes, expected_sha1, expected_sha512, url)?;
 

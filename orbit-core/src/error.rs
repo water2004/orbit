@@ -42,6 +42,16 @@ pub enum OrbitError {
     #[error("network error: {0}")]
     Network(#[from] reqwest::Error),
 
+    #[error(
+        "{provider} provider requires an API key; set {environment_variable} or \
+         {config_key} in config.toml"
+    )]
+    ProviderApiKeyRequired {
+        provider: &'static str,
+        environment_variable: &'static str,
+        config_key: &'static str,
+    },
+
     #[error("json error: {0}")]
     Json(#[from] serde_json::Error),
 

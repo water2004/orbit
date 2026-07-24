@@ -5,13 +5,14 @@ use std::collections::HashMap;
 
 use super::rate_limiter::RateLimiter;
 use super::{
-    ArtifactFingerprint, ModInfo, ModProvider, ModrinthResolvedInfo, ResolvedDependency,
-    ResolvedMod, SearchResultItem, SideSupport,
+    ArtifactDownloadClient, ArtifactFingerprint, ModInfo, ModProvider, ModrinthResolvedInfo,
+    ResolvedDependency, ResolvedMod, SearchResultItem, SideSupport,
 };
 use crate::error::OrbitError;
 
 pub struct ModrinthProvider {
     client: MRClient,
+    downloader: ArtifactDownloadClient,
     rate_limiter: RateLimiter,
 }
 
@@ -20,6 +21,7 @@ impl ModrinthProvider {
         let client = MRClient::new(user_agent).map_err(|e| OrbitError::Other(e.into()))?;
         Ok(Self {
             client,
+            downloader: ArtifactDownloadClient::anonymous(user_agent)?,
             rate_limiter: RateLimiter::new(max_concurrency),
         })
     }
@@ -101,6 +103,10 @@ fn build_facets(mc_version: Option<&str>, loader: Option<&str>) -> Option<String
 impl ModProvider for ModrinthProvider {
     fn name(&self) -> &'static str {
         "modrinth"
+    }
+
+    fn artifact_downloader(&self) -> &ArtifactDownloadClient {
+        &self.downloader
     }
 
     async fn search(

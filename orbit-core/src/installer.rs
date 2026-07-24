@@ -28,14 +28,6 @@ pub struct InstallOptions {
     pub env: Option<String>,
 }
 
-fn download_client() -> reqwest::Client {
-    reqwest::Client::builder()
-        .user_agent(format!("orbit/{}", env!("CARGO_PKG_VERSION")))
-        .timeout(std::time::Duration::from_secs(30))
-        .build()
-        .expect("failed to build download client")
-}
-
 /// 单次 install 报告
 #[derive(Debug, Clone)]
 pub struct InstallReport {
@@ -326,7 +318,8 @@ pub async fn upgrade_all_in_instance(
         return Ok(report);
     }
 
-    let installed = materialize_plans(planned, &resolved_candidates, &mods_dir, loader).await?;
+    let installed =
+        materialize_plans(planned, &resolved_candidates, &mods_dir, loader, providers).await?;
 
     apply_to_lockfile(&mut lock.inner, &installed, &mods_dir);
 
@@ -674,7 +667,7 @@ async fn install_mod(input: InstallModInput<'_>) -> Result<InstallReport, OrbitE
             let _ = std::fs::remove_file(mods_dir.join(&old.filename));
         }
     }
-    let installed = materialize_plans(planned, &resolved, mods_dir, loader).await?;
+    let installed = materialize_plans(planned, &resolved, mods_dir, loader, providers).await?;
 
     if installed
         .iter()
@@ -1025,6 +1018,14 @@ async fn restore_platform_package(
     providers: &[Box<dyn ModProvider>],
     locked: bool,
 ) -> Result<(), OrbitError> {
+    let provider =
+        crate::providers::find_provider(providers, &entry.provider).ok_or_else(|| {
+            OrbitError::Other(anyhow::anyhow!(
+                "{} provider is required to restore '{}'",
+                entry.provider,
+                entry.mod_id,
+            ))
+        })?;
     let project_id = entry.source_project_id().ok_or_else(|| {
         OrbitError::Other(anyhow::anyhow!(
             "{} package '{}' has no provider metadata",
@@ -1059,14 +1060,6 @@ async fn restore_platform_package(
                 entry.mod_id
             )));
         }
-        let provider =
-            crate::providers::find_provider(providers, &entry.provider).ok_or_else(|| {
-                OrbitError::Other(anyhow::anyhow!(
-                    "{} provider is required to restore '{}'",
-                    entry.provider,
-                    entry.mod_id,
-                ))
-            })?;
         provider
             .get_versions(&project_id, None, None)
             .await?
@@ -1078,7 +1071,7 @@ async fn restore_platform_package(
     } else {
         resolved_from_lock_entry(entry, download_url, filename.clone())?
     };
-    let destination = download_mod(&resolved, mods_dir).await?;
+    let destination = download_mod(&resolved, provider, mods_dir).await?;
     verify_package_hash(entry, &destination)?;
     entry.filename = resolved.filename.clone();
     entry.sha1 = crate::jar::compute_sha1(&destination)?;
@@ -1208,6 +1201,7 @@ async fn materialize_plans(
     resolved_candidates: &crate::outdated::ResolvedCandidates,
     mods_dir: &Path,
     loader: &str,
+    providers: &[Box<dyn ModProvider>],
 ) -> Result<Vec<InstalledMod>, OrbitError> {
     let mut installed = Vec::new();
     for mut plan in planned {
@@ -1215,7 +1209,15 @@ async fn materialize_plans(
         let Some(resolved) = resolved_candidates.get(&key) else {
             continue;
         };
-        let dest_path = download_mod(resolved, mods_dir).await?;
+        let provider =
+            crate::providers::find_provider(providers, &resolved.provider).ok_or_else(|| {
+                OrbitError::Other(anyhow::anyhow!(
+                    "{} provider is required to download '{}'",
+                    resolved.provider,
+                    resolved.filename
+                ))
+            })?;
+        let dest_path = download_mod(resolved, provider, mods_dir).await?;
         let metadata = crate::jar::read_mod_metadata(&dest_path, loader)?;
         if !metadata.mod_id.is_empty() {
             plan.mod_id = metadata.mod_id;
@@ -1238,7 +1240,18 @@ async fn materialize_plans(
     Ok(installed)
 }
 
-async fn download_mod(m: &ResolvedMod, mods_dir: &Path) -> Result<PathBuf, OrbitError> {
+async fn download_mod(
+    m: &ResolvedMod,
+    provider: &dyn ModProvider,
+    mods_dir: &Path,
+) -> Result<PathBuf, OrbitError> {
+    if provider.name() != m.provider {
+        return Err(OrbitError::Other(anyhow::anyhow!(
+            "cannot download {} artifact with {} provider",
+            m.provider,
+            provider.name()
+        )));
+    }
     let final_path = mods_dir.join(&m.filename);
     if final_path.exists() {
         if !m.sha512.is_empty() {
@@ -1270,24 +1283,10 @@ async fn download_mod(m: &ResolvedMod, mods_dir: &Path) -> Result<PathBuf, Orbit
         }
     }
 
-    let client = download_client();
-    let response = client
-        .get(&m.download_url)
-        .send()
-        .await
-        .map_err(OrbitError::Network)?;
-    let status = response.status();
-    if !status.is_success() {
-        let body = response.text().await.unwrap_or_default();
-        let body: String = body.chars().take(500).collect();
-        return Err(OrbitError::Other(anyhow::anyhow!(
-            "download of '{}' failed with HTTP {}: {}",
-            m.filename,
-            status,
-            body
-        )));
-    }
-    let bytes = response.bytes().await.map_err(OrbitError::Network)?;
+    let bytes = provider
+        .artifact_downloader()
+        .download(&m.download_url, &m.filename)
+        .await?;
     crate::jar::verify_source_hash(&bytes, &m.sha1, &m.sha512, &m.filename)?;
 
     // 存入全局缓存

@@ -68,16 +68,19 @@ pub async fn download_candidates_bfs(
         }
     }
     let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(10));
+    let downloader = provider.artifact_downloader().clone();
     let mut handles = Vec::new();
 
     for v in &to_download {
         let v = v.clone();
         let loader = loader.to_string();
         let sem = semaphore.clone();
+        let downloader = downloader.clone();
         let lockfile_packages = lockfile.packages.clone();
         handles.push(tokio::spawn(async move {
             let _permit = sem.acquire().await;
             let metadata = crate::jar::download_and_parse(
+                &downloader,
                 &v.download_url,
                 &v.filename,
                 &v.sha1,

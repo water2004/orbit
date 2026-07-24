@@ -170,6 +170,7 @@ async fn fetch_missing_candidates(request: FetchRequest<'_>) -> Result<bool, Str
         let mut first_error = None;
         for version in versions {
             match crate::jar::download_and_parse(
+                mod_provider.artifact_downloader(),
                 &version.download_url,
                 &version.filename,
                 &version.sha1,

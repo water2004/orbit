@@ -11,8 +11,8 @@ use self::client::{ApiError, Client, MAX_RESULTS};
 use self::models::{File, GetFilesParams, Mod, ModLoaderType, SearchModsParams};
 use super::rate_limiter::RateLimiter;
 use super::{
-    ArtifactFingerprint, CurseForgeResolvedInfo, ModInfo, ModProvider, ModVersionInfo,
-    ResolvedDependency, ResolvedMod, SearchResultItem,
+    ArtifactDownloadClient, ArtifactFingerprint, CurseForgeResolvedInfo, ModInfo, ModProvider,
+    ModVersionInfo, ResolvedDependency, ResolvedMod, SearchResultItem,
 };
 use crate::error::OrbitError;
 
@@ -28,6 +28,7 @@ struct MinecraftContext {
 
 pub struct CurseForgeProvider {
     client: Client,
+    downloader: ArtifactDownloadClient,
     rate_limiter: RateLimiter,
     minecraft: OnceCell<MinecraftContext>,
 }
@@ -38,8 +39,15 @@ impl CurseForgeProvider {
         user_agent: &str,
         max_concurrency: usize,
     ) -> Result<Self, OrbitError> {
+        let api_key = required_api_key(api_key)?;
         Ok(Self {
             client: Client::new(api_key, user_agent).map_err(map_client_error)?,
+            downloader: ArtifactDownloadClient::authenticated_for_domain(
+                user_agent,
+                "x-api-key",
+                api_key,
+                "forgecdn.net",
+            )?,
             rate_limiter: RateLimiter::new(max_concurrency),
             minecraft: OnceCell::new(),
         })
@@ -52,9 +60,16 @@ impl CurseForgeProvider {
         max_concurrency: usize,
         base_url: &str,
     ) -> Result<Self, OrbitError> {
+        let api_key = required_api_key(api_key)?;
         Ok(Self {
             client: Client::with_base_url(api_key, user_agent, base_url)
                 .map_err(map_client_error)?,
+            downloader: ArtifactDownloadClient::authenticated_for_domain(
+                user_agent,
+                "x-api-key",
+                api_key,
+                "forgecdn.net",
+            )?,
             rate_limiter: RateLimiter::new(max_concurrency),
             minecraft: OnceCell::new(),
         })
@@ -267,6 +282,18 @@ impl CurseForgeProvider {
     }
 }
 
+fn required_api_key(api_key: &str) -> Result<&str, OrbitError> {
+    let api_key = api_key.trim();
+    if api_key.is_empty() {
+        return Err(OrbitError::ProviderApiKeyRequired {
+            provider: "CurseForge",
+            environment_variable: "ORBIT_CURSEFORGE_API_KEY",
+            config_key: "auth.curseforge_api_key",
+        });
+    }
+    Ok(api_key)
+}
+
 fn map_client_error(error: ApiError) -> OrbitError {
     OrbitError::Other(error.into())
 }
@@ -330,6 +357,10 @@ fn file_game_versions(file: &File) -> Vec<String> {
 impl ModProvider for CurseForgeProvider {
     fn name(&self) -> &'static str {
         "curseforge"
+    }
+
+    fn artifact_downloader(&self) -> &ArtifactDownloadClient {
+        &self.downloader
     }
 
     async fn search(
@@ -668,6 +699,31 @@ mod tests {
             }
         });
         (format!("http://{address}/v1/"), handle)
+    }
+
+    #[test]
+    fn direct_construction_requires_an_api_key() {
+        let error = CurseForgeProvider::new(" \t ", "orbit-test", 1)
+            .err()
+            .expect("blank key should fail");
+        assert!(matches!(
+            error,
+            OrbitError::ProviderApiKeyRequired {
+                provider: "CurseForge",
+                ..
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn provider_downloads_reject_untrusted_hosts_before_network_access() {
+        let provider = CurseForgeProvider::new("test-key", "orbit-test", 1).unwrap();
+        let error = provider
+            .artifact_downloader()
+            .download("https://example.invalid/example.jar", "example.jar")
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("untrusted host"));
     }
 
     #[tokio::test]

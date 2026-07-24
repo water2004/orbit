@@ -6,11 +6,13 @@
 //! 统一消费这里的领域类型。
 
 pub mod curseforge;
+pub mod download;
 pub mod modrinth;
 pub mod rate_limiter;
 
 use crate::error::OrbitError;
 use async_trait::async_trait;
+pub use download::ArtifactDownloadClient;
 
 /// 根据配置创建 provider 列表，按 `resolver.platforms` 顺序。
 pub fn create_providers(
@@ -38,11 +40,10 @@ pub fn create_providers_with_auth(
                     .curseforge_api_key
                     .as_deref()
                     .filter(|key| !key.trim().is_empty())
-                    .ok_or_else(|| {
-                        crate::error::OrbitError::Other(anyhow::anyhow!(
-                            "CurseForge requires an API key; set \
-                             ORBIT_CURSEFORGE_API_KEY or auth.curseforge_api_key in config.toml"
-                        ))
+                    .ok_or(crate::error::OrbitError::ProviderApiKeyRequired {
+                        provider: "CurseForge",
+                        environment_variable: "ORBIT_CURSEFORGE_API_KEY",
+                        config_key: "auth.curseforge_api_key",
                     })?;
                 providers.push(
                     Box::new(curseforge::CurseForgeProvider::new(api_key, &ua, 3)?)
@@ -286,6 +287,10 @@ pub trait ModProvider: Send + Sync {
     /// 提供者名称（如 "modrinth", "curseforge"）
     fn name(&self) -> &'static str;
 
+    /// Provider-owned artifact transport. Authentication stays in this runtime
+    /// client and is never copied into resolved metadata or lockfiles.
+    fn artifact_downloader(&self) -> &ArtifactDownloadClient;
+
     /// 搜索模组
     async fn search(
         &self,
@@ -353,7 +358,33 @@ mod tests {
         let error = create_providers_with_auth(&["curseforge".to_string()], &AuthConfig::default())
             .err()
             .expect("missing key should fail");
-        assert!(error.to_string().contains("ORBIT_CURSEFORGE_API_KEY"));
+        assert!(matches!(
+            error,
+            OrbitError::ProviderApiKeyRequired {
+                provider: "CurseForge",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn curseforge_rejects_a_whitespace_only_api_key() {
+        let error = create_providers_with_auth(
+            &["curseforge".to_string()],
+            &AuthConfig {
+                curseforge_api_key: Some("   ".to_string()),
+                modrinth_token: None,
+            },
+        )
+        .err()
+        .expect("blank key should fail");
+        assert!(matches!(
+            error,
+            OrbitError::ProviderApiKeyRequired {
+                provider: "CurseForge",
+                ..
+            }
+        ));
     }
 
     #[test]

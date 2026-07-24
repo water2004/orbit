@@ -12,6 +12,8 @@ pub(super) const MAX_RESULTS: u32 = 10_000;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ApiError {
+    #[error("CurseForge API key is required")]
+    MissingApiKey,
     #[error("invalid CurseForge API key header: {0}")]
     InvalidApiKey(#[source] reqwest::header::InvalidHeaderValue),
     #[error("failed to build CurseForge HTTP client: {0}")]
@@ -26,7 +28,9 @@ impl ApiError {
     pub fn status(&self) -> Option<StatusCode> {
         match self {
             Self::Status { status, .. } => Some(*status),
-            Self::InvalidApiKey(_) | Self::Client(_) | Self::Request(_) => None,
+            Self::MissingApiKey | Self::InvalidApiKey(_) | Self::Client(_) | Self::Request(_) => {
+                None
+            }
         }
     }
 }
@@ -52,6 +56,10 @@ impl Client {
     }
 
     fn build(api_key: &str, user_agent: &str, base_url: &str) -> Result<Self, ApiError> {
+        let api_key = api_key.trim();
+        if api_key.is_empty() {
+            return Err(ApiError::MissingApiKey);
+        }
         let mut headers = reqwest::header::HeaderMap::new();
         let api_key =
             reqwest::header::HeaderValue::from_str(api_key).map_err(ApiError::InvalidApiKey)?;
@@ -64,6 +72,8 @@ impl Client {
             .user_agent(user_agent)
             .default_headers(headers)
             .timeout(std::time::Duration::from_secs(30))
+            // Never forward x-api-key through an unvalidated redirect.
+            .redirect(reqwest::redirect::Policy::none())
             .build()
             .map_err(ApiError::Client)?;
         Ok(Self {
