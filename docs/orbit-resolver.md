@@ -14,7 +14,7 @@ orbit-core/src/resolver/
 ├── retry.rs               # 求解循环与缺失依赖补抓
 ├── local.rs               # 不联网的本地安装图校验
 ├── provider.rs            # OrbitDependencyProvider + ProviderError
-├── types.rs               # PackageId + CandidateVersion + ImplantedCandidate
+├── types.rs               # 候选输入 + 结构化 ResolutionReport / CandidateDiagnostic
 └── diagnostics/
     ├── mod.rs             # 从类型化 SolverEvent 采集候选淘汰原因
     ├── render.rs          # 将 DerivationTree 渲染为 Orbit 文案
@@ -48,7 +48,11 @@ build_solver_graph
     → collect_upgrades
 ```
 
-候选 JAR 的初次发现和批量下载目前发生在 `outdated::download_candidates_bfs()`；resolver 本身只会在求解失败后补抓候选所引用、且 lockfile 已知的缺失依赖。因此“离线求解”只描述单次 PubGrub 运行，不代表整个 API 绝不访问网络。
+候选 JAR 的初次发现和批量下载目前发生在
+`outdated::download_candidates_with_fallback()`（内部复用
+`download_candidates_bfs()`）；resolver 本身只会在求解失败后补抓候选所引用、且
+lockfile 已知的缺失依赖。因此“离线求解”只描述单次 PubGrub 运行，不代表整个 API
+绝不访问网络。
 
 ---
 
@@ -56,7 +60,7 @@ build_solver_graph
 
 `graph.rs` 按以下顺序构建 `OrbitDependencyProvider`：
 
-1. 注册平台内置包：`minecraft`、实际 loader、Fabric loader 别名、`java`，以及 Fabric 的 `mixinextras`；
+1. 注册平台内置包：`minecraft`、实际 loader 和 Fabric loader 别名；
 2. 注册 lockfile 中的包、真实依赖和内嵌模组；
 3. 注册候选版本和候选内嵌模组；
 4. 构造内部根包 `___orbit_root___`；
@@ -75,11 +79,19 @@ build_solver_graph
 当前根约束行为：
 
 - manifest 中的包始终使用 manifest 版本约束，无论该包是否有候选；
-- 不在 manifest 中的候选也以 `Ranges::full()` 加入根依赖，供 `orbit add` 使用。
+- 不在 manifest 中的候选只有被已选包依赖时才进入解，不会被提升为顶级依赖；
+- `[overrides]` 替换已有根边或传递边的版本范围，但不会创建新的依赖边；
+- `exclude` 只移除声明该规则的包到指定传递依赖的边；其他包或 manifest
+  显式声明仍可把该依赖带入解。
 
 `orbit add` 会先把 provider 查询标识映射到候选 JAR 自声明的 `mod_id`，再把命令行
 constraint 临时加入求解 manifest。安装成功后，该 constraint 写入真实 `mod_id` 对应的
-manifest 条目；后续升级只更新 lockfile 版本，不覆盖原约束。
+manifest 条目；`--optional` 和 `--env` 同时保存在完整依赖形式中。传递依赖只进入
+lockfile，不会被自动提升成 manifest 顶级声明；后续升级只更新 lockfile 版本，不覆盖原约束。
+
+`java` 和 `mixinextras` 当前被明确视为运行时提供的依赖，并在联网候选图、本地图和
+缺失候选发现中一致忽略。Orbit 尚未探测实际 Java 运行时版本，因此不会伪造 `0.0.0`
+参与版本比较。
 
 ---
 
@@ -91,14 +103,18 @@ manifest 条目；后续升级只更新 lockfile 版本，不覆盖原约束。
 2. 调用 `pubgrub::resolve_with_observer()`；
 3. 成功时返回解和本次实际求解路径的 trace；
 4. `NoSolution` 时检查候选及其内嵌模组声明的 required dependencies；
-5. 对尚无候选、不是内嵌模组、且能在 lockfile 找到 Modrinth 元数据的包，获取版本、下载 JAR、解析元数据并注册；
-6. 有新增候选则重新求解，否则用 `DefaultStringReporter` 返回原始不可解证明。
+5. 对尚无候选、不是内嵌模组、且能在 lockfile 找到 Modrinth 元数据的包，通过名称选择
+   Modrinth provider，获取版本、下载 JAR、解析元数据并注册；
+6. 有新增候选则重新求解，否则把不可解证明渲染为领域依赖事实。
 
 补抓得到的候选走 `graph::register_candidate_versions()`，与初始候选共享同一套版本去重、依赖注册和未知传递依赖注册逻辑。
 
 这不是旧文档描述的“PubGrub 返回 `FetchRetryError` 后按缓存缺口抓取”。`ProviderError` 只表示图构造漏掉了包版本或版本依赖，是内部错误；正常的未知依赖已注册为空版本列表，并表现为 `NoSolution`。
 
-目前补抓只使用 `providers.first()`。这与 `[resolver].platforms` 的顺序回退规范尚不一致。
+初始候选发现通过 `download_candidates_with_fallback()` 按
+`[resolver].platforms` 顺序选择第一个有有效候选的平台。补抓已有 lockfile 条目时不做
+跨平台猜测，而是按条目的来源元数据选择对应 provider；当前 lockfile 只实现了
+Modrinth 专属元数据。
 
 ---
 
@@ -126,7 +142,9 @@ Orbit 不再运行第二次反事实求解，也不解析 debug 日志。定制 
 
 `diagnostics/tests.rs` 使用最小、确定性的依赖图分别触发上述三条路径。测试断言的是类型化事件生成的领域解释，不解析日志，也不运行第二条证明路径。
 
-当前诊断只覆盖“求解成功但首个候选未被选择”的场景。真正不可解时仍返回 `DefaultStringReporter` 的字符串，见第 8 节。
+成功求解返回 `ResolutionReport`，其中 `diagnostics` 是类型化
+`CandidateDiagnostic`；CLI 决定如何展示。不可解和本地校验也共用领域事实渲染器，
+不再暴露 PubGrub 默认 reporter 的内部证明格式。
 
 ---
 
@@ -140,12 +158,13 @@ check_local_graph(manifest, local_mods)
 
 1. 注册 Minecraft、loader 等平台包；
 2. 使用 JAR 自声明的 `mod_id` 和版本注册本地模组；
-3. 注入本地 JAR 的 required dependencies；
+3. 使用与候选图相同的 override、exclude 和运行时依赖规则注入 required dependencies；
 4. 将被依赖但未安装的包注册为空版本列表；
-5. 根包精确依赖已安装的 manifest 包，并以 full range 依赖缺失的 manifest 包；
+5. 根包按 manifest 的实际版本约束依赖所有顶级包；
 6. 调用普通 `pubgrub::resolve()`。
 
-缺失的 manifest 顶层依赖必须进入根约束，否则空版本列表不会被求解器访问。该行为有单元测试保护。
+缺失的 manifest 顶层依赖和不满足 manifest 约束的本地版本都必须产生不可解结果。
+override/exclude 在本地与联网路径一致的行为也有单元测试保护。
 
 当前 `init` 使用此函数验证扫描结果；`check` 和 `sync` 命令仍未实现，不能写成已经接入。
 
@@ -159,23 +178,31 @@ check_local_graph(manifest, local_mods)
 | `dependents(mod_id, entries)` | 从 lockfile 真实依赖中反查直接依赖者 |
 | `check_version_conflict(mod_id, version, entries)` | 检查 lockfile 已有版本是否冲突 |
 | `resolve_with_candidates(...)` | 构图、求解、必要时补抓依赖，并返回实际升级版本 |
+| `resolve_with_candidates_report(...)` | 在升级结果之外返回类型化候选诊断 |
 | `check_local_graph(...)` | 不联网验证本地安装图 |
 
 不存在 `resolve_manifest()`、`ProviderVersionResolver`、`ModrinthVersionResolver` 或 `trapped_room_test()`。
 
 ---
 
-## 8. 仍然有效但代码尚未满足的规范
+## 8. 已收口的规范与剩余边界
 
-以下条目不是过时文档，不能为了匹配现状而删除：
+| 规范 | 当前状态 |
+|------|----------|
+| `[resolver].platforms` 按顺序回退 | add 的候选发现和搜索已按配置顺序工作；补抓按 lockfile 来源选择 provider |
+| `orbit-core` 不输出 UI 文本 | core 返回报告和错误，stdout/stderr 只由 CLI 使用 |
+| 冲突信息可读且可测试 | 成功路径返回类型化候选原因；不可解路径渲染领域依赖事实 |
+| `[overrides]` / `exclude` | 候选图和本地图共用规则；override 不新增依赖，exclude 按声明者移除边 |
+| `optional` / `env` | `orbit add` 已持久化字段；它们按 Fat Lockfile 设计不改变求解图 |
+| Java 依赖 | 联网和本地路径均明确忽略，不再注入虚假的 `0.0.0` |
 
-| 规范 | 当前代码差距 |
-|------|--------------|
-| `[resolver].platforms` 应按顺序回退 | add、outdated、BFS 下载和 resolver 补抓目前只使用第一个 provider |
-| `orbit-core` 不直接输出 UI/进度文本 | `resolver/mod.rs` 和 `retry.rs` 仍有 `eprintln!`；诊断应通过结构化返回值交给 CLI |
-| 冲突报告应面向用户且可读 | 成功但跳过候选已有领域化解释；真正 `NoSolution` 和本地校验仍直接返回 `DefaultStringReporter` 字符串 |
-| `[overrides]`、`optional`、`env`、`exclude` 应影响解析或安装 | manifest 已能反序列化这些字段，但当前候选求解路径未应用它们 |
-| Java 依赖必须有明确语义 | 联网候选图把 `java` 注册为 `0.0.0`，本地校验却忽略 Java 依赖；两条路径尚未统一为“检测运行时版本”或“明确忽略” |
+仍未完成但不能从规范中删除的边界：
+
+- CurseForge provider 和对应 lockfile 来源元数据尚未实现，因此多平台回退框架目前只有
+  Modrinth 可实际使用；
+- `orbit install` 全量还原尚未实现，所以 `--target`、`--no-optional` 和 groups 对实际
+  文件安装的过滤仍未落地；
+- 实际 Java 运行时探测属于后续能力；当前策略是明确且一致地忽略元数据中的 Java 约束。
 
 ---
 

@@ -257,8 +257,7 @@ pub enum SideSupport {
 pub fn create_providers(platforms: &[String]) -> Result<Vec<Box<dyn ModProvider>>, OrbitError> {
     let ua = format!("orbit/{}", env!("CARGO_PKG_VERSION"));
     // 按 platforms 顺序构造，modrinth → ModrinthProvider::new(&ua, 3)
-    // curseforge → 暂未实现，输出 warning 并跳过
-    // 未知平台 → 输出 warning 并跳过
+    // curseforge / 未知平台 → 当前尚无可用实现，不加入返回列表
     // 若结果为空则返回 Err
 }
 
@@ -269,6 +268,7 @@ pub fn create_providers_default() -> Result<Vec<Box<dyn ModProvider>>, OrbitErro
 ```
 
 - `create_providers()` 接收平台名称列表，返回 `Vec<Box<dyn ModProvider>>`
+- core 不直接输出 warning；如果所有配置项都不可用，则返回可展示的错误
 - 通过 trait object 擦除具体类型，`resolver` 只依赖 `ModProvider` trait
 - `create_providers_default()` 提供仅 Modrinth 的便捷构造
 

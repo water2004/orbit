@@ -390,9 +390,9 @@ anyhow = { workspace = true }
 - `core` 不得依赖 `cli`
 - wrapper 不得依赖 `core` 或 `cli`
 
-这些规则是规范，不是现状快照。当前已知偏差包括：`orbit-core` 的若干模块仍直接
-`eprintln!`，resolver/provider 调用链尚未完整实现多平台顺序回退，以及本地 PubGrub
-path 依赖尚不可独立发布。修复方向是让代码回到本节边界，而不是放宽本节。
+这些规则是规范，不是现状快照。当前 core 已不再直接写 stdout/stderr，provider
+选择和用户可见诊断也由编排结果交给 CLI。仍存在的发布边界是：CurseForge provider
+尚未实现，以及本地 PubGrub path 依赖在上游远端接入前尚不可独立发布。
 
 ---
 
@@ -415,7 +415,7 @@ lib.rs                    ← 公共 API 入口，暴露 install_to_instance / r
 │   ├── local.rs          ← 不联网的本地安装图校验
 │   ├── diagnostics/      ← 类型化事件采集、领域渲染和测试
 │   ├── provider.rs       ← OrbitDependencyProvider + ProviderError
-│   └── types.rs          ← CandidateVersion + ImplantedCandidate
+│   └── types.rs          ← 候选输入 + ResolutionReport / CandidateDiagnostic
 ├── sync.rs               ← 双向同步 (Err 占位)
 ├── installer.rs          ← install_to_instance + remove_from_instance
 ├── outdated.rs           ← 候选 BFS 下载 + 可升级集合查询
@@ -940,8 +940,8 @@ orbit-cli/commands/add.rs
   → 解析命令参数，创建 provider 与确认回调
   → installer::install_to_instance
       → 打开 ManifestFile / Lockfile
-      → outdated::download_candidates_bfs
-          → 查询 provider[0] 的兼容版本及平台依赖
+      → outdated::download_candidates_with_fallback
+          → 按 manifest 配置顺序查询 provider，采用首个有效候选集
           → 并发下载候选 JAR，解析真实 mod_id / version / dependencies
       → resolver::resolve_with_candidates
           → graph::build_solver_graph
@@ -954,10 +954,11 @@ orbit-cli/commands/add.rs
   → orbit-cli 格式化结果
 ```
 
-这里描述的是现状，不代表所有规范已经满足：`--version` 已绑定到候选 JAR 的真实
-`mod_id` 并参与根约束；`--platform`、`--env` 和 `--optional` 仍被 CLI handler 忽略，
-provider 回退也只使用首个 provider。后者仍是实现缺口，详见
-[orbit-resolver.md](orbit-resolver.md#8-仍然有效但代码尚未满足的规范)。
+这里描述的是现状：`--version` 绑定到候选 JAR 的真实 `mod_id` 并参与根约束；
+`--platform` 限定 provider，`--env` 和 `--optional` 写入 manifest 完整依赖形式。
+resolver/provider 编排已支持按配置顺序回退，但 CurseForge 的具体实现仍待完成。
+高级依赖字段与剩余边界见
+[orbit-resolver.md](orbit-resolver.md#8-已收口的规范与剩余边界)。
 
 ---
 

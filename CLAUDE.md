@@ -19,7 +19,7 @@
 6. **`todo!()` 禁止在 library crate 中使用**。所有未实现函数返回 `Err(OrbitError::Other(anyhow!("not yet implemented")))`。
 7. **空壳 CLI 命令用 `eprintln! + exit(2)`**，不允许 `println! + Ok(())`。
 8. **写入 manifest/lockfile 时传 `mods_dir` 作为参数**——禁止硬编码 `Path::new("mods")`。
-9. **`apply_to_manifest_and_lock` 传 `provider_name` 作为参数**——禁止硬编码 `"modrinth"`。
+9. **`apply_to_lockfile` 使用每个 `InstalledMod.provider` 的真实来源**——禁止硬编码 `"modrinth"`；传递依赖只写 lockfile，不得自动提升为 manifest 顶级声明。
 10. **每模组独立记录 provider 来源**——`InstalledMod.provider` 字段，不能假设所有 deps 来自同一平台。
 
 ---
@@ -86,9 +86,9 @@
 36. **`expect()` / `unwrap()` 只在不可能失败时使用**。library crate 优先返回 `Result`。
 37. **修复一个问题时检查所有同类问题**（如一个 stub 改 exit(2) 就要全部改）。
 
-## core 层输出（待整改）
+## core 层输出
 
-38. **当前 `init.rs`、`identification.rs`、`installer.rs`、`outdated.rs`、`providers/mod.rs` 和 `resolver/` 中存在 `eprintln!`，违反规则 2**。用户可见结果和依赖诊断应通过结构化返回值传递给 CLI；纯调试信息改用 `tracing`。
+38. **`orbit-core/src` 当前不包含 `println!` / `eprintln!` / `eprint!`**。继续保持：用户可见结果和依赖诊断通过结构化返回值传递给 CLI；纯调试信息使用 `tracing`。
 
 ---
 
