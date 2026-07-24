@@ -46,7 +46,10 @@ pub struct ScannedMod {
 ///
 /// 遍历 `{instance_dir}/mods/` 下所有 .jar 文件，
 /// 读取 fabric.mod.json 并计算 SHA-256。
-fn scan_mods_dir(instance_dir: &Path, loader: &str) -> Result<Vec<ScannedMod>, OrbitError> {
+pub(crate) fn scan_mods_dir(
+    instance_dir: &Path,
+    loader: &str,
+) -> Result<Vec<ScannedMod>, OrbitError> {
     let mods_dir = instance_dir.join("mods");
     if !mods_dir.is_dir() {
         return Ok(vec![]);
@@ -339,6 +342,7 @@ pub async fn run_init(
                     project_id,
                     version_id,
                     slug,
+                    download_url,
                 } => {
                     entry.provider = platform.clone();
                     entry.modrinth = Some(crate::lockfile::ModrinthInfo {
@@ -346,6 +350,7 @@ pub async fn run_init(
                         version_id: version_id.clone(),
                         version: m.modrinth_version.clone(),
                         slug: slug.clone(),
+                        download_url: download_url.clone(),
                     });
                 }
                 crate::identification::IdentifiedSource::File { path } => {

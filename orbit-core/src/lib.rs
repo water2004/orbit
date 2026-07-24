@@ -27,6 +27,7 @@ pub mod resolver;
 pub mod sync;
 pub mod workspace;
 
+pub use checker::{CheckResult, check_compatibility};
 pub use config::{
     GlobalConfig, InstanceEntry, InstancesRegistry, config_path, orbit_data_dir, register_instance,
     remove_instance, set_default_instance,
@@ -35,8 +36,8 @@ pub use detection::LoaderDetectionService;
 pub use error::OrbitError;
 pub use installer::{
     InstallOptions, InstallPrompt, InstallReport, InstalledMod, ListOutput, ListedPackage,
-    RemoveReport, install_to_instance, list_dependencies, list_installed, remove_from_instance,
-    upgrade_all_in_instance,
+    RemoveReport, RestoreOptions, RestoreReport, install_to_instance, list_dependencies,
+    list_installed, remove_from_instance, restore_instance, upgrade_all_in_instance,
 };
 pub use jar_cache::{CacheSummary, clean_cache, inspect_cache};
 pub use lockfile::{
@@ -46,4 +47,6 @@ pub use manifest::OrbitManifest;
 pub use metadata::{ModLoader, mojang::McVersion};
 pub use outdated::{OutdatedMod, check_all_outdated};
 pub use providers::ModProvider;
+pub use purge::{CandidateConfig, find_config_candidates, remove_config_candidates};
+pub use sync::{SyncReport, sync_instance};
 pub use workspace::{Lockfile, ManifestFile};

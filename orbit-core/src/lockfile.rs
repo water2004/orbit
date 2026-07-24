@@ -57,6 +57,8 @@ pub struct ModrinthInfo {
     /// Modrinth 的 `version_number`
     pub version: String,
     pub slug: String,
+    #[serde(skip_serializing_if = "String::is_empty", default)]
+    pub download_url: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -199,6 +201,7 @@ path = "mods/fabric-carpet-26.1+v260402.jar"
                     version_id: "abc123mod".into(),
                     version: "mc1.20.1-0.5.8-fabric".into(),
                     slug: "sodium".into(),
+                    download_url: String::new(),
                 }),
                 file: None,
                 dependencies: vec![],

@@ -25,6 +25,24 @@ pub fn check_local_graph(
     local::check_local_graph(manifest, local_mods)
 }
 
+pub fn check_lockfile_graph(
+    manifest: &OrbitManifest,
+    lockfile: &OrbitLockfile,
+) -> Result<(), String> {
+    let graph = build_solver_graph(manifest, lockfile, &HashMap::new());
+    match pubgrub::resolve(&graph.provider, graph.root_package, graph.root_version) {
+        Ok(_) => Ok(()),
+        Err(pubgrub::PubGrubError::NoSolution(derivation_tree)) => {
+            Err(diagnostics::describe_no_solution(&derivation_tree))
+        }
+        Err(pubgrub::PubGrubError::ErrorChoosingVersion { source, .. })
+        | Err(pubgrub::PubGrubError::ErrorRetrievingDependencies { source, .. }) => {
+            Err(format!("internal resolver error: {source}"))
+        }
+        Err(error) => Err(error.to_string()),
+    }
+}
+
 pub fn dependents<'a>(slug: &str, entries: &'a [PackageEntry]) -> Vec<&'a str> {
     entries
         .iter()

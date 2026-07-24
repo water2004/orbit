@@ -12,6 +12,7 @@ pub enum IdentifiedSource {
         project_id: String,
         version_id: String,
         slug: String,
+        download_url: String,
     },
     File {
         path: String,
@@ -78,6 +79,7 @@ fn build_identified(
                 .map(|m| m.version_id.clone())
                 .unwrap_or_default(),
             slug,
+            download_url: resolved.download_url.clone(),
         },
         deps: m.jar_deps.clone(),
     }

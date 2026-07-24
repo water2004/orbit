@@ -4,13 +4,49 @@ use anyhow::Result;
 /// `orbit install` — 根据 orbit.toml + orbit.lock 还原全部模组。
 /// 不接受 mod 名称参数（单个模组安装请用 `orbit add`）。
 pub async fn handle(
-    _target: Option<String>,
-    _group: Option<String>,
-    _no_optional: bool,
-    _locked: bool,
-    _ctx: &CliContext,
+    target: Option<String>,
+    group: Option<String>,
+    no_optional: bool,
+    locked: bool,
+    ctx: &CliContext,
 ) -> Result<()> {
-    eprintln!("⚠ Full environment restore ('orbit install') is not yet implemented.");
-    eprintln!("  Use 'orbit add <slug>' to install a single mod.");
-    std::process::exit(2);
+    let instance_dir = ctx.instance_dir()?;
+    let providers = if locked {
+        Vec::new()
+    } else {
+        super::create_instance_providers(&instance_dir, None)?
+    };
+    let report = orbit_core::restore_instance(
+        &instance_dir,
+        &providers,
+        orbit_core::RestoreOptions {
+            target,
+            group,
+            no_optional,
+            locked,
+            dry_run: ctx.dry_run,
+        },
+    )
+    .await?;
+    super::print_resolution_diagnostics(&report.diagnostics);
+
+    if ctx.dry_run {
+        for package in &report.restored {
+            println!("  [dry-run] would restore {package}");
+        }
+        println!(
+            "Restore preview: {} to restore, {} already present, {} skipped.",
+            report.restored.len(),
+            report.already_present.len(),
+            report.skipped.len()
+        );
+    } else {
+        println!(
+            "Installed {} mods, skipped {} already present and {} excluded by policy.",
+            report.restored.len(),
+            report.already_present.len(),
+            report.skipped.len()
+        );
+    }
+    Ok(())
 }

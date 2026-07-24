@@ -148,6 +148,22 @@ fn read_mod_metadata_from_archive<R: std::io::Read + std::io::Seek>(
 
 // ── 哈希计算 ────────────────────────────────────────────────────
 
+/// 计算文件 SHA-1
+pub fn compute_sha1(path: &Path) -> Result<String, std::io::Error> {
+    use sha1::Sha1;
+    let mut file = std::fs::File::open(path)?;
+    let mut hasher = Sha1::new();
+    let mut buf = [0u8; 8192];
+    loop {
+        let n = file.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    Ok(hex::encode(hasher.finalize()))
+}
+
 /// 计算文件 SHA-512
 pub fn compute_sha512(path: &Path) -> Result<String, std::io::Error> {
     use sha2::Sha512;

@@ -1,7 +1,49 @@
 use super::CliContext;
-use anyhow::Result;
+use anyhow::{Context, Result};
 
-pub async fn handle(_version: String, _modloader: Option<String>, _ctx: &CliContext) -> Result<()> {
-    eprintln!("⚠ 'orbit check' is not yet implemented.");
-    std::process::exit(2);
+pub async fn handle(version: String, modloader: Option<String>, ctx: &CliContext) -> Result<()> {
+    let instance_dir = ctx.instance_dir()?;
+    let manifest =
+        orbit_core::ManifestFile::open(&instance_dir).context("failed to read orbit.toml")?;
+    let lockfile =
+        orbit_core::Lockfile::open(&instance_dir).context("failed to read orbit.lock")?;
+    let loader = modloader.unwrap_or_else(|| manifest.inner.project.modloader.clone());
+    let providers = super::create_instance_providers(&instance_dir, None)?;
+
+    eprintln!("Checking compatibility with Minecraft {version} ({loader})...");
+    let results =
+        orbit_core::check_compatibility(&lockfile.inner, &version, &loader, &providers).await?;
+    if results.is_empty() {
+        println!("No online packages in orbit.lock to check.");
+        return Ok(());
+    }
+
+    let compatible = results.iter().filter(|result| result.compatible).count();
+    for result in &results {
+        if let Some(available) = &result.available_version {
+            println!(
+                "  {}  {}  ✓ {} available on {}",
+                result.mod_name, result.current_version, available, result.provider
+            );
+        } else {
+            println!(
+                "  {}  {}  ✗ no compatible version yet",
+                result.mod_name, result.current_version
+            );
+        }
+    }
+    println!(
+        "\n{} of {} mods are ready for Minecraft {version}.",
+        compatible,
+        results.len()
+    );
+    let blockers: Vec<_> = results
+        .iter()
+        .filter(|result| !result.compatible)
+        .map(|result| result.mod_name.as_str())
+        .collect();
+    if !blockers.is_empty() {
+        println!("Blocking the upgrade: {}.", blockers.join(", "));
+    }
+    Ok(())
 }
