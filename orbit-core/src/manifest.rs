@@ -62,7 +62,7 @@ impl Default for ResolverConfig {
 /// sodium = "^0.5"                          # → Short
 /// zoomify = { version = "*", optional = true }  # → Full
 /// ```
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(untagged)]
 pub enum DependencySpec {
     Short(String),

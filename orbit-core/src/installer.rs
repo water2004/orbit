@@ -766,7 +766,7 @@ fn lock_entry_from_candidate(
     }
 }
 
-fn selected_packages(
+pub(crate) fn selected_packages(
     manifest: &OrbitManifest,
     lockfile: &OrbitLockfile,
     options: &RestoreOptions,

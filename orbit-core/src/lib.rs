@@ -18,6 +18,7 @@ pub mod providers;
 pub mod versions;
 
 // 业务逻辑模块（逐步实现中）
+pub mod archive;
 pub mod checker;
 pub mod installer;
 pub mod jar_cache;
@@ -27,6 +28,10 @@ pub mod resolver;
 pub mod sync;
 pub mod workspace;
 
+pub use archive::{
+    ExportReport, ImportMergeStrategy, ImportReport, export_instance, import_archive,
+    import_manifest,
+};
 pub use checker::{CheckResult, check_compatibility};
 pub use config::{
     GlobalConfig, InstanceEntry, InstancesRegistry, config_path, orbit_data_dir, register_instance,
