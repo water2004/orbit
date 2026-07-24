@@ -5,8 +5,18 @@ fn create_client() -> Client {
     Client::new("test-user-agent-fabric-api (https://github.com/test/test)").unwrap()
 }
 
+macro_rules! require_live_modrinth {
+    () => {
+        if std::env::var_os("MODRINTH_LIVE_TESTS").is_none() {
+            eprintln!("skipping live Modrinth API test; set MODRINTH_LIVE_TESTS=1 to run");
+            return;
+        }
+    };
+}
+
 #[tokio::test]
 async fn test_get_project() {
+    require_live_modrinth!();
     let client = create_client();
     let project = client.get_project("fabric-api").await;
     assert!(
@@ -23,6 +33,7 @@ async fn test_get_project() {
 
 #[tokio::test]
 async fn test_get_projects() {
+    require_live_modrinth!();
     let client = create_client();
     let projects = client.get_projects(&["fabric-api", "iris"]).await;
     assert!(
@@ -30,11 +41,12 @@ async fn test_get_projects() {
         "Failed to fetch projects: {:?}",
         projects.err()
     );
-    assert!(projects.unwrap().len() >= 1);
+    assert!(!projects.unwrap().is_empty());
 }
 
 #[tokio::test]
 async fn test_get_project_dependencies() {
+    require_live_modrinth!();
     let client = create_client();
     let deps = client.get_project_dependencies("fabric-api").await;
     assert!(
@@ -46,6 +58,7 @@ async fn test_get_project_dependencies() {
 
 #[tokio::test]
 async fn test_search_projects() {
+    require_live_modrinth!();
     let client = create_client();
     let result = client.search_projects("fabric-api").await;
     assert!(
@@ -65,6 +78,7 @@ async fn test_search_projects() {
 
 #[tokio::test]
 async fn test_search_with_params() {
+    require_live_modrinth!();
     let client = create_client();
     let result = client
         .search(SearchParams::new("fabric").index("downloads").limit(5))
@@ -81,6 +95,7 @@ async fn test_search_with_params() {
 
 #[tokio::test]
 async fn test_list_versions() {
+    require_live_modrinth!();
     let client = create_client();
     let result = client.list_versions("fabric-api").await;
     assert!(
@@ -101,6 +116,7 @@ async fn test_list_versions() {
 
 #[tokio::test]
 async fn test_list_versions_with_params() {
+    require_live_modrinth!();
     let client = create_client();
     let result = client
         .list_versions_with_params(
@@ -129,6 +145,7 @@ async fn test_list_versions_with_params() {
 
 #[tokio::test]
 async fn test_get_version_by_id() {
+    require_live_modrinth!();
     let client = create_client();
     let versions = client.list_versions("fabric-api").await.unwrap();
     let first_version_id = &versions[0].id;
@@ -144,6 +161,7 @@ async fn test_get_version_by_id() {
 
 #[tokio::test]
 async fn test_get_version() {
+    require_live_modrinth!();
     let client = create_client();
     let versions = client.list_versions("fabric-api").await.unwrap();
     let first_version_id = &versions[0].id;
@@ -155,6 +173,7 @@ async fn test_get_version() {
 
 #[tokio::test]
 async fn test_get_versions_by_ids() {
+    require_live_modrinth!();
     let client = create_client();
     let versions = client.list_versions("fabric-api").await.unwrap();
     let id1 = versions[0].id.as_str();
@@ -172,6 +191,7 @@ async fn test_get_versions_by_ids() {
 
 #[tokio::test]
 async fn test_get_version_from_hash() {
+    require_live_modrinth!();
     let client = create_client();
     let versions = client.list_versions("fabric-api").await.unwrap();
     let hash = &versions[0].files[0].hashes.sha1;
@@ -186,6 +206,7 @@ async fn test_get_version_from_hash() {
 
 #[tokio::test]
 async fn test_get_versions_from_hashes() {
+    require_live_modrinth!();
     let client = create_client();
     let versions = client.list_versions("fabric-api").await.unwrap();
     let hash = versions[0].files[0].hashes.sha1.as_str();
@@ -202,6 +223,7 @@ async fn test_get_versions_from_hashes() {
 
 #[tokio::test]
 async fn test_get_latest_version_from_hash() {
+    require_live_modrinth!();
     let client = create_client();
     let versions = client.list_versions("fabric-api").await.unwrap();
     let hash = &versions[0].files[0].hashes.sha1;
@@ -225,6 +247,7 @@ async fn test_get_latest_version_from_hash() {
 
 #[tokio::test]
 async fn test_get_latest_versions_from_hashes() {
+    require_live_modrinth!();
     let client = create_client();
     let versions = client.list_versions("fabric-api").await.unwrap();
     let hash = versions[0].files[0].hashes.sha1.as_str();
