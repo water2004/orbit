@@ -1,13 +1,33 @@
+//! In-memory [`pubgrub::DependencyProvider`] used by Orbit's orchestration layer.
+
 use pubgrub::Ranges;
 use pubgrub::{Dependencies, DependencyProvider};
 use std::collections::HashMap;
 
-use crate::resolver::FetchRetryError;
 use crate::resolver::types::PackageId;
 use crate::versions::Version;
 
 type PackageVersionKey = (PackageId, Version);
 type PackageDependencies = Vec<(PackageId, Ranges<Version>)>;
+
+#[derive(Debug)]
+pub enum ProviderError {
+    MissingVersions(PackageId),
+    MissingDependencies(PackageId, Version),
+}
+
+impl std::fmt::Display for ProviderError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::MissingVersions(package) => write!(f, "missing versions for {package}"),
+            Self::MissingDependencies(package, version) => {
+                write!(f, "missing dependencies for {package} {version}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for ProviderError {}
 
 /// PubGrub 的数据源——一个只读的内存视图
 #[derive(Default)]
@@ -47,7 +67,7 @@ impl DependencyProvider for OrbitDependencyProvider {
     type VS = Ranges<Version>;
     type Priority = usize;
     type M = String;
-    type Err = FetchRetryError;
+    type Err = ProviderError;
 
     fn prioritize(
         &self,
@@ -76,7 +96,7 @@ impl DependencyProvider for OrbitDependencyProvider {
                 }
                 Ok(None)
             }
-            None => Err(FetchRetryError::MissingVersions(package.clone())),
+            None => Err(ProviderError::MissingVersions(package.clone())),
         }
     }
 
@@ -87,7 +107,7 @@ impl DependencyProvider for OrbitDependencyProvider {
     ) -> Result<Dependencies<Self::P, Self::VS, Self::M>, Self::Err> {
         match self.dependencies.get(&(package.clone(), version.clone())) {
             Some(deps) => Ok(Dependencies::Available(deps.iter().cloned().collect())),
-            None => Err(FetchRetryError::MissingDependencies(
+            None => Err(ProviderError::MissingDependencies(
                 package.clone(),
                 version.clone(),
             )),
