@@ -20,6 +20,7 @@ pub mod versions;
 
 // 业务逻辑模块
 pub mod archive;
+pub mod audit;
 pub mod checker;
 pub mod installer;
 pub mod jar_cache;
@@ -36,6 +37,7 @@ pub use archive::{
     ExportReport, ImportMergeStrategy, ImportReport, export_instance, import_archive,
     import_manifest, import_mrpack,
 };
+pub use audit::audit_instance;
 pub use checker::{CheckResult, check_compatibility};
 pub use config::{
     GlobalConfig, InstanceEntry, InstancesRegistry, register_instance, remove_instance,
@@ -56,6 +58,14 @@ pub use lockfile::{
 };
 pub use manifest::{OrbitManifest, PlatformArtifact, PlatformArtifacts};
 pub use metadata::{ModLoader, mojang::McVersion};
+pub use orbit_bytecode_audit as audit_model;
+pub use orbit_bytecode_audit::{
+    Activation as AuditActivation, ArtifactKind as AuditArtifactKind, AuditReport,
+    Confidence as AuditConfidence, Coverage as AuditCoverage, LoaderFamily as AuditLoaderFamily,
+    Mechanism as AuditMechanism, MutationKind as AuditMutationKind,
+    OrderAnalysis as AuditOrderAnalysis, Precision as AuditPrecision, Readiness as AuditReadiness,
+    ReadinessStatus as AuditReadinessStatus, Risk as AuditRisk, Severity as AuditSeverity,
+};
 pub use outdated::{OutdatedMod, check_all_outdated};
 pub use providers::ModProvider;
 pub use purge::{CandidateConfig, find_config_candidates, remove_config_candidates};

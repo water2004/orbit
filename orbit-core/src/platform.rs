@@ -100,6 +100,185 @@ pub(crate) fn rediscover_current_platform(
     discover_platform(instance_dir, None, None, None)
 }
 
+/// Resolves the launcher-declared runtime libraries that accompany the
+/// selected platform. Only concrete, existing JARs are returned; no Maven
+/// download or provider metadata is consulted.
+pub(crate) fn discover_runtime_classpath(
+    instance_dir: &Path,
+    discovered: &DiscoveredPlatform,
+) -> Result<Vec<PathBuf>, OrbitError> {
+    let layout = crate::launcher::LauncherLayout::discover(instance_dir)?;
+    let mut coordinates = Vec::new();
+    for profile_path in &layout.profile_paths {
+        let Ok(profile) = VersionProfile::from_path(profile_path) else {
+            continue;
+        };
+        if profile.id != discovered.minecraft_version.id
+            && profile.inherits_from.as_deref() != Some(discovered.minecraft_version.id.as_str())
+            && !profile.libraries.iter().any(|library| {
+                MavenCoord::parse(&library.name).is_some_and(|coordinate| {
+                    loader_signature(&discovered.loader).is_some_and(|(group, artifacts)| {
+                        coordinate.group_id == group
+                            && artifacts.contains(&coordinate.artifact_id.as_str())
+                    })
+                })
+            })
+        {
+            continue;
+        }
+        coordinates.extend(
+            profile
+                .libraries
+                .iter()
+                .filter_map(|library| MavenCoord::parse(&library.name)),
+        );
+    }
+    coordinates.extend(multimc_patch_coordinates(instance_dir)?);
+    coordinates.extend(multimc_cached_component_coordinates(
+        instance_dir,
+        &layout.components,
+    )?);
+
+    // Some component metadata only records the selected component, while its
+    // patched dependency list lives in a launcher cache outside the instance.
+    // The component artifact itself is still exact and can be resolved from
+    // the instance's declared library roots.
+    for component in &layout.components {
+        let coordinate = match component.uid.as_str() {
+            "net.fabricmc.fabric-loader" => Some(MavenCoord {
+                group_id: "net.fabricmc".to_string(),
+                artifact_id: "fabric-loader".to_string(),
+                version: component.version.clone(),
+                classifier: None,
+            }),
+            "org.quiltmc.quilt-loader" => Some(MavenCoord {
+                group_id: "org.quiltmc".to_string(),
+                artifact_id: "quilt-loader".to_string(),
+                version: component.version.clone(),
+                classifier: None,
+            }),
+            "net.minecraftforge" => Some(MavenCoord {
+                group_id: "net.minecraftforge".to_string(),
+                artifact_id: "forge".to_string(),
+                version: component.version.clone(),
+                classifier: None,
+            }),
+            "net.neoforged" => Some(MavenCoord {
+                group_id: "net.neoforged".to_string(),
+                artifact_id: "neoforge".to_string(),
+                version: component.version.clone(),
+                classifier: None,
+            }),
+            _ => None,
+        };
+        if let Some(coordinate) = coordinate {
+            coordinates.push(coordinate);
+        }
+    }
+
+    let mut jars = Vec::new();
+    for coordinate in coordinates {
+        let relative_dir = maven_directory(&coordinate);
+        for root in &layout.library_roots {
+            let exact = root.join(&relative_dir).join(maven_filename(&coordinate));
+            if exact.is_file() {
+                jars.push(exact);
+            }
+        }
+    }
+    jars.retain(|path| path != &discovered.minecraft_jar && path != &discovered.loader_jar);
+    jars.sort();
+    jars.dedup();
+    Ok(jars)
+}
+
+fn multimc_patch_coordinates(instance_dir: &Path) -> Result<Vec<MavenCoord>, OrbitError> {
+    let Some(instance_root) = instance_dir.parent() else {
+        return Ok(Vec::new());
+    };
+    let patches = instance_root.join("patches");
+    if !patches.is_dir() {
+        return Ok(Vec::new());
+    }
+    let mut coordinates = Vec::new();
+    for entry in std::fs::read_dir(patches)? {
+        let path = entry?.path();
+        if !path
+            .extension()
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("json"))
+        {
+            continue;
+        }
+        let Ok(value) = serde_json::from_slice::<serde_json::Value>(&std::fs::read(&path)?) else {
+            continue;
+        };
+        for library in value
+            .get("libraries")
+            .and_then(serde_json::Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            if let Some(name) = library.get("name").and_then(serde_json::Value::as_str)
+                && let Some(coordinate) = MavenCoord::parse(name)
+            {
+                coordinates.push(coordinate);
+            }
+        }
+    }
+    Ok(coordinates)
+}
+
+fn multimc_cached_component_coordinates(
+    instance_dir: &Path,
+    components: &[crate::launcher::LauncherComponent],
+) -> Result<Vec<MavenCoord>, OrbitError> {
+    let Some(instance_root) = instance_dir.parent() else {
+        return Ok(Vec::new());
+    };
+    let Some(instances_root) = instance_root.parent() else {
+        return Ok(Vec::new());
+    };
+    let Some(launcher_root) = instances_root.parent() else {
+        return Ok(Vec::new());
+    };
+    let meta_root = launcher_root.join("meta");
+    if !meta_root.is_dir() {
+        return Ok(Vec::new());
+    }
+    let mut coordinates = Vec::new();
+    for component in components {
+        let candidates = [
+            meta_root
+                .join(&component.uid)
+                .join(format!("{}.json", component.version)),
+            meta_root.join(format!("{}.json", component.uid)),
+        ];
+        for path in candidates.into_iter().filter(|path| path.is_file()) {
+            let Ok(value) = serde_json::from_slice::<serde_json::Value>(&std::fs::read(path)?)
+            else {
+                continue;
+            };
+            coordinates.extend(coordinates_from_json(&value));
+        }
+    }
+    Ok(coordinates)
+}
+
+fn coordinates_from_json(value: &serde_json::Value) -> Vec<MavenCoord> {
+    value
+        .get("libraries")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|library| {
+            library
+                .get("name")
+                .and_then(serde_json::Value::as_str)
+                .and_then(MavenCoord::parse)
+        })
+        .collect()
+}
+
 fn discover_platform(
     instance_dir: &Path,
     requested_mc_version: Option<&str>,
@@ -587,7 +766,7 @@ mod tests {
         std::fs::create_dir_all(&library_dir).unwrap();
         std::fs::write(
             version_dir.join("fabric-test.json"),
-            r#"{"id":"fabric-test","inheritsFrom":"1.21.1","libraries":[{"name":"net.fabricmc:fabric-loader:0.19.2"}]}"#,
+            r#"{"id":"fabric-test","inheritsFrom":"1.21.1","libraries":[{"name":"net.fabricmc:fabric-loader:0.19.2"},{"name":"net.fabricmc:sponge-mixin:0.16.3+mixin.0.8.7"}]}"#,
         )
         .unwrap();
         std::fs::write(
@@ -615,6 +794,19 @@ mod tests {
             ]),
         )
         .unwrap();
+        let mixin_dir = root
+            .join("libraries")
+            .join("net")
+            .join("fabricmc")
+            .join("sponge-mixin")
+            .join("0.16.3+mixin.0.8.7");
+        std::fs::create_dir_all(&mixin_dir).unwrap();
+        let mixin_jar = mixin_dir.join("sponge-mixin-0.16.3+mixin.0.8.7.jar");
+        std::fs::write(
+            &mixin_jar,
+            jar_bytes(&[("org/spongepowered/asm/mixin/Mixin.class", b"class")]),
+        )
+        .unwrap();
 
         assert_eq!(
             crate::init::detect_mc_versions(&version_dir)
@@ -632,6 +824,10 @@ mod tests {
         assert_eq!(
             platform.loader_package.as_ref().unwrap().bundled[0].mod_id,
             "mixinextras"
+        );
+        assert_eq!(
+            discover_runtime_classpath(&version_dir, &platform).unwrap(),
+            vec![mixin_jar]
         );
         let artifacts = platform.artifacts(&version_dir).unwrap();
         assert!(artifacts.minecraft_jar.path.contains("../1.21.1/"));
@@ -677,6 +873,39 @@ mod tests {
         assert!(error.contains("Minecraft version changed"));
         assert!(error.contains("orbit sync"));
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn reads_prism_cached_component_runtime_libraries() {
+        let directory = tempfile::tempdir().unwrap();
+        let game = directory
+            .path()
+            .join("instances")
+            .join("example")
+            .join(".minecraft");
+        let metadata = directory
+            .path()
+            .join("meta")
+            .join("net.fabricmc.fabric-loader");
+        std::fs::create_dir_all(&game).unwrap();
+        std::fs::create_dir_all(&metadata).unwrap();
+        std::fs::write(
+            metadata.join("0.19.2.json"),
+            r#"{"libraries":[{"name":"net.fabricmc:sponge-mixin:0.16.3+mixin.0.8.7"}]}"#,
+        )
+        .unwrap();
+
+        let coordinates = multimc_cached_component_coordinates(
+            &game,
+            &[crate::launcher::LauncherComponent {
+                uid: "net.fabricmc.fabric-loader".to_string(),
+                version: "0.19.2".to_string(),
+            }],
+        )
+        .unwrap();
+
+        assert_eq!(coordinates.len(), 1);
+        assert_eq!(coordinates[0].artifact_id, "sponge-mixin");
     }
 
     fn minecraft_version_json() -> String {

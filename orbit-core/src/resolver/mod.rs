@@ -104,6 +104,93 @@ pub(crate) fn resolve_lockfile_for_target(
     }
 }
 
+/// Returns the nested archive paths selected by the same graph that validates
+/// the installed package set. The result is keyed by the top-level filename.
+///
+/// This is runtime classpath construction, not compatibility evidence:
+/// `orbit audit` must not parse inactive versions in a loader-managed
+/// multi-version JAR.
+pub(crate) fn selected_runtime_nested_jars(
+    manifest: &OrbitManifest,
+    lockfile: &OrbitLockfile,
+    loader_package: Option<&types::PlatformCandidate>,
+) -> Result<HashMap<String, std::collections::BTreeSet<String>>, String> {
+    let solution =
+        resolve_lockfile_for_target(manifest, lockfile, Environment::Both, loader_package)?;
+    let mut selected = HashMap::<String, std::collections::BTreeSet<String>>::new();
+    for (package, version) in solution.iter() {
+        let Some(identity) = version.candidate_identity() else {
+            continue;
+        };
+        let Some(entry) = lockfile.packages.iter().find(|entry| {
+            entry.mod_id == identity.owner && locked_source(entry) == identity.source
+        }) else {
+            continue;
+        };
+        if identity.location == CandidateLocation::Nested
+            && let Some(path) = nested_archive_path(entry, &identity.path)
+        {
+            selected
+                .entry(entry.filename.clone())
+                .or_default()
+                .insert(path);
+        }
+        if let SolverPackage::EmbeddedArtifact(artifact_id) = package
+            && let Some(selected_version) = version.domain()
+            && let Some((prefix, artifacts)) = embedded_artifacts_at_path(entry, &identity.path)
+            && let Some(artifact) = artifacts.iter().find(|artifact| {
+                artifact.id == *artifact_id
+                    && Version::parse(&artifact.version, "forge") == *selected_version
+            })
+        {
+            let path = if prefix.is_empty() {
+                artifact.path.clone()
+            } else {
+                format!("{prefix}!/{}", artifact.path)
+            };
+            selected
+                .entry(entry.filename.clone())
+                .or_default()
+                .insert(path);
+        }
+    }
+    Ok(selected)
+}
+
+fn nested_archive_path(entry: &PackageEntry, path: &[usize]) -> Option<String> {
+    let mut bundled = entry.bundled.as_slice();
+    let mut archives = Vec::new();
+    for index in path {
+        let selected = bundled.get(*index)?;
+        if let crate::jar::JarModOrigin::Nested { path, .. } = &selected.origin {
+            archives.push(path.clone());
+        }
+        bundled = &selected.bundled;
+    }
+    (!archives.is_empty()).then(|| archives.join("!/"))
+}
+
+fn embedded_artifacts_at_path<'a>(
+    entry: &'a PackageEntry,
+    path: &[usize],
+) -> Option<(String, &'a [crate::metadata::EmbeddedArtifact])> {
+    if path.is_empty() {
+        return Some((String::new(), &entry.embedded_artifacts));
+    }
+    let mut bundled = entry.bundled.as_slice();
+    let mut archives = Vec::new();
+    let mut selected = None;
+    for index in path {
+        let node = bundled.get(*index)?;
+        if let crate::jar::JarModOrigin::Nested { path, .. } = &node.origin {
+            archives.push(path.clone());
+        }
+        selected = Some(node);
+        bundled = &node.bundled;
+    }
+    selected.map(|node| (archives.join("!/"), node.embedded_artifacts.as_slice()))
+}
+
 pub fn dependents<'a>(slug: &str, entries: &'a [PackageEntry]) -> Vec<&'a str> {
     entries
         .iter()
@@ -452,8 +539,9 @@ fn highest_candidate<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::lockfile::{LockMeta, PackageEntry};
-    use crate::metadata::{Environment, ModDependency};
+    use crate::jar::JarModOrigin;
+    use crate::lockfile::{BundledMod, LockMeta, PackageEntry};
+    use crate::metadata::{Environment, ModDependency, ModLoadCondition};
 
     fn manifest() -> OrbitManifest {
         toml::from_str(
@@ -872,5 +960,38 @@ iris = "*"
             error,
             "dependency solution selector returned invalid choice 3 for 2 alternatives"
         );
+    }
+
+    #[test]
+    fn nested_identity_path_becomes_a_physical_archive_chain() {
+        let mut entry = locked("wrapper");
+        entry.bundled = vec![nested_mod(
+            "outer.jar",
+            vec![nested_mod("inner.jar", Vec::new())],
+        )];
+
+        assert_eq!(
+            nested_archive_path(&entry, &[0, 0]).as_deref(),
+            Some("outer.jar!/inner.jar")
+        );
+        assert!(nested_archive_path(&entry, &[1]).is_none());
+    }
+
+    fn nested_mod(path: &str, bundled: Vec<BundledMod>) -> BundledMod {
+        BundledMod {
+            mod_id: path.to_string(),
+            version: "1".to_string(),
+            load_condition: ModLoadCondition::IfPossible,
+            origin: JarModOrigin::Nested {
+                path: path.to_string(),
+                artifact: None,
+            },
+            environment: Environment::Both,
+            dependencies: Vec::new(),
+            provides: Vec::new(),
+            language_loader: None,
+            embedded_artifacts: Vec::new(),
+            bundled,
+        }
     }
 }

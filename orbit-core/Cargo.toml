@@ -14,6 +14,7 @@ portable = []
 # 内部依赖
 curseforge-wrapper = { path = "../curseforge-wrapper" }
 modrinth-wrapper = { path = "../modrinth-wrapper" }
+orbit-bytecode-audit = { path = "../orbit-bytecode-audit" }
 
 # 工作区共享依赖
 tokio.workspace = true
@@ -38,3 +39,4 @@ http-body-util = "0.1"
 hyper = { version = "1.9", features = ["http1", "server"] }
 hyper-util = { version = "0.1", features = ["tokio"] }
 tokio = { workspace = true, features = ["net"] }
+tempfile = "3.20"
