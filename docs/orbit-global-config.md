@@ -1,210 +1,119 @@
-# Orbit 全局配置文件规格
+# Orbit 全局配置与运行路径
 
-> 本文档定义 `config.toml`（全局用户级配置）的完整 schema 及加载策略。
-> 与之对应的项目级配置 `orbit.toml` 见 [orbit-toml-spec.md](orbit-toml-spec.md)。
+本文描述当前实现。项目级 `orbit.toml` 见
+[orbit-toml-spec.md](orbit-toml-spec.md)。
 
----
+## 1. 路径不是全局常量
 
-## 目录
+core 不读取固定的 Windows 路径，也不在业务模块中调用 `APPDATA`、`HOME`、
+`current_exe()`。入口先构造：
 
-1. [概述](#1-概述)
-2. [文件位置](#2-文件位置)
-3. [完整 Schema](#3-完整-schema)
-   - [[core] — 核心设置](#core--核心设置)
-   - [[network] — 网络设置](#network--网络设置)
-   - [[auth] — 平台认证](#auth--平台认证)
-   - [[cache] — 缓存设置](#cache--缓存设置)
-   - [[ui] — 终端界面](#ui--终端界面)
-4. [配置加载优先级](#4-配置加载优先级)
-5. [Rust 实现参考](#5-rust-实现参考)
-6. [安全注意事项](#6-安全注意事项)
-
----
-
-## 1. 概述
-
-Orbit 有两级配置文件：
-
-| 文件 | 级别 | 内容 |
-|------|------|------|
-| `orbit.toml` | 项目级 | 该 Minecraft 实例装了什么模组 |
-| `config.toml` | 全局级 | Orbit 这个工具本身该如何运行 |
-
-`config.toml` **不关心你装了什么模组**，保存 Orbit CLI 的全局运行参数。
-
-### 当前接入状态
-
-schema、默认值、文件加载/保存和环境变量覆盖已经实现，但并非每个字段都已被运行路径
-消费：
-
-| 范围 | 当前状态 |
-|------|----------|
-| `core.default_instance` | 已用于实例选择，并与 `instances.toml` 默认标记同步 |
-| `cache.dir` | 已用于缓存读取、写入、检查和清理 |
-| 环境变量覆盖 | 已写入加载后的 `GlobalConfig` |
-| `max_concurrent_downloads` | 已持久化，尚未接到下载编排 |
-| `network.*` | 已持久化，HTTP 客户端仍使用各模块固定超时，代理/重试尚未统一接入 |
-| `auth.modrinth_token` | 已持久化，尚未传入 Modrinth 客户端 |
-| `auth.curseforge_api_key` | 创建 CurseForge provider 时作为 `x-api-key` 使用 |
-| `cache.enable` / 淘汰策略 / 大小 | 已持久化，开关和自动淘汰尚未执行 |
-| `language` / `[ui]` | 已持久化，CLI 本地化和样式消费尚未实现 |
-
-后两类是“规范仍有效但代码尚未遵守”，不是可以宣称已经生效的当前行为。
-
----
-
-## 2. 文件位置
-
-```
-平台    路径
-─────────────────────────────────────────────
-Windows  %APPDATA%\orbit\config.toml
-Linux    ~/.orbit/config.toml
-macOS    ~/Library/Application Support/orbit/config.toml (预留)
+```rust
+RuntimeContext::load(RuntimePathOptions {
+    layout,
+    config_file,
+    cache_dir,
+})
 ```
 
-> **设计决策**：采用统一的 `orbit/` 数据目录，`instances.toml` 与 `config.toml` 同目录存放。
-> 不拆分 XDG `~/.config` vs `~/.local/share`——Orbit 的配置和状态数据都是轻量 TOML 文件，没必要分两个目录。
+`RuntimeContext` 持有解析后的 `RuntimePaths`、`GlobalConfig` 和 `JarCache`，再显式传给
+实例注册、provider factory、下载和 cache 命令。
 
----
+调用方有三种选择：
 
-## 3. 完整 Schema
+- 直接传入 `config.toml` 的精确路径和 JAR cache 目录；
+- 使用 `system` 布局；
+- 使用 `executable` 布局。
+
+CLI 对应全局参数：
+
+```text
+--config <file>
+--cache-dir <directory>
+--data-layout system|executable
+```
+
+精确路径不依赖宿主目录发现。若只显式传配置文件，`[cache].dir` 也可以提供缓存目录。
+`instances.toml` 始终与实际使用的 `config.toml` 同目录。
+
+## 2. 内置布局
+
+### `system`
+
+| 平台 | 配置与实例注册表 | JAR cache |
+|---|---|---|
+| Windows | `%APPDATA%\orbit\` | `%LOCALAPPDATA%\orbit\`，缺失时回退 `%APPDATA%\orbit\` |
+| Linux | `$XDG_CONFIG_HOME/orbit/`，否则 `$HOME/.config/orbit/` | `$XDG_CACHE_HOME/orbit/`，否则 `$HOME/.cache/orbit/` |
+| macOS | `$HOME/Library/Application Support/orbit/` | `$HOME/Library/Caches/orbit/` |
+
+无法取得所需宿主目录时返回错误，并提示传显式路径或选择 executable 布局；不会静默写
+当前工作目录。
+
+### `executable`
+
+```text
+<executable-dir>/
+  config.toml
+  instances.toml
+  cache/
+```
+
+构建 `orbit` 或 `orbit-core` 时启用 Cargo feature `portable`，只会把编译出的默认布局
+改为 `executable`：
+
+```bash
+cargo build -p orbit --features portable
+```
+
+无该 feature 时默认 `system`。编译默认值不会禁止运行时用 `--data-layout` 或精确路径
+覆盖。
+
+## 3. 路径优先级
+
+配置文件：
+
+1. `--config` / `RuntimePathOptions.config_file`
+2. 所选 layout 的默认 `config.toml`
+
+缓存目录：
+
+1. `--cache-dir` / `RuntimePathOptions.cache_dir`
+2. 已加载配置的 `[cache].dir`
+3. 所选 layout 的默认 cache
+
+## 4. `config.toml` schema
 
 ```toml
-# ==========================================
-# Orbit 全局用户配置文件
-# ==========================================
-
-# ── 核心设置 ──────────────────────────────
 [core]
-# 默认全局实例名称（当你在非项目目录下执行命令时默认操作它）
-# default_instance = "my-survival"
-# 并发下载的最大线程数（默认 8）
+default_instance = "survival" # 可省略
 max_concurrent_downloads = 8
-# 语言偏好: "en" | "zh-CN"（默认 "en"）
-language = "zh-CN"
+language = "en"
 
-# ── 网络设置 ──────────────────────────────
 [network]
-# HTTP 请求超时时间（秒）
 timeout = 30
-# 遇到网络错误时的最大重试次数
 max_retries = 3
-# 可选的 HTTP 代理（当前 schema 已保留，HTTP 客户端尚未统一接入）
 # proxy = "http://127.0.0.1:7890"
 
-# ── 平台认证 ──────────────────────────────
 [auth]
-# CurseForge Core API Key（启用 curseforge provider 时必填）
-# curseforge_api_key = "YOUR_API_KEY_HERE"
-# Modrinth Token（可选，用于操作私有项目）
-# modrinth_token = "mrp_YOUR_TOKEN_HERE"
+# curseforge_api_key = "..."
+# modrinth_token = "..."
 
-# ── 缓存设置 ──────────────────────────────
 [cache]
-# 是否开启全局 JAR 包缓存（多实例共享模组秒装）
 enable = true
-# 自定义缓存目录（可选）。留空则使用默认路径。
-# Windows 示例: dir = "D:/Games/OrbitCache"
-# Linux 示例:   dir = "/mnt/data/orbit-cache"
-# 缓存清理策略: "size" | "time" | "none"
+# dir = "D:/OrbitCache"
 eviction_policy = "size"
-# 最大缓存占用（GB），eviction_policy = "size" 时生效
 max_size_gb = 5.0
 
-# ── 终端界面 ──────────────────────────────
 [ui]
-# 终端颜色: "auto" | "always" | "never"
 color = "auto"
-# 进度条样式: "modern" | "classic" | "none"
 progress_bar = "modern"
 ```
 
-### [core] — 核心设置
+首次加载不存在的配置文件时，Orbit 在解析出的路径创建默认文件。环境变量随后覆盖内存
+值：
 
-| 字段 | 类型 | 默认值 | 说明 |
-|------|------|--------|------|
-| `default_instance` | `Option<String>` | `None` | 全局默认实例名。等价于 `orbit instances default <name>` |
-| `max_concurrent_downloads` | `usize` | `8` | 并发下载上限。网络差时可调低 |
-| `language` | `String` | `"en"` | 语言偏好；当前已持久化，CLI 尚未消费 |
-
-### [network] — 网络设置
-
-| 字段 | 类型 | 默认值 | 说明 |
-|------|------|--------|------|
-| `timeout` | `u64` | `30` | HTTP 请求超时（秒） |
-| `max_retries` | `u32` | `3` | 网络错误自动重试次数 |
-| `proxy` | `Option<String>` | `None` | HTTP 代理 URL；当前 HTTP 客户端尚未统一消费 |
-
-### [auth] — 平台认证
-
-| 字段 | 类型 | 默认值 | 说明 |
-|------|------|--------|------|
-| `curseforge_api_key` | `Option<String>` | `None` | CurseForge Core API/CDN 的 `x-api-key`；创建或使用该 provider 时硬性必填 |
-| `modrinth_token` | `Option<String>` | `None` | Modrinth API Token；当前已加载但尚未传给客户端 |
-
-> **安全警告**：API Key 以明文存储在 `config.toml` 中。请勿将此文件纳入 Git 或分享给他人。
-> 未来版本计划使用 OS 凭据管理器（Windows Credential Manager / Linux Secret Service）存储敏感信息。
-> Key 不会写入项目 manifest 或 lockfile；下载时仅向 HTTPS `forgecdn.net` 域名发送。
-
-### [cache] — 缓存设置
-
-| 字段 | 类型 | 默认值 | 说明 |
-|------|------|--------|------|
-| `enable` | `bool` | `true` | 缓存开关 schema；当前缓存路径仍会使用，开关尚未执行 |
-| `dir` | `Option<String>` | `None` | 自定义缓存目录。留空则使用 `{数据目录}/cache`。适合系统盘空间紧张时指向其他硬盘 |
-| `eviction_policy` | `String` | `"size"` | 清理策略：`"size"` 按大小，`"time"` 按时间过期，`"none"` 不自动清理 |
-| `max_size_gb` | `f64` | `5.0` | 最大缓存占用（GB），`eviction_policy = "size"` 时生效 |
-
-> **全局缓存的收益**：玩家可能有 3 个 1.20.1 整合包都装了 Sodium。开启缓存后 Orbit 只下载一次，在各实例间使用 copy 部署，节省时间和磁盘。
-
-#### 缓存结构
-
-```
-{cache_dir}/
-  index.toml        # 哈希 → 文件名索引
-  jars/             # JAR 文件（保留原始名）
-    sodium-fabric-0.8.7.jar
-```
-
-`index.toml` 结构：
-
-```toml
-[sha1]
-"a6ae6273..." = "sodium-fabric-0.8.7.jar"
-
-[sha256]
-"b4a1c3d2..." = "sodium-fabric-0.8.7.jar"
-
-[sha512]
-"6189b8c2..." = "sodium-fabric-0.8.7.jar"
-```
-
-> 三种哈希均从下载字节自算，不依赖平台 API。任一哈希命中即可从缓存取回文件。
-
-### [ui] — 终端界面
-
-| 字段 | 类型 | 默认值 | 说明 |
-|------|------|--------|------|
-| `color` | `String` | `"auto"` | 终端颜色输出：`"auto"`（自动探测 TTY）、`"always"`、`"never"` |
-| `progress_bar` | `String` | `"modern"` | 进度条样式：`"modern"`（Cargo 风格）、`"classic"`（ASCII）、`"none"` |
-
----
-
-## 4. 配置加载优先级
-
-Orbit 按以下优先级合并配置（高优先级覆盖低优先级）：
-
-```
-1. 环境变量            ORBIT_PROXY=http://127.0.0.1:1080
-2. config.toml         ~/.orbit/config.toml 中的 [network] proxy
-3. 代码默认值           NetworkConfig::default()
-```
-
-**环境变量映射**：
-
-| 环境变量 | 覆盖字段 |
-|----------|---------|
+| 环境变量 | 字段 |
+|---|---|
 | `ORBIT_PROXY` | `network.proxy` |
 | `ORBIT_TIMEOUT` | `network.timeout` |
 | `ORBIT_RETRIES` | `network.max_retries` |
@@ -212,180 +121,55 @@ Orbit 按以下优先级合并配置（高优先级覆盖低优先级）：
 | `ORBIT_CURSEFORGE_API_KEY` | `auth.curseforge_api_key` |
 | `ORBIT_MODRINTH_TOKEN` | `auth.modrinth_token` |
 
-> 当前没有全局 `--proxy` 参数。临时覆盖请使用环境变量；长期配置写入
-> `config.toml`。代理字段本身仍属于“规范有效、HTTP 客户端尚未统一接入”的差距。
+因此配置值优先级是：环境变量 > 文件 > schema 默认值。路径参数在加载文件之前解析，不
+属于这个字段覆盖层。
 
----
+## 5. JAR cache
 
-## 5. Rust 实现参考
+cache 不信任 provider 文件名，也不使用“文件名 → 哈希”的可变全局索引。结构为：
 
-```rust
-// orbit-core/src/config.rs
-
-use serde::{Deserialize, Serialize};
-
-/// config.toml 的完整 Rust 表示
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct OrbitGlobalConfig {
-    #[serde(default)]
-    pub core: CoreConfig,
-    #[serde(default)]
-    pub network: NetworkConfig,
-    #[serde(default)]
-    pub auth: AuthConfig,
-    #[serde(default)]
-    pub cache: CacheConfig,
-    #[serde(default)]
-    pub ui: UiConfig,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CoreConfig {
-    pub default_instance: Option<String>,
-    #[serde(default = "default_max_downloads")]
-    pub max_concurrent_downloads: usize,
-    #[serde(default = "default_language")]
-    pub language: String,
-}
-
-impl Default for CoreConfig {
-    fn default() -> Self {
-        Self {
-            default_instance: None,
-            max_concurrent_downloads: 8,
-            language: "en".into(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct NetworkConfig {
-    #[serde(default = "default_timeout")]
-    pub timeout: u64,
-    #[serde(default = "default_max_retries")]
-    pub max_retries: u32,
-    pub proxy: Option<String>,
-}
-
-impl Default for NetworkConfig {
-    fn default() -> Self {
-        Self { timeout: 30, max_retries: 3, proxy: None }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct AuthConfig {
-    pub curseforge_api_key: Option<String>,
-    pub modrinth_token: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CacheConfig {
-    #[serde(default = "default_true")]
-    pub enable: bool,
-    pub dir: Option<String>,
-    #[serde(default = "default_eviction_policy")]
-    pub eviction_policy: String,
-    #[serde(default = "default_max_size")]
-    pub max_size_gb: f64,
-}
-
-impl Default for CacheConfig {
-    fn default() -> Self {
-        Self { enable: true, dir: None, eviction_policy: "size".into(), max_size_gb: 5.0 }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct UiConfig {
-    #[serde(default = "default_color")]
-    pub color: String,
-    #[serde(default = "default_progress_bar")]
-    pub progress_bar: String,
-}
-
-impl Default for UiConfig {
-    fn default() -> Self {
-        Self { color: "auto".into(), progress_bar: "modern".into() }
-    }
-}
-
-// 辅助默认值函数
-fn default_max_downloads() -> usize { 8 }
-fn default_language() -> String { "en".into() }
-fn default_timeout() -> u64 { 30 }
-fn default_max_retries() -> u32 { 3 }
-fn default_true() -> bool { true }
-fn default_eviction_policy() -> String { "size".into() }
-fn default_max_size() -> f64 { 5.0 }
-fn default_color() -> String { "auto".into() }
-fn default_progress_bar() -> String { "modern".into() }
+```text
+{cache_dir}/
+  jars/
+    sha512/
+      <locally-computed-sha512>
+  aliases/
+    sha1/
+      <provider-sha1>        # 内容是对应的 SHA-512
 ```
 
-**加载流程**：
+写入时始终从实际 bytes 计算 SHA-1/SHA-512。统一 artifact 队列执行时，先按 provider
+给出的强哈希查 cache；命中后再次校验并直接解析，不发 HTTP。未命中才调用
+provider-owned downloader。
+
+`orbit cache clean` 使用同一个注入目录。core 拒绝递归删除文件系统根或当前工作
+目录/其祖先，也拒绝删除包含 `config.toml` 或 `instances.toml` 的目录。
+
+## 6. 平台抽象
+
+`RuntimeEnvironment` 只暴露：
 
 ```rust
-impl OrbitGlobalConfig {
-    /// 分层加载：config.toml → 环境变量覆盖 → 返回
-    pub fn load() -> Result<Self, OrbitError> {
-        let path = orbit_data_dir().join("config.toml");
-
-        // Layer 1: 文件（如果存在），不存在则自动创建默认配置
-        let mut config = if path.exists() {
-            let content = std::fs::read_to_string(&path)
-                .map_err(|e| OrbitError::Other(anyhow::anyhow!("failed to read config.toml: {e}")))?;
-            toml::from_str(&content)
-                .map_err(|e| OrbitError::Other(anyhow::anyhow!("failed to parse config.toml: {e}")))?
-        } else {
-            let cfg = Self::default();
-            let _ = cfg.save(); // 首次运行自动写入默认配置
-            cfg
-        };
-
-        // Layer 2: 环境变量覆盖
-        if let Ok(proxy) = std::env::var("ORBIT_PROXY") {
-            config.network.proxy = Some(proxy);
-        }
-        if let Ok(lang) = std::env::var("ORBIT_LANGUAGE") {
-            config.core.language = lang;
-        }
-        if let Ok(cf) = std::env::var("ORBIT_CURSEFORGE_API_KEY") {
-            config.auth.curseforge_api_key = Some(cf);
-        }
-        if let Ok(mr) = std::env::var("ORBIT_MODRINTH_TOKEN") {
-            config.auth.modrinth_token = Some(mr);
-        }
-
-        Ok(config)
-    }
-}
-
-impl Default for OrbitGlobalConfig {
-    fn default() -> Self {
-        Self {
-            core: CoreConfig::default(),
-            network: NetworkConfig::default(),
-            auth: AuthConfig::default(),
-            cache: CacheConfig::default(),
-            ui: UiConfig::default(),
-        }
-    }
+trait RuntimeEnvironment {
+    fn executable_dir(&self) -> Result<PathBuf, OrbitError>;
+    fn config_root(&self) -> Result<PathBuf, OrbitError>;
+    fn cache_root(&self) -> Result<PathBuf, OrbitError>;
 }
 ```
 
----
+Windows、Linux、macOS 只实现目录发现。`RuntimePaths` 负责公共 `orbit/`、文件名和
+layout 组装；配置、缓存、installer 和 resolver 不包含平台分支。测试通过 fake
+environment 验证布局，不修改真实用户目录。
 
-## 6. 安全注意事项
+## 7. 当前尚未接入的正确规范
 
-1. **`config.toml` 应设为 `0600` 权限**（仅所有者可读写）——其中 `[auth]` 块包含 API Token。
-2. **不要将 `config.toml` 纳入 Git 版本控制**——Orbit 会将其放在 `orbit/` 数据目录下，而非项目目录。
-3. 环境变量中的 Key/Token 优先于 `config.toml`。CurseForge Key 只作为
-   `x-api-key` 请求头发送，不写入错误或日志。
-4. 未来计划使用 `keyring` crate 将 Token 存入操作系统凭据管理器，届时 `config.toml` 中的 `[auth]` 将只作为回退方案。
+以下字段已正确加载和保存，但运行路径尚未完整消费；这是实现差距，不是废弃 schema：
 
----
+- `core.max_concurrent_downloads`：统一候选下载当前使用固定有界并发；
+- `network.proxy`、timeout、retry：各 HTTP client 尚未统一由配置构造；
+- `auth.modrinth_token`：尚未传入 Modrinth client；
+- `cache.enable`、自动淘汰策略和大小上限：尚未执行；
+- `language` 与 `[ui]`：CLI 本地化和样式尚未接入。
 
-> **关联文档**
-> - [orbit-toml-spec.md](orbit-toml-spec.md) — 项目级 `orbit.toml` 规格
-> - [orbit-architecture.md](orbit-architecture.md) — 项目结构中的配置模块
-> - [orbit-cli-commands.md](orbit-cli-commands.md) — 命令行为与全局标志
+CurseForge API Key 已真实接入 provider 创建、Core API 与受限 CDN 下载。Key 不进入
+lockfile、日志或错误正文。

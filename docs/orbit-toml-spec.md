@@ -238,7 +238,6 @@ environment = "both"
 [package.modrinth]
 project_id = "project-id"
 version_id = "version-id"
-version = "platform display version"
 slug = "example"
 download_url = "https://cdn.example/..."
 
@@ -246,7 +245,6 @@ download_url = "https://cdn.example/..."
 # [package.curseforge]
 # project_id = 123456
 # file_id = 789012
-# display_name = "Example 1.2.3"
 # slug = "example"
 # download_url = "https://example.invalid/example.jar"
 
@@ -308,8 +306,8 @@ environment = "both"
 embedded artifacts 和递归 bundled。
 
 provider 专属字段只进入 `[package.modrinth]`、`[package.curseforge]` 或
-`[package.file]`，不扁平污染公共 schema。CurseForge 的数字 project/file ID 与平台
-展示名不会占用公共 JAR 版本字段。
+`[package.file]`，不扁平污染公共 schema。远端子表只保存恢复下载所需的
+project/version-file ID、slug 和 URL；不保存或信任平台展示版本。
 
 ## 5. 字段速查表
 
@@ -342,8 +340,8 @@ provider 专属字段只进入 `[package.modrinth]`、`[package.curseforge]` 或
 | `mod_id` | 作为键使用 | 存储 JAR loader 元数据声明的 ID |
 | `sha1` / `sha256` / `sha512` | — | 本地 JAR 计算 |
 | `provider` | — | 安装时确定 |
-| `[package.modrinth]` | — | Modrinth API 数据 |
-| `[package.curseforge]` | — | CurseForge project/file 数据 |
+| `[package.modrinth]` | — | Modrinth 下载定位信息 |
+| `[package.curseforge]` | — | CurseForge 下载定位信息 |
 | `[package.file]` | — | 文件路径 |
 | `[[package.dependencies]]` | — | JAR 声明的依赖 |
 | `[[package.bundled]]` | — | 同一 JAR 内的其他逻辑模组 |
@@ -558,7 +556,6 @@ environment = "client"
 [package.modrinth]
 project_id = "AANobbMI"
 version_id = "SIrB5bCM"
-version = "mc1.21.5-0.8.10-fabric"
 slug = "sodium"
 download_url = "https://cdn.modrinth.com/..."
 

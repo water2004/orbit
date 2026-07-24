@@ -10,7 +10,6 @@ resolver/
 ├── graph.rs        注册平台、物理模组、能力、内嵌模组和 Jar-in-Jar
 ├── constraints.rs  将规范化 any/all/unless 表达式编译为 PubGrub 子句
 ├── ordering.rs     加载顺序环约束与软依赖告警
-├── catalog.rs      求解前闭合候选元数据图
 ├── local.rs        把本地扫描结果转换为 lockfile 后复用统一建图
 ├── provider.rs     内存 DependencyProvider
 └── diagnostics/    成功路径观察与不可解证明的领域化渲染
@@ -131,21 +130,26 @@ Forge-family Jar-in-Jar 的 Maven 坐标是逻辑 artifact 包。每个内嵌 ar
 父模组依赖声明 range，所以两个父 JAR 对同一坐标要求不相交时冲突由 PubGrub 证明，
 而候选 `a@1` 绝不能借用未选中 `a@2` 里的 artifact。
 
-## 6. 求解与补抓
+## 6. 下载闭包与纯离线求解
 
-`resolve_candidate_portfolio()`：
+联网编排在调用 `resolve_candidate_portfolio()` 之前完成：
 
-1. 从已知候选元数据收集 required 边；
-2. 对 lockfile 中有明确 provider/project ID 的缺失包下载全部候选并解析真实 JAR；
-3. 重复上一步直到候选目录闭合；
-4. 只建一次最终图，并调用 fork 的 maximal-solution API；
-5. 为每个保留解从同次 observer snapshot 生成升级、诊断和 warning 报告；
-6. 唯一解直接选择；多解才交给 CLI 选择。
+1. 用用户输入或 lockfile 中的 provider project locator 作为种子；
+2. 对每个 project 枚举当前 Minecraft/loader 的全部可下载版本；
+3. 只沿 provider project relation 递归，直到远端 project 闭包稳定；
+4. 将完整 artifact 队列统一交给 content-addressed cache/下载器；
+5. 每个 artifact 校验来源强哈希并解析真实 JAR metadata；
+6. 把完整 `CandidateCatalog` 交给纯离线 resolver；
+7. 建一次最终图并调用 fork 的 maximal-solution API；
+8. 唯一解直接选择；多解才交给 CLI 选择。
 
-先闭合目录是完整枚举的前提；不能一边发现解一边补候选，否则前面排除的并不是最终
-搜索空间。补抓读取已有 lockfile 的原始 provider 与 project ID；Modrinth 和
-CurseForge 使用同一 catalog/注册路径，不跨平台猜别名。未知依赖仍注册为空版本列表，
-表现为可解释的 `NoVersions`，而不是 provider 缓存异常。
+provider 的 dependency relation 仅用于定位下一批 project，不携带可信的 required、
+版本或 `mod_id` 语义。JAR dependency 也不会反向触发 provider 查询，因为 `mod_id`
+不是 slug。若下载闭包中没有 JAR 声明某个 required identity，建图会把该引用注册为
+空版本包，并由 PubGrub 产生可解释的无可行解。
+
+`resolve_candidate_portfolio()` 不持有 provider、下载器或缓存，也不会动态联网。
+这保证下载失败、JAR 解析和依赖求解是三个清楚的错误边界。
 
 多解的定义是：在保持其他投影包版本不变时，不存在任何一个包还能单独升级。交互界面
 列出每个方案的实际升级集合；只有一个方案时不读取 stdin。`--yes` 和 dry-run 不

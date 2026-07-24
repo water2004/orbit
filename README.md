@@ -145,8 +145,9 @@ CurseForge provider 不支持匿名或降级运行。使用 `cf:`、把 `cursefo
 配置 API Key：
 
 ```toml
-# %APPDATA%/orbit/config.toml（Windows）
-# ~/.orbit/config.toml（Linux）
+# Windows system 布局：%APPDATA%/orbit/config.toml
+# Linux system 布局：$XDG_CONFIG_HOME/orbit/config.toml
+#   （未设置 XDG_CONFIG_HOME 时为 $HOME/.config/orbit/config.toml）
 [auth]
 curseforge_api_key = "YOUR_API_KEY"
 ```
@@ -155,6 +156,11 @@ curseforge_api_key = "YOUR_API_KEY"
 [CurseForge 官方说明](https://support.curseforge.com/support/solutions/articles/9000208346-about-the-curseforge-api-and-how-to-apply-for-a-key)
 申请；Orbit 不内置共享 Key。Key 同时用于 Core API 与 CurseForge CDN 下载，只在
 运行时保存，不写入 `orbit.toml` 或 `orbit.lock`。
+
+也可以用全局 `--config <file>` 与 `--cache-dir <directory>` 传入精确路径，或用
+`--data-layout executable` 将 `config.toml`、`instances.toml` 和 `cache/` 放在
+可执行文件旁。完整跨平台规则见
+[全局配置与运行路径](docs/orbit-global-config.md)。
 
 ---
 

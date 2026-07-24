@@ -1,6 +1,7 @@
 # Orbit Provider 层
 
-> 实现位置：`orbit-core/src/providers/`
+> HTTP wrapper 位于 workspace 顶层；Orbit 领域适配位于
+> `orbit-core/src/providers/`。
 
 ## 1. 当前支持状态
 
@@ -16,19 +17,20 @@
 ## 2. 模块边界
 
 ```text
-providers/
-├── mod.rs                 trait、统一类型、provider factory
+modrinth-wrapper/          Modrinth HTTP、请求/响应 DTO、传输错误
+curseforge-wrapper/        CurseForge HTTP、认证、分页、DTO、传输错误
+
+orbit-core/src/providers/
+├── mod.rs                 trait、统一领域类型、provider factory
 ├── download.rs            统一 artifact 下载、域名限定认证与重定向校验
-├── modrinth.rs            Modrinth SDK → 领域类型
-├── rate_limiter.rs        单 provider 的 semaphore
-└── curseforge/
-    ├── client.rs          HTTP、认证、分页、状态错误
-    ├── models.rs          REST JSON 与官方枚举
-    └── mod.rs             CurseForge → 领域类型
+├── modrinth.rs            modrinth-wrapper → Orbit 领域类型
+├── curseforge/mod.rs      curseforge-wrapper → Orbit 领域类型
+└── rate_limiter.rs        单 provider 的 semaphore
 ```
 
-平台实现只负责查询和归一化。CLI、安装器和 resolver 不直接调用平台 SDK；所有来源下载
-后都进入同一个 JAR reader、候选图、PubGrub 求解、lockfile 和恢复路径。
+wrapper 不依赖 core，也不知道 Orbit 的包身份、缓存或 solver。core provider adapter
+只负责查询编排和领域映射；CLI、安装器和 resolver 不直接调用 wrapper。所有来源下载后
+都进入同一个 JAR reader、候选图、PubGrub 求解、lockfile 和恢复路径。
 
 ## 3. 统一接口
 
@@ -42,11 +44,8 @@ pub trait ModProvider: Send + Sync {
     async fn identify_artifacts(
         &self,
         artifacts: &[ArtifactFingerprint],
-    ) -> Result<Vec<ResolvedMod>, OrbitError>;
-    async fn get_versions(...) -> Result<Vec<ResolvedMod>, OrbitError>;
-    async fn get_versions_batch(...) -> Result<Vec<ResolvedMod>, OrbitError>;
-    async fn get_categories(...) -> Result<Vec<String>, OrbitError>;
-    async fn fetch_dependencies(...) -> Result<Vec<ResolvedDependency>, OrbitError>;
+    ) -> Result<Vec<RemoteArtifact>, OrbitError>;
+    async fn get_versions(...) -> Result<Vec<RemoteArtifact>, OrbitError>;
 }
 ```
 
@@ -56,24 +55,36 @@ pub trait ModProvider: Send + Sync {
 
 ## 4. 统一类型与来源事实
 
-`ResolvedMod` 的公共字段包括查询别名、来源名、文件名、下载 URL、发布日期、平台依赖
-提示和可用哈希；专属字段分别位于：
+`RemoteArtifact` 只包含下载所需的来源 locator、文件名、URL 和 provider
+强哈希；专属字段分别位于：
 
 - `modrinth: Option<ModrinthResolvedInfo>`；
 - `curseforge: Option<CurseForgeResolvedInfo>`。
 
+该类型刻意没有 `mod_id`、模组版本、依赖范围、环境、provides 或 bundled。
 lockfile 同样使用 `[package.modrinth]` 和 `[package.curseforge]` 子表。公共层通过
 `source_slug()`、`source_project_id()`、`source_version_id()` 等方法读取，不按平台
-复制 install/restore/outdated/check/catalog 逻辑。
+复制 install/restore/outdated/check 逻辑。
 
-平台的版本展示名不能代替 JAR 版本。Orbit 下载候选后读取 loader 元数据，用真实
-`mod_id`、版本、`DependencyExpression` 与递归 `bundled` 构建求解图。平台依赖只用于
-发现需要下载的项目；最终证明来自同一物理 JAR。
+lockfile 的来源子表不保存远端展示版本。平台 slug、project ID 和查询结果里的版本名
+都不能代替 JAR 身份。Orbit 先沿
+`RemoteProjectLocator` 递归枚举当前 Minecraft/loader 的完整 project/artifact 闭包，
+所有 provider 的发现阶段都结束后，再用一个有界批次统一查 cache 或下载。之后才读取
+loader 元数据，用真实 `mod_id`、版本、
+`DependencyExpression` 与递归 `bundled` 构建求解图。
+
+远端 dependency relation 只定位下一层 project，不向求解器贡献 required/optional 或
+版本语义。反过来，JAR `mod_id` 绝不作为 slug/project 查询；闭包缺少 JAR required
+identity 时，纯离线 solver 将其证明为无解。
+
+若多个远端项目下载出的 JAR 声明同一 `mod_id + version`，元数据完全一致时按 provider
+配置顺序稳定去重；依赖、环境、provides 或 bundled 不一致时报告 JAR 身份碰撞，不让
+后到的远端记录静默覆盖。
 
 ## 5. Provider 选择与认证
 
 `create_providers()` 保持 `[resolver].platforms` 的顺序。候选发现选择第一个返回有效
-候选的来源；已锁定包的恢复、补抓、检查和升级按 lockfile 记录的原始 provider，不跨
+候选的来源；已锁定包的恢复、检查和升级按 lockfile 记录的原始 provider，不跨
 平台猜同名项目。
 
 `orbit init` 尚无 manifest 可提供来源列表，因此使用专门的 identification factory：
@@ -103,7 +114,8 @@ CurseForge 使用 `x-api-key`，配置项为 `auth.curseforge_api_key`，环境�
   NeoForge=6；
 - 文件没有内联 URL 时调用
   `/mods/{modId}/files/{fileId}/download-url`；不可用响应不会被替换成猜测的 CDN 地址；
-- `relationType=3` 作为 required，`relationType=2` 作为 optional 候选发现提示；
+- 所有 dependency relation 的 project ID 都进入递归下载发现；relation type 仅供
+  `info` 展示，不进入 JAR 依赖图；
 - 文件 SHA-1 用于下载校验，下载后再计算 SHA-256/SHA-512 写入 lockfile 和缓存。
 
 API 没有 license 和 client/server side 字段，因此 CurseForge `info` 对这三项显示
@@ -126,21 +138,21 @@ unknown；不会从分类或文件名猜测。
 ## 8. 下载限制与错误
 
 CurseForge 项目可以没有第三方可用的下载 URL。Orbit 只使用 API 返回的内联 URL 或
-download-url 端点；若目标版本没有任何 API 可下载且带 SHA-1 的文件，会明确报告
-`matching files, but none is API-downloadable with a SHA-1 checksum`。完全没有匹配文件
-仍返回空候选，使 provider 回退和 `orbit check` 的“不兼容”结果保持正常。Orbit 不会
-拼接 CDN URL，也不会把 HTML 错误页当 JAR。
+download-url 端点；若任一目标文件不可用、缺 SHA-1 或无法取得 API download URL，
+整个发现阶段失败并列出文件，不会拿其余文件组成残缺候选集。完全没有匹配文件仍返回
+空候选，使 provider 回退和 `orbit check` 的“不兼容”结果保持正常。Orbit 不会拼接
+CDN URL，也不会把 HTML 错误页当 JAR。
 
 根据 CurseForge 的
 [文件下载认证公告](https://blog.curseforge.com/introducing-api-key-authentication-for-curseforge-file-downloads/)，
 直接 CDN 下载从 2026-07-16 起也需要 `x-api-key`。所有 provider 共用
 `ArtifactDownloadClient` 下载路径；CurseForge 只在运行时为 HTTPS
 `forgecdn.net` 及其子域添加 Key，每一跳重定向都重新校验。Key 不进入
-`ResolvedMod`、`InstalledMod` 或 lockfile，也不会被发送给任意 API 返回 URL。
+`RemoteArtifact`、`InstalledMod` 或 lockfile，也不会被发送给任意 API 返回 URL。
 
 API 状态错误保留 HTTP 状态和最多 500 字符响应正文；API Key 不进入日志或错误文本。
-候选批量验证允许忽略个别坏的历史文件，但当所有候选都失败时返回第一个具体下载、
-校验或 JAR 解析错误，不降级成不可读的“未找到”。
+候选队列必须完整验证；任一已排队 artifact 下载、校验或 JAR 解析失败都会返回具体
+错误，避免在不完整搜索空间上伪造求解结果。
 
 ## 9. 测试边界
 

@@ -7,7 +7,7 @@ orbit-cli       参数、交互和展示
     ↓
 orbit-core      领域模型、编排、JAR、求解、文件事务
     ├── modrinth-wrapper
-    ├── CurseForge typed client（core provider 边界内）
+    ├── curseforge-wrapper
     └── water2004/pubgrub（固定 Git revision）
 ```
 
@@ -20,9 +20,11 @@ PubGrub fork 位于
 分支后续移动导致构建结果变化。仓库内的 `pubgrub-fork` 仍是独立 checkout，不加入根
 workspace，仅供继续开发和向 fork 推送。
 
-CurseForge 的 HTTP/JSON 位于 `providers/curseforge/{client,models}.rs`，平台映射位于
-同目录 `mod.rs`。`providers/download.rs` 是所有平台共用的 artifact transport；
-provider 只配置自己的运行时认证策略，不会复制安装器或 resolver。
+`modrinth-wrapper` 与 `curseforge-wrapper` 分别拥有平台的 HTTP client、请求参数、
+响应 DTO、分页和传输错误。`orbit-core/src/providers/{modrinth,curseforge}` 只把
+wrapper 输出适配成统一的 `RemoteArtifact` / 查询模型。
+`providers/download.rs` 是所有平台共用的 artifact transport；provider 只配置自己的
+运行时认证策略，不会复制安装器或 resolver。
 
 ## 2. core 分层
 
@@ -31,13 +33,13 @@ metadata/     loader 文件 → 规范化逻辑元数据
 jar/          ZIP、manifest、嵌套 JAR、Jar-in-Jar、class major
 identification/
 providers/    来源查询、统一下载与受限运行时认证
+runtime       跨平台目录发现、显式路径覆盖与运行时服务注入
 lockfile      可复现的 Fat Lockfile
 versions/     Fabric predicate 与 Maven version range
 resolver/
   graph       loader-neutral 建图
   constraints 依赖表达式 → PubGrub 子句
   ordering    顺序环与软依赖 warning
-  catalog     求解前闭合候选元数据图
   diagnostics 同次求解的原因
 installer/    事务、复制和恢复
 init/sync/    实例扫描与对账
@@ -63,7 +65,9 @@ init/sync/    实例扫描与对账
 ```text
 命令
   → manifest / instance
-  → provider 或本地 JAR
+  → provider project 闭包发现
+  → 完整 artifact 队列
+  → content-addressed cache / 网络
   → jar reader
   → loader adapter
   → normalized metadata
@@ -72,6 +76,14 @@ init/sync/    实例扫描与对账
   → PubGrub solution + diagnostics + warnings
   → transaction / report
 ```
+
+在线安装分为三个不可反向调用的阶段：
+
+1. provider 只按 project relation 递归枚举当前 Minecraft/loader 的 artifact；
+2. 队列稳定后统一查缓存或下载，并把每个 JAR 解析为候选；
+3. resolver 纯离线消费 JAR 候选，缺少实际依赖时产生正常的无解证明。
+
+JAR `mod_id` 不会被拿去猜 provider slug，resolver 也没有联网补抓入口。
 
 一个物理 JAR 可以包含多个逻辑模组。顶层 `PackageEntry` 对应物理文件的主逻辑包，
 其余逻辑模组递归位于 `bundled`。它们参与同一求解图，但不会生成不存在的独立文件。
@@ -143,8 +155,18 @@ Orbit 不能仅凭字节码完整证明：
 
 | 边界 | 状态 |
 |---|---|
-| Modrinth | 可用 |
+| Modrinth | `modrinth-wrapper` + core adapter，可用 |
 | 本地 `file:` | 可用 |
-| CurseForge | 可用；无 API Key 时 provider 无法创建，Core API 与 CDN 下载均认证 |
+| CurseForge | `curseforge-wrapper` + core adapter，可用；无 API Key 时 provider 无法创建，Core API 与 CDN 下载均认证 |
 | PubGrub fork | 已发布并固定到 `0c260ff2528a6c09c683cc7270b3b97c2ea114f3` |
 | 多个极大解 | 完整枚举；唯一解自动选择，多解交给调用方选择 |
+
+## 9. 跨平台运行环境
+
+`RuntimeEnvironment` 是唯一允许读取宿主平台目录的 trait。Windows、Linux 和 macOS
+实现分别使用 AppData、XDG/HOME 和 Library 目录；公共层只接收 `RuntimePaths`。
+`RuntimeContext` 加载显式 `config.toml`、实例注册表路径和 content-addressed JAR
+缓存，随后注入 CLI 调用的 core API。
+
+调用方可传精确配置/缓存路径，也可选择 `system` 或 `executable` 布局。Cargo
+`portable` feature 只把编译默认值改成 executable 布局，不取消运行时显式覆盖。

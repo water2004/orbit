@@ -28,6 +28,9 @@ add install remove purge sync upgrade import
 | 标志 | 说明 |
 |------|------|
 | `-i, --instance <name>` | 显式选择注册实例 |
+| `--config <file>` | 使用指定的全局配置文件；实例注册表位于其同目录 |
+| `--cache-dir <directory>` | 使用指定的 content-addressed JAR 缓存目录 |
+| `--data-layout system\|executable` | 选择平台目录或可执行文件相邻目录布局 |
 | `-v, --verbose` | 显示实例选择等额外上下文 |
 | `-q, --quiet` | 规范要求仅输出错误；当前只有部分上下文输出遵守，见 §8 |
 | `-y, --yes` | 跳过确认；不会替缺失的可复现元数据猜值 |
@@ -248,7 +251,8 @@ orbit cache clean
 ```
 
 先检查配置解析后的缓存目录、文件数和大小；空缓存直接成功。非 `--yes` 时确认，dry-run
-不删除。core 会拒绝清理文件系统根、当前目录或 Orbit 数据目录本身。
+不删除。core 会拒绝清理文件系统根、当前目录/其祖先，或包含配置文件与实例注册表的
+目录。
 
 当前命令清空整个 cache；配置中的自动淘汰策略和大小上限尚未执行。
 

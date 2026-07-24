@@ -1,6 +1,6 @@
 # Orbit 实现状态
 
-> 更新日期：2026-07-24。本文区分“正确规范曾未被代码执行”和“文档本身已经过时”。
+> 更新日期：2026-07-25。本文区分“正确规范曾未被代码执行”和“文档本身已经过时”。
 
 ## 1. 当前结论
 
@@ -20,6 +20,9 @@
 | Modrinth / CurseForge / `file:` | ✅ | 查询、下载、识别、锁定；CurseForge 无 API Key 时拒绝创建 |
 | PubGrub fork 远端 | ✅ | 功能分支已发布，Orbit 固定到完整 commit SHA |
 | 多解选择 | ✅ | 唯一解自动选择；多个单包不可升级解才交互 |
+| 远端身份边界 | ✅ | provider 只给下载 locator；所有包元数据来自实际 JAR |
+| Provider 分层 | ✅ | Modrinth / CurseForge HTTP 与 DTO 各在独立 wrapper，core 只做领域适配 |
+| 跨平台全局路径 | ✅ | RuntimeEnvironment + 显式路径；system/executable 布局 |
 
 ## 2. 保留的正确规范
 
@@ -48,7 +51,8 @@
 - “optional/env 不影响传递图”：现在按真实语义和 target 建图。
 - “Jar-in-Jar 是全局无依赖叶子”：现在 artifact 版本由 owner-bound occurrence
   提供，未选中候选不能提供内容。
-- “求解失败后再补一个候选重试”：完整枚举前先闭合 candidate catalog。
+- “resolver 动态补抓候选”：下载层先按远端 project relation 构造完整 artifact
+  队列并统一解析，resolver 此后严格离线。
 
 不提供旧 lockfile schema 的兼容读取层；目前没有外部 Orbit 用户需要承担这种迁移债。
 
@@ -64,7 +68,7 @@
 | `check` | 实例目标兼容性预检 |
 | `list` / `info` | 展示包信息、逻辑依赖和 bundled |
 | `export` / `import` | Orbit archive 与 Modrinth pack |
-| `cache` / `config` / `instance` / `purge` | 已接 core |
+| `cache` / `instances` / `purge` | 已接 core |
 
 ## 5. 已知边界
 
@@ -77,7 +81,9 @@
 - 字节码扫描只能证明 class major 下限，不能证明 API/Mixin/反射兼容。
 - PubGrub fork 已发布到 `water2004/pubgrub` 的 `codex/solver-observer` 分支；
   Orbit 固定到 `0c260ff2528a6c09c683cc7270b3b97c2ea114f3`。
-- 补抓传递候选依赖已有 lockfile 来源信息；不会凭别名猜远端项目。
+- 远端 project relation 会递归构造下载闭包；JAR `mod_id` 从不作为 slug/project
+  查询。闭包缺少实际 required identity 时由 resolver 正常证明无解。
+- JAR 缓存按本地 SHA-512 寻址，SHA-1 只作别名；provider 文件名不作为缓存键。
 
 ## 6. 文档索引
 
