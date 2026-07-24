@@ -223,14 +223,10 @@ fn root_dependencies(
 ) -> Vec<(String, Ranges<Version>)> {
     let mut dependencies = Vec::new();
     for (name, spec) in &manifest.dependencies {
-        let constraint = if candidates.contains_key(name) {
-            Ranges::full()
-        } else {
-            match spec {
-                DependencySpec::Short(version) => Version::parse_constraint(version, loader),
-                DependencySpec::Full { version, .. } => {
-                    Version::parse_constraint(version.as_deref().unwrap_or("*"), loader)
-                }
+        let constraint = match spec {
+            DependencySpec::Short(version) => Version::parse_constraint(version, loader),
+            DependencySpec::Full { version, .. } => {
+                Version::parse_constraint(version.as_deref().unwrap_or("*"), loader)
             }
         };
         dependencies.push((name.clone(), constraint));
@@ -310,5 +306,47 @@ mod tests {
         register_candidate_versions(&mut provider, "example", &candidates, "forge");
 
         assert_eq!(provider.versions["transitive"], Vec::<Version>::new());
+    }
+
+    #[test]
+    fn manifest_constraint_still_applies_when_candidates_exist() {
+        let manifest: OrbitManifest = toml::from_str(
+            r#"
+[project]
+name = "test"
+mc_version = "1"
+modloader = "forge"
+modloader_version = "1"
+
+[dependencies]
+example = "1"
+"#,
+        )
+        .unwrap();
+        let lockfile: OrbitLockfile = toml::from_str(
+            r#"
+[meta]
+mc_version = "1"
+modloader = "forge"
+modloader_version = "1"
+
+[[package]]
+mod_id = "example"
+version = "1"
+sha256 = "unused"
+provider = "file"
+"#,
+        )
+        .unwrap();
+        let candidates = HashMap::from([("example".to_string(), vec![candidate("2", Vec::new())])]);
+
+        let graph = build_solver_graph(&manifest, &lockfile, &candidates);
+        let solution =
+            pubgrub::resolve(&graph.provider, graph.root_package, graph.root_version).unwrap();
+
+        assert_eq!(
+            solution.get(&"example".to_string()),
+            Some(&Version::Generic("1".to_string()))
+        );
     }
 }

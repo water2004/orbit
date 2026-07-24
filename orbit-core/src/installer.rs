@@ -2,7 +2,6 @@
 //!
 //! 提供顶层 API 供 CLI 调用。CLI 层不直接操作 TOML / 文件。
 
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use crate::error::OrbitError;
@@ -58,10 +57,11 @@ pub struct InstalledMod {
 /// 顶层 API：在指定实例目录安装模组。
 ///
 /// 接收 `instance_dir`，内部完成 orbit.toml / orbit.lock 的读写和 mods/ 目录管理。
+/// `constraint` 会绑定到候选 JAR 自声明的 `mod_id`，并作为 manifest 根约束保留。
 /// `dry_run` 为 true 时仅解析不下载不写文件。
 pub async fn install_to_instance(
     slug: &str,
-    _constraint: &str,
+    constraint: &str,
     instance_dir: &Path,
     providers: &[Box<dyn ModProvider>],
     options: InstallOptions,
@@ -84,6 +84,7 @@ pub async fn install_to_instance(
 
     let report = install_mod(InstallModInput {
         slug,
+        constraint,
         providers,
         manifest: &mut manifest_file.inner,
         lockfile: &mut lock.inner,
@@ -118,7 +119,7 @@ pub async fn upgrade_all_in_instance(
         },
     );
 
-    let (outdated, jar_ver_to_v) =
+    let (outdated, resolved_candidates) =
         crate::outdated::check_all_outdated(&manifest_file.inner, &lock.inner, providers).await?;
 
     if outdated.is_empty() {
@@ -138,7 +139,8 @@ pub async fn upgrade_all_in_instance(
     let mut planned = Vec::new();
 
     for o in &outdated {
-        let Some(resolved) = jar_ver_to_v.get(&o.new_version) else {
+        let key = (o.mod_id.clone(), o.new_version.clone());
+        let Some(resolved) = resolved_candidates.get(&key) else {
             continue;
         };
         planned.push(InstalledMod {
@@ -189,7 +191,8 @@ pub async fn upgrade_all_in_instance(
 
     let mut installed = Vec::new();
     for mut plan in planned {
-        let Some(resolved) = jar_ver_to_v.get(&plan.version).cloned() else {
+        let key = (plan.mod_id.clone(), plan.version.clone());
+        let Some(resolved) = resolved_candidates.get(&key).cloned() else {
             continue;
         };
         let dest_path = download_mod(&resolved, &mods_dir).await?;
@@ -374,6 +377,7 @@ pub fn list_installed(instance_dir: &Path) -> Result<ListOutput, OrbitError> {
 
 struct InstallModInput<'a> {
     slug: &'a str,
+    constraint: &'a str,
     providers: &'a [Box<dyn ModProvider>],
     manifest: &'a mut OrbitManifest,
     lockfile: &'a mut OrbitLockfile,
@@ -385,6 +389,7 @@ struct InstallModInput<'a> {
 async fn install_mod(input: InstallModInput<'_>) -> Result<InstallReport, OrbitError> {
     let InstallModInput {
         slug,
+        constraint,
         providers,
         manifest,
         lockfile,
@@ -404,7 +409,11 @@ async fn install_mod(input: InstallModInput<'_>) -> Result<InstallReport, OrbitE
 
     // 1-2. BFS download all JARs
     let seeds = vec![slug.to_string()];
-    let (mut candidates, jar_ver_to_v_owned) = crate::outdated::download_candidates_bfs(
+    let crate::outdated::CandidateDownload {
+        mut candidates,
+        resolved,
+        source_packages,
+    } = crate::outdated::download_candidates_bfs(
         providers[0].as_ref(),
         &seeds,
         lockfile,
@@ -412,14 +421,21 @@ async fn install_mod(input: InstallModInput<'_>) -> Result<InstallReport, OrbitE
         loader,
     )
     .await?;
-    // Convert String→ResolvedMod to &ResolvedMod for compatibility
-    let jar_ver_to_v: HashMap<String, &ResolvedMod> = jar_ver_to_v_owned
-        .iter()
-        .map(|(k, v)| (k.clone(), v))
-        .collect();
     if candidates.is_empty() {
         return Err(OrbitError::ModNotFound(slug.to_string()));
     }
+    let requested_package = source_packages
+        .get(slug)
+        .cloned()
+        .or_else(|| {
+            crate::resolver::find_entry(slug, &lockfile.packages)
+                .map(|entry| entry.mod_id.clone())
+                .filter(|package| candidates.contains_key(package))
+        })
+        .ok_or_else(|| OrbitError::ModNotFound(slug.to_string()))?;
+
+    let mut resolution_manifest = manifest.clone();
+    ensure_root_requirement(&mut resolution_manifest, &requested_package, constraint);
 
     // 3. Resolve offline
     eprintln!(
@@ -427,7 +443,7 @@ async fn install_mod(input: InstallModInput<'_>) -> Result<InstallReport, OrbitE
         candidates.len()
     );
     let upgrades = match crate::resolver::resolve_with_candidates(
-        manifest,
+        &resolution_manifest,
         lockfile,
         &mut candidates,
         providers,
@@ -446,7 +462,8 @@ async fn install_mod(input: InstallModInput<'_>) -> Result<InstallReport, OrbitE
     let mut already_satisfied = Vec::new();
 
     for (mod_id, new_ver) in &upgrades {
-        let Some(resolved) = jar_ver_to_v.get(new_ver).copied() else {
+        let key = (mod_id.clone(), new_ver.clone());
+        let Some(resolved) = resolved.get(&key) else {
             continue;
         };
 
@@ -456,7 +473,7 @@ async fn install_mod(input: InstallModInput<'_>) -> Result<InstallReport, OrbitE
             already_satisfied.push(mod_id.clone());
             continue;
         }
-        if options.no_deps && mod_id != slug {
+        if options.no_deps && mod_id != &requested_package {
             continue;
         }
 
@@ -515,7 +532,8 @@ async fn install_mod(input: InstallModInput<'_>) -> Result<InstallReport, OrbitE
         {
             let _ = std::fs::remove_file(mods_dir.join(&old.filename));
         }
-        let Some(resolved) = jar_ver_to_v.get(&plan.version).copied() else {
+        let key = (plan.mod_id.clone(), plan.version.clone());
+        let Some(resolved) = resolved.get(&key) else {
             continue;
         };
         let dest_path = download_mod(resolved, mods_dir).await?;
@@ -560,6 +578,12 @@ async fn install_mod(input: InstallModInput<'_>) -> Result<InstallReport, OrbitE
         installed.push(plan);
     }
 
+    if installed
+        .iter()
+        .any(|installed| installed.mod_id == requested_package)
+    {
+        ensure_root_requirement(manifest, &requested_package, constraint);
+    }
     apply_to_manifest_and_lock(manifest, lockfile, &installed, mods_dir);
 
     Ok(InstallReport {
@@ -634,14 +658,7 @@ fn apply_to_manifest_and_lock(
 ) {
     for inst in installed {
         let key = &inst.mod_id;
-        manifest.dependencies.insert(
-            key.clone(),
-            DependencySpec::Short(if inst.version.is_empty() {
-                "*".into()
-            } else {
-                inst.version.clone()
-            }),
-        );
+        ensure_root_requirement(manifest, key, &inst.version);
         lockfile.packages.retain(|e| e.mod_id != *key);
         let lock_deps: Vec<LockDependency> = inst
             .jar_deps
@@ -686,5 +703,61 @@ fn apply_to_manifest_and_lock(
             dependencies: lock_deps,
             implanted: inst.implanted.clone(),
         });
+    }
+}
+
+fn ensure_root_requirement(manifest: &mut OrbitManifest, package: &str, constraint: &str) {
+    manifest
+        .dependencies
+        .entry(package.to_string())
+        .or_insert_with(|| {
+            DependencySpec::Short(if constraint.is_empty() {
+                "*".to_string()
+            } else {
+                constraint.to_string()
+            })
+        });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn manifest() -> OrbitManifest {
+        toml::from_str(
+            r#"
+[project]
+name = "test"
+mc_version = "1"
+modloader = "forge"
+modloader_version = "1"
+"#,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn requested_constraint_is_bound_to_the_actual_package_id() {
+        let mut manifest = manifest();
+
+        ensure_root_requirement(&mut manifest, "actual-mod-id", "^1");
+
+        assert_eq!(
+            manifest.dependencies["actual-mod-id"].version_constraint(),
+            Some("^1")
+        );
+    }
+
+    #[test]
+    fn installed_version_does_not_replace_an_existing_requirement() {
+        let mut manifest = manifest();
+        ensure_root_requirement(&mut manifest, "example", "^1");
+
+        ensure_root_requirement(&mut manifest, "example", "1.5");
+
+        assert_eq!(
+            manifest.dependencies["example"].version_constraint(),
+            Some("^1")
+        );
     }
 }

@@ -7,8 +7,8 @@ use std::collections::{HashMap, HashSet};
 use crate::error::OrbitError;
 use crate::lockfile::OrbitLockfile;
 use crate::manifest::OrbitManifest;
-use crate::providers::ModProvider;
-use crate::resolver::types::CandidateVersion;
+use crate::providers::{ModProvider, ResolvedMod};
+use crate::resolver::types::{CandidateVersion, ImplantedCandidate};
 
 pub struct OutdatedMod {
     pub mod_id: String,
@@ -16,7 +16,18 @@ pub struct OutdatedMod {
     pub new_version: String,
 }
 
-/// BFS 下载 JAR 并构建 candidates + jar_ver_to_v。
+pub type ResolvedCandidateKey = (String, String);
+pub type ResolvedCandidates = HashMap<ResolvedCandidateKey, ResolvedMod>;
+
+#[derive(Default)]
+pub struct CandidateDownload {
+    pub candidates: HashMap<String, Vec<CandidateVersion>>,
+    pub resolved: ResolvedCandidates,
+    /// Provider 查询标识（slug 或 project_id）到 JAR 自声明 mod_id 的映射。
+    pub source_packages: HashMap<String, String>,
+}
+
+/// BFS 下载 JAR 并构建候选图、候选元数据和 provider 标识映射。
 /// 供 `install_mod` 和 `check_all_outdated` 共用。
 pub async fn download_candidates_bfs(
     provider: &dyn ModProvider,
@@ -24,15 +35,9 @@ pub async fn download_candidates_bfs(
     lockfile: &OrbitLockfile,
     mc_version: &str,
     loader: &str,
-) -> Result<
-    (
-        HashMap<String, Vec<CandidateVersion>>,
-        HashMap<String, crate::providers::ResolvedMod>,
-    ),
-    OrbitError,
-> {
+) -> Result<CandidateDownload, OrbitError> {
     let mut seen: HashSet<String> = HashSet::new();
-    let mut to_download: Vec<crate::providers::ResolvedMod> = Vec::new();
+    let mut to_download: Vec<ResolvedMod> = Vec::new();
     let mut queue: Vec<String> = seeds.to_vec();
 
     while let Some(pid) = queue.pop() {
@@ -120,19 +125,53 @@ pub async fn download_candidates_bfs(
         }));
     }
 
-    let mut jar_ver_to_v: HashMap<String, crate::providers::ResolvedMod> = HashMap::new();
-    let mut candidates: HashMap<String, Vec<CandidateVersion>> = HashMap::new();
+    let mut download = CandidateDownload::default();
     for handle in handles {
-        if let Ok(Some((key, ver, deps, imp, resolved))) = handle.await {
-            jar_ver_to_v.insert(ver.clone(), resolved);
-            candidates.entry(key).or_default().push(CandidateVersion {
-                jar_version: ver,
-                deps,
-                implanted: imp,
-            });
+        if let Ok(Some((package, version, dependencies, implanted, resolved))) = handle.await {
+            record_candidate(
+                &mut download,
+                package,
+                version,
+                dependencies,
+                implanted,
+                resolved,
+            );
         }
     }
-    Ok((candidates, jar_ver_to_v))
+    Ok(download)
+}
+
+fn record_candidate(
+    download: &mut CandidateDownload,
+    package: String,
+    version: String,
+    dependencies: Vec<(String, String, bool)>,
+    implanted: Vec<ImplantedCandidate>,
+    resolved: ResolvedMod,
+) {
+    download
+        .source_packages
+        .insert(resolved.slug.clone(), package.clone());
+    download
+        .source_packages
+        .insert(resolved.mod_id.clone(), package.clone());
+    if let Some(modrinth) = &resolved.modrinth {
+        download
+            .source_packages
+            .insert(modrinth.project_id.clone(), package.clone());
+    }
+    download
+        .resolved
+        .insert((package.clone(), version.clone()), resolved);
+    download
+        .candidates
+        .entry(package)
+        .or_default()
+        .push(CandidateVersion {
+            jar_version: version,
+            deps: dependencies,
+            implanted,
+        });
 }
 
 /// 检查所有已安装 modrinth mod 的可用更新。
@@ -140,13 +179,7 @@ pub async fn check_all_outdated(
     manifest: &OrbitManifest,
     lockfile: &OrbitLockfile,
     providers: &[Box<dyn ModProvider>],
-) -> Result<
-    (
-        Vec<OutdatedMod>,
-        HashMap<String, crate::providers::ResolvedMod>,
-    ),
-    OrbitError,
-> {
+) -> Result<(Vec<OutdatedMod>, ResolvedCandidates), OrbitError> {
     let loader = &manifest.project.modloader;
     let mc_version = &manifest.project.mc_version;
     let provider = &providers[0];
@@ -208,8 +241,11 @@ pub async fn check_all_outdated(
     }
 
     // 2. BFS download
-    let (mut candidates, jar_ver_to_v) =
-        download_candidates_bfs(provider.as_ref(), &seeds, lockfile, mc_version, loader).await?;
+    let CandidateDownload {
+        mut candidates,
+        resolved,
+        ..
+    } = download_candidates_bfs(provider.as_ref(), &seeds, lockfile, mc_version, loader).await?;
     if candidates.is_empty() {
         return Ok((vec![], HashMap::new()));
     }
@@ -236,5 +272,69 @@ pub async fn check_all_outdated(
         })
         .collect();
     results.sort_by(|a, b| a.mod_id.cmp(&b.mod_id));
-    Ok((results, jar_ver_to_v))
+    Ok((results, resolved))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::providers::ModrinthResolvedInfo;
+
+    fn resolved(source: &str, project_id: &str) -> ResolvedMod {
+        ResolvedMod {
+            mod_id: source.to_string(),
+            version: "provider-version".to_string(),
+            sha1: String::new(),
+            sha512: String::new(),
+            slug: source.to_string(),
+            provider: "modrinth".to_string(),
+            modrinth: Some(ModrinthResolvedInfo {
+                project_id: project_id.to_string(),
+                version_id: format!("{project_id}-version"),
+                version_number: "provider-version".to_string(),
+            }),
+            date_published: String::new(),
+            download_url: String::new(),
+            filename: String::new(),
+            dependencies: Vec::new(),
+            client_side: None,
+            server_side: None,
+        }
+    }
+
+    #[test]
+    fn candidate_catalog_uses_actual_package_and_version_as_its_key() {
+        let mut download = CandidateDownload::default();
+
+        record_candidate(
+            &mut download,
+            "actual-a".to_string(),
+            "1".to_string(),
+            Vec::new(),
+            Vec::new(),
+            resolved("source-a", "project-a"),
+        );
+        record_candidate(
+            &mut download,
+            "actual-b".to_string(),
+            "1".to_string(),
+            Vec::new(),
+            Vec::new(),
+            resolved("source-b", "project-b"),
+        );
+
+        assert_eq!(download.resolved.len(), 2);
+        assert!(
+            download
+                .resolved
+                .contains_key(&("actual-a".to_string(), "1".to_string()))
+        );
+        assert!(
+            download
+                .resolved
+                .contains_key(&("actual-b".to_string(), "1".to_string()))
+        );
+        assert_eq!(download.source_packages["source-a"], "actual-a");
+        assert_eq!(download.source_packages["project-b"], "actual-b");
+    }
 }
