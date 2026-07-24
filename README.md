@@ -16,6 +16,7 @@ Orbit 是一个专为 Minecraft 打造的现代化命令行模组包管理器。
 - **🌐 多来源**：支持 Modrinth、CurseForge 与本地 `file:` JAR；不同平台只负责候选发现，最终统一验证 JAR 并求解依赖。
 - **🧩 完整 Loader 语义**：Fabric、Quilt、Forge、NeoForge 共享同一解析与求解路径，支持端侧、软/硬依赖、`provides`、加载顺序、内嵌模组与 Jar-in-Jar。
 - **🔎 可解释求解**：依赖原因直接参与 PubGrub 的真实传播和回溯；不会用第二次反事实求解或日志解析猜原因。
+- **🧭 完整方案选择**：枚举所有“其它包不变时已无法单独升级”的方案；唯一解自动采用，多解才请求选择。
 - **☕ 字节码下限检查**：根据目标 Minecraft 与 JAR class major 校验最低 Java；该检查不宣称能证明 API、Mixin 或运行时行为完全兼容。
 - **🚀 跨版本升级预检**：想升级 MC 主版本？`orbit check <version>` 可查询在线模组是否已有兼容版本。
 

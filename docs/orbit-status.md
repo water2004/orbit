@@ -13,12 +13,13 @@
 | 初始化与检测 | ✅ | Minecraft 与四种 loader/version |
 | JAR 元数据 | ✅ | 四种 loader、多逻辑 mod、嵌套 JAR、JarJar |
 | 版本语义 | ✅ | Fabric predicate；Maven ComparableVersion/range |
-| 依赖求解 | ✅ | any/all/unless、六类关系、环境、provides、ordering、Java、JarJar |
+| 依赖求解 | ✅ | 强类型 occurrence 图、完整极大解枚举、any/all/unless、环境、provides、ordering、Java、JarJar |
 | 原因 | ✅ | 自定义 reason 参与原始推导；成功候选用同次 observer |
 | 本地校验 | ✅ | 转 Fat Lockfile 后复用统一建图 |
 | 安装/恢复/升级 | ✅ | 由求解结果选择物理 JAR |
 | Modrinth / CurseForge / `file:` | ✅ | 查询、下载、识别、锁定；CurseForge 无 API Key 时拒绝创建 |
 | PubGrub fork 远端 | ✅ | 功能分支已发布，Orbit 固定到完整 commit SHA |
+| 多解选择 | ✅ | 唯一解自动选择；多个单包不可升级解才交互 |
 
 ## 2. 保留的正确规范
 
@@ -45,6 +46,9 @@
 - “fork 只增加 observer”：现在还支持 provider-defined incompatibility clauses；
 - “Forge/NeoForge/Quilt 属于 future phase”：四者已经进入完整路径；
 - “optional/env 不影响传递图”：现在按真实语义和 target 建图。
+- “Jar-in-Jar 是全局无依赖叶子”：现在 artifact 版本由 owner-bound occurrence
+  提供，未选中候选不能提供内容。
+- “求解失败后再补一个候选重试”：完整枚举前先闭合 candidate catalog。
 
 不提供旧 lockfile schema 的兼容读取层；目前没有外部 Orbit 用户需要承担这种迁移债。
 
@@ -72,7 +76,7 @@
   源码并用 golden vectors 固定行为。
 - 字节码扫描只能证明 class major 下限，不能证明 API/Mixin/反射兼容。
 - PubGrub fork 已发布到 `water2004/pubgrub` 的 `codex/solver-observer` 分支；
-  Orbit 固定到 `c3c4326a7e7ced4077e831285c4408c60c52ea32`。
+  Orbit 固定到 `0c260ff2528a6c09c683cc7270b3b97c2ea114f3`。
 - 补抓传递候选依赖已有 lockfile 来源信息；不会凭别名猜远端项目。
 
 ## 6. 文档索引

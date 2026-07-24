@@ -37,7 +37,7 @@ resolver/
   graph       loader-neutral 建图
   constraints 依赖表达式 → PubGrub 子句
   ordering    顺序环与软依赖 warning
-  retry       候选补抓
+  catalog     求解前闭合候选元数据图
   diagnostics 同次求解的原因
 installer/    事务、复制和恢复
 init/sync/    实例扫描与对账
@@ -75,6 +75,8 @@ init/sync/    实例扫描与对账
 
 一个物理 JAR 可以包含多个逻辑模组。顶层 `PackageEntry` 对应物理文件的主逻辑包，
 其余逻辑模组递归位于 `bundled`。它们参与同一求解图，但不会生成不存在的独立文件。
+求解层用 owner/version/path 标识每个 bundled occurrence；相同 mod ID/version 位于
+两个不同 owner 时仍是两个物理实体。
 
 ## 4. 统一求解
 
@@ -91,7 +93,12 @@ Jar-in-Jar 和物理包注册在 `graph.rs`。这种拆分按职责而不是按 
 
 PubGrub fork 允许 provider 在选择包版本时注入带 reason 的自定义 incompatibility。
 条件原因因此属于真正的传播/回溯路径。observer 只补充成功解中的候选淘汰原因，不承担
-另一条证明路径。
+另一条证明路径。fork 的最大解枚举只接收通用投影包；Jar-in-Jar 由 Orbit 的强类型
+逻辑包、物理 occurrence 和 provider witness 建模，不向求解器库加入领域特例。
+
+`SolverPackage` 与私有 `SolverVersion` 承载所有内部身份。逻辑 capability 和
+Jar-in-Jar artifact 通过 witness 绑定真实 occurrence；公共 loader `Version` 不包含
+求解器选择编号。诊断同样按这些类型折叠内部边，不解析名称前缀。
 
 ## 5. loader 支持矩阵
 
@@ -139,4 +146,5 @@ Orbit 不能仅凭字节码完整证明：
 | Modrinth | 可用 |
 | 本地 `file:` | 可用 |
 | CurseForge | 可用；无 API Key 时 provider 无法创建，Core API 与 CDN 下载均认证 |
-| PubGrub fork | 已发布并固定到 `c3c4326a7e7ced4077e831285c4408c60c52ea32` |
+| PubGrub fork | 已发布并固定到 `0c260ff2528a6c09c683cc7270b3b97c2ea114f3` |
+| 多个极大解 | 完整枚举；唯一解自动选择，多解交给调用方选择 |

@@ -64,7 +64,7 @@ pub trait ModProvider: Send + Sync {
 
 lockfile 同样使用 `[package.modrinth]` 和 `[package.curseforge]` 子表。公共层通过
 `source_slug()`、`source_project_id()`、`source_version_id()` 等方法读取，不按平台
-复制 install/restore/outdated/check/retry 逻辑。
+复制 install/restore/outdated/check/catalog 逻辑。
 
 平台的版本展示名不能代替 JAR 版本。Orbit 下载候选后读取 loader 元数据，用真实
 `mod_id`、版本、`DependencyExpression` 与递归 `bundled` 构建求解图。平台依赖只用于
