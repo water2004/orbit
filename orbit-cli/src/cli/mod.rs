@@ -1,7 +1,7 @@
 pub mod commands;
 use crate::cli::commands::CommandHandler;
 use anyhow::Result;
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 
 #[derive(Parser)]
@@ -201,11 +201,52 @@ pub enum Commands {
         modloader: Option<String>,
     },
 
+    /// 静态分析当前实例中 Mod 的字节码兼容风险（只读）
+    Audit {
+        /// 输出格式
+        #[arg(long, value_enum, default_value_t = AuditFormat::Text)]
+        format: AuditFormat,
+        /// 仅显示达到该等级的风险
+        #[arg(long, value_enum, default_value_t = AuditSeverity::Low)]
+        min_severity: AuditSeverity,
+        /// 存在达到该等级的风险时返回非零退出码
+        #[arg(long, value_enum)]
+        fail_on: Option<AuditSeverity>,
+        /// 仅显示涉及该 Mod（ID、文件名或展示名）的风险
+        #[arg(long = "mod")]
+        mod_filter: Option<String>,
+    },
+
     /// 清理全局下载缓存
     Cache {
         #[command(subcommand)]
         command: CacheCommands,
     },
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum AuditFormat {
+    Text,
+    Json,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum AuditSeverity {
+    Low,
+    Medium,
+    High,
+    Critical,
+}
+
+impl From<AuditSeverity> for orbit_core::AuditSeverity {
+    fn from(value: AuditSeverity) -> Self {
+        match value {
+            AuditSeverity::Low => Self::Low,
+            AuditSeverity::Medium => Self::Medium,
+            AuditSeverity::High => Self::High,
+            AuditSeverity::Critical => Self::Critical,
+        }
+    }
 }
 
 #[derive(Subcommand)]
@@ -277,6 +318,12 @@ impl CommandHandler for Commands {
                 format,
             } => handle_export(file, target, format, ctx).await,
             Commands::Check { version, modloader } => handle_check(version, modloader, ctx).await,
+            Commands::Audit {
+                format,
+                min_severity,
+                fail_on,
+                mod_filter,
+            } => handle_audit(format, min_severity, fail_on, mod_filter, ctx).await,
             Commands::Cache { command } => command.execute(ctx).await,
         }
     }
@@ -341,6 +388,15 @@ mod tests {
             .mutates_instance()
         );
         assert!(!Commands::Outdated { mod_name: None }.mutates_instance());
+        assert!(
+            !Commands::Audit {
+                format: super::AuditFormat::Text,
+                min_severity: super::AuditSeverity::Low,
+                fail_on: None,
+                mod_filter: None,
+            }
+            .mutates_instance()
+        );
         assert!(
             !Commands::Export {
                 file: None,
