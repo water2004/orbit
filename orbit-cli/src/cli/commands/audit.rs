@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
@@ -53,7 +53,7 @@ pub async fn handle(
 
     match format {
         AuditFormat::Text => {
-            print!("{}", render_text(&report, limit));
+            print!("{}", crate::cli::output::audit_report(&report, limit));
             if let Some(path) = &report_path {
                 println!("Detailed report written to: {}", path.display());
             }
@@ -115,209 +115,6 @@ fn exceeds_threshold(
     })
 }
 
-fn render_text(report: &orbit_core::AuditReport, limit: usize) -> String {
-    use std::fmt::Write;
-
-    let labels = report
-        .artifacts
-        .iter()
-        .map(|artifact| (artifact.id.as_str(), artifact.display_name.as_str()))
-        .collect::<HashMap<_, _>>();
-    let mut output = String::new();
-    writeln!(
-        output,
-        "Bytecode audit: Minecraft {}, {} {}",
-        report.environment.minecraft_version,
-        report.environment.detected_loader,
-        report.environment.loader_version
-    )
-    .ok();
-    writeln!(
-        output,
-        "Readiness: {:?} — {}",
-        report.readiness.status, report.readiness.message
-    )
-    .ok();
-    writeln!(
-        output,
-        "Scanned {} JAR(s), parsed {}/{} class(es), discovered {} Mixin(s) and {} Transformer(s).",
-        report.coverage.jars_scanned,
-        report.coverage.classes_parsed,
-        report.coverage.classes_discovered,
-        report.coverage.mixins_discovered,
-        report.coverage.transformers_discovered
-    )
-    .ok();
-    writeln!(
-        output,
-        "Effect precision: {} instruction/pattern, {} method, {} class/unknown.",
-        report.coverage.effects_instruction_precision,
-        report.coverage.effects_method_precision,
-        report.coverage.effects_class_precision
-    )
-    .ok();
-    writeln!(
-        output,
-        "Transformer recovery: {} target(s), {} exact effect(s), {} partial, {} unknown.",
-        report.coverage.transformer_targets_recovered,
-        report.coverage.transformer_effects_recovered,
-        report.coverage.transformer_effects_partial,
-        report.coverage.transformer_effects_unknown
-    )
-    .ok();
-    if !report.coverage.unsupported_mechanisms.is_empty() {
-        writeln!(
-            output,
-            "Unsupported mechanisms: {}.",
-            report.coverage.unsupported_mechanisms.join("; ")
-        )
-        .ok();
-    }
-    if !report.coverage.budget_exhaustions.is_empty() {
-        writeln!(
-            output,
-            "Analysis budgets exhausted: {}.",
-            report.coverage.budget_exhaustions.join("; ")
-        )
-        .ok();
-    }
-
-    if !report.warnings.is_empty() {
-        let mut warning_counts = BTreeMap::new();
-        for warning in &report.warnings {
-            *warning_counts.entry(warning.kind).or_insert(0_usize) += 1;
-        }
-        writeln!(output, "\nWarnings ({}):", report.warnings.len()).ok();
-        for (kind, count) in warning_counts {
-            writeln!(output, "  {count:>4} {}", warning_label(kind)).ok();
-        }
-    }
-
-    if report.risks.is_empty() {
-        writeln!(output, "\n未发现达到当前阈值的字节码兼容风险。").ok();
-        writeln!(
-            output,
-            "Use --format json or --report <path> for the complete structured report."
-        )
-        .ok();
-        return output;
-    }
-
-    let severity_counts = [
-        orbit_core::AuditSeverity::Critical,
-        orbit_core::AuditSeverity::High,
-        orbit_core::AuditSeverity::Medium,
-        orbit_core::AuditSeverity::Low,
-    ]
-    .map(|severity| {
-        (
-            severity,
-            report
-                .risks
-                .iter()
-                .filter(|risk| risk.severity == severity)
-                .count(),
-        )
-    });
-    writeln!(
-        output,
-        "\nRisk distribution: {} critical, {} high, {} medium, {} low.",
-        severity_counts[0].1, severity_counts[1].1, severity_counts[2].1, severity_counts[3].1,
-    )
-    .ok();
-    let shown = report.risks.len().min(limit);
-    writeln!(output, "Showing {shown} of {} risks.", report.risks.len()).ok();
-    for risk in report.risks.iter().take(limit) {
-        let left = labels
-            .get(risk.left_artifact.as_str())
-            .copied()
-            .unwrap_or(&risk.left_artifact);
-        let right = labels
-            .get(risk.right_artifact.as_str())
-            .copied()
-            .unwrap_or(&risk.right_artifact);
-        writeln!(
-            output,
-            "\n{:<8} {:>3}  {left} ↔ {right}",
-            severity_label(risk.severity),
-            risk.risk_index
-        )
-        .ok();
-        writeln!(
-            output,
-            "  {}{}",
-            risk.target.class,
-            format_member(&risk.target)
-        )
-        .ok();
-        writeln!(output, "  {}", risk.reason).ok();
-        let mechanisms = risk
-            .evidence
-            .iter()
-            .filter_map(|evidence| {
-                evidence.mechanism.map(|mechanism| {
-                    evidence.injector_kind.as_ref().map_or_else(
-                        || format!("{mechanism:?}"),
-                        |injector| format!("{mechanism:?} {injector}"),
-                    )
-                })
-            })
-            .collect::<BTreeSet<_>>();
-        if !mechanisms.is_empty() {
-            writeln!(
-                output,
-                "  source: {}",
-                mechanisms.into_iter().collect::<Vec<_>>().join(" × ")
-            )
-            .ok();
-        }
-        writeln!(
-            output,
-            "  rule {}, confidence {:?}, activation {:?}",
-            risk.rule, risk.confidence, risk.activation
-        )
-        .ok();
-    }
-    writeln!(
-        output,
-        "\nUse --format json or --report <path> for all evidence, selectors, warnings, and offsets."
-    )
-    .ok();
-    output
-}
-
-fn severity_label(severity: orbit_core::AuditSeverity) -> &'static str {
-    match severity {
-        orbit_core::AuditSeverity::Low => "LOW",
-        orbit_core::AuditSeverity::Medium => "MEDIUM",
-        orbit_core::AuditSeverity::High => "HIGH",
-        orbit_core::AuditSeverity::Critical => "CRITICAL",
-    }
-}
-
-fn warning_label(kind: orbit_core::AuditWarningKind) -> &'static str {
-    match kind {
-        orbit_core::AuditWarningKind::UnresolvedSoftReference => "unresolved soft references",
-        orbit_core::AuditWarningKind::AmbiguousSoftReference => "ambiguous soft references",
-        orbit_core::AuditWarningKind::KnownUnsupportedInjectionPoint => {
-            "known but unsupported injection points"
-        }
-        orbit_core::AuditWarningKind::CustomInjectionPoint => "custom injection points",
-        orbit_core::AuditWarningKind::DamagedArtifact => "damaged artifacts",
-        orbit_core::AuditWarningKind::DamagedClass => "damaged classes",
-        orbit_core::AuditWarningKind::TransformerPartial => "partial transformer analyses",
-        orbit_core::AuditWarningKind::UnsupportedMechanism => "unsupported mechanisms",
-        orbit_core::AuditWarningKind::BudgetExhaustion => "analysis budget exhaustions",
-        orbit_core::AuditWarningKind::Other => "other warnings",
-    }
-}
-
-fn format_member(target: &orbit_core::audit_model::Target) -> String {
-    target.member.as_ref().map_or_else(String::new, |member| {
-        format!("::{}{}", member.name, member.descriptor)
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -325,7 +122,7 @@ mod tests {
     #[test]
     fn no_risk_wording_does_not_claim_compatibility() {
         let report = empty_report();
-        let text = render_text(&report, 20);
+        let text = crate::cli::output::audit_report(&report, 20);
         assert!(text.contains("未发现达到当前阈值的字节码兼容风险。"));
         assert!(!text.contains("所有 Mod 均兼容"));
     }
@@ -341,11 +138,11 @@ mod tests {
             "secret warning detail",
         ));
 
-        let text = render_text(&report, 20);
+        let text = crate::cli::output::audit_report(&report, 20);
 
-        assert!(text.contains("Risk distribution:"));
-        assert!(text.contains("Showing 1 of 1 risks."));
-        assert!(text.contains("1 unresolved soft references"));
+        assert!(text.contains("Risk distribution"));
+        assert!(text.contains("Risks (showing 1 of 1)"));
+        assert!(text.contains("Unresolved soft references"));
         assert!(!text.contains("evidence:"));
         assert!(!text.contains("secret evidence detail"));
         assert!(!text.contains("secret warning detail"));
@@ -359,10 +156,14 @@ mod tests {
         second.left_artifact = "c".to_string();
         report.risks.push(second);
 
-        let text = render_text(&report, 1);
+        let text = crate::cli::output::audit_report(&report, 1);
 
-        assert!(text.contains("Showing 1 of 2 risks."));
-        assert_eq!(text.matches("rule test").count(), 1);
+        assert!(text.contains("Risks (showing 1 of 2)"));
+        assert_eq!(text.matches("Rule: test").count(), 1);
+        assert!(
+            text.lines().all(|line| line.chars().count() <= 120),
+            "{text}"
+        );
     }
 
     #[test]

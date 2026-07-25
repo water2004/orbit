@@ -8,6 +8,10 @@ use orbit_core::{
     resolver::types::{CandidateDiagnostic, CandidateDiagnosticKind},
 };
 
+mod audit;
+
+pub use audit::audit_report;
+
 const ABSENT: &str = "—";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -259,6 +263,9 @@ fn configured_table<const N: usize>(headers: [&str; N], stderr: bool) -> Table {
         .set_header(headers);
     if stderr {
         table.use_stderr();
+    }
+    if table.width().is_none() {
+        table.set_width(120);
     }
     table
 }
