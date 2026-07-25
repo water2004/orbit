@@ -83,7 +83,7 @@ orbit-bytecode-audit
 命令
   → launcher layout / fresh platform discovery
   → manifest / instance
-  → provider project 闭包发现
+  → package remotes 的 provider project 闭包发现（联网命令）
   → 完整 artifact 队列
   → content-addressed cache / 网络
   → jar reader
@@ -97,7 +97,8 @@ orbit-bytecode-audit
 
 在线安装分为三个不可反向调用的阶段：
 
-1. provider 只按 project relation 递归枚举当前 Minecraft/loader 的 artifact；
+1. manifest、lock 与本次输入中的全部 package remotes 同时作为种子，provider 只按
+   project relation 递归枚举当前 Minecraft/loader 的 artifact；
 2. 队列稳定后统一查缓存或下载，并把每个 JAR 解析为候选；
 3. resolver 纯离线消费 JAR 候选，缺少实际依赖时产生正常的无解证明。
 
@@ -114,13 +115,14 @@ enumeration continuation 与 maximality probe 的 start/finish 动态扩展并�
 probe 内部路径不进入成功解原因轨迹。
 
 求解包的身份恒为 JAR 声明的 `mod_id`。同一 ID 的多个顶层 `mods/*.jar` 是同一个包
-的多个候选，最终每包只选一个。文件名、slug 和 project ID 只是候选来源事实，不能
-变成求解包。
+的多个候选，最终每包只选一个。候选以本地计算的内容哈希保持唯一；完全相同的字节跨
+provider 合并为一个候选并累积来源，同版本不同字节仍是不同候选。哈希、文件名、slug
+和 project ID 都不能变成求解包，也不能作为正常交互中的包名。
 
 一个顶层包 JAR 可以包含多个同文件模块、嵌套模组 JAR 和普通库；并不是所有内嵌 JAR
 都是包。含 loader 元数据的 contained 模块用 owner/source/path 绑定所选顶层候选，
-普通库随 owner 一起移动而不单独求解。事务只安装或删除顶层包文件，绝不删除包内部的
-单个 JAR。
+普通库随 owner 一起移动而不单独求解。用户和事务计划操作的最小单元始终是逻辑包；
+执行层只为这个包物化或移除对应的顶层 artifact，绝不把包内部的单个 JAR 当删除目标。
 
 ## 4. 统一求解
 
@@ -153,6 +155,10 @@ PubGrub fork 允许 provider 在选择包版本时注入带 reason 的自定义 
 因此按包版本而非载体身份区分方案。fork 验证两个范围的基本序关系，避免无效排除导致
 同一投影重复。该抽象由 fork 原生支持，不需要领域特判。
 
+同一语义版本的不同内容哈希天然是不同的私有 `SolverVersion`，因此仍可携带不同
+依赖约束参与一次求解；语义投影又保证它们不被误当成版本升级。Orbit 只需为 CLI
+提供 project/release 与依赖差异描述，不需要再次修改 fork 或把哈希显示给用户。
+
 Jar-in-Jar artifact 使用独立的 Maven 坐标包并精确绑定 owner 候选；`provides` 使用
 同一 mod_id 包下的代理候选。公共 loader `Version` 不包含来源编号，诊断也按强类型
 折叠内部边，不解析名称前缀。
@@ -162,6 +168,9 @@ Jar-in-Jar artifact 使用独立的 Maven 坐标包并精确绑定 owner 候选�
 不会返回；每个保留点一次排除完整支配区域。唯一解自动选择，多解由调用方选择；任何
 降级、替换或删除都在写盘前展示并确认。upgrade 方案只要求至少一个包相对当前版本变新，
 允许其他包降级。
+
+`sync` 复用相同本地图和方案/确认模型，但明确不进入 provider 阶段；联网闭包修复只由
+`install` 执行。
 
 ## 5. loader 支持矩阵
 

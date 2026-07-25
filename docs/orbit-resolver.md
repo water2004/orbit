@@ -116,9 +116,11 @@ provider slug、project ID、下载 URL 和嵌套路径都不能成为 `SolverPa
 - loader 语义版本；
 - `CandidateIdentity { owner, source, path, location, installed }`。
 
-顶层 `mods/*.jar` 是包的具体候选，身份中的 `path` 为空且 `owner == mod_id`。同一
-`mod_id` 的多个顶层 JAR 是同一个包的不同候选，即使它们声明了相同版本也不能互相
-覆盖，因为依赖元数据或文件来源可能不同。最终解每个包只选择一个候选。
+远端顶层候选的 `source` 是 Orbit 对实际字节计算的内容哈希；已安装候选也优先使用
+内容哈希。哈希只保证两个具体候选不被错误覆盖，不参与版本高低比较，也不进入正常
+CLI 文本。顶层 `mods/*.jar` 是包的具体候选，身份中的 `path` 为空且
+`owner == mod_id`。同一 `mod_id` 的多个顶层 JAR 是同一个包的不同候选，即使声明了
+相同版本也不能互相覆盖，因为依赖元数据或内容可能不同。最终解每个包只选择一个候选。
 
 一个顶层包 JAR 可以包含多个同文件模块或嵌套 JAR；并不是每个嵌套 JAR 都是包。
 只有含 loader 模组元数据的模块才进入 `Mod(mod_id)` 候选，普通库只作为包内容随 owner
@@ -169,14 +171,16 @@ Forge-family Jar-in-Jar 的 Maven 坐标是逻辑 artifact 包。每个内嵌 ar
 
 联网编排在调用 `resolve_candidate_portfolio()` 之前完成：
 
-1. 用用户输入或 lockfile 中的 provider project locator 作为种子；
+1. 用用户输入、manifest 根包和 lockfile 中的全部确切 `remotes` 作为种子；
 2. 对每个 project 枚举当前 Minecraft/loader 的全部可下载版本；
 3. 只沿 provider project relation 递归，直到远端 project 闭包稳定；
 4. 将完整 artifact 队列统一交给 content-addressed cache/下载器；
 5. 每个 artifact 校验来源强哈希并解析真实 JAR metadata；
-6. 把完整 `CandidateCatalog` 交给纯离线 resolver；
-7. 建一次最终图并调用 fork 的 maximal-solution API；
-8. 唯一解直接选择；多解才交给 CLI 选择。
+6. 对实际字节自行计算 SHA-512：相同内容跨 provider 合并来源，不同内容即使
+   `mod_id + version` 相同也保持独立；
+7. 把完整 `CandidateCatalog` 交给纯离线 resolver；
+8. 建一次最终图并调用 fork 的 maximal-solution API；
+9. 唯一解直接选择；多解才交给 CLI 选择。
 
 这些边界同时是进度事件边界。project 递归发现报告当前 provider locator 和已发现
 artifact 数；队列稳定后报告每个候选 JAR 的完成数；纯离线求解报告包/候选规模和
@@ -201,7 +205,8 @@ lockfile 身份。这个选择发生在下载完成、纯离线求解开始之�
 并且至少一个严格更高。候选来源不是“更高版本”的第二条坐标。这个定义会删除全面落后的
 方案，但保留“某些包升级、另一些包必须降级”的真实权衡。交互界面列出每个方案的安装、
 升级、降级、同版本替换和删除。共同动作只列一次，每个选项用 `◆` 标记与其他选项不同
-的逻辑包动作；物理文件名不属于求解决策，不进入这张表。只有一个方案时不读取 stdin。
+的逻辑包动作。同版本不同内容的选项用 provider project/release 与 JAR-declared
+依赖差异描述；物理文件名和哈希不属于用户决策，不进入这张表。只有一个方案时不读取 stdin。
 dry-run 仍会在多解时请求选择，因为它预览的必须是一个确定方案；`--yes` 才稳定选择
 枚举顺序中的第一个。
 
@@ -233,7 +238,8 @@ Minecraft/loader 没有返回任何 JAR 声明某个已锁 `mod_id`，outdated �
 Minecraft/loader 下的全部 JAR 候选。所有 project 先完成版本枚举并进入同一下载队列，
 统一下载、读取真实 JAR 元数据后才交给求解器；只给现有包的锁定版本会制造假冲突。
 
-`sync` 只对本地 `mods/`、manifest 与 lockfile 对账，不联网下载候选来修复冲突；
+`sync` 只对本地 `mods/`、manifest 与 lockfile 对账，既不下载也不调用 provider
+哈希识别接口；它保留 manifest 中已有的远端，并把当前本地内容记录为精确恢复来源。
 `install` 才会通过完整远端 artifact 闭包重建候选并修复缺失或不兼容的包。
 
 ## 8. 可读错误的约束

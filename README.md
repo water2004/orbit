@@ -48,8 +48,14 @@ orbit init survival
 
 # 3. 搜索并添加模组 (自动匹配当前 MC 版本与 Loader)
 orbit add sodium
-orbit add cf:jei   # 需要先配置 CurseForge API Key
+orbit add cf:238222   # CurseForge 数值 project ID；需要先配置 API Key
 orbit add file:./my-local-mod.jar
+
+# 给现有包增加/移除候选远端；Modrinth 使用 project ID，CurseForge 使用数值 project ID
+orbit remote add sodium modrinth AANobbMI
+orbit remote add sodium curseforge 394468
+orbit remote list sodium
+orbit remote remove sodium --index 2
 
 # 4. 添加客户端专用模组 (开服时自动跳过)
 orbit add zoomify --env client
@@ -88,7 +94,7 @@ Orbit 采用**目录优先**的上下文逻辑。命令会默认作用于当前�
 
 | 命令 | 描述 |
 | :--- | :--- |
-| `orbit sync` | **本地状态双向对齐**。重新探测 Minecraft/loader 工件并扫描 `mods/`，同 ID 文件统一求解并确认清理未选版本。不下载 JAR；来源识别可能查询平台哈希接口。 |
+| `orbit sync` | **纯本地状态双向对齐**。重新探测 Minecraft/loader 工件并扫描 `mods/`，同 ID 文件统一求解并确认清理未选版本；不下载 JAR，也不调用 provider。 |
 | `orbit outdated [mod]` | **检查过时模组（只读）**。显示可行更新；更高候选受阻或没有适用 JAR 时同时给出原因。 |
 | `orbit upgrade [mod]` | **执行更新**。单包模式必须让该包变新；方案也可包含依赖降级/替换/删除，确认后更新文件与 lock。 |
 
@@ -98,11 +104,12 @@ Orbit 采用**目录优先**的上下文逻辑。命令会默认作用于当前�
 | :--- | :--- |
 | `orbit search <query>` | 在已配置来源中搜索模组；支持 Modrinth 与 CurseForge。 |
 | `orbit info <mod>` | 查看模组详细信息（描述、作者、版本历史、前置依赖、端侧支持等）。无需安装，直接请求平台 API。 |
-| `orbit add <mod>` | 添加新模组。支持自动查找、`mr:name`、`cf:name` 或 `file:./my-mod.jar`。使用 `--env client\|server` 标记端侧。 |
+| `orbit add <mod>` | 添加新模组。支持自动查找、`mr:<project-id-or-search>`、`cf:<numeric-project-id>` 或 `file:./my-mod.jar`。使用 `--env client\|server` 标记端侧。 |
 | `orbit install` | 重新探测实际平台后按 `orbit.toml`/lock 补齐缺失 JAR。Minecraft 版本变化时要求先 sync；loader 版本变化交给真实依赖分析。 |
-| `orbit remove <mod>` | 卸载模组。删除对应的 `.jar` 文件并移除 `orbit.toml` 中的记录。 |
+| `orbit remove <mod>` | 按 JAR `mod_id` 卸载包。删除其选中内容并移除 `orbit.toml`/lock 中的记录。 |
 | `orbit purge <mod>` | **深度清理**。在 `remove` 的基础上，启发式搜索并交互式询问以**彻底删除** `config/` 下的配置文件。 |
 | `orbit list` | 列出当前实例记录的所有模组及版本；支持 `--tree` 和 `--target`。 |
+| `orbit remote add/remove/list` | 管理一个逻辑包的多个 `file` / Modrinth / CurseForge 候选远端；不能删除最后一个远端。 |
 
 ### 4. 导入、导出与进阶工具 (IO & Utility)
 
@@ -119,9 +126,9 @@ Orbit 采用**目录优先**的上下文逻辑。命令会默认作用于当前�
 ## ⚙️ 工作原理：`orbit.toml` & `orbit.lock`
 
 每一个被 Orbit 接管的 `.minecraft` 目录下都会生成两个文件。`orbit.toml`
-声明期望状态；`orbit.lock` 锁定实际版本、来源、校验值和依赖树。在线依赖可按锁文件
-还原，本地 `file:` 依赖则需要保留对应 JAR，或通过 `orbit export` 一并分发。两者都应
-纳入版本控制。
+声明期望状态和每个根包的全部候选远端；`orbit.lock` 锁定实际版本、内容校验值、
+JAR 元数据和能够恢复该精确内容的工件来源。相同字节跨来源按哈希合并，同版本不同
+字节保持为不同候选；哈希不会作为用户界面中的包名或选项名称。两者都应纳入版本控制。
 
 ```toml
 [project]
@@ -135,20 +142,28 @@ minecraft_jar = { path = "../../1.20.1/1.20.1.jar", sha256 = "..." }
 loader_jar = { path = "../../libraries/net/fabricmc/fabric-loader/0.15.7/fabric-loader-0.15.7.jar", sha256 = "..." }
 
 [resolver]
-platforms = ["modrinth"]
+catalogs = ["modrinth"]
 prerelease = false
 
 [dependencies]
-# 平台托管模组
-sodium = "^0.5"
-lithium = ">=0.11 <0.14"
+# 一个包可同时声明多个远端；包身份和版本始终从下载后的 JAR 读取
+sodium = { version = "^0.5", remotes = [
+  { type = "modrinth", project_id = "AANobbMI" },
+  { type = "curseforge", project_id = 394468 },
+] }
+lithium = { version = ">=0.11 <0.14", remotes = [
+  { type = "modrinth", project_id = "MODRINTH_PROJECT_ID" },
+] }
 
 # 客户端专用
-"inventory-hud" = { version = "*", env = "client" }
+"inventory-hud" = { version = "*", env = "client", remotes = [
+  { type = "modrinth", project_id = "MODRINTH_PROJECT_ID" },
+] }
 
-# `orbit add file:./my-local-mod.jar` 后仍只声明 mod_id 与版本；
-# 模组文件路径和哈希记录在 orbit.lock；上面的 platform 路径只描述游戏/loader 工件
-"my-local-mod" = "1.0.0"
+# 本地文件也是同一远端模型
+"my-local-mod" = { version = "1.0.0", remotes = [
+  { type = "file", path = "../sources/my-local-mod.jar" },
+] }
 ```
 
 > **提示**：强烈建议将 `orbit.toml` 和 `orbit.lock` 一同纳入 Git 版本控制！结合 `orbit install --target server`，你可以在任何机器上一键还原完整的模组环境。
@@ -156,7 +171,8 @@ lithium = ">=0.11 <0.14"
 ### CurseForge API Key
 
 CurseForge provider 不支持匿名或降级运行。使用 `cf:`、把 `curseforge` 加入
-`[resolver].platforms`，或者操作含 CurseForge 锁定包的实例前，必须任选一种方式
+`[resolver].catalogs`、为包添加 CurseForge 远端，或者操作含 CurseForge 远端的实例前，
+必须任选一种方式
 配置 API Key：
 
 ```toml

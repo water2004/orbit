@@ -17,7 +17,7 @@
 拒绝执行，要求显式 `--instance` 或进入项目目录。当前受保护的命令是：
 
 ```text
-add install remove purge sync upgrade import
+add install remove purge sync upgrade import remote-add remote-remove
 ```
 
 `init` 始终初始化当前目录；实例注册表和 cache 命令操作全局数据；`export` 读取实例但只
@@ -68,14 +68,17 @@ orbit init <name>
 4. 扫描 `mods/*.jar`，忽略 `.old` / `.disabled`，解析对应 loader 元数据与内嵌 JAR；
 5. 计算 SHA-1/SHA-256/SHA-512 和 CurseForge fingerprint；Modrinth 始终参与批量识别，
    已配置 API Key 时 CurseForge 也参与；
-6. 同一 `mod_id` 的顶层 JAR 作为一个包的候选，经共享 PubGrub portfolio 选择；
-7. 多解时请求方案选择；未选中的顶层包版本列入删除计划并在写盘前确认；
-8. 将实际平台 JAR 的相对路径与 SHA-256 写入 manifest，生成 Fat Lockfile，再将实例
+6. 同一 `mod_id` 的顶层 JAR 作为一个包的候选；无法在线识别的本地源先复制到
+   `.orbit/sources/`，避免后续清理 `mods/` 时删除它；
+7. 候选经共享 PubGrub portfolio 选择；
+8. 多解时请求方案选择；未选中的顶层包版本列入删除计划并在写盘前确认；
+9. 将实际平台 JAR 的相对路径与 SHA-256 写入 manifest，生成 Fat Lockfile，再将实例
    注册到全局 `instances.toml`。
 
-无法识别平台来源的 JAR 作为 `provider = "file"` 写入 lockfile；manifest 始终只保存
-`mod_id` 与开放版本约束。同一顶层包 JAR 中的其他模块只进入父 package 的
-`bundled`。若依赖图本身无解，init 保留所有文件、写出诊断，不猜测应该删除哪个包。
+无法识别平台来源的 JAR 以 `file` remote 写入 manifest；有解时也作为所选 package 的
+精确 lock 来源。每个根包都保存至少一个候选远端。同一顶层包 JAR 中的其他模块只进入
+父 package 的 `bundled`。若依赖图本身无解，init 保留所有文件和全部 manifest remotes，
+写出空 lock 与诊断；没有选中方案时不会把冲突候选伪装成已锁定包。
 
 支持标准共享游戏根目录、`versions/<实例>` 隔离目录、Prism/MultiMC 的
 `.minecraft`/`minecraft`、CurseForge profile 和 GDLauncher 的 `instance/`。
@@ -114,13 +117,13 @@ orbit add <mod>
 
 | 形式 | 行为 |
 |------|------|
-| `sodium` | 按 manifest 的 provider 顺序解析 |
-| `mr:sodium` | 只用 Modrinth |
-| `cf:jei` | 只用 CurseForge；需要 API Key |
+| `sodium` | 先按 `[resolver].catalogs` 尝试作为 project locator；未找到时搜索并让用户选择 |
+| `mr:<project-id-or-search>` | 只用 Modrinth；持久化时规范为 project ID |
+| `cf:<numeric-project-id>` | 只用 CurseForge；需要 API Key |
 | `file:./mod.jar` | 解析并复制本地 JAR |
 
 来源前缀与 `--platform` 同时出现时必须指向同一 provider；冲突会直接报错，不会把
-`cf:` slug 交给 Modrinth 或反向处理。
+`cf:` locator 交给 Modrinth 或反向处理。CurseForge 的持久远端只接受数值 project ID。
 
 在线流程先取得并验证候选 JAR，再以 JAR 的真实 `mod_id`、版本和 required dependencies
 求解。确认后写入 `mods/`、manifest 和 lockfile。顶层 constraint、`optional`、`env`
@@ -139,6 +142,23 @@ Pareto 或 co-Pareto front 本身仍可能很大。
 本地 `file:` 同样解析 loader 元数据、哈希、内嵌模组并校验依赖图，不绕过锁文件。
 在线与本地添加都使用同一个方案选择和包事务报告；若选中方案替换或淘汰已有顶层包
 版本，会与新安装项一起展示并确认。
+
+### `orbit remote`
+
+```text
+orbit remote list <package>
+orbit remote add <package> file <jar-path>
+orbit remote add <package> modrinth <project-id>
+orbit remote add <package> curseforge <numeric-project-id>
+orbit remote remove <package> <provider> <locator>
+orbit remote remove <package> --index <one-based-index>
+```
+
+`add` 会先下载并分析目标远端的全部候选，只有其中存在 JAR 实际声明 `<package>` 才写入。
+不同 provider 一视同仁，现有和新增远端在后续 add/install/outdated/upgrade 中全部进入
+同一个候选闭包。`remove` 不能删除最后一个远端。`list` 使用用户可读的 provider/project
+信息；managed local source 用序号引用，不显示内容哈希。删除 discovery remote 后，
+当前 lock 的精确恢复来源保留到下一次内容选择，因而不会让已锁定环境突然不可恢复。
 
 ### `orbit install`
 
@@ -165,8 +185,9 @@ loader 版本不一致不直接拒绝：实际 loader JAR 的版本和 bundled �
 6. 下载/复制后再次校验，并按需更新 lockfile。
 
 `--locked` 与 `--frozen` 同义：要求 lockfile 与 manifest 完整一致，禁止重新解析来源
-元数据。它不表示物理离线；缓存未命中时仍可使用 lockfile 已锁定的下载 URL。旧 lockfile
-没有 URL 且缓存未命中时，locked 模式返回错误。
+元数据。它不表示物理离线；缓存未命中时仍可使用 lockfile 已锁定的下载 URL。新模型
+要求每个 lock package 有 SHA-512、非空 remotes 和可恢复所选字节的精确来源；缺项的
+旧 lockfile 在任何模式下都会被拒绝，不会静默降级为空锁。
 
 非 locked `install` 是依赖修复入口：lock 图不完整或冲突时会下载远端完整候选闭包，
 再按 JAR 元数据重新求解。`sync` 则只做本地对账，不承担联网修复。
@@ -177,8 +198,8 @@ loader 版本不一致不直接拒绝：实际 loader JAR 的版本和 bundled �
 orbit remove <mod>
 ```
 
-按 `mod_id` 或平台 slug 查找顶层依赖。若仍有其它 package 依赖它则拒绝删除；
-否则删除已校验的 JAR，并从 manifest/lockfile 移除条目。输入不匹配时，交互模式列出
+只按 JAR-declared `mod_id` 查找顶层依赖。若仍有其它 package 依赖它则拒绝删除；
+否则删除所选包的已校验文件，并从 manifest/lockfile 移除条目。输入不匹配时，交互模式列出
 可选依赖；`--yes` 要求精确标识，不进行猜测。dry-run 只报告计划。
 
 ### `orbit purge`
@@ -211,18 +232,22 @@ manifest/lockfile。旧 `[project]` 版本和 `[platform]` 路径都只是用于
 平台刷新和包求解使用同一次实际 loader JAR 分析。loader 版本变化不被先验判为错误；
 若某个 mod 对新 loader 的真实约束不成立，正常返回依赖无解。
 
-它不下载 JAR；为识别手动加入的文件，批量反查可能访问 Modrinth SHA-512 或 CurseForge fingerprint 接口。dry-run 不保存对账
-结果。同 ID 的所有本地文件先作为候选统一求解；不会按扫描顺序让后一个覆盖前一个。
+它既不下载 JAR，也不访问 Modrinth/CurseForge 识别接口。既有 manifest remotes 会保留；
+当前本地内容作为 lock 的精确恢复来源。dry-run 不保存对账结果。同 ID 的所有本地文件
+先作为候选统一求解；不会按扫描顺序让后一个覆盖前一个。
 实际删除 `removed` 前总会展示逻辑包 ID、版本和动作并确认；物理文件名不占用用户决策
 界面。
 
 ### `orbit outdated [mod]`
 
-只读查询在线 package 的最新兼容版本。可按真实 `mod_id` 或 slug 限定单包；不存在的
-输入、未安装的包和 `file:` 包返回明确结果，不会静默当作“已是最新”。
+只读查询 package 全部 remotes 的兼容候选。按真实 `mod_id` 限定单包；不存在的输入、
+未安装的包和没有可分析候选的包返回明确结果，不会静默当作“已是最新”。
 若存在多个互不支配的 Pareto 方案，只在交互模式列出升级集合并请求选择；唯一方案自动
 采用。共同动作只显示一次；每个选项只展开与其他选项不同的动作，并用 `◆` 与终端样式
 高亮差异。dry-run 仍需选择具体方案；`--yes` 才稳定选择第一个方案。
+
+同一 JAR-declared 版本可以有多个不同内容候选。此时选项表使用 provider project/release
+和依赖约束差异说明选择，不显示内部哈希，也不以物理 JAR 文件名充当包名。
 
 输出区分三种结果：有可行更新时显示包/当前版本/可用版本表；存在更高候选但被依赖传播
 或回溯排除时显示 PubGrub 推导事实；provider 对当前 Minecraft/loader 没有返回声明该
@@ -255,7 +280,7 @@ orbit list [--tree] [--target client|server|both]
 
 - `search` 合并已配置 provider 的结果并应用可选的 Minecraft/loader 过滤；
 - `info` 按 provider 顺序查询详情；`mr:` / `cf:` 前缀可显式选择来源；
-- `list` 从 lockfile 展示版本、provider、manifest env/optional；`--tree` 展示依赖，
+- `list` 从 lockfile 展示版本、全部 remotes、manifest env/optional；`--tree` 展示依赖，
   `--target` 过滤根并保留传递闭包。
 
 在线查询支持 Modrinth 与 CurseForge。`cf:` 和 `--platform curseforge` 只选择
@@ -271,7 +296,7 @@ orbit import <file>
   [--merge-strategy prefer-existing|prefer-import|interactive]
 ```
 
-- `.toml`：合并 manifest 依赖，冲突按策略处理；
+- `.toml`：同包 remotes 始终取并集；版本、端侧、optional、exclude 等语义冲突才按策略处理；
 - `.zip`：只提取安全的 `mods/*.jar` 路径；
 - `.mrpack`：先应用 bundled overrides，再按 index 从官方允许的 HTTPS 来源下载缺失
   JAR，并验证 file size、SHA-1 与 SHA-512；
@@ -381,6 +406,6 @@ orbit cache clean
 - 默认实例的修改型命令安全阻断；
 - 非交互 init 不猜 loader/版本，重复 init 不覆盖项目。
 
-CurseForge 已接入 search/info/add/install/sync/check/outdated/upgrade/restore 的共享
+CurseForge 已接入 search/info/add/install/check/outdated/upgrade/restore 的共享
 路径。它仍受 Core API Key 和项目第三方下载许可约束；这些是外部服务边界，不会用
 硬编码 ID 或猜测 CDN URL 规避。

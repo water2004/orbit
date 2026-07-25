@@ -19,6 +19,8 @@
 | 本地校验 | ✅ | 转 Fat Lockfile 后复用统一建图 |
 | 安装/恢复/升级 | ✅ | 由求解结果选择顶层包候选并生成统一事务计划 |
 | Modrinth / CurseForge / `file:` | ✅ | 查询、下载、识别、锁定；CurseForge 无 API Key 时拒绝创建 |
+| 多远端包模型 | ✅ | 每个根包非空 `remotes`；全部来源共同发现，完全相同字节跨 provider 合并 |
+| 内容候选身份 | ✅ | 本地 SHA-512 作为内部候选主键；同版本不同内容保持独立，CLI 只显示来源与依赖差异 |
 | PubGrub fork 远端 | ✅ | 功能分支已发布，Orbit 固定到完整 commit SHA |
 | 多解选择 | ✅ | fork 原生枚举 Pareto 极大解；唯一解自动选择，多解交互 |
 | 本地重复包 | ✅ | init/sync 按 mod_id 合并为候选；确认后删除未选中的顶层包版本 |
@@ -59,7 +61,13 @@
 - “resolver 动态补抓候选”：下载层先按远端 project relation 构造完整 artifact
   队列并统一解析，resolver 此后严格离线。
 - “每个物理 JAR 是独立求解包”：求解包现为 JAR 声明的 `mod_id`，文件与嵌套路径
-  只区分候选；顶层文件才是安装/删除单元。
+  只区分候选；逻辑包才是用户操作和事务计划单元，文件只由执行层物化或移除。
+- “每个包只有一个 provider/source”：现在 manifest/lock 都保存非空 package
+  `remotes`，精确已选工件另存为 `artifact_sources`；不存在 provider 回退优先级。
+- “相同 `mod_id + version` 就是同一候选”：现在仅相同内容哈希合并；不同字节即使
+  版本相同也交给求解器。
+- “`[resolver].platforms` 是来源优先级”：已删除并替换为只控制无限定搜索目录的
+  `[resolver].catalogs`，旧字段直接报错。
 - “同一 ID 的嵌套版本必须全部满足”：现在按 Fabric/Quilt load condition 选择一个
   loader 可加载候选，Forge-family JarJar 按 artifact range 选择。
 
@@ -71,9 +79,10 @@
 |---|---|
 | `init` | 拒绝空/任意目录，定位真实平台 JAR，扫描实例并确认重复包清理 |
 | `add` | Modrinth、CurseForge、搜索名和本地 JAR |
+| `remote add/remove/list` | 验证并管理包的多个 discovery remotes；不能删除最后一个；删除远端时保留当前 lock 的精确恢复来源 |
 | `install` / `restore` | fresh platform scan；Minecraft 变化拒绝，loader 变化由共享图判定 |
 | `remove` / `upgrade` / `outdated` | 使用 Fat Lockfile、保留受阻候选原因、自适应表格与多解差异高亮 |
-| `sync` | 重新探测平台并扫描 mods，刷新工件快照，按包选择候选并确认移除未选版本 |
+| `sync` | 完全离线重新探测平台并扫描 mods；保留既有 remotes，按包选择候选并确认移除未选版本 |
 | `check` | 实例目标兼容性预检 |
 | `audit` | 复用 Loader-selected runtime，解析实际 Mixin/Transformer 注册与 ClassFile；分类摘要 + schema 3 JSON/显式完整 report |
 | `list` / `info` | 展示包信息、逻辑依赖和 bundled |
@@ -94,16 +103,21 @@
 - PubGrub fork 已发布到 `water2004/pubgrub` 的 `codex/solver-observer` 分支；
   Orbit 固定到 `c334509daecf91611af2729b2db91af7eba6f076`。
 - 当前 fork 原生支持 `P = mod_id`、不透明复合候选版本、调用方定义
-  `same_version` / `strictly_higher` 和完整 Pareto front 枚举；同声明版本的载体身份不会
-  扩成多个用户解，每个保留点会一次排除完整支配区域，无效版本序回调会在产生错误排除
-  前失败。upgrade 的“至少一个包变新、其他包可降级”是对同批 Pareto 解的操作分类。
+  `same_version` / `strictly_higher` 和完整 Pareto front 枚举；同声明版本的不同内容身份
+  会以各自 JAR 约束参与求解，但相同语义投影不会凭空扩成多个用户解。每个保留点会一次
+  排除完整支配区域，无效版本序回调会在产生错误排除前失败。upgrade 的“至少一个包
+  变新、其他包可降级”是对同批 Pareto 解的操作分类。
 - 远端 project relation 会递归构造下载闭包；JAR `mod_id` 从不作为 slug/project
   查询。闭包缺少实际 required identity 时由 resolver 正常证明无解。
-- `sync` 保持本地对账且不下载修复；`install` 才构造远端候选闭包修复依赖图。
+- `sync` 保持纯本地对账，既不下载也不调用 provider；`install` 才构造远端候选闭包
+  修复依赖图。
 - 共享游戏根目录若同时暴露多个 Minecraft/loader 候选，没有通用办法从目录本身判断
   launcher 下一次会启动哪一个；Orbit 明确报歧义，要求使用隔离实例或在 init 显式选择，
   不按目录顺序猜测。
 - JAR 缓存按本地 SHA-512 寻址，SHA-1 只作别名；provider 文件名不作为缓存键。
+- 内部候选和 managed local source 路径可以含内容哈希；正常 CLI 表格、方案名称和
+  `remote list` 不显示哈希。相同版本的不同候选用 provider project/release 与实际
+  JAR 依赖差异解释。
 - project 闭包的总工作量事前未知，因此显示当前 locator、已发现 artifact 与耗时。
   Pareto 枚举的总量随 continuation run/maximality probe 的实际发现而增长，完成数同步
   推进；它不构成剩余耗时上界，Pareto 或 co-Pareto front 本身仍可能很大。候选 JAR

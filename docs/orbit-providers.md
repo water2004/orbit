@@ -9,10 +9,11 @@
 |----------|:---:|------|
 | Modrinth | ✅ | 搜索、详情、版本、依赖、SHA-512 批量识别 |
 | CurseForge | ✅ | 搜索、详情、版本、依赖、认证下载、文件指纹批量识别；API Key 必填 |
-| 本地 `file:` | ✅ | 由 `installer/local.rs` 处理，不是网络 provider |
+| 本地 `file:` | ✅ | 不是网络 provider，但与网络来源进入同一候选目录和事务 |
 
-默认平台仍是 `["modrinth"]`，因为 CurseForge Core API 要求用户自己的 API Key。
-配置 Key 后，可将 `curseforge` 单独使用或放入 `[resolver].platforms` 的回退顺序。
+默认搜索目录是 `["modrinth"]`，因为 CurseForge Core API 要求用户自己的 API Key。
+配置 Key 后，可将 `curseforge` 加入 `[resolver].catalogs`。该数组只控制无限定
+搜索/添加启用哪些目录，不是包候选的回退优先级。
 
 ## 2. 模块边界
 
@@ -62,12 +63,12 @@ pub trait ModProvider: Send + Sync {
 - `curseforge: Option<CurseForgeResolvedInfo>`。
 
 该类型刻意没有 `mod_id`、模组版本、依赖范围、环境、provides 或 bundled。
-lockfile 同样使用 `[package.modrinth]` 和 `[package.curseforge]` 子表。公共层通过
-`source_slug()`、`source_project_id()`、`source_version_id()` 等方法读取，不按平台
-复制 install/restore/outdated/check 逻辑。
+lockfile 将候选发现入口统一保存在 `package.remotes`，将能恢复当前已选字节内容的
+精确工件统一保存在 `package.artifact_sources`。公共层不按平台复制
+install/restore/outdated/check 逻辑。
 
-lockfile 的来源子表不保存远端展示版本。平台 slug、project ID 和查询结果里的版本名
-都不能代替 JAR 身份。Orbit 先沿
+lockfile 的 `remotes` / `artifact_sources` 不保存或信任远端展示版本。平台 slug、
+project ID 和查询结果里的版本名都不能代替 JAR 身份。Orbit 先沿
 `RemoteProjectLocator` 递归枚举当前 Minecraft/loader 的完整 project/artifact 闭包，
 所有 provider 的发现阶段都结束后，再用一个有界批次统一查 cache 或下载。之后才读取
 loader 元数据，用真实 `mod_id`、版本、
@@ -77,9 +78,10 @@ loader 元数据，用真实 `mod_id`、版本、
 版本语义。反过来，JAR `mod_id` 绝不作为 slug/project 查询；闭包缺少 JAR required
 identity 时，纯离线 solver 将其证明为无解。
 
-若多个远端项目下载出的 JAR 声明同一 `mod_id + version`，元数据完全一致时按 provider
-配置顺序稳定去重；依赖、环境、provides 或 bundled 不一致时报告 JAR 身份碰撞，不让
-后到的远端记录静默覆盖。
+候选主键是 Orbit 对下载内容自行计算的 SHA-512，而不是 provider、文件名或展示版本。
+多个远端给出完全相同字节时合并为一个候选，并保留全部精确恢复来源。不同字节即使声明
+相同 `mod_id + version` 也必须保持为不同候选，因为依赖、环境、provides 或 bundled
+可能不同。只有同一内容哈希被解析出不一致元数据才是内部一致性错误。
 
 反过来，一个 provider locator 在不同 artifact 中可能声明多个真实 `mod_id`，例如
 项目改名或同时发布历史身份。`CandidateCatalog` 按真实 `mod_id` 分区，不要求
@@ -88,15 +90,19 @@ identity 时，纯离线 solver 将其证明为无解。
 只剩一个可行身份时自动采用，多个可行身份时先让用户选择包身份，再进行正常的多解
 方案选择。provider slug/project ID 始终只是下载定位符。
 
-## 5. Provider 选择与认证
+## 5. Provider 集合与认证
 
-`create_providers()` 保持 `[resolver].platforms` 的顺序。候选发现选择第一个返回有效
-候选的来源；已锁定包的恢复、检查和升级按 lockfile 记录的原始 provider，不跨
-平台猜同名项目。
+`create_providers()` 保持 `[resolver].catalogs` 的顺序，供无限定搜索稳定展示。
+对已有包执行 add/install/outdated/upgrade/check 时，manifest 与 lock 中所有确切
+`remotes` 都加入同一发现任务；不会因第一个 provider 返回结果就停止，也不会按同名
+slug 跨平台猜项目。
 
-`orbit init` 尚无 manifest 可提供来源列表，因此使用专门的 identification factory：
+`orbit init` 尚无 manifest 可提供来源列表，因此可使用专门的 identification factory：
 Modrinth 始终参与，只有已配置 API Key 时才加入 CurseForge。它不会因为用户没有 Key
 而破坏默认初始化，也不会跳过一个已显式配置但认证失败的 provider 错误。
+
+`orbit sync` 是例外：它按设计完全离线，只扫描当前实例并保留既有远端，不调用任何
+哈希识别 API。联网修复属于 `orbit install`。
 
 - `mr:` → 只用 Modrinth；
 - `cf:` → 只用 CurseForge；
@@ -138,8 +144,8 @@ unknown；不会从分类或文件名猜测。
 作为可审计来源。
 
 算法先移除字节 `9`、`10`、`13`、`32`，再以 seed 1 计算 32 位 MurmurHash2。单元测试
-包含 golden vectors；provider 合同测试验证指纹批量请求与项目映射。`init` / `sync`
-因此可以识别手动放入的 CurseForge JAR。识别只接受平台的精确 hash/fingerprint
+包含 golden vectors；provider 合同测试验证指纹批量请求与项目映射。`init`
+可以据此识别手动放入的 CurseForge JAR。识别只接受平台的精确 hash/fingerprint
 匹配；批量接口失败会保留 provider 名称并报错，不会按文件名或展示版本猜来源。
 
 ## 8. 下载限制与错误
@@ -147,7 +153,7 @@ unknown；不会从分类或文件名猜测。
 CurseForge 项目可以没有第三方可用的下载 URL。Orbit 只使用 API 返回的内联 URL 或
 download-url 端点；若任一目标文件不可用、缺 SHA-1 或无法取得 API download URL，
 整个发现阶段失败并列出文件，不会拿其余文件组成残缺候选集。完全没有匹配文件仍返回
-空候选，使 provider 回退和 `orbit check` 的“不兼容”结果保持正常。Orbit 不会拼接
+空候选，使完整多远端候选集和 `orbit check` 的“不兼容”结果保持正常。Orbit 不会拼接
 CDN URL，也不会把 HTML 错误页当 JAR。
 
 根据 CurseForge 的
@@ -171,9 +177,10 @@ API 状态错误保留 HTTP 状态和最多 500 字符响应正文；API Key 不
 - loader/game version 搜索；
 - download-url 回退；
 - fingerprint 批量识别；
-- `[package.curseforge]` roundtrip；
-- provider 顺序和缺 Key 错误。
+- CurseForge `remotes` / `artifact_sources` roundtrip；
+- catalog 顺序和缺 Key 错误；
+- 同一字节跨 provider 合并、同版本不同字节保持独立。
 
 测试不依赖开发者私人 Key。需要上线前 smoke test 时，设置
-`ORBIT_CURSEFORGE_API_KEY` 后执行实际 `search`、`info` 与 `add cf:<slug>`；最后一项
+`ORBIT_CURSEFORGE_API_KEY` 后执行实际 `search`、`info` 与 `add cf:<numeric-project-id>`；最后一项
 同时覆盖真实 CDN 认证。
