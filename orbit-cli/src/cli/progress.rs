@@ -156,7 +156,7 @@ impl ProgressRenderer {
                 let counters = state.resolution_counters();
                 finish(
                     &mut state,
-                    format!("[3/4] Found {solutions} maximal solution(s) · {counters}"),
+                    format!("[3/4] Found {solutions} Pareto-maximal solution(s) · {counters}"),
                 );
             }
             ProgressEvent::ApplyStarted { total } => start_bar(
@@ -360,7 +360,7 @@ fn plain_line(event: &ProgressEvent, state: &mut RenderState) -> Option<String> 
         ProgressEvent::ResolutionFinished { solutions } => {
             state.solutions = *solutions;
             Some(format!(
-                "[3/4] Found {solutions} maximal solution(s) · {}.",
+                "[3/4] Found {solutions} Pareto-maximal solution(s) · {}.",
                 state.resolution_counters()
             ))
         }
@@ -428,7 +428,7 @@ fn activity_label(activity: &ResolutionActivity) -> String {
             to_level,
         } => format!("backtracking {from_level} → {to_level}"),
         ResolutionActivity::Conflict => "resolving a conflict".to_string(),
-        ResolutionActivity::Solution => "retained a maximal solution".to_string(),
+        ResolutionActivity::Solution => "retained a Pareto-maximal solution".to_string(),
     }
 }
 

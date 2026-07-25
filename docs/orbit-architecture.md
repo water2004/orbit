@@ -153,9 +153,11 @@ Jar-in-Jar artifact 使用独立的 Maven 坐标包并精确绑定 owner 候选�
 同一 mod_id 包下的代理候选。公共 loader `Version` 不包含来源编号，诊断也按强类型
 折叠内部边，不解析名称前缀。
 
-所有会形成新包集合的入口先得到同一种 `ResolutionReport`，再形成事务计划。唯一解
-自动选择，多解由调用方选择；任何降级、替换或删除都在写盘前展示并确认。upgrade
-方案只要求至少一个包相对当前版本变新，允许其他包降级。
+所有会形成新包集合的入口先得到同一种 `ResolutionReport`，再形成事务计划。fork 枚举
+完整 Pareto front：被另一个方案在全部已选包上等价或升级、且至少一项严格升级的方案
+不会返回；每个保留点一次排除完整支配区域。唯一解自动选择，多解由调用方选择；任何
+降级、替换或删除都在写盘前展示并确认。upgrade 方案只要求至少一个包相对当前版本变新，
+允许其他包降级。
 
 ## 5. loader 支持矩阵
 
@@ -203,8 +205,8 @@ Orbit 不能仅凭字节码完整证明：
 | Modrinth | `modrinth-wrapper` + core adapter，可用 |
 | 本地 `file:` | 可用 |
 | CurseForge | `curseforge-wrapper` + core adapter，可用；无 API Key 时 provider 无法创建，Core API 与 CDN 下载均认证 |
-| PubGrub fork | 已发布并固定到 `0c260ff2528a6c09c683cc7270b3b97c2ea114f3` |
-| 多个极大解 | fork 原生完整枚举；唯一解自动选择，多解交给调用方选择 |
+| PubGrub fork | 已发布并固定到 `c334509daecf91611af2729b2db91af7eba6f076` |
+| 多个 Pareto 极大解 | fork 原生完整枚举；唯一解自动选择，多解交给调用方选择 |
 
 ## 9. 跨平台运行环境
 

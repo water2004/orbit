@@ -123,7 +123,7 @@
     `always` / `if_possible` / `if_required`；Forge-family JarJar 按 artifact range
     选择。相同 ID 的多版本嵌套候选选择一个兼容项，不能要求所有候选同时成立。
 48. **所有包集合变更共享 portfolio 与事务报告**。add、本地 add、非 locked restore、
-    upgrade、sync、init 等不得各写选择规则。唯一极大解自动选择，多解交给交互层；
+    upgrade、sync、init 等不得各写选择规则。唯一 Pareto 极大解自动选择，多解交给交互层；
     降级、替换和未选包删除即使在唯一解中也必须展示精确文件并在写盘前确认。
 49. **upgrade 的定义是至少一个包相对当前安装版本变新**。允许同一方案中的其他包
     降级、换源或删除；不得要求所有包都不降级，也不得把同版本不同候选算作升级。
@@ -131,9 +131,11 @@
     `same_version` / `strictly_higher` 和 maximal-solution enumeration 已由 fork 原生
     支持。来源身份可以属于 `V`，但枚举排除和固定其它包时必须使用 JAR 声明版本的
     `same_version` 等价类，不能把同声明版本的不同来源扩成用户多解。fork 必须拒绝不含
-    当前值或与严格更高范围重叠的等价类，避免排除约束不前进。若新的依赖语义无法由
-    通用 constraint/observer/enumeration 表达，应在 fork 增加通用能力并测试，禁止在
-    Orbit 侧反事实求解、黑盒探测或结果后修补。
+    当前值或与严格更高范围重叠的等价类。完整方案集采用标准 Pareto 支配：不存在另一
+    可行方案让全部已选投影包保持等价或变高，且至少一个严格变高；每个 Pareto 点必须
+    一次排除其支配的完整区域，不能退回逐个局部组合阻塞。若新的依赖语义无法由通用
+    constraint/observer/enumeration 表达，应在 fork 增加通用能力并测试，禁止在 Orbit
+    侧反事实求解、黑盒探测或结果后修补。
 51. **一个 provider locator 可以对应多个真实包身份**。catalog 必须按每个 artifact
     的 JAR `mod_id` 分区；add 分别求可行解并在多个可行身份间交互选择，upgrade 固定
     lockfile 身份。禁止重新引入“一 locator 一 mod_id”的校验。
@@ -152,5 +154,6 @@
 56. **长事务进度必须是 core 强类型事件**。core 不直接渲染，CLI 负责终端/文本展示；
     并发下载报告稳定队列的完成数，求解进度使用 fork observer 的 enumeration
     run/maximality probe start/finish 动态扩展总量。禁止解析 solver 日志或用定时假进度。
-    动态进度只证明当前工作仍在推进，不是剩余时间或多解枚举复杂度的上界；不得据此
-    宣称指数级枚举一定会在可接受时间内完成。
+    成功的 Pareto 提升 probe 属于保留解的真实路径；失败 probe 必须通过边界结果回滚
+    observer 状态。动态进度只证明当前工作仍在推进，不是剩余时间上界；Pareto/co-Pareto
+    front 本身仍可能很大。

@@ -14,13 +14,13 @@
 | 平台工件同步 | ✅ | fresh scan 后刷新 Minecraft/loader JAR 路径、SHA-256 和版本；旧 TOML 路径不是发现入口 |
 | JAR 元数据 | ✅ | 四种 loader、多逻辑 mod、嵌套 JAR、JarJar |
 | 版本语义 | ✅ | Fabric predicate；Maven ComparableVersion/range |
-| 依赖求解 | ✅ | 强类型 occurrence 图、完整极大解枚举、any/all/unless、环境、provides、ordering、Java、JarJar |
+| 依赖求解 | ✅ | 强类型 occurrence 图、完整 Pareto front、any/all/unless、环境、provides、ordering、Java、JarJar |
 | 原因 | ✅ | 自定义 reason 参与原始推导；成功候选用同次 observer |
 | 本地校验 | ✅ | 转 Fat Lockfile 后复用统一建图 |
 | 安装/恢复/升级 | ✅ | 由求解结果选择顶层包候选并生成统一事务计划 |
 | Modrinth / CurseForge / `file:` | ✅ | 查询、下载、识别、锁定；CurseForge 无 API Key 时拒绝创建 |
 | PubGrub fork 远端 | ✅ | 功能分支已发布，Orbit 固定到完整 commit SHA |
-| 多解选择 | ✅ | fork 原生枚举单包极大解；唯一解自动选择，多解交互 |
+| 多解选择 | ✅ | fork 原生枚举 Pareto 极大解；唯一解自动选择，多解交互 |
 | 本地重复包 | ✅ | init/sync 按 mod_id 合并为候选；确认后删除未选中的顶层包版本 |
 | 远端身份边界 | ✅ | provider 只给下载 locator；一个 locator 的多种真实 mod_id 按 JAR 身份分区并选择 |
 | Provider 分层 | ✅ | Modrinth / CurseForge HTTP 与 DTO 各在独立 wrapper，core 只做领域适配 |
@@ -92,11 +92,11 @@
   ModLauncher transformer 和二进制形状风险，但仍只报告潜在风险，不能证明兼容，
   也不覆盖资源、配置、注册表、网络协议、反射目标或游戏业务逻辑。
 - PubGrub fork 已发布到 `water2004/pubgrub` 的 `codex/solver-observer` 分支；
-  Orbit 固定到 `7157c30d6242774f20312886933e11598a914951`。
+  Orbit 固定到 `c334509daecf91611af2729b2db91af7eba6f076`。
 - 当前 fork 原生支持 `P = mod_id`、不透明复合候选版本、调用方定义
-  `same_version` / `strictly_higher` 和完整单包极大解枚举；同声明版本的载体身份不会
-  扩成多个用户解，无效版本序回调会在产生不前进的排除前失败。upgrade 的“至少一个包
-  变新、其他包可降级”是对同批极大解的操作分类。
+  `same_version` / `strictly_higher` 和完整 Pareto front 枚举；同声明版本的载体身份不会
+  扩成多个用户解，每个保留点会一次排除完整支配区域，无效版本序回调会在产生错误排除
+  前失败。upgrade 的“至少一个包变新、其他包可降级”是对同批 Pareto 解的操作分类。
 - 远端 project relation 会递归构造下载闭包；JAR `mod_id` 从不作为 slug/project
   查询。闭包缺少实际 required identity 时由 resolver 正常证明无解。
 - `sync` 保持本地对账且不下载修复；`install` 才构造远端候选闭包修复依赖图。
@@ -105,8 +105,8 @@
   不按目录顺序猜测。
 - JAR 缓存按本地 SHA-512 寻址，SHA-1 只作别名；provider 文件名不作为缓存键。
 - project 闭包的总工作量事前未知，因此显示当前 locator、已发现 artifact 与耗时。
-  极大解枚举的总量随 continuation run/maximality probe 的实际发现而增长，完成数同步
-  推进；它不构成剩余耗时上界，当前局部极大解完整枚举最坏仍为指数级。候选 JAR
+  Pareto 枚举的总量随 continuation run/maximality probe 的实际发现而增长，完成数同步
+  推进；它不构成剩余耗时上界，Pareto 或 co-Pareto front 本身仍可能很大。候选 JAR
   下载/校验/解析及最终物化使用预先稳定的精确总数。
 
 ## 6. 文档索引

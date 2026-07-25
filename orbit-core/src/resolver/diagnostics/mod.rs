@@ -6,7 +6,7 @@ mod tests;
 
 use std::collections::HashMap;
 
-use pubgrub::{DerivationTree, Ranges, SolverEvent, SolverObserver};
+use pubgrub::{DerivationTree, MaximalityProbeResult, Ranges, SolverEvent, SolverObserver};
 
 use crate::progress::{
     ProgressEvent, ProgressReporter, ResolutionActivity, ResolutionWork, emit as emit_progress,
@@ -67,6 +67,7 @@ pub(crate) struct ResolutionTrace {
     watched: HashMap<SolverPackage, WatchedVersion>,
     solutions: Vec<ResolutionSnapshot>,
     progress: Option<ProgressReporter>,
+    probe_checkpoint: Option<HashMap<SolverPackage, WatchedVersion>>,
 }
 
 #[derive(Debug, Clone)]
@@ -95,6 +96,7 @@ impl ResolutionTrace {
                 .collect(),
             solutions: Vec::new(),
             progress,
+            probe_checkpoint: None,
         }
     }
 
@@ -120,7 +122,7 @@ impl ResolutionTrace {
                     },
                 }
             }
-            SolverEvent::MaximalityProbeFinished { package } => {
+            SolverEvent::MaximalityProbeFinished { package, .. } => {
                 ProgressEvent::ResolutionWorkFinished {
                     work: ResolutionWork::MaximalityProbe {
                         package: package.to_string(),
@@ -181,6 +183,26 @@ impl SolverObserver<SolverPackage, Ranges<SolverVersion>, String> for Resolution
     fn on_event(&mut self, event: SolverEvent<'_, SolverPackage, Ranges<SolverVersion>, String>) {
         self.report_progress(&event);
         match event {
+            SolverEvent::MaximalityProbeStarted { .. } => {
+                assert!(
+                    self.probe_checkpoint.is_none(),
+                    "maximality probes must not be nested"
+                );
+                self.probe_checkpoint = Some(self.watched.clone());
+                for watched in self.watched.values_mut() {
+                    watched.decision_level = None;
+                    watched.reason = None;
+                }
+            }
+            SolverEvent::MaximalityProbeFinished { result, .. } => {
+                let checkpoint = self
+                    .probe_checkpoint
+                    .take()
+                    .expect("a maximality probe finish must match a start");
+                if result != MaximalityProbeResult::Improved {
+                    self.watched = checkpoint;
+                }
+            }
             SolverEvent::PackageChoice { package, allowed } => {
                 if let Some(watched) = self.watched.get_mut(package)
                     && allowed.contains(&watched.version)

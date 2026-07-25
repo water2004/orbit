@@ -228,7 +228,7 @@ pub fn check_version_conflict(
     Ok(())
 }
 
-/// Complete the candidate graph and enumerate every single-package-maximal solution.
+/// Complete the candidate graph and enumerate its package-version Pareto front.
 pub async fn resolve_candidate_portfolio(
     manifest: &OrbitManifest,
     lockfile: &OrbitLockfile,
@@ -768,6 +768,36 @@ b = "*"
                 ("a".to_string(), "2".to_string()),
                 ("b".to_string(), "2".to_string()),
             ])
+        );
+    }
+
+    #[tokio::test]
+    async fn coordinated_upgrade_dominates_the_lower_disconnected_solution() {
+        let mut catalog = CandidateCatalog::default();
+        catalog.candidates.insert(
+            "a".to_string(),
+            vec![
+                candidate("1", vec![ModDependency::required("b", "[1]")]),
+                candidate("2", vec![ModDependency::required("b", "[2]")]),
+            ],
+        );
+        catalog.candidates.insert(
+            "b".to_string(),
+            vec![candidate("1", Vec::new()), candidate("2", Vec::new())],
+        );
+
+        let portfolio = resolve_candidate_portfolio(&manifest(), &lockfile(), &catalog)
+            .await
+            .unwrap();
+
+        assert_eq!(portfolio.alternatives.len(), 1);
+        assert_eq!(
+            portfolio.alternatives[0].selected_versions["a"],
+            "2".to_string()
+        );
+        assert_eq!(
+            portfolio.alternatives[0].selected_versions["b"],
+            "2".to_string()
         );
     }
 

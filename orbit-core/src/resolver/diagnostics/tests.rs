@@ -1,4 +1,4 @@
-use pubgrub::{Ranges, resolve_with_observer};
+use pubgrub::{MaximalityProbeResult, Ranges, SolverEvent, SolverObserver, resolve_with_observer};
 
 use super::*;
 use crate::resolver::provider::OrbitDependencyProvider;
@@ -15,6 +15,43 @@ fn version(value: &str) -> SolverVersion {
 
 fn package(value: &str) -> SolverPackage {
     SolverPackage::logical(value)
+}
+
+#[test]
+fn failed_probe_rolls_back_path_state_while_improved_probe_commits_it() {
+    let selected = version("2");
+    let selected_package = package("a");
+    let mut trace = ResolutionTrace::with_progress([("a".to_string(), selected.clone())], None);
+    trace.on_event(SolverEvent::Decision {
+        package: &selected_package,
+        version: &selected,
+        decision_level: 1,
+    });
+
+    trace.on_event(SolverEvent::MaximalityProbeStarted {
+        package: &selected_package,
+    });
+    trace.on_event(SolverEvent::MaximalityProbeFinished {
+        package: &selected_package,
+        result: MaximalityProbeResult::NoImprovement,
+    });
+    assert_eq!(
+        trace.watched[&selected_package].decision_level,
+        Some(1),
+        "a failed probe must restore the retained candidate path"
+    );
+
+    trace.on_event(SolverEvent::MaximalityProbeStarted {
+        package: &selected_package,
+    });
+    trace.on_event(SolverEvent::MaximalityProbeFinished {
+        package: &selected_package,
+        result: MaximalityProbeResult::Improved,
+    });
+    assert_eq!(
+        trace.watched[&selected_package].decision_level, None,
+        "a successful probe becomes the new retained candidate path"
+    );
 }
 
 #[test]
