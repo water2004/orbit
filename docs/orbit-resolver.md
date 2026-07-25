@@ -149,6 +149,9 @@ profile 找到实际 Maven library JAR，再通过同一个 JAR reader 读取 lo
 模块则以 owner-bound contained 候选进入普通 `Mod(mod_id)` 图，可以满足其它模组的
 正常依赖，同时不会出现在安装、删除或 lockfile 事务中。找不到实际 library JAR 时
 才退化为只注册 loader 版本；不会硬编码某个 loader 附带的具体模块。
+`minecraft` 与 canonical loader 是 root 的必选依赖，而不是等到某个 Mod 声明依赖时
+才进入解；因此 Loader 自己的依赖、端侧条件和嵌套 load condition 始终参与同一次求解，
+audit 也能直接消费该解中的实际 Loader archive chain。
 
 Java 版本由目标 Minecraft 版本确定；JAR 根目录 class 文件的最高 class major
 又会产生模组到 `java` 的最低版本依赖。因此声明式 Java feature 和实际字节码下限都

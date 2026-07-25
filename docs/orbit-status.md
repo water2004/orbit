@@ -75,7 +75,7 @@
 | `remove` / `upgrade` / `outdated` | 使用 Fat Lockfile、保留受阻候选原因、自适应表格与多解差异高亮 |
 | `sync` | 重新探测平台并扫描 mods，刷新工件快照，按包选择候选并确认移除未选版本 |
 | `check` | 实例目标兼容性预检 |
-| `audit` | 只读扫描实际 ClassFile/refmap；自适应表格摘要 + schema 2 JSON/显式完整 report |
+| `audit` | 复用 Loader-selected runtime，解析实际 Mixin/Transformer 注册与 ClassFile；分类摘要 + schema 3 JSON/显式完整 report |
 | `list` / `info` | 展示包信息、逻辑依赖和 bundled |
 | `export` / `import` | Orbit archive 与 Modrinth pack |
 | `cache` / `instances` / `purge` | 已接 core |

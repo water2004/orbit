@@ -9,7 +9,7 @@ orbit-cli       参数、交互和展示
 orbit-core      领域模型、编排、JAR、求解、文件事务
     ├── modrinth-wrapper
     ├── curseforge-wrapper
-    ├── orbit-bytecode-audit（只依赖实际 ClassFile/refmap）
+    ├── orbit-bytecode-audit（只依赖已选择的实际 JAR 内容与运行时环境）
     └── water2004/pubgrub（固定 Git revision）
 ```
 
@@ -51,14 +51,15 @@ installer/    事务、复制和恢复
 package_reconciliation
               init/sync 共用的本地包候选选择与清理计划
 init/sync/    实例扫描与对账
-audit         实际运行时 classpath 组装；不包含字节码判定规则
+audit         复用 resolver 的 Loader-selected runtime；不包含字节码判定规则
     ↓
 orbit-bytecode-audit
   classfile   第三方 parser 隔离 facade、稳定指令 ID
-  jar         安全预算、嵌套 JAR/refmap、同名类多定义 Universe
-  mixin       selector/slice → InjectionQuery；injector → 显式组合语义 Mutation
+  jar         安全预算、活动嵌套 JAR/resource、MR-JAR、同名类多定义 Universe
+  mixin_config Loader 注册、端侧/requiredMods/plugin 激活、config/refmap 作用域
+  mixin       候选类合并；selector/slice → InjectionQuery；injector → Mutation
   transformer ModLauncher/Java transformer → 带 heuristic precision 的统一效果
-  conflict    组合矩阵、query 重算、写形状和普通二进制形状风险
+  conflict    独立风险原因、行为交互、query 重算、遮蔽后的硬引用风险
 ```
 
 允许出现 loader 分支的位置：
