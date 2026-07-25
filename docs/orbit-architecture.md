@@ -102,6 +102,13 @@ JAR `mod_id` 不会被拿去猜 provider slug，resolver 也没有联网补抓�
 添加先比较各身份的可行 portfolio，已有包升级则保持 lockfile 身份，不把项目改名
 伪装成普通版本升级。
 
+长事务通过 core 的强类型 `ProgressEvent` 暴露进度，core 不写 stdout/stderr。CLI
+把同一事件流渲染为交互式 spinner/进度条，非终端环境退化为逐项文本。事件边界与上述
+数据流一致：project 闭包发现、候选 JAR 下载/校验/解析、离线求解、选中包物化。
+并发下载任务只上报结构化完成计数，不各自操作终端。求解进度直接来自 fork observer：
+enumeration continuation 与 maximality probe 的 start/finish 动态扩展并完成工作总量；
+probe 内部路径不进入成功解原因轨迹。
+
 求解包的身份恒为 JAR 声明的 `mod_id`。同一 ID 的多个顶层 `mods/*.jar` 是同一个包
 的多个候选，最终每包只选一个。文件名、slug 和 project ID 只是候选来源事实，不能
 变成求解包。

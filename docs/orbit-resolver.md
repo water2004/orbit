@@ -168,6 +168,13 @@ Forge-family Jar-in-Jar 的 Maven 坐标是逻辑 artifact 包。每个内嵌 ar
 7. 建一次最终图并调用 fork 的 maximal-solution API；
 8. 唯一解直接选择；多解才交给 CLI 选择。
 
+这些边界同时是进度事件边界。project 递归发现报告当前 provider locator 和已发现
+artifact 数；队列稳定后报告每个候选 JAR 的完成数；纯离线求解报告包/候选规模和
+动态工作量。fork 对每个 enumeration continuation run 和 maximality probe 发出成对
+start/finish 事件；UI 在 start 时扩大总量，在 finish 时推进，并额外显示 decision、
+propagation、backtrack、conflict 与 retained solution 计数。probe 内部决策仍使用
+noop observer，不能污染用于解释候选淘汰原因的成功路径。
+
 provider 的 dependency relation 仅用于定位下一批 project，不携带可信的 required、
 版本或 `mod_id` 语义。JAR dependency 也不会反向触发 provider 查询，因为 `mod_id`
 不是 slug。若下载闭包中没有 JAR 声明某个 required identity，建图会把该引用注册为

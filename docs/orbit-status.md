@@ -26,6 +26,7 @@
 | Provider 分层 | ✅ | Modrinth / CurseForge HTTP 与 DTO 各在独立 wrapper，core 只做领域适配 |
 | 跨平台全局路径 | ✅ | RuntimeEnvironment + 显式路径；system/executable 布局 |
 | Windows MSI | ✅ | x64 per-machine 向导、可选系统 PATH、同版本重建升级、维护模式、可选清理默认 AppData；发布产物仍需项目证书签名 |
+| 长事务进度 | ✅ | add/install/check/outdated/upgrade 共用强类型事件；候选 JAR 精确计数，求解工作总量随实际 run/probe 动态增长 |
 
 ## 2. 保留的正确规范
 
@@ -91,7 +92,7 @@
   ModLauncher transformer 和二进制形状风险，但仍只报告潜在风险，不能证明兼容，
   也不覆盖资源、配置、注册表、网络协议、反射目标或游戏业务逻辑。
 - PubGrub fork 已发布到 `water2004/pubgrub` 的 `codex/solver-observer` 分支；
-  Orbit 固定到 `0c260ff2528a6c09c683cc7270b3b97c2ea114f3`。
+  Orbit 固定到 `5679fd07fe8e2280fb3938cf8683ad2cc2c48b23`。
 - 当前 fork 原生支持 `P = mod_id`、不透明复合候选版本、调用方定义
   `strictly_higher` 和完整单包极大解枚举；这部分不需要 Orbit 侧旁路或新的 fork
   改动。upgrade 的“至少一个包变新、其他包可降级”是对同批极大解的操作分类。
@@ -102,6 +103,9 @@
   launcher 下一次会启动哪一个；Orbit 明确报歧义，要求使用隔离实例或在 init 显式选择，
   不按目录顺序猜测。
 - JAR 缓存按本地 SHA-512 寻址，SHA-1 只作别名；provider 文件名不作为缓存键。
+- project 闭包的总工作量事前未知，因此显示当前 locator、已发现 artifact 与耗时。
+  极大解枚举的总量随 continuation run/maximality probe 的实际发现而增长，完成数同步
+  推进；候选 JAR 下载/校验/解析及最终物化使用预先稳定的精确总数。
 
 ## 6. 文档索引
 

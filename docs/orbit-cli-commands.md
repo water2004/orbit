@@ -42,7 +42,9 @@ contained JAR 不是独立删除目标。
 | `-y, --yes` | 跳过确认；不会替缺失的可复现元数据猜值 |
 | `--dry-run` | 返回操作预览，不写目标状态 |
 
-正常结果写 stdout，错误、警告、搜索进度和交互提示写 stderr。
+正常结果写 stdout，错误、警告、结构化操作进度和交互提示写 stderr。交互终端默认显示
+spinner/进度条；重定向时显示稳定文本。`config.toml` 的 `ui.progress_bar` 可设为
+`modern`、`plain` 或 `off`，`--quiet` 始终关闭进度。
 
 ## 2. 初始化与实例
 
@@ -121,6 +123,11 @@ orbit add <mod>
 在线流程先取得并验证候选 JAR，再以 JAR 的真实 `mod_id`、版本和 required dependencies
 求解。确认后写入 `mods/`、manifest 和 lockfile。顶层 constraint、`optional`、`env`
 持久化到 manifest；传递依赖只进入 lockfile。`--no-deps` 禁止传递安装。
+
+该流程会分别显示：递归发现 project、候选队列总数、JAR 下载/缓存校验/解析完成数、
+离线求解的动态工作量，以及确认后的包物化进度。求解总量会在发现新的 continuation
+run/maximality probe 时增加，完成数随后推进，同时显示决策、传播、回溯、冲突和解
+数量；这样候选下载完成后进入耗时的多解枚举时不会再被误判为网络卡死。
 
 若同一个 provider locator 的不同候选 JAR 声明了多个真实 `mod_id`，会分别剔除无解
 身份。唯一可行身份自动采用；多个可行身份会先询问要添加哪一个包。upgrade 不允许借此
@@ -329,7 +336,7 @@ orbit cache clean
 | `--quiet` 只输出错误 | 多数 handler 仍直接 `println!`，只有实例上下文日志检查 quiet |
 | `--verbose` 展示网络/解析细节 | 当前主要展示实例选择，没有统一结构化日志层 |
 | 用户取消使用独立退出码 3 | clap 参数错误为 2、普通错误为 1；部分取消当前为成功或普通错误 |
-| 全局运行配置控制网络/并发/UI | schema 已加载，但代理、重试、语言、样式和下载并发尚未全部接入 |
+| 全局运行配置控制网络/并发/UI | `ui.progress_bar` 已接入；代理、重试、语言、颜色和下载并发尚未全部接入 |
 | 大规模 restore 有界并发 | 候选验证并发，最终 JAR 物化仍按确定顺序执行 |
 
 已经实现、旧文档不应再标为缺失的内容：

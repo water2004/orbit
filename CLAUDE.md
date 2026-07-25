@@ -146,3 +146,6 @@
 55. **init 只接受合法游戏目录**。支持标准共享根、`versions/<实例>` 隔离目录、
     Prism/MultiMC、CurseForge 和 GDLauncher 的实际 game directory；空目录或任意
     `mods/` 目录不得仅凭命令行参数初始化。多候选必须消歧，不按扫描顺序取第一个。
+56. **长事务进度必须是 core 强类型事件**。core 不直接渲染，CLI 负责终端/文本展示；
+    并发下载报告稳定队列的完成数，求解进度使用 fork observer 的 enumeration
+    run/maximality probe start/finish 动态扩展总量。禁止解析 solver 日志或用定时假进度。
