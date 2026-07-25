@@ -37,10 +37,11 @@ pub async fn handle(
         for package in &report.restored {
             println!("  [dry-run] would restore {package}");
         }
-        for package in &report.removed {
+        if !report.removed.is_empty() {
+            println!("\nPackages to remove:");
             println!(
-                "  [dry-run] would remove {} {} ({})",
-                package.mod_id, package.version, package.filename
+                "{}",
+                crate::cli::output::removed_packages_table(&report.removed)
             );
         }
         println!(

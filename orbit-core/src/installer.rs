@@ -777,7 +777,7 @@ async fn install_mod(input: InstallModInput<'_>) -> Result<InstallReport, OrbitE
             candidates: catalog.candidates.values().map(Vec::len).sum(),
         },
     );
-    let (requested_package, mut portfolio) = resolve_requested_package(RequestedPackageInput {
+    let (requested_package, portfolio) = resolve_requested_package(RequestedPackageInput {
         locator: slug,
         intent: options.intent,
         manifest,
@@ -790,24 +790,27 @@ async fn install_mod(input: InstallModInput<'_>) -> Result<InstallReport, OrbitE
     .await?;
 
     // 3. Resolve offline
-    if options.intent == InstallIntent::Upgrade {
-        portfolio
-            .alternatives
-            .retain(crate::resolver::types::ResolutionReport::has_upgrade);
-        if portfolio.alternatives.is_empty() {
-            return Ok(InstallReport {
-                installed: Vec::new(),
-                removed: Vec::new(),
-                changes: Vec::new(),
-                already_satisfied: Vec::new(),
-                skipped_optional: Vec::new(),
-                diagnostics: Vec::new(),
-                warnings: Vec::new(),
-            });
-        }
+    let resolution = if options.intent == InstallIntent::Upgrade {
+        crate::resolver::select_upgrade_resolution(
+            portfolio,
+            Some(&requested_package),
+            select_resolution,
+        )
+    } else {
+        crate::resolver::select_resolution(portfolio, select_resolution)
     }
-    let resolution = crate::resolver::select_resolution(portfolio, select_resolution)
-        .map_err(OrbitError::Conflict)?;
+    .map_err(OrbitError::Conflict)?;
+    if options.intent == InstallIntent::Upgrade && !resolution.has_upgrade() {
+        return Ok(InstallReport {
+            installed: Vec::new(),
+            removed: Vec::new(),
+            changes: Vec::new(),
+            already_satisfied: Vec::new(),
+            skipped_optional: Vec::new(),
+            diagnostics: resolution.diagnostics,
+            warnings: resolution.warnings,
+        });
+    }
     let selected_versions = resolution.selected_versions.clone();
     let selected_sources = resolution.selected_sources.clone();
     let selected_candidates = resolution.selected_candidates.clone();

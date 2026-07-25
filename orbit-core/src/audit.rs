@@ -4,16 +4,47 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use orbit_bytecode_audit::{
-    AnalysisLimits, ArtifactInput, ArtifactKind, AuditEnvironment, AuditReport, AuditRequest,
-    NestedJarPolicy,
+    AnalysisLimits, ArtifactInput, ArtifactKind, AuditEnvironment, AuditProgressEvent,
+    AuditProgressReporter, AuditProgressStage, AuditReport, AuditRequest, NestedJarPolicy,
 };
 
 use crate::error::OrbitError;
 
 pub fn audit_instance(instance_dir: &Path) -> Result<AuditReport, OrbitError> {
+    audit_instance_with_progress(instance_dir, None)
+}
+
+pub fn audit_instance_with_progress(
+    instance_dir: &Path,
+    progress: Option<AuditProgressReporter>,
+) -> Result<AuditReport, OrbitError> {
+    let emit = |event| {
+        if let Some(progress) = progress.as_ref() {
+            progress(event);
+        }
+    };
+    emit(AuditProgressEvent::StageStarted {
+        stage: AuditProgressStage::PrepareInputs,
+        total: Some(5),
+    });
     let manifest = crate::manifest::OrbitManifest::from_dir(instance_dir)?;
+    emit(AuditProgressEvent::Advanced {
+        stage: AuditProgressStage::PrepareInputs,
+        completed: 1,
+        total: Some(5),
+    });
     let discovered = crate::platform::rediscover_current_platform(instance_dir)?;
+    emit(AuditProgressEvent::Advanced {
+        stage: AuditProgressStage::PrepareInputs,
+        completed: 2,
+        total: Some(5),
+    });
     let runtime = crate::platform::discover_runtime_classpath(instance_dir, &discovered)?;
+    emit(AuditProgressEvent::Advanced {
+        stage: AuditProgressStage::PrepareInputs,
+        completed: 3,
+        total: Some(5),
+    });
     let lockfile = crate::lockfile::OrbitLockfile::from_dir(instance_dir)?;
     let selected_nested = crate::resolver::selected_runtime_nested_jars(
         &manifest,
@@ -25,6 +56,11 @@ pub fn audit_instance(instance_dir: &Path) -> Result<AuditReport, OrbitError> {
             "cannot construct the active nested-JAR classpath for audit: {error}"
         ))
     })?;
+    emit(AuditProgressEvent::Advanced {
+        stage: AuditProgressStage::PrepareInputs,
+        completed: 4,
+        total: Some(5),
+    });
     let labels = lockfile_labels(&lockfile);
 
     let mut artifacts = vec![
@@ -83,17 +119,29 @@ pub fn audit_instance(instance_dir: &Path) -> Result<AuditReport, OrbitError> {
                 }
             }),
     );
+    emit(AuditProgressEvent::Advanced {
+        stage: AuditProgressStage::PrepareInputs,
+        completed: 5,
+        total: Some(5),
+    });
+    emit(AuditProgressEvent::StageFinished {
+        stage: AuditProgressStage::PrepareInputs,
+        completed: 5,
+    });
 
-    orbit_bytecode_audit::analyze(&AuditRequest {
-        environment: AuditEnvironment {
-            minecraft_version: discovered.minecraft_version.id,
-            declared_loader: manifest.project.modloader,
-            detected_loader: discovered.loader,
-            loader_version: discovered.loader_version,
+    orbit_bytecode_audit::analyze_with_progress(
+        &AuditRequest {
+            environment: AuditEnvironment {
+                minecraft_version: discovered.minecraft_version.id,
+                declared_loader: manifest.project.modloader,
+                detected_loader: discovered.loader,
+                loader_version: discovered.loader_version,
+            },
+            artifacts,
+            limits: AnalysisLimits::default(),
         },
-        artifacts,
-        limits: AnalysisLimits::default(),
-    })
+        progress.as_ref(),
+    )
     .map_err(|error| match error {
         orbit_bytecode_audit::AuditError::NotReady(readiness) => {
             OrbitError::Other(anyhow::anyhow!(readiness.message))

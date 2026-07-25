@@ -33,6 +33,13 @@ pub struct OutdatedReport {
     pub warnings: Vec<String>,
 }
 
+#[derive(Default)]
+pub struct OutdatedInteraction {
+    pub package: Option<String>,
+    pub select_resolution: Option<ResolutionSelector>,
+    pub progress: Option<ProgressReporter>,
+}
+
 async fn discover_artifact_closure(
     provider: &dyn ModProvider,
     initial_lookups: Vec<String>,
@@ -432,6 +439,74 @@ pub async fn check_all_outdated_with_progress(
     jar_cache: &crate::jar_cache::JarCache,
     progress: Option<ProgressReporter>,
 ) -> Result<OutdatedReport, OrbitError> {
+    check_outdated_with_progress(OutdatedCheck {
+        instance_dir,
+        manifest,
+        lockfile,
+        providers,
+        requested_package: None,
+        selector,
+        jar_cache,
+        progress,
+    })
+    .await
+}
+
+/// Check upgrades with an optional logical-package scope and UI callbacks.
+///
+/// Even when `interaction.package` is set, the complete instance candidate
+/// universe is resolved because a feasible result may require coordinated
+/// upgrades or downgrades elsewhere.
+pub async fn check_outdated_with_interaction(
+    instance_dir: &std::path::Path,
+    manifest: &OrbitManifest,
+    lockfile: &OrbitLockfile,
+    providers: &[Box<dyn ModProvider>],
+    jar_cache: &crate::jar_cache::JarCache,
+    interaction: OutdatedInteraction,
+) -> Result<OutdatedReport, OrbitError> {
+    let OutdatedInteraction {
+        package,
+        select_resolution,
+        progress,
+    } = interaction;
+    check_outdated_with_progress(OutdatedCheck {
+        instance_dir,
+        manifest,
+        lockfile,
+        providers,
+        requested_package: package.as_deref(),
+        selector: select_resolution,
+        jar_cache,
+        progress,
+    })
+    .await
+}
+
+struct OutdatedCheck<'a> {
+    instance_dir: &'a std::path::Path,
+    manifest: &'a OrbitManifest,
+    lockfile: &'a OrbitLockfile,
+    providers: &'a [Box<dyn ModProvider>],
+    requested_package: Option<&'a str>,
+    selector: Option<ResolutionSelector>,
+    jar_cache: &'a crate::jar_cache::JarCache,
+    progress: Option<ProgressReporter>,
+}
+
+async fn check_outdated_with_progress(
+    input: OutdatedCheck<'_>,
+) -> Result<OutdatedReport, OrbitError> {
+    let OutdatedCheck {
+        instance_dir,
+        manifest,
+        lockfile,
+        providers,
+        requested_package,
+        selector,
+        jar_cache,
+        progress,
+    } = input;
     let platform =
         crate::platform::discover_install_platform(instance_dir, &manifest.project.mc_version)?;
     let mut effective_manifest = manifest.clone();
@@ -450,8 +525,14 @@ pub async fn check_all_outdated_with_progress(
     )
     .await?;
     catalog.loader_package = platform.loader_package;
+    let discovery_diagnostics =
+        missing_candidate_diagnostics(lockfile, &catalog, requested_package, mc_version, loader);
     if catalog.candidates.is_empty() {
-        return Ok(OutdatedReport::default());
+        return Ok(OutdatedReport {
+            resolved: catalog.resolved,
+            diagnostics: discovery_diagnostics,
+            ..OutdatedReport::default()
+        });
     }
 
     // 3. Resolve
@@ -462,7 +543,7 @@ pub async fn check_all_outdated_with_progress(
             candidates: catalog.candidates.values().map(Vec::len).sum(),
         },
     );
-    let mut portfolio = crate::resolver::resolve_candidate_portfolio_with_progress(
+    let portfolio = crate::resolver::resolve_candidate_portfolio_with_progress(
         manifest,
         lockfile,
         &catalog,
@@ -470,21 +551,27 @@ pub async fn check_all_outdated_with_progress(
     )
     .await
     .map_err(|e| OrbitError::Other(anyhow::anyhow!("{e}")))?;
-    portfolio.alternatives.retain(ResolutionReport::has_upgrade);
     emit_progress(
         progress.as_ref(),
         ProgressEvent::ResolutionFinished {
-            solutions: portfolio.alternatives.len(),
+            solutions: portfolio
+                .alternatives
+                .iter()
+                .filter(|alternative| {
+                    alternative.changes.iter().any(|change| {
+                        change.kind == PackageChangeKind::Upgrade
+                            && requested_package.is_none_or(|package| change.package == package)
+                    })
+                })
+                .count(),
         },
     );
-    if portfolio.alternatives.is_empty() {
-        return Ok(OutdatedReport {
-            resolved: catalog.resolved,
-            ..OutdatedReport::default()
-        });
-    }
-    let resolution = crate::resolver::select_resolution(portfolio, selector)
-        .map_err(|e| OrbitError::Other(anyhow::anyhow!("{e}")))?;
+    let mut resolution =
+        crate::resolver::select_upgrade_resolution(portfolio, requested_package, selector)
+            .map_err(|e| OrbitError::Other(anyhow::anyhow!("{e}")))?;
+    resolution.diagnostics.extend(discovery_diagnostics);
+    resolution.diagnostics =
+        crate::resolver::normalize_candidate_diagnostics(resolution.diagnostics);
 
     let mut updates: Vec<OutdatedMod> = resolution
         .changes
@@ -506,6 +593,37 @@ pub async fn check_all_outdated_with_progress(
         warnings: resolution.warnings.clone(),
         resolution,
     })
+}
+
+fn missing_candidate_diagnostics(
+    lockfile: &OrbitLockfile,
+    catalog: &CandidateCatalog,
+    requested_package: Option<&str>,
+    mc_version: &str,
+    loader: &str,
+) -> Vec<CandidateDiagnostic> {
+    let mut diagnostics: Vec<_> = lockfile
+        .packages
+        .iter()
+        .filter(|entry| entry.provider != "file")
+        .filter(|entry| {
+            requested_package.is_none_or(|package| entry.mod_id == package)
+                && !catalog.candidates.contains_key(&entry.mod_id)
+        })
+        .map(|entry| CandidateDiagnostic {
+            package: entry.mod_id.clone(),
+            selected_version: entry.version.clone(),
+            candidate_version: "none".to_string(),
+            kind: crate::resolver::types::CandidateDiagnosticKind::NoCompatibleCandidate,
+            facts: vec![format!(
+                "{} returned no JAR for Minecraft {mc_version} / {loader} declaring this mod ID",
+                entry.provider
+            )],
+        })
+        .collect();
+    diagnostics.sort_by(|left, right| left.package.cmp(&right.package));
+    diagnostics.dedup_by(|left, right| left.package == right.package);
+    diagnostics
 }
 
 #[cfg(test)]
@@ -836,6 +954,57 @@ mod tests {
 
         assert!(error.to_string().contains("artifact closure is incomplete"));
         assert!(error.to_string().contains("missing"));
+    }
+
+    #[test]
+    fn missing_jar_declared_package_is_reported_instead_of_called_up_to_date() {
+        let entry = crate::lockfile::PackageEntry {
+            mod_id: "missing-package".to_string(),
+            version: "1.0.0".to_string(),
+            sha1: String::new(),
+            sha256: "hash".to_string(),
+            sha512: String::new(),
+            filename: "ignored-by-presentation.jar".to_string(),
+            provider: "modrinth".to_string(),
+            modrinth: Some(crate::lockfile::ModrinthInfo {
+                project_id: "project".to_string(),
+                version_id: "version".to_string(),
+                slug: "missing-package".to_string(),
+                download_url: String::new(),
+            }),
+            curseforge: None,
+            file: None,
+            dependencies: Vec::new(),
+            environment: crate::metadata::Environment::Both,
+            provides: Vec::new(),
+            language_loader: None,
+            embedded_artifacts: Vec::new(),
+            bundled: Vec::new(),
+        };
+        let lockfile = OrbitLockfile {
+            meta: crate::lockfile::LockMeta {
+                mc_version: "26.1.2".to_string(),
+                modloader: "fabric".to_string(),
+                modloader_version: "0.19.2".to_string(),
+            },
+            packages: vec![entry],
+        };
+
+        let diagnostics = missing_candidate_diagnostics(
+            &lockfile,
+            &CandidateCatalog::default(),
+            Some("missing-package"),
+            "26.1.2",
+            "fabric",
+        );
+
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(
+            diagnostics[0].kind,
+            crate::resolver::types::CandidateDiagnosticKind::NoCompatibleCandidate
+        );
+        assert!(diagnostics[0].facts[0].contains("declaring this mod ID"));
+        assert!(!diagnostics[0].facts[0].contains(".jar"));
     }
 
     #[test]

@@ -494,14 +494,32 @@ fn probe_abi_classes() -> HashSet<&'static str> {
     ])
 }
 
+#[cfg(test)]
 pub(crate) fn scan_artifacts(request: &AuditRequest) -> Result<ScannedArtifacts, AuditError> {
+    scan_artifacts_with_progress(request, None)
+}
+
+pub(crate) fn scan_artifacts_with_progress(
+    request: &AuditRequest,
+    progress: Option<&crate::progress::AuditProgressReporter>,
+) -> Result<ScannedArtifacts, AuditError> {
+    use crate::progress::{AuditProgressEvent, AuditProgressStage, emit};
+
+    let total = request.artifacts.len();
+    emit(
+        progress,
+        AuditProgressEvent::StageStarted {
+            stage: AuditProgressStage::ScanArtifacts,
+            total: Some(total),
+        },
+    );
     let mut artifact_reports = Vec::new();
     let mut artifacts = Vec::new();
     let mut universe = ClassUniverse::default();
     let mut coverage = Coverage::default();
     let mut warnings = Vec::new();
     let mut total_classes = 0_usize;
-    for input in &request.artifacts {
+    for (index, input) in request.artifacts.iter().enumerate() {
         match scan_artifact(input, request, &mut coverage, &mut warnings) {
             Ok((report, artifact)) => {
                 total_classes += artifact.classes.len();
@@ -576,6 +594,14 @@ pub(crate) fn scan_artifacts(request: &AuditRequest) -> Result<ScannedArtifacts,
                 )));
             }
         }
+        emit(
+            progress,
+            AuditProgressEvent::Advanced {
+                stage: AuditProgressStage::ScanArtifacts,
+                completed: index + 1,
+                total: Some(total),
+            },
+        );
     }
     if artifacts
         .iter()
@@ -586,14 +612,22 @@ pub(crate) fn scan_artifacts(request: &AuditRequest) -> Result<ScannedArtifacts,
             "no Mod JAR contains a parseable ClassFile".to_string(),
         ));
     }
-    Ok(ScannedArtifacts {
+    let scanned = ScannedArtifacts {
         artifact_reports,
         artifacts,
         universe,
         limits: request.limits.clone(),
         coverage,
         warnings,
-    })
+    };
+    emit(
+        progress,
+        AuditProgressEvent::StageFinished {
+            stage: AuditProgressStage::ScanArtifacts,
+            completed: total,
+        },
+    );
+    Ok(scanned)
 }
 
 fn scan_artifact(
@@ -1071,6 +1105,8 @@ pub(crate) mod test_support {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{Arc, Mutex};
+
     use crate::model::{
         AnalysisLimits, ArtifactInput, ArtifactKind, AuditEnvironment, AuditRequest,
         NestedJarPolicy,
@@ -1142,6 +1178,52 @@ mod tests {
         assert_eq!(scanned.coverage.jars_failed, 1);
         assert_eq!(scanned.artifacts.len(), 1);
         assert_eq!(scanned.artifacts[0].classes[0].name, "mod/Good");
+    }
+
+    #[test]
+    fn top_level_artifact_progress_uses_the_exact_request_count() {
+        let directory = tempfile::tempdir().unwrap();
+        let first = directory.path().join("first.jar");
+        let second = directory.path().join("second.jar");
+        write_jar(&first, &["mod/First"]);
+        write_jar(&second, &["mod/Second"]);
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let captured = events.clone();
+        let reporter: crate::progress::AuditProgressReporter = Arc::new(move |event| {
+            captured.lock().unwrap().push(event);
+        });
+
+        scan_artifacts_with_progress(
+            &request(vec![
+                input("first", first, ArtifactKind::Mod),
+                input("second", second, ArtifactKind::Mod),
+            ]),
+            Some(&reporter),
+        )
+        .unwrap();
+
+        let events = events.lock().unwrap();
+        assert_eq!(
+            events.first(),
+            Some(&crate::progress::AuditProgressEvent::StageStarted {
+                stage: crate::progress::AuditProgressStage::ScanArtifacts,
+                total: Some(2),
+            })
+        );
+        assert!(
+            events.contains(&crate::progress::AuditProgressEvent::Advanced {
+                stage: crate::progress::AuditProgressStage::ScanArtifacts,
+                completed: 1,
+                total: Some(2),
+            })
+        );
+        assert_eq!(
+            events.last(),
+            Some(&crate::progress::AuditProgressEvent::StageFinished {
+                stage: crate::progress::AuditProgressStage::ScanArtifacts,
+                completed: 2,
+            })
+        );
     }
 
     #[test]

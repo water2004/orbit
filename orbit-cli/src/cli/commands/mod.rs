@@ -176,39 +176,7 @@ pub fn resolution_selector(_dry_run: bool, yes: bool) -> Option<orbit_core::Reso
 
 fn prompt_resolution(alternatives: &[orbit_core::ResolutionReport]) -> usize {
     eprintln!("\nMultiple dependency solutions are available:");
-    for (index, alternative) in alternatives.iter().enumerate() {
-        eprintln!("\n  {}.", index + 1);
-        if alternative.changes.is_empty() {
-            eprintln!("     keep all currently selected versions");
-        } else {
-            for change in &alternative.changes {
-                let current = change.current_version.as_deref().unwrap_or("not installed");
-                let selected = change.selected_version.as_deref().unwrap_or("removed");
-                let current_file = change
-                    .filename
-                    .as_deref()
-                    .map(|filename| format!(" [{filename}]"))
-                    .unwrap_or_default();
-                let selected_file = change
-                    .selected_filename
-                    .as_deref()
-                    .map(|filename| format!(" [{filename}]"))
-                    .unwrap_or_default();
-                eprintln!(
-                    "     {}: {}{} → {}{} ({})",
-                    change.package,
-                    current,
-                    current_file,
-                    selected,
-                    selected_file,
-                    change_label(change.kind)
-                );
-            }
-        }
-        if !alternative.warnings.is_empty() {
-            eprintln!("     {} warning(s)", alternative.warnings.len());
-        }
-    }
+    eprintln!("{}", crate::cli::output::resolution_choices(alternatives));
 
     loop {
         eprint!(
@@ -236,29 +204,10 @@ pub fn prompt_install_report(report: &orbit_core::InstallReport, yes: bool) -> b
     }
     if !report.changes.is_empty() {
         eprintln!("\nPlanned package transaction:");
-        for change in &report.changes {
-            let current = change.current_version.as_deref().unwrap_or("not installed");
-            let selected = change.selected_version.as_deref().unwrap_or("removed");
-            let current_file = change
-                .filename
-                .as_deref()
-                .map(|filename| format!(" [{filename}]"))
-                .unwrap_or_default();
-            let selected_file = change
-                .selected_filename
-                .as_deref()
-                .map(|filename| format!(" [{filename}]"))
-                .unwrap_or_default();
-            eprintln!(
-                "  {} {}{} → {}{} ({})",
-                change.package,
-                current,
-                current_file,
-                selected,
-                selected_file,
-                change_label(change.kind)
-            );
-        }
+        eprintln!(
+            "{}",
+            crate::cli::output::package_changes_table(&report.changes)
+        );
     }
     if !report.installed.is_empty() {
         eprintln!("\nSelected package contents:");
@@ -279,12 +228,10 @@ pub fn prompt_install_report(report: &orbit_core::InstallReport, yes: bool) -> b
     }
     if report.changes.is_empty() && !report.removed.is_empty() {
         eprintln!("\nThe following unselected package versions will be removed:");
-        for package in &report.removed {
-            eprintln!(
-                "  - {} v{} ({})",
-                package.mod_id, package.version, package.filename
-            );
-        }
+        eprintln!(
+            "{}",
+            crate::cli::output::removed_packages_table(&report.removed)
+        );
     }
     if !report.already_satisfied.is_empty() {
         eprintln!(
@@ -304,16 +251,6 @@ pub fn prompt_install_report(report: &orbit_core::InstallReport, yes: bool) -> b
     input.is_empty() || input == "y" || input == "yes"
 }
 
-fn change_label(kind: orbit_core::PackageChangeKind) -> &'static str {
-    match kind {
-        orbit_core::PackageChangeKind::Install => "install",
-        orbit_core::PackageChangeKind::Upgrade => "upgrade",
-        orbit_core::PackageChangeKind::Downgrade => "downgrade",
-        orbit_core::PackageChangeKind::Replace => "replace",
-        orbit_core::PackageChangeKind::Remove => "remove",
-    }
-}
-
 fn print_bundled_mod(bundled: &orbit_core::BundledMod, depth: usize) {
     let indent = "    ".repeat(depth);
     eprintln!(
@@ -328,14 +265,18 @@ fn print_bundled_mod(bundled: &orbit_core::BundledMod, depth: usize) {
 pub fn print_resolution_diagnostics(
     diagnostics: &[orbit_core::resolver::types::CandidateDiagnostic],
 ) {
-    for diagnostic in diagnostics {
-        eprintln!("{diagnostic}");
+    if !diagnostics.is_empty() {
+        eprintln!("\nUpgrade diagnostics:");
+        eprintln!("{}", crate::cli::output::diagnostics_table(diagnostics));
     }
 }
 
 pub fn print_resolution_warnings(warnings: &[String]) {
-    for warning in warnings {
-        eprintln!("warning: {warning}");
+    if !warnings.is_empty() {
+        eprintln!("\nDependency ordering warnings:");
+        for warning in warnings {
+            eprintln!("  • {warning}");
+        }
     }
 }
 

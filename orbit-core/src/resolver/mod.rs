@@ -51,6 +51,59 @@ pub(crate) fn select_resolution(
     Ok(portfolio.alternatives.remove(index))
 }
 
+/// Select a Pareto-maximal solution that performs an upgrade.
+///
+/// When `package` is set, upgrading some unrelated package is not sufficient:
+/// the requested logical package itself must move to a newer version. If no
+/// eligible solution exists, the returned empty report retains the solver's
+/// explanations for newer candidates instead of silently discarding them.
+pub(crate) fn select_upgrade_resolution(
+    mut portfolio: ResolutionPortfolio,
+    package: Option<&str>,
+    selector: Option<ResolutionSelector>,
+) -> Result<ResolutionReport, String> {
+    let diagnostics = aggregate_candidate_diagnostics(&portfolio.alternatives, package);
+    portfolio.alternatives.retain(|alternative| {
+        alternative.changes.iter().any(|change| {
+            change.kind == PackageChangeKind::Upgrade
+                && package.is_none_or(|package| change.package == package)
+        })
+    });
+    if portfolio.alternatives.is_empty() {
+        return Ok(ResolutionReport {
+            diagnostics,
+            ..ResolutionReport::default()
+        });
+    }
+    select_resolution(portfolio, selector)
+}
+
+fn aggregate_candidate_diagnostics(
+    alternatives: &[ResolutionReport],
+    package: Option<&str>,
+) -> Vec<types::CandidateDiagnostic> {
+    let diagnostics = alternatives
+        .iter()
+        .flat_map(|alternative| alternative.diagnostics.iter().cloned())
+        .filter(|diagnostic| package.is_none_or(|package| diagnostic.package == package))
+        .collect();
+    normalize_candidate_diagnostics(diagnostics)
+}
+
+pub(crate) fn normalize_candidate_diagnostics(
+    mut diagnostics: Vec<types::CandidateDiagnostic>,
+) -> Vec<types::CandidateDiagnostic> {
+    diagnostics.sort_by(|left, right| {
+        left.package
+            .cmp(&right.package)
+            .then_with(|| left.candidate_version.cmp(&right.candidate_version))
+            .then_with(|| left.selected_version.cmp(&right.selected_version))
+            .then_with(|| left.facts.cmp(&right.facts))
+    });
+    diagnostics.dedup();
+    diagnostics
+}
+
 pub fn check_local_graph(
     manifest: &OrbitManifest,
     local_mods: &[crate::identification::IdentifiedMod],
@@ -689,6 +742,44 @@ b = "*"
                 "{alternative:?}"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn targeted_upgrade_keeps_its_blocking_reason_instead_of_upgrading_another_package() {
+        let mut catalog = CandidateCatalog::default();
+        catalog.candidates.insert(
+            "a".to_string(),
+            vec![candidate(
+                "2",
+                vec![ModDependency::required("unavailable-dependency", "=2")],
+            )],
+        );
+        catalog.candidates.insert(
+            "b".to_string(),
+            vec![candidate("1", Vec::new()), candidate("2", Vec::new())],
+        );
+
+        let portfolio = resolve_candidate_portfolio(&manifest(), &lockfile(), &catalog)
+            .await
+            .unwrap();
+        let all_packages = select_upgrade_resolution(portfolio.clone(), None, None).unwrap();
+        assert!(
+            all_packages.changes.iter().any(|change| {
+                change.package == "b" && change.kind == PackageChangeKind::Upgrade
+            })
+        );
+
+        let targeted = select_upgrade_resolution(portfolio, Some("a"), None).unwrap();
+        assert!(targeted.changes.is_empty(), "{targeted:?}");
+        assert_eq!(targeted.diagnostics.len(), 1, "{targeted:?}");
+        assert_eq!(targeted.diagnostics[0].package, "a");
+        assert!(
+            targeted.diagnostics[0]
+                .facts
+                .iter()
+                .any(|fact| fact.contains("unavailable-dependency")),
+            "{targeted:?}"
+        );
     }
 
     #[tokio::test]

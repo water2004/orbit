@@ -1,4 +1,5 @@
 pub mod commands;
+mod output;
 mod progress;
 use crate::cli::commands::CommandHandler;
 use anyhow::Result;

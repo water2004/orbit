@@ -43,11 +43,31 @@ struct MethodKey {
     descriptor: String,
 }
 
-pub(crate) fn analyze(scanned: &mut ScannedArtifacts, readiness: &Readiness) -> Vec<Effect> {
+pub(crate) fn analyze_with_progress(
+    scanned: &mut ScannedArtifacts,
+    readiness: &Readiness,
+    progress: Option<&crate::progress::AuditProgressReporter>,
+) -> Vec<Effect> {
+    use crate::progress::{AuditProgressEvent, AuditProgressStage, emit};
+
     if !matches!(
         readiness.loader,
         Some(LoaderFamily::Forge | LoaderFamily::NeoForge)
     ) {
+        emit(
+            progress,
+            AuditProgressEvent::StageStarted {
+                stage: AuditProgressStage::AnalyzeTransformers,
+                total: Some(0),
+            },
+        );
+        emit(
+            progress,
+            AuditProgressEvent::StageFinished {
+                stage: AuditProgressStage::AnalyzeTransformers,
+                completed: 0,
+            },
+        );
         return Vec::new();
     }
 
@@ -61,6 +81,33 @@ pub(crate) fn analyze(scanned: &mut ScannedArtifacts, readiness: &Readiness) -> 
             (artifact.kind == crate::model::ArtifactKind::Mod).then_some(index)
         })
         .collect::<Vec<_>>();
+    let total = mod_indexes
+        .iter()
+        .map(|index| discover_transformer_classes(scanned, &scanned.artifacts[*index]).len())
+        .sum();
+    emit(
+        progress,
+        AuditProgressEvent::StageStarted {
+            stage: AuditProgressStage::AnalyzeTransformers,
+            total: Some(total),
+        },
+    );
+    let mut completed = 0;
+
+    macro_rules! complete_and_continue {
+        () => {{
+            completed += 1;
+            emit(
+                progress,
+                AuditProgressEvent::Advanced {
+                    stage: AuditProgressStage::AnalyzeTransformers,
+                    completed,
+                    total: Some(total),
+                },
+            );
+            continue;
+        }};
+    }
 
     for artifact_index in mod_indexes {
         let artifact = &scanned.artifacts[artifact_index];
@@ -71,7 +118,7 @@ pub(crate) fn analyze(scanned: &mut ScannedArtifacts, readiness: &Readiness) -> 
                 .iter()
                 .find(|class| class.name == class_name)
             else {
-                continue;
+                complete_and_continue!();
             };
             scanned.coverage.transformers_discovered += 1;
             let mechanism = transformer_mechanism(scanned, class);
@@ -86,7 +133,7 @@ pub(crate) fn analyze(scanned: &mut ScannedArtifacts, readiness: &Readiness) -> 
                               no global pairwise conflicts were fabricated"
                         .to_string(),
                 });
-                continue;
+                complete_and_continue!();
             }
             scanned.coverage.transformer_targets_recovered += targets.len();
 
@@ -121,7 +168,7 @@ pub(crate) fn analyze(scanned: &mut ScannedArtifacts, readiness: &Readiness) -> 
                         "transform() was found, but no supported ASM mutation was recovered",
                     ));
                 }
-                continue;
+                complete_and_continue!();
             }
 
             if targets.len() > 1 {
@@ -144,7 +191,7 @@ pub(crate) fn analyze(scanned: &mut ScannedArtifacts, readiness: &Readiness) -> 
                         "target-to-mutation branch association is heuristic",
                     ));
                 }
-                continue;
+                complete_and_continue!();
             }
 
             for target in &targets {
@@ -162,10 +209,26 @@ pub(crate) fn analyze(scanned: &mut ScannedArtifacts, readiness: &Readiness) -> 
                     effects.extend(recovered);
                 }
             }
+            completed += 1;
+            emit(
+                progress,
+                AuditProgressEvent::Advanced {
+                    stage: AuditProgressStage::AnalyzeTransformers,
+                    completed,
+                    total: Some(total),
+                },
+            );
         }
     }
 
     scanned.warnings.extend(warnings);
+    emit(
+        progress,
+        AuditProgressEvent::StageFinished {
+            stage: AuditProgressStage::AnalyzeTransformers,
+            completed,
+        },
+    );
     effects
 }
 

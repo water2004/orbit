@@ -18,9 +18,34 @@ const UNIQUE: &str = "Lorg/spongepowered/asm/mixin/Unique;";
 const ACCESSOR: &str = "Lorg/spongepowered/asm/mixin/gen/Accessor;";
 const INVOKER: &str = "Lorg/spongepowered/asm/mixin/gen/Invoker;";
 
+#[cfg(test)]
 pub(crate) fn analyze(scanned: &mut ScannedArtifacts) -> Vec<Effect> {
+    analyze_with_progress(scanned, None)
+}
+
+pub(crate) fn analyze_with_progress(
+    scanned: &mut ScannedArtifacts,
+    progress: Option<&crate::progress::AuditProgressReporter>,
+) -> Vec<Effect> {
+    use crate::progress::{AuditProgressEvent, AuditProgressStage, emit};
+
+    let total = scanned
+        .artifacts
+        .iter()
+        .filter(|artifact| artifact.kind == crate::model::ArtifactKind::Mod)
+        .flat_map(|artifact| &artifact.classes)
+        .filter(|class| annotation(&class.annotations, MIXIN).is_some())
+        .count();
+    emit(
+        progress,
+        AuditProgressEvent::StageStarted {
+            stage: AuditProgressStage::AnalyzeMixins,
+            total: Some(total),
+        },
+    );
     let mut effects = Vec::new();
     let mut warnings = Vec::new();
+    let mut completed = 0;
     let mod_indexes = scanned
         .artifacts
         .iter()
@@ -44,6 +69,15 @@ pub(crate) fn analyze(scanned: &mut ScannedArtifacts) -> Vec<Effect> {
                     WarningKind::Other,
                     "@Mixin contains no recoverable target class",
                 ));
+                completed += 1;
+                emit(
+                    progress,
+                    AuditProgressEvent::Advanced {
+                        stage: AuditProgressStage::AnalyzeMixins,
+                        completed,
+                        total: Some(total),
+                    },
+                );
                 continue;
             }
             let priority = mixin_annotation
@@ -71,10 +105,26 @@ pub(crate) fn analyze(scanned: &mut ScannedArtifacts) -> Vec<Effect> {
                     );
                 }
             }
+            completed += 1;
+            emit(
+                progress,
+                AuditProgressEvent::Advanced {
+                    stage: AuditProgressStage::AnalyzeMixins,
+                    completed,
+                    total: Some(total),
+                },
+            );
         }
     }
     finalize_injection_groups(&mut effects);
     scanned.warnings.extend(warnings);
+    emit(
+        progress,
+        AuditProgressEvent::StageFinished {
+            stage: AuditProgressStage::AnalyzeMixins,
+            completed,
+        },
+    );
     effects
 }
 

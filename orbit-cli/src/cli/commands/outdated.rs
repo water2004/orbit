@@ -24,34 +24,66 @@ pub async fn handle(mod_name: Option<String>, ctx: &CliContext) -> Result<()> {
 
     let providers = super::create_instance_providers(&dir, None, &ctx.runtime)?;
 
-    let report = orbit_core::outdated::check_all_outdated_with_progress(
-        &dir,
-        &manifest_file.inner,
-        &lock.inner,
-        &providers,
-        super::resolution_selector(ctx.dry_run, ctx.yes),
-        ctx.runtime.jar_cache(),
-        super::operation_progress(ctx),
-    )
-    .await
+    let selector = super::resolution_selector(ctx.dry_run, ctx.yes);
+    let progress = super::operation_progress(ctx);
+    let report = if requested_package.is_some() {
+        orbit_core::outdated::check_outdated_with_interaction(
+            &dir,
+            &manifest_file.inner,
+            &lock.inner,
+            &providers,
+            ctx.runtime.jar_cache(),
+            orbit_core::outdated::OutdatedInteraction {
+                package: requested_package.clone(),
+                select_resolution: selector,
+                progress,
+            },
+        )
+        .await
+    } else {
+        orbit_core::outdated::check_all_outdated_with_progress(
+            &dir,
+            &manifest_file.inner,
+            &lock.inner,
+            &providers,
+            selector,
+            ctx.runtime.jar_cache(),
+            progress,
+        )
+        .await
+    }
     .context("failed to check for updates")?;
-    super::print_resolution_diagnostics(&report.diagnostics);
+    let diagnostics: Vec<_> = report
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| {
+            requested_package
+                .as_deref()
+                .is_none_or(|package| diagnostic.package == package)
+        })
+        .cloned()
+        .collect();
+    super::print_resolution_diagnostics(&diagnostics);
     super::print_resolution_warnings(&report.warnings);
     let mut results = report.updates;
 
-    if let Some(package) = requested_package {
+    if let Some(package) = requested_package.as_deref() {
         results.retain(|outdated| outdated.mod_id == package);
     }
 
     if results.is_empty() {
-        println!("All mods are up to date.");
+        println!(
+            "{}",
+            crate::cli::output::no_upgrade_message(
+                requested_package.as_deref(),
+                !diagnostics.is_empty()
+            )
+        );
         return Ok(());
     }
 
-    println!("\nUpdates available:\n");
-    for m in &results {
-        println!("  {} {} → {}", m.mod_id, m.current_version, m.new_version);
-    }
+    println!("\nUpdates available:");
+    println!("{}", crate::cli::output::outdated_table(&results));
 
     Ok(())
 }

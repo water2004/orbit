@@ -4,7 +4,8 @@ use std::time::Duration;
 
 use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
 use orbit_core::{
-    ArtifactProgressState, ProgressEvent, ProgressReporter, ResolutionActivity, ResolutionWork,
+    ArtifactProgressState, AuditProgressEvent, AuditProgressReporter, AuditProgressStage,
+    ProgressEvent, ProgressReporter, ResolutionActivity, ResolutionWork,
 };
 
 pub fn reporter(quiet: bool, configured_style: &str) -> Option<ProgressReporter> {
@@ -24,6 +25,94 @@ pub fn reporter(quiet: bool, configured_style: &str) -> Option<ProgressReporter>
         state: Mutex::new(RenderState::default()),
     });
     Some(Arc::new(move |event| renderer.render(event)))
+}
+
+pub fn audit_reporter(quiet: bool, configured_style: &str) -> Option<AuditProgressReporter> {
+    if quiet
+        || matches!(
+            configured_style.trim().to_ascii_lowercase().as_str(),
+            "off" | "none" | "false"
+        )
+    {
+        return None;
+    }
+
+    let modern =
+        configured_style.trim().eq_ignore_ascii_case("modern") && std::io::stderr().is_terminal();
+    let renderer = Arc::new(AuditProgressRenderer {
+        modern,
+        state: Mutex::new(RenderState::default()),
+    });
+    Some(Arc::new(move |event| renderer.render(event)))
+}
+
+struct AuditProgressRenderer {
+    modern: bool,
+    state: Mutex<RenderState>,
+}
+
+impl AuditProgressRenderer {
+    fn render(&self, event: AuditProgressEvent) {
+        let Ok(mut state) = self.state.lock() else {
+            return;
+        };
+        if !self.modern {
+            if let Some(line) = audit_plain_line(&event) {
+                eprintln!("{line}");
+            }
+            return;
+        }
+
+        match event {
+            AuditProgressEvent::StageStarted { stage, total } => {
+                let message = format!(
+                    "[{}/6] {}",
+                    audit_stage_number(stage),
+                    audit_stage_present(stage)
+                );
+                if let Some(total) = total.filter(|total| *total > 0) {
+                    start_bar(&mut state, total, message);
+                } else {
+                    start_spinner(&mut state, message);
+                }
+            }
+            AuditProgressEvent::Advanced {
+                stage,
+                completed,
+                total,
+            } => {
+                if let Some(bar) = &state.bar {
+                    if let Some(total) = total {
+                        bar.set_length(total as u64);
+                    }
+                    bar.set_position(completed as u64);
+                    bar.set_message(format!(
+                        "[{}/6] {}",
+                        audit_stage_number(stage),
+                        audit_stage_present(stage)
+                    ));
+                }
+            }
+            AuditProgressEvent::StageFinished { stage, completed } => finish(
+                &mut state,
+                format!(
+                    "[{}/6] {}",
+                    audit_stage_number(stage),
+                    audit_stage_finished(stage, completed)
+                ),
+            ),
+        }
+    }
+}
+
+impl Drop for AuditProgressRenderer {
+    fn drop(&mut self) {
+        if let Ok(state) = self.state.get_mut()
+            && let Some(bar) = state.bar.take()
+        {
+            bar.finish_and_clear();
+        }
+    }
 }
 
 struct ProgressRenderer {
@@ -86,7 +175,7 @@ impl ProgressRenderer {
             ProgressEvent::CandidateArtifact {
                 completed,
                 total,
-                filename,
+                filename: _,
                 state: artifact_state,
             } => {
                 if let Some(bar) = &state.bar {
@@ -98,7 +187,7 @@ impl ProgressRenderer {
                         ArtifactProgressState::AlreadyPresent => "cached",
                         ArtifactProgressState::Failed => "failed",
                     };
-                    bar.set_message(format!("[2/4] {action} {filename}"));
+                    bar.set_message(format!("[2/4] {action} candidate {completed}/{total}"));
                 }
             }
             ProgressEvent::CandidateDownloadFinished { total } => finish(
@@ -167,7 +256,7 @@ impl ProgressRenderer {
             ProgressEvent::ApplyArtifact {
                 completed,
                 total,
-                filename,
+                filename: _,
                 state: artifact_state,
             } => {
                 if let Some(bar) = &state.bar {
@@ -179,7 +268,7 @@ impl ProgressRenderer {
                         ArtifactProgressState::AlreadyPresent => "already present",
                         ArtifactProgressState::Failed => "failed",
                     };
-                    bar.set_message(format!("[4/4] {action} {filename}"));
+                    bar.set_message(format!("[4/4] {action} package {completed}/{total}"));
                 }
             }
             ProgressEvent::ApplyFinished { total } => finish(
@@ -313,15 +402,15 @@ fn plain_line(event: &ProgressEvent, state: &mut RenderState) -> Option<String> 
         ProgressEvent::CandidateArtifact {
             completed,
             total,
-            filename,
+            filename: _,
             state: ArtifactProgressState::Finished,
-        } => Some(format!("  [{completed}/{total}] parsed {filename}")),
+        } => Some(format!("  [{completed}/{total}] parsed candidate")),
         ProgressEvent::CandidateArtifact {
             completed,
             total,
-            filename,
+            filename: _,
             state: ArtifactProgressState::Failed,
-        } => Some(format!("  [{completed}/{total}] failed {filename}")),
+        } => Some(format!("  [{completed}/{total}] candidate failed")),
         ProgressEvent::CandidateDownloadFinished { total } => {
             Some(format!("[2/4] Parsed {total} candidate JARs."))
         }
@@ -370,23 +459,21 @@ fn plain_line(event: &ProgressEvent, state: &mut RenderState) -> Option<String> 
         ProgressEvent::ApplyArtifact {
             completed,
             total,
-            filename,
+            filename: _,
             state: ArtifactProgressState::Finished,
-        } => Some(format!("  [{completed}/{total}] installed {filename}")),
+        } => Some(format!("  [{completed}/{total}] installed package")),
         ProgressEvent::ApplyArtifact {
             completed,
             total,
-            filename,
+            filename: _,
             state: ArtifactProgressState::AlreadyPresent,
-        } => Some(format!(
-            "  [{completed}/{total}] already present {filename}"
-        )),
+        } => Some(format!("  [{completed}/{total}] package already present")),
         ProgressEvent::ApplyArtifact {
             completed,
             total,
-            filename,
+            filename: _,
             state: ArtifactProgressState::Failed,
-        } => Some(format!("  [{completed}/{total}] failed {filename}")),
+        } => Some(format!("  [{completed}/{total}] package failed")),
         ProgressEvent::ApplyFinished { total } => {
             Some(format!("[4/4] Applied/verified {total} selected packages."))
         }
@@ -398,6 +485,71 @@ fn plain_line(event: &ProgressEvent, state: &mut RenderState) -> Option<String> 
             state: ArtifactProgressState::Started,
             ..
         } => None,
+    }
+}
+
+fn audit_plain_line(event: &AuditProgressEvent) -> Option<String> {
+    match *event {
+        AuditProgressEvent::StageStarted { stage, .. } => Some(format!(
+            "[{}/6] {}...",
+            audit_stage_number(stage),
+            audit_stage_present(stage)
+        )),
+        AuditProgressEvent::Advanced {
+            stage,
+            completed,
+            total: Some(total),
+        } if completed < total && should_report_audit_count(completed, total) => Some(format!(
+            "  [{completed}/{total}] {}",
+            audit_stage_present(stage).to_ascii_lowercase()
+        )),
+        AuditProgressEvent::StageFinished { stage, completed } => Some(format!(
+            "[{}/6] {}.",
+            audit_stage_number(stage),
+            audit_stage_finished(stage, completed)
+        )),
+        AuditProgressEvent::Advanced { .. } => None,
+    }
+}
+
+fn should_report_audit_count(completed: usize, total: usize) -> bool {
+    completed == 1 || completed.is_multiple_of((total / 10).max(1))
+}
+
+fn audit_stage_number(stage: AuditProgressStage) -> usize {
+    match stage {
+        AuditProgressStage::PrepareInputs => 1,
+        AuditProgressStage::Readiness => 2,
+        AuditProgressStage::ScanArtifacts => 3,
+        AuditProgressStage::AnalyzeMixins => 4,
+        AuditProgressStage::AnalyzeTransformers => 5,
+        AuditProgressStage::DetectConflicts => 6,
+    }
+}
+
+fn audit_stage_present(stage: AuditProgressStage) -> &'static str {
+    match stage {
+        AuditProgressStage::PrepareInputs => "Preparing the active runtime classpath",
+        AuditProgressStage::Readiness => "Checking audit prerequisites",
+        AuditProgressStage::ScanArtifacts => "Scanning bytecode artifacts",
+        AuditProgressStage::AnalyzeMixins => "Analyzing Mixins",
+        AuditProgressStage::AnalyzeTransformers => "Analyzing Transformers",
+        AuditProgressStage::DetectConflicts => "Comparing recovered effects",
+    }
+}
+
+fn audit_stage_finished(stage: AuditProgressStage, completed: usize) -> String {
+    match stage {
+        AuditProgressStage::PrepareInputs => "Prepared the active runtime classpath".to_string(),
+        AuditProgressStage::Readiness => "Audit prerequisites are ready".to_string(),
+        AuditProgressStage::ScanArtifacts => format!("Scanned {completed} bytecode artifacts"),
+        AuditProgressStage::AnalyzeMixins => format!("Analyzed {completed} Mixins"),
+        AuditProgressStage::AnalyzeTransformers => {
+            format!("Analyzed {completed} Transformers")
+        }
+        AuditProgressStage::DetectConflicts => {
+            format!("Detected {completed} compatibility-risk candidates")
+        }
     }
 }
 
@@ -458,7 +610,7 @@ mod tests {
                 &mut state,
             )
             .as_deref(),
-            Some("  [7/42] parsed voxy.jar")
+            Some("  [7/42] parsed candidate")
         );
         assert_eq!(
             plain_line(
@@ -471,7 +623,20 @@ mod tests {
                 &mut state,
             )
             .as_deref(),
-            Some("  [8/42] failed dependency.jar")
+            Some("  [8/42] candidate failed")
+        );
+        assert!(
+            !plain_line(
+                &ProgressEvent::CandidateArtifact {
+                    completed: 9,
+                    total: 42,
+                    filename: "must-not-be-rendered.jar".to_string(),
+                    state: ArtifactProgressState::Finished,
+                },
+                &mut state,
+            )
+            .unwrap()
+            .contains(".jar")
         );
     }
 
@@ -516,5 +681,33 @@ mod tests {
         );
         assert_eq!(state.resolution_completed, 1);
         assert_eq!(state.resolution_total, 2);
+    }
+
+    #[test]
+    fn plain_audit_progress_reports_truthful_stage_counts_without_artifact_names() {
+        let start = audit_plain_line(&AuditProgressEvent::StageStarted {
+            stage: AuditProgressStage::ScanArtifacts,
+            total: Some(100),
+        });
+        let progress = audit_plain_line(&AuditProgressEvent::Advanced {
+            stage: AuditProgressStage::ScanArtifacts,
+            completed: 10,
+            total: Some(100),
+        });
+        let noisy = audit_plain_line(&AuditProgressEvent::Advanced {
+            stage: AuditProgressStage::ScanArtifacts,
+            completed: 11,
+            total: Some(100),
+        });
+
+        assert_eq!(
+            start.as_deref(),
+            Some("[3/6] Scanning bytecode artifacts...")
+        );
+        assert_eq!(
+            progress.as_deref(),
+            Some("  [10/100] scanning bytecode artifacts")
+        );
+        assert!(noisy.is_none());
     }
 }

@@ -20,7 +20,10 @@ pub async fn handle(
         anyhow::bail!("--limit must be at least 1");
     }
     let instance_dir = ctx.instance_dir()?;
-    let full_report = orbit_core::audit_instance(&instance_dir)?;
+    let full_report = orbit_core::audit_instance_with_progress(
+        &instance_dir,
+        crate::cli::progress::audit_reporter(ctx.quiet, &ctx.runtime.config().ui.progress_bar),
+    )?;
     let threshold = orbit_core::AuditSeverity::from(min_severity);
     let selected_artifacts = selected_artifacts(&full_report, mod_filter.as_deref());
     if mod_filter.is_some() && selected_artifacts.as_ref().is_some_and(HashMap::is_empty) {

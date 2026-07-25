@@ -49,13 +49,11 @@ pub async fn handle(
         super::print_resolution_diagnostics(&report.diagnostics);
         super::print_resolution_warnings(&report.warnings);
         if ctx.dry_run {
-            for installed in &report.installed {
-                println!(
-                    "  [dry-run] would install {} v{}",
-                    installed.mod_id, installed.version
-                );
-            }
-            print_dry_run_removals(&report.removed);
+            println!("\nAdd preview:");
+            println!(
+                "{}",
+                crate::cli::output::package_changes_table(&report.changes)
+            );
         } else if report.installed.is_empty() {
             println!("Add cancelled.");
         } else {
@@ -98,10 +96,11 @@ pub async fn handle(
             super::print_resolution_diagnostics(&report.diagnostics);
             super::print_resolution_warnings(&report.warnings);
             if ctx.dry_run {
-                for m in &report.installed {
-                    println!("  [dry-run] would install {} v{}", m.mod_id, m.version);
-                }
-                print_dry_run_removals(&report.removed);
+                println!("\nAdd preview:");
+                println!(
+                    "{}",
+                    crate::cli::output::package_changes_table(&report.changes)
+                );
                 return Ok(());
             }
             if report.installed.is_empty() && report.removed.is_empty() {
@@ -177,15 +176,6 @@ pub async fn handle(
         }
         Err(OrbitError::Conflict(msg)) => anyhow::bail!("Dependency conflict:\n\n  {msg}"),
         Err(e) => anyhow::bail!("Add failed: {e}"),
-    }
-}
-
-fn print_dry_run_removals(removals: &[orbit_core::RemovedPackage]) {
-    for package in removals {
-        println!(
-            "  [dry-run] would remove {} v{} ({})",
-            package.mod_id, package.version, package.filename
-        );
     }
 }
 

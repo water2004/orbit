@@ -48,14 +48,31 @@ pub async fn handle(mod_name: Option<String>, ctx: &CliContext) -> Result<()> {
                 super::print_resolution_diagnostics(&report.diagnostics);
                 super::print_resolution_warnings(&report.warnings);
                 if ctx.dry_run {
-                    for m in &report.installed {
-                        println!("  [dry-run] would select {} v{}", m.mod_id, m.version);
+                    if report.changes.is_empty() {
+                        println!(
+                            "{}",
+                            crate::cli::output::no_upgrade_message(
+                                Some(&entry.mod_id),
+                                !report.diagnostics.is_empty()
+                            )
+                        );
+                    } else {
+                        println!("\nUpgrade preview:");
+                        println!(
+                            "{}",
+                            crate::cli::output::package_changes_table(&report.changes)
+                        );
                     }
-                    print_dry_run_removals(&report.removed);
                     return Ok(());
                 }
                 if report.installed.is_empty() && report.removed.is_empty() {
-                    println!("No new versions were installed.");
+                    println!(
+                        "{}",
+                        crate::cli::output::no_upgrade_message(
+                            Some(&entry.mod_id),
+                            !report.diagnostics.is_empty()
+                        )
+                    );
                 } else {
                     println!(
                         "\nApplied {} selected package version(s) and removed {} unselected package version(s).",
@@ -88,14 +105,31 @@ pub async fn handle(mod_name: Option<String>, ctx: &CliContext) -> Result<()> {
                 super::print_resolution_diagnostics(&report.diagnostics);
                 super::print_resolution_warnings(&report.warnings);
                 if ctx.dry_run {
-                    for m in &report.installed {
-                        println!("  [dry-run] would select {} v{}", m.mod_id, m.version);
+                    if report.changes.is_empty() {
+                        println!(
+                            "{}",
+                            crate::cli::output::no_upgrade_message(
+                                None,
+                                !report.diagnostics.is_empty()
+                            )
+                        );
+                    } else {
+                        println!("\nUpgrade preview:");
+                        println!(
+                            "{}",
+                            crate::cli::output::package_changes_table(&report.changes)
+                        );
                     }
-                    print_dry_run_removals(&report.removed);
                     return Ok(());
                 }
                 if report.installed.is_empty() && report.removed.is_empty() {
-                    println!("No new versions were installed. All mods are up to date.");
+                    println!(
+                        "{}",
+                        crate::cli::output::no_upgrade_message(
+                            None,
+                            !report.diagnostics.is_empty()
+                        )
+                    );
                 } else {
                     println!(
                         "\nApplied {} selected package version(s) and removed {} unselected package version(s).",
@@ -108,14 +142,5 @@ pub async fn handle(mod_name: Option<String>, ctx: &CliContext) -> Result<()> {
             Err(OrbitError::Conflict(msg)) => anyhow::bail!("Dependency conflict:\n\n  {msg}"),
             Err(e) => anyhow::bail!("Upgrade failed: {e}"),
         }
-    }
-}
-
-fn print_dry_run_removals(removals: &[orbit_core::RemovedPackage]) {
-    for package in removals {
-        println!(
-            "  [dry-run] would remove {} v{} ({})",
-            package.mod_id, package.version, package.filename
-        );
     }
 }

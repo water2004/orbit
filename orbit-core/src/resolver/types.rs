@@ -377,6 +377,7 @@ impl BundledCandidate {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CandidateDiagnosticKind {
+    NoCompatibleCandidate,
     ExcludedByPropagation,
     Backtracked,
     Unexplained,
@@ -394,6 +395,11 @@ pub struct CandidateDiagnostic {
 impl std::fmt::Display for CandidateDiagnostic {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self.kind {
+            CandidateDiagnosticKind::NoCompatibleCandidate => write!(
+                f,
+                "{} stayed at {}; no compatible remote candidate was discovered",
+                self.package, self.selected_version
+            )?,
             CandidateDiagnosticKind::ExcludedByPropagation => write!(
                 f,
                 "{} stayed at {}; candidate {} was excluded by dependency propagation",

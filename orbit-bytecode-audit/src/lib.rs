@@ -10,6 +10,7 @@ mod error;
 mod jar;
 mod mixin;
 mod model;
+mod progress;
 mod readiness;
 mod transformer;
 
@@ -22,6 +23,7 @@ pub use model::{
     OrderAnalysis, Precision, Readiness, ReadinessStatus, RequirementKind, Risk, Severity,
     ShapeRequirement, SoftReferenceResolution, Target, Warning, WarningKind,
 };
+pub use progress::{AuditProgressEvent, AuditProgressReporter, AuditProgressStage};
 pub use readiness::probe_readiness;
 
 /// Analyze the exact files supplied by the caller.
@@ -29,12 +31,42 @@ pub use readiness::probe_readiness;
 /// No result is persisted. Every invocation opens and parses every artifact
 /// again, including artifacts whose path, timestamp, or hash is unchanged.
 pub fn analyze(request: &AuditRequest) -> Result<AuditReport, AuditError> {
+    analyze_with_progress(request, None)
+}
+
+/// Analyze the supplied files while emitting truthful stage and work counts.
+pub fn analyze_with_progress(
+    request: &AuditRequest,
+    progress: Option<&AuditProgressReporter>,
+) -> Result<AuditReport, AuditError> {
+    use progress::{AuditProgressEvent, AuditProgressStage, emit};
+
+    emit(
+        progress,
+        AuditProgressEvent::StageStarted {
+            stage: AuditProgressStage::Readiness,
+            total: Some(1),
+        },
+    );
     let readiness = probe_readiness(request)?;
     if readiness.status != ReadinessStatus::Ready {
         return Err(AuditError::NotReady(readiness));
     }
-    let mut scanned = jar::scan_artifacts(request)?;
-    let mut effects = mixin::analyze(&mut scanned);
-    effects.extend(transformer::analyze(&mut scanned, &readiness));
-    Ok(conflict::build_report(request, readiness, scanned, effects))
+    emit(
+        progress,
+        AuditProgressEvent::StageFinished {
+            stage: AuditProgressStage::Readiness,
+            completed: 1,
+        },
+    );
+    let mut scanned = jar::scan_artifacts_with_progress(request, progress)?;
+    let mut effects = mixin::analyze_with_progress(&mut scanned, progress);
+    effects.extend(transformer::analyze_with_progress(
+        &mut scanned,
+        &readiness,
+        progress,
+    ));
+    Ok(conflict::build_report_with_progress(
+        request, readiness, scanned, effects, progress,
+    ))
 }

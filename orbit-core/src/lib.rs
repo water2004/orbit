@@ -38,7 +38,7 @@ pub use archive::{
     ExportReport, ImportMergeStrategy, ImportReport, export_instance, import_archive,
     import_manifest, import_mrpack,
 };
-pub use audit::audit_instance;
+pub use audit::{audit_instance, audit_instance_with_progress};
 pub use checker::{CheckResult, check_compatibility, check_compatibility_with_progress};
 pub use config::{
     GlobalConfig, InstanceEntry, InstancesRegistry, register_instance, remove_instance,
@@ -68,7 +68,11 @@ pub use orbit_bytecode_audit::{
     ReadinessStatus as AuditReadinessStatus, Risk as AuditRisk, Severity as AuditSeverity,
     WarningKind as AuditWarningKind,
 };
-pub use outdated::{OutdatedMod, check_all_outdated, check_all_outdated_with_progress};
+pub use orbit_bytecode_audit::{AuditProgressEvent, AuditProgressReporter, AuditProgressStage};
+pub use outdated::{
+    OutdatedInteraction, OutdatedMod, check_all_outdated, check_all_outdated_with_progress,
+    check_outdated_with_interaction,
+};
 pub use progress::{
     ArtifactProgressState, ProgressEvent, ProgressReporter, ResolutionActivity, ResolutionWork,
 };

@@ -7,13 +7,31 @@ use crate::model::{
     Readiness, RequirementKind, Risk, Severity, Target,
 };
 
-pub(crate) fn build_report(
+pub(crate) fn build_report_with_progress(
     request: &AuditRequest,
     readiness: Readiness,
     scanned: ScannedArtifacts,
     effects: Vec<Effect>,
+    progress: Option<&crate::progress::AuditProgressReporter>,
 ) -> AuditReport {
+    use crate::progress::{AuditProgressEvent, AuditProgressStage, emit};
+
+    emit(
+        progress,
+        AuditProgressEvent::StageStarted {
+            stage: AuditProgressStage::DetectConflicts,
+            total: Some(2),
+        },
+    );
     let mut risks = binary_shape_risks(&scanned);
+    emit(
+        progress,
+        AuditProgressEvent::Advanced {
+            stage: AuditProgressStage::DetectConflicts,
+            completed: 1,
+            total: Some(2),
+        },
+    );
     let mut coverage = scanned.coverage;
     for effect in &effects {
         match effect.precision {
@@ -25,6 +43,14 @@ pub(crate) fn build_report(
         }
     }
     risks.extend(analyze_effects(&effects));
+    emit(
+        progress,
+        AuditProgressEvent::Advanced {
+            stage: AuditProgressStage::DetectConflicts,
+            completed: 2,
+            total: Some(2),
+        },
+    );
     risks = coalesce_risks(risks);
     risks.sort_by(|left, right| {
         right
@@ -34,7 +60,7 @@ pub(crate) fn build_report(
             .then_with(|| left.right_artifact.cmp(&right.right_artifact))
             .then_with(|| left.rule.cmp(&right.rule))
     });
-    AuditReport {
+    let report = AuditReport {
         schema_version: REPORT_SCHEMA_VERSION.to_string(),
         environment: request.environment.clone(),
         readiness,
@@ -42,7 +68,15 @@ pub(crate) fn build_report(
         risks,
         coverage,
         warnings: scanned.warnings,
-    }
+    };
+    emit(
+        progress,
+        AuditProgressEvent::StageFinished {
+            stage: AuditProgressStage::DetectConflicts,
+            completed: report.risks.len(),
+        },
+    );
+    report
 }
 
 fn coalesce_risks(risks: Vec<Risk>) -> Vec<Risk> {

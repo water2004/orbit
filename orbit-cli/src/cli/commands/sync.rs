@@ -32,10 +32,11 @@ pub async fn handle(ctx: &CliContext) -> Result<()> {
     for package in &report.unlocked {
         println!("  ? unlocked   {package}");
     }
-    for package in &report.removed {
+    if !report.removed.is_empty() {
+        println!("\nRemoved unselected package versions:");
         println!(
-            "  - removed    {} {} ({})",
-            package.mod_id, package.version, package.filename
+            "{}",
+            crate::cli::output::removed_packages_table(&report.removed)
         );
     }
     println!(

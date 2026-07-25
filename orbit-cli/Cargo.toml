@@ -17,3 +17,4 @@ clap.workspace = true
 anyhow.workspace = true
 serde_json.workspace = true
 indicatif.workspace = true
+comfy-table.workspace = true

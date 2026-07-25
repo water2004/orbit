@@ -177,13 +177,13 @@ pub async fn handle(
     for package in &output.removed {
         if ctx.dry_run {
             println!(
-                "  [dry-run] would remove unselected package {} v{} ({})",
-                package.mod_id, package.version, package.filename
+                "  [dry-run] would remove unselected package {} v{}",
+                package.mod_id, package.version
             );
         } else {
             println!(
-                "  Removed unselected package {} v{} ({})",
-                package.mod_id, package.version, package.filename
+                "  Removed unselected package {} v{}",
+                package.mod_id, package.version
             );
         }
     }
