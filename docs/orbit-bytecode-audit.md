@@ -64,9 +64,13 @@ Fabric/Quilt 要求实际 Loader marker 与 Mixin annotation ABI。Forge/NeoForg
 Mixin 与 Transformer 都转换为：
 
 - `ShapeRequirement`：类/成员/指令、slice、cardinality、local layout、control flow；
-- `Mutation`：替换方法、成员增删、指令插入/删除/替换、redirect/wrap、参数/局部变量/
-  常量、访问标志/父类/接口/控制流或未知方法/类修改；
-- `Evidence`：来源 Artifact/ClassFile/方法/annotation/指令、refmap 或解释路径；
+- `InjectionQuery`：一个 injector 的完整候选/选中 join point、require/allow/expect、
+  slice 区间和组级 min/max；cardinality 不复制到每个具体指令；
+- `Mutation`：修改种类、位置精度与显式组合语义。独占 owner、破坏性替换、值/参数
+  decorator、operation wrapper、相邻插入、局部值修改和结构变化不会再压缩成一个
+  `exclusive` 布尔值；
+- `Evidence`：来源 Artifact/ClassFile/方法/annotation/指令，以及结构化的 mechanism、
+  injector、selector、slice、ordinal、shift、refmap 来源、解析状态和分析精度；
 - `Precision`：instruction、pattern、method、class、unknown；
 - `Activation`：definite、conditional、candidate、unknown。
 
@@ -86,16 +90,30 @@ ModifyExpressionValue、ModifyReturnValue 和 WrapWithCondition。
 
 支持字符串 selector 与 `@Desc`、priority、ordinal、opcode、shift/by、
 require/expect/allow、group min/max、locals、cancellable 和 slice 边界。内置
-InjectionPoint 支持 HEAD、TAIL、RETURN、INVOKE、INVOKE_ASSIGN、FIELD、NEW、
-CONSTANT、JUMP、LOAD、STORE。自定义 InjectionPoint 保留方法级未知修改并发出
-warning。`@ModifyConstant` 不要求伪造 `@At`，会直接解析 `@Constant` 的 literal、
+InjectionPoint 支持 HEAD、TAIL、RETURN、INVOKE、INVOKE_STRING、FIELD、NEW、
+CONSTANT、JUMP、LOAD、STORE。INVOKE_STRING 同时验证 target、`ldc=`、slice、
+ordinal 和 shift；NEW 严格要求 NEW opcode；CONSTANT 严格解析类型化键值，不使用
+字符串后缀匹配。INVOKE_ASSIGN 与 MIXINEXTRAS:EXPRESSION 当前标记为
+`known_but_unsupported` 并降级位置精度，不伪装成普通 INVOKE，也不丢失原 injector
+的 mutation 语义。真正的自定义 InjectionPoint 单独分类。`@ModifyConstant` 不要求
+伪造 `@At`，会直接解析 `@Constant` 的 literal、
 ordinal 与 zero-condition discriminator；未显式给 discriminator 时按 handler 返回
 类型匹配实际常量指令。
 
-refmap 的 default 和所有 context 都作为候选，在实际类空间验证。唯一可解析候选可提高
-可信度；多个可解析候选保持歧义；没有 refmap 时保留原始软引用并降低可信度。
-MixinExtras 的 wrap/value/condition 注入按其链式组合语义处理；它们彼此不伪报为
-`@Redirect` 式独占写，但与真正独占的 Redirect 或无法证明可组合的其他机制仍会比较。
+每个软引用分别得到 `direct_exact`、`refmap_exact`、`ambiguous` 或 `unresolved`
+状态。原始引用在活动 Class Universe 唯一命中时不需要 refmap、不警告且不降低
+confidence；无关 refmap 也不能抬高当前引用。只有当前引用真正歧义或无法解析时才产生
+对应 warning。
+
+slice 先按主 `@At.slice` 选择 ID，再解析 from/to（含 boundary ordinal/shift），随后
+在区间内匹配 selector，最后应用主 ordinal 和 shift。边界或 ID 无法解析时整个
+injector 降为方法精度，禁止退回全方法搜索后声称具体指令。require/allow 作用于整个
+`InjectionQuery`，expect 仅作为调试预期保存；`@Group` 按 Mixin class + group name
+聚合成员成功数。
+
+MixinExtras 的 value decorator 与 Redirect 可以分层组合，value decorator 之间及
+WrapOperation 之间可以链式组合。只有 Redirect×Redirect、Redirect×破坏性替换等真正
+互斥组合才生成独占冲突；remove/set × decorator 仍报告锚点失效。
 这些规则以运行时实现而不是版本号表为依据，维护时应对照
 [MixinPreProcessorStandard](https://github.com/SpongePowered/Mixin/blob/master/src/main/java/org/spongepowered/asm/mixin/transformer/MixinPreProcessorStandard.java)
 以及 MixinExtras 的
@@ -109,12 +127,19 @@ MixinExtras 的 wrap/value/condition 注入按其链式组合语义处理；它�
 `ITransformationService` 工厂和 invokedynamic implementation method。静态
 `targets()` 中的 Target factory 恢复类、方法或字段目标。
 
-专用有界解释器跟踪 transform 输入节点的局部变量别名、字段访问、helper/lambda 路径、
+有界解释器跟踪 transform 输入节点的局部变量、字段访问、helper/lambda 路径、
 字符串/整数/opcode 和常见 ASM tree/visitor 修改，包括 InsnList
 add/insert/insertBefore/remove/set/clear、iterator remove、成员列表与结构字段写入。
 只有接收者能追溯到 transform 输入时才生成 Mutation；内部临时 ASM 对象的写入会忽略并
-记入 warning。构造出的 MethodInsnNode、FieldInsnNode 或 LdcInsnNode 会回到实际目标
-方法匹配，以恢复具体稳定指令 ID。
+记入 warning。当前解释器没有完整 JVM operand stack、堆别名和路径证明，因此最近常量、
+固定 taint 窗口和构造节点关联一律标成 heuristic/partial、Pattern/Method 精度与 Low
+confidence，不能产生“精确指令修改”。无法证明 collection provenance 的
+`Iterator.remove()` 保留为 UnknownMethod；无法证明新旧值不同的 ClassVisitor/ClassNode
+结构写也保留为 unknown。
+
+多个 recovered target 无法与 mutation 分支一一关联时，不做 target×mutation
+笛卡尔积，而是逐 target 生成 unknown effect。只有未来同时证明 target、输入节点来源、
+写操作与控制流关联后，才允许提升精度。
 
 动态 target 完全无法恢复时只记录 coverage 缺口，不与全部 Mod 制造风险边。目标已知但
 效果未知时分别降级为 UnknownMethod 或 UnknownClass。JavaScript CoreMod、native/JVMTI
@@ -124,17 +149,32 @@ add/insert/insertBefore/remove/set/clear、iterator remove、成员列表与结�
 
 冲突比较只在共享类/成员/指令桶中进行，包含：
 
-- Overwrite/独占指令写、remove×replace、同签名成员和结构写写冲突；
-- 写操作破坏另一效果的指令、slice、cardinality、local 或 control-flow 要求；
-- 插入导致 ordinal/cardinality 漂移；
+- Overwrite、真正互斥的组合矩阵、同签名成员和结构写写冲突；
+- 破坏性写操作使另一效果的指令/slice 锚点失效；
+- 对完整 InjectionQuery 重算 require/allow/ordinal 与组级 min/max；
+- 只有新增 RETURN 或有明确模式证据的 Transformer 插入才影响对应 query；
+- ChangeLocalLayout 会与 locals capture 比较，ModifyVariable 的局部值写不会被当成
+  布局变化；cancellable 不再泛化成“破坏所有 RETURN/TAIL”；
 - 未知方法/类修改与精确效果重叠；
 - 多个 Mod 提供形状不同的同名类，以及遮蔽后硬成员引用失效。
 
 `severity` 表示双方生效后的潜在后果，`confidence` 表示恢复证据精度，
-`activation` 表示 Loader 激活确定性。`risk_index` 按 severity 55%、confidence 30%、
-activation 15% 形成 0–100 的启发式排序值，明确不是不兼容概率。
+`activation` 表示 Loader 激活确定性。三者在报告中独立显示；`risk_index` 使用乘法
+门控形成 0–100 的启发式排序值，使 Critical/Low/Candidate 低于 High/Exact/Definite，
+明确不是不兼容概率。同名类形状差异是确定事实，但在没有 ClassLoader 可见性证明时，
+遮蔽风险的 activation 是 Conditional，不是 Definite。
 
-## 8. Coverage 与安全预算
+## 8. 文本与详细报告
+
+默认文本只显示 readiness、coverage、风险等级分布、排序最高的前 20 项、warning
+分类计数和详细报告提示。`--limit` 可调整展示数；文本不会展开 `Evidence.detail`、
+selector 候选、refmap、stable ID 或每条 warning。
+
+`--format json` 在 stdout 输出未截断的结构化细节。`--report <path>` 仅在用户显式
+指定时额外写完整、未按文本 limit 截断的 JSON 报告；默认命令不创建文件。当前 schema
+version 为 2。
+
+## 9. Coverage 与安全预算
 
 报告记录 JAR/ClassFile 成功失败、方法降级、Mixin 数、各精度效果数、Transformer/
 target/effect 恢复数、unsupported mechanism 和 budget exhaustion。单个坏 Mod JAR、

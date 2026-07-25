@@ -216,6 +216,12 @@ pub enum Commands {
         /// 仅显示涉及该 Mod（ID、文件名或展示名）的风险
         #[arg(long = "mod")]
         mod_filter: Option<String>,
+        /// 将未截断的完整结构化报告写入 JSON 文件
+        #[arg(long)]
+        report: Option<PathBuf>,
+        /// 文本模式最多展示的高排名风险数
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
     },
 
     /// 清理全局下载缓存
@@ -225,7 +231,7 @@ pub enum Commands {
     },
 }
 
-#[derive(Debug, Clone, Copy, ValueEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum AuditFormat {
     Text,
     Json,
@@ -324,7 +330,20 @@ impl CommandHandler for Commands {
                 min_severity,
                 fail_on,
                 mod_filter,
-            } => handle_audit(format, min_severity, fail_on, mod_filter, ctx).await,
+                report,
+                limit,
+            } => {
+                handle_audit(
+                    format,
+                    min_severity,
+                    fail_on,
+                    mod_filter,
+                    report,
+                    limit,
+                    ctx,
+                )
+                .await
+            }
             Commands::Cache { command } => command.execute(ctx).await,
         }
     }
@@ -367,7 +386,20 @@ impl CommandHandler for CacheCommands {
 
 #[cfg(test)]
 mod tests {
-    use super::Commands;
+    use clap::Parser;
+
+    use super::{Cli, Commands};
+
+    #[test]
+    fn audit_defaults_do_not_request_a_report_file() {
+        let cli = Cli::try_parse_from(["orbit", "audit"]).unwrap();
+        let Commands::Audit { report, limit, .. } = cli.command else {
+            panic!("audit command was not parsed");
+        };
+
+        assert!(report.is_none());
+        assert_eq!(limit, 20);
+    }
 
     #[test]
     fn classifies_instance_mutations_for_default_fallback_safety() {
@@ -395,6 +427,8 @@ mod tests {
                 min_severity: super::AuditSeverity::Low,
                 fail_on: None,
                 mod_filter: None,
+                report: None,
+                limit: 20,
             }
             .mutates_instance()
         );

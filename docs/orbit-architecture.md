@@ -53,9 +53,9 @@ audit         实际运行时 classpath 组装；不包含字节码判定规则
 orbit-bytecode-audit
   classfile   第三方 parser 隔离 facade、稳定指令 ID
   jar         安全预算、嵌套 JAR/refmap、同名类多定义 Universe
-  mixin       Mixin/MixinExtras → 统一效果
-  transformer ModLauncher/Java transformer → 统一效果
-  conflict    写写、写形状和普通二进制形状风险
+  mixin       selector/slice → InjectionQuery；injector → 显式组合语义 Mutation
+  transformer ModLauncher/Java transformer → 带 heuristic precision 的统一效果
+  conflict    组合矩阵、query 重算、写形状和普通二进制形状风险
 ```
 
 允许出现 loader 分支的位置：

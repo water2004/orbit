@@ -111,7 +111,7 @@ Orbit 采用**目录优先**的上下文逻辑。命令会默认作用于当前�
 | `orbit import <file>` | 合并 TOML、导入安全 ZIP，或按 index/overrides 导入 mrpack，随后触发 `sync`。 |
 | `orbit export [file.zip]` | 将清单、锁文件和校验通过的 JAR 打包为 ZIP；也可输出 mrpack。 |
 | `orbit check <version>`| **跨版本升级预检**。检查当前安装的模组集合是否已经针对目标 MC 版本（如 `1.21`）发布了对应文件。 |
-| `orbit audit` | **字节码兼容风险分析（只读）**。直接分析当前实例的 Mod、Minecraft、Loader 与运行时 JAR；不下载 mapping，也不把依赖声明当作风险证据。 |
+| `orbit audit` | **字节码兼容风险分析（只读）**。默认输出有界摘要；`--format json` 或显式 `--report <path>` 保留完整证据。直接分析当前实例的 Mod、Minecraft、Loader 与运行时 JAR，不下载 mapping，也不把依赖声明当作风险证据。 |
 | `orbit cache clean` | 清理 Orbit 在后台全局保存的 `.jar` 下载缓存，释放磁盘空间。 |
 
 ---

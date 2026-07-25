@@ -296,6 +296,8 @@ orbit audit
   [--min-severity low|medium|high|critical]
   [--fail-on low|medium|high|critical]
   [--mod <id-or-name>]
+  [--limit <count>]
+  [--report <path>]
 ```
 
 只读分析当前实例实际存在的 Minecraft、Loader、运行时依赖和 Mod JAR。它与
@@ -303,8 +305,13 @@ orbit audit
 provider 兼容声明，也不修改 manifest、lockfile、下载缓存或实例文件。
 
 `--min-severity` 只控制报告展示；`--fail-on` 在完整分析后按等级决定是否返回非零退出
-码。`--mod` 只匹配已安装 Mod 的 ID、展示名或文件名并过滤报告；没有匹配项会明确报错，
-但有匹配项时分析仍加载完整实例。JSON 顶层固定包含
+码。`--mod` 只匹配已安装 Mod 的 ID、展示名或文件名并过滤文本/JSON stdout；没有匹配项
+会明确报错，但有匹配项时分析仍加载完整实例。默认文本按 warning 类别汇总，只展示
+排序最高的 20 条风险且不展开完整 evidence；`--limit` 调整这一数量。
+
+`--format json` 保留完整 evidence。显式 `--report <path>` 额外写入未按文本 limit、
+severity 或 mod 过滤截断的完整结构化报告；默认模式不创建报告文件。JSON schema 2 顶层
+固定包含
 `schema_version`、`environment`、`readiness`、`artifacts`、`risks`、`coverage` 和
 `warnings`。没有达到阈值的结果只表述为
 “未发现达到当前阈值的字节码兼容风险”，不宣称全部 Mod 兼容。
@@ -312,8 +319,9 @@ provider 兼容声明，也不修改 manifest、lockfile、下载缓存或实例
 执行前根据实际 classpath 进行 capability probe。Fabric/Quilt 需要 Loader 与 Mixin
 ABI；现代 Forge/NeoForge 还必须具有可识别的 ModLauncher `ITransformer`、
 `Target` 和 `ITransformationService` ABI。Legacy LaunchWrapper 明确拒绝，不提供
-`--force`。单个坏 Mod、缺少 refmap、自定义 InjectionPoint 和解释预算耗尽进入
-warning/coverage；缺失基础游戏或运行库则停止。
+`--force`。单个坏 Mod、真正 unresolved/ambiguous 的软引用、已知未支持或自定义
+InjectionPoint 和解释预算耗尽进入 warning/coverage；缺失基础游戏或运行库则停止。
+“JAR 没有 refmap”本身不是 warning。
 
 详细证据边界见 [orbit-bytecode-audit.md](orbit-bytecode-audit.md)。
 

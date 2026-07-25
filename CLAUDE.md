@@ -157,3 +157,18 @@
     成功的 Pareto 提升 probe 属于保留解的真实路径；失败 probe 必须通过边界结果回滚
     observer 状态。动态进度只证明当前工作仍在推进，不是剩余时间上界；Pareto/co-Pareto
     front 本身仍可能很大。
+57. **字节码 mutation 的行为和位置精度必须正交建模**。禁止恢复 `exclusive: bool`
+    或把未知 InjectionPoint 改写成 UnknownMethod；Redirect、破坏性替换、value/argument
+    decorator、operation wrapper、相邻插入、局部值和结构变化使用显式组合语义。双方都是
+    Instruction 精度时只以 stable ID 判同；至少一方为 Pattern 时才比较 opcode/member/
+    constant。
+58. **Mixin cardinality 属于完整 InjectionQuery**。slice ID 与 boundary 先解析并限制
+    搜索区间，再应用 selector、ordinal、shift；无法解析不得回退成全方法精确匹配。
+    require/allow 按 query 总匹配数计算，expect 只保存为调试预期，Group 按 Mixin class +
+    group name 聚合。cancellable 与 ModifyVariable 不得泛化为控制流/局部布局 High。
+59. **软引用 confidence 逐引用决定**。DirectExact 与 RefmapExact 不警告；只有
+    Ambiguous/Unresolved 警告。Artifact 是否含任意 refmap 不能改变无关引用的 confidence。
+    Transformer 启发式必须为 Pattern/Method + Low，未知 target-branch 关联不得做笛卡尔积。
+60. **audit 默认文本与详细报告分离**。默认终端只显示摘要、有限高排名风险和 warning
+    分类，不展开 Evidence.detail。完整 evidence 只进入 JSON stdout 或用户显式指定的
+    `--report`；默认运行不得创建报告文件。

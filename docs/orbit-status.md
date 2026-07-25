@@ -75,7 +75,7 @@
 | `remove` / `upgrade` / `outdated` | 使用 Fat Lockfile 和结构化报告 |
 | `sync` | 重新探测平台并扫描 mods，刷新工件快照，按包选择候选并确认移除未选版本 |
 | `check` | 实例目标兼容性预检 |
-| `audit` | 只读扫描实际 ClassFile/refmap，输出文本或固定 schema JSON 风险报告 |
+| `audit` | 只读扫描实际 ClassFile/refmap；简洁文本 + schema 2 JSON/显式完整 report |
 | `list` / `info` | 展示包信息、逻辑依赖和 bundled |
 | `export` / `import` | Orbit archive 与 Modrinth pack |
 | `cache` / `instances` / `purge` | 已接 core |
