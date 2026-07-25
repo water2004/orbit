@@ -96,7 +96,7 @@ orbit instances default <name>
 orbit instances remove <name>
 ```
 
-- `list` 展示名称、路径、Minecraft、loader 以及当前/默认标记；
+- `list` 展示名称、路径、Minecraft、loader 以及当前/默认标记，输出为统一自适应表格；
 - `default` 保证只有一个默认实例，并同步 `config.toml` 的 `default_instance`；
 - `remove` 只移除全局追踪，绝不删除实例目录；若移除默认实例，同时清除默认值。
 
@@ -157,8 +157,9 @@ orbit remote remove <package> --index <one-based-index>
 `add` 会先下载并分析目标远端的全部候选，只有其中存在 JAR 实际声明 `<package>` 才写入。
 不同 provider 一视同仁，现有和新增远端在后续 add/install/outdated/upgrade 中全部进入
 同一个候选闭包。`remove` 不能删除最后一个远端。`list` 使用用户可读的 provider/project
-信息；managed local source 用序号引用，不显示内容哈希。删除 discovery remote 后，
-当前 lock 的精确恢复来源保留到下一次内容选择，因而不会让已锁定环境突然不可恢复。
+信息并以统一自适应表格展示，managed local source 用序号引用，不显示内容哈希。删除
+discovery remote 后，当前 lock 的精确恢复来源保留到下一次内容选择，因而不会让已锁定
+环境突然不可恢复。
 
 ### `orbit install`
 
@@ -232,6 +233,8 @@ manifest/lockfile。旧 `[project]` 版本和 `[platform]` 路径都只是用于
 平台刷新和包求解使用同一次实际 loader JAR 分析。loader 版本变化不被先验判为错误；
 若某个 mod 对新 loader 的真实约束不成立，正常返回依赖无解。
 
+平台与包变更由统一展示层渲染为单张自适应表格（`~`/`+`/`-`/`?` 标记 platform、added、
+changed、missing、unlocked），未选中包版本仍使用统一删除表，物理文件名不进入表格。
 它既不下载 JAR，也不访问 Modrinth/CurseForge 识别接口。既有 manifest remotes 会保留；
 当前本地内容作为 lock 的精确恢复来源。dry-run 不保存对账结果。同 ID 的所有本地文件
 先作为候选统一求解；不会按扫描顺序让后一个覆盖前一个。
@@ -278,10 +281,13 @@ orbit info <mod> [--platform <provider>]
 orbit list [--tree] [--target client|server|both]
 ```
 
-- `search` 合并已配置 provider 的结果并应用可选的 Minecraft/loader 过滤；
-- `info` 按 provider 顺序查询详情；`mr:` / `cf:` 前缀可显式选择来源；
+- `search` 合并已配置 provider 的结果并应用可选的 Minecraft/loader 过滤；结果由统一
+  展示层渲染为自适应表格，按 slug/名称、平台、下载量和最新 MC 版本分列，参考 MC 版本
+  存在时附加 `✓` 兼容列；
+- `info` 按 provider 顺序查询详情；`mr:` / `cf:` 前缀可显式选择来源；字段渲染为自适应
+  表格，内嵌 recent versions 子表；
 - `list` 从 lockfile 展示版本、全部 remotes、manifest env/optional；`--tree` 展示依赖，
-  `--target` 过滤根并保留传递闭包。
+  `--target` 过滤根并保留传递闭包。非树形模式输出统一表格，bundled 模块进入 Notes 列。
 
 在线查询支持 Modrinth 与 CurseForge。`cf:` 和 `--platform curseforge` 只选择
 CurseForge，不回退到 Modrinth；缺少 API Key 或目标文件没有 API 下载 URL 时返回明确
@@ -322,8 +328,9 @@ orbit export [output] [--target client|server|both] [--format zip|mrpack]
 orbit check <mc-version> [--modloader <loader>]
 ```
 
-对 lockfile 中在线 package 查询目标 Minecraft/loader 的兼容版本并返回逐包矩阵。本地
-`file:` package 没有平台兼容性事实，会明确标为无法在线判断。
+对 lockfile 中在线 package 查询目标 Minecraft/loader 的兼容版本并返回逐包矩阵。结果由
+统一展示层渲染为自适应表格，兼容包标 `✓` 并显示可用版本与 provider，无兼容版本包标
+`✗`。本地 `file:` package 没有平台兼容性事实，会明确标为无法在线判断。
 
 ### `orbit audit`
 
