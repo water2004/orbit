@@ -124,15 +124,21 @@ pub use search::handle as handle_search;
 pub use sync::handle as handle_sync;
 pub use upgrade::handle as handle_upgrade;
 
-pub fn install_interaction(dry_run: bool, yes: bool) -> orbit_core::InstallInteraction {
+pub fn install_interaction(ctx: &CliContext) -> orbit_core::InstallInteraction {
     orbit_core::InstallInteraction {
-        select_package: package_selector(yes),
-        select_resolution: resolution_selector(dry_run, yes),
-        confirm_install: (!dry_run).then(|| {
+        select_package: package_selector(ctx.yes),
+        select_resolution: resolution_selector(ctx.dry_run, ctx.yes),
+        confirm_install: (!ctx.dry_run).then(|| {
+            let yes = ctx.yes;
             Box::new(move |report: &orbit_core::InstallReport| prompt_install_report(report, yes))
                 as orbit_core::InstallPrompt
         }),
+        progress: operation_progress(ctx),
     }
+}
+
+pub fn operation_progress(ctx: &CliContext) -> Option<orbit_core::ProgressReporter> {
+    crate::cli::progress::reporter(ctx.quiet, &ctx.runtime.config().ui.progress_bar)
 }
 
 fn package_selector(yes: bool) -> Option<orbit_core::PackageSelector> {

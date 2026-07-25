@@ -4,6 +4,7 @@
 
 use crate::error::OrbitError;
 use crate::lockfile::OrbitLockfile;
+use crate::progress::ProgressReporter;
 use crate::providers::ModProvider;
 
 /// 兼容性检查结果
@@ -24,12 +25,32 @@ pub async fn check_compatibility(
     providers: &[Box<dyn ModProvider>],
     jar_cache: &crate::jar_cache::JarCache,
 ) -> Result<Vec<CheckResult>, OrbitError> {
+    check_compatibility_with_progress(
+        lockfile,
+        target_mc_version,
+        target_loader,
+        providers,
+        jar_cache,
+        None,
+    )
+    .await
+}
+
+pub async fn check_compatibility_with_progress(
+    lockfile: &OrbitLockfile,
+    target_mc_version: &str,
+    target_loader: &str,
+    providers: &[Box<dyn ModProvider>],
+    jar_cache: &crate::jar_cache::JarCache,
+    progress: Option<ProgressReporter>,
+) -> Result<Vec<CheckResult>, OrbitError> {
     let catalog = crate::outdated::download_lockfile_candidate_catalog(
         providers,
         lockfile,
         target_mc_version,
         target_loader,
         jar_cache,
+        progress,
     )
     .await?;
     let mut results = Vec::new();

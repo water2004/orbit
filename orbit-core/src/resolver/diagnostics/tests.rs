@@ -39,7 +39,7 @@ fn explains_a_candidate_excluded_before_selection() {
         vec![(package("a"), Ranges::singleton(version("1")))],
     );
 
-    let mut trace = ResolutionTrace::new([("a".to_string(), version("2"))]);
+    let mut trace = ResolutionTrace::with_progress([("a".to_string(), version("2"))], None);
     let solution =
         resolve_with_observer(&provider, package("root"), version("1"), &mut trace).unwrap();
 
@@ -84,7 +84,7 @@ fn explains_a_candidate_rejected_after_conflicting_choices() {
     provider.add_package_deps(package("b"), version("2"), vec![]);
     provider.add_package_deps(package("b"), version("1"), vec![]);
 
-    let mut trace = ResolutionTrace::new([("a".to_string(), version("2"))]);
+    let mut trace = ResolutionTrace::with_progress([("a".to_string(), version("2"))], None);
     let solution =
         resolve_with_observer(&provider, package("root"), version("1"), &mut trace).unwrap();
 

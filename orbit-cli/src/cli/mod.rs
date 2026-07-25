@@ -1,4 +1,5 @@
 pub mod commands;
+mod progress;
 use crate::cli::commands::CommandHandler;
 use anyhow::Result;
 use clap::{Parser, Subcommand, ValueEnum};

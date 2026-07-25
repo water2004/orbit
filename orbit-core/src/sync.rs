@@ -72,6 +72,7 @@ pub async fn sync_instance(
         select_package: _,
         select_resolution,
         confirm_install,
+        progress: _,
     } = interaction;
     let loader_package = discovered_platform.loader_package;
     let selection = match crate::package_reconciliation::select_local_packages(
@@ -412,6 +413,7 @@ alpha = "*"
                     *captured.lock().unwrap() = report.removed.clone();
                     false
                 })),
+                progress: None,
             },
         )
         .await
@@ -428,6 +430,7 @@ alpha = "*"
                 select_package: None,
                 select_resolution: None,
                 confirm_install: Some(Box::new(|_| true)),
+                progress: None,
             },
         )
         .await

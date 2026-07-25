@@ -55,7 +55,7 @@ pub async fn handle(file: String, merge_strategy: Option<String>, ctx: &CliConte
                     &instance_dir,
                     &providers,
                     false,
-                    super::install_interaction(false, ctx.yes),
+                    super::install_interaction(ctx),
                 )
                 .await?;
                 println!(

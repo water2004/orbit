@@ -24,24 +24,14 @@ pub async fn handle(mod_name: Option<String>, ctx: &CliContext) -> Result<()> {
 
     let providers = super::create_instance_providers(&dir, None, &ctx.runtime)?;
 
-    let total = lock
-        .inner
-        .packages
-        .iter()
-        .filter(|entry| entry.provider != "file")
-        .count();
-    eprintln!(
-        "Checking {total} mod(s) for updates (mc={}, loader={})...\n  This may download candidate JARs for verification.",
-        manifest_file.inner.project.mc_version, manifest_file.inner.project.modloader,
-    );
-
-    let report = orbit_core::outdated::check_all_outdated(
+    let report = orbit_core::outdated::check_all_outdated_with_progress(
         &dir,
         &manifest_file.inner,
         &lock.inner,
         &providers,
         super::resolution_selector(ctx.dry_run, ctx.yes),
         ctx.runtime.jar_cache(),
+        super::operation_progress(ctx),
     )
     .await
     .context("failed to check for updates")?;

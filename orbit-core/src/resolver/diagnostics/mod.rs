@@ -8,6 +8,9 @@ use std::collections::HashMap;
 
 use pubgrub::{DerivationTree, Ranges, SolverEvent, SolverObserver};
 
+use crate::progress::{
+    ProgressEvent, ProgressReporter, ResolutionActivity, ResolutionWork, emit as emit_progress,
+};
 use crate::resolver::types::{CandidateDiagnostic, SolverPackage, SolverVersion};
 
 pub(super) type Cause = DerivationTree<SolverPackage, Ranges<SolverVersion>, String>;
@@ -63,6 +66,7 @@ impl SkippedVersionReason {
 pub(crate) struct ResolutionTrace {
     watched: HashMap<SolverPackage, WatchedVersion>,
     solutions: Vec<ResolutionSnapshot>,
+    progress: Option<ProgressReporter>,
 }
 
 #[derive(Debug, Clone)]
@@ -71,7 +75,10 @@ pub(crate) struct ResolutionSnapshot {
 }
 
 impl ResolutionTrace {
-    pub(crate) fn new(candidates: impl IntoIterator<Item = (String, SolverVersion)>) -> Self {
+    pub(crate) fn with_progress(
+        candidates: impl IntoIterator<Item = (String, SolverVersion)>,
+        progress: Option<ProgressReporter>,
+    ) -> Self {
         Self {
             watched: candidates
                 .into_iter()
@@ -87,11 +94,68 @@ impl ResolutionTrace {
                 })
                 .collect(),
             solutions: Vec::new(),
+            progress,
         }
     }
 
     pub(crate) fn into_solutions(self) -> Vec<ResolutionSnapshot> {
         self.solutions
+    }
+
+    fn report_progress(
+        &self,
+        event: &SolverEvent<'_, SolverPackage, Ranges<SolverVersion>, String>,
+    ) {
+        let event = match event {
+            SolverEvent::EnumerationRunStarted { run } => ProgressEvent::ResolutionWorkStarted {
+                work: ResolutionWork::EnumerationRun { run: *run },
+            },
+            SolverEvent::EnumerationRunFinished { run } => ProgressEvent::ResolutionWorkFinished {
+                work: ResolutionWork::EnumerationRun { run: *run },
+            },
+            SolverEvent::MaximalityProbeStarted { package } => {
+                ProgressEvent::ResolutionWorkStarted {
+                    work: ResolutionWork::MaximalityProbe {
+                        package: package.to_string(),
+                    },
+                }
+            }
+            SolverEvent::MaximalityProbeFinished { package } => {
+                ProgressEvent::ResolutionWorkFinished {
+                    work: ResolutionWork::MaximalityProbe {
+                        package: package.to_string(),
+                    },
+                }
+            }
+            SolverEvent::Decision { package, .. } => ProgressEvent::ResolutionActivity {
+                activity: ResolutionActivity::Decision {
+                    package: package.to_string(),
+                },
+            },
+            SolverEvent::Derivation { package, .. } => ProgressEvent::ResolutionActivity {
+                activity: ResolutionActivity::Propagation {
+                    package: package.to_string(),
+                },
+            },
+            SolverEvent::Backtrack {
+                from_level,
+                to_level,
+                ..
+            } => ProgressEvent::ResolutionActivity {
+                activity: ResolutionActivity::Backtrack {
+                    from_level: *from_level,
+                    to_level: *to_level,
+                },
+            },
+            SolverEvent::Conflict { .. } => ProgressEvent::ResolutionActivity {
+                activity: ResolutionActivity::Conflict,
+            },
+            SolverEvent::Solution => ProgressEvent::ResolutionActivity {
+                activity: ResolutionActivity::Solution,
+            },
+            _ => return,
+        };
+        emit_progress(self.progress.as_ref(), event);
     }
 }
 
@@ -115,6 +179,7 @@ pub(crate) fn describe_no_solution(cause: &Cause) -> String {
 
 impl SolverObserver<SolverPackage, Ranges<SolverVersion>, String> for ResolutionTrace {
     fn on_event(&mut self, event: SolverEvent<'_, SolverPackage, Ranges<SolverVersion>, String>) {
+        self.report_progress(&event);
         match event {
             SolverEvent::PackageChoice { package, allowed } => {
                 if let Some(watched) = self.watched.get_mut(package)

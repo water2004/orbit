@@ -14,6 +14,7 @@ pub mod jar;
 pub mod lockfile;
 pub mod manifest;
 pub mod metadata;
+pub mod progress;
 pub mod providers;
 pub mod runtime;
 pub mod versions;
@@ -38,7 +39,7 @@ pub use archive::{
     import_manifest, import_mrpack,
 };
 pub use audit::audit_instance;
-pub use checker::{CheckResult, check_compatibility};
+pub use checker::{CheckResult, check_compatibility, check_compatibility_with_progress};
 pub use config::{
     GlobalConfig, InstanceEntry, InstancesRegistry, register_instance, remove_instance,
     set_default_instance,
@@ -66,7 +67,10 @@ pub use orbit_bytecode_audit::{
     OrderAnalysis as AuditOrderAnalysis, Precision as AuditPrecision, Readiness as AuditReadiness,
     ReadinessStatus as AuditReadinessStatus, Risk as AuditRisk, Severity as AuditSeverity,
 };
-pub use outdated::{OutdatedMod, check_all_outdated};
+pub use outdated::{OutdatedMod, check_all_outdated, check_all_outdated_with_progress};
+pub use progress::{
+    ArtifactProgressState, ProgressEvent, ProgressReporter, ResolutionActivity, ResolutionWork,
+};
 pub use providers::ModProvider;
 pub use purge::{CandidateConfig, find_config_candidates, remove_config_candidates};
 pub use resolver::types::{PackageChange, PackageChangeKind, ResolutionReport, ResolutionSelector};

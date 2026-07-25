@@ -9,6 +9,9 @@ use crate::lockfile::{
     CurseForgeInfo, FileInfo, LockMeta, ModrinthInfo, OrbitLockfile, PackageEntry,
 };
 use crate::manifest::{DependencySpec, OrbitManifest};
+use crate::progress::{
+    ArtifactProgressState, ProgressEvent, ProgressReporter, emit as emit_progress,
+};
 use crate::providers::{ModProvider, RemoteArtifact};
 use crate::resolver::types::{CandidateDiagnostic, ResolutionSelector};
 use crate::workspace::{Lockfile, ManifestFile};
@@ -27,6 +30,8 @@ pub struct InstallInteraction {
     pub select_package: Option<PackageSelector>,
     pub select_resolution: Option<ResolutionSelector>,
     pub confirm_install: Option<InstallPrompt>,
+    /// Optional structured progress observer owned by the frontend.
+    pub progress: Option<ProgressReporter>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -207,6 +212,7 @@ pub async fn restore_instance(
         select_package: _,
         select_resolution,
         confirm_install,
+        progress,
     } = interaction;
     let mods_dir = instance_dir.join("mods");
     let loader_package = platform.loader_package;
@@ -243,6 +249,7 @@ pub async fn restore_instance(
             jar_cache,
             loader_package.clone(),
             select_resolution,
+            progress.clone(),
         )
         .await?;
         let removals = package_removals(&resolution.changes);
@@ -279,6 +286,9 @@ pub async fn restore_instance(
         std::fs::create_dir_all(&mods_dir)?;
     }
 
+    let total = selected.len();
+    emit_progress(progress.as_ref(), ProgressEvent::ApplyStarted { total });
+    let mut completed = 0;
     let mut lock_changed = false;
     for package in selected {
         let Some(index) = lock
@@ -291,12 +301,42 @@ pub async fn restore_instance(
                 "orbit.lock is missing selected package '{package}'"
             )));
         };
+        let filename = package_filename(&lock.inner.packages[index]);
+        emit_progress(
+            progress.as_ref(),
+            ProgressEvent::ApplyArtifact {
+                completed,
+                total,
+                filename: filename.clone(),
+                state: ArtifactProgressState::Started,
+            },
+        );
         if package_is_present(&lock.inner.packages[index], &mods_dir)? {
             report.already_present.push(package);
+            completed += 1;
+            emit_progress(
+                progress.as_ref(),
+                ProgressEvent::ApplyArtifact {
+                    completed,
+                    total,
+                    filename,
+                    state: ArtifactProgressState::AlreadyPresent,
+                },
+            );
             continue;
         }
         if options.dry_run {
             report.restored.push(package);
+            completed += 1;
+            emit_progress(
+                progress.as_ref(),
+                ProgressEvent::ApplyArtifact {
+                    completed,
+                    total,
+                    filename,
+                    state: ArtifactProgressState::Finished,
+                },
+            );
             continue;
         }
         restore_package(
@@ -310,7 +350,18 @@ pub async fn restore_instance(
         .await?;
         lock_changed = true;
         report.restored.push(package);
+        completed += 1;
+        emit_progress(
+            progress.as_ref(),
+            ProgressEvent::ApplyArtifact {
+                completed,
+                total,
+                filename,
+                state: ArtifactProgressState::Finished,
+            },
+        );
     }
+    emit_progress(progress.as_ref(), ProgressEvent::ApplyFinished { total });
     if !options.dry_run && (lock_changed || lock_metadata_changed) {
         lock.save()?;
     }
@@ -331,6 +382,12 @@ pub async fn upgrade_all_in_instance(
     dry_run: bool,
     interaction: InstallInteraction,
 ) -> Result<InstallReport, OrbitError> {
+    let InstallInteraction {
+        select_package: _,
+        select_resolution,
+        confirm_install,
+        progress,
+    } = interaction;
     let mut manifest_file = ManifestFile::open(instance_dir)?;
     let platform = crate::platform::discover_install_platform(
         instance_dir,
@@ -359,13 +416,14 @@ pub async fn upgrade_all_in_instance(
         resolution,
         diagnostics,
         warnings,
-    } = crate::outdated::check_all_outdated(
+    } = crate::outdated::check_all_outdated_with_progress(
         instance_dir,
         &manifest_file.inner,
         &lock.inner,
         providers,
-        interaction.select_resolution,
+        select_resolution,
         jar_cache,
+        progress.clone(),
     )
     .await?;
 
@@ -408,7 +466,7 @@ pub async fn upgrade_all_in_instance(
         warnings: warnings.clone(),
     };
 
-    if let Some(prompt) = interaction.confirm_install
+    if let Some(prompt) = confirm_install
         && !prompt(&report)
     {
         return Ok(InstallReport {
@@ -433,6 +491,7 @@ pub async fn upgrade_all_in_instance(
         loader,
         providers,
         jar_cache,
+        progress,
     )
     .await?;
     remove_packages(&mods_dir, &removals, &installed)?;
@@ -675,6 +734,12 @@ async fn install_mod(input: InstallModInput<'_>) -> Result<InstallReport, OrbitE
         options,
         interaction,
     } = input;
+    let InstallInteraction {
+        select_package,
+        select_resolution,
+        confirm_install,
+        progress,
+    } = interaction;
 
     if options.intent == InstallIntent::Add
         && crate::resolver::find_entry(slug, &lockfile.packages).is_some()
@@ -690,7 +755,13 @@ async fn install_mod(input: InstallModInput<'_>) -> Result<InstallReport, OrbitE
     // 1-2. BFS download all JARs
     let seeds = vec![slug.to_string()];
     let mut catalog = crate::outdated::download_transaction_candidate_catalog(
-        providers, &seeds, lockfile, mc_version, loader, jar_cache,
+        providers,
+        &seeds,
+        lockfile,
+        mc_version,
+        loader,
+        jar_cache,
+        progress.clone(),
     )
     .await?;
     catalog.loader_package = loader_package;
@@ -699,15 +770,23 @@ async fn install_mod(input: InstallModInput<'_>) -> Result<InstallReport, OrbitE
     }
     let requested_requirement =
         requested_requirement(constraint, options.optional, options.env.as_deref())?;
-    let (requested_package, mut portfolio) = resolve_requested_package(
-        slug,
-        options.intent,
+    emit_progress(
+        progress.as_ref(),
+        ProgressEvent::ResolutionStarted {
+            packages: catalog.candidates.len(),
+            candidates: catalog.candidates.values().map(Vec::len).sum(),
+        },
+    );
+    let (requested_package, mut portfolio) = resolve_requested_package(RequestedPackageInput {
+        locator: slug,
+        intent: options.intent,
         manifest,
         lockfile,
-        &catalog,
-        requested_requirement.clone(),
-        interaction.select_package,
-    )
+        catalog: &catalog,
+        requirement: requested_requirement.clone(),
+        selector: select_package,
+        progress: progress.clone(),
+    })
     .await?;
 
     // 3. Resolve offline
@@ -727,7 +806,7 @@ async fn install_mod(input: InstallModInput<'_>) -> Result<InstallReport, OrbitE
             });
         }
     }
-    let resolution = crate::resolver::select_resolution(portfolio, interaction.select_resolution)
+    let resolution = crate::resolver::select_resolution(portfolio, select_resolution)
         .map_err(OrbitError::Conflict)?;
     let selected_versions = resolution.selected_versions.clone();
     let selected_sources = resolution.selected_sources.clone();
@@ -761,7 +840,7 @@ async fn install_mod(input: InstallModInput<'_>) -> Result<InstallReport, OrbitE
         warnings: warnings.clone(),
     };
 
-    if let Some(prompt) = interaction.confirm_install
+    if let Some(prompt) = confirm_install
         && !prompt(&report)
     {
         return Ok(InstallReport {
@@ -786,6 +865,7 @@ async fn install_mod(input: InstallModInput<'_>) -> Result<InstallReport, OrbitE
         loader,
         providers,
         jar_cache,
+        progress,
     )
     .await?;
     remove_packages(mods_dir, &removals, &installed)?;
@@ -810,15 +890,30 @@ async fn install_mod(input: InstallModInput<'_>) -> Result<InstallReport, OrbitE
     })
 }
 
-async fn resolve_requested_package(
-    locator: &str,
+struct RequestedPackageInput<'a> {
+    locator: &'a str,
     intent: InstallIntent,
-    manifest: &OrbitManifest,
-    lockfile: &OrbitLockfile,
-    catalog: &crate::resolver::types::CandidateCatalog,
+    manifest: &'a OrbitManifest,
+    lockfile: &'a OrbitLockfile,
+    catalog: &'a crate::resolver::types::CandidateCatalog,
     requirement: DependencySpec,
     selector: Option<PackageSelector>,
+    progress: Option<ProgressReporter>,
+}
+
+async fn resolve_requested_package(
+    input: RequestedPackageInput<'_>,
 ) -> Result<(String, crate::resolver::types::ResolutionPortfolio), OrbitError> {
+    let RequestedPackageInput {
+        locator,
+        intent,
+        manifest,
+        lockfile,
+        catalog,
+        requirement,
+        selector,
+        progress,
+    } = input;
     if intent == InstallIntent::Upgrade {
         let package = crate::resolver::find_entry(locator, &lockfile.packages)
             .map(|entry| entry.mod_id.clone())
@@ -831,10 +926,20 @@ async fn resolve_requested_package(
         }
         let mut resolution_manifest = manifest.clone();
         ensure_root_requirement(&mut resolution_manifest, &package, requirement);
-        let portfolio =
-            crate::resolver::resolve_candidate_portfolio(&resolution_manifest, lockfile, catalog)
-                .await
-                .map_err(OrbitError::Conflict)?;
+        let portfolio = crate::resolver::resolve_candidate_portfolio_with_progress(
+            &resolution_manifest,
+            lockfile,
+            catalog,
+            progress.clone(),
+        )
+        .await
+        .map_err(OrbitError::Conflict)?;
+        emit_progress(
+            progress.as_ref(),
+            ProgressEvent::ResolutionFinished {
+                solutions: portfolio.alternatives.len(),
+            },
+        );
         return Ok((package, portfolio));
     }
 
@@ -862,8 +967,13 @@ async fn resolve_requested_package(
         }
         let mut resolution_manifest = manifest.clone();
         ensure_root_requirement(&mut resolution_manifest, &package, requirement.clone());
-        match crate::resolver::resolve_candidate_portfolio(&resolution_manifest, lockfile, catalog)
-            .await
+        match crate::resolver::resolve_candidate_portfolio_with_progress(
+            &resolution_manifest,
+            lockfile,
+            catalog,
+            progress.clone(),
+        )
+        .await
         {
             Ok(portfolio) => feasible.push((package, portfolio)),
             Err(error) => failures.push((package, error)),
@@ -881,6 +991,15 @@ async fn resolve_requested_package(
         )));
     }
 
+    emit_progress(
+        progress.as_ref(),
+        ProgressEvent::ResolutionFinished {
+            solutions: feasible
+                .iter()
+                .map(|(_, portfolio)| portfolio.alternatives.len())
+                .sum(),
+        },
+    );
     let index = if feasible.len() == 1 {
         0
     } else {
@@ -951,6 +1070,7 @@ async fn resolve_missing_lock_entries(
     jar_cache: &crate::jar_cache::JarCache,
     loader_package: Option<crate::resolver::types::PlatformCandidate>,
     selector: Option<ResolutionSelector>,
+    progress: Option<ProgressReporter>,
 ) -> Result<crate::resolver::types::ResolutionReport, OrbitError> {
     let mut catalog = crate::outdated::download_lockfile_candidate_catalog(
         providers,
@@ -958,13 +1078,32 @@ async fn resolve_missing_lock_entries(
         &manifest.project.mc_version,
         &manifest.project.modloader,
         jar_cache,
+        progress.clone(),
     )
     .await?;
     catalog.loader_package = loader_package;
 
-    let portfolio = crate::resolver::resolve_candidate_portfolio(manifest, lockfile, &catalog)
-        .await
-        .map_err(|error| OrbitError::Conflict(error.to_string()))?;
+    emit_progress(
+        progress.as_ref(),
+        ProgressEvent::ResolutionStarted {
+            packages: catalog.candidates.len(),
+            candidates: catalog.candidates.values().map(Vec::len).sum(),
+        },
+    );
+    let portfolio = crate::resolver::resolve_candidate_portfolio_with_progress(
+        manifest,
+        lockfile,
+        &catalog,
+        progress.clone(),
+    )
+    .await
+    .map_err(|error| OrbitError::Conflict(error.to_string()))?;
+    emit_progress(
+        progress.as_ref(),
+        ProgressEvent::ResolutionFinished {
+            solutions: portfolio.alternatives.len(),
+        },
+    );
     let resolution =
         crate::resolver::select_resolution(portfolio, selector).map_err(OrbitError::Conflict)?;
     retain_selected_lock_entries(lockfile, &resolution.selected_sources);
@@ -1379,9 +1518,21 @@ async fn materialize_plans(
     loader: &str,
     providers: &[Box<dyn ModProvider>],
     jar_cache: &crate::jar_cache::JarCache,
+    progress: Option<ProgressReporter>,
 ) -> Result<Vec<InstalledMod>, OrbitError> {
+    let total = planned.len();
+    emit_progress(progress.as_ref(), ProgressEvent::ApplyStarted { total });
     let mut installed = Vec::new();
     for mut plan in planned {
+        emit_progress(
+            progress.as_ref(),
+            ProgressEvent::ApplyArtifact {
+                completed: installed.len(),
+                total,
+                filename: plan.filename.clone(),
+                state: ArtifactProgressState::Started,
+            },
+        );
         let candidate_id = plan.candidate_id.as_deref().ok_or_else(|| {
             OrbitError::Other(anyhow::anyhow!(
                 "remote install plan for '{}' has no candidate identity",
@@ -1420,7 +1571,20 @@ async fn materialize_plans(
             .map(crate::lockfile::BundledMod::from_jar_metadata)
             .collect();
         installed.push(plan);
+        emit_progress(
+            progress.as_ref(),
+            ProgressEvent::ApplyArtifact {
+                completed: installed.len(),
+                total,
+                filename: installed
+                    .last()
+                    .map(|package| package.filename.clone())
+                    .unwrap_or_default(),
+                state: ArtifactProgressState::Finished,
+            },
+        );
     }
+    emit_progress(progress.as_ref(), ProgressEvent::ApplyFinished { total });
     Ok(installed)
 }
 
@@ -1760,20 +1924,21 @@ loader_jar = { path = "loader.jar", sha256 = "test" }
             )
             .unwrap();
 
-        let (package, portfolio) = resolve_requested_package(
-            "gca",
-            InstallIntent::Add,
-            &manifest(),
-            &empty_lockfile(),
-            &catalog,
-            DependencySpec::Short("*".to_string()),
-            Some(Box::new(|packages| {
+        let (package, portfolio) = resolve_requested_package(RequestedPackageInput {
+            locator: "gca",
+            intent: InstallIntent::Add,
+            manifest: &manifest(),
+            lockfile: &empty_lockfile(),
+            catalog: &catalog,
+            requirement: DependencySpec::Short("*".to_string()),
+            selector: Some(Box::new(|packages| {
                 packages
                     .iter()
                     .position(|package| package == "gca_wrapper")
                     .unwrap()
             })),
-        )
+            progress: None,
+        })
         .await
         .unwrap();
 
@@ -1805,18 +1970,19 @@ loader_jar = { path = "loader.jar", sha256 = "test" }
         let prompted = Arc::new(AtomicBool::new(false));
         let captured = Arc::clone(&prompted);
 
-        let (package, _) = resolve_requested_package(
-            "UHjbX5mk",
-            InstallIntent::Add,
-            &manifest(),
-            &empty_lockfile(),
-            &catalog,
-            DependencySpec::Short("*".to_string()),
-            Some(Box::new(move |_| {
+        let (package, _) = resolve_requested_package(RequestedPackageInput {
+            locator: "UHjbX5mk",
+            intent: InstallIntent::Add,
+            manifest: &manifest(),
+            lockfile: &empty_lockfile(),
+            catalog: &catalog,
+            requirement: DependencySpec::Short("*".to_string()),
+            selector: Some(Box::new(move |_| {
                 captured.store(true, Ordering::Relaxed);
                 0
             })),
-        )
+            progress: None,
+        })
         .await
         .unwrap();
 

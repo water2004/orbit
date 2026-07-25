@@ -27,7 +27,7 @@ pub async fn handle(
             locked,
             dry_run: ctx.dry_run,
         },
-        super::install_interaction(ctx.dry_run, ctx.yes),
+        super::install_interaction(ctx),
     )
     .await?;
     super::print_resolution_diagnostics(&report.diagnostics);

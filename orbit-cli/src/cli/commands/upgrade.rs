@@ -40,7 +40,7 @@ pub async fn handle(mod_name: Option<String>, ctx: &CliContext) -> Result<()> {
                 optional: false,
                 env: None,
             },
-            super::install_interaction(ctx.dry_run, ctx.yes),
+            super::install_interaction(ctx),
         )
         .await
         {
@@ -80,7 +80,7 @@ pub async fn handle(mod_name: Option<String>, ctx: &CliContext) -> Result<()> {
             &providers,
             ctx.runtime.jar_cache(),
             ctx.dry_run,
-            super::install_interaction(ctx.dry_run, ctx.yes),
+            super::install_interaction(ctx),
         )
         .await
         {

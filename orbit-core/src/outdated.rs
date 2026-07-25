@@ -7,6 +7,9 @@ use std::collections::{HashMap, HashSet};
 use crate::error::OrbitError;
 use crate::lockfile::OrbitLockfile;
 use crate::manifest::OrbitManifest;
+use crate::progress::{
+    ArtifactProgressState, ProgressEvent, ProgressReporter, emit as emit_progress,
+};
 use crate::providers::{ModProvider, RemoteArtifact};
 use crate::resolver::types::{
     CandidateCatalog, CandidateDiagnostic, PackageChange, PackageChangeKind, ResolutionReport,
@@ -37,6 +40,7 @@ async fn discover_artifact_closure(
     loader: &str,
     seen_lookups: &mut HashSet<String>,
     seen_artifacts: &mut HashSet<String>,
+    progress: Option<&ProgressReporter>,
 ) -> Result<Vec<RemoteArtifact>, OrbitError> {
     let mut queue: Vec<_> = initial_lookups
         .into_iter()
@@ -47,6 +51,15 @@ async fn discover_artifact_closure(
         if !seen_lookups.insert(lookup.clone()) {
             continue;
         }
+        emit_progress(
+            progress,
+            ProgressEvent::DiscoveringProject {
+                provider: provider.name().to_string(),
+                locator: lookup.clone(),
+                pending_projects: queue.len(),
+                artifacts_found: seen_artifacts.len(),
+            },
+        );
         let artifacts = match provider
             .get_versions(&lookup, Some(mc_version), Some(loader))
             .await
@@ -91,20 +104,39 @@ async fn download_artifact_queue(
     jobs: Vec<(crate::providers::ArtifactDownloadClient, RemoteArtifact)>,
     loader: &str,
     jar_cache: &crate::jar_cache::JarCache,
+    progress: Option<ProgressReporter>,
 ) -> Result<Vec<(crate::jar::JarModMetadata, RemoteArtifact)>, OrbitError> {
+    let total = jobs.len();
+    emit_progress(
+        progress.as_ref(),
+        ProgressEvent::CandidateDownloadStarted { total },
+    );
     let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(10));
+    let completed = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let mut handles = Vec::with_capacity(jobs.len());
     for (downloader, artifact) in jobs {
         let loader = loader.to_string();
         let cache = jar_cache.clone();
         let semaphore = semaphore.clone();
+        let completed = completed.clone();
+        let progress = progress.clone();
         handles.push(tokio::spawn(async move {
             let _permit = semaphore.acquire_owned().await.map_err(|error| {
                 OrbitError::Other(anyhow::anyhow!(
                     "candidate download queue was closed: {error}"
                 ))
             })?;
-            let metadata = crate::jar::download_and_parse(
+            let filename = artifact.filename.clone();
+            emit_progress(
+                progress.as_ref(),
+                ProgressEvent::CandidateArtifact {
+                    completed: completed.load(std::sync::atomic::Ordering::Relaxed),
+                    total,
+                    filename: filename.clone(),
+                    state: ArtifactProgressState::Started,
+                },
+            );
+            let result = crate::jar::download_and_parse(
                 &cache,
                 &downloader,
                 &artifact.download_url,
@@ -113,8 +145,22 @@ async fn download_artifact_queue(
                 &artifact.sha512,
                 &loader,
             )
-            .await?;
-            Ok::<_, OrbitError>((metadata, artifact))
+            .await;
+            let completed = completed.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+            emit_progress(
+                progress.as_ref(),
+                ProgressEvent::CandidateArtifact {
+                    completed,
+                    total,
+                    filename,
+                    state: if result.is_ok() {
+                        ArtifactProgressState::Finished
+                    } else {
+                        ArtifactProgressState::Failed
+                    },
+                },
+            );
+            result.map(|metadata| (metadata, artifact))
         }));
     }
 
@@ -136,6 +182,10 @@ async fn download_artifact_queue(
     if let Some(error) = first_error {
         return Err(error);
     }
+    emit_progress(
+        progress.as_ref(),
+        ProgressEvent::CandidateDownloadFinished { total },
+    );
     Ok(parsed)
 }
 
@@ -153,17 +203,20 @@ pub(crate) async fn download_transaction_candidate_catalog(
     mc_version: &str,
     loader: &str,
     jar_cache: &crate::jar_cache::JarCache,
+    progress: Option<ProgressReporter>,
 ) -> Result<CandidateCatalog, OrbitError> {
+    emit_progress(progress.as_ref(), ProgressEvent::DiscoveryStarted);
     let jobs = discover_transaction_artifact_queue(
         providers,
         requested_seeds,
         lockfile,
         mc_version,
         loader,
+        progress.as_ref(),
     )
     .await?;
     let mut catalog = CandidateCatalog::default();
-    for (metadata, artifact) in download_artifact_queue(jobs, loader, jar_cache).await? {
+    for (metadata, artifact) in download_artifact_queue(jobs, loader, jar_cache, progress).await? {
         catalog.record(metadata, artifact)?;
     }
     Ok(catalog)
@@ -175,6 +228,7 @@ async fn discover_transaction_artifact_queue(
     lockfile: &OrbitLockfile,
     mc_version: &str,
     loader: &str,
+    progress: Option<&ProgressReporter>,
 ) -> Result<Vec<(crate::providers::ArtifactDownloadClient, RemoteArtifact)>, OrbitError> {
     #[derive(Default)]
     struct ProviderDiscovery {
@@ -194,6 +248,7 @@ async fn discover_transaction_artifact_queue(
             loader,
             &mut state.seen_lookups,
             &mut state.seen_artifacts,
+            progress,
         )
         .await
         {
@@ -255,6 +310,7 @@ async fn discover_transaction_artifact_queue(
             loader,
             &mut state.seen_lookups,
             &mut state.seen_artifacts,
+            progress,
         )
         .await?;
         let downloader = provider.artifact_downloader().clone();
@@ -264,6 +320,13 @@ async fn discover_transaction_artifact_queue(
                 .map(|artifact| (downloader.clone(), artifact)),
         );
     }
+    emit_progress(
+        progress,
+        ProgressEvent::DiscoveryFinished {
+            projects: states.values().map(|state| state.seen_lookups.len()).sum(),
+            artifacts: jobs.len(),
+        },
+    );
     Ok(jobs)
 }
 
@@ -273,7 +336,9 @@ pub(crate) async fn download_lockfile_candidate_catalog(
     mc_version: &str,
     loader: &str,
     jar_cache: &crate::jar_cache::JarCache,
+    progress: Option<ProgressReporter>,
 ) -> Result<CandidateCatalog, OrbitError> {
+    emit_progress(progress.as_ref(), ProgressEvent::DiscoveryStarted);
     let mut seeds_by_provider: HashMap<String, Vec<String>> = HashMap::new();
     for entry in lockfile
         .packages
@@ -296,6 +361,7 @@ pub(crate) async fn download_lockfile_candidate_catalog(
 
     let mut jobs = Vec::new();
     let mut catalog = CandidateCatalog::default();
+    let mut project_count = 0;
     for provider in providers {
         let Some(seeds) = seeds_by_provider.remove(provider.name()) else {
             continue;
@@ -309,8 +375,10 @@ pub(crate) async fn download_lockfile_candidate_catalog(
             loader,
             &mut seen_lookups,
             &mut seen_artifacts,
+            progress.as_ref(),
         )
         .await?;
+        project_count += seen_lookups.len();
         let downloader = provider.artifact_downloader().clone();
         jobs.extend(
             artifacts
@@ -319,7 +387,14 @@ pub(crate) async fn download_lockfile_candidate_catalog(
         );
     }
     debug_assert!(seeds_by_provider.is_empty());
-    for (metadata, artifact) in download_artifact_queue(jobs, loader, jar_cache).await? {
+    emit_progress(
+        progress.as_ref(),
+        ProgressEvent::DiscoveryFinished {
+            projects: project_count,
+            artifacts: jobs.len(),
+        },
+    );
+    for (metadata, artifact) in download_artifact_queue(jobs, loader, jar_cache, progress).await? {
         catalog.record(metadata, artifact)?;
     }
     Ok(catalog)
@@ -334,6 +409,29 @@ pub async fn check_all_outdated(
     selector: Option<ResolutionSelector>,
     jar_cache: &crate::jar_cache::JarCache,
 ) -> Result<OutdatedReport, OrbitError> {
+    check_all_outdated_with_progress(
+        instance_dir,
+        manifest,
+        lockfile,
+        providers,
+        selector,
+        jar_cache,
+        None,
+    )
+    .await
+}
+
+/// Variant of [`check_all_outdated`] that reports candidate discovery,
+/// download, parsing, and resolution progress.
+pub async fn check_all_outdated_with_progress(
+    instance_dir: &std::path::Path,
+    manifest: &OrbitManifest,
+    lockfile: &OrbitLockfile,
+    providers: &[Box<dyn ModProvider>],
+    selector: Option<ResolutionSelector>,
+    jar_cache: &crate::jar_cache::JarCache,
+    progress: Option<ProgressReporter>,
+) -> Result<OutdatedReport, OrbitError> {
     let platform =
         crate::platform::discover_install_platform(instance_dir, &manifest.project.mc_version)?;
     let mut effective_manifest = manifest.clone();
@@ -342,19 +440,43 @@ pub async fn check_all_outdated(
     let loader = &manifest.project.modloader;
     let mc_version = &manifest.project.mc_version;
 
-    let mut catalog =
-        download_lockfile_candidate_catalog(providers, lockfile, mc_version, loader, jar_cache)
-            .await?;
+    let mut catalog = download_lockfile_candidate_catalog(
+        providers,
+        lockfile,
+        mc_version,
+        loader,
+        jar_cache,
+        progress.clone(),
+    )
+    .await?;
     catalog.loader_package = platform.loader_package;
     if catalog.candidates.is_empty() {
         return Ok(OutdatedReport::default());
     }
 
     // 3. Resolve
-    let mut portfolio = crate::resolver::resolve_candidate_portfolio(manifest, lockfile, &catalog)
-        .await
-        .map_err(|e| OrbitError::Other(anyhow::anyhow!("{e}")))?;
+    emit_progress(
+        progress.as_ref(),
+        ProgressEvent::ResolutionStarted {
+            packages: catalog.candidates.len(),
+            candidates: catalog.candidates.values().map(Vec::len).sum(),
+        },
+    );
+    let mut portfolio = crate::resolver::resolve_candidate_portfolio_with_progress(
+        manifest,
+        lockfile,
+        &catalog,
+        progress.clone(),
+    )
+    .await
+    .map_err(|e| OrbitError::Other(anyhow::anyhow!("{e}")))?;
     portfolio.alternatives.retain(ResolutionReport::has_upgrade);
+    emit_progress(
+        progress.as_ref(),
+        ProgressEvent::ResolutionFinished {
+            solutions: portfolio.alternatives.len(),
+        },
+    );
     if portfolio.alternatives.is_empty() {
         return Ok(OutdatedReport {
             resolved: catalog.resolved,
@@ -394,6 +516,7 @@ mod tests {
         SearchResultItem,
     };
     use async_trait::async_trait;
+    use std::io::Write;
     use std::sync::{Arc, Mutex};
 
     struct DiscoveryProvider {
@@ -478,6 +601,20 @@ mod tests {
         artifact
     }
 
+    fn fabric_jar_bytes(mod_id: &str, version: &str) -> Vec<u8> {
+        let cursor = std::io::Cursor::new(Vec::new());
+        let mut archive = zip::ZipWriter::new(cursor);
+        archive
+            .start_file("fabric.mod.json", zip::write::SimpleFileOptions::default())
+            .unwrap();
+        write!(
+            archive,
+            r#"{{"schemaVersion":1,"id":"{mod_id}","version":"{version}","name":"Test"}}"#
+        )
+        .unwrap();
+        archive.finish().unwrap().into_inner()
+    }
+
     #[tokio::test]
     async fn discovery_recurses_projects_and_queues_every_matching_version_before_download() {
         let calls = Arc::new(Mutex::new(Vec::new()));
@@ -512,6 +649,7 @@ mod tests {
             "fabric",
             &mut seen_lookups,
             &mut seen_artifacts,
+            None,
         )
         .await
         .unwrap();
@@ -529,6 +667,59 @@ mod tests {
                 "child".to_string(),
                 "grandchild".to_string(),
             ])
+        );
+    }
+
+    #[tokio::test]
+    async fn cached_candidate_download_reports_start_item_and_completion() {
+        let directory = tempfile::tempdir().unwrap();
+        let cache = crate::jar_cache::JarCache::open(directory.path().join("cache")).unwrap();
+        let bytes = fabric_jar_bytes("voxy", "1.0.0");
+        let sha512 = crate::jar::sha512_digest(&bytes);
+        cache.store_bytes(&bytes).unwrap();
+
+        let mut candidate = related_artifact("voxy", "voxy-project", "1", None);
+        candidate.sha512 = sha512;
+        candidate.filename = "voxy.jar".to_string();
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let captured = events.clone();
+        let reporter: ProgressReporter = Arc::new(move |event| {
+            captured.lock().unwrap().push(event);
+        });
+
+        let parsed = download_artifact_queue(
+            vec![(
+                ArtifactDownloadClient::anonymous("orbit-test").unwrap(),
+                candidate,
+            )],
+            "fabric",
+            &cache,
+            Some(reporter),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(parsed[0].0.mod_id, "voxy");
+        let events = events.lock().unwrap();
+        assert_eq!(
+            events.first(),
+            Some(&ProgressEvent::CandidateDownloadStarted { total: 1 })
+        );
+        assert!(events.contains(&ProgressEvent::CandidateArtifact {
+            completed: 0,
+            total: 1,
+            filename: "voxy.jar".to_string(),
+            state: ArtifactProgressState::Started,
+        }));
+        assert!(events.contains(&ProgressEvent::CandidateArtifact {
+            completed: 1,
+            total: 1,
+            filename: "voxy.jar".to_string(),
+            state: ArtifactProgressState::Finished,
+        }));
+        assert_eq!(
+            events.last(),
+            Some(&ProgressEvent::CandidateDownloadFinished { total: 1 })
         );
     }
 
@@ -595,6 +786,7 @@ mod tests {
             &lockfile,
             "26.1",
             "fabric",
+            None,
         )
         .await
         .unwrap();
@@ -637,6 +829,7 @@ mod tests {
             "fabric",
             &mut seen_lookups,
             &mut seen_artifacts,
+            None,
         )
         .await
         .unwrap_err();

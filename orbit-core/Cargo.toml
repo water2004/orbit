@@ -31,7 +31,7 @@ async-trait.workspace = true
 anyhow.workspace = true
 thiserror.workspace = true
 indexmap.workspace = true
-pubgrub = { git = "https://github.com/water2004/pubgrub.git", rev = "0c260ff2528a6c09c683cc7270b3b97c2ea114f3" }
+pubgrub = { git = "https://github.com/water2004/pubgrub.git", rev = "5679fd07fe8e2280fb3938cf8683ad2cc2c48b23" }
 
 [dev-dependencies]
 bytes = "1.11"

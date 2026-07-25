@@ -10,13 +10,13 @@ pub async fn handle(version: String, modloader: Option<String>, ctx: &CliContext
     let loader = modloader.unwrap_or_else(|| manifest.inner.project.modloader.clone());
     let providers = super::create_instance_providers(&instance_dir, None, &ctx.runtime)?;
 
-    eprintln!("Checking compatibility with Minecraft {version} ({loader})...");
-    let results = orbit_core::check_compatibility(
+    let results = orbit_core::check_compatibility_with_progress(
         &lockfile.inner,
         &version,
         &loader,
         &providers,
         ctx.runtime.jar_cache(),
+        super::operation_progress(ctx),
     )
     .await?;
     if results.is_empty() {

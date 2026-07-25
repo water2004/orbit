@@ -15,6 +15,7 @@ use pubgrub::Ranges;
 use crate::lockfile::{OrbitLockfile, PackageEntry};
 use crate::manifest::OrbitManifest;
 use crate::metadata::Environment;
+use crate::progress::ProgressReporter;
 use crate::resolver::graph::{build_solver_graph, build_solver_graph_for_target};
 use crate::resolver::ordering::resolution_warnings;
 use crate::resolver::types::{
@@ -233,6 +234,15 @@ pub async fn resolve_candidate_portfolio(
     lockfile: &OrbitLockfile,
     catalog: &CandidateCatalog,
 ) -> Result<ResolutionPortfolio, String> {
+    resolve_candidate_portfolio_with_progress(manifest, lockfile, catalog, None).await
+}
+
+pub async fn resolve_candidate_portfolio_with_progress(
+    manifest: &OrbitManifest,
+    lockfile: &OrbitLockfile,
+    catalog: &CandidateCatalog,
+    progress: Option<ProgressReporter>,
+) -> Result<ResolutionPortfolio, String> {
     let graph = build_solver_graph(
         manifest,
         lockfile,
@@ -249,7 +259,7 @@ pub async fn resolve_candidate_portfolio(
     maximized_mods.dedup();
     let maximized_packages = maximized_mods.into_iter().map(SolverPackage::logical);
     let watched_candidates = highest_candidates(&catalog.candidates, &manifest.project.modloader);
-    let mut trace = diagnostics::ResolutionTrace::new(watched_candidates);
+    let mut trace = diagnostics::ResolutionTrace::with_progress(watched_candidates, progress);
     let solutions = match pubgrub::resolve_maximal_solutions_with_observer(
         &graph.provider,
         graph.root_package.clone(),
@@ -542,6 +552,8 @@ mod tests {
     use crate::jar::JarModOrigin;
     use crate::lockfile::{BundledMod, LockMeta, PackageEntry};
     use crate::metadata::{Environment, ModDependency, ModLoadCondition};
+    use crate::progress::{ProgressEvent, ProgressReporter, ResolutionActivity};
+    use std::sync::{Arc, Mutex};
 
     fn manifest() -> OrbitManifest {
         toml::from_str(
@@ -662,6 +674,56 @@ b = "*"
                 "{alternative:?}"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn portfolio_reports_balanced_dynamic_solver_work() {
+        let mut catalog = CandidateCatalog::default();
+        for package in ["a", "b"] {
+            catalog.candidates.insert(
+                package.to_string(),
+                vec![candidate("1", Vec::new()), candidate("2", Vec::new())],
+            );
+        }
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let captured = events.clone();
+        let progress: ProgressReporter = Arc::new(move |event| {
+            captured.lock().unwrap().push(event);
+        });
+
+        let portfolio = resolve_candidate_portfolio_with_progress(
+            &manifest(),
+            &lockfile(),
+            &catalog,
+            Some(progress),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(portfolio.alternatives.len(), 1);
+        let events = events.lock().unwrap();
+        let started = events
+            .iter()
+            .filter(|event| matches!(event, ProgressEvent::ResolutionWorkStarted { .. }))
+            .count();
+        let finished = events
+            .iter()
+            .filter(|event| matches!(event, ProgressEvent::ResolutionWorkFinished { .. }))
+            .count();
+        assert!(started > 1, "{events:?}");
+        assert_eq!(started, finished);
+        assert!(events.iter().any(|event| matches!(
+            event,
+            ProgressEvent::ResolutionActivity {
+                activity: ResolutionActivity::Decision { .. }
+            }
+        )));
+        assert!(events.iter().any(|event| matches!(
+            event,
+            ProgressEvent::ResolutionActivity {
+                activity: ResolutionActivity::Solution
+            }
+        )));
     }
 
     #[tokio::test]

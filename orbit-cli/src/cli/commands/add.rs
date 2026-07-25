@@ -42,7 +42,7 @@ pub async fn handle(
                 optional,
                 env,
             },
-            super::install_interaction(ctx.dry_run, ctx.yes),
+            super::install_interaction(ctx),
         )
         .await
         .map_err(|error| anyhow::anyhow!("Add failed: {error}"))?;
@@ -90,7 +90,7 @@ pub async fn handle(
             optional,
             env: env.clone(),
         },
-        super::install_interaction(ctx.dry_run, ctx.yes),
+        super::install_interaction(ctx),
     )
     .await
     {

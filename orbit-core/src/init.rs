@@ -336,6 +336,7 @@ pub async fn run_init(
         select_package: _,
         select_resolution,
         confirm_install,
+        progress: _,
     } = interaction;
     let loader_package = platform.loader_package;
     let (selected_lock_entries, removed, dependency_error) =
@@ -606,6 +607,7 @@ mod tests {
                     assert_eq!(report.removed[0].filename, "alpha-1.jar");
                     false
                 })),
+                progress: None,
             },
         )
         .await
@@ -624,6 +626,7 @@ mod tests {
                 select_package: None,
                 select_resolution: None,
                 confirm_install: Some(Box::new(|_| true)),
+                progress: None,
             },
         )
         .await

@@ -5,6 +5,9 @@ use std::path::Path;
 
 use crate::error::OrbitError;
 use crate::lockfile::{BundledMod, FileInfo, LockMeta, PackageEntry};
+use crate::progress::{
+    ArtifactProgressState, ProgressEvent, ProgressReporter, emit as emit_progress,
+};
 use crate::providers::ModProvider;
 use crate::workspace::{Lockfile, ManifestFile};
 
@@ -23,6 +26,12 @@ pub async fn install_local_file_to_instance(
     options: InstallOptions,
     interaction: InstallInteraction,
 ) -> Result<InstallReport, OrbitError> {
+    let InstallInteraction {
+        select_package: _,
+        select_resolution,
+        confirm_install,
+        progress,
+    } = interaction;
     let source = validate_source(source)?;
     let mut manifest = ManifestFile::open(instance_dir)?;
     let platform = crate::platform::discover_install_platform(
@@ -86,15 +95,16 @@ pub async fn install_local_file_to_instance(
         bundled: bundled.clone(),
     });
 
-    let resolution = resolve_dependencies(
-        &manifest,
-        &mut lockfile,
+    let resolution = resolve_dependencies(DependencyResolutionInput {
+        manifest: &manifest,
+        lockfile: &mut lockfile,
         providers,
         jar_cache,
-        options.no_deps,
+        no_dependencies: options.no_deps,
         loader_package,
-        interaction.select_resolution,
-    )
+        selector: select_resolution,
+        progress: progress.clone(),
+    })
     .await?;
     let preview = build_preview(
         &metadata,
@@ -106,10 +116,7 @@ pub async fn install_local_file_to_instance(
             resolution,
         },
     );
-    if interaction
-        .confirm_install
-        .is_some_and(|prompt| !prompt(&preview))
-    {
+    if confirm_install.is_some_and(|prompt| !prompt(&preview)) {
         return Ok(InstallReport {
             installed: Vec::new(),
             removed: Vec::new(),
@@ -137,6 +144,7 @@ pub async fn install_local_file_to_instance(
             .collect(),
         providers,
         jar_cache,
+        progress,
     };
     materialize_new_packages(materialize, &mut lockfile).await?;
     remove_packages(
@@ -209,15 +217,30 @@ fn validate_metadata(
     Ok(())
 }
 
-async fn resolve_dependencies(
-    manifest: &ManifestFile,
-    lockfile: &mut Lockfile,
-    providers: &[Box<dyn ModProvider>],
-    jar_cache: &crate::jar_cache::JarCache,
+struct DependencyResolutionInput<'a> {
+    manifest: &'a ManifestFile,
+    lockfile: &'a mut Lockfile,
+    providers: &'a [Box<dyn ModProvider>],
+    jar_cache: &'a crate::jar_cache::JarCache,
     no_dependencies: bool,
     loader_package: Option<crate::resolver::types::PlatformCandidate>,
     selector: Option<crate::resolver::types::ResolutionSelector>,
+    progress: Option<ProgressReporter>,
+}
+
+async fn resolve_dependencies(
+    input: DependencyResolutionInput<'_>,
 ) -> Result<crate::resolver::types::ResolutionReport, OrbitError> {
+    let DependencyResolutionInput {
+        manifest,
+        lockfile,
+        providers,
+        jar_cache,
+        no_dependencies,
+        loader_package,
+        selector,
+        progress,
+    } = input;
     if no_dependencies {
         return Ok(crate::resolver::types::ResolutionReport::default());
     }
@@ -228,6 +251,7 @@ async fn resolve_dependencies(
         jar_cache,
         loader_package.clone(),
         selector,
+        progress,
     )
     .await?;
     crate::resolver::check_lockfile_graph_with_loader(
@@ -346,6 +370,7 @@ struct LocalMaterialization<'a> {
     planned_packages: HashSet<String>,
     providers: &'a [Box<dyn ModProvider>],
     jar_cache: &'a crate::jar_cache::JarCache,
+    progress: Option<ProgressReporter>,
 }
 
 async fn materialize_new_packages(
@@ -353,13 +378,48 @@ async fn materialize_new_packages(
     lockfile: &mut Lockfile,
 ) -> Result<(), OrbitError> {
     let mods_dir = input.instance_dir.join("mods");
+    let total = input.planned_packages.len();
+    let mut completed = 0;
+    emit_progress(
+        input.progress.as_ref(),
+        ProgressEvent::ApplyStarted { total },
+    );
     std::fs::create_dir_all(&mods_dir)?;
+    emit_progress(
+        input.progress.as_ref(),
+        ProgressEvent::ApplyArtifact {
+            completed,
+            total,
+            filename: input.filename.to_string(),
+            state: ArtifactProgressState::Started,
+        },
+    );
     copy_local_jar(input.source, &mods_dir.join(input.filename), input.sha256)?;
+    completed += 1;
+    emit_progress(
+        input.progress.as_ref(),
+        ProgressEvent::ApplyArtifact {
+            completed,
+            total,
+            filename: input.filename.to_string(),
+            state: ArtifactProgressState::Finished,
+        },
+    );
     for entry in &mut lockfile.inner.packages {
         if entry.mod_id == input.package || !input.planned_packages.contains(&entry.mod_id) {
             continue;
         }
-        if !package_is_present(entry, &mods_dir)? {
+        let filename = package_filename(entry);
+        emit_progress(
+            input.progress.as_ref(),
+            ProgressEvent::ApplyArtifact {
+                completed,
+                total,
+                filename: filename.clone(),
+                state: ArtifactProgressState::Started,
+            },
+        );
+        let state = if !package_is_present(entry, &mods_dir)? {
             restore_package(
                 entry,
                 input.instance_dir,
@@ -369,12 +429,29 @@ async fn materialize_new_packages(
                 false,
             )
             .await?;
-        }
+            ArtifactProgressState::Finished
+        } else {
+            ArtifactProgressState::AlreadyPresent
+        };
+        completed += 1;
+        emit_progress(
+            input.progress.as_ref(),
+            ProgressEvent::ApplyArtifact {
+                completed,
+                total,
+                filename,
+                state,
+            },
+        );
     }
     lockfile
         .inner
         .packages
         .sort_by(|left, right| left.mod_id.cmp(&right.mod_id));
+    emit_progress(
+        input.progress.as_ref(),
+        ProgressEvent::ApplyFinished { total },
+    );
     Ok(())
 }
 

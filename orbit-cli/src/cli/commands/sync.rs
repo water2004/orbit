@@ -8,7 +8,7 @@ pub async fn handle(ctx: &CliContext) -> Result<()> {
         &instance_dir,
         &providers,
         ctx.dry_run,
-        super::install_interaction(ctx.dry_run, ctx.yes),
+        super::install_interaction(ctx),
     )
     .await?;
     super::print_resolution_diagnostics(&report.diagnostics);

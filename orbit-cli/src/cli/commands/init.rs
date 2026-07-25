@@ -133,12 +133,7 @@ pub async fn handle(
     };
 
     let providers = create_identification_providers(&ctx.runtime.config().auth)?;
-    let output = run_init(
-        input,
-        &providers,
-        super::install_interaction(ctx.dry_run, ctx.yes),
-    )
-    .await?;
+    let output = run_init(input, &providers, super::install_interaction(ctx)).await?;
 
     // ── 4. 输出结果 ────────────────────────────
     if ctx.dry_run {
