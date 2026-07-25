@@ -267,6 +267,12 @@ pub async fn resolve_candidate_portfolio_with_progress(
         maximized_packages,
         |version| {
             version.domain().map_or_else(
+                || Ranges::singleton(version.clone()),
+                |semantic| solver_range(Ranges::singleton(semantic.clone())),
+            )
+        },
+        |version| {
+            version.domain().map_or_else(
                 || Ranges::strictly_higher_than(version.clone()),
                 |semantic| solver_range(Ranges::strictly_higher_than(semantic.clone())),
             )
@@ -293,6 +299,15 @@ pub async fn resolve_candidate_portfolio_with_progress(
         }
         Err(pubgrub::PubGrubError::ErrorInShouldCancel(error)) => {
             return Err(error.to_string());
+        }
+        Err(pubgrub::PubGrubError::InvalidVersionOrdering {
+            package,
+            version,
+            reason,
+        }) => {
+            return Err(format!(
+                "internal error: invalid version ordering for '{package}' v{version}: {reason}"
+            ));
         }
     };
     let snapshots = trace.into_solutions();
@@ -863,7 +878,7 @@ voxy = "*"
     }
 
     #[tokio::test]
-    async fn a_different_candidate_at_the_same_declared_version_is_not_an_upgrade() {
+    async fn equivalent_candidates_keep_the_feasible_installed_realization() {
         let mut current = lockfile();
         current.packages.retain(|entry| entry.mod_id == "a");
         let mut only_a = manifest();
@@ -883,12 +898,8 @@ voxy = "*"
                 .iter()
                 .all(|alternative| !alternative.has_upgrade())
         );
-        assert!(portfolio.alternatives.iter().any(|alternative| {
-            alternative
-                .changes
-                .iter()
-                .any(|change| change.package == "a" && change.kind == PackageChangeKind::Replace)
-        }));
+        assert_eq!(portfolio.alternatives.len(), 1);
+        assert!(portfolio.alternatives[0].changes.is_empty());
     }
 
     #[tokio::test]

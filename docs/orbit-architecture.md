@@ -144,8 +144,10 @@ profile、Prism/MultiMC component 和当前 libraries 重新建候选集，因�
 PubGrub fork 允许 provider 在选择包版本时注入带 reason 的自定义 incompatibility。
 条件原因因此属于真正的传播/回溯路径。observer 只补充成功解中的候选淘汰原因，不承担
 另一条证明路径。fork 的最大解枚举只接收通用投影包；Orbit 直接把 `mod_id` 作为投影
-包，把语义版本与来源身份组成私有候选版本。`strictly_higher` 只比较 loader 语义版本，
-所以同版本不同 JAR 不是升级。该抽象由 fork 原生支持，不需要领域特判。
+包，把语义版本与来源身份组成私有候选版本。`same_version` 把同一 loader 语义版本的
+全部来源身份映射为一个等价类，`strictly_higher` 只覆盖更高语义版本；枚举和 probe
+因此按包版本而非载体身份区分方案。fork 验证两个范围的基本序关系，避免无效排除导致
+同一投影重复。该抽象由 fork 原生支持，不需要领域特判。
 
 Jar-in-Jar artifact 使用独立的 Maven 坐标包并精确绑定 owner 候选；`provides` 使用
 同一 mod_id 包下的代理候选。公共 loader `Version` 不包含来源编号，诊断也按强类型

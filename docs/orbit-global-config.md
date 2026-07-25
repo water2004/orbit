@@ -119,7 +119,8 @@ progress_bar = "modern"
 下载/缓存校验/解析、离线求解和最终物化。候选 JAR 阶段有精确的 `已完成/总数`；
 发现闭包无法预知远端递归总量，因此使用带已用时间的 spinner。多解枚举则把实际开始的
 continuation run 和 maximality probe 作为工作单元：新分支出现时总量增长，完成时进度
-推进，并同步显示 decision、propagation、backtrack、conflict 与已保留解计数。
+推进，并同步显示 decision、propagation、backtrack、conflict 与已保留解计数。这个
+动态计数用于证明阶段和活动状态，不预测剩余耗时；完整局部极大解枚举仍可能指数级。
 
 首次加载不存在的配置文件时，Orbit 在解析出的路径创建默认文件。环境变量随后覆盖内存
 值：
