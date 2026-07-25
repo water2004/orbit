@@ -9,23 +9,9 @@ pub async fn handle(ctx: &CliContext) -> Result<()> {
     super::print_resolution_diagnostics(&report.diagnostics);
     super::print_resolution_warnings(&report.warnings);
 
-    for change in &report.platform_changes {
-        println!(
-            "  ~ platform   {}: {} -> {}",
-            change.field, change.previous, change.current
-        );
-    }
-    for package in &report.added {
-        println!("  + added      {package}");
-    }
-    for package in &report.changed {
-        println!("  ~ changed    {package}");
-    }
-    for package in &report.missing {
-        println!("  - missing    {package}");
-    }
-    for package in &report.unlocked {
-        println!("  ? unlocked   {package}");
+    let deltas = crate::cli::output::sync_report_table(&report);
+    if deltas != "No local changes." {
+        println!("{deltas}");
     }
     if !report.removed.is_empty() {
         println!("\nRemoved unselected package versions:");

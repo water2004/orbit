@@ -10,19 +10,11 @@ pub async fn handle(ctx: &CliContext) -> Result<()> {
 
     let current = std::env::current_dir()
         .ok()
-        .and_then(|path| path.canonicalize().ok());
-    println!("  current  name  path  mc  loader");
-    for instance in registry.instances {
-        let path = std::path::PathBuf::from(&instance.path);
-        let is_current = current
-            .as_ref()
-            .is_some_and(|current| path.canonicalize().ok().as_ref() == Some(current));
-        let current_marker = if is_current { "*" } else { " " };
-        let default_marker = if instance.is_default { "(default)" } else { "" };
-        println!(
-            "{current_marker} {default_marker:9} {}  {}  {}  {}",
-            instance.name, instance.path, instance.mc_version, instance.modloader
-        );
-    }
+        .and_then(|path| path.canonicalize().ok())
+        .map(|path| path.to_string_lossy().into_owned());
+    println!(
+        "{}",
+        crate::cli::output::instances_table(&registry.instances, current.as_deref())
+    );
     Ok(())
 }

@@ -26,19 +26,10 @@ pub async fn handle(version: String, modloader: Option<String>, ctx: &CliContext
     }
 
     let compatible = results.iter().filter(|result| result.compatible).count();
-    for result in &results {
-        if let Some(available) = &result.available_version {
-            println!(
-                "  {}  {}  ✓ {} available on {}",
-                result.mod_name, result.current_version, available, result.provider
-            );
-        } else {
-            println!(
-                "  {}  {}  ✗ no compatible version yet",
-                result.mod_name, result.current_version
-            );
-        }
-    }
+    println!(
+        "{}",
+        crate::cli::output::check_results_table(&results)
+    );
     println!(
         "\n{} of {} mods are ready for Minecraft {version}.",
         compatible,

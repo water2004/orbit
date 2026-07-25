@@ -37,7 +37,7 @@ pub async fn handle(
         }
     );
 
-    let mut results = Vec::new();
+    let mut results: Vec<(&str, orbit_core::providers::SearchResultItem)> = Vec::new();
     for provider in &providers {
         for item in provider
             .search(&query, mc_version.as_deref(), modloader.as_deref(), limit)
@@ -53,60 +53,15 @@ pub async fn handle(
         return Ok(());
     }
 
+    let rows: Vec<(&str, &orbit_core::providers::SearchResultItem)> = results
+        .iter()
+        .map(|(provider, item)| (*provider, item))
+        .collect();
     println!();
-    for (provider, item) in &results {
-        let compatible = ref_mc
-            .as_ref()
-            .map(|rmc| item.mc_versions.iter().any(|v| v == rmc))
-            .unwrap_or(false);
-
-        let check = if compatible { "\u{2713}" } else { " " };
-        // Format downloads for readability
-        let dl = if item.downloads >= 1_000_000 {
-            format!("{:.1}M", item.downloads as f64 / 1_000_000.0)
-        } else if item.downloads >= 1_000 {
-            format!("{:.1}K", item.downloads as f64 / 1_000.0)
-        } else {
-            item.downloads.to_string()
-        };
-
-        let desc: String = item
-            .description
-            .chars()
-            .take(80)
-            .chain(if item.description.chars().count() > 80 {
-                Some('\u{2026}') // …
-            } else {
-                None
-            })
-            .collect();
-
-        // Show the latest few MC versions (search API doesn't return mod version)
-        let mc_list = item
-            .mc_versions
-            .iter()
-            .rev()
-            .take(3)
-            .map(|s| s.as_str())
-            .collect::<Vec<_>>()
-            .join(", ");
-
-        // Show slug prominently — this is what users type for `orbit install <slug>`
-        let name_part = if item.name.to_lowercase() != item.slug.to_lowercase().replace('-', " ") {
-            format!("{} — {}", item.slug, item.name)
-        } else {
-            item.slug.clone()
-        };
-
-        println!(
-            "  {check} {name_part} ({platform})  \u{2b07} {dl}  mc [{mc_list}]",
-            platform = provider,
-            dl = dl,
-        );
-        println!("    {desc}");
-    }
-
-    println!();
+    println!(
+        "{}",
+        crate::cli::output::search_results_table(&rows, ref_mc.as_deref())
+    );
     eprintln!("Found {} results.", results.len());
 
     Ok(())

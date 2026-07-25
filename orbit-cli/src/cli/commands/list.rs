@@ -26,20 +26,10 @@ pub async fn handle(tree: bool, target: Option<String>, ctx: &CliContext) -> Res
 }
 
 fn print_flat(output: &orbit_core::ListOutput) {
-    for pkg in &output.packages {
-        let optional = if pkg.optional { ", optional" } else { "" };
-        println!(
-            "{} v{} ({}, {}{})",
-            pkg.mod_id,
-            pkg.version,
-            pkg.remotes.join(", "),
-            pkg.environment,
-            optional
-        );
-        for (name, ver) in &pkg.bundled {
-            println!("  + bundled: {name} v{ver}");
-        }
-    }
+    println!(
+        "{}",
+        crate::cli::output::installed_packages_table(&output.packages)
+    );
 }
 
 fn print_tree(

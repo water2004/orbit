@@ -69,13 +69,21 @@ pub async fn handle(command: RemoteCommands, ctx: &CliContext) -> Result<()> {
 }
 
 fn print_report(report: &orbit_core::RemoteReport, dry_run: bool) {
-    let action = if dry_run { "Would keep" } else { "Package has" };
+    let header = if dry_run {
+        format!(
+            "Would keep {} remote(s) for {}:",
+            report.remotes.len(),
+            report.package
+        )
+    } else {
+        format!(
+            "Package has {} remote(s) for {}:",
+            report.remotes.len(),
+            report.package
+        )
+    };
     println!(
-        "{action} {} remote(s) for {}:",
-        report.remotes.len(),
-        report.package
+        "{}",
+        crate::cli::output::remote_list_table(report, Some(&header))
     );
-    for (index, remote) in report.remotes.iter().enumerate() {
-        println!("  {}. {}", index + 1, remote.display_locator());
-    }
 }
