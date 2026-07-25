@@ -41,7 +41,8 @@ pub(crate) fn check_local_graph(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::identification::IdentifiedSource;
+    use crate::lockfile::ArtifactSource;
+    use crate::manifest::PackageRemote;
     use crate::metadata::{DependencyExpression, ModDependency};
 
     fn local_mod(
@@ -57,9 +58,12 @@ mod tests {
             sha1: String::new(),
             sha256: String::new(),
             sha512: String::new(),
-            source: IdentifiedSource::File {
+            remotes: vec![PackageRemote::File {
                 path: format!("{mod_id}.jar"),
-            },
+            }],
+            artifact_sources: vec![ArtifactSource::File {
+                path: format!("{mod_id}.jar"),
+            }],
             dependencies,
             environment: crate::metadata::Environment::Both,
             provides: Vec::new(),
@@ -88,7 +92,7 @@ minecraft_jar = { path = "minecraft.jar", sha256 = "test" }
 loader_jar = { path = "loader.jar", sha256 = "test" }
 
 [dependencies]
-missing-mod = "*"
+missing-mod = { version = "*", remotes = [{ type = "file", path = "missing.jar" }] }
 "#,
         )
         .unwrap();
@@ -114,10 +118,10 @@ minecraft_jar = { path = "minecraft.jar", sha256 = "test" }
 loader_jar = { path = "loader.jar", sha256 = "test" }
 
 [dependencies]
-a = "*"
+a = { version = "*", remotes = [{ type = "file", path = "a.jar" }] }
 
 [overrides]
-b = "=1"
+b = { version = "=1" }
 "#,
         )
         .unwrap();
@@ -144,7 +148,7 @@ minecraft_jar = { path = "minecraft.jar", sha256 = "test" }
 loader_jar = { path = "loader.jar", sha256 = "test" }
 
 [dependencies]
-a = { version = "*", exclude = ["b"] }
+a = { version = "*", exclude = ["b"], remotes = [{ type = "file", path = "a.jar" }] }
 "#,
         )
         .unwrap();
@@ -168,7 +172,7 @@ minecraft_jar = { path = "minecraft.jar", sha256 = "test" }
 loader_jar = { path = "loader.jar", sha256 = "test" }
 
 [dependencies]
-a = ">=2"
+a = { version = ">=2", remotes = [{ type = "file", path = "a.jar" }] }
 "#,
         )
         .unwrap();

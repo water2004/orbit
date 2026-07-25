@@ -230,6 +230,12 @@ pub enum Commands {
         #[command(subcommand)]
         command: CacheCommands,
     },
+
+    /// 管理一个包的候选来源
+    Remote {
+        #[command(subcommand)]
+        command: RemoteCommands,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -252,6 +258,31 @@ pub enum InstanceCommands {
 pub enum CacheCommands {
     /// 清理下载缓存
     Clean,
+}
+
+#[derive(Subcommand)]
+pub enum RemoteCommands {
+    /// 验证并添加一个来源
+    Add {
+        package: String,
+        /// file / modrinth / curseforge
+        provider: String,
+        /// 文件路径、Modrinth project ID 或 CurseForge 数值 project ID
+        locator: String,
+    },
+    /// 移除一个来源；不能移除最后一个
+    Remove {
+        package: String,
+        /// file / modrinth / curseforge (omit when using --index)
+        provider: Option<String>,
+        /// Source locator (omit when using --index)
+        locator: Option<String>,
+        /// One-based index shown by `orbit remote list`
+        #[arg(long, conflicts_with_all = ["provider", "locator"])]
+        index: Option<usize>,
+    },
+    /// 列出一个包的所有来源
+    List { package: String },
 }
 
 impl CommandHandler for Commands {
@@ -327,6 +358,7 @@ impl CommandHandler for Commands {
                 .await
             }
             Commands::Cache { command } => command.execute(ctx).await,
+            Commands::Remote { command } => handle_remote(command, ctx).await,
         }
     }
 }
@@ -342,6 +374,9 @@ impl Commands {
                 | Self::Sync
                 | Self::Upgrade { .. }
                 | Self::Import { .. }
+                | Self::Remote {
+                    command: RemoteCommands::Add { .. } | RemoteCommands::Remove { .. }
+                }
         )
     }
 }
@@ -370,7 +405,7 @@ impl CommandHandler for CacheCommands {
 mod tests {
     use clap::Parser;
 
-    use super::{Cli, Commands};
+    use super::{Cli, Commands, RemoteCommands};
 
     #[test]
     fn audit_defaults_do_not_request_a_report_file() {
@@ -422,5 +457,28 @@ mod tests {
             }
             .mutates_instance()
         );
+    }
+
+    #[test]
+    fn remote_removal_accepts_a_human_visible_list_index() {
+        let cli =
+            Cli::try_parse_from(["orbit", "remote", "remove", "sodium", "--index", "2"]).unwrap();
+        let Commands::Remote {
+            command:
+                RemoteCommands::Remove {
+                    package,
+                    provider,
+                    locator,
+                    index,
+                },
+        } = cli.command
+        else {
+            panic!("remote remove command was not parsed");
+        };
+
+        assert_eq!(package, "sodium");
+        assert_eq!(index, Some(2));
+        assert!(provider.is_none());
+        assert!(locator.is_none());
     }
 }

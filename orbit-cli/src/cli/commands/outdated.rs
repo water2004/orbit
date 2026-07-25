@@ -8,16 +8,10 @@ pub async fn handle(mod_name: Option<String>, ctx: &CliContext) -> Result<()> {
     let lock = orbit_core::workspace::Lockfile::open(&dir).context("failed to read orbit.lock")?;
     let requested_package = mod_name
         .as_deref()
-        .map(|name| {
+        .map(|name| -> Result<String> {
             let entry = lock
                 .find_entry(name)
                 .ok_or_else(|| anyhow::anyhow!("'{name}' was not found in orbit.lock"))?;
-            if entry.provider == "file" {
-                anyhow::bail!(
-                    "'{}' is a local file and has no online source to check",
-                    entry.mod_id
-                );
-            }
             Ok(entry.mod_id.clone())
         })
         .transpose()?;

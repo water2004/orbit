@@ -34,9 +34,10 @@ pub async fn handle(file: String, merge_strategy: Option<String>, ctx: &CliConte
                 },
             )?;
             println!(
-                "Import {}: {} added, {} replaced, {} kept.",
+                "Import {}: {} added, {} remote sets merged, {} replaced, {} kept.",
                 if ctx.dry_run { "preview" } else { "complete" },
                 report.added.len(),
+                report.merged.len(),
                 report.replaced.len(),
                 report.kept.len()
             );
@@ -49,11 +50,8 @@ pub async fn handle(file: String, merge_strategy: Option<String>, ctx: &CliConte
                 orbit_core::import_archive(&instance_dir, &source, overwrite, ctx.dry_run)?
             };
             if !ctx.dry_run && !report.extracted.is_empty() {
-                let providers =
-                    super::create_instance_providers(&instance_dir, None, &ctx.runtime)?;
                 let sync = orbit_core::sync_instance(
                     &instance_dir,
-                    &providers,
                     false,
                     super::install_interaction(ctx),
                 )

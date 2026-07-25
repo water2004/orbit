@@ -26,7 +26,9 @@ pub enum OrbitError {
     #[error("dependency conflict: {0}")]
     Conflict(String),
 
-    #[error("checksum mismatch for '{name}': expected {expected}, got {actual}")]
+    #[error(
+        "content verification failed for '{name}'; downloaded bytes differ from the trusted source"
+    )]
     ChecksumMismatch {
         name: String,
         expected: String,
@@ -57,4 +59,23 @@ pub enum OrbitError {
 
     #[error("{0}")]
     Other(#[from] anyhow::Error),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::OrbitError;
+
+    #[test]
+    fn content_identity_values_are_not_rendered_to_users() {
+        let error = OrbitError::ChecksumMismatch {
+            name: "example".to_string(),
+            expected: "private-expected-hash".to_string(),
+            actual: "private-actual-hash".to_string(),
+        };
+
+        let rendered = error.to_string();
+        assert!(!rendered.contains("private-expected-hash"));
+        assert!(!rendered.contains("private-actual-hash"));
+        assert!(rendered.contains("content verification failed"));
+    }
 }

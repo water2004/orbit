@@ -386,7 +386,7 @@ fn embedded_artifacts_at_path_from<'a, T: RuntimeBundledNode>(
     selected.map(|node| (archives.join("!/"), node.embedded_artifacts()))
 }
 
-pub fn dependents<'a>(slug: &str, entries: &'a [PackageEntry]) -> Vec<&'a str> {
+pub fn dependents<'a>(package: &str, entries: &'a [PackageEntry]) -> Vec<&'a str> {
     entries
         .iter()
         .filter(|entry| {
@@ -394,24 +394,22 @@ pub fn dependents<'a>(slug: &str, entries: &'a [PackageEntry]) -> Vec<&'a str> {
                 .dependencies
                 .iter()
                 .flat_map(|dependency| dependency.relations())
-                .any(|dependency| dependency.kind.installs_target() && dependency.id == slug)
+                .any(|dependency| dependency.kind.installs_target() && dependency.id == package)
         })
         .map(|entry| entry.mod_id.as_str())
         .collect()
 }
 
-pub fn find_entry<'a>(slug: &str, entries: &'a [PackageEntry]) -> Option<&'a PackageEntry> {
-    entries
-        .iter()
-        .find(|entry| entry.mod_id == slug || entry.source_slug() == Some(slug))
+pub fn find_entry<'a>(package: &str, entries: &'a [PackageEntry]) -> Option<&'a PackageEntry> {
+    entries.iter().find(|entry| entry.mod_id == package)
 }
 
 pub fn check_version_conflict(
-    slug: &str,
+    package: &str,
     new_version: &str,
     entries: &[PackageEntry],
 ) -> Result<(), String> {
-    if let Some(entry) = find_entry(slug, entries)
+    if let Some(entry) = find_entry(package, entries)
         && entry.version != new_version
     {
         return Err(format!(
@@ -600,6 +598,11 @@ fn collect_report(
                     package,
                     &identity.source,
                 ),
+                selected_description: selected_candidate_description(
+                    context.candidates,
+                    package,
+                    &identity.source,
+                ),
                 kind: PackageChangeKind::Install,
             });
             continue;
@@ -638,6 +641,11 @@ fn collect_report(
             selected_version: Some(selected_version.clone()),
             filename: (!active.filename.is_empty()).then(|| active.filename.clone()),
             selected_filename: selected_candidate_filename(
+                context.candidates,
+                package,
+                &identity.source,
+            ),
+            selected_description: selected_candidate_description(
                 context.candidates,
                 package,
                 &identity.source,
@@ -700,6 +708,7 @@ fn removal_change(entry: &PackageEntry) -> PackageChange {
         selected_version: None,
         filename: (!entry.filename.is_empty()).then(|| entry.filename.clone()),
         selected_filename: None,
+        selected_description: None,
         kind: PackageChangeKind::Remove,
     }
 }
@@ -715,6 +724,19 @@ fn selected_candidate_filename(
             .find(|candidate| candidate.id == source)
             .map(|candidate| candidate.filename.clone())
             .filter(|filename| !filename.is_empty())
+    })
+}
+
+fn selected_candidate_description(
+    candidates: &HashMap<String, Vec<CandidateVersion>>,
+    package: &str,
+    source: &str,
+) -> Option<String> {
+    candidates.get(package).and_then(|versions| {
+        versions
+            .iter()
+            .find(|candidate| candidate.id == source)
+            .map(CandidateVersion::display_description)
     })
 }
 
@@ -776,8 +798,8 @@ modloader_version = "47.2.0"
 minecraft_jar = { path = "minecraft.jar", sha256 = "test" }
 loader_jar = { path = "loader.jar", sha256 = "test" }
 [dependencies]
-a = "*"
-b = "*"
+a = { version = "*", remotes = [{ type = "file", path = "a.jar" }] }
+b = { version = "*", remotes = [{ type = "file", path = "b.jar" }] }
 "#,
         )
         .unwrap()
@@ -791,10 +813,12 @@ b = "*"
             sha256: String::new(),
             sha512: String::new(),
             filename: format!("{package}.jar"),
-            provider: "file".to_string(),
-            modrinth: None,
-            curseforge: None,
-            file: None,
+            remotes: vec![crate::manifest::PackageRemote::File {
+                path: format!("{package}.jar"),
+            }],
+            artifact_sources: vec![crate::lockfile::ArtifactSource::File {
+                path: format!("{package}.jar"),
+            }],
             dependencies: Vec::new(),
             environment: Environment::Both,
             provides: Vec::new(),
@@ -808,6 +832,7 @@ b = "*"
         CandidateVersion {
             id: format!("candidate-{version}"),
             filename: format!("candidate-{version}.jar"),
+            display_sources: vec!["test candidate".to_string()],
             jar_version: version.to_string(),
             dependencies: dependencies.into_iter().map(Into::into).collect(),
             environment: Environment::Both,
@@ -1087,8 +1112,8 @@ modloader_version = "0.19.2"
 minecraft_jar = { path = "minecraft.jar", sha256 = "test" }
 loader_jar = { path = "loader.jar", sha256 = "test" }
 [dependencies]
-reeses-sodium-options = "*"
-voxy = "*"
+reeses-sodium-options = { version = "*", remotes = [{ type = "file", path = "reeses.jar" }] }
+voxy = { version = "*", remotes = [{ type = "file", path = "voxy.jar" }] }
 "#,
         )
         .unwrap();
@@ -1232,7 +1257,7 @@ minecraft_jar = { path = "minecraft.jar", sha256 = "test" }
 loader_jar = { path = "loader.jar", sha256 = "test" }
 
 [dependencies]
-iris = "*"
+iris = { version = "*", remotes = [{ type = "file", path = "iris.jar" }] }
 "#,
         )
         .unwrap();

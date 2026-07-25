@@ -7,7 +7,6 @@ use crate::error::OrbitError;
 use crate::identification::{IdentifiedMod, identify_mods};
 use crate::lockfile::LockMeta;
 use crate::manifest::DependencySpec;
-use crate::providers::ModProvider;
 use crate::workspace::{Lockfile, ManifestFile};
 use crate::{InstallInteraction, RemovedPackage};
 
@@ -32,7 +31,6 @@ pub struct PlatformChange {
 
 pub async fn sync_instance(
     instance_dir: &Path,
-    providers: &[Box<dyn ModProvider>],
     dry_run: bool,
     interaction: InstallInteraction,
 ) -> Result<SyncReport, OrbitError> {
@@ -51,7 +49,7 @@ pub async fn sync_instance(
             modloader: manifest.inner.project.modloader.clone(),
             modloader_version: manifest.inner.project.modloader_version.clone(),
         },
-    );
+    )?;
     let refreshed_lock_meta = LockMeta {
         mc_version: manifest.inner.project.mc_version.clone(),
         modloader: manifest.inner.project.modloader.clone(),
@@ -62,11 +60,34 @@ pub async fn sync_instance(
         || lockfile.inner.meta.modloader_version != refreshed_lock_meta.modloader_version;
     lockfile.inner.meta = refreshed_lock_meta;
     let scanned = crate::init::scan_mods_dir(instance_dir, &manifest.inner.project.modloader)?;
-    let identified = identify_mods(&scanned, providers).await?;
-    let local_entries: Vec<_> = identified
+    let mut identified = identify_mods(&scanned, &[]).await?;
+    if !dry_run {
+        crate::identification::preserve_local_sources(instance_dir, &mut identified)?;
+    }
+    let mut local_entries: Vec<_> = identified
         .iter()
         .map(IdentifiedMod::to_package_entry)
         .collect();
+    let mut discovered_remotes =
+        std::collections::HashMap::<String, Vec<crate::manifest::PackageRemote>>::new();
+    for entry in &local_entries {
+        discovered_remotes
+            .entry(entry.mod_id.clone())
+            .or_default()
+            .extend(entry.remotes.iter().cloned());
+    }
+    for remotes in discovered_remotes.values_mut() {
+        remotes.sort();
+        remotes.dedup();
+    }
+    for entry in &mut local_entries {
+        entry.remotes = discovered_remotes[&entry.mod_id].clone();
+        if let Some(requirement) = manifest.inner.dependencies.get(&entry.mod_id) {
+            entry.remotes.extend(requirement.remotes.iter().cloned());
+            entry.remotes.sort();
+            entry.remotes.dedup();
+        }
+    }
 
     let InstallInteraction {
         select_package: _,
@@ -170,7 +191,13 @@ pub async fn sync_instance(
             .inner
             .dependencies
             .entry(entry.mod_id.clone())
-            .or_insert_with(|| DependencySpec::Short(entry.version.clone()));
+            .or_insert_with(|| DependencySpec {
+                version: entry.version.clone(),
+                optional: false,
+                env: None,
+                exclude: Vec::new(),
+                remotes: entry.remotes.clone(),
+            });
     }
     lockfile.inner.packages = selected_entries;
     lockfile
@@ -254,8 +281,8 @@ fn push_platform_change(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::lockfile::{FileInfo, OrbitLockfile, PackageEntry};
-    use crate::manifest::{OrbitManifest, ProjectMeta, ResolverConfig};
+    use crate::lockfile::{ArtifactSource, OrbitLockfile, PackageEntry};
+    use crate::manifest::{OrbitManifest, PackageRemote, ProjectMeta, ResolverConfig};
     use std::io::Write;
     use std::sync::{Arc, Mutex};
     use zip::write::SimpleFileOptions;
@@ -307,11 +334,21 @@ mod tests {
             dependencies: indexmap::IndexMap::from([
                 (
                     "missing".to_string(),
-                    DependencySpec::Short("*".to_string()),
+                    DependencySpec::new(
+                        "*",
+                        vec![crate::manifest::PackageRemote::File {
+                            path: "sources/missing.jar".to_string(),
+                        }],
+                    ),
                 ),
                 (
                     "unlocked".to_string(),
-                    DependencySpec::Short("*".to_string()),
+                    DependencySpec::new(
+                        "*",
+                        vec![crate::manifest::PackageRemote::File {
+                            path: "sources/unlocked.jar".to_string(),
+                        }],
+                    ),
                 ),
             ]),
             groups: indexmap::IndexMap::new(),
@@ -331,14 +368,14 @@ mod tests {
                     version: "1".to_string(),
                     sha1: String::new(),
                     sha256: "hash".to_string(),
-                    sha512: String::new(),
+                    sha512: "content-identity".to_string(),
                     filename: "missing.jar".to_string(),
-                    provider: "file".to_string(),
-                    modrinth: None,
-                    curseforge: None,
-                    file: Some(FileInfo {
+                    remotes: vec![PackageRemote::File {
                         path: "mods/missing.jar".to_string(),
-                    }),
+                    }],
+                    artifact_sources: vec![ArtifactSource::File {
+                        path: "mods/missing.jar".to_string(),
+                    }],
                     dependencies: Vec::new(),
                     environment: crate::metadata::Environment::Both,
                     provides: Vec::new(),
@@ -351,7 +388,7 @@ mod tests {
         .save()
         .unwrap();
 
-        let report = sync_instance(&directory, &[], true, InstallInteraction::default())
+        let report = sync_instance(&directory, true, InstallInteraction::default())
             .await
             .unwrap();
 
@@ -385,7 +422,7 @@ modloader_version = "0.16.10"
 minecraft_jar = { path = "minecraft.jar", sha256 = "test" }
 loader_jar = { path = "loader.jar", sha256 = "test" }
 [dependencies]
-alpha = "*"
+alpha = { version = "*", remotes = [{ type = "file", path = "alpha.jar" }] }
 "#,
         )
         .unwrap();
@@ -403,7 +440,6 @@ alpha = "*"
         let captured = Arc::clone(&preview);
         let aborted = sync_instance(
             &directory,
-            &[],
             false,
             InstallInteraction {
                 select_package: None,
@@ -424,7 +460,6 @@ alpha = "*"
 
         let applied = sync_instance(
             &directory,
-            &[],
             false,
             InstallInteraction {
                 select_package: None,
@@ -438,14 +473,17 @@ alpha = "*"
         assert_eq!(applied.removed[0].filename, "a-1.jar");
         assert!(!mods.join("a-1.jar").exists());
         assert!(mods.join("a-2.jar").exists());
+        let refreshed = Lockfile::open(&directory).unwrap();
+        let alpha = refreshed.inner.find("alpha").unwrap();
+        assert_eq!(alpha.version, "2");
+        assert_eq!(alpha.remotes.len(), 3);
         assert_eq!(
-            Lockfile::open(&directory)
-                .unwrap()
-                .inner
-                .find("alpha")
-                .unwrap()
-                .version,
-            "2"
+            alpha
+                .remotes
+                .iter()
+                .filter(|remote| { remote.display_locator() == "file:managed local source" })
+                .count(),
+            2
         );
         std::fs::remove_dir_all(directory).unwrap();
     }
@@ -481,7 +519,7 @@ alpha = "*"
         };
         ManifestFile::new(&directory, manifest).save().unwrap();
 
-        let report = sync_instance(&directory, &[], false, InstallInteraction::default())
+        let report = sync_instance(&directory, false, InstallInteraction::default())
             .await
             .unwrap();
         let refreshed = ManifestFile::open(&directory).unwrap();
@@ -549,7 +587,7 @@ alpha = "*"
         };
         ManifestFile::new(&directory, manifest).save().unwrap();
 
-        let report = sync_instance(&directory, &[], false, InstallInteraction::default())
+        let report = sync_instance(&directory, false, InstallInteraction::default())
             .await
             .unwrap();
         let refreshed = ManifestFile::open(&directory).unwrap();

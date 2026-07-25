@@ -34,7 +34,13 @@ pub(crate) async fn select_local_packages(
         resolution_manifest
             .dependencies
             .entry(entry.mod_id.clone())
-            .or_insert_with(|| DependencySpec::Short("*".to_string()));
+            .or_insert_with(|| DependencySpec {
+                version: "*".to_string(),
+                optional: false,
+                env: None,
+                exclude: Vec::new(),
+                remotes: entry.remotes.clone(),
+            });
     }
     let portfolio = crate::resolver::resolve_candidate_portfolio(
         &resolution_manifest,

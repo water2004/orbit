@@ -124,11 +124,44 @@ pub async fn download_and_parse(
     expected_sha512: &str,
     loader: &str,
 ) -> Result<JarModMetadata, crate::error::OrbitError> {
+    Ok(download_and_inspect(
+        cache,
+        downloader,
+        url,
+        filename,
+        expected_sha1,
+        expected_sha512,
+        loader,
+    )
+    .await?
+    .metadata)
+}
+
+#[derive(Debug, Clone)]
+pub struct InspectedJar {
+    pub metadata: JarModMetadata,
+    pub sha1: String,
+    pub sha256: String,
+    pub sha512: String,
+}
+
+/// Download, verify and parse one artifact while retaining locally computed
+/// content hashes. Candidate identity must be based on these hashes, not on a
+/// provider's project/file identifiers.
+pub async fn download_and_inspect(
+    cache: &crate::jar_cache::JarCache,
+    downloader: &crate::providers::ArtifactDownloadClient,
+    url: &str,
+    filename: &str,
+    expected_sha1: &str,
+    expected_sha512: &str,
+    loader: &str,
+) -> Result<InspectedJar, crate::error::OrbitError> {
     // 缓存查询
     if let Some(bytes) = cache.get_bytes(expected_sha512, expected_sha1)
         && verify_source_hash(&bytes, expected_sha1, expected_sha512, filename).is_ok()
     {
-        return read_mod_metadata_from_bytes(&bytes, loader);
+        return inspect_bytes(&bytes, loader);
     }
 
     let bytes = downloader.download(url, filename).await?;
@@ -138,7 +171,21 @@ pub async fn download_and_parse(
     // 存入缓存
     cache.store_bytes(&bytes)?;
 
-    read_mod_metadata_from_bytes(&bytes, loader)
+    inspect_bytes(&bytes, loader)
+}
+
+pub fn inspect_path(path: &Path, loader: &str) -> Result<InspectedJar, OrbitError> {
+    let bytes = std::fs::read(path)?;
+    inspect_bytes(&bytes, loader)
+}
+
+fn inspect_bytes(bytes: &[u8], loader: &str) -> Result<InspectedJar, OrbitError> {
+    Ok(InspectedJar {
+        metadata: read_mod_metadata_from_bytes(bytes, loader)?,
+        sha1: sha1_digest(bytes),
+        sha256: sha256_digest(bytes),
+        sha512: sha512_digest(bytes),
+    })
 }
 
 pub(crate) fn verify_source_hash(

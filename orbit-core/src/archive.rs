@@ -23,6 +23,7 @@ pub enum ImportMergeStrategy {
 #[derive(Debug, Clone, Default)]
 pub struct ImportReport {
     pub added: Vec<String>,
+    pub merged: Vec<String>,
     pub replaced: Vec<String>,
     pub kept: Vec<String>,
     pub extracted: Vec<String>,
@@ -60,20 +61,47 @@ where
                 report.added.push(package.clone());
                 current.inner.dependencies.insert(package, requirement);
             }
-            Some(existing) if existing == &requirement => {
-                report.kept.push(package);
-            }
             Some(existing) => {
-                let replace = match strategy {
+                let mut remotes = existing.remotes.clone();
+                remotes.extend(requirement.remotes.iter().cloned());
+                remotes.sort();
+                remotes.dedup();
+                let remotes_changed = remotes != existing.remotes;
+                if same_requirement_semantics(existing, &requirement) {
+                    if remotes_changed {
+                        current
+                            .inner
+                            .dependencies
+                            .get_mut(&package)
+                            .expect("package exists")
+                            .remotes = remotes;
+                        report.merged.push(package);
+                    } else {
+                        report.kept.push(package);
+                    }
+                    continue;
+                }
+
+                let use_import = match strategy {
                     ImportMergeStrategy::PreferExisting => false,
                     ImportMergeStrategy::PreferImport => true,
                     ImportMergeStrategy::Interactive => {
                         resolve_conflict(&package, existing, &requirement)?
                     }
                 };
-                if replace {
+                if use_import {
+                    let mut requirement = requirement;
+                    requirement.remotes = remotes;
                     report.replaced.push(package.clone());
                     current.inner.dependencies.insert(package, requirement);
+                } else if remotes_changed {
+                    current
+                        .inner
+                        .dependencies
+                        .get_mut(&package)
+                        .expect("package exists")
+                        .remotes = remotes;
+                    report.merged.push(package);
                 } else {
                     report.kept.push(package);
                 }
@@ -81,12 +109,22 @@ where
         }
     }
     report.added.sort();
+    report.merged.sort();
     report.replaced.sort();
     report.kept.sort();
-    if !dry_run && (!report.added.is_empty() || !report.replaced.is_empty()) {
+    if !dry_run
+        && (!report.added.is_empty() || !report.merged.is_empty() || !report.replaced.is_empty())
+    {
         current.save()?;
     }
     Ok(report)
+}
+
+fn same_requirement_semantics(left: &DependencySpec, right: &DependencySpec) -> bool {
+    left.version == right.version
+        && left.optional == right.optional
+        && left.env == right.env
+        && left.exclude == right.exclude
 }
 
 pub fn import_archive(
@@ -309,8 +347,8 @@ fn temporary_output_path(output: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::lockfile::{FileInfo, LockMeta, ModrinthInfo, OrbitLockfile, PackageEntry};
-    use crate::manifest::{OrbitManifest, ProjectMeta, ResolverConfig};
+    use crate::lockfile::{ArtifactSource, LockMeta, OrbitLockfile, PackageEntry};
+    use crate::manifest::{OrbitManifest, PackageRemote, ProjectMeta, ResolverConfig};
     use serde_json::json;
 
     fn test_dir(name: &str) -> PathBuf {
@@ -341,7 +379,12 @@ mod tests {
             resolver: ResolverConfig::default(),
             dependencies: indexmap::IndexMap::from([(
                 dependency.to_string(),
-                DependencySpec::Short("*".to_string()),
+                DependencySpec::new(
+                    "*",
+                    vec![PackageRemote::File {
+                        path: format!("sources/{dependency}.jar"),
+                    }],
+                ),
             )]),
             groups: indexmap::IndexMap::new(),
             overrides: indexmap::IndexMap::new(),
@@ -359,7 +402,12 @@ mod tests {
         let mut incoming = manifest("added");
         incoming.dependencies.insert(
             "existing".to_string(),
-            DependencySpec::Short("2".to_string()),
+            DependencySpec::new(
+                "2",
+                vec![PackageRemote::File {
+                    path: "sources/existing-v2.jar".to_string(),
+                }],
+            ),
         );
         std::fs::write(&source, incoming.to_toml_string().unwrap()).unwrap();
 
@@ -373,11 +421,13 @@ mod tests {
         .unwrap();
 
         assert_eq!(report.added, vec!["added"]);
+        assert_eq!(report.merged, vec!["existing"]);
+        let imported = ManifestFile::open(&directory).unwrap();
         assert_eq!(
-            ManifestFile::open(&directory).unwrap().inner.dependencies["existing"]
-                .version_constraint(),
+            imported.inner.dependencies["existing"].version_constraint(),
             Some("*")
         );
+        assert_eq!(imported.inner.dependencies["existing"].remotes.len(), 2);
         std::fs::remove_dir_all(directory).unwrap();
     }
 
@@ -426,14 +476,14 @@ mod tests {
                     version: "1".to_string(),
                     sha1: String::new(),
                     sha256: crate::jar::compute_sha256(&jar).unwrap(),
-                    sha512: String::new(),
+                    sha512: crate::jar::compute_sha512(&jar).unwrap(),
                     filename: "example.jar".to_string(),
-                    provider: "file".to_string(),
-                    modrinth: None,
-                    curseforge: None,
-                    file: Some(FileInfo {
+                    remotes: vec![PackageRemote::File {
                         path: "mods/example.jar".to_string(),
-                    }),
+                    }],
+                    artifact_sources: vec![ArtifactSource::File {
+                        path: "mods/example.jar".to_string(),
+                    }],
                     dependencies: Vec::new(),
                     environment: crate::metadata::Environment::Both,
                     provides: Vec::new(),
@@ -463,16 +513,25 @@ mod tests {
         crate::platform::test_support::write_platform(&directory, "1", "fabric", "1");
         std::fs::create_dir_all(directory.join("mods")).unwrap();
         let mut project = manifest("online");
-        project
-            .dependencies
-            .insert("local".to_string(), DependencySpec::Short("*".to_string()));
+        project.dependencies.insert(
+            "local".to_string(),
+            DependencySpec::new(
+                "*",
+                vec![PackageRemote::File {
+                    path: "mods/local.jar".to_string(),
+                }],
+            ),
+        );
         project.dependencies.insert(
             "online".to_string(),
-            DependencySpec::Full {
-                version: Some("*".to_string()),
-                optional: Some(true),
+            DependencySpec {
+                version: "*".to_string(),
+                optional: true,
                 env: Some("client".to_string()),
-                exclude: None,
+                exclude: Vec::new(),
+                remotes: vec![PackageRemote::Modrinth {
+                    project_id: "online-project".to_string(),
+                }],
             },
         );
         ManifestFile::new(&directory, project).save().unwrap();
@@ -498,15 +557,14 @@ mod tests {
                         sha256: crate::jar::sha256_digest(&online_bytes),
                         sha512: crate::jar::sha512_digest(&online_bytes),
                         filename: "online.jar".to_string(),
-                        provider: "modrinth".to_string(),
-                        modrinth: Some(ModrinthInfo {
+                        remotes: vec![PackageRemote::Modrinth {
+                            project_id: "online-project".to_string(),
+                        }],
+                        artifact_sources: vec![ArtifactSource::Modrinth {
                             project_id: "online-project".to_string(),
                             version_id: "online-version".to_string(),
-                            slug: "online".to_string(),
                             download_url: "https://cdn.modrinth.com/online.jar".to_string(),
-                        }),
-                        curseforge: None,
-                        file: None,
+                        }],
                         dependencies: Vec::new(),
                         environment: crate::metadata::Environment::Both,
                         provides: Vec::new(),
@@ -521,12 +579,12 @@ mod tests {
                         sha256: crate::jar::sha256_digest(&local_bytes),
                         sha512: crate::jar::sha512_digest(&local_bytes),
                         filename: "local.jar".to_string(),
-                        provider: "file".to_string(),
-                        modrinth: None,
-                        curseforge: None,
-                        file: Some(FileInfo {
+                        remotes: vec![PackageRemote::File {
                             path: "mods/local.jar".to_string(),
-                        }),
+                        }],
+                        artifact_sources: vec![ArtifactSource::File {
+                            path: "mods/local.jar".to_string(),
+                        }],
                         dependencies: Vec::new(),
                         environment: crate::metadata::Environment::Both,
                         provides: Vec::new(),

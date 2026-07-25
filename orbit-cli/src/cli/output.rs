@@ -18,6 +18,7 @@ const ABSENT: &str = "—";
 struct LogicalChange {
     current: String,
     selected: String,
+    candidate: String,
     kind: PackageChangeKind,
 }
 
@@ -72,6 +73,7 @@ pub fn package_changes_table(changes: &[PackageChange]) -> String {
                 change.package.as_str(),
                 change.current_version.as_deref().unwrap_or(ABSENT),
                 change.selected_version.as_deref().unwrap_or(ABSENT),
+                change.selected_description.as_deref().unwrap_or(ABSENT),
                 change_label(change.kind),
             )
         }),
@@ -127,6 +129,7 @@ pub fn resolution_choices(alternatives: &[ResolutionReport]) -> String {
                     package.as_str(),
                     change.current.as_str(),
                     change.selected.as_str(),
+                    change.candidate.as_str(),
                     change_label(change.kind),
                 )
             })
@@ -152,12 +155,13 @@ pub fn resolution_choices(alternatives: &[ResolutionReport]) -> String {
                         package.as_str(),
                         change.current.as_str(),
                         change.selected.as_str(),
+                        change.candidate.as_str(),
                         change_label(change.kind),
                     )
                 }));
             } else {
                 let current = current_version_for(package, &logical);
-                rows.push(("◆", package.as_str(), current, current, "keep"));
+                rows.push(("◆", package.as_str(), current, current, ABSENT, "keep"));
             }
         }
         if rows.is_empty() {
@@ -201,6 +205,10 @@ fn logical_changes(report: &ResolutionReport) -> BTreeMap<String, Vec<LogicalCha
                     .selected_version
                     .clone()
                     .unwrap_or_else(|| ABSENT.into()),
+                candidate: change
+                    .selected_description
+                    .clone()
+                    .unwrap_or_else(|| ABSENT.into()),
                 kind: change.kind,
             });
     }
@@ -209,6 +217,7 @@ fn logical_changes(report: &ResolutionReport) -> BTreeMap<String, Vec<LogicalCha
             left.current
                 .cmp(&right.current)
                 .then_with(|| left.selected.cmp(&right.selected))
+                .then_with(|| left.candidate.cmp(&right.candidate))
                 .then_with(|| change_label(left.kind).cmp(change_label(right.kind)))
         });
     }
@@ -229,12 +238,12 @@ fn current_version_for<'a>(
 }
 
 fn changes_table<'a>(
-    rows: impl IntoIterator<Item = (&'a str, &'a str, &'a str, &'a str, &'a str)>,
+    rows: impl IntoIterator<Item = (&'a str, &'a str, &'a str, &'a str, &'a str, &'a str)>,
     highlight: bool,
 ) -> String {
-    let mut table = error_table(["", "Package", "Current", "Selected", "Action"]);
-    for (marker, package, current, selected, action) in rows {
-        let cells = [marker, package, current, selected, action].map(|value| {
+    let mut table = error_table(["", "Package", "Current", "Selected", "Candidate", "Action"]);
+    for (marker, package, current, selected, candidate, action) in rows {
+        let cells = [marker, package, current, selected, candidate, action].map(|value| {
             let cell = Cell::new(value);
             if highlight {
                 cell.fg(Color::Yellow).add_attribute(Attribute::Bold)
@@ -287,6 +296,7 @@ mod tests {
             selected_version: selected.map(str::to_string),
             filename: Some(filename.to_string()),
             selected_filename: Some(format!("selected-{filename}")),
+            selected_description: None,
             kind,
         }
     }
@@ -363,6 +373,46 @@ mod tests {
         assert_eq!(output.matches("Option ").count(), 2);
         assert!(output.matches('◆').count() >= 4, "{output}");
         assert!(output.contains("keep"));
+        assert!(!output.contains(".jar"));
+    }
+
+    #[test]
+    fn choices_distinguish_same_version_candidates_without_rendering_hashes() {
+        let mut first_change = change(
+            "voxy",
+            Some("1"),
+            Some("2"),
+            PackageChangeKind::Upgrade,
+            "voxy-a.jar",
+        );
+        first_change.selected_description =
+            Some("Modrinth project abc, release one; requires sodium =0.8.9".to_string());
+        let mut second_change = first_change.clone();
+        second_change.selected_description =
+            Some("CurseForge project 123, file 456; requires sodium >=0.9".to_string());
+        let first = ResolutionReport {
+            selected_candidates: BTreeMap::from([(
+                "voxy".to_string(),
+                "sha512:must-not-be-rendered".to_string(),
+            )]),
+            changes: vec![first_change],
+            ..ResolutionReport::default()
+        };
+        let second = ResolutionReport {
+            selected_candidates: BTreeMap::from([(
+                "voxy".to_string(),
+                "sha512:also-secret".to_string(),
+            )]),
+            changes: vec![second_change],
+            ..ResolutionReport::default()
+        };
+
+        let output = resolution_choices(&[first, second]);
+
+        assert_eq!(output.matches("Option ").count(), 2);
+        assert!(output.contains("Modrinth project abc"));
+        assert!(output.contains("CurseForge project 123"));
+        assert!(!output.contains("sha512"));
         assert!(!output.contains(".jar"));
     }
 

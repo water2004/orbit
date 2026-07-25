@@ -11,6 +11,7 @@ pub mod instances;
 pub mod list;
 pub mod outdated;
 pub mod purge;
+pub mod remote;
 pub mod remove;
 pub mod search;
 pub mod sync;
@@ -119,6 +120,7 @@ pub use install::handle as handle_install;
 pub use list::handle as handle_list;
 pub use outdated::handle as handle_outdated;
 pub use purge::handle as handle_purge;
+pub use remote::handle as handle_remote;
 pub use remove::handle as handle_remove;
 pub use search::handle as handle_search;
 pub use sync::handle as handle_sync;
@@ -285,11 +287,11 @@ pub fn create_instance_providers(
     platform: Option<&str>,
     runtime: &orbit_core::RuntimeContext,
 ) -> Result<Vec<Box<dyn orbit_core::ModProvider>>> {
-    let mut platforms = if let Some(platform) = platform {
+    let mut catalogs = if let Some(platform) = platform {
         vec![normalize_platform(platform).to_string()]
     } else {
         match orbit_core::ManifestFile::open(instance_dir) {
-            Ok(manifest) => manifest.inner.resolver.platforms,
+            Ok(manifest) => manifest.inner.resolver.catalogs,
             Err(orbit_core::OrbitError::ManifestNotFound) => vec!["modrinth".to_string()],
             Err(error) => return Err(error).context("failed to read orbit.toml"),
         }
@@ -298,12 +300,36 @@ pub fn create_instance_providers(
         && let Ok(lockfile) = orbit_core::Lockfile::open(instance_dir)
     {
         for entry in &lockfile.inner.packages {
-            if entry.provider != "file" && !platforms.contains(&entry.provider) {
-                platforms.push(entry.provider.clone());
+            for remote in &entry.remotes {
+                let provider = remote.provider();
+                if provider != "file" && !catalogs.iter().any(|item| item == provider) {
+                    catalogs.push(provider.to_string());
+                }
+            }
+            for source in &entry.artifact_sources {
+                let provider = source.provider();
+                if provider != "file" && !catalogs.iter().any(|item| item == provider) {
+                    catalogs.push(provider.to_string());
+                }
             }
         }
     }
-    orbit_core::providers::create_providers(&platforms, &runtime.config().auth)
+    if platform.is_none()
+        && let Ok(manifest) = orbit_core::ManifestFile::open(instance_dir)
+    {
+        for remote in manifest
+            .inner
+            .dependencies
+            .values()
+            .flat_map(|dependency| dependency.remotes.iter())
+        {
+            let provider = remote.provider();
+            if provider != "file" && !catalogs.iter().any(|item| item == provider) {
+                catalogs.push(provider.to_string());
+            }
+        }
+    }
+    orbit_core::providers::create_providers(&catalogs, &runtime.config().auth)
         .context("failed to create providers")
 }
 
@@ -346,6 +372,23 @@ fn normalize_platform(platform: &str) -> &str {
     }
 }
 
+pub fn parse_package_remote(provider: &str, locator: &str) -> Result<orbit_core::PackageRemote> {
+    match normalize_platform(provider) {
+        "file" => Ok(orbit_core::PackageRemote::File {
+            path: locator.to_string(),
+        }),
+        "modrinth" => Ok(orbit_core::PackageRemote::Modrinth {
+            project_id: locator.to_string(),
+        }),
+        "curseforge" => Ok(orbit_core::PackageRemote::Curseforge {
+            project_id: locator.parse().map_err(|_| {
+                anyhow::anyhow!("CurseForge remotes require a numeric project ID, got '{locator}'")
+            })?,
+        }),
+        other => anyhow::bail!("unsupported package remote '{other}'"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::resolve_platform_target;
@@ -353,8 +396,8 @@ mod tests {
     #[test]
     fn platform_prefix_selects_one_provider() {
         assert_eq!(
-            resolve_platform_target("cf:jei", None).unwrap(),
-            (Some("curseforge".to_string()), "jei")
+            resolve_platform_target("cf:238222", None).unwrap(),
+            (Some("curseforge".to_string()), "238222")
         );
         assert_eq!(
             resolve_platform_target("mr:sodium", Some("modrinth")).unwrap(),
@@ -364,7 +407,7 @@ mod tests {
 
     #[test]
     fn conflicting_platform_selectors_are_rejected() {
-        let error = resolve_platform_target("cf:jei", Some("modrinth")).unwrap_err();
+        let error = resolve_platform_target("cf:238222", Some("modrinth")).unwrap_err();
         assert!(error.to_string().contains("selects curseforge"));
     }
 }

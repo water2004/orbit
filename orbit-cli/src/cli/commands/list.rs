@@ -30,7 +30,11 @@ fn print_flat(output: &orbit_core::ListOutput) {
         let optional = if pkg.optional { ", optional" } else { "" };
         println!(
             "{} v{} ({}, {}{})",
-            pkg.mod_id, pkg.version, pkg.provider, pkg.environment, optional
+            pkg.mod_id,
+            pkg.version,
+            pkg.remotes.join(", "),
+            pkg.environment,
+            optional
         );
         for (name, ver) in &pkg.bundled {
             println!("  + bundled: {name} v{ver}");
@@ -158,6 +162,10 @@ fn print_package_line(prefix: &str, package: &orbit_core::ListedPackage) {
     let optional = if package.optional { ", optional" } else { "" };
     println!(
         "{prefix}{} v{} ({}, {}{})",
-        package.mod_id, package.version, package.provider, package.environment, optional
+        package.mod_id,
+        package.version,
+        package.remotes.join(", "),
+        package.environment,
+        optional
     );
 }

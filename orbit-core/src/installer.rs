@@ -5,14 +5,12 @@
 use std::path::{Path, PathBuf};
 
 use crate::error::OrbitError;
-use crate::lockfile::{
-    CurseForgeInfo, FileInfo, LockMeta, ModrinthInfo, OrbitLockfile, PackageEntry,
-};
-use crate::manifest::{DependencySpec, OrbitManifest};
+use crate::lockfile::{ArtifactSource, LockMeta, OrbitLockfile, PackageEntry};
+use crate::manifest::{DependencySpec, OrbitManifest, PackageRemote};
 use crate::progress::{
     ArtifactProgressState, ProgressEvent, ProgressReporter, emit as emit_progress,
 };
-use crate::providers::{ModProvider, RemoteArtifact};
+use crate::providers::ModProvider;
 use crate::resolver::types::{CandidateDiagnostic, ResolutionSelector};
 use crate::workspace::{Lockfile, ManifestFile};
 
@@ -92,14 +90,12 @@ pub struct RestoreReport {
 pub struct InstalledMod {
     /// Remote candidate identity used only while materializing this plan.
     pub candidate_id: Option<String>,
-    pub slug: String,
     pub mod_id: String,
     /// JAR loader 元数据声明的版本
     pub version: String,
     pub filename: String,
-    pub provider: String,
-    pub modrinth: Option<ModrinthInfo>,
-    pub curseforge: Option<CurseForgeInfo>,
+    pub remotes: Vec<PackageRemote>,
+    pub artifact_sources: Vec<ArtifactSource>,
     pub dependencies: Vec<crate::metadata::DependencyExpression>,
     pub environment: crate::metadata::Environment,
     pub provides: Vec<crate::metadata::ProvidedMod>,
@@ -108,13 +104,19 @@ pub struct InstalledMod {
     pub bundled: Vec<crate::lockfile::BundledMod>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InstallTarget {
+    Remote(PackageRemote),
+    Package(String),
+}
+
 /// 顶层 API：在指定实例目录安装模组。
 ///
 /// 接收 `instance_dir`，内部完成 orbit.toml / orbit.lock 的读写和 mods/ 目录管理。
 /// `constraint` 会绑定到候选 JAR 自声明的 `mod_id`，并作为 manifest 根约束保留。
 /// `dry_run` 为 true 时仅解析不下载不写文件。
 pub async fn install_to_instance(
-    slug: &str,
+    target: InstallTarget,
     constraint: &str,
     instance_dir: &Path,
     providers: &[Box<dyn ModProvider>],
@@ -137,7 +139,7 @@ pub async fn install_to_instance(
             modloader: manifest_file.inner.project.modloader.clone(),
             modloader_version: manifest_file.inner.project.modloader_version.clone(),
         },
-    );
+    )?;
     lock.inner.meta = LockMeta {
         mc_version: manifest_file.inner.project.mc_version.clone(),
         modloader: manifest_file.inner.project.modloader.clone(),
@@ -151,7 +153,8 @@ pub async fn install_to_instance(
 
     let loader_package = platform.loader_package;
     let report = install_mod(InstallModInput {
-        slug,
+        target,
+        instance_dir,
         constraint,
         providers,
         jar_cache,
@@ -205,7 +208,7 @@ pub async fn restore_instance(
             modloader: manifest.inner.project.modloader.clone(),
             modloader_version: manifest.inner.project.modloader_version.clone(),
         },
-    );
+    )?;
     let lock_metadata_changed =
         reconcile_lock_metadata(&manifest.inner, &mut lock.inner, options.locked)?;
     let InstallInteraction {
@@ -242,15 +245,16 @@ pub async fn restore_instance(
                 lock_graph_error.unwrap_or_else(|| "missing lock entry".to_string())
             )));
         }
-        let resolution = resolve_missing_lock_entries(
-            &manifest.inner,
-            &mut lock.inner,
+        let resolution = resolve_missing_lock_entries(MissingLockResolutionInput {
+            instance_dir,
+            manifest: &manifest.inner,
+            lockfile: &mut lock.inner,
             providers,
             jar_cache,
-            loader_package.clone(),
-            select_resolution,
-            progress.clone(),
-        )
+            loader_package: loader_package.clone(),
+            selector: select_resolution,
+            progress: progress.clone(),
+        })
         .await?;
         let removals = package_removals(&resolution.changes);
         if confirm_install.is_some_and(|confirm| {
@@ -402,7 +406,7 @@ pub async fn upgrade_all_in_instance(
             modloader: manifest_file.inner.project.modloader.clone(),
             modloader_version: manifest_file.inner.project.modloader_version.clone(),
         },
-    );
+    )?;
     lock.inner.meta = LockMeta {
         mc_version: manifest_file.inner.project.mc_version.clone(),
         modloader: manifest_file.inner.project.modloader.clone(),
@@ -412,6 +416,7 @@ pub async fn upgrade_all_in_instance(
     let crate::outdated::OutdatedReport {
         updates: _,
         resolved: resolved_candidates,
+        candidate_remotes,
         changes: _,
         resolution,
         diagnostics,
@@ -452,7 +457,22 @@ pub async fn upgrade_all_in_instance(
     for (package, candidate_id) in &resolution.selected_candidates {
         let version = &resolution.selected_versions[package];
         let resolved = resolved_candidate(&resolved_candidates, candidate_id)?;
-        planned.push(plan_from_resolved(package, version, candidate_id, resolved));
+        let mut remotes = candidate_remotes.get(package).cloned().unwrap_or_default();
+        if let Some(requirement) = manifest_file.inner.dependencies.get(package) {
+            remotes.extend(requirement.remotes.iter().cloned());
+        }
+        if let Some(entry) = lock.inner.find(package) {
+            remotes.extend(entry.remotes.iter().cloned());
+        }
+        remotes.sort();
+        remotes.dedup();
+        planned.push(plan_from_resolved(
+            package,
+            version,
+            candidate_id,
+            resolved,
+            remotes,
+        ));
     }
     let removals = package_removals(&resolution.changes);
 
@@ -517,23 +537,22 @@ pub async fn upgrade_all_in_instance(
 
 /// 顶层 API：从指定实例目录移除模组。
 ///
-/// `input` 可以是 JAR loader 元数据声明的 `mod_id` 或平台 slug。
-/// 先从 lockfile 查找（同时匹配 mod_id 和平台 slug），
-/// 再同步更新 manifest、lockfile、JAR 文件。
+/// `package` 只能是 JAR loader 元数据声明的 `mod_id`。远端 locator
+/// 不属于包身份，不能用于已安装包操作。
 pub fn remove_from_instance(
-    input: &str,
+    package: &str,
     instance_dir: &Path,
     dry_run: bool,
 ) -> Result<RemoveReport, OrbitError> {
     let mut manifest_file = ManifestFile::open(instance_dir)?;
     let mut lock = Lockfile::open(instance_dir)?;
 
-    let entry = crate::resolver::find_entry(input, &lock.inner.packages)
-        .ok_or_else(|| OrbitError::ModNotFound(input.to_string()))?;
+    let entry = crate::resolver::find_entry(package, &lock.inner.packages)
+        .ok_or_else(|| OrbitError::ModNotFound(package.to_string()))?;
     let key = entry.mod_id.clone();
 
     if !manifest_file.inner.dependencies.contains_key(&key) {
-        return Err(OrbitError::ModNotFound(input.to_string()));
+        return Err(OrbitError::ModNotFound(package.to_string()));
     }
     manifest_file
         .inner
@@ -569,26 +588,10 @@ pub struct RemoveReport {
     pub jar_deleted: bool,
 }
 
-/// 列出实例中所有依赖（供 remove 找不到时交互选择）
-/// 返回 (mod_id, slug)，slug 从 lockfile 的平台专属子表读取，
-/// 若 lockfile 不存在或无平台来源信息则回退到 mod_id。
-pub fn list_dependencies(instance_dir: &Path) -> Result<Vec<(String, String)>, OrbitError> {
+/// 列出实例中的所有顶层包身份，供 remove 找不到时交互选择。
+pub fn list_dependencies(instance_dir: &Path) -> Result<Vec<String>, OrbitError> {
     let manifest_file = ManifestFile::open(instance_dir)?;
-    let lock = Lockfile::open(instance_dir).ok();
-    Ok(manifest_file
-        .inner
-        .dependencies
-        .iter()
-        .map(|(k, _)| {
-            let slug = lock
-                .as_ref()
-                .and_then(|l| l.find(k))
-                .and_then(PackageEntry::source_slug)
-                .map(str::to_string)
-                .unwrap_or_else(|| k.clone());
-            (k.clone(), slug)
-        })
-        .collect())
+    Ok(manifest_file.inner.dependencies.keys().cloned().collect())
 }
 
 /// `orbit list` 输出结构
@@ -601,8 +604,7 @@ pub struct ListOutput {
 pub struct ListedPackage {
     pub mod_id: String,
     pub version: String,
-    pub slug: Option<String>,
-    pub provider: String,
+    pub remotes: Vec<String>,
     pub environment: String,
     pub optional: bool,
     /// 依赖的 mod_id 列表
@@ -663,8 +665,11 @@ fn list_output(
             ListedPackage {
                 mod_id: entry.mod_id.clone(),
                 version: entry.version.clone(),
-                slug: entry.source_slug().map(str::to_string),
-                provider: entry.provider.clone(),
+                remotes: entry
+                    .remotes
+                    .iter()
+                    .map(PackageRemote::display_locator)
+                    .collect(),
                 environment: requirement
                     .and_then(DependencySpec::env)
                     .unwrap_or("both")
@@ -709,7 +714,8 @@ fn bundled_pairs(bundled: &[crate::lockfile::BundledMod]) -> Vec<(String, String
 // ── 内部实现 ──────────────────────────────────────────────────────────
 
 struct InstallModInput<'a> {
-    slug: &'a str,
+    target: InstallTarget,
+    instance_dir: &'a Path,
     constraint: &'a str,
     providers: &'a [Box<dyn ModProvider>],
     jar_cache: &'a crate::jar_cache::JarCache,
@@ -723,7 +729,8 @@ struct InstallModInput<'a> {
 
 async fn install_mod(input: InstallModInput<'_>) -> Result<InstallReport, OrbitError> {
     let InstallModInput {
-        slug,
+        target,
+        instance_dir,
         constraint,
         providers,
         jar_cache,
@@ -741,11 +748,18 @@ async fn install_mod(input: InstallModInput<'_>) -> Result<InstallReport, OrbitE
         progress,
     } = interaction;
 
-    if options.intent == InstallIntent::Add
-        && crate::resolver::find_entry(slug, &lockfile.packages).is_some()
-    {
-        return Err(OrbitError::Conflict(format!(
-            "'{slug}' already in lockfile. Use 'orbit upgrade {slug}' to update it."
+    let requested_package = match &target {
+        InstallTarget::Package(package) => Some(package.as_str()),
+        InstallTarget::Remote(_) => None,
+    };
+    if options.intent == InstallIntent::Add && requested_package.is_some() {
+        return Err(OrbitError::Other(anyhow::anyhow!(
+            "add requires a package remote, not an installed package id"
+        )));
+    }
+    if options.intent == InstallIntent::Upgrade && requested_package.is_none() {
+        return Err(OrbitError::Other(anyhow::anyhow!(
+            "upgrade requires an installed package id"
         )));
     }
 
@@ -753,20 +767,41 @@ async fn install_mod(input: InstallModInput<'_>) -> Result<InstallReport, OrbitE
     let mc_version = &manifest.project.mc_version;
 
     // 1-2. BFS download all JARs
-    let seeds = vec![slug.to_string()];
-    let mut catalog = crate::outdated::download_transaction_candidate_catalog(
-        providers,
-        &seeds,
-        lockfile,
-        mc_version,
-        loader,
-        jar_cache,
-        progress.clone(),
+    let requested_remotes: Vec<_> = match &target {
+        InstallTarget::Remote(remote) => vec![remote.clone()],
+        InstallTarget::Package(_) => Vec::new(),
+    };
+    let manifest_remotes: Vec<_> = manifest
+        .dependencies
+        .values()
+        .flat_map(|dependency| dependency.remotes.iter().cloned())
+        .collect();
+    let mut catalog = crate::outdated::download_candidate_catalog(
+        crate::outdated::CandidateDiscoveryInput {
+            instance_dir,
+            providers,
+            additional_remotes: &manifest_remotes,
+            lockfile,
+            mc_version,
+            loader,
+            jar_cache,
+            progress: progress.clone(),
+        },
+        &requested_remotes,
     )
     .await?;
     catalog.loader_package = loader_package;
     if catalog.candidates.is_empty() {
-        return Err(OrbitError::ModNotFound(slug.to_string()));
+        return Err(OrbitError::ModNotFound(
+            requested_package
+                .map(str::to_string)
+                .or_else(|| {
+                    requested_remotes
+                        .first()
+                        .map(PackageRemote::display_locator)
+                })
+                .unwrap_or_default(),
+        ));
     }
     let requested_requirement =
         requested_requirement(constraint, options.optional, options.env.as_deref())?;
@@ -778,7 +813,7 @@ async fn install_mod(input: InstallModInput<'_>) -> Result<InstallReport, OrbitE
         },
     );
     let (requested_package, portfolio) = resolve_requested_package(RequestedPackageInput {
-        locator: slug,
+        requested_package,
         intent: options.intent,
         manifest,
         lockfile,
@@ -830,7 +865,13 @@ async fn install_mod(input: InstallModInput<'_>) -> Result<InstallReport, OrbitE
             continue;
         }
 
-        planned.push(plan_from_resolved(mod_id, new_ver, candidate_id, resolved));
+        planned.push(plan_from_resolved(
+            mod_id,
+            new_ver,
+            candidate_id,
+            resolved,
+            package_remotes(mod_id, manifest, lockfile, &catalog),
+        ));
     }
 
     let report = InstallReport {
@@ -878,6 +919,9 @@ async fn install_mod(input: InstallModInput<'_>) -> Result<InstallReport, OrbitE
         .iter()
         .any(|installed| installed.mod_id == requested_package)
     {
+        let mut requested_requirement = requested_requirement;
+        requested_requirement.remotes =
+            package_remotes(&requested_package, manifest, lockfile, &catalog);
         ensure_root_requirement(manifest, &requested_package, requested_requirement);
     }
     apply_to_lockfile(lockfile, &installed, mods_dir);
@@ -894,7 +938,7 @@ async fn install_mod(input: InstallModInput<'_>) -> Result<InstallReport, OrbitE
 }
 
 struct RequestedPackageInput<'a> {
-    locator: &'a str,
+    requested_package: Option<&'a str>,
     intent: InstallIntent,
     manifest: &'a OrbitManifest,
     lockfile: &'a OrbitLockfile,
@@ -908,7 +952,7 @@ async fn resolve_requested_package(
     input: RequestedPackageInput<'_>,
 ) -> Result<(String, crate::resolver::types::ResolutionPortfolio), OrbitError> {
     let RequestedPackageInput {
-        locator,
+        requested_package,
         intent,
         manifest,
         lockfile,
@@ -918,6 +962,7 @@ async fn resolve_requested_package(
         progress,
     } = input;
     if intent == InstallIntent::Upgrade {
+        let locator = requested_package.unwrap_or_default();
         let package = crate::resolver::find_entry(locator, &lockfile.packages)
             .map(|entry| entry.mod_id.clone())
             .ok_or_else(|| OrbitError::ModNotFound(locator.to_string()))?;
@@ -946,12 +991,11 @@ async fn resolve_requested_package(
         return Ok((package, portfolio));
     }
 
-    let mut packages = catalog.packages_for_locator(locator);
-    if packages.is_empty() && catalog.candidates.contains_key(locator) {
-        packages.push(locator.to_string());
-    }
+    let packages: Vec<_> = catalog.requested_packages.iter().cloned().collect();
     if packages.is_empty() {
-        return Err(OrbitError::ModNotFound(locator.to_string()));
+        return Err(OrbitError::ModNotFound(
+            "requested remotes contain no JAR-declared package".to_string(),
+        ));
     }
 
     let mut feasible = Vec::new();
@@ -969,7 +1013,9 @@ async fn resolve_requested_package(
             continue;
         }
         let mut resolution_manifest = manifest.clone();
-        ensure_root_requirement(&mut resolution_manifest, &package, requirement.clone());
+        let mut package_requirement = requirement.clone();
+        package_requirement.remotes = catalog.remotes_for_package(&package);
+        ensure_root_requirement(&mut resolution_manifest, &package, package_requirement);
         match crate::resolver::resolve_candidate_portfolio_with_progress(
             &resolution_manifest,
             lockfile,
@@ -990,7 +1036,7 @@ async fn resolve_requested_package(
             .collect::<Vec<_>>()
             .join("\n");
         return Err(OrbitError::Conflict(format!(
-            "provider locator '{locator}' contains no feasible JAR-declared package:\n{details}"
+            "requested remotes contain no feasible JAR-declared package:\n{details}"
         )));
     }
 
@@ -1066,22 +1112,47 @@ fn reconcile_lock_metadata(
     Ok(true)
 }
 
-async fn resolve_missing_lock_entries(
-    manifest: &OrbitManifest,
-    lockfile: &mut OrbitLockfile,
-    providers: &[Box<dyn ModProvider>],
-    jar_cache: &crate::jar_cache::JarCache,
+struct MissingLockResolutionInput<'a> {
+    instance_dir: &'a Path,
+    manifest: &'a OrbitManifest,
+    lockfile: &'a mut OrbitLockfile,
+    providers: &'a [Box<dyn ModProvider>],
+    jar_cache: &'a crate::jar_cache::JarCache,
     loader_package: Option<crate::resolver::types::PlatformCandidate>,
     selector: Option<ResolutionSelector>,
     progress: Option<ProgressReporter>,
+}
+
+async fn resolve_missing_lock_entries(
+    input: MissingLockResolutionInput<'_>,
 ) -> Result<crate::resolver::types::ResolutionReport, OrbitError> {
-    let mut catalog = crate::outdated::download_lockfile_candidate_catalog(
-        providers,
+    let MissingLockResolutionInput {
+        instance_dir,
+        manifest,
         lockfile,
-        &manifest.project.mc_version,
-        &manifest.project.modloader,
+        providers,
         jar_cache,
-        progress.clone(),
+        loader_package,
+        selector,
+        progress,
+    } = input;
+    let manifest_remotes: Vec<_> = manifest
+        .dependencies
+        .values()
+        .flat_map(|dependency| dependency.remotes.iter().cloned())
+        .collect();
+    let mut catalog = crate::outdated::download_candidate_catalog(
+        crate::outdated::CandidateDiscoveryInput {
+            instance_dir,
+            providers,
+            additional_remotes: &manifest_remotes,
+            lockfile,
+            mc_version: &manifest.project.mc_version,
+            loader: &manifest.project.modloader,
+            jar_cache,
+            progress: progress.clone(),
+        },
+        &[],
     )
     .await?;
     catalog.loader_package = loader_package;
@@ -1120,7 +1191,11 @@ async fn resolve_missing_lock_entries(
         });
         lockfile.packages.retain(|entry| entry.mod_id != *package);
         lockfile.packages.push(lock_entry_from_candidate(
-            package, version, resolved, candidate,
+            package,
+            version,
+            resolved,
+            package_remotes(package, manifest, lockfile, &catalog),
+            candidate,
         ));
     }
     lockfile
@@ -1129,10 +1204,29 @@ async fn resolve_missing_lock_entries(
     Ok(resolution)
 }
 
+fn package_remotes(
+    package: &str,
+    manifest: &OrbitManifest,
+    lockfile: &OrbitLockfile,
+    catalog: &crate::resolver::types::CandidateCatalog,
+) -> Vec<PackageRemote> {
+    let mut remotes = catalog.remotes_for_package(package);
+    if let Some(requirement) = manifest.dependencies.get(package) {
+        remotes.extend(requirement.remotes.iter().cloned());
+    }
+    if let Some(entry) = lockfile.find(package) {
+        remotes.extend(entry.remotes.iter().cloned());
+    }
+    remotes.sort();
+    remotes.dedup();
+    remotes
+}
+
 fn lock_entry_from_candidate(
     package: &str,
     version: &str,
-    artifact: &RemoteArtifact,
+    artifact: &crate::resolver::types::ResolvedArtifact,
+    remotes: Vec<PackageRemote>,
     candidate: Option<&crate::resolver::types::CandidateVersion>,
 ) -> PackageEntry {
     let dependencies = candidate
@@ -1151,26 +1245,11 @@ fn lock_entry_from_candidate(
         mod_id: package.to_string(),
         version: version.to_string(),
         sha1: artifact.sha1.clone(),
-        sha256: String::new(),
+        sha256: artifact.sha256.clone(),
         sha512: artifact.sha512.clone(),
         filename: artifact.filename.clone(),
-        provider: artifact.provider.clone(),
-        modrinth: artifact.modrinth.as_ref().map(|modrinth| ModrinthInfo {
-            project_id: modrinth.project_id.clone(),
-            version_id: modrinth.version_id.clone(),
-            slug: artifact.slug.clone(),
-            download_url: artifact.download_url.clone(),
-        }),
-        curseforge: artifact
-            .curseforge
-            .as_ref()
-            .map(|curseforge| CurseForgeInfo {
-                project_id: curseforge.project_id,
-                file_id: curseforge.file_id,
-                slug: artifact.slug.clone(),
-                download_url: artifact.download_url.clone(),
-            }),
-        file: None,
+        remotes,
+        artifact_sources: artifact.sources.clone(),
         dependencies,
         environment: candidate
             .map(|candidate| candidate.environment)
@@ -1283,169 +1362,136 @@ async fn restore_package(
     jar_cache: &crate::jar_cache::JarCache,
     locked: bool,
 ) -> Result<(), OrbitError> {
-    match entry.provider.as_str() {
-        "file" => restore_file_package(entry, instance_dir, mods_dir),
-        "modrinth" | "curseforge" => {
-            restore_platform_package(entry, mods_dir, providers, jar_cache, locked).await
-        }
-        provider => Err(OrbitError::Other(anyhow::anyhow!(
-            "unsupported lockfile provider '{provider}' for '{}'",
-            entry.mod_id
-        ))),
-    }
-}
-
-fn restore_file_package(
-    entry: &mut PackageEntry,
-    instance_dir: &Path,
-    mods_dir: &Path,
-) -> Result<(), OrbitError> {
-    let source = entry
-        .file
-        .as_ref()
-        .map(|file| instance_dir.join(&file.path))
-        .ok_or_else(|| {
-            OrbitError::Other(anyhow::anyhow!(
-                "file package '{}' has no source path",
-                entry.mod_id
-            ))
-        })?;
-    if !source.is_file() {
+    let resolved = crate::resolver::types::ResolvedArtifact {
+        filename: package_filename(entry),
+        sha1: entry.sha1.clone(),
+        sha256: entry.sha256.clone(),
+        sha512: entry.sha512.clone(),
+        sources: entry.artifact_sources.clone(),
+    };
+    if locked && resolved.sources.is_empty() {
         return Err(OrbitError::Other(anyhow::anyhow!(
-            "local source for '{}' is missing: {}",
-            entry.mod_id,
-            source.display()
+            "--locked: '{}' has no source for the selected artifact",
+            entry.mod_id
         )));
     }
-    let filename = source
-        .file_name()
-        .ok_or_else(|| OrbitError::Other(anyhow::anyhow!("invalid file package path")))?
-        .to_string_lossy()
-        .into_owned();
-    let destination = mods_dir.join(&filename);
-    if source != destination {
-        std::fs::copy(&source, &destination)?;
-    }
+    let destination =
+        materialize_resolved(&resolved, instance_dir, mods_dir, providers, jar_cache).await?;
     verify_package_hash(entry, &destination)?;
-    entry.filename = filename;
+    entry.filename = resolved.filename;
     entry.sha1 = crate::jar::compute_sha1(&destination)?;
     entry.sha256 = crate::jar::compute_sha256(&destination)?;
     entry.sha512 = crate::jar::compute_sha512(&destination)?;
     Ok(())
 }
 
-async fn restore_platform_package(
-    entry: &mut PackageEntry,
+async fn materialize_resolved(
+    resolved: &crate::resolver::types::ResolvedArtifact,
+    instance_dir: &Path,
     mods_dir: &Path,
     providers: &[Box<dyn ModProvider>],
     jar_cache: &crate::jar_cache::JarCache,
-    locked: bool,
-) -> Result<(), OrbitError> {
-    let provider =
-        crate::providers::find_provider(providers, &entry.provider).ok_or_else(|| {
-            OrbitError::Other(anyhow::anyhow!(
-                "{} provider is required to restore '{}'",
-                entry.provider,
-                entry.mod_id,
-            ))
-        })?;
-    let project_id = entry.source_project_id().ok_or_else(|| {
-        OrbitError::Other(anyhow::anyhow!(
-            "{} package '{}' has no provider metadata",
-            entry.provider,
-            entry.mod_id
-        ))
-    })?;
-    let version_id = entry.source_version_id().ok_or_else(|| {
-        OrbitError::Other(anyhow::anyhow!(
-            "{} package '{}' has no file/version id",
-            entry.provider,
-            entry.mod_id
-        ))
-    })?;
-    let download_url = entry.source_download_url().unwrap_or_default().to_string();
-    let filename = package_filename(entry);
-    if (!entry.sha512.is_empty() || !entry.sha1.is_empty()) && !filename.is_empty() {
-        let destination = mods_dir.join(&filename);
-        if jar_cache.copy_to(&entry.sha512, &entry.sha1, &destination) {
-            verify_package_hash(entry, &destination)?;
-            entry.filename = filename;
-            return Ok(());
+) -> Result<PathBuf, OrbitError> {
+    let filename = safe_artifact_filename(&resolved.filename)?;
+    let destination = mods_dir.join(filename);
+    if destination.is_file()
+        && crate::jar::compute_sha512(&destination)?.eq_ignore_ascii_case(&resolved.sha512)
+    {
+        return Ok(destination);
+    }
+    if jar_cache.copy_to(&resolved.sha512, &resolved.sha1, &destination)
+        && crate::jar::compute_sha512(&destination)?.eq_ignore_ascii_case(&resolved.sha512)
+    {
+        return Ok(destination);
+    }
+
+    let mut errors = Vec::new();
+    for source in &resolved.sources {
+        let result = match source {
+            ArtifactSource::File { path } => {
+                let source_path = {
+                    let path = Path::new(path);
+                    if path.is_absolute() {
+                        path.to_path_buf()
+                    } else {
+                        instance_dir.join(path)
+                    }
+                };
+                std::fs::read(&source_path)
+                    .map_err(OrbitError::Io)
+                    .and_then(|bytes| {
+                        verify_resolved_bytes(resolved, &bytes)?;
+                        Ok(bytes)
+                    })
+            }
+            ArtifactSource::Modrinth { download_url, .. } => {
+                download_resolved_source("modrinth", download_url, resolved, providers).await
+            }
+            ArtifactSource::Curseforge { download_url, .. } => {
+                download_resolved_source("curseforge", download_url, resolved, providers).await
+            }
+        };
+        match result {
+            Ok(bytes) => {
+                jar_cache.store_bytes(&bytes)?;
+                let temporary = destination.with_extension("jar.orbit-tmp");
+                std::fs::write(&temporary, bytes)?;
+                if destination.exists() {
+                    std::fs::remove_file(&destination)?;
+                }
+                std::fs::rename(temporary, &destination)?;
+                return Ok(destination);
+            }
+            Err(error) => errors.push(format!("{}: {error}", source.provider())),
         }
     }
 
-    let resolved = if download_url.is_empty() {
-        if locked {
-            return Err(OrbitError::Other(anyhow::anyhow!(
-                "--locked: '{}' has no download_url and is not available in cache",
-                entry.mod_id
-            )));
-        }
-        provider
-            .get_versions(&project_id, None, None)
-            .await?
-            .into_iter()
-            .find(|version| version.version_id().as_deref() == Some(version_id.as_str()))
-            .ok_or_else(|| {
-                OrbitError::ModNotFound(format!("{} version {}", entry.mod_id, version_id))
-            })?
-    } else {
-        resolved_from_lock_entry(entry, download_url, filename.clone())?
-    };
-    let destination = download_mod(&resolved, provider, mods_dir, jar_cache).await?;
-    verify_package_hash(entry, &destination)?;
-    entry.filename = resolved.filename.clone();
-    entry.sha1 = crate::jar::compute_sha1(&destination)?;
-    entry.sha256 = crate::jar::compute_sha256(&destination)?;
-    entry.sha512 = crate::jar::compute_sha512(&destination)?;
-    if let Some(modrinth) = &mut entry.modrinth {
-        modrinth.download_url = resolved.download_url.clone();
-    }
-    if let Some(curseforge) = &mut entry.curseforge {
-        curseforge.download_url = resolved.download_url;
-    }
-    Ok(())
+    Err(OrbitError::Other(anyhow::anyhow!(
+        "no source could restore '{}':\n  - {}",
+        resolved.filename,
+        errors.join("\n  - ")
+    )))
 }
 
-fn resolved_from_lock_entry(
-    entry: &PackageEntry,
-    download_url: String,
-    filename: String,
-) -> Result<RemoteArtifact, OrbitError> {
-    let modrinth = entry
-        .modrinth
-        .as_ref()
-        .map(|metadata| crate::providers::ModrinthResolvedInfo {
-            project_id: metadata.project_id.clone(),
-            version_id: metadata.version_id.clone(),
-        });
-    let curseforge =
-        entry
-            .curseforge
-            .as_ref()
-            .map(|metadata| crate::providers::CurseForgeResolvedInfo {
-                project_id: metadata.project_id,
-                file_id: metadata.file_id,
-                fingerprint: 0,
-            });
-    if modrinth.is_none() && curseforge.is_none() {
+async fn download_resolved_source(
+    provider_name: &str,
+    download_url: &str,
+    resolved: &crate::resolver::types::ResolvedArtifact,
+    providers: &[Box<dyn ModProvider>],
+) -> Result<Vec<u8>, OrbitError> {
+    if download_url.is_empty() {
         return Err(OrbitError::Other(anyhow::anyhow!(
-            "{} package '{}' has no provider metadata",
-            entry.provider,
-            entry.mod_id
+            "selected source has no download URL"
         )));
     }
-    Ok(RemoteArtifact {
-        sha1: entry.sha1.clone(),
-        sha512: entry.sha512.clone(),
-        slug: entry.source_slug().unwrap_or(&entry.mod_id).to_string(),
-        provider: entry.provider.clone(),
-        modrinth,
-        curseforge,
-        download_url,
-        filename,
-        related_projects: Vec::new(),
-    })
+    let provider = crate::providers::find_provider(providers, provider_name).ok_or_else(|| {
+        OrbitError::Other(anyhow::anyhow!(
+            "{provider_name} provider is required to restore '{}'",
+            resolved.filename
+        ))
+    })?;
+    let bytes = provider
+        .artifact_downloader()
+        .download(download_url, &resolved.filename)
+        .await?;
+    verify_resolved_bytes(resolved, &bytes)?;
+    Ok(bytes)
+}
+
+fn verify_resolved_bytes(
+    resolved: &crate::resolver::types::ResolvedArtifact,
+    bytes: &[u8],
+) -> Result<(), OrbitError> {
+    let actual = crate::jar::sha512_digest(bytes);
+    if actual.eq_ignore_ascii_case(&resolved.sha512) {
+        Ok(())
+    } else {
+        Err(OrbitError::ChecksumMismatch {
+            name: resolved.filename.clone(),
+            expected: resolved.sha512.clone(),
+            actual,
+        })
+    }
 }
 
 fn verify_package_hash(entry: &PackageEntry, path: &Path) -> Result<(), OrbitError> {
@@ -1473,9 +1519,12 @@ fn package_filename(entry: &PackageEntry) -> String {
         return entry.filename.clone();
     }
     entry
-        .file
-        .as_ref()
-        .and_then(|file| Path::new(&file.path).file_name())
+        .artifact_sources
+        .iter()
+        .find_map(|source| match source {
+            ArtifactSource::File { path } => Path::new(path).file_name(),
+            _ => None,
+        })
         .map(|filename| filename.to_string_lossy().into_owned())
         .unwrap_or_default()
 }
@@ -1484,27 +1533,16 @@ fn plan_from_resolved(
     mod_id: &str,
     version: &str,
     candidate_id: &str,
-    artifact: &RemoteArtifact,
+    artifact: &crate::resolver::types::ResolvedArtifact,
+    remotes: Vec<PackageRemote>,
 ) -> InstalledMod {
     InstalledMod {
         candidate_id: Some(candidate_id.to_string()),
-        slug: artifact.slug.clone(),
         mod_id: mod_id.to_string(),
         version: version.to_string(),
         filename: artifact.filename.clone(),
-        provider: artifact.provider.clone(),
-        modrinth: artifact.modrinth.as_ref().map(|metadata| ModrinthInfo {
-            project_id: metadata.project_id.clone(),
-            version_id: metadata.version_id.clone(),
-            slug: artifact.slug.clone(),
-            download_url: artifact.download_url.clone(),
-        }),
-        curseforge: artifact.curseforge.as_ref().map(|metadata| CurseForgeInfo {
-            project_id: metadata.project_id,
-            file_id: metadata.file_id,
-            slug: artifact.slug.clone(),
-            download_url: artifact.download_url.clone(),
-        }),
+        remotes,
+        artifact_sources: artifact.sources.clone(),
         dependencies: Vec::new(),
         environment: crate::metadata::Environment::Both,
         provides: Vec::new(),
@@ -1524,6 +1562,7 @@ async fn materialize_plans(
     progress: Option<ProgressReporter>,
 ) -> Result<Vec<InstalledMod>, OrbitError> {
     let total = planned.len();
+    let instance_dir = mods_dir.parent().unwrap_or_else(|| Path::new("."));
     emit_progress(progress.as_ref(), ProgressEvent::ApplyStarted { total });
     let mut installed = Vec::new();
     for mut plan in planned {
@@ -1543,15 +1582,8 @@ async fn materialize_plans(
             ))
         })?;
         let resolved = resolved_candidate(resolved_candidates, candidate_id)?;
-        let provider =
-            crate::providers::find_provider(providers, &resolved.provider).ok_or_else(|| {
-                OrbitError::Other(anyhow::anyhow!(
-                    "{} provider is required to download '{}'",
-                    resolved.provider,
-                    resolved.filename
-                ))
-            })?;
-        let dest_path = download_mod(resolved, provider, mods_dir, jar_cache).await?;
+        let dest_path =
+            materialize_resolved(resolved, instance_dir, mods_dir, providers, jar_cache).await?;
         let metadata = crate::jar::read_mod_metadata(&dest_path, loader)?;
         if metadata.mod_id != plan.mod_id || metadata.version != plan.version {
             return Err(OrbitError::Other(anyhow::anyhow!(
@@ -1594,10 +1626,10 @@ async fn materialize_plans(
 fn resolved_candidate<'a>(
     candidates: &'a crate::resolver::types::ResolvedCandidates,
     candidate_id: &str,
-) -> Result<&'a RemoteArtifact, OrbitError> {
+) -> Result<&'a crate::resolver::types::ResolvedArtifact, OrbitError> {
     candidates.get(candidate_id).ok_or_else(|| {
         OrbitError::Other(anyhow::anyhow!(
-            "solver selected package candidate '{candidate_id}' without a download artifact"
+            "solver selected a package candidate without a materializable artifact"
         ))
     })
 }
@@ -1656,66 +1688,6 @@ fn retain_selected_lock_entries(
     });
 }
 
-async fn download_mod(
-    m: &RemoteArtifact,
-    provider: &dyn ModProvider,
-    mods_dir: &Path,
-    jar_cache: &crate::jar_cache::JarCache,
-) -> Result<PathBuf, OrbitError> {
-    if provider.name() != m.provider {
-        return Err(OrbitError::Other(anyhow::anyhow!(
-            "cannot download {} artifact with {} provider",
-            m.provider,
-            provider.name()
-        )));
-    }
-    let filename = safe_artifact_filename(&m.filename)?;
-    let final_path = mods_dir.join(filename);
-    if final_path.exists() {
-        if !m.sha512.is_empty() {
-            let existing_sha = crate::jar::compute_sha512(&final_path).unwrap_or_default();
-            if existing_sha == m.sha512 {
-                return Ok(final_path);
-            }
-        } else if !m.sha1.is_empty() {
-            let existing_sha = crate::jar::compute_sha1(&final_path).unwrap_or_default();
-            if existing_sha.eq_ignore_ascii_case(&m.sha1) {
-                return Ok(final_path);
-            }
-        } else {
-            let meta = std::fs::metadata(&final_path).map_err(OrbitError::Io)?;
-            if meta.len() > 0 {
-                return Ok(final_path);
-            }
-        }
-    }
-
-    // 查全局缓存
-    if jar_cache.copy_to(&m.sha512, &m.sha1, &final_path) && final_path.exists() {
-        let cached = std::fs::read(&final_path)?;
-        if crate::jar::verify_source_hash(&cached, &m.sha1, &m.sha512, &m.filename).is_ok() {
-            return Ok(final_path);
-        }
-    }
-
-    let bytes = provider
-        .artifact_downloader()
-        .download(&m.download_url, &m.filename)
-        .await?;
-    crate::jar::verify_source_hash(&bytes, &m.sha1, &m.sha512, &m.filename)?;
-
-    // 存入全局缓存
-    jar_cache.store_bytes(&bytes)?;
-
-    let tmp_path = mods_dir.join(format!(".{}.tmp", filename.to_string_lossy()));
-    std::fs::write(&tmp_path, &bytes).map_err(OrbitError::Io)?;
-    if final_path.exists() {
-        std::fs::remove_file(&final_path).map_err(OrbitError::Io)?;
-    }
-    std::fs::rename(&tmp_path, &final_path).map_err(OrbitError::Io)?;
-    Ok(final_path)
-}
-
 fn safe_artifact_filename(filename: &str) -> Result<&std::ffi::OsStr, OrbitError> {
     let path = Path::new(filename);
     let basename = path
@@ -1749,16 +1721,8 @@ fn apply_to_lockfile(lockfile: &mut OrbitLockfile, installed: &[InstalledMod], m
             sha256,
             sha512,
             filename: inst.filename.clone(),
-            provider: inst.provider.clone(),
-            modrinth: inst.modrinth.clone(),
-            curseforge: inst.curseforge.clone(),
-            file: if inst.provider == "file" {
-                Some(FileInfo {
-                    path: format!("mods/{}", inst.filename),
-                })
-            } else {
-                None
-            },
+            remotes: inst.remotes.clone(),
+            artifact_sources: inst.artifact_sources.clone(),
             dependencies: inst.dependencies.clone(),
             environment: inst.environment,
             provides: inst.provides.clone(),
@@ -1786,16 +1750,13 @@ fn requested_requirement(
     } else {
         constraint.to_string()
     };
-    if !optional && env.is_none() {
-        Ok(DependencySpec::Short(version))
-    } else {
-        Ok(DependencySpec::Full {
-            version: Some(version),
-            optional: optional.then_some(true),
-            env: env.map(str::to_string),
-            exclude: None,
-        })
-    }
+    Ok(DependencySpec {
+        version,
+        optional,
+        env: env.map(str::to_string),
+        exclude: Vec::new(),
+        remotes: Vec::new(),
+    })
 }
 
 fn ensure_root_requirement(
@@ -1812,6 +1773,7 @@ fn ensure_root_requirement(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::providers::RemoteArtifact;
     use std::sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -1841,12 +1803,12 @@ loader_jar = { path = "loader.jar", sha256 = "test" }
             sha256: String::new(),
             sha512: String::new(),
             filename: format!("{mod_id}.jar"),
-            provider: "file".to_string(),
-            modrinth: None,
-            curseforge: None,
-            file: Some(FileInfo {
+            remotes: vec![PackageRemote::File {
                 path: format!("mods/{mod_id}.jar"),
-            }),
+            }],
+            artifact_sources: vec![ArtifactSource::File {
+                path: format!("mods/{mod_id}.jar"),
+            }],
             dependencies: dependencies
                 .iter()
                 .map(|dependency| crate::metadata::ModDependency::required(*dependency, "*").into())
@@ -1915,25 +1877,25 @@ loader_jar = { path = "loader.jar", sha256 = "test" }
     async fn add_selects_between_feasible_real_packages_from_one_locator() {
         let mut catalog = crate::resolver::types::CandidateCatalog::default();
         catalog
-            .record(
+            .record_test(
                 jar_metadata("gca-wrapper", "1.0.1", &[]),
                 remote_artifact("old"),
             )
             .unwrap();
         catalog
-            .record(
+            .record_test(
                 jar_metadata("gca_wrapper", "1.0.6", &[]),
                 remote_artifact("new"),
             )
             .unwrap();
 
         let (package, portfolio) = resolve_requested_package(RequestedPackageInput {
-            locator: "gca",
+            requested_package: None,
             intent: InstallIntent::Add,
             manifest: &manifest(),
             lockfile: &empty_lockfile(),
             catalog: &catalog,
-            requirement: DependencySpec::Short("*".to_string()),
+            requirement: DependencySpec::new("*", Vec::new()),
             selector: Some(Box::new(|packages| {
                 packages
                     .iter()
@@ -1959,13 +1921,13 @@ loader_jar = { path = "loader.jar", sha256 = "test" }
     async fn add_skips_infeasible_package_id_without_prompting() {
         let mut catalog = crate::resolver::types::CandidateCatalog::default();
         catalog
-            .record(
+            .record_test(
                 jar_metadata("gca-wrapper", "1.0.1", &["missing"]),
                 remote_artifact("old"),
             )
             .unwrap();
         catalog
-            .record(
+            .record_test(
                 jar_metadata("gca_wrapper", "1.0.6", &[]),
                 remote_artifact("new"),
             )
@@ -1974,12 +1936,12 @@ loader_jar = { path = "loader.jar", sha256 = "test" }
         let captured = Arc::clone(&prompted);
 
         let (package, _) = resolve_requested_package(RequestedPackageInput {
-            locator: "UHjbX5mk",
+            requested_package: None,
             intent: InstallIntent::Add,
             manifest: &manifest(),
             lockfile: &empty_lockfile(),
             catalog: &catalog,
-            requirement: DependencySpec::Short("*".to_string()),
+            requirement: DependencySpec::new("*", Vec::new()),
             selector: Some(Box::new(move |_| {
                 captured.store(true, Ordering::Relaxed);
                 0
@@ -2034,20 +1996,10 @@ loader_jar = { path = "loader.jar", sha256 = "test" }
     fn optional_environment_requirement_uses_full_manifest_form() {
         let requirement = requested_requirement("^1", true, Some("client")).unwrap();
 
-        match requirement {
-            DependencySpec::Full {
-                version,
-                optional,
-                env,
-                exclude,
-            } => {
-                assert_eq!(version.as_deref(), Some("^1"));
-                assert_eq!(optional, Some(true));
-                assert_eq!(env.as_deref(), Some("client"));
-                assert!(exclude.is_none());
-            }
-            DependencySpec::Short(_) => panic!("expected full dependency form"),
-        }
+        assert_eq!(requirement.version, "^1");
+        assert!(requirement.optional);
+        assert_eq!(requirement.env.as_deref(), Some("client"));
+        assert!(requirement.exclude.is_empty());
     }
 
     #[test]
@@ -2076,9 +2028,9 @@ minecraft_jar = { path = "minecraft.jar", sha256 = "test" }
 loader_jar = { path = "loader.jar", sha256 = "test" }
 
 [dependencies]
-client-mod = { version = "*", env = "client" }
-server-mod = { version = "*", env = "server" }
-optional-mod = { version = "*", optional = true }
+client-mod = { version = "*", env = "client", remotes = [{ type = "file", path = "client.jar" }] }
+server-mod = { version = "*", env = "server", remotes = [{ type = "file", path = "server.jar" }] }
+optional-mod = { version = "*", optional = true, remotes = [{ type = "file", path = "optional.jar" }] }
 
 [groups.small]
 dependencies = ["client-mod", "optional-mod"]
@@ -2125,7 +2077,7 @@ modloader_version = "21.1"
 minecraft_jar = { path = "minecraft.jar", sha256 = "test" }
 loader_jar = { path = "loader.jar", sha256 = "test" }
 [dependencies]
-example = "*"
+example = { version = "*", remotes = [{ type = "file", path = "example.jar" }] }
 "#,
         )
         .unwrap();

@@ -30,7 +30,9 @@ pub mod outdated;
 mod package_reconciliation;
 mod platform;
 pub mod purge;
+pub mod remote;
 pub mod resolver;
+mod source_store;
 pub mod sync;
 pub mod workspace;
 
@@ -47,17 +49,17 @@ pub use config::{
 pub use detection::LoaderDetectionService;
 pub use error::OrbitError;
 pub use installer::{
-    InstallIntent, InstallInteraction, InstallOptions, InstallPrompt, InstallReport, InstalledMod,
-    ListOutput, ListedPackage, PackageSelector, RemoveReport, RemovedPackage, RestoreOptions,
-    RestoreReport, install_local_file_to_instance, install_to_instance, list_dependencies,
-    list_installed, list_installed_for_target, remove_from_instance, restore_instance,
-    upgrade_all_in_instance,
+    InstallIntent, InstallInteraction, InstallOptions, InstallPrompt, InstallReport, InstallTarget,
+    InstalledMod, ListOutput, ListedPackage, PackageSelector, RemoveReport, RemovedPackage,
+    RestoreOptions, RestoreReport, install_local_file_to_instance, install_to_instance,
+    list_dependencies, list_installed, list_installed_for_target, remove_from_instance,
+    restore_instance, upgrade_all_in_instance,
 };
 pub use jar_cache::{CacheSummary, JarCache, clean_cache, inspect_cache};
-pub use lockfile::{
-    BundledMod, CurseForgeInfo, FileInfo, LockMeta, ModrinthInfo, OrbitLockfile, PackageEntry,
+pub use lockfile::{ArtifactSource, BundledMod, LockMeta, OrbitLockfile, PackageEntry};
+pub use manifest::{
+    DependencySpec, OrbitManifest, PackageRemote, PlatformArtifact, PlatformArtifacts,
 };
-pub use manifest::{OrbitManifest, PlatformArtifact, PlatformArtifacts};
 pub use metadata::{ModLoader, mojang::McVersion};
 pub use orbit_bytecode_audit as audit_model;
 pub use orbit_bytecode_audit::{
@@ -78,6 +80,7 @@ pub use progress::{
 };
 pub use providers::ModProvider;
 pub use purge::{CandidateConfig, find_config_candidates, remove_config_candidates};
+pub use remote::{RemoteReport, add_package_remote, list_package_remotes, remove_package_remote};
 pub use resolver::types::{PackageChange, PackageChangeKind, ResolutionReport, ResolutionSelector};
 pub use runtime::{
     NativeRuntimeEnvironment, PathLayout, RuntimeContext, RuntimeEnvironment, RuntimePathOptions,

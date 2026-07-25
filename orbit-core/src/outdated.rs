@@ -2,11 +2,11 @@
 //!
 //! BFS 下载候选 JAR → 解析 → PubGrub 离线求解。
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use crate::error::OrbitError;
 use crate::lockfile::OrbitLockfile;
-use crate::manifest::OrbitManifest;
+use crate::manifest::{OrbitManifest, PackageRemote};
 use crate::progress::{
     ArtifactProgressState, ProgressEvent, ProgressReporter, emit as emit_progress,
 };
@@ -27,6 +27,7 @@ pub struct OutdatedMod {
 pub struct OutdatedReport {
     pub updates: Vec<OutdatedMod>,
     pub resolved: ResolvedCandidates,
+    pub candidate_remotes: HashMap<String, Vec<PackageRemote>>,
     pub changes: Vec<PackageChange>,
     pub resolution: ResolutionReport,
     pub diagnostics: Vec<CandidateDiagnostic>,
@@ -40,23 +41,37 @@ pub struct OutdatedInteraction {
     pub progress: Option<ProgressReporter>,
 }
 
+#[derive(Debug)]
+struct DiscoveredRemoteArtifact {
+    artifact: RemoteArtifact,
+    requested: bool,
+}
+
 async fn discover_artifact_closure(
     provider: &dyn ModProvider,
-    initial_lookups: Vec<String>,
+    initial_lookups: Vec<(String, bool)>,
     mc_version: &str,
     loader: &str,
-    seen_lookups: &mut HashSet<String>,
-    seen_artifacts: &mut HashSet<String>,
+    seen_lookups: &mut HashMap<String, bool>,
+    seen_artifacts: &mut HashMap<String, usize>,
     progress: Option<&ProgressReporter>,
-) -> Result<Vec<RemoteArtifact>, OrbitError> {
+) -> Result<Vec<DiscoveredRemoteArtifact>, OrbitError> {
     let mut queue: Vec<_> = initial_lookups
         .into_iter()
-        .map(|lookup| (lookup, None::<String>))
+        .map(|(lookup, requested)| (lookup, None::<String>, requested))
         .collect();
-    let mut discovered = Vec::new();
-    while let Some((lookup, referenced_by)) = queue.pop() {
-        if !seen_lookups.insert(lookup.clone()) {
-            continue;
+    let mut discovered: Vec<DiscoveredRemoteArtifact> = Vec::new();
+    while let Some((lookup, referenced_by, requested)) = queue.pop() {
+        match seen_lookups.entry(lookup.clone()) {
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                entry.insert(requested);
+            }
+            std::collections::hash_map::Entry::Occupied(mut entry)
+                if requested && !*entry.get() =>
+            {
+                entry.insert(true);
+            }
+            std::collections::hash_map::Entry::Occupied(_) => continue,
         }
         emit_progress(
             progress,
@@ -86,9 +101,13 @@ async fn discover_artifact_closure(
         for artifact in artifacts {
             for related in &artifact.related_projects {
                 if let Some(project_id) = related.project_id.as_ref() {
-                    queue.push((project_id.clone(), Some(lookup.clone())));
-                } else if let Some(slug) = related.slug.as_ref() {
-                    queue.push((slug.clone(), Some(lookup.clone())));
+                    queue.push((project_id.clone(), Some(lookup.clone()), false));
+                } else {
+                    return Err(OrbitError::Other(anyhow::anyhow!(
+                        "{} project '{}' returned a dependency without a stable project ID",
+                        provider.name(),
+                        lookup
+                    )));
                 }
             }
             let artifact_key = format!(
@@ -98,21 +117,29 @@ async fn discover_artifact_closure(
                 artifact.download_url,
                 artifact.filename
             );
-            if !seen_artifacts.insert(artifact_key) {
+            if let Some(index) = seen_artifacts.get(&artifact_key).copied() {
+                discovered[index].requested |= requested;
                 continue;
             }
-            discovered.push(artifact);
+            seen_artifacts.insert(artifact_key, discovered.len());
+            discovered.push(DiscoveredRemoteArtifact {
+                artifact,
+                requested,
+            });
         }
     }
     Ok(discovered)
 }
 
 async fn download_artifact_queue(
-    jobs: Vec<(crate::providers::ArtifactDownloadClient, RemoteArtifact)>,
+    jobs: Vec<(
+        crate::providers::ArtifactDownloadClient,
+        DiscoveredRemoteArtifact,
+    )>,
     loader: &str,
     jar_cache: &crate::jar_cache::JarCache,
     progress: Option<ProgressReporter>,
-) -> Result<Vec<(crate::jar::JarModMetadata, RemoteArtifact)>, OrbitError> {
+) -> Result<Vec<(crate::jar::InspectedJar, RemoteArtifact, bool)>, OrbitError> {
     let total = jobs.len();
     emit_progress(
         progress.as_ref(),
@@ -121,7 +148,9 @@ async fn download_artifact_queue(
     let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(10));
     let completed = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let mut handles = Vec::with_capacity(jobs.len());
-    for (downloader, artifact) in jobs {
+    for (downloader, discovered) in jobs {
+        let artifact = discovered.artifact;
+        let requested = discovered.requested;
         let loader = loader.to_string();
         let cache = jar_cache.clone();
         let semaphore = semaphore.clone();
@@ -143,7 +172,7 @@ async fn download_artifact_queue(
                     state: ArtifactProgressState::Started,
                 },
             );
-            let result = crate::jar::download_and_parse(
+            let result = crate::jar::download_and_inspect(
                 &cache,
                 &downloader,
                 &artifact.download_url,
@@ -167,7 +196,7 @@ async fn download_artifact_queue(
                     },
                 },
             );
-            result.map(|metadata| (metadata, artifact))
+            result.map(|inspected| (inspected, artifact, requested))
         }));
     }
 
@@ -203,189 +232,105 @@ async fn download_artifact_queue(
 /// complete solver input: every online project already represented by the
 /// lockfile must contribute all of its matching artifacts as well. Discovery
 /// finishes for every project before the combined queue is downloaded.
-pub(crate) async fn download_transaction_candidate_catalog(
-    providers: &[Box<dyn ModProvider>],
-    requested_seeds: &[String],
-    lockfile: &OrbitLockfile,
-    mc_version: &str,
-    loader: &str,
-    jar_cache: &crate::jar_cache::JarCache,
-    progress: Option<ProgressReporter>,
+pub(crate) struct CandidateDiscoveryInput<'a> {
+    pub instance_dir: &'a std::path::Path,
+    pub providers: &'a [Box<dyn ModProvider>],
+    pub additional_remotes: &'a [PackageRemote],
+    pub lockfile: &'a OrbitLockfile,
+    pub mc_version: &'a str,
+    pub loader: &'a str,
+    pub jar_cache: &'a crate::jar_cache::JarCache,
+    pub progress: Option<ProgressReporter>,
+}
+
+pub(crate) async fn download_candidate_catalog(
+    input: CandidateDiscoveryInput<'_>,
+    requested_remotes: &[PackageRemote],
 ) -> Result<CandidateCatalog, OrbitError> {
-    emit_progress(progress.as_ref(), ProgressEvent::DiscoveryStarted);
-    let jobs = discover_transaction_artifact_queue(
-        providers,
-        requested_seeds,
-        lockfile,
-        mc_version,
-        loader,
-        progress.as_ref(),
-    )
-    .await?;
+    emit_progress(input.progress.as_ref(), ProgressEvent::DiscoveryStarted);
+    let jobs = discover_transaction_artifact_queue(&input, requested_remotes).await?;
+    let (jobs, local) = jobs;
     let mut catalog = CandidateCatalog::default();
-    for (metadata, artifact) in download_artifact_queue(jobs, loader, jar_cache, progress).await? {
-        catalog.record(metadata, artifact)?;
+    for (inspected, path, filename, requested) in local {
+        catalog.record_local(inspected, path, filename, requested)?;
+    }
+    for (inspected, artifact, requested) in
+        download_artifact_queue(jobs, input.loader, input.jar_cache, input.progress).await?
+    {
+        catalog.record(inspected.metadata.clone(), artifact, &inspected, requested)?;
     }
     Ok(catalog)
 }
 
 async fn discover_transaction_artifact_queue(
-    providers: &[Box<dyn ModProvider>],
-    requested_seeds: &[String],
-    lockfile: &OrbitLockfile,
-    mc_version: &str,
-    loader: &str,
-    progress: Option<&ProgressReporter>,
-) -> Result<Vec<(crate::providers::ArtifactDownloadClient, RemoteArtifact)>, OrbitError> {
+    input: &CandidateDiscoveryInput<'_>,
+    requested_remotes: &[PackageRemote],
+) -> Result<
+    (
+        Vec<(
+            crate::providers::ArtifactDownloadClient,
+            DiscoveredRemoteArtifact,
+        )>,
+        Vec<(crate::jar::InspectedJar, String, String, bool)>,
+    ),
+    OrbitError,
+> {
     #[derive(Default)]
     struct ProviderDiscovery {
-        seen_lookups: HashSet<String>,
-        seen_artifacts: HashSet<String>,
+        seen_lookups: HashMap<String, bool>,
+        seen_artifacts: HashMap<String, usize>,
+    }
+
+    let mut all_remotes = std::collections::BTreeMap::<PackageRemote, bool>::new();
+    for remote in requested_remotes {
+        all_remotes.insert(remote.clone(), true);
+    }
+    for remote in input.additional_remotes.iter().chain(
+        input
+            .lockfile
+            .packages
+            .iter()
+            .flat_map(|entry| entry.remotes.iter()),
+    ) {
+        all_remotes.entry(remote.clone()).or_insert(false);
     }
 
     let mut states: HashMap<String, ProviderDiscovery> = HashMap::new();
     let mut jobs = Vec::new();
-    let mut requested_provider = None;
-    for provider in providers {
-        let state = states.entry(provider.name().to_string()).or_default();
-        match discover_artifact_closure(
-            provider.as_ref(),
-            requested_seeds.to_vec(),
-            mc_version,
-            loader,
-            &mut state.seen_lookups,
-            &mut state.seen_artifacts,
-            progress,
-        )
-        .await
-        {
-            Ok(artifacts) if !artifacts.is_empty() => {
-                let downloader = provider.artifact_downloader().clone();
-                jobs.extend(
-                    artifacts
-                        .into_iter()
-                        .map(|artifact| (downloader.clone(), artifact)),
-                );
-                requested_provider = Some(provider.name());
-                break;
+    let mut local = Vec::new();
+    let mut seeds_by_provider: HashMap<String, Vec<(String, bool)>> = HashMap::new();
+    for (remote, requested) in all_remotes {
+        match remote {
+            PackageRemote::File { path } => {
+                let resolved = resolve_file_remote(input.instance_dir, &path);
+                let inspected = crate::jar::inspect_path(&resolved, input.loader)?;
+                let filename =
+                    local_candidate_filename(&path, &resolved, &inspected, input.lockfile)?;
+                local.push((inspected, path, filename, requested));
             }
-            Ok(_) | Err(OrbitError::ModNotFound(_)) => {}
-            Err(error) => return Err(error),
+            remote => {
+                seeds_by_provider
+                    .entry(remote.provider().to_string())
+                    .or_default()
+                    .push((remote.locator(), requested));
+            }
         }
     }
-    if requested_provider.is_none() {
-        return Err(OrbitError::ModNotFound(
-            requested_seeds.first().cloned().unwrap_or_default(),
-        ));
-    }
-
-    let mut seeds_by_provider: HashMap<String, Vec<String>> = HashMap::new();
-    for entry in lockfile
-        .packages
-        .iter()
-        .filter(|entry| entry.provider != "file")
-    {
-        let project_id = entry.source_project_id().ok_or_else(|| {
-            OrbitError::Other(anyhow::anyhow!(
-                "lockfile package '{}' uses provider '{}' but has no project locator",
-                entry.mod_id,
-                entry.provider
-            ))
-        })?;
-        seeds_by_provider
-            .entry(entry.provider.clone())
-            .or_default()
-            .push(project_id);
-    }
-    for seeds in seeds_by_provider.values_mut() {
-        seeds.sort();
-        seeds.dedup();
-    }
-
-    for (provider_name, seeds) in seeds_by_provider {
-        let provider =
-            crate::providers::find_provider(providers, &provider_name).ok_or_else(|| {
-                OrbitError::Other(anyhow::anyhow!(
-                    "lockfile contains {provider_name} packages but that provider is not configured"
-                ))
-            })?;
-        let state = states.entry(provider_name).or_default();
-        let artifacts = discover_artifact_closure(
-            provider,
-            seeds,
-            mc_version,
-            loader,
-            &mut state.seen_lookups,
-            &mut state.seen_artifacts,
-            progress,
-        )
-        .await?;
-        let downloader = provider.artifact_downloader().clone();
-        jobs.extend(
-            artifacts
-                .into_iter()
-                .map(|artifact| (downloader.clone(), artifact)),
-        );
-    }
-    emit_progress(
-        progress,
-        ProgressEvent::DiscoveryFinished {
-            projects: states.values().map(|state| state.seen_lookups.len()).sum(),
-            artifacts: jobs.len(),
-        },
-    );
-    Ok(jobs)
-}
-
-pub(crate) async fn download_lockfile_candidate_catalog(
-    providers: &[Box<dyn ModProvider>],
-    lockfile: &OrbitLockfile,
-    mc_version: &str,
-    loader: &str,
-    jar_cache: &crate::jar_cache::JarCache,
-    progress: Option<ProgressReporter>,
-) -> Result<CandidateCatalog, OrbitError> {
-    emit_progress(progress.as_ref(), ProgressEvent::DiscoveryStarted);
-    let mut seeds_by_provider: HashMap<String, Vec<String>> = HashMap::new();
-    for entry in lockfile
-        .packages
-        .iter()
-        .filter(|entry| entry.provider != "file")
-    {
-        crate::providers::find_provider(providers, &entry.provider).ok_or_else(|| {
-            OrbitError::Other(anyhow::anyhow!(
-                "lockfile contains {} packages but that provider is not configured",
-                entry.provider
-            ))
-        })?;
-        if let Some(project_id) = entry.source_project_id() {
-            seeds_by_provider
-                .entry(entry.provider.clone())
-                .or_default()
-                .push(project_id);
-        }
-    }
-
-    let mut jobs = Vec::new();
-    let mut catalog = CandidateCatalog::default();
-    let mut project_count = 0;
-    for provider in providers {
+    for provider in input.providers {
         let Some(seeds) = seeds_by_provider.remove(provider.name()) else {
             continue;
         };
-        let mut seen_lookups = HashSet::new();
-        let mut seen_artifacts = HashSet::new();
+        let state = states.entry(provider.name().to_string()).or_default();
         let artifacts = discover_artifact_closure(
             provider.as_ref(),
             seeds,
-            mc_version,
-            loader,
-            &mut seen_lookups,
-            &mut seen_artifacts,
-            progress.as_ref(),
+            input.mc_version,
+            input.loader,
+            &mut state.seen_lookups,
+            &mut state.seen_artifacts,
+            input.progress.as_ref(),
         )
         .await?;
-        project_count += seen_lookups.len();
         let downloader = provider.artifact_downloader().clone();
         jobs.extend(
             artifacts
@@ -393,18 +338,94 @@ pub(crate) async fn download_lockfile_candidate_catalog(
                 .map(|artifact| (downloader.clone(), artifact)),
         );
     }
-    debug_assert!(seeds_by_provider.is_empty());
+    if let Some((provider, _)) = seeds_by_provider.into_iter().next() {
+        return Err(OrbitError::Other(anyhow::anyhow!(
+            "package remotes require the unconfigured provider '{provider}'"
+        )));
+    }
+    if jobs.is_empty() && local.is_empty() && !requested_remotes.is_empty() {
+        return Err(OrbitError::ModNotFound(
+            requested_remotes
+                .first()
+                .map(PackageRemote::display_locator)
+                .unwrap_or_default(),
+        ));
+    }
     emit_progress(
-        progress.as_ref(),
+        input.progress.as_ref(),
         ProgressEvent::DiscoveryFinished {
-            projects: project_count,
-            artifacts: jobs.len(),
+            projects: states.values().map(|state| state.seen_lookups.len()).sum(),
+            artifacts: jobs.len() + local.len(),
         },
     );
-    for (metadata, artifact) in download_artifact_queue(jobs, loader, jar_cache, progress).await? {
-        catalog.record(metadata, artifact)?;
+    Ok((jobs, local))
+}
+
+fn resolve_file_remote(instance_dir: &std::path::Path, path: &str) -> std::path::PathBuf {
+    let path = std::path::Path::new(path);
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        instance_dir.join(path)
     }
-    Ok(catalog)
+}
+
+fn local_candidate_filename(
+    remote_path: &str,
+    resolved: &std::path::Path,
+    inspected: &crate::jar::InspectedJar,
+    lockfile: &OrbitLockfile,
+) -> Result<String, OrbitError> {
+    if remote_path
+        .replace('\\', "/")
+        .starts_with(".orbit/sources/")
+    {
+        if let Some(filename) = lockfile
+            .packages
+            .iter()
+            .find(|entry| entry.sha512.eq_ignore_ascii_case(&inspected.sha512))
+            .map(|entry| entry.filename.as_str())
+            .filter(|filename| !filename.is_empty())
+        {
+            return Ok(filename.to_string());
+        }
+        return Ok(format!(
+            "{}-{}.jar",
+            safe_filename_component(&inspected.metadata.mod_id),
+            safe_filename_component(&inspected.metadata.version)
+        ));
+    }
+    resolved
+        .file_name()
+        .map(|filename| filename.to_string_lossy().into_owned())
+        .ok_or_else(|| {
+            OrbitError::Other(anyhow::anyhow!(
+                "local remote '{}' has no filename",
+                resolved.display()
+            ))
+        })
+}
+
+fn safe_filename_component(value: &str) -> String {
+    let mut component: String = value
+        .chars()
+        .take(96)
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || matches!(character, '.' | '_' | '-') {
+                character
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    while component.ends_with('.') || component.ends_with(' ') {
+        component.pop();
+    }
+    if component.is_empty() {
+        "package".to_string()
+    } else {
+        component
+    }
 }
 
 /// 检查所有已安装平台模组的可用更新。
@@ -515,21 +536,33 @@ async fn check_outdated_with_progress(
     let loader = &manifest.project.modloader;
     let mc_version = &manifest.project.mc_version;
 
-    let mut catalog = download_lockfile_candidate_catalog(
-        providers,
-        lockfile,
-        mc_version,
-        loader,
-        jar_cache,
-        progress.clone(),
+    let manifest_remotes: Vec<_> = manifest
+        .dependencies
+        .values()
+        .flat_map(|dependency| dependency.remotes.iter().cloned())
+        .collect();
+    let mut catalog = download_candidate_catalog(
+        CandidateDiscoveryInput {
+            instance_dir,
+            providers,
+            additional_remotes: &manifest_remotes,
+            lockfile,
+            mc_version,
+            loader,
+            jar_cache,
+            progress: progress.clone(),
+        },
+        &[],
     )
     .await?;
     catalog.loader_package = platform.loader_package;
     let discovery_diagnostics =
         missing_candidate_diagnostics(lockfile, &catalog, requested_package, mc_version, loader);
     if catalog.candidates.is_empty() {
+        let candidate_remotes = catalog.package_remotes();
         return Ok(OutdatedReport {
             resolved: catalog.resolved,
+            candidate_remotes,
             diagnostics: discovery_diagnostics,
             ..OutdatedReport::default()
         });
@@ -587,6 +620,7 @@ async fn check_outdated_with_progress(
     updates.sort_by(|a, b| a.mod_id.cmp(&b.mod_id));
     Ok(OutdatedReport {
         updates,
+        candidate_remotes: catalog.package_remotes(),
         resolved: catalog.resolved,
         changes: resolution.changes.clone(),
         diagnostics: resolution.diagnostics.clone(),
@@ -605,7 +639,7 @@ fn missing_candidate_diagnostics(
     let mut diagnostics: Vec<_> = lockfile
         .packages
         .iter()
-        .filter(|entry| entry.provider != "file")
+        .filter(|entry| !entry.remotes.is_empty())
         .filter(|entry| {
             requested_package.is_none_or(|package| entry.mod_id == package)
                 && !catalog.candidates.contains_key(&entry.mod_id)
@@ -617,7 +651,12 @@ fn missing_candidate_diagnostics(
             kind: crate::resolver::types::CandidateDiagnosticKind::NoCompatibleCandidate,
             facts: vec![format!(
                 "{} returned no JAR for Minecraft {mc_version} / {loader} declaring this mod ID",
-                entry.provider
+                entry
+                    .remotes
+                    .iter()
+                    .map(PackageRemote::display_locator)
+                    .collect::<Vec<_>>()
+                    .join(", ")
             )],
         })
         .collect();
@@ -630,10 +669,11 @@ fn missing_candidate_diagnostics(
 mod tests {
     use super::*;
     use crate::providers::{
-        ArtifactDownloadClient, ModInfo, ModrinthResolvedInfo, RemoteProjectLocator,
-        SearchResultItem,
+        ArtifactDownloadClient, CurseForgeResolvedInfo, ModInfo, ModrinthResolvedInfo,
+        RemoteProjectLocator, SearchResultItem,
     };
     use async_trait::async_trait;
+    use std::collections::HashSet;
     use std::io::Write;
     use std::sync::{Arc, Mutex};
 
@@ -733,6 +773,37 @@ mod tests {
         archive.finish().unwrap().into_inner()
     }
 
+    #[test]
+    fn managed_source_identity_never_becomes_the_installed_filename() {
+        let directory = tempfile::tempdir().unwrap();
+        let source_dir = directory.path().join(".orbit/sources");
+        std::fs::create_dir_all(&source_dir).unwrap();
+        let bytes = fabric_jar_bytes("voxy", "1.0+mc");
+        let sha512 = crate::jar::sha512_digest(&bytes);
+        let source = source_dir.join(format!("{sha512}.jar"));
+        std::fs::write(&source, bytes).unwrap();
+        let inspected = crate::jar::inspect_path(&source, "fabric").unwrap();
+        let lockfile = OrbitLockfile {
+            meta: crate::lockfile::LockMeta {
+                mc_version: "1.21.1".to_string(),
+                modloader: "fabric".to_string(),
+                modloader_version: "0.16.10".to_string(),
+            },
+            packages: Vec::new(),
+        };
+
+        let filename = local_candidate_filename(
+            &format!(".orbit/sources/{sha512}.jar"),
+            &source,
+            &inspected,
+            &lockfile,
+        )
+        .unwrap();
+
+        assert_eq!(filename, "voxy-1.0-mc.jar");
+        assert!(!filename.contains(&sha512));
+    }
+
     #[tokio::test]
     async fn discovery_recurses_projects_and_queues_every_matching_version_before_download() {
         let calls = Arc::new(Mutex::new(Vec::new()));
@@ -757,12 +828,12 @@ mod tests {
             ]),
             calls: calls.clone(),
         };
-        let mut seen_lookups = HashSet::new();
-        let mut seen_artifacts = HashSet::new();
+        let mut seen_lookups = HashMap::new();
+        let mut seen_artifacts = HashMap::new();
 
         let artifacts = discover_artifact_closure(
             &provider,
-            vec!["root".to_string()],
+            vec![("root".to_string(), true)],
             "1.21.1",
             "fabric",
             &mut seen_lookups,
@@ -789,6 +860,45 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_direct_seed_promotes_artifacts_already_seen_through_a_relation() {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let shared = related_artifact("shared", "shared", "1", None);
+        let provider = DiscoveryProvider {
+            downloader: ArtifactDownloadClient::anonymous("orbit-test").unwrap(),
+            projects: HashMap::from([("shared".to_string(), vec![shared])]),
+            calls: calls.clone(),
+        };
+        let mut seen_lookups = HashMap::new();
+        let mut seen_artifacts = HashMap::new();
+
+        // LIFO traversal visits the transitive occurrence first. The later
+        // direct occurrence must still promote the same bytes to "requested".
+        let artifacts = discover_artifact_closure(
+            &provider,
+            vec![("shared".to_string(), true), ("shared".to_string(), false)],
+            "1.21.1",
+            "fabric",
+            &mut seen_lookups,
+            &mut seen_artifacts,
+            None,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(artifacts.len(), 1);
+        assert!(artifacts[0].requested);
+        assert_eq!(
+            calls
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|lookup| lookup.as_str() == "shared")
+                .count(),
+            2
+        );
+    }
+
+    #[tokio::test]
     async fn cached_candidate_download_reports_start_item_and_completion() {
         let directory = tempfile::tempdir().unwrap();
         let cache = crate::jar_cache::JarCache::open(directory.path().join("cache")).unwrap();
@@ -808,7 +918,10 @@ mod tests {
         let parsed = download_artifact_queue(
             vec![(
                 ArtifactDownloadClient::anonymous("orbit-test").unwrap(),
-                candidate,
+                DiscoveredRemoteArtifact {
+                    artifact: candidate,
+                    requested: true,
+                },
             )],
             "fabric",
             &cache,
@@ -817,7 +930,7 @@ mod tests {
         .await
         .unwrap();
 
-        assert_eq!(parsed[0].0.mod_id, "voxy");
+        assert_eq!(parsed[0].0.metadata.mod_id, "voxy");
         let events = events.lock().unwrap();
         assert_eq!(
             events.first(),
@@ -880,15 +993,14 @@ mod tests {
                 sha256: "hash".to_string(),
                 sha512: String::new(),
                 filename: "existing-old.jar".to_string(),
-                provider: "modrinth".to_string(),
-                modrinth: Some(crate::lockfile::ModrinthInfo {
+                remotes: vec![PackageRemote::Modrinth {
+                    project_id: "existing-project".to_string(),
+                }],
+                artifact_sources: vec![crate::lockfile::ArtifactSource::Modrinth {
                     project_id: "existing-project".to_string(),
                     version_id: "existing-old".to_string(),
-                    slug: "existing".to_string(),
                     download_url: String::new(),
-                }),
-                curseforge: None,
-                file: None,
+                }],
                 dependencies: Vec::new(),
                 environment: crate::metadata::Environment::Both,
                 provides: Vec::new(),
@@ -898,19 +1010,30 @@ mod tests {
             }],
         };
 
+        let jar_cache =
+            crate::jar_cache::JarCache::open(std::path::PathBuf::from("unused-cache")).unwrap();
+        let input = CandidateDiscoveryInput {
+            instance_dir: std::path::Path::new("."),
+            providers: &providers,
+            additional_remotes: &[],
+            lockfile: &lockfile,
+            mc_version: "26.1",
+            loader: "fabric",
+            jar_cache: &jar_cache,
+            progress: None,
+        };
         let jobs = discover_transaction_artifact_queue(
-            &providers,
-            &["requested".to_string()],
-            &lockfile,
-            "26.1",
-            "fabric",
-            None,
+            &input,
+            &[PackageRemote::Modrinth {
+                project_id: "requested".to_string(),
+            }],
         )
         .await
         .unwrap();
         let filenames = jobs
+            .0
             .into_iter()
-            .map(|(_, artifact)| artifact.filename)
+            .map(|(_, artifact)| artifact.artifact.filename)
             .collect::<HashSet<_>>();
 
         assert_eq!(
@@ -937,12 +1060,12 @@ mod tests {
             )]),
             calls: Arc::new(Mutex::new(Vec::new())),
         };
-        let mut seen_lookups = HashSet::new();
-        let mut seen_artifacts = HashSet::new();
+        let mut seen_lookups = HashMap::new();
+        let mut seen_artifacts = HashMap::new();
 
         let error = discover_artifact_closure(
             &provider,
-            vec!["root".to_string()],
+            vec![("root".to_string(), true)],
             "1.21.1",
             "fabric",
             &mut seen_lookups,
@@ -965,15 +1088,14 @@ mod tests {
             sha256: "hash".to_string(),
             sha512: String::new(),
             filename: "ignored-by-presentation.jar".to_string(),
-            provider: "modrinth".to_string(),
-            modrinth: Some(crate::lockfile::ModrinthInfo {
+            remotes: vec![PackageRemote::Modrinth {
+                project_id: "project".to_string(),
+            }],
+            artifact_sources: vec![crate::lockfile::ArtifactSource::Modrinth {
                 project_id: "project".to_string(),
                 version_id: "version".to_string(),
-                slug: "missing-package".to_string(),
                 download_url: String::new(),
-            }),
-            curseforge: None,
-            file: None,
+            }],
             dependencies: Vec::new(),
             environment: crate::metadata::Environment::Both,
             provides: Vec::new(),
@@ -1012,7 +1134,7 @@ mod tests {
         let mut download = CandidateCatalog::default();
 
         download
-            .record(
+            .record_test(
                 crate::jar::JarModMetadata {
                     mod_id: "actual-a".to_string(),
                     name: "Actual A".to_string(),
@@ -1031,7 +1153,7 @@ mod tests {
             )
             .unwrap();
         download
-            .record(
+            .record_test(
                 crate::jar::JarModMetadata {
                     mod_id: "actual-b".to_string(),
                     name: "Actual B".to_string(),
@@ -1051,24 +1173,16 @@ mod tests {
             .unwrap();
 
         assert_eq!(download.resolved.len(), 2);
-        assert!(
-            download
-                .resolved
-                .values()
-                .any(|artifact| artifact.slug == "source-a")
-        );
-        assert!(
-            download
-                .resolved
-                .values()
-                .any(|artifact| artifact.slug == "source-b")
-        );
         assert_eq!(
-            download.source_packages[&("modrinth".to_string(), "source-a".to_string())],
+            download.remote_packages[&PackageRemote::Modrinth {
+                project_id: "project-a".to_string()
+            }],
             std::collections::BTreeSet::from(["actual-a".to_string()])
         );
         assert_eq!(
-            download.source_packages[&("modrinth".to_string(), "project-b".to_string())],
+            download.remote_packages[&PackageRemote::Modrinth {
+                project_id: "project-b".to_string()
+            }],
             std::collections::BTreeSet::from(["actual-b".to_string()])
         );
     }
@@ -1080,7 +1194,7 @@ mod tests {
             let mut remote = artifact("gca", "UHjbX5mk");
             remote.modrinth.as_mut().unwrap().version_id = version.to_string();
             catalog
-                .record(
+                .record_test(
                     crate::jar::JarModMetadata {
                         mod_id: mod_id.to_string(),
                         name: "GCA wrapper".to_string(),
@@ -1103,11 +1217,9 @@ mod tests {
         assert_eq!(catalog.candidates["gca-wrapper"].len(), 1);
         assert_eq!(catalog.candidates["gca_wrapper"].len(), 1);
         assert_eq!(
-            catalog.packages_for_locator("gca"),
-            vec!["gca-wrapper", "gca_wrapper"]
-        );
-        assert_eq!(
-            catalog.packages_for_locator("UHjbX5mk"),
+            catalog.packages_for_remote(&PackageRemote::Modrinth {
+                project_id: "UHjbX5mk".to_string()
+            }),
             vec!["gca-wrapper", "gca_wrapper"]
         );
     }
@@ -1138,18 +1250,23 @@ mod tests {
 
         let mut catalog = CandidateCatalog::default();
         catalog
-            .record(metadata(Vec::new()), artifact("first", "project-a"))
+            .record_test(metadata(Vec::new()), artifact("first", "project-a"))
             .unwrap();
         catalog
-            .record(metadata(Vec::new()), artifact("mirror", "project-b"))
+            .record_test(metadata(Vec::new()), artifact("mirror", "project-b"))
             .unwrap();
 
         assert_eq!(catalog.candidates["actual"].len(), 2);
         assert_eq!(catalog.resolved.len(), 2);
-        assert_eq!(catalog.packages_for_locator("mirror"), vec!["actual"]);
+        assert_eq!(
+            catalog.packages_for_remote(&PackageRemote::Modrinth {
+                project_id: "project-b".to_string()
+            }),
+            vec!["actual"]
+        );
 
         catalog
-            .record(
+            .record_test(
                 metadata(vec![crate::metadata::ModDependency::required(
                     "different",
                     "*",
@@ -1160,7 +1277,7 @@ mod tests {
         assert_eq!(catalog.candidates["actual"].len(), 3);
 
         let error = catalog
-            .record(
+            .record_test(
                 metadata(vec![crate::metadata::ModDependency::required(
                     "same-artifact-different-metadata",
                     "*",
@@ -1168,6 +1285,67 @@ mod tests {
                 artifact("same-artifact", "project-c"),
             )
             .unwrap_err();
-        assert!(error.to_string().contains("different metadata"));
+        assert!(error.to_string().contains("inconsistent JAR metadata"));
+    }
+
+    #[test]
+    fn identical_content_from_different_providers_is_one_human_readable_candidate() {
+        let metadata = crate::jar::JarModMetadata {
+            mod_id: "actual".to_string(),
+            name: "Actual".to_string(),
+            version: "1".to_string(),
+            environment: Default::default(),
+            dependencies: vec![crate::metadata::ModDependency::required("sodium", ">=0.9").into()],
+            provides: Vec::new(),
+            language_loader: None,
+            load_condition: crate::metadata::ModLoadCondition::IfPossible,
+            origin: crate::jar::JarModOrigin::Root,
+            embedded_jars: Vec::new(),
+            embedded_artifacts: Vec::new(),
+            bundled_mods: Vec::new(),
+        };
+        let inspected = crate::jar::InspectedJar {
+            metadata: metadata.clone(),
+            sha1: "same-sha1".to_string(),
+            sha256: "same-sha256".to_string(),
+            sha512: "same-sha512".to_string(),
+        };
+        let mut modrinth = artifact("release-a", "project-a");
+        modrinth.sha512 = inspected.sha512.clone();
+        let curseforge = crate::providers::RemoteArtifact {
+            sha1: inspected.sha1.clone(),
+            sha512: inspected.sha512.clone(),
+            slug: "actual".to_string(),
+            provider: "curseforge".to_string(),
+            modrinth: None,
+            curseforge: Some(CurseForgeResolvedInfo {
+                project_id: 123,
+                file_id: 456,
+                fingerprint: 789,
+            }),
+            download_url: "https://edge.forgecdn.net/files/actual.jar".to_string(),
+            filename: "actual-cf.jar".to_string(),
+            related_projects: Vec::new(),
+        };
+
+        let mut catalog = CandidateCatalog::default();
+        catalog
+            .record(metadata.clone(), modrinth, &inspected, true)
+            .unwrap();
+        catalog
+            .record(metadata, curseforge, &inspected, true)
+            .unwrap();
+
+        assert_eq!(catalog.candidates["actual"].len(), 1);
+        assert_eq!(catalog.resolved.len(), 1);
+        let candidate = &catalog.candidates["actual"][0];
+        assert_eq!(candidate.display_sources.len(), 2);
+        assert!(
+            candidate
+                .display_description()
+                .contains("requires sodium >=0.9")
+        );
+        assert!(!candidate.display_description().contains("same-sha"));
+        assert_eq!(catalog.resolved[&candidate.id].sources.len(), 2);
     }
 }

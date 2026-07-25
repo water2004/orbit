@@ -14,14 +14,14 @@ use crate::error::OrbitError;
 use async_trait::async_trait;
 pub use download::ArtifactDownloadClient;
 
-/// 根据配置创建 provider 列表，按 `resolver.platforms` 顺序。
+/// 根据配置创建 provider 列表。顺序只影响无限定搜索的展示顺序。
 pub fn create_providers(
-    platforms: &[String],
+    catalogs: &[String],
     auth: &crate::config::AuthConfig,
 ) -> Result<Vec<Box<dyn ModProvider>>, crate::error::OrbitError> {
     let ua = format!("orbit/{}", env!("CARGO_PKG_VERSION"));
     let mut providers: Vec<Box<dyn ModProvider>> = Vec::new();
-    for name in platforms {
+    for name in catalogs {
         match name.as_str() {
             "modrinth" => {
                 providers.push(
@@ -45,14 +45,14 @@ pub fn create_providers(
             }
             other => {
                 return Err(crate::error::OrbitError::Other(anyhow::anyhow!(
-                    "unsupported provider '{other}' in [resolver].platforms"
+                    "unsupported provider '{other}' in [resolver].catalogs"
                 )));
             }
         }
     }
     if providers.is_empty() {
         return Err(crate::error::OrbitError::Other(anyhow::anyhow!(
-            "no valid platforms configured in [resolver].platforms"
+            "no valid provider catalogs configured in [resolver].catalogs"
         )));
     }
     Ok(providers)
@@ -64,15 +64,15 @@ pub fn create_providers(
 pub fn create_identification_providers(
     auth: &crate::config::AuthConfig,
 ) -> Result<Vec<Box<dyn ModProvider>>, crate::error::OrbitError> {
-    let mut platforms = vec!["modrinth".to_string()];
+    let mut catalogs = vec!["modrinth".to_string()];
     if auth
         .curseforge_api_key
         .as_deref()
         .is_some_and(|key| !key.trim().is_empty())
     {
-        platforms.push("curseforge".to_string());
+        catalogs.push("curseforge".to_string());
     }
-    create_providers(&platforms, auth)
+    create_providers(&catalogs, auth)
 }
 
 pub fn find_provider<'a>(
@@ -140,22 +140,62 @@ pub struct RemoteArtifact {
 }
 
 impl RemoteArtifact {
-    /// Stable identity for one provider artifact within a candidate catalog.
-    ///
-    /// Provider IDs are preferred; hashes and the URL keep anonymous/file-like
-    /// artifacts distinct without trusting the remote display version.
-    pub fn candidate_id(&self) -> String {
-        format!(
-            "{}:{}:{}:{}",
+    pub fn package_remote(&self) -> Result<crate::manifest::PackageRemote, OrbitError> {
+        if let Some(metadata) = &self.modrinth {
+            return Ok(crate::manifest::PackageRemote::Modrinth {
+                project_id: metadata.project_id.clone(),
+            });
+        }
+        if let Some(metadata) = &self.curseforge {
+            return Ok(crate::manifest::PackageRemote::Curseforge {
+                project_id: metadata.project_id,
+            });
+        }
+        Err(OrbitError::Other(anyhow::anyhow!(
+            "{} artifact '{}' has no project identity",
             self.provider,
-            self.version_id().unwrap_or_default(),
-            if self.sha512.is_empty() {
-                &self.sha1
-            } else {
-                &self.sha512
-            },
-            self.download_url
-        )
+            self.filename
+        )))
+    }
+
+    pub fn artifact_source(&self) -> Result<crate::lockfile::ArtifactSource, OrbitError> {
+        if let Some(metadata) = &self.modrinth {
+            return Ok(crate::lockfile::ArtifactSource::Modrinth {
+                project_id: metadata.project_id.clone(),
+                version_id: metadata.version_id.clone(),
+                download_url: self.download_url.clone(),
+            });
+        }
+        if let Some(metadata) = &self.curseforge {
+            return Ok(crate::lockfile::ArtifactSource::Curseforge {
+                project_id: metadata.project_id,
+                file_id: metadata.file_id,
+                download_url: self.download_url.clone(),
+            });
+        }
+        Err(OrbitError::Other(anyhow::anyhow!(
+            "{} artifact '{}' has no downloadable source",
+            self.provider,
+            self.filename
+        )))
+    }
+
+    /// Human-readable provenance for a concrete artifact. This is deliberately
+    /// separate from the content-hash candidate identity used by the solver.
+    pub fn display_source(&self) -> String {
+        if let Some(metadata) = &self.modrinth {
+            return format!(
+                "Modrinth project {}, release {}",
+                metadata.project_id, metadata.version_id
+            );
+        }
+        if let Some(metadata) = &self.curseforge {
+            return format!(
+                "CurseForge project {}, file {}",
+                metadata.project_id, metadata.file_id
+            );
+        }
+        self.provider.clone()
     }
 
     pub fn project_id(&self) -> Option<String> {

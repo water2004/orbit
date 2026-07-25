@@ -28,11 +28,11 @@ pub async fn handle(input: String, ctx: &CliContext) -> Result<()> {
                 anyhow::bail!("No dependencies in orbit.toml.");
             }
             eprintln!("'{input}' not found in orbit.toml. Installed dependencies:");
-            for (i, (k, slug)) in deps.iter().enumerate() {
-                eprintln!("  [{i}] {k}  (slug: {slug})");
+            for (i, package) in deps.iter().enumerate() {
+                eprintln!("  [{i}] {package}");
             }
             let key = if ctx.yes {
-                anyhow::bail!("'{input}' not found. Use an exact slug.");
+                anyhow::bail!("'{input}' not found. Use an exact JAR-declared mod_id.");
             } else {
                 eprint!("\nChoose a number (or press Enter to cancel): ");
                 let mut choice = String::new();
@@ -42,7 +42,7 @@ pub async fn handle(input: String, ctx: &CliContext) -> Result<()> {
                     anyhow::bail!("Remove cancelled.");
                 }
                 match trimmed.parse::<usize>() {
-                    Ok(i) if i < deps.len() => deps[i].0.clone(),
+                    Ok(i) if i < deps.len() => deps[i].clone(),
                     _ => anyhow::bail!("Invalid choice."),
                 }
             };

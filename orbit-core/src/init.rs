@@ -289,13 +289,31 @@ pub async fn run_init(
 
     // 2. Identify top-level package JARs. Modules contained in one package are
     // already represented by the JAR layer as bundled metadata.
-    let identified = crate::identification::identify_mods(&scanned, providers).await?;
+    let mut identified = crate::identification::identify_mods(&scanned, providers).await?;
+    if !input.dry_run {
+        crate::identification::preserve_local_sources(&input.instance_dir, &mut identified)?;
+    }
 
     // 3. Build root declarations and concrete top-level package candidates.
-    let lock_entries: Vec<crate::lockfile::PackageEntry> = identified
+    let mut package_remotes =
+        std::collections::HashMap::<String, Vec<crate::manifest::PackageRemote>>::new();
+    for package in &identified {
+        package_remotes
+            .entry(package.package_id())
+            .or_default()
+            .extend(package.remotes.iter().cloned());
+    }
+    for remotes in package_remotes.values_mut() {
+        remotes.sort();
+        remotes.dedup();
+    }
+    let mut lock_entries: Vec<crate::lockfile::PackageEntry> = identified
         .iter()
         .map(crate::identification::IdentifiedMod::to_package_entry)
         .collect();
+    for entry in &mut lock_entries {
+        entry.remotes = package_remotes[&entry.mod_id].clone();
+    }
 
     let mc_ver = platform.minecraft_version.id.clone();
     let loader_name = platform.loader.clone();
@@ -303,13 +321,21 @@ pub async fn run_init(
     let mut dependencies = indexmap::IndexMap::new();
     for m in &identified {
         let key = m.package_id();
-        let spec = DependencySpec::Full {
-            version: Some("*".to_string()),
-            optional: None,
+        let spec = DependencySpec {
+            version: "*".to_string(),
+            optional: false,
             env: None,
-            exclude: None,
+            exclude: Vec::new(),
+            remotes: m.remotes.clone(),
         };
-        dependencies.insert(key, spec);
+        dependencies
+            .entry(key)
+            .and_modify(|existing: &mut DependencySpec| {
+                existing.remotes.extend(spec.remotes.iter().cloned());
+                existing.remotes.sort();
+                existing.remotes.dedup();
+            })
+            .or_insert(spec);
     }
 
     // 3. 构建 manifest
@@ -360,7 +386,11 @@ pub async fn run_init(
                 }
                 (selection.selected_entries, selection.removed, None)
             }
-            Err(error) => (lock_entries, Vec::new(), Some(error)),
+            // A lock records one selected realization per package. If the
+            // local graph has no solution, there is no valid selection to
+            // persist. The manifest still retains every managed local remote
+            // so `install` can retry after the candidate universe changes.
+            Err(error) => (Vec::new(), Vec::new(), Some(error)),
         };
 
     // 5. Write the selected package graph. If the graph is incomplete, retain
@@ -648,6 +678,19 @@ mod tests {
         assert_eq!(
             output.manifest.dependencies["alpha"].version_constraint(),
             Some("*")
+        );
+        assert_eq!(output.manifest.dependencies["alpha"].remotes.len(), 2);
+        assert!(
+            output.manifest.dependencies["alpha"]
+                .remotes
+                .iter()
+                .all(|remote| remote.display_locator() == "file:managed local source")
+        );
+        assert_eq!(
+            std::fs::read_dir(directory.join(".orbit/sources"))
+                .unwrap()
+                .count(),
+            2
         );
         std::fs::remove_dir_all(directory).unwrap();
     }

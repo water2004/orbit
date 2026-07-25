@@ -5,12 +5,14 @@
 use serde::{Deserialize, Serialize};
 
 use crate::error::OrbitError;
+use crate::manifest::PackageRemote;
 use crate::metadata::{
     DependencyExpression, EmbeddedArtifact, Environment, LanguageLoaderRequirement,
     ModLoadCondition, ProvidedMod,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct OrbitLockfile {
     pub meta: LockMeta,
     #[serde(rename = "package")]
@@ -18,6 +20,7 @@ pub struct OrbitLockfile {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct LockMeta {
     pub mc_version: String,
     pub modloader: String,
@@ -26,6 +29,7 @@ pub struct LockMeta {
 
 /// `[[package]]` 条目。`mod_id` 为 loader 元数据声明的模组 ID，是 lockfile 的键。
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PackageEntry {
     /// JAR loader 元数据声明的模组 ID
     pub mod_id: String,
@@ -34,22 +38,15 @@ pub struct PackageEntry {
     #[serde(skip_serializing_if = "String::is_empty", default)]
     pub sha1: String,
     pub sha256: String,
-    #[serde(skip_serializing_if = "String::is_empty", default)]
     pub sha512: String,
     /// JAR 文件名（不含路径），用于升级/删除时定位旧文件
     #[serde(default)]
     pub filename: String,
-    /// "modrinth" | "curseforge" | "file"
-    pub provider: String,
-    /// Modrinth provider 专属字段
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub modrinth: Option<ModrinthInfo>,
-    /// CurseForge provider 专属字段
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub curseforge: Option<CurseForgeInfo>,
-    /// File provider 专属字段
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub file: Option<FileInfo>,
+    /// Every known candidate-discovery entry for this logical package.
+    pub remotes: Vec<PackageRemote>,
+    /// Sources that can restore the exact selected content hash.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub artifact_sources: Vec<ArtifactSource>,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub dependencies: Vec<DependencyExpression>,
     #[serde(default)]
@@ -65,30 +62,36 @@ pub struct PackageEntry {
     pub bundled: Vec<BundledMod>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ModrinthInfo {
-    pub project_id: String,
-    pub version_id: String,
-    pub slug: String,
-    #[serde(skip_serializing_if = "String::is_empty", default)]
-    pub download_url: String,
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "type", rename_all = "lowercase", deny_unknown_fields)]
+pub enum ArtifactSource {
+    File {
+        path: String,
+    },
+    Modrinth {
+        project_id: String,
+        version_id: String,
+        download_url: String,
+    },
+    Curseforge {
+        project_id: u32,
+        file_id: u32,
+        download_url: String,
+    },
+}
+
+impl ArtifactSource {
+    pub fn provider(&self) -> &'static str {
+        match self {
+            Self::File { .. } => "file",
+            Self::Modrinth { .. } => "modrinth",
+            Self::Curseforge { .. } => "curseforge",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CurseForgeInfo {
-    pub project_id: u32,
-    pub file_id: u32,
-    pub slug: String,
-    #[serde(skip_serializing_if = "String::is_empty", default)]
-    pub download_url: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FileInfo {
-    pub path: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct BundledMod {
     pub mod_id: String,
     pub version: String,
@@ -146,13 +149,21 @@ impl BundledMod {
 
 impl OrbitLockfile {
     pub fn from_path(path: &std::path::Path) -> Result<Self, OrbitError> {
-        let content = std::fs::read_to_string(path).map_err(|_| OrbitError::LockfileNotFound)?;
+        let content = std::fs::read_to_string(path).map_err(|error| {
+            if error.kind() == std::io::ErrorKind::NotFound {
+                OrbitError::LockfileNotFound
+            } else {
+                OrbitError::Io(error)
+            }
+        })?;
         let lockfile: Self = toml::from_str(&content)
             .map_err(|e| OrbitError::Other(anyhow::anyhow!("failed to parse orbit.lock: {e}")))?;
+        lockfile.validate()?;
         Ok(lockfile)
     }
 
     pub fn to_toml_string(&self) -> Result<String, OrbitError> {
+        self.validate()?;
         toml::to_string_pretty(self)
             .map_err(|e| OrbitError::Other(anyhow::anyhow!("failed to serialize orbit.lock: {e}")))
     }
@@ -166,51 +177,94 @@ impl OrbitLockfile {
     pub fn find(&self, mod_id: &str) -> Option<&PackageEntry> {
         self.packages.iter().find(|e| e.mod_id == mod_id)
     }
+
+    pub fn validate(&self) -> Result<(), OrbitError> {
+        let mut packages = std::collections::BTreeSet::new();
+        for entry in &self.packages {
+            if entry.mod_id.trim().is_empty()
+                || entry.version.trim().is_empty()
+                || entry.sha512.trim().is_empty()
+            {
+                return Err(OrbitError::Other(anyhow::anyhow!(
+                    "every locked package must contain a mod_id, JAR version, and SHA-512 content identity"
+                )));
+            }
+            if !packages.insert(entry.mod_id.as_str()) {
+                return Err(OrbitError::Other(anyhow::anyhow!(
+                    "orbit.lock contains package '{}' more than once",
+                    entry.mod_id
+                )));
+            }
+            if entry.remotes.is_empty() {
+                return Err(OrbitError::Other(anyhow::anyhow!(
+                    "locked package '{}' must declare at least one remote",
+                    entry.mod_id
+                )));
+            }
+            let mut remotes = std::collections::BTreeSet::new();
+            for remote in &entry.remotes {
+                remote.validate(&entry.mod_id)?;
+                if !remotes.insert(remote) {
+                    return Err(OrbitError::Other(anyhow::anyhow!(
+                        "locked package '{}' declares the same remote more than once",
+                        entry.mod_id
+                    )));
+                }
+            }
+            if entry.artifact_sources.is_empty() {
+                return Err(OrbitError::Other(anyhow::anyhow!(
+                    "locked package '{}' has no exact source for its selected content",
+                    entry.mod_id
+                )));
+            }
+            let mut sources = Vec::new();
+            for source in &entry.artifact_sources {
+                if !source.is_valid() {
+                    return Err(OrbitError::Other(anyhow::anyhow!(
+                        "locked package '{}' contains an invalid exact artifact source",
+                        entry.mod_id
+                    )));
+                }
+                if sources.contains(&source) {
+                    return Err(OrbitError::Other(anyhow::anyhow!(
+                        "locked package '{}' contains the same exact artifact source more than once",
+                        entry.mod_id
+                    )));
+                }
+                sources.push(source);
+            }
+        }
+        Ok(())
+    }
 }
 
 impl PackageEntry {
-    pub fn source_slug(&self) -> Option<&str> {
-        self.modrinth
-            .as_ref()
-            .map(|metadata| metadata.slug.as_str())
-            .or_else(|| {
-                self.curseforge
-                    .as_ref()
-                    .map(|metadata| metadata.slug.as_str())
-            })
+    pub fn has_online_remote(&self) -> bool {
+        self.remotes
+            .iter()
+            .any(|remote| remote.provider() != "file")
     }
+}
 
-    pub fn source_project_id(&self) -> Option<String> {
-        self.modrinth
-            .as_ref()
-            .map(|metadata| metadata.project_id.clone())
-            .or_else(|| {
-                self.curseforge
-                    .as_ref()
-                    .map(|metadata| metadata.project_id.to_string())
-            })
-    }
-
-    pub fn source_version_id(&self) -> Option<String> {
-        self.modrinth
-            .as_ref()
-            .map(|metadata| metadata.version_id.clone())
-            .or_else(|| {
-                self.curseforge
-                    .as_ref()
-                    .map(|metadata| metadata.file_id.to_string())
-            })
-    }
-
-    pub fn source_download_url(&self) -> Option<&str> {
-        self.modrinth
-            .as_ref()
-            .map(|metadata| metadata.download_url.as_str())
-            .or_else(|| {
-                self.curseforge
-                    .as_ref()
-                    .map(|metadata| metadata.download_url.as_str())
-            })
+impl ArtifactSource {
+    fn is_valid(&self) -> bool {
+        match self {
+            Self::File { path } => !path.trim().is_empty(),
+            Self::Modrinth {
+                project_id,
+                version_id,
+                download_url,
+            } => {
+                !project_id.trim().is_empty()
+                    && !version_id.trim().is_empty()
+                    && !download_url.trim().is_empty()
+            }
+            Self::Curseforge {
+                project_id,
+                file_id,
+                download_url,
+            } => *project_id > 0 && *file_id > 0 && !download_url.trim().is_empty(),
+        }
     }
 }
 
@@ -230,31 +284,28 @@ modloader_version = "0.16.10"
 mod_id = "sodium"
 version = "0.5.8"
 sha256 = "abc123def456"
-provider = "modrinth"
-
-[package.modrinth]
-project_id = "AANobbMI"
-version_id = "abc123mod"
-slug = "sodium"
+sha512 = "sodium-content"
+remotes = [{ type = "modrinth", project_id = "AANobbMI" }]
+artifact_sources = [{ type = "modrinth", project_id = "AANobbMI", version_id = "abc123mod", download_url = "https://cdn.modrinth.com/sodium.jar" }]
 
 [[package]]
 mod_id = "fabric-api"
 version = "0.92.0"
 sha1 = "deadbeef"
 sha256 = "xyz789"
-provider = "modrinth"
-
-[package.modrinth]
-project_id = "P7dR8mSH"
-version_id = "def456ver"
-slug = "fabric-api"
+sha512 = "fabric-api-content"
+remotes = [{ type = "modrinth", project_id = "P7dR8mSH" }]
+artifact_sources = [{ type = "modrinth", project_id = "P7dR8mSH", version_id = "def456ver", download_url = "https://cdn.modrinth.com/fabric-api.jar" }]
 "#;
         let lockfile: OrbitLockfile = toml::from_str(toml_str).unwrap();
         assert_eq!(lockfile.meta.mc_version, "1.20.1");
         assert_eq!(lockfile.packages.len(), 2);
         let sodium = lockfile.find("sodium").unwrap();
         assert_eq!(sodium.version, "0.5.8");
-        assert_eq!(sodium.modrinth.as_ref().unwrap().project_id, "AANobbMI");
+        assert!(matches!(
+            sodium.remotes[0],
+            PackageRemote::Modrinth { ref project_id } if project_id == "AANobbMI"
+        ));
 
         let fa = lockfile.find("fabric-api").unwrap();
         assert_eq!(fa.sha1, "deadbeef");
@@ -272,18 +323,16 @@ modloader_version = "0.16.10"
 mod_id = "carpet"
 version = "26.1+v260402"
 sha256 = "abc123"
-provider = "file"
-
-[package.file]
-path = "mods/fabric-carpet-26.1+v260402.jar"
+sha512 = "carpet-content"
+remotes = [{ type = "file", path = "mods/fabric-carpet-26.1+v260402.jar" }]
+artifact_sources = [{ type = "file", path = "mods/fabric-carpet-26.1+v260402.jar" }]
 "#;
         let lockfile: OrbitLockfile = toml::from_str(toml_str).unwrap();
         let carpet = lockfile.find("carpet").unwrap();
-        assert_eq!(carpet.provider, "file");
-        assert_eq!(
-            carpet.file.as_ref().unwrap().path,
-            "mods/fabric-carpet-26.1+v260402.jar"
-        );
+        assert!(matches!(
+            &carpet.remotes[0],
+            PackageRemote::File { path } if path == "mods/fabric-carpet-26.1+v260402.jar"
+        ));
     }
 
     #[test]
@@ -299,27 +348,24 @@ mod_id = "example"
 version = "2.0.0"
 sha1 = "deadbeef"
 sha256 = "cafebabe"
+sha512 = "example-content"
 filename = "example.jar"
-provider = "curseforge"
-
-[package.curseforge]
-project_id = 123
-file_id = 456
-slug = "example"
-download_url = "https://example.invalid/example.jar"
+remotes = [{ type = "curseforge", project_id = 123 }]
+artifact_sources = [{ type = "curseforge", project_id = 123, file_id = 456, download_url = "https://example.invalid/example.jar" }]
 "#;
 
         let lockfile: OrbitLockfile = toml::from_str(source).unwrap();
         let entry = lockfile.find("example").unwrap();
-        assert_eq!(entry.source_slug(), Some("example"));
-        assert_eq!(entry.source_project_id().as_deref(), Some("123"));
-        assert_eq!(entry.source_version_id().as_deref(), Some("456"));
+        assert!(matches!(
+            entry.artifact_sources[0],
+            ArtifactSource::Curseforge { file_id: 456, .. }
+        ));
 
         let serialized = lockfile.to_toml_string().unwrap();
         let roundtrip: OrbitLockfile = toml::from_str(&serialized).unwrap();
         assert_eq!(
-            roundtrip.packages[0].curseforge.as_ref().unwrap().file_id,
-            456
+            roundtrip.packages[0].artifact_sources,
+            entry.artifact_sources
         );
     }
 
@@ -336,17 +382,16 @@ download_url = "https://example.invalid/example.jar"
                 version: "0.5.8".into(),
                 sha1: String::new(),
                 sha256: "abc123".into(),
-                sha512: String::new(),
+                sha512: "sodium-content".into(),
                 filename: String::new(),
-                provider: "modrinth".into(),
-                modrinth: Some(ModrinthInfo {
+                remotes: vec![PackageRemote::Modrinth {
+                    project_id: "AANobbMI".into(),
+                }],
+                artifact_sources: vec![ArtifactSource::Modrinth {
                     project_id: "AANobbMI".into(),
                     version_id: "abc123mod".into(),
-                    slug: "sodium".into(),
-                    download_url: String::new(),
-                }),
-                curseforge: None,
-                file: None,
+                    download_url: "https://cdn.modrinth.com/sodium.jar".into(),
+                }],
                 dependencies: vec![],
                 environment: Environment::Both,
                 provides: vec![],
@@ -359,5 +404,54 @@ download_url = "https://example.invalid/example.jar"
         let deserialized: OrbitLockfile = toml::from_str(&serialized).unwrap();
         assert_eq!(deserialized.packages.len(), 1);
         assert_eq!(deserialized.packages[0].mod_id, "sodium");
+    }
+
+    #[test]
+    fn obsolete_single_provider_fields_are_rejected() {
+        let source = r#"
+[meta]
+mc_version = "1.20.1"
+modloader = "fabric"
+modloader_version = "0.16.10"
+
+[[package]]
+mod_id = "sodium"
+version = "0.5.8"
+sha256 = "abc123"
+sha512 = "sodium-content"
+provider = "modrinth"
+slug = "sodium"
+remotes = [{ type = "modrinth", project_id = "AANobbMI" }]
+"#;
+
+        let error = toml::from_str::<OrbitLockfile>(source).unwrap_err();
+        assert!(error.to_string().contains("unknown field"));
+    }
+
+    #[test]
+    fn persisted_lock_requires_a_content_identity() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("orbit.lock");
+        std::fs::write(
+            &path,
+            r#"
+[meta]
+mc_version = "1.20.1"
+modloader = "fabric"
+modloader_version = "0.16.10"
+
+[[package]]
+mod_id = "sodium"
+version = "0.5.8"
+sha256 = "abc123"
+sha512 = ""
+remotes = [{ type = "modrinth", project_id = "AANobbMI" }]
+artifact_sources = [{ type = "modrinth", project_id = "different-project", version_id = "version", download_url = "https://example.invalid/sodium.jar" }]
+"#,
+        )
+        .unwrap();
+
+        let error = OrbitLockfile::from_path(&path).unwrap_err();
+        assert!(error.to_string().contains("content identity"));
     }
 }

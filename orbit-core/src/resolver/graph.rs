@@ -623,16 +623,20 @@ fn nested_artifact(origin: &crate::jar::JarModOrigin) -> Option<&EmbeddedArtifac
 }
 
 pub(crate) fn locked_source(entry: &crate::lockfile::PackageEntry) -> String {
+    if !entry.sha512.is_empty() {
+        return format!("lock:sha512:{}", entry.sha512);
+    }
+    if !entry.sha256.is_empty() {
+        return format!("lock:sha256:{}", entry.sha256);
+    }
+
+    // A freshly constructed in-memory graph may not have been persisted and
+    // hashed yet. Keep those concrete files distinct; persisted lock entries
+    // are required to carry a content hash.
     format!(
-        "lock:{}:{}:{}:{}",
-        entry.provider,
-        entry.source_version_id().unwrap_or_default(),
-        if entry.sha512.is_empty() {
-            &entry.sha256
-        } else {
-            &entry.sha512
-        },
-        entry.filename
+        "lock:unhashed:{}:{}",
+        entry.version,
+        entry.filename.replace('\\', "/")
     )
 }
 
@@ -1045,8 +1049,8 @@ modloader_version = "47.2.0"
 minecraft_jar = { path = "minecraft.jar", sha256 = "test" }
 loader_jar = { path = "loader.jar", sha256 = "test" }
 [dependencies]
-a = "*"
-b = "*"
+a = { version = "*", remotes = [{ type = "file", path = "a.jar" }] }
+b = { version = "*", remotes = [{ type = "file", path = "b.jar" }] }
 "#,
         )
         .unwrap()
@@ -1060,10 +1064,12 @@ b = "*"
             sha256: String::new(),
             sha512: String::new(),
             filename: format!("{id}.jar"),
-            provider: "file".to_string(),
-            modrinth: None,
-            curseforge: None,
-            file: None,
+            remotes: vec![crate::manifest::PackageRemote::File {
+                path: format!("{id}.jar"),
+            }],
+            artifact_sources: vec![crate::lockfile::ArtifactSource::File {
+                path: format!("{id}.jar"),
+            }],
             dependencies,
             environment: Environment::Both,
             provides: Vec::new(),
@@ -1077,6 +1083,7 @@ b = "*"
         CandidateVersion {
             id: format!("candidate-{version}"),
             filename: format!("candidate-{version}.jar"),
+            display_sources: vec!["test candidate".to_string()],
             jar_version: version.to_string(),
             dependencies: Vec::new(),
             environment: Environment::Both,
@@ -1100,7 +1107,7 @@ modloader_version = "0.19.2"
 minecraft_jar = { path = "minecraft.jar", sha256 = "test" }
 loader_jar = { path = "loader.jar", sha256 = "test" }
 [dependencies]
-carpet_tis = "*"
+carpet_tis = { version = "*", remotes = [{ type = "file", path = "carpet_tis.jar" }] }
 "#,
         )
         .unwrap();
@@ -1164,7 +1171,7 @@ carpet_tis = "*"
         manifest.dependencies.clear();
         manifest.dependencies.insert(
             "virtual_api".to_string(),
-            crate::manifest::DependencySpec::Short("*".to_string()),
+            crate::manifest::DependencySpec::new("*", Vec::new()),
         );
         let mut first = package("provider_one", "1", Vec::new());
         first.provides.push(ProvidedMod {
@@ -1278,7 +1285,7 @@ carpet_tis = "*"
         let mut manifest = manifest();
         manifest.dependencies.insert(
             "c".to_string(),
-            crate::manifest::DependencySpec::Short("*".to_string()),
+            crate::manifest::DependencySpec::new("*", Vec::new()),
         );
         let conflict = DependencyExpression::All(vec![
             dependency("b", "*", DependencyKind::Incompatible),
@@ -1410,7 +1417,7 @@ carpet_tis = "*"
         manifest.dependencies.shift_remove("b");
         manifest.dependencies.insert(
             "a".to_string(),
-            crate::manifest::DependencySpec::Short("[1]".to_string()),
+            crate::manifest::DependencySpec::new("[1]", Vec::new()),
         );
         let artifact = |version: &str, requirement: &str| EmbeddedArtifact {
             id: "org.example:shared".to_string(),
@@ -1448,7 +1455,7 @@ carpet_tis = "*"
         manifest.dependencies.clear();
         manifest.dependencies.insert(
             "shared".to_string(),
-            crate::manifest::DependencySpec::Short("*".to_string()),
+            crate::manifest::DependencySpec::new("*", Vec::new()),
         );
         let bundled = || BundledMod {
             mod_id: "shared".to_string(),
@@ -1503,7 +1510,7 @@ carpet_tis = "*"
         manifest.dependencies.clear();
         manifest.dependencies.insert(
             "a".to_string(),
-            crate::manifest::DependencySpec::Short("*".to_string()),
+            crate::manifest::DependencySpec::new("*", Vec::new()),
         );
         let mut incompatible = candidate("1", Vec::new());
         incompatible.id = "incompatible".to_string();
@@ -1558,7 +1565,7 @@ modloader_version = "0.16.10"
 minecraft_jar = { path = "minecraft.jar", sha256 = "test" }
 loader_jar = { path = "loader.jar", sha256 = "test" }
 [dependencies]
-wrapper = "*"
+wrapper = { version = "*", remotes = [{ type = "file", path = "wrapper.jar" }] }
 "#,
         )
         .unwrap();
@@ -1626,7 +1633,7 @@ modloader_version = "0.16.10"
 minecraft_jar = { path = "minecraft.jar", sha256 = "test" }
 loader_jar = { path = "loader.jar", sha256 = "test" }
 [dependencies]
-wrapper = "*"
+wrapper = { version = "*", remotes = [{ type = "file", path = "wrapper.jar" }] }
 "#,
         )
         .unwrap();
@@ -1689,8 +1696,8 @@ modloader_version = "0.16.10"
 minecraft_jar = { path = "minecraft.jar", sha256 = "test" }
 loader_jar = { path = "loader.jar", sha256 = "test" }
 [dependencies]
-a_parent = "*"
-z_parent = "*"
+a_parent = { version = "*", remotes = [{ type = "file", path = "a_parent.jar" }] }
+z_parent = { version = "*", remotes = [{ type = "file", path = "z_parent.jar" }] }
 "#,
         )
         .unwrap();

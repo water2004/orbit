@@ -1,6 +1,8 @@
 use std::collections::{BTreeMap, HashMap};
 use std::ops::Bound;
 
+use crate::lockfile::ArtifactSource;
+use crate::manifest::PackageRemote;
 use crate::metadata::{
     DependencyExpression, EmbeddedArtifact, Environment, LanguageLoaderRequirement,
     ModLoadCondition, ProvidedMod,
@@ -188,10 +190,12 @@ impl std::fmt::Display for SolverPackage {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CandidateVersion {
-    /// Provider-artifact identity; independent from JAR-declared mod ID/version.
+    /// Locally computed content identity; never intended for user-facing output.
     pub id: String,
-    /// Download filename used to distinguish concrete package candidates in plans.
+    /// Download filename used only to materialize the selected artifact.
     pub filename: String,
+    /// Human-readable exact artifact provenance, without content hashes.
+    pub display_sources: Vec<String>,
     pub jar_version: String,
     pub dependencies: Vec<DependencyExpression>,
     pub environment: Environment,
@@ -201,7 +205,16 @@ pub struct CandidateVersion {
     pub bundled: Vec<BundledCandidate>,
 }
 
-pub type ResolvedCandidates = HashMap<String, RemoteArtifact>;
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedArtifact {
+    pub filename: String,
+    pub sha1: String,
+    pub sha256: String,
+    pub sha512: String,
+    pub sources: Vec<ArtifactSource>,
+}
+
+pub type ResolvedCandidates = HashMap<String, ResolvedArtifact>;
 
 #[derive(Debug, Clone, Default)]
 pub struct CandidateCatalog {
@@ -213,7 +226,12 @@ pub struct CandidateCatalog {
     ///
     /// A provider project is only a download locator. Its artifacts may change
     /// `mod_id` over time, so it must not impose a single package identity.
-    pub source_packages: HashMap<(String, String), std::collections::BTreeSet<String>>,
+    pub remote_packages: HashMap<PackageRemote, std::collections::BTreeSet<String>>,
+    /// JAR-declared packages found directly in the remote(s) named by `add`.
+    pub requested_packages: std::collections::BTreeSet<String>,
+    /// Canonical provider project/file remote for each directly requested
+    /// JAR-declared package. Recursive dependency projects are excluded.
+    pub requested_remotes: HashMap<String, std::collections::BTreeSet<PackageRemote>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -246,11 +264,13 @@ impl CandidateVersion {
     pub fn from_jar_metadata(
         id: String,
         filename: String,
+        display_source: String,
         metadata: crate::jar::JarModMetadata,
     ) -> Self {
         Self {
             id,
             filename,
+            display_sources: vec![display_source],
             jar_version: metadata.version,
             dependencies: metadata.dependencies,
             environment: metadata.environment,
@@ -263,6 +283,43 @@ impl CandidateVersion {
                 .map(BundledCandidate::from_jar)
                 .collect(),
         }
+    }
+
+    fn metadata_equivalent(&self, other: &Self) -> bool {
+        self.jar_version == other.jar_version
+            && self.dependencies == other.dependencies
+            && self.environment == other.environment
+            && self.provides == other.provides
+            && self.language_loader == other.language_loader
+            && self.embedded_artifacts == other.embedded_artifacts
+            && self.bundled == other.bundled
+    }
+
+    fn add_display_source(&mut self, source: String) {
+        if !self.display_sources.contains(&source) {
+            self.display_sources.push(source);
+            self.display_sources.sort();
+        }
+    }
+
+    pub fn display_description(&self) -> String {
+        let mut description = if self.display_sources.is_empty() {
+            "downloaded artifact".to_string()
+        } else {
+            self.display_sources.join(", ")
+        };
+        let requirements: Vec<_> = self
+            .dependencies
+            .iter()
+            .flat_map(DependencyExpression::relations)
+            .filter(|dependency| dependency.kind.installs_target())
+            .map(|dependency| format!("{} {}", dependency.id, dependency.requirement))
+            .collect();
+        if !requirements.is_empty() {
+            description.push_str("; requires ");
+            description.push_str(&requirements.join(", "));
+        }
+        description
     }
 }
 
@@ -286,10 +343,31 @@ impl PlatformCandidate {
 }
 
 impl CandidateCatalog {
+    #[cfg(test)]
+    pub(crate) fn record_test(
+        &mut self,
+        metadata: crate::jar::JarModMetadata,
+        artifact: RemoteArtifact,
+    ) -> Result<String, crate::error::OrbitError> {
+        let identity = artifact
+            .version_id()
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| format!("{}:{}", artifact.provider, artifact.download_url));
+        let inspected = crate::jar::InspectedJar {
+            metadata: metadata.clone(),
+            sha1: format!("sha1-{identity}"),
+            sha256: format!("sha256-{identity}"),
+            sha512: format!("sha512-{identity}"),
+        };
+        self.record(metadata, artifact, &inspected, true)
+    }
+
     pub(crate) fn record(
         &mut self,
         metadata: crate::jar::JarModMetadata,
         artifact: RemoteArtifact,
+        inspected: &crate::jar::InspectedJar,
+        requested: bool,
     ) -> Result<String, crate::error::OrbitError> {
         if metadata.mod_id.is_empty() {
             return Err(crate::error::OrbitError::Other(anyhow::anyhow!(
@@ -304,53 +382,183 @@ impl CandidateCatalog {
             )));
         }
         let package = metadata.mod_id.clone();
-        let candidate_id = artifact.candidate_id();
+        let candidate_id = format!("sha512:{}", inspected.sha512);
+        let display_source = artifact.display_source();
         let candidate = CandidateVersion::from_jar_metadata(
             candidate_id.clone(),
             artifact.filename.clone(),
+            display_source.clone(),
             metadata,
         );
-        let existing = self
-            .candidates
-            .get(&package)
-            .and_then(|versions| versions.iter().find(|existing| existing.id == candidate.id));
-        if existing.is_some_and(|existing| existing != &candidate) {
+        let existing = self.candidates.get(&package).and_then(|versions| {
+            versions
+                .iter()
+                .position(|existing| existing.id == candidate.id)
+        });
+        if existing
+            .is_some_and(|index| !self.candidates[&package][index].metadata_equivalent(&candidate))
+        {
             return Err(crate::error::OrbitError::Other(anyhow::anyhow!(
-                "provider artifact '{}' was parsed with different metadata from its JAR",
-                candidate.id
+                "the same downloaded content was parsed with inconsistent JAR metadata"
             )));
         }
         let duplicate = existing.is_some();
-        self.record_source_alias(&artifact.provider, &artifact.slug, &package);
-        if let Some(project_id) = artifact.project_id() {
-            self.record_source_alias(&artifact.provider, &project_id, &package);
+        let remote = artifact.package_remote()?;
+        self.remote_packages
+            .entry(remote.clone())
+            .or_default()
+            .insert(package.clone());
+        if requested {
+            self.requested_packages.insert(package.clone());
+            self.requested_remotes
+                .entry(package.clone())
+                .or_default()
+                .insert(remote);
         }
         if !duplicate {
             self.candidates
                 .entry(package.clone())
                 .or_default()
                 .push(candidate);
+        } else if let Some(index) = existing {
+            self.candidates
+                .get_mut(&package)
+                .expect("candidate package exists")[index]
+                .add_display_source(display_source);
         }
-        self.resolved.entry(candidate_id).or_insert(artifact);
+        let source = artifact.artifact_source()?;
+        let resolved = self
+            .resolved
+            .entry(candidate_id)
+            .or_insert_with(|| ResolvedArtifact {
+                filename: artifact.filename.clone(),
+                sha1: inspected.sha1.clone(),
+                sha256: inspected.sha256.clone(),
+                sha512: inspected.sha512.clone(),
+                sources: Vec::new(),
+            });
+        if !resolved.sources.contains(&source) {
+            resolved.sources.push(source);
+            resolved.sources.sort_by_key(|source| format!("{source:?}"));
+        }
         Ok(package)
     }
 
-    fn record_source_alias(&mut self, provider: &str, alias: &str, package: &str) {
-        let key = (provider.to_string(), alias.to_string());
-        self.source_packages
-            .entry(key)
+    pub(crate) fn record_local(
+        &mut self,
+        inspected: crate::jar::InspectedJar,
+        path: String,
+        filename: String,
+        requested: bool,
+    ) -> Result<String, crate::error::OrbitError> {
+        let remote = PackageRemote::File { path: path.clone() };
+        let package = inspected.metadata.mod_id.clone();
+        if package.is_empty() {
+            return Err(crate::error::OrbitError::Other(anyhow::anyhow!(
+                "local JAR has an empty mod_id"
+            )));
+        }
+        if inspected.metadata.version.is_empty() {
+            return Err(crate::error::OrbitError::Other(anyhow::anyhow!(
+                "local package '{package}' has an empty JAR version"
+            )));
+        }
+        let candidate_id = format!("sha512:{}", inspected.sha512);
+        let candidate = CandidateVersion::from_jar_metadata(
+            candidate_id.clone(),
+            filename.clone(),
+            "local file".to_string(),
+            inspected.metadata,
+        );
+        if let Some(existing) = self
+            .candidates
+            .get(&package)
+            .and_then(|versions| versions.iter().find(|existing| existing.id == candidate.id))
+            && !existing.metadata_equivalent(&candidate)
+        {
+            return Err(crate::error::OrbitError::Other(anyhow::anyhow!(
+                "the same content hash was parsed with different JAR metadata"
+            )));
+        }
+        if !self
+            .candidates
+            .get(&package)
+            .is_some_and(|versions| versions.iter().any(|existing| existing.id == candidate.id))
+        {
+            self.candidates
+                .entry(package.clone())
+                .or_default()
+                .push(candidate);
+        }
+        self.remote_packages
+            .entry(remote.clone())
             .or_default()
-            .insert(package.to_string());
+            .insert(package.clone());
+        if requested {
+            self.requested_packages.insert(package.clone());
+            self.requested_remotes
+                .entry(package.clone())
+                .or_default()
+                .insert(remote);
+        }
+        let source = ArtifactSource::File { path };
+        let resolved = self
+            .resolved
+            .entry(candidate_id)
+            .or_insert_with(|| ResolvedArtifact {
+                filename,
+                sha1: inspected.sha1,
+                sha256: inspected.sha256,
+                sha512: inspected.sha512,
+                sources: Vec::new(),
+            });
+        if !resolved.sources.contains(&source) {
+            resolved.sources.push(source);
+            resolved.sources.sort_by_key(|source| format!("{source:?}"));
+        }
+        Ok(package)
     }
 
-    pub(crate) fn packages_for_locator(&self, locator: &str) -> Vec<String> {
-        self.source_packages
-            .iter()
-            .filter(|((_, alias), _)| alias == locator)
-            .flat_map(|(_, packages)| packages.iter().cloned())
-            .collect::<std::collections::BTreeSet<_>>()
+    #[cfg(test)]
+    pub(crate) fn packages_for_remote(&self, remote: &PackageRemote) -> Vec<String> {
+        self.remote_packages
+            .get(remote)
             .into_iter()
+            .flat_map(|packages| packages.iter().cloned())
             .collect()
+    }
+
+    pub(crate) fn remotes_for_package(&self, package: &str) -> Vec<PackageRemote> {
+        self.remote_packages
+            .iter()
+            .filter(|(_, packages)| packages.contains(package))
+            .map(|(remote, _)| remote.clone())
+            .collect()
+    }
+
+    pub(crate) fn requested_remotes_for_package(&self, package: &str) -> Vec<PackageRemote> {
+        self.requested_remotes
+            .get(package)
+            .into_iter()
+            .flat_map(|remotes| remotes.iter().cloned())
+            .collect()
+    }
+
+    pub(crate) fn package_remotes(&self) -> HashMap<String, Vec<PackageRemote>> {
+        let mut result: HashMap<String, Vec<PackageRemote>> = HashMap::new();
+        for (remote, packages) in &self.remote_packages {
+            for package in packages {
+                result
+                    .entry(package.clone())
+                    .or_default()
+                    .push(remote.clone());
+            }
+        }
+        for remotes in result.values_mut() {
+            remotes.sort();
+            remotes.dedup();
+        }
+        result
     }
 }
 
@@ -463,6 +671,9 @@ pub struct PackageChange {
     pub filename: Option<String>,
     /// Concrete top-level JAR selected for installation, when known.
     pub selected_filename: Option<String>,
+    /// Human-readable candidate provenance and relevant declared constraints.
+    /// Content hashes and physical filenames must not be placed here.
+    pub selected_description: Option<String>,
     pub kind: PackageChangeKind,
 }
 

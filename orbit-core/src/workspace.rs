@@ -63,14 +63,20 @@ impl Lockfile {
         Ok(Self { path, inner })
     }
 
-    /// 加载 orbit.lock，不存在时用给定 meta 创建空锁文件。
-    pub fn open_or_default(dir: &Path, meta: LockMeta) -> Self {
+    /// 加载 orbit.lock；只有文件确实不存在时才用给定 meta 创建空锁。
+    ///
+    /// 格式错误或违反模型约束的 lock 必须显式失败，不能被静默当成空状态。
+    pub fn open_or_default(dir: &Path, meta: LockMeta) -> Result<Self, OrbitError> {
         let path = dir.join("orbit.lock");
-        let inner = OrbitLockfile::from_path(&path).unwrap_or_else(|_| OrbitLockfile {
-            meta,
-            packages: vec![],
-        });
-        Self { path, inner }
+        let inner = match OrbitLockfile::from_path(&path) {
+            Ok(lockfile) => lockfile,
+            Err(OrbitError::LockfileNotFound) => OrbitLockfile {
+                meta,
+                packages: vec![],
+            },
+            Err(error) => return Err(error),
+        };
+        Ok(Self { path, inner })
     }
 
     /// 用预先构建的 lockfile 创建（用于 init）。
@@ -92,9 +98,9 @@ impl Lockfile {
         self.inner.find(mod_id)
     }
 
-    /// 按 slug 或 mod_id 查找条目。
-    pub fn find_entry(&self, slug: &str) -> Option<&crate::lockfile::PackageEntry> {
-        crate::resolver::find_entry(slug, &self.inner.packages)
+    /// 按 JAR 声明的 mod_id 查找包条目。
+    pub fn find_entry(&self, package: &str) -> Option<&crate::lockfile::PackageEntry> {
+        crate::resolver::find_entry(package, &self.inner.packages)
     }
 
     /// 通过 mod_id 找到 JAR 文件路径（同时校验 SHA-256）。
@@ -133,5 +139,29 @@ impl Lockfile {
         let path = self.find_jar_path(mod_id, mods_dir)?;
         std::fs::remove_file(&path)?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn meta() -> LockMeta {
+        LockMeta {
+            mc_version: "1.21.1".to_string(),
+            modloader: "fabric".to_string(),
+            modloader_version: "0.16.10".to_string(),
+        }
+    }
+
+    #[test]
+    fn open_or_default_only_defaults_a_missing_lock() {
+        let directory = tempfile::tempdir().unwrap();
+        let empty = Lockfile::open_or_default(directory.path(), meta()).unwrap();
+        assert!(empty.inner.packages.is_empty());
+
+        std::fs::write(directory.path().join("orbit.lock"), "not valid toml").unwrap();
+        let error = Lockfile::open_or_default(directory.path(), meta()).unwrap_err();
+        assert!(error.to_string().contains("failed to parse orbit.lock"));
     }
 }

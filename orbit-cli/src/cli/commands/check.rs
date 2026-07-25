@@ -11,6 +11,7 @@ pub async fn handle(version: String, modloader: Option<String>, ctx: &CliContext
     let providers = super::create_instance_providers(&instance_dir, None, &ctx.runtime)?;
 
     let results = orbit_core::check_compatibility_with_progress(
+        &instance_dir,
         &lockfile.inner,
         &version,
         &loader,

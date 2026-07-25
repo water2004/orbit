@@ -344,7 +344,16 @@ fn download_url(entry: &crate::lockfile::PackageEntry) -> Option<&str> {
     if entry.sha1.is_empty() || entry.sha512.is_empty() {
         return None;
     }
-    let download_url = entry.source_download_url()?;
+    let download_url = entry
+        .artifact_sources
+        .iter()
+        .find_map(|source| match source {
+            crate::lockfile::ArtifactSource::Modrinth { download_url, .. }
+            | crate::lockfile::ArtifactSource::Curseforge { download_url, .. } => {
+                Some(download_url.as_str())
+            }
+            crate::lockfile::ArtifactSource::File { .. } => None,
+        })?;
     let url = url::Url::parse(download_url).ok()?;
     (url.scheme() == "https").then_some(download_url)
 }

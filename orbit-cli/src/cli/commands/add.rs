@@ -1,7 +1,8 @@
 use super::CliContext;
 use anyhow::{Context, Result};
 use orbit_core::{
-    InstallIntent, InstallOptions, OrbitError, install_local_file_to_instance, install_to_instance,
+    InstallIntent, InstallOptions, InstallTarget, OrbitError, install_local_file_to_instance,
+    install_to_instance,
 };
 
 pub async fn handle(
@@ -74,9 +75,14 @@ pub async fn handle(
         selected_platform.as_deref(),
         &ctx.runtime,
     )?;
+    let provider_name = selected_platform
+        .as_deref()
+        .or_else(|| providers.first().map(|provider| provider.name()))
+        .ok_or_else(|| anyhow::anyhow!("no provider is configured for add"))?;
+    let remote = super::parse_package_remote(provider_name, slug)?;
 
     match install_to_instance(
-        slug,
+        InstallTarget::Remote(remote),
         &constraint,
         &instance_dir,
         &providers,
@@ -147,8 +153,8 @@ pub async fn handle(
                         .join(", ")
                 );
             }
-            let slug = if ctx.yes {
-                results[0].slug.clone()
+            let project_id = if ctx.yes {
+                results[0].project_id.clone()
             } else {
                 eprint!("\nChoose a number (or press Enter to cancel): ");
                 let mut input = String::new();
@@ -158,13 +164,13 @@ pub async fn handle(
                     anyhow::bail!("Add cancelled.");
                 }
                 match trimmed.parse::<usize>() {
-                    Ok(idx) if idx < results.len() => results[idx].slug.clone(),
+                    Ok(idx) if idx < results.len() => results[idx].project_id.clone(),
                     _ => anyhow::bail!("Invalid choice."),
                 }
             };
-            eprintln!("Installing {}...", slug);
+            eprintln!("Installing project {}...", project_id);
             Box::pin(handle(
-                slug,
+                project_id,
                 Some(suggestion_platform),
                 Some(constraint),
                 env,

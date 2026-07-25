@@ -1,7 +1,8 @@
 use super::CliContext;
 use anyhow::Result;
 use orbit_core::{
-    InstallIntent, InstallOptions, OrbitError, install_to_instance, upgrade_all_in_instance,
+    InstallIntent, InstallOptions, InstallTarget, OrbitError, install_to_instance,
+    upgrade_all_in_instance,
 };
 
 pub async fn handle(mod_name: Option<String>, ctx: &CliContext) -> Result<()> {
@@ -9,26 +10,13 @@ pub async fn handle(mod_name: Option<String>, ctx: &CliContext) -> Result<()> {
 
     if let Some(name) = mod_name {
         let lockfile = orbit_core::Lockfile::open(&instance_dir)?;
-        let entry = lockfile
-            .find_entry(name.trim_start_matches("mr:").trim_start_matches("cf:"))
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "Mod '{name}' is not installed. Use 'orbit add {name}' to install it."
-                )
-            })?;
-        let slug = entry.source_slug().map(str::to_string).ok_or_else(|| {
-            anyhow::anyhow!(
-                "Mod '{}' is a local file and has no online source to upgrade",
-                entry.mod_id
-            )
+        let entry = lockfile.find_entry(&name).ok_or_else(|| {
+            anyhow::anyhow!("Package '{name}' is not installed. Use its JAR-declared mod_id.")
         })?;
-        let providers = super::create_instance_providers(
-            &instance_dir,
-            Some(entry.provider.as_str()),
-            &ctx.runtime,
-        )?;
+        let package = entry.mod_id.clone();
+        let providers = super::create_instance_providers(&instance_dir, None, &ctx.runtime)?;
         match install_to_instance(
-            &slug,
+            InstallTarget::Package(package.clone()),
             "*",
             &instance_dir,
             &providers,
@@ -84,7 +72,7 @@ pub async fn handle(mod_name: Option<String>, ctx: &CliContext) -> Result<()> {
             }
             Err(OrbitError::ModNotFound(_)) => {
                 anyhow::bail!(
-                    "Mod '{slug}' is not installed or found. Use 'orbit add {slug}' to install it."
+                    "Mod '{package}' is not installed or no candidate source is available."
                 );
             }
             Err(OrbitError::Conflict(msg)) => anyhow::bail!("Dependency conflict:\n\n  {msg}"),

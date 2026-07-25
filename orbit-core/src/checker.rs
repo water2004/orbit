@@ -19,6 +19,7 @@ pub struct CheckResult {
 
 /// 检查所有已安装模组在目标 MC 版本下的兼容性。
 pub async fn check_compatibility(
+    instance_dir: &std::path::Path,
     lockfile: &OrbitLockfile,
     target_mc_version: &str,
     target_loader: &str,
@@ -26,6 +27,7 @@ pub async fn check_compatibility(
     jar_cache: &crate::jar_cache::JarCache,
 ) -> Result<Vec<CheckResult>, OrbitError> {
     check_compatibility_with_progress(
+        instance_dir,
         lockfile,
         target_mc_version,
         target_loader,
@@ -37,6 +39,7 @@ pub async fn check_compatibility(
 }
 
 pub async fn check_compatibility_with_progress(
+    instance_dir: &std::path::Path,
     lockfile: &OrbitLockfile,
     target_mc_version: &str,
     target_loader: &str,
@@ -44,21 +47,23 @@ pub async fn check_compatibility_with_progress(
     jar_cache: &crate::jar_cache::JarCache,
     progress: Option<ProgressReporter>,
 ) -> Result<Vec<CheckResult>, OrbitError> {
-    let catalog = crate::outdated::download_lockfile_candidate_catalog(
-        providers,
-        lockfile,
-        target_mc_version,
-        target_loader,
-        jar_cache,
-        progress,
+    let catalog = crate::outdated::download_candidate_catalog(
+        crate::outdated::CandidateDiscoveryInput {
+            instance_dir,
+            providers,
+            additional_remotes: &[],
+            lockfile,
+            mc_version: target_mc_version,
+            loader: target_loader,
+            jar_cache,
+            progress,
+        },
+        &[],
     )
     .await?;
     let mut results = Vec::new();
     for entry in &lockfile.packages {
-        if entry.provider == "file" {
-            continue;
-        }
-        if entry.source_project_id().is_none() {
+        if entry.remotes.is_empty() {
             continue;
         }
         let available_version = catalog
@@ -75,7 +80,16 @@ pub async fn check_compatibility_with_progress(
         results.push(CheckResult {
             mod_name: entry.mod_id.clone(),
             current_version: entry.version.clone(),
-            provider: entry.provider.clone(),
+            provider: {
+                let mut providers: Vec<_> = entry
+                    .remotes
+                    .iter()
+                    .map(|remote| remote.provider())
+                    .collect();
+                providers.sort();
+                providers.dedup();
+                providers.join(", ")
+            },
             compatible: available_version.is_some(),
             available_version,
         });
@@ -103,9 +117,16 @@ mod tests {
         let cache =
             crate::jar_cache::JarCache::open(std::env::temp_dir().join("orbit-check-local-test"))
                 .unwrap();
-        let result = check_compatibility(&lockfile, "2", "fabric", &[], &cache)
-            .await
-            .unwrap();
+        let result = check_compatibility(
+            std::path::Path::new("."),
+            &lockfile,
+            "2",
+            "fabric",
+            &[],
+            &cache,
+        )
+        .await
+        .unwrap();
 
         assert!(result.is_empty());
     }
