@@ -166,9 +166,11 @@ confidence，不能产生“精确指令修改”。无法证明 collection prov
 
 ## 8. 文本与详细报告
 
-默认文本只显示 readiness、coverage、风险等级分布、排序最高的前 20 项、warning
-分类计数和详细报告提示。`--limit` 可调整展示数；文本不会展开 `Evidence.detail`、
-selector 候选、refmap、stable ID 或每条 warning。
+默认文本以自适应表格分别显示环境/readiness、coverage、覆盖缺口、风险等级分布、
+排序最高的前 20 项、warning 分类计数和详细报告提示。每条风险使用“编号/详情”两列，
+不会因 JVM descriptor 过长而把多个语义列压成不可读的窄列；TTY 服从当前终端宽度，
+重定向输出无法探测宽度时限制为 120 列。`--limit` 可调整展示数；文本不会展开
+`Evidence.detail`、selector 候选、refmap、stable ID 或每条 warning。
 
 `--format json` 在 stdout 输出未截断的结构化细节。`--report <path>` 仅在用户显式
 指定时额外写完整、未按文本 limit 截断的 JSON 报告；默认命令不创建文件。当前 schema

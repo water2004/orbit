@@ -318,8 +318,9 @@ provider 兼容声明，也不修改 manifest、lockfile、下载缓存或实例
 
 `--min-severity` 只控制报告展示；`--fail-on` 在完整分析后按等级决定是否返回非零退出
 码。`--mod` 只匹配已安装 Mod 的 ID、展示名或文件名并过滤文本/JSON stdout；没有匹配项
-会明确报错，但有匹配项时分析仍加载完整实例。默认文本按 warning 类别汇总，只展示
-排序最高的 20 条风险且不展开完整 evidence；`--limit` 调整这一数量。
+会明确报错，但有匹配项时分析仍加载完整实例。默认文本把环境、覆盖率、warning、风险
+分布和风险详情渲染为自适应表格，只展示排序最高的 20 条风险且不展开完整 evidence；
+每条风险使用两列详情布局，非 TTY 输出最大 120 列。`--limit` 调整展示数量。
 
 `--format json` 保留完整 evidence。显式 `--report <path>` 额外写入未按文本 limit、
 severity 或 mod 过滤截断的完整结构化报告；默认模式不创建报告文件。JSON schema 2 顶层

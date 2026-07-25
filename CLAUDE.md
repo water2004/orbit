@@ -171,8 +171,9 @@
     Ambiguous/Unresolved 警告。Artifact 是否含任意 refmap 不能改变无关引用的 confidence。
     Transformer 启发式必须为 Pattern/Method + Low，未知 target-branch 关联不得做笛卡尔积。
 60. **audit 默认文本与详细报告分离**。默认终端只显示摘要、有限高排名风险和 warning
-    分类，不展开 Evidence.detail。完整 evidence 只进入 JSON stdout 或用户显式指定的
-    `--report`；默认运行不得创建报告文件。
+    分类，不展开 Evidence.detail。文本必须通过统一 output 层渲染环境、coverage、
+    warning、风险分布和两列风险详情表；TTY 服从终端宽度，非 TTY 最大 120 列。完整
+    evidence 只进入 JSON stdout 或用户显式指定的 `--report`；默认运行不得创建报告文件。
 61. **升级失败诊断不能随方案筛选丢失**。outdated、批量 upgrade 和单包 upgrade 共享
     upgrade resolution selector；单包模式必须升级指定 `mod_id`，不能由无关包升级满足。
     没有可行升级时保留所有 Pareto 解的候选排除推导；没有适用 JAR 时报告
