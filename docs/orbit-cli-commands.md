@@ -27,7 +27,8 @@ add install remove purge sync upgrade import
 极大解自动选择，多个 Pareto 极大解必须选择（dry-run 也一样，只有 `--yes` 自动选稳定
 的第一个）。
 选择之后，安装、升级、降级、同版本替换和删除合并成一个计划。只要计划会替换或删除
-顶层 `mods/*.jar`，即使求解只有唯一方案也必须先展示精确包版本与文件名并确认。
+顶层 `mods/*.jar`，即使求解只有唯一方案也必须先展示精确逻辑包版本动作并确认。物理
+JAR 文件名是执行层事实，不进入方案选择、升级预览或删除确认 UI。
 contained JAR 不是独立删除目标。
 
 全局标志：
@@ -212,23 +213,34 @@ manifest/lockfile。旧 `[project]` 版本和 `[platform]` 路径都只是用于
 
 它不下载 JAR；为识别手动加入的文件，批量反查可能访问 Modrinth SHA-512 或 CurseForge fingerprint 接口。dry-run 不保存对账
 结果。同 ID 的所有本地文件先作为候选统一求解；不会按扫描顺序让后一个覆盖前一个。
-实际删除 `removed` 前总会展示文件名并确认。
+实际删除 `removed` 前总会展示逻辑包 ID、版本和动作并确认；物理文件名不占用用户决策
+界面。
 
 ### `orbit outdated [mod]`
 
 只读查询在线 package 的最新兼容版本。可按真实 `mod_id` 或 slug 限定单包；不存在的
 输入、未安装的包和 `file:` 包返回明确结果，不会静默当作“已是最新”。
 若存在多个互不支配的 Pareto 方案，只在交互模式列出升级集合并请求选择；唯一方案自动
-采用。dry-run 仍需选择具体方案；`--yes` 才稳定选择第一个方案。
+采用。共同动作只显示一次；每个选项只展开与其他选项不同的动作，并用 `◆` 与终端样式
+高亮差异。dry-run 仍需选择具体方案；`--yes` 才稳定选择第一个方案。
+
+输出区分三种结果：有可行更新时显示包/当前版本/可用版本表；存在更高候选但被依赖传播
+或回溯排除时显示 PubGrub 推导事实；provider 对当前 Minecraft/loader 没有返回声明该
+`mod_id` 的 JAR 时明确报告“无兼容远端候选”。后两种情况不得表述成“已是最新”。
 
 ### `orbit upgrade [mod]`
 
 无参数时升级所有允许升级的在线 package；有参数时要求该包已经安装且有在线来源。
 升级复用候选下载、真实 JAR 解析、PubGrub 诊断、确认与原子文件替换。manifest 中的版本
 约束保持不变，只更新 lockfile 的实际版本与来源事实。多解规则与 `outdated` 相同；
-方案选择发生在安装确认之前。一个 upgrade 方案只要求至少一个包比当前安装版本更新，
+方案选择发生在安装确认之前。批量 upgrade 方案要求至少一个包比当前安装版本更新；
+单包 `upgrade <mod>` 的方案必须让指定逻辑包本身变新，不能用无关包的升级冒充成功。
 允许为满足依赖而让其他包降级、同版本换源或被删除；这些变化全部列入同一个确认计划。
-若没有任何包变新则 upgrade 是 no-op。dry-run 不替换文件。
+若没有可行升级则 upgrade 是 no-op，但仍显示阻止更高候选的同一份结构化诊断。dry-run
+不替换文件。
+
+更新表、事务表、诊断表和多方案差异由统一终端展示层通过 `comfy-table` 渲染，按终端
+宽度自动换行；重定向输出时仍保留表格和 `◆` 差异标记，不依赖 ANSI 颜色传达含义。
 
 ## 5. 查询
 
@@ -322,6 +334,11 @@ ABI；现代 Forge/NeoForge 还必须具有可识别的 ModLauncher `ITransforme
 `--force`。单个坏 Mod、真正 unresolved/ambiguous 的软引用、已知未支持或自定义
 InjectionPoint 和解释预算耗尽进入 warning/coverage；缺失基础游戏或运行库则停止。
 “JAR 没有 refmap”本身不是 warning。
+
+审计通过 core 强类型事件报告六个真实阶段：准备活动 classpath、readiness、顶层工件
+扫描、Mixin 分析、Transformer 分析和冲突比较。已知总量的阶段显示实际计数；非交互
+文本约按 10% 间隔更新，交互终端使用进度条。`--quiet` 或
+`ui.progress_bar = "off"` 关闭进度，不影响最终报告。
 
 详细证据边界见 [orbit-bytecode-audit.md](orbit-bytecode-audit.md)。
 

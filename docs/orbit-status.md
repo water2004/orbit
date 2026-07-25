@@ -26,7 +26,7 @@
 | Provider 分层 | ✅ | Modrinth / CurseForge HTTP 与 DTO 各在独立 wrapper，core 只做领域适配 |
 | 跨平台全局路径 | ✅ | RuntimeEnvironment + 显式路径；system/executable 布局 |
 | Windows MSI | ✅ | x64 per-machine 向导、可选系统 PATH、同版本重建升级、维护模式、可选清理默认 AppData；发布产物仍需项目证书签名 |
-| 长事务进度 | ✅ | add/install/check/outdated/upgrade 共用强类型事件；候选 JAR 精确计数，求解工作总量随实际 run/probe 动态增长 |
+| 长事务进度 | ✅ | 包操作与 audit 均使用 core 强类型事件；候选/审计工件精确计数，求解工作总量随实际 run/probe 动态增长 |
 
 ## 2. 保留的正确规范
 
@@ -72,7 +72,7 @@
 | `init` | 拒绝空/任意目录，定位真实平台 JAR，扫描实例并确认重复包清理 |
 | `add` | Modrinth、CurseForge、搜索名和本地 JAR |
 | `install` / `restore` | fresh platform scan；Minecraft 变化拒绝，loader 变化由共享图判定 |
-| `remove` / `upgrade` / `outdated` | 使用 Fat Lockfile 和结构化报告 |
+| `remove` / `upgrade` / `outdated` | 使用 Fat Lockfile、保留受阻候选原因、自适应表格与多解差异高亮 |
 | `sync` | 重新探测平台并扫描 mods，刷新工件快照，按包选择候选并确认移除未选版本 |
 | `check` | 实例目标兼容性预检 |
 | `audit` | 只读扫描实际 ClassFile/refmap；简洁文本 + schema 2 JSON/显式完整 report |

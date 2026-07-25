@@ -184,3 +184,7 @@ target/effect 恢复数、unsupported mechanism 和 budget exhaustion。单个�
 安全限制覆盖 JAR 与嵌套 JAR entry 数、单 entry/类大小、累计解压大小、嵌套深度、
 类/方法/指令数量、annotation 深度、解释状态数和 helper 深度。预算耗尽会降级和警告，
 不会无限分析。
+
+分析过程另行发出不进入 `AuditReport` 的强类型进度事件：输入准备、readiness、顶层
+artifact 扫描、Mixin、Transformer 和冲突比较。artifact/Mixin/Transformer 使用扫描后
+可知的真实总数；不会按定时器伪造百分比，也不会把物理 JAR 文件名放进终端进度。

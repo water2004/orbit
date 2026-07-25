@@ -123,6 +123,10 @@ continuation run 和 maximality probe 作为工作单元：新分支出现时总
 动态计数用于证明阶段和活动状态，不预测剩余耗时；Pareto 或 co-Pareto front 本身仍可能
 很大。
 
+`orbit audit` 复用同一 UI 开关，但使用独立的审计强类型事件：按实际阶段和已知总量显示
+classpath 准备、artifact、Mixin、Transformer 与冲突分析。plain 模式按比例节流，
+不会逐个打印 artifact 文件名。
+
 首次加载不存在的配置文件时，Orbit 在解析出的路径创建默认文件。环境变量随后覆盖内存
 值：
 

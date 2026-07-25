@@ -4,6 +4,7 @@
 
 ```text
 orbit-cli       参数、交互和展示
+  output        自适应表格、逻辑包事务、多方案差异高亮
     ↓
 orbit-core      领域模型、编排、JAR、求解、文件事务
     ├── modrinth-wrapper
@@ -12,8 +13,9 @@ orbit-core      领域模型、编排、JAR、求解、文件事务
     └── water2004/pubgrub（固定 Git revision）
 ```
 
-CLI 不实现业务规则。core 不打印 UI 文本，而是返回结构化报告或错误。平台 SDK、网络、
-ZIP 和文件系统位于边界模块。
+CLI 不实现业务规则。core 不打印 UI 文本，而是返回结构化报告或错误。CLI `output`
+使用 `comfy-table` 渲染更新、诊断、事务和方案差异；颜色只是增强，`◆` 才是可重定向的
+差异语义。平台 SDK、网络、ZIP 和文件系统位于边界模块。
 
 PubGrub fork 位于
 [`water2004/pubgrub`](https://github.com/water2004/pubgrub/tree/codex/solver-observer) 的
