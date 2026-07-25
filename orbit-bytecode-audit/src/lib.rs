@@ -15,11 +15,12 @@ mod transformer;
 
 pub use error::AuditError;
 pub use model::{
-    Activation, AnalysisLimits, ArtifactInput, ArtifactKind, ArtifactReport, AuditEnvironment,
-    AuditReport, AuditRequest, ClassReference, Confidence, Coverage, Effect, Evidence,
-    InstructionReference, LoaderFamily, Mechanism, MemberKind, MemberReference, Mutation,
-    MutationKind, NestedJarPolicy, OrderAnalysis, Precision, Readiness, ReadinessStatus,
-    RequirementKind, Risk, Severity, ShapeRequirement, Target, Warning,
+    AccessDelta, Activation, AnalysisLimits, ArtifactInput, ArtifactKind, ArtifactReport,
+    AuditEnvironment, AuditReport, AuditRequest, ClassReference, CompositionSemantics, Confidence,
+    Coverage, Effect, Evidence, InjectionGroupConstraint, InjectionQuery, InstructionReference,
+    LoaderFamily, Mechanism, MemberKind, MemberReference, Mutation, MutationKind, NestedJarPolicy,
+    OrderAnalysis, Precision, Readiness, ReadinessStatus, RequirementKind, Risk, Severity,
+    ShapeRequirement, SoftReferenceResolution, Target, Warning, WarningKind,
 };
 pub use readiness::probe_readiness;
 

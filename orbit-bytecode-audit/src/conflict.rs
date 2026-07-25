@@ -2,9 +2,9 @@ use std::collections::{BTreeMap, HashMap};
 
 use crate::jar::ScannedArtifacts;
 use crate::model::{
-    Activation, AuditReport, AuditRequest, Confidence, Effect, Mutation, MutationKind,
-    OrderAnalysis, Precision, REPORT_SCHEMA_VERSION, Readiness, RequirementKind, Risk, Severity,
-    Target,
+    Activation, AuditReport, AuditRequest, CompositionSemantics, Confidence, Effect,
+    InjectionQuery, Mutation, MutationKind, OrderAnalysis, Precision, REPORT_SCHEMA_VERSION,
+    Readiness, RequirementKind, Risk, Severity, Target,
 };
 
 pub(crate) fn build_report(
@@ -166,10 +166,22 @@ fn compare(left: &Effect, right: &Effect) -> Option<Risk> {
                 write_shape(left, left_mutation, right, requirement),
             );
         }
+        for query in &right.queries {
+            select_stronger(
+                &mut selected,
+                write_query(left, left_mutation, right, query),
+            );
+        }
     }
     for right_mutation in &right.mutations {
         for requirement in &left.requirements {
             if let Some(mut candidate) = write_shape(right, right_mutation, left, requirement) {
+                candidate.order = reverse_order(candidate.order);
+                select_stronger(&mut selected, Some(candidate));
+            }
+        }
+        for query in &left.queries {
+            if let Some(mut candidate) = write_query(right, right_mutation, left, query) {
                 candidate.order = reverse_order(candidate.order);
                 select_stronger(&mut selected, Some(candidate));
             }
@@ -189,9 +201,10 @@ fn compare(left: &Effect, right: &Effect) -> Option<Risk> {
     {
         selected = Some(ConflictMatch {
             rule: "unknown_method_overlap",
-            reason: "An unknown method-level rewrite overlaps another modification of the same method.",
-            severity: Severity::High,
+            reason: "A method-level mutation with unknown behavior overlaps a more precise effect.",
+            severity: Severity::Medium,
             order: OrderAnalysis::Unknown,
+            confidence_cap: Confidence::Low,
         });
     }
     if selected.is_none()
@@ -209,10 +222,14 @@ fn compare(left: &Effect, right: &Effect) -> Option<Risk> {
             reason: "Both effects overlap the same class, but at least one modification is only known at class precision.",
             severity: Severity::Low,
             order: OrderAnalysis::Unknown,
+            confidence_cap: Confidence::Low,
         });
     }
     let matched = selected?;
-    let confidence = left.confidence.min(right.confidence);
+    let confidence = left
+        .confidence
+        .min(right.confidence)
+        .min(matched.confidence_cap);
     let activation = combine_activation(left.activation, right.activation);
     let risk_index = risk_index(matched.severity, confidence, activation);
     let (left_artifact, right_artifact, left_mutations, right_mutations) =
@@ -270,6 +287,7 @@ struct ConflictMatch {
     reason: &'static str,
     severity: Severity,
     order: OrderAnalysis,
+    confidence_cap: Confidence,
 }
 
 fn select_stronger(current: &mut Option<ConflictMatch>, candidate: Option<ConflictMatch>) {
@@ -283,9 +301,8 @@ fn select_stronger(current: &mut Option<ConflictMatch>, candidate: Option<Confli
 
 fn write_write(left: &Mutation, right: &Mutation) -> Option<ConflictMatch> {
     use MutationKind::{
-        AddField, AddMethod, ChangeAccess, ChangeInterfaces, ChangeSuperclass, RedirectOperation,
-        RemoveField, RemoveInstruction, RemoveMethod, ReplaceInstruction, ReplaceMethodBody,
-        WrapOperation,
+        AddField, AddInterfaces, AddMethod, ChangeAccess, ChangeInterfaces, ChangeSuperclass,
+        RemoveField, RemoveMethod, ReplaceMethodBody,
     };
     if left.kind == ReplaceMethodBody && right.kind == ReplaceMethodBody {
         return Some(ConflictMatch {
@@ -293,32 +310,74 @@ fn write_write(left: &Mutation, right: &Mutation) -> Option<ConflictMatch> {
             reason: "Both artifacts replace the complete body of the same method.",
             severity: Severity::Critical,
             order: OrderAnalysis::Exclusive,
+            confidence_cap: Confidence::Exact,
         });
     }
-    if same_instruction(&left.target, &right.target)
-        && (left.exclusive || right.exclusive)
-        && matches!(
-            left.kind,
-            RedirectOperation | WrapOperation | RemoveInstruction | ReplaceInstruction
-        )
-        && matches!(
-            right.kind,
-            RedirectOperation | WrapOperation | RemoveInstruction | ReplaceInstruction
-        )
-    {
+    if mutations_overlap_instruction(left, right) {
+        use CompositionSemantics::{
+            Destructive, ExclusiveOwner, LocalValueDecorator, OperationWrapper,
+        };
+        match (left.composition, right.composition) {
+            (ExclusiveOwner, ExclusiveOwner) => {
+                return Some(ConflictMatch {
+                    rule: "exclusive_instruction_write",
+                    reason: "Two exclusive owners target the same original instruction.",
+                    severity: Severity::Critical,
+                    order: OrderAnalysis::Exclusive,
+                    confidence_cap: Confidence::Exact,
+                });
+            }
+            (ExclusiveOwner, Destructive) | (Destructive, ExclusiveOwner) => {
+                return Some(ConflictMatch {
+                    rule: "exclusive_destructive_instruction_write",
+                    reason: "An exclusive operation owner and a destructive rewrite target the same original instruction.",
+                    severity: Severity::Critical,
+                    order: OrderAnalysis::Exclusive,
+                    confidence_cap: Confidence::Exact,
+                });
+            }
+            (ExclusiveOwner, OperationWrapper) | (OperationWrapper, ExclusiveOwner) => {
+                return Some(ConflictMatch {
+                    rule: "exclusive_operation_wrapper",
+                    reason: "An exclusive redirect and an operation wrapper compete for the same operation.",
+                    severity: Severity::High,
+                    order: OrderAnalysis::Exclusive,
+                    confidence_cap: Confidence::High,
+                });
+            }
+            (Destructive, Destructive) => {
+                return Some(ConflictMatch {
+                    rule: "destructive_instruction_write",
+                    reason: "Two destructive rewrites target the same original instruction.",
+                    severity: Severity::Critical,
+                    order: OrderAnalysis::Exclusive,
+                    confidence_cap: Confidence::Exact,
+                });
+            }
+            (LocalValueDecorator, LocalValueDecorator) => {
+                return Some(ConflictMatch {
+                    rule: "local_value_overlap",
+                    reason: "Two value decorators target the same recovered local-variable join point.",
+                    severity: Severity::Medium,
+                    order: OrderAnalysis::BothApplyDifferentResult,
+                    confidence_cap: Confidence::High,
+                });
+            }
+            _ => {}
+        }
+    }
+    if matches!(
+        (left.kind, right.kind),
+        (ChangeInterfaces, ChangeInterfaces)
+            | (AddInterfaces, ChangeInterfaces)
+            | (ChangeInterfaces, AddInterfaces)
+    ) {
         return Some(ConflictMatch {
-            rule: "exclusive_instruction_write",
-            reason: "Two exclusive modifications target the same original instruction.",
-            severity: Severity::Critical,
-            order: OrderAnalysis::Exclusive,
-        });
-    }
-    if left.kind == ChangeInterfaces && right.kind == ChangeInterfaces {
-        return (left.exclusive || right.exclusive).then_some(ConflictMatch {
-            rule: "interface_shape_replacement",
-            reason: "At least one artifact replaces the interface set while another artifact changes it.",
-            severity: Severity::High,
+            rule: "interface_shape_overlap",
+            reason: "Both artifacts change the interface set; the exact merge behavior is not known.",
+            severity: Severity::Medium,
             order: OrderAnalysis::Structural,
+            confidence_cap: Confidence::Medium,
         });
     }
     if matches!(
@@ -334,6 +393,7 @@ fn write_write(left: &Mutation, right: &Mutation) -> Option<ConflictMatch> {
             reason: "Both artifacts change the same class or member shape.",
             severity: Severity::High,
             order: OrderAnalysis::Structural,
+            confidence_cap: Confidence::Exact,
         });
     }
     if matches!(
@@ -344,25 +404,33 @@ fn write_write(left: &Mutation, right: &Mutation) -> Option<ConflictMatch> {
             | (RemoveField, AddField | ChangeAccess)
             | (ReplaceMethodBody, AddMethod)
             | (AddMethod, ReplaceMethodBody)
-            | (ChangeAccess, ChangeAccess)
     ) {
         return Some(ConflictMatch {
             rule: "member_shape_write_write",
             reason: "One artifact removes, replaces, adds, or changes access to a member that the other artifact also changes.",
             severity: Severity::High,
             order: OrderAnalysis::Structural,
+            confidence_cap: Confidence::Exact,
         });
     }
-    if matches!(
-        (left.kind, right.kind),
-        (RemoveInstruction, ReplaceInstruction) | (ReplaceInstruction, RemoveInstruction)
-    ) && same_instruction(&left.target, &right.target)
-    {
+    if left.kind == ChangeAccess && right.kind == ChangeAccess {
+        if let (Some(left), Some(right)) = (left.access_delta, right.access_delta) {
+            let contradictory = left.added_flags & right.removed_flags != 0
+                || right.added_flags & left.removed_flags != 0;
+            return contradictory.then_some(ConflictMatch {
+                rule: "contradictory_access_change",
+                reason: "The access-flag deltas add and remove at least one of the same flags.",
+                severity: Severity::High,
+                order: OrderAnalysis::Structural,
+                confidence_cap: Confidence::Exact,
+            });
+        }
         return Some(ConflictMatch {
-            rule: "remove_replace_instruction",
-            reason: "One artifact removes an instruction that the other replaces.",
-            severity: Severity::Critical,
-            order: OrderAnalysis::Exclusive,
+            rule: "unknown_access_overlap",
+            reason: "Both artifacts change access flags, but their exact added/removed flag deltas are unavailable.",
+            severity: Severity::Medium,
+            order: OrderAnalysis::Structural,
+            confidence_cap: Confidence::Medium,
         });
     }
     None
@@ -371,49 +439,36 @@ fn write_write(left: &Mutation, right: &Mutation) -> Option<ConflictMatch> {
 fn write_shape(
     writer: &Effect,
     mutation: &Mutation,
-    reader: &Effect,
+    _reader: &Effect,
     requirement: &crate::model::ShapeRequirement,
 ) -> Option<ConflictMatch> {
     use MutationKind::{
-        ChangeControlFlow, ChangeLocalLayout, InsertInstructions, ModifyConstant, ModifyLocal,
-        RedirectOperation, RemoveField, RemoveInstruction, RemoveMethod, ReplaceInstruction,
-        ReplaceMethodBody, WrapOperation,
+        ChangeLocalLayout, InsertInstructions, RemoveField, RemoveInstruction, RemoveMethod,
+        ReplaceInstruction, ReplaceMethodBody,
     };
-    use RequirementKind::{
-        Cardinality, ControlFlow, InstructionExists, LocalLayout, MemberExists, SliceBoundary,
-    };
+    use RequirementKind::{InstructionExists, LocalLayout, MemberExists, SliceBoundary};
     let kind = requirement.kind;
-    if mixinextras_chainable(writer) && mixinextras_chainable(reader) {
-        return None;
-    }
     if mutation.kind == ReplaceMethodBody
-        && matches!(
-            kind,
-            InstructionExists | SliceBoundary | Cardinality | LocalLayout | ControlFlow
-        )
+        && matches!(kind, InstructionExists | SliceBoundary | LocalLayout)
     {
         return Some(ConflictMatch {
             rule: "overwrite_invalidates_internal_shape",
             reason: "A complete method replacement may remove an anchor required by the other artifact.",
             severity: Severity::High,
             order: OrderAnalysis::AnchorInvalidated,
+            confidence_cap: Confidence::Exact,
         });
     }
-    if matches!(
-        mutation.kind,
-        RemoveInstruction | ReplaceInstruction | RedirectOperation | WrapOperation | ModifyConstant
-    ) && matches!(kind, InstructionExists | SliceBoundary | Cardinality)
+    if matches!(mutation.kind, RemoveInstruction | ReplaceInstruction)
+        && matches!(kind, InstructionExists | SliceBoundary)
         && requirements_overlap_instruction(mutation, requirement)
     {
         return Some(ConflictMatch {
             rule: "instruction_write_invalidates_selector",
-            reason: "An instruction mutation may invalidate the other artifact's selector or slice.",
+            reason: "A destructive instruction mutation may invalidate the other artifact's selector or slice anchor.",
             severity: Severity::High,
-            order: if kind == Cardinality {
-                OrderAnalysis::CardinalityInvalidated
-            } else {
-                OrderAnalysis::AnchorInvalidated
-            },
+            order: OrderAnalysis::AnchorInvalidated,
+            confidence_cap: Confidence::Exact,
         });
     }
     if matches!(mutation.kind, RemoveMethod | RemoveField)
@@ -425,60 +480,220 @@ fn write_shape(
             reason: "A member removal invalidates a member required by the other artifact.",
             severity: Severity::High,
             order: OrderAnalysis::AnchorInvalidated,
+            confidence_cap: Confidence::Exact,
         });
     }
     if mutation.kind == InsertInstructions
-        && (requirement.ordinal.is_some() || kind == Cardinality)
+        && requirement.ordinal.is_some()
         && matches!(
             writer.mechanism,
             crate::model::Mechanism::ModLauncherTransformer | crate::model::Mechanism::JavaCoremod
         )
-        && instruction_patterns_overlap(
-            mutation.target.instruction.as_ref(),
-            requirement.target.instruction.as_ref(),
-        )
+        && requirements_overlap_instruction(mutation, requirement)
     {
         return Some(ConflictMatch {
-            rule: "insertion_changes_selector_cardinality",
-            reason: "Inserted instructions may change ordinal or cardinality selection.",
+            rule: "insertion_changes_selector_ordinal",
+            reason: "A heuristic instruction insertion may change ordinal selection.",
             severity: Severity::Medium,
-            order: if requirement.ordinal.is_some() {
-                OrderAnalysis::OrdinalChanged
-            } else {
-                OrderAnalysis::CardinalityInvalidated
-            },
+            order: OrderAnalysis::OrdinalChanged,
+            confidence_cap: Confidence::Low,
         });
     }
-    if matches!(mutation.kind, ChangeLocalLayout | ModifyLocal) && kind == LocalLayout {
+    if mutation.kind == ChangeLocalLayout && kind == LocalLayout {
         return Some(ConflictMatch {
             rule: "local_layout_dependency",
-            reason: "A local-variable modification overlaps a local-layout requirement.",
+            reason: "A local-layout mutation overlaps a local-capture requirement.",
             severity: Severity::High,
             order: OrderAnalysis::Structural,
-        });
-    }
-    if mutation.kind == ChangeControlFlow && kind == ControlFlow {
-        return Some(ConflictMatch {
-            rule: "control_flow_dependency",
-            reason: "A control-flow change overlaps a RETURN, TAIL, or control-flow requirement.",
-            severity: Severity::High,
-            order: OrderAnalysis::Structural,
+            confidence_cap: Confidence::Exact,
         });
     }
     None
 }
 
-fn mixinextras_chainable(effect: &Effect) -> bool {
-    effect.mechanism == crate::model::Mechanism::MixinExtras
-        && effect.mutations.iter().all(|mutation| {
-            !mutation.exclusive
-                && matches!(
-                    mutation.kind,
-                    MutationKind::WrapOperation
-                        | MutationKind::ReplaceInstruction
-                        | MutationKind::ChangeControlFlow
-                )
-        })
+fn write_query(
+    writer: &Effect,
+    mutation: &Mutation,
+    _reader: &Effect,
+    query: &InjectionQuery,
+) -> Option<ConflictMatch> {
+    if mutation.target.member.as_ref().is_some() && !same_member(&mutation.target, &query.method) {
+        return None;
+    }
+    if mutation.kind == MutationKind::ReplaceMethodBody {
+        return Some(ConflictMatch {
+            rule: "method_replacement_invalidates_injection_query",
+            reason: "A complete method replacement prevents the original injector query from being re-evaluated reliably.",
+            severity: Severity::High,
+            order: OrderAnalysis::CardinalityInvalidated,
+            confidence_cap: Confidence::Exact,
+        });
+    }
+
+    let selected_count = u32::try_from(query.selected.len()).unwrap_or(u32::MAX);
+    let impacted_selected = u32::try_from(
+        query
+            .selected
+            .iter()
+            .filter(|instruction| mutation_overlaps_reference(mutation, instruction))
+            .count(),
+    )
+    .unwrap_or(u32::MAX);
+    let impacted_candidates = query
+        .candidates
+        .iter()
+        .filter(|instruction| mutation_overlaps_reference(mutation, instruction))
+        .count();
+    let destructive = mutation.composition == CompositionSemantics::Destructive;
+
+    if destructive && impacted_candidates > 0 && query.ordinal.is_some() {
+        return Some(ConflictMatch {
+            rule: "destructive_write_changes_query_ordinal",
+            reason: "Removing or replacing a candidate before ordinal selection can choose a different join point.",
+            severity: Severity::Medium,
+            order: OrderAnalysis::OrdinalChanged,
+            confidence_cap: Confidence::Exact,
+        });
+    }
+
+    if destructive && impacted_selected > 0 {
+        let remaining = selected_count.saturating_sub(impacted_selected);
+        if let Some(group) = &query.group {
+            let member_was_successful = query
+                .minimum_matches
+                .is_none_or(|minimum| selected_count >= minimum)
+                && query
+                    .maximum_matches
+                    .is_none_or(|maximum| selected_count <= maximum);
+            let member_remains_successful = query
+                .minimum_matches
+                .is_none_or(|minimum| remaining >= minimum)
+                && query
+                    .maximum_matches
+                    .is_none_or(|maximum| remaining <= maximum);
+            let group_after = group.successful_members.saturating_sub(u32::from(
+                member_was_successful && !member_remains_successful,
+            ));
+            if group
+                .minimum_successes
+                .is_some_and(|minimum| group_after < minimum)
+            {
+                return Some(ConflictMatch {
+                    rule: "injection_group_minimum_invalidated",
+                    reason: "A destructive write makes an injector group fall below its aggregate minimum.",
+                    severity: Severity::High,
+                    order: OrderAnalysis::CardinalityInvalidated,
+                    confidence_cap: Confidence::Exact,
+                });
+            }
+        }
+        if query
+            .minimum_matches
+            .is_some_and(|minimum| remaining < minimum)
+        {
+            return Some(ConflictMatch {
+                rule: "injection_query_minimum_invalidated",
+                reason: "A destructive write reduces the injector query's total matches below its require value.",
+                severity: Severity::High,
+                order: OrderAnalysis::CardinalityInvalidated,
+                confidence_cap: Confidence::Exact,
+            });
+        }
+    }
+
+    let inserts_matching_return = mutation.kind == MutationKind::InsertConditionalReturn
+        && query
+            .selector_kind
+            .split('+')
+            .any(|kind| matches!(kind, "RETURN" | "TAIL"))
+        && mutation
+            .target
+            .instruction
+            .as_ref()
+            .is_some_and(|instruction| {
+                query
+                    .slice_start
+                    .is_none_or(|start| instruction.stable_id >= start)
+                    && query
+                        .slice_end
+                        .is_none_or(|end| instruction.stable_id <= end)
+            });
+    let pattern_insertion = mutation.kind == MutationKind::InsertInstructions
+        && matches!(
+            writer.mechanism,
+            crate::model::Mechanism::ModLauncherTransformer | crate::model::Mechanism::JavaCoremod
+        )
+        && query
+            .candidates
+            .iter()
+            .any(|instruction| mutation_overlaps_reference(mutation, instruction));
+    if inserts_matching_return || pattern_insertion {
+        let increased = selected_count.saturating_add(1);
+        if let Some(group) = &query.group {
+            let member_was_successful = query
+                .minimum_matches
+                .is_none_or(|minimum| selected_count >= minimum)
+                && query
+                    .maximum_matches
+                    .is_none_or(|maximum| selected_count <= maximum);
+            let member_becomes_successful = !member_was_successful
+                && query
+                    .minimum_matches
+                    .is_none_or(|minimum| increased >= minimum)
+                && query
+                    .maximum_matches
+                    .is_none_or(|maximum| increased <= maximum);
+            let group_after = group
+                .successful_members
+                .saturating_add(u32::from(member_becomes_successful));
+            if group
+                .maximum_successes
+                .is_some_and(|maximum| group_after > maximum)
+            {
+                return Some(ConflictMatch {
+                    rule: "injection_group_maximum_invalidated",
+                    reason: "An inserted match makes an injector group exceed its aggregate maximum.",
+                    severity: Severity::High,
+                    order: OrderAnalysis::CardinalityInvalidated,
+                    confidence_cap: if inserts_matching_return {
+                        Confidence::High
+                    } else {
+                        Confidence::Low
+                    },
+                });
+            }
+        }
+        if query
+            .maximum_matches
+            .is_some_and(|maximum| increased > maximum)
+        {
+            return Some(ConflictMatch {
+                rule: "injection_query_maximum_invalidated",
+                reason: "An inserted matching instruction raises the injector query above its allow value.",
+                severity: Severity::High,
+                order: OrderAnalysis::CardinalityInvalidated,
+                confidence_cap: if inserts_matching_return {
+                    Confidence::High
+                } else {
+                    Confidence::Low
+                },
+            });
+        }
+        if query.ordinal.is_some() {
+            return Some(ConflictMatch {
+                rule: "insertion_changes_query_ordinal",
+                reason: "An inserted matching instruction can change ordinal selection.",
+                severity: Severity::Medium,
+                order: OrderAnalysis::OrdinalChanged,
+                confidence_cap: if inserts_matching_return {
+                    Confidence::High
+                } else {
+                    Confidence::Low
+                },
+            });
+        }
+    }
+    None
 }
 
 fn requirements_overlap_instruction(
@@ -489,11 +704,48 @@ fn requirements_overlap_instruction(
         mutation.target.instruction.as_ref(),
         requirement.target.instruction.as_ref(),
     ) {
-        (Some(left), Some(right)) => {
-            left.stable_id == right.stable_id
-                || instruction_patterns_overlap(Some(left), Some(right))
+        (Some(left), Some(right)) => match (mutation.precision, requirement.precision) {
+            (Precision::Instruction, Precision::Instruction) => left.stable_id == right.stable_id,
+            (Precision::Pattern, _) | (_, Precision::Pattern) => {
+                instruction_patterns_overlap(Some(left), Some(right))
+            }
+            _ => false,
+        },
+        _ => false,
+    }
+}
+
+fn mutations_overlap_instruction(left: &Mutation, right: &Mutation) -> bool {
+    match (
+        left.target.instruction.as_ref(),
+        right.target.instruction.as_ref(),
+    ) {
+        (Some(left_instruction), Some(right_instruction)) => {
+            match (left.precision, right.precision) {
+                (Precision::Instruction, Precision::Instruction) => {
+                    left_instruction.stable_id == right_instruction.stable_id
+                }
+                (Precision::Pattern, _) | (_, Precision::Pattern) => {
+                    instruction_patterns_overlap(Some(left_instruction), Some(right_instruction))
+                }
+                _ => false,
+            }
         }
         _ => false,
+    }
+}
+
+fn mutation_overlaps_reference(
+    mutation: &Mutation,
+    reference: &crate::model::InstructionReference,
+) -> bool {
+    let Some(target) = mutation.target.instruction.as_ref() else {
+        return false;
+    };
+    match mutation.precision {
+        Precision::Instruction => target.stable_id == reference.stable_id,
+        Precision::Pattern => instruction_patterns_overlap(Some(target), Some(reference)),
+        Precision::Method | Precision::Class | Precision::Unknown => false,
     }
 }
 
@@ -511,13 +763,6 @@ fn instruction_patterns_overlap(
                 && left.constant == right.constant
                 && left.opcode == right.opcode
         }
-        _ => false,
-    }
-}
-
-fn same_instruction(left: &Target, right: &Target) -> bool {
-    match (&left.instruction, &right.instruction) {
-        (Some(left), Some(right)) => left.stable_id == right.stable_id,
         _ => false,
     }
 }
@@ -553,16 +798,14 @@ fn combine_activation(left: Activation, right: Activation) -> Activation {
 }
 
 fn risk_index(severity: Severity, confidence: Confidence, activation: Activation) -> u8 {
-    let activation_score = match activation {
-        Activation::Definite => 100_u16,
-        Activation::Conditional => 85,
-        Activation::Candidate => 70,
-        Activation::Unknown => 50,
+    let activation_factor = match activation {
+        Activation::Definite => 100_u32,
+        Activation::Conditional => 80,
+        Activation::Candidate => 55,
+        Activation::Unknown => 35,
     };
-    let weighted = u16::from(severity.score()) * 55
-        + u16::from(confidence.score()) * 30
-        + activation_score * 15;
-    u8::try_from((weighted / 100).min(100)).unwrap_or(100)
+    let product = u32::from(severity.score()) * u32::from(confidence.score()) * activation_factor;
+    u8::try_from(((product + 5_000) / 10_000).min(100)).unwrap_or(100)
 }
 
 fn more_precise_target(left: &Target, right: &Target) -> Target {
@@ -604,7 +847,7 @@ fn binary_shape_risks(scanned: &ScannedArtifacts) -> Vec<Risk> {
                     right_artifact: right.artifact_id.clone(),
                     target: Target::class(&left.name),
                     rule: "duplicate_class_shape".to_string(),
-                    reason: "Different Mod JARs provide incompatible shapes for the same class."
+                    reason: "Different Mod JARs provide incompatible shapes for the same class; class-loader co-visibility is not proven."
                         .to_string(),
                     left_mutations: vec![MutationKind::UnknownClass],
                     right_mutations: vec![MutationKind::UnknownClass],
@@ -612,8 +855,8 @@ fn binary_shape_risks(scanned: &ScannedArtifacts) -> Vec<Risk> {
                     order: OrderAnalysis::Structural,
                     severity: Severity::High,
                     confidence,
-                    risk_index: risk_index(Severity::High, confidence, Activation::Definite),
-                    activation: Activation::Definite,
+                    risk_index: risk_index(Severity::High, confidence, Activation::Conditional),
+                    activation: Activation::Conditional,
                 });
             }
         }
@@ -667,8 +910,8 @@ fn binary_shape_risks(scanned: &ScannedArtifacts) -> Vec<Risk> {
                     order: OrderAnalysis::Structural,
                     severity: Severity::High,
                     confidence,
-                    risk_index: risk_index(Severity::High, confidence, Activation::Definite),
-                    activation: Activation::Definite,
+                    risk_index: risk_index(Severity::High, confidence, Activation::Conditional),
+                    activation: Activation::Conditional,
                 });
             }
         }
@@ -680,9 +923,10 @@ fn binary_shape_risks(scanned: &ScannedArtifacts) -> Vec<Risk> {
 mod tests {
     use crate::jar::{ClassDefinition, ClassUniverse, ScannedArtifacts};
     use crate::model::{
-        Activation, AnalysisLimits, Confidence, Coverage, Effect, Evidence, InstructionReference,
-        Mechanism, MemberKind, MemberReference, Mutation, MutationKind, Precision, RequirementKind,
-        ShapeRequirement, Target,
+        Activation, AnalysisLimits, Confidence, Coverage, Effect, Evidence,
+        InjectionGroupConstraint, InjectionQuery, InstructionReference, Mechanism, MemberKind,
+        MemberReference, Mutation, MutationKind, Precision, RequirementKind, ShapeRequirement,
+        SoftReferenceResolution, Target,
     };
 
     use super::*;
@@ -711,19 +955,61 @@ mod tests {
             mechanism: Mechanism::Mixin,
             target: mutation.target.clone(),
             requirements,
+            queries: Vec::new(),
             mutations: vec![mutation],
-            evidence: vec![Evidence {
-                artifact_id: artifact.to_string(),
-                class: format!("{artifact}/Mixin"),
-                method: None,
-                annotation: None,
-                instruction: None,
-                detail: "test".to_string(),
-            }],
+            evidence: vec![Evidence::new(artifact, format!("{artifact}/Mixin"), "test")],
             precision: Precision::Instruction,
             confidence: Confidence::Exact,
             activation: Activation::Candidate,
             priority: None,
+        }
+    }
+
+    fn mutation(kind: MutationKind, target: Target) -> Mutation {
+        let precision = if target.instruction.is_some() {
+            Precision::Instruction
+        } else if target.member.is_some() {
+            Precision::Method
+        } else {
+            Precision::Class
+        };
+        Mutation::new(kind, target, precision)
+    }
+
+    fn requirement(kind: RequirementKind, target: Target) -> ShapeRequirement {
+        ShapeRequirement {
+            kind,
+            precision: if target.instruction.is_some() {
+                Precision::Instruction
+            } else if target.member.is_some() {
+                Precision::Method
+            } else {
+                Precision::Class
+            },
+            target,
+            minimum_matches: Some(1),
+            maximum_matches: None,
+            ordinal: None,
+            slice: None,
+        }
+    }
+
+    fn query(method: Target, selected: Vec<InstructionReference>) -> InjectionQuery {
+        InjectionQuery {
+            id: "query".to_string(),
+            selector_kind: "INVOKE".to_string(),
+            method,
+            candidates: selected.clone(),
+            selected,
+            minimum_matches: None,
+            maximum_matches: None,
+            expected_matches: None,
+            ordinal: None,
+            slice: None,
+            slice_start: None,
+            slice_end: None,
+            resolution: SoftReferenceResolution::DirectExact,
+            group: None,
         }
     }
 
@@ -733,11 +1019,7 @@ mod tests {
         let effects = ["a", "b"].map(|artifact| {
             effect(
                 artifact,
-                Mutation {
-                    kind: MutationKind::RedirectOperation,
-                    target: target.clone(),
-                    exclusive: true,
-                },
+                mutation(MutationKind::RedirectOperation, target.clone()),
                 Vec::new(),
             )
         });
@@ -751,50 +1033,83 @@ mod tests {
     }
 
     #[test]
-    fn mixinextras_wrappers_chain_but_redirect_remains_exclusive() {
+    fn redirect_and_value_decorator_are_composable_on_the_same_instruction() {
         let target = instruction_target(7);
-        let requirement = ShapeRequirement {
-            kind: RequirementKind::InstructionExists,
-            target: target.clone(),
-            minimum_matches: Some(1),
-            maximum_matches: None,
-            ordinal: None,
-            slice: None,
-        };
-        let mut first = effect(
-            "first",
-            Mutation {
-                kind: MutationKind::WrapOperation,
-                target: target.clone(),
-                exclusive: false,
-            },
-            vec![requirement.clone()],
-        );
-        first.mechanism = Mechanism::MixinExtras;
-        let mut second = effect(
-            "second",
-            Mutation {
-                kind: MutationKind::WrapOperation,
-                target: target.clone(),
-                exclusive: false,
-            },
-            vec![requirement.clone()],
-        );
-        second.mechanism = Mechanism::MixinExtras;
-        assert!(analyze_effects(&[first.clone(), second]).is_empty());
-
         let redirect = effect(
             "redirect",
-            Mutation {
-                kind: MutationKind::RedirectOperation,
-                target,
-                exclusive: true,
-            },
-            vec![requirement],
+            mutation(MutationKind::RedirectOperation, target.clone()),
+            Vec::new(),
         );
-        let risks = analyze_effects(&[first, redirect]);
-        assert_eq!(risks[0].rule, "exclusive_instruction_write");
-        assert_eq!(risks[0].severity, Severity::Critical);
+        let decorator = effect(
+            "decorator",
+            mutation(MutationKind::TransformExpressionValue, target.clone()),
+            vec![requirement(RequirementKind::InstructionExists, target)],
+        );
+
+        assert!(analyze_effects(&[redirect, decorator]).is_empty());
+    }
+
+    #[test]
+    fn value_decorators_and_operation_wrappers_chain() {
+        for kind in [
+            MutationKind::TransformExpressionValue,
+            MutationKind::WrapOperation,
+        ] {
+            let target = instruction_target(7);
+            let effects = ["a", "b"]
+                .map(|artifact| effect(artifact, mutation(kind, target.clone()), Vec::new()));
+            assert!(analyze_effects(&effects).is_empty());
+        }
+    }
+
+    #[test]
+    fn mixin_interface_additions_are_composable() {
+        let target = Target::class("game/Foo");
+        let effects = ["a", "b"].map(|artifact| {
+            effect(
+                artifact,
+                mutation(MutationKind::AddInterfaces, target.clone()),
+                Vec::new(),
+            )
+        });
+
+        assert!(analyze_effects(&effects).is_empty());
+    }
+
+    #[test]
+    fn destructive_write_invalidates_a_value_decorator_anchor() {
+        let target = instruction_target(7);
+        let removal = effect(
+            "removal",
+            mutation(MutationKind::RemoveInstruction, target.clone()),
+            Vec::new(),
+        );
+        let decorator = effect(
+            "decorator",
+            mutation(MutationKind::TransformExpressionValue, target.clone()),
+            vec![requirement(RequirementKind::InstructionExists, target)],
+        );
+
+        let risks = analyze_effects(&[removal, decorator]);
+
+        assert_eq!(risks.len(), 1);
+        assert_eq!(risks[0].rule, "instruction_write_invalidates_selector");
+    }
+
+    #[test]
+    fn concrete_instructions_with_the_same_pattern_but_different_ids_do_not_overlap() {
+        let left = effect(
+            "left",
+            mutation(MutationKind::RedirectOperation, instruction_target(10)),
+            Vec::new(),
+        );
+        let right = effect(
+            "right",
+            mutation(MutationKind::RedirectOperation, instruction_target(42)),
+            Vec::new(),
+        );
+
+        assert!(analyze_effects(&[left, right]).is_empty());
     }
 
     #[test]
@@ -802,28 +1117,16 @@ mod tests {
         let target = instruction_target(4);
         let overwrite = effect(
             "overwrite",
-            Mutation {
-                kind: MutationKind::ReplaceMethodBody,
-                target: Target::method("game/Foo", "tick", "()V"),
-                exclusive: true,
-            },
+            mutation(
+                MutationKind::ReplaceMethodBody,
+                Target::method("game/Foo", "tick", "()V"),
+            ),
             Vec::new(),
         );
         let inject = effect(
             "inject",
-            Mutation {
-                kind: MutationKind::InsertInstructions,
-                target: target.clone(),
-                exclusive: false,
-            },
-            vec![ShapeRequirement {
-                kind: RequirementKind::InstructionExists,
-                target,
-                minimum_matches: Some(1),
-                maximum_matches: None,
-                ordinal: None,
-                slice: None,
-            }],
+            mutation(MutationKind::InsertInstructions, target.clone()),
+            vec![requirement(RequirementKind::InstructionExists, target)],
         );
 
         let risks = analyze_effects(&[overwrite, inject]);
@@ -837,28 +1140,13 @@ mod tests {
         let method = Target::method("game/Foo", "tick", "()V");
         let removal = effect(
             "removal",
-            Mutation {
-                kind: MutationKind::RemoveMethod,
-                target: method.clone(),
-                exclusive: true,
-            },
+            mutation(MutationKind::RemoveMethod, method.clone()),
             Vec::new(),
         );
         let overwrite = effect(
             "overwrite",
-            Mutation {
-                kind: MutationKind::ReplaceMethodBody,
-                target: method.clone(),
-                exclusive: true,
-            },
-            vec![ShapeRequirement {
-                kind: RequirementKind::MemberExists,
-                target: method,
-                minimum_matches: Some(1),
-                maximum_matches: None,
-                ordinal: None,
-                slice: None,
-            }],
+            mutation(MutationKind::ReplaceMethodBody, method.clone()),
+            vec![requirement(RequirementKind::MemberExists, method)],
         );
 
         let risks = analyze_effects(&[removal, overwrite]);
@@ -868,155 +1156,255 @@ mod tests {
     }
 
     #[test]
-    fn insertion_reports_ordinal_drift() {
-        let target = instruction_target(2);
-        let mut insertion = effect(
-            "insertion",
-            Mutation {
-                kind: MutationKind::InsertInstructions,
-                target: target.clone(),
-                exclusive: false,
-            },
+    fn query_cardinality_is_checked_for_the_whole_injector() {
+        let targets = [1, 2, 3].map(instruction_target);
+        let mut removal = effect(
+            "removal",
+            mutation(MutationKind::RemoveInstruction, targets[0].clone()),
             Vec::new(),
         );
-        insertion.mechanism = Mechanism::ModLauncherTransformer;
-        let ordinal = effect(
-            "ordinal",
-            Mutation {
-                kind: MutationKind::ModifyArgument,
-                target: target.clone(),
-                exclusive: false,
-            },
-            vec![ShapeRequirement {
-                kind: RequirementKind::InstructionExists,
-                target,
-                minimum_matches: Some(1),
-                maximum_matches: None,
-                ordinal: Some(1),
-                slice: None,
-            }],
+        removal.precision = Precision::Instruction;
+        let mut reader = effect(
+            "reader",
+            mutation(MutationKind::InsertInstructions, targets[1].clone()),
+            Vec::new(),
         );
+        let mut injector_query = query(
+            Target::method("game/Foo", "tick", "()V"),
+            targets
+                .iter()
+                .map(|target| target.instruction.clone().unwrap())
+                .collect(),
+        );
+        injector_query.minimum_matches = Some(1);
+        reader.queries.push(injector_query);
 
-        let risks = analyze_effects(&[insertion, ordinal]);
-
-        assert_eq!(risks[0].order, OrderAnalysis::OrdinalChanged);
-        assert_eq!(risks[0].severity, Severity::Medium);
+        assert!(analyze_effects(&[removal, reader]).is_empty());
     }
 
     #[test]
-    fn local_layout_and_cardinality_conflicts_are_distinct() {
+    fn expect_is_not_a_production_cardinality_minimum() {
+        let target = instruction_target(1);
+        let removal = effect(
+            "removal",
+            mutation(MutationKind::RemoveInstruction, target.clone()),
+            Vec::new(),
+        );
+        let mut reader = effect(
+            "reader",
+            mutation(MutationKind::InsertInstructions, target.clone()),
+            Vec::new(),
+        );
+        let mut injector_query = query(
+            Target::method("game/Foo", "tick", "()V"),
+            vec![target.instruction.unwrap()],
+        );
+        injector_query.expected_matches = Some(2);
+        reader.queries.push(injector_query);
+
+        assert!(analyze_effects(&[removal, reader]).is_empty());
+    }
+
+    #[test]
+    fn local_layout_changes_conflict_with_capture_but_local_value_changes_do_not() {
         let method = Target::method("game/Foo", "tick", "()V");
         let local = effect(
             "local-writer",
-            Mutation {
-                kind: MutationKind::ChangeLocalLayout,
-                target: method.clone(),
-                exclusive: false,
-            },
+            mutation(MutationKind::ChangeLocalLayout, method.clone()),
             Vec::new(),
         );
         let capture = effect(
             "capture",
-            Mutation {
-                kind: MutationKind::InsertInstructions,
-                target: method.clone(),
-                exclusive: false,
-            },
-            vec![ShapeRequirement {
-                kind: RequirementKind::LocalLayout,
-                target: method,
-                minimum_matches: None,
-                maximum_matches: None,
-                ordinal: None,
-                slice: None,
-            }],
+            mutation(MutationKind::InsertInstructions, method.clone()),
+            vec![requirement(RequirementKind::LocalLayout, method.clone())],
         );
 
-        let risks = analyze_effects(&[local, capture]);
+        let risks = analyze_effects(&[local, capture.clone()]);
 
         assert_eq!(risks[0].rule, "local_layout_dependency");
         assert_eq!(risks[0].severity, Severity::High);
+        let value_writer = effect(
+            "writer",
+            mutation(MutationKind::ModifyLocalValue, method),
+            Vec::new(),
+        );
+
+        assert!(analyze_effects(&[value_writer, capture]).is_empty());
     }
 
     #[test]
-    fn removal_invalidates_slice_and_allow_cardinality() {
-        let target = instruction_target(3);
+    fn cancellable_head_does_not_conflict_with_an_unbounded_return_query() {
+        let target = instruction_target(0);
+        let cancellable = effect(
+            "cancellable",
+            mutation(MutationKind::InsertConditionalReturn, target.clone()),
+            Vec::new(),
+        );
+        let mut return_injector = effect(
+            "return",
+            mutation(MutationKind::InsertInstructions, target.clone()),
+            Vec::new(),
+        );
+        let mut return_query = query(
+            Target::method("game/Foo", "tick", "()V"),
+            vec![target.instruction.unwrap()],
+        );
+        return_query.selector_kind = "RETURN".to_string();
+        return_injector.queries.push(return_query);
+
+        assert!(analyze_effects(&[cancellable, return_injector]).is_empty());
+    }
+
+    #[test]
+    fn group_minimum_is_aggregate_across_members() {
+        let target = instruction_target(1);
         let removal = effect(
             "removal",
-            Mutation {
-                kind: MutationKind::RemoveInstruction,
-                target: target.clone(),
-                exclusive: true,
-            },
+            mutation(MutationKind::RemoveInstruction, target.clone()),
             Vec::new(),
         );
-        let slice = effect(
-            "slice",
-            Mutation {
-                kind: MutationKind::InsertInstructions,
-                target: target.clone(),
-                exclusive: false,
-            },
-            vec![
-                ShapeRequirement {
-                    kind: RequirementKind::SliceBoundary,
-                    target: target.clone(),
-                    minimum_matches: Some(1),
-                    maximum_matches: None,
-                    ordinal: None,
-                    slice: Some("region".to_string()),
-                },
-                ShapeRequirement {
-                    kind: RequirementKind::Cardinality,
-                    target,
-                    minimum_matches: Some(1),
-                    maximum_matches: Some(1),
-                    ordinal: None,
-                    slice: Some("region".to_string()),
-                },
-            ],
+        let mut grouped = effect(
+            "grouped",
+            mutation(MutationKind::InsertInstructions, target.clone()),
+            Vec::new(),
         );
+        let mut grouped_query = query(
+            Target::method("game/Foo", "tick", "()V"),
+            vec![target.instruction.unwrap()],
+        );
+        grouped_query.minimum_matches = Some(1);
+        grouped_query.group = Some(InjectionGroupConstraint {
+            id: "group".to_string(),
+            member_id: "handler".to_string(),
+            successful_members: 2,
+            minimum_successes: Some(2),
+            maximum_successes: None,
+        });
+        grouped.queries.push(grouped_query);
 
-        let risks = analyze_effects(&[removal, slice]);
-
-        assert_eq!(risks.len(), 1);
-        assert_eq!(risks[0].order, OrderAnalysis::AnchorInvalidated);
-        assert_eq!(risks[0].severity, Severity::High);
+        let risks = analyze_effects(&[removal, grouped]);
+        assert_eq!(risks[0].rule, "injection_group_minimum_invalidated");
     }
 
     #[test]
-    fn control_flow_change_conflicts_with_return_shape() {
-        let method = Target::method("game/Foo", "tick", "()V");
-        let writer = effect(
-            "writer",
-            Mutation {
-                kind: MutationKind::ChangeControlFlow,
-                target: method.clone(),
-                exclusive: false,
-            },
+    fn allow_fails_only_after_a_matching_instruction_is_added() {
+        let insertion_target = instruction_target(0);
+        let insertion = effect(
+            "insertion",
+            mutation(
+                MutationKind::InsertConditionalReturn,
+                insertion_target.clone(),
+            ),
             Vec::new(),
         );
-        let reader = effect(
+        let mut reader = effect(
             "reader",
-            Mutation {
-                kind: MutationKind::InsertInstructions,
-                target: method.clone(),
-                exclusive: false,
-            },
-            vec![ShapeRequirement {
-                kind: RequirementKind::ControlFlow,
-                target: method,
-                minimum_matches: Some(1),
-                maximum_matches: None,
-                ordinal: None,
-                slice: None,
+            mutation(MutationKind::InsertInstructions, insertion_target),
+            Vec::new(),
+        );
+        let mut return_query = query(
+            Target::method("game/Foo", "tick", "()V"),
+            vec![InstructionReference {
+                stable_id: 3,
+                original_offset: Some(3),
+                opcode: 177,
+                member: None,
+                constant: None,
             }],
         );
+        return_query.selector_kind = "RETURN".to_string();
+        return_query.maximum_matches = Some(1);
+        reader.queries.push(return_query);
 
-        let risks = analyze_effects(&[writer, reader]);
+        let risks = analyze_effects(&[insertion, reader]);
 
-        assert_eq!(risks[0].rule, "control_flow_dependency");
-        assert_eq!(risks[0].order, OrderAnalysis::Structural);
+        assert_eq!(risks[0].rule, "injection_query_maximum_invalidated");
+    }
+
+    #[test]
+    fn group_maximum_is_checked_after_a_member_becomes_successful() {
+        let target = instruction_target(0);
+        let insertion = effect(
+            "insertion",
+            mutation(MutationKind::InsertConditionalReturn, target.clone()),
+            Vec::new(),
+        );
+        let mut reader = effect(
+            "reader",
+            mutation(MutationKind::InsertInstructions, target),
+            Vec::new(),
+        );
+        let mut return_query = query(Target::method("game/Foo", "tick", "()V"), Vec::new());
+        return_query.selector_kind = "RETURN".to_string();
+        return_query.minimum_matches = Some(1);
+        return_query.group = Some(InjectionGroupConstraint {
+            id: "group".to_string(),
+            member_id: "new-member".to_string(),
+            successful_members: 1,
+            minimum_successes: None,
+            maximum_successes: Some(1),
+        });
+        reader.queries.push(return_query);
+
+        let risks = analyze_effects(&[insertion, reader]);
+
+        assert_eq!(risks[0].rule, "injection_group_maximum_invalidated");
+    }
+
+    #[test]
+    fn access_changes_only_conflict_when_deltas_contradict() {
+        let target = Target::method("game/Foo", "tick", "()V");
+        let mut public = mutation(MutationKind::ChangeAccess, target.clone());
+        public.access_delta = Some(crate::model::AccessDelta {
+            added_flags: 0x0001,
+            removed_flags: 0x0002,
+        });
+        assert!(
+            analyze_effects(&[
+                effect("a", public.clone(), Vec::new()),
+                effect("b", public.clone(), Vec::new()),
+            ])
+            .is_empty()
+        );
+
+        let mut private = mutation(MutationKind::ChangeAccess, target.clone());
+        private.access_delta = Some(crate::model::AccessDelta {
+            added_flags: 0x0002,
+            removed_flags: 0x0001,
+        });
+        let contradiction = analyze_effects(&[
+            effect("a", public, Vec::new()),
+            effect("b", private, Vec::new()),
+        ]);
+        assert_eq!(contradiction[0].rule, "contradictory_access_change");
+        assert_eq!(contradiction[0].severity, Severity::High);
+
+        let unknown = analyze_effects(&[
+            effect(
+                "a",
+                mutation(MutationKind::ChangeAccess, target.clone()),
+                Vec::new(),
+            ),
+            effect(
+                "b",
+                mutation(MutationKind::ChangeAccess, target),
+                Vec::new(),
+            ),
+        ]);
+        assert_eq!(unknown[0].rule, "unknown_access_overlap");
+        assert_eq!(unknown[0].confidence, Confidence::Medium);
+    }
+
+    #[test]
+    fn risk_index_is_multiplicatively_gated_by_confidence_and_activation() {
+        let exact_critical =
+            risk_index(Severity::Critical, Confidence::Exact, Activation::Definite);
+        let weak_critical = risk_index(Severity::Critical, Confidence::Low, Activation::Candidate);
+        let exact_high = risk_index(Severity::High, Confidence::Exact, Activation::Definite);
+
+        assert_eq!(exact_critical, 100);
+        assert!(weak_critical < exact_high);
+        assert!(weak_critical < 30);
     }
 
     #[test]
@@ -1083,6 +1471,7 @@ mod tests {
                     .member
                     .as_ref()
                     .is_some_and(|member| member.is_static == Some(false))
+                && risk.activation == Activation::Conditional
         }));
     }
 

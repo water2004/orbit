@@ -5,7 +5,7 @@ use crate::jar::{ParsedArtifact, ScannedArtifacts};
 use crate::model::{
     Activation, Confidence, Effect, Evidence, LoaderFamily, Mechanism, MemberKind, MemberReference,
     Mutation, MutationKind, Precision, Readiness, RequirementKind, ShapeRequirement, Target,
-    Warning,
+    Warning, WarningKind,
 };
 
 const ITRANSFORMER: &str = "cpw/mods/modlauncher/api/ITransformer";
@@ -29,7 +29,6 @@ struct InstructionPattern {
 #[derive(Debug, Clone)]
 struct MutationSignal {
     kind: MutationKind,
-    exclusive: bool,
     source_class: String,
     source_method: String,
     source_instruction: crate::model::InstructionReference,
@@ -82,6 +81,7 @@ pub(crate) fn analyze(scanned: &mut ScannedArtifacts, readiness: &Readiness) -> 
                 warnings.push(Warning {
                     artifact_id: Some(artifact.id.clone()),
                     scope: class.name.clone(),
+                    kind: WarningKind::TransformerPartial,
                     message: "ITransformer target set is dynamic or could not be recovered; \
                               no global pairwise conflicts were fabricated"
                         .to_string(),
@@ -97,6 +97,7 @@ pub(crate) fn analyze(scanned: &mut ScannedArtifacts, readiness: &Readiness) -> 
                 warnings.push(Warning {
                     artifact_id: Some(artifact.id.clone()),
                     scope: class.name.clone(),
+                    kind: WarningKind::TransformerPartial,
                     message: format!(
                         "ignored {ignored_untainted} ASM-looking write(s) whose receiver \
                          could not be traced to the transform() input"
@@ -118,6 +119,29 @@ pub(crate) fn analyze(scanned: &mut ScannedArtifacts, readiness: &Readiness) -> 
                         target,
                         mechanism,
                         "transform() was found, but no supported ASM mutation was recovered",
+                    ));
+                }
+                continue;
+            }
+
+            if targets.len() > 1 {
+                scanned.coverage.transformer_effects_partial += targets.len();
+                warnings.push(Warning {
+                    artifact_id: Some(artifact.id.clone()),
+                    scope: class.name.clone(),
+                    kind: WarningKind::TransformerPartial,
+                    message: "multiple transformer targets and mutation branches could not be \
+                              associated without path-sensitive stack analysis; effects were \
+                              kept as unknown per target"
+                        .to_string(),
+                });
+                for target in targets {
+                    effects.push(unknown_effect(
+                        artifact,
+                        class,
+                        target,
+                        mechanism,
+                        "target-to-mutation branch association is heuristic",
                     ));
                 }
                 continue;
@@ -301,7 +325,7 @@ fn recover_targets(class: &ParsedClass) -> Vec<RecoveredTarget> {
                     if let Some(target) = target_from_factory(&member.name, &strings) {
                         targets.push(RecoveredTarget {
                             detail: format!(
-                                "recovered from {}.{}{} call {}",
+                                "heuristically recovered from nearby constants before {}.{}{} call {}",
                                 class.name, method.name, method.descriptor, member.name
                             ),
                             target,
@@ -475,6 +499,7 @@ fn recover_mutations(
                         warnings.push(Warning {
                             artifact_id: Some(artifact.id.clone()),
                             scope: format!("{}.{}{}", owner.name, method.name, method.descriptor),
+                            kind: WarningKind::TransformerPartial,
                             message: format!(
                                 "invokedynamic {name}{descriptor} has no recoverable implementation handle"
                             ),
@@ -487,13 +512,10 @@ fn recover_mutations(
                     {
                         push_bounded(&mut patterns, pattern, 8);
                     }
-                    if let Some((kind, exclusive, description)) =
-                        classify_call(member, &recent_types)
-                    {
+                    if let Some((kind, description)) = classify_call(member, &recent_types) {
                         if taint_window > 0 {
                             signals.push(MutationSignal {
                                 kind,
-                                exclusive,
                                 source_class: owner.name.clone(),
                                 source_method: format!("{}{}", method.name, method.descriptor),
                                 source_instruction: instruction.reference.clone(),
@@ -527,12 +549,6 @@ fn recover_mutations(
                         if taint_window > 0 {
                             signals.push(MutationSignal {
                                 kind,
-                                exclusive: matches!(
-                                    kind,
-                                    MutationKind::ChangeSuperclass
-                                        | MutationKind::ChangeInterfaces
-                                        | MutationKind::ReplaceMethodBody
-                                ),
                                 source_class: owner.name.clone(),
                                 source_method: format!("{}{}", method.name, method.descriptor),
                                 source_instruction: instruction.reference.clone(),
@@ -582,14 +598,14 @@ fn recover_mutations(
 fn classify_call(
     member: &MemberReference,
     recent_types: &VecDeque<String>,
-) -> Option<(MutationKind, bool, String)> {
+) -> Option<(MutationKind, String)> {
     let owner = member.owner.as_str();
-    let (kind, exclusive) = if owner.ends_with("/InsnList") {
+    let kind = if owner.ends_with("/InsnList") {
         match member.name.as_str() {
-            "add" | "insert" | "insertBefore" => (MutationKind::InsertInstructions, false),
-            "remove" => (MutationKind::RemoveInstruction, true),
-            "set" => (MutationKind::ReplaceInstruction, true),
-            "clear" => (MutationKind::ReplaceMethodBody, true),
+            "add" | "insert" | "insertBefore" => MutationKind::InsertInstructions,
+            "remove" => MutationKind::RemoveInstruction,
+            "set" => MutationKind::ReplaceInstruction,
+            "clear" => MutationKind::ReplaceMethodBody,
             _ => return None,
         }
     } else if owner.ends_with("/MethodVisitor") || owner.ends_with("/MethodNode") {
@@ -606,34 +622,38 @@ fn classify_call(
             | "visitIincInsn"
             | "visitTableSwitchInsn"
             | "visitLookupSwitchInsn"
-            | "visitMultiANewArrayInsn" => (MutationKind::InsertInstructions, false),
-            "visitMaxs" | "visitLocalVariable" => (MutationKind::ChangeLocalLayout, false),
+            | "visitMultiANewArrayInsn" => MutationKind::InsertInstructions,
+            "visitMaxs" | "visitLocalVariable" => MutationKind::ChangeLocalLayout,
             _ => return None,
         }
     } else if owner.ends_with("/ClassVisitor") || owner.ends_with("/ClassNode") {
         match member.name.as_str() {
-            "visitMethod" => (MutationKind::AddMethod, false),
-            "visitField" => (MutationKind::AddField, false),
-            "visit" => (MutationKind::ChangeSuperclass, true),
+            "visitMethod" => MutationKind::AddMethod,
+            "visitField" => MutationKind::AddField,
+            // Without evaluating the visit() operand stack we cannot prove
+            // that superclass or access values differ from the input class.
+            "visit" => MutationKind::UnknownClass,
             _ => return None,
         }
     } else if owner == "java/util/List" || owner.ends_with("/ArrayList") {
         let node = recent_types.back().map(String::as_str).unwrap_or_default();
         match (member.name.as_str(), node) {
-            ("add", node) if node.ends_with("/MethodNode") => (MutationKind::AddMethod, false),
-            ("add", node) if node.ends_with("/FieldNode") => (MutationKind::AddField, false),
-            ("remove", node) if node.ends_with("/MethodNode") => (MutationKind::RemoveMethod, true),
-            ("remove", node) if node.ends_with("/FieldNode") => (MutationKind::RemoveField, true),
+            ("add", node) if node.ends_with("/MethodNode") => MutationKind::AddMethod,
+            ("add", node) if node.ends_with("/FieldNode") => MutationKind::AddField,
+            ("remove", node) if node.ends_with("/MethodNode") => MutationKind::RemoveMethod,
+            ("remove", node) if node.ends_with("/FieldNode") => MutationKind::RemoveField,
             _ => return None,
         }
     } else if owner == "java/util/Iterator" && member.name == "remove" {
-        (MutationKind::RemoveInstruction, true)
+        // The iterator may originate from methods, fields, interfaces,
+        // annotations, or an instruction list. Its collection provenance is
+        // not available in this bounded interpreter.
+        MutationKind::UnknownMethod
     } else {
         return None;
     };
     Some((
         kind,
-        exclusive,
         format!(
             "ASM mutation call {}.{}{}",
             member.owner, member.name, member.descriptor
@@ -645,8 +665,9 @@ fn classify_field_write(member: &MemberReference) -> Option<(MutationKind, Strin
     let owner = member.owner.as_str();
     let kind = if owner.ends_with("/ClassNode") {
         match member.name.as_str() {
-            "superName" => MutationKind::ChangeSuperclass,
-            "interfaces" => MutationKind::ChangeInterfaces,
+            // A raw field write does not prove that the new value differs
+            // from the original class shape.
+            "superName" | "interfaces" => MutationKind::UnknownClass,
             "access" => MutationKind::ChangeAccess,
             "methods" => MutationKind::AddMethod,
             "fields" => MutationKind::AddField,
@@ -769,8 +790,8 @@ fn effects_for_signal(
                         target,
                         signal,
                         mechanism,
-                        Precision::Instruction,
-                        Confidence::High,
+                        Precision::Pattern,
+                        Confidence::Low,
                         vec![ShapeRequirement {
                             kind: RequirementKind::InstructionExists,
                             target: {
@@ -778,6 +799,7 @@ fn effects_for_signal(
                                 required.instruction = Some(instruction);
                                 required
                             },
+                            precision: Precision::Pattern,
                             minimum_matches: Some(1),
                             maximum_matches: None,
                             ordinal: None,
@@ -797,11 +819,7 @@ fn effects_for_signal(
             } else {
                 Precision::Method
             },
-            if signal.pattern.is_some() {
-                Confidence::Medium
-            } else {
-                Confidence::Low
-            },
+            Confidence::Low,
             RequirementKind::MemberExists,
         )
     } else {
@@ -821,6 +839,7 @@ fn effects_for_signal(
         vec![ShapeRequirement {
             kind: requirement,
             target: base_target.clone(),
+            precision,
             minimum_matches: Some(1),
             maximum_matches: None,
             ordinal: None,
@@ -921,18 +940,16 @@ fn effect(
         mechanism,
         target: target.clone(),
         requirements,
-        mutations: vec![Mutation {
-            kind: signal.kind,
-            target,
-            exclusive: signal.exclusive,
-        }],
-        evidence: vec![Evidence {
-            artifact_id: artifact.id.clone(),
-            class: signal.source_class.clone(),
-            method: Some(signal.source_method.clone()),
-            annotation: None,
-            instruction: Some(signal.source_instruction.clone()),
-            detail,
+        queries: Vec::new(),
+        mutations: vec![Mutation::new(signal.kind, target, precision)],
+        evidence: vec![{
+            let mut evidence = Evidence::new(&artifact.id, &signal.source_class, detail);
+            evidence.method = Some(signal.source_method.clone());
+            evidence.instruction = Some(signal.source_instruction.clone());
+            evidence.mechanism = Some(mechanism);
+            evidence.composition_semantics = Some(signal.kind.default_composition());
+            evidence.analysis_precision = Some(precision);
+            evidence
         }],
         precision,
         confidence,
@@ -964,23 +981,41 @@ fn unknown_effect(
                 RequirementKind::ClassExists
             },
             target: target.target.clone(),
+            precision: if target.target.member.is_some() {
+                Precision::Method
+            } else {
+                Precision::Class
+            },
             minimum_matches: Some(1),
             maximum_matches: None,
             ordinal: None,
             slice: None,
         }],
-        mutations: vec![Mutation {
-            kind: mutation_kind,
-            target: target.target.clone(),
-            exclusive: false,
-        }],
-        evidence: vec![Evidence {
-            artifact_id: artifact.id.clone(),
-            class: transformer.name.clone(),
-            method: Some("transform".to_string()),
-            annotation: None,
-            instruction: None,
-            detail: format!("{}; {reason}", target.detail),
+        queries: Vec::new(),
+        mutations: vec![Mutation::new(
+            mutation_kind,
+            target.target.clone(),
+            if target.target.member.is_some() {
+                Precision::Method
+            } else {
+                Precision::Class
+            },
+        )],
+        evidence: vec![{
+            let mut evidence = Evidence::new(
+                &artifact.id,
+                &transformer.name,
+                format!("{}; {reason}", target.detail),
+            );
+            evidence.method = Some("transform".to_string());
+            evidence.mechanism = Some(mechanism);
+            evidence.composition_semantics = Some(mutation_kind.default_composition());
+            evidence.analysis_precision = Some(if target.target.member.is_some() {
+                Precision::Method
+            } else {
+                Precision::Class
+            });
+            evidence
         }],
         precision: if target.target.member.is_some() {
             Precision::Method
@@ -1107,13 +1142,13 @@ mod tests {
 
     #[test]
     fn asm_tree_mutations_are_classified() {
-        for (name, expected, exclusive) in [
-            ("add", MutationKind::InsertInstructions, false),
-            ("insert", MutationKind::InsertInstructions, false),
-            ("insertBefore", MutationKind::InsertInstructions, false),
-            ("remove", MutationKind::RemoveInstruction, true),
-            ("set", MutationKind::ReplaceInstruction, true),
-            ("clear", MutationKind::ReplaceMethodBody, true),
+        for (name, expected) in [
+            ("add", MutationKind::InsertInstructions),
+            ("insert", MutationKind::InsertInstructions),
+            ("insertBefore", MutationKind::InsertInstructions),
+            ("remove", MutationKind::RemoveInstruction),
+            ("set", MutationKind::ReplaceInstruction),
+            ("clear", MutationKind::ReplaceMethodBody),
         ] {
             let call = MemberReference {
                 owner: "org/objectweb/asm/tree/InsnList".to_string(),
@@ -1122,10 +1157,102 @@ mod tests {
                 kind: MemberKind::Method,
                 is_static: Some(false),
             };
-            let (kind, is_exclusive, _) = classify_call(&call, &VecDeque::new()).unwrap();
+            let (kind, _) = classify_call(&call, &VecDeque::new()).unwrap();
             assert_eq!(kind, expected);
-            assert_eq!(is_exclusive, exclusive);
         }
+    }
+
+    #[test]
+    fn iterator_remove_without_collection_provenance_is_not_an_instruction_removal() {
+        let call = MemberReference {
+            owner: "java/util/Iterator".to_string(),
+            name: "remove".to_string(),
+            descriptor: "()V".to_string(),
+            kind: MemberKind::Method,
+            is_static: Some(false),
+        };
+
+        let (kind, _) = classify_call(&call, &VecDeque::new()).unwrap();
+
+        assert_eq!(kind, MutationKind::UnknownMethod);
+    }
+
+    #[test]
+    fn heuristic_transformer_pattern_never_claims_exact_instruction_precision() {
+        let called = member("game/Owner", "run", "()V");
+        let target_class = empty_class(
+            "game/Foo",
+            Vec::new(),
+            vec![method(
+                "tick",
+                vec![instruction(0, InstructionKind::MethodCall(called.clone()))],
+            )],
+        );
+        let runtime = ParsedArtifact {
+            id: "minecraft".to_string(),
+            display_name: "minecraft".to_string(),
+            kind: ArtifactKind::Minecraft,
+            classes: vec![target_class],
+            refmaps: Vec::new(),
+        };
+        let artifact = ParsedArtifact {
+            id: "mod".to_string(),
+            display_name: "mod".to_string(),
+            kind: ArtifactKind::Mod,
+            classes: Vec::new(),
+            refmaps: Vec::new(),
+        };
+        let scanned = scanned(vec![runtime, artifact], ClassUniverse::default());
+        let recovered_target = RecoveredTarget {
+            target: Target::method("game/Foo", "tick", "()V"),
+            detail: "heuristic target factory".to_string(),
+        };
+        let signal = MutationSignal {
+            kind: MutationKind::RemoveInstruction,
+            source_class: "example/Transformer".to_string(),
+            source_method: "transform()V".to_string(),
+            source_instruction: InstructionReference {
+                stable_id: 5,
+                original_offset: Some(5),
+                opcode: 182,
+                member: None,
+                constant: None,
+            },
+            pattern: Some(InstructionPattern {
+                member: Some(called),
+                constant: None,
+                integer: None,
+                opcode: Some(182),
+                detail: "recent constructor heuristic".to_string(),
+            }),
+            detail: "heuristic ASM call".to_string(),
+        };
+
+        let effects = effects_for_signal(
+            &scanned,
+            &scanned.artifacts[1],
+            &recovered_target,
+            &signal,
+            Mechanism::ModLauncherTransformer,
+        );
+
+        assert!(!effects.is_empty());
+        assert!(
+            effects
+                .iter()
+                .all(|effect| effect.precision == Precision::Pattern)
+        );
+        assert!(
+            effects
+                .iter()
+                .all(|effect| effect.confidence == Confidence::Low)
+        );
+        assert!(
+            effects
+                .iter()
+                .flat_map(|effect| &effect.mutations)
+                .all(|mutation| mutation.precision == Precision::Pattern)
+        );
     }
 
     #[test]

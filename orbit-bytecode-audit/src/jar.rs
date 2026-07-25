@@ -9,7 +9,7 @@ use crate::AuditError;
 use crate::classfile::{InstructionKind, ParsedClass};
 use crate::model::{
     ArtifactKind, ArtifactReport, AuditRequest, Coverage, LoaderFamily, MemberKind,
-    MemberReference, Readiness, ReadinessStatus, Warning,
+    MemberReference, Readiness, ReadinessStatus, Warning, WarningKind,
 };
 
 #[derive(Debug)]
@@ -565,6 +565,7 @@ pub(crate) fn scan_artifacts(request: &AuditRequest) -> Result<ScannedArtifacts,
                 warnings.push(Warning {
                     artifact_id: Some(input.id.clone()),
                     scope: "jar".to_string(),
+                    kind: WarningKind::DamagedArtifact,
                     message: error,
                 });
             }
@@ -714,6 +715,7 @@ fn scan_archive<R: Read + Seek>(
                 warnings.push(Warning {
                     artifact_id: Some(input.id.clone()),
                     scope: name,
+                    kind: WarningKind::BudgetExhaustion,
                     message: format!(
                         "nested JAR depth exceeds limit {}",
                         request.limits.max_nested_jar_depth
@@ -728,6 +730,7 @@ fn scan_archive<R: Read + Seek>(
                 warnings.push(Warning {
                     artifact_id: Some(input.id.clone()),
                     scope: name,
+                    kind: WarningKind::BudgetExhaustion,
                     message: format!(
                         "nested JAR size {} exceeds entry limit {}",
                         entry.size(),
@@ -762,6 +765,7 @@ fn scan_archive<R: Read + Seek>(
                         warnings.push(Warning {
                             artifact_id: Some(input.id.clone()),
                             scope: name,
+                            kind: WarningKind::BudgetExhaustion,
                             message: format!("nested JAR scan failed: {error}"),
                         });
                     }
@@ -771,6 +775,7 @@ fn scan_archive<R: Read + Seek>(
                     warnings.push(Warning {
                         artifact_id: Some(input.id.clone()),
                         scope: name,
+                        kind: WarningKind::DamagedArtifact,
                         message: format!("nested JAR is invalid: {error}"),
                     });
                 }
@@ -800,6 +805,7 @@ fn record_unsupported_javascript_coremod(
     warnings.push(Warning {
         artifact_id: Some(input.id.clone()),
         scope: scope.to_string(),
+        kind: WarningKind::UnsupportedMechanism,
         message: "JavaScript CoreMod was not analyzed; only .class transformers are supported"
             .to_string(),
     });
@@ -835,6 +841,7 @@ fn scan_class_entry(
         warnings.push(Warning {
             artifact_id: Some(input.id.clone()),
             scope: name.to_string(),
+            kind: WarningKind::BudgetExhaustion,
             message: format!(
                 "ClassFile size {entry_size} exceeds limit {}",
                 request.limits.max_class_bytes
@@ -850,6 +857,7 @@ fn scan_class_entry(
         warnings.push(Warning {
             artifact_id: Some(input.id.clone()),
             scope: name.to_string(),
+            kind: WarningKind::BudgetExhaustion,
             message: format!(
                 "constant-pool count exceeds limit {}",
                 request.limits.max_constant_pool_entries
@@ -863,6 +871,7 @@ fn scan_class_entry(
                 warnings.push(Warning {
                     artifact_id: Some(input.id.clone()),
                     scope: class.name.clone(),
+                    kind: WarningKind::Other,
                     message: format!(
                         "ClassFile {}.{} is newer than Java 25; parsed best-effort",
                         class.major, class.minor
@@ -874,6 +883,7 @@ fn scan_class_entry(
                 warnings.push(Warning {
                     artifact_id: Some(input.id.clone()),
                     scope: class.name,
+                    kind: WarningKind::BudgetExhaustion,
                     message: "method count exceeds configured limit".to_string(),
                 });
                 return Ok(());
@@ -885,6 +895,7 @@ fn scan_class_entry(
                     warnings.push(Warning {
                         artifact_id: Some(input.id.clone()),
                         scope: format!("{}.{}{}", class.name, method.name, method.descriptor),
+                        kind: WarningKind::BudgetExhaustion,
                         message: "instruction count exceeds configured limit; \
                                   method degraded to shape-only"
                             .to_string(),
@@ -901,6 +912,7 @@ fn scan_class_entry(
             warnings.push(Warning {
                 artifact_id: Some(input.id.clone()),
                 scope: name.to_string(),
+                kind: WarningKind::DamagedClass,
                 message: format!("ClassFile parse failed: {error}"),
             });
         }

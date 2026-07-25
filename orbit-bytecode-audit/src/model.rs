@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-pub const REPORT_SCHEMA_VERSION: &str = "1";
+pub const REPORT_SCHEMA_VERSION: &str = "2";
 
 #[derive(Debug, Clone)]
 pub struct AuditRequest {
@@ -160,7 +160,41 @@ pub struct Coverage {
 pub struct Warning {
     pub artifact_id: Option<String>,
     pub scope: String,
+    pub kind: WarningKind,
     pub message: String,
+}
+
+impl Warning {
+    #[must_use]
+    pub fn new(
+        artifact_id: Option<String>,
+        scope: impl Into<String>,
+        kind: WarningKind,
+        message: impl Into<String>,
+    ) -> Self {
+        Self {
+            artifact_id,
+            scope: scope.into(),
+            kind,
+            message: message.into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WarningKind {
+    UnresolvedSoftReference,
+    AmbiguousSoftReference,
+    KnownUnsupportedInjectionPoint,
+    CustomInjectionPoint,
+    DamagedArtifact,
+    DamagedClass,
+    TransformerPartial,
+    UnsupportedMechanism,
+    BudgetExhaustion,
+    #[default]
+    Other,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -306,10 +340,26 @@ impl Target {
 pub struct ShapeRequirement {
     pub kind: RequirementKind,
     pub target: Target,
+    pub precision: Precision,
     pub minimum_matches: Option<u32>,
     pub maximum_matches: Option<u32>,
     pub ordinal: Option<u32>,
     pub slice: Option<String>,
+}
+
+impl ShapeRequirement {
+    #[must_use]
+    pub fn new(kind: RequirementKind, target: Target, precision: Precision) -> Self {
+        Self {
+            kind,
+            target,
+            precision,
+            minimum_matches: None,
+            maximum_matches: None,
+            ordinal: None,
+            slice: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -330,7 +380,44 @@ pub enum RequirementKind {
 pub struct Mutation {
     pub kind: MutationKind,
     pub target: Target,
-    pub exclusive: bool,
+    pub precision: Precision,
+    pub composition: CompositionSemantics,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub access_delta: Option<AccessDelta>,
+}
+
+impl Mutation {
+    #[must_use]
+    pub fn new(kind: MutationKind, target: Target, precision: Precision) -> Self {
+        Self {
+            kind,
+            target,
+            precision,
+            composition: kind.default_composition(),
+            access_delta: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CompositionSemantics {
+    ExclusiveOwner,
+    Destructive,
+    ValueDecorator,
+    ArgumentDecorator,
+    OperationWrapper,
+    AdjacentInsertion,
+    StructuralChange,
+    LocalValueDecorator,
+    AccessMutation,
+    Unknown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AccessDelta {
+    pub added_flags: u16,
+    pub removed_flags: u16,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -346,16 +433,89 @@ pub enum MutationKind {
     ReplaceInstruction,
     RedirectOperation,
     WrapOperation,
+    TransformExpressionValue,
     ModifyArgument,
-    ModifyLocal,
+    ModifyLocalValue,
     ModifyConstant,
     ChangeAccess,
     ChangeSuperclass,
+    AddInterfaces,
     ChangeInterfaces,
     ChangeControlFlow,
+    InsertConditionalReturn,
     ChangeLocalLayout,
     UnknownMethod,
     UnknownClass,
+}
+
+impl MutationKind {
+    #[must_use]
+    pub fn default_composition(self) -> CompositionSemantics {
+        use CompositionSemantics::{
+            AccessMutation, AdjacentInsertion, ArgumentDecorator, Destructive, ExclusiveOwner,
+            LocalValueDecorator, OperationWrapper, StructuralChange, Unknown, ValueDecorator,
+        };
+        match self {
+            Self::RedirectOperation => ExclusiveOwner,
+            Self::RemoveInstruction | Self::ReplaceInstruction => Destructive,
+            Self::TransformExpressionValue | Self::ModifyConstant => ValueDecorator,
+            Self::ModifyArgument => ArgumentDecorator,
+            Self::WrapOperation => OperationWrapper,
+            Self::InsertInstructions | Self::ChangeControlFlow | Self::InsertConditionalReturn => {
+                AdjacentInsertion
+            }
+            Self::ModifyLocalValue => LocalValueDecorator,
+            Self::ChangeAccess => AccessMutation,
+            Self::ReplaceMethodBody
+            | Self::AddMethod
+            | Self::RemoveMethod
+            | Self::AddField
+            | Self::RemoveField
+            | Self::ChangeSuperclass
+            | Self::AddInterfaces
+            | Self::ChangeInterfaces
+            | Self::ChangeLocalLayout => StructuralChange,
+            Self::UnknownMethod | Self::UnknownClass => Unknown,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SoftReferenceResolution {
+    DirectExact,
+    RefmapExact,
+    Ambiguous,
+    Unresolved,
+    NotApplicable,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InjectionGroupConstraint {
+    pub id: String,
+    pub member_id: String,
+    pub successful_members: u32,
+    pub minimum_successes: Option<u32>,
+    pub maximum_successes: Option<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InjectionQuery {
+    pub id: String,
+    pub selector_kind: String,
+    pub method: Target,
+    pub candidates: Vec<InstructionReference>,
+    pub selected: Vec<InstructionReference>,
+    pub minimum_matches: Option<u32>,
+    pub maximum_matches: Option<u32>,
+    pub expected_matches: Option<u32>,
+    pub ordinal: Option<u32>,
+    pub slice: Option<String>,
+    pub slice_start: Option<u32>,
+    pub slice_end: Option<u32>,
+    pub resolution: SoftReferenceResolution,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group: Option<InjectionGroupConstraint>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -365,7 +525,64 @@ pub struct Evidence {
     pub method: Option<String>,
     pub annotation: Option<String>,
     pub instruction: Option<InstructionReference>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mechanism: Option<Mechanism>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub injector_kind: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub composition_semantics: Option<CompositionSemantics>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub method_selector: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub at_kind: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub at_target: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slice: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ordinal: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shift: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolution_kind: Option<SoftReferenceResolution>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub refmap_sources: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub target_candidates: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub analysis_precision: Option<Precision>,
     pub detail: String,
+}
+
+impl Evidence {
+    #[must_use]
+    pub fn new(
+        artifact_id: impl Into<String>,
+        class: impl Into<String>,
+        detail: impl Into<String>,
+    ) -> Self {
+        Self {
+            artifact_id: artifact_id.into(),
+            class: class.into(),
+            method: None,
+            annotation: None,
+            instruction: None,
+            mechanism: None,
+            injector_kind: None,
+            composition_semantics: None,
+            method_selector: None,
+            at_kind: None,
+            at_target: None,
+            slice: None,
+            ordinal: None,
+            shift: None,
+            resolution_kind: None,
+            refmap_sources: Vec::new(),
+            target_candidates: Vec::new(),
+            analysis_precision: None,
+            detail: detail.into(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -374,6 +591,8 @@ pub struct Effect {
     pub mechanism: Mechanism,
     pub target: Target,
     pub requirements: Vec<ShapeRequirement>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub queries: Vec<InjectionQuery>,
     pub mutations: Vec<Mutation>,
     pub evidence: Vec<Evidence>,
     pub precision: Precision,

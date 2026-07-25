@@ -66,6 +66,7 @@ pub use orbit_bytecode_audit::{
     Mechanism as AuditMechanism, MutationKind as AuditMutationKind,
     OrderAnalysis as AuditOrderAnalysis, Precision as AuditPrecision, Readiness as AuditReadiness,
     ReadinessStatus as AuditReadinessStatus, Risk as AuditRisk, Severity as AuditSeverity,
+    WarningKind as AuditWarningKind,
 };
 pub use outdated::{OutdatedMod, check_all_outdated, check_all_outdated_with_progress};
 pub use progress::{
