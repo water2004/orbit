@@ -9,6 +9,7 @@ mod conflict;
 mod error;
 mod jar;
 mod mixin;
+mod mixin_config;
 mod model;
 mod progress;
 mod readiness;
@@ -17,11 +18,16 @@ mod transformer;
 pub use error::AuditError;
 pub use model::{
     AccessDelta, Activation, AnalysisLimits, ArtifactInput, ArtifactKind, ArtifactReport,
-    AuditEnvironment, AuditReport, AuditRequest, ClassReference, CompositionSemantics, Confidence,
-    Coverage, Effect, Evidence, InjectionGroupConstraint, InjectionQuery, InstructionReference,
-    LoaderFamily, Mechanism, MemberKind, MemberReference, Mutation, MutationKind, NestedJarPolicy,
-    OrderAnalysis, Precision, Readiness, ReadinessStatus, RequirementKind, Risk, Severity,
-    ShapeRequirement, SoftReferenceResolution, Target, Warning, WarningKind,
+    AuditEnvironment, AuditReport, AuditRequest, BehavioralInteraction, BehavioralInteractionKind,
+    ClassDefinitionId, ClassReference, CompositionSemantics, Confidence, ConfigActivation,
+    Coverage, CoverageGap, CoverageGapKind, Effect, Evidence, FramePosition, GlobPattern,
+    InactiveCandidate, InactiveCandidateKind, InjectionGroupConstraint, InjectionQuery,
+    InstructionIdentity, InstructionReference, LoaderFamily, LocalSelector, Mechanism, MemberKind,
+    MemberReference, MethodContributionKind, MethodSelector, MixinActivation, Mutation,
+    MutationKind, NestedJarPolicy, OrderAnalysis, ParsedMixinConfig, PhysicalSide, Precision,
+    Readiness, ReadinessStatus, RegisteredMixin, RegisteredMixinConfig, RegistrationSource,
+    RequirementKind, Risk, Severity, ShapeRequirement, SideConstraint, SoftReferenceResolution,
+    Target, Warning, WarningKind,
 };
 pub use progress::{AuditProgressEvent, AuditProgressReporter, AuditProgressStage};
 pub use readiness::probe_readiness;
@@ -41,6 +47,8 @@ pub fn analyze_with_progress(
 ) -> Result<AuditReport, AuditError> {
     use progress::{AuditProgressEvent, AuditProgressStage, emit};
 
+    let loader = readiness::preflight(request).map_err(AuditError::NotReady)?;
+    let mut scanned = jar::scan_artifacts_with_progress(request, progress)?;
     emit(
         progress,
         AuditProgressEvent::StageStarted {
@@ -48,7 +56,7 @@ pub fn analyze_with_progress(
             total: Some(1),
         },
     );
-    let readiness = probe_readiness(request)?;
+    let readiness = jar::probe_runtime_abi(&scanned, loader);
     if readiness.status != ReadinessStatus::Ready {
         return Err(AuditError::NotReady(readiness));
     }
@@ -59,14 +67,34 @@ pub fn analyze_with_progress(
             completed: 1,
         },
     );
-    let mut scanned = jar::scan_artifacts_with_progress(request, progress)?;
-    let mut effects = mixin::analyze_with_progress(&mut scanned, progress);
-    effects.extend(transformer::analyze_with_progress(
-        &mut scanned,
-        &readiness,
-        progress,
-    ));
+    let mut registry = mixin_config::discover(&mut scanned, request);
+    let mixin_analysis = mixin::analyze_with_progress(&mut scanned, &registry, progress);
+    registry.coverage_gaps.extend(mixin_analysis.coverage_gaps);
+    registry
+        .inactive_candidates
+        .extend(mixin_analysis.inactive_candidates);
+    let precomputed_risks = mixin_analysis.risks;
+    let interactions = mixin_analysis.interactions;
+    let mut effects = mixin_analysis.effects;
+    let transformer_analysis =
+        transformer::analyze_with_progress(&mut scanned, &readiness, progress);
+    effects.extend(transformer_analysis.effects);
+    registry
+        .inactive_candidates
+        .extend(transformer_analysis.inactive_candidates);
+    registry
+        .coverage_gaps
+        .extend(transformer_analysis.coverage_gaps);
     Ok(conflict::build_report_with_progress(
-        request, readiness, scanned, effects, progress,
+        request,
+        readiness,
+        scanned,
+        conflict::RecoveredFindings {
+            effects,
+            registry,
+            risks: precomputed_risks,
+            interactions,
+        },
+        progress,
     ))
 }

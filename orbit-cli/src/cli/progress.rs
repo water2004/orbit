@@ -519,8 +519,8 @@ fn should_report_audit_count(completed: usize, total: usize) -> bool {
 fn audit_stage_number(stage: AuditProgressStage) -> usize {
     match stage {
         AuditProgressStage::PrepareInputs => 1,
-        AuditProgressStage::Readiness => 2,
-        AuditProgressStage::ScanArtifacts => 3,
+        AuditProgressStage::ScanArtifacts => 2,
+        AuditProgressStage::Readiness => 3,
         AuditProgressStage::AnalyzeMixins => 4,
         AuditProgressStage::AnalyzeTransformers => 5,
         AuditProgressStage::DetectConflicts => 6,
@@ -702,7 +702,7 @@ mod tests {
 
         assert_eq!(
             start.as_deref(),
-            Some("[3/6] Scanning bytecode artifacts...")
+            Some("[2/6] Scanning bytecode artifacts...")
         );
         assert_eq!(
             progress.as_deref(),

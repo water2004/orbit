@@ -7,10 +7,14 @@ use super::output_table;
 pub fn audit_report(report: &orbit_core::AuditReport, limit: usize) -> String {
     let mut sections = vec![environment_table(report), coverage_table(&report.coverage)];
 
-    if !report.coverage.unsupported_mechanisms.is_empty()
-        || !report.coverage.budget_exhaustions.is_empty()
-    {
-        sections.push(coverage_gaps_table(&report.coverage));
+    if !report.coverage_gaps.is_empty() {
+        sections.push(coverage_gaps_table(report));
+    }
+    if !report.inactive_candidates.is_empty() {
+        sections.push(inactive_candidates_table(report));
+    }
+    if !report.interactions.is_empty() {
+        sections.push(interactions_table(report));
     }
     if !report.warnings.is_empty() {
         sections.push(warnings_table(report));
@@ -22,7 +26,10 @@ pub fn audit_report(report: &orbit_core::AuditReport, limit: usize) -> String {
             "Use --format json or --report <path> for the complete structured report.".to_string(),
         );
     } else {
-        sections.push(risk_distribution_table(report));
+        sections.push(format!(
+            "Structural compatibility risks: {}",
+            report.risks.len()
+        ));
         sections.push(risks_table(report, limit));
         sections.push(
             "Use --format json or --report <path> for all evidence, selectors, warnings, and offsets."
@@ -70,13 +77,22 @@ fn coverage_table(coverage: &orbit_core::AuditCoverage) -> String {
     table.add_row([
         Cell::new("Methods"),
         Cell::new(format!("{} parsed", coverage.methods_parsed)),
-        Cell::new(format!("{} degraded", coverage.methods_degraded)),
+        Cell::new(format!(
+            "{} parse failures; {} budget degradations; {} instruction-resolution degradations",
+            coverage.method_parse_failures,
+            coverage.method_budget_degradations,
+            coverage.instruction_resolution_degraded
+        )),
     ]);
     table.add_row([
         Cell::new("Mixins"),
-        Cell::new(coverage.mixins_discovered),
         Cell::new(format!(
-            "{} instruction/pattern, {} method, {} class/unknown effects",
+            "{} registered / {} analyzed",
+            coverage.mixins_registered, coverage.mixins_discovered
+        )),
+        Cell::new(format!(
+            "{} inactive; {} instruction/pattern, {} method, {} class/unknown effects",
+            coverage.inactive_mixins,
             coverage.effects_instruction_precision,
             coverage.effects_method_precision,
             coverage.effects_class_precision
@@ -96,18 +112,48 @@ fn coverage_table(coverage: &orbit_core::AuditCoverage) -> String {
     format!("Coverage\n{table}")
 }
 
-fn coverage_gaps_table(coverage: &orbit_core::AuditCoverage) -> String {
-    let mut table = output_table(["Category", "Details"]);
-    for mechanism in &coverage.unsupported_mechanisms {
-        table.add_row([Cell::new("Unsupported mechanism"), Cell::new(mechanism)]);
+fn coverage_gaps_table(report: &orbit_core::AuditReport) -> String {
+    let mut counts = BTreeMap::new();
+    let mut total = 0_usize;
+    for gap in &report.coverage_gaps {
+        *counts.entry(gap.kind).or_insert(0_usize) += gap.count;
+        total = total.saturating_add(gap.count);
     }
-    for exhaustion in &coverage.budget_exhaustions {
-        table.add_row([
-            Cell::new("Analysis budget exhausted"),
-            Cell::new(exhaustion),
-        ]);
+    let mut table = output_table(["Coverage gap", "Count"]);
+    for (kind, count) in counts {
+        table.add_row([Cell::new(coverage_gap_label(kind)), Cell::new(count)]);
     }
-    format!("Coverage gaps\n{table}")
+    format!("Coverage gaps ({total})\n{table}")
+}
+
+fn inactive_candidates_table(report: &orbit_core::AuditReport) -> String {
+    let mut counts = BTreeMap::new();
+    for candidate in &report.inactive_candidates {
+        *counts.entry(candidate.kind).or_insert(0_usize) += 1;
+    }
+    let mut table = output_table(["Inactive candidate", "Count"]);
+    for (kind, count) in counts {
+        table.add_row([Cell::new(inactive_candidate_label(kind)), Cell::new(count)]);
+    }
+    format!(
+        "Inactive candidates ({})\n{table}",
+        report.inactive_candidates.len()
+    )
+}
+
+fn interactions_table(report: &orbit_core::AuditReport) -> String {
+    let mut counts = BTreeMap::new();
+    for interaction in &report.interactions {
+        *counts.entry(interaction.kind).or_insert(0_usize) += 1;
+    }
+    let mut table = output_table(["Behavioral interaction", "Count"]);
+    for (kind, count) in counts {
+        table.add_row([Cell::new(interaction_label(kind)), Cell::new(count)]);
+    }
+    format!(
+        "Behavioral interactions ({})\n{table}",
+        report.interactions.len()
+    )
 }
 
 fn warnings_table(report: &orbit_core::AuditReport) -> String {
@@ -121,28 +167,6 @@ fn warnings_table(report: &orbit_core::AuditReport) -> String {
         table.add_row([Cell::new(warning_label(kind)), Cell::new(count)]);
     }
     format!("Warnings ({})\n{table}", report.warnings.len())
-}
-
-fn risk_distribution_table(report: &orbit_core::AuditReport) -> String {
-    let mut table = output_table(["Critical", "High", "Medium", "Low"]);
-    table.add_row(
-        [
-            orbit_core::AuditSeverity::Critical,
-            orbit_core::AuditSeverity::High,
-            orbit_core::AuditSeverity::Medium,
-            orbit_core::AuditSeverity::Low,
-        ]
-        .map(|severity| {
-            Cell::new(
-                report
-                    .risks
-                    .iter()
-                    .filter(|risk| risk.severity == severity)
-                    .count(),
-            )
-        }),
-    );
-    format!("Risk distribution\n{table}")
 }
 
 fn risks_table(report: &orbit_core::AuditReport, limit: usize) -> String {
@@ -176,12 +200,14 @@ fn risks_table(report: &orbit_core::AuditReport, limit: usize) -> String {
             })
             .collect::<BTreeSet<_>>();
         let mut details = format!(
-            "Packages: {left} ↔ {right}\nTarget: {}\nReason: {}\nRule: {}\nConfidence: {} · Activation: {}",
+            "Packages: {left} ↔ {right}\nTarget: {}\nReason: {}\nRule: {}\nImpact: {} · Confidence: {} · Activation: {} · Precision: {}",
             format_target(&risk.target),
             risk.reason,
             risk.rule,
+            severity_label(risk.severity).to_ascii_lowercase(),
             confidence_label(risk.confidence),
-            activation_label(risk.activation)
+            activation_label(risk.activation),
+            precision_label(risk.precision),
         );
         if !sources.is_empty() {
             details.push_str("\nSource: ");
@@ -189,17 +215,22 @@ fn risks_table(report: &orbit_core::AuditReport, limit: usize) -> String {
         }
 
         table.add_row([
-            Cell::new(format!(
-                "#{}\n{}\nscore {}",
-                index + 1,
-                severity_label(risk.severity),
-                risk.risk_index
-            )),
+            Cell::new(format!("#{}\nRISK {}", index + 1, risk.risk_index)),
             Cell::new(details),
         ]);
     }
 
     format!("Risks (showing {shown} of {})\n{table}", report.risks.len())
+}
+
+fn precision_label(precision: orbit_core::AuditPrecision) -> &'static str {
+    match precision {
+        orbit_core::AuditPrecision::Instruction => "instruction",
+        orbit_core::AuditPrecision::Pattern => "pattern",
+        orbit_core::AuditPrecision::Method => "method",
+        orbit_core::AuditPrecision::Class => "class",
+        orbit_core::AuditPrecision::Unknown => "unknown",
+    }
 }
 
 fn format_target(target: &orbit_core::audit_model::Target) -> String {
@@ -265,9 +296,52 @@ fn warning_label(kind: orbit_core::AuditWarningKind) -> &'static str {
         orbit_core::AuditWarningKind::CustomInjectionPoint => "Custom injection points",
         orbit_core::AuditWarningKind::DamagedArtifact => "Damaged artifacts",
         orbit_core::AuditWarningKind::DamagedClass => "Damaged classes",
+        orbit_core::AuditWarningKind::MalformedConfig => "Malformed Mixin configs",
         orbit_core::AuditWarningKind::TransformerPartial => "Partial transformer analyses",
         orbit_core::AuditWarningKind::UnsupportedMechanism => "Unsupported mechanisms",
         orbit_core::AuditWarningKind::BudgetExhaustion => "Analysis budget exhaustions",
         orbit_core::AuditWarningKind::Other => "Other warnings",
+    }
+}
+
+fn coverage_gap_label(kind: orbit_core::audit_model::CoverageGapKind) -> &'static str {
+    use orbit_core::audit_model::CoverageGapKind;
+    match kind {
+        CoverageGapKind::UnsupportedSelector => "Unsupported selector syntax",
+        CoverageGapKind::UnsupportedInjectionPoint => "Unsupported injection point",
+        CoverageGapKind::UnresolvedLocalSelector => "Unresolved local selector",
+        CoverageGapKind::DynamicMixinConfigRegistration => "Dynamic Mixin config registration",
+        CoverageGapKind::PluginDecision => "Dynamic plugin decision",
+        CoverageGapKind::PluginDynamicMixins => "Dynamic plugin Mixin list",
+        CoverageGapKind::PluginClassMutation => "Plugin class mutation",
+        CoverageGapKind::TransformerPartial => "Partial transformer analysis",
+        CoverageGapKind::TransformerUnknown => "Unknown transformer effect",
+        CoverageGapKind::BudgetExhaustion => "Analysis budget exhausted",
+        CoverageGapKind::FutureClassfile => "Future ClassFile best effort",
+        CoverageGapKind::PhysicalSideUnknown => "Unknown physical side",
+        CoverageGapKind::UnsupportedMechanism => "Unsupported mechanism",
+    }
+}
+
+fn inactive_candidate_label(kind: orbit_core::audit_model::InactiveCandidateKind) -> &'static str {
+    use orbit_core::audit_model::InactiveCandidateKind;
+    match kind {
+        InactiveCandidateKind::UnregisteredConfig => "Unregistered Mixin config",
+        InactiveCandidateKind::SideMismatch => "Physical side mismatch",
+        InactiveCandidateKind::MissingRequiredMods => "Missing required Mod",
+        InactiveCandidateKind::PluginRejected => "Plugin rejected",
+        InactiveCandidateKind::MissingOptionalTarget => "Missing optional target",
+        InactiveCandidateKind::PseudoTargetMissing => "Missing @Pseudo target",
+        InactiveCandidateKind::UnregisteredTransformer => "Unregistered transformer",
+    }
+}
+
+fn interaction_label(kind: orbit_core::audit_model::BehavioralInteractionKind) -> &'static str {
+    use orbit_core::audit_model::BehavioralInteractionKind;
+    match kind {
+        BehavioralInteractionKind::OrderedValueDecorators => "Ordered value decorators",
+        BehavioralInteractionKind::OrderedMethodContributions => "Ordered method contributions",
+        BehavioralInteractionKind::OptionalInjectionAffected => "Optional injection affected",
+        BehavioralInteractionKind::OrderDependentTransformation => "Order-dependent transformation",
     }
 }

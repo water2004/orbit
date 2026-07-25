@@ -1,21 +1,36 @@
 use std::collections::{BTreeMap, HashMap};
 
 use crate::jar::ScannedArtifacts;
+use crate::mixin_config::MixinRegistry;
 use crate::model::{
-    Activation, AuditReport, AuditRequest, CompositionSemantics, Confidence, Effect,
-    InjectionQuery, Mutation, MutationKind, OrderAnalysis, Precision, REPORT_SCHEMA_VERSION,
-    Readiness, RequirementKind, Risk, Severity, Target,
+    Activation, AuditReport, AuditRequest, BehavioralInteraction, BehavioralInteractionKind,
+    CompositionSemantics, Confidence, CoverageGap, CoverageGapKind, Effect, InjectionQuery,
+    Mutation, MutationKind, OrderAnalysis, Precision, REPORT_SCHEMA_VERSION, Readiness,
+    RequirementKind, Risk, Severity, Target, WarningKind,
 };
+
+pub(crate) struct RecoveredFindings {
+    pub effects: Vec<Effect>,
+    pub registry: MixinRegistry,
+    pub risks: Vec<Risk>,
+    pub interactions: Vec<BehavioralInteraction>,
+}
 
 pub(crate) fn build_report_with_progress(
     request: &AuditRequest,
     readiness: Readiness,
     scanned: ScannedArtifacts,
-    effects: Vec<Effect>,
+    findings: RecoveredFindings,
     progress: Option<&crate::progress::AuditProgressReporter>,
 ) -> AuditReport {
     use crate::progress::{AuditProgressEvent, AuditProgressStage, emit};
 
+    let RecoveredFindings {
+        effects,
+        registry,
+        risks: mut precomputed_risks,
+        mut interactions,
+    } = findings;
     emit(
         progress,
         AuditProgressEvent::StageStarted {
@@ -23,7 +38,8 @@ pub(crate) fn build_report_with_progress(
             total: Some(2),
         },
     );
-    let mut risks = binary_shape_risks(&scanned);
+    precomputed_risks.extend(binary_shape_risks(&scanned));
+    let mut risks = precomputed_risks;
     emit(
         progress,
         AuditProgressEvent::Advanced {
@@ -42,6 +58,22 @@ pub(crate) fn build_report_with_progress(
             Precision::Class | Precision::Unknown => coverage.effects_class_precision += 1,
         }
     }
+    coverage.instruction_resolution_degraded = effects
+        .iter()
+        .filter(|effect| {
+            !matches!(
+                effect.precision,
+                Precision::Instruction | Precision::Pattern
+            ) && effect.evidence.iter().any(|evidence| {
+                evidence
+                    .injector_kind
+                    .as_deref()
+                    .is_some_and(|kind| kind != "WrapMethod")
+            })
+        })
+        .count();
+    interactions.extend(behavioral_interactions(&effects));
+    interactions = coalesce_interactions(interactions);
     risks.extend(analyze_effects(&effects));
     emit(
         progress,
@@ -60,14 +92,67 @@ pub(crate) fn build_report_with_progress(
             .then_with(|| left.right_artifact.cmp(&right.right_artifact))
             .then_with(|| left.rule.cmp(&right.rule))
     });
+    let registered_mixin_configs = registry.configs;
+    let registered_mixins = registry.mixins;
+    let inactive_candidates = registry.inactive_candidates;
+    let mut coverage_gaps = registry.coverage_gaps;
+    let mut warnings = Vec::new();
+    for warning in scanned.warnings {
+        let gap_kind = match warning.kind {
+            WarningKind::KnownUnsupportedInjectionPoint | WarningKind::CustomInjectionPoint => {
+                Some(CoverageGapKind::UnsupportedInjectionPoint)
+            }
+            WarningKind::TransformerPartial => Some(CoverageGapKind::TransformerPartial),
+            WarningKind::BudgetExhaustion => Some(CoverageGapKind::BudgetExhaustion),
+            WarningKind::UnsupportedMechanism => Some(CoverageGapKind::UnsupportedMechanism),
+            _ => None,
+        };
+        if let Some(kind) = gap_kind {
+            coverage_gaps.push(CoverageGap {
+                artifact_id: warning.artifact_id,
+                scope: warning.scope,
+                kind,
+                detail: warning.message,
+                count: 1,
+            });
+        } else {
+            warnings.push(warning);
+        }
+    }
+    if coverage.future_classfiles > 0 {
+        coverage_gaps.push(CoverageGap {
+            artifact_id: None,
+            scope: "class universe".to_string(),
+            kind: CoverageGapKind::FutureClassfile,
+            detail: "newer ClassFiles were parsed using the best-effort compatibility path"
+                .to_string(),
+            count: coverage.future_classfiles,
+        });
+    }
+    if coverage.transformer_effects_unknown > 0 {
+        coverage_gaps.push(CoverageGap {
+            artifact_id: None,
+            scope: "ModLauncher transformers".to_string(),
+            kind: CoverageGapKind::TransformerUnknown,
+            detail: "registered transformer targets or mutations could not be recovered"
+                .to_string(),
+            count: coverage.transformer_effects_unknown,
+        });
+    }
     let report = AuditReport {
-        schema_version: REPORT_SCHEMA_VERSION.to_string(),
+        schema_version: REPORT_SCHEMA_VERSION,
         environment: request.environment.clone(),
         readiness,
         artifacts: scanned.artifact_reports,
+        registered_mixin_configs,
+        registered_mixins,
+        transformations: effects,
         risks,
+        interactions,
+        inactive_candidates,
+        coverage_gaps,
         coverage,
-        warnings: scanned.warnings,
+        warnings,
     };
     emit(
         progress,
@@ -79,20 +164,61 @@ pub(crate) fn build_report_with_progress(
     report
 }
 
+fn coalesce_interactions(interactions: Vec<BehavioralInteraction>) -> Vec<BehavioralInteraction> {
+    let mut grouped = BTreeMap::<String, BehavioralInteraction>::new();
+    for interaction in interactions {
+        let (left, right) = if interaction.left_artifact <= interaction.right_artifact {
+            (
+                interaction.left_artifact.clone(),
+                interaction.right_artifact.clone(),
+            )
+        } else {
+            (
+                interaction.right_artifact.clone(),
+                interaction.left_artifact.clone(),
+            )
+        };
+        let key = format!(
+            "{left}|{right}|{}|{:?}|{}|{:?}|{:?}|{:?}",
+            target_identity(&interaction.target),
+            interaction.kind,
+            interaction.reason,
+            interaction.confidence,
+            interaction.activation,
+            interaction.order,
+        );
+        match grouped.entry(key) {
+            std::collections::btree_map::Entry::Vacant(entry) => {
+                entry.insert(interaction);
+            }
+            std::collections::btree_map::Entry::Occupied(mut entry) => {
+                let existing = entry.get_mut();
+                existing.evidence.extend(interaction.evidence);
+                existing.evidence.sort_by_key(evidence_identity);
+                existing
+                    .evidence
+                    .dedup_by(|left, right| evidence_identity(left) == evidence_identity(right));
+            }
+        }
+    }
+    grouped.into_values().collect()
+}
+
 fn coalesce_risks(risks: Vec<Risk>) -> Vec<Risk> {
     let mut grouped = BTreeMap::<String, Risk>::new();
     for risk in risks {
         let key = format!(
-            "{}|{}|{}|{}|{:?}|{}",
+            "{}|{}|{}|{}|{}|{:?}|{:?}|{:?}|{:?}|{:?}",
             risk.left_artifact,
             risk.right_artifact,
             target_identity(&risk.target),
             risk.rule,
+            risk.reason,
             risk.order,
-            risk.target
-                .instruction
-                .as_ref()
-                .map_or(u32::MAX, |instruction| instruction.stable_id)
+            risk.severity,
+            risk.confidence,
+            risk.activation,
+            risk.precision,
         );
         match grouped.entry(key) {
             std::collections::btree_map::Entry::Vacant(entry) => {
@@ -100,9 +226,6 @@ fn coalesce_risks(risks: Vec<Risk>) -> Vec<Risk> {
             }
             std::collections::btree_map::Entry::Occupied(mut entry) => {
                 let existing = entry.get_mut();
-                existing.severity = existing.severity.max(risk.severity);
-                existing.confidence = existing.confidence.max(risk.confidence);
-                existing.activation = combine_activation(existing.activation, risk.activation);
                 existing.left_mutations.extend(risk.left_mutations);
                 existing.right_mutations.extend(risk.right_mutations);
                 existing.evidence.extend(risk.evidence);
@@ -114,8 +237,6 @@ fn coalesce_risks(risks: Vec<Risk>) -> Vec<Risk> {
                 existing
                     .evidence
                     .dedup_by(|left, right| evidence_identity(left) == evidence_identity(right));
-                existing.risk_index =
-                    risk_index(existing.severity, existing.confidence, existing.activation);
             }
         }
     }
@@ -123,7 +244,7 @@ fn coalesce_risks(risks: Vec<Risk>) -> Vec<Risk> {
 }
 
 fn target_identity(target: &Target) -> String {
-    target.member.as_ref().map_or_else(
+    let member = target.member.as_ref().map_or_else(
         || target.class.clone(),
         |member| {
             format!(
@@ -131,20 +252,53 @@ fn target_identity(target: &Target) -> String {
                 target.class, member.name, member.descriptor, member.kind
             )
         },
-    )
+    );
+    target
+        .instruction
+        .as_ref()
+        .map_or(member.clone(), |instruction| {
+            instruction.identity.as_ref().map_or_else(
+                || format!("{member}@offset:{}", instruction.stable_id),
+                |identity| {
+                    format!(
+                        "{member}@{}:{}:{}{}:{}",
+                        identity.definition.artifact_id,
+                        identity.definition.entry_path,
+                        identity.method_name,
+                        identity.method_descriptor,
+                        identity.instruction_index
+                    )
+                },
+            )
+        })
 }
 
 fn evidence_identity(evidence: &crate::model::Evidence) -> String {
+    let instruction = evidence.instruction.as_ref().map_or_else(
+        || "none".to_string(),
+        |instruction| {
+            instruction.identity.as_ref().map_or_else(
+                || format!("offset:{}", instruction.stable_id),
+                |identity| {
+                    format!(
+                        "{}:{}:{}{}:{}",
+                        identity.definition.artifact_id,
+                        identity.definition.entry_path,
+                        identity.method_name,
+                        identity.method_descriptor,
+                        identity.instruction_index
+                    )
+                },
+            )
+        },
+    );
     format!(
         "{}|{}|{}|{}|{}|{}",
         evidence.artifact_id,
         evidence.class,
         evidence.method.as_deref().unwrap_or_default(),
         evidence.annotation.as_deref().unwrap_or_default(),
-        evidence
-            .instruction
-            .as_ref()
-            .map_or(u32::MAX, |instruction| instruction.stable_id),
+        instruction,
         evidence.detail
     )
 }
@@ -167,13 +321,99 @@ pub(crate) fn analyze_effects(effects: &[Effect]) -> Vec<Risk> {
                 if left.artifact_id == right.artifact_id {
                     continue;
                 }
-                if let Some(risk) = compare(left, right) {
-                    risks.push(risk);
-                }
+                risks.extend(compare(left, right));
             }
         }
     }
     risks
+}
+
+pub(crate) fn behavioral_interactions(effects: &[Effect]) -> Vec<BehavioralInteraction> {
+    let mut buckets: BTreeMap<String, Vec<&Effect>> = BTreeMap::new();
+    for effect in effects {
+        if !effect.target.class.is_empty() {
+            buckets
+                .entry(target_bucket(&effect.target))
+                .or_default()
+                .push(effect);
+        }
+    }
+    let mut interactions = Vec::new();
+    for bucket in buckets.values() {
+        for (index, left) in bucket.iter().enumerate() {
+            for right in &bucket[index + 1..] {
+                if left.artifact_id == right.artifact_id {
+                    continue;
+                }
+                let kind = left.mutations.iter().find_map(|left_mutation| {
+                    right.mutations.iter().find_map(|right_mutation| {
+                        if !mutations_overlap_instruction(left_mutation, right_mutation) {
+                            return None;
+                        }
+                        match (left_mutation.composition, right_mutation.composition) {
+                            (
+                                CompositionSemantics::LocalValueDecorator,
+                                CompositionSemantics::LocalValueDecorator,
+                            )
+                            | (
+                                CompositionSemantics::ValueDecorator,
+                                CompositionSemantics::ValueDecorator,
+                            ) => Some(BehavioralInteractionKind::OrderedValueDecorators),
+                            (
+                                CompositionSemantics::OperationWrapper,
+                                CompositionSemantics::OperationWrapper,
+                            )
+                            | (
+                                CompositionSemantics::AdjacentInsertion,
+                                CompositionSemantics::AdjacentInsertion,
+                            ) => Some(BehavioralInteractionKind::OrderDependentTransformation),
+                            _ => None,
+                        }
+                    })
+                });
+                let Some(kind) = kind else {
+                    continue;
+                };
+                let mut evidence = left.evidence.clone();
+                evidence.extend(right.evidence.clone());
+                interactions.push(BehavioralInteraction {
+                    left_artifact: left.artifact_id.clone(),
+                    right_artifact: right.artifact_id.clone(),
+                    target: more_precise_target(&left.target, &right.target),
+                    kind,
+                    reason: "Both transformations can apply, but their composed behavior depends on Mixin order."
+                        .to_string(),
+                    evidence,
+                    confidence: left.confidence.min(right.confidence),
+                    activation: combine_activation(left.activation, right.activation),
+                    order: effect_execution_order(left, right),
+                });
+            }
+        }
+    }
+    interactions
+}
+
+fn effect_execution_order(left: &Effect, right: &Effect) -> OrderAnalysis {
+    let comparison = left
+        .injector_order
+        .zip(right.injector_order)
+        .and_then(|(left, right)| (left != right).then(|| left.cmp(&right)))
+        .or_else(|| {
+            left.mixin_priority
+                .zip(right.mixin_priority)
+                .and_then(|(left, right)| (left != right).then(|| left.cmp(&right)))
+        })
+        .or_else(|| {
+            left.config_priority
+                .zip(right.config_priority)
+                .and_then(|(left, right)| (left != right).then(|| left.cmp(&right)))
+        });
+    match comparison {
+        Some(std::cmp::Ordering::Less) => OrderAnalysis::LeftMustRunFirst,
+        Some(std::cmp::Ordering::Greater) => OrderAnalysis::RightMustRunFirst,
+        _ => OrderAnalysis::BothApplyDifferentResult,
+    }
 }
 
 fn target_bucket(target: &Target) -> String {
@@ -188,84 +428,61 @@ fn target_bucket(target: &Target) -> String {
     )
 }
 
-fn compare(left: &Effect, right: &Effect) -> Option<Risk> {
-    let mut selected: Option<ConflictMatch> = None;
+fn compare(left: &Effect, right: &Effect) -> Vec<Risk> {
+    let mut matches = Vec::new();
     for left_mutation in &left.mutations {
         for right_mutation in &right.mutations {
-            select_stronger(&mut selected, write_write(left_mutation, right_mutation));
+            extend_match(&mut matches, write_write(left_mutation, right_mutation));
         }
         for requirement in &right.requirements {
-            select_stronger(
-                &mut selected,
+            extend_match(
+                &mut matches,
                 write_shape(left, left_mutation, right, requirement),
             );
         }
         for query in &right.queries {
-            select_stronger(
-                &mut selected,
-                write_query(left, left_mutation, right, query),
-            );
+            extend_match(&mut matches, write_query(left, left_mutation, right, query));
         }
     }
     for right_mutation in &right.mutations {
         for requirement in &left.requirements {
             if let Some(mut candidate) = write_shape(right, right_mutation, left, requirement) {
                 candidate.order = reverse_order(candidate.order);
-                select_stronger(&mut selected, Some(candidate));
+                extend_match(&mut matches, Some(candidate));
             }
         }
         for query in &left.queries {
             if let Some(mut candidate) = write_query(right, right_mutation, left, query) {
                 candidate.order = reverse_order(candidate.order);
-                select_stronger(&mut selected, Some(candidate));
+                extend_match(&mut matches, Some(candidate));
             }
         }
     }
-    if selected.is_none()
-        && (left
-            .mutations
-            .iter()
-            .any(|mutation| mutation.kind == MutationKind::UnknownMethod)
-            || right
-                .mutations
-                .iter()
-                .any(|mutation| mutation.kind == MutationKind::UnknownMethod))
-        && left.target.member.is_some()
-        && right.target.member.is_some()
-    {
-        selected = Some(ConflictMatch {
-            rule: "unknown_method_overlap",
-            reason: "A method-level mutation with unknown behavior overlaps a more precise effect.",
-            severity: Severity::Medium,
-            order: OrderAnalysis::Unknown,
-            confidence_cap: Confidence::Low,
-        });
-    }
-    if selected.is_none()
-        && (left
-            .mutations
-            .iter()
-            .any(|mutation| mutation.kind == MutationKind::UnknownClass)
-            || right
-                .mutations
-                .iter()
-                .any(|mutation| mutation.kind == MutationKind::UnknownClass))
-    {
-        selected = Some(ConflictMatch {
-            rule: "unknown_class_overlap",
-            reason: "Both effects overlap the same class, but at least one modification is only known at class precision.",
-            severity: Severity::Low,
-            order: OrderAnalysis::Unknown,
-            confidence_cap: Confidence::Low,
-        });
-    }
-    let matched = selected?;
+    matches
+        .into_iter()
+        .map(|matched| risk_from_match(left, right, matched))
+        .collect()
+}
+
+fn risk_from_match(left: &Effect, right: &Effect, matched: ConflictMatch) -> Risk {
     let confidence = left
         .confidence
         .min(right.confidence)
         .min(matched.confidence_cap);
     let activation = combine_activation(left.activation, right.activation);
-    let risk_index = risk_index(matched.severity, confidence, activation);
+    let heuristic_transformer = [left, right].iter().any(|effect| {
+        matches!(
+            effect.mechanism,
+            crate::model::Mechanism::ModLauncherTransformer | crate::model::Mechanism::JavaCoremod
+        ) && effect.confidence < Confidence::Exact
+    });
+    let severity = if heuristic_transformer {
+        matched.severity.min(Severity::Medium)
+    } else {
+        matched.severity
+    };
+    let risk_index = risk_index(severity, confidence, activation);
+    let precision = less_precise(left.precision, right.precision);
     let (left_artifact, right_artifact, left_mutations, right_mutations) =
         if left.artifact_id <= right.artifact_id {
             (
@@ -298,7 +515,7 @@ fn compare(left: &Effect, right: &Effect) -> Option<Risk> {
         };
     let mut evidence = left.evidence.clone();
     evidence.extend(right.evidence.clone());
-    Some(Risk {
+    Risk {
         left_artifact,
         right_artifact,
         target: more_precise_target(&left.target, &right.target),
@@ -308,11 +525,12 @@ fn compare(left: &Effect, right: &Effect) -> Option<Risk> {
         right_mutations,
         evidence,
         order: matched.order,
-        severity: matched.severity,
+        severity,
         confidence,
+        precision,
         risk_index,
         activation,
-    })
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -324,29 +542,43 @@ struct ConflictMatch {
     confidence_cap: Confidence,
 }
 
-fn select_stronger(current: &mut Option<ConflictMatch>, candidate: Option<ConflictMatch>) {
+fn extend_match(current: &mut Vec<ConflictMatch>, candidate: Option<ConflictMatch>) {
     let Some(candidate) = candidate else {
         return;
     };
-    if current.is_none_or(|value| candidate.severity > value.severity) {
-        *current = Some(candidate);
+    if !current.iter().any(|existing| {
+        existing.rule == candidate.rule
+            && existing.reason == candidate.reason
+            && existing.severity == candidate.severity
+            && existing.order == candidate.order
+            && existing.confidence_cap == candidate.confidence_cap
+    }) {
+        current.push(candidate);
+    }
+}
+
+fn less_precise(left: Precision, right: Precision) -> Precision {
+    fn rank(precision: Precision) -> u8 {
+        match precision {
+            Precision::Instruction => 0,
+            Precision::Pattern => 1,
+            Precision::Method => 2,
+            Precision::Class => 3,
+            Precision::Unknown => 4,
+        }
+    }
+    if rank(left) >= rank(right) {
+        left
+    } else {
+        right
     }
 }
 
 fn write_write(left: &Mutation, right: &Mutation) -> Option<ConflictMatch> {
     use MutationKind::{
-        AddField, AddInterfaces, AddMethod, ChangeAccess, ChangeInterfaces, ChangeSuperclass,
-        RemoveField, RemoveMethod, ReplaceMethodBody,
+        AddField, AddInterfaces, ChangeAccess, ChangeInterfaces, ChangeSuperclass, RemoveField,
+        RemoveMethod, ReplaceMethodBody,
     };
-    if left.kind == ReplaceMethodBody && right.kind == ReplaceMethodBody {
-        return Some(ConflictMatch {
-            rule: "method_body_write_write",
-            reason: "Both artifacts replace the complete body of the same method.",
-            severity: Severity::Critical,
-            order: OrderAnalysis::Exclusive,
-            confidence_cap: Confidence::Exact,
-        });
-    }
     if mutations_overlap_instruction(left, right) {
         use CompositionSemantics::{
             Destructive, ExclusiveOwner, LocalValueDecorator, OperationWrapper,
@@ -388,15 +620,7 @@ fn write_write(left: &Mutation, right: &Mutation) -> Option<ConflictMatch> {
                     confidence_cap: Confidence::Exact,
                 });
             }
-            (LocalValueDecorator, LocalValueDecorator) => {
-                return Some(ConflictMatch {
-                    rule: "local_value_overlap",
-                    reason: "Two value decorators target the same recovered local-variable join point.",
-                    severity: Severity::Medium,
-                    order: OrderAnalysis::BothApplyDifferentResult,
-                    confidence_cap: Confidence::High,
-                });
-            }
+            (LocalValueDecorator, LocalValueDecorator) => {}
             _ => {}
         }
     }
@@ -416,9 +640,7 @@ fn write_write(left: &Mutation, right: &Mutation) -> Option<ConflictMatch> {
     }
     if matches!(
         (left.kind, right.kind),
-        (AddField, AddField)
-            | (AddMethod, AddMethod)
-            | (RemoveField, RemoveField)
+        (RemoveField, RemoveField)
             | (RemoveMethod, RemoveMethod)
             | (ChangeSuperclass, ChangeSuperclass)
     ) {
@@ -432,12 +654,10 @@ fn write_write(left: &Mutation, right: &Mutation) -> Option<ConflictMatch> {
     }
     if matches!(
         (left.kind, right.kind),
-        (AddMethod | ReplaceMethodBody | ChangeAccess, RemoveMethod)
-            | (RemoveMethod, AddMethod | ReplaceMethodBody | ChangeAccess)
+        (ReplaceMethodBody | ChangeAccess, RemoveMethod)
+            | (RemoveMethod, ReplaceMethodBody | ChangeAccess)
             | (AddField | ChangeAccess, RemoveField)
             | (RemoveField, AddField | ChangeAccess)
-            | (ReplaceMethodBody, AddMethod)
-            | (AddMethod, ReplaceMethodBody)
     ) {
         return Some(ConflictMatch {
             rule: "member_shape_write_write",
@@ -478,21 +698,10 @@ fn write_shape(
 ) -> Option<ConflictMatch> {
     use MutationKind::{
         ChangeLocalLayout, InsertInstructions, RemoveField, RemoveInstruction, RemoveMethod,
-        ReplaceInstruction, ReplaceMethodBody,
+        ReplaceInstruction,
     };
     use RequirementKind::{InstructionExists, LocalLayout, MemberExists, SliceBoundary};
     let kind = requirement.kind;
-    if mutation.kind == ReplaceMethodBody
-        && matches!(kind, InstructionExists | SliceBoundary | LocalLayout)
-    {
-        return Some(ConflictMatch {
-            rule: "overwrite_invalidates_internal_shape",
-            reason: "A complete method replacement may remove an anchor required by the other artifact.",
-            severity: Severity::High,
-            order: OrderAnalysis::AnchorInvalidated,
-            confidence_cap: Confidence::Exact,
-        });
-    }
     if matches!(mutation.kind, RemoveInstruction | ReplaceInstruction)
         && matches!(kind, InstructionExists | SliceBoundary)
         && requirements_overlap_instruction(mutation, requirement)
@@ -554,16 +763,6 @@ fn write_query(
     if mutation.target.member.as_ref().is_some() && !same_member(&mutation.target, &query.method) {
         return None;
     }
-    if mutation.kind == MutationKind::ReplaceMethodBody {
-        return Some(ConflictMatch {
-            rule: "method_replacement_invalidates_injection_query",
-            reason: "A complete method replacement prevents the original injector query from being re-evaluated reliably.",
-            severity: Severity::High,
-            order: OrderAnalysis::CardinalityInvalidated,
-            confidence_cap: Confidence::Exact,
-        });
-    }
-
     let selected_count = u32::try_from(query.selected.len()).unwrap_or(u32::MAX);
     let impacted_selected = u32::try_from(
         query
@@ -739,7 +938,9 @@ fn requirements_overlap_instruction(
         requirement.target.instruction.as_ref(),
     ) {
         (Some(left), Some(right)) => match (mutation.precision, requirement.precision) {
-            (Precision::Instruction, Precision::Instruction) => left.stable_id == right.stable_id,
+            (Precision::Instruction, Precision::Instruction) => {
+                same_instruction_identity(left, right)
+            }
             (Precision::Pattern, _) | (_, Precision::Pattern) => {
                 instruction_patterns_overlap(Some(left), Some(right))
             }
@@ -757,7 +958,7 @@ fn mutations_overlap_instruction(left: &Mutation, right: &Mutation) -> bool {
         (Some(left_instruction), Some(right_instruction)) => {
             match (left.precision, right.precision) {
                 (Precision::Instruction, Precision::Instruction) => {
-                    left_instruction.stable_id == right_instruction.stable_id
+                    same_instruction_identity(left_instruction, right_instruction)
                 }
                 (Precision::Pattern, _) | (_, Precision::Pattern) => {
                     instruction_patterns_overlap(Some(left_instruction), Some(right_instruction))
@@ -765,6 +966,17 @@ fn mutations_overlap_instruction(left: &Mutation, right: &Mutation) -> bool {
                 _ => false,
             }
         }
+        _ => false,
+    }
+}
+
+fn same_instruction_identity(
+    left: &crate::model::InstructionReference,
+    right: &crate::model::InstructionReference,
+) -> bool {
+    match (&left.identity, &right.identity) {
+        (Some(left), Some(right)) => left == right,
+        (None, None) => left.stable_id == right.stable_id,
         _ => false,
     }
 }
@@ -777,7 +989,7 @@ fn mutation_overlaps_reference(
         return false;
     };
     match mutation.precision {
-        Precision::Instruction => target.stable_id == reference.stable_id,
+        Precision::Instruction => same_instruction_identity(target, reference),
         Precision::Pattern => instruction_patterns_overlap(Some(target), Some(reference)),
         Precision::Method | Precision::Class | Precision::Unknown => false,
     }
@@ -852,50 +1064,6 @@ fn more_precise_target(left: &Target, right: &Target) -> Target {
 
 fn binary_shape_risks(scanned: &ScannedArtifacts) -> Vec<Risk> {
     let mut risks = Vec::new();
-    for definitions in scanned.universe.classes.values() {
-        let mod_definitions = definitions
-            .iter()
-            .filter(|definition| definition.is_mod)
-            .collect::<Vec<_>>();
-        for (index, left) in mod_definitions.iter().enumerate() {
-            for right in &mod_definitions[index + 1..] {
-                if left.artifact_id == right.artifact_id {
-                    continue;
-                }
-                let left_shape = left.member_shape();
-                let right_shape = right.member_shape();
-                let mut left_interfaces = left.interfaces.clone();
-                let mut right_interfaces = right.interfaces.clone();
-                left_interfaces.sort();
-                right_interfaces.sort();
-                if left_shape == right_shape
-                    && left.super_name == right.super_name
-                    && left_interfaces == right_interfaces
-                    && left.is_interface == right.is_interface
-                {
-                    continue;
-                }
-                let confidence = Confidence::Exact;
-                risks.push(Risk {
-                    left_artifact: left.artifact_id.clone(),
-                    right_artifact: right.artifact_id.clone(),
-                    target: Target::class(&left.name),
-                    rule: "duplicate_class_shape".to_string(),
-                    reason: "Different Mod JARs provide incompatible shapes for the same class; class-loader co-visibility is not proven."
-                        .to_string(),
-                    left_mutations: vec![MutationKind::UnknownClass],
-                    right_mutations: vec![MutationKind::UnknownClass],
-                    evidence: Vec::new(),
-                    order: OrderAnalysis::Structural,
-                    severity: Severity::High,
-                    confidence,
-                    risk_index: risk_index(Severity::High, confidence, Activation::Conditional),
-                    activation: Activation::Conditional,
-                });
-            }
-        }
-    }
-
     let definitions_by_class: HashMap<_, _> = scanned
         .universe
         .classes
@@ -915,16 +1083,30 @@ fn binary_shape_risks(scanned: &ScannedArtifacts) -> Vec<Risk> {
             };
             let valid = candidates
                 .iter()
-                .filter(|candidate| candidate.has_member(reference))
+                .filter(|candidate| {
+                    scanned
+                        .universe
+                        .definition_resolves_member(candidate, reference)
+                })
                 .count();
             if valid == 0 || valid == candidates.len() {
                 continue;
             }
-            for candidate in candidates
-                .iter()
-                .filter(|candidate| candidate.is_mod && !candidate.has_member(reference))
-            {
+            for candidate in candidates.iter().filter(|candidate| {
+                candidate.is_mod
+                    && !scanned
+                        .universe
+                        .definition_resolves_member(candidate, reference)
+            }) {
                 if candidate.artifact_id == definitions.artifact_id {
+                    continue;
+                }
+                if candidate
+                    .definition_id
+                    .as_ref()
+                    .zip(definitions.definition_id.as_ref())
+                    .is_some_and(|(left, right)| left.content_hash == right.content_hash)
+                {
                     continue;
                 }
                 let confidence = Confidence::Exact;
@@ -944,6 +1126,7 @@ fn binary_shape_risks(scanned: &ScannedArtifacts) -> Vec<Risk> {
                     order: OrderAnalysis::Structural,
                     severity: Severity::High,
                     confidence,
+                    precision: Precision::Class,
                     risk_index: risk_index(Severity::High, confidence, Activation::Conditional),
                     activation: Activation::Conditional,
                 });
@@ -957,10 +1140,10 @@ fn binary_shape_risks(scanned: &ScannedArtifacts) -> Vec<Risk> {
 mod tests {
     use crate::jar::{ClassDefinition, ClassUniverse, ScannedArtifacts};
     use crate::model::{
-        Activation, AnalysisLimits, Confidence, Coverage, Effect, Evidence,
-        InjectionGroupConstraint, InjectionQuery, InstructionReference, Mechanism, MemberKind,
-        MemberReference, Mutation, MutationKind, Precision, RequirementKind, ShapeRequirement,
-        SoftReferenceResolution, Target,
+        Activation, AnalysisLimits, ClassDefinitionId, Confidence, Coverage, Effect, Evidence,
+        InjectionGroupConstraint, InjectionQuery, InstructionIdentity, InstructionReference,
+        Mechanism, MemberKind, MemberReference, Mutation, MutationKind, Precision, RequirementKind,
+        ShapeRequirement, SoftReferenceResolution, Target,
     };
 
     use super::*;
@@ -968,9 +1151,11 @@ mod tests {
     fn instruction_target(id: u32) -> Target {
         let mut target = Target::method("game/Foo", "tick", "()V");
         target.instruction = Some(InstructionReference {
+            identity: None,
             stable_id: id,
             original_offset: Some(id),
             opcode: 182,
+            local_slot: None,
             member: Some(MemberReference {
                 owner: "game/Bar".to_string(),
                 name: "call".to_string(),
@@ -995,7 +1180,9 @@ mod tests {
             precision: Precision::Instruction,
             confidence: Confidence::Exact,
             activation: Activation::Candidate,
-            priority: None,
+            config_priority: None,
+            mixin_priority: None,
+            injector_order: None,
         }
     }
 
@@ -1031,7 +1218,13 @@ mod tests {
     fn query(method: Target, selected: Vec<InstructionReference>) -> InjectionQuery {
         InjectionQuery {
             id: "query".to_string(),
+            method_selector: crate::model::MethodSelector::Exact {
+                owner: Some("game/Foo".to_string()),
+                name: "tick".to_string(),
+                descriptor: Some("()V".to_string()),
+            },
             selector_kind: "INVOKE".to_string(),
+            target_selectors: Vec::new(),
             method,
             candidates: selected.clone(),
             selected,
@@ -1039,10 +1232,12 @@ mod tests {
             maximum_matches: None,
             expected_matches: None,
             ordinal: None,
+            shift: None,
             slice: None,
             slice_start: None,
             slice_end: None,
             resolution: SoftReferenceResolution::DirectExact,
+            local_selector: None,
             group: None,
         }
     }
@@ -1097,6 +1292,28 @@ mod tests {
     }
 
     #[test]
+    fn injector_order_determines_value_decorator_composition_order() {
+        let target = instruction_target(7);
+        let mut later = effect(
+            "later",
+            mutation(MutationKind::TransformExpressionValue, target.clone()),
+            Vec::new(),
+        );
+        later.injector_order = Some(2_000);
+        let mut earlier = effect(
+            "earlier",
+            mutation(MutationKind::TransformExpressionValue, target),
+            Vec::new(),
+        );
+        earlier.injector_order = Some(1_000);
+
+        let interactions = behavioral_interactions(&[later, earlier]);
+
+        assert_eq!(interactions.len(), 1);
+        assert_eq!(interactions[0].order, OrderAnalysis::RightMustRunFirst);
+    }
+
+    #[test]
     fn mixin_interface_additions_are_composable() {
         let target = Target::class("game/Foo");
         let effects = ["a", "b"].map(|artifact| {
@@ -1147,7 +1364,38 @@ mod tests {
     }
 
     #[test]
-    fn overwrite_invalidates_an_internal_inject_anchor() {
+    fn equal_method_offsets_in_different_class_definitions_do_not_collide() {
+        let target = |artifact: &str| {
+            let mut target = instruction_target(7);
+            target.instruction.as_mut().unwrap().identity = Some(InstructionIdentity {
+                definition: ClassDefinitionId {
+                    artifact_id: artifact.to_string(),
+                    entry_path: "game/Foo.class".to_string(),
+                    class_name: "game/Foo".to_string(),
+                    content_hash: artifact.to_string(),
+                },
+                method_name: "tick".to_string(),
+                method_descriptor: "()V".to_string(),
+                instruction_index: 7,
+            });
+            target
+        };
+        let left = effect(
+            "left",
+            mutation(MutationKind::RedirectOperation, target("left-definition")),
+            Vec::new(),
+        );
+        let right = effect(
+            "right",
+            mutation(MutationKind::RedirectOperation, target("right-definition")),
+            Vec::new(),
+        );
+
+        assert!(analyze_effects(&[left, right]).is_empty());
+    }
+
+    #[test]
+    fn overwrite_is_not_a_blanket_internal_anchor_risk() {
         let target = instruction_target(4);
         let overwrite = effect(
             "overwrite",
@@ -1163,10 +1411,7 @@ mod tests {
             vec![requirement(RequirementKind::InstructionExists, target)],
         );
 
-        let risks = analyze_effects(&[overwrite, inject]);
-
-        assert_eq!(risks[0].rule, "overwrite_invalidates_internal_shape");
-        assert_eq!(risks[0].order, OrderAnalysis::AnchorInvalidated);
+        assert!(analyze_effects(&[overwrite, inject]).is_empty());
     }
 
     #[test]
@@ -1339,9 +1584,11 @@ mod tests {
         let mut return_query = query(
             Target::method("game/Foo", "tick", "()V"),
             vec![InstructionReference {
+                identity: None,
                 stable_id: 3,
                 original_offset: Some(3),
                 opcode: 177,
+                local_slot: None,
                 member: None,
                 constant: None,
             }],
@@ -1466,6 +1713,105 @@ mod tests {
     }
 
     #[test]
+    fn duplicate_private_or_helper_shape_differences_are_not_blanket_risks() {
+        let first = definition(
+            "a",
+            "lib/Duplicate",
+            Vec::new(),
+            vec![member("privateHelperA", "()V", false)],
+            Vec::new(),
+        );
+        let second = definition(
+            "b",
+            "lib/Duplicate",
+            Vec::new(),
+            vec![member("privateHelperB", "(I)V", false)],
+            Vec::new(),
+        );
+        let scanned = scanned_with_classes(BTreeMap::from([(
+            "lib/Duplicate".to_string(),
+            vec![first, second],
+        )]));
+
+        assert!(binary_shape_risks(&scanned).is_empty());
+    }
+
+    #[test]
+    fn hard_member_resolution_walks_superclasses_and_default_interfaces() {
+        let inherited = member("inherited", "()V", false);
+        let default_method = member("defaultMethod", "()V", false);
+        let parent = definition(
+            "runtime",
+            "api/Parent",
+            Vec::new(),
+            vec![inherited.clone()],
+            Vec::new(),
+        );
+        let interface = definition(
+            "runtime",
+            "api/DefaultInterface",
+            Vec::new(),
+            vec![default_method.clone()],
+            Vec::new(),
+        );
+        let mut child = definition(
+            "mod",
+            "api/Child",
+            vec!["api/DefaultInterface"],
+            Vec::new(),
+            Vec::new(),
+        );
+        child.super_name = Some("api/Parent".to_string());
+        let universe = ClassUniverse {
+            classes: BTreeMap::from([
+                ("api/Parent".to_string(), vec![parent]),
+                ("api/DefaultInterface".to_string(), vec![interface]),
+                ("api/Child".to_string(), vec![child]),
+            ]),
+        };
+        let child = &universe.classes["api/Child"][0];
+
+        assert!(universe.definition_resolves_member(child, &inherited));
+        assert!(universe.definition_resolves_member(child, &default_method));
+    }
+
+    #[test]
+    fn risk_reasons_with_different_confidence_remain_independent() {
+        let target = instruction_target(7);
+        let risks = analyze_effects(&[
+            effect(
+                "a",
+                mutation(MutationKind::RedirectOperation, target.clone()),
+                Vec::new(),
+            ),
+            effect(
+                "b",
+                mutation(MutationKind::RedirectOperation, target),
+                Vec::new(),
+            ),
+        ]);
+        let exact = risks[0].clone();
+        let mut lower_confidence = exact.clone();
+        lower_confidence.confidence = Confidence::Low;
+        lower_confidence.risk_index = risk_index(
+            lower_confidence.severity,
+            lower_confidence.confidence,
+            lower_confidence.activation,
+        );
+
+        let coalesced = coalesce_risks(vec![exact, lower_confidence]);
+
+        assert_eq!(coalesced.len(), 2);
+        assert_eq!(
+            coalesced
+                .iter()
+                .map(|risk| risk.confidence)
+                .collect::<std::collections::BTreeSet<_>>(),
+            std::collections::BTreeSet::from([Confidence::Low, Confidence::Exact])
+        );
+    }
+
+    #[test]
     fn duplicate_class_shadowing_reports_hard_reference_staticness_mismatch() {
         let hard_reference = member("run", "()V", false);
         let caller = definition(
@@ -1527,12 +1873,12 @@ mod tests {
         hard_references: Vec<MemberReference>,
     ) -> ClassDefinition {
         ClassDefinition {
+            definition_id: None,
             artifact_id: artifact_id.to_string(),
             is_mod: true,
             name: name.to_string(),
             super_name: Some("java/lang/Object".to_string()),
             interfaces: interfaces.into_iter().map(str::to_string).collect(),
-            is_interface: false,
             fields: Vec::new(),
             methods,
             hard_references,

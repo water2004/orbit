@@ -841,7 +841,7 @@ fn root_dependencies(
     overrides: &OverrideMap,
     target: Environment,
 ) -> Vec<(SolverPackage, Ranges<SolverVersion>)> {
-    manifest
+    let mut dependencies = manifest
         .dependencies
         .iter()
         .filter(|(_, spec)| manifest_environment(spec.env()).applies_to(target))
@@ -856,7 +856,31 @@ fn root_dependencies(
                 ),
             )
         })
-        .collect()
+        .collect::<Vec<_>>();
+    // Minecraft and the selected Loader are not optional leaves: their actual
+    // JARs are part of every launch. Keeping them at the root also makes the
+    // Loader's own dependencies and contained-module load conditions use the
+    // same solver path as ordinary packages.
+    dependencies.push((
+        SolverPackage::Platform("minecraft".to_string()),
+        solver_range(Ranges::singleton(Version::parse(
+            &manifest.project.mc_version,
+            loader,
+        ))),
+    ));
+    let canonical_loader = match loader {
+        "fabric" => "fabricloader",
+        "quilt" => "quilt_loader",
+        other => other,
+    };
+    dependencies.push((
+        SolverPackage::Platform(canonical_loader.to_string()),
+        solver_range(Ranges::singleton(Version::parse(
+            &manifest.project.modloader_version,
+            loader,
+        ))),
+    ));
+    dependencies
 }
 
 fn manifest_environment(environment: Option<&str>) -> Environment {

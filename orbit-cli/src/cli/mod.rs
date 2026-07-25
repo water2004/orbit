@@ -208,12 +208,12 @@ pub enum Commands {
         /// 输出格式
         #[arg(long, value_enum, default_value_t = AuditFormat::Text)]
         format: AuditFormat,
-        /// 仅显示达到该等级的风险
-        #[arg(long, value_enum, default_value_t = AuditSeverity::Low)]
-        min_severity: AuditSeverity,
-        /// 存在达到该等级的风险时返回非零退出码
-        #[arg(long, value_enum)]
-        fail_on: Option<AuditSeverity>,
+        /// 仅显示综合风险指数达到该值的风险（0-100）
+        #[arg(long, default_value_t = 0, value_parser = clap::value_parser!(u8).range(0..=100))]
+        min_risk: u8,
+        /// 存在综合风险指数达到该值的风险时返回非零退出码（0-100）
+        #[arg(long, value_parser = clap::value_parser!(u8).range(0..=100))]
+        fail_on_risk: Option<u8>,
         /// 仅显示涉及该 Mod（ID、文件名或展示名）的风险
         #[arg(long = "mod")]
         mod_filter: Option<String>,
@@ -236,25 +236,6 @@ pub enum Commands {
 pub enum AuditFormat {
     Text,
     Json,
-}
-
-#[derive(Debug, Clone, Copy, ValueEnum)]
-pub enum AuditSeverity {
-    Low,
-    Medium,
-    High,
-    Critical,
-}
-
-impl From<AuditSeverity> for orbit_core::AuditSeverity {
-    fn from(value: AuditSeverity) -> Self {
-        match value {
-            AuditSeverity::Low => Self::Low,
-            AuditSeverity::Medium => Self::Medium,
-            AuditSeverity::High => Self::High,
-            AuditSeverity::Critical => Self::Critical,
-        }
-    }
 }
 
 #[derive(Subcommand)]
@@ -328,16 +309,16 @@ impl CommandHandler for Commands {
             Commands::Check { version, modloader } => handle_check(version, modloader, ctx).await,
             Commands::Audit {
                 format,
-                min_severity,
-                fail_on,
+                min_risk,
+                fail_on_risk,
                 mod_filter,
                 report,
                 limit,
             } => {
                 handle_audit(
                     format,
-                    min_severity,
-                    fail_on,
+                    min_risk,
+                    fail_on_risk,
                     mod_filter,
                     report,
                     limit,
@@ -425,8 +406,8 @@ mod tests {
         assert!(
             !Commands::Audit {
                 format: super::AuditFormat::Text,
-                min_severity: super::AuditSeverity::Low,
-                fail_on: None,
+                min_risk: 0,
+                fail_on_risk: None,
                 mod_filter: None,
                 report: None,
                 limit: 20,

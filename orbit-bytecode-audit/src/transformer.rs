@@ -3,9 +3,9 @@ use std::collections::{BTreeSet, HashSet, VecDeque};
 use crate::classfile::{InstructionKind, ParsedClass, ParsedInstruction, ParsedMethod};
 use crate::jar::{ParsedArtifact, ScannedArtifacts};
 use crate::model::{
-    Activation, Confidence, Effect, Evidence, LoaderFamily, Mechanism, MemberKind, MemberReference,
-    Mutation, MutationKind, Precision, Readiness, RequirementKind, ShapeRequirement, Target,
-    Warning, WarningKind,
+    Activation, Confidence, CoverageGap, Effect, Evidence, InactiveCandidate,
+    InactiveCandidateKind, LoaderFamily, Mechanism, MemberKind, MemberReference, Mutation,
+    MutationKind, Precision, Readiness, RequirementKind, ShapeRequirement, Target,
 };
 
 const ITRANSFORMER: &str = "cpw/mods/modlauncher/api/ITransformer";
@@ -43,11 +43,18 @@ struct MethodKey {
     descriptor: String,
 }
 
+#[derive(Debug, Default)]
+pub(crate) struct TransformerAnalysis {
+    pub effects: Vec<Effect>,
+    pub inactive_candidates: Vec<InactiveCandidate>,
+    pub coverage_gaps: Vec<CoverageGap>,
+}
+
 pub(crate) fn analyze_with_progress(
     scanned: &mut ScannedArtifacts,
     readiness: &Readiness,
     progress: Option<&crate::progress::AuditProgressReporter>,
-) -> Vec<Effect> {
+) -> TransformerAnalysis {
     use crate::progress::{AuditProgressEvent, AuditProgressStage, emit};
 
     if !matches!(
@@ -68,11 +75,12 @@ pub(crate) fn analyze_with_progress(
                 completed: 0,
             },
         );
-        return Vec::new();
+        return TransformerAnalysis::default();
     }
 
     let mut effects = Vec::new();
-    let mut warnings = Vec::new();
+    let mut inactive_candidates = Vec::new();
+    let mut coverage_gaps = Vec::new();
     let mod_indexes = scanned
         .artifacts
         .iter()
@@ -83,7 +91,9 @@ pub(crate) fn analyze_with_progress(
         .collect::<Vec<_>>();
     let total = mod_indexes
         .iter()
-        .map(|index| discover_transformer_classes(scanned, &scanned.artifacts[*index]).len())
+        .map(|index| {
+            discover_registered_transformer_classes(scanned, &scanned.artifacts[*index]).len()
+        })
         .sum();
     emit(
         progress,
@@ -111,7 +121,19 @@ pub(crate) fn analyze_with_progress(
 
     for artifact_index in mod_indexes {
         let artifact = &scanned.artifacts[artifact_index];
-        let transformer_classes = discover_transformer_classes(scanned, artifact);
+        let transformer_classes = discover_registered_transformer_classes(scanned, artifact);
+        for class_name in
+            discover_transformer_candidates(scanned, artifact).difference(&transformer_classes)
+        {
+            inactive_candidates.push(InactiveCandidate {
+                artifact_id: artifact.id.clone(),
+                class: Some(class_name.clone()),
+                config_path: None,
+                kind: InactiveCandidateKind::UnregisteredTransformer,
+                reason: "ITransformer implementation is not reachable from ITransformationService.transformers()"
+                    .to_string(),
+            });
+        }
         for class_name in transformer_classes {
             let Some(class) = artifact
                 .classes
@@ -125,30 +147,32 @@ pub(crate) fn analyze_with_progress(
             let targets = recover_targets(class);
             if targets.is_empty() {
                 scanned.coverage.transformer_effects_unknown += 1;
-                warnings.push(Warning {
+                coverage_gaps.push(CoverageGap {
                     artifact_id: Some(artifact.id.clone()),
                     scope: class.name.clone(),
-                    kind: WarningKind::TransformerPartial,
-                    message: "ITransformer target set is dynamic or could not be recovered; \
-                              no global pairwise conflicts were fabricated"
+                    kind: crate::model::CoverageGapKind::TransformerUnknown,
+                    detail: "ITransformer target set is dynamic or could not be recovered; \
+                             no global pairwise conflicts were fabricated"
                         .to_string(),
+                    count: 1,
                 });
                 complete_and_continue!();
             }
             scanned.coverage.transformer_targets_recovered += targets.len();
 
             let (signals, exhausted, ignored_untainted) =
-                recover_mutations(scanned, artifact, class, &mut warnings);
+                recover_mutations(scanned, artifact, class, &mut coverage_gaps);
             if ignored_untainted > 0 {
                 scanned.coverage.transformer_effects_partial += 1;
-                warnings.push(Warning {
+                coverage_gaps.push(CoverageGap {
                     artifact_id: Some(artifact.id.clone()),
                     scope: class.name.clone(),
-                    kind: WarningKind::TransformerPartial,
-                    message: format!(
+                    kind: crate::model::CoverageGapKind::TransformerPartial,
+                    detail: format!(
                         "ignored {ignored_untainted} ASM-looking write(s) whose receiver \
                          could not be traced to the transform() input"
                     ),
+                    count: ignored_untainted,
                 });
             }
             if exhausted {
@@ -156,8 +180,24 @@ pub(crate) fn analyze_with_progress(
                     "{}:{} bounded transformer interpretation",
                     artifact.id, class.name
                 ));
+                coverage_gaps.push(CoverageGap {
+                    artifact_id: Some(artifact.id.clone()),
+                    scope: class.name.clone(),
+                    kind: crate::model::CoverageGapKind::BudgetExhaustion,
+                    detail: "bounded transformer interpretation exhausted its state budget"
+                        .to_string(),
+                    count: 1,
+                });
             }
             if signals.is_empty() {
+                coverage_gaps.push(CoverageGap {
+                    artifact_id: Some(artifact.id.clone()),
+                    scope: class.name.clone(),
+                    kind: crate::model::CoverageGapKind::TransformerUnknown,
+                    detail: "transform() was found, but no supported ASM mutation was recovered"
+                        .to_string(),
+                    count: targets.len(),
+                });
                 for target in targets {
                     scanned.coverage.transformer_effects_unknown += 1;
                     effects.push(unknown_effect(
@@ -173,14 +213,15 @@ pub(crate) fn analyze_with_progress(
 
             if targets.len() > 1 {
                 scanned.coverage.transformer_effects_partial += targets.len();
-                warnings.push(Warning {
+                coverage_gaps.push(CoverageGap {
                     artifact_id: Some(artifact.id.clone()),
                     scope: class.name.clone(),
-                    kind: WarningKind::TransformerPartial,
-                    message: "multiple transformer targets and mutation branches could not be \
-                              associated without path-sensitive stack analysis; effects were \
-                              kept as unknown per target"
+                    kind: crate::model::CoverageGapKind::TransformerPartial,
+                    detail: "multiple transformer targets and mutation branches could not be \
+                             associated without path-sensitive stack analysis; effects were \
+                             kept as unknown per target"
                         .to_string(),
+                    count: targets.len(),
                 });
                 for target in targets {
                     effects.push(unknown_effect(
@@ -221,7 +262,6 @@ pub(crate) fn analyze_with_progress(
         }
     }
 
-    scanned.warnings.extend(warnings);
     emit(
         progress,
         AuditProgressEvent::StageFinished {
@@ -229,30 +269,43 @@ pub(crate) fn analyze_with_progress(
             completed,
         },
     );
-    effects
+    TransformerAnalysis {
+        effects,
+        inactive_candidates,
+        coverage_gaps,
+    }
 }
 
-fn discover_transformer_classes(
+fn discover_transformer_candidates(
     scanned: &ScannedArtifacts,
     artifact: &ParsedArtifact,
 ) -> BTreeSet<String> {
-    let mut result = artifact
+    artifact
         .classes
         .iter()
         .filter(|class| inherits(scanned, &class.name, ITRANSFORMER, &mut HashSet::new()))
         .map(|class| class.name.clone())
-        .collect::<BTreeSet<_>>();
+        .collect()
+}
+
+fn discover_registered_transformer_classes(
+    scanned: &ScannedArtifacts,
+    artifact: &ParsedArtifact,
+) -> BTreeSet<String> {
+    let mut result = BTreeSet::new();
+    let registered_services = registered_transformation_services(artifact);
 
     // ITransformationService#transformers commonly constructs anonymous or
     // nested transformer classes. Inspecting those factories also catches
     // implementations reached through a static helper or invokedynamic.
     for service in artifact.classes.iter().filter(|class| {
-        inherits(
-            scanned,
-            &class.name,
-            TRANSFORMATION_SERVICE,
-            &mut HashSet::new(),
-        )
+        registered_services.contains(&class.name)
+            && inherits(
+                scanned,
+                &class.name,
+                TRANSFORMATION_SERVICE,
+                &mut HashSet::new(),
+            )
     }) {
         let mut queue = service
             .methods
@@ -316,6 +369,26 @@ fn discover_transformer_classes(
     result
 }
 
+fn registered_transformation_services(artifact: &ParsedArtifact) -> BTreeSet<String> {
+    const SERVICE_PATH: &str = "meta-inf/services/cpw.mods.modlauncher.api.itransformationservice";
+    let mut services = BTreeSet::new();
+    for resource in artifact.resources.iter().filter(|resource| {
+        resource
+            .path
+            .rsplit("!/")
+            .next()
+            .is_some_and(|path| path.to_ascii_lowercase() == SERVICE_PATH)
+    }) {
+        for line in String::from_utf8_lossy(&resource.bytes).lines() {
+            let service = line.split('#').next().unwrap_or_default().trim();
+            if !service.is_empty() {
+                services.insert(service.replace('.', "/"));
+            }
+        }
+    }
+    services
+}
+
 fn inherits(
     scanned: &ScannedArtifacts,
     class: &str,
@@ -372,31 +445,50 @@ fn recover_targets(class: &ParsedClass) -> Vec<RecoveredTarget> {
         .iter()
         .filter(|method| method.name == "targets")
     {
-        let mut strings = VecDeque::<String>::new();
+        let mut stack = Vec::<Option<String>>::new();
         for instruction in &method.instructions {
             match &instruction.kind {
-                InstructionKind::StringConstant(value) => {
-                    strings.push_back(value.clone());
-                    if strings.len() > 8 {
-                        strings.pop_front();
-                    }
+                InstructionKind::StringConstant(value) => stack.push(Some(value.clone())),
+                InstructionKind::IntegerConstant(_)
+                | InstructionKind::DecimalConstant(_)
+                | InstructionKind::NullConstant
+                | InstructionKind::Type(_)
+                | InstructionKind::FieldRead(_)
+                | InstructionKind::Load(_) => stack.push(None),
+                InstructionKind::Store(_) | InstructionKind::FieldWrite(_) => {
+                    stack.pop();
                 }
-                InstructionKind::MethodCall(member)
-                    if member.owner.ends_with("/ITransformer$Target")
-                        || member.owner == "cpw/mods/modlauncher/api/ITransformer$Target" =>
-                {
-                    if let Some(target) = target_from_factory(&member.name, &strings) {
+                InstructionKind::MethodCall(member) => {
+                    let arguments = pop_call_arguments(&mut stack, member);
+                    if (member.owner.ends_with("/ITransformer$Target")
+                        || member.owner == "cpw/mods/modlauncher/api/ITransformer$Target")
+                        && let Some(arguments) = arguments.as_deref()
+                        && let Some(target) = target_from_factory_arguments(&member.name, arguments)
+                    {
                         targets.push(RecoveredTarget {
                             detail: format!(
-                                "heuristically recovered from nearby constants before {}.{}{} call {}",
+                                "recovered from the operand stack at {}.{}{} call {}",
                                 class.name, method.name, method.descriptor, member.name
                             ),
                             target,
                         });
                     }
-                    strings.clear();
+                    if !method_returns_void(&member.descriptor) {
+                        stack.push(None);
+                    }
                 }
-                _ => {}
+                InstructionKind::InvokeDynamic { descriptor, .. } => {
+                    let count = descriptor_argument_count(descriptor).unwrap_or(0);
+                    for _ in 0..count {
+                        stack.pop();
+                    }
+                    if !method_returns_void(descriptor) {
+                        stack.push(None);
+                    }
+                }
+                InstructionKind::Jump => stack.clear(),
+                InstructionKind::Return => stack.clear(),
+                InstructionKind::Other => {}
             }
         }
     }
@@ -405,25 +497,64 @@ fn recover_targets(class: &ParsedClass) -> Vec<RecoveredTarget> {
     targets
 }
 
-fn target_from_factory(name: &str, strings: &VecDeque<String>) -> Option<Target> {
+fn pop_call_arguments(
+    stack: &mut Vec<Option<String>>,
+    member: &MemberReference,
+) -> Option<Vec<Option<String>>> {
+    let count = descriptor_argument_count(&member.descriptor)?;
+    if stack.len() < count {
+        stack.clear();
+        return None;
+    }
+    let split = stack.len() - count;
+    let arguments = stack.split_off(split);
+    if member.is_static == Some(false) {
+        stack.pop();
+    }
+    Some(arguments)
+}
+
+fn descriptor_argument_count(descriptor: &str) -> Option<usize> {
+    let arguments = descriptor.strip_prefix('(')?.split_once(')')?.0;
+    let bytes = arguments.as_bytes();
+    let mut count = 0_usize;
+    let mut offset = 0_usize;
+    while offset < bytes.len() {
+        while bytes.get(offset) == Some(&b'[') {
+            offset += 1;
+        }
+        if bytes.get(offset) == Some(&b'L') {
+            offset += arguments[offset..].find(';')? + 1;
+        } else {
+            offset += 1;
+        }
+        count += 1;
+    }
+    Some(count)
+}
+
+fn method_returns_void(descriptor: &str) -> bool {
+    descriptor
+        .split_once(')')
+        .is_some_and(|(_, result)| result == "V")
+}
+
+fn target_from_factory_arguments(name: &str, values: &[Option<String>]) -> Option<Target> {
+    let string = |index: usize| values.get(index)?.as_deref();
     match name {
-        "targetClass" | "targetPreClass" => {
-            let class = normalize_class(strings.back()?)?;
-            Some(Target::class(class))
-        }
-        "targetMethod" => {
-            let values = last_strings(strings, 3)?;
-            let owner = normalize_class(&values[0])?;
-            Some(Target::method(owner, values[1].clone(), values[2].clone()))
-        }
+        "targetClass" | "targetPreClass" => Some(Target::class(normalize_class(string(0)?)?)),
+        "targetMethod" => Some(Target::method(
+            normalize_class(string(0)?)?,
+            string(1)?,
+            string(2)?,
+        )),
         "targetField" => {
-            let values = last_strings(strings, 2)?;
-            let owner = normalize_class(&values[0])?;
+            let owner = normalize_class(string(0)?)?;
             Some(Target {
                 class: owner.clone(),
                 member: Some(MemberReference {
                     owner,
-                    name: values[1].clone(),
+                    name: string(1)?.to_string(),
                     descriptor: String::new(),
                     kind: MemberKind::Field,
                     is_static: None,
@@ -452,7 +583,7 @@ fn recover_mutations(
     scanned: &ScannedArtifacts,
     artifact: &ParsedArtifact,
     transformer: &ParsedClass,
-    warnings: &mut Vec<Warning>,
+    coverage_gaps: &mut Vec<CoverageGap>,
 ) -> (Vec<MutationSignal>, bool, usize) {
     let mut queue = transformer
         .methods
@@ -559,13 +690,14 @@ fn recover_mutations(
                             ));
                         }
                     } else {
-                        warnings.push(Warning {
+                        coverage_gaps.push(CoverageGap {
                             artifact_id: Some(artifact.id.clone()),
                             scope: format!("{}.{}{}", owner.name, method.name, method.descriptor),
-                            kind: WarningKind::TransformerPartial,
-                            message: format!(
+                            kind: crate::model::CoverageGapKind::TransformerPartial,
+                            detail: format!(
                                 "invokedynamic {name}{descriptor} has no recoverable implementation handle"
                             ),
+                            count: 1,
                         });
                     }
                 }
@@ -1017,7 +1149,9 @@ fn effect(
         precision,
         confidence,
         activation: Activation::Candidate,
-        priority: None,
+        config_priority: None,
+        mixin_priority: None,
+        injector_order: None,
     }
 }
 
@@ -1087,7 +1221,9 @@ fn unknown_effect(
         },
         confidence: Confidence::Low,
         activation: Activation::Candidate,
-        priority: None,
+        config_priority: None,
+        mixin_priority: None,
+        injector_order: None,
     }
 }
 
@@ -1135,42 +1271,116 @@ fn push_bounded<T>(values: &mut VecDeque<T>, value: T, limit: usize) {
 #[cfg(test)]
 mod tests {
     use crate::classfile::{ParsedClass, ParsedInstruction, ParsedMethod};
-    use crate::jar::{ClassDefinition, ClassUniverse, ParsedArtifact};
+    use crate::jar::{ClassDefinition, ClassUniverse, ParsedArtifact, ResourceEntry};
     use crate::model::{AnalysisLimits, ArtifactKind, Coverage, InstructionReference};
 
     use super::*;
 
     #[test]
     fn target_factories_recover_class_method_and_field() {
-        let mut strings = VecDeque::from([
-            "net.minecraft.client.Minecraft".to_string(),
-            "runTick".to_string(),
-            "()V".to_string(),
-        ]);
+        let mut values = vec![
+            Some("net.minecraft.client.Minecraft".to_string()),
+            Some("runTick".to_string()),
+            Some("()V".to_string()),
+        ];
         assert_eq!(
-            target_from_factory("targetMethod", &strings)
+            target_from_factory_arguments("targetMethod", &values)
                 .unwrap()
                 .member
                 .unwrap()
                 .name,
             "runTick"
         );
-        strings = VecDeque::from([
-            "net.minecraft.client.Minecraft".to_string(),
-            "level".to_string(),
-        ]);
+        values = vec![
+            Some("net.minecraft.client.Minecraft".to_string()),
+            Some("level".to_string()),
+        ];
         assert_eq!(
-            target_from_factory("targetField", &strings)
+            target_from_factory_arguments("targetField", &values)
                 .unwrap()
                 .member
                 .unwrap()
                 .name,
             "level"
         );
-        strings = VecDeque::from(["net.minecraft.client.Minecraft".to_string()]);
+        values = vec![Some("net.minecraft.client.Minecraft".to_string())];
         assert_eq!(
-            target_from_factory("targetClass", &strings).unwrap().class,
+            target_from_factory_arguments("targetClass", &values)
+                .unwrap()
+                .class,
             "net/minecraft/client/Minecraft"
+        );
+    }
+
+    #[test]
+    fn target_recovery_uses_operand_stack_and_ignores_consumed_log_strings() {
+        let logger = MemberReference {
+            owner: "org/slf4j/Logger".to_string(),
+            name: "info".to_string(),
+            descriptor: "(Ljava/lang/String;)V".to_string(),
+            kind: MemberKind::Method,
+            is_static: Some(false),
+        };
+        let target_class = MemberReference {
+            owner: "cpw/mods/modlauncher/api/ITransformer$Target".to_string(),
+            name: "targetClass".to_string(),
+            descriptor: "(Ljava/lang/String;)Lcpw/mods/modlauncher/api/ITransformer$Target;"
+                .to_string(),
+            kind: MemberKind::Method,
+            is_static: Some(true),
+        };
+        let class = empty_class(
+            "example/Transformer",
+            vec![ITRANSFORMER.to_string()],
+            vec![method(
+                "targets",
+                vec![
+                    instruction(
+                        0,
+                        InstructionKind::StringConstant("not.a.Target".to_string()),
+                    ),
+                    instruction(1, InstructionKind::MethodCall(logger)),
+                    instruction(2, InstructionKind::Load(1)),
+                    instruction(3, InstructionKind::MethodCall(target_class)),
+                ],
+            )],
+        );
+
+        assert!(recover_targets(&class).is_empty());
+    }
+
+    #[test]
+    fn target_recovery_binds_factory_arguments_without_a_recent_string_window() {
+        let target_method = MemberReference {
+            owner: "cpw/mods/modlauncher/api/ITransformer$Target".to_string(),
+            name: "targetMethod".to_string(),
+            descriptor: "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Lcpw/mods/modlauncher/api/ITransformer$Target;".to_string(),
+            kind: MemberKind::Method,
+            is_static: Some(true),
+        };
+        let class = empty_class(
+            "example/Transformer",
+            vec![ITRANSFORMER.to_string()],
+            vec![method(
+                "targets",
+                vec![
+                    instruction(
+                        0,
+                        InstructionKind::StringConstant("game.Target".to_string()),
+                    ),
+                    instruction(1, InstructionKind::StringConstant("tick".to_string())),
+                    instruction(2, InstructionKind::StringConstant("()V".to_string())),
+                    instruction(3, InstructionKind::MethodCall(target_method)),
+                ],
+            )],
+        );
+
+        let targets = recover_targets(&class);
+
+        assert_eq!(targets.len(), 1);
+        assert_eq!(
+            targets[0].target,
+            Target::method("game/Target", "tick", "()V")
         );
     }
 
@@ -1182,6 +1392,7 @@ mod tests {
             kind: ArtifactKind::Mod,
             classes: Vec::new(),
             refmaps: Vec::new(),
+            resources: Vec::new(),
         };
         let transformer = empty_class("example/Transformer", Vec::new(), Vec::new());
         let target = RecoveredTarget {
@@ -1257,6 +1468,7 @@ mod tests {
             kind: ArtifactKind::Minecraft,
             classes: vec![target_class],
             refmaps: Vec::new(),
+            resources: Vec::new(),
         };
         let artifact = ParsedArtifact {
             id: "mod".to_string(),
@@ -1264,6 +1476,7 @@ mod tests {
             kind: ArtifactKind::Mod,
             classes: Vec::new(),
             refmaps: Vec::new(),
+            resources: Vec::new(),
         };
         let scanned = scanned(vec![runtime, artifact], ClassUniverse::default());
         let recovered_target = RecoveredTarget {
@@ -1275,9 +1488,11 @@ mod tests {
             source_class: "example/Transformer".to_string(),
             source_method: "transform()V".to_string(),
             source_instruction: InstructionReference {
+                identity: None,
                 stable_id: 5,
                 original_offset: Some(5),
                 opcode: 182,
+                local_slot: None,
                 member: None,
                 constant: None,
             },
@@ -1340,7 +1555,7 @@ mod tests {
     }
 
     #[test]
-    fn anonymous_itransformer_is_discovered_by_actual_hierarchy() {
+    fn unregistered_itransformer_is_only_a_candidate() {
         let artifact = ParsedArtifact {
             id: "mod".to_string(),
             display_name: "mod".to_string(),
@@ -1351,6 +1566,7 @@ mod tests {
                 Vec::new(),
             )],
             refmaps: Vec::new(),
+            resources: Vec::new(),
         };
         let mut universe = ClassUniverse::default();
         universe.classes.insert(
@@ -1362,12 +1578,168 @@ mod tests {
         );
         let scanned = scanned(vec![artifact], universe);
 
-        let discovered = discover_transformer_classes(&scanned, &scanned.artifacts[0]);
+        let candidates = discover_transformer_candidates(&scanned, &scanned.artifacts[0]);
+        let registered = discover_registered_transformer_classes(&scanned, &scanned.artifacts[0]);
 
         assert_eq!(
-            discovered,
+            candidates,
             BTreeSet::from(["example/Service$1".to_string()])
         );
+        assert!(registered.is_empty());
+    }
+
+    #[test]
+    fn service_loaded_transformation_service_registers_only_returned_transformers() {
+        let service = empty_class(
+            "example/Service",
+            vec![TRANSFORMATION_SERVICE.to_string()],
+            vec![method(
+                "transformers",
+                vec![instruction(
+                    0,
+                    InstructionKind::Type("example/Transformer".to_string()),
+                )],
+            )],
+        );
+        let transformer = empty_class(
+            "example/Transformer",
+            vec![ITRANSFORMER.to_string()],
+            Vec::new(),
+        );
+        let artifact = ParsedArtifact {
+            id: "mod".to_string(),
+            display_name: "mod".to_string(),
+            kind: ArtifactKind::Mod,
+            classes: vec![service, transformer],
+            refmaps: Vec::new(),
+            resources: vec![ResourceEntry {
+                path: "META-INF/services/cpw.mods.modlauncher.api.ITransformationService"
+                    .to_string(),
+                bytes: b"# registered by ServiceLoader\nexample.Service\n".to_vec(),
+            }],
+        };
+        let mut universe = ClassUniverse::default();
+        universe.classes.insert(
+            "example/Service".to_string(),
+            vec![definition(
+                "example/Service",
+                vec![TRANSFORMATION_SERVICE.to_string()],
+            )],
+        );
+        universe.classes.insert(
+            "example/Transformer".to_string(),
+            vec![definition(
+                "example/Transformer",
+                vec![ITRANSFORMER.to_string()],
+            )],
+        );
+        let scanned = scanned(vec![artifact], universe);
+
+        assert_eq!(
+            discover_registered_transformer_classes(&scanned, &scanned.artifacts[0]),
+            BTreeSet::from(["example/Transformer".to_string()])
+        );
+    }
+
+    #[test]
+    fn multiple_targets_and_mutations_do_not_form_a_cartesian_product() {
+        let service = empty_class(
+            "example/Service",
+            vec![TRANSFORMATION_SERVICE.to_string()],
+            vec![method(
+                "transformers",
+                vec![instruction(
+                    0,
+                    InstructionKind::Type("example/Transformer".to_string()),
+                )],
+            )],
+        );
+        let target_class = MemberReference {
+            owner: "cpw/mods/modlauncher/api/ITransformer$Target".to_string(),
+            name: "targetClass".to_string(),
+            descriptor: "(Ljava/lang/String;)Lcpw/mods/modlauncher/api/ITransformer$Target;"
+                .to_string(),
+            kind: MemberKind::Method,
+            is_static: Some(true),
+        };
+        let remove = member(
+            "org/objectweb/asm/tree/InsnList",
+            "remove",
+            "(Lorg/objectweb/asm/tree/AbstractInsnNode;)V",
+        );
+        let transformer = empty_class(
+            "example/Transformer",
+            vec![ITRANSFORMER.to_string()],
+            vec![
+                method(
+                    "targets",
+                    vec![
+                        instruction(0, InstructionKind::StringConstant("game.First".to_string())),
+                        instruction(1, InstructionKind::MethodCall(target_class.clone())),
+                        instruction(
+                            2,
+                            InstructionKind::StringConstant("game.Second".to_string()),
+                        ),
+                        instruction(3, InstructionKind::MethodCall(target_class)),
+                    ],
+                ),
+                method(
+                    "transform",
+                    vec![
+                        instruction(0, InstructionKind::MethodCall(remove.clone())),
+                        instruction(1, InstructionKind::MethodCall(remove)),
+                    ],
+                ),
+            ],
+        );
+        let artifact = ParsedArtifact {
+            id: "mod".to_string(),
+            display_name: "mod".to_string(),
+            kind: ArtifactKind::Mod,
+            classes: vec![service, transformer],
+            refmaps: Vec::new(),
+            resources: vec![ResourceEntry {
+                path: "META-INF/services/cpw.mods.modlauncher.api.ITransformationService"
+                    .to_string(),
+                bytes: b"example.Service\n".to_vec(),
+            }],
+        };
+        let mut universe = ClassUniverse::default();
+        universe.classes.insert(
+            "example/Service".to_string(),
+            vec![definition(
+                "example/Service",
+                vec![TRANSFORMATION_SERVICE.to_string()],
+            )],
+        );
+        universe.classes.insert(
+            "example/Transformer".to_string(),
+            vec![definition(
+                "example/Transformer",
+                vec![ITRANSFORMER.to_string()],
+            )],
+        );
+        let mut scanned = scanned(vec![artifact], universe);
+        let readiness = Readiness {
+            status: crate::model::ReadinessStatus::Ready,
+            loader: Some(LoaderFamily::Forge),
+            message: "ready".to_string(),
+            capabilities: Vec::new(),
+        };
+
+        let analysis = analyze_with_progress(&mut scanned, &readiness, None);
+
+        assert_eq!(analysis.effects.len(), 2);
+        assert!(analysis.effects.iter().all(|effect| {
+            effect.precision == Precision::Class
+                && effect.mutations[0].kind == MutationKind::UnknownClass
+        }));
+        assert_eq!(analysis.coverage_gaps.len(), 1);
+        assert_eq!(
+            analysis.coverage_gaps[0].kind,
+            crate::model::CoverageGapKind::TransformerPartial
+        );
+        assert!(scanned.warnings.is_empty());
     }
 
     #[test]
@@ -1421,6 +1793,7 @@ mod tests {
             kind: ArtifactKind::Mod,
             classes: vec![transformer.clone()],
             refmaps: Vec::new(),
+            resources: Vec::new(),
         };
         let scanned = scanned(vec![artifact], ClassUniverse::default());
         let (signals, exhausted, ignored) = recover_mutations(
@@ -1449,13 +1822,11 @@ mod tests {
 
     fn empty_class(name: &str, interfaces: Vec<String>, methods: Vec<ParsedMethod>) -> ParsedClass {
         ParsedClass {
-            minor: 0,
-            major: 61,
+            definition_id: None,
             future_version_best_effort: false,
             name: name.to_string(),
             super_name: Some("java/lang/Object".to_string()),
             interfaces,
-            is_interface: false,
             annotations: Vec::new(),
             fields: Vec::new(),
             methods,
@@ -1478,9 +1849,11 @@ mod tests {
     fn instruction(id: u32, kind: InstructionKind) -> ParsedInstruction {
         ParsedInstruction {
             reference: InstructionReference {
+                identity: None,
                 stable_id: id,
                 original_offset: Some(id),
                 opcode: 0,
+                local_slot: None,
                 member: None,
                 constant: None,
             },
@@ -1500,12 +1873,12 @@ mod tests {
 
     fn definition(name: &str, interfaces: Vec<String>) -> ClassDefinition {
         ClassDefinition {
+            definition_id: None,
             artifact_id: "mod".to_string(),
             is_mod: true,
             name: name.to_string(),
             super_name: Some("java/lang/Object".to_string()),
             interfaces,
-            is_interface: false,
             fields: Vec::new(),
             methods: Vec::new(),
             hard_references: Vec::new(),

@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use orbit_bytecode_audit::{
     AnalysisLimits, ArtifactInput, ArtifactKind, AuditEnvironment, AuditProgressEvent,
     AuditProgressReporter, AuditProgressStage, AuditReport, AuditRequest, NestedJarPolicy,
+    PhysicalSide,
 };
 
 use crate::error::OrbitError;
@@ -46,14 +47,15 @@ pub fn audit_instance_with_progress(
         total: Some(5),
     });
     let lockfile = crate::lockfile::OrbitLockfile::from_dir(instance_dir)?;
-    let selected_nested = crate::resolver::selected_runtime_nested_jars(
+    let selected_runtime = crate::resolver::selected_runtime_load(
         &manifest,
         &lockfile,
         discovered.loader_package.as_ref(),
+        discovered.physical_environment,
     )
     .map_err(|error| {
         OrbitError::Conflict(format!(
-            "cannot construct the active nested-JAR classpath for audit: {error}"
+            "cannot construct the Loader-selected runtime content for audit: {error}"
         ))
     })?;
     emit(AuditProgressEvent::Advanced {
@@ -76,7 +78,14 @@ pub fn audit_instance_with_progress(
             display_name: format!("{} {}", discovered.loader, discovered.loader_version),
             path: discovered.loader_jar.clone(),
             kind: ArtifactKind::Loader,
-            nested_jars: NestedJarPolicy::All,
+            nested_jars: if discovered.loader_package.is_some() {
+                NestedJarPolicy::Selected(selected_runtime.loader_nested_jars.clone())
+            } else {
+                // Without parseable Loader metadata there is no trustworthy
+                // archive selection to consume, so retain conservative
+                // visibility rather than hiding unknown runtime code.
+                NestedJarPolicy::All
+            },
         },
     ];
     artifacts.extend(runtime.into_iter().enumerate().map(|(index, path)| {
@@ -93,9 +102,21 @@ pub fn audit_instance_with_progress(
             nested_jars: NestedJarPolicy::None,
         }
     }));
+    let known_package_files = lockfile
+        .packages
+        .iter()
+        .filter_map(|package| (!package.filename.is_empty()).then_some(package.filename.as_str()))
+        .collect::<std::collections::BTreeSet<_>>();
     artifacts.extend(
         mod_jars(instance_dir)?
             .into_iter()
+            .filter(|path| {
+                let Some(filename) = path.file_name().and_then(|name| name.to_str()) else {
+                    return true;
+                };
+                !known_package_files.contains(filename)
+                    || selected_runtime.top_level_jars.contains(filename)
+            })
             .enumerate()
             .map(|(index, path)| {
                 let filename = path
@@ -107,7 +128,11 @@ pub fn audit_instance_with_progress(
                     .get(&filename)
                     .cloned()
                     .unwrap_or_else(|| filename.clone());
-                let nested_jars = selected_nested.get(&filename).cloned().unwrap_or_default();
+                let nested_jars = selected_runtime
+                    .nested_jars
+                    .get(&filename)
+                    .cloned()
+                    .unwrap_or_default();
                 ArtifactInput {
                     // The filename is evidence-neutral presentation data. The
                     // index keeps duplicate names from distinct paths separate.
@@ -136,8 +161,15 @@ pub fn audit_instance_with_progress(
                 declared_loader: manifest.project.modloader,
                 detected_loader: discovered.loader,
                 loader_version: discovered.loader_version,
+                physical_side: match discovered.physical_environment {
+                    crate::metadata::Environment::Client => PhysicalSide::Client,
+                    crate::metadata::Environment::Server => PhysicalSide::DedicatedServer,
+                    crate::metadata::Environment::Both => PhysicalSide::Unknown,
+                },
+                java_feature: discovered.minecraft_version.java_version,
             },
             artifacts,
+            active_mod_ids: selected_runtime.active_mod_ids,
             limits: AnalysisLimits::default(),
         },
         progress.as_ref(),

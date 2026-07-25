@@ -8,23 +8,20 @@ use std::collections::BTreeMap;
 
 use ristretto_classfile::attributes::{AnnotationElement, Attribute, Instruction};
 use ristretto_classfile::{
-    ClassAccessFlags, ClassFile, Constant, ConstantPool, FieldAccessFlags, MethodAccessFlags,
-    ReferenceKind,
+    ClassFile, Constant, ConstantPool, FieldAccessFlags, MethodAccessFlags, ReferenceKind,
 };
 
-use crate::model::{InstructionReference, MemberKind, MemberReference};
+use crate::model::{ClassDefinitionId, InstructionReference, MemberKind, MemberReference};
 
 const MAX_KNOWN_CLASS_MAJOR: u16 = 69; // Java 25
 
 #[derive(Debug, Clone)]
 pub(crate) struct ParsedClass {
-    pub minor: u16,
-    pub major: u16,
+    pub definition_id: Option<ClassDefinitionId>,
     pub future_version_best_effort: bool,
     pub name: String,
     pub super_name: Option<String>,
     pub interfaces: Vec<String>,
-    pub is_interface: bool,
     pub annotations: Vec<ParsedAnnotation>,
     pub fields: Vec<ParsedField>,
     pub methods: Vec<ParsedMethod>,
@@ -177,7 +174,6 @@ pub(crate) fn parse(bytes: &[u8], max_annotation_depth: usize) -> Result<ParsedC
     if bytes.len() < 8 || bytes[..4] != [0xCA, 0xFE, 0xBA, 0xBE] {
         return Err("invalid ClassFile magic or truncated header".to_string());
     }
-    let minor = u16::from_be_bytes([bytes[4], bytes[5]]);
     let major = u16::from_be_bytes([bytes[6], bytes[7]]);
     let future_version_best_effort = major > MAX_KNOWN_CLASS_MAJOR;
     let patched;
@@ -192,19 +188,11 @@ pub(crate) fn parse(bytes: &[u8], max_annotation_depth: usize) -> Result<ParsedC
         bytes
     };
     let class_file = ClassFile::from_bytes(parser_bytes).map_err(|error| error.to_string())?;
-    convert(
-        class_file,
-        minor,
-        major,
-        future_version_best_effort,
-        max_annotation_depth,
-    )
+    convert(class_file, future_version_best_effort, max_annotation_depth)
 }
 
 fn convert(
     class_file: ClassFile<'static>,
-    minor: u16,
-    major: u16,
     future_version_best_effort: bool,
     max_annotation_depth: usize,
 ) -> Result<ParsedClass, String> {
@@ -285,15 +273,11 @@ fn convert(
         });
     }
     Ok(ParsedClass {
-        minor,
-        major,
+        definition_id: None,
         future_version_best_effort,
         name,
         super_name,
         interfaces,
-        is_interface: class_file
-            .access_flags
-            .contains(ClassAccessFlags::INTERFACE),
         annotations,
         fields,
         methods,
@@ -446,11 +430,17 @@ fn parse_instructions(
                 InstructionKind::NullConstant => Some("null".to_string()),
                 _ => None,
             };
+            let local_slot = match &kind {
+                InstructionKind::Load(slot) | InstructionKind::Store(slot) => Some(*slot),
+                _ => None,
+            };
             let parsed = ParsedInstruction {
                 reference: InstructionReference {
+                    identity: None,
                     stable_id: u32::try_from(index).unwrap_or(u32::MAX),
                     original_offset: Some(offset),
                     opcode,
+                    local_slot,
                     member,
                     constant,
                 },

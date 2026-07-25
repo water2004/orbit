@@ -21,6 +21,7 @@ pub(crate) struct DiscoveredPlatform {
     pub loader_version: String,
     pub loader_jar: PathBuf,
     pub loader_package: Option<PlatformCandidate>,
+    pub physical_environment: crate::metadata::Environment,
 }
 
 impl DiscoveredPlatform {
@@ -113,17 +114,11 @@ pub(crate) fn discover_runtime_classpath(
         let Ok(profile) = VersionProfile::from_path(profile_path) else {
             continue;
         };
-        if profile.id != discovered.minecraft_version.id
-            && profile.inherits_from.as_deref() != Some(discovered.minecraft_version.id.as_str())
-            && !profile.libraries.iter().any(|library| {
-                MavenCoord::parse(&library.name).is_some_and(|coordinate| {
-                    loader_signature(&discovered.loader).is_some_and(|(group, artifacts)| {
-                        coordinate.group_id == group
-                            && artifacts.contains(&coordinate.artifact_id.as_str())
-                    })
-                })
-            })
-        {
+        if !profile_matches_runtime(
+            &profile,
+            &discovered.loader,
+            &discovered.minecraft_version.id,
+        ) {
             continue;
         }
         coordinates.extend(
@@ -331,6 +326,7 @@ fn discover_platform(
         .as_ref()
         .map(|package| package.version.clone())
         .unwrap_or(loader_version);
+    let physical_environment = physical_environment(&layout, &loader, &minecraft_version.id);
 
     Ok(DiscoveredPlatform {
         minecraft_version,
@@ -339,7 +335,68 @@ fn discover_platform(
         loader_version: actual_loader_version,
         loader_jar,
         loader_package,
+        physical_environment,
     })
+}
+
+fn physical_environment(
+    layout: &crate::launcher::LauncherLayout,
+    loader: &str,
+    minecraft_version: &str,
+) -> crate::metadata::Environment {
+    use crate::launcher::LauncherLayoutKind;
+    use crate::metadata::Environment;
+
+    if layout.kind == LauncherLayoutKind::DedicatedServer
+        || layout.game_jar_directories.iter().any(|directory| {
+            directory.join("server.properties").is_file() || directory.join("eula.txt").is_file()
+        })
+    {
+        return Environment::Server;
+    }
+
+    let mut saw_client = false;
+    let mut saw_server = false;
+    for profile_path in &layout.profile_paths {
+        let Ok(profile) = VersionProfile::from_path(profile_path) else {
+            continue;
+        };
+        if !profile_matches_runtime(&profile, loader, minecraft_version) {
+            continue;
+        }
+        let main_class = profile
+            .main_class
+            .as_deref()
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        saw_client |= main_class.contains("client");
+        saw_server |= main_class.contains("server");
+    }
+    match (saw_client, saw_server) {
+        (false, true) => Environment::Server,
+        (true, false) => Environment::Client,
+        // Normal launcher instances are client-side. An ambiguous or
+        // side-neutral main class cannot turn a client instance into a
+        // dedicated server without the server layout markers above.
+        _ => Environment::Client,
+    }
+}
+
+fn profile_matches_runtime(
+    profile: &VersionProfile,
+    loader: &str,
+    minecraft_version: &str,
+) -> bool {
+    profile.id == minecraft_version
+        || profile.inherits_from.as_deref() == Some(minecraft_version)
+        || profile.libraries.iter().any(|library| {
+            MavenCoord::parse(&library.name).is_some_and(|coordinate| {
+                loader_signature(loader).is_some_and(|(group, artifacts)| {
+                    coordinate.group_id == group
+                        && artifacts.contains(&coordinate.artifact_id.as_str())
+                })
+            })
+        })
 }
 
 /// Hard platform gate for `install`: Minecraft must still be the declared
@@ -906,6 +963,34 @@ mod tests {
 
         assert_eq!(coordinates.len(), 1);
         assert_eq!(coordinates[0].artifact_id, "sponge-mixin");
+    }
+
+    #[test]
+    fn server_markers_override_a_side_neutral_launcher_main_class() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(
+            directory.path().join("server.properties"),
+            b"online-mode=true",
+        )
+        .unwrap();
+        let profile = directory.path().join("server.json");
+        std::fs::write(
+            &profile,
+            r#"{"id":"server","inheritsFrom":"1.21.1","mainClass":"cpw.mods.bootstraplauncher.BootstrapLauncher","libraries":[{"name":"net.minecraftforge:forge:1.21.1-52.0.1"}]}"#,
+        )
+        .unwrap();
+        let layout = crate::launcher::LauncherLayout {
+            kind: crate::launcher::LauncherLayoutKind::Standalone,
+            profile_paths: vec![profile],
+            game_jar_directories: vec![directory.path().to_path_buf()],
+            library_roots: Vec::new(),
+            components: Vec::new(),
+        };
+
+        assert_eq!(
+            physical_environment(&layout, "forge", "1.21.1"),
+            crate::metadata::Environment::Server
+        );
     }
 
     fn minecraft_version_json() -> String {

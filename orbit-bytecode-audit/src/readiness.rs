@@ -2,8 +2,17 @@ use crate::AuditError;
 use crate::model::{ArtifactKind, AuditRequest, LoaderFamily, Readiness, ReadinessStatus};
 
 pub fn probe_readiness(request: &AuditRequest) -> Result<Readiness, AuditError> {
+    let loader = match preflight(request) {
+        Ok(loader) => loader,
+        Err(readiness) => return Ok(readiness),
+    };
+    let scanned = crate::jar::scan_artifacts_with_progress(request, None)?;
+    Ok(crate::jar::probe_runtime_abi(&scanned, loader))
+}
+
+pub(crate) fn preflight(request: &AuditRequest) -> Result<LoaderFamily, Readiness> {
     if request.environment.declared_loader != request.environment.detected_loader {
-        return Ok(Readiness {
+        return Err(Readiness {
             status: ReadinessStatus::Ambiguous,
             loader: None,
             message: format!(
@@ -18,7 +27,7 @@ pub fn probe_readiness(request: &AuditRequest) -> Result<Readiness, AuditError> 
         .iter()
         .any(|artifact| artifact.kind == ArtifactKind::Minecraft && artifact.path.is_file())
     {
-        return Ok(Readiness {
+        return Err(Readiness {
             status: ReadinessStatus::Incomplete,
             loader: None,
             message: "the actual Minecraft JAR is missing".to_string(),
@@ -30,7 +39,7 @@ pub fn probe_readiness(request: &AuditRequest) -> Result<Readiness, AuditError> 
         .iter()
         .any(|artifact| artifact.kind == ArtifactKind::Loader && artifact.path.is_file())
     {
-        return Ok(Readiness {
+        return Err(Readiness {
             status: ReadinessStatus::Incomplete,
             loader: None,
             message: "the actual loader JAR is missing".to_string(),
@@ -42,7 +51,7 @@ pub fn probe_readiness(request: &AuditRequest) -> Result<Readiness, AuditError> 
         .iter()
         .any(|artifact| artifact.kind == ArtifactKind::Mod && artifact.path.is_file())
     {
-        return Ok(Readiness {
+        return Err(Readiness {
             status: ReadinessStatus::Incomplete,
             loader: None,
             message: "the instance contains no analyzable Mod JAR".to_string(),
@@ -55,7 +64,7 @@ pub fn probe_readiness(request: &AuditRequest) -> Result<Readiness, AuditError> 
         "forge" => LoaderFamily::Forge,
         "neoforge" => LoaderFamily::NeoForge,
         other => {
-            return Ok(Readiness {
+            return Err(Readiness {
                 status: ReadinessStatus::Unsupported,
                 loader: None,
                 message: format!("loader '{other}' is not supported by bytecode audit"),
@@ -63,7 +72,7 @@ pub fn probe_readiness(request: &AuditRequest) -> Result<Readiness, AuditError> 
             });
         }
     };
-    crate::jar::probe_runtime_abi(request, loader)
+    Ok(loader)
 }
 
 #[cfg(test)]
@@ -73,7 +82,7 @@ mod tests {
     };
     use crate::model::{
         AnalysisLimits, ArtifactInput, ArtifactKind, AuditEnvironment, AuditRequest,
-        NestedJarPolicy, ReadinessStatus,
+        NestedJarPolicy, PhysicalSide, ReadinessStatus,
     };
 
     use super::*;
@@ -293,8 +302,11 @@ mod tests {
                 declared_loader: loader.to_string(),
                 detected_loader: loader.to_string(),
                 loader_version: "test".to_string(),
+                physical_side: PhysicalSide::Unknown,
+                java_feature: 17,
             },
             artifacts,
+            active_mod_ids: Default::default(),
             limits: AnalysisLimits::default(),
         }
     }

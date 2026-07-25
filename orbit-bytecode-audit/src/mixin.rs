@@ -5,9 +5,12 @@ use crate::classfile::{
     ParsedMethod,
 };
 use crate::jar::{ParsedArtifact, ScannedArtifacts};
+use crate::mixin_config::MixinRegistry;
 use crate::model::{
-    Activation, Confidence, Effect, Evidence, InjectionGroupConstraint, InjectionQuery, Mechanism,
-    MemberKind, MemberReference, Mutation, MutationKind, Precision, RequirementKind,
+    Activation, BehavioralInteraction, BehavioralInteractionKind, Confidence, CoverageGap,
+    CoverageGapKind, Effect, Evidence, FramePosition, InactiveCandidate, InactiveCandidateKind,
+    InjectionGroupConstraint, InjectionQuery, LocalSelector, Mechanism, MemberKind,
+    MemberReference, MethodContributionKind, Mutation, MutationKind, Precision, RequirementKind,
     ShapeRequirement, SoftReferenceResolution, Target, Warning, WarningKind,
 };
 
@@ -17,24 +20,776 @@ const OVERWRITE: &str = "Lorg/spongepowered/asm/mixin/Overwrite;";
 const UNIQUE: &str = "Lorg/spongepowered/asm/mixin/Unique;";
 const ACCESSOR: &str = "Lorg/spongepowered/asm/mixin/gen/Accessor;";
 const INVOKER: &str = "Lorg/spongepowered/asm/mixin/gen/Invoker;";
+const PSEUDO: &str = "Lorg/spongepowered/asm/mixin/Pseudo;";
+
+#[derive(Debug, Default)]
+pub(crate) struct MixinAnalysis {
+    pub effects: Vec<Effect>,
+    pub risks: Vec<crate::model::Risk>,
+    pub interactions: Vec<BehavioralInteraction>,
+    pub coverage_gaps: Vec<CoverageGap>,
+    pub inactive_candidates: Vec<InactiveCandidate>,
+}
+
+#[derive(Debug, Default)]
+struct MixinFindings {
+    coverage_gaps: Vec<CoverageGap>,
+    inactive_candidates: Vec<InactiveCandidate>,
+    unsupported_selectors: usize,
+    unsupported_injection_points: usize,
+    valid_multi_target_selectors: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct MethodContributionKey {
+    artifact_id: String,
+    mixin_class: String,
+    target_class: String,
+    method_name: String,
+    descriptor: String,
+}
+
+#[derive(Debug, Clone)]
+struct CandidateMethod {
+    method: ParsedMethod,
+    source_artifact: String,
+    source_mixin: Option<String>,
+    priority: i32,
+    config_priority: i32,
+    contribution: Option<MethodContributionKey>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct CandidateClassState {
+    base_artifact: Option<String>,
+    fields: BTreeMap<(String, String), crate::classfile::ParsedField>,
+    base_methods: BTreeMap<(String, String), ParsedMethod>,
+    methods: BTreeMap<(String, String), CandidateMethod>,
+    interfaces: BTreeSet<String>,
+}
+
+#[derive(Debug, Default)]
+struct CandidateUniverse {
+    classes: BTreeMap<String, CandidateClassState>,
+    contribution_kinds: BTreeMap<MethodContributionKey, MethodContributionKind>,
+    interactions: Vec<BehavioralInteraction>,
+    invalid_contributions: Vec<InvalidMethodContribution>,
+    ambiguous_methods: BTreeMap<(String, String, String), Vec<CandidateMethod>>,
+}
+
+#[derive(Debug, Clone)]
+struct InvalidMethodContribution {
+    key: MethodContributionKey,
+    kind: MethodContributionKind,
+}
+
+#[derive(Debug, Clone)]
+struct PendingMethodContribution {
+    key: MethodContributionKey,
+    method: ParsedMethod,
+    priority: i32,
+    config_priority: i32,
+    sequence: usize,
+    overwrite: bool,
+    unique: bool,
+    synthetic: bool,
+    require_overwrite_annotation: bool,
+}
+
+impl CandidateUniverse {
+    fn build(scanned: &ScannedArtifacts, registry: &MixinRegistry) -> Self {
+        let mut universe = Self::default();
+        let mut pending = Vec::new();
+        let mut sequence = 0_usize;
+        for registered in registry.mixins.iter().filter(|registered| {
+            matches!(
+                registered.activation,
+                crate::model::MixinActivation::RegisteredForCurrentSide
+                    | crate::model::MixinActivation::PluginAccepted
+            )
+        }) {
+            let Some(artifact) = scanned
+                .artifacts
+                .iter()
+                .find(|artifact| artifact.id == registered.artifact_id)
+            else {
+                continue;
+            };
+            let Some(mixin) = artifact
+                .classes
+                .iter()
+                .find(|class| class.name == registered.mixin_class)
+            else {
+                continue;
+            };
+            let Some(mixin_annotation) = annotation(&mixin.annotations, MIXIN) else {
+                continue;
+            };
+            let priority = mixin_annotation
+                .value("priority")
+                .and_then(AnnotationValue::integer)
+                .and_then(|value| i32::try_from(value).ok())
+                .unwrap_or(registered.class_priority);
+            for target_class in mixin_targets(mixin_annotation) {
+                universe.ensure_base_class(scanned, &target_class);
+                if let Some(state) = universe.classes.get_mut(&target_class) {
+                    state.interfaces.extend(mixin.interfaces.iter().cloned());
+                    for field in &mixin.fields {
+                        if annotation(&field.annotations, SHADOW).is_some() {
+                            continue;
+                        }
+                        let key = (field.name.clone(), field.descriptor.clone());
+                        let unique = annotation(&field.annotations, UNIQUE).is_some()
+                            || annotation(&mixin.annotations, UNIQUE).is_some();
+                        if !unique || !state.fields.contains_key(&key) {
+                            state.fields.entry(key).or_insert_with(|| field.clone());
+                        }
+                    }
+                }
+                for method in &mixin.methods {
+                    let key = MethodContributionKey {
+                        artifact_id: artifact.id.clone(),
+                        mixin_class: mixin.name.clone(),
+                        target_class: target_class.clone(),
+                        method_name: method.name.clone(),
+                        descriptor: method.descriptor.clone(),
+                    };
+                    if method.name == "<init>" || method.name == "<clinit>" {
+                        universe
+                            .contribution_kinds
+                            .insert(key, MethodContributionKind::HelperMethod);
+                        continue;
+                    }
+                    if method
+                        .annotations
+                        .iter()
+                        .any(|annotation| injector_kind(&annotation.descriptor).is_some())
+                    {
+                        universe
+                            .contribution_kinds
+                            .insert(key, MethodContributionKind::InjectorHandler);
+                        continue;
+                    }
+                    if annotation(&method.annotations, SHADOW).is_some() {
+                        continue;
+                    }
+                    if annotation(&method.annotations, ACCESSOR).is_some() {
+                        universe
+                            .contribution_kinds
+                            .insert(key.clone(), MethodContributionKind::Accessor);
+                        // Accessor bodies are generated in the ACCESSOR pass,
+                        // after every Mixin's INJECT_PREPARE pass. They must
+                        // not enter the method universe used to resolve
+                        // wildcard injector selectors.
+                        continue;
+                    }
+                    if annotation(&method.annotations, INVOKER).is_some() {
+                        universe
+                            .contribution_kinds
+                            .insert(key.clone(), MethodContributionKind::Invoker);
+                        continue;
+                    }
+                    pending.push(PendingMethodContribution {
+                        key,
+                        method: method.clone(),
+                        priority,
+                        config_priority: registered.config_priority,
+                        sequence,
+                        overwrite: annotation(&method.annotations, OVERWRITE).is_some(),
+                        unique: annotation(&method.annotations, UNIQUE).is_some()
+                            || annotation(&mixin.annotations, UNIQUE).is_some()
+                            // MixinPreProcessorStandard routes every synthetic
+                            // method through attachUniqueMethod, even without
+                            // an explicit @Unique annotation. Private
+                            // compiler-generated helpers (notably lambdas)
+                            // are therefore conformed/renamed instead of
+                            // overwriting a same-signature target method.
+                            || method.is_synthetic,
+                        synthetic: method.is_synthetic,
+                        require_overwrite_annotation: registry
+                            .configs
+                            .iter()
+                            .find(|config| {
+                                config.artifact_id == registered.artifact_id
+                                    && config.config_path == registered.config_path
+                            })
+                            .and_then(|config| config.parsed.as_ref())
+                            .is_some_and(|config| config.overwrite_require_annotations),
+                    });
+                    sequence += 1;
+                }
+            }
+        }
+        pending.sort_by(|left, right| {
+            left.priority
+                .cmp(&right.priority)
+                .then_with(|| left.config_priority.cmp(&right.config_priority))
+                .then_with(|| left.sequence.cmp(&right.sequence))
+        });
+        for contribution in pending {
+            universe.apply_method_contribution(contribution);
+        }
+        universe
+    }
+
+    fn ensure_base_class(&mut self, scanned: &ScannedArtifacts, class_name: &str) {
+        if self.classes.contains_key(class_name) {
+            return;
+        }
+        let Some((artifact, class)) = scanned
+            .universe
+            .parsed_definitions(&scanned.artifacts, class_name)
+            .into_iter()
+            .next()
+        else {
+            self.classes
+                .insert(class_name.to_string(), CandidateClassState::default());
+            return;
+        };
+        let state = CandidateClassState {
+            base_artifact: Some(artifact.id.clone()),
+            fields: class
+                .fields
+                .iter()
+                .cloned()
+                .map(|field| ((field.name.clone(), field.descriptor.clone()), field))
+                .collect(),
+            base_methods: class
+                .methods
+                .iter()
+                .cloned()
+                .map(|method| ((method.name.clone(), method.descriptor.clone()), method))
+                .collect(),
+            methods: class
+                .methods
+                .iter()
+                .cloned()
+                .map(|method| {
+                    (
+                        (method.name.clone(), method.descriptor.clone()),
+                        CandidateMethod {
+                            method,
+                            source_artifact: artifact.id.clone(),
+                            source_mixin: None,
+                            priority: i32::MIN,
+                            config_priority: i32::MIN,
+                            contribution: None,
+                        },
+                    )
+                })
+                .collect(),
+            interfaces: class.interfaces.iter().cloned().collect(),
+        };
+        self.classes.insert(class_name.to_string(), state);
+    }
+
+    fn apply_method_contribution(&mut self, contribution: PendingMethodContribution) {
+        self.classes
+            .entry(contribution.key.target_class.clone())
+            .or_default();
+        let method_key = (
+            contribution.key.method_name.clone(),
+            contribution.key.descriptor.clone(),
+        );
+        let existing = self
+            .classes
+            .get(&contribution.key.target_class)
+            .and_then(|state| state.methods.get(&method_key))
+            .cloned();
+        let equal_priority_mixin = existing.as_ref().is_some_and(|existing| {
+            existing.source_mixin.is_some()
+                && existing.priority == contribution.priority
+                && existing.config_priority == contribution.config_priority
+        });
+        if equal_priority_mixin {
+            let alternatives = self
+                .ambiguous_methods
+                .entry((
+                    contribution.key.target_class.clone(),
+                    contribution.key.method_name.clone(),
+                    contribution.key.descriptor.clone(),
+                ))
+                .or_default();
+            if let Some(existing) = existing.clone() {
+                alternatives.push(existing);
+            }
+            alternatives.push(CandidateMethod {
+                method: contribution.method.clone(),
+                source_artifact: contribution.key.artifact_id.clone(),
+                source_mixin: Some(contribution.key.mixin_class.clone()),
+                priority: contribution.priority,
+                config_priority: contribution.config_priority,
+                contribution: Some(contribution.key.clone()),
+            });
+        }
+        let kind = if contribution.unique && existing.is_some() {
+            if contribution.synthetic || !contribution.method.is_public {
+                MethodContributionKind::UniqueRenamedMethod
+            } else {
+                MethodContributionKind::UniqueDiscardableMethod
+            }
+        } else if contribution.overwrite && existing.is_none() {
+            MethodContributionKind::InvalidOverwriteTarget
+        } else if !contribution.overwrite
+            && contribution.require_overwrite_annotation
+            && existing.is_some()
+        {
+            MethodContributionKind::MissingRequiredOverwriteAnnotation
+        } else if existing.as_ref().is_some_and(|existing| {
+            existing.source_mixin.is_some() && existing.priority >= contribution.priority
+        }) {
+            MethodContributionKind::SkippedByPriority
+        } else if contribution.overwrite {
+            MethodContributionKind::OverwriteExistingMethod
+        } else if existing.is_some() {
+            MethodContributionKind::ReplaceExistingMethod
+        } else {
+            MethodContributionKind::AddNewMethod
+        };
+
+        if let Some(existing) = existing.as_ref().filter(|existing| {
+            existing
+                .source_mixin
+                .as_ref()
+                .is_some_and(|_| existing.source_artifact != contribution.key.artifact_id)
+        }) {
+            self.interactions.push(method_interaction(
+                existing,
+                &contribution,
+                &method_key,
+                kind,
+            ));
+        }
+        self.contribution_kinds
+            .insert(contribution.key.clone(), kind);
+        if matches!(
+            kind,
+            MethodContributionKind::UniqueRenamedMethod
+                | MethodContributionKind::UniqueDiscardableMethod
+                | MethodContributionKind::SkippedByPriority
+                | MethodContributionKind::InvalidOverwriteTarget
+                | MethodContributionKind::MissingRequiredOverwriteAnnotation
+        ) {
+            if matches!(
+                kind,
+                MethodContributionKind::InvalidOverwriteTarget
+                    | MethodContributionKind::MissingRequiredOverwriteAnnotation
+            ) {
+                self.invalid_contributions.push(InvalidMethodContribution {
+                    key: contribution.key,
+                    kind,
+                });
+            }
+            return;
+        }
+        self.classes
+            .get_mut(&contribution.key.target_class)
+            .expect("candidate class was inserted above")
+            .methods
+            .insert(
+                method_key,
+                CandidateMethod {
+                    method: contribution.method,
+                    source_artifact: contribution.key.artifact_id.clone(),
+                    source_mixin: Some(contribution.key.mixin_class.clone()),
+                    priority: contribution.priority,
+                    config_priority: contribution.config_priority,
+                    contribution: Some(contribution.key),
+                },
+            );
+    }
+
+    fn methods<'a>(
+        &'a self,
+        scanned: &'a ScannedArtifacts,
+        class_name: &str,
+    ) -> Vec<(String, &'a ParsedMethod)> {
+        if let Some(state) = self.classes.get(class_name) {
+            return state
+                .methods
+                .values()
+                .map(|method| (method.source_artifact.clone(), &method.method))
+                .collect();
+        }
+        scanned
+            .universe
+            .parsed_definitions(&scanned.artifacts, class_name)
+            .into_iter()
+            .flat_map(|(artifact, class)| {
+                class
+                    .methods
+                    .iter()
+                    .map(move |method| (artifact.id.clone(), method))
+            })
+            .collect()
+    }
+
+    fn contribution_kind(
+        &self,
+        artifact: &ParsedArtifact,
+        mixin: &ParsedClass,
+        target_class: &str,
+        method: &ParsedMethod,
+    ) -> Option<MethodContributionKind> {
+        self.contribution_kinds
+            .get(&MethodContributionKey {
+                artifact_id: artifact.id.clone(),
+                mixin_class: mixin.name.clone(),
+                target_class: target_class.to_string(),
+                method_name: method.name.clone(),
+                descriptor: method.descriptor.clone(),
+            })
+            .copied()
+    }
+
+    fn method(&self, target: &Target) -> Option<&CandidateMethod> {
+        let member = target.member.as_ref()?;
+        self.classes
+            .get(&target.class)?
+            .methods
+            .get(&(member.name.clone(), member.descriptor.clone()))
+    }
+
+    fn method_variants(&self, target: &Target) -> Vec<&CandidateMethod> {
+        let Some(member) = target.member.as_ref() else {
+            return Vec::new();
+        };
+        let key = (
+            target.class.clone(),
+            member.name.clone(),
+            member.descriptor.clone(),
+        );
+        if let Some(alternatives) = self.ambiguous_methods.get(&key) {
+            let mut variants = alternatives.iter().collect::<Vec<_>>();
+            variants.sort_by(|left, right| {
+                left.source_artifact
+                    .cmp(&right.source_artifact)
+                    .then_with(|| left.source_mixin.cmp(&right.source_mixin))
+            });
+            variants.dedup_by(|left, right| {
+                left.source_artifact == right.source_artifact
+                    && left.source_mixin == right.source_mixin
+            });
+            variants
+        } else {
+            self.method(target).into_iter().collect()
+        }
+    }
+
+    fn base_method(&self, target: &Target) -> Option<&ParsedMethod> {
+        let member = target.member.as_ref()?;
+        self.classes
+            .get(&target.class)?
+            .base_methods
+            .get(&(member.name.clone(), member.descriptor.clone()))
+    }
+
+    fn is_winning_contribution(
+        &self,
+        artifact: &ParsedArtifact,
+        mixin: &ParsedClass,
+        target_class: &str,
+        method: &ParsedMethod,
+    ) -> bool {
+        self.classes
+            .get(target_class)
+            .and_then(|state| {
+                state
+                    .methods
+                    .get(&(method.name.clone(), method.descriptor.clone()))
+            })
+            .and_then(|candidate| candidate.contribution.as_ref())
+            .is_some_and(|key| {
+                key.artifact_id == artifact.id
+                    && key.mixin_class == mixin.name
+                    && key.target_class == target_class
+            })
+    }
+}
+
+fn method_interaction(
+    existing: &CandidateMethod,
+    incoming: &PendingMethodContribution,
+    method_key: &(String, String),
+    result: MethodContributionKind,
+) -> BehavioralInteraction {
+    let target = Target::method(&incoming.key.target_class, &method_key.0, &method_key.1);
+    let mut left = Evidence::new(
+        &existing.source_artifact,
+        existing.source_mixin.as_deref().unwrap_or("<base>"),
+        "earlier Mixin method contribution",
+    );
+    left.method = Some(format!("{}{}", method_key.0, method_key.1));
+    let mut right = Evidence::new(
+        &incoming.key.artifact_id,
+        &incoming.key.mixin_class,
+        format!("later contribution resolved as {result:?}"),
+    );
+    right.method = Some(format!("{}{}", method_key.0, method_key.1));
+    BehavioralInteraction {
+        left_artifact: existing.source_artifact.clone(),
+        right_artifact: incoming.key.artifact_id.clone(),
+        target,
+        kind: BehavioralInteractionKind::OrderedMethodContributions,
+        reason: format!(
+            "Mixin priority/order selects one of multiple method contributions ({result:?})"
+        ),
+        evidence: vec![left, right],
+        confidence: Confidence::Exact,
+        activation: Activation::Definite,
+        order: crate::model::OrderAnalysis::LeftMustRunFirst,
+    }
+}
+
+fn candidate_query_findings(
+    effects: &[Effect],
+    candidates: &CandidateUniverse,
+) -> (Vec<crate::model::Risk>, Vec<BehavioralInteraction>) {
+    let mut risks = Vec::new();
+    let mut interactions = Vec::new();
+    for effect in effects {
+        for query in &effect.queries {
+            let Some(method) = candidates.method(&query.method) else {
+                continue;
+            };
+            let Some(contribution) = method.contribution.as_ref() else {
+                continue;
+            };
+            let is_replacement =
+                candidates
+                    .contribution_kinds
+                    .get(contribution)
+                    .is_some_and(|kind| {
+                        matches!(
+                            kind,
+                            MethodContributionKind::ReplaceExistingMethod
+                                | MethodContributionKind::OverwriteExistingMethod
+                        )
+                    });
+            if !is_replacement || method.source_artifact == effect.artifact_id {
+                continue;
+            }
+            let selected = u32::try_from(query.selected.len()).unwrap_or(u32::MAX);
+            let minimum = query.minimum_matches;
+            let variant_counts = candidates
+                .method_variants(&query.method)
+                .into_iter()
+                .filter(|variant| variant.source_mixin.is_some())
+                .filter_map(|variant| {
+                    query_matches_candidate(query, &variant.method)
+                        .map(|matches| (variant, matches))
+                })
+                .collect::<Vec<_>>();
+            let mixed_outcome = minimum.is_some_and(|minimum| {
+                variant_counts.iter().any(|(_, matches)| *matches < minimum)
+                    && variant_counts
+                        .iter()
+                        .any(|(_, matches)| *matches >= minimum)
+            });
+            let hard_failure = mixed_outcome
+                || minimum.is_some_and(|minimum| {
+                    if variant_counts.len() > 1 {
+                        variant_counts.iter().all(|(_, matches)| *matches < minimum)
+                    } else {
+                        selected < minimum
+                    }
+                });
+            let failing_method = variant_counts
+                .iter()
+                .find(|(_, matches)| minimum.is_some_and(|minimum| *matches < minimum))
+                .map_or(method, |(variant, _)| *variant);
+            let mut source_evidence = Evidence::new(
+                &failing_method.source_artifact,
+                failing_method
+                    .source_mixin
+                    .as_deref()
+                    .unwrap_or("<unknown mixin>"),
+                "this Mixin contribution supplies the candidate replacement body",
+            );
+            source_evidence.method = query
+                .method
+                .member
+                .as_ref()
+                .map(|member| format!("{}{}", member.name, member.descriptor));
+            if hard_failure {
+                let mut evidence = effect.evidence.clone();
+                evidence.push(source_evidence);
+                let confidence = effect.confidence;
+                let activation = if mixed_outcome {
+                    Activation::Conditional
+                } else {
+                    effect.activation
+                };
+                let severity = crate::model::Severity::High;
+                risks.push(crate::model::Risk {
+                    left_artifact: failing_method.source_artifact.clone(),
+                    right_artifact: effect.artifact_id.clone(),
+                    target: query.method.clone(),
+                    rule: "candidate_query_minimum_unsatisfied".to_string(),
+                    reason: if mixed_outcome {
+                        format!(
+                            "Some finite candidate Mixin orders satisfy require {}, while another recovered replacement body does not.",
+                            minimum.unwrap_or_default()
+                        )
+                    } else {
+                        format!(
+                            "The final candidate method body matches {} join point(s), below the injector require value {}.",
+                            selected,
+                            minimum.unwrap_or_default()
+                        )
+                    },
+                    left_mutations: vec![MutationKind::ReplaceMethodBody],
+                    right_mutations: effect
+                        .mutations
+                        .iter()
+                        .map(|mutation| mutation.kind)
+                        .collect(),
+                    evidence,
+                    order: if mixed_outcome {
+                        crate::model::OrderAnalysis::Unknown
+                    } else {
+                        crate::model::OrderAnalysis::CardinalityInvalidated
+                    },
+                    severity,
+                    confidence,
+                    precision: effect.precision,
+                    risk_index: effective_risk_index(severity, confidence, activation),
+                    activation,
+                });
+            } else if selected == 0
+                && query.minimum_matches.is_none_or(|minimum| minimum == 0)
+                && candidates
+                    .base_method(&query.method)
+                    .is_some_and(|base| instruction_body_changed(base, &method.method))
+            {
+                let mut evidence = effect.evidence.clone();
+                evidence.push(source_evidence);
+                interactions.push(BehavioralInteraction {
+                    left_artifact: method.source_artifact.clone(),
+                    right_artifact: effect.artifact_id.clone(),
+                    target: query.method.clone(),
+                    kind: BehavioralInteractionKind::OptionalInjectionAffected,
+                    reason: "The optional injector has no join point in the final replacement body; Mixin application remains valid."
+                        .to_string(),
+                    evidence,
+                    confidence: effect.confidence,
+                    activation: effect.activation,
+                    order: crate::model::OrderAnalysis::LeftMustRunFirst,
+                });
+            }
+        }
+    }
+    (risks, interactions)
+}
+
+fn query_matches_candidate(query: &InjectionQuery, method: &ParsedMethod) -> Option<u32> {
+    if query.slice.is_some() || query.shift.is_some() {
+        return None;
+    }
+    if query
+        .local_selector
+        .as_ref()
+        .is_some_and(|selector| selector.args_only && selector.slot.is_some())
+        && query.selector_kind == "HEAD"
+    {
+        return Some(1);
+    }
+    if query.selector_kind == "CONSTANT" {
+        return None;
+    }
+    let mut matched = BTreeSet::new();
+    for kind in query
+        .selector_kind
+        .split('+')
+        .filter(|kind| !kind.is_empty())
+    {
+        let mut values = BTreeMap::from([(
+            "value".to_string(),
+            AnnotationValue::String(kind.to_string()),
+        )]);
+        if let Some(ordinal) = query.ordinal {
+            values.insert(
+                "ordinal".to_string(),
+                AnnotationValue::Integer(i64::from(ordinal)),
+            );
+        }
+        let at = ParsedAnnotation {
+            descriptor: "Lorg/spongepowered/asm/mixin/injection/At;".to_string(),
+            values,
+        };
+        let matches = match_instructions(method, &at, kind, &query.target_selectors, None);
+        let matches = query.ordinal.map_or(matches.clone(), |ordinal| {
+            matches
+                .get(usize::try_from(ordinal).unwrap_or(usize::MAX))
+                .copied()
+                .into_iter()
+                .collect()
+        });
+        matched.extend(
+            matches
+                .into_iter()
+                .map(|instruction| instruction.reference.stable_id),
+        );
+    }
+    u32::try_from(matched.len()).ok()
+}
+
+fn instruction_body_changed(left: &ParsedMethod, right: &ParsedMethod) -> bool {
+    left.instructions.len() != right.instructions.len()
+        || left
+            .instructions
+            .iter()
+            .zip(&right.instructions)
+            .any(|(left, right)| {
+                left.reference.opcode != right.reference.opcode
+                    || left.reference.member != right.reference.member
+                    || left.reference.constant != right.reference.constant
+            })
+}
+
+fn effective_risk_index(
+    severity: crate::model::Severity,
+    confidence: Confidence,
+    activation: Activation,
+) -> u8 {
+    let activation_factor = match activation {
+        Activation::Definite => 100_u32,
+        Activation::Conditional => 80,
+        Activation::Candidate => 55,
+        Activation::Unknown => 35,
+    };
+    let product = u32::from(severity.score()) * u32::from(confidence.score()) * activation_factor;
+    u8::try_from(((product + 5_000) / 10_000).min(100)).unwrap_or(100)
+}
 
 #[cfg(test)]
 pub(crate) fn analyze(scanned: &mut ScannedArtifacts) -> Vec<Effect> {
-    analyze_with_progress(scanned, None)
+    analyze_detailed(scanned).effects
+}
+
+#[cfg(test)]
+fn analyze_detailed(scanned: &mut ScannedArtifacts) -> MixinAnalysis {
+    let registry = MixinRegistry::all_annotated(scanned);
+    analyze_with_progress(scanned, &registry, None)
 }
 
 pub(crate) fn analyze_with_progress(
     scanned: &mut ScannedArtifacts,
+    registry: &MixinRegistry,
     progress: Option<&crate::progress::AuditProgressReporter>,
-) -> Vec<Effect> {
+) -> MixinAnalysis {
     use crate::progress::{AuditProgressEvent, AuditProgressStage, emit};
 
-    let total = scanned
-        .artifacts
+    let total = registry
+        .mixins
         .iter()
-        .filter(|artifact| artifact.kind == crate::model::ArtifactKind::Mod)
-        .flat_map(|artifact| &artifact.classes)
-        .filter(|class| annotation(&class.annotations, MIXIN).is_some())
+        .filter(|mixin| {
+            matches!(
+                mixin.activation,
+                crate::model::MixinActivation::RegisteredForCurrentSide
+                    | crate::model::MixinActivation::PluginAccepted
+            )
+        })
         .count();
     emit(
         progress,
@@ -44,6 +799,8 @@ pub(crate) fn analyze_with_progress(
         },
     );
     let mut effects = Vec::new();
+    let mut findings = MixinFindings::default();
+    let candidates = CandidateUniverse::build(scanned, registry);
     let mut warnings = Vec::new();
     let mut completed = 0;
     let mod_indexes = scanned
@@ -58,6 +815,9 @@ pub(crate) fn analyze_with_progress(
         let artifact = &scanned.artifacts[index];
         for mixin in &artifact.classes {
             let Some(mixin_annotation) = annotation(&mixin.annotations, MIXIN) else {
+                continue;
+            };
+            let Some(registered) = registry.active_mixin(&artifact.id, &mixin.name) else {
                 continue;
             };
             scanned.coverage.mixins_discovered += 1;
@@ -84,14 +844,50 @@ pub(crate) fn analyze_with_progress(
                 .value("priority")
                 .and_then(AnnotationValue::integer)
                 .and_then(|value| i32::try_from(value).ok())
-                .unwrap_or(1000);
-            analyze_mixin_structure(artifact, mixin, &target_classes, priority, &mut effects);
+                .unwrap_or(registered.class_priority);
+            let pseudo = annotation(&mixin.annotations, PSEUDO).is_some();
+            let target_classes = target_classes
+                .into_iter()
+                .filter(|target| {
+                    let present = !scanned.universe.definitions(target).is_empty();
+                    if !present && pseudo {
+                        findings.inactive_candidates.push(InactiveCandidate {
+                            artifact_id: artifact.id.clone(),
+                            class: Some(mixin.name.clone()),
+                            config_path: Some(registered.config_path.clone()),
+                            kind: InactiveCandidateKind::PseudoTargetMissing,
+                            reason: format!(
+                                "@Pseudo target {target} is absent from the active class universe"
+                            ),
+                        });
+                    }
+                    present || !pseudo
+                })
+                .collect::<Vec<_>>();
+            if target_classes.is_empty() {
+                completed += 1;
+                continue;
+            }
+            let first_effect = effects.len();
+            analyze_mixin_structure(
+                artifact,
+                mixin,
+                &target_classes,
+                priority,
+                &candidates,
+                &mut effects,
+            );
+            for effect in &mut effects[first_effect..] {
+                effect.config_priority = Some(registered.config_priority);
+                effect.mixin_priority = Some(priority);
+            }
             for method in &mixin.methods {
                 for injector in method
                     .annotations
                     .iter()
                     .filter(|annotation| injector_kind(&annotation.descriptor).is_some())
                 {
+                    let first_injector_effect = effects.len();
                     analyze_injector(
                         scanned,
                         artifact,
@@ -100,10 +896,27 @@ pub(crate) fn analyze_with_progress(
                         injector,
                         &target_classes,
                         priority,
+                        registered.default_require,
+                        registered.refmap.as_deref(),
+                        &candidates,
                         &mut effects,
                         &mut warnings,
+                        &mut findings,
                     );
+                    let injector_order = injector
+                        .value("order")
+                        .and_then(AnnotationValue::integer)
+                        .and_then(|value| i32::try_from(value).ok())
+                        .unwrap_or_else(|| default_injector_order(&injector.descriptor));
+                    for effect in &mut effects[first_injector_effect..] {
+                        effect.config_priority = Some(registered.config_priority);
+                        effect.mixin_priority = Some(priority);
+                        effect.injector_order = Some(injector_order);
+                    }
                 }
+            }
+            for effect in &mut effects[first_effect..] {
+                effect.activation = Activation::Definite;
             }
             completed += 1;
             emit(
@@ -117,6 +930,16 @@ pub(crate) fn analyze_with_progress(
         }
     }
     finalize_injection_groups(&mut effects);
+    let (mut candidate_risks, candidate_interactions) =
+        candidate_query_findings(&effects, &candidates);
+    candidate_risks.extend(candidate_merge_risks(&candidates));
+    scanned.coverage.unsupported_selector_syntax += findings.unsupported_selectors;
+    scanned.coverage.unsupported_injection_points += findings.unsupported_injection_points;
+    scanned.coverage.valid_multi_target_selectors += findings.valid_multi_target_selectors;
+    scanned.coverage.unresolved_required_references += warnings
+        .iter()
+        .filter(|warning| warning.kind == WarningKind::UnresolvedSoftReference)
+        .count();
     scanned.warnings.extend(warnings);
     emit(
         progress,
@@ -125,7 +948,74 @@ pub(crate) fn analyze_with_progress(
             completed,
         },
     );
-    effects
+    MixinAnalysis {
+        effects,
+        risks: candidate_risks,
+        interactions: candidates
+            .interactions
+            .into_iter()
+            .chain(candidate_interactions)
+            .collect(),
+        coverage_gaps: findings.coverage_gaps,
+        inactive_candidates: findings.inactive_candidates,
+    }
+}
+
+fn candidate_merge_risks(candidates: &CandidateUniverse) -> Vec<crate::model::Risk> {
+    candidates
+        .invalid_contributions
+        .iter()
+        .map(|invalid| {
+            let target = Target::method(
+                &invalid.key.target_class,
+                &invalid.key.method_name,
+                &invalid.key.descriptor,
+            );
+            let (rule, reason, annotation) = match invalid.kind {
+                MethodContributionKind::InvalidOverwriteTarget => (
+                    "invalid_overwrite_target",
+                    "@Overwrite names a method which does not exist in the candidate target class.",
+                    OVERWRITE,
+                ),
+                MethodContributionKind::MissingRequiredOverwriteAnnotation => (
+                    "missing_required_overwrite_annotation",
+                    "The active Mixin config requires @Overwrite on a method which replaces an existing target method.",
+                    "overwrite.requireAnnotations",
+                ),
+                _ => unreachable!("only invalid merge contributions are recorded"),
+            };
+            let severity = crate::model::Severity::High;
+            let confidence = Confidence::Exact;
+            let activation = Activation::Definite;
+            let mut evidence =
+                Evidence::new(&invalid.key.artifact_id, &invalid.key.mixin_class, reason);
+            evidence.method = Some(format!(
+                "{}{}",
+                invalid.key.method_name, invalid.key.descriptor
+            ));
+            evidence.annotation = Some(annotation.to_string());
+            crate::model::Risk {
+                left_artifact: invalid.key.artifact_id.clone(),
+                right_artifact: candidates
+                    .classes
+                    .get(&invalid.key.target_class)
+                    .and_then(|class| class.base_artifact.clone())
+                    .unwrap_or_else(|| "active class universe".to_string()),
+                target,
+                rule: rule.to_string(),
+                reason: reason.to_string(),
+                left_mutations: vec![MutationKind::ReplaceMethodBody],
+                right_mutations: Vec::new(),
+                evidence: vec![evidence],
+                order: crate::model::OrderAnalysis::Structural,
+                severity,
+                confidence,
+                precision: Precision::Method,
+                risk_index: effective_risk_index(severity, confidence, activation),
+                activation,
+            }
+        })
+        .collect()
 }
 
 fn analyze_mixin_structure(
@@ -133,6 +1023,7 @@ fn analyze_mixin_structure(
     mixin: &ParsedClass,
     targets: &[String],
     priority: i32,
+    candidates: &CandidateUniverse,
     effects: &mut Vec<Effect>,
 ) {
     let mixin_is_unique = annotation(&mixin.annotations, UNIQUE).is_some();
@@ -204,15 +1095,6 @@ fn analyze_mixin_structure(
                     SHADOW,
                     priority,
                 ));
-            } else if annotation(&method.annotations, OVERWRITE).is_some() {
-                effects.push(structural_effect(
-                    artifact,
-                    mixin,
-                    target,
-                    MutationKind::ReplaceMethodBody,
-                    OVERWRITE,
-                    priority,
-                ));
             } else if let Some(accessor) = annotation(&method.annotations, ACCESSOR)
                 .or_else(|| annotation(&method.annotations, INVOKER))
             {
@@ -248,27 +1130,55 @@ fn analyze_mixin_structure(
                     &accessor.descriptor,
                     priority,
                 ));
-            } else if !((method.is_synthetic
-                || annotation(&method.annotations, UNIQUE).is_some()
-                || mixin_is_unique)
-                && !method.is_public)
-            {
-                // MixinPreProcessorStandard gives synthetic and non-public
-                // @Unique methods target-specific unique names. Public unique
-                // methods can still be discarded or fail on a collision and
-                // therefore remain structural effects.
-                effects.push(structural_effect(
-                    artifact,
-                    mixin,
-                    target,
-                    MutationKind::AddMethod,
-                    if annotation(&method.annotations, UNIQUE).is_some() {
-                        UNIQUE
-                    } else {
-                        "mixin method merge"
-                    },
-                    priority,
-                ));
+            } else {
+                let contribution =
+                    candidates.contribution_kind(artifact, mixin, target_class, method);
+                let winning =
+                    candidates.is_winning_contribution(artifact, mixin, target_class, method);
+                match contribution {
+                    Some(
+                        MethodContributionKind::OverwriteExistingMethod
+                        | MethodContributionKind::ReplaceExistingMethod,
+                    ) if winning => effects.push(structural_effect(
+                        artifact,
+                        mixin,
+                        target,
+                        MutationKind::ReplaceMethodBody,
+                        if annotation(&method.annotations, OVERWRITE).is_some() {
+                            OVERWRITE
+                        } else {
+                            "Mixin method replacement"
+                        },
+                        priority,
+                    )),
+                    Some(MethodContributionKind::AddNewMethod) if winning => {
+                        effects.push(structural_effect(
+                            artifact,
+                            mixin,
+                            target,
+                            MutationKind::AddMethod,
+                            "Mixin method addition",
+                            priority,
+                        ));
+                    }
+                    None if !((method.is_synthetic
+                        || annotation(&method.annotations, UNIQUE).is_some()
+                        || mixin_is_unique)
+                        && !method.is_public) =>
+                    {
+                        // Test-only and degraded callers without a prepared
+                        // candidate state retain the conservative shape.
+                        effects.push(structural_effect(
+                            artifact,
+                            mixin,
+                            target,
+                            MutationKind::AddMethod,
+                            "Mixin method merge",
+                            priority,
+                        ));
+                    }
+                    _ => {}
+                }
             }
         }
         if !mixin.interfaces.is_empty() {
@@ -301,7 +1211,9 @@ fn analyze_mixin_structure(
                 precision: Precision::Class,
                 confidence: Confidence::High,
                 activation: Activation::Candidate,
-                priority: Some(priority),
+                config_priority: None,
+                mixin_priority: Some(priority),
+                injector_order: None,
             });
         }
     }
@@ -316,8 +1228,12 @@ fn analyze_injector(
     injector: &ParsedAnnotation,
     mixin_targets: &[String],
     priority: i32,
+    default_require: u32,
+    active_refmap: Option<&str>,
+    candidates: &CandidateUniverse,
     effects: &mut Vec<Effect>,
     warnings: &mut Vec<Warning>,
+    findings: &mut MixinFindings,
 ) {
     let Some((mutation_kind, mechanism)) = injector_kind(&injector.descriptor) else {
         return;
@@ -340,7 +1256,7 @@ fn analyze_injector(
         .value("at")
         .map(AnnotationValue::annotations)
         .unwrap_or_default();
-    let require = positive_u32(injector.value("require"));
+    let require = injector_requirement(injector, default_require);
     let expect = positive_u32(injector.value("expect"));
     let allow = positive_u32(injector.value("allow"));
     let group_annotation = annotation(
@@ -369,22 +1285,51 @@ fn analyze_injector(
 
     for target_class in mixin_targets {
         for raw_selector in &raw_selectors {
+            if !parse_selector(raw_selector).supported {
+                findings.unsupported_selectors += 1;
+                findings.coverage_gaps.push(CoverageGap {
+                    artifact_id: Some(artifact.id.clone()),
+                    scope: format!("{}::{raw_selector}", mixin.name),
+                    kind: CoverageGapKind::UnsupportedSelector,
+                    detail: "method selector syntax is not supported by the static evaluator"
+                        .to_string(),
+                    count: 1,
+                });
+                continue;
+            }
             let method_resolution = resolve_method_reference(
                 scanned,
                 artifact,
                 &mixin.name,
                 target_class,
                 raw_selector,
+                active_refmap,
+                candidates,
             );
-            warn_for_soft_reference(
-                warnings,
-                artifact,
-                &mixin.name,
-                "method selector",
-                raw_selector,
-                method_resolution.resolution,
-            );
+            if method_resolution.resolution == SoftReferenceResolution::MultiTargetValid {
+                findings.valid_multi_target_selectors += 1;
+            }
             if method_resolution.methods.is_empty() {
+                if require.is_none_or(|minimum| minimum == 0) {
+                    findings.inactive_candidates.push(InactiveCandidate {
+                        artifact_id: artifact.id.clone(),
+                        class: Some(mixin.name.clone()),
+                        config_path: None,
+                        kind: InactiveCandidateKind::MissingOptionalTarget,
+                        reason: format!(
+                            "optional injector selector '{raw_selector}' has no active target"
+                        ),
+                    });
+                    continue;
+                }
+                warn_for_soft_reference(
+                    warnings,
+                    artifact,
+                    &mixin.name,
+                    "method selector",
+                    raw_selector,
+                    method_resolution.resolution,
+                );
                 let parsed = parse_selector(raw_selector);
                 let method_target = Target::method(
                     target_class,
@@ -469,7 +1414,9 @@ fn analyze_injector(
                                 target_method,
                                 "CONSTANT",
                             ),
+                            method_selector: selector_model(raw_selector),
                             selector_kind: "CONSTANT".to_string(),
+                            target_selectors: Vec::new(),
                             method: method_target.clone(),
                             candidates: selected.clone(),
                             selected: selected.clone(),
@@ -477,10 +1424,12 @@ fn analyze_injector(
                             maximum_matches: allow,
                             expected_matches: expect,
                             ordinal: None,
+                            shift: None,
                             slice: None,
                             slice_start: None,
                             slice_end: None,
                             resolution: method_resolution.resolution,
+                            local_selector: None,
                             group: injection_group_constraint(
                                 artifact,
                                 mixin,
@@ -520,7 +1469,9 @@ fn analyze_injector(
                             precision: Precision::Instruction,
                             confidence: confidence_for_resolution(method_resolution.resolution),
                             activation: Activation::Candidate,
-                            priority: Some(priority),
+                            config_priority: None,
+                            mixin_priority: Some(priority),
+                            injector_order: None,
                         });
                         continue;
                     }
@@ -563,7 +1514,9 @@ fn analyze_injector(
                             precision: Precision::Method,
                             confidence: confidence_for_resolution(method_resolution.resolution),
                             activation: Activation::Candidate,
-                            priority: Some(priority),
+                            config_priority: None,
+                            mixin_priority: Some(priority),
+                            injector_order: None,
                         });
                         continue;
                     }
@@ -587,13 +1540,23 @@ fn analyze_injector(
                 let mut at_kinds = Vec::new();
                 let mut at_targets = Vec::new();
                 let mut refmap_sources = method_resolution.sources.clone();
-                let mut target_candidates = method_resolution.candidates.clone();
+                // Method selectors and @At target selectors are distinct
+                // namespaces. Carrying the former into the instruction query
+                // can turn a valid direct member match into a fabricated
+                // alternative target.
+                let mut target_candidates = Vec::new();
                 let mut slices_used = BTreeSet::new();
                 let mut slice_ranges = BTreeSet::new();
                 let mut ordinals = BTreeSet::new();
                 let mut shifts = BTreeSet::new();
                 let mut resolution = method_resolution.resolution;
                 let mut degradation = None;
+                let reference_context = ReferenceContext {
+                    artifact,
+                    mixin_class: &mixin.name,
+                    target_class,
+                    active_refmap,
+                };
 
                 for at in &ats {
                     let at_kind = at
@@ -603,25 +1566,21 @@ fn analyze_injector(
                         .to_ascii_uppercase();
                     let support = injection_point_support(&at_kind);
                     if support != InjectionPointSupport::Supported {
-                        let kind = if support == InjectionPointSupport::KnownUnsupported {
-                            WarningKind::KnownUnsupportedInjectionPoint
-                        } else {
-                            WarningKind::CustomInjectionPoint
-                        };
                         let label = if support == InjectionPointSupport::KnownUnsupported {
                             "known but unsupported"
                         } else {
                             "custom"
                         };
-                        warnings.push(warning(
-                            artifact,
-                            &mixin.name,
-                            kind,
-                            &format!(
-                                "{label} InjectionPoint '{at_kind}' kept the declared \
-                                 {mutation_kind:?} semantics at method precision"
+                        findings.unsupported_injection_points += 1;
+                        findings.coverage_gaps.push(CoverageGap {
+                            artifact_id: Some(artifact.id.clone()),
+                            scope: format!("{}::@At({at_kind})", mixin.name),
+                            kind: CoverageGapKind::UnsupportedInjectionPoint,
+                            detail: format!(
+                                "{label} InjectionPoint kept {mutation_kind:?} semantics at method precision"
                             ),
-                        ));
+                            count: 1,
+                        });
                         degradation = Some(format!(
                             "{label} InjectionPoint '{at_kind}' cannot be resolved precisely"
                         ));
@@ -633,9 +1592,7 @@ fn analyze_injector(
                         &method_target,
                         &slices,
                         at,
-                        artifact,
-                        &mixin.name,
-                        target_class,
+                        reference_context,
                     );
                     if let Some(reason) = &active_slice.unresolved {
                         warnings.push(warning(
@@ -663,25 +1620,25 @@ fn analyze_injector(
 
                     let (at_candidates, at_sources, at_resolution) = resolve_at_reference(
                         target_method,
-                        artifact,
-                        &mixin.name,
-                        target_class,
                         at,
                         &at_kind,
                         active_slice.range,
+                        reference_context,
                     );
                     if let Some(raw_at_target) = at
                         .value("target")
                         .and_then(|value| value.strings().into_iter().next())
                     {
-                        warn_for_soft_reference(
-                            warnings,
-                            artifact,
-                            &mixin.name,
-                            &format!("@At({at_kind}) target"),
-                            &raw_at_target,
-                            at_resolution,
-                        );
+                        if require.is_some_and(|minimum| minimum > 0) {
+                            warn_for_soft_reference(
+                                warnings,
+                                artifact,
+                                &mixin.name,
+                                &format!("@At({at_kind}) target"),
+                                &raw_at_target,
+                                at_resolution,
+                            );
+                        }
                         at_targets.push(raw_at_target);
                     }
                     resolution = weaker_resolution(resolution, at_resolution);
@@ -744,28 +1701,38 @@ fn analyze_injector(
                 candidates.dedup_by_key(|instruction| instruction.stable_id);
                 selected.sort_by_key(|instruction| instruction.reference.stable_id);
                 selected.dedup_by_key(|instruction| instruction.reference.stable_id);
-                if selected.is_empty() {
-                    effects.push(degraded_injector_effect(
-                        artifact,
-                        mixin,
-                        handler,
-                        injector,
-                        method_target,
-                        mutation_kind,
-                        mechanism,
-                        priority,
-                        &format!(
-                            "{} has no match inside its selected slice in the original target method",
-                            at_kinds.join("+")
-                        ),
-                    ));
-                    continue;
-                }
-
-                let selected_references = selected
+                let local_selector = (mutation_kind == MutationKind::ModifyLocalValue)
+                    .then(|| resolve_local_selector(injector, handler, target_method));
+                let mut selected_references = selected
                     .iter()
                     .map(|instruction| instruction.reference.clone())
                     .collect::<Vec<_>>();
+                let mut effect_precision = Precision::Instruction;
+                if let Some(local_selector) = &local_selector {
+                    if local_selector.args_only
+                        && at_kinds.iter().any(|kind| kind == "HEAD")
+                        && let Some(slot) = local_selector.slot
+                    {
+                        let local = local_instruction_reference(
+                            target_method,
+                            &method_target,
+                            slot,
+                            local_selector.expected_type.as_deref(),
+                        );
+                        candidates = vec![local.clone()];
+                        selected_references = vec![local];
+                    } else if local_selector.slot.is_none() {
+                        findings.coverage_gaps.push(CoverageGap {
+                            artifact_id: Some(artifact.id.clone()),
+                            scope: format!("{}::{}{}", mixin.name, handler.name, handler.descriptor),
+                            kind: CoverageGapKind::UnresolvedLocalSelector,
+                            detail: "ModifyVariable local discriminator did not resolve to one unique slot"
+                                .to_string(),
+                            count: 1,
+                        });
+                        effect_precision = Precision::Method;
+                    }
+                }
                 let first_instruction = selected_references.first().cloned();
                 let mut mutations = Vec::new();
                 for instruction in &selected_references {
@@ -804,6 +1771,13 @@ fn analyze_injector(
                         slice: None,
                     });
                 }
+                if mutation_kind == MutationKind::ModifyLocalValue && mutations.is_empty() {
+                    mutations.push(Mutation::new(
+                        mutation_kind,
+                        method_target.clone(),
+                        Precision::Method,
+                    ));
+                }
                 refmap_sources.sort();
                 refmap_sources.dedup();
                 target_candidates.sort();
@@ -820,7 +1794,9 @@ fn analyze_injector(
                         target_method,
                         &selector_kind,
                     ),
+                    method_selector: selector_model(raw_selector),
                     selector_kind: selector_kind.clone(),
+                    target_selectors: target_candidates.clone(),
                     method: method_target.clone(),
                     candidates,
                     selected: selected_references.clone(),
@@ -829,6 +1805,9 @@ fn analyze_injector(
                     expected_matches: expect,
                     ordinal: (ordinals.len() == 1)
                         .then(|| ordinals.iter().next().copied())
+                        .flatten(),
+                    shift: (shifts.len() == 1)
+                        .then(|| shifts.iter().next().cloned())
                         .flatten(),
                     slice: (slices_used.len() == 1)
                         .then(|| slices_used.iter().next().cloned())
@@ -840,6 +1819,7 @@ fn analyze_injector(
                         .then(|| slice_ranges.iter().next().map(|(_, end)| *end))
                         .flatten(),
                     resolution,
+                    local_selector,
                     group: injection_group_constraint(
                         artifact,
                         mixin,
@@ -870,7 +1850,7 @@ fn analyze_injector(
                             resolution,
                             &refmap_sources,
                             &target_candidates,
-                            Precision::Instruction,
+                            effect_precision,
                             "injector query resolved after slice, ordinal, and shift",
                         );
                         evidence.instruction = first_instruction;
@@ -885,10 +1865,12 @@ fn analyze_injector(
                             .flatten();
                         evidence
                     }],
-                    precision: Precision::Instruction,
+                    precision: effect_precision,
                     confidence: confidence_for_resolution(resolution),
                     activation: Activation::Candidate,
-                    priority: Some(priority),
+                    config_priority: None,
+                    mixin_priority: Some(priority),
+                    injector_order: None,
                 });
             }
         }
@@ -928,7 +1910,9 @@ fn shape_only_effect(
         precision: Precision::Method,
         confidence: Confidence::High,
         activation: Activation::Candidate,
-        priority: Some(priority),
+        config_priority: None,
+        mixin_priority: Some(priority),
+        injector_order: None,
     }
 }
 
@@ -982,7 +1966,9 @@ fn structural_effect(
         precision: Precision::Method,
         confidence: Confidence::High,
         activation: Activation::Candidate,
-        priority: Some(priority),
+        config_priority: None,
+        mixin_priority: Some(priority),
+        injector_order: None,
     }
 }
 
@@ -1035,7 +2021,9 @@ fn degraded_injector_effect(
         precision,
         confidence: Confidence::Low,
         activation: Activation::Candidate,
-        priority: Some(priority),
+        config_priority: None,
+        mixin_priority: Some(priority),
+        injector_order: None,
     }
 }
 
@@ -1068,6 +2056,13 @@ fn injector_simple_name(descriptor: &str) -> &str {
         .rsplit('/')
         .next()
         .unwrap_or_default()
+}
+
+fn default_injector_order(descriptor: &str) -> i32 {
+    match injector_simple_name(descriptor) {
+        "Redirect" | "ModifyConstant" => 10_000,
+        _ => 1_000,
+    }
 }
 
 fn match_instructions<'a>(
@@ -1141,7 +2136,14 @@ fn match_instructions<'a>(
             .iter()
             .filter(|instruction| {
                 instruction.reference.opcode == 187
-                    && matches!(&instruction.kind, InstructionKind::Type(class) if targets.is_empty() || targets.iter().any(|target| target.owner.as_deref().is_none_or(|owner| owner == class)))
+                    && matches!(
+                        &instruction.kind,
+                        InstructionKind::Type(class)
+                            if target_candidates.is_empty()
+                                || target_candidates.iter().any(|target| {
+                                    new_target_class(target).as_deref() == Some(class)
+                                })
+                    )
             })
             .collect(),
         "CONSTANT" => {
@@ -1177,6 +2179,28 @@ fn match_instructions<'a>(
         matches.retain(|instruction| instruction.reference.opcode == opcode);
     }
     matches
+}
+
+fn new_target_class(value: &str) -> Option<String> {
+    let value = value.trim();
+    if let Some((_, return_type)) = value.split_once(')')
+        && let Some(class) = return_type
+            .strip_prefix('L')
+            .and_then(|class| class.strip_suffix(';'))
+    {
+        // Mixin's BeforeNew also accepts a constructor descriptor whose
+        // object return type identifies the allocated class.
+        return normalize_class_name(class);
+    }
+    if let Some(rest) = value.strip_prefix('L')
+        && let Some((owner, _)) = rest.split_once(';')
+    {
+        return normalize_class_name(owner);
+    }
+    if value.contains("<init>") {
+        return parse_selector(value).owner;
+    }
+    normalize_class_name(value)
 }
 
 fn at_argument(at: &ParsedAnnotation, key: &str) -> Option<String> {
@@ -1350,14 +2374,20 @@ struct ActiveSlice {
     unresolved: Option<String>,
 }
 
+#[derive(Clone, Copy)]
+struct ReferenceContext<'a> {
+    artifact: &'a ParsedArtifact,
+    mixin_class: &'a str,
+    target_class: &'a str,
+    active_refmap: Option<&'a str>,
+}
+
 fn resolve_active_slice(
     method: &ParsedMethod,
     method_target: &Target,
     slices: &[&ParsedAnnotation],
     at: &ParsedAnnotation,
-    artifact: &ParsedArtifact,
-    mixin_class: &str,
-    target_class: &str,
+    context: ReferenceContext<'_>,
 ) -> ActiveSlice {
     let requested = at
         .value("slice")
@@ -1449,15 +2479,8 @@ fn resolve_active_slice(
                 .and_then(AnnotationValue::integer)
                 .filter(|value| *value >= 0)
                 .and_then(|value| u32::try_from(value).ok());
-            let (target_candidates, _, boundary_resolution) = resolve_at_reference(
-                method,
-                artifact,
-                mixin_class,
-                target_class,
-                boundary_at,
-                &kind,
-                None,
-            );
+            let (target_candidates, _, boundary_resolution) =
+                resolve_at_reference(method, boundary_at, &kind, None, context);
             let matches = match_instructions(method, boundary_at, &kind, &target_candidates, None);
             let selected = ordinal.map_or_else(
                 || matches.clone(),
@@ -1595,27 +2618,24 @@ fn render_shift(at: &ParsedAnnotation) -> Option<String> {
 
 fn resolve_target_methods<'a>(
     scanned: &'a ScannedArtifacts,
+    candidates: &'a CandidateUniverse,
     target_class: &str,
     selector: &str,
 ) -> Vec<(String, &'a ParsedMethod)> {
     let selector = parse_selector(selector);
+    if !selector.supported {
+        return Vec::new();
+    }
     let owner = selector.owner.as_deref().unwrap_or(target_class);
-    scanned
-        .universe
-        .parsed_definitions(&scanned.artifacts, owner)
+    candidates
+        .methods(scanned, owner)
         .into_iter()
-        .flat_map(|(artifact, class)| {
-            class
-                .methods
-                .iter()
-                .filter(|method| {
-                    method.name == selector.name
-                        && selector
-                            .descriptor
-                            .as_ref()
-                            .is_none_or(|descriptor| descriptor == &method.descriptor)
-                })
-                .map(move |method| (artifact.id.clone(), method))
+        .filter(|(_, method)| {
+            selector.matches_name(&method.name)
+                && selector
+                    .descriptor
+                    .as_ref()
+                    .is_none_or(|descriptor| descriptor == &method.descriptor)
         })
         .collect()
 }
@@ -1634,44 +2654,50 @@ fn resolve_method_reference<'a>(
     mixin_class: &str,
     target_class: &str,
     original: &str,
+    active_refmap: Option<&str>,
+    candidate_universe: &'a CandidateUniverse,
 ) -> ResolvedMethods<'a> {
-    let candidates = refmap_candidates(artifact, mixin_class, original, target_class);
-    let sources = refmap_sources(artifact, mixin_class, original, target_class);
+    let candidates =
+        refmap_candidates(artifact, mixin_class, original, target_class, active_refmap);
+    let sources = refmap_sources(artifact, mixin_class, original, target_class, active_refmap);
+    let direct_methods =
+        resolve_target_methods(scanned, candidate_universe, target_class, original);
+    if !direct_methods.is_empty() {
+        let resolution = if direct_methods.len() == 1 {
+            SoftReferenceResolution::DirectExact
+        } else {
+            SoftReferenceResolution::MultiTargetValid
+        };
+        return ResolvedMethods {
+            candidates,
+            sources,
+            resolution,
+            methods: deduplicate_methods(direct_methods),
+        };
+    }
     let mut methods = Vec::new();
     let mut active_candidates = BTreeSet::new();
-    let mut direct_keys = BTreeSet::new();
-    for candidate in &candidates {
-        let resolved = resolve_target_methods(scanned, target_class, candidate);
+    for candidate in candidates
+        .iter()
+        .filter(|candidate| candidate.as_str() != original)
+    {
+        let resolved = resolve_target_methods(scanned, candidate_universe, target_class, candidate);
         if !resolved.is_empty() {
             active_candidates.insert(normalize_soft_reference(candidate, target_class));
         }
         for (artifact_id, method) in resolved {
-            let key = format!("{artifact_id}|{}{}", method.name, method.descriptor);
-            if candidate == original {
-                direct_keys.insert(key);
-            }
             methods.push((artifact_id, method));
         }
     }
-    methods.sort_by(|left, right| {
-        left.0
-            .cmp(&right.0)
-            .then_with(|| left.1.name.cmp(&right.1.name))
-            .then_with(|| left.1.descriptor.cmp(&right.1.descriptor))
-    });
-    methods.dedup_by(|left, right| {
-        left.0 == right.0 && left.1.name == right.1.name && left.1.descriptor == right.1.descriptor
-    });
+    methods = deduplicate_methods(methods);
     let distinct_methods = methods
         .iter()
         .map(|(artifact_id, method)| format!("{artifact_id}|{}{}", method.name, method.descriptor))
         .collect::<BTreeSet<_>>();
     let resolution = match distinct_methods.len() {
         0 => SoftReferenceResolution::Unresolved,
-        1 if distinct_methods.iter().all(|key| direct_keys.contains(key)) => {
-            SoftReferenceResolution::DirectExact
-        }
         1 => SoftReferenceResolution::RefmapExact,
+        _ if active_candidates.len() == 1 => SoftReferenceResolution::MultiTargetValid,
         _ => SoftReferenceResolution::Ambiguous,
     };
     ResolvedMethods {
@@ -1682,14 +2708,25 @@ fn resolve_method_reference<'a>(
     }
 }
 
+fn deduplicate_methods(mut methods: Vec<(String, &ParsedMethod)>) -> Vec<(String, &ParsedMethod)> {
+    methods.sort_by(|left, right| {
+        left.0
+            .cmp(&right.0)
+            .then_with(|| left.1.name.cmp(&right.1.name))
+            .then_with(|| left.1.descriptor.cmp(&right.1.descriptor))
+    });
+    methods.dedup_by(|left, right| {
+        left.0 == right.0 && left.1.name == right.1.name && left.1.descriptor == right.1.descriptor
+    });
+    methods
+}
+
 fn resolve_at_reference(
     method: &ParsedMethod,
-    artifact: &ParsedArtifact,
-    mixin_class: &str,
-    target_class: &str,
     at: &ParsedAnnotation,
     kind: &str,
     range: Option<(usize, usize)>,
+    context: ReferenceContext<'_>,
 ) -> (Vec<String>, Vec<String>, SoftReferenceResolution) {
     let originals = at
         .value("target")
@@ -1697,30 +2734,42 @@ fn resolve_at_reference(
         .chain(at.value("desc"))
         .flat_map(selector_values)
         .collect::<BTreeSet<_>>();
-    let (candidates, sources) = at_selector_candidates(artifact, mixin_class, at, target_class);
+    let (candidates, sources) = at_selector_candidates(
+        context.artifact,
+        context.mixin_class,
+        at,
+        context.target_class,
+        context.active_refmap,
+    );
     if originals.is_empty() {
         return (candidates, sources, SoftReferenceResolution::NotApplicable);
     }
+    let direct_active = originals.iter().any(|original| {
+        !match_instructions(method, at, kind, std::slice::from_ref(original), range).is_empty()
+    });
+    if direct_active {
+        return (
+            candidates,
+            sources,
+            if originals.len() == 1 {
+                SoftReferenceResolution::DirectExact
+            } else {
+                SoftReferenceResolution::MultiTargetValid
+            },
+        );
+    }
     let mut active = BTreeSet::new();
-    let mut direct = BTreeSet::new();
-    for candidate in &candidates {
+    for candidate in candidates
+        .iter()
+        .filter(|candidate| !originals.contains(candidate.as_str()))
+    {
         if !match_instructions(method, at, kind, std::slice::from_ref(candidate), range).is_empty()
         {
-            let normalized = normalize_soft_reference(candidate, target_class);
-            if originals
-                .iter()
-                .any(|original| normalize_soft_reference(original, target_class) == normalized)
-            {
-                direct.insert(normalized.clone());
-            }
-            active.insert(normalized);
+            active.insert(normalize_soft_reference(candidate, context.target_class));
         }
     }
     let resolution = match active.len() {
         0 => SoftReferenceResolution::Unresolved,
-        1 if active.iter().all(|candidate| direct.contains(candidate)) => {
-            SoftReferenceResolution::DirectExact
-        }
         1 => SoftReferenceResolution::RefmapExact,
         _ => SoftReferenceResolution::Ambiguous,
     };
@@ -1747,6 +2796,7 @@ fn confidence_for_resolution(resolution: SoftReferenceResolution) -> Confidence 
     match resolution {
         SoftReferenceResolution::DirectExact
         | SoftReferenceResolution::RefmapExact
+        | SoftReferenceResolution::MultiTargetValid
         | SoftReferenceResolution::NotApplicable => Confidence::Exact,
         SoftReferenceResolution::Ambiguous => Confidence::Medium,
         SoftReferenceResolution::Unresolved => Confidence::Low,
@@ -1761,7 +2811,7 @@ fn weaker_resolution(
         match resolution {
             SoftReferenceResolution::Unresolved => 0,
             SoftReferenceResolution::Ambiguous => 1,
-            SoftReferenceResolution::RefmapExact => 2,
+            SoftReferenceResolution::RefmapExact | SoftReferenceResolution::MultiTargetValid => 2,
             SoftReferenceResolution::DirectExact | SoftReferenceResolution::NotApplicable => 3,
         }
     }
@@ -1906,22 +2956,69 @@ fn injector_evidence(
     evidence
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SelectorNamePattern {
+    Exact,
+    Prefix,
+    Suffix,
+    All,
+}
+
 #[derive(Debug)]
 struct Selector {
     owner: Option<String>,
     name: String,
     descriptor: Option<String>,
+    pattern: SelectorNamePattern,
+    supported: bool,
+}
+
+impl Selector {
+    fn matches_name(&self, candidate: &str) -> bool {
+        match self.pattern {
+            SelectorNamePattern::Exact => candidate == self.name,
+            SelectorNamePattern::Prefix => candidate.starts_with(&self.name),
+            SelectorNamePattern::Suffix => candidate.ends_with(&self.name),
+            SelectorNamePattern::All => true,
+        }
+    }
 }
 
 fn parse_selector(value: &str) -> Selector {
     let value = value.trim();
+    if value.starts_with('/')
+        || value.starts_with('@')
+        || value.contains(" desc=")
+        || value.contains(" regex=")
+    {
+        return Selector {
+            owner: None,
+            name: value.to_string(),
+            descriptor: None,
+            pattern: SelectorNamePattern::Exact,
+            supported: false,
+        };
+    }
     let (owner, member) = if let Some(rest) = value.strip_prefix('L') {
         rest.split_once(';')
             .map_or((None, value), |(owner, member)| {
                 (Some(owner.to_string()), member)
             })
     } else {
-        (None, value)
+        let descriptor_start = value.find('(').unwrap_or(value.len());
+        let prefix = &value[..descriptor_start];
+        // Mixin accepts owner/member spellings such as
+        // `java/util/List.add(...)` as well as `java/util/List/add(...)`.
+        // Pick the right-most separator across both forms; preferring any
+        // slash would incorrectly parse the former as owner `java/util` and
+        // method `List.add`.
+        let owner_separator = prefix.rfind('/').into_iter().chain(prefix.rfind('.')).max();
+        owner_separator.map_or((None, value), |position| {
+            (
+                Some(value[..position].replace('.', "/")),
+                &value[position + 1..],
+            )
+        })
     };
     let (name, descriptor) = if let Some(position) = member.find('(') {
         (&member[..position], Some(member[position..].to_string()))
@@ -1930,13 +3027,78 @@ fn parse_selector(value: &str) -> Selector {
     } else {
         (member, None)
     };
+    let name = name.trim_start_matches(['.', ':']);
+    let star_count = name.chars().filter(|character| *character == '*').count();
+    let (name, pattern, supported) = if name == "*" {
+        (String::new(), SelectorNamePattern::All, true)
+    } else if star_count == 0 {
+        (
+            name.to_string(),
+            SelectorNamePattern::Exact,
+            !name.chars().any(|character| {
+                matches!(character, '[' | ']' | '{' | '}' | '+' | '?' | '|' | '\\')
+            }),
+        )
+    } else if star_count == 1 && name.ends_with('*') {
+        (
+            name.trim_end_matches('*').to_string(),
+            SelectorNamePattern::Prefix,
+            true,
+        )
+    } else if star_count == 1 && name.starts_with('*') {
+        (
+            name.trim_start_matches('*').to_string(),
+            SelectorNamePattern::Suffix,
+            true,
+        )
+    } else {
+        (name.to_string(), SelectorNamePattern::Exact, false)
+    };
     Selector {
-        owner,
-        name: name
-            .trim_start_matches('.')
-            .trim_start_matches(':')
-            .to_string(),
+        owner: owner.map(|owner| owner.replace('.', "/")),
+        name,
         descriptor,
+        pattern,
+        supported,
+    }
+}
+
+fn selector_model(raw: &str) -> crate::model::MethodSelector {
+    use crate::model::{GlobPattern, MethodSelector};
+
+    let value = raw.trim();
+    if value.starts_with('@') {
+        return MethodSelector::Dynamic {
+            raw: value.to_string(),
+        };
+    }
+    let selector = parse_selector(value);
+    if !selector.supported {
+        return MethodSelector::Unsupported {
+            raw: value.to_string(),
+        };
+    }
+    match selector.pattern {
+        SelectorNamePattern::Exact => MethodSelector::Exact {
+            owner: selector.owner,
+            name: selector.name,
+            descriptor: selector.descriptor,
+        },
+        SelectorNamePattern::Prefix => MethodSelector::Glob {
+            owner: selector.owner,
+            pattern: GlobPattern::Prefix,
+            value: selector.name,
+            descriptor: selector.descriptor,
+        },
+        SelectorNamePattern::Suffix => MethodSelector::Glob {
+            owner: selector.owner,
+            pattern: GlobPattern::Suffix,
+            value: selector.name,
+            descriptor: selector.descriptor,
+        },
+        SelectorNamePattern::All => MethodSelector::All {
+            descriptor: selector.descriptor,
+        },
     }
 }
 
@@ -1951,6 +3113,7 @@ fn at_selector_candidates(
     mixin_class: &str,
     at: &ParsedAnnotation,
     default_owner: &str,
+    active_refmap: Option<&str>,
 ) -> (Vec<String>, Vec<String>) {
     let originals = at
         .value("target")
@@ -1966,12 +3129,14 @@ fn at_selector_candidates(
             mixin_class,
             &original,
             default_owner,
+            active_refmap,
         ));
         sources.extend(refmap_sources(
             artifact,
             mixin_class,
             &original,
             default_owner,
+            active_refmap,
         ));
     }
     (
@@ -2031,11 +3196,12 @@ fn type_descriptor(value: &str) -> Option<String> {
 }
 
 fn selector_matches_member(selector: &Selector, member: &MemberReference) -> bool {
-    selector
-        .owner
-        .as_ref()
-        .is_none_or(|owner| owner == &member.owner)
-        && selector.name == member.name
+    selector.supported
+        && selector
+            .owner
+            .as_ref()
+            .is_none_or(|owner| owner == &member.owner)
+        && selector.matches_name(&member.name)
         && selector
             .descriptor
             .as_ref()
@@ -2047,13 +3213,15 @@ fn refmap_candidates(
     mixin_class: &str,
     original: &str,
     default_owner: &str,
+    active_refmap: Option<&str>,
 ) -> Vec<String> {
     let normalized_mixin = mixin_class.replace('.', "/");
     let mut candidates = artifact
         .refmaps
         .iter()
         .filter(|entry| {
-            entry.mixin_class == normalized_mixin
+            active_refmap.is_some_and(|path| entry.path.eq_ignore_ascii_case(path))
+                && entry.mixin_class == normalized_mixin
                 && (entry.original == original
                     || normalize_soft_reference(&entry.original, default_owner)
                         == normalize_soft_reference(original, default_owner))
@@ -2069,13 +3237,15 @@ fn refmap_sources(
     mixin_class: &str,
     original: &str,
     default_owner: &str,
+    active_refmap: Option<&str>,
 ) -> Vec<String> {
     let normalized_mixin = mixin_class.replace('.', "/");
     artifact
         .refmaps
         .iter()
         .filter(|entry| {
-            entry.mixin_class == normalized_mixin
+            active_refmap.is_some_and(|path| entry.path.eq_ignore_ascii_case(path))
+                && entry.mixin_class == normalized_mixin
                 && (entry.original == original
                     || normalize_soft_reference(&entry.original, default_owner)
                         == normalize_soft_reference(original, default_owner))
@@ -2134,6 +3304,187 @@ fn positive_u32(value: Option<&AnnotationValue>) -> Option<u32> {
         .and_then(AnnotationValue::integer)
         .filter(|value| *value >= 0)
         .and_then(|value| u32::try_from(value).ok())
+}
+
+fn injector_requirement(injector: &ParsedAnnotation, default_require: u32) -> Option<u32> {
+    match injector.value("require").and_then(AnnotationValue::integer) {
+        Some(value) if value >= 0 => u32::try_from(value).ok(),
+        _ => (default_require > 0).then_some(default_require),
+    }
+}
+
+fn resolve_local_selector(
+    injector: &ParsedAnnotation,
+    handler: &ParsedMethod,
+    target: &ParsedMethod,
+) -> LocalSelector {
+    let args_only = injector
+        .value("argsOnly")
+        .and_then(AnnotationValue::boolean)
+        .unwrap_or(false);
+    let explicit_index = injector
+        .value("index")
+        .and_then(AnnotationValue::integer)
+        .filter(|value| *value >= 0)
+        .and_then(|value| u16::try_from(value).ok());
+    let ordinal = injector
+        .value("ordinal")
+        .and_then(AnnotationValue::integer)
+        .filter(|value| *value >= 0)
+        .and_then(|value| u32::try_from(value).ok());
+    let names = injector
+        .value("name")
+        .map(AnnotationValue::strings)
+        .unwrap_or_default();
+    let expected_type = method_return_descriptor(&handler.descriptor);
+    let arguments = method_argument_slots(&target.descriptor, target.is_static);
+    let slot = explicit_index.or_else(|| {
+        if !args_only || !names.is_empty() {
+            return None;
+        }
+        let matching = arguments
+            .iter()
+            .filter(|(_, descriptor)| {
+                expected_type
+                    .as_ref()
+                    .is_none_or(|expected| expected == descriptor)
+            })
+            .map(|(slot, _)| *slot)
+            .collect::<Vec<_>>();
+        ordinal.map_or_else(
+            || (matching.len() == 1).then(|| matching[0]),
+            |ordinal| {
+                matching
+                    .get(usize::try_from(ordinal).unwrap_or(usize::MAX))
+                    .copied()
+            },
+        )
+    });
+    let argument_slots = arguments
+        .iter()
+        .map(|(slot, _)| *slot)
+        .collect::<BTreeSet<_>>();
+    LocalSelector {
+        args_only,
+        explicit_index,
+        ordinal,
+        names,
+        expected_type,
+        slot,
+        frame_position: slot.map(|slot| {
+            if argument_slots.contains(&slot) {
+                FramePosition::Argument
+            } else {
+                FramePosition::Local
+            }
+        }),
+    }
+}
+
+fn method_argument_slots(descriptor: &str, is_static: bool) -> Vec<(u16, String)> {
+    let Some(arguments) = descriptor
+        .strip_prefix('(')
+        .and_then(|descriptor| descriptor.split_once(')').map(|(arguments, _)| arguments))
+    else {
+        return Vec::new();
+    };
+    let mut result = Vec::new();
+    let mut offset = 0_usize;
+    let mut slot = u16::from(!is_static);
+    while offset < arguments.len() {
+        let Some((descriptor, consumed)) = next_type_descriptor(&arguments[offset..]) else {
+            break;
+        };
+        result.push((slot, descriptor.clone()));
+        slot = slot.saturating_add(if matches!(descriptor.as_str(), "J" | "D") {
+            2
+        } else {
+            1
+        });
+        offset += consumed;
+    }
+    result
+}
+
+fn method_return_descriptor(descriptor: &str) -> Option<String> {
+    descriptor
+        .split_once(')')
+        .and_then(|(_, result)| next_type_descriptor(result))
+        .map(|(descriptor, _)| descriptor)
+}
+
+fn next_type_descriptor(value: &str) -> Option<(String, usize)> {
+    let bytes = value.as_bytes();
+    let first = *bytes.first()?;
+    if first == b'[' {
+        let mut end = 1;
+        while bytes.get(end) == Some(&b'[') {
+            end += 1;
+        }
+        if bytes.get(end) == Some(&b'L') {
+            end += value[end..].find(';')? + 1;
+        } else {
+            end += 1;
+        }
+        return Some((value[..end].to_string(), end));
+    }
+    if first == b'L' {
+        let end = value.find(';')? + 1;
+        return Some((value[..end].to_string(), end));
+    }
+    matches!(
+        first,
+        b'B' | b'C' | b'D' | b'F' | b'I' | b'J' | b'S' | b'Z' | b'V'
+    )
+    .then(|| (value[..1].to_string(), 1))
+}
+
+fn local_instruction_reference(
+    target_method: &ParsedMethod,
+    target: &Target,
+    slot: u16,
+    descriptor: Option<&str>,
+) -> crate::model::InstructionReference {
+    let instruction_index = u32::MAX.saturating_sub(u32::from(slot));
+    let identity = target_method
+        .instructions
+        .first()
+        .and_then(|instruction| instruction.reference.identity.as_ref())
+        .map(|identity| crate::model::InstructionIdentity {
+            definition: identity.definition.clone(),
+            method_name: target.member.as_ref().map_or_else(
+                || identity.method_name.clone(),
+                |member| member.name.clone(),
+            ),
+            method_descriptor: target.member.as_ref().map_or_else(
+                || identity.method_descriptor.clone(),
+                |member| member.descriptor.clone(),
+            ),
+            instruction_index,
+        });
+    crate::model::InstructionReference {
+        identity,
+        stable_id: instruction_index,
+        original_offset: None,
+        opcode: local_load_opcode(descriptor),
+        local_slot: Some(slot),
+        member: None,
+        constant: Some(format!("local:{slot}")),
+    }
+}
+
+fn local_load_opcode(descriptor: Option<&str>) -> u8 {
+    match descriptor
+        .map(str::as_bytes)
+        .and_then(|bytes| bytes.first())
+        .copied()
+    {
+        Some(b'J') => 22,
+        Some(b'F') => 23,
+        Some(b'D') => 24,
+        Some(b'L' | b'[') => 25,
+        _ => 21,
+    }
 }
 
 fn enum_is(value: &AnnotationValue, expected: &str) -> bool {
@@ -2228,8 +3579,9 @@ mod tests {
     #[test]
     fn direct_exact_reference_needs_no_refmap_warning_or_confidence_penalty() {
         let mut scanned = mixin_fixture("HEAD", "Lorg/spongepowered/asm/mixin/injection/Inject;");
-        let effects = analyze(&mut scanned);
-        let injector = effects
+        let analysis = analyze_detailed(&mut scanned);
+        let injector = analysis
+            .effects
             .iter()
             .find(|effect| effect.precision == Precision::Instruction)
             .unwrap();
@@ -2246,8 +3598,9 @@ mod tests {
             "example:custom",
             "Lorg/spongepowered/asm/mixin/injection/Inject;",
         );
-        let effects = analyze(&mut scanned);
-        let injector = effects
+        let analysis = analyze_detailed(&mut scanned);
+        let injector = analysis
+            .effects
             .iter()
             .find(|effect| {
                 effect
@@ -2258,16 +3611,14 @@ mod tests {
             .unwrap();
         assert_eq!(injector.precision, Precision::Method);
         assert_eq!(injector.mutations[0].kind, MutationKind::InsertInstructions);
-        assert!(
-            scanned
-                .warnings
-                .iter()
-                .any(|warning| warning.kind == WarningKind::CustomInjectionPoint)
-        );
+        assert!(analysis.coverage_gaps.iter().any(|gap| {
+            gap.kind == CoverageGapKind::UnsupportedInjectionPoint
+                && gap.scope.contains("EXAMPLE:CUSTOM")
+        }));
     }
 
     #[test]
-    fn multiple_refmap_contexts_are_not_arbitrarily_selected() {
+    fn only_the_registered_config_refmap_contributes_candidates() {
         let artifact = ParsedArtifact {
             id: "mod".to_string(),
             display_name: "mod".to_string(),
@@ -2289,10 +3640,27 @@ mod tests {
                     mapped: "a()V".to_string(),
                 },
             ],
+            resources: Vec::new(),
         };
-        let candidates = refmap_candidates(&artifact, "example/Mixin", "tick()V", "game/Target");
+        assert_eq!(
+            refmap_candidates(&artifact, "example/Mixin", "tick()V", "game/Target", None),
+            vec!["tick()V"]
+        );
+        let candidates = refmap_candidates(
+            &artifact,
+            "example/Mixin",
+            "tick()V",
+            "game/Target",
+            Some("mod.refmap.json"),
+        );
         assert_eq!(candidates, vec!["a()V", "method_1()V", "tick()V"]);
-        let sources = refmap_sources(&artifact, "example/Mixin", "tick()V", "game/Target");
+        let sources = refmap_sources(
+            &artifact,
+            "example/Mixin",
+            "tick()V",
+            "game/Target",
+            Some("mod.refmap.json"),
+        );
         assert_eq!(sources.len(), 2);
         assert!(sources.iter().all(|source| source.contains('[')));
     }
@@ -2325,9 +3693,13 @@ mod tests {
                 mapped: "Lgame/Owner;method_1()V".to_string(),
             },
         ]);
+        fixture_injector_mut(&mut scanned)
+            .values
+            .insert("require".to_string(), AnnotationValue::Integer(1));
 
-        let effects = analyze(&mut scanned);
-        let effect = effects
+        let analysis = analyze_detailed(&mut scanned);
+        let effect = analysis
+            .effects
             .iter()
             .find(|effect| effect.precision == Precision::Instruction)
             .unwrap();
@@ -2353,9 +3725,11 @@ mod tests {
         };
         scanned.artifacts[0].classes[0].methods[0].instructions = vec![ParsedInstruction {
             reference: InstructionReference {
+                identity: None,
                 stable_id: 0,
                 original_offset: Some(0),
                 opcode: 182,
+                local_slot: None,
                 member: Some(mapped_member.clone()),
                 constant: None,
             },
@@ -2380,8 +3754,9 @@ mod tests {
             mapped: "Lgame/Owner;a()V".to_string(),
         });
 
-        let effects = analyze(&mut scanned);
-        let effect = effects
+        let analysis = analyze_detailed(&mut scanned);
+        let effect = analysis
+            .effects
             .iter()
             .find(|effect| effect.precision == Precision::Instruction)
             .unwrap();
@@ -2408,6 +3783,37 @@ mod tests {
                 .refmap_sources
                 .iter()
                 .any(|source| source.contains("mod.refmap.json"))
+        );
+    }
+
+    #[test]
+    fn external_owner_is_validated_on_the_actual_instruction_without_classpath_presence() {
+        let mut scanned = mixin_fixture("INVOKE", "Lorg/spongepowered/asm/mixin/injection/Inject;");
+        scanned.artifacts[0].classes[0].methods[0].instructions =
+            vec![call_instruction(0, "java/util/List", "add")];
+        fixture_at_mut(&mut scanned).values.insert(
+            "target".to_string(),
+            AnnotationValue::String("java/util/List.add()V".to_string()),
+        );
+        fixture_injector_mut(&mut scanned)
+            .values
+            .insert("require".to_string(), AnnotationValue::Integer(1));
+
+        let analysis = analyze_detailed(&mut scanned);
+        let query = analysis
+            .effects
+            .iter()
+            .find_map(|effect| effect.queries.first())
+            .unwrap();
+
+        assert_eq!(query.resolution, SoftReferenceResolution::DirectExact);
+        assert_eq!(query.target_selectors, vec!["java/util/List.add()V"]);
+        assert_eq!(query.selected.len(), 1);
+        assert!(
+            scanned
+                .warnings
+                .iter()
+                .all(|warning| warning.kind != WarningKind::UnresolvedSoftReference)
         );
     }
 
@@ -2460,6 +3866,134 @@ mod tests {
     }
 
     #[test]
+    fn selector_ast_supports_all_prefix_suffix_constructor_and_owner_forms() {
+        let all = parse_selector("*");
+        assert!(all.supported && all.matches_name("anything"));
+        let prefix = parse_selector("disconnect*");
+        assert!(prefix.matches_name("disconnectNow"));
+        assert!(!prefix.matches_name("connect"));
+        let suffix = parse_selector("*Async");
+        assert!(suffix.matches_name("loadAsync"));
+        let clinit = parse_selector("<clinit>*");
+        assert!(clinit.matches_name("<clinit>"));
+        let constructor = parse_selector("<init>(I)V");
+        assert_eq!(constructor.name, "<init>");
+        assert_eq!(constructor.descriptor.as_deref(), Some("(I)V"));
+        for raw in [
+            "game.Target.tick()V",
+            "game/Target/tick()V",
+            "game/Target.tick()V",
+            "Lgame/Target;tick()V",
+        ] {
+            let selector = parse_selector(raw);
+            assert_eq!(selector.owner.as_deref(), Some("game/Target"), "{raw}");
+            assert_eq!(selector.name, "tick", "{raw}");
+            assert_eq!(selector.descriptor.as_deref(), Some("()V"), "{raw}");
+        }
+    }
+
+    #[test]
+    fn name_only_selector_matches_every_overload_without_ambiguity_warning() {
+        let mut scanned = mixin_fixture("HEAD", "Lorg/spongepowered/asm/mixin/injection/Inject;");
+        let mut overload = scanned.artifacts[0].classes[0].methods[0].clone();
+        overload.descriptor = "(I)V".to_string();
+        scanned.artifacts[0].classes[0].methods.push(overload);
+        fixture_injector_mut(&mut scanned).values.insert(
+            "method".to_string(),
+            AnnotationValue::Array(vec![AnnotationValue::String("tick".to_string())]),
+        );
+
+        let analysis = analyze_detailed(&mut scanned);
+
+        assert_eq!(
+            analysis
+                .effects
+                .iter()
+                .filter(|effect| !effect.queries.is_empty())
+                .count(),
+            2
+        );
+        assert_eq!(scanned.coverage.valid_multi_target_selectors, 1);
+        assert!(
+            scanned
+                .warnings
+                .iter()
+                .all(|warning| { warning.kind != WarningKind::AmbiguousSoftReference })
+        );
+    }
+
+    #[test]
+    fn wildcard_injector_does_not_target_accessor_generated_after_prepare() {
+        let mut scanned = mixin_fixture("RETURN", "Lorg/spongepowered/asm/mixin/injection/Inject;");
+        fixture_injector_mut(&mut scanned).values.insert(
+            "method".to_string(),
+            AnnotationValue::Array(vec![AnnotationValue::String("*".to_string())]),
+        );
+        scanned.artifacts[1].classes[0].methods.push(ParsedMethod {
+            name: "generatedAccessor".to_string(),
+            descriptor: "()I".to_string(),
+            is_static: false,
+            is_public: true,
+            is_synthetic: false,
+            annotations: vec![ParsedAnnotation {
+                descriptor: ACCESSOR.to_string(),
+                values: BTreeMap::new(),
+            }],
+            max_locals: Some(1),
+            instructions: Vec::new(),
+        });
+
+        let analysis = analyze_detailed(&mut scanned);
+        let queried_methods = analysis
+            .effects
+            .iter()
+            .flat_map(|effect| &effect.queries)
+            .map(|query| {
+                query
+                    .method
+                    .member
+                    .as_ref()
+                    .map(|member| member.name.as_str())
+                    .unwrap_or_default()
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(queried_methods, vec!["tick"]);
+        assert!(
+            scanned
+                .warnings
+                .iter()
+                .all(|warning| !warning.message.contains("contains no instructions"))
+        );
+    }
+
+    #[test]
+    fn regex_or_dynamic_selector_is_a_coverage_gap_not_a_warning() {
+        let mut scanned = mixin_fixture("HEAD", "Lorg/spongepowered/asm/mixin/injection/Inject;");
+        fixture_injector_mut(&mut scanned).values.insert(
+            "method".to_string(),
+            AnnotationValue::Array(vec![AnnotationValue::String(
+                "/^tick/ desc=/Target;$".to_string(),
+            )]),
+        );
+
+        let analysis = analyze_detailed(&mut scanned);
+
+        assert!(
+            analysis
+                .coverage_gaps
+                .iter()
+                .any(|gap| { gap.kind == CoverageGapKind::UnsupportedSelector })
+        );
+        assert!(
+            scanned
+                .warnings
+                .iter()
+                .all(|warning| { warning.kind != WarningKind::UnresolvedSoftReference })
+        );
+    }
+
+    #[test]
     fn wrap_method_resolves_as_a_composable_method_effect_without_at() {
         let mut scanned = mixin_fixture(
             "HEAD",
@@ -2468,8 +4002,9 @@ mod tests {
         let handler = &mut scanned.artifacts[1].classes[0].methods[0];
         handler.annotations[0].values.remove("at");
 
-        let effects = analyze(&mut scanned);
-        let effect = effects
+        let analysis = analyze_detailed(&mut scanned);
+        let effect = analysis
+            .effects
             .iter()
             .find(|effect| effect.mechanism == Mechanism::MixinExtras)
             .unwrap();
@@ -2497,9 +4032,11 @@ mod tests {
         );
         scanned.artifacts[0].classes[0].methods[0].instructions = vec![ParsedInstruction {
             reference: InstructionReference {
+                identity: None,
                 stable_id: 0,
                 original_offset: Some(0),
                 opcode: 8,
+                local_slot: None,
                 member: None,
                 constant: Some("5".to_string()),
             },
@@ -2592,8 +4129,9 @@ mod tests {
             "Lcom/llamalad7/mixinextras/injector/ModifyExpressionValue;",
         );
 
-        let effects = analyze(&mut scanned);
-        let effect = effects
+        let analysis = analyze_detailed(&mut scanned);
+        let effect = analysis
+            .effects
             .iter()
             .find(|effect| {
                 effect
@@ -2608,18 +4146,10 @@ mod tests {
             effect.mutations[0].kind,
             MutationKind::TransformExpressionValue
         );
-        assert!(
-            scanned
-                .warnings
-                .iter()
-                .any(|warning| warning.kind == WarningKind::KnownUnsupportedInjectionPoint)
-        );
-        assert!(
-            !scanned
-                .warnings
-                .iter()
-                .any(|warning| warning.kind == WarningKind::CustomInjectionPoint)
-        );
+        assert!(analysis.coverage_gaps.iter().any(|gap| {
+            gap.kind == CoverageGapKind::UnsupportedInjectionPoint
+                && gap.scope.contains("MIXINEXTRAS:EXPRESSION")
+        }));
     }
 
     #[test]
@@ -2661,6 +4191,29 @@ mod tests {
                 .iter()
                 .map(|instruction| instruction.reference.stable_id)
                 .collect::<Vec<_>>(),
+            vec![0]
+        );
+        let plain = at_annotation("NEW", Some("game/Thing"), Vec::new(), None, None);
+        assert_eq!(
+            match_instructions(&method, &plain, "NEW", &["game/Thing".to_string()], None)
+                .iter()
+                .map(|instruction| instruction.reference.stable_id)
+                .collect::<Vec<_>>(),
+            vec![0]
+        );
+        let constructor_descriptor =
+            at_annotation("NEW", Some("(I)Lgame/Thing;"), Vec::new(), None, None);
+        assert_eq!(
+            match_instructions(
+                &method,
+                &constructor_descriptor,
+                "NEW",
+                &["(I)Lgame/Thing;".to_string()],
+                None
+            )
+            .iter()
+            .map(|instruction| instruction.reference.stable_id)
+            .collect::<Vec<_>>(),
             vec![0]
         );
     }
@@ -2744,6 +4297,9 @@ mod tests {
             "slice".to_string(),
             AnnotationValue::String("missing".to_string()),
         );
+        fixture_injector_mut(&mut scanned)
+            .values
+            .insert("require".to_string(), AnnotationValue::Integer(1));
 
         let effects = analyze(&mut scanned);
         let injector = effects
@@ -2796,6 +4352,9 @@ mod tests {
             "target".to_string(),
             AnnotationValue::String("Lgame/Missing;run()V".to_string()),
         );
+        fixture_injector_mut(&mut scanned)
+            .values
+            .insert("require".to_string(), AnnotationValue::Integer(1));
 
         let _ = analyze(&mut scanned);
 
@@ -2824,13 +4383,11 @@ mod tests {
             instructions: Vec::new(),
         };
         let mixin = ParsedClass {
-            minor: 0,
-            major: 61,
+            definition_id: None,
             future_version_best_effort: false,
             name: "example/Mixin".to_string(),
             super_name: Some("java/lang/Object".to_string()),
             interfaces: Vec::new(),
-            is_interface: false,
             annotations: Vec::new(),
             fields: vec![
                 ParsedField {
@@ -2861,14 +4418,17 @@ mod tests {
             kind: ArtifactKind::Mod,
             classes: vec![mixin.clone()],
             refmaps: Vec::new(),
+            resources: Vec::new(),
         };
         let mut effects = Vec::new();
+        let candidates = CandidateUniverse::default();
 
         analyze_mixin_structure(
             &artifact,
             &mixin,
             &["game/Target".to_string()],
             1000,
+            &candidates,
             &mut effects,
         );
 
@@ -2885,6 +4445,467 @@ mod tests {
         assert_eq!(names, vec!["publicUnique", "publicUnique", "regular"]);
     }
 
+    #[test]
+    fn synthetic_helper_is_unique_even_when_config_requires_overwrite_annotations() {
+        let mut scanned = mixin_fixture("HEAD", "Lorg/spongepowered/asm/mixin/injection/Inject;");
+        scanned.artifacts[1].classes[0].methods = vec![ParsedMethod {
+            name: "tick".to_string(),
+            descriptor: "()V".to_string(),
+            is_static: false,
+            is_public: false,
+            is_synthetic: true,
+            annotations: Vec::new(),
+            max_locals: Some(1),
+            instructions: vec![return_instruction(0)],
+        }];
+        let mut registry = MixinRegistry::all_annotated(&scanned);
+        registry.configs.push(crate::model::RegisteredMixinConfig {
+            artifact_id: "mod".to_string(),
+            config_path: "<test>".to_string(),
+            side: crate::model::SideConstraint::Common,
+            registration: crate::model::RegistrationSource::FabricMetadata,
+            activation: crate::model::ConfigActivation::Active,
+            required_mods: Vec::new(),
+            behavior_version: None,
+            parsed: Some(crate::model::ParsedMixinConfig {
+                required: false,
+                min_version: None,
+                compatibility_level: None,
+                package: None,
+                plugin: None,
+                refmap: None,
+                priority: 1000,
+                mixin_priority: 1000,
+                mixins: vec!["example.Mixin".to_string()],
+                client: Vec::new(),
+                server: Vec::new(),
+                default_require: 0,
+                default_group: "default".to_string(),
+                overwrite_require_annotations: true,
+            }),
+        });
+
+        let candidates = CandidateUniverse::build(&scanned, &registry);
+
+        assert!(candidates.invalid_contributions.is_empty());
+        assert!(
+            candidates
+                .contribution_kinds
+                .values()
+                .any(|kind| { *kind == MethodContributionKind::UniqueRenamedMethod })
+        );
+    }
+
+    #[test]
+    fn overwrite_replacement_body_is_used_for_tail_query() {
+        let mut scanned = mixin_fixture("TAIL", "Lorg/spongepowered/asm/mixin/injection/Inject;");
+        scanned.artifacts.push(overwrite_artifact(
+            "overwrite",
+            "example/Overwrite",
+            "()V",
+            1100,
+            vec![return_instruction(0)],
+        ));
+
+        let analysis = analyze_detailed(&mut scanned);
+        let query = analysis
+            .effects
+            .iter()
+            .find_map(|effect| effect.queries.first())
+            .unwrap();
+
+        assert_eq!(query.selected.len(), 1);
+        assert!(analysis.risks.is_empty());
+    }
+
+    #[test]
+    fn overwrite_replacement_body_reports_only_a_hard_query_failure() {
+        let mut scanned = mixin_fixture("INVOKE", "Lorg/spongepowered/asm/mixin/injection/Inject;");
+        scanned.artifacts[0].classes[0].methods[0].instructions = vec![
+            call_instruction(0, "game/Owner", "run"),
+            return_instruction(1),
+        ];
+        fixture_at_mut(&mut scanned).values.insert(
+            "target".to_string(),
+            AnnotationValue::String("Lgame/Owner;run()V".to_string()),
+        );
+        fixture_injector_mut(&mut scanned)
+            .values
+            .insert("require".to_string(), AnnotationValue::Integer(1));
+        scanned.artifacts.push(overwrite_artifact(
+            "overwrite",
+            "example/Overwrite",
+            "()V",
+            1100,
+            vec![return_instruction(0)],
+        ));
+
+        let analysis = analyze_detailed(&mut scanned);
+
+        assert_eq!(analysis.risks.len(), 1);
+        assert_eq!(
+            analysis.risks[0].rule,
+            "candidate_query_minimum_unsatisfied"
+        );
+        assert_eq!(analysis.risks[0].activation, Activation::Definite);
+    }
+
+    #[test]
+    fn equal_priority_replacement_orders_with_partial_success_are_conditional() {
+        let mut scanned = mixin_fixture("INVOKE", "Lorg/spongepowered/asm/mixin/injection/Inject;");
+        scanned.artifacts[0].classes[0].methods[0].instructions = vec![
+            call_instruction(0, "game/Owner", "run"),
+            return_instruction(1),
+        ];
+        fixture_at_mut(&mut scanned).values.insert(
+            "target".to_string(),
+            AnnotationValue::String("Lgame/Owner;run()V".to_string()),
+        );
+        fixture_injector_mut(&mut scanned)
+            .values
+            .insert("require".to_string(), AnnotationValue::Integer(1));
+        scanned.artifacts.push(overwrite_artifact(
+            "retains-anchor",
+            "example/RetainsAnchor",
+            "()V",
+            1100,
+            vec![
+                call_instruction(0, "game/Owner", "run"),
+                return_instruction(1),
+            ],
+        ));
+        scanned.artifacts.push(overwrite_artifact(
+            "removes-anchor",
+            "example/RemovesAnchor",
+            "()V",
+            1100,
+            vec![return_instruction(0)],
+        ));
+
+        let analysis = analyze_detailed(&mut scanned);
+        let risk = analysis
+            .risks
+            .iter()
+            .find(|risk| risk.rule == "candidate_query_minimum_unsatisfied")
+            .unwrap();
+
+        assert_eq!(risk.activation, Activation::Conditional);
+        assert_eq!(risk.order, crate::model::OrderAnalysis::Unknown);
+    }
+
+    #[test]
+    fn optional_query_removed_by_overwrite_is_an_interaction_not_a_risk() {
+        let mut scanned = mixin_fixture("INVOKE", "Lorg/spongepowered/asm/mixin/injection/Inject;");
+        scanned.artifacts[0].classes[0].methods[0].instructions = vec![
+            call_instruction(0, "game/Owner", "run"),
+            return_instruction(1),
+        ];
+        fixture_at_mut(&mut scanned).values.insert(
+            "target".to_string(),
+            AnnotationValue::String("Lgame/Owner;run()V".to_string()),
+        );
+        fixture_injector_mut(&mut scanned)
+            .values
+            .insert("require".to_string(), AnnotationValue::Integer(0));
+        scanned.artifacts.push(overwrite_artifact(
+            "overwrite",
+            "example/Overwrite",
+            "()V",
+            1100,
+            vec![return_instruction(0)],
+        ));
+
+        let analysis = analyze_detailed(&mut scanned);
+
+        assert!(analysis.risks.is_empty());
+        assert!(analysis.interactions.iter().any(|interaction| {
+            interaction.kind == BehavioralInteractionKind::OptionalInjectionAffected
+        }));
+    }
+
+    #[test]
+    fn modify_variable_head_args_only_resolves_argument_slot_after_overwrite() {
+        let mut scanned = mixin_fixture(
+            "HEAD",
+            "Lorg/spongepowered/asm/mixin/injection/ModifyVariable;",
+        );
+        scanned.artifacts[0].classes[0].methods[0].descriptor = "(I)V".to_string();
+        let injector = fixture_injector_mut(&mut scanned);
+        injector.values.insert(
+            "method".to_string(),
+            AnnotationValue::Array(vec![AnnotationValue::String("tick(I)V".to_string())]),
+        );
+        injector
+            .values
+            .insert("argsOnly".to_string(), AnnotationValue::Boolean(true));
+        injector
+            .values
+            .insert("require".to_string(), AnnotationValue::Integer(1));
+        scanned.artifacts[1].classes[0].methods[0].descriptor = "(I)I".to_string();
+        scanned.artifacts.push(overwrite_artifact(
+            "overwrite",
+            "example/Overwrite",
+            "(I)V",
+            1100,
+            vec![return_instruction(0)],
+        ));
+
+        let analysis = analyze_detailed(&mut scanned);
+        let query = analysis
+            .effects
+            .iter()
+            .find_map(|effect| effect.queries.first())
+            .unwrap();
+
+        assert_eq!(
+            query
+                .local_selector
+                .as_ref()
+                .and_then(|selector| selector.slot),
+            Some(1)
+        );
+        assert_eq!(query.selected[0].local_slot, Some(1));
+        assert!(analysis.risks.is_empty());
+    }
+
+    #[test]
+    fn two_modify_variable_injectors_on_the_same_argument_are_an_interaction() {
+        let mut scanned = mixin_fixture(
+            "HEAD",
+            "Lorg/spongepowered/asm/mixin/injection/ModifyVariable;",
+        );
+        scanned.artifacts[0].classes[0].methods[0].descriptor = "(I)V".to_string();
+        scanned.artifacts[1].classes[0].methods[0].descriptor = "(I)I".to_string();
+        fixture_injector_mut(&mut scanned)
+            .values
+            .insert("argsOnly".to_string(), AnnotationValue::Boolean(true));
+        fixture_injector_mut(&mut scanned).values.insert(
+            "method".to_string(),
+            AnnotationValue::Array(vec![AnnotationValue::String("tick(I)V".to_string())]),
+        );
+        let mut second = scanned.artifacts[1].clone();
+        second.id = "second".to_string();
+        second.display_name = "second".to_string();
+        second.classes[0].name = "example/SecondMixin".to_string();
+        scanned.artifacts.push(second);
+
+        let analysis = analyze_detailed(&mut scanned);
+        let interactions = crate::conflict::behavioral_interactions(&analysis.effects);
+
+        assert!(analysis.risks.is_empty());
+        assert!(
+            interactions.iter().any(|interaction| {
+                interaction.kind == BehavioralInteractionKind::OrderedValueDecorators
+            }),
+            "{analysis:#?}"
+        );
+    }
+
+    #[test]
+    fn modify_variable_injectors_on_different_arguments_do_not_overlap() {
+        let mut scanned = mixin_fixture(
+            "HEAD",
+            "Lorg/spongepowered/asm/mixin/injection/ModifyVariable;",
+        );
+        scanned.artifacts[0].classes[0].methods[0].descriptor = "(II)V".to_string();
+        scanned.artifacts[1].classes[0].methods[0].descriptor = "(I)I".to_string();
+        let injector = fixture_injector_mut(&mut scanned);
+        injector
+            .values
+            .insert("argsOnly".to_string(), AnnotationValue::Boolean(true));
+        injector
+            .values
+            .insert("index".to_string(), AnnotationValue::Integer(1));
+        injector.values.insert(
+            "method".to_string(),
+            AnnotationValue::Array(vec![AnnotationValue::String("tick(II)V".to_string())]),
+        );
+        let mut second = scanned.artifacts[1].clone();
+        second.id = "second".to_string();
+        second.display_name = "second".to_string();
+        second.classes[0].name = "example/SecondMixin".to_string();
+        second.classes[0].methods[0].annotations[0]
+            .values
+            .insert("index".to_string(), AnnotationValue::Integer(2));
+        scanned.artifacts.push(second);
+
+        let analysis = analyze_detailed(&mut scanned);
+        let interactions = crate::conflict::behavioral_interactions(&analysis.effects);
+
+        assert!(analysis.risks.is_empty());
+        assert!(interactions.iter().all(|interaction| {
+            interaction.kind != BehavioralInteractionKind::OrderedValueDecorators
+        }));
+    }
+
+    #[test]
+    fn priority_resolves_two_normal_method_contributions_as_interaction() {
+        let mut scanned = mixin_fixture("HEAD", "Lorg/spongepowered/asm/mixin/injection/Inject;");
+        scanned.artifacts.push(overwrite_artifact(
+            "low",
+            "example/Low",
+            "()V",
+            900,
+            vec![return_instruction(0)],
+        ));
+        let mut high = overwrite_artifact(
+            "high",
+            "example/High",
+            "()V",
+            1200,
+            vec![return_instruction(0)],
+        );
+        high.classes[0].methods[0].annotations.clear();
+        scanned.artifacts.push(high);
+
+        let analysis = analyze_detailed(&mut scanned);
+
+        assert!(analysis.interactions.iter().any(|interaction| {
+            interaction.kind == BehavioralInteractionKind::OrderedMethodContributions
+        }));
+        assert_eq!(
+            analysis
+                .effects
+                .iter()
+                .filter(|effect| {
+                    effect
+                        .mutations
+                        .iter()
+                        .any(|mutation| mutation.kind == MutationKind::ReplaceMethodBody)
+                })
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn invalid_active_overwrite_is_a_structural_merge_risk() {
+        let mut scanned = mixin_fixture("HEAD", "Lorg/spongepowered/asm/mixin/injection/Inject;");
+        let mut invalid = overwrite_artifact(
+            "invalid",
+            "example/InvalidOverwrite",
+            "()V",
+            1100,
+            vec![return_instruction(0)],
+        );
+        invalid.classes[0].methods[0].name = "missing".to_string();
+        scanned.artifacts.push(invalid);
+
+        let analysis = analyze_detailed(&mut scanned);
+
+        assert!(analysis.risks.iter().any(|risk| {
+            risk.rule == "invalid_overwrite_target"
+                && risk.precision == Precision::Method
+                && risk.activation == Activation::Definite
+        }));
+    }
+
+    #[test]
+    fn dynamic_member_selector_resolves_after_another_mixin_adds_the_method() {
+        let mut scanned = mixin_fixture("HEAD", "Lorg/spongepowered/asm/mixin/injection/Inject;");
+        fixture_injector_mut(&mut scanned).values.insert(
+            "method".to_string(),
+            AnnotationValue::Array(vec![AnnotationValue::String("dynamic()V".to_string())]),
+        );
+        scanned.artifacts[1].classes[0].methods[0]
+            .annotations
+            .push(ParsedAnnotation {
+                descriptor: "Lorg/spongepowered/asm/mixin/Dynamic;".to_string(),
+                values: BTreeMap::new(),
+            });
+        let mut provider = overwrite_artifact(
+            "provider",
+            "example/Provider",
+            "()V",
+            900,
+            vec![return_instruction(0)],
+        );
+        provider.classes[0].methods[0].name = "dynamic".to_string();
+        provider.classes[0].methods[0].annotations.clear();
+        scanned.artifacts.push(provider);
+
+        let analysis = analyze_detailed(&mut scanned);
+
+        assert!(analysis.effects.iter().any(|effect| {
+            effect.queries.iter().any(|query| {
+                query
+                    .method
+                    .member
+                    .as_ref()
+                    .is_some_and(|member| member.name == "dynamic" && member.descriptor == "()V")
+            })
+        }));
+        assert!(
+            scanned
+                .warnings
+                .iter()
+                .all(|warning| { warning.kind != WarningKind::UnresolvedSoftReference })
+        );
+    }
+
+    #[test]
+    fn pseudo_mixin_with_absent_target_is_inactive_without_selector_warnings() {
+        let mut scanned = mixin_fixture("HEAD", "Lorg/spongepowered/asm/mixin/injection/Inject;");
+        scanned.artifacts[1].classes[0]
+            .annotations
+            .push(ParsedAnnotation {
+                descriptor: PSEUDO.to_string(),
+                values: BTreeMap::new(),
+            });
+        let AnnotationValue::Array(targets) = scanned.artifacts[1].classes[0].annotations[0]
+            .values
+            .get_mut("value")
+            .unwrap()
+        else {
+            panic!("fixture target list");
+        };
+        targets[0] = AnnotationValue::Class("Loptional/MissingTarget;".to_string());
+
+        let analysis = analyze_detailed(&mut scanned);
+
+        assert!(analysis.effects.is_empty());
+        assert!(
+            analysis
+                .inactive_candidates
+                .iter()
+                .any(|candidate| { candidate.kind == InactiveCandidateKind::PseudoTargetMissing })
+        );
+        assert!(
+            scanned
+                .warnings
+                .iter()
+                .all(|warning| { warning.kind != WarningKind::UnresolvedSoftReference })
+        );
+    }
+
+    #[test]
+    fn effects_record_config_mixin_and_injector_order_independently() {
+        let mut scanned =
+            mixin_fixture("INVOKE", "Lorg/spongepowered/asm/mixin/injection/Redirect;");
+        scanned.artifacts[0].classes[0].methods[0].instructions =
+            vec![call_instruction(0, "game/Owner", "run")];
+        fixture_at_mut(&mut scanned).values.insert(
+            "target".to_string(),
+            AnnotationValue::String("Lgame/Owner;run()V".to_string()),
+        );
+
+        let analysis = analyze_detailed(&mut scanned);
+        let effect = analysis
+            .effects
+            .iter()
+            .find(|effect| {
+                effect
+                    .mutations
+                    .iter()
+                    .any(|mutation| mutation.kind == MutationKind::RedirectOperation)
+            })
+            .unwrap();
+
+        assert_eq!(effect.config_priority, Some(1000));
+        assert_eq!(effect.mixin_priority, Some(1000));
+        assert_eq!(effect.injector_order, Some(10_000));
+    }
+
     fn unique_annotation() -> ParsedAnnotation {
         ParsedAnnotation {
             descriptor: UNIQUE.to_string(),
@@ -2892,8 +4913,57 @@ mod tests {
         }
     }
 
+    fn overwrite_artifact(
+        artifact_id: &str,
+        mixin_name: &str,
+        descriptor: &str,
+        priority: i64,
+        instructions: Vec<ParsedInstruction>,
+    ) -> ParsedArtifact {
+        ParsedArtifact {
+            id: artifact_id.to_string(),
+            display_name: artifact_id.to_string(),
+            kind: ArtifactKind::Mod,
+            classes: vec![ParsedClass {
+                definition_id: None,
+                future_version_best_effort: false,
+                name: mixin_name.to_string(),
+                super_name: Some("java/lang/Object".to_string()),
+                interfaces: Vec::new(),
+                annotations: vec![ParsedAnnotation {
+                    descriptor: MIXIN.to_string(),
+                    values: BTreeMap::from([
+                        (
+                            "value".to_string(),
+                            AnnotationValue::Array(vec![AnnotationValue::Class(
+                                "Lgame/Target;".to_string(),
+                            )]),
+                        ),
+                        ("priority".to_string(), AnnotationValue::Integer(priority)),
+                    ]),
+                }],
+                fields: Vec::new(),
+                methods: vec![ParsedMethod {
+                    name: "tick".to_string(),
+                    descriptor: descriptor.to_string(),
+                    is_static: false,
+                    is_public: true,
+                    is_synthetic: false,
+                    annotations: vec![ParsedAnnotation {
+                        descriptor: OVERWRITE.to_string(),
+                        values: BTreeMap::new(),
+                    }],
+                    max_locals: Some(2),
+                    instructions,
+                }],
+            }],
+            refmaps: Vec::new(),
+            resources: Vec::new(),
+        }
+    }
+
     fn fixture_at_mut(scanned: &mut ScannedArtifacts) -> &mut ParsedAnnotation {
-        let injector = &mut scanned.artifacts[1].classes[0].methods[0].annotations[0];
+        let injector = fixture_injector_mut(scanned);
         let AnnotationValue::Array(ats) = injector.values.get_mut("at").unwrap() else {
             panic!("fixture @At must be an array");
         };
@@ -2901,6 +4971,10 @@ mod tests {
             panic!("fixture @At must be an annotation");
         };
         at
+    }
+
+    fn fixture_injector_mut(scanned: &mut ScannedArtifacts) -> &mut ParsedAnnotation {
+        &mut scanned.artifacts[1].classes[0].methods[0].annotations[0]
     }
 
     fn at_annotation(
@@ -2984,9 +5058,11 @@ mod tests {
         };
         ParsedInstruction {
             reference: InstructionReference {
+                identity: None,
                 stable_id,
                 original_offset: Some(stable_id),
                 opcode: 182,
+                local_slot: None,
                 member: Some(member.clone()),
                 constant: None,
             },
@@ -2997,9 +5073,11 @@ mod tests {
     fn string_instruction(stable_id: u32, value: &str) -> ParsedInstruction {
         ParsedInstruction {
             reference: InstructionReference {
+                identity: None,
                 stable_id,
                 original_offset: Some(stable_id),
                 opcode: 18,
+                local_slot: None,
                 member: None,
                 constant: Some(value.to_string()),
             },
@@ -3010,9 +5088,11 @@ mod tests {
     fn integer_instruction(stable_id: u32, value: i64) -> ParsedInstruction {
         ParsedInstruction {
             reference: InstructionReference {
+                identity: None,
                 stable_id,
                 original_offset: Some(stable_id),
                 opcode: if value == 0 { 3 } else { 16 },
+                local_slot: None,
                 member: None,
                 constant: Some(value.to_string()),
             },
@@ -3023,9 +5103,11 @@ mod tests {
     fn type_instruction(stable_id: u32, opcode: u8, class: &str) -> ParsedInstruction {
         ParsedInstruction {
             reference: InstructionReference {
+                identity: None,
                 stable_id,
                 original_offset: Some(stable_id),
                 opcode,
+                local_slot: None,
                 member: None,
                 constant: Some(class.to_string()),
             },
@@ -3036,9 +5118,11 @@ mod tests {
     fn return_instruction(stable_id: u32) -> ParsedInstruction {
         ParsedInstruction {
             reference: InstructionReference {
+                identity: None,
                 stable_id,
                 original_offset: Some(stable_id),
                 opcode: 177,
+                local_slot: None,
                 member: None,
                 constant: None,
             },
@@ -3048,13 +5132,11 @@ mod tests {
 
     fn mixin_fixture(at_kind: &str, injector_descriptor: &str) -> ScannedArtifacts {
         let target = ParsedClass {
-            minor: 0,
-            major: 61,
+            definition_id: None,
             future_version_best_effort: false,
             name: "game/Target".to_string(),
             super_name: Some("java/lang/Object".to_string()),
             interfaces: Vec::new(),
-            is_interface: false,
             annotations: Vec::new(),
             fields: Vec::new(),
             methods: vec![ParsedMethod {
@@ -3096,13 +5178,11 @@ mod tests {
             )]),
         };
         let mixin = ParsedClass {
-            minor: 0,
-            major: 61,
+            definition_id: None,
             future_version_best_effort: false,
             name: "example/Mixin".to_string(),
             super_name: Some("java/lang/Object".to_string()),
             interfaces: Vec::new(),
-            is_interface: false,
             annotations: vec![mixin_annotation],
             fields: Vec::new(),
             methods: vec![ParsedMethod {
@@ -3125,6 +5205,7 @@ mod tests {
                     kind: ArtifactKind::Minecraft,
                     classes: vec![target],
                     refmaps: Vec::new(),
+                    resources: Vec::new(),
                 },
                 ParsedArtifact {
                     id: "mod".to_string(),
@@ -3132,6 +5213,7 @@ mod tests {
                     kind: ArtifactKind::Mod,
                     classes: vec![mixin],
                     refmaps: Vec::new(),
+                    resources: Vec::new(),
                 },
             ],
             universe: ClassUniverse::default(),

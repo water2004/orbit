@@ -3,12 +3,13 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-pub const REPORT_SCHEMA_VERSION: &str = "2";
+pub const REPORT_SCHEMA_VERSION: u32 = 3;
 
 #[derive(Debug, Clone)]
 pub struct AuditRequest {
     pub environment: AuditEnvironment,
     pub artifacts: Vec<ArtifactInput>,
+    pub active_mod_ids: BTreeSet<String>,
     pub limits: AnalysisLimits,
 }
 
@@ -18,6 +19,17 @@ pub struct AuditEnvironment {
     pub declared_loader: String,
     pub detected_loader: String,
     pub loader_version: String,
+    pub physical_side: PhysicalSide,
+    pub java_feature: u32,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PhysicalSide {
+    Client,
+    DedicatedServer,
+    #[default]
+    Unknown,
 }
 
 #[derive(Debug, Clone)]
@@ -113,11 +125,18 @@ pub struct Readiness {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuditReport {
-    pub schema_version: String,
+    pub schema_version: u32,
     pub environment: AuditEnvironment,
     pub readiness: Readiness,
     pub artifacts: Vec<ArtifactReport>,
+    pub registered_mixin_configs: Vec<RegisteredMixinConfig>,
+    pub registered_mixins: Vec<RegisteredMixin>,
+    /// Complete recovered transformation/query model used to derive findings.
+    pub transformations: Vec<Effect>,
     pub risks: Vec<Risk>,
+    pub interactions: Vec<BehavioralInteraction>,
+    pub inactive_candidates: Vec<InactiveCandidate>,
+    pub coverage_gaps: Vec<CoverageGap>,
     pub coverage: Coverage,
     pub warnings: Vec<Warning>,
 }
@@ -140,7 +159,8 @@ pub struct Coverage {
     pub classes_parsed: usize,
     pub classes_failed: usize,
     pub methods_parsed: usize,
-    pub methods_degraded: usize,
+    pub method_parse_failures: usize,
+    pub method_budget_degradations: usize,
     pub mixins_discovered: usize,
     pub effects_instruction_precision: usize,
     pub effects_method_precision: usize,
@@ -150,10 +170,212 @@ pub struct Coverage {
     pub transformer_effects_recovered: usize,
     pub transformer_effects_partial: usize,
     pub transformer_effects_unknown: usize,
+    pub mixin_configs_registered: usize,
+    pub mixins_registered: usize,
+    pub inactive_mixins: usize,
+    pub plugin_controlled_mixins: usize,
+    pub dynamically_registered_configs: usize,
+    pub unsupported_selector_syntax: usize,
+    pub unsupported_injection_points: usize,
+    pub unresolved_required_references: usize,
+    pub valid_multi_target_selectors: usize,
+    pub instruction_resolution_degraded: usize,
+    pub future_classfiles: usize,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub unsupported_mechanisms: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub budget_exhaustions: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SideConstraint {
+    Common,
+    Client,
+    DedicatedServer,
+}
+
+impl SideConstraint {
+    #[must_use]
+    pub fn applies_to(self, side: PhysicalSide) -> bool {
+        matches!(
+            (self, side),
+            (Self::Common, _)
+                | (Self::Client, PhysicalSide::Client)
+                | (Self::DedicatedServer, PhysicalSide::DedicatedServer)
+        )
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RegistrationSource {
+    FabricMetadata,
+    QuiltMetadata,
+    ForgeManifest,
+    NeoForgeMetadata,
+    StaticCode,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConfigActivation {
+    Active,
+    SideMismatch,
+    PhysicalSideUnknown,
+    MissingRequiredMods { mod_ids: Vec<String> },
+    PluginControlled,
+    Dynamic,
+    MissingConfig,
+    MalformedConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ParsedMixinConfig {
+    pub required: bool,
+    pub min_version: Option<String>,
+    pub compatibility_level: Option<String>,
+    pub package: Option<String>,
+    pub plugin: Option<String>,
+    pub refmap: Option<String>,
+    pub priority: i32,
+    pub mixin_priority: i32,
+    pub mixins: Vec<String>,
+    pub client: Vec<String>,
+    pub server: Vec<String>,
+    pub default_require: u32,
+    pub default_group: String,
+    pub overwrite_require_annotations: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RegisteredMixinConfig {
+    pub artifact_id: String,
+    pub config_path: String,
+    pub side: SideConstraint,
+    pub registration: RegistrationSource,
+    pub activation: ConfigActivation,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub required_mods: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub behavior_version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parsed: Option<ParsedMixinConfig>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MixinActivation {
+    RegisteredForCurrentSide,
+    PluginAccepted,
+    PluginRejected,
+    PluginControlled,
+    Dynamic,
+    Unregistered,
+    Inactive,
+    Unknown,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RegisteredMixin {
+    pub artifact_id: String,
+    pub config_path: String,
+    pub mixin_class: String,
+    pub side: SideConstraint,
+    pub config_priority: i32,
+    pub class_priority: i32,
+    pub refmap: Option<String>,
+    pub required_config: bool,
+    pub default_require: u32,
+    pub plugin: Option<String>,
+    pub activation: MixinActivation,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InactiveCandidateKind {
+    UnregisteredConfig,
+    SideMismatch,
+    MissingRequiredMods,
+    PluginRejected,
+    MissingOptionalTarget,
+    PseudoTargetMissing,
+    UnregisteredTransformer,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InactiveCandidate {
+    pub artifact_id: String,
+    pub class: Option<String>,
+    pub config_path: Option<String>,
+    pub kind: InactiveCandidateKind,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CoverageGapKind {
+    UnsupportedSelector,
+    UnsupportedInjectionPoint,
+    UnresolvedLocalSelector,
+    DynamicMixinConfigRegistration,
+    PluginDecision,
+    PluginDynamicMixins,
+    PluginClassMutation,
+    TransformerPartial,
+    TransformerUnknown,
+    BudgetExhaustion,
+    FutureClassfile,
+    PhysicalSideUnknown,
+    UnsupportedMechanism,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CoverageGap {
+    pub artifact_id: Option<String>,
+    pub scope: String,
+    pub kind: CoverageGapKind,
+    pub detail: String,
+    pub count: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BehavioralInteractionKind {
+    OrderedValueDecorators,
+    OrderedMethodContributions,
+    OptionalInjectionAffected,
+    OrderDependentTransformation,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MethodContributionKind {
+    AddNewMethod,
+    ReplaceExistingMethod,
+    OverwriteExistingMethod,
+    UniqueRenamedMethod,
+    UniqueDiscardableMethod,
+    Accessor,
+    Invoker,
+    InjectorHandler,
+    HelperMethod,
+    SkippedByPriority,
+    InvalidOverwriteTarget,
+    MissingRequiredOverwriteAnnotation,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BehavioralInteraction {
+    pub left_artifact: String,
+    pub right_artifact: String,
+    pub target: Target,
+    pub kind: BehavioralInteractionKind,
+    pub reason: String,
+    pub evidence: Vec<Evidence>,
+    pub confidence: Confidence,
+    pub activation: Activation,
+    pub order: OrderAnalysis,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -190,6 +412,7 @@ pub enum WarningKind {
     CustomInjectionPoint,
     DamagedArtifact,
     DamagedClass,
+    MalformedConfig,
     TransformerPartial,
     UnsupportedMechanism,
     BudgetExhaustion,
@@ -290,10 +513,30 @@ pub struct ClassReference {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct ClassDefinitionId {
+    pub artifact_id: String,
+    pub entry_path: String,
+    pub class_name: String,
+    pub content_hash: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct InstructionIdentity {
+    pub definition: ClassDefinitionId,
+    pub method_name: String,
+    pub method_descriptor: String,
+    pub instruction_index: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct InstructionReference {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub identity: Option<InstructionIdentity>,
     pub stable_id: u32,
     pub original_offset: Option<u32>,
     pub opcode: u8,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub local_slot: Option<u16>,
     pub member: Option<MemberReference>,
     pub constant: Option<String>,
 }
@@ -485,6 +728,7 @@ impl MutationKind {
 pub enum SoftReferenceResolution {
     DirectExact,
     RefmapExact,
+    MultiTargetValid,
     Ambiguous,
     Unresolved,
     NotApplicable,
@@ -502,7 +746,9 @@ pub struct InjectionGroupConstraint {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct InjectionQuery {
     pub id: String,
+    pub method_selector: MethodSelector,
     pub selector_kind: String,
+    pub target_selectors: Vec<String>,
     pub method: Target,
     pub candidates: Vec<InstructionReference>,
     pub selected: Vec<InstructionReference>,
@@ -510,12 +756,66 @@ pub struct InjectionQuery {
     pub maximum_matches: Option<u32>,
     pub expected_matches: Option<u32>,
     pub ordinal: Option<u32>,
+    pub shift: Option<String>,
     pub slice: Option<String>,
     pub slice_start: Option<u32>,
     pub slice_end: Option<u32>,
     pub resolution: SoftReferenceResolution,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub local_selector: Option<LocalSelector>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub group: Option<InjectionGroupConstraint>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "kind")]
+pub enum MethodSelector {
+    Exact {
+        owner: Option<String>,
+        name: String,
+        descriptor: Option<String>,
+    },
+    Glob {
+        owner: Option<String>,
+        pattern: GlobPattern,
+        value: String,
+        descriptor: Option<String>,
+    },
+    All {
+        descriptor: Option<String>,
+    },
+    Dynamic {
+        raw: String,
+    },
+    Unsupported {
+        raw: String,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GlobPattern {
+    Prefix,
+    Suffix,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LocalSelector {
+    pub args_only: bool,
+    pub explicit_index: Option<u16>,
+    pub ordinal: Option<u32>,
+    pub names: Vec<String>,
+    pub expected_type: Option<String>,
+    pub slot: Option<u16>,
+    pub frame_position: Option<FramePosition>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FramePosition {
+    Argument,
+    Local,
+    Unknown,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -598,7 +898,9 @@ pub struct Effect {
     pub precision: Precision,
     pub confidence: Confidence,
     pub activation: Activation,
-    pub priority: Option<i32>,
+    pub config_priority: Option<i32>,
+    pub mixin_priority: Option<i32>,
+    pub injector_order: Option<i32>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -629,6 +931,9 @@ pub struct Risk {
     pub order: OrderAnalysis,
     pub severity: Severity,
     pub confidence: Confidence,
+    /// Precision of this individual reason. Separate reasons are never
+    /// upgraded by borrowing confidence or precision from one another.
+    pub precision: Precision,
     /// Heuristic ranking value in `0..=100`; this is not a probability.
     pub risk_index: u8,
     pub activation: Activation,

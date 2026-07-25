@@ -3,14 +3,14 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 
-use crate::cli::{AuditFormat, AuditSeverity};
+use crate::cli::AuditFormat;
 
 use super::CliContext;
 
 pub async fn handle(
     format: AuditFormat,
-    min_severity: AuditSeverity,
-    fail_on: Option<AuditSeverity>,
+    min_risk: u8,
+    fail_on_risk: Option<u8>,
     mod_filter: Option<String>,
     report_path: Option<PathBuf>,
     limit: usize,
@@ -24,7 +24,6 @@ pub async fn handle(
         &instance_dir,
         crate::cli::progress::audit_reporter(ctx.quiet, &ctx.runtime.config().ui.progress_bar),
     )?;
-    let threshold = orbit_core::AuditSeverity::from(min_severity);
     let selected_artifacts = selected_artifacts(&full_report, mod_filter.as_deref());
     if mod_filter.is_some() && selected_artifacts.as_ref().is_some_and(HashMap::is_empty) {
         anyhow::bail!(
@@ -32,19 +31,15 @@ pub async fn handle(
             mod_filter.as_deref().unwrap_or_default()
         );
     }
-    let threshold_exceeded = fail_on.is_some_and(|severity| {
-        exceeds_threshold(
-            &full_report,
-            orbit_core::AuditSeverity::from(severity),
-            selected_artifacts.as_ref(),
-        )
+    let threshold_exceeded = fail_on_risk.is_some_and(|threshold| {
+        exceeds_threshold(&full_report, threshold, selected_artifacts.as_ref())
     });
     if let Some(path) = &report_path {
         write_detailed_report(path, &full_report)?;
     }
     let mut report = full_report;
     report.risks.retain(|risk| {
-        risk.severity >= threshold
+        risk.risk_index >= min_risk
             && selected_artifacts.as_ref().is_none_or(|selected| {
                 selected.contains_key(&risk.left_artifact)
                     || selected.contains_key(&risk.right_artifact)
@@ -66,7 +61,7 @@ pub async fn handle(
         eprintln!("Detailed report written to: {}", path.display());
     }
     if threshold_exceeded {
-        anyhow::bail!("bytecode audit found risk at or above the --fail-on threshold");
+        anyhow::bail!("bytecode audit found risk at or above the --fail-on-risk threshold");
     }
     Ok(())
 }
@@ -103,11 +98,11 @@ fn selected_artifacts(
 
 fn exceeds_threshold(
     report: &orbit_core::AuditReport,
-    threshold: orbit_core::AuditSeverity,
+    threshold: u8,
     selected: Option<&HashMap<String, ()>>,
 ) -> bool {
     report.risks.iter().any(|risk| {
-        risk.severity >= threshold
+        risk.risk_index >= threshold
             && selected.is_none_or(|selected| {
                 selected.contains_key(&risk.left_artifact)
                     || selected.contains_key(&risk.right_artifact)
@@ -140,7 +135,7 @@ mod tests {
 
         let text = crate::cli::output::audit_report(&report, 20);
 
-        assert!(text.contains("Risk distribution"));
+        assert!(text.contains("Structural compatibility risks: 1"));
         assert!(text.contains("Risks (showing 1 of 1)"));
         assert!(text.contains("Unresolved soft references"));
         assert!(!text.contains("evidence:"));
@@ -170,11 +165,73 @@ mod tests {
     fn json_and_explicit_report_keep_complete_evidence() {
         let mut report = empty_report();
         report.risks.push(sample_risk("full structured evidence"));
+        report
+            .interactions
+            .push(orbit_core::audit_model::BehavioralInteraction {
+                left_artifact: "a".to_string(),
+                right_artifact: "b".to_string(),
+                target: orbit_core::audit_model::Target::method("game/Foo", "run", "()V"),
+                kind: orbit_core::audit_model::BehavioralInteractionKind::OrderedValueDecorators,
+                reason: "ordered but composable".to_string(),
+                evidence: Vec::new(),
+                confidence: orbit_core::AuditConfidence::Exact,
+                activation: orbit_core::AuditActivation::Definite,
+                order: orbit_core::AuditOrderAnalysis::LeftMustRunFirst,
+            });
+        report
+            .coverage_gaps
+            .push(orbit_core::audit_model::CoverageGap {
+                artifact_id: Some("a".to_string()),
+                scope: "example/Mixin".to_string(),
+                kind: orbit_core::audit_model::CoverageGapKind::UnsupportedSelector,
+                detail: "unsupported selector".to_string(),
+                count: 1,
+            });
+        report
+            .registered_mixin_configs
+            .push(orbit_core::audit_model::RegisteredMixinConfig {
+                artifact_id: "a".to_string(),
+                config_path: "mixins.json".to_string(),
+                side: orbit_core::audit_model::SideConstraint::Common,
+                registration: orbit_core::audit_model::RegistrationSource::FabricMetadata,
+                activation: orbit_core::audit_model::ConfigActivation::PluginControlled,
+                required_mods: Vec::new(),
+                behavior_version: None,
+                parsed: Some(orbit_core::audit_model::ParsedMixinConfig {
+                    required: false,
+                    min_version: Some("0.8".to_string()),
+                    compatibility_level: Some("JAVA_21".to_string()),
+                    package: Some("example".to_string()),
+                    plugin: Some("example.Plugin".to_string()),
+                    refmap: Some("example.refmap.json".to_string()),
+                    priority: 1000,
+                    mixin_priority: 1000,
+                    mixins: vec!["Mixin".to_string()],
+                    client: Vec::new(),
+                    server: Vec::new(),
+                    default_require: 1,
+                    default_group: "default".to_string(),
+                    overwrite_require_annotations: true,
+                }),
+            });
         let json = serde_json::to_value(&report).unwrap();
         assert_eq!(
             json["risks"][0]["evidence"][0]["detail"],
             "full structured evidence"
         );
+        assert_eq!(
+            json["registered_mixin_configs"][0]["activation"],
+            "plugin_controlled"
+        );
+        assert_eq!(
+            json["registered_mixin_configs"][0]["parsed"]["plugin"],
+            "example.Plugin"
+        );
+        assert!(json["transformations"].is_array());
+        assert_eq!(json["risks"][0]["precision"], "instruction");
+        assert_eq!(json["interactions"][0]["kind"], "ordered_value_decorators");
+        assert_eq!(json["coverage_gaps"][0]["kind"], "unsupported_selector");
+        assert!(json["warnings"].as_array().unwrap().is_empty());
 
         let path = std::env::temp_dir().join(format!(
             "orbit-audit-report-{}-{}.json",
@@ -186,20 +243,20 @@ mod tests {
         std::fs::remove_file(&path).unwrap();
 
         assert!(written.contains("full structured evidence"));
-        assert!(written.contains("\"schema_version\": \"2\""));
+        assert!(written.contains("\"schema_version\": 3"));
     }
 
     #[test]
     fn json_keeps_fixed_schema_version() {
         let report = empty_report();
         let value = serde_json::to_value(report).unwrap();
-        assert_eq!(value["schema_version"], "2");
+        assert_eq!(value["schema_version"], 3);
         assert!(value.get("coverage").is_some());
         assert!(value.get("warnings").is_some());
     }
 
     #[test]
-    fn fail_on_threshold_uses_severity_ordering() {
+    fn fail_on_threshold_uses_effective_risk_index() {
         let mut report = empty_report();
         report.risks.push(orbit_core::AuditRisk {
             left_artifact: "a".to_string(),
@@ -213,19 +270,12 @@ mod tests {
             order: orbit_core::AuditOrderAnalysis::Exclusive,
             severity: orbit_core::AuditSeverity::High,
             confidence: orbit_core::AuditConfidence::Exact,
+            precision: orbit_core::AuditPrecision::Class,
             risk_index: 80,
             activation: orbit_core::AuditActivation::Candidate,
         });
-        assert!(exceeds_threshold(
-            &report,
-            orbit_core::AuditSeverity::High,
-            None
-        ));
-        assert!(!exceeds_threshold(
-            &report,
-            orbit_core::AuditSeverity::Critical,
-            None
-        ));
+        assert!(exceeds_threshold(&report, 80, None));
+        assert!(!exceeds_threshold(&report, 81, None));
     }
 
     #[test]
@@ -274,6 +324,7 @@ mod tests {
             order: orbit_core::AuditOrderAnalysis::Exclusive,
             severity: orbit_core::AuditSeverity::High,
             confidence: orbit_core::AuditConfidence::Exact,
+            precision: orbit_core::AuditPrecision::Instruction,
             risk_index: 75,
             activation: orbit_core::AuditActivation::Candidate,
         }
@@ -281,12 +332,14 @@ mod tests {
 
     fn empty_report() -> orbit_core::AuditReport {
         orbit_core::AuditReport {
-            schema_version: "2".to_string(),
+            schema_version: 3,
             environment: orbit_core::audit_model::AuditEnvironment {
                 minecraft_version: "test".to_string(),
                 declared_loader: "fabric".to_string(),
                 detected_loader: "fabric".to_string(),
                 loader_version: "test".to_string(),
+                physical_side: orbit_core::audit_model::PhysicalSide::Unknown,
+                java_feature: 17,
             },
             readiness: orbit_core::AuditReadiness {
                 status: orbit_core::AuditReadinessStatus::Ready,
@@ -295,7 +348,13 @@ mod tests {
                 capabilities: vec!["mixin".to_string()],
             },
             artifacts: Vec::new(),
+            registered_mixin_configs: Vec::new(),
+            registered_mixins: Vec::new(),
+            transformations: Vec::new(),
             risks: Vec::new(),
+            interactions: Vec::new(),
+            inactive_candidates: Vec::new(),
+            coverage_gaps: Vec::new(),
             coverage: orbit_core::AuditCoverage::default(),
             warnings: Vec::new(),
         }

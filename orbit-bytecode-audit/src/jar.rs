@@ -8,8 +8,8 @@ use sha2::{Digest, Sha256};
 use crate::AuditError;
 use crate::classfile::{InstructionKind, ParsedClass};
 use crate::model::{
-    ArtifactKind, ArtifactReport, AuditRequest, Coverage, LoaderFamily, MemberKind,
-    MemberReference, Readiness, ReadinessStatus, Warning, WarningKind,
+    ArtifactKind, ArtifactReport, AuditRequest, ClassDefinitionId, Coverage, InstructionIdentity,
+    LoaderFamily, MemberKind, MemberReference, Readiness, ReadinessStatus, Warning, WarningKind,
 };
 
 #[derive(Debug)]
@@ -22,13 +22,21 @@ pub(crate) struct ScannedArtifacts {
     pub warnings: Vec<Warning>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct ParsedArtifact {
     pub id: String,
     pub display_name: String,
     pub kind: ArtifactKind,
     pub classes: Vec<ParsedClass>,
     pub refmaps: Vec<RefmapEntry>,
+    pub resources: Vec<ResourceEntry>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct ResourceEntry {
+    /// Normalized path, including `outer.jar!/` prefixes for nested archives.
+    pub path: String,
+    pub bytes: Vec<u8>,
 }
 
 #[derive(Debug, Clone)]
@@ -47,40 +55,15 @@ pub(crate) struct ClassUniverse {
 
 #[derive(Debug)]
 pub(crate) struct ClassDefinition {
+    pub definition_id: Option<ClassDefinitionId>,
     pub artifact_id: String,
     pub is_mod: bool,
     pub name: String,
     pub super_name: Option<String>,
     pub interfaces: Vec<String>,
-    pub is_interface: bool,
     pub fields: Vec<MemberReference>,
     pub methods: Vec<MemberReference>,
     pub hard_references: Vec<MemberReference>,
-}
-
-impl ClassDefinition {
-    pub(crate) fn member_shape(&self) -> (Vec<MemberReference>, Vec<MemberReference>) {
-        let mut fields = self.fields.clone();
-        let mut methods = self.methods.clone();
-        fields.sort_by(compare_members);
-        methods.sort_by(compare_members);
-        (fields, methods)
-    }
-
-    pub(crate) fn has_member(&self, reference: &MemberReference) -> bool {
-        match reference.kind {
-            MemberKind::Method => self.methods.contains(reference),
-            MemberKind::Field => self.fields.contains(reference),
-        }
-    }
-}
-
-fn compare_members(left: &MemberReference, right: &MemberReference) -> std::cmp::Ordering {
-    left.name
-        .cmp(&right.name)
-        .then_with(|| left.descriptor.cmp(&right.descriptor))
-        .then_with(|| (left.kind as u8).cmp(&(right.kind as u8)))
-        .then_with(|| left.is_static.cmp(&right.is_static))
 }
 
 impl ClassUniverse {
@@ -107,81 +90,94 @@ impl ClassUniverse {
             })
             .collect()
     }
+
+    pub(crate) fn definition_resolves_member(
+        &self,
+        definition: &ClassDefinition,
+        reference: &MemberReference,
+    ) -> bool {
+        self.definition_resolves_member_inner(definition, reference, &mut HashSet::new())
+    }
+
+    fn definition_resolves_member_inner(
+        &self,
+        definition: &ClassDefinition,
+        reference: &MemberReference,
+        visited: &mut HashSet<String>,
+    ) -> bool {
+        if !visited.insert(definition.name.clone()) {
+            return false;
+        }
+        if definition
+            .fields
+            .iter()
+            .chain(&definition.methods)
+            .any(|member| same_member_signature(member, reference))
+        {
+            return true;
+        }
+        definition
+            .super_name
+            .iter()
+            .chain(&definition.interfaces)
+            .any(|parent| {
+                self.definitions(parent).iter().any(|parent_definition| {
+                    self.definition_resolves_member_inner(
+                        parent_definition,
+                        reference,
+                        &mut visited.clone(),
+                    )
+                })
+            })
+    }
 }
 
-pub(crate) fn probe_runtime_abi(
-    request: &AuditRequest,
-    loader: LoaderFamily,
-) -> Result<Readiness, AuditError> {
-    let runtime_inputs = request
+fn same_member_signature(left: &MemberReference, right: &MemberReference) -> bool {
+    left.name == right.name
+        && left.descriptor == right.descriptor
+        && left.kind == right.kind
+        && (left.is_static.is_none()
+            || right.is_static.is_none()
+            || left.is_static == right.is_static)
+}
+
+pub(crate) fn probe_runtime_abi(scanned: &ScannedArtifacts, loader: LoaderFamily) -> Readiness {
+    let runtime_artifacts = scanned
         .artifacts
         .iter()
         .filter(|artifact| artifact.kind != ArtifactKind::Mod)
         .collect::<Vec<_>>();
-    let mut classes = BTreeMap::<String, Vec<ParsedClass>>::new();
+    let mut classes = BTreeMap::<String, Vec<&ParsedClass>>::new();
     let mut minecraft_classes = 0_usize;
     let mut loader_classes = 0_usize;
-    for artifact in runtime_inputs {
-        let parsed = read_classes_for_probe(
-            &artifact.path,
-            &artifact.nested_jars,
-            request.limits.max_entries_per_jar,
-            request.limits.max_class_bytes,
-            request.limits.max_constant_pool_entries,
-            request.limits.max_annotation_depth,
-            artifact.kind == ArtifactKind::Minecraft,
-        )
-        .map_err(|message| {
-            AuditError::InvalidRequest(format!(
-                "cannot inspect runtime artifact '{}': {message}",
-                artifact.path.display()
-            ))
-        })?;
+    for artifact in runtime_artifacts {
         if artifact.kind == ArtifactKind::Minecraft {
-            minecraft_classes += parsed.len();
+            minecraft_classes += artifact.classes.len();
         }
         if artifact.kind == ArtifactKind::Loader {
-            loader_classes += parsed.len();
+            loader_classes += artifact.classes.len();
         }
-        for class in parsed {
+        for class in &artifact.classes {
             classes.entry(class.name.clone()).or_default().push(class);
         }
     }
     if minecraft_classes == 0 {
-        return Ok(incomplete(
+        return incomplete(
             loader,
             "the Minecraft JAR contains no parseable base-game classes",
-        ));
+        );
     }
     if loader_classes == 0 {
-        return Ok(incomplete(
-            loader,
-            "the loader JAR contains no parseable classes",
-        ));
+        return incomplete(loader, "the loader JAR contains no parseable classes");
     }
-    let mod_class_count = request
+    let mod_class_count = scanned
         .artifacts
         .iter()
         .filter(|artifact| artifact.kind == ArtifactKind::Mod)
-        .filter_map(|artifact| {
-            read_classes_for_probe(
-                &artifact.path,
-                &artifact.nested_jars,
-                request.limits.max_entries_per_jar,
-                request.limits.max_class_bytes,
-                request.limits.max_constant_pool_entries,
-                request.limits.max_annotation_depth,
-                true,
-            )
-            .ok()
-        })
-        .map(|classes| classes.len())
+        .map(|artifact| artifact.classes.len())
         .sum::<usize>();
     if mod_class_count == 0 {
-        return Ok(incomplete(
-            loader,
-            "the instance contains no parseable Mod classes",
-        ));
+        return incomplete(loader, "the instance contains no parseable Mod classes");
     }
 
     let fabric = classes.contains_key("net/fabricmc/loader/impl/FabricLoaderImpl");
@@ -198,7 +194,7 @@ pub(crate) fn probe_runtime_abi(
     .filter_map(|(present, family)| present.then_some(family))
     .collect::<Vec<_>>();
     if actual_families.len() > 1 {
-        return Ok(Readiness {
+        return Readiness {
             status: ReadinessStatus::Ambiguous,
             loader: None,
             message: format!(
@@ -210,13 +206,13 @@ pub(crate) fn probe_runtime_abi(
                     .join(", ")
             ),
             capabilities: Vec::new(),
-        });
+        };
     }
     if actual_families
         .first()
         .is_some_and(|actual| *actual != loader)
     {
-        return Ok(Readiness {
+        return Readiness {
             status: ReadinessStatus::Ambiguous,
             loader: Some(loader),
             message: format!(
@@ -224,56 +220,56 @@ pub(crate) fn probe_runtime_abi(
                 actual_families[0]
             ),
             capabilities: Vec::new(),
-        });
+        };
     }
     if actual_families.is_empty() {
-        return Ok(incomplete(
+        return incomplete(
             loader,
             "the actual loader implementation marker is absent from the runtime classpath",
-        ));
+        );
     }
     let has_mixin = classes.contains_key("org/spongepowered/asm/mixin/Mixin");
     if !has_mixin {
-        return Ok(incomplete(
+        return incomplete(
             loader,
             "the runtime classpath does not contain the Mixin annotation ABI",
-        ));
+        );
     }
 
     match loader {
-        LoaderFamily::Fabric | LoaderFamily::Quilt => Ok(Readiness {
+        LoaderFamily::Fabric | LoaderFamily::Quilt => Readiness {
             status: ReadinessStatus::Ready,
             loader: Some(loader),
             message: "runtime loader and Mixin ABI are available".to_string(),
             capabilities: vec!["mixin".to_string()],
-        }),
+        },
         LoaderFamily::Forge | LoaderFamily::NeoForge => probe_modlauncher(loader, &classes),
     }
 }
 
 fn probe_modlauncher(
     loader: LoaderFamily,
-    classes: &BTreeMap<String, Vec<ParsedClass>>,
-) -> Result<Readiness, AuditError> {
+    classes: &BTreeMap<String, Vec<&ParsedClass>>,
+) -> Readiness {
     let legacy = classes.contains_key("net/minecraft/launchwrapper/Launch")
         || classes.contains_key("net/minecraft/launchwrapper/IClassTransformer");
     let transformer = classes
         .get("cpw/mods/modlauncher/api/ITransformer")
         .and_then(|definitions| definitions.first());
     if transformer.is_none() && legacy {
-        return Ok(Readiness {
+        return Readiness {
             status: ReadinessStatus::Unsupported,
             loader: Some(loader),
             message: "当前实例使用 Legacy Forge/LaunchWrapper。\n字节码风险分析仅支持 ModLauncher 体系的现代 Forge 和 NeoForge。"
                 .to_string(),
             capabilities: Vec::new(),
-        });
+        };
     }
     let Some(transformer) = transformer else {
-        return Ok(incomplete(
+        return incomplete(
             loader,
             "Forge/NeoForge runtime classpath is missing ModLauncher ITransformer",
-        ));
+        );
     };
     let method = |name: &str, predicate: fn(&str) -> bool| {
         transformer
@@ -323,13 +319,13 @@ fn probe_modlauncher(
              Lcpw/mods/modlauncher/api/ITransformer$Target;",
         );
     if !recognized || !target_abi {
-        return Ok(Readiness {
+        return Readiness {
             status: ReadinessStatus::Unsupported,
             loader: Some(loader),
             message: "the runtime contains ModLauncher, but its actual ITransformer/Target ABI is not recognized"
                 .to_string(),
             capabilities: Vec::new(),
-        });
+        };
     }
     let service = classes
         .get("cpw/mods/modlauncher/api/ITransformationService")
@@ -339,12 +335,12 @@ fn probe_modlauncher(
             method.name == "transformers" && method.descriptor == "()Ljava/util/List;"
         })
     }) {
-        return Ok(incomplete(
+        return incomplete(
             loader,
             "the ModLauncher ITransformationService transformers() ABI is missing",
-        ));
+        );
     }
-    Ok(Readiness {
+    Readiness {
         status: ReadinessStatus::Ready,
         loader: Some(loader),
         message: "runtime Mixin, FML, and ModLauncher transformer ABIs are available".to_string(),
@@ -353,7 +349,7 @@ fn probe_modlauncher(
             "modlauncher_itransformer".to_string(),
             "java_coremod".to_string(),
         ],
-    })
+    }
 }
 
 fn incomplete(loader: LoaderFamily, message: &str) -> Readiness {
@@ -363,135 +359,6 @@ fn incomplete(loader: LoaderFamily, message: &str) -> Readiness {
         message: message.to_string(),
         capabilities: Vec::new(),
     }
-}
-
-fn read_classes_for_probe(
-    path: &std::path::Path,
-    nested_policy: &crate::model::NestedJarPolicy,
-    max_entries: usize,
-    max_class_bytes: usize,
-    max_constant_pool_entries: usize,
-    max_annotation_depth: usize,
-    stop_after_first: bool,
-) -> Result<Vec<ParsedClass>, String> {
-    let file = File::open(path).map_err(|error| error.to_string())?;
-    let mut archive = zip::ZipArchive::new(file).map_err(|error| error.to_string())?;
-    let mut classes = Vec::new();
-    read_probe_archive(
-        &mut archive,
-        "",
-        nested_policy,
-        max_entries,
-        max_class_bytes,
-        max_constant_pool_entries,
-        max_annotation_depth,
-        stop_after_first,
-        &mut classes,
-    )?;
-    Ok(classes)
-}
-
-#[expect(clippy::too_many_arguments)]
-fn read_probe_archive<R: Read + Seek>(
-    archive: &mut zip::ZipArchive<R>,
-    prefix: &str,
-    nested_policy: &crate::model::NestedJarPolicy,
-    max_entries: usize,
-    max_class_bytes: usize,
-    max_constant_pool_entries: usize,
-    max_annotation_depth: usize,
-    stop_after_first: bool,
-    classes: &mut Vec<ParsedClass>,
-) -> Result<(), String> {
-    if archive.len() > max_entries {
-        return Err(format!(
-            "JAR has {} entries, exceeding limit {max_entries}",
-            archive.len()
-        ));
-    }
-    let abi_classes = probe_abi_classes();
-    for index in 0..archive.len() {
-        let mut entry = archive.by_index(index).map_err(|error| error.to_string())?;
-        if !entry.is_file() {
-            continue;
-        }
-        let entry_name = entry.name().replace('\\', "/");
-        let name = if prefix.is_empty() {
-            entry_name
-        } else {
-            format!("{prefix}!/{entry_name}")
-        };
-        if name.ends_with(".jar") && nested_jar_selected(nested_policy, &name) {
-            let mut bytes = Vec::new();
-            (&mut entry)
-                .take(u64::try_from(max_class_bytes).unwrap_or(u64::MAX))
-                .read_to_end(&mut bytes)
-                .map_err(|error| error.to_string())?;
-            drop(entry);
-            if let Ok(mut nested) = zip::ZipArchive::new(std::io::Cursor::new(bytes)) {
-                read_probe_archive(
-                    &mut nested,
-                    &name,
-                    nested_policy,
-                    max_entries,
-                    max_class_bytes,
-                    max_constant_pool_entries,
-                    max_annotation_depth,
-                    stop_after_first,
-                    classes,
-                )?;
-                if stop_after_first && !classes.is_empty() {
-                    return Ok(());
-                }
-            }
-            continue;
-        }
-        if !name.ends_with(".class") {
-            continue;
-        }
-        let internal_name = name
-            .rsplit("!/")
-            .next()
-            .unwrap_or(&name)
-            .trim_end_matches(".class");
-        if !stop_after_first && !classes.is_empty() && !abi_classes.contains(internal_name) {
-            continue;
-        }
-        if entry.size() > u64::try_from(max_class_bytes).unwrap_or(u64::MAX) {
-            continue;
-        }
-        let mut bytes = Vec::with_capacity(usize::try_from(entry.size()).unwrap_or_default());
-        entry
-            .read_to_end(&mut bytes)
-            .map_err(|error| error.to_string())?;
-        if class_constant_pool_count(&bytes).is_some_and(|count| count > max_constant_pool_entries)
-        {
-            continue;
-        }
-        if let Ok(class) = crate::classfile::parse(&bytes, max_annotation_depth) {
-            classes.push(class);
-            if stop_after_first {
-                return Ok(());
-            }
-        }
-    }
-    Ok(())
-}
-
-fn probe_abi_classes() -> HashSet<&'static str> {
-    HashSet::from([
-        "net/fabricmc/loader/impl/FabricLoaderImpl",
-        "org/quiltmc/loader/impl/QuiltLoaderImpl",
-        "net/minecraftforge/fml/loading/FMLLoader",
-        "net/neoforged/fml/loading/FMLLoader",
-        "org/spongepowered/asm/mixin/Mixin",
-        "net/minecraft/launchwrapper/Launch",
-        "net/minecraft/launchwrapper/IClassTransformer",
-        "cpw/mods/modlauncher/api/ITransformer",
-        "cpw/mods/modlauncher/api/ITransformer$Target",
-        "cpw/mods/modlauncher/api/ITransformer$TargetType",
-        "cpw/mods/modlauncher/api/ITransformationService",
-    ])
 }
 
 #[cfg(test)]
@@ -519,9 +386,21 @@ pub(crate) fn scan_artifacts_with_progress(
     let mut coverage = Coverage::default();
     let mut warnings = Vec::new();
     let mut total_classes = 0_usize;
+    let mut seen_paths = HashSet::new();
+    let mut seen_hashes = HashSet::new();
     for (index, input) in request.artifacts.iter().enumerate() {
-        match scan_artifact(input, request, &mut coverage, &mut warnings) {
-            Ok((report, artifact)) => {
+        let scanned_artifact = (|| {
+            let normalized_path = normalized_path_identity(&input.path)?;
+            let sha256 = hash_file(&input.path).map_err(|error| error.to_string())?;
+            if seen_paths.contains(&normalized_path) || seen_hashes.contains(&sha256) {
+                return Ok(None);
+            }
+            seen_paths.insert(normalized_path);
+            seen_hashes.insert(sha256.clone());
+            scan_artifact(input, request, &sha256, &mut coverage, &mut warnings).map(Some)
+        })();
+        match scanned_artifact {
+            Ok(Some((report, artifact))) => {
                 total_classes += artifact.classes.len();
                 if total_classes > request.limits.max_classes {
                     return Err(AuditError::InvalidRequest(format!(
@@ -564,12 +443,12 @@ pub(crate) fn scan_artifacts_with_progress(
                         .entry(class.name.clone())
                         .or_default()
                         .push(ClassDefinition {
+                            definition_id: class.definition_id.clone(),
                             artifact_id: artifact.id.clone(),
                             is_mod: artifact.kind == ArtifactKind::Mod,
                             name: class.name.clone(),
                             super_name: class.super_name.clone(),
                             interfaces: class.interfaces.clone(),
-                            is_interface: class.is_interface,
                             fields,
                             methods,
                             hard_references,
@@ -578,6 +457,7 @@ pub(crate) fn scan_artifacts_with_progress(
                 artifact_reports.push(report);
                 artifacts.push(artifact);
             }
+            Ok(None) => {}
             Err(error) if input.kind == ArtifactKind::Mod => {
                 coverage.jars_failed += 1;
                 warnings.push(Warning {
@@ -633,15 +513,16 @@ pub(crate) fn scan_artifacts_with_progress(
 fn scan_artifact(
     input: &crate::model::ArtifactInput,
     request: &AuditRequest,
+    sha256: &str,
     coverage: &mut Coverage,
     warnings: &mut Vec<Warning>,
 ) -> Result<(ArtifactReport, ParsedArtifact), String> {
     let metadata = std::fs::metadata(&input.path).map_err(|error| error.to_string())?;
-    let sha256 = hash_file(&input.path).map_err(|error| error.to_string())?;
     let file = File::open(&input.path).map_err(|error| error.to_string())?;
     let mut archive = zip::ZipArchive::new(file).map_err(|error| error.to_string())?;
     let mut classes = Vec::new();
     let mut refmaps = Vec::new();
+    let mut resources = Vec::new();
     let mut budget = ArchiveBudget::default();
     scan_archive(
         &mut archive,
@@ -654,6 +535,7 @@ fn scan_artifact(
         &mut budget,
         &mut classes,
         &mut refmaps,
+        &mut resources,
     )?;
     Ok((
         ArtifactReport {
@@ -662,7 +544,7 @@ fn scan_artifact(
             path: input.path.to_string_lossy().into_owned(),
             kind: input.kind,
             size: metadata.len(),
-            sha256,
+            sha256: sha256.to_string(),
         },
         ParsedArtifact {
             id: input.id.clone(),
@@ -670,8 +552,19 @@ fn scan_artifact(
             kind: input.kind,
             classes,
             refmaps,
+            resources,
         },
     ))
+}
+
+fn normalized_path_identity(path: &std::path::Path) -> Result<String, String> {
+    let canonical = std::fs::canonicalize(path).map_err(|error| error.to_string())?;
+    let value = canonical.to_string_lossy().replace('\\', "/");
+    if cfg!(windows) {
+        Ok(value.to_ascii_lowercase())
+    } else {
+        Ok(value)
+    }
 }
 
 #[derive(Default)]
@@ -692,7 +585,10 @@ fn scan_archive<R: Read + Seek>(
     budget: &mut ArchiveBudget,
     classes: &mut Vec<ParsedClass>,
     refmaps: &mut Vec<RefmapEntry>,
+    resources: &mut Vec<ResourceEntry>,
 ) -> Result<(), String> {
+    let selected_class_entries =
+        selected_class_entry_indexes(archive, request.environment.java_feature)?;
     budget.entries = budget.entries.saturating_add(archive.len());
     if budget.entries > request.limits.max_entries_per_jar {
         return Err(format!(
@@ -720,6 +616,9 @@ fn scan_archive<R: Read + Seek>(
             format!("{prefix}!/{entry_name}")
         };
         if name.ends_with(".class") {
+            if !selected_class_entries.contains(&index) {
+                continue;
+            }
             let entry_size = entry.size();
             scan_class_entry(
                 &mut entry, entry_size, &name, input, request, coverage, warnings, classes,
@@ -738,6 +637,16 @@ fn scan_archive<R: Read + Seek>(
                     record_unsupported_javascript_coremod(input, &name, coverage, warnings);
                 }
             }
+            resources.push(ResourceEntry { path: name, bytes });
+        } else if is_registration_resource(&name)
+            && entry.size() <= request.limits.max_entry_bytes.min(8 * 1024 * 1024)
+        {
+            let bytes = read_limited(
+                &mut entry,
+                usize::try_from(request.limits.max_entry_bytes.min(8 * 1024 * 1024))
+                    .unwrap_or(8 * 1024 * 1024),
+            )?;
+            resources.push(ResourceEntry { path: name, bytes });
         } else if name.ends_with(".jar") {
             if !nested_jar_selected(&input.nested_jars, &name) {
                 continue;
@@ -791,6 +700,7 @@ fn scan_archive<R: Read + Seek>(
                         budget,
                         classes,
                         refmaps,
+                        resources,
                     ) {
                         coverage.jars_failed += 1;
                         coverage
@@ -821,6 +731,101 @@ fn scan_archive<R: Read + Seek>(
         }
     }
     Ok(())
+}
+
+fn selected_class_entry_indexes<R: Read + Seek>(
+    archive: &mut zip::ZipArchive<R>,
+    java_feature: u32,
+) -> Result<HashSet<usize>, String> {
+    let mut multi_release = false;
+    for index in 0..archive.len() {
+        let mut entry = archive.by_index(index).map_err(|error| error.to_string())?;
+        if !entry.is_file()
+            || !entry
+                .name()
+                .replace('\\', "/")
+                .eq_ignore_ascii_case("META-INF/MANIFEST.MF")
+        {
+            continue;
+        }
+        // The Multi-Release flag is a main-section attribute. Some launchers
+        // append megabytes of per-entry digest records to MANIFEST.MF, so
+        // parsing the bounded main-section prefix must not reject the whole
+        // runtime JAR merely because the complete manifest is large.
+        let bytes = read_prefix(&mut entry, 1024 * 1024)?;
+        multi_release = manifest_attribute(&bytes, "Multi-Release")
+            .is_some_and(|value| value.eq_ignore_ascii_case("true"));
+        break;
+    }
+    let mut selected = BTreeMap::<String, (u32, usize)>::new();
+    for index in 0..archive.len() {
+        let entry = archive.by_index(index).map_err(|error| error.to_string())?;
+        if !entry.is_file() {
+            continue;
+        }
+        let path = entry.name().replace('\\', "/");
+        let Some((logical_path, version)) = multi_release_class_path(&path) else {
+            if path.ends_with(".class") && !path.starts_with("META-INF/versions/") {
+                selected.entry(path).or_insert((0, index));
+            }
+            continue;
+        };
+        if multi_release && version <= java_feature {
+            let replace = selected
+                .get(&logical_path)
+                .is_none_or(|(selected_version, _)| version > *selected_version);
+            if replace {
+                selected.insert(logical_path, (version, index));
+            }
+        }
+    }
+    Ok(selected.into_values().map(|(_, index)| index).collect())
+}
+
+fn read_prefix(reader: &mut impl Read, limit: usize) -> Result<Vec<u8>, String> {
+    let mut bytes = Vec::new();
+    reader
+        .take(u64::try_from(limit).unwrap_or(u64::MAX))
+        .read_to_end(&mut bytes)
+        .map_err(|error| error.to_string())?;
+    Ok(bytes)
+}
+
+fn multi_release_class_path(path: &str) -> Option<(String, u32)> {
+    let rest = path.strip_prefix("META-INF/versions/")?;
+    let (version, logical_path) = rest.split_once('/')?;
+    let version = version.parse::<u32>().ok()?;
+    logical_path
+        .ends_with(".class")
+        .then(|| (logical_path.to_string(), version))
+}
+
+fn manifest_attribute(bytes: &[u8], requested: &str) -> Option<String> {
+    let manifest = std::str::from_utf8(bytes).ok()?.replace("\r\n", "\n");
+    let mut unfolded = Vec::<String>::new();
+    for line in manifest.lines() {
+        if let Some(continuation) = line.strip_prefix(' ') {
+            if let Some(previous) = unfolded.last_mut() {
+                previous.push_str(continuation);
+            }
+        } else {
+            unfolded.push(line.to_string());
+        }
+    }
+    unfolded.into_iter().find_map(|line| {
+        let (key, value) = line.split_once(':')?;
+        key.trim()
+            .eq_ignore_ascii_case(requested)
+            .then(|| value.trim().to_string())
+    })
+}
+
+fn is_registration_resource(path: &str) -> bool {
+    let leaf = path.rsplit("!/").next().unwrap_or(path);
+    leaf.eq_ignore_ascii_case("META-INF/MANIFEST.MF")
+        || leaf.eq_ignore_ascii_case("META-INF/mods.toml")
+        || leaf.eq_ignore_ascii_case("META-INF/neoforge.mods.toml")
+        || leaf.to_ascii_lowercase().starts_with("meta-inf/services/")
 }
 
 fn record_unsupported_javascript_coremod(
@@ -901,16 +906,25 @@ fn scan_class_entry(
     }
     match crate::classfile::parse(&bytes, request.limits.max_annotation_depth) {
         Ok(mut class) => {
+            let definition_id = ClassDefinitionId {
+                artifact_id: input.id.clone(),
+                entry_path: name.to_string(),
+                class_name: class.name.clone(),
+                content_hash: format!("{:x}", Sha256::digest(&bytes)),
+            };
+            for method in &mut class.methods {
+                for instruction in &mut method.instructions {
+                    instruction.reference.identity = Some(InstructionIdentity {
+                        definition: definition_id.clone(),
+                        method_name: method.name.clone(),
+                        method_descriptor: method.descriptor.clone(),
+                        instruction_index: instruction.reference.stable_id,
+                    });
+                }
+            }
+            class.definition_id = Some(definition_id);
             if class.future_version_best_effort {
-                warnings.push(Warning {
-                    artifact_id: Some(input.id.clone()),
-                    scope: class.name.clone(),
-                    kind: WarningKind::Other,
-                    message: format!(
-                        "ClassFile {}.{} is newer than Java 25; parsed best-effort",
-                        class.major, class.minor
-                    ),
-                });
+                coverage.future_classfiles += 1;
             }
             if class.methods.len() > request.limits.max_methods_per_class {
                 coverage.classes_failed += 1;
@@ -925,7 +939,7 @@ fn scan_class_entry(
             for method in &mut class.methods {
                 if method.instructions.len() > request.limits.max_instructions_per_method {
                     method.instructions.clear();
-                    coverage.methods_degraded += 1;
+                    coverage.method_budget_degradations += 1;
                     warnings.push(Warning {
                         artifact_id: Some(input.id.clone()),
                         scope: format!("{}.{}{}", class.name, method.name, method.descriptor),
@@ -1109,7 +1123,7 @@ mod tests {
 
     use crate::model::{
         AnalysisLimits, ArtifactInput, ArtifactKind, AuditEnvironment, AuditRequest,
-        NestedJarPolicy,
+        NestedJarPolicy, PhysicalSide,
     };
 
     use super::test_support::{jar_bytes, minimal_class, write_jar};
@@ -1247,6 +1261,65 @@ mod tests {
         );
     }
 
+    #[test]
+    fn multi_release_jar_selects_the_highest_runtime_eligible_class() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("multi-release.jar");
+        let mut base = minimal_class("example/Selected");
+        base[6..8].copy_from_slice(&52_u16.to_be_bytes());
+        let mut java_17 = minimal_class("example/Selected");
+        java_17[6..8].copy_from_slice(&61_u16.to_be_bytes());
+        let mut java_21 = minimal_class("example/Selected");
+        java_21[6..8].copy_from_slice(&65_u16.to_be_bytes());
+        std::fs::write(
+            &path,
+            jar_bytes(&[
+                (
+                    "META-INF/MANIFEST.MF".to_string(),
+                    b"Manifest-Version: 1.0\r\nMulti-Release: true\r\n\r\n".to_vec(),
+                ),
+                ("example/Selected.class".to_string(), base),
+                (
+                    "META-INF/versions/17/example/Selected.class".to_string(),
+                    java_17,
+                ),
+                (
+                    "META-INF/versions/21/example/Selected.class".to_string(),
+                    java_21,
+                ),
+            ]),
+        )
+        .unwrap();
+
+        let scanned =
+            scan_artifacts(&request(vec![input("mod", path, ArtifactKind::Mod)])).unwrap();
+
+        assert_eq!(scanned.artifacts[0].classes.len(), 1);
+        assert_eq!(
+            scanned.artifacts[0].classes[0]
+                .definition_id
+                .as_ref()
+                .unwrap()
+                .entry_path,
+            "META-INF/versions/17/example/Selected.class"
+        );
+    }
+
+    #[test]
+    fn duplicate_classpath_inputs_are_parsed_once() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("same.jar");
+        write_jar(&path, &["example/Mod"]);
+        let scanned = scan_artifacts(&request(vec![
+            input("first", path.clone(), ArtifactKind::Mod),
+            input("second", path, ArtifactKind::Mod),
+        ]))
+        .unwrap();
+
+        assert_eq!(scanned.artifacts.len(), 1);
+        assert_eq!(scanned.coverage.jars_scanned, 1);
+    }
+
     fn request(artifacts: Vec<ArtifactInput>) -> AuditRequest {
         AuditRequest {
             environment: AuditEnvironment {
@@ -1254,8 +1327,11 @@ mod tests {
                 declared_loader: "fabric".to_string(),
                 detected_loader: "fabric".to_string(),
                 loader_version: "test".to_string(),
+                physical_side: PhysicalSide::Unknown,
+                java_feature: 17,
             },
             artifacts,
+            active_mod_ids: Default::default(),
             limits: AnalysisLimits::default(),
         }
     }

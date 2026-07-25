@@ -158,33 +158,116 @@ pub(crate) fn resolve_lockfile_for_target(
     }
 }
 
-/// Returns the nested archive paths selected by the same graph that validates
-/// the installed package set. The result is keyed by the top-level filename.
+#[derive(Debug, Default)]
+pub(crate) struct RuntimeLoadSelection {
+    /// JAR-declared logical Mod IDs selected for the current physical side.
+    pub active_mod_ids: std::collections::BTreeSet<String>,
+    /// Top-level package files which carry at least one selected module.
+    pub top_level_jars: std::collections::BTreeSet<String>,
+    /// Active nested archive paths keyed by their top-level package filename.
+    pub nested_jars: HashMap<String, std::collections::BTreeSet<String>>,
+    /// Active nested archive paths carried by the actual Loader JAR.
+    pub loader_nested_jars: std::collections::BTreeSet<String>,
+}
+
+/// Returns the runtime content selected by the same graph that validates the
+/// installed package set for the current physical side.
 ///
 /// This is runtime classpath construction, not compatibility evidence:
 /// `orbit audit` must not parse inactive versions in a loader-managed
 /// multi-version JAR.
-pub(crate) fn selected_runtime_nested_jars(
+pub(crate) fn selected_runtime_load(
     manifest: &OrbitManifest,
     lockfile: &OrbitLockfile,
     loader_package: Option<&types::PlatformCandidate>,
-) -> Result<HashMap<String, std::collections::BTreeSet<String>>, String> {
-    let solution =
-        resolve_lockfile_for_target(manifest, lockfile, Environment::Both, loader_package)?;
-    let mut selected = HashMap::<String, std::collections::BTreeSet<String>>::new();
+    target: Environment,
+) -> Result<RuntimeLoadSelection, String> {
+    let solution = resolve_lockfile_for_target(manifest, lockfile, target, loader_package)?;
+    let mut selected = RuntimeLoadSelection::default();
+    if let Some(loader_package) = loader_package {
+        selected
+            .active_mod_ids
+            .insert(loader_package.mod_id.clone());
+        selected.active_mod_ids.extend(
+            loader_package
+                .provides
+                .iter()
+                .map(|provided| provided.id.clone()),
+        );
+    }
     for (package, version) in solution.iter() {
+        if let SolverPackage::Mod(mod_id) = package
+            && version.candidate_identity().is_some()
+        {
+            selected.active_mod_ids.insert(mod_id.clone());
+        }
         let Some(identity) = version.candidate_identity() else {
             continue;
         };
+        if let Some(loader_package) = loader_package.filter(|loader_package| {
+            identity.owner == loader_package.mod_id
+                && identity.source
+                    == format!(
+                        "platform:{}:{}",
+                        loader_package.mod_id, loader_package.version
+                    )
+        }) {
+            if let Some(bundled) = bundled_at_path(&loader_package.bundled, &identity.path) {
+                selected.active_mod_ids.insert(bundled.mod_id.clone());
+                selected
+                    .active_mod_ids
+                    .extend(bundled.provides.iter().map(|provided| provided.id.clone()));
+            }
+            if identity.location == CandidateLocation::Nested
+                && let Some(path) =
+                    nested_archive_path_from(&loader_package.bundled, &identity.path)
+            {
+                selected.loader_nested_jars.insert(path);
+            }
+            if let SolverPackage::EmbeddedArtifact(artifact_id) = package
+                && let Some(selected_version) = version.domain()
+                && let Some((prefix, artifacts)) = embedded_artifacts_at_path_from(
+                    &loader_package.embedded_artifacts,
+                    &loader_package.bundled,
+                    &identity.path,
+                )
+                && let Some(artifact) = artifacts.iter().find(|artifact| {
+                    artifact.id == *artifact_id
+                        && Version::parse(&artifact.version, "forge") == *selected_version
+                })
+            {
+                selected.loader_nested_jars.insert(if prefix.is_empty() {
+                    artifact.path.clone()
+                } else {
+                    format!("{prefix}!/{}", artifact.path)
+                });
+            }
+            continue;
+        }
         let Some(entry) = lockfile.packages.iter().find(|entry| {
             entry.mod_id == identity.owner && locked_source(entry) == identity.source
         }) else {
             continue;
         };
+        if !entry.filename.is_empty() {
+            selected.top_level_jars.insert(entry.filename.clone());
+        }
+        if identity.path.is_empty() {
+            selected.active_mod_ids.insert(entry.mod_id.clone());
+            selected
+                .active_mod_ids
+                .extend(entry.provides.iter().map(|provided| provided.id.clone()));
+        } else if let Some(bundled) = bundled_at_path(&entry.bundled, &identity.path) {
+            selected.active_mod_ids.insert(bundled.mod_id.clone());
+            selected
+                .active_mod_ids
+                .extend(bundled.provides.iter().map(|provided| provided.id.clone()));
+        }
         if identity.location == CandidateLocation::Nested
             && let Some(path) = nested_archive_path(entry, &identity.path)
         {
             selected
+                .nested_jars
                 .entry(entry.filename.clone())
                 .or_default()
                 .insert(path);
@@ -203,6 +286,7 @@ pub(crate) fn selected_runtime_nested_jars(
                 format!("{prefix}!/{}", artifact.path)
             };
             selected
+                .nested_jars
                 .entry(entry.filename.clone())
                 .or_default()
                 .insert(path);
@@ -211,15 +295,64 @@ pub(crate) fn selected_runtime_nested_jars(
     Ok(selected)
 }
 
+trait RuntimeBundledNode: Sized {
+    fn origin(&self) -> &crate::jar::JarModOrigin;
+    fn embedded_artifacts(&self) -> &[crate::metadata::EmbeddedArtifact];
+    fn bundled(&self) -> &[Self];
+}
+
+impl RuntimeBundledNode for crate::lockfile::BundledMod {
+    fn origin(&self) -> &crate::jar::JarModOrigin {
+        &self.origin
+    }
+
+    fn embedded_artifacts(&self) -> &[crate::metadata::EmbeddedArtifact] {
+        &self.embedded_artifacts
+    }
+
+    fn bundled(&self) -> &[Self] {
+        &self.bundled
+    }
+}
+
+impl RuntimeBundledNode for types::BundledCandidate {
+    fn origin(&self) -> &crate::jar::JarModOrigin {
+        &self.origin
+    }
+
+    fn embedded_artifacts(&self) -> &[crate::metadata::EmbeddedArtifact] {
+        &self.embedded_artifacts
+    }
+
+    fn bundled(&self) -> &[Self] {
+        &self.bundled
+    }
+}
+
+fn bundled_at_path<'a, T: RuntimeBundledNode>(roots: &'a [T], path: &[usize]) -> Option<&'a T> {
+    let mut bundled = roots;
+    let mut selected = None;
+    for index in path {
+        let node = bundled.get(*index)?;
+        selected = Some(node);
+        bundled = node.bundled();
+    }
+    selected
+}
+
 fn nested_archive_path(entry: &PackageEntry, path: &[usize]) -> Option<String> {
-    let mut bundled = entry.bundled.as_slice();
+    nested_archive_path_from(&entry.bundled, path)
+}
+
+fn nested_archive_path_from<T: RuntimeBundledNode>(roots: &[T], path: &[usize]) -> Option<String> {
+    let mut bundled = roots;
     let mut archives = Vec::new();
     for index in path {
         let selected = bundled.get(*index)?;
-        if let crate::jar::JarModOrigin::Nested { path, .. } = &selected.origin {
+        if let crate::jar::JarModOrigin::Nested { path, .. } = selected.origin() {
             archives.push(path.clone());
         }
-        bundled = &selected.bundled;
+        bundled = selected.bundled();
     }
     (!archives.is_empty()).then(|| archives.join("!/"))
 }
@@ -228,21 +361,29 @@ fn embedded_artifacts_at_path<'a>(
     entry: &'a PackageEntry,
     path: &[usize],
 ) -> Option<(String, &'a [crate::metadata::EmbeddedArtifact])> {
+    embedded_artifacts_at_path_from(&entry.embedded_artifacts, &entry.bundled, path)
+}
+
+fn embedded_artifacts_at_path_from<'a, T: RuntimeBundledNode>(
+    root_artifacts: &'a [crate::metadata::EmbeddedArtifact],
+    roots: &'a [T],
+    path: &[usize],
+) -> Option<(String, &'a [crate::metadata::EmbeddedArtifact])> {
     if path.is_empty() {
-        return Some((String::new(), &entry.embedded_artifacts));
+        return Some((String::new(), root_artifacts));
     }
-    let mut bundled = entry.bundled.as_slice();
+    let mut bundled = roots;
     let mut archives = Vec::new();
     let mut selected = None;
     for index in path {
         let node = bundled.get(*index)?;
-        if let crate::jar::JarModOrigin::Nested { path, .. } = &node.origin {
+        if let crate::jar::JarModOrigin::Nested { path, .. } = node.origin() {
             archives.push(path.clone());
         }
         selected = Some(node);
-        bundled = &node.bundled;
+        bundled = node.bundled();
     }
-    selected.map(|node| (archives.join("!/"), node.embedded_artifacts.as_slice()))
+    selected.map(|node| (archives.join("!/"), node.embedded_artifacts()))
 }
 
 pub fn dependents<'a>(slug: &str, entries: &'a [PackageEntry]) -> Vec<&'a str> {
@@ -1169,6 +1310,69 @@ iris = "*"
             Some("outer.jar!/inner.jar")
         );
         assert!(nested_archive_path(&entry, &[1]).is_none());
+    }
+
+    #[test]
+    fn runtime_load_selection_reuses_the_solver_selected_top_level_files() {
+        let mut older = locked("a");
+        older.filename = "a-1.jar".to_string();
+        let mut newer = locked("a");
+        newer.version = "2".to_string();
+        newer.filename = "a-2.jar".to_string();
+        let current = OrbitLockfile {
+            meta: lockfile().meta,
+            packages: vec![older, newer, locked("b")],
+        };
+
+        let selected =
+            selected_runtime_load(&manifest(), &current, None, Environment::Both).unwrap();
+
+        assert_eq!(
+            selected.top_level_jars,
+            std::collections::BTreeSet::from(["a-2.jar".to_string(), "b.jar".to_string()])
+        );
+        assert_eq!(
+            selected.active_mod_ids,
+            std::collections::BTreeSet::from(["a".to_string(), "b".to_string()])
+        );
+    }
+
+    #[test]
+    fn runtime_load_selection_also_filters_loader_owned_nested_modules() {
+        let loader = types::PlatformCandidate {
+            mod_id: "forge".to_string(),
+            version: "47.2.0".to_string(),
+            dependencies: Vec::new(),
+            environment: Environment::Both,
+            provides: Vec::new(),
+            language_loader: None,
+            embedded_artifacts: Vec::new(),
+            bundled: vec![types::BundledCandidate {
+                mod_id: "loader_child".to_string(),
+                version: "1".to_string(),
+                load_condition: ModLoadCondition::Always,
+                origin: JarModOrigin::Nested {
+                    path: "META-INF/jars/loader-child.jar".to_string(),
+                    artifact: None,
+                },
+                environment: Environment::Both,
+                dependencies: Vec::new(),
+                provides: Vec::new(),
+                language_loader: None,
+                embedded_artifacts: Vec::new(),
+                bundled: Vec::new(),
+            }],
+        };
+
+        let selected =
+            selected_runtime_load(&manifest(), &lockfile(), Some(&loader), Environment::Both)
+                .unwrap();
+
+        assert!(selected.active_mod_ids.contains("loader_child"));
+        assert_eq!(
+            selected.loader_nested_jars,
+            std::collections::BTreeSet::from(["META-INF/jars/loader-child.jar".to_string()])
+        );
     }
 
     fn nested_mod(path: &str, bundled: Vec<BundledMod>) -> BundledMod {
