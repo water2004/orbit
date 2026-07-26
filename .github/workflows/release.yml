@@ -58,6 +58,11 @@ jobs:
             echo "Tag $GITHUB_REF_NAME does not match Cargo version $version (expected v$version)." >&2
             exit 1
           fi
+          release_notes="docs/releases/v$version.md"
+          if [[ ! -s "$release_notes" ]]; then
+            echo "Required release notes are missing or empty: $release_notes" >&2
+            exit 1
+          fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
       - name: Run the workspace test suite
@@ -146,16 +151,8 @@ jobs:
           VERSION: ${{ needs.validate.outputs.version }}
         run: |
           set -euo pipefail
-          notes="$(cat <<EOF
-          ## Installers
-
-          - **Windows x64:** \`orbit-$VERSION-x86_64.msi\`
-          - **Debian/Ubuntu amd64:** \`orbit_${VERSION}-1_amd64.deb\`
-          - **Integrity:** verify downloads with \`SHA256SUMS\`
-
-          The MSI is unsigned until the project configures a release signing certificate.
-          EOF
-          )"
+          notes_file="docs/releases/v$VERSION.md"
+          notes="$(cat "$notes_file")"
           gh release create "$GITHUB_REF_NAME" \
             dist/*.msi \
             dist/*.deb \
