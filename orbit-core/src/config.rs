@@ -74,25 +74,30 @@ pub struct AuthConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CacheConfig {
-    #[serde(default = "default_true")]
-    pub enable: bool,
     /// 自定义缓存目录。`None` 时使用运行环境解析出的缓存目录。
     pub dir: Option<String>,
-    #[serde(default = "default_eviction_policy")]
-    pub eviction_policy: String,
-    #[serde(default = "default_max_size")]
-    pub max_size_gb: f64,
+    /// JAR 内容缓存的硬容量上限，单位为 MiB。
+    pub capacity_mib: u64,
 }
 
 impl Default for CacheConfig {
     fn default() -> Self {
         Self {
-            enable: true,
             dir: None,
-            eviction_policy: "size".into(),
-            max_size_gb: 5.0,
+            capacity_mib: 5 * 1024,
         }
+    }
+}
+
+impl CacheConfig {
+    pub fn capacity_bytes(&self) -> Result<u64, OrbitError> {
+        self.capacity_mib.checked_mul(1024 * 1024).ok_or_else(|| {
+            OrbitError::Other(anyhow::anyhow!(
+                "cache.capacity_mib is too large to represent in bytes"
+            ))
+        })
     }
 }
 
@@ -125,15 +130,6 @@ fn default_timeout() -> u64 {
 }
 fn default_max_retries() -> u32 {
     3
-}
-fn default_true() -> bool {
-    true
-}
-fn default_eviction_policy() -> String {
-    "size".into()
-}
-fn default_max_size() -> f64 {
-    5.0
 }
 fn default_color() -> String {
     "auto".into()
@@ -358,10 +354,12 @@ mod tests {
         assert_eq!(config.core.language, "en");
         assert_eq!(config.network.timeout, 30);
         assert_eq!(config.network.max_retries, 3);
-        assert!(config.cache.enable);
         assert!(config.cache.dir.is_none());
-        assert_eq!(config.cache.eviction_policy, "size");
-        assert_eq!(config.cache.max_size_gb, 5.0);
+        assert_eq!(config.cache.capacity_mib, 5 * 1024);
+        assert_eq!(
+            config.cache.capacity_bytes().unwrap(),
+            5 * 1024 * 1024 * 1024
+        );
         assert_eq!(config.ui.color, "auto");
         assert_eq!(config.ui.progress_bar, "modern");
     }
@@ -382,18 +380,50 @@ proxy = "http://127.0.0.1:7890"
             Some("http://127.0.0.1:7890")
         );
         assert_eq!(config.network.timeout, 30); // 未指定 → 默认值
-        assert!(config.cache.enable); // 未指定 → 默认值
+        assert_eq!(config.cache.capacity_mib, 5 * 1024);
     }
 
     #[test]
     fn custom_cache_dir() {
         let toml_str = r#"
 [cache]
-enable = true
 dir = "D:/Games/OrbitCache"
+capacity_mib = 2048
 "#;
         let config: GlobalConfig = toml::from_str(toml_str).unwrap();
         assert_eq!(config.cache.dir.as_deref(), Some("D:/Games/OrbitCache"));
+        assert_eq!(config.cache.capacity_mib, 2048);
+    }
+
+    #[test]
+    fn obsolete_cache_schema_is_rejected() {
+        let error = toml::from_str::<GlobalConfig>(
+            r#"
+[cache]
+capacity_mib = 5120
+eviction_policy = "size"
+"#,
+        )
+        .unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("unknown field `eviction_policy`")
+        );
+    }
+
+    #[test]
+    fn explicit_cache_section_requires_a_capacity() {
+        let error = toml::from_str::<GlobalConfig>(
+            r#"
+[cache]
+dir = "D:/Games/OrbitCache"
+"#,
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("missing field `capacity_mib`"));
     }
 
     #[test]
@@ -402,7 +432,7 @@ dir = "D:/Games/OrbitCache"
         let serialized = toml::to_string_pretty(&config).unwrap();
         let deserialized: GlobalConfig = toml::from_str(&serialized).unwrap();
         assert_eq!(deserialized.core.max_concurrent_downloads, 8);
-        assert_eq!(deserialized.cache.max_size_gb, 5.0);
+        assert_eq!(deserialized.cache.capacity_mib, 5 * 1024);
     }
 
     #[test]

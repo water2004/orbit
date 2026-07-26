@@ -1,11 +1,11 @@
 mod cli;
 
 use clap::Parser;
+use cli::output::{OutputCfg, OutputFormat, ProgressFormat};
 use cli::{
     Cli,
     commands::{CliContext, CommandHandler},
 };
-use cli::output::{OutputCfg, OutputFormat, ProgressFormat};
 
 #[tokio::main]
 async fn main() {
@@ -40,9 +40,17 @@ async fn main() {
         runtime,
         output,
     };
-    match cli.command.execute(&ctx).await {
-        Ok(()) => {}
-        Err(error) => exit_with_error(&error, output),
+    let command_result = cli.command.execute(&ctx).await;
+    let cache_result = ctx.runtime.prune_jar_cache().map_err(anyhow::Error::from);
+    match (command_result, cache_result) {
+        (Ok(()), Ok(_)) => {}
+        (Err(error), Ok(_)) | (Ok(()), Err(error)) => exit_with_error(&error, output),
+        (Err(command_error), Err(cache_error)) => {
+            let message =
+                format!("{command_error}; JAR cache LRU cleanup also failed: {cache_error}");
+            let combined = command_error.context(message);
+            exit_with_error(&combined, output);
+        }
     }
 }
 

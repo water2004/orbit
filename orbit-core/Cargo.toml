@@ -31,6 +31,7 @@ async-trait.workspace = true
 anyhow.workspace = true
 thiserror.workspace = true
 indexmap.workspace = true
+tempfile.workspace = true
 pubgrub = { git = "https://github.com/water2004/pubgrub.git", rev = "c334509daecf91611af2729b2db91af7eba6f076" }
 
 [dev-dependencies]
@@ -39,4 +40,3 @@ http-body-util = "0.1"
 hyper = { version = "1.9", features = ["http1", "server"] }
 hyper-util = { version = "0.1", features = ["tokio"] }
 tokio = { workspace = true, features = ["net"] }
-tempfile = "3.20"

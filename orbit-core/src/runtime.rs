@@ -145,6 +145,7 @@ pub struct RuntimeContext {
     paths: RuntimePaths,
     config: GlobalConfig,
     jar_cache: JarCache,
+    jar_cache_capacity_bytes: u64,
 }
 
 impl RuntimeContext {
@@ -162,12 +163,14 @@ impl RuntimeContext {
         if options.cache_dir.is_none() {
             options.cache_dir = config.cache.dir.as_deref().map(PathBuf::from);
         }
+        let jar_cache_capacity_bytes = config.cache.capacity_bytes()?;
         let paths = RuntimePaths::resolve_with(environment, &options)?;
         let jar_cache = JarCache::open(paths.cache_dir().to_path_buf())?;
         Ok(Self {
             paths,
             config,
             jar_cache,
+            jar_cache_capacity_bytes,
         })
     }
 
@@ -181,6 +184,14 @@ impl RuntimeContext {
 
     pub fn jar_cache(&self) -> &JarCache {
         &self.jar_cache
+    }
+
+    /// Persist this command's cache access order and enforce the configured
+    /// hard capacity. CLI entry points call this once after command execution,
+    /// including when the command itself returns an error.
+    pub fn prune_jar_cache(&self) -> Result<crate::jar_cache::CachePruneSummary, OrbitError> {
+        self.jar_cache
+            .prune_to_capacity(self.jar_cache_capacity_bytes)
     }
 }
 
@@ -385,7 +396,10 @@ mod tests {
         let cache_dir = directory.join("configured-cache");
         std::fs::write(
             &config_file,
-            format!("[cache]\ndir = {:?}\n", cache_dir.to_string_lossy()),
+            format!(
+                "[cache]\ndir = {:?}\ncapacity_mib = 5120\n",
+                cache_dir.to_string_lossy()
+            ),
         )
         .unwrap();
 

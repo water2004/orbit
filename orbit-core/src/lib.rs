@@ -55,7 +55,7 @@ pub use installer::{
     list_dependencies, list_installed, list_installed_for_target, remove_from_instance,
     restore_instance, upgrade_all_in_instance,
 };
-pub use jar_cache::{CacheSummary, JarCache, clean_cache, inspect_cache};
+pub use jar_cache::{CachePruneSummary, CacheSummary, JarCache, clean_cache, inspect_cache};
 pub use lockfile::{ArtifactSource, BundledMod, LockMeta, OrbitLockfile, PackageEntry};
 pub use manifest::{
     DependencySpec, OrbitManifest, PackageRemote, PlatformArtifact, PlatformSnapshot,
