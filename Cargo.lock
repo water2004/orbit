@@ -1190,6 +1190,7 @@ dependencies = [
  "comfy-table",
  "indicatif",
  "orbit-core",
+ "serde",
  "serde_json",
  "tokio",
 ]

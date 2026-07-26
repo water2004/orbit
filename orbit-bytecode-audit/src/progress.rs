@@ -1,6 +1,9 @@
 use std::sync::Arc;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+use serde::Serialize;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum AuditProgressStage {
     PrepareInputs,
     ScanArtifacts,
@@ -10,7 +13,8 @@ pub enum AuditProgressStage {
     DetectConflicts,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(tag = "event", rename_all = "PascalCase")]
 pub enum AuditProgressEvent {
     StageStarted {
         stage: AuditProgressStage,

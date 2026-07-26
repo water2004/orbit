@@ -5,10 +5,13 @@
 
 use std::sync::Arc;
 
+use serde::Serialize;
+
 /// Thread-safe observer used by concurrent candidate download tasks.
 pub type ProgressReporter = Arc<dyn Fn(ProgressEvent) + Send + Sync>;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ArtifactProgressState {
     Started,
     Finished,
@@ -16,13 +19,15 @@ pub enum ArtifactProgressState {
     Failed,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ResolutionWork {
     EnumerationRun { run: usize },
     MaximalityProbe { package: String },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ResolutionActivity {
     Decision { package: String },
     Propagation { package: String },
@@ -31,7 +36,13 @@ pub enum ResolutionActivity {
     Solution,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// Solver/package-operation progress event.
+///
+/// Serialized form uses `#[serde(tag = "event")]` so each variant renders as
+/// `{"event": "VariantName", ...fields}`. CLI NDJSON wrappers add the outer
+/// `type`/`phase` envelope.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "event", rename_all = "PascalCase")]
 pub enum ProgressEvent {
     DiscoveryStarted,
     DiscoveringProject {
@@ -50,6 +61,7 @@ pub enum ProgressEvent {
     CandidateArtifact {
         completed: usize,
         total: usize,
+        #[serde(skip)]
         filename: String,
         state: ArtifactProgressState,
     },
@@ -78,6 +90,7 @@ pub enum ProgressEvent {
     ApplyArtifact {
         completed: usize,
         total: usize,
+        #[serde(skip)]
         filename: String,
         state: ArtifactProgressState,
     },

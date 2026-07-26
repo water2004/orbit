@@ -16,6 +16,7 @@ use crate::resolver::types::{
     ResolutionSelector, ResolvedCandidates,
 };
 
+#[derive(Debug, Clone)]
 pub struct OutdatedMod {
     pub mod_id: String,
     pub current_version: String,
