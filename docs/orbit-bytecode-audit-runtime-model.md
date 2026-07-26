@@ -43,7 +43,8 @@ Mod 的成员共享加载单元中的 config、class、plugin 与 refmap 可见�
 
 现代 Forge 的 launch handler 明确暴露 runtime naming；NeoForge 的 GameLocator
 选择 patched Minecraft 或 launcher 声明的 `srg` 分类运行时内容。Orbit 不模拟启动
-过程，而是验证 launcher classpath 中候选 JAR 的内嵌 Minecraft 版本及实际类内容。
+过程，而是验证 init/sync 固定到 platform snapshot 的 classpath JAR 中内嵌
+Minecraft 版本及实际类内容。
 没有可靠 runtime game artifact 且磁盘基础游戏与转换目标不共享可观察类空间时，
 ModLauncher provider 返回 readiness incomplete。
 

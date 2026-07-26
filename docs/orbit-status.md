@@ -11,7 +11,7 @@
 | 能力 | 状态 | 说明 |
 |---|---|---|
 | 初始化与检测 | ✅ | 合法游戏目录校验；标准/HMCL/Prism/MultiMC/CurseForge/GDLauncher；Minecraft 与四种 loader/version/JAR |
-| 平台工件同步 | ✅ | fresh scan 后刷新 Minecraft/loader JAR 路径、SHA-256 和版本；旧 TOML 路径不是发现入口 |
+| 平台工件同步 | ✅ | init/sync 独占 fresh scan；TOML 固定 Minecraft/loader/runtime JAR 路径、SHA-256、物理端；其它命令严格消费 |
 | JAR 元数据 | ✅ | 四种 loader、多逻辑 mod、嵌套 JAR、JarJar |
 | 版本语义 | ✅ | Fabric predicate；Maven ComparableVersion/range |
 | 依赖求解 | ✅ | 强类型 occurrence 图、完整 Pareto front、any/all/unless、环境、provides、ordering、Java、JarJar |
@@ -45,6 +45,8 @@
 - provider 专属数据位于专属子结构；
 - CLI 不承载业务逻辑；
 - 平台不可用、缺认证或文件禁止 API 下载时必须明确报错。
+- launcher 探测只能存在于 init/sync 边界；其它命令必须使用 TOML 精确平台快照，
+  缺失或变化直接报错，不能猜测、兜底或静默刷新。
 
 ## 3. 已迁移的过时文档
 
@@ -72,8 +74,11 @@
   `[resolver].catalogs`，旧字段直接报错。
 - “同一 ID 的嵌套版本必须全部满足”：现在按 Fabric/Quilt load condition 选择一个
   loader 可加载候选，Forge-family JarJar 按 artifact range 选择。
+- “`[platform]` 只记录 Minecraft/Loader 两个 JAR”：现在还必须记录按内容去重的
+  `runtime_jars` 和 `physical_environment`；缺字段的旧 manifest 直接拒绝，不隐式迁移。
 
-不提供旧 lockfile schema 的兼容读取层；目前没有外部 Orbit 用户需要承担这种迁移债。
+不提供旧 manifest/lockfile schema 的兼容读取层；目前没有外部 Orbit 用户需要承担
+这种迁移债。
 
 ## 4. 当前命令状态
 
@@ -82,7 +87,7 @@
 | `init` | 拒绝空/任意目录，定位真实平台 JAR，扫描实例并确认重复包清理 |
 | `add` | Modrinth、CurseForge、搜索名和本地 JAR |
 | `remote add/remove/list` | 验证并管理包的多个 discovery remotes；不能删除最后一个；删除远端时保留当前 lock 的精确恢复来源；list 输出自适应表格 |
-| `install` / `restore` | fresh platform scan；Minecraft 变化拒绝，loader 变化由共享图判定 |
+| `install` / `restore` | 严格校验 TOML 平台快照；不探测、不兜底、不刷新；sync 后的 loader 变化由共享图判定 |
 | `remove` / `upgrade` / `outdated` | 使用 Fat Lockfile、保留受阻候选原因、自适应表格与多解差异高亮 |
 | `sync` | 完全离线重新探测平台并扫描 mods；保留既有 remotes，按包选择候选并确认移除未选版本；平台与包变更统一表格 |
 | `check` | 实例目标兼容性预检；结果自适应表格 |

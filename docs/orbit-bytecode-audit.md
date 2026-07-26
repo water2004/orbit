@@ -7,8 +7,8 @@
 
 `orbit audit` 每次都重新打开当前硬盘上的文件，只使用：
 
-- 当前实例实际 Minecraft JAR；
-- launcher profile/组件指向的 Loader 和运行时依赖 JAR；
+- `[platform]` 精确记录且通过路径、哈希和元数据校验的 Minecraft JAR；
+- `[platform]` 精确记录且通过校验的 Loader 和运行时依赖 JAR；
 - 与 install/sync 相同的 Loader 求解图为当前物理端选择的顶层包和活动嵌套 JAR；
 - 上述活动内容中的 `.class`、Loader 模组元数据、Mixin config、refmap、manifest、
   NeoForge TOML 和 `META-INF/services`。
@@ -32,8 +32,9 @@ ClassFile 的 internal name 与 descriptor，只是先把基础游戏投影到 L
 orbit CLI → orbit-core → orbit-bytecode-audit
 ```
 
-core 重新探测 launcher 平台，并复用当前物理端的 resolver solution 组装 Loader 实际
-选择的顶层 JAR、嵌套 archive chain、活动 mod ID/provides 和运行时路径。独立分析
+core 严格消费 init/sync 写入的 platform snapshot，并复用其中物理端的 resolver
+solution 组装 Loader 实际选择的顶层 JAR、嵌套 archive chain、活动 mod ID/provides
+和运行时路径。独立分析
 crate 不认识 Orbit manifest、lockfile、provider 或 CLI，只接收这份已选择的 Artifact
 列表与实际 Loader 环境，返回结构化报告。CLI 仅负责过滤、文本/JSON 展示和退出码。
 
@@ -49,11 +50,11 @@ ClassFile 前端使用 `ristretto_classfile`，由自有 facade 隔离第三方�
 
 ## 3. Runtime namespace 与 Readiness
 
-probe 同时比较 Orbit 声明、fresh loader 探测和实际 classpath：
+probe 比较 Orbit 声明、已校验的 Loader JAR 和快照 classpath：
 
 - `Ready`：Minecraft、Loader、至少一个 Mod 可解析，实际 Loader marker 与 ABI 完整；
 - `Incomplete`：基础 JAR、类空间、Mixin 或现代 Forge/NeoForge 运行库不完整；
-- `Ambiguous`：声明与 fresh 探测冲突，或 classpath 同时出现冲突 Loader；
+- `Ambiguous`：Loader 声明互相冲突，或 classpath 同时出现冲突 Loader；
 - `Unsupported`：Loader 不支持，或实际 ModLauncher ABI 无法识别。
 
 Fabric/Quilt 要求实际 Loader marker 与 Mixin annotation ABI。Forge/NeoForge 还验证
@@ -69,7 +70,7 @@ namespace alignment：
 - Loader 提供空 mapping artifact 时，这是可探测的 official identity capability；
 - mapping 缺失、多个来源冲突或输入 JAR 无法唯一匹配时返回
   `Incomplete`/`Ambiguous`，在生成具体风险和 warning 前停止；
-- Forge/NeoForge 优先采用 launcher classpath 中版本可验证、实际包含
+- Forge/NeoForge 优先采用 platform snapshot classpath 中版本可验证、实际包含
   `net/minecraft` 类的 Loader runtime game JAR；否则只有基础游戏与已注册转换共享
   可观察的类空间时才允许 identity 分析。
 

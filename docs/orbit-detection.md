@@ -1,17 +1,22 @@
 # Orbit 实例环境检测
 
-> 实现位置：`orbit-core/src/launcher.rs`、`orbit-core/src/platform.rs`、
+> 实现位置：`orbit-core/src/platform_detection.rs`、`orbit-core/src/launcher.rs`、
 > `orbit-core/src/detection/` 与 `orbit-core/src/init.rs`
 
 ## 1. 职责边界
 
-检测层只回答两个问题：
+检测层只回答四个问题：
 
 1. 当前目录是不是受支持的实际 Minecraft game directory；
 2. launcher 当前选择了哪些 Minecraft/loader 候选；
-3. 哪两个实际 Minecraft/loader JAR 对应该实例。
+3. 哪两个实际 Minecraft/loader JAR 对应该实例；
+4. launcher 选择了哪些其余 runtime JAR，以及能否确定物理端。
 
-它不解析模组 JAR，不查询下载平台，也不替安装流程选择兼容版本。模组元数据由
+生产调用边界是强制的：只有 `orbit init` 和 `orbit sync` 可以进入
+`platform_detection`。其它命令只能消费 `orbit.toml [platform]` 的精确快照，不得
+调用 `LauncherLayout`、loader detector 或目录候选扫描。
+
+检测层不解析普通模组 JAR，不查询下载平台，也不替安装流程选择兼容版本。模组元数据由
 `metadata/` 与 `jar/` 处理；平台版本由 provider 处理。
 
 ## 2. Loader detector
@@ -70,8 +75,7 @@ Prism/MultiMC 同时识别 component UID：
 
 找到 Maven 坐标时返回加载器版本和 `Confidence::Certain`。只命中 `mainClass` 时没有
 足够信息确定版本，因此返回 `Confidence::Low`；没有证据时返回
-`Confidence::None`。当前 detector 不产生 `Confidence::High`，该枚举值为其它检测
-策略保留。
+`Confidence::None`。
 
 Forge/NeoForge profile 的坐标版本有时包含 Minecraft 前缀，例如
 `1.21.1-52.0.0`。只有前半段确实是纯数字点分 Minecraft 版本时，检测层才将其归一化
@@ -93,7 +97,7 @@ Forge/NeoForge profile 的坐标版本有时包含 Minecraft 前缀，例如
 
 ## 5. Minecraft 版本检测
 
-`init::detect_mc_versions(instance_dir)` 只扫描布局声明的游戏 JAR 目录和
+`platform_detection::detect_mc_versions(instance_dir)`（由 `init` API 转出）只扫描布局声明的游戏 JAR 目录和
 `libraries/com/mojang/minecraft`，读取 `version.json` 并交给
 `metadata::mojang::McVersion` 解析。返回值除 `id` 外还保留
 world/protocol/pack/Java 版本和稳定版标志。
@@ -101,20 +105,24 @@ world/protocol/pack/Java 版本和稳定版标志。
 profile 的 `inheritsFrom` 或 Prism component 只用于筛选；最终仍必须找到并解析对应
 真实 JAR。多个版本不会按扫描顺序取第一个。
 
-`platform::discover_platform_for_init()` 只把 init 已选择的版本作为消歧条件；
-`platform::rediscover_current_platform()` 不接受任何旧版本或旧路径参数，供 sync 等
-对账流程使用。两者都会定位 loader Maven 目录并枚举其中的实际 JAR，Minecraft JAR
+`platform_detection::discover_platform_for_init()` 只把 init 已选择的版本作为消歧条件；
+`platform_detection::rediscover_current_platform()` 不接受任何旧版本或旧路径参数，
+只供 sync 对账使用。两者都会定位 loader Maven 目录并枚举其中的实际 JAR，Minecraft JAR
 则以 JAR 内的 `version.json` 识别，均不假设文件名与版本相同。Fabric/Quilt loader
-元数据必须可解析；所有能解析的 loader bundled 模块进入平台候选图。最终实际路径和
-SHA-256 才写入 `[platform]`。
+元数据必须可解析；所有能解析的 loader bundled 模块进入平台候选图。最终 Minecraft、
+Loader、runtime JAR 的实际路径和 SHA-256，以及物理端才整体写入 `[platform]`。
+
+`platform.rs` 不含上述规则。它只解析快照路径、校验 SHA-256、读取精确 JAR 元数据；
+任一事实不成立都要求运行 `orbit sync`，不会按文件名、相邻目录、launcher profile
+或旧值寻找替代项。
 
 ## 6. 已知边界
 
 - 不解析启动器的私有数据库；只读取实例内稳定的 profile/组件/marker 文件和现有
   libraries。没有这些信息时明确报错；
 - launcher profile 的 `mainClass` 仅是弱证据，不足以自动确定 loader 版本；
-- 多个 Minecraft、loader 或 loader version 候选均视为歧义；交互 init 可选择，
-  非交互 fresh scan 不猜测；
+- 多个 Minecraft、loader、loader version 或同级 Loader JAR 候选均视为歧义；
+  交互 init 可让用户选择版本，sync 不猜测；
 - 游戏 `version.json` 的 Java 信息用于检测展示；resolver 依据目标 Minecraft 版本
   注册 `java` 平台包，并用模组 feature 与 class major 校验最低 Java。它不探测用户
   当前 shell 的 Java，因为安装目标应由实例版本决定；

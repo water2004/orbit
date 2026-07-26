@@ -39,7 +39,9 @@ identification/
 providers/    来源查询、统一下载与受限运行时认证
 runtime       跨平台目录发现、显式路径覆盖与运行时服务注入
 launcher      标准/HMCL/Prism/MultiMC/CurseForge/GDLauncher 游戏目录归一化
-platform      fresh discovery、Minecraft/loader JAR 定位、哈希与运行时事实
+platform_detection
+              仅供 init/sync 使用的 launcher 探测、JAR 定位和快照生成
+platform      TOML 平台快照的精确路径解析、哈希与元数据校验
 lockfile      可复现的 Fat Lockfile
 versions/     Fabric predicate 与 Maven version range
 resolver/
@@ -81,9 +83,12 @@ orbit-bytecode-audit
 ## 3. 端到端数据流
 
 ```text
-命令
-  → launcher layout / fresh platform discovery
-  → manifest / instance
+init / sync
+  → launcher layout / platform_detection
+  → 完整 platform snapshot
+
+其它命令
+  → manifest / exact platform snapshot validation
   → package remotes 的 provider project 闭包发现（联网命令）
   → 完整 artifact 队列
   → content-addressed cache / 网络
@@ -143,10 +148,15 @@ launcher profile 指向的实际 loader library JAR 也通过公共 JAR reader �
 loader 自身仍是平台包，但其声明的 contained 模块使用与普通顶层包相同的
 owner/source/path 绑定规则参与求解；它们不成为磁盘事务目标。
 
-`orbit.toml [platform]` 是上次探测的路径/哈希快照，不是发现索引。`sync` 每次从 launcher
-profile、Prism/MultiMC component 和当前 libraries 重新建候选集，因此允许 launcher
-改名、移动或替换 JAR。`install`同样 fresh scan：Minecraft 变化是需要先 sync 的硬
-边界；loader 版本变化是求解事实，不先验等同于不兼容。
+`orbit.toml [platform]` 是完整、强制的运行时快照：Minecraft JAR、Loader JAR、
+其余 launcher runtime JAR、物理端，以及每个文件的 SHA-256。`platform_detection`
+封装 launcher profile、Prism/MultiMC component、Maven 坐标和目录候选等不稳定规则，
+生产代码中只有 `init` 和 `sync` 可以引用它。`platform` 则是无发现能力的严格消费者。
+
+`sync` 每次忽略旧快照，从当前 launcher 状态重建并整体替换快照，因此允许 launcher
+改名、移动、替换或升级 JAR。install/outdated/upgrade/export/audit 不 fresh scan、
+不修改 `[platform]`、不寻找替代文件：路径、哈希或 JAR 元数据与快照不符就要求先
+`orbit sync`。同步后的 loader 版本变化仍是求解事实，不先验等同于不兼容。
 
 PubGrub fork 允许 provider 在选择包版本时注入带 reason 的自定义 incompatibility。
 条件原因因此属于真正的传播/回溯路径。observer 只补充成功解中的候选淘汰原因，不承担

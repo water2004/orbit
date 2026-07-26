@@ -31,6 +31,11 @@ description = "example instance"
 [platform]
 minecraft_jar = { path = "../../versions/1.20.1/1.20.1.jar", sha256 = "..." }
 loader_jar = { path = "../../libraries/net/fabricmc/fabric-loader/0.16.10/fabric-loader-0.16.10.jar", sha256 = "..." }
+runtime_jars = [
+  { path = "../../libraries/org/ow2/asm/asm/9.7/asm-9.7.jar", sha256 = "..." },
+  { path = "../../libraries/net/fabricmc/intermediary/1.20.1/intermediary-1.20.1.jar", sha256 = "..." },
+]
+physical_environment = "client"
 
 [resolver]
 catalogs = ["modrinth"]
@@ -74,13 +79,24 @@ sodium = { version = ">=0.5.9" }
 
 ### 2.3 `[platform]`
 
-`minecraft_jar` 和 `loader_jar` 都包含 `path` 与 `sha256`。它们是上次
-`init`/`sync` 实际分析的工件快照，不是后续探测索引：
+`[platform]` 是 `init`/`sync` 写入的完整运行时快照：
 
-- `sync` 从当前 launcher profile、组件和 libraries 重新探测并刷新；
-- `install` 也重新探测；
-- Minecraft 版本变化时 `install` 拒绝并要求先 `sync`；
-- loader 版本变化本身不拒绝，是否兼容由统一 JAR 图和分析器判断。
+| 字段 | 含义 |
+|---|---|
+| `minecraft_jar` | 精确 Minecraft JAR 路径与 SHA-256 |
+| `loader_jar` | 精确 Loader JAR 路径与 SHA-256 |
+| `runtime_jars` | launcher 为该平台选择的其余运行时 JAR；按内容去重 |
+| `physical_environment` | `client`、`server` 或无法确定时的 `both` |
+
+只有 `init` 和 `sync` 读取 launcher profile、组件、libraries 或文件名候选。
+`install`、`add`、`outdated`、`upgrade`、`export`、`audit` 等其它命令只解析这些
+精确路径，并在使用前校验 SHA-256、Minecraft `version.json` 以及可解析的 Loader
+身份/版本。路径不存在、内容变化、字段缺失、元数据矛盾或列表重复时直接报错并要求
+运行 `orbit sync`；不会搜索同目录、按文件名猜替代项、回退到旧路径或静默刷新 TOML。
+
+`sync` 不受旧快照约束，会从当前 launcher 状态重新探测并整体替换快照。loader 或
+Minecraft 的变化只有经过 `sync` 才进入后续统一求解与 audit；loader 版本变化本身
+仍不被先验判为不兼容。
 
 共享游戏根与隔离版本目录都支持；每个隔离版本目录是独立 Orbit 实例。
 
@@ -197,7 +213,8 @@ bundled = []
 8. 任何会移除未选包版本的方案都在写盘前列出并确认。
 
 `sync` 是纯本地重新探测与对账，不调用 provider、不下载修复；它保留 manifest 已知
-远端，并把当前本地内容写为锁定工件来源。`install` 才执行完整联网发现与修复。
+远端，并把当前本地内容写为锁定工件来源。`install` 才执行完整联网发现与修复，但只
+消费 `[platform]` 快照，不承担平台探测或快照刷新。
 
 ## 5. 远端管理
 

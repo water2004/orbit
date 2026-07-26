@@ -105,7 +105,7 @@ Orbit 采用**目录优先**的上下文逻辑。命令会默认作用于当前�
 | `orbit search <query>` | 在已配置来源中搜索模组；支持 Modrinth 与 CurseForge。 |
 | `orbit info <mod>` | 查看模组详细信息（描述、作者、版本历史、前置依赖、端侧支持等）。无需安装，直接请求平台 API。 |
 | `orbit add <mod>` | 添加新模组。支持自动查找、`mr:<project-id-or-search>`、`cf:<numeric-project-id>` 或 `file:./my-mod.jar`。使用 `--env client\|server` 标记端侧。 |
-| `orbit install` | 重新探测实际平台后按 `orbit.toml`/lock 补齐缺失 JAR。Minecraft 版本变化时要求先 sync；loader 版本变化交给真实依赖分析。 |
+| `orbit install` | 严格校验 TOML 平台快照后按 manifest/lock 补齐缺失 JAR；平台路径或内容变化时要求先 sync。 |
 | `orbit remove <mod>` | 按 JAR `mod_id` 卸载包。删除其选中内容并移除 `orbit.toml`/lock 中的记录。 |
 | `orbit purge <mod>` | **深度清理**。在 `remove` 的基础上，启发式搜索并交互式询问以**彻底删除** `config/` 下的配置文件。 |
 | `orbit list` | 列出当前实例记录的所有模组及版本；支持 `--tree` 和 `--target`。 |
@@ -140,6 +140,10 @@ modloader_version = "0.15.7"
 [platform]
 minecraft_jar = { path = "../../1.20.1/1.20.1.jar", sha256 = "..." }
 loader_jar = { path = "../../libraries/net/fabricmc/fabric-loader/0.15.7/fabric-loader-0.15.7.jar", sha256 = "..." }
+runtime_jars = [
+  { path = "../../libraries/net/fabricmc/intermediary/1.20.1/intermediary-1.20.1.jar", sha256 = "..." },
+]
+physical_environment = "client"
 
 [resolver]
 catalogs = ["modrinth"]

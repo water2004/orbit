@@ -176,10 +176,10 @@ orbit install
   [--locked | --frozen]
 ```
 
-这是实例还原命令，不接受模组名。开始前重新探测实际平台，不从 manifest 中记录的旧
-文件名寻找 JAR。Minecraft 版本与 manifest 不一致时拒绝并要求先 `orbit sync`。
-loader 版本不一致不直接拒绝：实际 loader JAR 的版本和 bundled 模块进入同一次求解，
-只在真实依赖约束不兼容时失败；成功写盘时刷新平台快照。
+这是实例还原命令，不接受模组名。它严格使用 `[platform]` 记录的 Minecraft、Loader
+和 runtime JAR 路径并校验内容，不读取 launcher profile、不搜索替代文件，也不刷新
+平台快照。路径、哈希或 JAR 元数据不一致时拒绝并要求先 `orbit sync`。sync 刷新后的
+loader JAR 及其 bundled 模块进入同一次求解，只在真实依赖约束不兼容时失败。
 
 选择顺序：
 
@@ -371,8 +371,9 @@ JSON 结果直接嵌入 audit 的 `AuditReport`（schema 4），顶层固定包�
 没有达到阈值的结果只表述为
 “未发现达到当前阈值的字节码兼容风险”，不宣称全部 Mod 兼容。
 
-core 先重新探测平台，并复用 install/sync 的当前物理端求解结果选择实际顶层和嵌套
-JAR；audit 不另写 Loader classpath 规则。随后根据同一次扫描结果进行 capability
+core 严格读取 `[platform]` 中由 init/sync 固定的 Minecraft、Loader、runtime JAR
+与物理端，并复用 install/sync 的求解结果选择实际顶层和嵌套 JAR；audit 不读取
+launcher profile，也不另写 Loader classpath 发现规则。随后根据这些输入进行 capability
 probe。Fabric/Quilt 需要 Loader 与 Mixin
 ABI；现代 Forge/NeoForge 还必须具有可识别的 ModLauncher `ITransformer`、
 `Target` 和 `ITransformationService` ABI。Legacy LaunchWrapper 明确拒绝，不提供
