@@ -56,6 +56,7 @@ audit         复用 resolver 的 Loader-selected runtime；不包含字节码�
 orbit-bytecode-audit
   classfile   第三方 parser 隔离 facade、稳定指令 ID
   jar         安全预算、活动嵌套 JAR/resource、MR-JAR、同名类多定义 Universe
+  namespace   Loader capability provider、runtime symbol alignment、Tiny 投影/readiness
   mixin_config Loader 注册、端侧/requiredMods/plugin 激活、config/refmap 作用域
   mixin       候选类合并；selector/slice → InjectionQuery；injector → Mutation
   transformer ModLauncher/Java transformer → 带 heuristic precision 的统一效果

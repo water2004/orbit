@@ -30,6 +30,7 @@
 | Windows MSI | ✅ | x64 per-machine 向导、可选系统 PATH、同版本重建升级、维护模式、可选清理默认 AppData；发布产物仍需项目证书签名 |
 | 长事务进度 | ✅ | 包操作与 audit 均使用 core 强类型事件；候选/审计工件精确计数，求解工作总量随实际 run/probe 动态增长 |
 | JSON / 自动化输出 | ✅ | 全局 `--format text\|json` 与 `--progress-format none\|ndjson`；JSON 信封 + NDJSON 进度 + 结构化错误 JSON + 稳定错误码；view-model 层隔离哈希/文件名/密钥 |
+| 字节码运行时符号对齐 | ✅ | Fabric/Quilt 按实际 Tiny capability 投影；Forge/NeoForge 验证 Loader runtime game；未对齐时在 finding 前停止 |
 
 ## 2. 保留的正确规范
 
@@ -85,7 +86,7 @@
 | `remove` / `upgrade` / `outdated` | 使用 Fat Lockfile、保留受阻候选原因、自适应表格与多解差异高亮 |
 | `sync` | 完全离线重新探测平台并扫描 mods；保留既有 remotes，按包选择候选并确认移除未选版本；平台与包变更统一表格 |
 | `check` | 实例目标兼容性预检；结果自适应表格 |
-| `audit` | 复用 Loader-selected runtime，解析实际 Mixin/Transformer 注册与 ClassFile；分类摘要 + schema 3 JSON/显式完整 report |
+| `audit` | 复用 Loader-selected runtime，先对齐 namespace，再解析 Mixin/Transformer；unary/pairwise 分离 + schema 4 JSON/显式完整 report |
 | `list` / `info` | 展示包信息、逻辑依赖和 bundled；非树形 list 与 info 均使用自适应表格 |
 | `export` / `import` | Orbit archive 与 Modrinth pack |
 | `cache` / `instances` / `purge` | 已接 core；instances list 输出自适应表格 |
@@ -101,6 +102,9 @@
 - 普通安装扫描只能证明 class major 下限；`orbit audit` 另行分析 Mixin、
   ModLauncher transformer 和二进制形状风险，但仍只报告潜在风险，不能证明兼容，
   也不覆盖资源、配置、注册表、网络协议、反射目标或游戏业务逻辑。
+- audit 不下载外部 mapping；只消费当前 Loader classpath 已有的运行时 mapping 或经
+  launcher 选择且版本可验证的 runtime game JAR。mapping/Plugin/类定义证据不完整时
+  降为 readiness/coverage/inactive，不生成确定风险。
 - PubGrub fork 已发布到 `water2004/pubgrub` 的 `codex/solver-observer` 分支；
   Orbit 固定到 `c334509daecf91611af2729b2db91af7eba6f076`。
 - 当前 fork 原生支持 `P = mod_id`、不透明复合候选版本、调用方定义
@@ -136,3 +140,4 @@
 - [orbit-output-formats.md](orbit-output-formats.md)
 - [orbit-providers.md](orbit-providers.md)
 - [orbit-bytecode-audit.md](orbit-bytecode-audit.md)
+- [orbit-bytecode-audit-runtime-model.md](orbit-bytecode-audit-runtime-model.md)

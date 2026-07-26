@@ -358,14 +358,15 @@ provider 兼容声明，也不修改 manifest、lockfile、下载缓存或实例
 `--mod` 只匹配已安装 Mod 的 ID、展示名或文件名并过滤文本/JSON stdout；没有匹配项
 会明确报错，但有匹配项时分析仍加载完整实例。默认文本把环境、覆盖率、warning、风险
 及 behavioral interaction 分类和风险详情渲染为自适应表格，只展示排序最高的 20 条
-风险且不展开完整 evidence；每条风险使用两列详情布局，非 TTY 输出最大 120 列。
+风险且不展开 coverage/inactive/warning/evidence 明细；每条风险使用两列详情布局，
+非 TTY 输出最大 120 列。
 `--limit` 调整展示数量。
 
-`--format json` 保留完整 evidence（audit 子 schema 3）。显式 `--report <path>` 额外写入
+`--format json` 保留完整 evidence（audit 子 schema 4）。显式 `--report <path>` 额外写入
 未按文本 limit、risk threshold 或 mod 过滤截断的完整结构化报告；默认模式不创建报告文件。
-JSON 结果直接嵌入 audit 的 `AuditReport`（schema 3），顶层固定包含 `schema_version`、
-`environment`、`readiness`、`artifacts`、
-`registered_mixin_configs`、`registered_mixins`、`transformations`、`risks`、
+JSON 结果直接嵌入 audit 的 `AuditReport`（schema 4），顶层固定包含 `schema_version`、
+`environment`、`readiness`、`namespace`、`artifacts`、
+`registered_mixin_configs`、`registered_mixins`、`transformations`、`unary_risks`、`risks`、
 `interactions`、`inactive_candidates`、`coverage_gaps`、`coverage` 和 `warnings`。
 没有达到阈值的结果只表述为
 “未发现达到当前阈值的字节码兼容风险”，不宣称全部 Mod 兼容。
@@ -378,6 +379,11 @@ ABI；现代 Forge/NeoForge 还必须具有可识别的 ModLauncher `ITransforme
 `--force`。单个坏 Mod、真正 unresolved/ambiguous 的软引用、已知未支持或自定义
 InjectionPoint 和解释预算耗尽进入 warning/coverage；缺失基础游戏或运行库则停止。
 “JAR 没有 refmap”本身不是 warning。
+
+ABI probe 后先建立 Loader runtime namespace。Fabric/Quilt 使用当前 classpath 的
+Tiny mapping 内容做能力探测和 Class Universe 投影，不按 Minecraft/Loader 版本判断；
+Forge/NeoForge 使用 launcher 选择且内嵌版本匹配的 runtime game JAR。mapping 缺失、
+冲突或无法唯一识别时直接返回高层 readiness 错误，不继续输出具体 Mod 风险。
 
 审计通过 core 强类型事件报告六个真实阶段：准备 Loader-selected runtime、顶层工件
 扫描、readiness、Mixin 分析、Transformer 分析和冲突比较。已知总量的阶段显示实际计数；非交互

@@ -1,5 +1,8 @@
 # Orbit 字节码兼容风险分析
 
+上游行为依据与跨版本不变量见
+[orbit-bytecode-audit-runtime-model.md](orbit-bytecode-audit-runtime-model.md)。
+
 ## 1. 证据边界
 
 `orbit audit` 每次都重新打开当前硬盘上的文件，只使用：
@@ -12,9 +15,11 @@
 
 manifest、lockfile 和 JAR 内的 Loader 依赖用于恢复本次运行时内容，但依赖声明本身
 不构成字节码风险证据。JAR 内的 Mixin/Transformer 注册资源用于判断代码是否实际进入
-转换管线。Modrinth、CurseForge 和它们的兼容性声明不参与 audit。分析不下载 Yarn、
-Mojmap、SRG、Tiny 等 mapping；类和成员始终使用 ClassFile 的 internal name 与
-descriptor。
+转换管线。Modrinth、CurseForge 和它们的兼容性声明不参与 audit。分析不会为了可读
+名称下载 Yarn、Mojmap、社区 mapping 或平台数据；但会读取当前 Loader classpath
+中实际存在的运行时 mapping 资源，因为它们决定 JVM 最终看到的符号空间。比较仍使用
+ClassFile 的 internal name 与 descriptor，只是先把基础游戏投影到 Loader 的运行时
+命名空间。
 
 没有持久化分析缓存。每次命令都会重新读取、计算本次报告所需哈希并解析 JAR；内存中的
 类索引和方法对象在进程退出后消失，Orbit 的下载缓存不存放分析结果。
@@ -42,7 +47,7 @@ ClassFile 前端使用 `ristretto_classfile`，由自有 facade 隔离第三方�
 覆盖说明。类空间保留同名类的所有定义，不以最后一个覆盖前一个。目标方法指令同时保留
 稳定顺序 ID 和原始 byte offset。
 
-## 3. Readiness
+## 3. Runtime namespace 与 Readiness
 
 probe 同时比较 Orbit 声明、fresh loader 探测和实际 classpath：
 
@@ -54,6 +59,32 @@ probe 同时比较 Orbit 声明、fresh loader 探测和实际 classpath：
 Fabric/Quilt 要求实际 Loader marker 与 Mixin annotation ABI。Forge/NeoForge 还验证
 `ITransformer` 的 `targets/transform/getTargetType/castVote`、`Target` factory、
 `TargetType` 和 `ITransformationService.transformers()` 签名。判断不依赖固定版本号。
+
+ABI readiness 之后、任何 Mixin/Transformer finding 之前，audit 必须完成 runtime
+namespace alignment：
+
+- Fabric/Quilt 从当前 classpath 的 Tiny v1/v2 资源读取 namespace 和类/成员映射；
+- mapping 含实际类记录时，以 Minecraft JAR 对各 namespace 的精确类名覆盖确定输入
+  namespace，再把整个基础游戏 Class Universe 投影到 `intermediary`；
+- Loader 提供空 mapping artifact 时，这是可探测的 official identity capability；
+- mapping 缺失、多个来源冲突或输入 JAR 无法唯一匹配时返回
+  `Incomplete`/`Ambiguous`，在生成具体风险和 warning 前停止；
+- Forge/NeoForge 优先采用 launcher classpath 中版本可验证、实际包含
+  `net/minecraft` 类的 Loader runtime game JAR；否则只有基础游戏与已注册转换共享
+  可观察的类空间时才允许 identity 分析。
+
+投影覆盖类、父类、接口、字段/方法名和 descriptor、指令 member reference、
+invokedynamic implementation 与 annotation class descriptor，并在
+ClassDefinitionId 中同时保存 original/runtime 名称。部分 mapping 不会猜测：未覆盖
+数量进入 `mapping_coverage`，依赖这些符号的结论不能提升为 definite risk。
+Tiny 只在方法的声明 owner 上记录映射时，Orbit 按实际类/接口层次把唯一的继承映射
+传播到 override 声明和继承 member reference；冲突的继承名称保持未映射，不能用
+“精确 owner 查表失败”制造假的 `@Overwrite` 缺失。
+
+每个顶层 artifact 同时形成一个 `LoaderArtifactUnit`。只有 resolver 按 Loader 元数据
+选中的 nested archive 才成为成员；config、Mixin 类、plugin 和 refmap 在该单元内
+共享可见性。重复 nested 内容按 SHA-256 在单元内扫描一次，未选择的 nested JAR 不会
+并入全局类空间。
 
 若存在 LaunchWrapper/IClassTransformer 且没有可识别的 ModLauncher，命令以以下信息
 停止：
@@ -80,7 +111,9 @@ Mixin 与 Transformer 都转换为：
 
 每个效果还分别保留 config priority、Mixin priority 和 injector order；三者不会
 压成一个不可解释的总优先级。只有由当前 Loader 注册、通过物理端和 required-mod
-条件、且未被可静态判定的 plugin 拒绝的 Mixin 才进入效果管线。
+条件的 Mixin 才进入相应层次。plugin 明确接受时为 definite；plugin 结果为
+conditional/unknown 时可以恢复条件效果用于交互分析，但不会产生 definite unary risk
+或 unresolved warning。
 
 ## 5. Mixin
 
@@ -98,9 +131,18 @@ ID/provides 和 config 自身作用域共同决定激活；同名 refmap/config 
 artifact 串用。未注册的 `@Mixin`、端侧不匹配和 requiredMods 不满足项只进入
 `inactive_candidates`，不参与风险比较。
 
-`IMixinConfigPlugin` 只在结果可以从字节码确定时参与激活：常量 true/false、固定类存在
-谓词和静态 `getMixins()` 列表会被采用；动态 shouldApplyMixin 或 pre/postApply 对
-ClassNode 的任意修改进入 coverage gap，不能擅自当作启用或禁用。
+`IMixinConfigPlugin` 使用保守四态结果：
+`AlwaysApply`、`NeverApply`、`Conditional`、`Unknown`。只有无分支且所有可见返回都能
+证明的常量/当前 target 或 mixin 字符串谓词才能得到 true/false；分支返回不同常量是
+conditional。配置/系统属性、Loader API、类加载、静态可变字段、未知 helper、异常路径、
+预算耗尽或无法证明全部路径时一律 unknown，绝不默认 false。求值按每个真实
+`(targetClassName, mixinClassName)` 单独执行。静态 `getMixins()` 列表可以恢复；
+pre/postApply 修改 ClassNode 则进入 coverage gap。若一个 config 的全部 Mixin 都被
+证明为 false，会额外记录 `all_mixins_rejected_by_plugin` 一致性检查。
+
+类名归一化只解包完整的 `L...;` 对象 descriptor；`LocalPlayerMixin`、
+`LivingEntityMixin`、`LevelMixin` 等普通相对类名不会因首字母 `L` 被截断，数组
+descriptor 也不会被误当作普通 internal name。
 
 在活动集合中，分析器支持结构合并、`@Shadow`、`@Overwrite`、
 `@Unique`、`@Accessor`、`@Invoker`，以及 Inject、Redirect、ModifyArg(s)、
@@ -128,7 +170,10 @@ ordinal 与 zero-condition discriminator；未显式给 discriminator 时按 han
 每个软引用分别得到 `direct_exact`、`refmap_exact`、`ambiguous` 或 `unresolved`
 状态。原始引用在活动 Class Universe 唯一命中时不需要 refmap、不警告且不降低
 confidence；无关 refmap 也不能抬高当前引用。只有当前引用真正歧义或无法解析时才产生
-对应 warning。
+对应 warning。plugin-controlled、target 缺失、namespace 未对齐、unsupported selector、
+可选 `require = 0` 和方法体/切片不可静态检查分别进入 plugin coverage、inactive、
+readiness、optional 统计或独立的 `unavailable_method_body` / `unresolved_slice` coverage，
+不伪装为 unresolved warning，也不把方法体缺失错误标成切片失败。
 
 slice 先按主 `@At.slice` 选择 ID，再解析 from/to（含 boundary ordinal/shift），随后
 在区间内匹配 selector，最后应用主 ordinal 和 shift。边界或 ID 无法解析时整个
@@ -182,9 +227,10 @@ provenance 的
 
 ## 7. 冲突和风险值
 
-报告把四类事实严格分开：
+报告把五类事实严格分开：
 
-- `risks`：已找到具体结构失效或互斥条件；
+- `unary_risks`：单个 Mod 与当前已对齐环境之间的确定结构失效；
+- `risks`：两个 artifact 的效果之间已找到具体互斥条件；
 - `interactions`：顺序或组合会改变行为，但当前证据不证明结构不兼容；
 - `inactive_candidates`：当前 Loader/端侧/插件选择不会应用的候选；
 - `coverage_gaps` 与 `warnings`：静态分析没有覆盖或软引用无法唯一恢复。
@@ -211,10 +257,20 @@ provenance 的
 明确不是不兼容概率。同名类形状差异是确定事实，但在没有 ClassLoader 可见性证明时，
 遮蔽风险的 activation 是 Conditional，不是 Definite。
 
+`invalid_overwrite_target` 只在 config/side/plugin 确定、目标类唯一、namespace 与
+descriptor 已对齐，并确认目标类在当前合并阶段没有直接声明该方法时生成。继承/接口
+方法仍参与 selector 与 hard-reference 解析，但按 Mixin 的 `findTargetMethod` 语义，
+不能充当 `@Overwrite` 目标；普通 Mixin 方法可以合法地在子类新增同签名实现。
+`@Dynamic` 只补充运行时错误上下文，不会使缺失的 `@Overwrite` 目标合法。该结果属于
+`unary_risks`，不会伪造成两个 Mod 的 pairwise conflict。
+`UniqueRenamedMethod`/`UniqueDiscardableMethod` 已经消除成员竞争，不产生用户可见的
+“priority selects one”交互。
+
 ## 8. 文本与详细报告
 
-默认文本以自适应表格分别显示环境/readiness、coverage、覆盖缺口、inactive
-candidate、behavioral interaction、warning 分类、风险总数和排序最高的前 20 项。
+默认文本以自适应表格显示 runtime namespace/mapping/alignment、四类摘要计数、风险
+总数和排序最高的前 20 项。coverage、inactive、Plugin 路径、warning/selector 明细只
+进入 JSON，避免在正常终端中制造数百行诊断噪声。
 每条风险使用“编号/详情”两列，
 不会因 JVM descriptor 过长而把多个语义列压成不可读的窄列；TTY 服从当前终端宽度，
 重定向输出无法探测宽度时限制为 120 列。`--limit` 可调整展示数；文本不会展开
@@ -222,15 +278,21 @@ candidate、behavioral interaction、warning 分类、风险总数和排序最�
 
 `--format json` 在 stdout 输出未截断的结构化细节。`--report <path>` 仅在用户显式
 指定时额外写完整、未按文本 limit 或 stdout filter 截断的 JSON 报告；默认命令不创建
-文件。当前 schema version 为数字 `3`，顶层固定包含 environment、readiness、
-artifacts、registered_mixin_configs、registered_mixins、transformations、risks、
+文件。当前 schema version 为数字 `4`，顶层固定包含 environment、readiness、namespace、
+artifacts、registered_mixin_configs、registered_mixins、transformations、unary_risks、risks、
 interactions、inactive_candidates、coverage_gaps、coverage 和 warnings。
+
+`namespace` 给出 runtime namespace、每个 artifact 的符号空间、mapping source
+路径/哈希/namespaces、Loader artifact units、alignment、类/方法/字段 mapping
+覆盖率与探测证据。涉及投影的 transformation/risk evidence 同时记录 original symbol、
+runtime symbol、mapping source 和 confidence。
 
 ## 9. Coverage 与安全预算
 
 报告分别记录 JAR/ClassFile 成功失败、方法解析失败、方法预算降级、指令解析降级、
 registered/inactive/plugin-controlled Mixin、各精度效果、Transformer target/effect
-恢复、unsupported selector/injection point、future classfile、unsupported
+恢复、namespace/mapping、Plugin 四态、缺失 Mixin 类、nested plugin、optional
+unresolved、unsupported selector/injection point、future classfile、unsupported
 mechanism 和 budget exhaustion。单个坏 Mod JAR、类、方法、config、refmap 或解释
 路径不会丢弃其他 Mod；Minecraft/Loader 等必需运行时失败则停止。
 

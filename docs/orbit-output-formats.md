@@ -436,7 +436,7 @@ orbit [--format text|json] [--progress-format none|ndjson] <command> ...
 
 ### `audit`
 
-`audit` 沿用 `orbit-bytecode-audit` 的 schema 3 `AuditReport`，直接作为 `result` 字段嵌入信封：
+`audit` 沿用 `orbit-bytecode-audit` 的 schema 4 `AuditReport`，直接作为 `result` 字段嵌入信封：
 
 ```json
 {
@@ -444,17 +444,19 @@ orbit [--format text|json] [--progress-format none|ndjson] <command> ...
   "command": "audit",
   "ok": true,
   "result": {
-    "schema_version": 3,
+    "schema_version": 4,
     "environment": { ... },
     "readiness": { ... },
+    "namespace": { ... },
     "artifacts": [ ... ],
+    "unary_risks": [ ... ],
     "risks": [ ... ],
     ...
   }
 }
 ```
 
-信封 `schema_version` 是命令信封版本；`result.schema_version`（当前 3）是 audit 自身子 schema 版本。
+信封 `schema_version` 是命令信封版本；`result.schema_version`（当前 4）是 audit 自身子 schema 版本。
 
 ## 4. NDJSON 进度协议
 
