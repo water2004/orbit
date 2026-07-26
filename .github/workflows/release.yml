@@ -1,0 +1,167 @@
+name: Release packages
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+env:
+  CARGO_INCREMENTAL: "0"
+  CARGO_TERM_COLOR: always
+
+jobs:
+  validate:
+    name: Validate release tag
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Check out the tagged commit
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Require the tag commit to be on main
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin main:refs/remotes/origin/main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "Tag $GITHUB_REF_NAME does not point to a commit contained in main." >&2
+            exit 1
+          fi
+
+      - name: Require the tag to match the Cargo version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(
+            cargo metadata \
+              --format-version 1 \
+              --no-deps \
+              --manifest-path orbit-cli/Cargo.toml |
+              jq -r '.packages[] | select(.name == "orbit") | .version'
+          )"
+          if [[ -z "$version" || "$version" == "null" ]]; then
+            echo "Unable to read the Orbit package version." >&2
+            exit 1
+          fi
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Release versions must contain exactly three numeric fields; found $version." >&2
+            exit 1
+          fi
+          if [[ "$GITHUB_REF_NAME" != "v$version" ]]; then
+            echo "Tag $GITHUB_REF_NAME does not match Cargo version $version (expected v$version)." >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Run the workspace test suite
+        run: cargo test --workspace --locked
+
+  windows-msi:
+    name: Build Windows MSI
+    needs: validate
+    runs-on: windows-latest
+    steps:
+      - name: Check out the tagged commit
+        uses: actions/checkout@v6
+
+      - name: Install the stable Rust toolchain
+        shell: pwsh
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+
+      - name: Build and validate MSI
+        shell: pwsh
+        run: ./scripts/build-windows-msi.ps1
+
+      - name: Upload MSI
+        uses: actions/upload-artifact@v7
+        with:
+          name: orbit-${{ needs.validate.outputs.version }}-windows-msi
+          path: target/wix/orbit-${{ needs.validate.outputs.version }}-x86_64.msi
+          if-no-files-found: error
+
+  linux-deb:
+    name: Build Debian package
+    needs: validate
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Check out the tagged commit
+        uses: actions/checkout@v6
+
+      - name: Install the stable Rust toolchain
+        shell: bash
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+
+      - name: Install the pinned Debian packager
+        run: cargo install cargo-deb --version 3.7.0 --locked
+
+      - name: Build and validate deb
+        run: bash ./scripts/build-linux-deb.sh
+
+      - name: Upload deb
+        uses: actions/upload-artifact@v7
+        with:
+          name: orbit-${{ needs.validate.outputs.version }}-linux-deb
+          path: target/debian/orbit_${{ needs.validate.outputs.version }}-1_amd64.deb
+          if-no-files-found: error
+
+  publish:
+    name: Publish GitHub Release
+    needs:
+      - validate
+      - windows-msi
+      - linux-deb
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Check out release metadata
+        uses: actions/checkout@v6
+
+      - name: Download packaged artifacts
+        uses: actions/download-artifact@v8
+        with:
+          pattern: orbit-${{ needs.validate.outputs.version }}-*
+          path: dist
+          merge-multiple: true
+
+      - name: Create checksums
+        working-directory: dist
+        run: sha256sum *.msi *.deb > SHA256SUMS
+
+      - name: Publish release with generated notes
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          set -euo pipefail
+          notes="$(cat <<EOF
+          ## Installers
+
+          - **Windows x64:** \`orbit-$VERSION-x86_64.msi\`
+          - **Debian/Ubuntu amd64:** \`orbit_${VERSION}-1_amd64.deb\`
+          - **Integrity:** verify downloads with \`SHA256SUMS\`
+
+          The MSI is unsigned until the project configures a release signing certificate.
+          EOF
+          )"
+          gh release create "$GITHUB_REF_NAME" \
+            dist/*.msi \
+            dist/*.deb \
+            dist/SHA256SUMS \
+            --verify-tag \
+            --title "Orbit $VERSION" \
+            --notes "$notes" \
+            --generate-notes \
+            --fail-on-no-commits
