@@ -34,14 +34,13 @@ pub fn audit_instance_with_progress(
         completed: 1,
         total: Some(5),
     });
-    let discovered = crate::platform::rediscover_current_platform(instance_dir)?;
+    let platform = crate::platform::Platform::load(instance_dir, &manifest)?;
     emit(AuditProgressEvent::Advanced {
         stage: AuditProgressStage::PrepareInputs,
         completed: 2,
         total: Some(5),
     });
-    let runtime = crate::platform::discover_runtime_classpath(instance_dir, &discovered)?;
-    let runtime_game = discover_loader_runtime_game(&runtime, &discovered)?;
+    let runtime_game = discover_loader_runtime_game(&platform.runtime_jars, &platform)?;
     emit(AuditProgressEvent::Advanced {
         stage: AuditProgressStage::PrepareInputs,
         completed: 3,
@@ -51,8 +50,8 @@ pub fn audit_instance_with_progress(
     let selected_runtime = crate::resolver::selected_runtime_load(
         &manifest,
         &lockfile,
-        discovered.loader_package.as_ref(),
-        discovered.physical_environment,
+        platform.loader_package.as_ref(),
+        platform.physical_environment,
     )
     .map_err(|error| {
         OrbitError::Conflict(format!(
@@ -69,17 +68,17 @@ pub fn audit_instance_with_progress(
     let mut artifacts = vec![
         ArtifactInput {
             id: "minecraft".to_string(),
-            display_name: format!("Minecraft {}", discovered.minecraft_version.id),
-            path: discovered.minecraft_jar.clone(),
+            display_name: format!("Minecraft {}", platform.minecraft_version.id),
+            path: platform.minecraft_jar.clone(),
             kind: ArtifactKind::Minecraft,
             nested_jars: NestedJarPolicy::None,
         },
         ArtifactInput {
-            id: format!("loader:{}", discovered.loader),
-            display_name: format!("{} {}", discovered.loader, discovered.loader_version),
-            path: discovered.loader_jar.clone(),
+            id: format!("loader:{}", platform.loader),
+            display_name: format!("{} {}", platform.loader, platform.loader_version),
+            path: platform.loader_jar.clone(),
             kind: ArtifactKind::Loader,
-            nested_jars: if discovered.loader_package.is_some() {
+            nested_jars: if platform.loader_package.is_some() {
                 NestedJarPolicy::Selected(selected_runtime.loader_nested_jars.clone())
             } else {
                 // Without parseable Loader metadata there is no trustworthy
@@ -94,7 +93,7 @@ pub fn audit_instance_with_progress(
             id: "loader-runtime-game".to_string(),
             display_name: format!(
                 "{} runtime game {}",
-                discovered.loader, discovered.minecraft_version.id
+                platform.loader, platform.minecraft_version.id
             ),
             path: path.clone(),
             kind: ArtifactKind::RuntimeGame,
@@ -102,9 +101,11 @@ pub fn audit_instance_with_progress(
         });
     }
     artifacts.extend(
-        runtime
-            .into_iter()
-            .filter(|path| Some(path) != runtime_game.as_ref())
+        platform
+            .runtime_jars
+            .iter()
+            .filter(|path| runtime_game.as_ref() != Some(*path))
+            .cloned()
             .enumerate()
             .map(|(index, path)| {
                 let display_name = path
@@ -176,16 +177,16 @@ pub fn audit_instance_with_progress(
     orbit_bytecode_audit::analyze_with_progress(
         &AuditRequest {
             environment: AuditEnvironment {
-                minecraft_version: discovered.minecraft_version.id,
+                minecraft_version: platform.minecraft_version.id,
                 declared_loader: manifest.project.modloader,
-                detected_loader: discovered.loader,
-                loader_version: discovered.loader_version,
-                physical_side: match discovered.physical_environment {
+                detected_loader: platform.loader,
+                loader_version: platform.loader_version,
+                physical_side: match platform.physical_environment {
                     crate::metadata::Environment::Client => PhysicalSide::Client,
                     crate::metadata::Environment::Server => PhysicalSide::DedicatedServer,
                     crate::metadata::Environment::Both => PhysicalSide::Unknown,
                 },
-                java_feature: discovered.minecraft_version.java_version,
+                java_feature: platform.minecraft_version.java_version,
             },
             artifacts,
             active_mod_ids: selected_runtime.active_mod_ids,
@@ -203,17 +204,17 @@ pub fn audit_instance_with_progress(
 
 fn discover_loader_runtime_game(
     runtime: &[PathBuf],
-    discovered: &crate::platform::DiscoveredPlatform,
+    platform: &crate::platform::Platform,
 ) -> Result<Option<PathBuf>, OrbitError> {
-    if !matches!(discovered.loader.as_str(), "forge" | "neoforge") {
+    if !matches!(platform.loader.as_str(), "forge" | "neoforge") {
         return Ok(None);
     }
     let mut candidates = Vec::new();
     for path in runtime {
-        let Ok(version) = crate::init::read_version_json_from_jar(path) else {
+        let Ok(version) = crate::jar::read_minecraft_version(path) else {
             continue;
         };
-        if version.id == discovered.minecraft_version.id && jar_contains_minecraft_classes(path)? {
+        if version.id == platform.minecraft_version.id && jar_contains_minecraft_classes(path)? {
             candidates.push(path.clone());
         }
     }
@@ -222,7 +223,7 @@ fn discover_loader_runtime_game(
         [candidate] => Ok(Some(candidate.clone())),
         _ => Err(OrbitError::Other(anyhow::anyhow!(
             "multiple Loader-declared runtime game JARs match Minecraft {}: {}",
-            discovered.minecraft_version.id,
+            platform.minecraft_version.id,
             candidates
                 .iter()
                 .map(|path| path.display().to_string())
@@ -326,12 +327,8 @@ mod tests {
         );
     }
 
-    fn platform(
-        loader: &str,
-        version: &str,
-        directory: &Path,
-    ) -> crate::platform::DiscoveredPlatform {
-        crate::platform::DiscoveredPlatform {
+    fn platform(loader: &str, version: &str, directory: &Path) -> crate::platform::Platform {
+        crate::platform::Platform {
             minecraft_version: crate::metadata::mojang::McVersion {
                 id: version.to_string(),
                 name: version.to_string(),
@@ -350,6 +347,7 @@ mod tests {
             loader: loader.to_string(),
             loader_version: "test".to_string(),
             loader_jar: directory.join("loader.jar"),
+            runtime_jars: Vec::new(),
             loader_package: None,
             physical_environment: crate::metadata::Environment::Client,
         }

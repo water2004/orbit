@@ -90,6 +90,8 @@ modloader_version = "0.16.0"
 [platform]
 minecraft_jar = { path = "minecraft.jar", sha256 = "test" }
 loader_jar = { path = "loader.jar", sha256 = "test" }
+runtime_jars = []
+physical_environment = "client"
 
 [dependencies]
 missing-mod = { version = "*", remotes = [{ type = "file", path = "missing.jar" }] }
@@ -116,6 +118,8 @@ modloader_version = "0.16.0"
 [platform]
 minecraft_jar = { path = "minecraft.jar", sha256 = "test" }
 loader_jar = { path = "loader.jar", sha256 = "test" }
+runtime_jars = []
+physical_environment = "client"
 
 [dependencies]
 a = { version = "*", remotes = [{ type = "file", path = "a.jar" }] }
@@ -146,6 +150,8 @@ modloader_version = "0.16.0"
 [platform]
 minecraft_jar = { path = "minecraft.jar", sha256 = "test" }
 loader_jar = { path = "loader.jar", sha256 = "test" }
+runtime_jars = []
+physical_environment = "client"
 
 [dependencies]
 a = { version = "*", exclude = ["b"], remotes = [{ type = "file", path = "a.jar" }] }
@@ -170,6 +176,8 @@ modloader_version = "0.16.0"
 [platform]
 minecraft_jar = { path = "minecraft.jar", sha256 = "test" }
 loader_jar = { path = "loader.jar", sha256 = "test" }
+runtime_jars = []
+physical_environment = "client"
 
 [dependencies]
 a = { version = ">=2", remotes = [{ type = "file", path = "a.jar" }] }

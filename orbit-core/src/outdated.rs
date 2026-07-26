@@ -529,11 +529,7 @@ async fn check_outdated_with_progress(
         jar_cache,
         progress,
     } = input;
-    let platform =
-        crate::platform::discover_install_platform(instance_dir, &manifest.project.mc_version)?;
-    let mut effective_manifest = manifest.clone();
-    crate::platform::apply_to_manifest(instance_dir, &mut effective_manifest, &platform)?;
-    let manifest = &effective_manifest;
+    let platform = crate::platform::Platform::load(instance_dir, manifest)?;
     let loader = &manifest.project.modloader;
     let mc_version = &manifest.project.mc_version;
 

@@ -12,7 +12,7 @@ use crate::error::OrbitError;
 #[serde(deny_unknown_fields)]
 pub struct OrbitManifest {
     pub project: ProjectMeta,
-    pub platform: PlatformArtifacts,
+    pub platform: PlatformSnapshot,
     #[serde(default)]
     pub resolver: ResolverConfig,
     #[serde(default)]
@@ -23,16 +23,19 @@ pub struct OrbitManifest {
     pub overrides: IndexMap<String, DependencySpec>,
 }
 
-/// Concrete runtime artifacts used by the selected launcher instance.
+/// Exact platform runtime snapshot produced by `init` or `sync`.
 ///
 /// Versions alone are insufficient: launchers may keep multiple Minecraft and
-/// loader versions in shared directories. Orbit therefore pins the exact files
-/// it inspected, while `sync` may deliberately refresh these pins.
+/// loader versions in shared directories. Every other command consumes these
+/// exact paths and hashes; it never scans launcher state or substitutes another
+/// file.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-pub struct PlatformArtifacts {
+pub struct PlatformSnapshot {
     pub minecraft_jar: PlatformArtifact,
     pub loader_jar: PlatformArtifact,
+    pub runtime_jars: Vec<PlatformArtifact>,
+    pub physical_environment: crate::metadata::Environment,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -268,6 +271,8 @@ modloader_version = "0.15.7"
 [platform]
 minecraft_jar = { path = "minecraft.jar", sha256 = "test" }
 loader_jar = { path = "loader.jar", sha256 = "test" }
+runtime_jars = []
+physical_environment = "client"
 
 [dependencies]
 sodium = { version = "*", remotes = [
@@ -301,6 +306,8 @@ modloader_version = "0.15.7"
 [platform]
 minecraft_jar = { path = "minecraft.jar", sha256 = "test" }
 loader_jar = { path = "loader.jar", sha256 = "test" }
+runtime_jars = []
+physical_environment = "client"
 
 [dependencies]
 jei = { version = "^12", remotes = [{ type = "curseforge", project_id = 238222 }] }
@@ -328,10 +335,32 @@ modloader_version = "0.15.7"
 [platform]
 minecraft_jar = { path = "minecraft.jar", sha256 = "test" }
 loader_jar = { path = "loader.jar", sha256 = "test" }
+runtime_jars = []
+physical_environment = "client"
 "#;
         let manifest: OrbitManifest = toml::from_str(toml_str).unwrap();
         assert_eq!(manifest.resolver.catalogs, vec!["modrinth"]);
         assert!(!manifest.resolver.prerelease);
+    }
+
+    #[test]
+    fn incomplete_platform_snapshot_is_rejected() {
+        let error = toml::from_str::<OrbitManifest>(
+            r#"
+[project]
+name = "test"
+mc_version = "1.20.1"
+modloader = "fabric"
+modloader_version = "0.15.7"
+
+[platform]
+minecraft_jar = { path = "minecraft.jar", sha256 = "test" }
+loader_jar = { path = "loader.jar", sha256 = "test" }
+"#,
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("missing field `runtime_jars`"));
     }
 
     #[test]
@@ -346,6 +375,8 @@ modloader_version = "0.16.10"
 [platform]
 minecraft_jar = { path = "minecraft.jar", sha256 = "test" }
 loader_jar = { path = "loader.jar", sha256 = "test" }
+runtime_jars = []
+physical_environment = "client"
 [resolver]
 platforms = ["modrinth"]
 "#,
@@ -367,6 +398,8 @@ modloader_version = "0.16.10"
 [platform]
 minecraft_jar = { path = "minecraft.jar", sha256 = "test" }
 loader_jar = { path = "loader.jar", sha256 = "test" }
+runtime_jars = []
+physical_environment = "client"
 [dependencies]
 sodium = { version = "*" }
 "#,

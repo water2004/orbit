@@ -6,7 +6,7 @@
 //! 此 crate 不包含任何 CLI 或 UI 代码。
 
 pub mod config;
-pub mod detection;
+mod detection;
 pub mod error;
 pub mod identification;
 pub mod init;
@@ -29,6 +29,7 @@ mod launcher;
 pub mod outdated;
 mod package_reconciliation;
 mod platform;
+mod platform_detection;
 pub mod purge;
 pub mod remote;
 pub mod resolver;
@@ -46,7 +47,6 @@ pub use config::{
     GlobalConfig, InstanceEntry, InstancesRegistry, register_instance, remove_instance,
     set_default_instance,
 };
-pub use detection::LoaderDetectionService;
 pub use error::OrbitError;
 pub use installer::{
     InstallIntent, InstallInteraction, InstallOptions, InstallPrompt, InstallReport, InstallTarget,
@@ -58,7 +58,7 @@ pub use installer::{
 pub use jar_cache::{CacheSummary, JarCache, clean_cache, inspect_cache};
 pub use lockfile::{ArtifactSource, BundledMod, LockMeta, OrbitLockfile, PackageEntry};
 pub use manifest::{
-    DependencySpec, OrbitManifest, PackageRemote, PlatformArtifact, PlatformArtifacts,
+    DependencySpec, OrbitManifest, PackageRemote, PlatformArtifact, PlatformSnapshot,
 };
 pub use metadata::{ModLoader, mojang::McVersion};
 pub use orbit_bytecode_audit as audit_model;

@@ -797,6 +797,8 @@ modloader_version = "47.2.0"
 [platform]
 minecraft_jar = { path = "minecraft.jar", sha256 = "test" }
 loader_jar = { path = "loader.jar", sha256 = "test" }
+runtime_jars = []
+physical_environment = "client"
 [dependencies]
 a = { version = "*", remotes = [{ type = "file", path = "a.jar" }] }
 b = { version = "*", remotes = [{ type = "file", path = "b.jar" }] }
@@ -1111,6 +1113,8 @@ modloader_version = "0.19.2"
 [platform]
 minecraft_jar = { path = "minecraft.jar", sha256 = "test" }
 loader_jar = { path = "loader.jar", sha256 = "test" }
+runtime_jars = []
+physical_environment = "client"
 [dependencies]
 reeses-sodium-options = { version = "*", remotes = [{ type = "file", path = "reeses.jar" }] }
 voxy = { version = "*", remotes = [{ type = "file", path = "voxy.jar" }] }
@@ -1255,6 +1259,8 @@ modloader_version = "0.19.2"
 [platform]
 minecraft_jar = { path = "minecraft.jar", sha256 = "test" }
 loader_jar = { path = "loader.jar", sha256 = "test" }
+runtime_jars = []
+physical_environment = "client"
 
 [dependencies]
 iris = { version = "*", remotes = [{ type = "file", path = "iris.jar" }] }

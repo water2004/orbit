@@ -38,10 +38,15 @@ pub async fn sync_instance(
     // Reconciliation must observe the launcher as it exists now. The manifest
     // is only the previous snapshot used to describe changes; none of its
     // versions or paths may constrain discovery.
-    let discovered_platform = crate::platform::rediscover_current_platform(instance_dir)?;
+    let discovered_platform = crate::platform_detection::rediscover_current_platform(instance_dir)?;
+    let platform_snapshot = discovered_platform.snapshot(instance_dir)?;
     let platform_changes =
-        describe_platform_changes(&manifest.inner, &discovered_platform, instance_dir)?;
-    crate::platform::apply_to_manifest(instance_dir, &mut manifest.inner, &discovered_platform)?;
+        describe_platform_changes(&manifest.inner, &discovered_platform, &platform_snapshot);
+    crate::platform_detection::apply_to_manifest(
+        &mut manifest.inner,
+        &discovered_platform,
+        platform_snapshot,
+    );
     let mut lockfile = Lockfile::open_or_default(
         instance_dir,
         LockMeta {
@@ -211,10 +216,9 @@ pub async fn sync_instance(
 
 fn describe_platform_changes(
     manifest: &crate::manifest::OrbitManifest,
-    discovered: &crate::platform::DiscoveredPlatform,
-    instance_dir: &Path,
-) -> Result<Vec<PlatformChange>, OrbitError> {
-    let artifacts = discovered.artifacts(instance_dir)?;
+    discovered: &crate::platform_detection::DiscoveredPlatform,
+    snapshot: &crate::manifest::PlatformSnapshot,
+) -> Vec<PlatformChange> {
     let mut changes = Vec::new();
     push_platform_change(
         &mut changes,
@@ -238,29 +242,69 @@ fn describe_platform_changes(
         &mut changes,
         "minecraft_jar",
         &manifest.platform.minecraft_jar.path,
-        &artifacts.minecraft_jar.path,
+        &snapshot.minecraft_jar.path,
     );
     push_platform_change(
         &mut changes,
         "loader_jar",
         &manifest.platform.loader_jar.path,
-        &artifacts.loader_jar.path,
+        &snapshot.loader_jar.path,
     );
-    if manifest.platform.minecraft_jar.sha256 != artifacts.minecraft_jar.sha256 {
+    if manifest.platform.minecraft_jar.sha256 != snapshot.minecraft_jar.sha256 {
         changes.push(PlatformChange {
-            field: "minecraft_jar_sha256",
-            previous: manifest.platform.minecraft_jar.sha256.clone(),
-            current: artifacts.minecraft_jar.sha256,
+            field: "minecraft_jar_content",
+            previous: "recorded snapshot".to_string(),
+            current: "changed on disk".to_string(),
         });
     }
-    if manifest.platform.loader_jar.sha256 != artifacts.loader_jar.sha256 {
+    if manifest.platform.loader_jar.sha256 != snapshot.loader_jar.sha256 {
         changes.push(PlatformChange {
-            field: "loader_jar_sha256",
-            previous: manifest.platform.loader_jar.sha256.clone(),
-            current: artifacts.loader_jar.sha256,
+            field: "loader_jar_content",
+            previous: "recorded snapshot".to_string(),
+            current: "changed on disk".to_string(),
         });
     }
-    Ok(changes)
+    let previous_runtime = runtime_paths(&manifest.platform.runtime_jars);
+    let current_runtime = runtime_paths(&snapshot.runtime_jars);
+    if previous_runtime != current_runtime {
+        changes.push(PlatformChange {
+            field: "runtime_jars",
+            previous: previous_runtime.join(", "),
+            current: current_runtime.join(", "),
+        });
+    } else if manifest.platform.runtime_jars != snapshot.runtime_jars {
+        changes.push(PlatformChange {
+            field: "runtime_jars_content",
+            previous: "recorded snapshot".to_string(),
+            current: "changed on disk".to_string(),
+        });
+    }
+    if manifest.platform.physical_environment != snapshot.physical_environment {
+        changes.push(PlatformChange {
+            field: "physical_environment",
+            previous: environment_name(manifest.platform.physical_environment).to_string(),
+            current: environment_name(snapshot.physical_environment).to_string(),
+        });
+    }
+    changes
+}
+
+fn runtime_paths(artifacts: &[crate::manifest::PlatformArtifact]) -> Vec<String> {
+    if artifacts.is_empty() {
+        return vec!["(none)".to_string()];
+    }
+    artifacts
+        .iter()
+        .map(|artifact| artifact.path.clone())
+        .collect()
+}
+
+fn environment_name(environment: crate::metadata::Environment) -> &'static str {
+    match environment {
+        crate::metadata::Environment::Client => "client",
+        crate::metadata::Environment::Server => "server",
+        crate::metadata::Environment::Both => "unknown",
+    }
 }
 
 fn push_platform_change(
@@ -309,7 +353,7 @@ mod tests {
     async fn reports_missing_and_unlocked_manifest_dependencies() {
         let directory = test_dir("states");
         std::fs::create_dir_all(&directory).unwrap();
-        crate::platform::test_support::write_platform(&directory, "1", "fabric", "1");
+        crate::platform_detection::test_support::write_platform(&directory, "1", "fabric", "1");
         let manifest = OrbitManifest {
             project: ProjectMeta {
                 name: "test".to_string(),
@@ -320,7 +364,7 @@ mod tests {
                 authors: None,
                 version: None,
             },
-            platform: crate::manifest::PlatformArtifacts {
+            platform: crate::manifest::PlatformSnapshot {
                 minecraft_jar: crate::manifest::PlatformArtifact {
                     path: "minecraft.jar".to_string(),
                     sha256: "test".to_string(),
@@ -329,6 +373,8 @@ mod tests {
                     path: "loader.jar".to_string(),
                     sha256: "test".to_string(),
                 },
+                runtime_jars: Vec::new(),
+                physical_environment: crate::metadata::Environment::Client,
             },
             resolver: ResolverConfig::default(),
             dependencies: indexmap::IndexMap::from([
@@ -400,7 +446,9 @@ mod tests {
     #[tokio::test]
     async fn duplicate_package_versions_are_confirmed_and_removed_as_top_level_packages() {
         let directory = test_dir("duplicates");
-        crate::platform::test_support::write_platform(&directory, "1.20.1", "fabric", "0.16.10");
+        crate::platform_detection::test_support::write_platform(
+            &directory, "1.20.1", "fabric", "0.16.10",
+        );
         let mods = directory.join("mods");
         std::fs::create_dir_all(&mods).unwrap();
         write_fabric_jar(&mods.join("a-1.jar"), "1");
@@ -421,6 +469,8 @@ modloader_version = "0.16.10"
 [platform]
 minecraft_jar = { path = "minecraft.jar", sha256 = "test" }
 loader_jar = { path = "loader.jar", sha256 = "test" }
+runtime_jars = []
+physical_environment = "client"
 [dependencies]
 alpha = { version = "*", remotes = [{ type = "file", path = "alpha.jar" }] }
 "#,
@@ -491,7 +541,9 @@ alpha = { version = "*", remotes = [{ type = "file", path = "alpha.jar" }] }
     #[tokio::test]
     async fn refreshes_loader_version_and_artifact_paths_from_a_fresh_scan() {
         let directory = test_dir("platform-refresh");
-        crate::platform::test_support::write_platform(&directory, "1.20.1", "fabric", "0.17.0");
+        crate::platform_detection::test_support::write_platform(
+            &directory, "1.20.1", "fabric", "0.17.0",
+        );
         let manifest = OrbitManifest {
             project: ProjectMeta {
                 name: "test".to_string(),
@@ -502,7 +554,7 @@ alpha = { version = "*", remotes = [{ type = "file", path = "alpha.jar" }] }
                 authors: None,
                 version: None,
             },
-            platform: crate::manifest::PlatformArtifacts {
+            platform: crate::manifest::PlatformSnapshot {
                 minecraft_jar: crate::manifest::PlatformArtifact {
                     path: "old-minecraft.jar".to_string(),
                     sha256: "old".to_string(),
@@ -511,6 +563,8 @@ alpha = { version = "*", remotes = [{ type = "file", path = "alpha.jar" }] }
                     path: "old-loader.jar".to_string(),
                     sha256: "old".to_string(),
                 },
+                runtime_jars: Vec::new(),
+                physical_environment: crate::metadata::Environment::Client,
             },
             resolver: ResolverConfig::default(),
             dependencies: indexmap::IndexMap::new(),
@@ -546,7 +600,9 @@ alpha = { version = "*", remotes = [{ type = "file", path = "alpha.jar" }] }
     #[tokio::test]
     async fn rediscovers_renamed_platform_jars_instead_of_following_manifest_paths() {
         let directory = test_dir("renamed-platform-files");
-        crate::platform::test_support::write_platform(&directory, "1.20.1", "fabric", "0.17.0");
+        crate::platform_detection::test_support::write_platform(
+            &directory, "1.20.1", "fabric", "0.17.0",
+        );
         let minecraft_jar = directory.join("1.20.1.jar");
         let renamed_minecraft_jar = directory.join("launcher-client-current.jar");
         std::fs::rename(&minecraft_jar, &renamed_minecraft_jar).unwrap();
@@ -570,7 +626,7 @@ alpha = { version = "*", remotes = [{ type = "file", path = "alpha.jar" }] }
                 authors: None,
                 version: None,
             },
-            platform: crate::manifest::PlatformArtifacts {
+            platform: crate::manifest::PlatformSnapshot {
                 minecraft_jar: crate::manifest::PlatformArtifact {
                     path: "deleted-client-name.jar".to_string(),
                     sha256: "stale".to_string(),
@@ -579,6 +635,8 @@ alpha = { version = "*", remotes = [{ type = "file", path = "alpha.jar" }] }
                     path: "deleted-loader-name.jar".to_string(),
                     sha256: "stale".to_string(),
                 },
+                runtime_jars: Vec::new(),
+                physical_environment: crate::metadata::Environment::Client,
             },
             resolver: ResolverConfig::default(),
             dependencies: indexmap::IndexMap::new(),

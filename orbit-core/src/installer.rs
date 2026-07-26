@@ -126,12 +126,7 @@ pub async fn install_to_instance(
 ) -> Result<InstallReport, OrbitError> {
     let dry_run = options.dry_run;
     let mut manifest_file = ManifestFile::open(instance_dir)?;
-    let platform = crate::platform::discover_install_platform(
-        instance_dir,
-        &manifest_file.inner.project.mc_version,
-    )?;
-    let platform_changed =
-        crate::platform::apply_to_manifest(instance_dir, &mut manifest_file.inner, &platform)?;
+    let platform = crate::platform::Platform::load(instance_dir, &manifest_file.inner)?;
     let mut lock = Lockfile::open_or_default(
         instance_dir,
         LockMeta {
@@ -167,8 +162,7 @@ pub async fn install_to_instance(
     })
     .await?;
 
-    if !dry_run && (platform_changed || !report.installed.is_empty() || !report.removed.is_empty())
-    {
+    if !dry_run {
         manifest_file.save()?;
         lock.save()?;
     }
@@ -188,13 +182,8 @@ pub async fn restore_instance(
     interaction: InstallInteraction,
 ) -> Result<RestoreReport, OrbitError> {
     validate_restore_options(&options)?;
-    let mut manifest = ManifestFile::open(instance_dir)?;
-    let platform = crate::platform::discover_install_platform(
-        instance_dir,
-        &manifest.inner.project.mc_version,
-    )?;
-    let platform_changed =
-        crate::platform::apply_to_manifest(instance_dir, &mut manifest.inner, &platform)?;
+    let manifest = ManifestFile::open(instance_dir)?;
+    let platform = crate::platform::Platform::load(instance_dir, &manifest.inner)?;
     let lock_path = instance_dir.join("orbit.lock");
     if options.locked && !lock_path.exists() {
         return Err(OrbitError::Other(anyhow::anyhow!(
@@ -369,9 +358,6 @@ pub async fn restore_instance(
     if !options.dry_run && (lock_changed || lock_metadata_changed) {
         lock.save()?;
     }
-    if !options.dry_run && platform_changed {
-        manifest.save()?;
-    }
     report.restored.sort();
     report.already_present.sort();
     report.skipped.sort();
@@ -392,13 +378,8 @@ pub async fn upgrade_all_in_instance(
         confirm_install,
         progress,
     } = interaction;
-    let mut manifest_file = ManifestFile::open(instance_dir)?;
-    let platform = crate::platform::discover_install_platform(
-        instance_dir,
-        &manifest_file.inner.project.mc_version,
-    )?;
-    let platform_changed =
-        crate::platform::apply_to_manifest(instance_dir, &mut manifest_file.inner, &platform)?;
+    let manifest_file = ManifestFile::open(instance_dir)?;
+    crate::platform::Platform::load(instance_dir, &manifest_file.inner)?;
     let mut lock = Lockfile::open_or_default(
         instance_dir,
         LockMeta {
@@ -433,9 +414,6 @@ pub async fn upgrade_all_in_instance(
     .await?;
 
     if !resolution.has_upgrade() {
-        if !dry_run && platform_changed {
-            manifest_file.save()?;
-        }
         return Ok(InstallReport {
             installed: vec![],
             removed: vec![],
@@ -519,8 +497,7 @@ pub async fn upgrade_all_in_instance(
 
     apply_to_lockfile(&mut lock.inner, &installed, &mods_dir);
 
-    if platform_changed || !installed.is_empty() || !removals.is_empty() {
-        manifest_file.save()?;
+    if !installed.is_empty() || !removals.is_empty() {
         lock.save()?;
     }
 
@@ -628,18 +605,14 @@ pub fn list_installed_for_target(
     instance_dir: &Path,
     target: &str,
 ) -> Result<ListOutput, OrbitError> {
-    let mut manifest = ManifestFile::open(instance_dir)?;
+    let manifest = ManifestFile::open(instance_dir)?;
     let lock = Lockfile::open(instance_dir)?;
     let options = RestoreOptions {
         target: Some(target.to_string()),
         ..RestoreOptions::default()
     };
     validate_restore_options(&options)?;
-    let platform = crate::platform::discover_install_platform(
-        instance_dir,
-        &manifest.inner.project.mc_version,
-    )?;
-    crate::platform::apply_to_manifest(instance_dir, &mut manifest.inner, &platform)?;
+    let platform = crate::platform::Platform::load(instance_dir, &manifest.inner)?;
     let loader_package = platform.loader_package;
     let (selected, _) = selected_packages(
         &manifest.inner,
@@ -1790,6 +1763,8 @@ modloader_version = "1"
 [platform]
 minecraft_jar = { path = "minecraft.jar", sha256 = "test" }
 loader_jar = { path = "loader.jar", sha256 = "test" }
+runtime_jars = []
+physical_environment = "client"
 "#,
         )
         .unwrap()
@@ -2026,6 +2001,8 @@ modloader_version = "1"
 [platform]
 minecraft_jar = { path = "minecraft.jar", sha256 = "test" }
 loader_jar = { path = "loader.jar", sha256 = "test" }
+runtime_jars = []
+physical_environment = "client"
 
 [dependencies]
 client-mod = { version = "*", env = "client", remotes = [{ type = "file", path = "client.jar" }] }
@@ -2076,6 +2053,8 @@ modloader_version = "21.1"
 [platform]
 minecraft_jar = { path = "minecraft.jar", sha256 = "test" }
 loader_jar = { path = "loader.jar", sha256 = "test" }
+runtime_jars = []
+physical_environment = "client"
 [dependencies]
 example = { version = "*", remotes = [{ type = "file", path = "example.jar" }] }
 "#,

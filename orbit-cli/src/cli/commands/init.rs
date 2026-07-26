@@ -1,7 +1,8 @@
 use super::CliContext;
 use anyhow::Result;
-use orbit_core::detection::LoaderDetectionService;
-use orbit_core::init::{InitInput, detect_mc_versions, run_init};
+use orbit_core::init::{
+    InitInput, detect_loader_candidates, detect_mc_versions, known_loader_choices, run_init,
+};
 use orbit_core::providers::create_identification_providers;
 
 pub async fn handle(
@@ -57,27 +58,20 @@ pub async fn handle(
     };
 
     // ── 2. 确定加载器及其版本 ──────────────────
-    let service = LoaderDetectionService::new();
     let (loader, loader_ver) = if let Some(ref requested_loader) = modloader {
-        let detector = service.find_by_name(requested_loader).ok_or_else(|| {
-            let supported = service
-                .known_loaders()
-                .into_iter()
-                .map(|(loader, _)| loader.as_str())
-                .collect::<Vec<_>>()
-                .join(", ");
-            anyhow::anyhow!("unknown modloader: '{requested_loader}'. Supported: {supported}")
-        })?;
-        let detected = detector.detect(&instance_dir, Some(&mc_ver))?;
-        let loader = detector.loader_type().as_str().to_string();
+        let detected = detect_loader_candidates(&instance_dir, &mc_ver, Some(requested_loader))?
+            .into_iter()
+            .next()
+            .ok_or_else(|| anyhow::anyhow!("no detector result for '{requested_loader}'"))?;
+        let loader = detected.loader;
         let version =
             choose_loader_version(modloader_version, detected.versions, &loader, ctx.yes)?;
         (loader, version)
     } else {
-        let results = service.detect_all(&instance_dir, Some(&mc_ver))?;
+        let results = detect_loader_candidates(&instance_dir, &mc_ver, None)?;
         let certain = results
             .iter()
-            .filter(|info| info.confidence >= orbit_core::detection::Confidence::Certain)
+            .filter(|info| info.certain)
             .collect::<Vec<_>>();
 
         match certain.as_slice() {
@@ -114,7 +108,7 @@ pub async fn handle(
                          --modloader-version when using --yes"
                     );
                 }
-                let (l, name) = select_loader_interactive(&service)?;
+                let (l, name) = select_loader_interactive()?;
                 let ver = choose_loader_version(modloader_version, Vec::new(), &l, ctx.yes)?;
                 eprintln!("  Using {} loader {}", name, ver);
                 (l, ver)
@@ -232,14 +226,14 @@ pub async fn handle(
 
 // ── 交互式辅助 ──────────────────────────────────
 
-fn select_loader_interactive(service: &LoaderDetectionService) -> Result<(String, &'static str)> {
-    let loaders = service.known_loaders();
+fn select_loader_interactive() -> Result<(String, String)> {
+    let loaders = known_loader_choices();
     if loaders.is_empty() {
         anyhow::bail!("no modloaders available for detection");
     }
     eprintln!("? Could not auto-detect modloader. Available loaders:");
     for (i, (loader, name)) in loaders.iter().enumerate() {
-        eprintln!("  [{}] {} ({})", i + 1, name, loader.as_str());
+        eprintln!("  [{}] {} ({})", i + 1, name, loader);
     }
     eprint!("Choose a loader [1]: ");
     let mut input = String::new();
@@ -256,7 +250,7 @@ fn select_loader_interactive(service: &LoaderDetectionService) -> Result<(String
             .ok_or_else(|| anyhow::anyhow!("invalid modloader choice"))?
     };
     let (loader, name) = &loaders[index];
-    Ok((loader.as_str().to_string(), *name))
+    Ok((loader.clone(), name.clone()))
 }
 
 fn prompt_mc_version() -> Result<String> {

@@ -344,7 +344,7 @@ fn contains_minecraft_version_jar(directory: &Path) -> bool {
             let path = entry.path();
             path.extension()
                 .is_some_and(|extension| extension.eq_ignore_ascii_case("jar"))
-                && crate::init::read_version_json_from_jar(&path).is_ok()
+                && crate::jar::read_minecraft_version(&path).is_ok()
         })
     })
 }

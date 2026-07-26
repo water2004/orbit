@@ -1048,6 +1048,8 @@ modloader_version = "47.2.0"
 [platform]
 minecraft_jar = { path = "minecraft.jar", sha256 = "test" }
 loader_jar = { path = "loader.jar", sha256 = "test" }
+runtime_jars = []
+physical_environment = "client"
 [dependencies]
 a = { version = "*", remotes = [{ type = "file", path = "a.jar" }] }
 b = { version = "*", remotes = [{ type = "file", path = "b.jar" }] }
@@ -1106,6 +1108,8 @@ modloader_version = "0.19.2"
 [platform]
 minecraft_jar = { path = "minecraft.jar", sha256 = "test" }
 loader_jar = { path = "loader.jar", sha256 = "test" }
+runtime_jars = []
+physical_environment = "client"
 [dependencies]
 carpet_tis = { version = "*", remotes = [{ type = "file", path = "carpet_tis.jar" }] }
 "#,
@@ -1564,6 +1568,8 @@ modloader_version = "0.16.10"
 [platform]
 minecraft_jar = { path = "minecraft.jar", sha256 = "test" }
 loader_jar = { path = "loader.jar", sha256 = "test" }
+runtime_jars = []
+physical_environment = "client"
 [dependencies]
 wrapper = { version = "*", remotes = [{ type = "file", path = "wrapper.jar" }] }
 "#,
@@ -1632,6 +1638,8 @@ modloader_version = "0.16.10"
 [platform]
 minecraft_jar = { path = "minecraft.jar", sha256 = "test" }
 loader_jar = { path = "loader.jar", sha256 = "test" }
+runtime_jars = []
+physical_environment = "client"
 [dependencies]
 wrapper = { version = "*", remotes = [{ type = "file", path = "wrapper.jar" }] }
 "#,
@@ -1695,6 +1703,8 @@ modloader_version = "0.16.10"
 [platform]
 minecraft_jar = { path = "minecraft.jar", sha256 = "test" }
 loader_jar = { path = "loader.jar", sha256 = "test" }
+runtime_jars = []
+physical_environment = "client"
 [dependencies]
 a_parent = { version = "*", remotes = [{ type = "file", path = "a_parent.jar" }] }
 z_parent = { version = "*", remotes = [{ type = "file", path = "z_parent.jar" }] }

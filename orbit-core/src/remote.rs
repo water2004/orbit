@@ -262,7 +262,7 @@ pub fn list_package_remotes(
 mod tests {
     use super::*;
     use crate::manifest::{
-        DependencySpec, OrbitManifest, PlatformArtifact, PlatformArtifacts, ProjectMeta,
+        DependencySpec, OrbitManifest, PlatformArtifact, PlatformSnapshot, ProjectMeta,
         ResolverConfig,
     };
 
@@ -277,7 +277,7 @@ mod tests {
                 authors: None,
                 version: None,
             },
-            platform: PlatformArtifacts {
+            platform: PlatformSnapshot {
                 minecraft_jar: PlatformArtifact {
                     path: "minecraft.jar".to_string(),
                     sha256: "test".to_string(),
@@ -286,6 +286,8 @@ mod tests {
                     path: "loader.jar".to_string(),
                     sha256: "test".to_string(),
                 },
+                runtime_jars: Vec::new(),
+                physical_environment: crate::metadata::Environment::Client,
             },
             resolver: ResolverConfig::default(),
             dependencies: indexmap::IndexMap::from([(

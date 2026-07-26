@@ -98,18 +98,51 @@ pub(super) fn from_mod_file(
 
 /// 从 JAR 文件路径读取模组元数据。`loader` 由调用者根据实例配置传入。
 pub fn read_mod_metadata(path: &Path, loader: &str) -> Result<JarModMetadata, OrbitError> {
+    read_mod_metadata_if_present(path, loader)?.ok_or_else(|| {
+        OrbitError::Other(anyhow::anyhow!(
+            "no {} mod metadata found in {}",
+            loader,
+            path.display()
+        ))
+    })
+}
+
+pub(crate) fn read_mod_metadata_if_present(
+    path: &Path,
+    loader: &str,
+) -> Result<Option<JarModMetadata>, OrbitError> {
     let file = std::fs::File::open(path).map_err(OrbitError::Io)?;
     let mut archive = zip::ZipArchive::new(file).map_err(OrbitError::Zip)?;
-
     read_mod_metadata_from_archive(&mut archive, loader)
-        .transpose()
-        .unwrap_or_else(|| {
-            Err(OrbitError::Other(anyhow::anyhow!(
-                "no {} mod metadata found in {}",
-                loader,
-                path.display()
-            )))
-        })
+}
+
+/// Reads the authoritative Minecraft version metadata from one exact game JAR.
+pub(crate) fn read_minecraft_version(
+    jar_path: &Path,
+) -> Result<crate::metadata::mojang::McVersion, OrbitError> {
+    let file = std::fs::File::open(jar_path).map_err(|error| {
+        OrbitError::Other(anyhow::anyhow!(
+            "cannot open {}: {error}",
+            jar_path.display()
+        ))
+    })?;
+    let mut archive = zip::ZipArchive::new(file).map_err(|error| {
+        OrbitError::Other(anyhow::anyhow!(
+            "cannot open {} as ZIP: {error}",
+            jar_path.display()
+        ))
+    })?;
+    let mut entry = archive.by_name("version.json").map_err(|_| {
+        OrbitError::Other(anyhow::anyhow!("no version.json in {}", jar_path.display()))
+    })?;
+    let mut content = String::new();
+    std::io::Read::read_to_string(&mut entry, &mut content).map_err(|error| {
+        OrbitError::Other(anyhow::anyhow!(
+            "cannot read version.json from {}: {error}",
+            jar_path.display()
+        ))
+    })?;
+    crate::metadata::mojang::McVersion::from_json(&content)
 }
 
 /// 下载 JAR 并按实例 loader 解析元数据。

@@ -208,13 +208,9 @@ pub fn export_instance(
             "unsupported export format '{format}'; expected zip or mrpack"
         )));
     }
-    let mut manifest = ManifestFile::open(instance_dir)?;
+    let manifest = ManifestFile::open(instance_dir)?;
     let lockfile = Lockfile::open(instance_dir)?;
-    let platform = crate::platform::discover_install_platform(
-        instance_dir,
-        &manifest.inner.project.mc_version,
-    )?;
-    crate::platform::apply_to_manifest(instance_dir, &mut manifest.inner, &platform)?;
+    let platform = crate::platform::Platform::load(instance_dir, &manifest.inner)?;
     let loader_package = platform.loader_package;
     let (selected, _) = crate::installer::selected_packages(
         &manifest.inner,
@@ -366,7 +362,7 @@ mod tests {
                 authors: None,
                 version: None,
             },
-            platform: crate::manifest::PlatformArtifacts {
+            platform: crate::manifest::PlatformSnapshot {
                 minecraft_jar: crate::manifest::PlatformArtifact {
                     path: "minecraft.jar".to_string(),
                     sha256: "test".to_string(),
@@ -375,6 +371,8 @@ mod tests {
                     path: "loader.jar".to_string(),
                     sha256: "test".to_string(),
                 },
+                runtime_jars: Vec::new(),
+                physical_environment: crate::metadata::Environment::Client,
             },
             resolver: ResolverConfig::default(),
             dependencies: indexmap::IndexMap::from([(
@@ -389,6 +387,16 @@ mod tests {
             groups: indexmap::IndexMap::new(),
             overrides: indexmap::IndexMap::new(),
         }
+    }
+
+    fn detected_manifest(directory: &Path, dependency: &str) -> OrbitManifest {
+        let mut manifest = manifest(dependency);
+        manifest.platform =
+            crate::platform_detection::discover_platform_for_init(directory, "1", "fabric", "1")
+                .unwrap()
+                .snapshot(directory)
+                .unwrap();
+        manifest
     }
 
     #[test]
@@ -456,9 +464,9 @@ mod tests {
     #[test]
     fn zip_export_contains_manifest_lock_and_selected_jar() {
         let directory = test_dir("zip-export");
-        crate::platform::test_support::write_platform(&directory, "1", "fabric", "1");
+        crate::platform_detection::test_support::write_platform(&directory, "1", "fabric", "1");
         std::fs::create_dir_all(directory.join("mods")).unwrap();
-        ManifestFile::new(&directory, manifest("example"))
+        ManifestFile::new(&directory, detected_manifest(&directory, "example"))
             .save()
             .unwrap();
         let jar = directory.join("mods/example.jar");
@@ -510,9 +518,9 @@ mod tests {
     #[test]
     fn mrpack_references_online_files_and_embeds_local_overrides() {
         let directory = test_dir("mrpack-export");
-        crate::platform::test_support::write_platform(&directory, "1", "fabric", "1");
+        crate::platform_detection::test_support::write_platform(&directory, "1", "fabric", "1");
         std::fs::create_dir_all(directory.join("mods")).unwrap();
-        let mut project = manifest("online");
+        let mut project = detected_manifest(&directory, "online");
         project.dependencies.insert(
             "local".to_string(),
             DependencySpec::new(
