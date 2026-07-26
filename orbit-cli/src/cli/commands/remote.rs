@@ -2,6 +2,8 @@ use super::CliContext;
 use crate::cli::RemoteCommands;
 use anyhow::Result;
 
+use crate::cli::output::{OutputFormat, remote_view};
+
 pub async fn handle(command: RemoteCommands, ctx: &CliContext) -> Result<()> {
     let instance_dir = ctx.instance_dir()?;
     match command {
@@ -30,7 +32,7 @@ pub async fn handle(command: RemoteCommands, ctx: &CliContext) -> Result<()> {
                 super::operation_progress(ctx),
             )
             .await?;
-            print_report(&report, ctx.dry_run);
+            print_report(&report, ctx);
         }
         RemoteCommands::Remove {
             package,
@@ -58,32 +60,41 @@ pub async fn handle(command: RemoteCommands, ctx: &CliContext) -> Result<()> {
             };
             let report =
                 orbit_core::remove_package_remote(&instance_dir, &package, &remote, ctx.dry_run)?;
-            print_report(&report, ctx.dry_run);
+            print_report(&report, ctx);
         }
         RemoteCommands::List { package } => {
             let report = orbit_core::list_package_remotes(&instance_dir, &package)?;
-            print_report(&report, false);
+            print_report(&report, ctx);
         }
     }
     Ok(())
 }
 
-fn print_report(report: &orbit_core::RemoteReport, dry_run: bool) {
-    let header = if dry_run {
-        format!(
-            "Would keep {} remote(s) for {}:",
-            report.remotes.len(),
-            report.package
-        )
-    } else {
-        format!(
-            "Package has {} remote(s) for {}:",
-            report.remotes.len(),
-            report.package
-        )
-    };
-    println!(
-        "{}",
-        crate::cli::output::remote_list_table(report, Some(&header))
-    );
+fn print_report(report: &orbit_core::RemoteReport, ctx: &CliContext) {
+    let subcommand = if ctx.dry_run { "add" } else { "list" };
+    match ctx.output.format {
+        OutputFormat::Text => {
+            let header = if ctx.dry_run {
+                format!(
+                    "Would keep {} remote(s) for {}:",
+                    report.remotes.len(),
+                    report.package
+                )
+            } else {
+                format!(
+                    "Package has {} remote(s) for {}:",
+                    report.remotes.len(),
+                    report.package
+                )
+            };
+            println!(
+                "{}",
+                crate::cli::output::remote_list_table(report, Some(&header))
+            );
+        }
+        OutputFormat::Json => {
+            let view = remote_view(report, subcommand);
+            crate::cli::output::print_json("remote", &view);
+        }
+    }
 }

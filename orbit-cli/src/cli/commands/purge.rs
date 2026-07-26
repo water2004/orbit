@@ -1,6 +1,8 @@
 use super::CliContext;
 use anyhow::{Context, Result};
 
+use crate::cli::output::{OutputFormat, PurgeOutput};
+
 pub async fn handle(mod_name: String, ctx: &CliContext) -> Result<()> {
     let instance_dir = ctx.instance_dir()?;
     let lock = orbit_core::Lockfile::open(&instance_dir).context("failed to read orbit.lock")?;
@@ -14,20 +16,48 @@ pub async fn handle(mod_name: String, ctx: &CliContext) -> Result<()> {
 
     let removed = orbit_core::remove_from_instance(&mod_id, &instance_dir, ctx.dry_run)?;
     if ctx.dry_run {
-        println!(
-            "[dry-run] would purge '{}' and {} config file(s).",
-            removed.mod_id,
-            selected.len()
-        );
+        match ctx.output.format {
+            OutputFormat::Text => {
+                println!(
+                    "[dry-run] would purge '{}' and {} config file(s).",
+                    removed.mod_id,
+                    selected.len()
+                );
+            }
+            OutputFormat::Json => {
+                crate::cli::output::print_json(
+                    "purge",
+                    &PurgeOutput {
+                        mod_id: removed.mod_id,
+                        jar_deleted: removed.jar_deleted,
+                        configs_removed: selected.iter().map(|c| c.path.clone()).collect(),
+                    },
+                );
+            }
+        }
         return Ok(());
     }
     let removed_configs = orbit_core::remove_config_candidates(&config_dir, &selected)?;
-    println!(
-        "Purged {}: removed {} jar and {} config file(s).",
-        removed.mod_id,
-        usize::from(removed.jar_deleted),
-        removed_configs.len()
-    );
+    match ctx.output.format {
+        OutputFormat::Text => {
+            println!(
+                "Purged {}: removed {} jar and {} config file(s).",
+                removed.mod_id,
+                usize::from(removed.jar_deleted),
+                removed_configs.len()
+            );
+        }
+        OutputFormat::Json => {
+            crate::cli::output::print_json(
+                "purge",
+                &PurgeOutput {
+                    mod_id: removed.mod_id,
+                    jar_deleted: removed.jar_deleted,
+                    configs_removed: removed_configs,
+                },
+            );
+        }
+    }
     Ok(())
 }
 

@@ -5,6 +5,8 @@ use orbit_core::{
     install_to_instance,
 };
 
+use crate::cli::output::OutputFormat;
+
 pub async fn handle(
     mod_name: String,
     platform: Option<String>,
@@ -47,23 +49,7 @@ pub async fn handle(
         )
         .await
         .map_err(|error| anyhow::anyhow!("Add failed: {error}"))?;
-        super::print_resolution_diagnostics(&report.diagnostics);
-        super::print_resolution_warnings(&report.warnings);
-        if ctx.dry_run {
-            println!("\nAdd preview:");
-            println!(
-                "{}",
-                crate::cli::output::package_changes_table(&report.changes)
-            );
-        } else if report.installed.is_empty() {
-            println!("Add cancelled.");
-        } else {
-            println!(
-                "Successfully added local mod and {} dependency mod(s); removed {} unselected package version(s).",
-                report.installed.len().saturating_sub(1),
-                report.removed.len()
-            );
-        }
+        super::print_transaction_result("add", &report, ctx);
         return Ok(());
     }
 
@@ -99,28 +85,15 @@ pub async fn handle(
     .await
     {
         Ok(report) => {
-            super::print_resolution_diagnostics(&report.diagnostics);
-            super::print_resolution_warnings(&report.warnings);
-            if ctx.dry_run {
-                println!("\nAdd preview:");
-                println!(
-                    "{}",
-                    crate::cli::output::package_changes_table(&report.changes)
-                );
-                return Ok(());
-            }
-            if report.installed.is_empty() && report.removed.is_empty() {
-                println!("No new mods were installed.");
-            } else {
-                println!(
-                    "\nSuccessfully installed {} mod(s) and removed {} unselected package version(s).",
-                    report.installed.len(),
-                    report.removed.len()
-                );
-            }
+            super::print_transaction_result("add", &report, ctx);
             Ok(())
         }
         Err(OrbitError::ModNotFound(_)) => {
+            if ctx.output.format == OutputFormat::Json {
+                // Search fallback is interactive; in JSON mode we surface the
+                // not-found error rather than prompting.
+                anyhow::bail!(OrbitError::ModNotFound(slug.to_string()));
+            }
             let mut suggestion = None;
             for provider in &providers {
                 let results = provider
@@ -168,7 +141,7 @@ pub async fn handle(
                     _ => anyhow::bail!("Invalid choice."),
                 }
             };
-            eprintln!("Installing project {}...", project_id);
+            eprintln!("Installing project {project_id}...");
             Box::pin(handle(
                 project_id,
                 Some(suggestion_platform),

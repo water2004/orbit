@@ -1,6 +1,8 @@
 use super::CliContext;
 use anyhow::Result;
 
+use crate::cli::output::{OutputFormat, restore_view};
+
 /// `orbit install` — 根据 orbit.toml + orbit.lock 还原全部模组。
 /// 不接受 mod 名称参数（单个模组安装请用 `orbit add`）。
 pub async fn handle(
@@ -30,35 +32,41 @@ pub async fn handle(
         super::install_interaction(ctx),
     )
     .await?;
-    super::print_resolution_diagnostics(&report.diagnostics);
-    super::print_resolution_warnings(&report.warnings);
+    if ctx.output.format == OutputFormat::Text {
+        super::print_resolution_diagnostics(&report.diagnostics);
+        super::print_resolution_warnings(&report.warnings);
 
-    if ctx.dry_run {
-        for package in &report.restored {
-            println!("  [dry-run] would restore {package}");
-        }
-        if !report.removed.is_empty() {
-            println!("\nPackages to remove:");
+        if ctx.dry_run {
+            for package in &report.restored {
+                println!("  [dry-run] would restore {package}");
+            }
+            if !report.removed.is_empty() {
+                println!("\nPackages to remove:");
+                println!(
+                    "{}",
+                    crate::cli::output::removed_packages_table(&report.removed)
+                );
+            }
             println!(
-                "{}",
-                crate::cli::output::removed_packages_table(&report.removed)
+                "Restore preview: {} to restore, {} to remove, {} already present, {} skipped.",
+                report.restored.len(),
+                report.removed.len(),
+                report.already_present.len(),
+                report.skipped.len()
+            );
+        } else {
+            println!(
+                "Installed {} mods, removed {} unselected package version(s), skipped {} already present and {} excluded by policy.",
+                report.restored.len(),
+                report.removed.len(),
+                report.already_present.len(),
+                report.skipped.len()
             );
         }
-        println!(
-            "Restore preview: {} to restore, {} to remove, {} already present, {} skipped.",
-            report.restored.len(),
-            report.removed.len(),
-            report.already_present.len(),
-            report.skipped.len()
-        );
-    } else {
-        println!(
-            "Installed {} mods, removed {} unselected package version(s), skipped {} already present and {} excluded by policy.",
-            report.restored.len(),
-            report.removed.len(),
-            report.already_present.len(),
-            report.skipped.len()
-        );
+        return Ok(());
     }
+
+    let view = restore_view(&report, ctx.dry_run);
+    crate::cli::output::print_json("install", &view);
     Ok(())
 }

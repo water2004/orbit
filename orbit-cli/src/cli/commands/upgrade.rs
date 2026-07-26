@@ -5,6 +5,8 @@ use orbit_core::{
     upgrade_all_in_instance,
 };
 
+use crate::cli::output::{OutputFormat, no_upgrade_message};
+
 pub async fn handle(mod_name: Option<String>, ctx: &CliContext) -> Result<()> {
     let instance_dir = ctx.instance_dir()?;
 
@@ -33,40 +35,23 @@ pub async fn handle(mod_name: Option<String>, ctx: &CliContext) -> Result<()> {
         .await
         {
             Ok(report) => {
-                super::print_resolution_diagnostics(&report.diagnostics);
-                super::print_resolution_warnings(&report.warnings);
-                if ctx.dry_run {
-                    if report.changes.is_empty() {
-                        println!(
-                            "{}",
-                            crate::cli::output::no_upgrade_message(
-                                Some(&entry.mod_id),
-                                !report.diagnostics.is_empty()
-                            )
-                        );
-                    } else {
-                        println!("\nUpgrade preview:");
-                        println!(
-                            "{}",
-                            crate::cli::output::package_changes_table(&report.changes)
-                        );
-                    }
-                    return Ok(());
-                }
                 if report.installed.is_empty() && report.removed.is_empty() {
-                    println!(
-                        "{}",
-                        crate::cli::output::no_upgrade_message(
-                            Some(&entry.mod_id),
-                            !report.diagnostics.is_empty()
-                        )
-                    );
+                    match ctx.output.format {
+                        OutputFormat::Text => {
+                            println!(
+                                "{}",
+                                no_upgrade_message(
+                                    Some(&entry.mod_id),
+                                    !report.diagnostics.is_empty(),
+                                )
+                            );
+                        }
+                        OutputFormat::Json => {
+                            super::print_transaction_result("upgrade", &report, ctx);
+                        }
+                    }
                 } else {
-                    println!(
-                        "\nApplied {} selected package version(s) and removed {} unselected package version(s).",
-                        report.installed.len(),
-                        report.removed.len()
-                    );
+                    super::print_transaction_result("upgrade", &report, ctx);
                 }
                 Ok(())
             }
@@ -90,40 +75,20 @@ pub async fn handle(mod_name: Option<String>, ctx: &CliContext) -> Result<()> {
         .await
         {
             Ok(report) => {
-                super::print_resolution_diagnostics(&report.diagnostics);
-                super::print_resolution_warnings(&report.warnings);
-                if ctx.dry_run {
-                    if report.changes.is_empty() {
-                        println!(
-                            "{}",
-                            crate::cli::output::no_upgrade_message(
-                                None,
-                                !report.diagnostics.is_empty()
-                            )
-                        );
-                    } else {
-                        println!("\nUpgrade preview:");
-                        println!(
-                            "{}",
-                            crate::cli::output::package_changes_table(&report.changes)
-                        );
-                    }
-                    return Ok(());
-                }
                 if report.installed.is_empty() && report.removed.is_empty() {
-                    println!(
-                        "{}",
-                        crate::cli::output::no_upgrade_message(
-                            None,
-                            !report.diagnostics.is_empty()
-                        )
-                    );
+                    match ctx.output.format {
+                        OutputFormat::Text => {
+                            println!(
+                                "{}",
+                                no_upgrade_message(None, !report.diagnostics.is_empty())
+                            );
+                        }
+                        OutputFormat::Json => {
+                            super::print_transaction_result("upgrade", &report, ctx);
+                        }
+                    }
                 } else {
-                    println!(
-                        "\nApplied {} selected package version(s) and removed {} unselected package version(s).",
-                        report.installed.len(),
-                        report.removed.len()
-                    );
+                    super::print_transaction_result("upgrade", &report, ctx);
                 }
                 Ok(())
             }

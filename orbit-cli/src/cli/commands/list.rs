@@ -3,6 +3,8 @@ use anyhow::{Context, Result};
 use orbit_core::{OrbitManifest, list_installed, list_installed_for_target};
 use std::collections::{HashMap, HashSet};
 
+use crate::cli::output::{OutputFormat, list_view};
+
 pub async fn handle(tree: bool, target: Option<String>, ctx: &CliContext) -> Result<()> {
     let dir = ctx.instance_dir()?;
     let output = match target.as_deref() {
@@ -12,39 +14,49 @@ pub async fn handle(tree: bool, target: Option<String>, ctx: &CliContext) -> Res
     .context("failed to read installed packages")?;
 
     if output.packages.is_empty() {
-        println!("No mods installed.");
+        if ctx.output.format == OutputFormat::Text {
+            println!("No mods installed.");
+        } else {
+            crate::cli::output::print_json(
+                "list",
+                &list_view(&output.packages, target.as_deref(), tree, None),
+            );
+        }
         return Ok(());
     }
 
     if tree {
-        print_tree(&dir, &output, target.as_deref())?;
+        print_tree(&dir, &output, target.as_deref(), ctx)?;
     } else {
-        print_flat(&output);
+        match ctx.output.format {
+            OutputFormat::Text => {
+                println!(
+                    "{}",
+                    crate::cli::output::installed_packages_table(&output.packages)
+                );
+            }
+            OutputFormat::Json => {
+                let view = list_view(&output.packages, target.as_deref(), false, None);
+                crate::cli::output::print_json("list", &view);
+            }
+        }
     }
 
     Ok(())
-}
-
-fn print_flat(output: &orbit_core::ListOutput) {
-    println!(
-        "{}",
-        crate::cli::output::installed_packages_table(&output.packages)
-    );
 }
 
 fn print_tree(
     dir: &std::path::Path,
     output: &orbit_core::ListOutput,
     target: Option<&str>,
+    ctx: &CliContext,
 ) -> Result<()> {
-    // 构建 mod_id → Package 的索引
     let index: HashMap<&str, &orbit_core::ListedPackage> = output
         .packages
         .iter()
         .map(|p| (p.mod_id.as_str(), p))
         .collect();
 
-    // 找出顶层包：在 manifest 中声明的
     let manifest = OrbitManifest::from_dir(dir).context("failed to read orbit.toml")?;
     let top_level: Vec<&str> = manifest
         .dependencies
@@ -61,6 +73,28 @@ fn print_tree(
         .collect();
 
     let mut visited = HashSet::new();
+    let mut roots = Vec::new();
+
+    if ctx.output.format == OutputFormat::Json {
+        let mut text_lines: Vec<String> = Vec::new();
+        for &root in &top_level {
+            roots.push(root.to_string());
+            if let Some(pkg) = index.get(root) {
+                collect_tree(pkg, "", true, &index, &mut visited, &mut text_lines);
+            } else {
+                text_lines.push(format!("{root} (not installed)"));
+            }
+        }
+        let known: HashSet<&str> = top_level.iter().copied().collect();
+        for pkg in &output.packages {
+            if !known.contains(pkg.mod_id.as_str()) && !visited.contains(pkg.mod_id.as_str()) {
+                collect_tree(pkg, "", true, &index, &mut visited, &mut text_lines);
+            }
+        }
+        let view = list_view(&output.packages, target, true, Some(roots));
+        crate::cli::output::print_json("list", &view);
+        return Ok(());
+    }
 
     for &root in &top_level {
         if let Some(pkg) = index.get(root) {
@@ -70,7 +104,6 @@ fn print_tree(
         }
     }
 
-    // 显示未被任何顶层依赖引用的包（如有）
     let known: HashSet<&str> = top_level.iter().copied().collect();
     for pkg in &output.packages {
         if !known.contains(pkg.mod_id.as_str()) && !visited.contains(pkg.mod_id.as_str()) {
@@ -79,6 +112,47 @@ fn print_tree(
     }
 
     Ok(())
+}
+
+fn collect_tree(
+    pkg: &orbit_core::ListedPackage,
+    prefix: &str,
+    _is_last: bool,
+    index: &HashMap<&str, &orbit_core::ListedPackage>,
+    visited: &mut HashSet<String>,
+    lines: &mut Vec<String>,
+) {
+    if !visited.insert(pkg.mod_id.clone()) {
+        lines.push(format!("{prefix}{} v{} (*)", pkg.mod_id, pkg.version));
+        return;
+    }
+    let optional = if pkg.optional { ", optional" } else { "" };
+    lines.push(format!(
+        "{prefix}{} v{} ({}, {}{})",
+        pkg.mod_id,
+        pkg.version,
+        pkg.remotes.join(", "),
+        pkg.environment,
+        optional
+    ));
+    let deps: Vec<&str> = pkg
+        .dependencies
+        .iter()
+        .filter(|d| index.contains_key(d.as_str()))
+        .map(|d| d.as_str())
+        .collect();
+    for (i, dep_name) in deps.iter().enumerate() {
+        let last = i == deps.len() - 1;
+        let connector = if last { "  +-- " } else { "  |-- " };
+        let child_prefix = format!("{prefix}{}", if last { "      " } else { "  |   " });
+        if let Some(child) = index.get(dep_name) {
+            let line = format!("{prefix}{connector}{} v{} ({}, {}{})",
+                child.mod_id, child.version, child.remotes.join(", "), child.environment,
+                if child.optional { ", optional" } else { "" });
+            lines.push(line);
+            collect_tree(child, &child_prefix, last, index, visited, lines);
+        }
+    }
 }
 
 fn print_node(

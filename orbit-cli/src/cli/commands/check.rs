@@ -1,6 +1,8 @@
 use super::CliContext;
 use anyhow::{Context, Result};
 
+use crate::cli::output::{CheckOutput, CheckSummary, OutputFormat, check_result_view};
+
 pub async fn handle(version: String, modloader: Option<String>, ctx: &CliContext) -> Result<()> {
     let instance_dir = ctx.instance_dir()?;
     let manifest =
@@ -21,27 +23,57 @@ pub async fn handle(version: String, modloader: Option<String>, ctx: &CliContext
     )
     .await?;
     if results.is_empty() {
-        println!("No online packages in orbit.lock to check.");
+        if ctx.output.format == OutputFormat::Text {
+            println!("No online packages in orbit.lock to check.");
+        } else {
+            let view = CheckOutput {
+                target_mc_version: version.clone(),
+                target_loader: loader.clone(),
+                summary: CheckSummary {
+                    total: 0,
+                    compatible: 0,
+                    blocking: 0,
+                },
+                results: Vec::new(),
+            };
+            crate::cli::output::print_json("check", &view);
+        }
         return Ok(());
     }
 
     let compatible = results.iter().filter(|result| result.compatible).count();
-    println!(
-        "{}",
-        crate::cli::output::check_results_table(&results)
-    );
-    println!(
-        "\n{} of {} mods are ready for Minecraft {version}.",
-        compatible,
-        results.len()
-    );
-    let blockers: Vec<_> = results
-        .iter()
-        .filter(|result| !result.compatible)
-        .map(|result| result.mod_name.as_str())
-        .collect();
-    if !blockers.is_empty() {
-        println!("Blocking the upgrade: {}.", blockers.join(", "));
+    let blocking = results.len() - compatible;
+    let view = CheckOutput {
+        target_mc_version: version.clone(),
+        target_loader: loader.clone(),
+        summary: CheckSummary {
+            total: results.len(),
+            compatible,
+            blocking,
+        },
+        results: results.iter().map(check_result_view).collect(),
+    };
+
+    match ctx.output.format {
+        OutputFormat::Text => {
+            println!("{}", crate::cli::output::check_results_table(&results));
+            println!(
+                "\n{} of {} mods are ready for Minecraft {version}.",
+                compatible,
+                results.len()
+            );
+            let blockers: Vec<_> = results
+                .iter()
+                .filter(|result| !result.compatible)
+                .map(|result| result.mod_name.as_str())
+                .collect();
+            if !blockers.is_empty() {
+                println!("Blocking the upgrade: {}.", blockers.join(", "));
+            }
+        }
+        OutputFormat::Json => {
+            crate::cli::output::print_json("check", &view);
+        }
     }
     Ok(())
 }

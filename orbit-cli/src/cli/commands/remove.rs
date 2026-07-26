@@ -2,27 +2,45 @@ use super::CliContext;
 use anyhow::{Context, Result};
 use orbit_core::{OrbitError, list_dependencies, remove_from_instance};
 
+use crate::cli::output::{OutputFormat, RemoveOutput};
+
 pub async fn handle(input: String, ctx: &CliContext) -> Result<()> {
     let instance_dir = ctx.instance_dir()?;
 
     match remove_from_instance(&input, &instance_dir, ctx.dry_run) {
         Ok(report) => {
-            if ctx.dry_run {
-                println!("[dry-run] would remove '{}'.", report.mod_id);
-                return Ok(());
-            }
-            println!(
-                "Removed '{}'{}.",
-                report.mod_id,
-                if report.jar_deleted {
-                    " and its JAR file"
-                } else {
-                    ""
+            match ctx.output.format {
+                OutputFormat::Text => {
+                    if ctx.dry_run {
+                        println!("[dry-run] would remove '{}'.", report.mod_id);
+                        return Ok(());
+                    }
+                    println!(
+                        "Removed '{}'{}.",
+                        report.mod_id,
+                        if report.jar_deleted {
+                            " and its JAR file"
+                        } else {
+                            ""
+                        }
+                    );
                 }
-            );
+                OutputFormat::Json => {
+                    crate::cli::output::print_json(
+                        "remove",
+                        &RemoveOutput {
+                            mod_id: report.mod_id,
+                            jar_deleted: report.jar_deleted,
+                        },
+                    );
+                }
+            }
             Ok(())
         }
         Err(OrbitError::ModNotFound(_)) => {
+            if ctx.output.format == OutputFormat::Json {
+                anyhow::bail!(OrbitError::ModNotFound(input));
+            }
             let deps = list_dependencies(&instance_dir).context("failed to list dependencies")?;
             if deps.is_empty() {
                 anyhow::bail!("No dependencies in orbit.toml.");

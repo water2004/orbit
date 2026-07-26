@@ -135,6 +135,38 @@ pub async fn handle(
     let providers = create_identification_providers(&ctx.runtime.config().auth)?;
     let output = run_init(input, &providers, super::install_interaction(ctx)).await?;
 
+    let identified = output
+        .scanned_mods
+        .iter()
+        .filter(|m| m.mod_id.is_some())
+        .count();
+    let unknown = output.scanned_mods.len() - identified;
+
+    if ctx.output.format == crate::cli::output::OutputFormat::Json {
+        let view = crate::cli::output::InitOutput {
+            dry_run: ctx.dry_run,
+            name: name.clone(),
+            mc_version: output.manifest.project.mc_version.clone(),
+            modloader: loader.clone(),
+            modloader_version: output.manifest.project.modloader_version.clone(),
+            locked_packages: output.locked_packages,
+            scanned_mods: output.scanned_mods.len(),
+            identified,
+            unknown,
+            removed: output
+                .removed
+                .iter()
+                .map(|r| crate::cli::output::RemovedPackageView {
+                    mod_id: r.mod_id.clone(),
+                    version: r.version.clone(),
+                })
+                .collect(),
+            dependency_error: output.dependency_error.clone(),
+        };
+        crate::cli::output::print_json("init", &view);
+        return Ok(());
+    }
+
     // ── 4. 输出结果 ────────────────────────────
     if ctx.dry_run {
         println!(
@@ -157,12 +189,6 @@ pub async fn handle(
     if output.scanned_mods.is_empty() {
         println!("  No mods found in mods/ directory.");
     } else {
-        let identified = output
-            .scanned_mods
-            .iter()
-            .filter(|m| m.mod_id.is_some())
-            .count();
-        let unknown = output.scanned_mods.len() - identified;
         println!(
             "  Scanned {} mods ({} identified, {} unknown)",
             output.scanned_mods.len(),

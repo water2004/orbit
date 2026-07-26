@@ -3,12 +3,9 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 
-use crate::cli::AuditFormat;
-
 use super::CliContext;
 
 pub async fn handle(
-    format: AuditFormat,
     min_risk: u8,
     fail_on_risk: Option<u8>,
     mod_filter: Option<String>,
@@ -20,10 +17,12 @@ pub async fn handle(
         anyhow::bail!("--limit must be at least 1");
     }
     let instance_dir = ctx.instance_dir()?;
-    let full_report = orbit_core::audit_instance_with_progress(
-        &instance_dir,
-        crate::cli::progress::audit_reporter(ctx.quiet, &ctx.runtime.config().ui.progress_bar),
-    )?;
+    let audit_progress = if ctx.output.ndjson_progress() {
+        Some(crate::cli::output::ndjson_audit_reporter())
+    } else {
+        crate::cli::progress::audit_reporter(ctx.quiet, &ctx.runtime.config().ui.progress_bar)
+    };
+    let full_report = orbit_core::audit_instance_with_progress(&instance_dir, audit_progress)?;
     let selected_artifacts = selected_artifacts(&full_report, mod_filter.as_deref());
     if mod_filter.is_some() && selected_artifacts.as_ref().is_some_and(HashMap::is_empty) {
         anyhow::bail!(
@@ -37,7 +36,7 @@ pub async fn handle(
     if let Some(path) = &report_path {
         write_detailed_report(path, &full_report)?;
     }
-    let mut report = full_report;
+    let mut report = full_report.clone();
     report.risks.retain(|risk| {
         risk.risk_index >= min_risk
             && selected_artifacts.as_ref().is_none_or(|selected| {
@@ -46,16 +45,18 @@ pub async fn handle(
             })
     });
 
-    match format {
-        AuditFormat::Text => {
+    match ctx.output.format {
+        crate::cli::output::OutputFormat::Text => {
             print!("{}", crate::cli::output::audit_report(&report, limit));
             if let Some(path) = &report_path {
                 println!("Detailed report written to: {}", path.display());
             }
         }
-        AuditFormat::Json => println!("{}", serde_json::to_string_pretty(&report)?),
+        crate::cli::output::OutputFormat::Json => {
+            crate::cli::output::print_json("audit", &report);
+        }
     }
-    if format == AuditFormat::Json
+    if ctx.output.format == crate::cli::output::OutputFormat::Text
         && let Some(path) = &report_path
     {
         eprintln!("Detailed report written to: {}", path.display());

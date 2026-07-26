@@ -1,6 +1,8 @@
 use super::CliContext;
 use anyhow::Result;
 
+use crate::cli::output::{OutputFormat, info_view};
+
 pub async fn handle(mod_name: String, platform: Option<String>, ctx: &CliContext) -> Result<()> {
     let (selected_platform, slug) = super::resolve_platform_target(&mod_name, platform.as_deref())?;
     let instance_dir = ctx.instance_dir()?;
@@ -13,7 +15,15 @@ pub async fn handle(mod_name: String, platform: Option<String>, ctx: &CliContext
     for provider in providers {
         match provider.get_mod_info(slug).await {
             Ok(info) => {
-                println!("{}", crate::cli::output::mod_info_table(provider.name(), &info));
+                let view = info_view(provider.name(), &info);
+                match ctx.output.format {
+                    OutputFormat::Text => {
+                        print!("{}", crate::cli::output::mod_info_table(provider.name(), &info));
+                    }
+                    OutputFormat::Json => {
+                        crate::cli::output::print_json("info", &view);
+                    }
+                }
                 return Ok(());
             }
             Err(orbit_core::OrbitError::ModNotFound(_)) => continue,

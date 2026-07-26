@@ -1,6 +1,8 @@
 use super::CliContext;
 use anyhow::Result;
 
+use crate::cli::output::{ExportOutput, OutputFormat};
+
 pub async fn handle(
     file: Option<String>,
     target: Option<String>,
@@ -21,13 +23,28 @@ pub async fn handle(
         }
     };
     let report = orbit_core::export_instance(&instance_dir, &output, target, &format, ctx.dry_run)?;
-    println!(
-        "Export {}: {} package(s), {}, output {}.",
-        if ctx.dry_run { "preview" } else { "complete" },
-        report.packages,
-        format_bytes(report.bytes),
-        report.path.display()
-    );
+    match ctx.output.format {
+        OutputFormat::Text => {
+            println!(
+                "Export {}: {} package(s), {}, output {}.",
+                if ctx.dry_run { "preview" } else { "complete" },
+                report.packages,
+                format_bytes(report.bytes),
+                report.path.display()
+            );
+        }
+        OutputFormat::Json => {
+            crate::cli::output::print_json(
+                "export",
+                &ExportOutput {
+                    dry_run: ctx.dry_run,
+                    path: report.path.to_string_lossy().into_owned(),
+                    packages: report.packages,
+                    bytes: report.bytes,
+                },
+            );
+        }
+    }
     Ok(())
 }
 

@@ -1,6 +1,8 @@
 use super::CliContext;
 use anyhow::Result;
 
+use crate::cli::output::{ImportOutput, OutputFormat};
+
 pub async fn handle(file: String, merge_strategy: Option<String>, ctx: &CliContext) -> Result<()> {
     let instance_dir = ctx.instance_dir()?;
     let source = std::path::PathBuf::from(&file);
@@ -33,14 +35,31 @@ pub async fn handle(file: String, merge_strategy: Option<String>, ctx: &CliConte
                     ))
                 },
             )?;
-            println!(
-                "Import {}: {} added, {} remote sets merged, {} replaced, {} kept.",
-                if ctx.dry_run { "preview" } else { "complete" },
-                report.added.len(),
-                report.merged.len(),
-                report.replaced.len(),
-                report.kept.len()
-            );
+            match ctx.output.format {
+                OutputFormat::Text => {
+                    println!(
+                        "Import {}: {} added, {} remote sets merged, {} replaced, {} kept.",
+                        if ctx.dry_run { "preview" } else { "complete" },
+                        report.added.len(),
+                        report.merged.len(),
+                        report.replaced.len(),
+                        report.kept.len()
+                    );
+                }
+                OutputFormat::Json => {
+                    crate::cli::output::print_json(
+                        "import",
+                        &ImportOutput {
+                            dry_run: ctx.dry_run,
+                            added: report.added,
+                            merged: report.merged,
+                            replaced: report.replaced,
+                            kept: report.kept,
+                            extracted: Vec::new(),
+                        },
+                    );
+                }
+            }
         }
         "zip" | "mrpack" => {
             let overwrite = strategy == orbit_core::ImportMergeStrategy::PreferImport;
@@ -56,20 +75,54 @@ pub async fn handle(file: String, merge_strategy: Option<String>, ctx: &CliConte
                     super::install_interaction(ctx),
                 )
                 .await?;
-                println!(
-                    "Imported {} JAR(s); sync added {}, changed {}, and removed {} package version(s).",
-                    report.extracted.len(),
-                    sync.added.len(),
-                    sync.changed.len(),
-                    sync.removed.len()
-                );
+                match ctx.output.format {
+                    OutputFormat::Text => {
+                        println!(
+                            "Imported {} JAR(s); sync added {}, changed {}, and removed {} package version(s).",
+                            report.extracted.len(),
+                            sync.added.len(),
+                            sync.changed.len(),
+                            sync.removed.len()
+                        );
+                    }
+                    OutputFormat::Json => {
+                        crate::cli::output::print_json(
+                            "import",
+                            &ImportOutput {
+                                dry_run: false,
+                                added: report.added.clone(),
+                                merged: report.merged.clone(),
+                                replaced: report.replaced.clone(),
+                                kept: report.kept.clone(),
+                                extracted: report.extracted.clone(),
+                            },
+                        );
+                    }
+                }
             } else {
-                println!(
-                    "Import {}: {} JAR(s) to extract, {} existing file(s) kept.",
-                    if ctx.dry_run { "preview" } else { "complete" },
-                    report.extracted.len(),
-                    report.kept.len()
-                );
+                match ctx.output.format {
+                    OutputFormat::Text => {
+                        println!(
+                            "Import {}: {} JAR(s) to extract, {} existing file(s) kept.",
+                            if ctx.dry_run { "preview" } else { "complete" },
+                            report.extracted.len(),
+                            report.kept.len()
+                        );
+                    }
+                    OutputFormat::Json => {
+                        crate::cli::output::print_json(
+                            "import",
+                            &ImportOutput {
+                                dry_run: ctx.dry_run,
+                                added: report.added,
+                                merged: report.merged,
+                                replaced: report.replaced,
+                                kept: report.kept,
+                                extracted: report.extracted,
+                            },
+                        );
+                    }
+                }
             }
         }
         _ => anyhow::bail!("Unsupported file format. Expected .toml, .zip, or .mrpack."),
