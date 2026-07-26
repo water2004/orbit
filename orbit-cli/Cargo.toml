@@ -2,16 +2,40 @@
 name = "orbit"
 version = "0.1.0"
 edition = "2024"
+authors = ["Yuan Shui"]
+description = "A non-intrusive package manager for Minecraft mods"
+license = "MIT"
+repository = "https://github.com/water2004/orbit"
+
+[package.metadata.deb]
+maintainer = "Yuan Shui <water2004@users.noreply.github.com>"
+copyright = "2026, Yuan Shui"
+license-file = ["../LICENSE", "0"]
+extended-description = """\
+Orbit manages Minecraft mod instances from JAR-declared metadata, resolves \
+dependencies across supported providers, and keeps reproducible manifests \
+and lockfiles."""
+depends = "$auto"
+section = "utils"
+priority = "optional"
+assets = [
+    ["target/release/orbit", "usr/bin/", "755"],
+    ["../README.md", "usr/share/doc/orbit/README.md", "644"],
+]
+
+[features]
+default = []
+portable = ["orbit-core/portable"]
 
 [dependencies]
-zip.workspace = true
-serde_json.workspace = true
-serde.workspace = true
-sha2.workspace = true
-hex.workspace = true
-reqwest = { workspace = true, features = ["blocking"] }
-modrinth-wrapper = { path = "../modrinth-wrapper" }
+# 内部依赖
+orbit-core = { path = "../orbit-core" }
+
+# 工作区依赖
 tokio.workspace = true
 clap.workspace = true
 anyhow.workspace = true
-
+serde.workspace = true
+serde_json.workspace = true
+indicatif.workspace = true
+comfy-table.workspace = true

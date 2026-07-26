@@ -1,0 +1,48 @@
+{
+  "schemaVersion": 1,
+  "id": "litematica-printer",
+  "version": "2.4+20260330.10",
+  "icon": "assets/litematica-printer/icon.png",
+  "name": "Litematica-Printer",
+  "description": "A fork of Litematica that adds the missing printer functionality",
+  "authors": [
+    "aleksilassila",
+    "zhaixianyu"
+  ],
+  "contact": {
+    "website": "https://space.bilibili.com/31545812",
+    "homepage": "https://github.com/zhaixianyu/litematica-printer",
+    "sources": "https://github.com/zhaixianyu/litematica-printer"
+  },
+  "license": "CC0-1.0",
+  "environment": "*",
+  "entrypoints": {
+    "main": [
+      "me.aleksilassila.litematica.printer.LitematicaMixinMod"
+    ],
+    "client": [
+      "me.aleksilassila.litematica.printer.LitematicaMixinMod"
+    ],
+    "modmenu": [
+      "me.aleksilassila.litematica.printer.config.ModMenu"
+    ]
+  },
+  "mixins": [
+    "litematica-printer.mixins.json"
+  ],
+  "depends": {
+    "minecraft": "1.21.11"
+  },
+  "custom": {
+    "modmenu": {
+      "parent": {
+        "id": "litematica-printer-all"
+      }
+    }
+  },
+  "jars": [
+    {
+      "file": "META-INF/jars/pinyin4j-2.5.1.jar"
+    }
+  ]
+}

@@ -1,0 +1,455 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Wix
+  xmlns="http://wixtoolset.org/schemas/v4/wxs"
+  RequiredVersion="7.0.0">
+  <Fragment>
+    <UI Id="OrbitInstallUI">
+      <TextStyle Id="WixUI_Font_Normal" FaceName="Tahoma" Size="8" />
+      <TextStyle Id="WixUI_Font_Bigger" FaceName="Tahoma" Size="12" />
+      <TextStyle Id="WixUI_Font_Title" FaceName="Tahoma" Size="9" Bold="yes" />
+
+      <Property Id="DefaultUIFont" Value="WixUI_Font_Normal" />
+      <Property Id="WIXUI_INSTALLDIR" Value="INSTALLFOLDER" />
+
+      <DialogRef Id="BrowseDlg" />
+      <DialogRef Id="CancelDlg" />
+      <DialogRef Id="DiskCostDlg" />
+      <DialogRef Id="ErrorDlg" />
+      <DialogRef Id="ExitDialog" />
+      <DialogRef Id="FatalError" />
+      <DialogRef Id="FilesInUse" />
+      <DialogRef Id="InstallDirDlg" />
+      <DialogRef Id="InvalidDirDlg" />
+      <DialogRef Id="LicenseAgreementDlg" />
+      <DialogRef Id="MaintenanceTypeDlg" />
+      <DialogRef Id="MaintenanceWelcomeDlg" />
+      <DialogRef Id="MsiRMFilesInUse" />
+      <DialogRef Id="OutOfDiskDlg" />
+      <DialogRef Id="OutOfRbDiskDlg" />
+      <DialogRef Id="PrepareDlg" />
+      <DialogRef Id="ProgressDlg" />
+      <DialogRef Id="ResumeDlg" />
+      <DialogRef Id="UserExit" />
+      <DialogRef Id="VerifyReadyDlg" />
+      <DialogRef Id="WaitForCostingDlg" />
+      <DialogRef Id="WelcomeDlg" />
+
+      <Dialog
+        Id="OrbitOptionsDlg"
+        Width="370"
+        Height="270"
+        Title="[ProductName] Setup">
+        <Control
+          Id="Title"
+          Type="Text"
+          X="15"
+          Y="6"
+          Width="340"
+          Height="15"
+          Transparent="yes"
+          NoPrefix="yes"
+          Text="{\WixUI_Font_Title}Installation options" />
+        <Control
+          Id="Description"
+          Type="Text"
+          X="25"
+          Y="23"
+          Width="340"
+          Height="15"
+          Transparent="yes"
+          NoPrefix="yes"
+          Text="Choose how Orbit integrates with Windows." />
+        <Control
+          Id="BannerBitmap"
+          Type="Bitmap"
+          X="0"
+          Y="0"
+          Width="370"
+          Height="44"
+          TabSkip="no"
+          Text="WixUI_Bmp_Banner" />
+        <Control
+          Id="BannerLine"
+          Type="Line"
+          X="0"
+          Y="44"
+          Width="370"
+          Height="0" />
+        <Control
+          Id="AddToPath"
+          Type="CheckBox"
+          X="25"
+          Y="75"
+          Width="320"
+          Height="18"
+          Property="ADD_TO_PATH"
+          CheckBoxValue="1"
+          Text="Add Orbit to the system PATH" />
+        <Control
+          Id="AddToPathDescription"
+          Type="Text"
+          X="44"
+          Y="97"
+          Width="295"
+          Height="32"
+          NoPrefix="yes"
+          Text="Recommended. Makes the orbit command available in new Command Prompt, PowerShell, and terminal sessions." />
+        <Control
+          Id="ScopeDescription"
+          Type="Text"
+          X="25"
+          Y="150"
+          Width="320"
+          Height="32"
+          NoPrefix="yes"
+          Text="Orbit is installed for all users. Administrator approval is required." />
+        <Control
+          Id="BottomLine"
+          Type="Line"
+          X="0"
+          Y="234"
+          Width="370"
+          Height="0" />
+        <Control
+          Id="Back"
+          Type="PushButton"
+          X="180"
+          Y="243"
+          Width="56"
+          Height="17"
+          Text="&amp;Back" />
+        <Control
+          Id="Next"
+          Type="PushButton"
+          X="236"
+          Y="243"
+          Width="56"
+          Height="17"
+          Default="yes"
+          Text="&amp;Next" />
+        <Control
+          Id="Cancel"
+          Type="PushButton"
+          X="304"
+          Y="243"
+          Width="56"
+          Height="17"
+          Cancel="yes"
+          Text="Cancel">
+          <Publish Event="SpawnDialog" Value="CancelDlg" />
+        </Control>
+      </Dialog>
+
+      <Dialog
+        Id="OrbitUninstallOptionsDlg"
+        Width="370"
+        Height="270"
+        Title="[ProductName] Setup">
+        <Control
+          Id="Title"
+          Type="Text"
+          X="15"
+          Y="6"
+          Width="340"
+          Height="15"
+          Transparent="yes"
+          NoPrefix="yes"
+          Text="{\WixUI_Font_Title}Uninstall options" />
+        <Control
+          Id="Description"
+          Type="Text"
+          X="25"
+          Y="23"
+          Width="340"
+          Height="15"
+          Transparent="yes"
+          NoPrefix="yes"
+          Text="Choose whether to keep your Orbit data." />
+        <Control
+          Id="BannerBitmap"
+          Type="Bitmap"
+          X="0"
+          Y="0"
+          Width="370"
+          Height="44"
+          TabSkip="no"
+          Text="WixUI_Bmp_Banner" />
+        <Control
+          Id="BannerLine"
+          Type="Line"
+          X="0"
+          Y="44"
+          Width="370"
+          Height="0" />
+        <Control
+          Id="RemoveAppData"
+          Type="CheckBox"
+          X="25"
+          Y="75"
+          Width="320"
+          Height="18"
+          Property="REMOVE_APPDATA"
+          CheckBoxValue="1"
+          Text="Remove Orbit data from the default AppData locations" />
+        <Control
+          Id="RemoveAppDataDescription"
+          Type="Text"
+          X="44"
+          Y="97"
+          Width="295"
+          Height="48"
+          NoPrefix="yes"
+          Text="Deletes Orbit configuration, the instance registry, and cached JARs from the AppData paths recorded during installation. Custom paths and Minecraft instances are never removed." />
+        <Control
+          Id="KeepDataDescription"
+          Type="Text"
+          X="25"
+          Y="160"
+          Width="320"
+          Height="32"
+          NoPrefix="yes"
+          Text="This option is off by default. Leave it unchecked to keep your settings and download cache." />
+        <Control
+          Id="BottomLine"
+          Type="Line"
+          X="0"
+          Y="234"
+          Width="370"
+          Height="0" />
+        <Control
+          Id="Back"
+          Type="PushButton"
+          X="180"
+          Y="243"
+          Width="56"
+          Height="17"
+          Text="&amp;Back" />
+        <Control
+          Id="Next"
+          Type="PushButton"
+          X="236"
+          Y="243"
+          Width="56"
+          Height="17"
+          Default="yes"
+          Text="&amp;Next" />
+        <Control
+          Id="Cancel"
+          Type="PushButton"
+          X="304"
+          Y="243"
+          Width="56"
+          Height="17"
+          Cancel="yes"
+          Text="Cancel">
+          <Publish Event="SpawnDialog" Value="CancelDlg" />
+        </Control>
+      </Dialog>
+
+      <Publish
+        Dialog="ExitDialog"
+        Control="Finish"
+        Event="EndDialog"
+        Value="Return"
+        Order="999" />
+
+      <Publish
+        Dialog="WelcomeDlg"
+        Control="Next"
+        Event="NewDialog"
+        Value="LicenseAgreementDlg"
+        Condition="NOT Installed" />
+      <Publish
+        Dialog="WelcomeDlg"
+        Control="Next"
+        Event="NewDialog"
+        Value="VerifyReadyDlg"
+        Condition="Installed AND PATCH" />
+
+      <Publish
+        Dialog="LicenseAgreementDlg"
+        Control="Back"
+        Event="NewDialog"
+        Value="WelcomeDlg" />
+      <Publish
+        Dialog="LicenseAgreementDlg"
+        Control="Next"
+        Event="NewDialog"
+        Value="InstallDirDlg"
+        Condition="LicenseAccepted = &quot;1&quot;" />
+
+      <Publish
+        Dialog="InstallDirDlg"
+        Control="Back"
+        Event="NewDialog"
+        Value="LicenseAgreementDlg" />
+      <Publish
+        Dialog="InstallDirDlg"
+        Control="Next"
+        Event="CheckTargetPath"
+        Value="[WIXUI_INSTALLDIR]"
+        Order="1" />
+      <Publish
+        Dialog="InstallDirDlg"
+        Control="Next"
+        Event="SetTargetPath"
+        Value="[WIXUI_INSTALLDIR]"
+        Order="2" />
+      <Publish
+        Dialog="InstallDirDlg"
+        Control="Next"
+        Event="NewDialog"
+        Value="OrbitOptionsDlg"
+        Order="3" />
+      <Publish
+        Dialog="InstallDirDlg"
+        Control="ChangeFolder"
+        Property="_BrowseProperty"
+        Value="[WIXUI_INSTALLDIR]"
+        Order="1" />
+      <Publish
+        Dialog="InstallDirDlg"
+        Control="ChangeFolder"
+        Event="SpawnDialog"
+        Value="BrowseDlg"
+        Order="2" />
+
+      <Publish
+        Dialog="BrowseDlg"
+        Control="OK"
+        Event="CheckTargetPath"
+        Value="[WIXUI_INSTALLDIR]"
+        Order="1" />
+      <Publish
+        Dialog="BrowseDlg"
+        Control="OK"
+        Event="SetTargetPath"
+        Value="[_BrowseProperty]"
+        Order="2" />
+      <Publish
+        Dialog="BrowseDlg"
+        Control="OK"
+        Event="EndDialog"
+        Value="Return"
+        Order="3" />
+
+      <Publish
+        Dialog="OrbitOptionsDlg"
+        Control="Back"
+        Event="NewDialog"
+        Value="InstallDirDlg"
+        Order="1"
+        Condition="NOT Installed" />
+      <Publish
+        Dialog="OrbitOptionsDlg"
+        Control="Back"
+        Event="NewDialog"
+        Value="MaintenanceTypeDlg"
+        Order="2"
+        Condition="Installed" />
+      <Publish
+        Dialog="OrbitOptionsDlg"
+        Control="Next"
+        Event="AddLocal"
+        Value="PathFeature"
+        Order="1"
+        Condition="ADD_TO_PATH = &quot;1&quot;" />
+      <Publish
+        Dialog="OrbitOptionsDlg"
+        Control="Next"
+        Event="Remove"
+        Value="PathFeature"
+        Order="2"
+        Condition="ADD_TO_PATH &lt;&gt; &quot;1&quot;" />
+      <Publish
+        Dialog="OrbitOptionsDlg"
+        Control="Next"
+        Event="NewDialog"
+        Value="VerifyReadyDlg"
+        Order="3" />
+
+      <Publish
+        Dialog="VerifyReadyDlg"
+        Control="Back"
+        Event="NewDialog"
+        Value="OrbitOptionsDlg"
+        Order="1"
+        Condition="NOT Installed OR WixUI_InstallMode = &quot;Change&quot;" />
+      <Publish
+        Dialog="VerifyReadyDlg"
+        Control="Back"
+        Event="NewDialog"
+        Value="OrbitUninstallOptionsDlg"
+        Order="2"
+        Condition="Installed AND NOT PATCH AND WixUI_InstallMode = &quot;Remove&quot;" />
+      <Publish
+        Dialog="VerifyReadyDlg"
+        Control="Back"
+        Event="NewDialog"
+        Value="MaintenanceTypeDlg"
+        Order="3"
+        Condition="Installed AND NOT PATCH AND WixUI_InstallMode = &quot;Repair&quot;" />
+      <Publish
+        Dialog="VerifyReadyDlg"
+        Control="Back"
+        Event="NewDialog"
+        Value="WelcomeDlg"
+        Order="4"
+        Condition="Installed AND PATCH" />
+
+      <Publish
+        Dialog="MaintenanceWelcomeDlg"
+        Control="Next"
+        Event="NewDialog"
+        Value="MaintenanceTypeDlg" />
+
+      <Publish
+        Dialog="MaintenanceTypeDlg"
+        Control="ChangeButton"
+        Property="ADD_TO_PATH"
+        Value="1"
+        Order="2"
+        Condition="!PathFeature = 3" />
+      <Publish
+        Dialog="MaintenanceTypeDlg"
+        Control="ChangeButton"
+        Property="ADD_TO_PATH"
+        Order="3"
+        Condition="!PathFeature &lt;&gt; 3" />
+      <Publish
+        Dialog="MaintenanceTypeDlg"
+        Control="ChangeButton"
+        Event="NewDialog"
+        Value="OrbitOptionsDlg"
+        Order="4" />
+      <Publish
+        Dialog="MaintenanceTypeDlg"
+        Control="RepairButton"
+        Event="NewDialog"
+        Value="VerifyReadyDlg" />
+      <Publish
+        Dialog="MaintenanceTypeDlg"
+        Control="RemoveButton"
+        Event="NewDialog"
+        Value="OrbitUninstallOptionsDlg" />
+      <Publish
+        Dialog="MaintenanceTypeDlg"
+        Control="Back"
+        Event="NewDialog"
+        Value="MaintenanceWelcomeDlg" />
+
+      <Publish
+        Dialog="OrbitUninstallOptionsDlg"
+        Control="Back"
+        Event="NewDialog"
+        Value="MaintenanceTypeDlg" />
+      <Publish
+        Dialog="OrbitUninstallOptionsDlg"
+        Control="Next"
+        Event="NewDialog"
+        Value="VerifyReadyDlg" />
+    </UI>
+
+    <UIRef Id="WixUI_Common" />
+  </Fragment>
+</Wix>

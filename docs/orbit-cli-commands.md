@@ -1,0 +1,464 @@
+# Orbit CLI 命令规范
+
+> 本文同时标明当前行为和仍有效的规范差距。数据格式见
+> [orbit-toml-spec.md](orbit-toml-spec.md)，实现快照见
+> [orbit-status.md](orbit-status.md)。
+
+## 1. 全局上下文
+
+实例选择优先级：
+
+1. 显式 `-i <name>` / `--instance <name>`；
+2. 当前目录含 `orbit.toml`；
+3. `instances.toml` 中的全局默认实例；
+4. 都没有时保留当前目录，由需要项目的命令返回缺少 manifest/lockfile。
+
+只读命令可以静默使用全局默认实例。会修改实例的命令在从非项目目录回退到默认实例时
+拒绝执行，要求显式 `--instance` 或进入项目目录。当前受保护的命令是：
+
+```text
+add install remove purge sync upgrade import remote-add remote-remove
+```
+
+`init` 始终初始化当前目录；实例注册表和 cache 命令操作全局数据；`export` 读取实例但只
+写用户指定的输出文件。
+
+凡是命令会确定一个包集合，都遵守同一策略：求解包键是 JAR 的 `mod_id`；唯一 Pareto
+极大解自动选择，多个 Pareto 极大解必须选择（dry-run 也一样，只有 `--yes` 自动选稳定
+的第一个）。
+选择之后，安装、升级、降级、同版本替换和删除合并成一个计划。只要计划会替换或删除
+顶层 `mods/*.jar`，即使求解只有唯一方案也必须先展示精确逻辑包版本动作并确认。物理
+JAR 文件名是执行层事实，不进入方案选择、升级预览或删除确认 UI。
+contained JAR 不是独立删除目标。
+
+全局标志：
+
+| 标志 | 说明 |
+|------|------|
+| `-i, --instance <name>` | 显式选择注册实例 |
+| `--config <file>` | 使用指定的全局配置文件；实例注册表位于其同目录 |
+| `--cache-dir <directory>` | 使用指定的 content-addressed JAR 缓存目录 |
+| `--data-layout system\|executable` | 选择平台目录或可执行文件相邻目录布局 |
+| `--format text\|json` | 输出格式；`json` 输出单个 JSON 文档到 stdout，供自动化工具集成 |
+| `--progress-format none\|ndjson` | 进度协议；`ndjson` 把进度事件逐行写 stderr，每行一个 JSON 对象 |
+| `-v, --verbose` | 显示实例选择等额外上下文 |
+| `-q, --quiet` | 规范要求仅输出错误；当前只有部分上下文输出遵守，见 §8 |
+| `-y, --yes` | 跳过确认；不会替缺失的可复现元数据猜值 |
+| `--dry-run` | 返回操作预览，不写目标状态 |
+
+正常结果写 stdout，错误、警告、结构化操作进度和交互提示写 stderr。`--format json` 下
+stdout 始终是且只是一个完整 JSON 文档（成功为结果，失败为空），进度（若启用）走 stderr
+NDJSON，调用方可以安全 `orbit --format json ... | jq`。JSON 结果、NDJSON 进度、结构化
+错误的 schema 见 [orbit-output-formats.md](orbit-output-formats.md)。交互终端默认显示
+spinner/进度条；重定向时显示稳定文本。`config.toml` 的 `ui.progress_bar` 可设为
+`modern`、`plain` 或 `off`，`--quiet` 始终关闭进度。
+
+## 2. 初始化与实例
+
+### `orbit init`
+
+```text
+orbit init <name>
+  [--mc-version <version>]
+  [--modloader fabric|forge|neoforge|quilt]
+  [--modloader-version <version>]
+```
+
+行为：
+
+1. 若 `orbit.toml` 已存在，在扫描、联网和写入前拒绝覆盖；
+2. 验证当前目录是实际游戏目录；空目录或只有 `mods/` 的任意目录会拒绝；
+3. 从游戏 JAR 的 `version.json`、launcher version profile 或 Prism/MultiMC component
+   检测 Minecraft 与 loader；定位并解析实际 Minecraft/loader JAR；
+4. 扫描 `mods/*.jar`，忽略 `.old` / `.disabled`，解析对应 loader 元数据与内嵌 JAR；
+5. 计算 SHA-1/SHA-256/SHA-512 和 CurseForge fingerprint；Modrinth 始终参与批量识别，
+   已配置 API Key 时 CurseForge 也参与；
+6. 同一 `mod_id` 的顶层 JAR 作为一个包的候选；无法在线识别的本地源先复制到
+   `.orbit/sources/`，避免后续清理 `mods/` 时删除它；
+7. 候选经共享 PubGrub portfolio 选择；
+8. 多解时请求方案选择；未选中的顶层包版本列入删除计划并在写盘前确认；
+9. 将实际平台 JAR 的相对路径与 SHA-256 写入 manifest，生成 Fat Lockfile，再将实例
+   注册到全局 `instances.toml`。
+
+无法识别平台来源的 JAR 以 `file` remote 写入 manifest；有解时也作为所选 package 的
+精确 lock 来源。每个根包都保存至少一个候选远端。同一顶层包 JAR 中的其他模块只进入
+父 package 的 `bundled`。若依赖图本身无解，init 保留所有文件和全部 manifest remotes，
+写出空 lock 与诊断；没有选中方案时不会把冲突候选伪装成已锁定包。
+
+支持标准共享游戏根目录、`versions/<实例>` 隔离目录、Prism/MultiMC 的
+`.minecraft`/`minecraft`、CurseForge profile 和 GDLauncher 的 `instance/`。
+隔离布局只扫描当前实例，不读取 sibling profile；共享根目录出现多个 Minecraft 或
+loader 候选时必须显式选择，不能按目录顺序猜测。
+
+显式参数用于筛选实际候选，不能凭空创建平台工件。交互模式在多个候选时请求选择；
+`--yes` 模式不读取 stdin，歧义或缺少实际 JAR 时要求显式参数/修复启动器安装。
+
+### `orbit instances`
+
+```text
+orbit instances list
+orbit instances default <name>
+orbit instances remove <name>
+```
+
+- `list` 展示名称、路径、Minecraft、loader 以及当前/默认标记，输出为统一自适应表格；
+- `default` 保证只有一个默认实例，并同步 `config.toml` 的 `default_instance`；
+- `remove` 只移除全局追踪，绝不删除实例目录；若移除默认实例，同时清除默认值。
+
+### `orbit config`
+
+```text
+orbit config path
+orbit config list
+orbit config get <key>
+orbit config set <key> <value>
+orbit config unset <key>
+```
+
+配置键是固定、强类型的公开接口，不接受任意 TOML path。公开键使用连字符，例如
+`cache.capacity-mib`、`core.max-concurrent-downloads` 和
+`auth.curseforge-api-key`；`orbit config list` 展示完整集合、类型与文件层解析值
+（包含 schema 默认值）。
+密钥始终显示为 `<redacted>`。`set`/`unset` 原子更新单一字段且保留其它注释和排版；
+它们遵守全局 `--config` 与 `--dry-run`。`core.default-instance` 与
+`instances.toml` 的唯一默认标记作为一个领域操作同步维护。
+
+这里展示的是持久化层，不叠加环境变量。正常业务命令仍遵守“环境变量 > 文件 >
+schema 默认值”的有效配置优先级。完整键表、取值约束和路径规则见
+[orbit-global-config.md](orbit-global-config.md)。
+
+## 3. 添加、还原与删除
+
+### `orbit add`
+
+```text
+orbit add <mod>
+  [--platform <provider>]
+  [--version <constraint>]
+  [--env client|server|both]
+  [--optional]
+  [--no-deps]
+```
+
+输入形式：
+
+| 形式 | 行为 |
+|------|------|
+| `sodium` | 先按 `[resolver].catalogs` 尝试作为 project locator；未找到时搜索并让用户选择 |
+| `mr:<project-id-or-search>` | 只用 Modrinth；持久化时规范为 project ID |
+| `cf:<numeric-project-id>` | 只用 CurseForge；需要 API Key |
+| `file:./mod.jar` | 解析并复制本地 JAR |
+
+来源前缀与 `--platform` 同时出现时必须指向同一 provider；冲突会直接报错，不会把
+`cf:` locator 交给 Modrinth 或反向处理。CurseForge 的持久远端只接受数值 project ID。
+
+在线流程先取得并验证候选 JAR，再以 JAR 的真实 `mod_id`、版本和 required dependencies
+求解。确认后写入 `mods/`、manifest 和 lockfile。顶层 constraint、`optional`、`env`
+持久化到 manifest；传递依赖只进入 lockfile。`--no-deps` 禁止传递安装。
+
+该流程会分别显示：递归发现 project、候选队列总数、JAR 下载/缓存校验/解析完成数、
+离线求解的动态工作量，以及确认后的包物化进度。求解总量会在发现新的 continuation
+run/maximality probe 时增加，完成数随后推进，同时显示决策、传播、回溯、冲突和解
+数量；这样可以区分网络阶段与仍在探索新投影的求解阶段。该动态总量不是剩余耗时上界；
+Pareto 或 co-Pareto front 本身仍可能很大。
+
+若同一个 provider locator 的不同候选 JAR 声明了多个真实 `mod_id`，会分别剔除无解
+身份。唯一可行身份自动采用；多个可行身份会先询问要添加哪一个包。upgrade 不允许借此
+静默改名：它只跟随已安装 `mod_id`，项目改名必须作为 remove/add 的包替换。
+
+本地 `file:` 同样解析 loader 元数据、哈希、内嵌模组并校验依赖图，不绕过锁文件。
+在线与本地添加都使用同一个方案选择和包事务报告；若选中方案替换或淘汰已有顶层包
+版本，会与新安装项一起展示并确认。
+
+### `orbit remote`
+
+```text
+orbit remote list <package>
+orbit remote add <package> file <jar-path>
+orbit remote add <package> modrinth <project-id>
+orbit remote add <package> curseforge <numeric-project-id>
+orbit remote remove <package> <provider> <locator>
+orbit remote remove <package> --index <one-based-index>
+```
+
+`add` 会先下载并分析目标远端的全部候选，只有其中存在 JAR 实际声明 `<package>` 才写入。
+不同 provider 一视同仁，现有和新增远端在后续 add/install/outdated/upgrade 中全部进入
+同一个候选闭包。`remove` 不能删除最后一个远端。`list` 使用用户可读的 provider/project
+信息并以统一自适应表格展示，managed local source 用序号引用，不显示内容哈希。删除
+discovery remote 后，当前 lock 的精确恢复来源保留到下一次内容选择，因而不会让已锁定
+环境突然不可恢复。
+
+### `orbit install`
+
+```text
+orbit install
+  [--target client|server|both]
+  [--group <name>]
+  [--no-optional]
+  [--locked | --frozen]
+```
+
+这是实例还原命令，不接受模组名。它严格使用 `[platform]` 记录的 Minecraft、Loader
+和 runtime JAR 路径并校验内容，不读取 launcher profile、不搜索替代文件，也不刷新
+平台快照。路径、哈希或 JAR 元数据不一致时拒绝并要求先 `orbit sync`。sync 刷新后的
+loader JAR 及其 bundled 模块进入同一次求解，只在真实依赖约束不兼容时失败。
+
+选择顺序：
+
+1. 根据 target、group 和 optional 过滤 manifest 根依赖；
+2. 保留已选根的传递依赖闭包；
+3. 校验 manifest/lockfile 图；
+4. 已存在且 SHA-256 正确的 JAR跳过；
+5. 缺失 JAR 从缓存、本地 `file:` 或 provider 来源恢复；
+6. 下载/复制后再次校验，并按需更新 lockfile。
+
+`--locked` 与 `--frozen` 同义：要求 lockfile 与 manifest 完整一致，禁止重新解析来源
+元数据。它不表示物理离线；缓存未命中时仍可使用 lockfile 已锁定的下载 URL。新模型
+要求每个 lock package 有 SHA-512、非空 remotes 和可恢复所选字节的精确来源；缺项的
+旧 lockfile 在任何模式下都会被拒绝，不会静默降级为空锁。
+
+非 locked `install` 是依赖修复入口：lock 图不完整或冲突时会下载远端完整候选闭包，
+再按 JAR 元数据重新求解。`sync` 则只做本地对账，不承担联网修复。
+
+### `orbit remove`
+
+```text
+orbit remove <mod>
+```
+
+只按 JAR-declared `mod_id` 查找顶层依赖。若仍有其它 package 依赖它则拒绝删除；
+否则删除所选包的已校验文件，并从 manifest/lockfile 移除条目。输入不匹配时，交互模式列出
+可选依赖；`--yes` 要求精确标识，不进行猜测。dry-run 只报告计划。
+
+### `orbit purge`
+
+```text
+orbit purge <mod>
+```
+
+先按 mod ID/slug 在 `config/` 下寻找归一化名称候选，逐项确认后执行 remove 和配置清理。
+候选路径必须位于 config 根目录。`--yes` 选择全部候选；dry-run 展示全部但不删除。
+
+## 4. 同步与更新
+
+### `orbit sync`
+
+先从当前 launcher 布局重新探测平台，再扫描真实 `mods/` 并对账
+manifest/lockfile。旧 `[project]` 版本和 `[platform]` 路径都只是用于生成变更报告，
+不作为探测选择器；Minecraft 与 loader JAR 即使改名也按内容及 launcher 元数据重新
+定位。报告：
+
+| 分类 | 含义 |
+|------|------|
+| `platform` | Minecraft/loader 版本、JAR 路径或内容哈希发生变化 |
+| `added` | 磁盘新增 JAR，已识别并写入声明/锁 |
+| `changed` | 已锁文件内容或元数据变化，锁记录已更新 |
+| `missing` | manifest/lockfile 期望的 JAR 不在磁盘 |
+| `unlocked` | manifest 有顶层声明但 lockfile 无对应 package |
+| `removed` | 同一 `mod_id` 下未被所选方案采用的顶层包版本 |
+
+平台刷新和包求解使用同一次实际 loader JAR 分析。loader 版本变化不被先验判为错误；
+若某个 mod 对新 loader 的真实约束不成立，正常返回依赖无解。
+
+平台与包变更由统一展示层渲染为单张自适应表格（`~`/`+`/`-`/`?` 标记 platform、added、
+changed、missing、unlocked），未选中包版本仍使用统一删除表，物理文件名不进入表格。
+它既不下载 JAR，也不访问 Modrinth/CurseForge 识别接口。既有 manifest remotes 会保留；
+当前本地内容作为 lock 的精确恢复来源。dry-run 不保存对账结果。同 ID 的所有本地文件
+先作为候选统一求解；不会按扫描顺序让后一个覆盖前一个。
+实际删除 `removed` 前总会展示逻辑包 ID、版本和动作并确认；物理文件名不占用用户决策
+界面。
+
+### `orbit outdated [mod]`
+
+只读查询 package 全部 remotes 的兼容候选。按真实 `mod_id` 限定单包；不存在的输入、
+未安装的包和没有可分析候选的包返回明确结果，不会静默当作“已是最新”。
+若存在多个互不支配的 Pareto 方案，只在交互模式列出升级集合并请求选择；唯一方案自动
+采用。共同动作只显示一次；每个选项只展开与其他选项不同的动作，并用 `◆` 与终端样式
+高亮差异。dry-run 仍需选择具体方案；`--yes` 才稳定选择第一个方案。
+
+同一 JAR-declared 版本可以有多个不同内容候选。此时选项表使用 provider project/release
+和依赖约束差异说明选择，不显示内部哈希，也不以物理 JAR 文件名充当包名。
+
+输出区分三种结果：有可行更新时显示包/当前版本/可用版本表；存在更高候选但被依赖传播
+或回溯排除时显示 PubGrub 推导事实；provider 对当前 Minecraft/loader 没有返回声明该
+`mod_id` 的 JAR 时明确报告“无兼容远端候选”。后两种情况不得表述成“已是最新”。
+
+### `orbit upgrade [mod]`
+
+无参数时升级所有允许升级的在线 package；有参数时要求该包已经安装且有在线来源。
+升级复用候选下载、真实 JAR 解析、PubGrub 诊断、确认与原子文件替换。manifest 中的版本
+约束保持不变，只更新 lockfile 的实际版本与来源事实。多解规则与 `outdated` 相同；
+方案选择发生在安装确认之前。批量 upgrade 方案要求至少一个包比当前安装版本更新；
+单包 `upgrade <mod>` 的方案必须让指定逻辑包本身变新，不能用无关包的升级冒充成功。
+允许为满足依赖而让其他包降级、同版本换源或被删除；这些变化全部列入同一个确认计划。
+若没有可行升级则 upgrade 是 no-op，但仍显示阻止更高候选的同一份结构化诊断。dry-run
+不替换文件。
+
+更新表、事务表、诊断表和多方案差异由统一终端展示层通过 `comfy-table` 渲染，按终端
+宽度自动换行；重定向输出时仍保留表格和 `◆` 差异标记，不依赖 ANSI 颜色传达含义。
+
+## 5. 查询
+
+```text
+orbit search <query>
+  [--platform <provider>] [--limit <n>]
+  [--mc-version <version>] [--modloader <loader>]
+
+orbit info <mod> [--platform <provider>]
+orbit list [--tree] [--target client|server|both]
+```
+
+- `search` 合并已配置 provider 的结果并应用可选的 Minecraft/loader 过滤；结果由统一
+  展示层渲染为自适应表格，按 slug/名称、平台、下载量和最新 MC 版本分列，参考 MC 版本
+  存在时附加 `✓` 兼容列；
+- `info` 按 provider 顺序查询详情；`mr:` / `cf:` 前缀可显式选择来源；字段渲染为自适应
+  表格，内嵌 recent versions 子表；
+- `list` 从 lockfile 展示版本、全部 remotes、manifest env/optional；`--tree` 展示依赖，
+  `--target` 过滤根并保留传递闭包。非树形模式输出统一表格，bundled 模块进入 Notes 列。
+
+在线查询支持 Modrinth 与 CurseForge。`cf:` 和 `--platform curseforge` 只选择
+CurseForge，不回退到 Modrinth；缺少 API Key 或目标文件没有 API 下载 URL 时返回明确
+错误。
+
+## 6. 导入、导出与检查
+
+### `orbit import`
+
+```text
+orbit import <file>
+  [--merge-strategy prefer-existing|prefer-import|interactive]
+```
+
+- `.toml`：同包 remotes 始终取并集；版本、端侧、optional、exclude 等语义冲突才按策略处理；
+- `.zip`：只提取安全的 `mods/*.jar` 路径；
+- `.mrpack`：先应用 bundled overrides，再按 index 从官方允许的 HTTPS 来源下载缺失
+  JAR，并验证 file size、SHA-1 与 SHA-512；
+- `--yes` 未指定策略时等同 `prefer-import`；
+- dry-run 不写 manifest、JAR 或 lockfile。
+
+ZIP 与 mrpack index 路径都经过规范化，绝对路径、`..` 与非 mods JAR 不会写入实例；
+导入完成后统一触发 sync。
+
+### `orbit export`
+
+```text
+orbit export [output] [--target client|server|both] [--format zip|mrpack]
+```
+
+导出 manifest、lockfile 与目标选择中校验通过的 JAR。未指定文件名时使用安全化的项目
+名称和版本。`mrpack` 生成 Modrinth index；在线文件可成为 downloads，必须内嵌的本地
+文件放入 overrides。dry-run 只统计计划。
+
+### `orbit check`
+
+```text
+orbit check <mc-version> [--modloader <loader>]
+```
+
+对 lockfile 中在线 package 查询目标 Minecraft/loader 的兼容版本并返回逐包矩阵。结果由
+统一展示层渲染为自适应表格，兼容包标 `✓` 并显示可用版本与 provider，无兼容版本包标
+`✗`。本地 `file:` package 没有平台兼容性事实，会明确标为无法在线判断。
+
+### `orbit audit`
+
+```text
+orbit audit
+  [--min-risk 0..100]
+  [--fail-on-risk 0..100]
+  [--mod <id-or-name>]
+  [--limit <count>]
+  [--report <path>]
+```
+
+只读分析当前实例实际存在的 Minecraft、Loader、运行时依赖和 Mod JAR。它与
+`orbit check` 不同：`check` 查询目标版本是否有远端文件，`audit` 不联网、不读取
+provider 兼容声明，也不修改 manifest、lockfile、下载缓存或实例文件。输出格式由全局
+`--format` 控制（`text` 或 `json`），不再使用 per-command `--format`。
+
+`--min-risk` 只控制 stdout 展示；`--fail-on-risk` 在完整分析后按 `risk_index`
+阈值决定是否返回非零退出码。`risk_index` 是 0–100 的排序值，不是不兼容概率。
+`--mod` 只匹配已安装 Mod 的 ID、展示名或文件名并过滤文本/JSON stdout；没有匹配项
+会明确报错，但有匹配项时分析仍加载完整实例。默认文本把环境、覆盖率、warning、风险
+及 behavioral interaction 分类和风险详情渲染为自适应表格，只展示排序最高的 20 条
+风险且不展开 coverage/inactive/warning/evidence 明细；每条风险使用两列详情布局，
+非 TTY 输出最大 120 列。
+`--limit` 调整展示数量。
+
+`--format json` 保留完整 evidence（audit 子 schema 4）。显式 `--report <path>` 额外写入
+未按文本 limit、risk threshold 或 mod 过滤截断的完整结构化报告；默认模式不创建报告文件。
+JSON 结果直接嵌入 audit 的 `AuditReport`（schema 4），顶层固定包含 `schema_version`、
+`environment`、`readiness`、`namespace`、`artifacts`、
+`registered_mixin_configs`、`registered_mixins`、`transformations`、`unary_risks`、`risks`、
+`interactions`、`inactive_candidates`、`coverage_gaps`、`coverage` 和 `warnings`。
+没有达到阈值的结果只表述为
+“未发现达到当前阈值的字节码兼容风险”，不宣称全部 Mod 兼容。
+
+core 严格读取 `[platform]` 中由 init/sync 固定的 Minecraft、Loader、runtime JAR
+与物理端，并复用 install/sync 的求解结果选择实际顶层和嵌套 JAR；audit 不读取
+launcher profile，也不另写 Loader classpath 发现规则。随后根据这些输入进行 capability
+probe。Fabric/Quilt 需要 Loader 与 Mixin
+ABI；现代 Forge/NeoForge 还必须具有可识别的 ModLauncher `ITransformer`、
+`Target` 和 `ITransformationService` ABI。Legacy LaunchWrapper 明确拒绝，不提供
+`--force`。单个坏 Mod、真正 unresolved/ambiguous 的软引用、已知未支持或自定义
+InjectionPoint 和解释预算耗尽进入 warning/coverage；缺失基础游戏或运行库则停止。
+“JAR 没有 refmap”本身不是 warning。
+
+ABI probe 后先建立 Loader runtime namespace。Fabric/Quilt 使用当前 classpath 的
+Tiny mapping 内容做能力探测和 Class Universe 投影，不按 Minecraft/Loader 版本判断；
+Forge/NeoForge 使用 launcher 选择且内嵌版本匹配的 runtime game JAR。mapping 缺失、
+冲突或无法唯一识别时直接返回高层 readiness 错误，不继续输出具体 Mod 风险。
+
+审计通过 core 强类型事件报告六个真实阶段：准备 Loader-selected runtime、顶层工件
+扫描、readiness、Mixin 分析、Transformer 分析和冲突比较。已知总量的阶段显示实际计数；非交互
+文本约按 10% 间隔更新，交互终端使用进度条。`--quiet` 或
+`ui.progress_bar = "off"` 关闭进度，不影响最终报告。
+
+详细证据边界见 [orbit-bytecode-audit.md](orbit-bytecode-audit.md)。
+
+## 7. Cache
+
+```text
+orbit cache clean
+```
+
+先检查配置解析后的缓存目录、文件数和大小；空缓存直接成功。非 `--yes` 时确认，dry-run
+不删除。core 会拒绝清理文件系统根、当前目录/其祖先，或包含配置文件与实例注册表的
+目录。
+
+当前命令显式清空整个 cache。除此之外，每个 CLI 命令结束时都会按照全局
+`[cache].capacity_mib` 执行一次持久化 LRU 淘汰；命令本身报错也不跳过该收尾步骤。
+容量只统计 SHA-512 内容 JAR，淘汰时同步移除失效 SHA-1 别名。
+
+## 8. 全局配置
+
+`orbit config path/list/get/set/unset` 已实现；配置结果同时支持 text 和统一 JSON
+信封。敏感值在 view-model 边界脱敏，修改命令不会把环境变量覆盖写回文件。字段校验、
+默认值、cache 生效时机见 [orbit-global-config.md](orbit-global-config.md)。
+
+## 9. 正确规范与剩余差距
+
+以下不是“历史文档已过时”，而是仍正确但代码尚未完全遵守的 CLI 规范：
+
+| 规范 | 当前差距 |
+|------|----------|
+| `--quiet` 只输出错误 | 多数 handler 仍直接 `println!`（text 模式），只有实例上下文日志检查 quiet |
+| `--verbose` 展示网络/解析细节 | 当前主要展示实例选择，没有统一结构化日志层 |
+| 用户取消使用独立退出码 3 | clap 参数错误为 2、普通错误为 1；部分取消当前为成功或普通错误 |
+| 全局运行配置控制网络/并发/UI | `ui.progress_bar` 已接入；代理、重试、语言、颜色和下载并发尚未全部接入 |
+| 大规模 restore 有界并发 | 候选验证并发，最终 JAR 物化仍按确定顺序执行 |
+
+已经实现、旧文档不应再标为缺失的内容：
+
+- 全部命令 handler 已接入 core，不再是 `exit(2)` 占位；
+- Forge、NeoForge、Quilt 检测和 JAR 解析；
+- `file:` 添加、全量 restore、target/group/optional；
+- list target、sync/check/purge、导入导出、实例与 cache；
+- 默认实例的修改型命令安全阻断；
+- 非交互 init 不猜 loader/版本，重复 init 不覆盖项目；
+- 全局 `--format text|json` 与 `--progress-format none|ndjson`；JSON 信封 + NDJSON 进度 +
+  结构化错误 JSON + 稳定错误码 + 退出码（见 [orbit-output-formats.md](orbit-output-formats.md)）；
+  audit 的 per-command `--format` 已删除并入全局选项。
+
+CurseForge 已接入 search/info/add/install/check/outdated/upgrade/restore 的共享
+路径。它仍受 Core API Key 和项目第三方下载许可约束；这些是外部服务边界，不会用
+硬编码 ID 或猜测 CDN URL 规避。

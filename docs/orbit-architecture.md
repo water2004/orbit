@@ -1,0 +1,246 @@
+# Orbit 架构
+
+## 1. workspace
+
+```text
+orbit-cli       参数、交互和展示
+  output        自适应表格、逻辑包事务、多方案差异高亮、audit 摘要
+    ↓
+orbit-core      领域模型、编排、JAR、求解、文件事务
+    ├── modrinth-wrapper
+    ├── curseforge-wrapper
+    ├── orbit-bytecode-audit（只依赖已选择的实际 JAR 内容与运行时环境）
+    └── water2004/pubgrub（固定 Git revision）
+```
+
+CLI 不实现业务规则。core 不打印 UI 文本，而是返回结构化报告或错误。CLI `output`
+使用 `comfy-table` 渲染更新、诊断、事务、方案差异和 audit 文本报告；颜色只是增强，
+`◆` 才是可重定向的差异语义。表格在 TTY 中服从终端宽度，无法探测宽度的重定向输出
+以 120 列为上限。平台 SDK、网络、ZIP 和文件系统位于边界模块。
+
+PubGrub fork 位于
+[`water2004/pubgrub`](https://github.com/water2004/pubgrub/tree/codex/solver-observer) 的
+`codex/solver-observer` 分支。Orbit 使用完整 commit SHA 固定 Git dependency，避免
+分支后续移动导致构建结果变化。仓库内的 `pubgrub-fork` 仍是独立 checkout，不加入根
+workspace，仅供继续开发和向 fork 推送。
+
+`modrinth-wrapper` 与 `curseforge-wrapper` 分别拥有平台的 HTTP client、请求参数、
+响应 DTO、分页和传输错误。`orbit-core/src/providers/{modrinth,curseforge}` 只把
+wrapper 输出适配成统一的 `RemoteArtifact` / 查询模型。
+`providers/download.rs` 是所有平台共用的 artifact transport；provider 只配置自己的
+运行时认证策略，不会复制安装器或 resolver。
+
+## 2. core 分层
+
+```text
+metadata/     loader 文件 → 规范化逻辑元数据
+jar/          ZIP、manifest、嵌套 JAR、Jar-in-Jar、class major
+identification/
+providers/    来源查询、统一下载与受限运行时认证
+runtime       跨平台目录发现、显式路径覆盖与运行时服务注入
+launcher      标准/HMCL/Prism/MultiMC/CurseForge/GDLauncher 游戏目录归一化
+platform_detection
+              仅供 init/sync 使用的 launcher 探测、JAR 定位和快照生成
+platform      TOML 平台快照的精确路径解析、哈希与元数据校验
+lockfile      可复现的 Fat Lockfile
+versions/     Fabric predicate 与 Maven version range
+resolver/
+  graph       loader-neutral 建图
+  constraints 依赖表达式 → PubGrub 子句
+  ordering    顺序环与软依赖 warning
+  diagnostics 同次求解的原因
+installer/    事务、复制和恢复
+package_reconciliation
+              init/sync 共用的本地包候选选择与清理计划
+init/sync/    实例扫描与对账
+audit         复用 resolver 的 Loader-selected runtime；不包含字节码判定规则
+    ↓
+orbit-bytecode-audit
+  classfile   第三方 parser 隔离 facade、稳定指令 ID
+  jar         安全预算、活动嵌套 JAR/resource、MR-JAR、同名类多定义 Universe
+  namespace   Loader capability provider、runtime symbol alignment、Tiny 投影/readiness
+  mixin_config Loader 注册、端侧/requiredMods/plugin 激活、config/refmap 作用域
+  mixin       候选类合并；selector/slice → InjectionQuery；injector → Mutation
+  transformer ModLauncher/Java transformer → 带 heuristic precision 的统一效果
+  conflict    独立风险原因、行为交互、query 重算、遮蔽后的硬引用风险
+```
+
+允许出现 loader 分支的位置：
+
+- 元数据文件名与字段映射；
+- loader 自身检测；
+- 版本约束语义；
+- loader 官方定义的嵌套格式。
+
+不允许出现 loader 分支的位置：
+
+- lockfile 的依赖数据模型；
+- 本地/联网求解；
+- 安装选择；
+- 错误证明路径；
+- sync/outdated 的图语义。
+
+## 3. 端到端数据流
+
+```text
+init / sync
+  → launcher layout / platform_detection
+  → 完整 platform snapshot
+
+其它命令
+  → manifest / exact platform snapshot validation
+  → package remotes 的 provider project 闭包发现（联网命令）
+  → 完整 artifact 队列
+  → content-addressed cache（命中即 touch）/ 网络
+  → jar reader
+  → loader adapter
+  → normalized metadata
+  → lock/candidate model
+  → shared solver graph
+  → PubGrub solution + diagnostics + warnings
+  → transaction / report
+  → 命令结束合并 LRU 索引并执行容量淘汰
+```
+
+在线安装分为三个不可反向调用的阶段：
+
+1. manifest、lock 与本次输入中的全部 package remotes 同时作为种子，provider 只按
+   project relation 递归枚举当前 Minecraft/loader 的 artifact；
+2. 队列稳定后统一查缓存或下载，并把每个 JAR 解析为候选；
+3. resolver 纯离线消费 JAR 候选，缺少实际依赖时产生正常的无解证明。
+
+JAR `mod_id` 不会被拿去猜 provider slug，resolver 也没有联网补抓入口。
+一个远端 locator 可以跨版本映射到多个真实 `mod_id`；下载后按 JAR 身份分区。新包
+添加先比较各身份的可行 portfolio，已有包升级则保持 lockfile 身份，不把项目改名
+伪装成普通版本升级。
+
+长事务通过 core 的强类型 `ProgressEvent` 暴露进度，core 不写 stdout/stderr。CLI
+把同一事件流渲染为交互式 spinner/进度条，非终端环境退化为逐项文本。事件边界与上述
+数据流一致：project 闭包发现、候选 JAR 下载/校验/解析、离线求解、选中包物化。
+并发下载任务只上报结构化完成计数，不各自操作终端。求解进度直接来自 fork observer：
+enumeration continuation 与 maximality probe 的 start/finish 动态扩展并完成工作总量；
+probe 内部路径不进入成功解原因轨迹。
+
+求解包的身份恒为 JAR 声明的 `mod_id`。同一 ID 的多个顶层 `mods/*.jar` 是同一个包
+的多个候选，最终每包只选一个。候选以本地计算的内容哈希保持唯一；完全相同的字节跨
+provider 合并为一个候选并累积来源，同版本不同字节仍是不同候选。哈希、文件名、slug
+和 project ID 都不能变成求解包，也不能作为正常交互中的包名。
+
+一个顶层包 JAR 可以包含多个同文件模块、嵌套模组 JAR 和普通库；并不是所有内嵌 JAR
+都是包。含 loader 元数据的 contained 模块用 owner/source/path 绑定所选顶层候选，
+普通库随 owner 一起移动而不单独求解。用户和事务计划操作的最小单元始终是逻辑包；
+执行层只为这个包物化或移除对应的顶层 artifact，绝不把包内部的单个 JAR 当删除目标。
+
+## 4. 统一求解
+
+所有入口最终调用 `build_solver_graph()` 或带 target 的变体：
+
+- 联网候选升级；
+- 本地扫描校验；
+- install / restore 的选择；
+- lockfile 校验；
+- outdated。
+
+依赖表达式在 `constraints.rs` 编译；加载顺序在 `ordering.rs`；平台、mod_id 候选、
+`provides`、load condition 和 Jar-in-Jar 在 `graph.rs` 注册。这种拆分按职责而不是
+按 loader 切开。
+
+launcher profile 指向的实际 loader library JAR 也通过公共 JAR reader 进入平台图。
+loader 自身仍是平台包，但其声明的 contained 模块使用与普通顶层包相同的
+owner/source/path 绑定规则参与求解；它们不成为磁盘事务目标。
+
+`orbit.toml [platform]` 是完整、强制的运行时快照：Minecraft JAR、Loader JAR、
+其余 launcher runtime JAR、物理端，以及每个文件的 SHA-256。`platform_detection`
+封装 launcher profile、Prism/MultiMC component、Maven 坐标和目录候选等不稳定规则，
+生产代码中只有 `init` 和 `sync` 可以引用它。`platform` 则是无发现能力的严格消费者。
+
+`sync` 每次忽略旧快照，从当前 launcher 状态重建并整体替换快照，因此允许 launcher
+改名、移动、替换或升级 JAR。install/outdated/upgrade/export/audit 不 fresh scan、
+不修改 `[platform]`、不寻找替代文件：路径、哈希或 JAR 元数据与快照不符就要求先
+`orbit sync`。同步后的 loader 版本变化仍是求解事实，不先验等同于不兼容。
+
+PubGrub fork 允许 provider 在选择包版本时注入带 reason 的自定义 incompatibility。
+条件原因因此属于真正的传播/回溯路径。observer 只补充成功解中的候选淘汰原因，不承担
+另一条证明路径。fork 的最大解枚举只接收通用投影包；Orbit 直接把 `mod_id` 作为投影
+包，把语义版本与来源身份组成私有候选版本。`same_version` 把同一 loader 语义版本的
+全部来源身份映射为一个等价类，`strictly_higher` 只覆盖更高语义版本；枚举和 probe
+因此按包版本而非载体身份区分方案。fork 验证两个范围的基本序关系，避免无效排除导致
+同一投影重复。该抽象由 fork 原生支持，不需要领域特判。
+
+同一语义版本的不同内容哈希天然是不同的私有 `SolverVersion`，因此仍可携带不同
+依赖约束参与一次求解；语义投影又保证它们不被误当成版本升级。Orbit 只需为 CLI
+提供 project/release 与依赖差异描述，不需要再次修改 fork 或把哈希显示给用户。
+
+Jar-in-Jar artifact 使用独立的 Maven 坐标包并精确绑定 owner 候选；`provides` 使用
+同一 mod_id 包下的代理候选。公共 loader `Version` 不包含来源编号，诊断也按强类型
+折叠内部边，不解析名称前缀。
+
+所有会形成新包集合的入口先得到同一种 `ResolutionReport`，再形成事务计划。fork 枚举
+完整 Pareto front：被另一个方案在全部已选包上等价或升级、且至少一项严格升级的方案
+不会返回；每个保留点一次排除完整支配区域。唯一解自动选择，多解由调用方选择；任何
+降级、替换或删除都在写盘前展示并确认。upgrade 方案只要求至少一个包相对当前版本变新，
+允许其他包降级。
+
+`sync` 复用相同本地图和方案/确认模型，但明确不进入 provider 阶段；联网闭包修复只由
+`install` 执行。
+
+## 5. loader 支持矩阵
+
+| Loader | 元数据 | 版本 | 嵌套 | 求解 |
+|---|---|---|---|---|
+| Fabric | `fabric.mod.json` | Fabric predicate | `jars` | 完整统一路径 |
+| Quilt | `quilt.mod.json` / Fabric fallback | Fabric predicate | `jars` | 完整统一路径 |
+| Forge | `META-INF/mods.toml` | Maven | JarJar | 完整统一路径 |
+| NeoForge | `META-INF/neoforge.mods.toml` / legacy name | Maven | JarJar | 完整统一路径 |
+
+“支持”意味着 identity、依赖类别、环境、版本、provides、内嵌和求解都进入真实路径，
+不是只识别文件名。
+
+## 6. 可维护性规则
+
+- 规范化类型表达语义，不用 tuple/字符串标志隐藏含义。
+- 新字段先进入 metadata model，再向 candidate/lock/solver 传播。
+- 不保留旧 lock schema 的兼容分支；项目尚无外部使用者，schema 直接收敛。
+- parser 对身份和结构错误 fail fast。
+- JAR 内 loader-owned JSON 只兼容字符串内未转义控制字符；适配集中在
+  `orbit-loader-json`，网络、launcher、lock 和 cache JSON 保持严格。
+- 测试断言公开行为、结构化 reason 和领域错误，不解析 debug 日志。
+- 暂不支持的产品边界必须显式报错并给出恢复建议。
+
+## 7. 静态兼容性边界
+
+Orbit 能确定：
+
+- loader 元数据声明的版本/端侧冲突；
+- class major 要求的最低 Java；
+- Maven/Fabric 版本范围；
+- Jar-in-Jar artifact 冲突；
+- 加载顺序环。
+
+Orbit 不能仅凭字节码完整证明：
+
+- Minecraft/loader API 调用一定存在；
+- Mixin 目标和映射一定正确；
+- 反射、native code、配置或其他模组交互一定安全。
+
+因此静态扫描只产生可证明的必要条件，不把“没有发现问题”描述为“保证兼容”。
+
+## 8. 当前外部边界
+
+| 边界 | 状态 |
+|---|---|
+| Modrinth | `modrinth-wrapper` + core adapter，可用 |
+| 本地 `file:` | 可用 |
+| CurseForge | `curseforge-wrapper` + core adapter，可用；无 API Key 时 provider 无法创建，Core API 与 CDN 下载均认证 |
+| PubGrub fork | 已发布并固定到 `c334509daecf91611af2729b2db91af7eba6f076` |
+| 多个 Pareto 极大解 | fork 原生完整枚举；唯一解自动选择，多解交给调用方选择 |
+
+## 9. 跨平台运行环境
+
+`RuntimeEnvironment` 是唯一允许读取宿主平台目录的 trait。Windows、Linux 和 macOS
+实现分别使用 AppData、XDG/HOME 和 Library 目录；公共层只接收 `RuntimePaths`。
+`RuntimeContext` 加载显式 `config.toml`、实例注册表路径和 content-addressed JAR
+缓存，随后注入 CLI 调用的 core API。
+
+调用方可传精确配置/缓存路径，也可选择 `system` 或 `executable` 布局。Cargo
+`portable` feature 只把编译默认值改成 executable 布局，不取消运行时显式覆盖。

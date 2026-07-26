@@ -1,0 +1,36 @@
+{
+    "game_versions": [
+        "26.1.2"
+    ],
+    "loaders": [
+        "fabric"
+    ],
+    "id": "SIrB5bCM",
+    "project_id": "AANobbMI",
+    "author_id": "TEZXhE2U",
+    "featured": false,
+    "name": "Sodium 0.8.10 for Fabric 26.1.2",
+    "version_number": "mc26.1.2-0.8.10-fabric",
+    "changelog": "Sodium 0.8.10 fixes some bugs. This release is primarily relevant for NeoForge.\n\n- Support Minecraft 26.1.2\n- Sources jar is now published to our Maven ([#3592](https://github.com/CaffeineMC/sodium/pull/3592))\n- Lazily construct expensive ShapeComparisonCache object ([#3607](https://github.com/CaffeineMC/sodium/pull/3607))",
+    "changelog_url": null,
+    "date_published": "2026-04-25T23:38:17.207633Z",
+    "downloads": 275139,
+    "version_type": "release",
+    "status": "listed",
+    "requested_status": null,
+    "files": [
+        {
+            "id": "hK9pa3rN",
+            "hashes": {
+                "sha1": "355b37c13219bd5fcfe1ad84911739008abd12a7",
+                "sha512": "ac09f0bd36d56824b9691f5160adf10e758ec6309b7e050fdcefb908af9d796eaf964e0386ea1f644284854926d2ffa902c641cd7e385586973a2cd8a3aed6b5"
+            },
+            "url": "https://cdn.modrinth.com/data/AANobbMI/versions/SIrB5bCM/sodium-fabric-0.8.10%2Bmc26.1.2.jar",
+            "filename": "sodium-fabric-0.8.10+mc26.1.2.jar",
+            "primary": true,
+            "size": 1811107,
+            "file_type": null
+        }
+    ],
+    "dependencies": []
+}

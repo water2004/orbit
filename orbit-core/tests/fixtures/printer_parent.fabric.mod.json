@@ -1,0 +1,89 @@
+{
+  "schemaVersion": 1,
+  "id": "litematica-printer-all",
+  "version": "2.4+20260330.10",
+  "name": "Litematica-Printer",
+  "description": "Printer All Version",
+  "authors": [
+    {
+      "name": "aleksilassila",
+      "contact": {
+        "homepage": ""
+      }
+    },
+    {
+      "name": "zhaixianyu",
+      "contact": {
+        "homepage": "https://github.com/zhaixianyu"
+      }
+    }
+  ],
+  "contact": {
+    "homepage": "https://space.bilibili.com/31545812",
+    "issues": "https://github.com/zhaixianyu/litematica-printer/issues",
+    "sources": "https://github.com/zhaixianyu/litematica-printer"
+  },
+  "license": "CC0-1.0",
+  "environment": "*",
+  "entrypoints": {},
+  "depends": {
+    "malilib": "*",
+    "minecraft": [
+      "1.18.2",
+      "1.19.2",
+      "1.19.4",
+      "1.20.1",
+      "1.20.2",
+      "1.20.4",
+      "1.20.6",
+      ">=1.21 <=1.21.1",
+      ">=1.21.9 <=1.21.10",
+      "1.21.11",
+      "1.21.4",
+      "1.21.5",
+      ">=1.21.6 <=1.21.8"
+    ]
+  },
+  "custom": {},
+  "jars": [
+    {
+      "file": "META-INF/jars/litematica-printer-1.18.2-2.4+20260330.10.jar"
+    },
+    {
+      "file": "META-INF/jars/litematica-printer-1.19.2-2.4+20260330.10.jar"
+    },
+    {
+      "file": "META-INF/jars/litematica-printer-1.19.4-2.4+20260330.10.jar"
+    },
+    {
+      "file": "META-INF/jars/litematica-printer-1.20.1-2.4+20260330.10.jar"
+    },
+    {
+      "file": "META-INF/jars/litematica-printer-1.20.2-2.4+20260330.10.jar"
+    },
+    {
+      "file": "META-INF/jars/litematica-printer-1.20.4-2.4+20260330.10.jar"
+    },
+    {
+      "file": "META-INF/jars/litematica-printer-1.20.6-2.4+20260330.10.jar"
+    },
+    {
+      "file": "META-INF/jars/litematica-printer-1.21.1-2.4+20260330.10.jar"
+    },
+    {
+      "file": "META-INF/jars/litematica-printer-1.21.10-2.4+20260330.10.jar"
+    },
+    {
+      "file": "META-INF/jars/litematica-printer-1.21.11-2.4+20260330.10.jar"
+    },
+    {
+      "file": "META-INF/jars/litematica-printer-1.21.4-2.4+20260330.10.jar"
+    },
+    {
+      "file": "META-INF/jars/litematica-printer-1.21.5-2.4+20260330.10.jar"
+    },
+    {
+      "file": "META-INF/jars/litematica-printer-1.21.6-2.4+20260330.10.jar"
+    }
+  ]
+}
