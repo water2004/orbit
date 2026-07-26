@@ -1200,6 +1200,7 @@ name = "orbit-bytecode-audit"
 version = "0.1.0"
 dependencies = [
  "hex",
+ "orbit-loader-json",
  "ristretto_classfile",
  "serde",
  "serde_json",
@@ -1225,6 +1226,7 @@ dependencies = [
  "indexmap",
  "modrinth-wrapper",
  "orbit-bytecode-audit",
+ "orbit-loader-json",
  "pubgrub",
  "reqwest",
  "serde",
@@ -1235,8 +1237,17 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "toml",
+ "toml_edit",
  "url",
  "zip",
+]
+
+[[package]]
+name = "orbit-loader-json"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

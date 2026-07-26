@@ -2,6 +2,7 @@ pub mod add;
 pub mod audit;
 pub mod cache;
 pub mod check;
+pub mod config;
 pub mod export;
 pub mod import;
 pub mod info;
@@ -114,6 +115,7 @@ pub trait CommandHandler {
 pub use add::handle as handle_add;
 pub use audit::handle as handle_audit;
 pub use check::handle as handle_check;
+pub use config::handle as handle_config;
 pub use export::handle as handle_export;
 pub use import::handle as handle_import;
 pub use info::handle as handle_info;

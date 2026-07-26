@@ -145,7 +145,6 @@ pub struct RuntimeContext {
     paths: RuntimePaths,
     config: GlobalConfig,
     jar_cache: JarCache,
-    jar_cache_capacity_bytes: u64,
 }
 
 impl RuntimeContext {
@@ -163,14 +162,13 @@ impl RuntimeContext {
         if options.cache_dir.is_none() {
             options.cache_dir = config.cache.dir.as_deref().map(PathBuf::from);
         }
-        let jar_cache_capacity_bytes = config.cache.capacity_bytes()?;
+        config.cache.capacity_bytes()?;
         let paths = RuntimePaths::resolve_with(environment, &options)?;
         let jar_cache = JarCache::open(paths.cache_dir().to_path_buf())?;
         Ok(Self {
             paths,
             config,
             jar_cache,
-            jar_cache_capacity_bytes,
         })
     }
 
@@ -190,8 +188,10 @@ impl RuntimeContext {
     /// hard capacity. CLI entry points call this once after command execution,
     /// including when the command itself returns an error.
     pub fn prune_jar_cache(&self) -> Result<crate::jar_cache::CachePruneSummary, OrbitError> {
-        self.jar_cache
-            .prune_to_capacity(self.jar_cache_capacity_bytes)
+        let capacity_bytes = GlobalConfig::load(self.paths.config_file())?
+            .cache
+            .capacity_bytes()?;
+        self.jar_cache.prune_to_capacity(capacity_bytes)
     }
 }
 

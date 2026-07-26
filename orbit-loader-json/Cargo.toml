@@ -1,0 +1,9 @@
+[package]
+name = "orbit-loader-json"
+version = "0.1.0"
+edition = "2024"
+description = "Loader-compatible JSON parsing for metadata embedded in Minecraft mod JARs"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true

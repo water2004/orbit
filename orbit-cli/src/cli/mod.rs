@@ -238,6 +238,12 @@ pub enum Commands {
         command: CacheCommands,
     },
 
+    /// 查看或修改全局配置
+    Config {
+        #[command(subcommand)]
+        command: ConfigCommands,
+    },
+
     /// 管理一个包的候选来源
     Remote {
         #[command(subcommand)]
@@ -259,6 +265,31 @@ pub enum InstanceCommands {
 pub enum CacheCommands {
     /// 清理下载缓存
     Clean,
+}
+
+#[derive(Subcommand)]
+pub enum ConfigCommands {
+    /// 显示实际使用的全局配置文件路径
+    Path,
+    /// 列出所有受支持字段的文件层值
+    List,
+    /// 读取一个配置文件字段
+    Get {
+        /// 配置键，例如 cache.capacity-mib
+        key: String,
+    },
+    /// 设置一个经过类型校验的配置文件字段
+    Set {
+        /// 配置键，例如 cache.capacity-mib
+        key: String,
+        /// 新值
+        value: String,
+    },
+    /// 清除可选字段，或把必填字段恢复为默认值
+    Unset {
+        /// 配置键，例如 network.proxy
+        key: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -357,6 +388,7 @@ impl CommandHandler for Commands {
                 .await
             }
             Commands::Cache { command } => command.execute(ctx).await,
+            Commands::Config { command } => handle_config(command, ctx).await,
             Commands::Remote { command } => handle_remote(command, ctx).await,
         }
     }
@@ -404,7 +436,7 @@ impl CommandHandler for CacheCommands {
 mod tests {
     use clap::Parser;
 
-    use super::{Cli, Commands, RemoteCommands};
+    use super::{Cli, Commands, ConfigCommands, RemoteCommands};
 
     #[test]
     fn audit_defaults_do_not_request_a_report_file() {
@@ -478,5 +510,26 @@ mod tests {
         assert_eq!(index, Some(2));
         assert!(provider.is_none());
         assert!(locator.is_none());
+    }
+
+    #[test]
+    fn config_set_accepts_canonical_typed_key_syntax() {
+        let cli = Cli::try_parse_from([
+            "orbit",
+            "config",
+            "set",
+            "cache.capacity-mib",
+            "2048",
+        ])
+        .unwrap();
+        let Commands::Config {
+            command: ConfigCommands::Set { key, value },
+        } = cli.command
+        else {
+            panic!("config set command was not parsed");
+        };
+
+        assert_eq!(key, "cache.capacity-mib");
+        assert_eq!(value, "2048");
     }
 }

@@ -19,10 +19,11 @@ mod progress_ndjson;
 pub use audit::audit_report;
 pub use progress_ndjson::{ndjson_audit_reporter, ndjson_progress_reporter};
 pub use view::{
-    CacheOutput, CheckOutput, CheckSummary, DiagnosticView, ErrorJson, ExportOutput,
-    ImportOutput, InitOutput, InstanceDefaultOutput, InstanceRemoveOutput, InstancesOutput,
-    JsonEnvelope, OutdatedOutput, OutdatedSummary, PurgeOutput, RemoveOutput,
-    RemovedPackageView, SearchFilters, SearchOutput, SearchResultView,
+    CacheOutput, CheckOutput, CheckSummary, ConfigEntryOutput, ConfigEntryView, ConfigListOutput,
+    ConfigPathOutput, ConfigValueView, DiagnosticView, ErrorJson, ExportOutput, ImportOutput,
+    InitOutput, InstanceDefaultOutput, InstanceRemoveOutput, InstancesOutput, JsonEnvelope,
+    OutdatedOutput, OutdatedSummary, PurgeOutput, RemoveOutput, RemovedPackageView, SearchFilters,
+    SearchOutput, SearchResultView,
 };
 pub use view::{
     check_result_view, diagnostic_view, info_view, instance_view, list_view, outdated_mod_view,
@@ -96,6 +97,23 @@ const ABSENT: &str = "—";
 
 const COMPATIBLE_MARK: &str = "\u{2713}";
 const INCOMPATIBLE_MARK: &str = "\u{2717}";
+
+pub fn config_entries_table(entries: &[ConfigEntryView]) -> String {
+    let mut table = output_table(["Key", "Type", "File/default value"]);
+    for entry in entries {
+        let value = match &entry.value {
+            Some(ConfigValueView::Text(value)) => value.clone(),
+            Some(ConfigValueView::Integer(value)) => value.to_string(),
+            None => ABSENT.to_string(),
+        };
+        table.add_row([
+            Cell::new(&entry.key),
+            Cell::new(&entry.value_type),
+            Cell::new(value),
+        ]);
+    }
+    table.to_string()
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct LogicalChange {

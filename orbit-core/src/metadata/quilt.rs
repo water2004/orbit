@@ -9,7 +9,7 @@ use super::{
 use crate::error::OrbitError;
 
 pub(crate) fn parse_quilt(content: &str) -> Result<ModFileMetadata, OrbitError> {
-    let value: Value = serde_json::from_str(content)
+    let value: Value = orbit_loader_json::from_str(content)
         .map_err(|error| OrbitError::Other(anyhow::anyhow!("invalid quilt.mod.json: {error}")))?;
     let root = value.as_object().ok_or_else(|| {
         OrbitError::Other(anyhow::anyhow!("quilt.mod.json must contain a JSON object"))
@@ -382,5 +382,22 @@ mod tests {
             .to_string()
             .contains("load_type")
         );
+    }
+
+    #[test]
+    fn accepts_loader_compatible_unescaped_controls_in_strings() {
+        let parsed = parse_quilt(
+            "{
+  \"quilt_loader\": {
+    \"id\": \"example\",
+    \"version\": \"1\",
+    \"metadata\": {\"description\": \"first line
+second line\"}
+  }
+}",
+        )
+        .unwrap();
+
+        assert_eq!(parsed.mods[0].description, "first line\nsecond line");
     }
 }

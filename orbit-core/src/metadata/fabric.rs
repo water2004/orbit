@@ -20,7 +20,7 @@ impl MetadataParser for FabricParser {
     }
 
     fn parse(&self, content: &str) -> Result<ModFileMetadata, OrbitError> {
-        let value: Value = serde_json::from_str(content).map_err(|error| {
+        let value: Value = orbit_loader_json::from_str(content).map_err(|error| {
             OrbitError::Other(anyhow::anyhow!("invalid fabric.mod.json: {error}"))
         })?;
         let object = value.as_object().ok_or_else(|| {
@@ -337,5 +337,37 @@ mod tests {
     fn requires_identity_fields() {
         let error = FabricParser.parse(r#"{"id":"example"}"#).unwrap_err();
         assert!(error.to_string().contains("version"));
+    }
+
+    #[test]
+    fn accepts_loader_compatible_unescaped_controls_in_strings() {
+        let parsed = FabricParser
+            .parse(
+                "{
+  \"schemaVersion\": 1,
+  \"id\": \"example\",
+  \"version\": \"1.0\",
+  \"description\": \"first line
+second line\"
+}",
+            )
+            .unwrap();
+
+        assert_eq!(parsed.mods[0].description, "first line\nsecond line");
+    }
+
+    #[test]
+    fn does_not_accept_unrelated_lenient_json_extensions() {
+        let error = FabricParser
+            .parse(
+                r#"{
+  "schemaVersion": 1,
+  "id": "example",
+  "version": "1.0",
+}"#,
+            )
+            .unwrap_err();
+
+        assert!(error.to_string().contains("invalid fabric.mod.json"));
     }
 }

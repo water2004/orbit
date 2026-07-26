@@ -7,7 +7,8 @@
 //! 文件位置由 [`crate::runtime::RuntimePaths`] 注入。
 
 use serde::{Deserialize, Serialize};
-use std::path::Path;
+use std::{io::Write, path::Path};
+use toml_edit::{DocumentMut, Item, Table, value as toml_value};
 
 use crate::error::OrbitError;
 
@@ -118,6 +119,263 @@ impl Default for UiConfig {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Typed global configuration keys
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConfigKey {
+    CoreDefaultInstance,
+    CoreMaxConcurrentDownloads,
+    CoreLanguage,
+    NetworkTimeout,
+    NetworkMaxRetries,
+    NetworkProxy,
+    AuthCurseforgeApiKey,
+    AuthModrinthToken,
+    CacheDir,
+    CacheCapacityMib,
+    UiColor,
+    UiProgressBar,
+}
+
+impl ConfigKey {
+    pub const ALL: [Self; 12] = [
+        Self::CoreDefaultInstance,
+        Self::CoreMaxConcurrentDownloads,
+        Self::CoreLanguage,
+        Self::NetworkTimeout,
+        Self::NetworkMaxRetries,
+        Self::NetworkProxy,
+        Self::AuthCurseforgeApiKey,
+        Self::AuthModrinthToken,
+        Self::CacheDir,
+        Self::CacheCapacityMib,
+        Self::UiColor,
+        Self::UiProgressBar,
+    ];
+
+    pub fn parse(key: &str) -> Result<Self, OrbitError> {
+        let key = match key {
+            "core.default-instance" => Self::CoreDefaultInstance,
+            "core.max-concurrent-downloads" => Self::CoreMaxConcurrentDownloads,
+            "core.language" => Self::CoreLanguage,
+            "network.timeout" => Self::NetworkTimeout,
+            "network.max-retries" => Self::NetworkMaxRetries,
+            "network.proxy" => Self::NetworkProxy,
+            "auth.curseforge-api-key" => Self::AuthCurseforgeApiKey,
+            "auth.modrinth-token" => Self::AuthModrinthToken,
+            "cache.dir" => Self::CacheDir,
+            "cache.capacity-mib" => Self::CacheCapacityMib,
+            "ui.color" => Self::UiColor,
+            "ui.progress-bar" => Self::UiProgressBar,
+            _ => {
+                return Err(OrbitError::Other(anyhow::anyhow!(
+                    "unknown global configuration key '{key}'; run 'orbit config list' to see supported keys"
+                )));
+            }
+        };
+        Ok(key)
+    }
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::CoreDefaultInstance => "core.default-instance",
+            Self::CoreMaxConcurrentDownloads => "core.max-concurrent-downloads",
+            Self::CoreLanguage => "core.language",
+            Self::NetworkTimeout => "network.timeout",
+            Self::NetworkMaxRetries => "network.max-retries",
+            Self::NetworkProxy => "network.proxy",
+            Self::AuthCurseforgeApiKey => "auth.curseforge-api-key",
+            Self::AuthModrinthToken => "auth.modrinth-token",
+            Self::CacheDir => "cache.dir",
+            Self::CacheCapacityMib => "cache.capacity-mib",
+            Self::UiColor => "ui.color",
+            Self::UiProgressBar => "ui.progress-bar",
+        }
+    }
+
+    pub const fn value_type(self) -> &'static str {
+        match self {
+            Self::CoreMaxConcurrentDownloads
+            | Self::NetworkTimeout
+            | Self::NetworkMaxRetries
+            | Self::CacheCapacityMib => "integer",
+            _ => "string",
+        }
+    }
+
+    pub const fn is_sensitive(self) -> bool {
+        matches!(self, Self::AuthCurseforgeApiKey | Self::AuthModrinthToken)
+    }
+
+    pub fn get(self, config: &GlobalConfig) -> ConfigValue {
+        match self {
+            Self::CoreDefaultInstance => optional_text(&config.core.default_instance),
+            Self::CoreMaxConcurrentDownloads => {
+                ConfigValue::Integer(config.core.max_concurrent_downloads as u64)
+            }
+            Self::CoreLanguage => ConfigValue::Text(config.core.language.clone()),
+            Self::NetworkTimeout => ConfigValue::Integer(config.network.timeout),
+            Self::NetworkMaxRetries => ConfigValue::Integer(u64::from(config.network.max_retries)),
+            Self::NetworkProxy => optional_text(&config.network.proxy),
+            Self::AuthCurseforgeApiKey => optional_text(&config.auth.curseforge_api_key),
+            Self::AuthModrinthToken => optional_text(&config.auth.modrinth_token),
+            Self::CacheDir => optional_text(&config.cache.dir),
+            Self::CacheCapacityMib => ConfigValue::Integer(config.cache.capacity_mib),
+            Self::UiColor => ConfigValue::Text(config.ui.color.clone()),
+            Self::UiProgressBar => ConfigValue::Text(config.ui.progress_bar.clone()),
+        }
+    }
+
+    pub fn set(self, config: &mut GlobalConfig, raw: &str) -> Result<(), OrbitError> {
+        match self {
+            Self::CoreDefaultInstance => {
+                config.core.default_instance = Some(nonempty(raw, self)?);
+            }
+            Self::CoreMaxConcurrentDownloads => {
+                let value = parse_toml_u64(raw, self)?;
+                if value == 0 {
+                    return Err(invalid_value(self, "must be greater than zero"));
+                }
+                config.core.max_concurrent_downloads = usize::try_from(value)
+                    .map_err(|_| invalid_value(self, "does not fit this platform's usize"))?;
+            }
+            Self::CoreLanguage => config.core.language = nonempty(raw, self)?,
+            Self::NetworkTimeout => {
+                let value = parse_toml_u64(raw, self)?;
+                if value == 0 {
+                    return Err(invalid_value(self, "must be greater than zero"));
+                }
+                config.network.timeout = value;
+            }
+            Self::NetworkMaxRetries => {
+                config.network.max_retries = raw
+                    .parse()
+                    .map_err(|_| invalid_value(self, "expected an integer from 0 to 4294967295"))?;
+            }
+            Self::NetworkProxy => config.network.proxy = Some(nonempty(raw, self)?),
+            Self::AuthCurseforgeApiKey => {
+                config.auth.curseforge_api_key = Some(nonempty(raw, self)?);
+            }
+            Self::AuthModrinthToken => {
+                config.auth.modrinth_token = Some(nonempty(raw, self)?);
+            }
+            Self::CacheDir => config.cache.dir = Some(nonempty(raw, self)?),
+            Self::CacheCapacityMib => {
+                let capacity_mib = parse_toml_u64(raw, self)?;
+                config.cache.capacity_mib = capacity_mib;
+                config.cache.capacity_bytes()?;
+            }
+            Self::UiColor => {
+                if !matches!(raw, "auto" | "always" | "never") {
+                    return Err(invalid_value(self, "expected auto, always, or never"));
+                }
+                config.ui.color = raw.to_string();
+            }
+            Self::UiProgressBar => {
+                if !matches!(raw, "modern" | "plain" | "off") {
+                    return Err(invalid_value(self, "expected modern, plain, or off"));
+                }
+                config.ui.progress_bar = raw.to_string();
+            }
+        }
+        Ok(())
+    }
+
+    /// Remove an optional value or restore a required value to its schema
+    /// default.
+    pub fn unset(self, config: &mut GlobalConfig) {
+        let defaults = GlobalConfig::default();
+        match self {
+            Self::CoreDefaultInstance => config.core.default_instance = None,
+            Self::CoreMaxConcurrentDownloads => {
+                config.core.max_concurrent_downloads = defaults.core.max_concurrent_downloads;
+            }
+            Self::CoreLanguage => config.core.language = defaults.core.language,
+            Self::NetworkTimeout => config.network.timeout = defaults.network.timeout,
+            Self::NetworkMaxRetries => {
+                config.network.max_retries = defaults.network.max_retries;
+            }
+            Self::NetworkProxy => config.network.proxy = None,
+            Self::AuthCurseforgeApiKey => config.auth.curseforge_api_key = None,
+            Self::AuthModrinthToken => config.auth.modrinth_token = None,
+            Self::CacheDir => config.cache.dir = None,
+            Self::CacheCapacityMib => {
+                config.cache.capacity_mib = defaults.cache.capacity_mib;
+            }
+            Self::UiColor => config.ui.color = defaults.ui.color,
+            Self::UiProgressBar => config.ui.progress_bar = defaults.ui.progress_bar,
+        }
+    }
+
+    const fn toml_path(self) -> (&'static str, &'static str) {
+        match self {
+            Self::CoreDefaultInstance => ("core", "default_instance"),
+            Self::CoreMaxConcurrentDownloads => ("core", "max_concurrent_downloads"),
+            Self::CoreLanguage => ("core", "language"),
+            Self::NetworkTimeout => ("network", "timeout"),
+            Self::NetworkMaxRetries => ("network", "max_retries"),
+            Self::NetworkProxy => ("network", "proxy"),
+            Self::AuthCurseforgeApiKey => ("auth", "curseforge_api_key"),
+            Self::AuthModrinthToken => ("auth", "modrinth_token"),
+            Self::CacheDir => ("cache", "dir"),
+            Self::CacheCapacityMib => ("cache", "capacity_mib"),
+            Self::UiColor => ("ui", "color"),
+            Self::UiProgressBar => ("ui", "progress_bar"),
+        }
+    }
+
+    fn toml_item(self, config: &GlobalConfig) -> Option<Item> {
+        match self.get(config) {
+            ConfigValue::Absent => None,
+            ConfigValue::Text(value) => Some(toml_value(value)),
+            ConfigValue::Integer(value) => Some(toml_value(value as i64)),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConfigValue {
+    Absent,
+    Text(String),
+    Integer(u64),
+}
+
+fn optional_text(value: &Option<String>) -> ConfigValue {
+    value
+        .as_ref()
+        .map(|value| ConfigValue::Text(value.clone()))
+        .unwrap_or(ConfigValue::Absent)
+}
+
+fn nonempty(raw: &str, key: ConfigKey) -> Result<String, OrbitError> {
+    let value = raw.trim();
+    if value.is_empty() {
+        Err(invalid_value(key, "must not be empty"))
+    } else {
+        Ok(value.to_string())
+    }
+}
+
+fn parse_toml_u64(raw: &str, key: ConfigKey) -> Result<u64, OrbitError> {
+    let value = raw
+        .parse()
+        .map_err(|_| invalid_value(key, "expected a non-negative integer"))?;
+    if value > i64::MAX as u64 {
+        Err(invalid_value(key, "exceeds TOML's integer range"))
+    } else {
+        Ok(value)
+    }
+}
+
+fn invalid_value(key: ConfigKey, reason: &str) -> OrbitError {
+    OrbitError::Other(anyhow::anyhow!(
+        "invalid value for '{}': {reason}",
+        key.as_str()
+    ))
+}
+
 // 辅助默认值函数
 fn default_max_downloads() -> usize {
     8
@@ -143,8 +401,17 @@ impl GlobalConfig {
     ///
     /// 优先级：环境变量 > config.toml > 代码默认值
     pub fn load(path: &Path) -> Result<Self, OrbitError> {
-        // Layer 1: 文件（如果存在）
-        let mut config = if path.exists() {
+        let mut config = Self::load_stored(path)?;
+        config.apply_environment();
+        Ok(config)
+    }
+
+    /// Load only the values persisted in `config.toml`.
+    ///
+    /// Mutation commands must use this entry point so process environment
+    /// overrides, especially credentials, are never written back to disk.
+    pub fn load_stored(path: &Path) -> Result<Self, OrbitError> {
+        let config = if path.exists() {
             let content = std::fs::read_to_string(path).map_err(|e| {
                 OrbitError::Other(anyhow::anyhow!("failed to read config.toml: {e}"))
             })?;
@@ -153,36 +420,35 @@ impl GlobalConfig {
             })?
         } else {
             let cfg = Self::default();
-            // 首次运行时自动写入默认配置
             cfg.save(path)?;
             cfg
         };
+        Ok(config)
+    }
 
-        // Layer 2: 环境变量覆盖
+    fn apply_environment(&mut self) {
         if let Ok(v) = std::env::var("ORBIT_PROXY") {
-            config.network.proxy = Some(v);
+            self.network.proxy = Some(v);
         }
         if let Ok(v) = std::env::var("ORBIT_TIMEOUT")
             && let Ok(n) = v.parse()
         {
-            config.network.timeout = n;
+            self.network.timeout = n;
         }
         if let Ok(v) = std::env::var("ORBIT_RETRIES")
             && let Ok(n) = v.parse()
         {
-            config.network.max_retries = n;
+            self.network.max_retries = n;
         }
         if let Ok(v) = std::env::var("ORBIT_LANGUAGE") {
-            config.core.language = v;
+            self.core.language = v;
         }
         if let Ok(v) = std::env::var("ORBIT_CURSEFORGE_API_KEY") {
-            config.auth.curseforge_api_key = Some(v);
+            self.auth.curseforge_api_key = Some(v);
         }
         if let Ok(v) = std::env::var("ORBIT_MODRINTH_TOKEN") {
-            config.auth.modrinth_token = Some(v);
+            self.auth.modrinth_token = Some(v);
         }
-
-        Ok(config)
     }
 
     /// 保存到 config.toml
@@ -196,8 +462,7 @@ impl GlobalConfig {
         let content = toml::to_string_pretty(self).map_err(|e| {
             OrbitError::Other(anyhow::anyhow!("failed to serialize config.toml: {e}"))
         })?;
-        std::fs::write(path, content)?;
-        Ok(())
+        write_atomic(path, content.as_bytes())
     }
 
     /// 写入默认配置（首次使用时）
@@ -206,6 +471,70 @@ impl GlobalConfig {
         config.save(path)?;
         Ok(config)
     }
+}
+
+/// Persist exactly one typed field while preserving unrelated TOML comments
+/// and formatting.
+pub fn persist_config_field(
+    path: &Path,
+    key: ConfigKey,
+    config: &GlobalConfig,
+) -> Result<(), OrbitError> {
+    let content = std::fs::read_to_string(path).map_err(|error| {
+        OrbitError::Other(anyhow::anyhow!("failed to read config.toml: {error}"))
+    })?;
+    let mut document = content.parse::<DocumentMut>().map_err(|error| {
+        OrbitError::Other(anyhow::anyhow!("failed to edit config.toml: {error}"))
+    })?;
+    let (section, field) = key.toml_path();
+    if !document.contains_key(section) {
+        document[section] = Item::Table(Table::new());
+    }
+    let table = document[section].as_table_mut().ok_or_else(|| {
+        OrbitError::Other(anyhow::anyhow!(
+            "config.toml field '{section}' must be a table"
+        ))
+    })?;
+    match key.toml_item(config) {
+        Some(mut item) => {
+            if let Some(decor) = table
+                .get(field)
+                .and_then(Item::as_value)
+                .map(|value| value.decor().clone())
+                && let Some(value) = item.as_value_mut()
+            {
+                *value.decor_mut() = decor;
+            }
+            table.insert(field, item);
+        }
+        None => {
+            table.remove(field);
+        }
+    }
+
+    let rendered = document.to_string();
+    let validated: GlobalConfig = toml::from_str(&rendered).map_err(|error| {
+        OrbitError::Other(anyhow::anyhow!(
+            "updated config.toml failed schema validation: {error}"
+        ))
+    })?;
+    validated.cache.capacity_bytes()?;
+    write_atomic(path, rendered.as_bytes())
+}
+
+fn write_atomic(path: &Path, content: &[u8]) -> Result<(), OrbitError> {
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    std::fs::create_dir_all(parent)?;
+    let mut temporary = tempfile::NamedTempFile::new_in(parent)?;
+    temporary.write_all(content)?;
+    temporary.flush()?;
+    temporary
+        .persist(path)
+        .map_err(|error| OrbitError::Io(error.error))?;
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -315,10 +644,22 @@ pub fn set_default_instance(
     })?;
     registry.save(paths.instances_file())?;
 
-    let mut config = GlobalConfig::load(paths.config_file())?;
-    config.core.default_instance = Some(name.to_string());
-    config.save(paths.config_file())?;
+    let mut config = GlobalConfig::load_stored(paths.config_file())?;
+    ConfigKey::CoreDefaultInstance.set(&mut config, name)?;
+    persist_config_field(paths.config_file(), ConfigKey::CoreDefaultInstance, &config)?;
     Ok(selected)
+}
+
+pub fn clear_default_instance(paths: &crate::runtime::RuntimePaths) -> Result<(), OrbitError> {
+    let mut registry = InstancesRegistry::load(paths.instances_file())?;
+    for instance in &mut registry.instances {
+        instance.is_default = false;
+    }
+    registry.save(paths.instances_file())?;
+
+    let mut config = GlobalConfig::load_stored(paths.config_file())?;
+    ConfigKey::CoreDefaultInstance.unset(&mut config);
+    persist_config_field(paths.config_file(), ConfigKey::CoreDefaultInstance, &config)
 }
 
 pub fn remove_instance(
@@ -331,10 +672,10 @@ pub fn remove_instance(
         .ok_or_else(|| OrbitError::Other(anyhow::anyhow!("instance '{name}' not found")))?;
     registry.save(paths.instances_file())?;
 
-    let mut config = GlobalConfig::load(paths.config_file())?;
+    let mut config = GlobalConfig::load_stored(paths.config_file())?;
     if config.core.default_instance.as_deref() == Some(name) {
-        config.core.default_instance = None;
-        config.save(paths.config_file())?;
+        ConfigKey::CoreDefaultInstance.unset(&mut config);
+        persist_config_field(paths.config_file(), ConfigKey::CoreDefaultInstance, &config)?;
     }
     Ok(removed)
 }
@@ -433,6 +774,77 @@ dir = "D:/Games/OrbitCache"
         let deserialized: GlobalConfig = toml::from_str(&serialized).unwrap();
         assert_eq!(deserialized.core.max_concurrent_downloads, 8);
         assert_eq!(deserialized.cache.capacity_mib, 5 * 1024);
+    }
+
+    #[test]
+    fn typed_config_keys_validate_values_and_reset_defaults() {
+        let mut config = GlobalConfig::default();
+
+        ConfigKey::CacheCapacityMib
+            .set(&mut config, "2048")
+            .unwrap();
+        ConfigKey::UiProgressBar.set(&mut config, "plain").unwrap();
+        ConfigKey::NetworkProxy
+            .set(&mut config, "http://127.0.0.1:7890")
+            .unwrap();
+        assert_eq!(
+            ConfigKey::CacheCapacityMib.get(&config),
+            ConfigValue::Integer(2048)
+        );
+        assert_eq!(
+            ConfigKey::NetworkProxy.get(&config),
+            ConfigValue::Text("http://127.0.0.1:7890".to_string())
+        );
+
+        assert!(
+            ConfigKey::CoreMaxConcurrentDownloads
+                .set(&mut config, "0")
+                .is_err()
+        );
+        assert!(ConfigKey::UiProgressBar.set(&mut config, "fast").is_err());
+        assert!(
+            ConfigKey::CacheCapacityMib
+                .set(&mut config, "9223372036854775808")
+                .is_err()
+        );
+
+        ConfigKey::CacheCapacityMib.unset(&mut config);
+        ConfigKey::NetworkProxy.unset(&mut config);
+        assert_eq!(config.cache.capacity_mib, 5 * 1024);
+        assert_eq!(ConfigKey::NetworkProxy.get(&config), ConfigValue::Absent);
+    }
+
+    #[test]
+    fn config_key_names_are_canonical_and_do_not_accept_toml_spelling() {
+        assert_eq!(
+            ConfigKey::parse("cache.capacity-mib").unwrap(),
+            ConfigKey::CacheCapacityMib
+        );
+        assert!(ConfigKey::parse("cache.capacity_mib").is_err());
+    }
+
+    #[test]
+    fn field_updates_preserve_unrelated_comments_and_formatting() {
+        let directory =
+            std::env::temp_dir().join(format!("orbit-config-edit-test-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("config.toml");
+        std::fs::write(
+            &path,
+            "# keep this comment\n[cache]\ncapacity_mib = 5120 # keep inline\n",
+        )
+        .unwrap();
+        let mut config = GlobalConfig::load_stored(&path).unwrap();
+        ConfigKey::CacheCapacityMib
+            .set(&mut config, "2048")
+            .unwrap();
+
+        persist_config_field(&path, ConfigKey::CacheCapacityMib, &config).unwrap();
+
+        let updated = std::fs::read_to_string(&path).unwrap();
+        assert!(updated.contains("# keep this comment"));
+        assert!(updated.contains("capacity_mib = 2048 # keep inline"));
+        std::fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]

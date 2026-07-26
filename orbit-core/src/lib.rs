@@ -44,8 +44,8 @@ pub use archive::{
 pub use audit::{audit_instance, audit_instance_with_progress};
 pub use checker::{CheckResult, check_compatibility, check_compatibility_with_progress};
 pub use config::{
-    GlobalConfig, InstanceEntry, InstancesRegistry, register_instance, remove_instance,
-    set_default_instance,
+    ConfigKey, ConfigValue, GlobalConfig, InstanceEntry, InstancesRegistry, clear_default_instance,
+    persist_config_field, register_instance, remove_instance, set_default_instance,
 };
 pub use error::OrbitError;
 pub use installer::{

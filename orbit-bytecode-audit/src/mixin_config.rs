@@ -158,7 +158,7 @@ fn discover_fabric(artifact: &ParsedArtifact, output: &mut Vec<ConfigDeclaration
         .iter()
         .filter(|resource| leaf(&resource.path).eq_ignore_ascii_case("fabric.mod.json"))
     {
-        let Ok(value) = serde_json::from_slice::<Value>(&resource.bytes) else {
+        let Ok(value) = orbit_loader_json::from_slice::<Value>(&resource.bytes) else {
             continue;
         };
         let Some(mixins) = value.get("mixins") else {
@@ -225,7 +225,7 @@ fn discover_quilt(artifact: &ParsedArtifact, output: &mut Vec<ConfigDeclaration>
         .iter()
         .filter(|resource| leaf(&resource.path).eq_ignore_ascii_case("quilt.mod.json"))
     {
-        let Ok(value) = serde_json::from_slice::<Value>(&resource.bytes) else {
+        let Ok(value) = orbit_loader_json::from_slice::<Value>(&resource.bytes) else {
             continue;
         };
         let Some(mixins) = value.get("mixin") else {
@@ -1129,7 +1129,7 @@ fn plugin_gap(artifact_id: &str, scope: &str, kind: CoverageGapKind, detail: &st
 }
 
 fn parse_config(bytes: &[u8]) -> Result<ParsedMixinConfig, ()> {
-    let value = serde_json::from_slice::<Value>(bytes).map_err(|_| ())?;
+    let value = orbit_loader_json::from_slice::<Value>(bytes).map_err(|_| ())?;
     let object = value.as_object().ok_or(())?;
     let injectors = object.get("injectors").and_then(Value::as_object);
     let overwrites = object.get("overwrites").and_then(Value::as_object);
@@ -1952,6 +1952,14 @@ requiredMods = ["dependency"]
         assert_eq!(parsed.default_require, 2);
         assert_eq!(parsed.default_group, "orbit");
         assert!(parsed.overwrite_require_annotations);
+    }
+
+    #[test]
+    fn common_config_parser_accepts_loader_compatible_string_controls() {
+        let parsed =
+            parse_config(b"{\"package\":\"example\nmixin\",\"mixins\":[\"Common\"]}").unwrap();
+
+        assert_eq!(parsed.package.as_deref(), Some("example\nmixin"));
     }
 
     fn request(

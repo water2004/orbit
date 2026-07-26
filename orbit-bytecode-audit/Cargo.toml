@@ -5,6 +5,7 @@ edition = "2024"
 description = "Static bytecode compatibility risk analysis for Minecraft mod artifacts"
 
 [dependencies]
+orbit-loader-json.workspace = true
 hex.workspace = true
 ristretto_classfile.workspace = true
 serde.workspace = true

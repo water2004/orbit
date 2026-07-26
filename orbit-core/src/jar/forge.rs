@@ -183,7 +183,7 @@ fn read_jarjar_metadata<R: Read + Seek>(
     else {
         return Ok(Vec::new());
     };
-    let metadata: JarJarMetadata = serde_json::from_str(&content).map_err(|error| {
+    let metadata: JarJarMetadata = orbit_loader_json::from_str(&content).map_err(|error| {
         OrbitError::Other(anyhow::anyhow!(
             "invalid META-INF/jarjar/metadata.json: {error}"
         ))

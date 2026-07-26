@@ -410,6 +410,47 @@ pub struct CacheOutput {
 }
 
 // ---------------------------------------------------------------------------
+// config
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ConfigPathOutput {
+    pub subcommand: String,
+    pub config_path: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ConfigListOutput {
+    pub subcommand: String,
+    pub config_path: String,
+    pub entries: Vec<ConfigEntryView>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ConfigEntryOutput {
+    pub subcommand: String,
+    pub config_path: String,
+    pub dry_run: bool,
+    pub entry: ConfigEntryView,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ConfigEntryView {
+    pub key: String,
+    pub value_type: String,
+    pub sensitive: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub value: Option<ConfigValueView>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(untagged)]
+pub enum ConfigValueView {
+    Text(String),
+    Integer(u64),
+}
+
+// ---------------------------------------------------------------------------
 // Error JSON
 // ---------------------------------------------------------------------------
 

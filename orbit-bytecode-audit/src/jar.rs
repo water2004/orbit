@@ -654,7 +654,7 @@ fn scan_archive<R: Read + Seek>(
                 usize::try_from(request.limits.max_entry_bytes.min(8 * 1024 * 1024))
                     .unwrap_or(8 * 1024 * 1024),
             )?;
-            if let Ok(value) = serde_json::from_slice::<Value>(&bytes) {
+            if let Ok(value) = orbit_loader_json::from_slice::<Value>(&bytes) {
                 refmaps.extend(parse_refmap(&name, &value));
                 if name.to_ascii_lowercase().ends_with("coremods.json") {
                     record_unsupported_javascript_coremod(input, &name, coverage, warnings);
