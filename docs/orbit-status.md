@@ -10,7 +10,7 @@
 
 | 能力 | 状态 | 说明 |
 |---|---|---|
-| 初始化与检测 | ✅ | 合法游戏目录校验；标准/HMCL/Prism/MultiMC/CurseForge/GDLauncher；Minecraft 与四种 loader/version/JAR |
+| 初始化与检测 | ✅ | 合法游戏目录校验；标准/HMCL/Prism/MultiMC/CurseForge/GDLauncher；Fabric/Quilt/Forge/NeoForge dedicated server 官方 launch spec；Minecraft 与四种 loader/version/JAR |
 | 平台工件同步 | ✅ | init/sync 独占 fresh scan；TOML 固定 Minecraft/loader/runtime JAR 路径、SHA-256、物理端；其它命令严格消费 |
 | JAR 元数据 | ✅ | 四种 loader、多逻辑 mod、嵌套 JAR、JarJar |
 | 版本语义 | ✅ | Fabric predicate；Maven ComparableVersion/range |

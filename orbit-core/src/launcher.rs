@@ -63,6 +63,11 @@ impl LauncherLayout {
         if let Some(layout) = discover_gdlauncher(instance_dir)? {
             return Ok(layout);
         }
+        // Dedicated-server markers are stronger than the generic versions/
+        // and standalone layouts. Server installers commonly create both.
+        if is_dedicated_server(instance_dir) {
+            return discover_dedicated_server(instance_dir);
+        }
         if let Some(layout) = discover_isolated_version(instance_dir)? {
             return Ok(layout);
         }
@@ -72,16 +77,6 @@ impl LauncherLayout {
         if let Some(layout) = discover_standalone(instance_dir)? {
             return Ok(layout);
         }
-        if is_dedicated_server(instance_dir) {
-            return Ok(LauncherLayout {
-                kind: LauncherLayoutKind::DedicatedServer,
-                profile_paths: Vec::new(),
-                game_jar_directories: vec![instance_dir.to_path_buf()],
-                library_roots: existing_library_roots(instance_dir, 1),
-                components: Vec::new(),
-            });
-        }
-
         Err(invalid_game_directory(
             instance_dir,
             "no launcher profile, launcher instance metadata, Minecraft version JAR, or \
@@ -118,6 +113,23 @@ impl LauncherLayout {
         versions.dedup();
         versions
     }
+}
+
+fn discover_dedicated_server(instance_dir: &Path) -> Result<LauncherLayout, OrbitError> {
+    let (profile_paths, mut game_jar_directories) = launcher_assets(instance_dir)?;
+    let fabric_runtime = instance_dir.join(".fabric").join("server");
+    if fabric_runtime.is_dir() {
+        game_jar_directories.push(fabric_runtime);
+    }
+    game_jar_directories.sort();
+    game_jar_directories.dedup();
+    Ok(LauncherLayout {
+        kind: LauncherLayoutKind::DedicatedServer,
+        profile_paths,
+        game_jar_directories,
+        library_roots: existing_library_roots(instance_dir, 1),
+        components: Vec::new(),
+    })
 }
 
 fn discover_isolated_version(instance_dir: &Path) -> Result<Option<LauncherLayout>, OrbitError> {
@@ -382,7 +394,7 @@ fn existing_directories(paths: impl IntoIterator<Item = PathBuf>) -> Vec<PathBuf
     paths
 }
 
-fn is_dedicated_server(instance_dir: &Path) -> bool {
+pub(crate) fn is_dedicated_server(instance_dir: &Path) -> bool {
     instance_dir.join("server.properties").is_file() || instance_dir.join("eula.txt").is_file()
 }
 
@@ -498,6 +510,29 @@ mod tests {
             Some("0.16.14")
         );
         assert_eq!(layout.library_roots, vec![root.join("libraries")]);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn dedicated_server_markers_take_priority_over_a_versions_directory() {
+        let root = temp_dir("server-priority");
+        let version = root.join("versions").join("26.1.2");
+        let fabric_runtime = root.join(".fabric").join("server");
+        std::fs::create_dir_all(&version).unwrap();
+        std::fs::create_dir_all(&fabric_runtime).unwrap();
+        std::fs::write(root.join("eula.txt"), "eula=true").unwrap();
+        std::fs::write(
+            version.join("server.json"),
+            r#"{"id":"server","mainClass":"net.minecraft.server.Main"}"#,
+        )
+        .unwrap();
+
+        let layout = LauncherLayout::discover(&root).unwrap();
+
+        assert_eq!(layout.kind, LauncherLayoutKind::DedicatedServer);
+        assert!(layout.profile_paths.contains(&version.join("server.json")));
+        assert!(layout.game_jar_directories.contains(&version));
+        assert!(layout.game_jar_directories.contains(&fabric_runtime));
         std::fs::remove_dir_all(root).unwrap();
     }
 }

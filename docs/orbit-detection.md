@@ -50,7 +50,10 @@ libraries 和组件列表：
 - Prism Launcher/MultiMC 的实例 `.minecraft` 或 `minecraft`，读取 `mmc-pack.json`；
 - CurseForge profile（`minecraftinstance.json`）；
 - GDLauncher 的 `instance/`（父目录 `instance.json`）；
-- 带实际 version profile/JAR 的 standalone 目录和 dedicated server marker。
+- 带实际 version profile/JAR 的 standalone 目录；
+- 含 `eula.txt` 或 `server.properties` 的 dedicated server。服务端 marker 的优先级高于
+  通用 `versions/` 和 standalone，避免 Mojang bundler 生成的 `versions/` 被误判为
+  客户端共享游戏根。
 
 空目录、任意目录和只有 `mods/` 的目录不是合法实例。隔离目录只读取当前
 `versions/<实例>` 的 profile，不扫描 sibling 实例。
@@ -81,7 +84,38 @@ Forge/NeoForge profile 的坐标版本有时包含 Minecraft 前缀，例如
 `1.21.1-52.0.0`。只有前半段确实是纯数字点分 Minecraft 版本时，检测层才将其归一化
 为 `52.0.0`，避免破坏 `21.1.0-beta` 这样的正常预发布版本。
 
-## 4. `orbit init` 的选择规则
+## 4. Dedicated server 运行时规范
+
+服务端不伪造 launcher version profile，也不把启动脚本当作 shell/batch 程序执行。
+`detection/server.rs` 将四种 loader 的官方本地安装格式归一化成同一个
+`ServerRuntimeSpec`：
+
+| Loader | 权威本地规格 | 实际路径来源 |
+|---|---|---|
+| Fabric | 官方 server bootstrap JAR 的 `install.properties`，以及生成 launch JAR 的 manifest `Class-Path` | `game-version`、`fabric-loader-version`、真实 loader 元数据 |
+| Quilt | `quilt-server-launch.jar` 的 manifest `Main-Class` / `Class-Path` | classpath 中声明 `quilt_loader` 的实际 JAR，以及 `quilt-server-launcher.properties` |
+| Forge（当前） | 根目录 bootstrap shim 的 manifest 与 `bootstrap-shim.list` | 清单中的 Maven 坐标、相对路径和 SHA-256 |
+| Forge（ModLauncher） | 安装器生成的当前平台 `unix_args.txt` / `win_args.txt` | `--fml.*` 参数、module path、legacy classpath 与安装器坐标目录 |
+| NeoForge | 安装器生成的当前平台 `unix_args.txt` / `win_args.txt` | `--fml.mcVersion`、`--fml.neoForgeVersion` 和精确 classpath |
+
+Fabric/Quilt 的 `server.jar` 若是 Mojang bundler，Orbit 读取
+`META-INF/versions.list` 和 `META-INF/libraries.list`，验证清单哈希，并选择 loader
+运行时实际展开的 `versions/<id>/<jar>`，不会把只负责解包的外层 server JAR 当成游戏
+类空间。Forge bootstrap shim 的每一项同样按其清单 SHA-256 验证。
+
+四种格式最终只输出 Minecraft 版本、loader/version、实际 Minecraft JAR、loader JAR
+和完整 runtime classpath。`init`、loader 自动识别与 `sync` 都消费这一个结果；快照
+之后的命令仍不接触探测规则。
+
+下列情况直接报错，不按目录顺序或文件名猜测：
+
+- 官方 launch spec 引用的 JAR 缺失、越出实例目录或 hash 不匹配；
+- classpath 中没有唯一的 Fabric/Quilt loader 元数据；
+- Forge/NeoForge 参数版本与安装坐标不一致；
+- 同一服务端目录中存在多个不同的有效 loader/runtime；
+- server 安装尚未生成实际 loader/game/runtime JAR。
+
+## 5. `orbit init` 的选择规则
 
 加载器选择顺序如下：
 
@@ -95,10 +129,11 @@ Forge/NeoForge profile 的坐标版本有时包含 Minecraft 前缀，例如
 `LoaderInfo.evidence` 保留命中的坐标、profile 文件名或 `mainClass` 标记，CLI 在
 自动检测成功时显示这些证据。检测失败与“检测到某个版本”是两种可区分的结果。
 
-## 5. Minecraft 版本检测
+## 6. Minecraft 版本检测
 
-`platform_detection::detect_mc_versions(instance_dir)`（由 `init` API 转出）只扫描布局声明的游戏 JAR 目录和
-`libraries/com/mojang/minecraft`，读取 `version.json` 并交给
+Dedicated server 先按上一节的运行时规范确定实际 game JAR；其它布局由
+`platform_detection::detect_mc_versions(instance_dir)`（经 `init` API 转出）扫描布局声明的游戏 JAR 目录和
+`libraries/com/mojang/minecraft`。两者都读取 `version.json` 并交给
 `metadata::mojang::McVersion` 解析。返回值除 `id` 外还保留
 world/protocol/pack/Java 版本和稳定版标志。
 
@@ -116,11 +151,13 @@ Loader、runtime JAR 的实际路径和 SHA-256，以及物理端才整体写入
 任一事实不成立都要求运行 `orbit sync`，不会按文件名、相邻目录、launcher profile
 或旧值寻找替代项。
 
-## 6. 已知边界
+## 7. 已知边界
 
 - 不解析启动器的私有数据库；只读取实例内稳定的 profile/组件/marker 文件和现有
   libraries。没有这些信息时明确报错；
 - launcher profile 的 `mainClass` 仅是弱证据，不足以自动确定 loader 版本；
+- dedicated server 只接受上述官方落盘规格；不会执行 `launch.sh`、`run.sh`、
+  `run.bat` 或用户自定义 wrapper，也不会从进程列表猜测实际启动项；
 - 多个 Minecraft、loader、loader version 或同级 Loader JAR 候选均视为歧义；
   交互 init 可让用户选择版本，sync 不猜测；
 - 游戏 `version.json` 的 Java 信息用于检测展示；resolver 依据目标 Minecraft 版本
@@ -129,7 +166,7 @@ Loader、runtime JAR 的实际路径和 SHA-256，以及物理端才整体写入
 - CurseForge 下载 provider 与 CurseForge launcher 布局是两个独立边界；前者需要 API
   Key，后者只读取本地实例 marker/profile，不需要网络。
 
-## 7. 扩展检测策略
+## 8. 扩展检测策略
 
 新增 loader 时需要同时完成：
 

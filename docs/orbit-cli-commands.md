@@ -68,8 +68,9 @@ orbit init <name>
 
 1. 若 `orbit.toml` 已存在，在扫描、联网和写入前拒绝覆盖；
 2. 验证当前目录是实际游戏目录；空目录或只有 `mods/` 的任意目录会拒绝；
-3. 从游戏 JAR 的 `version.json`、launcher version profile 或 Prism/MultiMC component
-   检测 Minecraft 与 loader；定位并解析实际 Minecraft/loader JAR；
+3. 从游戏 JAR 的 `version.json`、launcher version profile、Prism/MultiMC component
+   或 dedicated-server 官方 launch spec 检测 Minecraft 与 loader；定位并解析实际
+   Minecraft/loader/runtime JAR；
 4. 扫描 `mods/*.jar`，忽略 `.old` / `.disabled`，解析对应 loader 元数据与内嵌 JAR；
 5. 计算 SHA-1/SHA-256/SHA-512 和 CurseForge fingerprint；Modrinth 始终参与批量识别，
    已配置 API Key 时 CurseForge 也参与；
@@ -86,9 +87,15 @@ orbit init <name>
 写出空 lock 与诊断；没有选中方案时不会把冲突候选伪装成已锁定包。
 
 支持标准共享游戏根目录、`versions/<实例>` 隔离目录、Prism/MultiMC 的
-`.minecraft`/`minecraft`、CurseForge profile 和 GDLauncher 的 `instance/`。
+`.minecraft`/`minecraft`、CurseForge profile、GDLauncher 的 `instance/`，以及
+Fabric、Quilt、现代 Forge/NeoForge 安装器生成的 dedicated server 根目录。
 隔离布局只扫描当前实例，不读取 sibling profile；共享根目录出现多个 Minecraft 或
 loader 候选时必须显式选择，不能按目录顺序猜测。
+
+Dedicated server 的 `eula.txt` / `server.properties` 优先于通用 `versions/` 布局。
+Orbit 读取 Fabric/Quilt launch JAR、Forge bootstrap shim 或当前平台
+`unix_args.txt` / `win_args.txt`，但不执行启动脚本。缺少实际运行时文件、清单 hash
+不匹配或存在多个不同安装时直接报错。
 
 显式参数用于筛选实际候选，不能凭空创建平台工件。交互模式在多个候选时请求选择；
 `--yes` 模式不读取 stdin，歧义或缺少实际 JAR 时要求显式参数/修复启动器安装。

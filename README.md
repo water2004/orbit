@@ -10,7 +10,7 @@ Orbit 是一个专为 Minecraft 打造的现代化命令行模组包管理器。
 
 ## ✨ 核心特性
 
-- **📂 非侵入式与多实例管理**：无需改变原有启动器结构。直接 `cd` 进入任意 `.minecraft` 目录即可初始化管理。
+- **📂 非侵入式与多实例/服务器管理**：无需改变原有启动器结构。直接进入启动器实例或 Fabric、Quilt、Forge、NeoForge dedicated server 根目录即可初始化管理。
 - **🔄 拥抱混乱的双向同步**：手动往 `mods` 文件夹拖入了新 mod？启动器自动删除了文件？只需 `orbit sync`，Orbit 会识别变更并对齐状态。
 - **🧹 彻底的深度清理 (`purge`)**：卸载模组时一并清理 `config/` 目录下残留的配置文件，保持环境绝对纯净。
 - **🌐 多来源**：支持 Modrinth、CurseForge 与本地 `file:` JAR；不同平台只负责候选发现，最终统一验证 JAR 并求解依赖。
@@ -41,7 +41,7 @@ Debian/Ubuntu amd64 可从同一个 GitHub Release 下载
 `orbit_<version>-1_amd64.deb`：
 
 ```bash
-sudo apt install ./orbit_0.1.0-1_amd64.deb
+sudo apt install ./orbit_0.1.1-1_amd64.deb
 ```
 
 tag 必须指向 `main` 且与 Cargo 版本一致，GitHub Actions 才会同时发布 MSI、deb、

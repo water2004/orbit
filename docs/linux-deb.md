@@ -7,7 +7,7 @@ MIT 许可信息放入 `/usr/share/doc/orbit/`。用户配置和 JAR cache 位�
 安装 GitHub Release 中的包：
 
 ```bash
-sudo apt install ./orbit_0.1.0-1_amd64.deb
+sudo apt install ./orbit_0.1.1-1_amd64.deb
 orbit --help
 ```
 

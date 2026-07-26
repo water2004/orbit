@@ -8,6 +8,7 @@ pub mod forge;
 pub mod neoforge;
 mod profile;
 pub mod quilt;
+pub(crate) mod server;
 
 use crate::error::OrbitError;
 use crate::metadata::ModLoader;

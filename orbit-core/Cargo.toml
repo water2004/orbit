@@ -1,6 +1,6 @@
 [package]
 name = "orbit-core"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 description = "Core business logic for Orbit — the Minecraft mod package manager"
 
@@ -34,6 +34,7 @@ anyhow.workspace = true
 thiserror.workspace = true
 indexmap.workspace = true
 tempfile.workspace = true
+java-properties = "2.0"
 pubgrub = { git = "https://github.com/water2004/pubgrub.git", rev = "c334509daecf91611af2729b2db91af7eba6f076" }
 
 [dev-dependencies]
