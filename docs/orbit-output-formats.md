@@ -434,6 +434,80 @@ orbit [--format text|json] [--progress-format none|ndjson] <command> ...
 }
 ```
 
+### `config`
+
+`path`：
+
+```json
+{
+  "schema_version": 1,
+  "command": "config",
+  "ok": true,
+  "result": {
+    "subcommand": "path",
+    "config_path": "C:\\Users\\user\\AppData\\Roaming\\orbit\\config.toml"
+  }
+}
+```
+
+`list`：
+
+```json
+{
+  "schema_version": 1,
+  "command": "config",
+  "ok": true,
+  "result": {
+    "subcommand": "list",
+    "config_path": "C:\\Users\\user\\AppData\\Roaming\\orbit\\config.toml",
+    "entries": [
+      {
+        "key": "cache.capacity-mib",
+        "value_type": "integer",
+        "sensitive": false,
+        "value": 2048
+      },
+      {
+        "key": "auth.curseforge-api-key",
+        "value_type": "string",
+        "sensitive": true,
+        "value": "<redacted>"
+      },
+      {
+        "key": "network.proxy",
+        "value_type": "string",
+        "sensitive": false
+      }
+    ]
+  }
+}
+```
+
+`get`、`set` 与 `unset` 返回同一个单项结构：
+
+```json
+{
+  "schema_version": 1,
+  "command": "config",
+  "ok": true,
+  "result": {
+    "subcommand": "set",
+    "config_path": "C:\\Users\\user\\AppData\\Roaming\\orbit\\config.toml",
+    "dry_run": false,
+    "entry": {
+      "key": "cache.capacity-mib",
+      "value_type": "integer",
+      "sensitive": false,
+      "value": 2048
+    }
+  }
+}
+```
+
+未设置的可选字段省略 `value`。敏感字段无论 text/JSON 都只输出
+`"<redacted>"`；环境变量覆盖不进入这些结果。`--dry-run` 时 `dry_run` 为 `true`，
+结果展示验证后的目标值，但不修改文件。
+
 ### `audit`
 
 `audit` 沿用 `orbit-bytecode-audit` 的 schema 4 `AuditReport`，直接作为 `result` 字段嵌入信封：

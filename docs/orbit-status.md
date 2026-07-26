@@ -1,6 +1,6 @@
 # Orbit 实现状态
 
-> 更新日期：2026-07-26。本文区分“正确规范曾未被代码执行”和“文档本身已经过时”。
+> 更新日期：2026-07-27。本文区分“正确规范曾未被代码执行”和“文档本身已经过时”。
 
 ## 1. 当前结论
 
@@ -30,6 +30,8 @@
 | Windows MSI | ✅ | x64 per-machine 向导、可选系统 PATH、同版本重建升级、维护模式、可选清理默认 AppData；发布产物仍需项目证书签名 |
 | 长事务进度 | ✅ | 包操作与 audit 均使用 core 强类型事件；候选/审计工件精确计数，求解工作总量随实际 run/probe 动态增长 |
 | JSON / 自动化输出 | ✅ | 全局 `--format text\|json` 与 `--progress-format none\|ndjson`；JSON 信封 + NDJSON 进度 + 结构化错误 JSON + 稳定错误码；view-model 层隔离哈希/文件名/密钥 |
+| 全局配置命令 | ✅ | `config path/list/get/set/unset`；强类型校验、单字段原子更新、注释保留、密钥脱敏、环境覆盖不回写 |
+| Loader JSON 容错 | ✅ | Fabric-compatible 字符串控制字符；仅限 JAR 内 loader/Mixin/refmap，其他 JSON 保持严格 |
 | 字节码运行时符号对齐 | ✅ | Fabric/Quilt 按实际 Tiny capability 投影；Forge/NeoForge 验证 Loader runtime game；未对齐时在 finding 前停止 |
 
 ## 2. 保留的正确规范
@@ -95,6 +97,7 @@
 | `list` / `info` | 展示包信息、逻辑依赖和 bundled；非树形 list 与 info 均使用自适应表格 |
 | `export` / `import` | Orbit archive 与 Modrinth pack |
 | `cache` / `instances` / `purge` | cache 使用跨命令持久化 LRU 并在每次命令结束执行容量淘汰；instances list 输出自适应表格 |
+| `config` | path/list/get/set/unset；只操作持久化层，强类型校验并对密钥脱敏 |
 
 ## 5. 已知边界
 

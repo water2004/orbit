@@ -105,6 +105,28 @@ orbit instances remove <name>
 - `default` 保证只有一个默认实例，并同步 `config.toml` 的 `default_instance`；
 - `remove` 只移除全局追踪，绝不删除实例目录；若移除默认实例，同时清除默认值。
 
+### `orbit config`
+
+```text
+orbit config path
+orbit config list
+orbit config get <key>
+orbit config set <key> <value>
+orbit config unset <key>
+```
+
+配置键是固定、强类型的公开接口，不接受任意 TOML path。公开键使用连字符，例如
+`cache.capacity-mib`、`core.max-concurrent-downloads` 和
+`auth.curseforge-api-key`；`orbit config list` 展示完整集合、类型与文件层解析值
+（包含 schema 默认值）。
+密钥始终显示为 `<redacted>`。`set`/`unset` 原子更新单一字段且保留其它注释和排版；
+它们遵守全局 `--config` 与 `--dry-run`。`core.default-instance` 与
+`instances.toml` 的唯一默认标记作为一个领域操作同步维护。
+
+这里展示的是持久化层，不叠加环境变量。正常业务命令仍遵守“环境变量 > 文件 >
+schema 默认值”的有效配置优先级。完整键表、取值约束和路径规则见
+[orbit-global-config.md](orbit-global-config.md)。
+
 ## 3. 添加、还原与删除
 
 ### `orbit add`
@@ -407,7 +429,13 @@ orbit cache clean
 `[cache].capacity_mib` 执行一次持久化 LRU 淘汰；命令本身报错也不跳过该收尾步骤。
 容量只统计 SHA-512 内容 JAR，淘汰时同步移除失效 SHA-1 别名。
 
-## 8. 正确规范与剩余差距
+## 8. 全局配置
+
+`orbit config path/list/get/set/unset` 已实现；配置结果同时支持 text 和统一 JSON
+信封。敏感值在 view-model 边界脱敏，修改命令不会把环境变量覆盖写回文件。字段校验、
+默认值、cache 生效时机见 [orbit-global-config.md](orbit-global-config.md)。
+
+## 9. 正确规范与剩余差距
 
 以下不是“历史文档已过时”，而是仍正确但代码尚未完全遵守的 CLI 规范：
 

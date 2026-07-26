@@ -58,7 +58,21 @@ Quilt 的嵌套 `any` / `all` 通过递归 `DependencyExpression` 保真。一�
 Fabric/Quilt 使用 Fabric predicate；Forge/NeoForge 使用 Maven ComparableVersion 与
 Maven version range。版本约束的解释只发生在 `versions/`，parser 保留原始文本。
 
-## 4. 严格解析
+## 4. 严格结构与 Loader-compatible JSON
+
+Fabric Loader 的
+[`JsonReader`](https://github.com/FabricMC/fabric-loader/blob/master/src/main/java/net/fabricmc/loader/impl/lib/gson/JsonReader.java)
+会接受双引号字符串中未转义的 U+0000–U+001F 控制字符，并由
+[`ModMetadataParser`](https://github.com/FabricMC/fabric-loader/blob/master/src/main/java/net/fabricmc/loader/impl/metadata/ModMetadataParser.java)
+用于模组元数据；标准 JSON 解析器则会拒绝。Orbit 对 JAR 内由 loader 消费的 JSON
+使用一个共享适配层：
+Fabric/Quilt 元数据、Forge-family JarJar metadata，以及 audit 读取的 Mixin config 和
+refmap 都接受这一种非规范输入。
+
+这不是 JSON5 或无边界“宽松模式”：注释、尾逗号、单引号、无引号字段、字符串外的
+控制字符和无效 UTF-8 仍然报错。远端 provider 响应、launcher profile、mrpack、
+lock/cache 索引等非 loader 输入继续使用严格 JSON。宽松边界集中在
+`orbit-loader-json`，各 loader/parser 不复制清洗分支。
 
 身份和结构字段错误会立即返回带文件名/字段名的错误，不再“尽量猜一个能用的结果”：
 

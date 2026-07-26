@@ -187,6 +187,17 @@ CurseForge provider 不支持匿名或降级运行。使用 `cf:`、把 `cursefo
 curseforge_api_key = "YOUR_API_KEY"
 ```
 
+也可以不手工编辑 TOML：
+
+```powershell
+orbit config set auth.curseforge-api-key YOUR_API_KEY
+orbit config set cache.capacity-mib 2048
+orbit config list
+```
+
+密钥在 `config get/list` 和 JSON 输出中只显示 `<redacted>`；由于命令行可能进入 shell
+历史，无人值守环境仍建议使用环境变量。
+
 或设置环境变量 `ORBIT_CURSEFORGE_API_KEY`。API Key 需要按
 [CurseForge 官方说明](https://support.curseforge.com/support/solutions/articles/9000208346-about-the-curseforge-api-and-how-to-apply-for-a-key)
 申请；Orbit 不内置共享 Key。Key 同时用于 Core API 与 CurseForge CDN 下载，只在

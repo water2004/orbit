@@ -202,6 +202,8 @@ Jar-in-Jar artifact 使用独立的 Maven 坐标包并精确绑定 owner 候选�
 - 新字段先进入 metadata model，再向 candidate/lock/solver 传播。
 - 不保留旧 lock schema 的兼容分支；项目尚无外部使用者，schema 直接收敛。
 - parser 对身份和结构错误 fail fast。
+- JAR 内 loader-owned JSON 只兼容字符串内未转义控制字符；适配集中在
+  `orbit-loader-json`，网络、launcher、lock 和 cache JSON 保持严格。
 - 测试断言公开行为、结构化 reason 和领域错误，不解析 debug 日志。
 - 暂不支持的产品边界必须显式报错并给出恢复建议。
 

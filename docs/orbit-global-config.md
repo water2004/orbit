@@ -107,6 +107,43 @@ color = "auto"
 progress_bar = "modern"
 ```
 
+### 命令式管理
+
+通常不需要手工编辑 TOML。CLI 提供强类型配置入口：
+
+```text
+orbit config path
+orbit config list
+orbit config get <key>
+orbit config set <key> <value>
+orbit config unset <key>
+```
+
+键名使用面向 CLI 的连字符形式，例如：
+
+```powershell
+orbit config set cache.capacity-mib 2048
+orbit config set network.timeout 60
+orbit config set ui.progress-bar plain
+orbit config unset network.proxy
+```
+
+`list` 和 `get` 显示文件层解析结果（文件中省略的必填字段显示 schema 默认值），不显示
+环境变量覆盖后的有效值，防止进程环境中的 API Key 被意外回写或泄露。
+`auth.curseforge-api-key` 与 `auth.modrinth-token` 即使已经保存也只显示
+`<redacted>`；自动化输出同样脱敏。命令行本身可能进入 shell 历史，因此无人值守环境
+仍优先使用对应环境变量。
+
+`set` 在写盘前按字段类型和取值域验证；未知键、非法整数、空字符串和非法枚举值直接
+报错。`unset` 清除可选字段；对 schema 必填字段则写回 schema 默认值。
+`core.default-instance` 还会验证 `instances.toml` 并同步唯一的 `is_default` 标记，
+不能指向不存在的实例。全局 `--dry-run` 对 `set`/`unset` 只验证和展示，不写文件。
+
+配置修改只更新目标字段，保留其它字段、注释和排版，并以同目录临时文件原子替换。
+`cache.capacity-mib` 在该命令结束时立即用于 LRU 清理；`cache.dir` 决定后续命令打开
+哪个 cache，当前命令不会把已打开的 cache 中途换目录。若传入全局 `--config`，上述
+命令操作的就是该精确文件。
+
 `ui.progress_bar` 控制长事务的进度展示：
 
 - `modern`：交互终端使用 spinner/进度条；stderr 被重定向时自动改为逐项文本；
