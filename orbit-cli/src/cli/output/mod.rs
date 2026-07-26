@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
+use clap::ValueEnum;
 use comfy_table::{
     Attribute, Cell, Color, ContentArrangement, Table, presets::UTF8_HORIZONTAL_ONLY,
 };
@@ -10,9 +11,86 @@ use orbit_core::{
     resolver::types::{CandidateDiagnostic, CandidateDiagnosticKind},
 };
 
+pub mod view;
+
 mod audit;
+mod progress_ndjson;
 
 pub use audit::audit_report;
+pub use progress_ndjson::{ndjson_audit_reporter, ndjson_progress_reporter};
+pub use view::{
+    CacheOutput, CheckOutput, CheckSummary, DiagnosticView, ErrorJson, ExportOutput,
+    ImportOutput, InitOutput, InstanceDefaultOutput, InstanceRemoveOutput, InstancesOutput,
+    JsonEnvelope, OutdatedOutput, OutdatedSummary, PurgeOutput, RemoveOutput,
+    RemovedPackageView, SearchFilters, SearchOutput, SearchResultView,
+};
+pub use view::{
+    check_result_view, diagnostic_view, info_view, instance_view, list_view, outdated_mod_view,
+    remote_view, restore_view, search_result_view, sync_view, transaction_view,
+};
+
+/// Render format for command results.
+///
+/// `Text` keeps the adaptive-table/interactive output. `Json` writes a single
+/// JSON document (the [`JsonEnvelope`]) to stdout and silences progress unless
+/// `--progress-format ndjson` is explicitly requested.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Default)]
+pub enum OutputFormat {
+    #[default]
+    Text,
+    Json,
+}
+
+/// Progress protocol for long-running operations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Default)]
+pub enum ProgressFormat {
+    #[default]
+    None,
+    /// One JSON object per line on stderr.
+    Ndjson,
+}
+
+/// Effective output configuration resolved from CLI flags and config.
+///
+/// Commands receive this and call [`render`] / [`print_json`] instead of
+/// `println!`, so the format switch lives in one place.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct OutputCfg {
+    pub format: OutputFormat,
+    pub progress: ProgressFormat,
+}
+
+impl OutputCfg {
+    /// Whether structured NDJSON progress should be emitted on stderr.
+    ///
+    /// `--format json` disables progress unless `--progress-format ndjson` is
+    /// explicit; `--format text` follows the configured `ui.progress_bar`
+    /// style (the caller decides whether to construct a reporter at all).
+    pub fn ndjson_progress(self) -> bool {
+        self.progress == ProgressFormat::Ndjson
+    }
+}
+
+/// Render a view-model in the configured format.
+///
+/// `text` calls the supplied table renderer; `json` prints the envelope to
+/// stdout as a single pretty-printed document.
+pub fn render<T: serde::Serialize>(
+    cfg: OutputCfg,
+    command: &'static str,
+    view: &T,
+    text: impl FnOnce(&T) -> String,
+) {
+    match cfg.format {
+        OutputFormat::Text => print!("{}", text(view)),
+        OutputFormat::Json => println!("{}", JsonEnvelope::new(command, view).to_json()),
+    }
+}
+
+/// Print a JSON envelope directly to stdout.
+pub fn print_json<T: serde::Serialize>(command: &'static str, view: &T) {
+    println!("{}", JsonEnvelope::new(command, view).to_json());
+}
 
 const ABSENT: &str = "—";
 

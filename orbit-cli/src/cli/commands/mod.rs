@@ -29,6 +29,8 @@ pub struct CliContext {
     pub dry_run: bool,
     pub instance: Option<String>,
     pub runtime: orbit_core::RuntimeContext,
+    /// 输出格式与进度协议，由全局 `--format` / `--progress-format` 决定。
+    pub output: crate::cli::output::OutputCfg,
 }
 
 impl CliContext {
@@ -140,6 +142,9 @@ pub fn install_interaction(ctx: &CliContext) -> orbit_core::InstallInteraction {
 }
 
 pub fn operation_progress(ctx: &CliContext) -> Option<orbit_core::ProgressReporter> {
+    if ctx.output.ndjson_progress() {
+        return Some(crate::cli::output::ndjson_progress_reporter());
+    }
     crate::cli::progress::reporter(ctx.quiet, &ctx.runtime.config().ui.progress_bar)
 }
 
@@ -278,6 +283,43 @@ pub fn print_resolution_warnings(warnings: &[String]) {
         eprintln!("\nDependency ordering warnings:");
         for warning in warnings {
             eprintln!("  • {warning}");
+        }
+    }
+}
+
+/// Print a transaction-style result (used by `add`, `install`, `upgrade`)
+/// honoring the configured output format.
+pub fn print_transaction_result(
+    command: &'static str,
+    report: &orbit_core::InstallReport,
+    ctx: &CliContext,
+) {
+    use crate::cli::output::OutputFormat;
+    match ctx.output.format {
+        OutputFormat::Text => {
+            print_resolution_diagnostics(&report.diagnostics);
+            print_resolution_warnings(&report.warnings);
+            if ctx.dry_run {
+                println!("\n{command} preview:");
+                println!(
+                    "{}",
+                    crate::cli::output::package_changes_table(&report.changes)
+                );
+                return;
+            }
+            if report.installed.is_empty() && report.removed.is_empty() {
+                println!("No new mods were installed.");
+            } else {
+                println!(
+                    "\nApplied {} selected package version(s) and removed {} unselected package version(s).",
+                    report.installed.len(),
+                    report.removed.len()
+                );
+            }
+        }
+        OutputFormat::Json => {
+            let view = crate::cli::output::transaction_view(report, ctx.dry_run);
+            crate::cli::output::print_json(command, &view);
         }
     }
 }

@@ -1,10 +1,12 @@
 pub mod commands;
-mod output;
+pub mod output;
 mod progress;
 use crate::cli::commands::CommandHandler;
 use anyhow::Result;
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{Parser, Subcommand};
 use std::path::PathBuf;
+
+pub use output::{OutputFormat, ProgressFormat};
 
 #[derive(Parser)]
 #[command(name = "orbit")]
@@ -28,6 +30,14 @@ pub struct Cli {
     /// 默认路径布局: system / executable
     #[arg(long, global = true)]
     pub data_layout: Option<orbit_core::PathLayout>,
+
+    /// 输出格式: text / json
+    #[arg(long, global = true, value_enum, default_value_t = OutputFormat::Text)]
+    pub format: OutputFormat,
+
+    /// 进度协议: none / ndjson（仅 stderr）
+    #[arg(long, global = true, value_enum, default_value_t = ProgressFormat::None)]
+    pub progress_format: ProgressFormat,
 
     /// 输出详细日志
     #[arg(short, long, global = true)]
@@ -205,9 +215,6 @@ pub enum Commands {
 
     /// 静态分析当前实例中 Mod 的字节码兼容风险（只读）
     Audit {
-        /// 输出格式
-        #[arg(long, value_enum, default_value_t = AuditFormat::Text)]
-        format: AuditFormat,
         /// 仅显示综合风险指数达到该值的风险（0-100）
         #[arg(long, default_value_t = 0, value_parser = clap::value_parser!(u8).range(0..=100))]
         min_risk: u8,
@@ -236,12 +243,6 @@ pub enum Commands {
         #[command(subcommand)]
         command: RemoteCommands,
     },
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
-pub enum AuditFormat {
-    Text,
-    Json,
 }
 
 #[derive(Subcommand)]
@@ -339,7 +340,6 @@ impl CommandHandler for Commands {
             } => handle_export(file, target, format, ctx).await,
             Commands::Check { version, modloader } => handle_check(version, modloader, ctx).await,
             Commands::Audit {
-                format,
                 min_risk,
                 fail_on_risk,
                 mod_filter,
@@ -347,7 +347,6 @@ impl CommandHandler for Commands {
                 limit,
             } => {
                 handle_audit(
-                    format,
                     min_risk,
                     fail_on_risk,
                     mod_filter,
@@ -440,7 +439,6 @@ mod tests {
         assert!(!Commands::Outdated { mod_name: None }.mutates_instance());
         assert!(
             !Commands::Audit {
-                format: super::AuditFormat::Text,
                 min_risk: 0,
                 fail_on_risk: None,
                 mod_filter: None,
