@@ -41,6 +41,7 @@ pub fn audit_instance_with_progress(
         total: Some(5),
     });
     let runtime = crate::platform::discover_runtime_classpath(instance_dir, &discovered)?;
+    let runtime_game = discover_loader_runtime_game(&runtime, &discovered)?;
     emit(AuditProgressEvent::Advanced {
         stage: AuditProgressStage::PrepareInputs,
         completed: 3,
@@ -88,20 +89,38 @@ pub fn audit_instance_with_progress(
             },
         },
     ];
-    artifacts.extend(runtime.into_iter().enumerate().map(|(index, path)| {
-        let display_name = path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or("runtime.jar")
-            .to_string();
-        ArtifactInput {
-            id: format!("runtime:{index}:{display_name}"),
-            display_name,
-            path,
-            kind: ArtifactKind::Runtime,
+    if let Some(path) = runtime_game.as_ref() {
+        artifacts.push(ArtifactInput {
+            id: "loader-runtime-game".to_string(),
+            display_name: format!(
+                "{} runtime game {}",
+                discovered.loader, discovered.minecraft_version.id
+            ),
+            path: path.clone(),
+            kind: ArtifactKind::RuntimeGame,
             nested_jars: NestedJarPolicy::None,
-        }
-    }));
+        });
+    }
+    artifacts.extend(
+        runtime
+            .into_iter()
+            .filter(|path| Some(path) != runtime_game.as_ref())
+            .enumerate()
+            .map(|(index, path)| {
+                let display_name = path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or("runtime.jar")
+                    .to_string();
+                ArtifactInput {
+                    id: format!("runtime:{index}:{display_name}"),
+                    display_name,
+                    path,
+                    kind: ArtifactKind::Runtime,
+                    nested_jars: NestedJarPolicy::None,
+                }
+            }),
+    );
     let known_package_files = lockfile
         .packages
         .iter()
@@ -182,6 +201,59 @@ pub fn audit_instance_with_progress(
     })
 }
 
+fn discover_loader_runtime_game(
+    runtime: &[PathBuf],
+    discovered: &crate::platform::DiscoveredPlatform,
+) -> Result<Option<PathBuf>, OrbitError> {
+    if !matches!(discovered.loader.as_str(), "forge" | "neoforge") {
+        return Ok(None);
+    }
+    let mut candidates = Vec::new();
+    for path in runtime {
+        let Ok(version) = crate::init::read_version_json_from_jar(path) else {
+            continue;
+        };
+        if version.id == discovered.minecraft_version.id && jar_contains_minecraft_classes(path)? {
+            candidates.push(path.clone());
+        }
+    }
+    match candidates.as_slice() {
+        [] => Ok(None),
+        [candidate] => Ok(Some(candidate.clone())),
+        _ => Err(OrbitError::Other(anyhow::anyhow!(
+            "multiple Loader-declared runtime game JARs match Minecraft {}: {}",
+            discovered.minecraft_version.id,
+            candidates
+                .iter()
+                .map(|path| path.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ))),
+    }
+}
+
+fn jar_contains_minecraft_classes(path: &Path) -> Result<bool, OrbitError> {
+    let file = std::fs::File::open(path)?;
+    let mut archive = zip::ZipArchive::new(file).map_err(|error| {
+        OrbitError::Other(anyhow::anyhow!(
+            "cannot inspect Loader runtime candidate '{}': {error}",
+            path.display()
+        ))
+    })?;
+    for index in 0..archive.len() {
+        let entry = archive.by_index(index).map_err(|error| {
+            OrbitError::Other(anyhow::anyhow!(
+                "cannot inspect Loader runtime candidate '{}': {error}",
+                path.display()
+            ))
+        })?;
+        if entry.name().starts_with("net/minecraft/") && entry.name().ends_with(".class") {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 fn mod_jars(instance_dir: &Path) -> Result<Vec<PathBuf>, OrbitError> {
     let mods = instance_dir.join("mods");
     if !mods.is_dir() {
@@ -216,4 +288,87 @@ fn lockfile_labels(lockfile: &crate::lockfile::OrbitLockfile) -> HashMap<String,
             )
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::Write;
+
+    use zip::write::SimpleFileOptions;
+
+    use super::*;
+
+    #[test]
+    fn loader_runtime_game_requires_matching_embedded_version() {
+        let directory = tempfile::tempdir().unwrap();
+        let matching = directory.path().join("matching.jar");
+        let stale = directory.path().join("stale.jar");
+        write_game_jar(&matching, "1.21.11");
+        write_game_jar(&stale, "1.21.10");
+        let discovered = platform("forge", "1.21.11", directory.path());
+
+        assert_eq!(
+            discover_loader_runtime_game(&[stale, matching.clone()], &discovered).unwrap(),
+            Some(matching)
+        );
+    }
+
+    #[test]
+    fn fabric_does_not_treat_launcher_libraries_as_runtime_game_artifacts() {
+        let directory = tempfile::tempdir().unwrap();
+        let candidate = directory.path().join("candidate.jar");
+        write_game_jar(&candidate, "1.21.11");
+        let discovered = platform("fabric", "1.21.11", directory.path());
+
+        assert_eq!(
+            discover_loader_runtime_game(&[candidate], &discovered).unwrap(),
+            None
+        );
+    }
+
+    fn platform(
+        loader: &str,
+        version: &str,
+        directory: &Path,
+    ) -> crate::platform::DiscoveredPlatform {
+        crate::platform::DiscoveredPlatform {
+            minecraft_version: crate::metadata::mojang::McVersion {
+                id: version.to_string(),
+                name: version.to_string(),
+                world_version: 0,
+                protocol_version: 0,
+                pack_version: crate::metadata::mojang::PackVersion {
+                    resource_major: 0,
+                    resource_minor: 0,
+                    data_major: 0,
+                    data_minor: 0,
+                },
+                java_version: 21,
+                stable: true,
+            },
+            minecraft_jar: directory.join("minecraft.jar"),
+            loader: loader.to_string(),
+            loader_version: "test".to_string(),
+            loader_jar: directory.join("loader.jar"),
+            loader_package: None,
+            physical_environment: crate::metadata::Environment::Client,
+        }
+    }
+
+    fn write_game_jar(path: &Path, version: &str) {
+        let file = std::fs::File::create(path).unwrap();
+        let mut archive = zip::ZipWriter::new(file);
+        let options = SimpleFileOptions::default();
+        archive.start_file("version.json", options).unwrap();
+        write!(
+            archive,
+            r#"{{"id":"{version}","name":"{version}","world_version":0,"protocol_version":0,"pack_version":{{"resource_major":0,"resource_minor":0,"data_major":0,"data_minor":0}},"java_version":21,"stable":true}}"#
+        )
+        .unwrap();
+        archive
+            .start_file("net/minecraft/client/Minecraft.class", options)
+            .unwrap();
+        archive.write_all(b"class").unwrap();
+        archive.finish().unwrap();
+    }
 }

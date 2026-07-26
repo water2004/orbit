@@ -1,26 +1,13 @@
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap};
 
 use comfy_table::Cell;
 
 use super::output_table;
 
 pub fn audit_report(report: &orbit_core::AuditReport, limit: usize) -> String {
-    let mut sections = vec![environment_table(report), coverage_table(&report.coverage)];
+    let mut sections = vec![environment_table(report), summary_table(report)];
 
-    if !report.coverage_gaps.is_empty() {
-        sections.push(coverage_gaps_table(report));
-    }
-    if !report.inactive_candidates.is_empty() {
-        sections.push(inactive_candidates_table(report));
-    }
-    if !report.interactions.is_empty() {
-        sections.push(interactions_table(report));
-    }
-    if !report.warnings.is_empty() {
-        sections.push(warnings_table(report));
-    }
-
-    if report.risks.is_empty() {
+    if report.risks.is_empty() && report.unary_risks.is_empty() {
         sections.push("未发现达到当前阈值的字节码兼容风险。".to_string());
         sections.push(
             "Use --format json or --report <path> for the complete structured report.".to_string(),
@@ -28,7 +15,7 @@ pub fn audit_report(report: &orbit_core::AuditReport, limit: usize) -> String {
     } else {
         sections.push(format!(
             "Structural compatibility risks: {}",
-            report.risks.len()
+            report.risks.len() + report.unary_risks.len()
         ));
         sections.push(risks_table(report, limit));
         sections.push(
@@ -43,130 +30,63 @@ pub fn audit_report(report: &orbit_core::AuditReport, limit: usize) -> String {
 }
 
 fn environment_table(report: &orbit_core::AuditReport) -> String {
-    let mut table = output_table(["Minecraft", "Loader", "Readiness"]);
+    let mut table = output_table(["Minecraft", "Loader", "Runtime symbols"]);
+    let namespace = report
+        .namespace
+        .runtime_namespace
+        .map(namespace_label)
+        .unwrap_or("unknown");
+    let mapping = report
+        .namespace
+        .mapping_sources
+        .first()
+        .map(|source| source.resource_path.as_str())
+        .unwrap_or("identity");
     table.add_row([
         Cell::new(&report.environment.minecraft_version),
         Cell::new(format!(
             "{} {}",
             report.environment.detected_loader, report.environment.loader_version
         )),
-        Cell::new(format!(
-            "{}\n{}",
-            readiness_label(report.readiness.status),
-            report.readiness.message
-        )),
+        Cell::new(format!("{namespace}\n{mapping}\nalignment complete")),
     ]);
     format!("Bytecode audit\n{table}")
 }
 
-fn coverage_table(coverage: &orbit_core::AuditCoverage) -> String {
-    let mut table = output_table(["Area", "Count", "Coverage notes"]);
-    table.add_row([
-        Cell::new("JARs"),
-        Cell::new(coverage.jars_scanned),
-        Cell::new(format!("{} failed", coverage.jars_failed)),
+fn summary_table(report: &orbit_core::AuditReport) -> String {
+    let mut table = output_table([
+        "Structural risks",
+        "Behavioral interactions",
+        "Coverage gaps",
+        "Warnings",
     ]);
     table.add_row([
-        Cell::new("Classes"),
-        Cell::new(format!(
-            "{} / {} parsed",
-            coverage.classes_parsed, coverage.classes_discovered
-        )),
-        Cell::new(format!("{} failed", coverage.classes_failed)),
+        Cell::new(report.risks.len() + report.unary_risks.len()),
+        Cell::new(report.interactions.len()),
+        Cell::new(
+            report
+                .coverage_gaps
+                .iter()
+                .map(|gap| gap.count)
+                .sum::<usize>(),
+        ),
+        Cell::new(report.warnings.len()),
     ]);
-    table.add_row([
-        Cell::new("Methods"),
-        Cell::new(format!("{} parsed", coverage.methods_parsed)),
-        Cell::new(format!(
-            "{} parse failures; {} budget degradations; {} instruction-resolution degradations",
-            coverage.method_parse_failures,
-            coverage.method_budget_degradations,
-            coverage.instruction_resolution_degraded
-        )),
-    ]);
-    table.add_row([
-        Cell::new("Mixins"),
-        Cell::new(format!(
-            "{} registered / {} analyzed",
-            coverage.mixins_registered, coverage.mixins_discovered
-        )),
-        Cell::new(format!(
-            "{} inactive; {} instruction/pattern, {} method, {} class/unknown effects",
-            coverage.inactive_mixins,
-            coverage.effects_instruction_precision,
-            coverage.effects_method_precision,
-            coverage.effects_class_precision
-        )),
-    ]);
-    table.add_row([
-        Cell::new("Transformers"),
-        Cell::new(coverage.transformers_discovered),
-        Cell::new(format!(
-            "{} targets; {} exact, {} partial, {} unknown effects",
-            coverage.transformer_targets_recovered,
-            coverage.transformer_effects_recovered,
-            coverage.transformer_effects_partial,
-            coverage.transformer_effects_unknown
-        )),
-    ]);
-    format!("Coverage\n{table}")
+    format!("Summary\n{table}")
 }
 
-fn coverage_gaps_table(report: &orbit_core::AuditReport) -> String {
-    let mut counts = BTreeMap::new();
-    let mut total = 0_usize;
-    for gap in &report.coverage_gaps {
-        *counts.entry(gap.kind).or_insert(0_usize) += gap.count;
-        total = total.saturating_add(gap.count);
-    }
-    let mut table = output_table(["Coverage gap", "Count"]);
-    for (kind, count) in counts {
-        table.add_row([Cell::new(coverage_gap_label(kind)), Cell::new(count)]);
-    }
-    format!("Coverage gaps ({total})\n{table}")
+enum DisplayRisk<'a> {
+    Unary(&'a orbit_core::AuditUnaryRisk),
+    Pair(&'a orbit_core::AuditRisk),
 }
 
-fn inactive_candidates_table(report: &orbit_core::AuditReport) -> String {
-    let mut counts = BTreeMap::new();
-    for candidate in &report.inactive_candidates {
-        *counts.entry(candidate.kind).or_insert(0_usize) += 1;
+impl DisplayRisk<'_> {
+    fn risk_index(&self) -> u8 {
+        match self {
+            Self::Unary(risk) => risk.risk_index,
+            Self::Pair(risk) => risk.risk_index,
+        }
     }
-    let mut table = output_table(["Inactive candidate", "Count"]);
-    for (kind, count) in counts {
-        table.add_row([Cell::new(inactive_candidate_label(kind)), Cell::new(count)]);
-    }
-    format!(
-        "Inactive candidates ({})\n{table}",
-        report.inactive_candidates.len()
-    )
-}
-
-fn interactions_table(report: &orbit_core::AuditReport) -> String {
-    let mut counts = BTreeMap::new();
-    for interaction in &report.interactions {
-        *counts.entry(interaction.kind).or_insert(0_usize) += 1;
-    }
-    let mut table = output_table(["Behavioral interaction", "Count"]);
-    for (kind, count) in counts {
-        table.add_row([Cell::new(interaction_label(kind)), Cell::new(count)]);
-    }
-    format!(
-        "Behavioral interactions ({})\n{table}",
-        report.interactions.len()
-    )
-}
-
-fn warnings_table(report: &orbit_core::AuditReport) -> String {
-    let mut counts = BTreeMap::new();
-    for warning in &report.warnings {
-        *counts.entry(warning.kind).or_insert(0_usize) += 1;
-    }
-
-    let mut table = output_table(["Warning", "Count"]);
-    for (kind, count) in counts {
-        table.add_row([Cell::new(warning_label(kind)), Cell::new(count)]);
-    }
-    format!("Warnings ({})\n{table}", report.warnings.len())
 }
 
 fn risks_table(report: &orbit_core::AuditReport, limit: usize) -> String {
@@ -175,52 +95,90 @@ fn risks_table(report: &orbit_core::AuditReport, limit: usize) -> String {
         .iter()
         .map(|artifact| (artifact.id.as_str(), artifact.display_name.as_str()))
         .collect::<HashMap<_, _>>();
-    let shown = report.risks.len().min(limit);
+    let total = report.risks.len() + report.unary_risks.len();
+    let mut ranked = report
+        .unary_risks
+        .iter()
+        .map(DisplayRisk::Unary)
+        .chain(report.risks.iter().map(DisplayRisk::Pair))
+        .enumerate()
+        .collect::<Vec<_>>();
+    ranked.sort_by(|(left_order, left), (right_order, right)| {
+        right
+            .risk_index()
+            .cmp(&left.risk_index())
+            .then_with(|| left_order.cmp(right_order))
+    });
+    let shown = total.min(limit);
     let mut table = output_table(["Risk", "Details"]);
 
-    for (index, risk) in report.risks.iter().take(limit).enumerate() {
-        let left = labels
-            .get(risk.left_artifact.as_str())
-            .copied()
-            .unwrap_or(&risk.left_artifact);
-        let right = labels
-            .get(risk.right_artifact.as_str())
-            .copied()
-            .unwrap_or(&risk.right_artifact);
-        let sources = risk
-            .evidence
-            .iter()
-            .filter_map(|evidence| {
-                evidence.mechanism.map(|mechanism| {
-                    evidence.injector_kind.as_ref().map_or_else(
-                        || mechanism_label(mechanism).to_string(),
-                        |injector| format!("{} {injector}", mechanism_label(mechanism)),
-                    )
-                })
-            })
-            .collect::<BTreeSet<_>>();
-        let mut details = format!(
-            "Packages: {left} ↔ {right}\nTarget: {}\nReason: {}\nRule: {}\nImpact: {} · Confidence: {} · Activation: {} · Precision: {}",
-            format_target(&risk.target),
-            risk.reason,
-            risk.rule,
-            severity_label(risk.severity).to_ascii_lowercase(),
-            confidence_label(risk.confidence),
-            activation_label(risk.activation),
-            precision_label(risk.precision),
-        );
-        if !sources.is_empty() {
-            details.push_str("\nSource: ");
-            details.push_str(&sources.into_iter().collect::<Vec<_>>().join(" × "));
-        }
-
+    for (index, (_, risk)) in ranked.into_iter().take(limit).enumerate() {
+        let (risk_index, details) = match risk {
+            DisplayRisk::Unary(risk) => {
+                let artifact = labels
+                    .get(risk.artifact_id.as_str())
+                    .copied()
+                    .unwrap_or(&risk.artifact_id);
+                (
+                    risk.risk_index,
+                    format!(
+                        "Package: {artifact}\nEnvironment: {}\nTarget: {}\nReason: {}\nRule: {}\nImpact: {} · Confidence: {} · Activation: {} · Precision: {}",
+                        risk.environment_target,
+                        format_target(&risk.target),
+                        risk.reason,
+                        risk.rule,
+                        severity_label(risk.severity).to_ascii_lowercase(),
+                        confidence_label(risk.confidence),
+                        activation_label(risk.activation),
+                        precision_label(risk.precision),
+                    ),
+                )
+            }
+            DisplayRisk::Pair(risk) => {
+                let left = labels
+                    .get(risk.left_artifact.as_str())
+                    .copied()
+                    .unwrap_or(&risk.left_artifact);
+                let right = labels
+                    .get(risk.right_artifact.as_str())
+                    .copied()
+                    .unwrap_or(&risk.right_artifact);
+                let sources = risk
+                    .evidence
+                    .iter()
+                    .filter_map(|evidence| {
+                        evidence.mechanism.map(|mechanism| {
+                            evidence.injector_kind.as_ref().map_or_else(
+                                || mechanism_label(mechanism).to_string(),
+                                |injector| format!("{} {injector}", mechanism_label(mechanism)),
+                            )
+                        })
+                    })
+                    .collect::<BTreeSet<_>>();
+                let mut details = format!(
+                    "Packages: {left} ↔ {right}\nTarget: {}\nReason: {}\nRule: {}\nImpact: {} · Confidence: {} · Activation: {} · Precision: {}",
+                    format_target(&risk.target),
+                    risk.reason,
+                    risk.rule,
+                    severity_label(risk.severity).to_ascii_lowercase(),
+                    confidence_label(risk.confidence),
+                    activation_label(risk.activation),
+                    precision_label(risk.precision),
+                );
+                if !sources.is_empty() {
+                    details.push_str("\nSource: ");
+                    details.push_str(&sources.into_iter().collect::<Vec<_>>().join(" × "));
+                }
+                (risk.risk_index, details)
+            }
+        };
         table.add_row([
-            Cell::new(format!("#{}\nRISK {}", index + 1, risk.risk_index)),
+            Cell::new(format!("#{}\nRISK {risk_index}", index + 1)),
             Cell::new(details),
         ]);
     }
 
-    format!("Risks (showing {shown} of {})\n{table}", report.risks.len())
+    format!("Risks (showing {shown} of {total})\n{table}")
 }
 
 fn precision_label(precision: orbit_core::AuditPrecision) -> &'static str {
@@ -240,12 +198,15 @@ fn format_target(target: &orbit_core::audit_model::Target) -> String {
     )
 }
 
-fn readiness_label(status: orbit_core::AuditReadinessStatus) -> &'static str {
-    match status {
-        orbit_core::AuditReadinessStatus::Ready => "Ready",
-        orbit_core::AuditReadinessStatus::Unsupported => "Unsupported",
-        orbit_core::AuditReadinessStatus::Incomplete => "Incomplete",
-        orbit_core::AuditReadinessStatus::Ambiguous => "Ambiguous",
+fn namespace_label(namespace: orbit_core::AuditSymbolNamespace) -> &'static str {
+    match namespace {
+        orbit_core::AuditSymbolNamespace::Runtime => "runtime",
+        orbit_core::AuditSymbolNamespace::Official => "official",
+        orbit_core::AuditSymbolNamespace::Intermediary => "intermediary",
+        orbit_core::AuditSymbolNamespace::Srg => "srg",
+        orbit_core::AuditSymbolNamespace::Named => "named",
+        orbit_core::AuditSymbolNamespace::Identity => "identity",
+        orbit_core::AuditSymbolNamespace::Unknown => "unknown",
     }
 }
 
@@ -283,65 +244,5 @@ fn mechanism_label(mechanism: orbit_core::AuditMechanism) -> &'static str {
         orbit_core::AuditMechanism::ModLauncherTransformer => "ModLauncher transformer",
         orbit_core::AuditMechanism::JavaCoremod => "Java coremod",
         orbit_core::AuditMechanism::BinaryShape => "binary shape",
-    }
-}
-
-fn warning_label(kind: orbit_core::AuditWarningKind) -> &'static str {
-    match kind {
-        orbit_core::AuditWarningKind::UnresolvedSoftReference => "Unresolved soft references",
-        orbit_core::AuditWarningKind::AmbiguousSoftReference => "Ambiguous soft references",
-        orbit_core::AuditWarningKind::KnownUnsupportedInjectionPoint => {
-            "Known but unsupported injection points"
-        }
-        orbit_core::AuditWarningKind::CustomInjectionPoint => "Custom injection points",
-        orbit_core::AuditWarningKind::DamagedArtifact => "Damaged artifacts",
-        orbit_core::AuditWarningKind::DamagedClass => "Damaged classes",
-        orbit_core::AuditWarningKind::MalformedConfig => "Malformed Mixin configs",
-        orbit_core::AuditWarningKind::TransformerPartial => "Partial transformer analyses",
-        orbit_core::AuditWarningKind::UnsupportedMechanism => "Unsupported mechanisms",
-        orbit_core::AuditWarningKind::BudgetExhaustion => "Analysis budget exhaustions",
-        orbit_core::AuditWarningKind::Other => "Other warnings",
-    }
-}
-
-fn coverage_gap_label(kind: orbit_core::audit_model::CoverageGapKind) -> &'static str {
-    use orbit_core::audit_model::CoverageGapKind;
-    match kind {
-        CoverageGapKind::UnsupportedSelector => "Unsupported selector syntax",
-        CoverageGapKind::UnsupportedInjectionPoint => "Unsupported injection point",
-        CoverageGapKind::UnresolvedLocalSelector => "Unresolved local selector",
-        CoverageGapKind::DynamicMixinConfigRegistration => "Dynamic Mixin config registration",
-        CoverageGapKind::PluginDecision => "Dynamic plugin decision",
-        CoverageGapKind::PluginDynamicMixins => "Dynamic plugin Mixin list",
-        CoverageGapKind::PluginClassMutation => "Plugin class mutation",
-        CoverageGapKind::TransformerPartial => "Partial transformer analysis",
-        CoverageGapKind::TransformerUnknown => "Unknown transformer effect",
-        CoverageGapKind::BudgetExhaustion => "Analysis budget exhausted",
-        CoverageGapKind::FutureClassfile => "Future ClassFile best effort",
-        CoverageGapKind::PhysicalSideUnknown => "Unknown physical side",
-        CoverageGapKind::UnsupportedMechanism => "Unsupported mechanism",
-    }
-}
-
-fn inactive_candidate_label(kind: orbit_core::audit_model::InactiveCandidateKind) -> &'static str {
-    use orbit_core::audit_model::InactiveCandidateKind;
-    match kind {
-        InactiveCandidateKind::UnregisteredConfig => "Unregistered Mixin config",
-        InactiveCandidateKind::SideMismatch => "Physical side mismatch",
-        InactiveCandidateKind::MissingRequiredMods => "Missing required Mod",
-        InactiveCandidateKind::PluginRejected => "Plugin rejected",
-        InactiveCandidateKind::MissingOptionalTarget => "Missing optional target",
-        InactiveCandidateKind::PseudoTargetMissing => "Missing @Pseudo target",
-        InactiveCandidateKind::UnregisteredTransformer => "Unregistered transformer",
-    }
-}
-
-fn interaction_label(kind: orbit_core::audit_model::BehavioralInteractionKind) -> &'static str {
-    use orbit_core::audit_model::BehavioralInteractionKind;
-    match kind {
-        BehavioralInteractionKind::OrderedValueDecorators => "Ordered value decorators",
-        BehavioralInteractionKind::OrderedMethodContributions => "Ordered method contributions",
-        BehavioralInteractionKind::OptionalInjectionAffected => "Optional injection affected",
-        BehavioralInteractionKind::OrderDependentTransformation => "Order-dependent transformation",
     }
 }

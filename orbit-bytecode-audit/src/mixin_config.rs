@@ -6,8 +6,8 @@ use crate::classfile::InstructionKind;
 use crate::jar::{ParsedArtifact, ResourceEntry, ScannedArtifacts};
 use crate::model::{
     ConfigActivation, CoverageGap, CoverageGapKind, InactiveCandidate, InactiveCandidateKind,
-    MixinActivation, ParsedMixinConfig, RegisteredMixin, RegisteredMixinConfig, RegistrationSource,
-    SideConstraint, Warning, WarningKind,
+    MixinActivation, ParsedMixinConfig, PluginDecision, RegisteredMixin, RegisteredMixinConfig,
+    RegistrationSource, SideConstraint, Warning, WarningKind,
 };
 
 const MIXIN_ANNOTATION: &str = "Lorg/spongepowered/asm/mixin/Mixin;";
@@ -64,6 +64,7 @@ impl MixinRegistry {
                     required_config: false,
                     default_require: 0,
                     plugin: None,
+                    plugin_decision: None,
                     activation: MixinActivation::RegisteredForCurrentSide,
                 };
                 let index = registry.mixins.len();
@@ -93,16 +94,10 @@ struct ConfigDeclaration {
     activation: ConfigActivation,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum PluginDecision {
-    Accepted,
-    Rejected,
-    Controlled,
-}
-
 #[derive(Debug)]
 struct PluginEvaluation {
-    decision: PluginDecision,
+    class_found: bool,
+    nested_class: bool,
     dynamic_mixins: Vec<String>,
     coverage_gaps: Vec<CoverageGap>,
 }
@@ -455,13 +450,14 @@ fn register_config(
     } else {
         None
     };
-    if plugin_evaluation
-        .as_ref()
-        .is_some_and(|evaluation| evaluation.decision == PluginDecision::Controlled)
-    {
-        declaration.activation = ConfigActivation::PluginControlled;
-    }
     if let Some(evaluation) = &plugin_evaluation {
+        if evaluation.class_found {
+            if evaluation.nested_class {
+                scanned.coverage.nested_plugin_classes_resolved += 1;
+            }
+        } else {
+            scanned.coverage.nested_plugin_classes_missing += 1;
+        }
         registry
             .coverage_gaps
             .extend(evaluation.coverage_gaps.clone());
@@ -521,20 +517,7 @@ fn register_config(
                 .to_string(),
         });
     }
-    if declaration.activation == ConfigActivation::PluginControlled {
-        registry.coverage_gaps.push(CoverageGap {
-            artifact_id: Some(declaration.artifact_id.clone()),
-            scope: resource_path.clone(),
-            kind: CoverageGapKind::PluginDecision,
-            detail: "Mixin activation is controlled by IMixinConfigPlugin and could not be evaluated statically"
-                .to_string(),
-            count: config
-                .mixins
-                .len()
-                .saturating_add(config.client.len())
-                .saturating_add(config.server.len()),
-        });
-    } else if declaration.activation == ConfigActivation::Dynamic {
+    if declaration.activation == ConfigActivation::Dynamic {
         scanned.coverage.dynamically_registered_configs += 1;
         registry.coverage_gaps.push(CoverageGap {
             artifact_id: Some(declaration.artifact_id.clone()),
@@ -565,21 +548,70 @@ fn register_config(
                 .map(|name| (name, SideConstraint::DedicatedServer)),
         );
     for (name, side) in entries {
-        let activation = if request.environment.physical_side == crate::model::PhysicalSide::Unknown
-            && side != SideConstraint::Common
+        let Some(mixin_class) = qualify_mixin_class(config.package.as_deref(), name) else {
+            scanned.coverage.invalid_mixin_class_names += 1;
+            registry.coverage_gaps.push(CoverageGap {
+                artifact_id: Some(declaration.artifact_id.clone()),
+                scope: resource_path.clone(),
+                kind: CoverageGapKind::MissingMixinClass,
+                detail: format!("Mixin config contains an invalid class name: {name}"),
+                count: 1,
+            });
+            continue;
+        };
+        let mixin_present = scanned
+            .artifacts
+            .iter()
+            .find(|artifact| artifact.id == declaration.artifact_id)
+            .is_some_and(|artifact| {
+                artifact
+                    .classes
+                    .iter()
+                    .any(|class| class.name == mixin_class)
+            });
+        let plugin_decision = (mixin_present && side.applies_to(request.environment.physical_side))
+            .then(|| {
+                config.plugin.as_deref().map(|plugin| {
+                    evaluate_plugin_for_mixin(
+                        scanned,
+                        &declaration.artifact_id,
+                        plugin,
+                        &mixin_class,
+                    )
+                })
+            })
+            .flatten();
+        if let Some(decision) = &plugin_decision {
+            match decision {
+                PluginDecision::AlwaysApply => {
+                    scanned.coverage.plugin_decisions_proven_true += 1;
+                }
+                PluginDecision::NeverApply => {
+                    scanned.coverage.plugin_decisions_proven_false += 1;
+                }
+                PluginDecision::Conditional { .. } => {
+                    scanned.coverage.plugin_decisions_conditional += 1;
+                }
+                PluginDecision::Unknown { .. } => {
+                    scanned.coverage.plugin_decisions_unknown += 1;
+                }
+            }
+        }
+        let activation = if !mixin_present
+            || (request.environment.physical_side == crate::model::PhysicalSide::Unknown
+                && side != SideConstraint::Common)
         {
             MixinActivation::Unknown
         } else if !side.applies_to(request.environment.physical_side) {
             MixinActivation::Inactive
         } else {
             match declaration.activation {
-                ConfigActivation::Active => match plugin_evaluation
-                    .as_ref()
-                    .map(|evaluation| evaluation.decision)
-                {
-                    Some(PluginDecision::Accepted) => MixinActivation::PluginAccepted,
-                    Some(PluginDecision::Rejected) => MixinActivation::PluginRejected,
-                    Some(PluginDecision::Controlled) => MixinActivation::PluginControlled,
+                ConfigActivation::Active => match plugin_decision.as_ref() {
+                    Some(PluginDecision::AlwaysApply) => MixinActivation::PluginAccepted,
+                    Some(PluginDecision::NeverApply) => MixinActivation::PluginRejected,
+                    Some(PluginDecision::Conditional { .. } | PluginDecision::Unknown { .. }) => {
+                        MixinActivation::PluginControlled
+                    }
                     None => MixinActivation::RegisteredForCurrentSide,
                 },
                 ConfigActivation::PluginControlled => MixinActivation::PluginControlled,
@@ -591,23 +623,55 @@ fn register_config(
         let registered = RegisteredMixin {
             artifact_id: declaration.artifact_id.clone(),
             config_path: resource_path.clone(),
-            mixin_class: qualify_mixin_class(config.package.as_deref(), name),
+            mixin_class,
             side,
             config_priority: config.priority,
             class_priority: config.mixin_priority,
             refmap: config
                 .refmap
                 .as_ref()
-                .map(|path| scoped_resource_path(&resource_path, path)),
+                .map(|path| scoped_resource_path(&resource_path, path))
+                .map(|expected| {
+                    find_config_resource(&scanned.artifacts, &declaration.artifact_id, &expected)
+                        .map(|resource| resource.path.clone())
+                        .unwrap_or(expected)
+                }),
             required_config: config.required,
             default_require: config.default_require,
             plugin: config.plugin.clone(),
+            plugin_decision,
             activation,
         };
+        if !mixin_present {
+            scanned.coverage.registered_mixin_classes_missing += 1;
+            registry.coverage_gaps.push(CoverageGap {
+                artifact_id: Some(registered.artifact_id.clone()),
+                scope: registered.config_path.clone(),
+                kind: CoverageGapKind::MissingMixinClass,
+                detail: format!(
+                    "registered Mixin class '{}' is absent from the active Loader artifact unit",
+                    registered.mixin_class
+                ),
+                count: 1,
+            });
+        }
+        if let Some(PluginDecision::Conditional { detail } | PluginDecision::Unknown { detail }) =
+            registered.plugin_decision.as_ref()
+        {
+            registry.coverage_gaps.push(CoverageGap {
+                artifact_id: Some(registered.artifact_id.clone()),
+                scope: format!("{}::{}", registered.config_path, registered.mixin_class),
+                kind: CoverageGapKind::PluginDecision,
+                detail: detail.clone(),
+                count: 1,
+            });
+        }
         let index = registry.mixins.len();
         if matches!(
             registered.activation,
-            MixinActivation::RegisteredForCurrentSide | MixinActivation::PluginAccepted
+            MixinActivation::RegisteredForCurrentSide
+                | MixinActivation::PluginAccepted
+                | MixinActivation::PluginControlled
         ) {
             registry.active.insert(
                 (
@@ -637,6 +701,27 @@ fn register_config(
             });
         }
         registry.mixins.push(registered);
+    }
+    if config.plugin.is_some()
+        && registry.mixins.iter().any(|mixin| {
+            mixin.artifact_id == declaration.artifact_id && mixin.config_path == resource_path
+        })
+        && registry
+            .mixins
+            .iter()
+            .filter(|mixin| {
+                mixin.artifact_id == declaration.artifact_id && mixin.config_path == resource_path
+            })
+            .all(|mixin| mixin.activation == MixinActivation::PluginRejected)
+    {
+        registry.coverage_gaps.push(CoverageGap {
+            artifact_id: Some(declaration.artifact_id),
+            scope: resource_path,
+            kind: CoverageGapKind::PluginDecision,
+            detail: "all_mixins_rejected_by_plugin: every listed Mixin was statically proven false; the result was retained but flagged for consistency review"
+                .to_string(),
+            count: 1,
+        });
     }
 }
 
@@ -674,6 +759,7 @@ fn record_unregistered_mixins(scanned: &ScannedArtifacts, registry: &mut MixinRe
                 required_config: false,
                 default_require: 0,
                 plugin: None,
+                plugin_decision: None,
                 activation: MixinActivation::Unregistered,
             });
         }
@@ -699,35 +785,18 @@ fn evaluate_plugin(
         });
     let Some(plugin) = plugin else {
         return PluginEvaluation {
-            decision: PluginDecision::Controlled,
+            class_found: false,
+            nested_class: false,
             dynamic_mixins: Vec::new(),
             coverage_gaps: vec![plugin_gap(
                 artifact_id,
                 config_path,
                 CoverageGapKind::PluginDecision,
-                "configured IMixinConfigPlugin class is not present in the active artifact",
+                "configured IMixinConfigPlugin class is not present in the active Loader artifact unit",
             )],
         };
     };
     let mut coverage_gaps = Vec::new();
-    let decision = plugin
-        .methods
-        .iter()
-        .find(|method| {
-            method.name == "shouldApplyMixin"
-                && method.descriptor == "(Ljava/lang/String;Ljava/lang/String;)Z"
-        })
-        .map_or(PluginDecision::Controlled, |method| {
-            evaluate_should_apply(scanned, method).unwrap_or(PluginDecision::Controlled)
-        });
-    if decision == PluginDecision::Controlled {
-        coverage_gaps.push(plugin_gap(
-            artifact_id,
-            config_path,
-            CoverageGapKind::PluginDecision,
-            "shouldApplyMixin could not be reduced to a static boolean or one class-existence predicate",
-        ));
-    }
 
     let dynamic_mixins = plugin
         .methods
@@ -768,67 +837,250 @@ fn evaluate_plugin(
     }
 
     PluginEvaluation {
-        decision,
+        class_found: true,
+        nested_class: plugin
+            .definition_id
+            .as_ref()
+            .is_some_and(|definition| definition.entry_path.contains("!/")),
         dynamic_mixins,
         coverage_gaps,
     }
 }
 
-fn evaluate_should_apply(
+fn evaluate_plugin_for_mixin(
     scanned: &ScannedArtifacts,
-    method: &crate::classfile::ParsedMethod,
-) -> Option<PluginDecision> {
-    let booleans = method
-        .instructions
+    artifact_id: &str,
+    plugin_class: &str,
+    mixin_class: &str,
+) -> PluginDecision {
+    let plugin_class = normalize_class(plugin_class);
+    let Some(artifact) = scanned
+        .artifacts
         .iter()
-        .filter_map(|instruction| match instruction.kind {
-            InstructionKind::IntegerConstant(0) => Some(false),
-            InstructionKind::IntegerConstant(1) => Some(true),
-            _ => None,
-        })
-        .collect::<BTreeSet<_>>();
-    if booleans.len() == 1 {
-        return booleans.first().copied().map(|value| {
-            if value {
-                PluginDecision::Accepted
-            } else {
-                PluginDecision::Rejected
+        .find(|artifact| artifact.id == artifact_id)
+    else {
+        return PluginDecision::Unknown {
+            detail: "the plugin artifact is absent from the active Loader artifact unit"
+                .to_string(),
+        };
+    };
+    let Some(plugin) = artifact
+        .classes
+        .iter()
+        .find(|class| class.name == plugin_class)
+    else {
+        return PluginDecision::Unknown {
+            detail: "the configured plugin class is absent from the active Loader artifact unit"
+                .to_string(),
+        };
+    };
+    let Some(method) = plugin.methods.iter().find(|method| {
+        method.name == "shouldApplyMixin"
+            && method.descriptor == "(Ljava/lang/String;Ljava/lang/String;)Z"
+    }) else {
+        return PluginDecision::Unknown {
+            detail: "shouldApplyMixin is inherited or its implementation is unavailable"
+                .to_string(),
+        };
+    };
+    let Some(mixin) = artifact
+        .classes
+        .iter()
+        .find(|class| class.name == mixin_class)
+    else {
+        return PluginDecision::Unknown {
+            detail: "the listed Mixin class is absent from the active Loader artifact unit"
+                .to_string(),
+        };
+    };
+    let targets = mixin
+        .annotations
+        .iter()
+        .find(|annotation| annotation.descriptor == MIXIN_ANNOTATION)
+        .map(mixin_target_names)
+        .unwrap_or_default();
+    if targets.is_empty() {
+        return PluginDecision::Unknown {
+            detail: "the Mixin has no statically recoverable target for plugin evaluation"
+                .to_string(),
+        };
+    }
+    let decisions = targets
+        .iter()
+        .map(|target| evaluate_should_apply(method, target, mixin_class))
+        .collect::<Vec<_>>();
+    merge_plugin_decisions(&decisions)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum AbstractValue {
+    Boolean(bool),
+    String(String),
+    Unknown,
+}
+
+fn evaluate_should_apply(
+    method: &crate::classfile::ParsedMethod,
+    target_class: &str,
+    mixin_class: &str,
+) -> PluginDecision {
+    let mut stack = Vec::<AbstractValue>::new();
+    let mut returns = Vec::<Option<bool>>::new();
+    let mut dynamic_unknown = false;
+    let mut has_branch = false;
+    for instruction in &method.instructions {
+        match &instruction.kind {
+            InstructionKind::IntegerConstant(0) => stack.push(AbstractValue::Boolean(false)),
+            InstructionKind::IntegerConstant(1) => stack.push(AbstractValue::Boolean(true)),
+            InstructionKind::StringConstant(value) => {
+                stack.push(AbstractValue::String(value.clone()));
             }
-        });
+            InstructionKind::Load(1) => {
+                stack.push(AbstractValue::String(target_class.replace('/', ".")));
+            }
+            InstructionKind::Load(2) => {
+                stack.push(AbstractValue::String(mixin_class.replace('/', ".")));
+            }
+            InstructionKind::MethodCall(call) => {
+                let Some(value) = evaluate_known_plugin_call(call, &mut stack) else {
+                    dynamic_unknown = true;
+                    stack.push(AbstractValue::Unknown);
+                    continue;
+                };
+                stack.push(value);
+            }
+            InstructionKind::Return if instruction.reference.opcode == 172 => {
+                returns.push(match stack.pop() {
+                    Some(AbstractValue::Boolean(value)) => Some(value),
+                    _ => None,
+                });
+                stack.clear();
+            }
+            InstructionKind::Jump => {
+                // The ClassFile reader intentionally does not retain control-flow
+                // edges. A branch can therefore prove only that the result is
+                // conditional when distinct constant returns are visible; it can
+                // never prove a global true/false result.
+                has_branch = true;
+                stack.clear();
+            }
+            InstructionKind::Return
+            | InstructionKind::FieldRead(_)
+            | InstructionKind::FieldWrite(_)
+            | InstructionKind::InvokeDynamic { .. }
+            | InstructionKind::Store(_)
+            | InstructionKind::Type(_)
+            | InstructionKind::DecimalConstant(_)
+            | InstructionKind::NullConstant
+            | InstructionKind::Other => {
+                dynamic_unknown = true;
+            }
+            InstructionKind::IntegerConstant(_) | InstructionKind::Load(_) => {
+                stack.push(AbstractValue::Unknown);
+            }
+        }
     }
-    let class_names = method
-        .instructions
-        .windows(2)
-        .filter_map(|pair| {
-            let [
-                crate::classfile::ParsedInstruction {
-                    kind: InstructionKind::StringConstant(class_name),
-                    ..
-                },
-                crate::classfile::ParsedInstruction {
-                    kind: InstructionKind::MethodCall(call),
-                    ..
-                },
-            ] = pair
-            else {
-                return None;
-            };
-            ((call.owner == "java/lang/Class" && call.name == "forName")
-                || (call.owner == "java/lang/ClassLoader" && call.name == "loadClass"))
-                .then(|| normalize_class(class_name))
-        })
-        .collect::<BTreeSet<_>>();
-    if class_names.len() == 1 && booleans == BTreeSet::from([false, true]) {
-        let exists = class_names
-            .first()
-            .is_some_and(|class| !scanned.universe.definitions(class).is_empty());
-        return Some(if exists {
-            PluginDecision::Accepted
+    if returns.is_empty() || returns.iter().any(Option::is_none) || dynamic_unknown {
+        return PluginDecision::Unknown {
+            detail: "shouldApplyMixin reads dynamic state, calls an unknown helper, or exceeds the conservative evaluator"
+                .to_string(),
+        };
+    }
+    let values = returns.into_iter().flatten().collect::<BTreeSet<_>>();
+    if has_branch {
+        return if values.len() > 1 {
+            PluginDecision::Conditional {
+                detail: "reachable plugin paths return different decisions".to_string(),
+            }
         } else {
-            PluginDecision::Rejected
-        });
+            PluginDecision::Unknown {
+                detail: "shouldApplyMixin branches and the available bytecode view cannot prove every reachable path"
+                    .to_string(),
+            }
+        };
     }
-    None
+    if values == BTreeSet::from([true]) {
+        PluginDecision::AlwaysApply
+    } else if values == BTreeSet::from([false]) {
+        PluginDecision::NeverApply
+    } else {
+        PluginDecision::Conditional {
+            detail: "reachable plugin paths return different decisions".to_string(),
+        }
+    }
+}
+
+fn evaluate_known_plugin_call(
+    call: &crate::model::MemberReference,
+    stack: &mut Vec<AbstractValue>,
+) -> Option<AbstractValue> {
+    let binary_string_predicate = call.owner == "java/lang/String"
+        && matches!(
+            call.name.as_str(),
+            "equals" | "startsWith" | "endsWith" | "contains"
+        )
+        && call.descriptor.ends_with(")Z");
+    if !binary_string_predicate {
+        return None;
+    }
+    let argument = stack.pop()?;
+    let receiver = stack.pop()?;
+    let (AbstractValue::String(receiver), AbstractValue::String(argument)) = (receiver, argument)
+    else {
+        return Some(AbstractValue::Unknown);
+    };
+    let value = match call.name.as_str() {
+        "equals" => receiver == argument,
+        "startsWith" => receiver.starts_with(&argument),
+        "endsWith" => receiver.ends_with(&argument),
+        "contains" => receiver.contains(&argument),
+        _ => return None,
+    };
+    Some(AbstractValue::Boolean(value))
+}
+
+fn merge_plugin_decisions(decisions: &[PluginDecision]) -> PluginDecision {
+    if decisions
+        .iter()
+        .any(|decision| matches!(decision, PluginDecision::Unknown { .. }))
+    {
+        return PluginDecision::Unknown {
+            detail: "at least one target-specific plugin decision is unknown".to_string(),
+        };
+    }
+    if decisions
+        .iter()
+        .any(|decision| matches!(decision, PluginDecision::Conditional { .. }))
+    {
+        return PluginDecision::Conditional {
+            detail: "at least one target-specific plugin decision is conditional".to_string(),
+        };
+    }
+    let accepted = decisions
+        .iter()
+        .any(|decision| matches!(decision, PluginDecision::AlwaysApply));
+    let rejected = decisions
+        .iter()
+        .any(|decision| matches!(decision, PluginDecision::NeverApply));
+    match (accepted, rejected) {
+        (true, false) => PluginDecision::AlwaysApply,
+        (false, true) => PluginDecision::NeverApply,
+        _ => PluginDecision::Conditional {
+            detail: "the plugin accepts some Mixin targets and rejects others".to_string(),
+        },
+    }
+}
+
+fn mixin_target_names(annotation: &crate::classfile::ParsedAnnotation) -> Vec<String> {
+    annotation
+        .value("value")
+        .into_iter()
+        .chain(annotation.value("targets"))
+        .flat_map(crate::classfile::AnnotationValue::strings)
+        .filter_map(|value| normalize_class_name(&value))
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
 }
 
 fn recover_static_mixin_list(method: &crate::classfile::ParsedMethod) -> Option<Vec<String>> {
@@ -965,24 +1217,36 @@ fn scoped_resource_path(owner_path: &str, resource: &str) -> String {
     })
 }
 
-fn qualify_mixin_class(package: Option<&str>, name: &str) -> String {
-    let name = normalize_class(name);
+fn qualify_mixin_class(package: Option<&str>, name: &str) -> Option<String> {
+    let name = normalize_class_name(name)?;
     let Some(package) = package.filter(|package| !package.is_empty()) else {
-        return name;
+        return Some(name);
     };
-    let package = normalize_class(package).trim_end_matches('/').to_string();
+    let package = normalize_class_name(package)?
+        .trim_end_matches('/')
+        .to_string();
     if name == package || name.starts_with(&format!("{package}/")) {
-        name
+        Some(name)
     } else {
-        format!("{package}/{name}")
+        Some(format!("{package}/{name}"))
     }
 }
 
 fn normalize_class(name: &str) -> String {
-    name.trim()
-        .trim_start_matches('L')
-        .trim_end_matches(';')
-        .replace('.', "/")
+    normalize_class_name(name).unwrap_or_else(|| name.trim().replace('.', "/"))
+}
+
+pub(crate) fn normalize_class_name(name: &str) -> Option<String> {
+    let name = name.trim();
+    if name.is_empty() || name.starts_with('[') {
+        return None;
+    }
+    let name = name
+        .strip_prefix('L')
+        .and_then(|value| value.strip_suffix(';'))
+        .filter(|value| !value.is_empty())
+        .unwrap_or(name);
+    Some(name.replace('.', "/"))
 }
 
 fn leaf(path: &str) -> &str {
@@ -1067,7 +1331,7 @@ mod tests {
         ClassDefinition, ClassUniverse, ParsedArtifact, ResourceEntry, ScannedArtifacts,
     };
     use crate::model::{
-        AnalysisLimits, ArtifactKind, AuditEnvironment, AuditRequest, Coverage,
+        AnalysisLimits, ArtifactKind, AuditEnvironment, AuditRequest, ClassDefinitionId, Coverage,
         InstructionReference, MemberKind, MemberReference, PhysicalSide,
     };
 
@@ -1364,7 +1628,7 @@ requiredMods = ["dependency"]
     }
 
     #[test]
-    fn plugin_class_existence_predicate_is_evaluated_against_the_active_universe() {
+    fn class_loading_plugin_logic_remains_unknown_without_executing_the_jvm() {
         let mut plugin = empty_class("example/Plugin");
         plugin.methods.push(method(
             "shouldApplyMixin",
@@ -1402,14 +1666,26 @@ requiredMods = ["dependency"]
             &mut present,
             &request("fabric", PhysicalSide::Client, BTreeSet::new()),
         );
-        assert!(accepted.active_mixin("mod", "example/Optional").is_some());
+        assert_eq!(
+            accepted
+                .active_mixin("mod", "example/Optional")
+                .unwrap()
+                .activation,
+            MixinActivation::PluginControlled
+        );
 
         let mut absent = scanned(resources, classes);
         let rejected = discover(
             &mut absent,
             &request("fabric", PhysicalSide::Client, BTreeSet::new()),
         );
-        assert!(rejected.active_mixin("mod", "example/Optional").is_none());
+        assert_eq!(
+            rejected
+                .active_mixin("mod", "example/Optional")
+                .unwrap()
+                .activation,
+            MixinActivation::PluginControlled
+        );
     }
 
     #[test]
@@ -1464,7 +1740,145 @@ requiredMods = ["dependency"]
                 .iter()
                 .any(|gap| { gap.kind == CoverageGapKind::PluginClassMutation })
         );
-        assert!(registry.active_mixin("mod", "example/Controlled").is_none());
+        assert_eq!(
+            registry
+                .active_mixin("mod", "example/Controlled")
+                .unwrap()
+                .activation,
+            MixinActivation::PluginControlled
+        );
+    }
+
+    #[test]
+    fn nested_config_plugin_and_cross_member_refmap_share_one_loader_unit() {
+        let mut plugin = empty_class("example/Plugin");
+        plugin.definition_id = Some(ClassDefinitionId {
+            loader_unit_id: "mod".to_string(),
+            artifact_id: "mod".to_string(),
+            entry_path: "META-INF/jars/plugin.jar!/example/Plugin.class".to_string(),
+            original_name: "example/Plugin".to_string(),
+            runtime_name: "example/Plugin".to_string(),
+            content_hash: "plugin".to_string(),
+        });
+        plugin.methods.push(method(
+            "shouldApplyMixin",
+            "(Ljava/lang/String;Ljava/lang/String;)Z",
+            vec![integer_instruction(0, 1), return_instruction(1)],
+        ));
+        let mut scanned = scanned(
+            vec![
+                resource(
+                    "META-INF/jars/config.jar!/fabric.mod.json",
+                    br#"{"schemaVersion":1,"mixins":["nested.mixins.json"]}"#,
+                ),
+                resource(
+                    "META-INF/jars/config.jar!/nested.mixins.json",
+                    br#"{"package":"example","plugin":"example.Plugin","refmap":"nested.refmap.json","mixins":["NestedMixin"]}"#,
+                ),
+                resource(
+                    "META-INF/jars/refmap.jar!/nested.refmap.json",
+                    br#"{"mappings":{}}"#,
+                ),
+            ],
+            vec![plugin, mixin_class("example/NestedMixin")],
+        );
+
+        let registry = discover(
+            &mut scanned,
+            &request("fabric", PhysicalSide::Client, BTreeSet::new()),
+        );
+        let registered = registry.active_mixin("mod", "example/NestedMixin").unwrap();
+
+        assert_eq!(registered.activation, MixinActivation::PluginAccepted);
+        assert_eq!(
+            registered.refmap.as_deref(),
+            Some("META-INF/jars/refmap.jar!/nested.refmap.json")
+        );
+        assert_eq!(scanned.coverage.nested_plugin_classes_resolved, 1);
+        assert_eq!(scanned.coverage.nested_plugin_classes_missing, 0);
+    }
+
+    #[test]
+    fn relative_mixin_names_starting_with_l_are_not_descriptors() {
+        for name in [
+            "LocalPlayerMixin",
+            "LivingEntityMixin",
+            "LevelMixin",
+            "LevelChunkMixin",
+            "LoadingOverlayMixin",
+            "LootTableMixin",
+        ] {
+            assert_eq!(normalize_class_name(name).as_deref(), Some(name));
+            assert_eq!(
+                qualify_mixin_class(Some("example.mixin"), name),
+                Some(format!("example/mixin/{name}"))
+            );
+        }
+        assert_eq!(
+            normalize_class_name("Lnet/minecraft/Foo;").as_deref(),
+            Some("net/minecraft/Foo")
+        );
+        assert_eq!(normalize_class_name("[[Lnet/minecraft/Foo;"), None);
+    }
+
+    #[test]
+    fn branching_plugin_result_is_conditional_or_unknown_but_never_rejected() {
+        let branching = method(
+            "shouldApplyMixin",
+            "(Ljava/lang/String;Ljava/lang/String;)Z",
+            vec![
+                instruction(0, InstructionKind::Load(1)),
+                string_instruction(1, "game.Target"),
+                call_instruction(2, "java/lang/String", "equals", "(Ljava/lang/Object;)Z"),
+                instruction(3, InstructionKind::Jump),
+                integer_instruction(4, 0),
+                return_instruction(5),
+                integer_instruction(6, 1),
+                return_instruction(7),
+            ],
+        );
+
+        assert!(matches!(
+            evaluate_should_apply(&branching, "game/Target", "example/Mixin"),
+            PluginDecision::Conditional { .. }
+        ));
+
+        let one_visible_result = method(
+            "shouldApplyMixin",
+            "(Ljava/lang/String;Ljava/lang/String;)Z",
+            vec![
+                instruction(0, InstructionKind::Jump),
+                integer_instruction(1, 0),
+                return_instruction(2),
+            ],
+        );
+        assert!(matches!(
+            evaluate_should_apply(&one_visible_result, "game/Target", "example/Mixin"),
+            PluginDecision::Unknown { .. }
+        ));
+    }
+
+    #[test]
+    fn plugin_receives_the_current_target_and_mixin_names() {
+        let compares_mixin_name = method(
+            "shouldApplyMixin",
+            "(Ljava/lang/String;Ljava/lang/String;)Z",
+            vec![
+                instruction(0, InstructionKind::Load(2)),
+                string_instruction(1, "example.AcceptedMixin"),
+                call_instruction(2, "java/lang/String", "equals", "(Ljava/lang/Object;)Z"),
+                return_instruction(3),
+            ],
+        );
+
+        assert_eq!(
+            evaluate_should_apply(&compares_mixin_name, "game/Target", "example/AcceptedMixin"),
+            PluginDecision::AlwaysApply
+        );
+        assert_eq!(
+            evaluate_should_apply(&compares_mixin_name, "game/Target", "example/RejectedMixin"),
+            PluginDecision::NeverApply
+        );
     }
 
     #[test]
@@ -1575,6 +1989,7 @@ requiredMods = ["dependency"]
             limits: AnalysisLimits::default(),
             coverage: Coverage::default(),
             warnings: Vec::new(),
+            symbol_mappings: BTreeMap::new(),
         }
     }
 
@@ -1589,7 +2004,10 @@ requiredMods = ["dependency"]
         let mut class = empty_class(name);
         class.annotations.push(ParsedAnnotation {
             descriptor: MIXIN_ANNOTATION.to_string(),
-            values: BTreeMap::from([("targets".to_string(), AnnotationValue::Array(Vec::new()))]),
+            values: BTreeMap::from([(
+                "targets".to_string(),
+                AnnotationValue::Array(vec![AnnotationValue::String("game.Target".to_string())]),
+            )]),
         });
         class
     }

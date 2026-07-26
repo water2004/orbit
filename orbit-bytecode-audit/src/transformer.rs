@@ -1243,10 +1243,7 @@ fn find_artifact_method<'a>(
 }
 
 fn normalize_class(value: &str) -> Option<String> {
-    let value = value.trim();
-    let value = value.strip_prefix('L').unwrap_or(value);
-    let value = value.strip_suffix(';').unwrap_or(value);
-    (!value.is_empty()).then(|| value.replace('.', "/"))
+    crate::mixin_config::normalize_class_name(value)
 }
 
 fn target_key(target: &Target) -> String {
@@ -1817,6 +1814,7 @@ mod tests {
             limits: AnalysisLimits::default(),
             coverage: Coverage::default(),
             warnings: Vec::new(),
+            symbol_mappings: Default::default(),
         }
     }
 

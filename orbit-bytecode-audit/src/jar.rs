@@ -9,7 +9,8 @@ use crate::AuditError;
 use crate::classfile::{InstructionKind, ParsedClass};
 use crate::model::{
     ArtifactKind, ArtifactReport, AuditRequest, ClassDefinitionId, Coverage, InstructionIdentity,
-    LoaderFamily, MemberKind, MemberReference, Readiness, ReadinessStatus, Warning, WarningKind,
+    LoaderFamily, MemberKind, MemberReference, Readiness, ReadinessStatus, SymbolMappingEvidence,
+    Warning, WarningKind,
 };
 
 #[derive(Debug)]
@@ -20,6 +21,7 @@ pub(crate) struct ScannedArtifacts {
     pub limits: crate::model::AnalysisLimits,
     pub coverage: Coverage,
     pub warnings: Vec<Warning>,
+    pub symbol_mappings: BTreeMap<String, SymbolMappingEvidence>,
 }
 
 #[derive(Debug, Clone)]
@@ -382,7 +384,6 @@ pub(crate) fn scan_artifacts_with_progress(
     );
     let mut artifact_reports = Vec::new();
     let mut artifacts = Vec::new();
-    let mut universe = ClassUniverse::default();
     let mut coverage = Coverage::default();
     let mut warnings = Vec::new();
     let mut total_classes = 0_usize;
@@ -407,52 +408,6 @@ pub(crate) fn scan_artifacts_with_progress(
                         "class universe exceeds configured limit {}",
                         request.limits.max_classes
                     )));
-                }
-                for class in &artifact.classes {
-                    let fields = class
-                        .fields
-                        .iter()
-                        .map(|field| MemberReference {
-                            owner: class.name.clone(),
-                            name: field.name.clone(),
-                            descriptor: field.descriptor.clone(),
-                            kind: MemberKind::Field,
-                            is_static: Some(field.is_static),
-                        })
-                        .collect::<Vec<_>>();
-                    let methods = class
-                        .methods
-                        .iter()
-                        .map(|method| method.reference(&class.name))
-                        .collect::<Vec<_>>();
-                    let hard_references = class
-                        .methods
-                        .iter()
-                        .flat_map(|method| &method.instructions)
-                        .filter_map(|instruction| match &instruction.kind {
-                            InstructionKind::MethodCall(member)
-                            | InstructionKind::FieldRead(member)
-                            | InstructionKind::FieldWrite(member) => Some(member.clone()),
-                            _ => None,
-                        })
-                        .collect::<HashSet<_>>()
-                        .into_iter()
-                        .collect();
-                    universe
-                        .classes
-                        .entry(class.name.clone())
-                        .or_default()
-                        .push(ClassDefinition {
-                            definition_id: class.definition_id.clone(),
-                            artifact_id: artifact.id.clone(),
-                            is_mod: artifact.kind == ArtifactKind::Mod,
-                            name: class.name.clone(),
-                            super_name: class.super_name.clone(),
-                            interfaces: class.interfaces.clone(),
-                            fields,
-                            methods,
-                            hard_references,
-                        });
                 }
                 artifact_reports.push(report);
                 artifacts.push(artifact);
@@ -494,11 +449,12 @@ pub(crate) fn scan_artifacts_with_progress(
     }
     let scanned = ScannedArtifacts {
         artifact_reports,
+        universe: build_universe(&artifacts),
         artifacts,
-        universe,
         limits: request.limits.clone(),
         coverage,
         warnings,
+        symbol_mappings: BTreeMap::new(),
     };
     emit(
         progress,
@@ -508,6 +464,72 @@ pub(crate) fn scan_artifacts_with_progress(
         },
     );
     Ok(scanned)
+}
+
+pub(crate) fn rebuild_universe(scanned: &mut ScannedArtifacts) {
+    scanned.universe = build_universe(&scanned.artifacts);
+}
+
+fn build_universe(artifacts: &[ParsedArtifact]) -> ClassUniverse {
+    let mut universe = ClassUniverse::default();
+    let has_runtime_game = artifacts
+        .iter()
+        .any(|artifact| artifact.kind == ArtifactKind::RuntimeGame);
+    for artifact in artifacts {
+        // A validated Loader runtime game artifact is the executable class
+        // space. Keeping the launcher's raw input JAR beside it would create
+        // artificial duplicate definitions in a different namespace.
+        if has_runtime_game && artifact.kind == ArtifactKind::Minecraft {
+            continue;
+        }
+        for class in &artifact.classes {
+            let fields = class
+                .fields
+                .iter()
+                .map(|field| MemberReference {
+                    owner: class.name.clone(),
+                    name: field.name.clone(),
+                    descriptor: field.descriptor.clone(),
+                    kind: MemberKind::Field,
+                    is_static: Some(field.is_static),
+                })
+                .collect::<Vec<_>>();
+            let methods = class
+                .methods
+                .iter()
+                .map(|method| method.reference(&class.name))
+                .collect::<Vec<_>>();
+            let hard_references = class
+                .methods
+                .iter()
+                .flat_map(|method| &method.instructions)
+                .filter_map(|instruction| match &instruction.kind {
+                    InstructionKind::MethodCall(member)
+                    | InstructionKind::FieldRead(member)
+                    | InstructionKind::FieldWrite(member) => Some(member.clone()),
+                    _ => None,
+                })
+                .collect::<HashSet<_>>()
+                .into_iter()
+                .collect();
+            universe
+                .classes
+                .entry(class.name.clone())
+                .or_default()
+                .push(ClassDefinition {
+                    definition_id: class.definition_id.clone(),
+                    artifact_id: artifact.id.clone(),
+                    is_mod: artifact.kind == ArtifactKind::Mod,
+                    name: class.name.clone(),
+                    super_name: class.super_name.clone(),
+                    interfaces: class.interfaces.clone(),
+                    fields,
+                    methods,
+                    hard_references,
+                });
+        }
+    }
+    universe
 }
 
 fn scan_artifact(
@@ -571,6 +593,7 @@ fn normalized_path_identity(path: &std::path::Path) -> Result<String, String> {
 struct ArchiveBudget {
     entries: usize,
     uncompressed: u64,
+    nested_hashes: HashSet<String>,
 }
 
 #[expect(clippy::too_many_arguments)]
@@ -686,6 +709,10 @@ fn scan_archive<R: Read + Seek>(
                 &mut entry,
                 usize::try_from(request.limits.max_entry_bytes).unwrap_or(usize::MAX),
             )?;
+            let nested_hash = format!("{:x}", Sha256::digest(&bytes));
+            if !budget.nested_hashes.insert(nested_hash) {
+                continue;
+            }
             drop(entry);
             match zip::ZipArchive::new(std::io::Cursor::new(bytes)) {
                 Ok(mut nested) => {
@@ -825,6 +852,7 @@ fn is_registration_resource(path: &str) -> bool {
     leaf.eq_ignore_ascii_case("META-INF/MANIFEST.MF")
         || leaf.eq_ignore_ascii_case("META-INF/mods.toml")
         || leaf.eq_ignore_ascii_case("META-INF/neoforge.mods.toml")
+        || leaf.eq_ignore_ascii_case("mappings/mappings.tiny")
         || leaf.to_ascii_lowercase().starts_with("meta-inf/services/")
 }
 
@@ -907,9 +935,11 @@ fn scan_class_entry(
     match crate::classfile::parse(&bytes, request.limits.max_annotation_depth) {
         Ok(mut class) => {
             let definition_id = ClassDefinitionId {
+                loader_unit_id: input.id.clone(),
                 artifact_id: input.id.clone(),
                 entry_path: name.to_string(),
-                class_name: class.name.clone(),
+                original_name: class.name.clone(),
+                runtime_name: class.name.clone(),
                 content_hash: format!("{:x}", Sha256::digest(&bytes)),
             };
             for method in &mut class.methods {
@@ -1175,6 +1205,31 @@ mod tests {
         assert_eq!(scanned.artifacts[0].classes.len(), 1);
         assert_eq!(scanned.artifacts[0].classes[0].name, "root/Active");
         assert_eq!(scanned.coverage.jars_scanned, 1);
+    }
+
+    #[test]
+    fn duplicate_nested_jar_content_is_scanned_once_per_loader_unit() {
+        let directory = tempfile::tempdir().unwrap();
+        let outer = directory.path().join("outer.jar");
+        let nested = jar_bytes(&[(
+            "nested/Shared.class".to_string(),
+            minimal_class("nested/Shared"),
+        )]);
+        std::fs::write(
+            &outer,
+            jar_bytes(&[
+                ("META-INF/jars/first.jar".to_string(), nested.clone()),
+                ("META-INF/jars/second.jar".to_string(), nested),
+            ]),
+        )
+        .unwrap();
+
+        let scanned =
+            scan_artifacts(&request(vec![input("outer", outer, ArtifactKind::Mod)])).unwrap();
+
+        assert_eq!(scanned.coverage.jars_scanned, 2);
+        assert_eq!(scanned.artifacts[0].classes.len(), 1);
+        assert_eq!(scanned.artifacts[0].classes[0].name, "nested/Shared");
     }
 
     #[test]

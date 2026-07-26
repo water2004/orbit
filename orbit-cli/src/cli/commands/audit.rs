@@ -37,6 +37,12 @@ pub async fn handle(
         write_detailed_report(path, &full_report)?;
     }
     let mut report = full_report.clone();
+    report.unary_risks.retain(|risk| {
+        risk.risk_index >= min_risk
+            && selected_artifacts
+                .as_ref()
+                .is_none_or(|selected| selected.contains_key(&risk.artifact_id))
+    });
     report.risks.retain(|risk| {
         risk.risk_index >= min_risk
             && selected_artifacts.as_ref().is_none_or(|selected| {
@@ -102,7 +108,10 @@ fn exceeds_threshold(
     threshold: u8,
     selected: Option<&HashMap<String, ()>>,
 ) -> bool {
-    report.risks.iter().any(|risk| {
+    report.unary_risks.iter().any(|risk| {
+        risk.risk_index >= threshold
+            && selected.is_none_or(|selected| selected.contains_key(&risk.artifact_id))
+    }) || report.risks.iter().any(|risk| {
         risk.risk_index >= threshold
             && selected.is_none_or(|selected| {
                 selected.contains_key(&risk.left_artifact)
@@ -138,7 +147,8 @@ mod tests {
 
         assert!(text.contains("Structural compatibility risks: 1"));
         assert!(text.contains("Risks (showing 1 of 1)"));
-        assert!(text.contains("Unresolved soft references"));
+        assert!(text.contains("Warnings"));
+        assert!(!text.contains("Unresolved soft references"));
         assert!(!text.contains("evidence:"));
         assert!(!text.contains("secret evidence detail"));
         assert!(!text.contains("secret warning detail"));
@@ -160,6 +170,34 @@ mod tests {
             text.lines().all(|line| line.chars().count() <= 120),
             "{text}"
         );
+    }
+
+    #[test]
+    fn text_limit_is_global_across_unary_and_pairwise_risks() {
+        let mut report = empty_report();
+        let mut pair = sample_risk("pair");
+        pair.rule = "pair-rule".to_string();
+        report.risks.push(pair);
+        report.unary_risks.push(orbit_core::AuditUnaryRisk {
+            artifact_id: "a".to_string(),
+            environment_target: "game runtime".to_string(),
+            target: orbit_core::audit_model::Target::class("game/Foo"),
+            rule: "unary-rule".to_string(),
+            reason: "invalid transformation".to_string(),
+            mutations: vec![orbit_core::AuditMutationKind::ReplaceMethodBody],
+            evidence: Vec::new(),
+            severity: orbit_core::AuditSeverity::High,
+            confidence: orbit_core::AuditConfidence::Exact,
+            precision: orbit_core::AuditPrecision::Method,
+            risk_index: 90,
+            activation: orbit_core::AuditActivation::Definite,
+        });
+
+        let text = crate::cli::output::audit_report(&report, 1);
+
+        assert!(text.contains("Risks (showing 1 of 2)"));
+        assert!(text.contains("Rule: unary-rule"));
+        assert!(!text.contains("Rule: pair-rule"));
     }
 
     #[test]
@@ -244,14 +282,14 @@ mod tests {
         std::fs::remove_file(&path).unwrap();
 
         assert!(written.contains("full structured evidence"));
-        assert!(written.contains("\"schema_version\": 3"));
+        assert!(written.contains("\"schema_version\": 4"));
     }
 
     #[test]
     fn json_keeps_fixed_schema_version() {
         let report = empty_report();
         let value = serde_json::to_value(report).unwrap();
-        assert_eq!(value["schema_version"], 3);
+        assert_eq!(value["schema_version"], 4);
         assert!(value.get("coverage").is_some());
         assert!(value.get("warnings").is_some());
     }
@@ -333,7 +371,7 @@ mod tests {
 
     fn empty_report() -> orbit_core::AuditReport {
         orbit_core::AuditReport {
-            schema_version: 3,
+            schema_version: 4,
             environment: orbit_core::audit_model::AuditEnvironment {
                 minecraft_version: "test".to_string(),
                 declared_loader: "fabric".to_string(),
@@ -348,10 +386,24 @@ mod tests {
                 message: "ready".to_string(),
                 capabilities: vec!["mixin".to_string()],
             },
+            namespace: orbit_core::audit_model::NamespaceReport {
+                runtime_namespace: Some(orbit_core::AuditSymbolNamespace::Identity),
+                artifacts: Vec::new(),
+                mapping_sources: Vec::new(),
+                loader_units: Vec::new(),
+                alignment: orbit_core::audit_model::NamespaceAlignment::Aligned {
+                    runtime_namespace: orbit_core::AuditSymbolNamespace::Identity,
+                },
+                class_mapping_coverage: Default::default(),
+                method_mapping_coverage: Default::default(),
+                field_mapping_coverage: Default::default(),
+                evidence: Vec::new(),
+            },
             artifacts: Vec::new(),
             registered_mixin_configs: Vec::new(),
             registered_mixins: Vec::new(),
             transformations: Vec::new(),
+            unary_risks: Vec::new(),
             risks: Vec::new(),
             interactions: Vec::new(),
             inactive_candidates: Vec::new(),

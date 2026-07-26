@@ -11,6 +11,7 @@ mod jar;
 mod mixin;
 mod mixin_config;
 mod model;
+mod namespace;
 mod progress;
 mod readiness;
 mod transformer;
@@ -18,16 +19,19 @@ mod transformer;
 pub use error::AuditError;
 pub use model::{
     AccessDelta, Activation, AnalysisLimits, ArtifactInput, ArtifactKind, ArtifactReport,
-    AuditEnvironment, AuditReport, AuditRequest, BehavioralInteraction, BehavioralInteractionKind,
-    ClassDefinitionId, ClassReference, CompositionSemantics, Confidence, ConfigActivation,
-    Coverage, CoverageGap, CoverageGapKind, Effect, Evidence, FramePosition, GlobPattern,
-    InactiveCandidate, InactiveCandidateKind, InjectionGroupConstraint, InjectionQuery,
-    InstructionIdentity, InstructionReference, LoaderFamily, LocalSelector, Mechanism, MemberKind,
-    MemberReference, MethodContributionKind, MethodSelector, MixinActivation, Mutation,
-    MutationKind, NestedJarPolicy, OrderAnalysis, ParsedMixinConfig, PhysicalSide, Precision,
-    Readiness, ReadinessStatus, RegisteredMixin, RegisteredMixinConfig, RegistrationSource,
-    RequirementKind, Risk, Severity, ShapeRequirement, SideConstraint, SoftReferenceResolution,
-    Target, Warning, WarningKind,
+    ArtifactSymbolSpace, AuditEnvironment, AuditReport, AuditRequest, BehavioralInteraction,
+    BehavioralInteractionKind, ClassDefinitionId, ClassReference, ClassVisibility,
+    CompositionSemantics, Confidence, ConfigActivation, Coverage, CoverageGap, CoverageGapKind,
+    CoverageRatio, Effect, Evidence, FramePosition, GlobPattern, InactiveCandidate,
+    InactiveCandidateKind, InjectionGroupConstraint, InjectionQuery, InstructionIdentity,
+    InstructionReference, LoaderArtifactUnit, LoaderFamily, LocalSelector, MappingSource,
+    Mechanism, MemberKind, MemberReference, MethodContributionKind, MethodSelector,
+    MixinActivation, Mutation, MutationKind, NamespaceAlignment, NamespaceEvidence,
+    NamespaceReport, NestedJarPolicy, OrderAnalysis, ParsedMixinConfig, PhysicalSide,
+    PluginDecision, Precision, Readiness, ReadinessStatus, RegisteredMixin, RegisteredMixinConfig,
+    RegistrationSource, RequirementKind, Risk, Severity, ShapeRequirement, SideConstraint,
+    SoftReferenceResolution, SymbolMappingEvidence, SymbolNamespace, Target,
+    UnaryCompatibilityRisk, Warning, WarningKind,
 };
 pub use progress::{AuditProgressEvent, AuditProgressReporter, AuditProgressStage};
 pub use readiness::probe_readiness;
@@ -67,6 +71,8 @@ pub fn analyze_with_progress(
             completed: 1,
         },
     );
+    let namespace =
+        namespace::align_runtime_namespace(&mut scanned, loader).map_err(AuditError::NotReady)?;
     let mut registry = mixin_config::discover(&mut scanned, request);
     let mixin_analysis = mixin::analyze_with_progress(&mut scanned, &registry, progress);
     registry.coverage_gaps.extend(mixin_analysis.coverage_gaps);
@@ -74,6 +80,7 @@ pub fn analyze_with_progress(
         .inactive_candidates
         .extend(mixin_analysis.inactive_candidates);
     let precomputed_risks = mixin_analysis.risks;
+    let unary_risks = mixin_analysis.unary_risks;
     let interactions = mixin_analysis.interactions;
     let mut effects = mixin_analysis.effects;
     let transformer_analysis =
@@ -88,11 +95,13 @@ pub fn analyze_with_progress(
     Ok(conflict::build_report_with_progress(
         request,
         readiness,
+        namespace,
         scanned,
         conflict::RecoveredFindings {
             effects,
             registry,
             risks: precomputed_risks,
+            unary_risks,
             interactions,
         },
         progress,

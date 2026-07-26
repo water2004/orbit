@@ -4,21 +4,24 @@ use crate::jar::ScannedArtifacts;
 use crate::mixin_config::MixinRegistry;
 use crate::model::{
     Activation, AuditReport, AuditRequest, BehavioralInteraction, BehavioralInteractionKind,
-    CompositionSemantics, Confidence, CoverageGap, CoverageGapKind, Effect, InjectionQuery,
-    Mutation, MutationKind, OrderAnalysis, Precision, REPORT_SCHEMA_VERSION, Readiness,
-    RequirementKind, Risk, Severity, Target, WarningKind,
+    CompositionSemantics, Confidence, CoverageGap, CoverageGapKind, Effect, Evidence,
+    InjectionQuery, MemberKind, Mutation, MutationKind, OrderAnalysis, Precision,
+    REPORT_SCHEMA_VERSION, Readiness, RequirementKind, Risk, Severity, SymbolMappingEvidence,
+    Target, UnaryCompatibilityRisk, WarningKind,
 };
 
 pub(crate) struct RecoveredFindings {
     pub effects: Vec<Effect>,
     pub registry: MixinRegistry,
     pub risks: Vec<Risk>,
+    pub unary_risks: Vec<UnaryCompatibilityRisk>,
     pub interactions: Vec<BehavioralInteraction>,
 }
 
 pub(crate) fn build_report_with_progress(
     request: &AuditRequest,
     readiness: Readiness,
+    namespace: crate::model::NamespaceReport,
     scanned: ScannedArtifacts,
     findings: RecoveredFindings,
     progress: Option<&crate::progress::AuditProgressReporter>,
@@ -26,9 +29,10 @@ pub(crate) fn build_report_with_progress(
     use crate::progress::{AuditProgressEvent, AuditProgressStage, emit};
 
     let RecoveredFindings {
-        effects,
+        mut effects,
         registry,
         risks: mut precomputed_risks,
+        mut unary_risks,
         mut interactions,
     } = findings;
     emit(
@@ -84,6 +88,20 @@ pub(crate) fn build_report_with_progress(
         },
     );
     risks = coalesce_risks(risks);
+    attach_symbol_mappings(
+        &mut effects,
+        &mut risks,
+        &mut unary_risks,
+        &mut interactions,
+        &scanned.symbol_mappings,
+    );
+    unary_risks.sort_by(|left, right| {
+        right
+            .risk_index
+            .cmp(&left.risk_index)
+            .then_with(|| left.artifact_id.cmp(&right.artifact_id))
+            .then_with(|| left.rule.cmp(&right.rule))
+    });
     risks.sort_by(|left, right| {
         right
             .risk_index
@@ -139,14 +157,30 @@ pub(crate) fn build_report_with_progress(
             count: coverage.transformer_effects_unknown,
         });
     }
+    let mapping_missing = coverage
+        .classes_mapping_missing
+        .saturating_add(coverage.methods_mapping_missing)
+        .saturating_add(coverage.fields_mapping_missing);
+    if mapping_missing > 0 {
+        coverage_gaps.push(CoverageGap {
+            artifact_id: None,
+            scope: "runtime namespace projection".to_string(),
+            kind: CoverageGapKind::MappingCoverage,
+            detail: "some base-game symbols are absent from the selected runtime mapping source; findings that require those symbols were not promoted to definite risks"
+                .to_string(),
+            count: mapping_missing,
+        });
+    }
     let report = AuditReport {
         schema_version: REPORT_SCHEMA_VERSION,
         environment: request.environment.clone(),
         readiness,
+        namespace,
         artifacts: scanned.artifact_reports,
         registered_mixin_configs,
         registered_mixins,
         transformations: effects,
+        unary_risks,
         risks,
         interactions,
         inactive_candidates,
@@ -158,10 +192,88 @@ pub(crate) fn build_report_with_progress(
         progress,
         AuditProgressEvent::StageFinished {
             stage: AuditProgressStage::DetectConflicts,
-            completed: report.risks.len(),
+            completed: 2,
         },
     );
     report
+}
+
+fn attach_symbol_mappings(
+    effects: &mut [Effect],
+    risks: &mut [Risk],
+    unary_risks: &mut [UnaryCompatibilityRisk],
+    interactions: &mut [BehavioralInteraction],
+    mappings: &BTreeMap<String, SymbolMappingEvidence>,
+) {
+    for effect in effects {
+        let mut targets = vec![&effect.target];
+        targets.extend(
+            effect
+                .requirements
+                .iter()
+                .map(|requirement| &requirement.target),
+        );
+        targets.extend(effect.mutations.iter().map(|mutation| &mutation.target));
+        let mapped = mappings_for_targets(targets, mappings);
+        attach_to_evidence(&mut effect.evidence, &mapped);
+    }
+    for risk in risks {
+        let mapped = mappings_for_targets([&risk.target], mappings);
+        attach_to_evidence(&mut risk.evidence, &mapped);
+    }
+    for risk in unary_risks {
+        let mapped = mappings_for_targets([&risk.target], mappings);
+        attach_to_evidence(&mut risk.evidence, &mapped);
+    }
+    for interaction in interactions {
+        let mapped = mappings_for_targets([&interaction.target], mappings);
+        attach_to_evidence(&mut interaction.evidence, &mapped);
+    }
+}
+
+fn mappings_for_targets<'a>(
+    targets: impl IntoIterator<Item = &'a Target>,
+    mappings: &BTreeMap<String, SymbolMappingEvidence>,
+) -> Vec<SymbolMappingEvidence> {
+    let mut selected = BTreeMap::<String, SymbolMappingEvidence>::new();
+    for target in targets {
+        if let Some(mapping) = mappings.get(&target.class) {
+            selected.insert(mapping.runtime_symbol.clone(), mapping.clone());
+        }
+        for member in target.member.iter().chain(
+            target
+                .instruction
+                .iter()
+                .filter_map(|instruction| instruction.member.as_ref()),
+        ) {
+            let key = match member.kind {
+                MemberKind::Field => {
+                    format!("{}::{}:{}", member.owner, member.name, member.descriptor)
+                }
+                MemberKind::Method => {
+                    format!("{}::{}{}", member.owner, member.name, member.descriptor)
+                }
+            };
+            if let Some(mapping) = mappings.get(&key) {
+                selected.insert(mapping.runtime_symbol.clone(), mapping.clone());
+            }
+        }
+    }
+    selected.into_values().collect()
+}
+
+fn attach_to_evidence(evidence: &mut [Evidence], mappings: &[SymbolMappingEvidence]) {
+    for item in evidence {
+        for mapping in mappings {
+            if !item
+                .symbol_mappings
+                .iter()
+                .any(|existing| existing.runtime_symbol == mapping.runtime_symbol)
+            {
+                item.symbol_mappings.push(mapping.clone());
+            }
+        }
+    }
 }
 
 fn coalesce_interactions(interactions: Vec<BehavioralInteraction>) -> Vec<BehavioralInteraction> {
@@ -1369,9 +1481,11 @@ mod tests {
             let mut target = instruction_target(7);
             target.instruction.as_mut().unwrap().identity = Some(InstructionIdentity {
                 definition: ClassDefinitionId {
+                    loader_unit_id: artifact.to_string(),
                     artifact_id: artifact.to_string(),
                     entry_path: "game/Foo.class".to_string(),
-                    class_name: "game/Foo".to_string(),
+                    original_name: "game/Foo".to_string(),
+                    runtime_name: "game/Foo".to_string(),
                     content_hash: artifact.to_string(),
                 },
                 method_name: "tick".to_string(),
@@ -1893,6 +2007,7 @@ mod tests {
             limits: AnalysisLimits::default(),
             coverage: Coverage::default(),
             warnings: Vec::new(),
+            symbol_mappings: BTreeMap::new(),
         }
     }
 }

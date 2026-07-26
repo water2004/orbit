@@ -68,6 +68,7 @@ pub use orbit_bytecode_audit::{
     Mechanism as AuditMechanism, MutationKind as AuditMutationKind,
     OrderAnalysis as AuditOrderAnalysis, Precision as AuditPrecision, Readiness as AuditReadiness,
     ReadinessStatus as AuditReadinessStatus, Risk as AuditRisk, Severity as AuditSeverity,
+    SymbolNamespace as AuditSymbolNamespace, UnaryCompatibilityRisk as AuditUnaryRisk,
     WarningKind as AuditWarningKind,
 };
 pub use orbit_bytecode_audit::{AuditProgressEvent, AuditProgressReporter, AuditProgressStage};

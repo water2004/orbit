@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-pub const REPORT_SCHEMA_VERSION: u32 = 3;
+pub const REPORT_SCHEMA_VERSION: u32 = 4;
 
 #[derive(Debug, Clone)]
 pub struct AuditRequest {
@@ -56,6 +56,7 @@ pub enum NestedJarPolicy {
 #[serde(rename_all = "snake_case")]
 pub enum ArtifactKind {
     Minecraft,
+    RuntimeGame,
     Loader,
     Runtime,
     Mod,
@@ -128,11 +129,13 @@ pub struct AuditReport {
     pub schema_version: u32,
     pub environment: AuditEnvironment,
     pub readiness: Readiness,
+    pub namespace: NamespaceReport,
     pub artifacts: Vec<ArtifactReport>,
     pub registered_mixin_configs: Vec<RegisteredMixinConfig>,
     pub registered_mixins: Vec<RegisteredMixin>,
     /// Complete recovered transformation/query model used to derive findings.
     pub transformations: Vec<Effect>,
+    pub unary_risks: Vec<UnaryCompatibilityRisk>,
     pub risks: Vec<Risk>,
     pub interactions: Vec<BehavioralInteraction>,
     pub inactive_candidates: Vec<InactiveCandidate>,
@@ -180,11 +183,116 @@ pub struct Coverage {
     pub unresolved_required_references: usize,
     pub valid_multi_target_selectors: usize,
     pub instruction_resolution_degraded: usize,
+    pub namespace_alignment_failures: usize,
+    pub namespace_ambiguous_artifacts: usize,
+    pub classes_mapped: usize,
+    pub classes_mapping_missing: usize,
+    pub methods_mapped: usize,
+    pub methods_mapping_missing: usize,
+    pub fields_mapped: usize,
+    pub fields_mapping_missing: usize,
+    pub registered_mixin_classes_missing: usize,
+    pub invalid_mixin_class_names: usize,
+    pub plugin_decisions_proven_true: usize,
+    pub plugin_decisions_proven_false: usize,
+    pub plugin_decisions_conditional: usize,
+    pub plugin_decisions_unknown: usize,
+    pub nested_artifact_units: usize,
+    pub nested_plugin_classes_resolved: usize,
+    pub nested_plugin_classes_missing: usize,
+    pub optional_unresolved_references: usize,
     pub future_classfiles: usize,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub unsupported_mechanisms: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub budget_exhaustions: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SymbolNamespace {
+    Runtime,
+    Official,
+    Intermediary,
+    Srg,
+    Named,
+    Identity,
+    Unknown,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NamespaceEvidence {
+    pub artifact_id: String,
+    pub resource_path: Option<String>,
+    pub detail: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MappingSource {
+    pub id: String,
+    pub artifact_id: String,
+    pub resource_path: String,
+    pub sha256: String,
+    pub namespaces: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct CoverageRatio {
+    pub mapped: usize,
+    pub total: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ArtifactSymbolSpace {
+    pub artifact_id: String,
+    pub namespace: SymbolNamespace,
+    pub confidence: Confidence,
+    pub mapping_source: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "status")]
+pub enum NamespaceAlignment {
+    Aligned {
+        runtime_namespace: SymbolNamespace,
+    },
+    Ambiguous {
+        candidates: Vec<SymbolNamespace>,
+        reason: String,
+    },
+    Unsupported {
+        reason: String,
+    },
+    Incomplete {
+        reason: String,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NamespaceReport {
+    pub runtime_namespace: Option<SymbolNamespace>,
+    pub artifacts: Vec<ArtifactSymbolSpace>,
+    pub mapping_sources: Vec<MappingSource>,
+    pub loader_units: Vec<LoaderArtifactUnit>,
+    pub alignment: NamespaceAlignment,
+    pub class_mapping_coverage: CoverageRatio,
+    pub method_mapping_coverage: CoverageRatio,
+    pub field_mapping_coverage: CoverageRatio,
+    pub evidence: Vec<NamespaceEvidence>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LoaderArtifactUnit {
+    pub id: String,
+    pub root_artifact: String,
+    pub members: Vec<String>,
+    pub class_visibility: ClassVisibility,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ClassVisibility {
+    SharedWithinUnit,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -228,6 +336,15 @@ pub enum ConfigActivation {
     Dynamic,
     MissingConfig,
     MalformedConfig,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "decision")]
+pub enum PluginDecision {
+    AlwaysApply,
+    NeverApply,
+    Conditional { detail: String },
+    Unknown { detail: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -288,6 +405,7 @@ pub struct RegisteredMixin {
     pub required_config: bool,
     pub default_require: u32,
     pub plugin: Option<String>,
+    pub plugin_decision: Option<PluginDecision>,
     pub activation: MixinActivation,
 }
 
@@ -298,6 +416,7 @@ pub enum InactiveCandidateKind {
     SideMismatch,
     MissingRequiredMods,
     PluginRejected,
+    MissingTarget,
     MissingOptionalTarget,
     PseudoTargetMissing,
     UnregisteredTransformer,
@@ -315,9 +434,15 @@ pub struct InactiveCandidate {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CoverageGapKind {
+    NamespaceAlignment,
+    MappingCoverage,
+    AmbiguousClassDefinition,
+    MissingMixinClass,
     UnsupportedSelector,
     UnsupportedInjectionPoint,
     UnresolvedLocalSelector,
+    UnresolvedSlice,
+    UnavailableMethodBody,
     DynamicMixinConfigRegistration,
     PluginDecision,
     PluginDynamicMixins,
@@ -514,9 +639,11 @@ pub struct ClassReference {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ClassDefinitionId {
+    pub loader_unit_id: String,
     pub artifact_id: String,
     pub entry_path: String,
-    pub class_name: String,
+    pub original_name: String,
+    pub runtime_name: String,
     pub content_hash: String,
 }
 
@@ -851,7 +978,17 @@ pub struct Evidence {
     pub target_candidates: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub analysis_precision: Option<Precision>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub symbol_mappings: Vec<SymbolMappingEvidence>,
     pub detail: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SymbolMappingEvidence {
+    pub original_symbol: String,
+    pub runtime_symbol: String,
+    pub mapping_source: String,
+    pub confidence: Confidence,
 }
 
 impl Evidence {
@@ -880,6 +1017,7 @@ impl Evidence {
             refmap_sources: Vec::new(),
             target_candidates: Vec::new(),
             analysis_precision: None,
+            symbol_mappings: Vec::new(),
             detail: detail.into(),
         }
     }
@@ -935,6 +1073,22 @@ pub struct Risk {
     /// upgraded by borrowing confidence or precision from one another.
     pub precision: Precision,
     /// Heuristic ranking value in `0..=100`; this is not a probability.
+    pub risk_index: u8,
+    pub activation: Activation,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UnaryCompatibilityRisk {
+    pub artifact_id: String,
+    pub environment_target: String,
+    pub target: Target,
+    pub rule: String,
+    pub reason: String,
+    pub mutations: Vec<MutationKind>,
+    pub evidence: Vec<Evidence>,
+    pub severity: Severity,
+    pub confidence: Confidence,
+    pub precision: Precision,
     pub risk_index: u8,
     pub activation: Activation,
 }
