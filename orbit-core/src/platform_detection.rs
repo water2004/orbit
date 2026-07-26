@@ -23,13 +23,18 @@ pub(crate) struct DiscoveredPlatform {
     pub loader_jar: PathBuf,
     pub loader_package: Option<PlatformCandidate>,
     pub physical_environment: crate::metadata::Environment,
+    runtime_jars: Option<Vec<PathBuf>>,
 }
 
 impl DiscoveredPlatform {
     pub(crate) fn snapshot(&self, instance_dir: &Path) -> Result<PlatformSnapshot, OrbitError> {
         let minecraft_jar = PlatformArtifact::capture(instance_dir, &self.minecraft_jar)?;
         let loader_jar = PlatformArtifact::capture(instance_dir, &self.loader_jar)?;
-        let mut runtime_jars = discover_runtime_classpath(instance_dir, self)?
+        let mut runtime_jars = self
+            .runtime_jars
+            .clone()
+            .map(Ok)
+            .unwrap_or_else(|| discover_runtime_classpath(instance_dir, self))?
             .into_iter()
             .map(|path| PlatformArtifact::capture(instance_dir, &path))
             .collect::<Result<Vec<_>, _>>()?;
@@ -122,6 +127,39 @@ pub fn detect_loader_candidates(
     minecraft_version: &str,
     requested_loader: Option<&str>,
 ) -> Result<Vec<InitLoaderCandidate>, OrbitError> {
+    if let Some(server) = crate::detection::server::discover_server_runtime(instance_dir)? {
+        if server.minecraft.id != minecraft_version {
+            return Err(OrbitError::Other(anyhow::anyhow!(
+                "dedicated-server metadata selects Minecraft '{}', not '{}'",
+                server.minecraft.id,
+                minecraft_version
+            )));
+        }
+        if requested_loader.is_some_and(|requested| requested != server.loader) {
+            return Err(OrbitError::Other(anyhow::anyhow!(
+                "dedicated-server metadata selects loader '{}', not requested '{}'",
+                server.loader,
+                requested_loader.unwrap()
+            )));
+        }
+        let name = LoaderDetectionService::new()
+            .known_loaders()
+            .into_iter()
+            .find_map(|(loader, name)| (loader.as_str() == server.loader).then_some(name))
+            .ok_or_else(|| {
+                OrbitError::Other(anyhow::anyhow!(
+                    "dedicated-server detector returned unregistered loader '{}'",
+                    server.loader
+                ))
+            })?;
+        return Ok(vec![InitLoaderCandidate {
+            loader: server.loader,
+            name: name.to_string(),
+            versions: vec![server.loader_version],
+            evidence: vec![server.evidence],
+            certain: true,
+        }]);
+    }
     let service = LoaderDetectionService::new();
     let detected = if let Some(loader) = requested_loader {
         let detector = service.find_by_name(loader).ok_or_else(|| {
@@ -178,7 +216,7 @@ pub fn detect_mc_version(instance_dir: &Path) -> Result<McVersion, OrbitError> {
     match versions.as_slice() {
         [version] => Ok(version.clone()),
         [] => Err(OrbitError::Other(anyhow::anyhow!(
-            "no Minecraft client JAR with version.json was found for '{}'",
+            "no Minecraft runtime JAR with version.json was found for '{}'",
             instance_dir.display()
         ))),
         versions => Err(OrbitError::Other(anyhow::anyhow!(
@@ -193,8 +231,11 @@ pub fn detect_mc_version(instance_dir: &Path) -> Result<McVersion, OrbitError> {
     }
 }
 
-/// Returns every actual Minecraft client version visible to this instance.
+/// Returns every actual Minecraft runtime version visible to this instance.
 pub fn detect_mc_versions(instance_dir: &Path) -> Result<Vec<McVersion>, OrbitError> {
+    if let Some(server) = crate::detection::server::discover_server_runtime(instance_dir)? {
+        return Ok(vec![server.minecraft]);
+    }
     let layout = crate::launcher::LauncherLayout::discover(instance_dir)?;
     let configured_versions = layout.configured_minecraft_versions();
     let expected_version =
@@ -441,6 +482,15 @@ fn discover_platform(
     requested_loader: Option<&str>,
     requested_loader_version: Option<&str>,
 ) -> Result<DiscoveredPlatform, OrbitError> {
+    if let Some(server) = crate::detection::server::discover_server_runtime(instance_dir)? {
+        return discover_server_platform(
+            instance_dir,
+            server,
+            requested_mc_version,
+            requested_loader,
+            requested_loader_version,
+        );
+    }
     let layout = crate::launcher::LauncherLayout::discover(instance_dir)?;
     let (minecraft_jar, minecraft_version) = discover_minecraft(&layout, requested_mc_version)?;
     let (loader, loader_version, loader_jar) = discover_loader(
@@ -450,7 +500,98 @@ fn discover_platform(
         requested_loader,
         requested_loader_version,
     )?;
+    let physical_environment = physical_environment(&layout, &loader, &minecraft_version.id);
 
+    build_discovered_platform(
+        minecraft_version,
+        minecraft_jar,
+        loader,
+        loader_version,
+        loader_jar,
+        physical_environment,
+        None,
+    )
+}
+
+fn discover_server_platform(
+    instance_dir: &Path,
+    server: crate::detection::server::ServerRuntimeSpec,
+    requested_mc_version: Option<&str>,
+    requested_loader: Option<&str>,
+    requested_loader_version: Option<&str>,
+) -> Result<DiscoveredPlatform, OrbitError> {
+    if requested_mc_version.is_some_and(|requested| requested != server.minecraft.id) {
+        return Err(OrbitError::Other(anyhow::anyhow!(
+            "dedicated-server metadata selects Minecraft '{}', not requested '{}'",
+            server.minecraft.id,
+            requested_mc_version.unwrap()
+        )));
+    }
+    if requested_loader.is_some_and(|requested| requested != server.loader) {
+        return Err(OrbitError::Other(anyhow::anyhow!(
+            "dedicated-server metadata selects loader '{}', not requested '{}'",
+            server.loader,
+            requested_loader.unwrap()
+        )));
+    }
+    if requested_loader_version.is_some_and(|requested| {
+        crate::versions::Version::parse(requested, &server.loader)
+            != crate::versions::Version::parse(&server.loader_version, &server.loader)
+    }) {
+        return Err(OrbitError::Other(anyhow::anyhow!(
+            "dedicated-server metadata selects {} loader version '{}', not requested '{}'",
+            server.loader,
+            server.loader_version,
+            requested_loader_version.unwrap()
+        )));
+    }
+    let minecraft_jar = server.minecraft_jar.clone();
+    let loader = server.loader.clone();
+    let loader_version = server.loader_version.clone();
+    let loader_jar = server.loader_jar.clone();
+    let minecraft = server.minecraft;
+    let runtime_jars = server.runtime_jars;
+    let discovered = build_discovered_platform(
+        minecraft,
+        minecraft_jar,
+        loader,
+        loader_version,
+        loader_jar,
+        crate::metadata::Environment::Server,
+        Some(runtime_jars),
+    )?;
+    // Every server path must still belong to the instance after the common
+    // platform object has been assembled.
+    let root = instance_dir.canonicalize().map_err(|error| {
+        OrbitError::Other(anyhow::anyhow!(
+            "cannot resolve dedicated-server directory '{}': {error}",
+            instance_dir.display()
+        ))
+    })?;
+    for path in std::iter::once(&discovered.minecraft_jar)
+        .chain(std::iter::once(&discovered.loader_jar))
+        .chain(discovered.runtime_jars.iter().flatten())
+    {
+        if !path.starts_with(&root) {
+            return Err(OrbitError::Other(anyhow::anyhow!(
+                "dedicated-server runtime artifact '{}' is outside '{}'",
+                path.display(),
+                root.display()
+            )));
+        }
+    }
+    Ok(discovered)
+}
+
+fn build_discovered_platform(
+    minecraft_version: McVersion,
+    minecraft_jar: PathBuf,
+    loader: String,
+    loader_version: String,
+    loader_jar: PathBuf,
+    physical_environment: crate::metadata::Environment,
+    runtime_jars: Option<Vec<PathBuf>>,
+) -> Result<DiscoveredPlatform, OrbitError> {
     let loader_package = match crate::jar::read_mod_metadata_if_present(&loader_jar, &loader) {
         Ok(Some(metadata)) => {
             let expected_mod_id = loader_mod_id(&loader);
@@ -493,8 +634,6 @@ fn discover_platform(
         .as_ref()
         .map(|package| package.version.clone())
         .unwrap_or(loader_version);
-    let physical_environment = physical_environment(&layout, &loader, &minecraft_version.id);
-
     Ok(DiscoveredPlatform {
         minecraft_version,
         minecraft_jar,
@@ -503,6 +642,7 @@ fn discover_platform(
         loader_jar,
         loader_package,
         physical_environment,
+        runtime_jars,
     })
 }
 
