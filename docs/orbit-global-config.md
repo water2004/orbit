@@ -99,10 +99,8 @@ max_retries = 3
 # modrinth_token = "..."
 
 [cache]
-enable = true
 # dir = "D:/OrbitCache"
-eviction_policy = "size"
-max_size_gb = 5.0
+capacity_mib = 5120
 
 [ui]
 color = "auto"
@@ -148,6 +146,8 @@ cache 不信任 provider 文件名，也不使用“文件名 → 哈希”的�
 
 ```text
 {cache_dir}/
+  lru-index.json            # SHA-512 → 最近使用序号
+  lru.lock                  # 跨进程维护锁
   jars/
     sha512/
       <locally-computed-sha512>
@@ -159,6 +159,21 @@ cache 不信任 provider 文件名，也不使用“文件名 → 哈希”的�
 写入时始终从实际 bytes 计算 SHA-1/SHA-512。统一 artifact 队列执行时，先按 provider
 给出的强哈希查 cache；命中后再次校验并直接解析，不发 HTTP。未命中才调用
 provider-owned downloader。
+
+`capacity_mib` 是 JAR 内容的硬容量上限，不计算索引、锁和 SHA-1 别名的体积。每次
+`get_bytes`、`copy_to` 和 `store_bytes` 都会 touch 对应 SHA-512 内容；CLI 在每一次
+命令执行结束后（包括命令返回错误时）合并本次访问记录，按标准 LRU 从最久未使用的
+JAR 开始删除，直到内容总量不超过上限，并同时删除指向已淘汰内容的 SHA-1 别名。
+持久化顺序使用索引内的单调逻辑时钟，不依赖系统时间或文件系统 atime。LRU 索引通过
+临时文件原子替换，维护过程以 cache 内的跨进程文件锁串行化。
+
+`capacity_mib = 0` 表示一个命令内仍可复用刚下载的内容，但命令结束后不保留任何 JAR。
+索引中没有访问记录的 content-addressed JAR 统一视为最旧条目；不存在第二套目录、
+旧路径查询或按文件系统 atime 的兜底逻辑。
+
+cache 配置只有 `dir` 和 `capacity_mib`。旧的 `enable`、`eviction_policy`、
+`max_size_gb` 字段会作为未知字段直接报错，必须从配置中删除并改用整数 MiB 容量；
+Orbit 不会静默猜测旧字段的含义。
 
 `orbit cache clean` 使用同一个注入目录。core 拒绝递归删除文件系统根或当前工作
 目录/其祖先，也拒绝删除包含 `config.toml` 或 `instances.toml` 的目录。
@@ -186,7 +201,6 @@ environment 验证布局，不修改真实用户目录。
 - `core.max_concurrent_downloads`：统一候选下载当前使用固定有界并发；
 - `network.proxy`、timeout、retry：各 HTTP client 尚未统一由配置构造；
 - `auth.modrinth_token`：尚未传入 Modrinth client；
-- `cache.enable`、自动淘汰策略和大小上限：尚未执行；
 - `language` 与 `ui.color`：CLI 本地化和颜色策略尚未接入；`ui.progress_bar` 已接入。
 
 CurseForge API Key 已真实接入 provider 创建、Core API 与受限 CDN 下载。Key 不进入

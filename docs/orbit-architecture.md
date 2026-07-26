@@ -91,7 +91,7 @@ init / sync
   → manifest / exact platform snapshot validation
   → package remotes 的 provider project 闭包发现（联网命令）
   → 完整 artifact 队列
-  → content-addressed cache / 网络
+  → content-addressed cache（命中即 touch）/ 网络
   → jar reader
   → loader adapter
   → normalized metadata
@@ -99,6 +99,7 @@ init / sync
   → shared solver graph
   → PubGrub solution + diagnostics + warnings
   → transaction / report
+  → 命令结束合并 LRU 索引并执行容量淘汰
 ```
 
 在线安装分为三个不可反向调用的阶段：

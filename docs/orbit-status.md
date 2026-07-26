@@ -94,7 +94,7 @@
 | `audit` | 复用 Loader-selected runtime，先对齐 namespace，再解析 Mixin/Transformer；unary/pairwise 分离 + schema 4 JSON/显式完整 report |
 | `list` / `info` | 展示包信息、逻辑依赖和 bundled；非树形 list 与 info 均使用自适应表格 |
 | `export` / `import` | Orbit archive 与 Modrinth pack |
-| `cache` / `instances` / `purge` | 已接 core；instances list 输出自适应表格 |
+| `cache` / `instances` / `purge` | cache 使用跨命令持久化 LRU 并在每次命令结束执行容量淘汰；instances list 输出自适应表格 |
 
 ## 5. 已知边界
 
