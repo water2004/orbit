@@ -29,6 +29,7 @@
 | 跨平台全局路径 | ✅ | RuntimeEnvironment + 显式路径；system/executable 布局 |
 | Windows MSI | ✅ | x64 per-machine 向导、可选系统 PATH、同版本重建升级、维护模式、可选清理默认 AppData；发布产物仍需项目证书签名 |
 | 长事务进度 | ✅ | 包操作与 audit 均使用 core 强类型事件；候选/审计工件精确计数，求解工作总量随实际 run/probe 动态增长 |
+| JSON / 自动化输出 | ✅ | 全局 `--format text\|json` 与 `--progress-format none\|ndjson`；JSON 信封 + NDJSON 进度 + 结构化错误 JSON + 稳定错误码；view-model 层隔离哈希/文件名/密钥 |
 
 ## 2. 保留的正确规范
 
@@ -132,5 +133,6 @@
 - [orbit-toml-spec.md](orbit-toml-spec.md)
 - [orbit-detection.md](orbit-detection.md)
 - [orbit-cli-commands.md](orbit-cli-commands.md)
+- [orbit-output-formats.md](orbit-output-formats.md)
 - [orbit-providers.md](orbit-providers.md)
 - [orbit-bytecode-audit.md](orbit-bytecode-audit.md)

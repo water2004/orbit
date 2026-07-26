@@ -39,12 +39,17 @@ contained JAR 不是独立删除目标。
 | `--config <file>` | 使用指定的全局配置文件；实例注册表位于其同目录 |
 | `--cache-dir <directory>` | 使用指定的 content-addressed JAR 缓存目录 |
 | `--data-layout system\|executable` | 选择平台目录或可执行文件相邻目录布局 |
+| `--format text\|json` | 输出格式；`json` 输出单个 JSON 文档到 stdout，供自动化工具集成 |
+| `--progress-format none\|ndjson` | 进度协议；`ndjson` 把进度事件逐行写 stderr，每行一个 JSON 对象 |
 | `-v, --verbose` | 显示实例选择等额外上下文 |
 | `-q, --quiet` | 规范要求仅输出错误；当前只有部分上下文输出遵守，见 §8 |
 | `-y, --yes` | 跳过确认；不会替缺失的可复现元数据猜值 |
 | `--dry-run` | 返回操作预览，不写目标状态 |
 
-正常结果写 stdout，错误、警告、结构化操作进度和交互提示写 stderr。交互终端默认显示
+正常结果写 stdout，错误、警告、结构化操作进度和交互提示写 stderr。`--format json` 下
+stdout 始终是且只是一个完整 JSON 文档（成功为结果，失败为空），进度（若启用）走 stderr
+NDJSON，调用方可以安全 `orbit --format json ... | jq`。JSON 结果、NDJSON 进度、结构化
+错误的 schema 见 [orbit-output-formats.md](orbit-output-formats.md)。交互终端默认显示
 spinner/进度条；重定向时显示稳定文本。`config.toml` 的 `ui.progress_bar` 可设为
 `modern`、`plain` 或 `off`，`--quiet` 始终关闭进度。
 
@@ -336,7 +341,6 @@ orbit check <mc-version> [--modloader <loader>]
 
 ```text
 orbit audit
-  [--format text|json]
   [--min-risk 0..100]
   [--fail-on-risk 0..100]
   [--mod <id-or-name>]
@@ -346,7 +350,8 @@ orbit audit
 
 只读分析当前实例实际存在的 Minecraft、Loader、运行时依赖和 Mod JAR。它与
 `orbit check` 不同：`check` 查询目标版本是否有远端文件，`audit` 不联网、不读取
-provider 兼容声明，也不修改 manifest、lockfile、下载缓存或实例文件。
+provider 兼容声明，也不修改 manifest、lockfile、下载缓存或实例文件。输出格式由全局
+`--format` 控制（`text` 或 `json`），不再使用 per-command `--format`。
 
 `--min-risk` 只控制 stdout 展示；`--fail-on-risk` 在完整分析后按 `risk_index`
 阈值决定是否返回非零退出码。`risk_index` 是 0–100 的排序值，不是不兼容概率。
@@ -356,9 +361,10 @@ provider 兼容声明，也不修改 manifest、lockfile、下载缓存或实例
 风险且不展开完整 evidence；每条风险使用两列详情布局，非 TTY 输出最大 120 列。
 `--limit` 调整展示数量。
 
-`--format json` 保留完整 evidence。显式 `--report <path>` 额外写入未按文本 limit、
-risk threshold 或 mod 过滤截断的完整结构化报告；默认模式不创建报告文件。JSON
-schema 3 顶层固定包含 `schema_version`、`environment`、`readiness`、`artifacts`、
+`--format json` 保留完整 evidence（audit 子 schema 3）。显式 `--report <path>` 额外写入
+未按文本 limit、risk threshold 或 mod 过滤截断的完整结构化报告；默认模式不创建报告文件。
+JSON 结果直接嵌入 audit 的 `AuditReport`（schema 3），顶层固定包含 `schema_version`、
+`environment`、`readiness`、`artifacts`、
 `registered_mixin_configs`、`registered_mixins`、`transformations`、`risks`、
 `interactions`、`inactive_candidates`、`coverage_gaps`、`coverage` 和 `warnings`。
 没有达到阈值的结果只表述为
@@ -398,7 +404,7 @@ orbit cache clean
 
 | 规范 | 当前差距 |
 |------|----------|
-| `--quiet` 只输出错误 | 多数 handler 仍直接 `println!`，只有实例上下文日志检查 quiet |
+| `--quiet` 只输出错误 | 多数 handler 仍直接 `println!`（text 模式），只有实例上下文日志检查 quiet |
 | `--verbose` 展示网络/解析细节 | 当前主要展示实例选择，没有统一结构化日志层 |
 | 用户取消使用独立退出码 3 | clap 参数错误为 2、普通错误为 1；部分取消当前为成功或普通错误 |
 | 全局运行配置控制网络/并发/UI | `ui.progress_bar` 已接入；代理、重试、语言、颜色和下载并发尚未全部接入 |
@@ -411,7 +417,10 @@ orbit cache clean
 - `file:` 添加、全量 restore、target/group/optional；
 - list target、sync/check/purge、导入导出、实例与 cache；
 - 默认实例的修改型命令安全阻断；
-- 非交互 init 不猜 loader/版本，重复 init 不覆盖项目。
+- 非交互 init 不猜 loader/版本，重复 init 不覆盖项目；
+- 全局 `--format text|json` 与 `--progress-format none|ndjson`；JSON 信封 + NDJSON 进度 +
+  结构化错误 JSON + 稳定错误码 + 退出码（见 [orbit-output-formats.md](orbit-output-formats.md)）；
+  audit 的 per-command `--format` 已删除并入全局选项。
 
 CurseForge 已接入 search/info/add/install/check/outdated/upgrade/restore 的共享
 路径。它仍受 Core API Key 和项目第三方下载许可约束；这些是外部服务边界，不会用
