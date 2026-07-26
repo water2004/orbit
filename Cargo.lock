@@ -437,7 +437,7 @@ dependencies = [
 
 [[package]]
 name = "curseforge-wrapper"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "reqwest",
  "serde",
@@ -1173,7 +1173,7 @@ dependencies = [
 
 [[package]]
 name = "modrinth-wrapper"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "reqwest",
  "serde",
@@ -1209,7 +1209,7 @@ checksum = "7c87def4c32ab89d880effc9e097653c8da5d6ef28e6b539d313baaacfbafcbe"
 
 [[package]]
 name = "orbit"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -1223,7 +1223,7 @@ dependencies = [
 
 [[package]]
 name = "orbit-bytecode-audit"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "hex",
  "orbit-loader-json",
@@ -1239,7 +1239,7 @@ dependencies = [
 
 [[package]]
 name = "orbit-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1271,7 +1271,7 @@ dependencies = [
 
 [[package]]
 name = "orbit-loader-json"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
  "serde_json",
