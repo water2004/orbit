@@ -55,6 +55,10 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-windows-
 MSI 默认不签名。正式发布前应在 CI 的受控签名步骤中使用项目证书签名，并保留
 SHA-256 校验值。
 
+正式 tag 构建由 [release-process.md](release-process.md) 中的 GitHub Actions 在
+Windows runner 上调用同一脚本。只有 tag 指向 `main` 且版本匹配时才会与 Linux deb
+一起发布；本地构建不创建 GitHub Release。
+
 ## WiX 版本与许可
 
 仓库固定 WiX 7.0.0，并在构建命令中使用官方为构建脚本和 CI 提供的

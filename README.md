@@ -37,6 +37,18 @@ Windows x64 用户可以从 release 页面下载
 从源码构建 MSI 的方法见
 [Windows MSI](docs/windows-msi.md)。
 
+Debian/Ubuntu amd64 可从同一个 GitHub Release 下载
+`orbit_<version>-1_amd64.deb`：
+
+```bash
+sudo apt install ./orbit_0.1.0-1_amd64.deb
+```
+
+tag 必须指向 `main` 且与 Cargo 版本一致，GitHub Actions 才会同时发布 MSI、deb、
+`SHA256SUMS` 和自动分类的 Release notes。构建与发布规则见
+[Release 流程](docs/release-process.md)，deb 细节见
+[Linux deb](docs/linux-deb.md)。
+
 ### 体验丝滑工作流
 
 ```bash
