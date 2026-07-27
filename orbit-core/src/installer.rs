@@ -575,6 +575,7 @@ pub fn list_dependencies(instance_dir: &Path) -> Result<Vec<String>, OrbitError>
 #[derive(Debug, Clone)]
 pub struct ListOutput {
     pub packages: Vec<ListedPackage>,
+    pub roots: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -594,7 +595,8 @@ pub struct ListedPackage {
 pub fn list_installed(instance_dir: &Path) -> Result<ListOutput, OrbitError> {
     let manifest = ManifestFile::open(instance_dir)?;
     let lock = Lockfile::open(instance_dir)?;
-    Ok(list_output(&manifest.inner, &lock.inner, None))
+    let roots = manifest.inner.dependencies.keys().cloned().collect();
+    Ok(list_output(&manifest.inner, &lock.inner, None, roots))
 }
 
 /// Read installed packages selected for a client/server target.
@@ -614,20 +616,33 @@ pub fn list_installed_for_target(
     validate_restore_options(&options)?;
     let platform = crate::platform::Platform::load(instance_dir, &manifest.inner)?;
     let loader_package = platform.loader_package;
-    let (selected, _) = selected_packages(
+    let (selected, skipped) = selected_packages(
         &manifest.inner,
         &lock.inner,
         &options,
         loader_package.as_ref(),
     )?;
     let selected: std::collections::HashSet<_> = selected.into_iter().collect();
-    Ok(list_output(&manifest.inner, &lock.inner, Some(&selected)))
+    let roots = manifest
+        .inner
+        .dependencies
+        .keys()
+        .filter(|package| !skipped.contains(package))
+        .cloned()
+        .collect();
+    Ok(list_output(
+        &manifest.inner,
+        &lock.inner,
+        Some(&selected),
+        roots,
+    ))
 }
 
 fn list_output(
     manifest: &OrbitManifest,
     lockfile: &OrbitLockfile,
     selected: Option<&std::collections::HashSet<String>>,
+    roots: Vec<String>,
 ) -> ListOutput {
     let packages: Vec<ListedPackage> = lockfile
         .packages
@@ -644,8 +659,9 @@ fn list_output(
                     .map(PackageRemote::display_locator)
                     .collect(),
                 environment: requirement
-                    .and_then(DependencySpec::env)
-                    .unwrap_or("both")
+                    .map(|requirement| requirement.effective_environment(entry.environment))
+                    .unwrap_or(entry.environment)
+                    .as_str()
                     .to_string(),
                 optional: requirement.is_some_and(DependencySpec::optional),
                 dependencies: declared_dependency_ids(&entry.dependencies)
@@ -656,7 +672,7 @@ fn list_output(
             }
         })
         .collect();
-    ListOutput { packages }
+    ListOutput { packages, roots }
 }
 
 fn declared_dependency_ids(dependencies: &[crate::metadata::DependencyExpression]) -> Vec<&str> {
@@ -1265,10 +1281,14 @@ pub(crate) fn selected_packages(
                 .iter()
                 .any(|dependency| dependency == package)
         });
-        let environment = spec.env().unwrap_or("both");
+        let declared_environment = lockfile
+            .find(package)
+            .map(|entry| entry.environment)
+            .unwrap_or(crate::metadata::Environment::Both);
+        let environment = spec.effective_environment(declared_environment);
         let environment_matches = match target {
-            "client" => matches!(environment, "client" | "both"),
-            "server" => matches!(environment, "server" | "both"),
+            "client" => environment.applies_to(crate::metadata::Environment::Client),
+            "server" => environment.applies_to(crate::metadata::Environment::Server),
             _ => true,
         };
         if in_group && environment_matches && !(options.no_optional && spec.optional()) {
@@ -1711,13 +1731,10 @@ fn requested_requirement(
     optional: bool,
     env: Option<&str>,
 ) -> Result<DependencySpec, OrbitError> {
-    if let Some(env) = env
-        && !matches!(env, "client" | "server" | "both")
-    {
-        return Err(OrbitError::Other(anyhow::anyhow!(
-            "invalid dependency environment '{env}'; expected client, server, or both"
-        )));
-    }
+    let env = env
+        .map(str::parse)
+        .transpose()
+        .map_err(|error: String| OrbitError::Other(anyhow::anyhow!(error)))?;
     let version = if constraint.is_empty() {
         "*".to_string()
     } else {
@@ -1726,7 +1743,7 @@ fn requested_requirement(
     Ok(DependencySpec {
         version,
         optional,
-        env: env.map(str::to_string),
+        env,
         exclude: Vec::new(),
         remotes: Vec::new(),
     })
@@ -1973,7 +1990,7 @@ physical_environment = "client"
 
         assert_eq!(requirement.version, "^1");
         assert!(requirement.optional);
-        assert_eq!(requirement.env.as_deref(), Some("client"));
+        assert_eq!(requirement.env, Some(crate::metadata::Environment::Client));
         assert!(requirement.exclude.is_empty());
     }
 
@@ -2039,6 +2056,93 @@ dependencies = ["client-mod", "optional-mod"]
 
         assert_eq!(selected, vec!["client-mod", "library"]);
         assert_eq!(skipped, vec!["optional-mod", "server-mod"]);
+    }
+
+    #[test]
+    fn missing_manifest_environment_follows_the_locked_jar_declaration() {
+        let manifest: OrbitManifest = toml::from_str(
+            r#"
+[project]
+name = "test"
+mc_version = "1"
+modloader = "fabric"
+modloader_version = "1"
+[platform]
+minecraft_jar = { path = "minecraft.jar", sha256 = "test" }
+loader_jar = { path = "loader.jar", sha256 = "test" }
+runtime_jars = []
+physical_environment = "client"
+[dependencies]
+example = { version = "*", remotes = [{ type = "file", path = "example.jar" }] }
+"#,
+        )
+        .unwrap();
+        let mut package = locked_package("example", &[]);
+        package.environment = crate::metadata::Environment::Client;
+        let lockfile = OrbitLockfile {
+            meta: LockMeta {
+                mc_version: "1".to_string(),
+                modloader: "fabric".to_string(),
+                modloader_version: "1".to_string(),
+            },
+            packages: vec![package],
+        };
+
+        let client = RestoreOptions {
+            target: Some("client".to_string()),
+            ..RestoreOptions::default()
+        };
+        let server = RestoreOptions {
+            target: Some("server".to_string()),
+            ..RestoreOptions::default()
+        };
+
+        assert_eq!(
+            selected_packages(&manifest, &lockfile, &client, None).unwrap(),
+            (vec!["example".to_string()], Vec::new())
+        );
+        assert_eq!(
+            selected_packages(&manifest, &lockfile, &server, None).unwrap(),
+            (Vec::new(), vec!["example".to_string()])
+        );
+    }
+
+    #[test]
+    fn explicit_manifest_environment_overrides_the_locked_jar_filter() {
+        let mut manifest: OrbitManifest = toml::from_str(
+            r#"
+[project]
+name = "test"
+mc_version = "1"
+modloader = "fabric"
+modloader_version = "1"
+[platform]
+minecraft_jar = { path = "minecraft.jar", sha256 = "test" }
+loader_jar = { path = "loader.jar", sha256 = "test" }
+runtime_jars = []
+physical_environment = "client"
+[dependencies]
+example = { version = "*", remotes = [{ type = "file", path = "example.jar" }] }
+"#,
+        )
+        .unwrap();
+        manifest.dependencies["example"].env = Some(crate::metadata::Environment::Both);
+        let mut package = locked_package("example", &[]);
+        package.environment = crate::metadata::Environment::Client;
+        let lockfile = OrbitLockfile {
+            meta: LockMeta {
+                mc_version: "1".to_string(),
+                modloader: "fabric".to_string(),
+                modloader_version: "1".to_string(),
+            },
+            packages: vec![package],
+        };
+        let server = RestoreOptions {
+            target: Some("server".to_string()),
+            ..RestoreOptions::default()
+        };
+
+        assert!(selected_packages(&manifest, &lockfile, &server, None).is_err());
     }
 
     #[test]

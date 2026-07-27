@@ -2,6 +2,7 @@
 
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
+use std::str::FromStr;
 
 /// Physical runtime side used by loader metadata.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -24,6 +25,25 @@ impl Environment {
 
     pub fn applies_to(self, target: Self) -> bool {
         self == Self::Both || target == Self::Both || self == target
+    }
+
+    pub fn union(self, other: Self) -> Self {
+        if self == other { self } else { Self::Both }
+    }
+}
+
+impl FromStr for Environment {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "client" => Ok(Self::Client),
+            "server" => Ok(Self::Server),
+            "both" => Ok(Self::Both),
+            _ => Err(format!(
+                "invalid dependency environment '{value}'; expected client, server, or both"
+            )),
+        }
     }
 }
 

@@ -1,6 +1,6 @@
 use super::CliContext;
 use anyhow::{Context, Result};
-use orbit_core::{OrbitManifest, list_installed, list_installed_for_target};
+use orbit_core::{list_installed, list_installed_for_target};
 use std::collections::{HashMap, HashSet};
 
 use crate::cli::output::{OutputFormat, list_view};
@@ -26,7 +26,7 @@ pub async fn handle(tree: bool, target: Option<String>, ctx: &CliContext) -> Res
     }
 
     if tree {
-        print_tree(&dir, &output, target.as_deref(), ctx)?;
+        print_tree(&output, target.as_deref(), ctx)?;
     } else {
         match ctx.output.format {
             OutputFormat::Text => {
@@ -46,7 +46,6 @@ pub async fn handle(tree: bool, target: Option<String>, ctx: &CliContext) -> Res
 }
 
 fn print_tree(
-    dir: &std::path::Path,
     output: &orbit_core::ListOutput,
     target: Option<&str>,
     ctx: &CliContext,
@@ -57,20 +56,7 @@ fn print_tree(
         .map(|p| (p.mod_id.as_str(), p))
         .collect();
 
-    let manifest = OrbitManifest::from_dir(dir).context("failed to read orbit.toml")?;
-    let top_level: Vec<&str> = manifest
-        .dependencies
-        .iter()
-        .filter(|(_, spec)| {
-            let environment = spec.env().unwrap_or("both");
-            match target.unwrap_or("both") {
-                "client" => matches!(environment, "client" | "both"),
-                "server" => matches!(environment, "server" | "both"),
-                _ => true,
-            }
-        })
-        .map(|(package, _)| package.as_str())
-        .collect();
+    let top_level: Vec<&str> = output.roots.iter().map(String::as_str).collect();
 
     let mut visited = HashSet::new();
     let mut roots = Vec::new();

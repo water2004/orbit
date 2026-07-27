@@ -160,8 +160,9 @@ orbit add <mod>
 `cf:` locator 交给 Modrinth 或反向处理。CurseForge 的持久远端只接受数值 project ID。
 
 在线流程先取得并验证候选 JAR，再以 JAR 的真实 `mod_id`、版本和 required dependencies
-求解。确认后写入 `mods/`、manifest 和 lockfile。顶层 constraint、`optional`、`env`
-持久化到 manifest；传递依赖只进入 lockfile。`--no-deps` 禁止传递安装。
+求解。确认后写入 `mods/`、manifest 和 lockfile。顶层 constraint、`optional` 和显式
+传入的 `env` 持久化到 manifest；未传 `--env` 时保持自动状态，由选中 JAR 的
+`environment` 决定过滤范围。传递依赖只进入 lockfile。`--no-deps` 禁止传递安装。
 
 该流程会分别显示：递归发现 project、候选队列总数、JAR 下载/缓存校验/解析完成数、
 离线求解的动态工作量，以及确认后的包物化进度。求解总量会在发现新的 continuation
@@ -176,6 +177,17 @@ Pareto 或 co-Pareto front 本身仍可能很大。
 本地 `file:` 同样解析 loader 元数据、哈希、内嵌模组并校验依赖图，不绕过锁文件。
 在线与本地添加都使用同一个方案选择和包事务报告；若选中方案替换或淘汰已有顶层包
 版本，会与新安装项一起展示并确认。
+
+### `orbit env`
+
+```text
+orbit env <package> <client|server|both|auto>
+```
+
+修改 `orbit.toml` 中一个根包的环境过滤覆盖。`client`、`server` 和 `both` 是显式用户
+策略；`auto` 删除显式覆盖，重新跟随 lock 中精确选中 JAR 的 `environment`。该命令只
+接受 JAR 声明的 `mod_id`，不修改 lock，也不重新求解或下载。支持全局 `--dry-run` 和
+`--format json`。
 
 ### `orbit remote`
 
@@ -212,7 +224,8 @@ loader JAR 及其 bundled 模块进入同一次求解，只在真实依赖约束
 
 选择顺序：
 
-1. 根据 target、group 和 optional 过滤 manifest 根依赖；
+1. 根据 target、group 和 optional 过滤 manifest 根依赖；根包未配置 `env` 时使用
+   lock 中选中 JAR 的 `environment`；
 2. 保留已选根的传递依赖闭包；
 3. 校验 manifest/lockfile 图；
 4. 已存在且 SHA-256 正确的 JAR跳过；

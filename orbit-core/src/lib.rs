@@ -6,6 +6,7 @@
 //! 此 crate 不包含任何 CLI 或 UI 代码。
 
 pub mod config;
+mod dependency_environment;
 mod detection;
 pub mod error;
 pub mod identification;
@@ -48,6 +49,7 @@ pub use config::{
     ConfigKey, ConfigValue, GlobalConfig, InstanceEntry, InstancesRegistry, clear_default_instance,
     persist_config_field, register_instance, remove_instance, set_default_instance,
 };
+pub use dependency_environment::{DependencyEnvironmentReport, set_dependency_environment};
 pub use error::OrbitError;
 pub use installer::{
     InstallIntent, InstallInteraction, InstallOptions, InstallPrompt, InstallReport, InstallTarget,

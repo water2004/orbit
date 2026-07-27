@@ -72,6 +72,10 @@ orbit remote remove sodium --index 2
 # 4. 添加客户端专用模组 (开服时自动跳过)
 orbit add zoomify --env client
 
+# 修改已有根包的过滤策略；auto 恢复跟随 JAR 声明
+orbit env sodium client
+orbit env sodium auto
+
 # 5. 一键还原依赖环境 (新电脑 clone 后)
 orbit install
 
@@ -116,7 +120,8 @@ Orbit 采用**目录优先**的上下文逻辑。命令会默认作用于当前�
 | :--- | :--- |
 | `orbit search <query>` | 在已配置来源中搜索模组；支持 Modrinth 与 CurseForge。 |
 | `orbit info <mod>` | 查看模组详细信息（描述、作者、版本历史、前置依赖、端侧支持等）。无需安装，直接请求平台 API。 |
-| `orbit add <mod>` | 添加新模组。支持自动查找、`mr:<project-id-or-search>`、`cf:<numeric-project-id>` 或 `file:./my-mod.jar`。使用 `--env client\|server` 标记端侧。 |
+| `orbit add <mod>` | 添加新模组。支持自动查找、`mr:<project-id-or-search>`、`cf:<numeric-project-id>` 或 `file:./my-mod.jar`。可用 `--env client\|server\|both` 覆盖 JAR 声明。 |
+| `orbit env <package> <client\|server\|both\|auto>` | 修改根包环境过滤；`auto` 跟随 lock 中精确 JAR 的声明。 |
 | `orbit install` | 严格校验 TOML 平台快照后按 manifest/lock 补齐缺失 JAR；平台路径或内容变化时要求先 sync。 |
 | `orbit remove <mod>` | 按 JAR `mod_id` 卸载包。删除其选中内容并移除 `orbit.toml`/lock 中的记录。 |
 | `orbit purge <mod>` | **深度清理**。在 `remove` 的基础上，启发式搜索并交互式询问以**彻底删除** `config/` 下的配置文件。 |

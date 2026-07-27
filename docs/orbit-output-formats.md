@@ -139,7 +139,28 @@ orbit [--format text|json] [--progress-format none|ndjson] <command> ...
 }
 ```
 
-`tree: true` 时额外返回 `roots` 与每个包的 `dependents`，结构见 schema 文档源码。
+`environment` 是实际用于根过滤的有效值：显式 TOML 覆盖优先，否则来自 lock 中精确
+候选的 JAR 声明。`tree: true` 时额外返回 `roots` 与每个包的 `dependents`，结构见
+schema 文档源码。
+
+### `env`
+
+```json
+{
+  "schema_version": 1,
+  "command": "env",
+  "ok": true,
+  "result": {
+    "package": "sodium",
+    "configured": null,
+    "effective": "client",
+    "dry_run": false
+  }
+}
+```
+
+`configured: null` 表示持久化状态为 `auto`；`effective` 来自当前 lock。尚无选中 lock
+候选时 `effective` 也为 `null`，将在候选 JAR 解析和选择后确定。
 
 ### `check`
 

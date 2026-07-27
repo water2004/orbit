@@ -192,6 +192,12 @@ Jar-in-Jar artifact 使用独立的 Maven 坐标包并精确绑定 owner 候选�
 `sync` 复用相同本地图和方案/确认模型，但明确不进入 provider 阶段；联网闭包修复只由
 `install` 执行。
 
+根包环境具有两层正交语义：`orbit.toml` 的可选 `env` 是用户 target 过滤覆盖，lock 的
+`environment` 是精确候选从 JAR 解析出的事实。TOML 缺失覆盖时，locked 路径直接使用
+选中候选的环境；无 lock 的候选路径使用候选集合的真实 Loader 声明。Loader 没有包级
+声明时 adapter 产生 `both`。init/sync 不把推导结果反写成用户策略，`orbit env` 只修改
+manifest 覆盖。
+
 ## 5. loader 支持矩阵
 
 | Loader | 元数据适配 | 版本语义 | 嵌套选择 | audit 后端 | 规范化求解 |

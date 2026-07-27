@@ -119,6 +119,14 @@ pub enum Commands {
         no_deps: bool,
     },
 
+    /// 设置根包的环境过滤；auto 跟随选中 JAR 的声明
+    Env {
+        /// JAR 元数据声明的 mod_id
+        package: String,
+        /// client / server / both / auto
+        environment: String,
+    },
+
     /// 卸载模组
     Remove {
         /// 模组名称
@@ -346,6 +354,10 @@ impl CommandHandler for Commands {
                 optional,
                 no_deps,
             } => handle_add(mod_name, platform, version, env, optional, no_deps, ctx).await,
+            Commands::Env {
+                package,
+                environment,
+            } => handle_env(package, environment, ctx),
             Commands::Remove { mod_name } => handle_remove(mod_name, ctx).await,
             Commands::Purge { mod_name } => handle_purge(mod_name, ctx).await,
             Commands::Sync => handle_sync(ctx).await,
@@ -400,6 +412,7 @@ impl Commands {
             self,
             Self::Install { .. }
                 | Self::Add { .. }
+                | Self::Env { .. }
                 | Self::Remove { .. }
                 | Self::Purge { .. }
                 | Self::Sync
@@ -510,6 +523,21 @@ mod tests {
         assert_eq!(index, Some(2));
         assert!(provider.is_none());
         assert!(locator.is_none());
+    }
+
+    #[test]
+    fn env_command_accepts_explicit_and_auto_values_for_core_validation() {
+        let cli = Cli::try_parse_from(["orbit", "env", "sodium", "auto"]).unwrap();
+        let Commands::Env {
+            package,
+            environment,
+        } = cli.command
+        else {
+            panic!("env command was not parsed");
+        };
+
+        assert_eq!(package, "sodium");
+        assert_eq!(environment, "auto");
     }
 
     #[test]

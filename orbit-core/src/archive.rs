@@ -535,7 +535,7 @@ mod tests {
             DependencySpec {
                 version: "*".to_string(),
                 optional: true,
-                env: Some("client".to_string()),
+                env: Some(crate::metadata::Environment::Client),
                 exclude: Vec::new(),
                 remotes: vec![PackageRemote::Modrinth {
                     project_id: "online-project".to_string(),

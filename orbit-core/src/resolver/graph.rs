@@ -133,7 +133,7 @@ pub(crate) fn build_solver_graph_for_target(
     provider.add_package_deps(
         root_package.clone(),
         root_version.clone(),
-        root_dependencies(manifest, loader, &overrides, target),
+        root_dependencies(manifest, lockfile, candidates, loader, &overrides, target),
     );
     provider.add_package_incompatibilities(root_package.clone(), root_version.clone(), Vec::new());
     ensure_referenced_packages(&mut provider);
@@ -826,6 +826,8 @@ fn register_proxy_candidate(
 
 fn root_dependencies(
     manifest: &OrbitManifest,
+    lockfile: &OrbitLockfile,
+    candidates: &HashMap<String, Vec<CandidateVersion>>,
     loader: LoaderKind,
     overrides: &OverrideMap,
     target: Environment,
@@ -833,7 +835,9 @@ fn root_dependencies(
     let mut dependencies = manifest
         .dependencies
         .iter()
-        .filter(|(_, spec)| manifest_environment(spec.env()).applies_to(target))
+        .filter(|(package, spec)| {
+            effective_root_environment(package, spec, lockfile, candidates).applies_to(target)
+        })
         .map(|(name, spec)| {
             (
                 logical_package(name),
@@ -868,12 +872,27 @@ fn root_dependencies(
     dependencies
 }
 
-fn manifest_environment(environment: Option<&str>) -> Environment {
-    match environment {
-        Some("client") => Environment::Client,
-        Some("server") => Environment::Server,
-        _ => Environment::Both,
+fn effective_root_environment(
+    package: &str,
+    spec: &crate::manifest::DependencySpec,
+    lockfile: &OrbitLockfile,
+    candidates: &HashMap<String, Vec<CandidateVersion>>,
+) -> Environment {
+    if let Some(environment) = spec.env() {
+        return environment;
     }
+    if let Some(entry) = lockfile.find(package) {
+        return entry.environment;
+    }
+    candidates
+        .get(package)
+        .and_then(|candidates| {
+            candidates
+                .iter()
+                .map(|candidate| candidate.environment)
+                .reduce(Environment::union)
+        })
+        .unwrap_or(Environment::Both)
 }
 
 pub(crate) fn manifest_exclusions(manifest: &OrbitManifest) -> ExclusionMap {
@@ -1352,6 +1371,85 @@ carpet_tis = { version = "*", remotes = [{ type = "file", path = "carpet_tis.jar
         );
         assert!(
             pubgrub::resolve(&client.provider, client.root_package, client.root_version).is_err()
+        );
+    }
+
+    #[test]
+    fn automatic_root_environment_uses_the_locked_candidate() {
+        let mut manifest = manifest();
+        manifest.dependencies.shift_remove("b");
+        let mut client_package = package("a", "1", Vec::new());
+        client_package.environment = Environment::Client;
+        let lockfile = OrbitLockfile {
+            meta: LockMeta {
+                mc_version: "1.20.1".to_string(),
+                modloader: "forge".to_string(),
+                modloader_version: "47.2.0".to_string(),
+            },
+            packages: vec![client_package],
+        };
+
+        let server = build_solver_graph_for_target(
+            &manifest,
+            &lockfile,
+            &HashMap::new(),
+            None,
+            Environment::Server,
+        );
+        let server_solution =
+            pubgrub::resolve(&server.provider, server.root_package, server.root_version).unwrap();
+        assert!(
+            !server_solution
+                .iter()
+                .any(|(package, _)| package == &SolverPackage::Mod("a".to_string()))
+        );
+
+        let client = build_solver_graph_for_target(
+            &manifest,
+            &lockfile,
+            &HashMap::new(),
+            None,
+            Environment::Client,
+        );
+        let client_solution =
+            pubgrub::resolve(&client.provider, client.root_package, client.root_version).unwrap();
+        assert!(
+            client_solution
+                .iter()
+                .any(|(package, _)| package == &SolverPackage::Mod("a".to_string()))
+        );
+    }
+
+    #[test]
+    fn automatic_root_environment_uses_downloaded_candidates_without_a_lock() {
+        let mut manifest = manifest();
+        manifest.dependencies.shift_remove("b");
+        let lockfile = OrbitLockfile {
+            meta: LockMeta {
+                mc_version: "1.20.1".to_string(),
+                modloader: "forge".to_string(),
+                modloader_version: "47.2.0".to_string(),
+            },
+            packages: Vec::new(),
+        };
+        let mut client_candidate = candidate("1", Vec::new());
+        client_candidate.environment = Environment::Client;
+        let candidates = HashMap::from([("a".to_string(), vec![client_candidate])]);
+
+        let server = build_solver_graph_for_target(
+            &manifest,
+            &lockfile,
+            &candidates,
+            None,
+            Environment::Server,
+        );
+        let solution =
+            pubgrub::resolve(&server.provider, server.root_package, server.root_version).unwrap();
+
+        assert!(
+            !solution
+                .iter()
+                .any(|(package, _)| package == &SolverPackage::Mod("a".to_string()))
         );
     }
 

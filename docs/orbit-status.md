@@ -1,6 +1,6 @@
 # Orbit 实现状态
 
-> 更新日期：2026-07-27。本文区分“正确规范曾未被代码执行”和“文档本身已经过时”。
+> 更新日期：2026-07-28。本文区分“正确规范曾未被代码执行”和“文档本身已经过时”。
 
 ## 1. 当前结论
 
@@ -32,6 +32,7 @@
 | 长事务进度 | ✅ | 包操作与 audit 均使用 core 强类型事件；候选/审计工件精确计数，求解工作总量随实际 run/probe 动态增长 |
 | JSON / 自动化输出 | ✅ | 全局 `--format text\|json` 与 `--progress-format none\|ndjson`；JSON 信封 + NDJSON 进度 + 结构化错误 JSON + 稳定错误码；view-model 层隔离哈希/文件名/密钥 |
 | 全局配置命令 | ✅ | `config path/list/get/set/unset`；强类型校验、单字段原子更新、注释保留、密钥脱敏、环境覆盖不回写 |
+| 根包环境过滤 | ✅ | TOML `env` 可选；缺失时跟随 lock/JAR 声明；`orbit env ... auto` 可设置覆盖或恢复自动 |
 | Loader JSON 容错 | ✅ | Fabric-compatible 字符串控制字符；仅限 JAR 内 loader/Mixin/refmap，其他 JSON 保持严格 |
 | 字节码运行时符号对齐 | ✅ | Fabric/Quilt 按实际 Tiny capability 投影；Forge/NeoForge 验证 Loader runtime game；未对齐时在 finding 前停止 |
 

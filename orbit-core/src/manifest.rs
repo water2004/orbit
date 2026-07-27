@@ -158,7 +158,7 @@ pub struct DependencySpec {
     #[serde(default, skip_serializing_if = "is_false")]
     pub optional: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub env: Option<String>,
+    pub env: Option<crate::metadata::Environment>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub exclude: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -188,8 +188,16 @@ impl DependencySpec {
         Some(&self.version)
     }
 
-    pub fn env(&self) -> Option<&str> {
-        self.env.as_deref()
+    pub fn env(&self) -> Option<crate::metadata::Environment> {
+        self.env
+    }
+
+    /// Resolve the user override against the selected JAR's declaration.
+    pub fn effective_environment(
+        &self,
+        declared: crate::metadata::Environment,
+    ) -> crate::metadata::Environment {
+        self.env.unwrap_or(declared)
     }
 
     pub fn optional(&self) -> bool {
@@ -329,7 +337,27 @@ zoomify = { version = "*", optional = true, env = "client", remotes = [{ type = 
         assert_eq!(jei.version_constraint(), Some("^12"));
 
         let zoomify = &manifest.dependencies["zoomify"];
-        assert_eq!(zoomify.env(), Some("client"));
+        assert_eq!(zoomify.env(), Some(crate::metadata::Environment::Client));
+    }
+
+    #[test]
+    fn rejects_invalid_dependency_environment() {
+        let toml_str = r#"
+[project]
+name = "test"
+mc_version = "1.20.1"
+modloader = "fabric"
+modloader_version = "0.15.7"
+[platform]
+minecraft_jar = { path = "minecraft.jar", sha256 = "test" }
+loader_jar = { path = "loader.jar", sha256 = "test" }
+runtime_jars = []
+physical_environment = "client"
+[dependencies]
+example = { version = "*", env = "desktop", remotes = [{ type = "file", path = "example.jar" }] }
+"#;
+
+        assert!(toml::from_str::<OrbitManifest>(toml_str).is_err());
     }
 
     #[test]

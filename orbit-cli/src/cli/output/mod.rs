@@ -20,10 +20,10 @@ pub use audit::audit_report;
 pub use progress_ndjson::{ndjson_audit_reporter, ndjson_progress_reporter};
 pub use view::{
     CacheOutput, CheckOutput, CheckSummary, ConfigEntryOutput, ConfigEntryView, ConfigListOutput,
-    ConfigPathOutput, ConfigValueView, DiagnosticView, ErrorJson, ExportOutput, ImportOutput,
-    InitOutput, InstanceDefaultOutput, InstanceRemoveOutput, InstancesOutput, JsonEnvelope,
-    OutdatedOutput, OutdatedSummary, PurgeOutput, RemoveOutput, RemovedPackageView, SearchFilters,
-    SearchOutput, SearchResultView,
+    ConfigPathOutput, ConfigValueView, DependencyEnvironmentOutput, DiagnosticView, ErrorJson,
+    ExportOutput, ImportOutput, InitOutput, InstanceDefaultOutput, InstanceRemoveOutput,
+    InstancesOutput, JsonEnvelope, OutdatedOutput, OutdatedSummary, PurgeOutput, RemoveOutput,
+    RemovedPackageView, SearchFilters, SearchOutput, SearchResultView,
 };
 pub use view::{
     check_result_view, diagnostic_view, info_view, instance_view, list_view, outdated_mod_view,

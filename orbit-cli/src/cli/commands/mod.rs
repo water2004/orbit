@@ -3,6 +3,7 @@ pub mod audit;
 pub mod cache;
 pub mod check;
 pub mod config;
+pub mod env;
 pub mod export;
 pub mod import;
 pub mod info;
@@ -17,6 +18,8 @@ pub mod remove;
 pub mod search;
 pub mod sync;
 pub mod upgrade;
+
+pub use env::handle as handle_env;
 
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};

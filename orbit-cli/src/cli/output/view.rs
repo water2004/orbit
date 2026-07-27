@@ -111,6 +111,20 @@ pub struct DependencyView {
 }
 
 // ---------------------------------------------------------------------------
+// dependency environment
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize)]
+pub struct DependencyEnvironmentOutput {
+    pub package: String,
+    /// `None` is the persisted `auto` state.
+    pub configured: Option<String>,
+    /// Missing only when auto has no selected lock entry yet.
+    pub effective: Option<String>,
+    pub dry_run: bool,
+}
+
+// ---------------------------------------------------------------------------
 // list
 // ---------------------------------------------------------------------------
 
@@ -808,6 +822,21 @@ mod tests {
         assert_eq!(json["command"], "search");
         assert_eq!(json["ok"], true);
         assert_eq!(json["result"]["query"], "sodium");
+    }
+
+    #[test]
+    fn dependency_environment_json_distinguishes_auto_from_effective_value() {
+        let view = DependencyEnvironmentOutput {
+            package: "sodium".into(),
+            configured: None,
+            effective: Some("client".into()),
+            dry_run: false,
+        };
+        let envelope = JsonEnvelope::new("env", &view);
+        let json = serde_json::to_value(&envelope).unwrap();
+
+        assert!(json["result"]["configured"].is_null());
+        assert_eq!(json["result"]["effective"], "client");
     }
 
     #[test]

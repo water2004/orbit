@@ -305,7 +305,7 @@ fn build_index(
         .iter()
         .filter_map(|(entry, source)| {
             let download_url = download_url(entry)?;
-            let (client, server) = environment(manifest, &entry.mod_id);
+            let (client, server) = environment(manifest, entry);
             Some(json!({
                 "path": format!("mods/{}", entry.filename),
                 "hashes": {
@@ -360,9 +360,9 @@ fn download_url(entry: &crate::lockfile::PackageEntry) -> Option<&str> {
 
 fn environment(
     manifest: &crate::manifest::OrbitManifest,
-    mod_id: &str,
+    entry: &crate::lockfile::PackageEntry,
 ) -> (&'static str, &'static str) {
-    let Some(requirement) = manifest.dependencies.get(mod_id) else {
+    let Some(requirement) = manifest.dependencies.get(&entry.mod_id) else {
         return ("required", "required");
     };
     let supported = if requirement.optional() {
@@ -370,9 +370,9 @@ fn environment(
     } else {
         "required"
     };
-    match requirement.env().unwrap_or("both") {
-        "client" => (supported, "unsupported"),
-        "server" => ("unsupported", supported),
-        _ => (supported, supported),
+    match requirement.effective_environment(entry.environment) {
+        crate::metadata::Environment::Client => (supported, "unsupported"),
+        crate::metadata::Environment::Server => ("unsupported", supported),
+        crate::metadata::Environment::Both => (supported, supported),
     }
 }

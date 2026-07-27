@@ -555,6 +555,7 @@ mod tests {
             output.manifest.dependencies["alpha"].version_constraint(),
             Some("*")
         );
+        assert_eq!(output.manifest.dependencies["alpha"].env(), None);
         assert_eq!(output.manifest.dependencies["alpha"].remotes.len(), 2);
         assert!(
             output.manifest.dependencies["alpha"]

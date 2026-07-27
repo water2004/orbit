@@ -532,6 +532,10 @@ alpha = { version = "*", remotes = [{ type = "file", path = "alpha.jar" }] }
         assert_eq!(alpha.version, "2");
         assert_eq!(alpha.remotes.len(), 3);
         assert_eq!(
+            ManifestFile::open(&directory).unwrap().inner.dependencies["alpha"].env(),
+            None
+        );
+        assert_eq!(
             alpha
                 .remotes
                 .iter()

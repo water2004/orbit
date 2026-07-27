@@ -132,13 +132,19 @@ package_id = {
 |---|---|---|
 | `version` | `"*"` | 根包版本约束 |
 | `optional` | `false` | 是否可由 `--no-optional` 跳过 |
-| `env` | 无 | `client`、`server`；无值表示两端 |
+| `env` | 无 | 可选的 `client`、`server`、`both` 根包过滤覆盖；无值时跟随 lock 中选中 JAR 的 `environment` |
 | `exclude` | `[]` | 明确排除的依赖边 |
 | `remotes` | 无 | 非空候选来源集合 |
 
 表键必须是 JAR 实际 `mod_id`。Modrinth 使用 project ID，CurseForge 使用数值 project
 ID；slug 只允许用于搜索和展示，不能持久化为包身份。显式添加远端时 Orbit 会下载并
 确认目标 project 的 JAR 确实声明该 `mod_id`。
+
+`env` 是用户过滤条件，不是 Loader 元数据的副本。缺失时保持自动状态：有 lock 时使用
+精确选中 package 的 `environment`；重新求解时使用候选 JAR 的真实声明。某个 Loader
+没有包级环境声明时，其适配器产生 `both`。`init`、`sync` 和未传 `--env` 的 `add`
+不会把自动结果写回 TOML；因此升级选中不同声明的 JAR 后，自动过滤会随 lock 一起更新。
+使用 `orbit env <package> client|server|both` 设置显式覆盖，使用 `auto` 恢复自动状态。
 
 ### 2.6 本地远端
 
