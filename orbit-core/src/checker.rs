@@ -57,7 +57,7 @@ pub async fn check_compatibility_with_progress(
             additional_remotes: &[],
             lockfile,
             mc_version: target_mc_version,
-            loader: target_loader.as_str(),
+            loader: target_loader,
             jar_cache,
             progress,
         },

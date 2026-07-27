@@ -85,7 +85,7 @@ pub async fn add_package_remote(
             additional_remotes: &[],
             lockfile: &empty_lock,
             mc_version: &manifest.inner.project.mc_version,
-            loader: &manifest.inner.project.modloader,
+            loader: manifest.inner.project.loader_kind()?,
             jar_cache,
             progress,
         },

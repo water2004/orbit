@@ -608,45 +608,44 @@ fn build_discovered_platform(
     physical_environment: crate::metadata::Environment,
     runtime_jars: Option<Vec<PathBuf>>,
 ) -> Result<DiscoveredPlatform, OrbitError> {
-    let loader_package =
-        match crate::jar::read_mod_metadata_if_present(&loader_jar, loader.as_str()) {
-            Ok(Some(metadata)) => {
-                let expected_mod_id = loader_mod_id(loader);
-                if metadata.mod_id != expected_mod_id {
-                    return Err(OrbitError::Other(anyhow::anyhow!(
-                        "{loader} loader JAR '{}' declares mod_id '{}', expected '{}'",
-                        loader_jar.display(),
-                        metadata.mod_id,
-                        expected_mod_id
-                    )));
-                }
-                if crate::versions::Version::parse(&metadata.version, loader)
-                    != crate::versions::Version::parse(&loader_version, loader)
-                {
-                    return Err(OrbitError::Other(anyhow::anyhow!(
-                        "{loader} loader JAR '{}' declares version '{}', but launcher metadata \
+    let loader_package = match crate::jar::read_mod_metadata_if_present(&loader_jar, loader) {
+        Ok(Some(metadata)) => {
+            let expected_mod_id = loader_mod_id(loader);
+            if metadata.mod_id != expected_mod_id {
+                return Err(OrbitError::Other(anyhow::anyhow!(
+                    "{loader} loader JAR '{}' declares mod_id '{}', expected '{}'",
+                    loader_jar.display(),
+                    metadata.mod_id,
+                    expected_mod_id
+                )));
+            }
+            if crate::versions::Version::parse(&metadata.version, loader)
+                != crate::versions::Version::parse(&loader_version, loader)
+            {
+                return Err(OrbitError::Other(anyhow::anyhow!(
+                    "{loader} loader JAR '{}' declares version '{}', but launcher metadata \
                      selected '{}'",
-                        loader_jar.display(),
-                        metadata.version,
-                        loader_version
-                    )));
-                }
-                Some(PlatformCandidate::from_jar_metadata(metadata))
-            }
-            Ok(None) if matches!(loader, LoaderKind::Fabric | LoaderKind::Quilt) => {
-                return Err(OrbitError::Other(anyhow::anyhow!(
-                    "no {loader} loader metadata found in '{}'",
-                    loader_jar.display()
+                    loader_jar.display(),
+                    metadata.version,
+                    loader_version
                 )));
             }
-            Ok(None) => None,
-            Err(error) => {
-                return Err(OrbitError::Other(anyhow::anyhow!(
-                    "cannot parse {loader} loader JAR '{}': {error}",
-                    loader_jar.display()
-                )));
-            }
-        };
+            Some(PlatformCandidate::from_jar_metadata(metadata))
+        }
+        Ok(None) if matches!(loader, LoaderKind::Fabric | LoaderKind::Quilt) => {
+            return Err(OrbitError::Other(anyhow::anyhow!(
+                "no {loader} loader metadata found in '{}'",
+                loader_jar.display()
+            )));
+        }
+        Ok(None) => None,
+        Err(error) => {
+            return Err(OrbitError::Other(anyhow::anyhow!(
+                "cannot parse {loader} loader JAR '{}': {error}",
+                loader_jar.display()
+            )));
+        }
+    };
     let actual_loader_version = loader_package
         .as_ref()
         .map(|package| package.version.clone())
@@ -950,7 +949,7 @@ fn find_loader_jar(
     let metadata_matches = jars
         .iter()
         .filter(|path| {
-            crate::jar::read_mod_metadata(path, loader.as_str()).is_ok_and(|metadata| {
+            crate::jar::read_mod_metadata(path, loader).is_ok_and(|metadata| {
                 metadata.mod_id == expected_mod_id
                     && crate::versions::Version::parse(&metadata.version, loader)
                         == crate::versions::Version::parse(version, loader)

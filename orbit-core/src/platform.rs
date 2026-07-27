@@ -179,7 +179,7 @@ fn load_loader_package(
     loader: LoaderKind,
     loader_version: &str,
 ) -> Result<Option<PlatformCandidate>, OrbitError> {
-    match crate::jar::read_mod_metadata_if_present(loader_jar, loader.as_str()) {
+    match crate::jar::read_mod_metadata_if_present(loader_jar, loader) {
         Ok(Some(metadata)) => {
             let expected_mod_id = loader.semantics().canonical_package;
             if metadata.mod_id != expected_mod_id {

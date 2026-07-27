@@ -58,7 +58,7 @@ pub struct ScannedMod {
 /// 按实例 loader 读取元数据并计算内容哈希。
 pub(crate) fn scan_mods_dir(
     instance_dir: &Path,
-    loader: &str,
+    loader: crate::loader::LoaderKind,
 ) -> Result<Vec<ScannedMod>, OrbitError> {
     let mods_dir = instance_dir.join("mods");
     if !mods_dir.is_dir() {
@@ -159,7 +159,7 @@ pub async fn run_init(
     let platform_snapshot = platform.snapshot(&input.instance_dir)?;
 
     // 1. 扫描 mods/
-    let scanned = scan_mods_dir(&input.instance_dir, platform.loader.as_str())?;
+    let scanned = scan_mods_dir(&input.instance_dir, platform.loader)?;
 
     // 2. Identify top-level package JARs. Modules contained in one package are
     // already represented by the JAR layer as bundled metadata.
@@ -366,7 +366,7 @@ mod tests {
             &active,
         );
 
-        let scanned = scan_mods_dir(&instance, "fabric").unwrap();
+        let scanned = scan_mods_dir(&instance, crate::loader::LoaderKind::Fabric).unwrap();
 
         assert_eq!(scanned.len(), 1);
         assert_eq!(scanned[0].filename, "sodium-fabric-0.8.11+mc1.21.11.jar");
@@ -394,7 +394,7 @@ mod tests {
             &parent,
         );
 
-        let scanned = scan_mods_dir(&instance, "fabric").unwrap();
+        let scanned = scan_mods_dir(&instance, crate::loader::LoaderKind::Fabric).unwrap();
 
         assert_eq!(scanned.len(), 1);
         let parent_mod = &scanned[0];
@@ -432,7 +432,7 @@ mod tests {
             &jar_bytes(&[("example.txt", b"not a mod")]),
         );
 
-        let error = scan_mods_dir(&instance, "fabric").unwrap_err();
+        let error = scan_mods_dir(&instance, crate::loader::LoaderKind::Fabric).unwrap_err();
 
         assert!(error.to_string().contains("top-level package"));
         assert!(error.to_string().contains("fabric"));

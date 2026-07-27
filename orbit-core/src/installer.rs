@@ -379,7 +379,7 @@ pub async fn upgrade_all_in_instance(
         progress,
     } = interaction;
     let manifest_file = ManifestFile::open(instance_dir)?;
-    crate::platform::Platform::load(instance_dir, &manifest_file.inner)?;
+    let platform = crate::platform::Platform::load(instance_dir, &manifest_file.inner)?;
     let mut lock = Lockfile::open_or_default(
         instance_dir,
         LockMeta {
@@ -430,7 +430,7 @@ pub async fn upgrade_all_in_instance(
         std::fs::create_dir_all(&mods_dir).map_err(OrbitError::Io)?;
     }
 
-    let loader = &manifest_file.inner.project.modloader;
+    let loader = platform.loader;
     let mut planned = Vec::new();
     for (package, candidate_id) in &resolution.selected_candidates {
         let version = &resolution.selected_versions[package];
@@ -736,7 +736,7 @@ async fn install_mod(input: InstallModInput<'_>) -> Result<InstallReport, OrbitE
         )));
     }
 
-    let loader = &manifest.project.modloader;
+    let loader = manifest.project.loader_kind()?;
     let mc_version = &manifest.project.mc_version;
 
     // 1-2. BFS download all JARs
@@ -1121,7 +1121,7 @@ async fn resolve_missing_lock_entries(
             additional_remotes: &manifest_remotes,
             lockfile,
             mc_version: &manifest.project.mc_version,
-            loader: &manifest.project.modloader,
+            loader: manifest.project.loader_kind()?,
             jar_cache,
             progress: progress.clone(),
         },
@@ -1529,7 +1529,7 @@ async fn materialize_plans(
     planned: Vec<InstalledMod>,
     resolved_candidates: &crate::resolver::types::ResolvedCandidates,
     mods_dir: &Path,
-    loader: &str,
+    loader: crate::loader::LoaderKind,
     providers: &[Box<dyn ModProvider>],
     jar_cache: &crate::jar_cache::JarCache,
     progress: Option<ProgressReporter>,

@@ -473,7 +473,7 @@ fn identify_loader_jar(
     };
     let mut matches = Vec::new();
     for path in classpath {
-        if let Some(metadata) = crate::jar::read_mod_metadata_if_present(path, loader.as_str())?
+        if let Some(metadata) = crate::jar::read_mod_metadata_if_present(path, loader)?
             && metadata.mod_id == expected_id
         {
             matches.push((path.clone(), metadata.version));

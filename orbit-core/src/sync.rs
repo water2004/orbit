@@ -64,7 +64,7 @@ pub async fn sync_instance(
         || lockfile.inner.meta.modloader != refreshed_lock_meta.modloader
         || lockfile.inner.meta.modloader_version != refreshed_lock_meta.modloader_version;
     lockfile.inner.meta = refreshed_lock_meta;
-    let scanned = crate::init::scan_mods_dir(instance_dir, &manifest.inner.project.modloader)?;
+    let scanned = crate::init::scan_mods_dir(instance_dir, discovered_platform.loader)?;
     let mut identified = identify_mods(&scanned, &[]).await?;
     if !dry_run {
         crate::identification::preserve_local_sources(instance_dir, &mut identified)?;
@@ -454,7 +454,10 @@ mod tests {
         write_fabric_jar(&mods.join("a-1.jar"), "1");
         write_fabric_jar(&mods.join("a-2.jar"), "2");
         assert_eq!(
-            crate::jar::read_mod_metadata(&mods.join("a-1.jar"), "fabric")
+            crate::jar::read_mod_metadata(
+                &mods.join("a-1.jar"),
+                crate::loader::LoaderKind::Fabric,
+            )
                 .unwrap()
                 .mod_id,
             "alpha"
@@ -477,7 +480,8 @@ alpha = { version = "*", remotes = [{ type = "file", path = "alpha.jar" }] }
         )
         .unwrap();
         ManifestFile::new(&directory, manifest).save().unwrap();
-        let scanned = crate::init::scan_mods_dir(&directory, "fabric").unwrap();
+        let scanned =
+            crate::init::scan_mods_dir(&directory, crate::loader::LoaderKind::Fabric).unwrap();
         assert_eq!(
             scanned
                 .iter()

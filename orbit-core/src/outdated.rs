@@ -5,6 +5,7 @@
 use std::collections::HashMap;
 
 use crate::error::OrbitError;
+use crate::loader::LoaderKind;
 use crate::lockfile::OrbitLockfile;
 use crate::manifest::{OrbitManifest, PackageRemote};
 use crate::progress::{
@@ -137,7 +138,7 @@ async fn download_artifact_queue(
         crate::providers::ArtifactDownloadClient,
         DiscoveredRemoteArtifact,
     )>,
-    loader: &str,
+    loader: LoaderKind,
     jar_cache: &crate::jar_cache::JarCache,
     progress: Option<ProgressReporter>,
 ) -> Result<Vec<(crate::jar::InspectedJar, RemoteArtifact, bool)>, OrbitError> {
@@ -152,7 +153,6 @@ async fn download_artifact_queue(
     for (downloader, discovered) in jobs {
         let artifact = discovered.artifact;
         let requested = discovered.requested;
-        let loader = loader.to_string();
         let cache = jar_cache.clone();
         let semaphore = semaphore.clone();
         let completed = completed.clone();
@@ -180,7 +180,7 @@ async fn download_artifact_queue(
                 &artifact.filename,
                 &artifact.sha1,
                 &artifact.sha512,
-                &loader,
+                loader,
             )
             .await;
             let completed = completed.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
@@ -239,7 +239,7 @@ pub(crate) struct CandidateDiscoveryInput<'a> {
     pub additional_remotes: &'a [PackageRemote],
     pub lockfile: &'a OrbitLockfile,
     pub mc_version: &'a str,
-    pub loader: &'a str,
+    pub loader: LoaderKind,
     pub jar_cache: &'a crate::jar_cache::JarCache,
     pub progress: Option<ProgressReporter>,
 }
@@ -326,7 +326,7 @@ async fn discover_transaction_artifact_queue(
             provider.as_ref(),
             seeds,
             input.mc_version,
-            input.loader,
+            input.loader.as_str(),
             &mut state.seen_lookups,
             &mut state.seen_artifacts,
             input.progress.as_ref(),
@@ -530,7 +530,7 @@ async fn check_outdated_with_progress(
         progress,
     } = input;
     let platform = crate::platform::Platform::load(instance_dir, manifest)?;
-    let loader = &manifest.project.modloader;
+    let loader = platform.loader;
     let mc_version = &manifest.project.mc_version;
 
     let manifest_remotes: Vec<_> = manifest
@@ -553,8 +553,13 @@ async fn check_outdated_with_progress(
     )
     .await?;
     catalog.loader_package = platform.loader_package;
-    let discovery_diagnostics =
-        missing_candidate_diagnostics(lockfile, &catalog, requested_package, mc_version, loader);
+    let discovery_diagnostics = missing_candidate_diagnostics(
+        lockfile,
+        &catalog,
+        requested_package,
+        mc_version,
+        loader.as_str(),
+    );
     if catalog.candidates.is_empty() {
         let candidate_remotes = catalog.package_remotes();
         return Ok(OutdatedReport {
@@ -779,7 +784,7 @@ mod tests {
         let sha512 = crate::jar::sha512_digest(&bytes);
         let source = source_dir.join(format!("{sha512}.jar"));
         std::fs::write(&source, bytes).unwrap();
-        let inspected = crate::jar::inspect_path(&source, "fabric").unwrap();
+        let inspected = crate::jar::inspect_path(&source, LoaderKind::Fabric).unwrap();
         let lockfile = OrbitLockfile {
             meta: crate::lockfile::LockMeta {
                 mc_version: "1.21.1".to_string(),
@@ -920,7 +925,7 @@ mod tests {
                     requested: true,
                 },
             )],
-            "fabric",
+            LoaderKind::Fabric,
             &cache,
             Some(reporter),
         )
@@ -1015,7 +1020,7 @@ mod tests {
             additional_remotes: &[],
             lockfile: &lockfile,
             mc_version: "26.1",
-            loader: "fabric",
+            loader: LoaderKind::Fabric,
             jar_cache: &jar_cache,
             progress: None,
         };

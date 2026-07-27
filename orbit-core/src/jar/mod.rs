@@ -16,6 +16,7 @@ use std::io::Read;
 use std::path::Path;
 
 use crate::error::OrbitError;
+use crate::loader::LoaderKind;
 
 // ── 统一元数据结构 ──────────────────────────────────────────────
 
@@ -97,7 +98,7 @@ pub(super) fn from_mod_file(
 // ── 顶层 API ────────────────────────────────────────────────────
 
 /// 从 JAR 文件路径读取模组元数据。`loader` 由调用者根据实例配置传入。
-pub fn read_mod_metadata(path: &Path, loader: &str) -> Result<JarModMetadata, OrbitError> {
+pub fn read_mod_metadata(path: &Path, loader: LoaderKind) -> Result<JarModMetadata, OrbitError> {
     read_mod_metadata_if_present(path, loader)?.ok_or_else(|| {
         OrbitError::Other(anyhow::anyhow!(
             "no {} mod metadata found in {}",
@@ -109,7 +110,7 @@ pub fn read_mod_metadata(path: &Path, loader: &str) -> Result<JarModMetadata, Or
 
 pub(crate) fn read_mod_metadata_if_present(
     path: &Path,
-    loader: &str,
+    loader: LoaderKind,
 ) -> Result<Option<JarModMetadata>, OrbitError> {
     let file = std::fs::File::open(path).map_err(OrbitError::Io)?;
     let mut archive = zip::ZipArchive::new(file).map_err(OrbitError::Zip)?;
@@ -155,7 +156,7 @@ pub async fn download_and_parse(
     filename: &str,
     expected_sha1: &str,
     expected_sha512: &str,
-    loader: &str,
+    loader: LoaderKind,
 ) -> Result<JarModMetadata, crate::error::OrbitError> {
     Ok(download_and_inspect(
         cache,
@@ -188,7 +189,7 @@ pub async fn download_and_inspect(
     filename: &str,
     expected_sha1: &str,
     expected_sha512: &str,
-    loader: &str,
+    loader: LoaderKind,
 ) -> Result<InspectedJar, crate::error::OrbitError> {
     // 缓存查询
     if let Some(bytes) = cache.get_bytes(expected_sha512, expected_sha1)
@@ -207,12 +208,12 @@ pub async fn download_and_inspect(
     inspect_bytes(&bytes, loader)
 }
 
-pub fn inspect_path(path: &Path, loader: &str) -> Result<InspectedJar, OrbitError> {
+pub fn inspect_path(path: &Path, loader: LoaderKind) -> Result<InspectedJar, OrbitError> {
     let bytes = std::fs::read(path)?;
     inspect_bytes(&bytes, loader)
 }
 
-fn inspect_bytes(bytes: &[u8], loader: &str) -> Result<InspectedJar, OrbitError> {
+fn inspect_bytes(bytes: &[u8], loader: LoaderKind) -> Result<InspectedJar, OrbitError> {
     Ok(InspectedJar {
         metadata: read_mod_metadata_from_bytes(bytes, loader)?,
         sha1: sha1_digest(bytes),
@@ -248,7 +249,7 @@ pub(crate) fn verify_source_hash(
 /// 从字节数据读取模组元数据（用于内嵌 JAR）。`loader` 由调用者传入。
 pub fn read_mod_metadata_from_bytes(
     data: &[u8],
-    loader: &str,
+    loader: LoaderKind,
 ) -> Result<JarModMetadata, OrbitError> {
     let cursor = std::io::Cursor::new(data);
     let mut archive = zip::ZipArchive::new(cursor).map_err(OrbitError::Zip)?;
@@ -266,23 +267,17 @@ pub fn read_mod_metadata_from_bytes(
 /// 根据 loader 分发到对应 reader
 fn read_mod_metadata_from_archive<R: std::io::Read + std::io::Seek>(
     archive: &mut zip::ZipArchive<R>,
-    loader: &str,
+    loader: LoaderKind,
 ) -> Result<Option<JarModMetadata>, OrbitError> {
-    let normalized_loader = loader.to_ascii_lowercase();
-    let meta_opt = match normalized_loader.as_str() {
-        "fabric" => fabric::try_read(archive)?,
-        "quilt" => quilt::try_read(archive)?,
-        "forge" => forge::try_read(archive, crate::metadata::LoaderKind::Forge)?,
-        "neoforge" => forge::try_read(archive, crate::metadata::LoaderKind::NeoForge)?,
-        _ => {
-            return Err(OrbitError::Other(anyhow::anyhow!(
-                "unsupported mod loader: {loader}"
-            )));
-        }
+    let meta_opt = match loader {
+        LoaderKind::Fabric => fabric::try_read(archive)?,
+        LoaderKind::Quilt => quilt::try_read(archive)?,
+        LoaderKind::Forge => forge::try_read(archive, LoaderKind::Forge)?,
+        LoaderKind::NeoForge => forge::try_read(archive, LoaderKind::NeoForge)?,
     };
 
     if let Some(mut meta) = meta_opt {
-        inject_bytecode_requirement(archive, &mut meta, &normalized_loader)?;
+        inject_bytecode_requirement(archive, &mut meta, loader)?;
         let mut bundled = Vec::new();
         for emb_path in &meta.embedded_jars {
             let Ok(mut entry) = archive.by_name(emb_path) else {
@@ -314,7 +309,7 @@ fn read_mod_metadata_from_archive<R: std::io::Read + std::io::Seek>(
 fn inject_bytecode_requirement<R: std::io::Read + std::io::Seek>(
     archive: &mut zip::ZipArchive<R>,
     metadata: &mut JarModMetadata,
-    loader: &str,
+    loader: LoaderKind,
 ) -> Result<(), OrbitError> {
     let mut highest_major = None;
     for index in 0..archive.len() {
@@ -333,7 +328,7 @@ fn inject_bytecode_requirement<R: std::io::Read + std::io::Seek>(
     let Some(java_version) = highest_major.and_then(class_major_to_java) else {
         return Ok(());
     };
-    let requirement = if matches!(loader, "forge" | "neoforge") {
+    let requirement = if matches!(loader, LoaderKind::Forge | LoaderKind::NeoForge) {
         format!("[{java_version},)")
     } else {
         format!(">={java_version}")
@@ -540,7 +535,7 @@ mod tests {
     fn reads_realistic_fabric_metadata_from_jar_bytes() {
         let bytes = jar_bytes(&[("fabric.mod.json", SODIUM_LIKE.as_bytes())]);
 
-        let meta = read_mod_metadata_from_bytes(&bytes, "fabric").unwrap();
+        let meta = read_mod_metadata_from_bytes(&bytes, LoaderKind::Fabric).unwrap();
 
         assert_eq!(meta.mod_id, "sodium");
         assert_eq!(meta.version, "0.8.11+mc1.21.11");
@@ -576,7 +571,7 @@ mod tests {
             "cached.jar",
             "",
             &sha512,
-            "fabric",
+            LoaderKind::Fabric,
         )
         .await
         .unwrap();
@@ -595,7 +590,8 @@ mod tests {
             ("META-INF/versions/22/example/Main.class", &multi_release),
         ];
 
-        let metadata = read_mod_metadata_from_bytes(&jar_bytes(&entries), "fabric").unwrap();
+        let metadata =
+            read_mod_metadata_from_bytes(&jar_bytes(&entries), LoaderKind::Fabric).unwrap();
 
         assert!(has_dependency(&metadata, "java", ">=21", true));
     }
@@ -610,7 +606,7 @@ mod tests {
         ];
         let parent = jar_bytes(&parent_entries);
 
-        let meta = read_mod_metadata_from_bytes(&parent, "fabric").unwrap();
+        let meta = read_mod_metadata_from_bytes(&parent, LoaderKind::Fabric).unwrap();
 
         assert_eq!(meta.mod_id, "sodium");
         assert_eq!(meta.embedded_jars.len(), 9);
@@ -631,7 +627,7 @@ mod tests {
         ];
         let parent = jar_bytes(&parent_entries);
 
-        let meta = read_mod_metadata_from_bytes(&parent, "fabric").unwrap();
+        let meta = read_mod_metadata_from_bytes(&parent, LoaderKind::Fabric).unwrap();
 
         assert_eq!(meta.mod_id, "litematica-printer-all");
         assert_eq!(meta.embedded_jars.len(), 13);
@@ -698,7 +694,8 @@ mandatory = false
             ("META-INF/jarjar/child.jar", child.as_slice()),
         ];
 
-        let metadata = read_mod_metadata_from_bytes(&jar_bytes(&entries), "forge").unwrap();
+        let metadata =
+            read_mod_metadata_from_bytes(&jar_bytes(&entries), LoaderKind::Forge).unwrap();
 
         assert_eq!(metadata.mod_id, "parent");
         assert_eq!(metadata.version, "2.0.1");
@@ -724,7 +721,7 @@ versionRange = "[21,)"
 "#;
         for target in ["META-INF/neoforge.mods.toml", "META-INF/mods.toml"] {
             let jar = jar_bytes(&[(target, metadata)]);
-            let parsed = read_mod_metadata_from_bytes(&jar, "neoforge").unwrap();
+            let parsed = read_mod_metadata_from_bytes(&jar, LoaderKind::NeoForge).unwrap();
             assert_eq!(parsed.mod_id, "neo_example");
             assert!(
                 parsed.dependencies[0]
@@ -746,11 +743,11 @@ versionRange = "[21,)"
   }
 }"#;
         let quilt = jar_bytes(&[("quilt.mod.json", quilt_metadata)]);
-        let parsed = read_mod_metadata_from_bytes(&quilt, "quilt").unwrap();
+        let parsed = read_mod_metadata_from_bytes(&quilt, LoaderKind::Quilt).unwrap();
         assert_eq!(parsed.mod_id, "quilt-example");
 
         let fabric = jar_bytes(&[("fabric.mod.json", PRINTER_EMBEDDED.as_bytes())]);
-        let parsed = read_mod_metadata_from_bytes(&fabric, "quilt").unwrap();
+        let parsed = read_mod_metadata_from_bytes(&fabric, LoaderKind::Quilt).unwrap();
         assert_eq!(parsed.mod_id, "litematica-printer");
     }
 }
