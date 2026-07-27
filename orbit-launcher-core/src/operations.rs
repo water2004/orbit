@@ -273,6 +273,34 @@ pub fn set_default_instance(
     Ok(selected)
 }
 
+/// Roll back the manifest and registry entry created by an unsuccessful
+/// bootstrap. Runtime or user files are deliberately not inferred or removed.
+pub fn rollback_created_instance(
+    paths: &RuntimePaths,
+    selector: &str,
+) -> Result<RegistryEntry, LauncherError> {
+    let registry = InstanceRegistry::load(&paths.instances_file())?;
+    let entry = registry
+        .find(selector)
+        .cloned()
+        .ok_or_else(|| LauncherError::InstanceNotFound(selector.to_string()))?;
+    let manifest = ManifestFile::open(&entry.root)?;
+    if manifest.inner.id != entry.id {
+        return Err(LauncherError::InstanceRegistryMismatch(format!(
+            "cannot roll back instance '{}' because its manifest ID changed",
+            entry.name
+        )));
+    }
+    let removed = remove_instance(paths, selector)?.entry;
+    std::fs::remove_file(entry.root.join(INSTANCE_MANIFEST_FILE)).map_err(|error| {
+        LauncherError::Transaction(format!(
+            "unregistered failed bootstrap '{}' but could not remove its provisional manifest: {error}",
+            entry.name
+        ))
+    })?;
+    Ok(removed)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -358,5 +386,35 @@ mod tests {
             import_instance(&paths, &copy),
             Err(LauncherError::DuplicateInstanceId(_))
         ));
+    }
+
+    #[test]
+    fn failed_bootstrap_rollback_removes_only_registration_and_manifest() {
+        let directory = tempfile::tempdir().unwrap();
+        let paths = paths(directory.path());
+        let root = directory.path().join("server");
+        let created = create_instance(
+            &paths,
+            CreateInstanceRequest {
+                root: root.clone(),
+                name: "server".to_string(),
+                kind: InstanceKind::Server,
+                minecraft_requirement: "1.21.1".to_string(),
+                loader_kind: LoaderKind::Vanilla,
+                loader_requirement: None,
+            },
+        )
+        .unwrap();
+        std::fs::write(root.join("user-note.txt"), b"keep").unwrap();
+
+        rollback_created_instance(&paths, &created.entry.id.to_string()).unwrap();
+        assert!(!root.join(INSTANCE_MANIFEST_FILE).exists());
+        assert!(root.join("user-note.txt").exists());
+        assert!(
+            InstanceRegistry::load(&paths.instances_file())
+                .unwrap()
+                .instances
+                .is_empty()
+        );
     }
 }

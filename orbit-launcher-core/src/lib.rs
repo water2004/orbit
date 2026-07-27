@@ -4,29 +4,59 @@
 //! render terminal output and has no dependency on Orbit's mod-management
 //! crates.
 
+pub mod artifact;
 mod atomic_io;
 pub mod config;
 pub mod context;
 pub mod error;
+pub mod eula;
+pub mod install;
 pub mod instance;
+pub mod java;
+pub mod lockfile;
+pub mod mojang;
 pub mod operations;
 pub mod registry;
 pub mod runtime;
 
+pub use artifact::{
+    ArtifactCache, ArtifactRequest, ArtifactTransferEvent, CachedArtifact, ExpectedHash,
+    hash_file_sha256,
+};
 pub use config::{
     ConfigEntry, ConfigKey, ConfigMutation, GlobalConfig, JavaProvider, UiPreference, get_config,
     list_config, set_config, unset_config,
 };
 pub use context::{ContextIntent, ContextSource, ResolvedInstance, resolve_instance};
 pub use error::LauncherError;
+pub use eula::{
+    EulaAcceptance, EulaAcceptanceMethod, EulaDocument, MINECRAFT_EULA_URL, accept_shown_eula,
+    require_current_acceptance, show_current_eula,
+};
+pub use install::{
+    InstallProgressEvent, InstallResult, VanillaServerInstallPlan, execute_vanilla_server_install,
+    prepare_vanilla_server_install,
+};
 pub use instance::{
     INSTANCE_MANIFEST_FILE, InstanceKind, InstanceManifest, JavaPolicy, LoaderKind, ManifestFile,
     RestartPolicy,
 };
+pub use java::{
+    JavaProgressEvent, JavaTarget, MOJANG_RUNTIME_MANIFEST_URL, ManagedJavaRuntime, MojangJavaPlan,
+    install_mojang_java, plan_mojang_java,
+};
+pub use lockfile::{
+    ArtifactOwner, INSTANCE_LOCK_FILE, LOCK_SCHEMA, LauncherLock, LockFile, LockedArguments,
+    LockedArtifact, LockedEntrypoint, LockedJavaRuntime, LockedLoader, LockedMinecraft,
+    portable_relative_path,
+};
+pub use mojang::{
+    MojangClient, MojangJavaRequirement, ResolvedVanillaServer, VERSION_MANIFEST_V2_URL,
+};
 pub use operations::{
     CreateInstanceRequest, CreateInstanceResult, ImportInstanceResult, RemoveInstanceResult,
     RenameInstanceResult, create_instance, import_instance, remove_instance, rename_instance,
-    resolve_instance_root, set_default_instance,
+    resolve_instance_root, rollback_created_instance, set_default_instance,
 };
 pub use registry::{InstanceRegistry, RegistryEntry};
 pub use runtime::{

@@ -7,6 +7,7 @@ description = "Platform-independent core for Orbit Launcher"
 
 [dependencies]
 serde = { workspace = true }
+serde_json = { workspace = true }
 toml = { workspace = true }
 toml_edit = { workspace = true }
 thiserror = { workspace = true }
@@ -14,6 +15,13 @@ tempfile = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }
 dunce = { workspace = true }
+reqwest = { workspace = true }
+scraper = { workspace = true }
+html2text = { workspace = true }
+sha2 = { workspace = true }
+sha1 = { workspace = true }
+hex = { workspace = true }
+futures-util = { workspace = true }
+tokio = { workspace = true }
 
 [dev-dependencies]
-serde_json = { workspace = true }

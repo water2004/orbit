@@ -1,0 +1,310 @@
+use serde::Deserialize;
+use sha1::{Digest, Sha1};
+use sha2::Sha256;
+
+use crate::artifact::{ArtifactRequest, ExpectedHash};
+use crate::error::LauncherError;
+
+pub const VERSION_MANIFEST_V2_URL: &str =
+    "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json";
+const MAX_METADATA_BYTES: u64 = 16 * 1024 * 1024;
+
+#[derive(Debug, Clone)]
+pub struct ResolvedVanillaServer {
+    pub minecraft_version: String,
+    pub version_type: String,
+    pub version_manifest_sha256: String,
+    pub version_json_url: String,
+    pub version_json_sha1: String,
+    pub server: ArtifactRequest,
+    pub java: Option<MojangJavaRequirement>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MojangJavaRequirement {
+    pub component: String,
+    pub major: u32,
+}
+
+#[derive(Debug, Clone)]
+pub struct MojangClient {
+    client: reqwest::Client,
+}
+
+impl MojangClient {
+    pub fn new(client: reqwest::Client) -> Self {
+        Self { client }
+    }
+
+    pub async fn resolve_vanilla_server(
+        &self,
+        requirement: &str,
+    ) -> Result<ResolvedVanillaServer, LauncherError> {
+        let manifest_bytes = self.fetch_metadata(VERSION_MANIFEST_V2_URL).await?;
+        let manifest_sha256 = hex::encode(Sha256::digest(&manifest_bytes));
+        let manifest: VersionManifest =
+            serde_json::from_slice(&manifest_bytes).map_err(|error| {
+                LauncherError::InvalidRemoteData(format!(
+                    "failed to parse Mojang version manifest v2: {error}"
+                ))
+            })?;
+        let version_id = manifest.resolve(requirement)?;
+        let entry = manifest
+            .versions
+            .iter()
+            .find(|entry| entry.id == version_id)
+            .ok_or_else(|| {
+                LauncherError::InvalidRemoteData(format!(
+                    "Mojang manifest points to missing version '{version_id}'"
+                ))
+            })?;
+        validate_mojang_url(&entry.url, &["piston-meta.mojang.com"], "version JSON")?;
+        validate_digest(&entry.sha1, 40, "version JSON SHA-1")?;
+
+        let version_bytes = self.fetch_metadata(&entry.url).await?;
+        let actual_version_sha1 = hex::encode(Sha1::digest(&version_bytes));
+        if actual_version_sha1 != entry.sha1 {
+            return Err(LauncherError::ArtifactIntegrity(format!(
+                "Mojang version JSON '{}' did not match manifest SHA-1",
+                entry.id
+            )));
+        }
+        let version: VersionJson = serde_json::from_slice(&version_bytes).map_err(|error| {
+            LauncherError::InvalidRemoteData(format!(
+                "failed to parse Mojang version JSON '{}': {error}",
+                entry.id
+            ))
+        })?;
+        if version.id != entry.id || version.version_type != entry.version_type {
+            return Err(LauncherError::InvalidRemoteData(format!(
+                "Mojang version JSON identity for '{}' disagrees with the version manifest",
+                entry.id
+            )));
+        }
+        let server = version.downloads.server.ok_or_else(|| {
+            LauncherError::UnsupportedRequirement(format!(
+                "Minecraft '{}' does not publish a dedicated server artifact",
+                entry.id
+            ))
+        })?;
+        server.validate("server JAR")?;
+        validate_mojang_url(
+            &server.url,
+            &["piston-data.mojang.com", "launcher.mojang.com"],
+            "server JAR",
+        )?;
+        let java = version.java_version.map(|java| MojangJavaRequirement {
+            component: java.component,
+            major: java.major_version,
+        });
+        if java
+            .as_ref()
+            .is_some_and(|java| java.component.trim().is_empty() || java.major == 0)
+        {
+            return Err(LauncherError::InvalidRemoteData(format!(
+                "Minecraft '{}' declares an invalid Java requirement",
+                entry.id
+            )));
+        }
+        Ok(ResolvedVanillaServer {
+            minecraft_version: version.id,
+            version_type: version.version_type,
+            version_manifest_sha256: manifest_sha256,
+            version_json_url: entry.url.clone(),
+            version_json_sha1: entry.sha1.clone(),
+            server: ArtifactRequest {
+                logical_name: format!("Minecraft {} server", entry.id),
+                url: server.url,
+                expected_hash: ExpectedHash::Sha1(server.sha1),
+                expected_size: Some(server.size),
+            },
+            java,
+        })
+    }
+
+    async fn fetch_metadata(&self, url: &str) -> Result<Vec<u8>, LauncherError> {
+        let response = self.client.get(url).send().await?.error_for_status()?;
+        if response.url().scheme() != "https" {
+            return Err(LauncherError::InvalidRemoteData(format!(
+                "Mojang metadata redirected to non-HTTPS URL '{}'",
+                response.url()
+            )));
+        }
+        if response
+            .content_length()
+            .is_some_and(|length| length > MAX_METADATA_BYTES)
+        {
+            return Err(LauncherError::InvalidRemoteData(format!(
+                "Mojang metadata '{}' exceeds {MAX_METADATA_BYTES} bytes",
+                response.url()
+            )));
+        }
+        let bytes = response.bytes().await?;
+        if bytes.len() as u64 > MAX_METADATA_BYTES {
+            return Err(LauncherError::InvalidRemoteData(format!(
+                "Mojang metadata '{url}' exceeds {MAX_METADATA_BYTES} bytes"
+            )));
+        }
+        Ok(bytes.to_vec())
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct VersionManifest {
+    latest: LatestVersions,
+    versions: Vec<VersionEntry>,
+}
+
+impl VersionManifest {
+    fn resolve(&self, requirement: &str) -> Result<String, LauncherError> {
+        let id = match requirement {
+            "latest-release" => &self.latest.release,
+            "latest-snapshot" => &self.latest.snapshot,
+            exact
+                if !exact.is_empty()
+                    && exact.trim() == exact
+                    && !exact.chars().any(char::is_control) =>
+            {
+                exact
+            }
+            _ => {
+                return Err(LauncherError::UnsupportedRequirement(format!(
+                    "Minecraft requirement '{requirement}' must be an exact version, latest-release, or latest-snapshot"
+                )));
+            }
+        };
+        if self.versions.iter().any(|version| version.id == id) {
+            Ok(id.to_string())
+        } else {
+            Err(LauncherError::UnsupportedRequirement(format!(
+                "Minecraft version '{id}' is not present in Mojang's version manifest"
+            )))
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct LatestVersions {
+    release: String,
+    snapshot: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct VersionEntry {
+    id: String,
+    #[serde(rename = "type")]
+    version_type: String,
+    url: String,
+    sha1: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct VersionJson {
+    id: String,
+    #[serde(rename = "type")]
+    version_type: String,
+    downloads: VersionDownloads,
+    #[serde(rename = "javaVersion")]
+    java_version: Option<JavaVersion>,
+}
+
+#[derive(Debug, Deserialize)]
+struct VersionDownloads {
+    server: Option<Download>,
+}
+
+#[derive(Debug, Deserialize)]
+struct Download {
+    sha1: String,
+    size: u64,
+    url: String,
+}
+
+impl Download {
+    fn validate(&self, subject: &str) -> Result<(), LauncherError> {
+        validate_digest(&self.sha1, 40, &format!("{subject} SHA-1"))?;
+        if self.size == 0 {
+            return Err(LauncherError::InvalidRemoteData(format!(
+                "Mojang {subject} has zero size"
+            )));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct JavaVersion {
+    component: String,
+    #[serde(rename = "majorVersion")]
+    major_version: u32,
+}
+
+fn validate_mojang_url(
+    value: &str,
+    allowed_hosts: &[&str],
+    subject: &str,
+) -> Result<(), LauncherError> {
+    let url = url::Url::parse(value).map_err(|error| {
+        LauncherError::InvalidRemoteData(format!("Mojang {subject} URL is invalid: {error}"))
+    })?;
+    if url.scheme() != "https"
+        || !url
+            .host_str()
+            .is_some_and(|host| allowed_hosts.contains(&host))
+        || !url.username().is_empty()
+        || url.password().is_some()
+    {
+        return Err(LauncherError::InvalidRemoteData(format!(
+            "Mojang {subject} URL '{value}' is not an allowed official HTTPS URL"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_digest(value: &str, length: usize, subject: &str) -> Result<(), LauncherError> {
+    if value.len() != length
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err(LauncherError::InvalidRemoteData(format!(
+            "Mojang {subject} '{value}' is invalid"
+        )));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn manifest_resolves_only_documented_requirement_forms() {
+        let manifest: VersionManifest = serde_json::from_str(
+            r#"{
+                "latest":{"release":"1.21.1","snapshot":"25w01a"},
+                "versions":[
+                    {"id":"1.21.1","type":"release","url":"https://piston-meta.mojang.com/a","sha1":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+                    {"id":"25w01a","type":"snapshot","url":"https://piston-meta.mojang.com/b","sha1":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}
+                ]
+            }"#,
+        )
+        .unwrap();
+        assert_eq!(manifest.resolve("latest-release").unwrap(), "1.21.1");
+        assert_eq!(manifest.resolve("25w01a").unwrap(), "25w01a");
+        assert!(manifest.resolve("latest").is_err());
+        assert!(manifest.resolve("missing").is_err());
+    }
+
+    #[test]
+    fn official_url_validation_rejects_lookalike_hosts() {
+        assert!(
+            validate_mojang_url(
+                "https://piston-data.mojang.com.evil.example/server.jar",
+                &["piston-data.mojang.com"],
+                "server JAR"
+            )
+            .is_err()
+        );
+    }
+}

@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 use std::path::Path;
 use std::str::FromStr;
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use toml_edit::{DocumentMut, Item, Table, value};
@@ -43,6 +44,15 @@ impl Default for GlobalConfig {
 }
 
 impl GlobalConfig {
+    pub fn http_client(&self) -> Result<reqwest::Client, LauncherError> {
+        self.validate()?;
+        Ok(reqwest::Client::builder()
+            .connect_timeout(Duration::from_secs(self.network.connect_timeout_seconds))
+            .timeout(Duration::from_secs(self.network.request_timeout_seconds))
+            .user_agent(concat!("orbit-launcher-core/", env!("CARGO_PKG_VERSION")))
+            .build()?)
+    }
+
     pub fn load(path: &Path) -> Result<Self, LauncherError> {
         if !path.exists() {
             return Ok(Self::default());

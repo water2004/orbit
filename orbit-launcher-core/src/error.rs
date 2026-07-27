@@ -5,6 +5,30 @@ pub enum LauncherError {
     #[error("I/O operation failed: {0}")]
     Io(#[from] std::io::Error),
 
+    #[error("network operation failed: {0}")]
+    Network(#[from] reqwest::Error),
+
+    #[error("remote service returned invalid data: {0}")]
+    InvalidRemoteData(String),
+
+    #[error("artifact integrity check failed: {0}")]
+    ArtifactIntegrity(String),
+
+    #[error("unsupported launcher requirement: {0}")]
+    UnsupportedRequirement(String),
+
+    #[error("failed to parse orbit-launcher.lock: {0}")]
+    LockParse(#[source] toml::de::Error),
+
+    #[error("invalid orbit-launcher.lock: {0}")]
+    InvalidLock(String),
+
+    #[error("Minecraft EULA confirmation is required: {0}")]
+    EulaRequired(String),
+
+    #[error("interactive input is required: {0}")]
+    InteractionRequired(String),
+
     #[error("failed to parse launcher config.toml: {0}")]
     ConfigParse(#[source] toml::de::Error),
 
@@ -73,6 +97,14 @@ impl LauncherError {
     pub const fn code(&self) -> &'static str {
         match self {
             Self::Io(_) => "io",
+            Self::Network(_) => "network",
+            Self::InvalidRemoteData(_) => "invalid_remote_data",
+            Self::ArtifactIntegrity(_) => "artifact_integrity",
+            Self::UnsupportedRequirement(_) => "unsupported_requirement",
+            Self::LockParse(_) => "lock_parse",
+            Self::InvalidLock(_) => "invalid_lock",
+            Self::EulaRequired(_) => "eula_required",
+            Self::InteractionRequired(_) => "interaction_required",
             Self::ConfigParse(_) => "config_parse",
             Self::ConfigDocumentParse(_) => "config_parse",
             Self::ManifestParse(_) => "manifest_parse",

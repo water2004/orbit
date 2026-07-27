@@ -1,6 +1,7 @@
 # Orbit Launcher CLI
 
-> 实现状态：实例与运行时路径基础已可用；Minecraft/Loader/Java 安装和启动命令尚未发布。
+> 实现状态：实例、配置、Mojang Java runtime 和 Vanilla 独立服务端安装已可用；客户端、
+> Fabric/Quilt/Forge/NeoForge adapter、账户与启动命令仍在后续提交中。
 > 未实现的命令不会以空壳形式出现在 CLI 中。
 
 `orbit-launcher` 与 Orbit 模组包管理器完全隔离。它使用自己的全局目录、实例注册表、
@@ -27,6 +28,13 @@ orbit-launcher config get <key>
 orbit-launcher config set <key> <value>
 orbit-launcher config unset <key>
 
+# 已有实例
+orbit-launcher [--instance <id|name>] install
+
+# 一条命令创建并安装 Vanilla 服务端
+orbit-launcher install --new <name> [--root <path>] \
+  --kind server --minecraft <exact|latest-release|latest-snapshot>
+
 orbit-launcher instance create \
   --name <name> \
   [--root <path>] \
@@ -43,6 +51,9 @@ orbit-launcher [--instance <id|name>] instance remove
 orbit-launcher instance default set <id|name>
 orbit-launcher instance default clear
 orbit-launcher instance default show
+
+orbit-launcher [--instance <id|name>] server eula show
+orbit-launcher [--instance <id|name>] server eula accept <sha256>
 ```
 
 配置键是稳定协议，目前包括网络并发数与超时、缓存上限、Java 默认来源、Microsoft client
@@ -55,7 +66,19 @@ Yggdrasil provider 属于复合对象，后续由账户领域命令管理，不�
 
 非 Vanilla Loader 必须提供 `--loader-version`；Vanilla 禁止提供该参数。当前 `create` 只
 建立用户意图和全局注册，不下载任何内容。一次命令创建并安装将由真实安装事务入口
-`install --new` 提供，不会复用 `instance create` 伪装安装成功。
+`install --new` 提供，不会复用 `instance create` 伪装安装成功。bootstrap 失败时会注销临时
+实例并删除 provisional manifest，不删除用户文件。
+
+当前 `install` 只接受 Vanilla server 实例。它先解析 Mojang version manifest v2、目标版本
+JSON 和该版本声明的 Java component/major，再一次性确定服务端 JAR 与 Java runtime 的完整
+下载队列。文件按上游 SHA-1 校验后进入本地 SHA-256 CAS；Java 文件并发下载，runtime 和
+实例分别在 staging 中验证，最后原子提交 `server.jar`、`eula.txt` 与
+`orbit-launcher.lock`。目标位置已有但不属于旧 lock 的文件时会拒绝覆盖。
+
+服务端安装每次都会获取当前官方 EULA。文本 TTY 会完整展示正文、官方 URL 和正文
+SHA-256，并且只有用户准确输入 `I AGREE` 才继续；没有 `--yes` 绕过。JSON、管道或
+`--non-interactive` 必须先对已有实例执行 `server eula show`，再用返回的 digest 执行
+`server eula accept`。接受记录与实际展示正文绑定；正文 digest 变化后必须重新接受。
 
 ## 全局路径
 
@@ -98,6 +121,7 @@ Yggdrasil provider 属于复合对象，后续由账户领域命令管理，不�
 
 错误只写 stderr，并提供稳定 `code`。GUI 不得依赖本地化 message 分支。
 
-`--progress-format ndjson` 已作为全局协议选择保留；当前实例命令都是短事务，不产生进度
-事件。安装、更新、登录和 supervisor 命令实现时才会发送真实强类型进度，不发送定时假
-进度。
+`--progress-format text|ndjson|none` 控制 stderr 进度，默认 `text`。安装进度来自真实阶段、
+文件下载字节数、缓存命中、Java 物化计数、staging 校验和事务提交；NDJSON 使用
+`schema_version/type/command/sequence/data.event` 稳定字段。最终 JSON 只写 stdout，进度与
+错误只写 stderr。

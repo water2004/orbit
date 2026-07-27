@@ -2,13 +2,17 @@ mod app;
 mod cli;
 mod output;
 
+use std::io::{BufRead, IsTerminal, Write};
 use std::process::ExitCode;
+use std::time::{Duration, Instant};
 
 use clap::Parser;
-use cli::{Cli, OutputFormat};
-use output::{ErrorEnvelope, SuccessEnvelope};
+use cli::{Cli, OutputFormat, ProgressFormat};
+use orbit_launcher_core::{EulaDocument, InstallProgressEvent, LauncherError};
+use output::{ErrorEnvelope, ProgressData, ProgressEnvelope, SuccessEnvelope};
 
-fn main() -> ExitCode {
+#[tokio::main]
+async fn main() -> ExitCode {
     let cli = Cli::parse();
     let command_name = command_name(&cli.command);
     let runtime =
@@ -27,7 +31,16 @@ fn main() -> ExitCode {
         Ok(path) => path,
         Err(error) => return render_error(cli.format, command_name, "io", &error.to_string()),
     };
-    match app::execute(cli.command, cli.instance.as_deref(), &current_dir, &runtime) {
+    let mut frontend = TerminalFrontend::new(cli.format, cli.progress_format, cli.non_interactive);
+    match app::execute(
+        cli.command,
+        cli.instance.as_deref(),
+        &current_dir,
+        &runtime,
+        &mut frontend,
+    )
+    .await
+    {
         Ok(output) => {
             render_success(cli.format, output);
             ExitCode::SUCCESS
@@ -38,6 +51,7 @@ fn main() -> ExitCode {
 
 fn command_name(command: &cli::Commands) -> &'static str {
     match command {
+        cli::Commands::Install { .. } => "install",
         cli::Commands::Config { command } => match command {
             cli::ConfigCommands::Path => "config.path",
             cli::ConfigCommands::List => "config.list",
@@ -54,6 +68,12 @@ fn command_name(command: &cli::Commands) -> &'static str {
             cli::InstanceCommands::Remove => "instance.remove",
             cli::InstanceCommands::Default { .. } => "instance.default",
         },
+        cli::Commands::Server { command } => match command {
+            cli::ServerCommands::Eula { command } => match command {
+                cli::EulaCommands::Show => "server.eula.show",
+                cli::EulaCommands::Accept { .. } => "server.eula.accept",
+            },
+        },
     }
 }
 
@@ -65,6 +85,9 @@ fn render_success(format: OutputFormat, output: app::CommandOutput) {
             app::CommandOutput::ConfigList(value) => print_json(command, value),
             app::CommandOutput::ConfigEntry(value) => print_json(command, value),
             app::CommandOutput::ConfigMutation(value) => print_json(command, value),
+            app::CommandOutput::EulaDocument(value) => print_json(command, value),
+            app::CommandOutput::EulaAcceptance(value) => print_json(command, value),
+            app::CommandOutput::Install(value) => print_json(command, value),
             app::CommandOutput::InstanceList(value) => print_json(command, value),
             app::CommandOutput::InstanceDetail(value) => print_json(command, value),
             app::CommandOutput::InstanceMutation(value) => print_json(command, value),
@@ -97,6 +120,30 @@ fn render_text(output: app::CommandOutput) {
             let previous = view.previous.as_deref().unwrap_or("<unset>");
             let source = if view.explicit { "explicit" } else { "default" };
             println!("{} = {} ({source}; was {previous})", view.key, current);
+        }
+        app::CommandOutput::EulaDocument(view) => {
+            print!("{}", view.text);
+            println!("\nOfficial URL: {}", view.url);
+            println!("SHA-256: {}", view.digest_sha256);
+            println!(
+                "To accept this exact document, run: orbit-launcher --instance {} server eula accept {}",
+                view.instance_id, view.digest_sha256
+            );
+        }
+        app::CommandOutput::EulaAcceptance(view) => println!(
+            "Accepted Minecraft EULA {} for instance {}.",
+            view.digest_sha256, view.instance_id
+        ),
+        app::CommandOutput::Install(view) => {
+            println!("Installed instance {}.", view.instance_id);
+            println!("  Minecraft: {}", view.minecraft_version);
+            println!("  loader: {}", view.loader);
+            println!("  Java: {} ({})", view.java_version, view.java_runtime_id);
+            println!(
+                "  artifacts: {} downloaded, {} cached",
+                view.downloaded_artifacts, view.cached_artifacts
+            );
+            println!("  EULA SHA-256: {}", view.eula_digest_sha256);
         }
         app::CommandOutput::InstanceList(view) => {
             if view.instances.is_empty() {
@@ -173,6 +220,160 @@ fn render_error(format: OutputFormat, command: &str, code: &str, message: &str) 
     }
     match code {
         "argument" => ExitCode::from(2),
+        "interaction_required" | "eula_required" => ExitCode::from(4),
         _ => ExitCode::from(1),
+    }
+}
+
+struct TerminalFrontend {
+    output_format: OutputFormat,
+    progress_format: ProgressFormat,
+    non_interactive: bool,
+    sequence: u64,
+    last_text_progress: Instant,
+}
+
+impl TerminalFrontend {
+    fn new(
+        output_format: OutputFormat,
+        progress_format: ProgressFormat,
+        non_interactive: bool,
+    ) -> Self {
+        Self {
+            output_format,
+            progress_format,
+            non_interactive,
+            sequence: 0,
+            last_text_progress: Instant::now() - Duration::from_secs(2),
+        }
+    }
+
+    fn render_text_progress(&mut self, data: ProgressData) {
+        match data {
+            ProgressData::MetadataStarted => eprintln!("Resolving Mojang metadata..."),
+            ProgressData::MinecraftResolved { version, .. } => {
+                eprintln!("Resolved Minecraft {version}.")
+            }
+            ProgressData::EulaChecked { accepted, .. } if accepted => {
+                eprintln!("Verified EULA acceptance.")
+            }
+            ProgressData::EulaChecked { .. } => {
+                eprintln!("Current EULA requires explicit acceptance.")
+            }
+            ProgressData::JavaManifestStarted => eprintln!("Resolving managed Java runtime..."),
+            ProgressData::JavaRuntimeResolved {
+                runtime_id,
+                artifacts,
+                total_bytes,
+            } => eprintln!(
+                "Resolved Java runtime {runtime_id}: {artifacts} files, {}.",
+                human_bytes(total_bytes)
+            ),
+            ProgressData::ArtifactStarted {
+                logical_name,
+                total_bytes,
+            } => eprintln!(
+                "Downloading {logical_name}{}...",
+                total_bytes
+                    .map(|size| format!(" ({})", human_bytes(size)))
+                    .unwrap_or_default()
+            ),
+            ProgressData::ArtifactBytes {
+                logical_name,
+                downloaded_bytes,
+                total_bytes,
+            } if self.last_text_progress.elapsed() >= Duration::from_secs(1) => {
+                self.last_text_progress = Instant::now();
+                let total = total_bytes
+                    .map(|size| format!(" / {}", human_bytes(size)))
+                    .unwrap_or_default();
+                eprintln!(
+                    "Downloading {logical_name}: {}{total}",
+                    human_bytes(downloaded_bytes)
+                );
+            }
+            ProgressData::ArtifactBytes { .. } => {}
+            ProgressData::ArtifactCached { logical_name, .. } => {
+                eprintln!("Using cached {logical_name}.")
+            }
+            ProgressData::ArtifactFinished { logical_name, .. } => {
+                eprintln!("Downloaded {logical_name}.")
+            }
+            ProgressData::JavaMaterialized { completed, total }
+                if completed == total || completed % 25 == 0 =>
+            {
+                eprintln!("Materializing Java runtime: {completed}/{total} files.")
+            }
+            ProgressData::JavaMaterialized { .. } => {}
+            ProgressData::JavaRuntimeVerified { runtime_id } => {
+                eprintln!("Verified Java runtime {runtime_id}.")
+            }
+            ProgressData::JavaRuntimeCached { runtime_id } => {
+                eprintln!("Using installed Java runtime {runtime_id}.")
+            }
+            ProgressData::StagingVerified => eprintln!("Verified staged server runtime."),
+            ProgressData::Committed => eprintln!("Committed instance runtime."),
+        }
+    }
+}
+
+impl app::Frontend for TerminalFrontend {
+    fn progress(&mut self, event: InstallProgressEvent) {
+        let data = ProgressData::from(event);
+        match self.progress_format {
+            ProgressFormat::None => {}
+            ProgressFormat::Text => self.render_text_progress(data),
+            ProgressFormat::Ndjson => {
+                self.sequence += 1;
+                let envelope = ProgressEnvelope::new(self.sequence, data);
+                eprintln!(
+                    "{}",
+                    serde_json::to_string(&envelope)
+                        .expect("launcher progress views are serializable")
+                );
+            }
+        }
+    }
+
+    fn confirm_eula(&mut self, document: &EulaDocument) -> Result<bool, LauncherError> {
+        if self.non_interactive
+            || self.output_format == OutputFormat::Json
+            || !std::io::stdin().is_terminal()
+            || !std::io::stderr().is_terminal()
+        {
+            return Err(LauncherError::InteractionRequired(format!(
+                "Minecraft EULA {} must be accepted with 'server eula show' and 'server eula accept <digest>' before retrying install",
+                document.digest_sha256
+            )));
+        }
+        let stderr = std::io::stderr();
+        let mut stderr = stderr.lock();
+        writeln!(
+            stderr,
+            "\nThe complete current Minecraft EULA follows. Installation will not continue without explicit acceptance.\n"
+        )?;
+        write!(stderr, "{}", document.text)?;
+        writeln!(stderr, "\nOfficial URL: {}", document.url)?;
+        writeln!(stderr, "SHA-256: {}", document.digest_sha256)?;
+        write!(stderr, "Type I AGREE to accept this exact document: ")?;
+        stderr.flush()?;
+        let mut input = String::new();
+        std::io::stdin().lock().read_line(&mut input)?;
+        Ok(input.trim() == "I AGREE")
+    }
+}
+
+fn human_bytes(bytes: u64) -> String {
+    const UNITS: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];
+    let mut value = bytes as f64;
+    let mut unit = 0;
+    while value >= 1024.0 && unit < UNITS.len() - 1 {
+        value /= 1024.0;
+        unit += 1;
+    }
+    if unit == 0 {
+        format!("{bytes} B")
+    } else {
+        format!("{value:.1} {}", UNITS[unit])
     }
 }

@@ -1,6 +1,9 @@
 use std::path::PathBuf;
 
-use orbit_launcher_core::{ContextSource, InstanceManifest, RegistryEntry};
+use orbit_launcher_core::{
+    ArtifactTransferEvent, ContextSource, InstallProgressEvent, InstanceManifest,
+    JavaProgressEvent, RegistryEntry,
+};
 use serde::Serialize;
 
 pub const SCHEMA_VERSION: u32 = 1;
@@ -187,6 +190,187 @@ pub struct ConfigMutationView {
     pub current: Option<String>,
     pub explicit: bool,
     pub action: ConfigMutationAction,
+}
+
+#[derive(Debug, Serialize)]
+pub struct EulaDocumentView {
+    pub instance_id: String,
+    pub url: String,
+    pub digest_sha256: String,
+    pub fetched_at_unix_seconds: u64,
+    pub text: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct EulaAcceptanceView {
+    pub instance_id: String,
+    pub url: String,
+    pub digest_sha256: String,
+    pub accepted_at_unix_seconds: u64,
+    pub method: &'static str,
+}
+
+#[derive(Debug, Serialize)]
+pub struct InstallView {
+    pub instance_id: String,
+    pub minecraft_version: String,
+    pub loader: String,
+    pub java_runtime_id: String,
+    pub java_version: String,
+    pub eula_digest_sha256: String,
+    pub downloaded_artifacts: usize,
+    pub cached_artifacts: usize,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ProgressEnvelope {
+    pub schema_version: u32,
+    #[serde(rename = "type")]
+    pub kind: &'static str,
+    pub command: &'static str,
+    pub sequence: u64,
+    pub data: ProgressData,
+}
+
+impl ProgressEnvelope {
+    pub fn new(sequence: u64, data: ProgressData) -> Self {
+        Self {
+            schema_version: SCHEMA_VERSION,
+            kind: "progress",
+            command: "install",
+            sequence,
+            data,
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(tag = "event", rename_all = "snake_case")]
+pub enum ProgressData {
+    MetadataStarted,
+    MinecraftResolved {
+        version: String,
+        total_artifacts: usize,
+    },
+    EulaChecked {
+        digest_sha256: String,
+        accepted: bool,
+    },
+    ArtifactStarted {
+        logical_name: String,
+        total_bytes: Option<u64>,
+    },
+    ArtifactBytes {
+        logical_name: String,
+        downloaded_bytes: u64,
+        total_bytes: Option<u64>,
+    },
+    ArtifactCached {
+        logical_name: String,
+        size: u64,
+    },
+    ArtifactFinished {
+        logical_name: String,
+        size: u64,
+    },
+    JavaManifestStarted,
+    JavaRuntimeResolved {
+        runtime_id: String,
+        artifacts: usize,
+        total_bytes: u64,
+    },
+    JavaMaterialized {
+        completed: usize,
+        total: usize,
+    },
+    JavaRuntimeVerified {
+        runtime_id: String,
+    },
+    JavaRuntimeCached {
+        runtime_id: String,
+    },
+    StagingVerified,
+    Committed,
+}
+
+impl From<InstallProgressEvent> for ProgressData {
+    fn from(event: InstallProgressEvent) -> Self {
+        match event {
+            InstallProgressEvent::MetadataStarted => Self::MetadataStarted,
+            InstallProgressEvent::MinecraftResolved {
+                version,
+                total_artifacts,
+            } => Self::MinecraftResolved {
+                version,
+                total_artifacts,
+            },
+            InstallProgressEvent::EulaChecked {
+                digest_sha256,
+                accepted,
+            } => Self::EulaChecked {
+                digest_sha256,
+                accepted,
+            },
+            InstallProgressEvent::Artifact(event) => Self::from_artifact(event),
+            InstallProgressEvent::Java(event) => Self::from_java(event),
+            InstallProgressEvent::StagingVerified => Self::StagingVerified,
+            InstallProgressEvent::Committed => Self::Committed,
+        }
+    }
+}
+
+impl ProgressData {
+    fn from_artifact(event: ArtifactTransferEvent) -> Self {
+        match event {
+            ArtifactTransferEvent::Started {
+                logical_name,
+                total_bytes,
+            } => Self::ArtifactStarted {
+                logical_name,
+                total_bytes,
+            },
+            ArtifactTransferEvent::Bytes {
+                logical_name,
+                downloaded_bytes,
+                total_bytes,
+            } => Self::ArtifactBytes {
+                logical_name,
+                downloaded_bytes,
+                total_bytes,
+            },
+            ArtifactTransferEvent::Cached { logical_name, size } => {
+                Self::ArtifactCached { logical_name, size }
+            }
+            ArtifactTransferEvent::Finished { logical_name, size } => {
+                Self::ArtifactFinished { logical_name, size }
+            }
+        }
+    }
+
+    fn from_java(event: JavaProgressEvent) -> Self {
+        match event {
+            JavaProgressEvent::ManifestStarted => Self::JavaManifestStarted,
+            JavaProgressEvent::RuntimeResolved {
+                runtime_id,
+                artifacts,
+                total_bytes,
+            } => Self::JavaRuntimeResolved {
+                runtime_id,
+                artifacts,
+                total_bytes,
+            },
+            JavaProgressEvent::Artifact(event) => Self::from_artifact(event),
+            JavaProgressEvent::Materialized { completed, total } => {
+                Self::JavaMaterialized { completed, total }
+            }
+            JavaProgressEvent::RuntimeVerified { runtime_id } => {
+                Self::JavaRuntimeVerified { runtime_id }
+            }
+            JavaProgressEvent::RuntimeCached { runtime_id } => {
+                Self::JavaRuntimeCached { runtime_id }
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize)]

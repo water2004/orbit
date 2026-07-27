@@ -14,8 +14,12 @@ pub struct Cli {
     pub format: OutputFormat,
 
     /// Progress event protocol written to stderr.
-    #[arg(long, value_enum, default_value_t = ProgressFormat::None, global = true)]
+    #[arg(long, value_enum, default_value_t = ProgressFormat::Text, global = true)]
     pub progress_format: ProgressFormat,
+
+    /// Disable all prompts; missing decisions become interaction_required errors.
+    #[arg(long, global = true)]
+    pub non_interactive: bool,
 
     /// Exact launcher configuration directory.
     #[arg(long, global = true)]
@@ -41,12 +45,35 @@ pub enum OutputFormat {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum ProgressFormat {
+    Text,
     None,
     Ndjson,
 }
 
 #[derive(Debug, Subcommand)]
 pub enum Commands {
+    /// Resolve, download, verify, and atomically install an existing or new instance.
+    Install {
+        /// Create and install a new named instance in one command.
+        #[arg(long)]
+        new: Option<String>,
+        /// New instance root; only valid with --new and defaults to the current directory.
+        #[arg(long)]
+        root: Option<PathBuf>,
+        /// New instance kind; required with --new.
+        #[arg(long, value_enum)]
+        kind: Option<InstanceKindArg>,
+        /// Minecraft requirement for a new instance; required with --new.
+        #[arg(long)]
+        minecraft: Option<String>,
+        /// Loader for a new instance; defaults to Vanilla.
+        #[arg(long, value_enum)]
+        loader: Option<LoaderKindArg>,
+        /// Loader requirement for a new non-Vanilla instance.
+        #[arg(long)]
+        loader_version: Option<String>,
+    },
+
     /// Inspect and change launcher-wide configuration.
     Config {
         #[command(subcommand)]
@@ -58,6 +85,29 @@ pub enum Commands {
         #[command(subcommand)]
         command: InstanceCommands,
     },
+
+    /// Manage a dedicated server and its legal/runtime state.
+    Server {
+        #[command(subcommand)]
+        command: ServerCommands,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum ServerCommands {
+    /// Display or accept the current official Minecraft EULA.
+    Eula {
+        #[command(subcommand)]
+        command: EulaCommands,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum EulaCommands {
+    /// Fetch and output the complete current official EULA.
+    Show,
+    /// Accept exactly the digest returned by the latest show for this instance.
+    Accept { digest: String },
 }
 
 #[derive(Debug, Subcommand)]
@@ -232,5 +282,37 @@ mod tests {
         };
         assert_eq!(key, "cache.max-size");
         assert_eq!(value, "8 GiB");
+    }
+
+    #[test]
+    fn install_new_keeps_creation_paths_at_the_bootstrap_boundary() {
+        let cli = Cli::try_parse_from([
+            "orbit-launcher",
+            "install",
+            "--new",
+            "server",
+            "--root",
+            "./server",
+            "--kind",
+            "server",
+            "--minecraft",
+            "latest-release",
+        ])
+        .unwrap();
+        let Commands::Install {
+            new,
+            root,
+            kind,
+            minecraft,
+            ..
+        } = cli.command
+        else {
+            panic!("unexpected command");
+        };
+        assert_eq!(new.as_deref(), Some("server"));
+        assert_eq!(root.as_deref(), Some(std::path::Path::new("./server")));
+        assert_eq!(kind, Some(InstanceKindArg::Server));
+        assert_eq!(minecraft.as_deref(), Some("latest-release"));
+        assert_eq!(cli.progress_format, ProgressFormat::Text);
     }
 }

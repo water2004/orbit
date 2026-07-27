@@ -1,16 +1,21 @@
 use std::path::Path;
 
 use orbit_launcher_core::{
-    ConfigKey, ContextIntent, CreateInstanceRequest, InstanceRegistry, RuntimeContext,
-    create_instance, get_config, import_instance, list_config, remove_instance, rename_instance,
-    resolve_instance, resolve_instance_root, set_config, set_default_instance, unset_config,
+    ConfigKey, ContextIntent, CreateInstanceRequest, EulaAcceptanceMethod, EulaDocument,
+    InstallProgressEvent, InstanceKind, InstanceRegistry, LauncherError, LoaderKind,
+    RuntimeContext, accept_shown_eula, create_instance, execute_vanilla_server_install, get_config,
+    import_instance, list_config, prepare_vanilla_server_install, remove_instance, rename_instance,
+    resolve_instance, resolve_instance_root, rollback_created_instance, set_config,
+    set_default_instance, show_current_eula, unset_config,
 };
 
-use crate::cli::{Commands, ConfigCommands, DefaultCommands, InstanceCommands};
+use crate::cli::{
+    Commands, ConfigCommands, DefaultCommands, EulaCommands, InstanceCommands, ServerCommands,
+};
 use crate::output::{
     ConfigEntryView, ConfigListView, ConfigMutationAction, ConfigMutationView, ConfigPathView,
-    DefaultView, InstanceDetailView, InstanceListView, InstanceMutationAction,
-    InstanceMutationView, InstanceView, RenameView,
+    DefaultView, EulaAcceptanceView, EulaDocumentView, InstallView, InstanceDetailView,
+    InstanceListView, InstanceMutationAction, InstanceMutationView, InstanceView, RenameView,
 };
 
 #[derive(Debug)]
@@ -19,6 +24,9 @@ pub enum CommandOutput {
     ConfigList(ConfigListView),
     ConfigEntry(ConfigEntryView),
     ConfigMutation(ConfigMutationView),
+    EulaDocument(EulaDocumentView),
+    EulaAcceptance(EulaAcceptanceView),
+    Install(InstallView),
     InstanceList(InstanceListView),
     InstanceDetail(InstanceDetailView),
     InstanceMutation(InstanceMutationView),
@@ -33,6 +41,9 @@ impl CommandOutput {
             Self::ConfigList(_) => "config.list",
             Self::ConfigEntry(_) => "config.get",
             Self::ConfigMutation(view) => view.action.command_name(),
+            Self::EulaDocument(_) => "server.eula.show",
+            Self::EulaAcceptance(_) => "server.eula.accept",
+            Self::Install(_) => "install",
             Self::InstanceList(_) => "instance.list",
             Self::InstanceDetail(_) => "instance.show",
             Self::InstanceMutation(view) => view.action.command_name(),
@@ -40,6 +51,12 @@ impl CommandOutput {
             Self::Default(_) => "instance.default",
         }
     }
+}
+
+pub trait Frontend: Send {
+    fn progress(&mut self, event: InstallProgressEvent);
+
+    fn confirm_eula(&mut self, document: &EulaDocument) -> Result<bool, LauncherError>;
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -59,13 +76,38 @@ impl AppError {
     }
 }
 
-pub fn execute(
+pub async fn execute(
     command: Commands,
     instance_selector: Option<&str>,
     current_dir: &Path,
     runtime: &RuntimeContext,
+    frontend: &mut dyn Frontend,
 ) -> Result<CommandOutput, AppError> {
     match command {
+        Commands::Install {
+            new,
+            root,
+            kind,
+            minecraft,
+            loader,
+            loader_version,
+        } => {
+            execute_install(
+                instance_selector,
+                current_dir,
+                runtime,
+                frontend,
+                InstallCommandRequest {
+                    new_name: new,
+                    root,
+                    kind,
+                    minecraft,
+                    loader,
+                    loader_version,
+                },
+            )
+            .await
+        }
         Commands::Config { command } => {
             if instance_selector.is_some() {
                 return Err(AppError::Argument(
@@ -82,6 +124,194 @@ pub fn execute(
             }
             execute_instance(command, instance_selector, current_dir, runtime)
         }
+        Commands::Server { command } => {
+            execute_server(command, instance_selector, current_dir, runtime).await
+        }
+    }
+}
+
+struct InstallCommandRequest {
+    new_name: Option<String>,
+    root: Option<std::path::PathBuf>,
+    kind: Option<crate::cli::InstanceKindArg>,
+    minecraft: Option<String>,
+    loader: Option<crate::cli::LoaderKindArg>,
+    loader_version: Option<String>,
+}
+
+async fn execute_install(
+    selector: Option<&str>,
+    current_dir: &Path,
+    runtime: &RuntimeContext,
+    frontend: &mut dyn Frontend,
+    request: InstallCommandRequest,
+) -> Result<CommandOutput, AppError> {
+    let created = if let Some(name) = request.new_name {
+        if selector.is_some() {
+            return Err(AppError::Argument(
+                "--instance cannot be combined with install --new".to_string(),
+            ));
+        }
+        let kind = request
+            .kind
+            .ok_or_else(|| AppError::Argument("install --new requires --kind".to_string()))?;
+        let minecraft = request
+            .minecraft
+            .ok_or_else(|| AppError::Argument("install --new requires --minecraft".to_string()))?;
+        let root = resolve_instance_root(current_dir, request.root.as_deref())?;
+        Some(create_instance(
+            runtime.paths(),
+            CreateInstanceRequest {
+                root,
+                name,
+                kind: kind.into(),
+                minecraft_requirement: minecraft,
+                loader_kind: request
+                    .loader
+                    .unwrap_or(crate::cli::LoaderKindArg::Vanilla)
+                    .into(),
+                loader_requirement: request.loader_version,
+            },
+        )?)
+    } else {
+        if request.root.is_some()
+            || request.kind.is_some()
+            || request.minecraft.is_some()
+            || request.loader.is_some()
+            || request.loader_version.is_some()
+        {
+            return Err(AppError::Argument(
+                "--root, --kind, --minecraft, --loader, and --loader-version require install --new"
+                    .to_string(),
+            ));
+        }
+        None
+    };
+    let created_selector = created.as_ref().map(|created| created.entry.id.to_string());
+    let selector = created_selector.as_deref().or(selector);
+    let result = execute_existing_install(selector, current_dir, runtime, frontend).await;
+    if result.is_err()
+        && let Some(created) = created
+    {
+        rollback_created_instance(runtime.paths(), &created.entry.id.to_string()).map_err(
+            |rollback| {
+                AppError::Core(LauncherError::Transaction(format!(
+                    "bootstrap failed and its provisional instance could not be rolled back: {rollback}"
+                )))
+            },
+        )?;
+    }
+    result
+}
+
+async fn execute_existing_install(
+    selector: Option<&str>,
+    current_dir: &Path,
+    runtime: &RuntimeContext,
+    frontend: &mut dyn Frontend,
+) -> Result<CommandOutput, AppError> {
+    let registry = InstanceRegistry::load(&runtime.paths().instances_file())?;
+    let resolved = resolve_instance(&registry, selector, current_dir, ContextIntent::Sensitive)?;
+    if resolved.manifest.kind != InstanceKind::Server
+        || resolved.manifest.loader.kind != LoaderKind::Vanilla
+    {
+        return Err(LauncherError::UnsupportedRequirement(format!(
+            "installation for {} {} is not implemented yet",
+            resolved.manifest.kind.as_str(),
+            resolved.manifest.loader.kind.as_str()
+        ))
+        .into());
+    }
+    let client = runtime.config().http_client()?;
+    let plan = prepare_vanilla_server_install(
+        &resolved.entry.root,
+        &client,
+        runtime.config().java.default_provider,
+        |event| frontend.progress(event),
+    )
+    .await?;
+    if !plan.eula_is_accepted() {
+        if !frontend.confirm_eula(plan.eula())? {
+            return Err(LauncherError::EulaRequired(
+                "the user did not accept the current Minecraft EULA".to_string(),
+            )
+            .into());
+        }
+        accept_shown_eula(
+            &resolved.entry.root,
+            &plan.eula().digest_sha256,
+            EulaAcceptanceMethod::InteractivePrompt,
+        )?;
+    }
+    let result = execute_vanilla_server_install(
+        &resolved.entry.root,
+        runtime.paths(),
+        &client,
+        plan,
+        usize::from(runtime.config().network.concurrency),
+        |event| frontend.progress(event),
+    )
+    .await?;
+    let java = result.lock.java.as_ref().ok_or_else(|| {
+        LauncherError::InvalidLock("completed install did not lock a Java runtime".to_string())
+    })?;
+    let eula = result.lock.eula.as_ref().ok_or_else(|| {
+        LauncherError::InvalidLock("completed server install did not lock EULA consent".to_string())
+    })?;
+    Ok(CommandOutput::Install(InstallView {
+        instance_id: resolved.entry.id.to_string(),
+        minecraft_version: result.lock.minecraft.version.clone(),
+        loader: result.lock.loader.kind.as_str().to_string(),
+        java_runtime_id: java.runtime_id.clone(),
+        java_version: java.version.clone(),
+        eula_digest_sha256: eula.digest_sha256.clone(),
+        downloaded_artifacts: result.downloaded_artifacts,
+        cached_artifacts: result.cached_artifacts,
+    }))
+}
+
+async fn execute_server(
+    command: ServerCommands,
+    selector: Option<&str>,
+    current_dir: &Path,
+    runtime: &RuntimeContext,
+) -> Result<CommandOutput, AppError> {
+    let registry = InstanceRegistry::load(&runtime.paths().instances_file())?;
+    let resolved = resolve_instance(&registry, selector, current_dir, ContextIntent::Sensitive)?;
+    if resolved.manifest.kind != InstanceKind::Server {
+        return Err(AppError::Argument(format!(
+            "instance '{}' is a client; server commands require a server instance",
+            resolved.entry.name
+        )));
+    }
+    match command {
+        ServerCommands::Eula { command } => match command {
+            EulaCommands::Show => {
+                let client = runtime.config().http_client()?;
+                let document = show_current_eula(&resolved.entry.root, &client).await?;
+                Ok(CommandOutput::EulaDocument(EulaDocumentView {
+                    instance_id: resolved.entry.id.to_string(),
+                    url: document.url,
+                    digest_sha256: document.digest_sha256,
+                    fetched_at_unix_seconds: document.fetched_at_unix_seconds,
+                    text: document.text,
+                }))
+            }
+            EulaCommands::Accept { digest } => {
+                let acceptance = accept_shown_eula(
+                    &resolved.entry.root,
+                    &digest,
+                    EulaAcceptanceMethod::DigestCommand,
+                )?;
+                Ok(CommandOutput::EulaAcceptance(EulaAcceptanceView {
+                    instance_id: resolved.entry.id.to_string(),
+                    url: acceptance.url,
+                    digest_sha256: acceptance.digest_sha256,
+                    accepted_at_unix_seconds: acceptance.accepted_at_unix_seconds,
+                    method: acceptance.method.as_str(),
+                }))
+            }
+        },
     }
 }
 
@@ -231,6 +461,18 @@ mod tests {
     use crate::cli::{DefaultCommands, InstanceKindArg, LoaderKindArg};
     use orbit_launcher_core::{ContextSource, RuntimePathOptions};
 
+    struct NoopFrontend;
+
+    impl Frontend for NoopFrontend {
+        fn progress(&mut self, _event: InstallProgressEvent) {}
+
+        fn confirm_eula(&mut self, _document: &EulaDocument) -> Result<bool, LauncherError> {
+            Err(LauncherError::InteractionRequired(
+                "test frontend does not prompt".to_string(),
+            ))
+        }
+    }
+
     fn runtime(directory: &Path) -> RuntimeContext {
         RuntimeContext::load(RuntimePathOptions {
             config_dir: Some(directory.join("config")),
@@ -336,10 +578,11 @@ mod tests {
         assert_eq!(error.code(), "explicit_instance_required");
     }
 
-    #[test]
-    fn config_commands_use_typed_core_mutations() {
+    #[tokio::test]
+    async fn config_commands_use_typed_core_mutations() {
         let directory = tempfile::tempdir().unwrap();
         let runtime = runtime(directory.path());
+        let mut frontend = NoopFrontend;
         let output = execute(
             Commands::Config {
                 command: ConfigCommands::Set {
@@ -350,7 +593,9 @@ mod tests {
             None,
             directory.path(),
             &runtime,
+            &mut frontend,
         )
+        .await
         .unwrap();
         let CommandOutput::ConfigMutation(view) = output else {
             panic!("unexpected config output");
@@ -368,7 +613,9 @@ mod tests {
             Some("server"),
             directory.path(),
             &runtime,
+            &mut frontend,
         )
+        .await
         .unwrap_err();
         assert_eq!(error.code(), "argument");
     }
