@@ -26,7 +26,7 @@
 ```rust
 pub trait LoaderDetector: Send + Sync {
     fn name(&self) -> &'static str;
-    fn loader_type(&self) -> ModLoader;
+    fn loader_type(&self) -> LoaderKind;
     fn detect(
         &self,
         instance_dir: &Path,
@@ -38,7 +38,8 @@ pub trait LoaderDetector: Send + Sync {
 `LoaderDetectionService::new()` 当前注册 Fabric、Forge、NeoForge 和 Quilt 四个
 detector。`LoaderInfo.versions` 保留全部候选，不在 detector 内提前取第一个。
 `detect_all()` 执行全部策略，并按置信度降序返回；手动传入
-`--modloader` 时，CLI 通过 `find_by_name()` 只运行对应 detector。
+`--modloader` 时，CLI 在边界解析为 `LoaderKind`，再通过 `find_by_kind()` 只运行对应
+detector。
 
 ## 3. Launcher 布局与 profile 扫描
 
@@ -54,6 +55,11 @@ libraries 和组件列表：
 - 含 `eula.txt` 或 `server.properties` 的 dedicated server。服务端 marker 的优先级高于
   通用 `versions/` 和 standalone，避免 Mojang bundler 生成的 `versions/` 被误判为
   客户端共享游戏根。
+
+实现不会在上述列表中“第一个匹配就返回”。每个 probe 先产生带 `LayoutEvidence` 和
+`LayoutPrecedence` 的候选：启动器自有实例 metadata 高于 dedicated server marker，
+server marker 高于 isolated/shared/standalone 通用布局；同一优先级出现多个候选直接
+报告歧义。这样优先级是可测试的领域规则，而不是函数调用顺序。
 
 空目录、任意目录和只有 `mods/` 的目录不是合法实例。隔离目录只读取当前
 `versions/<实例>` 的 profile，不扫描 sibling 实例。
@@ -87,7 +93,10 @@ Forge/NeoForge profile 的坐标版本有时包含 Minecraft 前缀，例如
 ## 4. Dedicated server 运行时规范
 
 服务端不伪造 launcher version profile，也不把启动脚本当作 shell/batch 程序执行。
-`detection/server.rs` 将四种 loader 的官方本地安装格式归一化成同一个
+`detection/server.rs` 只负责收集、合并和消歧 `ServerRuntimeCandidate`；
+`detection/server/formats.rs` 解析官方本地安装格式。候选携带
+`ServerLaunchFormat`（Fabric installer bootstrap、direct loader launch JAR、Forge
+bootstrap shim 或 ModLauncher argument file），最终归一化成同一个
 `ServerRuntimeSpec`：
 
 | Loader | 权威本地规格 | 实际路径来源 |

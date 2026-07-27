@@ -45,7 +45,7 @@ platform      TOML 平台快照的精确路径解析、哈希与元数据校验
 lockfile      可复现的 Fat Lockfile
 versions/     Fabric predicate 与 Maven version range
 resolver/
-  graph       loader-neutral 建图
+  graph       消费归一化 LoaderSemantics 的统一建图
   constraints 依赖表达式 → PubGrub 子句
   ordering    顺序环与软依赖 warning
   diagnostics 同次求解的原因
@@ -56,9 +56,10 @@ init/sync/    实例扫描与对账
 audit         复用 resolver 的 Loader-selected runtime；不包含字节码判定规则
     ↓
 orbit-bytecode-audit
+  backend/    Fabric/Quilt/Forge/NeoForge 的 ABI、namespace、注册和 transformer 策略
   classfile   第三方 parser 隔离 facade、稳定指令 ID
   jar         安全预算、活动嵌套 JAR/resource、MR-JAR、同名类多定义 Universe
-  namespace   Loader capability provider、runtime symbol alignment、Tiny 投影/readiness
+  namespace   backend 调用的共享 runtime symbol alignment、Tiny 投影/readiness
   mixin_config Loader 注册、端侧/requiredMods/plugin 激活、config/refmap 作用域
   mixin       候选类合并；selector/slice → InjectionQuery；injector → Mutation
   transformer ModLauncher/Java transformer → 带 heuristic precision 的统一效果
@@ -70,7 +71,8 @@ orbit-bytecode-audit
 - 元数据文件名与字段映射；
 - loader 自身检测；
 - 版本约束语义；
-- loader 官方定义的嵌套格式。
+- loader 官方定义的嵌套格式；
+- audit 的 ABI、namespace、Mixin 注册入口与 Transformer 能力。
 
 不允许出现 loader 分支的位置：
 
@@ -78,7 +80,12 @@ orbit-bytecode-audit
 - 本地/联网求解；
 - 安装选择；
 - 错误证明路径；
-- sync/outdated 的图语义。
+- sync/outdated 的图语义；
+- audit 的 JAR/ClassFile 扫描、统一效果模型和冲突合成。
+
+“统一”指四个 loader 在边界适配后消费同一个领域模型，不表示把不一致的运行时规则
+塞进公共分支。内部 loader 身份是封闭的 `LoaderKind`；TOML、CLI 和 provider 参数只在
+边界转换为字符串。新增 loader 不允许走 unknown/generic fallback。
 
 ## 3. 端到端数据流
 
@@ -143,7 +150,8 @@ provider 合并为一个候选并累积来源，同版本不同字节仍是不�
 
 依赖表达式在 `constraints.rs` 编译；加载顺序在 `ordering.rs`；平台、mod_id 候选、
 `provides`、load condition 和 Jar-in-Jar 在 `graph.rs` 注册。这种拆分按职责而不是
-按 loader 切开。
+按 loader 复制 resolver。`LoaderSemantics` 在建图前给出版本体系、规范平台包、平台
+capability 与 nested priority；graph 内不比较 loader 字符串。
 
 launcher profile 指向的实际 loader library JAR 也通过公共 JAR reader 进入平台图。
 loader 自身仍是平台包，但其声明的 contained 模块使用与普通顶层包相同的
@@ -186,12 +194,12 @@ Jar-in-Jar artifact 使用独立的 Maven 坐标包并精确绑定 owner 候选�
 
 ## 5. loader 支持矩阵
 
-| Loader | 元数据 | 版本 | 嵌套 | 求解 |
-|---|---|---|---|---|
-| Fabric | `fabric.mod.json` | Fabric predicate | `jars` | 完整统一路径 |
-| Quilt | `quilt.mod.json` / Fabric fallback | Fabric predicate | `jars` | 完整统一路径 |
-| Forge | `META-INF/mods.toml` | Maven | JarJar | 完整统一路径 |
-| NeoForge | `META-INF/neoforge.mods.toml` / legacy name | Maven | JarJar | 完整统一路径 |
+| Loader | 元数据适配 | 版本语义 | 嵌套选择 | audit 后端 | 规范化求解 |
+|---|---|---|---|---|---|
+| Fabric | `fabric.mod.json` | Fabric predicate | `jars` + parent priority | Fabric | 统一 graph |
+| Quilt | `quilt.mod.json` / Fabric fallback | Fabric predicate | Quilt `jars` 条件 | Quilt | 统一 graph |
+| Forge | `META-INF/mods.toml` | Maven | JarJar | Forge/ModLauncher | 统一 graph |
+| NeoForge | `META-INF/neoforge.mods.toml` / legacy name | Maven | JarJar | NeoForge/ModLauncher | 统一 graph |
 
 “支持”意味着 identity、依赖类别、环境、版本、provides、内嵌和求解都进入真实路径，
 不是只识别文件名。
@@ -199,6 +207,8 @@ Jar-in-Jar artifact 使用独立的 Maven 坐标包并精确绑定 owner 候选�
 ## 6. 可维护性规则
 
 - 规范化类型表达语义，不用 tuple/字符串标志隐藏含义。
+- loader 差异必须进入 `LoaderSemantics`、metadata adapter 或 audit backend；共享流水线
+  不允许重新从字符串推断 loader，也不允许 generic fallback。
 - 新字段先进入 metadata model，再向 candidate/lock/solver 传播。
 - 不保留旧 lock schema 的兼容分支；项目尚无外部使用者，schema 直接收敛。
 - parser 对身份和结构错误 fail fast。

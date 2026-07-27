@@ -39,7 +39,7 @@
 
 下列旧文档原则是正确的，问题曾经是代码没有遵守；本轮按规范修复，而不是删除规范：
 
-- 所有 loader 共享同一解析后数据流和 resolver；
+- 所有 loader 由强类型 adapter 保真解析，再共享同一领域数据流和 resolver；
 - launcher 实际 loader JAR 的依赖和内嵌模块必须进入同一平台图；
 - 本地校验与联网候选不能走两套规则；
 - 依赖原因必须来自实际推导路径；
@@ -94,7 +94,7 @@
 | `remove` / `upgrade` / `outdated` | 使用 Fat Lockfile、保留受阻候选原因、自适应表格与多解差异高亮 |
 | `sync` | 完全离线重新探测平台并扫描 mods；保留既有 remotes，按包选择候选并确认移除未选版本；平台与包变更统一表格 |
 | `check` | 实例目标兼容性预检；结果自适应表格 |
-| `audit` | 复用 Loader-selected runtime，先对齐 namespace，再解析 Mixin/Transformer；unary/pairwise 分离 + schema 4 JSON/显式完整 report |
+| `audit` | 四个 Loader backend 复用 Loader-selected runtime，先对齐 namespace，再进入共享 Mixin/Transformer 效果与冲突流水线；unary/pairwise 分离 + schema 5 JSON/显式完整 report |
 | `list` / `info` | 展示包信息、逻辑依赖和 bundled；非树形 list 与 info 均使用自适应表格 |
 | `export` / `import` | Orbit archive 与 Modrinth pack |
 | `cache` / `instances` / `purge` | cache 使用跨命令持久化 LRU 并在每次命令结束执行容量淘汰；instances list 输出自适应表格 |

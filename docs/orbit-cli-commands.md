@@ -391,9 +391,9 @@ provider 兼容声明，也不修改 manifest、lockfile、下载缓存或实例
 非 TTY 输出最大 120 列。
 `--limit` 调整展示数量。
 
-`--format json` 保留完整 evidence（audit 子 schema 4）。显式 `--report <path>` 额外写入
+`--format json` 保留完整 evidence（audit 子 schema 5）。显式 `--report <path>` 额外写入
 未按文本 limit、risk threshold 或 mod 过滤截断的完整结构化报告；默认模式不创建报告文件。
-JSON 结果直接嵌入 audit 的 `AuditReport`（schema 4），顶层固定包含 `schema_version`、
+JSON 结果直接嵌入 audit 的 `AuditReport`（schema 5），顶层固定包含 `schema_version`、
 `environment`、`readiness`、`namespace`、`artifacts`、
 `registered_mixin_configs`、`registered_mixins`、`transformations`、`unary_risks`、`risks`、
 `interactions`、`inactive_candidates`、`coverage_gaps`、`coverage` 和 `warnings`。

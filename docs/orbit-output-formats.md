@@ -510,7 +510,7 @@ orbit [--format text|json] [--progress-format none|ndjson] <command> ...
 
 ### `audit`
 
-`audit` 沿用 `orbit-bytecode-audit` 的 schema 4 `AuditReport`，直接作为 `result` 字段嵌入信封：
+`audit` 沿用 `orbit-bytecode-audit` 的 schema 5 `AuditReport`，直接作为 `result` 字段嵌入信封：
 
 ```json
 {
@@ -518,7 +518,7 @@ orbit [--format text|json] [--progress-format none|ndjson] <command> ...
   "command": "audit",
   "ok": true,
   "result": {
-    "schema_version": 4,
+    "schema_version": 5,
     "environment": { ... },
     "readiness": { ... },
     "namespace": { ... },
@@ -530,7 +530,9 @@ orbit [--format text|json] [--progress-format none|ndjson] <command> ...
 }
 ```
 
-信封 `schema_version` 是命令信封版本；`result.schema_version`（当前 4）是 audit 自身子 schema 版本。
+信封 `schema_version` 是命令信封版本；`result.schema_version`（当前 5）是 audit 自身子
+schema 版本。schema 5 的 `environment.loader` 是唯一、已验证的 loader 枚举，不再输出
+`declared_loader` / `detected_loader` 双字段。
 
 ## 4. NDJSON 进度协议
 

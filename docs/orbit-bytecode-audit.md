@@ -118,7 +118,7 @@ conditional/unknown 时可以恢复条件效果用于交互分析，但不会产
 
 ## 5. Mixin
 
-分析器先按 Loader 规则发现注册入口：
+分析器先由四个显式 backend 按 Loader 规则发现注册入口：
 
 - Fabric metadata schema 0/1 的 `mixins` 与 environment；
 - Quilt metadata 的 `mixin`；
@@ -279,8 +279,11 @@ descriptor 已对齐，并确认目标类在当前合并阶段没有直接声明
 
 `--format json` 在 stdout 输出未截断的结构化细节。`--report <path>` 仅在用户显式
 指定时额外写完整、未按文本 limit 或 stdout filter 截断的 JSON 报告；默认命令不创建
-文件。当前 schema version 为数字 `4`，顶层固定包含 environment、readiness、namespace、
-artifacts、registered_mixin_configs、registered_mixins、transformations、unary_risks、risks、
+文件。当前 schema version 为数字 `5`。schema 5 将原来的
+`environment.declared_loader` / `environment.detected_loader` 收敛为经过 platform snapshot
+校验的强类型 `environment.loader`；audit 内部不再自行选择两个字符串中的一个。顶层
+固定包含 environment、readiness、namespace、artifacts、registered_mixin_configs、
+registered_mixins、transformations、unary_risks、risks、
 interactions、inactive_candidates、coverage_gaps、coverage 和 warnings。
 
 `namespace` 给出 runtime namespace、每个 artifact 的符号空间、mapping source

@@ -50,8 +50,10 @@ ModLauncher provider 返回 readiness incomplete。
 
 ## Orbit 抽象
 
-`RuntimeEnvironmentProvider` 将 Fabric/Quilt 与 Forge/NeoForge 的 capability probe
-隔离；输出统一 `NamespaceReport`。`LoaderArtifactUnit` 表达 resolver 已选顶层内容及
+四个显式 `AuditBackend` 分别选择 runtime ABI profile、namespace alignment、Mixin
+注册来源与 Transformer 能力：Fabric 和 Quilt 共享 Tiny 投影实现但保留不同 metadata
+入口；Forge 和 NeoForge 共享 ModLauncher 解释器但保留不同注册入口。后续统一输出
+`NamespaceReport`、效果和冲突模型。`LoaderArtifactUnit` 表达 resolver 已选顶层内容及
 活动 nested 成员。`ClassDefinitionId` 保留 loader unit、artifact、entry、原始/运行时
 类名和内容哈希。所有 Mixin、Transformer、hard reference 与 duplicate-class 比较只
 消费对齐后的 Class Universe。

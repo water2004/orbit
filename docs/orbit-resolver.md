@@ -15,8 +15,9 @@ resolver/
 └── diagnostics/    成功路径观察与不可解证明的领域化渲染
 ```
 
-Fabric、Quilt、Forge、NeoForge 不各自拥有 resolver。它们只在
-`metadata/` 和 `versions/` 适配输入，之后统一进入：
+Fabric、Quilt、Forge、NeoForge 不各自拥有 resolver。TOML/CLI 的 loader 字符串在边界
+解析为封闭 `LoaderKind`；`LoaderSemantics` 决定版本体系、规范平台包、capability 与
+nested priority。各 loader 只在 `metadata/` 和 `versions/` 适配输入，之后统一进入：
 
 ```text
 loader metadata
