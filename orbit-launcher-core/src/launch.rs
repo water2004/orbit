@@ -9,13 +9,16 @@ use serde::Serialize;
 use uuid::Uuid;
 use zeroize::{Zeroize, Zeroizing};
 
+use base64::Engine;
+
 use tokio::io::{AsyncBufReadExt, AsyncRead, BufReader};
 use tokio::sync::mpsc;
 
 use crate::account::AccountLaunchIdentity;
 use crate::artifact::hash_file_sha256;
+use crate::config::GlobalConfig;
 use crate::error::LauncherError;
-use crate::instance::{InstanceKind, ManifestFile};
+use crate::instance::{InstanceKind, ManifestFile, ServerAuthenticationProvider};
 use crate::java::verify_locked_java_runtime;
 use crate::lockfile::{LauncherLock, LockFile, LockedEntrypoint};
 use crate::runtime::RuntimePaths;
@@ -132,6 +135,7 @@ pub struct LaunchResult {
 pub fn prepare_launch<F>(
     instance_root: &Path,
     runtime_paths: &RuntimePaths,
+    config: &GlobalConfig,
     identity: Option<AccountLaunchIdentity>,
     mut progress: F,
 ) -> Result<LaunchPlan, LauncherError>
@@ -153,6 +157,8 @@ where
     });
 
     let placeholders = build_placeholders(&root, &manifest, &lock, identity.as_ref())?;
+    let authentication_arguments =
+        authentication_arguments(&root, &manifest, &lock, config, identity.as_ref())?;
     let classpath_explicit = lock
         .arguments
         .jvm
@@ -164,6 +170,7 @@ where
         &lock,
         classpath_explicit,
         &placeholders.actual,
+        &authentication_arguments,
     )?;
     let redacted_arguments = assemble_arguments(
         &root,
@@ -171,6 +178,7 @@ where
         &lock,
         classpath_explicit,
         &placeholders.redacted,
+        &authentication_arguments,
     )?;
     let sensitive_values = identity
         .as_ref()
@@ -397,12 +405,6 @@ fn build_placeholders(
         }
         _ => {}
     }
-    if identity.is_some_and(|value| value.yggdrasil_provider.is_some()) {
-        return Err(LauncherError::UnsupportedRequirement(
-            "External Yggdrasil launch requires a locked authlib-injector artifact".to_string(),
-        ));
-    }
-
     let classpath = match &lock.entrypoint {
         LockedEntrypoint::Classpath { classpath, .. } => classpath
             .iter()
@@ -473,11 +475,13 @@ fn assemble_arguments(
     lock: &LauncherLock,
     classpath_explicit: bool,
     placeholders: &BTreeMap<&'static str, String>,
+    authentication_arguments: &[String],
 ) -> Result<Vec<String>, LauncherError> {
     let mut arguments = vec![
         format!("-Xms{}M", manifest.launch.min_memory_mib),
         format!("-Xmx{}M", manifest.launch.max_memory_mib),
     ];
+    arguments.extend(authentication_arguments.iter().cloned());
     arguments.extend(manifest.launch.jvm_args.iter().cloned());
     arguments.extend(expand_arguments(&lock.arguments.jvm, placeholders)?);
     match &lock.entrypoint {
@@ -505,6 +509,85 @@ fn assemble_arguments(
     arguments.extend(expand_arguments(&lock.arguments.game, placeholders)?);
     arguments.extend(manifest.launch.game_args.iter().cloned());
     Ok(arguments)
+}
+
+fn authentication_arguments(
+    root: &Path,
+    manifest: &crate::instance::InstanceManifest,
+    lock: &LauncherLock,
+    config: &GlobalConfig,
+    identity: Option<&AccountLaunchIdentity>,
+) -> Result<Vec<String>, LauncherError> {
+    let client_yggdrasil = identity.filter(|identity| identity.yggdrasil_provider.is_some());
+    let server_yggdrasil = manifest.server.as_ref().filter(|server| {
+        server.authentication.provider == ServerAuthenticationProvider::ExternalYggdrasil
+    });
+    if client_yggdrasil.is_none() && server_yggdrasil.is_none() {
+        return Ok(Vec::new());
+    }
+    let injector = lock.authlib_injector.as_ref().ok_or_else(|| {
+        LauncherError::InvalidLock(
+            "External Yggdrasil requires a locked authlib-injector artifact; run install"
+                .to_string(),
+        )
+    })?;
+    let injector_path = root.join(path_from_portable(&injector.path));
+    if let Some(identity) = client_yggdrasil {
+        let api_root = identity.yggdrasil_api_root.as_deref().ok_or_else(|| {
+            LauncherError::Authentication(
+                "External Yggdrasil identity has no resolved API root".to_string(),
+            )
+        })?;
+        let metadata = identity
+            .yggdrasil_prefetched_metadata
+            .as_deref()
+            .ok_or_else(|| {
+                LauncherError::Authentication(
+                    "External Yggdrasil identity has no prefetched API metadata".to_string(),
+                )
+            })?;
+        return Ok(vec![
+            format!("-javaagent:{}={api_root}", injector_path.display()),
+            "-Dauthlibinjector.side=client".to_string(),
+            format!(
+                "-Dauthlibinjector.yggdrasil.prefetched={}",
+                base64::engine::general_purpose::STANDARD.encode(metadata.as_bytes())
+            ),
+        ]);
+    }
+    let provider_id = server_yggdrasil
+        .and_then(|server| server.authentication.yggdrasil_provider.as_deref())
+        .ok_or_else(|| {
+            LauncherError::InvalidManifest(
+                "External Yggdrasil server has no provider ID".to_string(),
+            )
+        })?;
+    let provider = config
+        .yggdrasil
+        .providers
+        .iter()
+        .find(|provider| provider.id == provider_id)
+        .ok_or_else(|| {
+            LauncherError::InvalidConfig(format!(
+                "External Yggdrasil provider '{provider_id}' is not configured"
+            ))
+        })?;
+    let api_root = normalized_api_root(&provider.api_root)?;
+    Ok(vec![format!(
+        "-javaagent:{}={api_root}",
+        injector_path.display()
+    )])
+}
+
+fn normalized_api_root(value: &str) -> Result<String, LauncherError> {
+    let mut url = url::Url::parse(value).map_err(|error| {
+        LauncherError::InvalidConfig(format!("Yggdrasil API root is invalid: {error}"))
+    })?;
+    if !url.path().ends_with('/') {
+        let path = format!("{}/", url.path());
+        url.set_path(&path);
+    }
+    Ok(url.to_string())
 }
 
 fn expand_arguments(

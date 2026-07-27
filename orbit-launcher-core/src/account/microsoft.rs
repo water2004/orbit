@@ -342,6 +342,8 @@ fn identity(account: &AccountMetadata, access_token: String) -> AccountLaunchIde
         user_properties: "{}".to_string(),
         access_token,
         yggdrasil_provider: None,
+        yggdrasil_api_root: None,
+        yggdrasil_prefetched_metadata: None,
     }
 }
 

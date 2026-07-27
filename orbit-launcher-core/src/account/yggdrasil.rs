@@ -119,8 +119,16 @@ pub(super) async fn resolve_yggdrasil_identity(
             account.id
         )));
     };
+    let prefetched_metadata = fetch_provider_metadata(client, provider).await?;
+    let api_root = endpoint(provider, "")?.to_string();
     if validate_session(client, provider, access_token, client_token).await? {
-        return Ok(identity(&account, access_token.clone(), &provider.id));
+        return Ok(identity(
+            &account,
+            access_token.clone(),
+            &provider.id,
+            api_root,
+            prefetched_metadata,
+        ));
     }
     let refreshed = refresh_session(client, provider, access_token, client_token, None).await?;
     let profile_id = parse_profile_id(&refreshed.selected_profile.id, "Yggdrasil")?;
@@ -139,13 +147,21 @@ pub(super) async fn resolve_yggdrasil_identity(
         client_token: refreshed.client_token,
     };
     let updated = persist_authenticated_account(paths, secrets, updated, &secret).await?;
-    Ok(identity(&updated, access_token, &provider.id))
+    Ok(identity(
+        &updated,
+        access_token,
+        &provider.id,
+        api_root,
+        prefetched_metadata,
+    ))
 }
 
 fn identity(
     account: &AccountMetadata,
     access_token: String,
     provider_id: &str,
+    api_root: String,
+    prefetched_metadata: String,
 ) -> AccountLaunchIdentity {
     AccountLaunchIdentity {
         account_id: account.id,
@@ -155,7 +171,41 @@ fn identity(
         user_properties: "{}".to_string(),
         access_token,
         yggdrasil_provider: Some(provider_id.to_string()),
+        yggdrasil_api_root: Some(api_root),
+        yggdrasil_prefetched_metadata: Some(prefetched_metadata),
     }
+}
+
+async fn fetch_provider_metadata(
+    client: &reqwest::Client,
+    provider: &YggdrasilProviderConfig,
+) -> Result<String, LauncherError> {
+    let response = client.get(endpoint(provider, "")?).send().await?;
+    let status = response.status();
+    let bytes = response.bytes().await?;
+    if bytes.len() > MAX_AUTH_RESPONSE_BYTES {
+        return Err(LauncherError::Authentication(format!(
+            "Yggdrasil provider metadata exceeds {MAX_AUTH_RESPONSE_BYTES} bytes"
+        )));
+    }
+    if !status.is_success() {
+        return Err(parse_remote_error("metadata", status.as_u16(), &bytes));
+    }
+    let metadata: serde_json::Value = serde_json::from_slice(&bytes).map_err(|error| {
+        LauncherError::Authentication(format!(
+            "Yggdrasil provider metadata is invalid JSON: {error}"
+        ))
+    })?;
+    if !metadata.is_object() {
+        return Err(LauncherError::Authentication(
+            "Yggdrasil provider metadata must be a JSON object".to_string(),
+        ));
+    }
+    serde_json::to_string(&metadata).map_err(|error| {
+        LauncherError::Authentication(format!(
+            "failed to preserve Yggdrasil provider metadata: {error}"
+        ))
+    })
 }
 
 async fn validate_session(

@@ -14,6 +14,9 @@ use crate::artifact::{
     ArtifactCache, ArtifactTransferEvent, CachedArtifact, ExpectedHash, hash_file_sha256,
 };
 use crate::atomic_io::write_atomic;
+use crate::authlib_injector::{
+    ResolvedAuthlibInjector, resolve_authlib_injector, verify_authlib_injector,
+};
 use crate::client::{ClientDownload, ResolvedVanillaClient, resolve_vanilla_client};
 use crate::config::JavaProvider;
 use crate::error::LauncherError;
@@ -23,14 +26,18 @@ use crate::installer::{
     inspect_loader_installer, installed_server_argument_file, read_installed_client_profile,
     resolve_loader_installer, run_loader_installer,
 };
-use crate::instance::{InstanceKind, InstanceManifest, JavaPolicy, LoaderKind, ManifestFile};
+use crate::instance::{
+    InstanceKind, InstanceManifest, JavaPolicy, LoaderKind, ManifestFile,
+    ServerAuthenticationProvider,
+};
 use crate::java::{
     JavaProgressEvent, JavaTarget, MojangJavaPlan, install_mojang_java, plan_mojang_java,
 };
 use crate::loader::{LoaderSide, ResolvedLoaderProfile, resolve_loader_profile};
 use crate::lockfile::{
     ArtifactOwner, INSTANCE_LOCK_FILE, LOCK_SCHEMA, LauncherLock, LockFile, LockedArguments,
-    LockedArtifact, LockedArtifactSource, LockedEntrypoint, LockedLoader, LockedMinecraft,
+    LockedArtifact, LockedArtifactSource, LockedAuthlibInjector, LockedEntrypoint, LockedLoader,
+    LockedMinecraft,
 };
 use crate::mojang::{MojangClient, ResolvedVanillaServer, VERSION_MANIFEST_V2_URL};
 use crate::platform::HostPlatform;
@@ -50,6 +57,7 @@ pub struct ServerInstallPlan {
     eula: EulaDocument,
     acceptance: Option<EulaAcceptance>,
     loader: PlannedLoader,
+    authlib_injector: Option<ResolvedAuthlibInjector>,
 }
 
 #[derive(Debug, Clone)]
@@ -60,6 +68,7 @@ pub struct ClientInstallPlan {
     resolved: ResolvedVanillaClient,
     java: MojangJavaPlan,
     loader: PlannedLoader,
+    authlib_injector: Option<ResolvedAuthlibInjector>,
 }
 
 #[derive(Debug, Clone)]
@@ -94,10 +103,13 @@ impl ClientInstallPlan {
     }
 
     pub fn artifact_count(&self) -> usize {
-        self.resolved.downloads.len() + 1
+        self.resolved.downloads.len() + 1 + usize::from(self.authlib_injector.is_some())
     }
 
     pub fn download_size(&self) -> Option<u64> {
+        if self.authlib_injector.is_some() {
+            return None;
+        }
         self.resolved
             .downloads
             .iter()
@@ -128,7 +140,10 @@ impl ServerInstallPlan {
     }
 
     pub fn download_size(&self) -> Option<u64> {
-        self.resolved.server.expected_size
+        self.authlib_injector
+            .is_none()
+            .then_some(self.resolved.server.expected_size)
+            .flatten()
     }
 }
 
@@ -157,6 +172,60 @@ pub struct InstallResult {
     pub cached_artifacts: usize,
 }
 
+async fn plan_authlib_injector(
+    manifest: &InstanceManifest,
+    client: &reqwest::Client,
+) -> Result<Option<ResolvedAuthlibInjector>, LauncherError> {
+    if manifest_requires_authlib_injector(manifest) {
+        resolve_authlib_injector(client).await.map(Some)
+    } else {
+        Ok(None)
+    }
+}
+
+fn manifest_requires_authlib_injector(manifest: &InstanceManifest) -> bool {
+    match manifest.kind {
+        InstanceKind::Client => true,
+        InstanceKind::Server => manifest.server.as_ref().is_some_and(|server| {
+            server.authentication.provider == ServerAuthenticationProvider::ExternalYggdrasil
+        }),
+    }
+}
+
+fn append_authlib_download(
+    downloads: &mut Vec<ClientDownload>,
+    authlib_injector: Option<&ResolvedAuthlibInjector>,
+) {
+    if let Some(authlib_injector) = authlib_injector {
+        downloads.push(ClientDownload {
+            request: authlib_injector.request.clone(),
+            target: authlib_injector.target.clone(),
+            owner: ArtifactOwner::AuthlibInjector,
+            native_extract: None,
+        });
+    }
+}
+
+fn lock_authlib_injector(
+    authlib_injector: Option<&ResolvedAuthlibInjector>,
+    artifacts: &BTreeMap<String, (ClientDownload, CachedArtifact)>,
+) -> Result<Option<LockedAuthlibInjector>, LauncherError> {
+    let Some(resolved) = authlib_injector else {
+        return Ok(None);
+    };
+    let (_, artifact) = artifacts.get(&resolved.target).ok_or_else(|| {
+        LauncherError::Transaction(
+            "resolved authlib-injector is missing from the download transaction".to_string(),
+        )
+    })?;
+    verify_authlib_injector(&artifact.object_path, resolved, artifact)?;
+    Ok(Some(LockedAuthlibInjector {
+        version: resolved.version.clone(),
+        build_number: resolved.build_number,
+        path: resolved.target.clone(),
+    }))
+}
+
 async fn prepare_vanilla_client_install<F>(
     instance_root: &Path,
     client: &reqwest::Client,
@@ -175,9 +244,10 @@ where
         &HostPlatform::native()?,
     )
     .await?;
+    let authlib_injector = plan_authlib_injector(&manifest, client).await?;
     progress(InstallProgressEvent::MinecraftResolved {
         version: resolved.minecraft_version.clone(),
-        total_artifacts: resolved.downloads.len() + 1,
+        total_artifacts: resolved.downloads.len() + 1 + usize::from(authlib_injector.is_some()),
     });
     let java_requirement = resolved.java.as_ref().ok_or_else(|| {
         LauncherError::UnsupportedRequirement(format!(
@@ -203,6 +273,7 @@ where
         resolved,
         java,
         loader: PlannedLoader::Vanilla,
+        authlib_injector,
     })
 }
 
@@ -221,9 +292,10 @@ where
     let resolved = MojangClient::new(client.clone())
         .resolve_vanilla_server(&manifest.minecraft.requirement)
         .await?;
+    let authlib_injector = plan_authlib_injector(&manifest, client).await?;
     progress(InstallProgressEvent::MinecraftResolved {
         version: resolved.minecraft_version.clone(),
-        total_artifacts: 1,
+        total_artifacts: 1 + usize::from(authlib_injector.is_some()),
     });
     let java_requirement = resolved.java.as_ref().ok_or_else(|| {
         LauncherError::UnsupportedRequirement(format!(
@@ -261,6 +333,7 @@ where
         eula,
         acceptance,
         loader: PlannedLoader::Vanilla,
+        authlib_injector,
     })
 }
 
@@ -301,9 +374,13 @@ where
                 LoaderSide::Client,
             )
             .await?;
+            let authlib_injector = plan_authlib_injector(&manifest, client).await?;
             progress(InstallProgressEvent::MinecraftResolved {
                 version: resolved.minecraft_version.clone(),
-                total_artifacts: resolved.downloads.len() + profile.downloads.len() + 1,
+                total_artifacts: resolved.downloads.len()
+                    + profile.downloads.len()
+                    + 1
+                    + usize::from(authlib_injector.is_some()),
             });
             ensure_loader_java_compatible(
                 resolved.java.as_ref(),
@@ -332,6 +409,7 @@ where
                 resolved,
                 java,
                 loader: PlannedLoader::Profile(profile),
+                authlib_injector,
             }))
         }
         InstanceKind::Server => {
@@ -346,9 +424,12 @@ where
                 LoaderSide::Server,
             )
             .await?;
+            let authlib_injector = plan_authlib_injector(&manifest, client).await?;
             progress(InstallProgressEvent::MinecraftResolved {
                 version: resolved.minecraft_version.clone(),
-                total_artifacts: profile.downloads.len() + 1,
+                total_artifacts: profile.downloads.len()
+                    + 1
+                    + usize::from(authlib_injector.is_some()),
             });
             ensure_loader_java_compatible(
                 resolved.java.as_ref(),
@@ -389,6 +470,7 @@ where
                 eula,
                 acceptance,
                 loader: PlannedLoader::Profile(profile),
+                authlib_injector,
             }))
         }
     }
@@ -435,9 +517,12 @@ where
                 loader_requirement,
             )
             .await?;
+            let authlib_injector = plan_authlib_injector(&manifest, client).await?;
             progress(InstallProgressEvent::MinecraftResolved {
                 version: resolved.minecraft_version.clone(),
-                total_artifacts: resolved.downloads.len() + 2,
+                total_artifacts: resolved.downloads.len()
+                    + 2
+                    + usize::from(authlib_injector.is_some()),
             });
             let java_requirement = resolved.java.as_ref().ok_or_else(|| {
                 LauncherError::UnsupportedRequirement(format!(
@@ -460,6 +545,7 @@ where
                 resolved,
                 java,
                 loader: PlannedLoader::Installer(installer),
+                authlib_injector,
             }))
         }
         InstanceKind::Server => {
@@ -473,9 +559,10 @@ where
                 loader_requirement,
             )
             .await?;
+            let authlib_injector = plan_authlib_injector(&manifest, client).await?;
             progress(InstallProgressEvent::MinecraftResolved {
                 version: resolved.minecraft_version.clone(),
-                total_artifacts: 2,
+                total_artifacts: 2 + usize::from(authlib_injector.is_some()),
             });
             let java_requirement = resolved.java.as_ref().ok_or_else(|| {
                 LauncherError::UnsupportedRequirement(format!(
@@ -510,6 +597,7 @@ where
                 eula,
                 acceptance,
                 loader: PlannedLoader::Installer(installer),
+                authlib_injector,
             }))
         }
     }
@@ -618,11 +706,13 @@ where
     if manifest.id != plan.instance_id
         || manifest.minecraft.requirement != plan.minecraft_requirement
         || manifest.loader.requirement != plan.loader_requirement
+        || manifest_requires_authlib_injector(&manifest) != plan.authlib_injector.is_some()
     {
         return Err(LauncherError::Transaction(
             "instance manifest changed after the install plan was generated".to_string(),
         ));
     }
+    let authlib_injector = plan.authlib_injector.clone();
     let transaction = InstallTransaction::begin(instance_root, "install")?;
     let java = install_mojang_java(runtime_paths, client, plan.java, concurrency, |event| {
         progress(InstallProgressEvent::Java(event));
@@ -632,7 +722,7 @@ where
     let mut downloaded = java.downloaded_artifacts;
     let mut cached = java.cached_artifacts;
     let mut installer_producer = None;
-    let (resolved, locked_loader) = match plan.loader {
+    let (mut resolved, locked_loader) = match plan.loader {
         PlannedLoader::Vanilla => (plan.resolved, LockedLoader::vanilla()),
         PlannedLoader::Profile(profile) => merge_client_profile(plan.resolved, profile)?,
         PlannedLoader::Installer(installer) => {
@@ -679,6 +769,7 @@ where
             )
         }
     };
+    append_authlib_download(&mut resolved.downloads, authlib_injector.as_ref());
     cache.flush()?;
     let progress = Arc::new(Mutex::new(progress));
     let mut transfers = stream::iter(resolved.downloads.iter().cloned().map(|download| {
@@ -713,6 +804,7 @@ where
         }
     }
     cache.flush()?;
+    let locked_authlib_injector = lock_authlib_injector(authlib_injector.as_ref(), &artifacts)?;
 
     let mut locked_artifacts = Vec::new();
     for (target, (download, artifact)) in &artifacts {
@@ -770,6 +862,7 @@ where
         },
         loader: locked_loader,
         java: Some(java.locked),
+        authlib_injector: locked_authlib_injector,
         entrypoint: LockedEntrypoint::Classpath {
             main_class: resolved.main_class,
             classpath: resolved.classpath,
@@ -825,11 +918,13 @@ where
     if manifest.id != plan.instance_id
         || manifest.minecraft.requirement != plan.minecraft_requirement
         || manifest.loader.requirement != plan.loader_requirement
+        || manifest_requires_authlib_injector(&manifest) != plan.authlib_injector.is_some()
     {
         return Err(LauncherError::Transaction(
             "instance manifest changed after the install plan was generated".to_string(),
         ));
     }
+    let authlib_injector = plan.authlib_injector.clone();
     let acceptance = require_current_acceptance(instance_root, &plan.eula)?;
     let transaction = InstallTransaction::begin(instance_root, "install")?;
     let java = install_mojang_java(runtime_paths, client, plan.java, concurrency, |event| {
@@ -903,6 +998,7 @@ where
             native_extract: None,
         });
     }
+    append_authlib_download(&mut downloads, authlib_injector.as_ref());
     cache.flush()?;
     let progress = Arc::new(Mutex::new(progress));
     let mut transfers = stream::iter(downloads.into_iter().map(|download| {
@@ -936,6 +1032,7 @@ where
         }
     }
     cache.flush()?;
+    let locked_authlib_injector = lock_authlib_injector(authlib_injector.as_ref(), &artifacts)?;
     let mut locked_artifacts = Vec::new();
     for (target, (download, artifact)) in &artifacts {
         cache.materialize(artifact, &transaction.staging.join(target))?;
@@ -971,6 +1068,7 @@ where
         },
         loader,
         java: Some(java.locked),
+        authlib_injector: locked_authlib_injector,
         entrypoint,
         arguments,
         artifacts: locked_artifacts,
@@ -1862,6 +1960,7 @@ mod tests {
             },
             loader: LockedLoader::vanilla(),
             java: None,
+            authlib_injector: None,
             entrypoint: LockedEntrypoint::Jar {
                 path: "old/server.jar".to_string(),
             },

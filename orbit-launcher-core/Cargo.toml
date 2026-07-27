@@ -30,6 +30,7 @@ os_info = { workspace = true }
 shell-words = { workspace = true }
 zip = { workspace = true }
 md-5 = { workspace = true }
+base64 = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Security_Cryptography", "Win32_System_Memory"] }

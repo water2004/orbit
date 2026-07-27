@@ -10,7 +10,7 @@ use crate::eula::EulaAcceptance;
 use crate::instance::{InstanceKind, LoaderKind};
 
 pub const INSTANCE_LOCK_FILE: &str = "orbit-launcher.lock";
-pub const LOCK_SCHEMA: u32 = 2;
+pub const LOCK_SCHEMA: u32 = 3;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -22,6 +22,8 @@ pub struct LauncherLock {
     pub loader: LockedLoader,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub java: Option<LockedJavaRuntime>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub authlib_injector: Option<LockedAuthlibInjector>,
     pub entrypoint: LockedEntrypoint,
     #[serde(default)]
     pub arguments: LockedArguments,
@@ -50,6 +52,9 @@ impl LauncherLock {
         if let Some(java) = &self.java {
             java.validate()?;
         }
+        if let Some(authlib_injector) = &self.authlib_injector {
+            authlib_injector.validate()?;
+        }
         self.entrypoint.validate()?;
         let mut paths = HashSet::new();
         for artifact in &self.artifacts {
@@ -67,6 +72,26 @@ impl LauncherLock {
                 return Err(LauncherError::InvalidLock(format!(
                     "duplicate owned path '{path}'"
                 )));
+            }
+        }
+        let authlib_artifacts: Vec<_> = self
+            .artifacts
+            .iter()
+            .filter(|artifact| artifact.owner == ArtifactOwner::AuthlibInjector)
+            .collect();
+        match (&self.authlib_injector, authlib_artifacts.as_slice()) {
+            (None, []) => {}
+            (Some(locked), [artifact]) if artifact.path == locked.path => {}
+            (Some(_), _) => {
+                return Err(LauncherError::InvalidLock(
+                    "locked authlib-injector must identify exactly one authlib-injector artifact"
+                        .to_string(),
+                ));
+            }
+            (None, _) => {
+                return Err(LauncherError::InvalidLock(
+                    "authlib-injector artifact has no corresponding lock metadata".to_string(),
+                ));
             }
         }
         match &self.entrypoint {
@@ -111,6 +136,11 @@ impl LauncherLock {
             InstanceKind::Client if self.minecraft.asset_index.is_none() => Err(
                 LauncherError::InvalidLock("client lock requires an asset index ID".to_string()),
             ),
+            InstanceKind::Client if self.authlib_injector.is_none() => {
+                Err(LauncherError::InvalidLock(
+                    "client lock requires a managed authlib-injector artifact".to_string(),
+                ))
+            }
             _ => Ok(()),
         }
     }
@@ -258,6 +288,27 @@ pub struct LockedJavaRuntime {
     pub executable: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LockedAuthlibInjector {
+    pub version: String,
+    pub build_number: u32,
+    pub path: String,
+}
+
+impl LockedAuthlibInjector {
+    fn validate(&self) -> Result<(), LauncherError> {
+        validate_text(&self.version, "authlib-injector version")?;
+        validate_relative_path(&self.path)?;
+        if self.build_number == 0 {
+            return Err(LauncherError::InvalidLock(
+                "authlib-injector build number must be greater than zero".to_string(),
+            ));
+        }
+        Ok(())
+    }
+}
+
 impl LockedJavaRuntime {
     fn validate(&self) -> Result<(), LauncherError> {
         validate_identifier(&self.runtime_id, "Java runtime ID")?;
@@ -325,7 +376,7 @@ pub struct LockedArguments {
     pub game: Vec<String>,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ArtifactOwner {
     Minecraft,
@@ -529,6 +580,7 @@ mod tests {
             },
             loader: LockedLoader::vanilla(),
             java: None,
+            authlib_injector: None,
             entrypoint: LockedEntrypoint::Jar {
                 path: "server.jar".to_string(),
             },

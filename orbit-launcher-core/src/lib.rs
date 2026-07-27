@@ -7,6 +7,7 @@
 pub mod account;
 pub mod artifact;
 mod atomic_io;
+pub mod authlib_injector;
 pub mod client;
 pub mod config;
 pub mod context;
@@ -36,6 +37,10 @@ pub use account::{
 pub use artifact::{
     ArtifactCache, ArtifactRequest, ArtifactTransferEvent, CachedArtifact, ExpectedHash,
     hash_file_sha256,
+};
+pub use authlib_injector::{
+    AUTHLIB_INJECTOR_LATEST_URL, ResolvedAuthlibInjector, resolve_authlib_injector,
+    verify_authlib_injector,
 };
 pub use client::{
     AssetMapping, ClientDownload, NativeExtract, ResolvedVanillaClient, resolve_vanilla_client,
@@ -76,8 +81,8 @@ pub use launch::{
 pub use loader::{LoaderSide, ResolvedLoaderProfile, resolve_loader_profile};
 pub use lockfile::{
     ArtifactOwner, INSTANCE_LOCK_FILE, LOCK_SCHEMA, LauncherLock, LockFile, LockedArguments,
-    LockedArtifact, LockedArtifactSource, LockedEntrypoint, LockedJavaRuntime, LockedLoader,
-    LockedLoaderSource, LockedMinecraft, portable_relative_path,
+    LockedArtifact, LockedArtifactSource, LockedAuthlibInjector, LockedEntrypoint,
+    LockedJavaRuntime, LockedLoader, LockedLoaderSource, LockedMinecraft, portable_relative_path,
 };
 pub use mojang::{
     MojangClient, MojangJavaRequirement, ResolvedVanillaServer, VERSION_MANIFEST_V2_URL,

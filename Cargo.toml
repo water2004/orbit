@@ -49,5 +49,6 @@ ristretto_classfile = "0.31.0"
 tempfile = "3.27"
 uuid = { version = "1.24.0", features = ["serde", "v4"] }
 md-5 = "0.10"
+base64 = "0.22"
 dunce = "1.0.5"
 orbit-loader-json = { path = "orbit-loader-json" }

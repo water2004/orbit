@@ -250,9 +250,13 @@ async fn execute_launch(
     } else {
         None
     };
-    let plan = prepare_launch(&resolved.entry.root, runtime.paths(), identity, |event| {
-        frontend.launch_preparation(command_name, event)
-    })?;
+    let plan = prepare_launch(
+        &resolved.entry.root,
+        runtime.paths(),
+        runtime.config(),
+        identity,
+        |event| frontend.launch_preparation(command_name, event),
+    )?;
     if dry_run {
         return Ok(CommandOutput::LaunchPlan(plan.summary().into()));
     }

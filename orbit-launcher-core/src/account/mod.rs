@@ -325,12 +325,17 @@ pub struct AccountLaunchIdentity {
     pub user_properties: String,
     pub access_token: String,
     pub yggdrasil_provider: Option<String>,
+    pub yggdrasil_api_root: Option<String>,
+    pub yggdrasil_prefetched_metadata: Option<String>,
 }
 
 impl Drop for AccountLaunchIdentity {
     fn drop(&mut self) {
         self.access_token.zeroize();
         self.user_properties.zeroize();
+        if let Some(metadata) = &mut self.yggdrasil_prefetched_metadata {
+            metadata.zeroize();
+        }
     }
 }
 
@@ -372,6 +377,8 @@ pub async fn resolve_launch_identity(
             user_properties: "{}".to_string(),
             access_token: "0".to_string(),
             yggdrasil_provider: None,
+            yggdrasil_api_root: None,
+            yggdrasil_prefetched_metadata: None,
         }),
         AccountProvider::Microsoft => {
             microsoft::resolve_microsoft_identity(paths, config, client, secrets, account).await
