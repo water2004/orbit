@@ -74,6 +74,13 @@ pub enum Commands {
         loader_version: Option<String>,
     },
 
+    /// Verify and launch a client instance with its selected account.
+    Launch {
+        /// Verify and print a token-redacted command without starting Java.
+        #[arg(long)]
+        dry_run: bool,
+    },
+
     /// Inspect and change launcher-wide configuration.
     Config {
         #[command(subcommand)]
@@ -159,6 +166,12 @@ pub enum MicrosoftLoginCommands {
 
 #[derive(Debug, Subcommand)]
 pub enum ServerCommands {
+    /// Run a server in the foreground.
+    Run {
+        /// Verify and print the command without starting Java.
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Display or accept the current official Minecraft EULA.
     Eula {
         #[command(subcommand)]
@@ -399,5 +412,19 @@ mod tests {
         assert_eq!(kind, Some(InstanceKindArg::Server));
         assert_eq!(minecraft.as_deref(), Some("latest-release"));
         assert_eq!(cli.progress_format, ProgressFormat::Text);
+    }
+
+    #[test]
+    fn launch_surfaces_have_explicit_dry_run_modes() {
+        let client = Cli::try_parse_from(["orbit-launcher", "launch", "--dry-run"]).unwrap();
+        assert!(matches!(client.command, Commands::Launch { dry_run: true }));
+
+        let server = Cli::try_parse_from(["orbit-launcher", "server", "run", "--dry-run"]).unwrap();
+        assert!(matches!(
+            server.command,
+            Commands::Server {
+                command: ServerCommands::Run { dry_run: true }
+            }
+        ));
     }
 }

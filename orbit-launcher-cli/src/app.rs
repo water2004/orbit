@@ -3,13 +3,14 @@ use std::path::Path;
 use orbit_launcher_core::{
     AccountRepository, ConfigKey, ContextIntent, CreateInstanceRequest, EulaAcceptanceMethod,
     EulaDocument, ExternalYggdrasilLoginRequest, InstallProgressEvent, InstanceKind,
-    InstanceRegistry, LauncherError, ManifestFile, MicrosoftLoginProgressEvent, RuntimeContext,
-    ServerInstallPlan, YggdrasilProviderConfig, accept_shown_eula, add_yggdrasil_provider,
-    apply_install_plan, begin_microsoft_device_login, complete_microsoft_device_login,
-    create_instance, create_offline_account, get_config, import_instance, list_config,
-    login_external_yggdrasil, native_secret_store, prepare_install, remove_instance,
-    remove_yggdrasil_provider, rename_instance, resolve_instance, resolve_instance_root,
-    rollback_created_instance, set_config, set_default_instance, show_current_eula, unset_config,
+    InstanceRegistry, LaunchPreparationEvent, LaunchProcessEvent, LauncherError, ManifestFile,
+    MicrosoftLoginProgressEvent, RuntimeContext, ServerInstallPlan, YggdrasilProviderConfig,
+    accept_shown_eula, add_yggdrasil_provider, apply_install_plan, begin_microsoft_device_login,
+    complete_microsoft_device_login, create_instance, create_offline_account, get_config,
+    import_instance, list_config, login_external_yggdrasil, native_secret_store, prepare_install,
+    prepare_launch, remove_instance, remove_yggdrasil_provider, rename_instance, resolve_instance,
+    resolve_instance_root, resolve_launch_identity, rollback_created_instance, run_launch,
+    set_config, set_default_instance, show_current_eula, unset_config,
 };
 use zeroize::Zeroizing;
 
@@ -21,8 +22,8 @@ use crate::output::{
     AccountListView, AccountLoginView, AccountLogoutView, AccountSelectionView, AccountView,
     ConfigEntryView, ConfigListView, ConfigMutationAction, ConfigMutationView, ConfigPathView,
     DefaultView, EulaAcceptanceView, EulaDocumentView, InstallView, InstanceDetailView,
-    InstanceListView, InstanceMutationAction, InstanceMutationView, InstanceView,
-    MicrosoftDeviceSessionView, RenameView, YggdrasilProviderListView,
+    InstanceListView, InstanceMutationAction, InstanceMutationView, InstanceView, LaunchPlanView,
+    LaunchResultView, MicrosoftDeviceSessionView, RenameView, YggdrasilProviderListView,
     YggdrasilProviderMutationView, YggdrasilProviderView,
 };
 
@@ -35,6 +36,8 @@ pub enum CommandOutput {
     EulaDocument(EulaDocumentView),
     EulaAcceptance(EulaAcceptanceView),
     Install(InstallView),
+    LaunchPlan(LaunchPlanView),
+    LaunchResult(LaunchResultView),
     InstanceList(InstanceListView),
     InstanceDetail(InstanceDetailView),
     InstanceMutation(InstanceMutationView),
@@ -60,6 +63,20 @@ impl CommandOutput {
             Self::EulaDocument(_) => "server.eula.show",
             Self::EulaAcceptance(_) => "server.eula.accept",
             Self::Install(_) => "install",
+            Self::LaunchPlan(view) => {
+                if view.kind == "client" {
+                    "launch"
+                } else {
+                    "server.run"
+                }
+            }
+            Self::LaunchResult(view) => {
+                if view.kind == "client" {
+                    "launch"
+                } else {
+                    "server.run"
+                }
+            }
             Self::InstanceList(_) => "instance.list",
             Self::InstanceDetail(_) => "instance.show",
             Self::InstanceMutation(view) => view.action.command_name(),
@@ -82,6 +99,13 @@ impl CommandOutput {
             },
         }
     }
+
+    pub const fn process_succeeded(&self) -> bool {
+        match self {
+            Self::LaunchResult(view) => view.success,
+            _ => true,
+        }
+    }
 }
 
 pub trait Frontend: Send {
@@ -96,6 +120,10 @@ pub trait Frontend: Send {
     ) -> Result<Zeroizing<String>, LauncherError>;
 
     fn microsoft_login_progress(&mut self, event: MicrosoftLoginProgressEvent);
+
+    fn launch_preparation(&mut self, command: &'static str, event: LaunchPreparationEvent);
+
+    fn launch_process(&mut self, command: &'static str, event: LaunchProcessEvent);
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -147,6 +175,17 @@ pub async fn execute(
             )
             .await
         }
+        Commands::Launch { dry_run } => {
+            execute_launch(
+                instance_selector,
+                current_dir,
+                runtime,
+                frontend,
+                InstanceKind::Client,
+                dry_run,
+            )
+            .await
+        }
         Commands::Config { command } => {
             if instance_selector.is_some() {
                 return Err(AppError::Argument(
@@ -164,12 +203,61 @@ pub async fn execute(
             execute_instance(command, instance_selector, current_dir, runtime)
         }
         Commands::Server { command } => {
-            execute_server(command, instance_selector, current_dir, runtime).await
+            execute_server(command, instance_selector, current_dir, runtime, frontend).await
         }
         Commands::Account { command } => {
             execute_account(command, instance_selector, current_dir, runtime, frontend).await
         }
     }
+}
+
+async fn execute_launch(
+    selector: Option<&str>,
+    current_dir: &Path,
+    runtime: &RuntimeContext,
+    frontend: &mut dyn Frontend,
+    expected_kind: InstanceKind,
+    dry_run: bool,
+) -> Result<CommandOutput, AppError> {
+    let registry = InstanceRegistry::load(&runtime.paths().instances_file())?;
+    let resolved = resolve_instance(&registry, selector, current_dir, ContextIntent::Sensitive)?;
+    if resolved.manifest.kind != expected_kind {
+        return Err(AppError::Argument(format!(
+            "instance '{}' is a {}; this command requires a {} instance",
+            resolved.entry.name,
+            resolved.manifest.kind.as_str(),
+            expected_kind.as_str()
+        )));
+    }
+    let command_name = if expected_kind == InstanceKind::Client {
+        "launch"
+    } else {
+        "server.run"
+    };
+    let identity = if expected_kind == InstanceKind::Client {
+        let client = runtime.config().http_client()?;
+        let secrets = native_secret_store(runtime.paths())?;
+        Some(
+            resolve_launch_identity(
+                runtime.paths(),
+                runtime.config(),
+                &client,
+                secrets.as_ref(),
+                resolved.manifest.launch.account,
+            )
+            .await?,
+        )
+    } else {
+        None
+    };
+    let plan = prepare_launch(&resolved.entry.root, runtime.paths(), identity, |event| {
+        frontend.launch_preparation(command_name, event)
+    })?;
+    if dry_run {
+        return Ok(CommandOutput::LaunchPlan(plan.summary().into()));
+    }
+    let result = run_launch(plan, |event| frontend.launch_process(command_name, event)).await?;
+    Ok(CommandOutput::LaunchResult(result.into()))
 }
 
 async fn execute_account(
@@ -520,6 +608,7 @@ async fn execute_server(
     selector: Option<&str>,
     current_dir: &Path,
     runtime: &RuntimeContext,
+    frontend: &mut dyn Frontend,
 ) -> Result<CommandOutput, AppError> {
     let registry = InstanceRegistry::load(&runtime.paths().instances_file())?;
     let resolved = resolve_instance(&registry, selector, current_dir, ContextIntent::Sensitive)?;
@@ -530,6 +619,17 @@ async fn execute_server(
         )));
     }
     match command {
+        ServerCommands::Run { dry_run } => {
+            execute_launch(
+                selector,
+                current_dir,
+                runtime,
+                frontend,
+                InstanceKind::Server,
+                dry_run,
+            )
+            .await
+        }
         ServerCommands::Eula { command } => match command {
             EulaCommands::Show => {
                 let client = runtime.config().http_client()?;
@@ -766,6 +866,10 @@ mod tests {
         }
 
         fn microsoft_login_progress(&mut self, _event: MicrosoftLoginProgressEvent) {}
+
+        fn launch_preparation(&mut self, _command: &'static str, _event: LaunchPreparationEvent) {}
+
+        fn launch_process(&mut self, _command: &'static str, _event: LaunchProcessEvent) {}
     }
 
     fn runtime(directory: &Path) -> RuntimeContext {

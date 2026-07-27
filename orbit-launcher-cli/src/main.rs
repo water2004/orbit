@@ -8,8 +8,10 @@ use std::time::{Duration, Instant};
 
 use clap::Parser;
 use cli::{Cli, OutputFormat, ProgressFormat};
-use orbit_launcher_core::MicrosoftLoginProgressEvent;
-use orbit_launcher_core::{EulaDocument, InstallProgressEvent, LauncherError};
+use orbit_launcher_core::{
+    EulaDocument, InstallProgressEvent, LaunchOutputStream, LaunchPreparationEvent,
+    LaunchProcessEvent, LauncherError, MicrosoftLoginProgressEvent,
+};
 use output::{ErrorEnvelope, ProgressData, ProgressEnvelope, SuccessEnvelope};
 use zeroize::Zeroizing;
 
@@ -44,8 +46,13 @@ async fn main() -> ExitCode {
     .await
     {
         Ok(output) => {
+            let process_succeeded = output.process_succeeded();
             render_success(cli.format, output);
-            ExitCode::SUCCESS
+            if process_succeeded {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::from(1)
+            }
         }
         Err(error) => render_error(cli.format, command_name, error.code(), &error.to_string()),
     }
@@ -54,6 +61,7 @@ async fn main() -> ExitCode {
 fn command_name(command: &cli::Commands) -> &'static str {
     match command {
         cli::Commands::Install { .. } => "install",
+        cli::Commands::Launch { .. } => "launch",
         cli::Commands::Config { command } => match command {
             cli::ConfigCommands::Path => "config.path",
             cli::ConfigCommands::List => "config.list",
@@ -76,6 +84,7 @@ fn command_name(command: &cli::Commands) -> &'static str {
             cli::InstanceCommands::Default { .. } => "instance.default",
         },
         cli::Commands::Server { command } => match command {
+            cli::ServerCommands::Run { .. } => "server.run",
             cli::ServerCommands::Eula { command } => match command {
                 cli::EulaCommands::Show => "server.eula.show",
                 cli::EulaCommands::Accept { .. } => "server.eula.accept",
@@ -112,6 +121,8 @@ fn render_success(format: OutputFormat, output: app::CommandOutput) {
             app::CommandOutput::EulaDocument(value) => print_json(command, value),
             app::CommandOutput::EulaAcceptance(value) => print_json(command, value),
             app::CommandOutput::Install(value) => print_json(command, value),
+            app::CommandOutput::LaunchPlan(value) => print_json(command, value),
+            app::CommandOutput::LaunchResult(value) => print_json(command, value),
             app::CommandOutput::InstanceList(value) => print_json(command, value),
             app::CommandOutput::InstanceDetail(value) => print_json(command, value),
             app::CommandOutput::InstanceMutation(value) => print_json(command, value),
@@ -178,6 +189,33 @@ fn render_text(output: app::CommandOutput) {
             if let Some(digest) = view.eula_digest_sha256 {
                 println!("  EULA SHA-256: {digest}");
             }
+        }
+        app::CommandOutput::LaunchPlan(view) => {
+            println!(
+                "Verified {} launch plan for {}.",
+                view.kind, view.instance_id
+            );
+            println!("  working directory: {}", view.working_directory.display());
+            println!("  executable: {}", view.executable.display());
+            println!("  arguments (authentication redacted):");
+            for argument in view.arguments {
+                println!("    {argument}");
+            }
+        }
+        app::CommandOutput::LaunchResult(view) => {
+            let status = if view.success {
+                "exited normally"
+            } else {
+                "failed"
+            };
+            println!(
+                "{} process {} {status} (exit {}, {} ms).",
+                view.kind,
+                view.pid,
+                view.exit_code
+                    .map_or_else(|| "signal".to_string(), |code| code.to_string()),
+                view.elapsed_milliseconds
+            );
         }
         app::CommandOutput::InstanceList(view) => {
             if view.instances.is_empty() {
@@ -440,6 +478,25 @@ impl TerminalFrontend {
             | ProgressData::AccountSessionStored { .. } => {
                 unreachable!("authentication progress is rendered by its own command")
             }
+            ProgressData::LaunchArtifactVerified { completed, total }
+                if completed == total || completed % 25 == 0 =>
+            {
+                eprintln!("Verifying installed runtime: {completed}/{total} artifacts.")
+            }
+            ProgressData::LaunchArtifactVerified { .. } => {}
+            ProgressData::LaunchJavaVerified { runtime_id } => {
+                eprintln!("Verified managed Java runtime {runtime_id}.")
+            }
+            ProgressData::LaunchPlanReady => eprintln!("Launch plan is ready."),
+            ProgressData::ProcessSpawned { pid } => eprintln!("Started Java process {pid}."),
+            ProgressData::ProcessOutput { stream, line } => match (self.output_format, stream) {
+                (OutputFormat::Text, LaunchOutputStream::Stdout) => println!("{line}"),
+                _ => eprintln!("{line}"),
+            },
+            ProgressData::ProcessExited { exit_code, success } => eprintln!(
+                "Java process exited: {} (success: {success}).",
+                exit_code.map_or_else(|| "signal".to_string(), |code| code.to_string())
+            ),
         }
     }
 }
@@ -550,6 +607,32 @@ impl app::Frontend for TerminalFrontend {
                 self.sequence += 1;
                 let envelope =
                     ProgressEnvelope::new("account.login.microsoft.complete", self.sequence, data);
+                eprintln!(
+                    "{}",
+                    serde_json::to_string(&envelope)
+                        .expect("launcher progress views are serializable")
+                );
+            }
+        }
+    }
+
+    fn launch_preparation(&mut self, command: &'static str, event: LaunchPreparationEvent) {
+        self.render_launch_event(command, ProgressData::from_launch_preparation(event));
+    }
+
+    fn launch_process(&mut self, command: &'static str, event: LaunchProcessEvent) {
+        self.render_launch_event(command, ProgressData::from_launch_process(event));
+    }
+}
+
+impl TerminalFrontend {
+    fn render_launch_event(&mut self, command: &'static str, data: ProgressData) {
+        match self.progress_format {
+            ProgressFormat::None => {}
+            ProgressFormat::Text => self.render_text_progress(data),
+            ProgressFormat::Ndjson => {
+                self.sequence += 1;
+                let envelope = ProgressEnvelope::new(command, self.sequence, data);
                 eprintln!(
                     "{}",
                     serde_json::to_string(&envelope)

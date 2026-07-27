@@ -10,7 +10,7 @@ use crate::eula::EulaAcceptance;
 use crate::instance::{InstanceKind, LoaderKind};
 
 pub const INSTANCE_LOCK_FILE: &str = "orbit-launcher.lock";
-pub const LOCK_SCHEMA: u32 = 1;
+pub const LOCK_SCHEMA: u32 = 2;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -100,9 +100,17 @@ impl LauncherLock {
             InstanceKind::Server if self.eula.is_none() => Err(LauncherError::InvalidLock(
                 "server lock requires an EULA acceptance receipt".to_string(),
             )),
+            InstanceKind::Server if self.minecraft.asset_index.is_some() => {
+                Err(LauncherError::InvalidLock(
+                    "server lock cannot contain a client asset index".to_string(),
+                ))
+            }
             InstanceKind::Client if self.eula.is_some() => Err(LauncherError::InvalidLock(
                 "client lock cannot contain a server EULA receipt".to_string(),
             )),
+            InstanceKind::Client if self.minecraft.asset_index.is_none() => Err(
+                LauncherError::InvalidLock("client lock requires an asset index ID".to_string()),
+            ),
             _ => Ok(()),
         }
     }
@@ -113,6 +121,8 @@ impl LauncherLock {
 pub struct LockedMinecraft {
     pub version: String,
     pub version_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub asset_index: Option<String>,
     pub version_manifest_url: String,
     pub version_manifest_sha256: String,
     pub version_json_url: String,
@@ -123,6 +133,9 @@ impl LockedMinecraft {
     fn validate(&self) -> Result<(), LauncherError> {
         validate_text(&self.version, "Minecraft version")?;
         validate_text(&self.version_type, "Minecraft version type")?;
+        if let Some(asset_index) = &self.asset_index {
+            validate_text(asset_index, "Minecraft asset index")?;
+        }
         validate_https(&self.version_manifest_url, "Minecraft version manifest")?;
         validate_https(&self.version_json_url, "Minecraft version JSON")?;
         validate_digest(
@@ -247,7 +260,7 @@ pub struct LockedJavaRuntime {
 
 impl LockedJavaRuntime {
     fn validate(&self) -> Result<(), LauncherError> {
-        validate_text(&self.runtime_id, "Java runtime ID")?;
+        validate_identifier(&self.runtime_id, "Java runtime ID")?;
         validate_text(&self.provider, "Java provider")?;
         validate_text(&self.version, "Java version")?;
         validate_text(&self.platform, "Java platform")?;
@@ -456,6 +469,20 @@ fn validate_text(value: &str, subject: &str) -> Result<(), LauncherError> {
     Ok(())
 }
 
+fn validate_identifier(value: &str, subject: &str) -> Result<(), LauncherError> {
+    validate_text(value, subject)?;
+    if value.len() > 160
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+    {
+        return Err(LauncherError::InvalidLock(format!(
+            "{subject} '{value}' is not a portable identifier"
+        )));
+    }
+    Ok(())
+}
+
 fn validate_https(value: &str, subject: &str) -> Result<(), LauncherError> {
     let url = url::Url::parse(value)
         .map_err(|error| LauncherError::InvalidLock(format!("invalid {subject} URL: {error}")))?;
@@ -493,6 +520,7 @@ mod tests {
             minecraft: LockedMinecraft {
                 version: "1.21.1".to_string(),
                 version_type: "release".to_string(),
+                asset_index: None,
                 version_manifest_url:
                     "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json".to_string(),
                 version_manifest_sha256: "a".repeat(64),

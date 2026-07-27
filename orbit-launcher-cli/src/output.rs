@@ -2,7 +2,8 @@ use std::path::PathBuf;
 
 use orbit_launcher_core::{
     AccountMetadata, AccountProvider, ArtifactTransferEvent, ContextSource, InstallProgressEvent,
-    InstallerOutputStream, InstallerSide, InstanceManifest, JavaProgressEvent,
+    InstallerOutputStream, InstallerSide, InstanceManifest, JavaProgressEvent, LaunchOutputStream,
+    LaunchPlanSummary, LaunchPreparationEvent, LaunchProcessEvent, LaunchResult,
     LoaderInstallerEvent, MicrosoftDeviceSession, MicrosoftLoginProgressEvent, RegistryEntry,
 };
 use serde::Serialize;
@@ -253,6 +254,52 @@ pub struct InstallView {
     pub cached_artifacts: usize,
 }
 
+#[derive(Debug, Serialize)]
+pub struct LaunchPlanView {
+    pub instance_id: String,
+    pub kind: String,
+    pub executable: PathBuf,
+    pub working_directory: PathBuf,
+    pub arguments: Vec<String>,
+    pub redacted: bool,
+}
+
+impl From<LaunchPlanSummary> for LaunchPlanView {
+    fn from(plan: LaunchPlanSummary) -> Self {
+        Self {
+            instance_id: plan.instance_id.to_string(),
+            kind: plan.kind.as_str().to_string(),
+            executable: plan.executable,
+            working_directory: plan.working_directory,
+            arguments: plan.arguments,
+            redacted: true,
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct LaunchResultView {
+    pub instance_id: String,
+    pub kind: String,
+    pub pid: u32,
+    pub exit_code: Option<i32>,
+    pub success: bool,
+    pub elapsed_milliseconds: u128,
+}
+
+impl From<LaunchResult> for LaunchResultView {
+    fn from(result: LaunchResult) -> Self {
+        Self {
+            instance_id: result.instance_id.to_string(),
+            kind: result.kind.as_str().to_string(),
+            pid: result.pid,
+            exit_code: result.exit_code,
+            success: result.success,
+            elapsed_milliseconds: result.elapsed_milliseconds,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct AccountView {
     pub id: String,
@@ -438,6 +485,25 @@ pub enum ProgressData {
     AccountSessionStored {
         account_id: String,
     },
+    LaunchArtifactVerified {
+        completed: usize,
+        total: usize,
+    },
+    LaunchJavaVerified {
+        runtime_id: String,
+    },
+    LaunchPlanReady,
+    ProcessSpawned {
+        pid: u32,
+    },
+    ProcessOutput {
+        stream: LaunchOutputStream,
+        line: String,
+    },
+    ProcessExited {
+        exit_code: Option<i32>,
+        success: bool,
+    },
 }
 
 impl From<InstallProgressEvent> for ProgressData {
@@ -468,6 +534,28 @@ impl From<InstallProgressEvent> for ProgressData {
 }
 
 impl ProgressData {
+    pub fn from_launch_preparation(event: LaunchPreparationEvent) -> Self {
+        match event {
+            LaunchPreparationEvent::ArtifactVerified { completed, total } => {
+                Self::LaunchArtifactVerified { completed, total }
+            }
+            LaunchPreparationEvent::JavaVerified { runtime_id } => {
+                Self::LaunchJavaVerified { runtime_id }
+            }
+            LaunchPreparationEvent::PlanReady => Self::LaunchPlanReady,
+        }
+    }
+
+    pub fn from_launch_process(event: LaunchProcessEvent) -> Self {
+        match event {
+            LaunchProcessEvent::Spawned { pid } => Self::ProcessSpawned { pid },
+            LaunchProcessEvent::Output { stream, line } => Self::ProcessOutput { stream, line },
+            LaunchProcessEvent::Exited { exit_code, success } => {
+                Self::ProcessExited { exit_code, success }
+            }
+        }
+    }
+
     pub fn from_microsoft(event: MicrosoftLoginProgressEvent) -> Self {
         match event {
             MicrosoftLoginProgressEvent::Polling {

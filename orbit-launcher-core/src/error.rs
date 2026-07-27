@@ -35,6 +35,9 @@ pub enum LauncherError {
     #[error("account authentication failed: {0}")]
     Authentication(String),
 
+    #[error("launch preparation failed: {0}")]
+    Launch(String),
+
     #[error("failed to parse launcher config.toml: {0}")]
     ConfigParse(#[source] toml::de::Error),
 
@@ -113,6 +116,7 @@ impl LauncherError {
             Self::InteractionRequired(_) => "interaction_required",
             Self::SecretStore(_) => "secret_store",
             Self::Authentication(_) => "authentication",
+            Self::Launch(_) => "launch",
             Self::ConfigParse(_) => "config_parse",
             Self::ConfigDocumentParse(_) => "config_parse",
             Self::ManifestParse(_) => "manifest_parse",

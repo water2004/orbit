@@ -762,6 +762,7 @@ where
         minecraft: LockedMinecraft {
             version: resolved.minecraft_version.clone(),
             version_type: resolved.version_type,
+            asset_index: Some(resolved.asset_index_id),
             version_manifest_url: VERSION_MANIFEST_V2_URL.to_string(),
             version_manifest_sha256: resolved.version_manifest_sha256,
             version_json_url: resolved.version_json_url,
@@ -962,6 +963,7 @@ where
         minecraft: LockedMinecraft {
             version: plan.resolved.minecraft_version,
             version_type: plan.resolved.version_type,
+            asset_index: None,
             version_manifest_url: VERSION_MANIFEST_V2_URL.to_string(),
             version_manifest_sha256: plan.resolved.version_manifest_sha256,
             version_json_url: plan.resolved.version_json_url,
@@ -1852,6 +1854,7 @@ mod tests {
             minecraft: LockedMinecraft {
                 version: "1.21.1".to_string(),
                 version_type: "release".to_string(),
+                asset_index: None,
                 version_manifest_url: VERSION_MANIFEST_V2_URL.to_string(),
                 version_manifest_sha256: "a".repeat(64),
                 version_json_url: "https://piston-meta.mojang.com/version.json".to_string(),

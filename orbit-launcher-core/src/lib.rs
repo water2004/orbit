@@ -16,6 +16,7 @@ pub mod install;
 pub mod installer;
 pub mod instance;
 pub mod java;
+pub mod launch;
 pub mod loader;
 pub mod lockfile;
 mod maven;
@@ -66,7 +67,11 @@ pub use instance::{
 };
 pub use java::{
     JavaProgressEvent, JavaTarget, MOJANG_RUNTIME_MANIFEST_URL, ManagedJavaRuntime, MojangJavaPlan,
-    install_mojang_java, plan_mojang_java,
+    install_mojang_java, plan_mojang_java, verify_locked_java_runtime,
+};
+pub use launch::{
+    LaunchOutputStream, LaunchPlan, LaunchPlanSummary, LaunchPreparationEvent, LaunchProcessEvent,
+    LaunchResult, prepare_launch, run_launch,
 };
 pub use loader::{LoaderSide, ResolvedLoaderProfile, resolve_loader_profile};
 pub use lockfile::{

@@ -151,6 +151,49 @@ pub struct ManagedJavaRuntime {
     pub cached_artifacts: usize,
 }
 
+/// Verifies that a lock still refers to the exact managed runtime installed in
+/// the launcher data directory, then returns its executable path.
+pub fn verify_locked_java_runtime(
+    runtime_paths: &RuntimePaths,
+    locked: &LockedJavaRuntime,
+) -> Result<PathBuf, LauncherError> {
+    let root = runtime_paths
+        .data_dir()
+        .join("runtimes")
+        .join(&locked.runtime_id);
+    let inventory = JavaRuntimeInventory::load(&root.join(RUNTIME_INVENTORY_FILE))?;
+    if inventory.runtime_id != locked.runtime_id
+        || inventory.provider != locked.provider
+        || inventory.platform != locked.platform
+        || inventory.version != locked.version
+        || inventory.major != locked.major
+    {
+        return Err(LauncherError::ArtifactIntegrity(format!(
+            "managed Java runtime '{}' does not match orbit-launcher.lock",
+            locked.runtime_id
+        )));
+    }
+    inventory.verify_files(&root)?;
+    let executable = inventory
+        .files
+        .iter()
+        .find(|file| file.path == locked.executable && file.executable)
+        .ok_or_else(|| {
+            LauncherError::ArtifactIntegrity(format!(
+                "managed Java runtime '{}' does not inventory '{}' as an executable",
+                locked.runtime_id, locked.executable
+            ))
+        })?;
+    let path = root.join(path_from_portable(&executable.path));
+    if !path.is_file() {
+        return Err(LauncherError::ArtifactIntegrity(format!(
+            "managed Java runtime '{}' is missing its executable",
+            locked.runtime_id
+        )));
+    }
+    Ok(path)
+}
+
 pub async fn plan_mojang_java<F>(
     client: &reqwest::Client,
     requirement: &MojangJavaRequirement,
