@@ -41,7 +41,7 @@ Debian/Ubuntu amd64 可从同一个 GitHub Release 下载
 `orbit_<version>-1_amd64.deb`：
 
 ```bash
-sudo apt install ./orbit_0.1.1-1_amd64.deb
+sudo apt install ./orbit_0.1.2-1_amd64.deb
 ```
 
 tag 必须指向 `main` 且与 Cargo 版本一致，GitHub Actions 才会同时发布 MSI、deb、
