@@ -11,7 +11,7 @@ pub mod quilt;
 pub(crate) mod server;
 
 use crate::error::OrbitError;
-use crate::metadata::ModLoader;
+use crate::metadata::LoaderKind;
 
 // ---------------------------------------------------------------------------
 // 类型
@@ -20,7 +20,7 @@ use crate::metadata::ModLoader;
 /// 加载器检测信息
 #[derive(Debug, Clone)]
 pub struct LoaderInfo {
-    pub loader: ModLoader,
+    pub loader: LoaderKind,
     pub versions: Vec<String>,
     pub confidence: Confidence,
     pub evidence: Vec<String>,
@@ -47,7 +47,7 @@ pub trait LoaderDetector: Send + Sync {
     fn name(&self) -> &'static str;
 
     /// 对应的加载器类型
-    fn loader_type(&self) -> ModLoader;
+    fn loader_type(&self) -> LoaderKind;
 
     /// 检测目标目录，返回该加载器的证据和置信度
     fn detect(
@@ -94,20 +94,18 @@ impl LoaderDetectionService {
     }
 
     /// 返回已知加载器列表（供交互式选择使用）
-    pub fn known_loaders(&self) -> Vec<(ModLoader, &'static str)> {
+    pub fn known_loaders(&self) -> Vec<(LoaderKind, &'static str)> {
         self.detectors
             .iter()
             .map(|d| (d.loader_type(), d.name()))
             .collect()
     }
 
-    /// 按名称查找 detector（用于 `--modloader` 手动指定时验证）
-    pub fn find_by_name(&self, name: &str) -> Option<&dyn LoaderDetector> {
-        let name_lower = name.to_lowercase();
+    pub fn find_by_kind(&self, loader: LoaderKind) -> Option<&dyn LoaderDetector> {
         self.detectors
             .iter()
-            .find(|d| d.name().to_lowercase() == name_lower)
-            .map(|d| d.as_ref())
+            .find(|detector| detector.loader_type() == loader)
+            .map(|detector| detector.as_ref())
     }
 }
 

@@ -179,7 +179,7 @@ pub fn audit_instance_with_progress(
             environment: AuditEnvironment {
                 minecraft_version: platform.minecraft_version.id,
                 declared_loader: manifest.project.modloader,
-                detected_loader: platform.loader,
+                detected_loader: platform.loader.to_string(),
                 loader_version: platform.loader_version,
                 physical_side: match platform.physical_environment {
                     crate::metadata::Environment::Client => PhysicalSide::Client,
@@ -344,7 +344,7 @@ mod tests {
                 stable: true,
             },
             minecraft_jar: directory.join("minecraft.jar"),
-            loader: loader.to_string(),
+            loader: loader.parse().unwrap(),
             loader_version: "test".to_string(),
             loader_jar: directory.join("loader.jar"),
             runtime_jars: Vec::new(),

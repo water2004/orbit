@@ -12,6 +12,7 @@ pub mod quilt;
 pub mod version_profile;
 
 use crate::error::OrbitError;
+pub use crate::loader::LoaderKind;
 pub use model::{
     DependencyExpression, DependencyKind, DependencyOrdering, EmbeddedArtifact, Environment,
     LanguageLoaderRequirement, ModDependency, ModFileMetadata, ModLoadCondition, ModMetadata,
@@ -21,27 +22,6 @@ pub use model::{
 // ---------------------------------------------------------------------------
 // 统一类型
 // ---------------------------------------------------------------------------
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ModLoader {
-    Fabric,
-    Forge,
-    NeoForge,
-    Quilt,
-    Unknown,
-}
-
-impl ModLoader {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            ModLoader::Fabric => "fabric",
-            ModLoader::Forge => "forge",
-            ModLoader::NeoForge => "neoforge",
-            ModLoader::Quilt => "quilt",
-            ModLoader::Unknown => "",
-        }
-    }
-}
 
 // ---------------------------------------------------------------------------
 // Parser trait
@@ -53,7 +33,7 @@ pub trait MetadataParser: Send + Sync {
     fn target_file(&self) -> &str;
 
     /// 此 parser 对应的加载器类型
-    fn loader_type(&self) -> ModLoader;
+    fn loader_type(&self) -> LoaderKind;
 
     /// 解析文件内容为统一的文件级元数据。
     fn parse(&self, content: &str) -> Result<ModFileMetadata, OrbitError>;

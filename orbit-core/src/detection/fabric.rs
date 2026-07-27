@@ -2,7 +2,7 @@
 
 use super::{LoaderDetector, LoaderInfo};
 use crate::error::OrbitError;
-use crate::metadata::ModLoader;
+use crate::metadata::LoaderKind;
 
 pub struct FabricDetector;
 
@@ -11,8 +11,8 @@ impl LoaderDetector for FabricDetector {
         "Fabric"
     }
 
-    fn loader_type(&self) -> ModLoader {
-        ModLoader::Fabric
+    fn loader_type(&self) -> LoaderKind {
+        LoaderKind::Fabric
     }
 
     fn detect(
@@ -23,7 +23,7 @@ impl LoaderDetector for FabricDetector {
         super::profile::detect_profile_loader(
             instance_dir,
             mc_version,
-            ModLoader::Fabric,
+            LoaderKind::Fabric,
             &super::profile::ProfileSignature {
                 group: "net.fabricmc",
                 artifacts: &["fabric-loader"],

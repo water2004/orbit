@@ -8,15 +8,15 @@ use zip::ZipArchive;
 
 use super::JarModMetadata;
 use crate::error::OrbitError;
-use crate::metadata::{EmbeddedArtifact, ModLoader};
+use crate::metadata::{EmbeddedArtifact, LoaderKind};
 
 pub fn try_read<R: Read + Seek>(
     archive: &mut ZipArchive<R>,
-    loader: ModLoader,
+    loader: LoaderKind,
 ) -> Result<Option<JarModMetadata>, OrbitError> {
     let targets: &[&str] = match loader {
-        ModLoader::Forge => &["META-INF/mods.toml"],
-        ModLoader::NeoForge => &["META-INF/neoforge.mods.toml", "META-INF/mods.toml"],
+        LoaderKind::Forge => &["META-INF/mods.toml"],
+        LoaderKind::NeoForge => &["META-INF/neoforge.mods.toml", "META-INF/mods.toml"],
         _ => {
             return Err(OrbitError::Other(anyhow::anyhow!(
                 "Forge archive adapter received incompatible loader '{}'",

@@ -9,6 +9,7 @@ use std::path::{Component, Path, PathBuf};
 
 use crate::detection::{Confidence, LoaderDetectionService};
 use crate::error::OrbitError;
+use crate::loader::LoaderKind;
 use crate::manifest::{PlatformArtifact, PlatformSnapshot};
 use crate::metadata::mojang::McVersion;
 use crate::metadata::version_profile::{MavenCoord, VersionProfile};
@@ -18,7 +19,7 @@ use crate::resolver::types::PlatformCandidate;
 pub(crate) struct DiscoveredPlatform {
     pub minecraft_version: McVersion,
     pub minecraft_jar: PathBuf,
-    pub loader: String,
+    pub loader: LoaderKind,
     pub loader_version: String,
     pub loader_jar: PathBuf,
     pub loader_package: Option<PlatformCandidate>,
@@ -62,11 +63,11 @@ pub(crate) fn apply_to_manifest(
     artifacts: PlatformSnapshot,
 ) -> bool {
     let changed = manifest.project.mc_version != discovered.minecraft_version.id
-        || manifest.project.modloader != discovered.loader
+        || manifest.project.modloader != discovered.loader.as_str()
         || manifest.project.modloader_version != discovered.loader_version
         || manifest.platform != artifacts;
     manifest.project.mc_version = discovered.minecraft_version.id.clone();
-    manifest.project.modloader = discovered.loader.clone();
+    manifest.project.modloader = discovered.loader.to_string();
     manifest.project.modloader_version = discovered.loader_version.clone();
     manifest.platform = artifacts;
     changed
@@ -103,6 +104,7 @@ pub(crate) fn discover_platform_for_init(
     loader: &str,
     loader_version: &str,
 ) -> Result<DiscoveredPlatform, OrbitError> {
+    let loader = parse_loader(loader)?;
     discover_platform(
         instance_dir,
         Some(mc_version),
@@ -115,7 +117,7 @@ pub(crate) fn discover_platform_for_init(
 /// launcher-specific detector API into the rest of Orbit.
 #[derive(Debug, Clone)]
 pub struct InitLoaderCandidate {
-    pub loader: String,
+    pub loader: LoaderKind,
     pub name: String,
     pub versions: Vec<String>,
     pub evidence: Vec<String>,
@@ -127,6 +129,7 @@ pub fn detect_loader_candidates(
     minecraft_version: &str,
     requested_loader: Option<&str>,
 ) -> Result<Vec<InitLoaderCandidate>, OrbitError> {
+    let requested_loader = requested_loader.map(parse_loader).transpose()?;
     if let Some(server) = crate::detection::server::discover_server_runtime(instance_dir)? {
         if server.minecraft.id != minecraft_version {
             return Err(OrbitError::Other(anyhow::anyhow!(
@@ -145,7 +148,7 @@ pub fn detect_loader_candidates(
         let name = LoaderDetectionService::new()
             .known_loaders()
             .into_iter()
-            .find_map(|(loader, name)| (loader.as_str() == server.loader).then_some(name))
+            .find_map(|(loader, name)| (loader == server.loader).then_some(name))
             .ok_or_else(|| {
                 OrbitError::Other(anyhow::anyhow!(
                     "dedicated-server detector returned unregistered loader '{}'",
@@ -162,7 +165,7 @@ pub fn detect_loader_candidates(
     }
     let service = LoaderDetectionService::new();
     let detected = if let Some(loader) = requested_loader {
-        let detector = service.find_by_name(loader).ok_or_else(|| {
+        let detector = service.find_by_kind(loader).ok_or_else(|| {
             OrbitError::Other(anyhow::anyhow!(
                 "unknown modloader '{loader}'. Supported: {}",
                 service
@@ -180,12 +183,12 @@ pub fn detect_loader_candidates(
     let names = service
         .known_loaders()
         .into_iter()
-        .map(|(loader, name)| (loader.as_str().to_string(), name.to_string()))
+        .map(|(loader, name)| (loader, name.to_string()))
         .collect::<std::collections::HashMap<_, _>>();
     detected
         .into_iter()
         .map(|candidate| {
-            let loader = candidate.loader.as_str().to_string();
+            let loader = candidate.loader;
             let name = names.get(&loader).cloned().ok_or_else(|| {
                 OrbitError::Other(anyhow::anyhow!(
                     "loader detector returned unregistered loader '{loader}'"
@@ -208,6 +211,19 @@ pub fn known_loader_choices() -> Vec<(String, String)> {
         .into_iter()
         .map(|(loader, name)| (loader.as_str().to_string(), name.to_string()))
         .collect()
+}
+
+fn parse_loader(value: &str) -> Result<LoaderKind, OrbitError> {
+    value.parse().map_err(|message: String| {
+        OrbitError::Other(anyhow::anyhow!(
+            "{message}. Supported: {}",
+            LoaderKind::ALL
+                .into_iter()
+                .map(LoaderKind::as_str)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ))
+    })
 }
 
 /// Detects the single unambiguous Minecraft version for `orbit init`.
@@ -318,7 +334,7 @@ fn discover_runtime_classpath(
         };
         if !profile_matches_runtime(
             &profile,
-            &discovered.loader,
+            discovered.loader,
             &discovered.minecraft_version.id,
         ) {
             continue;
@@ -479,7 +495,7 @@ fn coordinates_from_json(value: &serde_json::Value) -> Vec<MavenCoord> {
 fn discover_platform(
     instance_dir: &Path,
     requested_mc_version: Option<&str>,
-    requested_loader: Option<&str>,
+    requested_loader: Option<LoaderKind>,
     requested_loader_version: Option<&str>,
 ) -> Result<DiscoveredPlatform, OrbitError> {
     if let Some(server) = crate::detection::server::discover_server_runtime(instance_dir)? {
@@ -500,7 +516,7 @@ fn discover_platform(
         requested_loader,
         requested_loader_version,
     )?;
-    let physical_environment = physical_environment(&layout, &loader, &minecraft_version.id);
+    let physical_environment = physical_environment(&layout, loader, &minecraft_version.id);
 
     build_discovered_platform(
         minecraft_version,
@@ -517,7 +533,7 @@ fn discover_server_platform(
     instance_dir: &Path,
     server: crate::detection::server::ServerRuntimeSpec,
     requested_mc_version: Option<&str>,
-    requested_loader: Option<&str>,
+    requested_loader: Option<LoaderKind>,
     requested_loader_version: Option<&str>,
 ) -> Result<DiscoveredPlatform, OrbitError> {
     if requested_mc_version.is_some_and(|requested| requested != server.minecraft.id) {
@@ -535,8 +551,8 @@ fn discover_server_platform(
         )));
     }
     if requested_loader_version.is_some_and(|requested| {
-        crate::versions::Version::parse(requested, &server.loader)
-            != crate::versions::Version::parse(&server.loader_version, &server.loader)
+        crate::versions::Version::parse(requested, server.loader.as_str())
+            != crate::versions::Version::parse(&server.loader_version, server.loader.as_str())
     }) {
         return Err(OrbitError::Other(anyhow::anyhow!(
             "dedicated-server metadata selects {} loader version '{}', not requested '{}'",
@@ -546,7 +562,7 @@ fn discover_server_platform(
         )));
     }
     let minecraft_jar = server.minecraft_jar.clone();
-    let loader = server.loader.clone();
+    let loader = server.loader;
     let loader_version = server.loader_version.clone();
     let loader_jar = server.loader_jar.clone();
     let minecraft = server.minecraft;
@@ -586,50 +602,51 @@ fn discover_server_platform(
 fn build_discovered_platform(
     minecraft_version: McVersion,
     minecraft_jar: PathBuf,
-    loader: String,
+    loader: LoaderKind,
     loader_version: String,
     loader_jar: PathBuf,
     physical_environment: crate::metadata::Environment,
     runtime_jars: Option<Vec<PathBuf>>,
 ) -> Result<DiscoveredPlatform, OrbitError> {
-    let loader_package = match crate::jar::read_mod_metadata_if_present(&loader_jar, &loader) {
-        Ok(Some(metadata)) => {
-            let expected_mod_id = loader_mod_id(&loader);
-            if metadata.mod_id != expected_mod_id {
-                return Err(OrbitError::Other(anyhow::anyhow!(
-                    "{loader} loader JAR '{}' declares mod_id '{}', expected '{}'",
-                    loader_jar.display(),
-                    metadata.mod_id,
-                    expected_mod_id
-                )));
-            }
-            if crate::versions::Version::parse(&metadata.version, &loader)
-                != crate::versions::Version::parse(&loader_version, &loader)
-            {
-                return Err(OrbitError::Other(anyhow::anyhow!(
-                    "{loader} loader JAR '{}' declares version '{}', but launcher metadata \
+    let loader_package =
+        match crate::jar::read_mod_metadata_if_present(&loader_jar, loader.as_str()) {
+            Ok(Some(metadata)) => {
+                let expected_mod_id = loader_mod_id(loader);
+                if metadata.mod_id != expected_mod_id {
+                    return Err(OrbitError::Other(anyhow::anyhow!(
+                        "{loader} loader JAR '{}' declares mod_id '{}', expected '{}'",
+                        loader_jar.display(),
+                        metadata.mod_id,
+                        expected_mod_id
+                    )));
+                }
+                if crate::versions::Version::parse(&metadata.version, loader.as_str())
+                    != crate::versions::Version::parse(&loader_version, loader.as_str())
+                {
+                    return Err(OrbitError::Other(anyhow::anyhow!(
+                        "{loader} loader JAR '{}' declares version '{}', but launcher metadata \
                      selected '{}'",
-                    loader_jar.display(),
-                    metadata.version,
-                    loader_version
+                        loader_jar.display(),
+                        metadata.version,
+                        loader_version
+                    )));
+                }
+                Some(PlatformCandidate::from_jar_metadata(metadata))
+            }
+            Ok(None) if matches!(loader, LoaderKind::Fabric | LoaderKind::Quilt) => {
+                return Err(OrbitError::Other(anyhow::anyhow!(
+                    "no {loader} loader metadata found in '{}'",
+                    loader_jar.display()
                 )));
             }
-            Some(PlatformCandidate::from_jar_metadata(metadata))
-        }
-        Ok(None) if matches!(loader.as_str(), "fabric" | "quilt") => {
-            return Err(OrbitError::Other(anyhow::anyhow!(
-                "no {loader} loader metadata found in '{}'",
-                loader_jar.display()
-            )));
-        }
-        Ok(None) => None,
-        Err(error) => {
-            return Err(OrbitError::Other(anyhow::anyhow!(
-                "cannot parse {loader} loader JAR '{}': {error}",
-                loader_jar.display()
-            )));
-        }
-    };
+            Ok(None) => None,
+            Err(error) => {
+                return Err(OrbitError::Other(anyhow::anyhow!(
+                    "cannot parse {loader} loader JAR '{}': {error}",
+                    loader_jar.display()
+                )));
+            }
+        };
     let actual_loader_version = loader_package
         .as_ref()
         .map(|package| package.version.clone())
@@ -648,7 +665,7 @@ fn build_discovered_platform(
 
 fn physical_environment(
     layout: &crate::launcher::LauncherLayout,
-    loader: &str,
+    loader: LoaderKind,
     minecraft_version: &str,
 ) -> crate::metadata::Environment {
     use crate::launcher::LauncherLayoutKind;
@@ -690,17 +707,15 @@ fn physical_environment(
 
 fn profile_matches_runtime(
     profile: &VersionProfile,
-    loader: &str,
+    loader: LoaderKind,
     minecraft_version: &str,
 ) -> bool {
     profile.id == minecraft_version
         || profile.inherits_from.as_deref() == Some(minecraft_version)
         || profile.libraries.iter().any(|library| {
             MavenCoord::parse(&library.name).is_some_and(|coordinate| {
-                loader_signature(loader).is_some_and(|(group, artifacts)| {
-                    coordinate.group_id == group
-                        && artifacts.contains(&coordinate.artifact_id.as_str())
-                })
+                let (group, artifacts) = loader_signature(loader);
+                coordinate.group_id == group && artifacts.contains(&coordinate.artifact_id.as_str())
             })
         })
 }
@@ -804,12 +819,12 @@ fn discover_loader(
     instance_dir: &Path,
     layout: &crate::launcher::LauncherLayout,
     mc_version: &str,
-    requested_loader: Option<&str>,
+    requested_loader: Option<LoaderKind>,
     requested_version: Option<&str>,
-) -> Result<(String, String, PathBuf), OrbitError> {
+) -> Result<(LoaderKind, String, PathBuf), OrbitError> {
     let service = LoaderDetectionService::new();
     let detected = if let Some(loader) = requested_loader {
-        let detector = service.find_by_name(loader).ok_or_else(|| {
+        let detector = service.find_by_kind(loader).ok_or_else(|| {
             OrbitError::Other(anyhow::anyhow!("unsupported modloader '{loader}'"))
         })?;
         vec![detector.detect(instance_dir, Some(mc_version))?]
@@ -836,13 +851,13 @@ fn discover_loader(
         )));
     }
     let info = &detected[0];
-    let loader = info.loader.as_str().to_string();
+    let loader = info.loader;
     let mut versions = info.versions.clone();
     versions.sort();
     versions.dedup();
     let selected_version = if let Some(requested) = requested_version {
         if !versions.iter().any(|version| {
-            normalized_loader_version(&loader, version) == requested || version == requested
+            normalized_loader_version(loader, version) == requested || version == requested
         }) {
             return Err(OrbitError::Other(anyhow::anyhow!(
                 "launcher metadata does not contain {loader} loader version '{requested}'"
@@ -851,7 +866,7 @@ fn discover_loader(
         requested.to_string()
     } else {
         match versions.as_slice() {
-            [version] => normalized_loader_version(&loader, version),
+            [version] => normalized_loader_version(loader, version),
             [] => {
                 return Err(OrbitError::Other(anyhow::anyhow!(
                     "launcher metadata identifies {loader}, but not its version"
@@ -866,7 +881,7 @@ fn discover_loader(
         }
     };
 
-    let jar = find_loader_jar(layout, &loader, &selected_version)?.ok_or_else(|| {
+    let jar = find_loader_jar(layout, loader, &selected_version)?.ok_or_else(|| {
         OrbitError::Other(anyhow::anyhow!(
             "could not find the {loader} loader JAR for version '{selected_version}' \
              in the launcher's libraries"
@@ -877,11 +892,10 @@ fn discover_loader(
 
 fn find_loader_jar(
     layout: &crate::launcher::LauncherLayout,
-    loader: &str,
+    loader: LoaderKind,
     version: &str,
 ) -> Result<Option<PathBuf>, OrbitError> {
-    let (group, artifacts) = loader_signature(loader)
-        .ok_or_else(|| OrbitError::Other(anyhow::anyhow!("unsupported modloader '{loader}'")))?;
+    let (group, artifacts) = loader_signature(loader);
     let mut coordinates = Vec::new();
     for profile_path in &layout.profile_paths {
         let Ok(profile) = VersionProfile::from_path(profile_path) else {
@@ -936,10 +950,10 @@ fn find_loader_jar(
     let metadata_matches = jars
         .iter()
         .filter(|path| {
-            crate::jar::read_mod_metadata(path, loader).is_ok_and(|metadata| {
+            crate::jar::read_mod_metadata(path, loader.as_str()).is_ok_and(|metadata| {
                 metadata.mod_id == expected_mod_id
-                    && crate::versions::Version::parse(&metadata.version, loader)
-                        == crate::versions::Version::parse(version, loader)
+                    && crate::versions::Version::parse(&metadata.version, loader.as_str())
+                        == crate::versions::Version::parse(version, loader.as_str())
             })
         })
         .cloned()
@@ -966,7 +980,7 @@ fn find_loader_jar(
 }
 
 fn one_candidate(
-    loader: &str,
+    loader: LoaderKind,
     version: &str,
     kind: &str,
     candidates: &[PathBuf],
@@ -985,32 +999,25 @@ fn one_candidate(
     }
 }
 
-fn loader_signature(loader: &str) -> Option<(&'static str, &'static [&'static str])> {
+fn loader_signature(loader: LoaderKind) -> (&'static str, &'static [&'static str]) {
     match loader {
-        "fabric" => Some(("net.fabricmc", &["fabric-loader"])),
-        "quilt" => Some(("org.quiltmc", &["quilt-loader"])),
-        "forge" => Some(("net.minecraftforge", &["forge"])),
-        "neoforge" => Some(("net.neoforged", &["neoforge", "forge"])),
-        _ => None,
+        LoaderKind::Fabric => ("net.fabricmc", &["fabric-loader"]),
+        LoaderKind::Quilt => ("org.quiltmc", &["quilt-loader"]),
+        LoaderKind::Forge => ("net.minecraftforge", &["forge"]),
+        LoaderKind::NeoForge => ("net.neoforged", &["neoforge", "forge"]),
     }
 }
 
-fn loader_mod_id(loader: &str) -> &'static str {
-    match loader {
-        "fabric" => "fabricloader",
-        "quilt" => "quilt_loader",
-        "forge" => "forge",
-        "neoforge" => "neoforge",
-        _ => "",
-    }
+fn loader_mod_id(loader: LoaderKind) -> &'static str {
+    loader.semantics().canonical_package
 }
 
-fn coordinate_version_matches(loader: &str, actual: &str, expected: &str) -> bool {
+fn coordinate_version_matches(loader: LoaderKind, actual: &str, expected: &str) -> bool {
     actual == expected || normalized_loader_version(loader, actual) == expected
 }
 
-fn normalized_loader_version(loader: &str, version: &str) -> String {
-    if matches!(loader, "forge" | "neoforge") {
+fn normalized_loader_version(loader: LoaderKind, version: &str) -> String {
+    if matches!(loader, LoaderKind::Forge | LoaderKind::NeoForge) {
         version
             .split_once('-')
             .filter(|(minecraft, loader_version)| {
@@ -1274,7 +1281,7 @@ mod tests {
         };
 
         assert_eq!(
-            physical_environment(&layout, "forge", "1.21.1"),
+            physical_environment(&layout, LoaderKind::Forge, "1.21.1"),
             crate::metadata::Environment::Server
         );
     }
@@ -1297,7 +1304,7 @@ mod tests {
         };
 
         assert_eq!(
-            physical_environment(&layout, "forge", "1.21.1"),
+            physical_environment(&layout, LoaderKind::Forge, "1.21.1"),
             crate::metadata::Environment::Both
         );
     }

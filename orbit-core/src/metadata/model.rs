@@ -189,7 +189,7 @@ pub struct LanguageLoaderRequirement {
 /// Complete normalized contents of one loader metadata file.
 #[derive(Debug, Clone)]
 pub struct ModFileMetadata {
-    pub loader: super::ModLoader,
+    pub loader: super::LoaderKind,
     pub license: Option<String>,
     pub language_loader: Option<LanguageLoaderRequirement>,
     pub mods: Vec<ModMetadata>,

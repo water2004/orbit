@@ -272,8 +272,8 @@ fn read_mod_metadata_from_archive<R: std::io::Read + std::io::Seek>(
     let meta_opt = match normalized_loader.as_str() {
         "fabric" => fabric::try_read(archive)?,
         "quilt" => quilt::try_read(archive)?,
-        "forge" => forge::try_read(archive, crate::metadata::ModLoader::Forge)?,
-        "neoforge" => forge::try_read(archive, crate::metadata::ModLoader::NeoForge)?,
+        "forge" => forge::try_read(archive, crate::metadata::LoaderKind::Forge)?,
+        "neoforge" => forge::try_read(archive, crate::metadata::LoaderKind::NeoForge)?,
         _ => {
             return Err(OrbitError::Other(anyhow::anyhow!(
                 "unsupported mod loader: {loader}"

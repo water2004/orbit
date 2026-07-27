@@ -2,7 +2,7 @@ use std::path::Path;
 
 use super::{Confidence, LoaderInfo};
 use crate::error::OrbitError;
-use crate::metadata::ModLoader;
+use crate::metadata::LoaderKind;
 use crate::metadata::version_profile::VersionProfile;
 
 pub(super) struct ProfileSignature {
@@ -15,7 +15,7 @@ pub(super) struct ProfileSignature {
 pub(super) fn detect_profile_loader(
     instance_dir: &Path,
     mc_version: Option<&str>,
-    loader: ModLoader,
+    loader: LoaderKind,
     signature: &ProfileSignature,
 ) -> Result<LoaderInfo, OrbitError> {
     let layout = crate::launcher::LauncherLayout::discover(instance_dir)?;
@@ -153,7 +153,7 @@ mod tests {
         let result = detect_profile_loader(
             &root,
             Some("1.21.11"),
-            ModLoader::Quilt,
+            LoaderKind::Quilt,
             &ProfileSignature {
                 group: "org.quiltmc",
                 artifacts: &["quilt-loader"],
@@ -180,7 +180,7 @@ mod tests {
         let result = detect_profile_loader(
             &root,
             None,
-            ModLoader::Forge,
+            LoaderKind::Forge,
             &ProfileSignature {
                 group: "net.minecraftforge",
                 artifacts: &["forge"],

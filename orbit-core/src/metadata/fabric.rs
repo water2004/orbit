@@ -3,8 +3,8 @@
 use serde_json::Value;
 
 use super::{
-    DependencyExpression, DependencyKind, DependencyOrdering, Environment, MetadataParser,
-    ModDependency, ModFileMetadata, ModLoadCondition, ModLoader, ModMetadata, ProvidedMod,
+    DependencyExpression, DependencyKind, DependencyOrdering, Environment, LoaderKind,
+    MetadataParser, ModDependency, ModFileMetadata, ModLoadCondition, ModMetadata, ProvidedMod,
 };
 use crate::error::OrbitError;
 
@@ -15,8 +15,8 @@ impl MetadataParser for FabricParser {
         "fabric.mod.json"
     }
 
-    fn loader_type(&self) -> ModLoader {
-        ModLoader::Fabric
+    fn loader_type(&self) -> LoaderKind {
+        LoaderKind::Fabric
     }
 
     fn parse(&self, content: &str) -> Result<ModFileMetadata, OrbitError> {
@@ -62,7 +62,7 @@ impl MetadataParser for FabricParser {
         let embedded_jars = parse_jars(object.get("jars"))?;
 
         Ok(ModFileMetadata {
-            loader: ModLoader::Fabric,
+            loader: LoaderKind::Fabric,
             license: object.get("license").and_then(first_string),
             language_loader: None,
             mods: vec![ModMetadata {

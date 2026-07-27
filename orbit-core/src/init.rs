@@ -159,7 +159,7 @@ pub async fn run_init(
     let platform_snapshot = platform.snapshot(&input.instance_dir)?;
 
     // 1. 扫描 mods/
-    let scanned = scan_mods_dir(&input.instance_dir, &platform.loader)?;
+    let scanned = scan_mods_dir(&input.instance_dir, platform.loader.as_str())?;
 
     // 2. Identify top-level package JARs. Modules contained in one package are
     // already represented by the JAR layer as bundled metadata.
@@ -190,7 +190,7 @@ pub async fn run_init(
     }
 
     let mc_ver = platform.minecraft_version.id.clone();
-    let loader_name = platform.loader.clone();
+    let loader_name = platform.loader;
     let loader_ver = platform.loader_version.clone();
     let mut dependencies = indexmap::IndexMap::new();
     for m in &identified {
@@ -217,7 +217,7 @@ pub async fn run_init(
         project: ProjectMeta {
             name: input.name,
             mc_version: mc_ver.clone(),
-            modloader: loader_name.clone(),
+            modloader: loader_name.to_string(),
             modloader_version: loader_ver.clone(),
             description: None,
             authors: None,
@@ -272,7 +272,7 @@ pub async fn run_init(
     let lockfile = crate::lockfile::OrbitLockfile {
         meta: crate::lockfile::LockMeta {
             mc_version: mc_ver,
-            modloader: loader_name,
+            modloader: loader_name.to_string(),
             modloader_version: loader_ver,
         },
         packages: selected_lock_entries,

@@ -3,8 +3,8 @@
 use serde_json::Value;
 
 use super::{
-    DependencyExpression, DependencyKind, DependencyOrdering, Environment, MetadataParser,
-    ModDependency, ModFileMetadata, ModLoadCondition, ModLoader, ModMetadata, ProvidedMod,
+    DependencyExpression, DependencyKind, DependencyOrdering, Environment, LoaderKind,
+    MetadataParser, ModDependency, ModFileMetadata, ModLoadCondition, ModMetadata, ProvidedMod,
 };
 use crate::error::OrbitError;
 
@@ -41,7 +41,7 @@ pub(crate) fn parse_quilt(content: &str) -> Result<ModFileMetadata, OrbitError> 
     }
 
     Ok(ModFileMetadata {
-        loader: ModLoader::Quilt,
+        loader: LoaderKind::Quilt,
         license: metadata
             .and_then(|metadata| metadata.get("license"))
             .and_then(first_string),
@@ -300,8 +300,8 @@ impl MetadataParser for QuiltParser {
         "quilt.mod.json"
     }
 
-    fn loader_type(&self) -> ModLoader {
-        ModLoader::Quilt
+    fn loader_type(&self) -> LoaderKind {
+        LoaderKind::Quilt
     }
 
     fn parse(&self, content: &str) -> Result<ModFileMetadata, OrbitError> {

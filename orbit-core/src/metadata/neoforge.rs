@@ -1,6 +1,6 @@
 //! NeoForge metadata parser.
 
-use super::{MetadataParser, ModFileMetadata, ModLoader};
+use super::{LoaderKind, MetadataParser, ModFileMetadata};
 use crate::error::OrbitError;
 
 pub struct NeoForgeParser;
@@ -10,12 +10,12 @@ impl MetadataParser for NeoForgeParser {
         "META-INF/neoforge.mods.toml"
     }
 
-    fn loader_type(&self) -> ModLoader {
-        ModLoader::NeoForge
+    fn loader_type(&self) -> LoaderKind {
+        LoaderKind::NeoForge
     }
 
     fn parse(&self, content: &str) -> Result<ModFileMetadata, OrbitError> {
-        super::forge::parse_for_loader(content, ModLoader::NeoForge, self.target_file())
+        super::forge::parse_for_loader(content, LoaderKind::NeoForge, self.target_file())
     }
 }
 
@@ -42,12 +42,12 @@ type = "optional"
 "#;
         let parsed = super::super::forge::parse_for_loader(
             metadata,
-            ModLoader::NeoForge,
+            LoaderKind::NeoForge,
             "META-INF/neoforge.mods.toml",
         )
         .unwrap();
 
-        assert_eq!(parsed.loader, ModLoader::NeoForge);
+        assert_eq!(parsed.loader, LoaderKind::NeoForge);
         assert!(matches!(
             parsed.mods[0].dependencies[0],
             DependencyExpression::Only(ModDependency {

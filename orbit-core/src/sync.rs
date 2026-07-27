@@ -230,7 +230,7 @@ fn describe_platform_changes(
         &mut changes,
         "modloader",
         &manifest.project.modloader,
-        &discovered.loader,
+        discovered.loader.as_str(),
     );
     push_platform_change(
         &mut changes,

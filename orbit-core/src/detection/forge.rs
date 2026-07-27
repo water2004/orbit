@@ -1,6 +1,6 @@
 use super::{LoaderDetector, LoaderInfo};
 use crate::error::OrbitError;
-use crate::metadata::ModLoader;
+use crate::metadata::LoaderKind;
 
 pub struct ForgeDetector;
 
@@ -9,8 +9,8 @@ impl LoaderDetector for ForgeDetector {
         "Forge"
     }
 
-    fn loader_type(&self) -> ModLoader {
-        ModLoader::Forge
+    fn loader_type(&self) -> LoaderKind {
+        LoaderKind::Forge
     }
 
     fn detect(
@@ -21,7 +21,7 @@ impl LoaderDetector for ForgeDetector {
         let mut info = super::profile::detect_profile_loader(
             instance_dir,
             mc_version,
-            ModLoader::Forge,
+            LoaderKind::Forge,
             &super::profile::ProfileSignature {
                 group: "net.minecraftforge",
                 artifacts: &["forge"],

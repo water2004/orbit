@@ -63,7 +63,7 @@ pub async fn handle(
             .into_iter()
             .next()
             .ok_or_else(|| anyhow::anyhow!("no detector result for '{requested_loader}'"))?;
-        let loader = detected.loader;
+        let loader = detected.loader.to_string();
         let version =
             choose_loader_version(modloader_version, detected.versions, &loader, ctx.yes)?;
         (loader, version)

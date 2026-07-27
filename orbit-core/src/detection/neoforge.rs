@@ -1,6 +1,6 @@
 use super::{LoaderDetector, LoaderInfo};
 use crate::error::OrbitError;
-use crate::metadata::ModLoader;
+use crate::metadata::LoaderKind;
 
 pub struct NeoForgeDetector;
 
@@ -9,8 +9,8 @@ impl LoaderDetector for NeoForgeDetector {
         "NeoForge"
     }
 
-    fn loader_type(&self) -> ModLoader {
-        ModLoader::NeoForge
+    fn loader_type(&self) -> LoaderKind {
+        LoaderKind::NeoForge
     }
 
     fn detect(
@@ -21,7 +21,7 @@ impl LoaderDetector for NeoForgeDetector {
         let mut info = super::profile::detect_profile_loader(
             instance_dir,
             mc_version,
-            ModLoader::NeoForge,
+            LoaderKind::NeoForge,
             &super::profile::ProfileSignature {
                 group: "net.neoforged",
                 artifacts: &["neoforge", "forge"],

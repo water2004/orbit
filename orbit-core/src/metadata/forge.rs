@@ -8,8 +8,8 @@ use serde::Deserialize;
 
 use super::{
     DependencyExpression, DependencyKind, DependencyOrdering, Environment,
-    LanguageLoaderRequirement, MetadataParser, ModDependency, ModFileMetadata, ModLoadCondition,
-    ModLoader, ModMetadata,
+    LanguageLoaderRequirement, LoaderKind, MetadataParser, ModDependency, ModFileMetadata,
+    ModLoadCondition, ModMetadata,
 };
 use crate::error::OrbitError;
 
@@ -96,7 +96,7 @@ struct RawDependency {
 
 pub(crate) fn parse_for_loader(
     content: &str,
-    loader: ModLoader,
+    loader: LoaderKind,
     source_name: &str,
 ) -> Result<ModFileMetadata, OrbitError> {
     let raw: ModsToml = toml::from_str(content)
@@ -125,7 +125,7 @@ pub(crate) fn parse_for_loader(
             id: id.to_string(),
             requirement: any_if_empty(raw.loader_version.clone()),
         }),
-        None if loader == ModLoader::NeoForge => Some(LanguageLoaderRequirement {
+        None if loader == LoaderKind::NeoForge => Some(LanguageLoaderRequirement {
             id: "javafml".to_string(),
             requirement: "*".to_string(),
         }),
@@ -199,7 +199,7 @@ pub(crate) fn parse_for_loader(
 
 fn normalize_dependency(
     dependency: &RawDependency,
-    loader: ModLoader,
+    loader: LoaderKind,
     source_name: &str,
 ) -> Result<ModDependency, OrbitError> {
     validate_mod_id(&dependency.mod_id, source_name)?;
@@ -208,7 +208,7 @@ fn normalize_dependency(
         None => match dependency.mandatory {
             Some(true) => DependencyKind::Required,
             Some(false) => DependencyKind::Optional,
-            None if loader == ModLoader::NeoForge => DependencyKind::Required,
+            None if loader == LoaderKind::NeoForge => DependencyKind::Required,
             None => {
                 return Err(OrbitError::Other(anyhow::anyhow!(
                     "{source_name} dependency '{}' is missing mandatory",
@@ -315,12 +315,12 @@ impl MetadataParser for ForgeParser {
         "META-INF/mods.toml"
     }
 
-    fn loader_type(&self) -> ModLoader {
-        ModLoader::Forge
+    fn loader_type(&self) -> LoaderKind {
+        LoaderKind::Forge
     }
 
     fn parse(&self, content: &str) -> Result<ModFileMetadata, OrbitError> {
-        parse_for_loader(content, ModLoader::Forge, self.target_file())
+        parse_for_loader(content, LoaderKind::Forge, self.target_file())
     }
 }
 
@@ -352,7 +352,7 @@ versionRange = "[47,48)"
 ordering = "AFTER"
 side = "CLIENT"
 "#,
-            ModLoader::Forge,
+            LoaderKind::Forge,
             "META-INF/mods.toml",
         )
         .unwrap();
@@ -386,7 +386,7 @@ modId = "example"
 [[dependencies.example]]
 modId = "forge"
 "#,
-            ModLoader::Forge,
+            LoaderKind::Forge,
             "META-INF/mods.toml",
         )
         .unwrap_err();

@@ -26,6 +26,7 @@ pub mod checker;
 pub mod installer;
 pub mod jar_cache;
 mod launcher;
+pub mod loader;
 pub mod outdated;
 mod package_reconciliation;
 mod platform;
@@ -56,11 +57,12 @@ pub use installer::{
     restore_instance, upgrade_all_in_instance,
 };
 pub use jar_cache::{CachePruneSummary, CacheSummary, JarCache, clean_cache, inspect_cache};
+pub use loader::LoaderKind;
 pub use lockfile::{ArtifactSource, BundledMod, LockMeta, OrbitLockfile, PackageEntry};
 pub use manifest::{
     DependencySpec, OrbitManifest, PackageRemote, PlatformArtifact, PlatformSnapshot,
 };
-pub use metadata::{ModLoader, mojang::McVersion};
+pub use metadata::mojang::McVersion;
 pub use orbit_bytecode_audit as audit_model;
 pub use orbit_bytecode_audit::{
     Activation as AuditActivation, ArtifactKind as AuditArtifactKind, AuditReport,

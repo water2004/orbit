@@ -1,6 +1,6 @@
 use super::{LoaderDetector, LoaderInfo};
 use crate::error::OrbitError;
-use crate::metadata::ModLoader;
+use crate::metadata::LoaderKind;
 
 pub struct QuiltDetector;
 
@@ -9,8 +9,8 @@ impl LoaderDetector for QuiltDetector {
         "Quilt"
     }
 
-    fn loader_type(&self) -> ModLoader {
-        ModLoader::Quilt
+    fn loader_type(&self) -> LoaderKind {
+        LoaderKind::Quilt
     }
 
     fn detect(
@@ -21,7 +21,7 @@ impl LoaderDetector for QuiltDetector {
         super::profile::detect_profile_loader(
             instance_dir,
             mc_version,
-            ModLoader::Quilt,
+            LoaderKind::Quilt,
             &super::profile::ProfileSignature {
                 group: "org.quiltmc",
                 artifacts: &["quilt-loader"],

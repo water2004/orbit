@@ -8,6 +8,7 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use crate::error::OrbitError;
+use crate::loader::LoaderKind;
 use crate::manifest::{OrbitManifest, PlatformArtifact};
 use crate::metadata::mojang::McVersion;
 use crate::resolver::types::PlatformCandidate;
@@ -16,7 +17,7 @@ use crate::resolver::types::PlatformCandidate;
 pub(crate) struct Platform {
     pub minecraft_version: McVersion,
     pub minecraft_jar: PathBuf,
-    pub loader: String,
+    pub loader: LoaderKind,
     pub loader_version: String,
     pub loader_jar: PathBuf,
     pub runtime_jars: Vec<PathBuf>,
@@ -103,9 +104,13 @@ impl Platform {
             )));
         }
 
-        let loader = manifest.project.modloader.clone();
+        let loader = manifest
+            .project
+            .modloader
+            .parse::<LoaderKind>()
+            .map_err(snapshot_error)?;
         let loader_version = manifest.project.modloader_version.clone();
-        let loader_package = load_loader_package(&loader_jar, &loader, &loader_version)?;
+        let loader_package = load_loader_package(&loader_jar, loader, &loader_version)?;
 
         Ok(Self {
             minecraft_version,
@@ -171,22 +176,12 @@ fn resolve_artifact(
 
 fn load_loader_package(
     loader_jar: &Path,
-    loader: &str,
+    loader: LoaderKind,
     loader_version: &str,
 ) -> Result<Option<PlatformCandidate>, OrbitError> {
-    match crate::jar::read_mod_metadata_if_present(loader_jar, loader) {
+    match crate::jar::read_mod_metadata_if_present(loader_jar, loader.as_str()) {
         Ok(Some(metadata)) => {
-            let expected_mod_id = match loader {
-                "fabric" => "fabricloader",
-                "quilt" => "quilt_loader",
-                "forge" => "forge",
-                "neoforge" => "neoforge",
-                _ => {
-                    return Err(snapshot_error(format!(
-                        "project.modloader '{loader}' is unsupported"
-                    )));
-                }
-            };
+            let expected_mod_id = loader.semantics().canonical_package;
             if metadata.mod_id != expected_mod_id {
                 return Err(snapshot_error(format!(
                     "platform.loader_jar '{}' declares mod_id '{}', expected '{}'",
@@ -195,8 +190,8 @@ fn load_loader_package(
                     expected_mod_id
                 )));
             }
-            if crate::versions::Version::parse(&metadata.version, loader)
-                != crate::versions::Version::parse(loader_version, loader)
+            if crate::versions::Version::parse(&metadata.version, loader.as_str())
+                != crate::versions::Version::parse(loader_version, loader.as_str())
             {
                 return Err(snapshot_error(format!(
                     "platform.loader_jar '{}' declares version '{}', but project.modloader_version is '{}'",
@@ -207,14 +202,14 @@ fn load_loader_package(
             }
             Ok(Some(PlatformCandidate::from_jar_metadata(metadata)))
         }
-        Ok(None) if matches!(loader, "fabric" | "quilt") => Err(snapshot_error(format!(
-            "platform.loader_jar '{}' contains no {loader} loader metadata",
-            loader_jar.display()
-        ))),
-        Ok(None) if matches!(loader, "forge" | "neoforge") => Ok(None),
-        Ok(None) => Err(snapshot_error(format!(
-            "project.modloader '{loader}' is unsupported"
-        ))),
+        Ok(None) if matches!(loader, LoaderKind::Fabric | LoaderKind::Quilt) => {
+            Err(snapshot_error(format!(
+                "platform.loader_jar '{}' contains no {loader} loader metadata",
+                loader_jar.display()
+            )))
+        }
+        Ok(None) if matches!(loader, LoaderKind::Forge | LoaderKind::NeoForge) => Ok(None),
+        Ok(None) => unreachable!(),
         Err(error) => Err(snapshot_error(format!(
             "cannot parse platform.loader_jar '{}': {error}",
             loader_jar.display()
@@ -245,7 +240,7 @@ mod tests {
             project: ProjectMeta {
                 name: "test".to_string(),
                 mc_version: discovered.minecraft_version.id.clone(),
-                modloader: discovered.loader.clone(),
+                modloader: discovered.loader.to_string(),
                 modloader_version: discovered.loader_version.clone(),
                 description: None,
                 authors: None,

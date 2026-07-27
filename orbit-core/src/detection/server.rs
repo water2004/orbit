@@ -10,6 +10,7 @@ use std::io::{Cursor, Read};
 use std::path::{Path, PathBuf};
 
 use crate::error::OrbitError;
+use crate::loader::LoaderKind;
 use crate::metadata::mojang::McVersion;
 use crate::metadata::version_profile::MavenCoord;
 
@@ -24,7 +25,7 @@ const FORGE_SHIM_MAIN: &str = "net.minecraftforge.bootstrap.shim.Main";
 
 #[derive(Debug, Clone)]
 pub(crate) struct ServerRuntimeSpec {
-    pub loader: String,
+    pub loader: LoaderKind,
     pub loader_version: String,
     pub minecraft: McVersion,
     pub minecraft_jar: PathBuf,
@@ -108,7 +109,8 @@ fn discover_fabric_bootstraps(instance_dir: &Path) -> Result<Vec<ServerRuntimeSp
         ));
         let outer_game_jar = runtime_dir.join(format!("{minecraft_version}-server.jar"));
         let classpath = read_launch_classpath(instance_dir, &launch_jar)?;
-        let (loader_jar, actual_loader_version) = identify_loader_jar(&classpath.jars, "fabric")?;
+        let (loader_jar, actual_loader_version) =
+            identify_loader_jar(&classpath.jars, LoaderKind::Fabric)?;
         if actual_loader_version != loader_version {
             return Err(other(format!(
                 "Fabric server launcher '{}' selects loader {}, but '{}' declares {}",
@@ -125,7 +127,7 @@ fn discover_fabric_bootstraps(instance_dir: &Path) -> Result<Vec<ServerRuntimeSp
         runtime_jars.append(&mut bundler_jars);
         normalize_runtime_jars(&mut runtime_jars);
         candidates.push(ServerRuntimeSpec {
-            loader: "fabric".to_string(),
+            loader: LoaderKind::Fabric,
             loader_version,
             minecraft,
             minecraft_jar,
@@ -150,9 +152,9 @@ fn discover_direct_launch_jars(instance_dir: &Path) -> Result<Vec<ServerRuntimeS
             continue;
         };
         let loader = if FABRIC_SERVER_MAINS.contains(&main_class) {
-            "fabric"
+            LoaderKind::Fabric
         } else if QUILT_SERVER_MAINS.contains(&main_class) {
-            "quilt"
+            LoaderKind::Quilt
         } else {
             continue;
         };
@@ -181,7 +183,7 @@ fn discover_direct_launch_jars(instance_dir: &Path) -> Result<Vec<ServerRuntimeS
         runtime_jars.append(&mut bundler_jars);
         normalize_runtime_jars(&mut runtime_jars);
         candidates.push(ServerRuntimeSpec {
-            loader: loader.to_string(),
+            loader,
             loader_version,
             minecraft,
             minecraft_jar,
@@ -242,7 +244,7 @@ fn discover_forge_shims(instance_dir: &Path) -> Result<Vec<ServerRuntimeSpec>, O
         }
         normalize_runtime_jars(&mut runtime_jars);
         candidates.push(ServerRuntimeSpec {
-            loader: "forge".to_string(),
+            loader: LoaderKind::Forge,
             loader_version,
             minecraft,
             minecraft_jar: server.1.clone(),
@@ -262,7 +264,7 @@ fn discover_modlauncher_argfiles(
 ) -> Result<Vec<ServerRuntimeSpec>, OrbitError> {
     let roots = [
         (
-            "forge",
+            LoaderKind::Forge,
             instance_dir
                 .join("libraries")
                 .join("net")
@@ -270,7 +272,7 @@ fn discover_modlauncher_argfiles(
                 .join("forge"),
         ),
         (
-            "neoforge",
+            LoaderKind::NeoForge,
             instance_dir
                 .join("libraries")
                 .join("net")
@@ -304,7 +306,7 @@ fn discover_modlauncher_argfiles(
 
 fn parse_modlauncher_argfile(
     instance_dir: &Path,
-    loader: &str,
+    loader: LoaderKind,
     version_dir: &Path,
     args_path: &Path,
 ) -> Result<Option<ServerRuntimeSpec>, OrbitError> {
@@ -346,7 +348,7 @@ fn parse_modlauncher_argfile(
             ))
         })?;
     let (minecraft_version, loader_version) = match loader {
-        "forge" => {
+        LoaderKind::Forge => {
             let (coordinate_mc, coordinate_loader) = split_forge_version(directory_version)
                 .ok_or_else(|| {
                     other(format!(
@@ -358,7 +360,7 @@ fn parse_modlauncher_argfile(
             validate_optional_option(&tokens, "--fml.forgeVersion", &coordinate_loader, args_path)?;
             (coordinate_mc, coordinate_loader)
         }
-        "neoforge" => {
+        LoaderKind::NeoForge => {
             let minecraft = required_option(&tokens, "--fml.mcVersion", args_path)?;
             let loader_version = required_option(&tokens, "--fml.neoForgeVersion", args_path)?;
             if loader_version != directory_version {
@@ -371,7 +373,7 @@ fn parse_modlauncher_argfile(
             }
             (minecraft, loader_version)
         }
-        _ => unreachable!(),
+        LoaderKind::Fabric | LoaderKind::Quilt => unreachable!(),
     };
 
     let loader_jar = exactly_one_named_jar(
@@ -381,13 +383,13 @@ fn parse_modlauncher_argfile(
         &format!("{loader} universal"),
     )?;
     let minecraft_jar = match loader {
-        "forge" => exactly_one_named_jar(
+        LoaderKind::Forge => exactly_one_named_jar(
             instance_dir,
             version_dir,
             &format!("forge-{directory_version}-server.jar"),
             "Forge patched server",
         )?,
-        "neoforge" => {
+        LoaderKind::NeoForge => {
             let directory = instance_dir
                 .join("libraries")
                 .join("net")
@@ -401,7 +403,7 @@ fn parse_modlauncher_argfile(
                 "NeoForge patched server",
             )?
         }
-        _ => unreachable!(),
+        LoaderKind::Fabric | LoaderKind::Quilt => unreachable!(),
     };
     let minecraft = read_minecraft_metadata(instance_dir, &minecraft_jar, &minecraft_version)?;
     let mut runtime_jars = runtime_paths_from_args(instance_dir, &tokens)?;
@@ -409,7 +411,7 @@ fn parse_modlauncher_argfile(
     runtime_jars.push(minecraft_jar.clone());
     normalize_runtime_jars(&mut runtime_jars);
     Ok(Some(ServerRuntimeSpec {
-        loader: loader.to_string(),
+        loader,
         loader_version,
         minecraft,
         minecraft_jar,
@@ -505,16 +507,16 @@ fn resolve_manifest_token(
 
 fn identify_loader_jar(
     classpath: &[PathBuf],
-    loader: &str,
+    loader: LoaderKind,
 ) -> Result<(PathBuf, String), OrbitError> {
     let expected_id = match loader {
-        "fabric" => "fabricloader",
-        "quilt" => "quilt_loader",
-        _ => unreachable!(),
+        LoaderKind::Fabric => "fabricloader",
+        LoaderKind::Quilt => "quilt_loader",
+        LoaderKind::Forge | LoaderKind::NeoForge => unreachable!(),
     };
     let mut matches = Vec::new();
     for path in classpath {
-        if let Some(metadata) = crate::jar::read_mod_metadata_if_present(path, loader)?
+        if let Some(metadata) = crate::jar::read_mod_metadata_if_present(path, loader.as_str())?
             && metadata.mod_id == expected_id
         {
             matches.push((path.clone(), metadata.version));
@@ -1282,7 +1284,7 @@ mod tests {
         );
 
         let spec = discover_server_runtime(root).unwrap().unwrap();
-        assert_eq!(spec.loader, "quilt");
+        assert_eq!(spec.loader, LoaderKind::Quilt);
         assert_eq!(spec.loader_version, "0.29.0");
         assert_eq!(spec.minecraft.id, "1.21.1");
         assert_eq!(spec.loader_jar, loader.canonicalize().unwrap());
@@ -1351,7 +1353,7 @@ mod tests {
         );
 
         let spec = discover_server_runtime(root).unwrap().unwrap();
-        assert_eq!(spec.loader, "fabric");
+        assert_eq!(spec.loader, LoaderKind::Fabric);
         assert_eq!(spec.loader_version, "0.19.2");
         assert_eq!(spec.minecraft.id, "26.1.2");
         assert_eq!(spec.minecraft_jar, minecraft.canonicalize().unwrap());
@@ -1367,7 +1369,7 @@ mod tests {
             .filter(|candidate| candidate.certain)
             .collect::<Vec<_>>();
         assert_eq!(certain.len(), 1);
-        assert_eq!(certain[0].loader, "fabric");
+        assert_eq!(certain[0].loader, LoaderKind::Fabric);
         assert_eq!(certain[0].versions, vec!["0.19.2"]);
 
         let platform = crate::platform_detection::discover_platform_for_init(
@@ -1393,7 +1395,7 @@ mod tests {
         );
         let rediscovered = crate::platform_detection::rediscover_current_platform(root).unwrap();
         assert_eq!(rediscovered.minecraft_version.id, "26.1.2");
-        assert_eq!(rediscovered.loader, "fabric");
+        assert_eq!(rediscovered.loader, LoaderKind::Fabric);
         assert_eq!(rediscovered.loader_version, "0.19.2");
         assert_eq!(
             rediscovered.minecraft_jar,
@@ -1433,7 +1435,7 @@ mod tests {
         );
 
         let spec = discover_server_runtime(root).unwrap().unwrap();
-        assert_eq!(spec.loader, "forge");
+        assert_eq!(spec.loader, LoaderKind::Forge);
         assert_eq!(spec.loader_version, "64.0.14");
         assert_eq!(spec.minecraft.id, "26.1.2");
         assert_eq!(spec.minecraft_jar, server.canonicalize().unwrap());
@@ -1511,7 +1513,7 @@ mod tests {
         .unwrap();
 
         let spec = discover_server_runtime(root).unwrap().unwrap();
-        assert_eq!(spec.loader, "neoforge");
+        assert_eq!(spec.loader, LoaderKind::NeoForge);
         assert_eq!(spec.loader_version, version);
         assert_eq!(spec.minecraft.id, "26.1.2");
         assert_eq!(spec.loader_jar, universal.canonicalize().unwrap());
@@ -1552,7 +1554,7 @@ mod tests {
         .unwrap();
 
         let spec = discover_server_runtime(root).unwrap().unwrap();
-        assert_eq!(spec.loader, "forge");
+        assert_eq!(spec.loader, LoaderKind::Forge);
         assert_eq!(spec.loader_version, "47.4.22");
         assert_eq!(spec.minecraft.id, "1.20.1");
         assert_eq!(spec.minecraft_jar, minecraft.canonicalize().unwrap());
