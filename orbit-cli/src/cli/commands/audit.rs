@@ -371,11 +371,10 @@ mod tests {
 
     fn empty_report() -> orbit_core::AuditReport {
         orbit_core::AuditReport {
-            schema_version: 4,
+            schema_version: 5,
             environment: orbit_core::audit_model::AuditEnvironment {
                 minecraft_version: "test".to_string(),
-                declared_loader: "fabric".to_string(),
-                detected_loader: "fabric".to_string(),
+                loader: orbit_core::AuditLoaderFamily::Fabric,
                 loader_version: "test".to_string(),
                 physical_side: orbit_core::audit_model::PhysicalSide::Unknown,
                 java_feature: 17,

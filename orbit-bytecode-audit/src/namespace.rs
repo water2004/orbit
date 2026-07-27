@@ -50,45 +50,6 @@ struct MappingTree {
     methods: Vec<(Vec<String>, String, Vec<String>)>,
 }
 
-trait RuntimeEnvironmentProvider {
-    fn align(
-        &self,
-        scanned: &mut ScannedArtifacts,
-        mapping_trees: Vec<MappingTree>,
-        mapping_sources: Vec<MappingSource>,
-    ) -> Result<NamespaceReport, Readiness>;
-}
-
-struct FabricFamilyProvider {
-    loader: LoaderFamily,
-}
-
-impl RuntimeEnvironmentProvider for FabricFamilyProvider {
-    fn align(
-        &self,
-        scanned: &mut ScannedArtifacts,
-        mapping_trees: Vec<MappingTree>,
-        mapping_sources: Vec<MappingSource>,
-    ) -> Result<NamespaceReport, Readiness> {
-        align_fabric_family(scanned, self.loader, mapping_trees, mapping_sources)
-    }
-}
-
-struct ModLauncherFamilyProvider {
-    loader: LoaderFamily,
-}
-
-impl RuntimeEnvironmentProvider for ModLauncherFamilyProvider {
-    fn align(
-        &self,
-        scanned: &mut ScannedArtifacts,
-        _mapping_trees: Vec<MappingTree>,
-        mapping_sources: Vec<MappingSource>,
-    ) -> Result<NamespaceReport, Readiness> {
-        align_modlauncher_family(scanned, self.loader, mapping_sources)
-    }
-}
-
 impl MappingTree {
     fn class_count(&self) -> usize {
         self.classes.len()
@@ -168,19 +129,24 @@ impl MappingTree {
     }
 }
 
-pub(crate) fn align_runtime_namespace(
+pub(crate) fn align_fabric_runtime(
     scanned: &mut ScannedArtifacts,
     loader: LoaderFamily,
 ) -> Result<NamespaceReport, Readiness> {
     let mapping_trees = discover_tiny_mappings(&scanned.artifacts);
     let mapping_sources = mapping_trees.iter().map(MappingTree::report).collect();
-    let provider: Box<dyn RuntimeEnvironmentProvider> = match loader {
-        LoaderFamily::Fabric | LoaderFamily::Quilt => Box::new(FabricFamilyProvider { loader }),
-        LoaderFamily::Forge | LoaderFamily::NeoForge => {
-            Box::new(ModLauncherFamilyProvider { loader })
-        }
-    };
-    provider.align(scanned, mapping_trees, mapping_sources)
+    align_fabric_family(scanned, loader, mapping_trees, mapping_sources)
+}
+
+pub(crate) fn align_modlauncher_runtime(
+    scanned: &mut ScannedArtifacts,
+    loader: LoaderFamily,
+) -> Result<NamespaceReport, Readiness> {
+    let mapping_sources = discover_tiny_mappings(&scanned.artifacts)
+        .iter()
+        .map(MappingTree::report)
+        .collect();
+    align_modlauncher_family(scanned, loader, mapping_sources)
 }
 
 fn align_fabric_family(
@@ -1342,7 +1308,7 @@ mod tests {
             ),
         ]);
 
-        let report = align_runtime_namespace(&mut scanned, LoaderFamily::Fabric).unwrap();
+        let report = align_fabric_runtime(&mut scanned, LoaderFamily::Fabric).unwrap();
 
         assert_eq!(
             report.runtime_namespace,
@@ -1387,7 +1353,7 @@ mod tests {
             ),
         ]);
 
-        align_runtime_namespace(&mut scanned, LoaderFamily::Fabric).unwrap();
+        align_fabric_runtime(&mut scanned, LoaderFamily::Fabric).unwrap();
 
         assert_eq!(scanned.artifacts[0].classes[0].methods[0].name, "method_1");
         assert_eq!(scanned.artifacts[0].classes[1].methods[0].name, "method_1");
@@ -1415,7 +1381,7 @@ mod tests {
             ),
         ]);
 
-        let report = align_runtime_namespace(&mut scanned, LoaderFamily::Fabric).unwrap();
+        let report = align_fabric_runtime(&mut scanned, LoaderFamily::Fabric).unwrap();
 
         assert_eq!(report.class_mapping_coverage.total, 2);
         assert_eq!(report.class_mapping_coverage.mapped, 1);
@@ -1432,7 +1398,7 @@ mod tests {
             Vec::new(),
         )]);
 
-        let readiness = align_runtime_namespace(&mut scanned, LoaderFamily::Fabric).unwrap_err();
+        let readiness = align_fabric_runtime(&mut scanned, LoaderFamily::Fabric).unwrap_err();
 
         assert_eq!(readiness.status, ReadinessStatus::Incomplete);
         assert_eq!(scanned.coverage.namespace_alignment_failures, 1);
@@ -1473,7 +1439,7 @@ mod tests {
             ),
         ]);
 
-        let report = align_runtime_namespace(&mut scanned, LoaderFamily::Fabric).unwrap();
+        let report = align_fabric_runtime(&mut scanned, LoaderFamily::Fabric).unwrap();
         let unit = report
             .loader_units
             .iter()
@@ -1516,7 +1482,7 @@ mod tests {
         ]);
         crate::jar::rebuild_universe(&mut scanned);
 
-        let report = align_runtime_namespace(&mut scanned, LoaderFamily::NeoForge).unwrap();
+        let report = align_modlauncher_runtime(&mut scanned, LoaderFamily::NeoForge).unwrap();
 
         assert_eq!(report.runtime_namespace, Some(SymbolNamespace::Identity));
         assert!(scanned.universe.definitions("a").is_empty());

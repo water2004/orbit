@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-pub const REPORT_SCHEMA_VERSION: u32 = 4;
+pub const REPORT_SCHEMA_VERSION: u32 = 5;
 
 #[derive(Debug, Clone)]
 pub struct AuditRequest {
@@ -16,8 +16,7 @@ pub struct AuditRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuditEnvironment {
     pub minecraft_version: String,
-    pub declared_loader: String,
-    pub detected_loader: String,
+    pub loader: LoaderFamily,
     pub loader_version: String,
     pub physical_side: PhysicalSide,
     pub java_feature: u32,
@@ -104,6 +103,23 @@ pub enum LoaderFamily {
     Quilt,
     Forge,
     NeoForge,
+}
+
+impl LoaderFamily {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Fabric => "fabric",
+            Self::Quilt => "quilt",
+            Self::Forge => "forge",
+            Self::NeoForge => "neoforge",
+        }
+    }
+}
+
+impl std::fmt::Display for LoaderFamily {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.as_str())
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

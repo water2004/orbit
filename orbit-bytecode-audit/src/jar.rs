@@ -143,7 +143,17 @@ fn same_member_signature(left: &MemberReference, right: &MemberReference) -> boo
             || left.is_static == right.is_static)
 }
 
-pub(crate) fn probe_runtime_abi(scanned: &ScannedArtifacts, loader: LoaderFamily) -> Readiness {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RuntimeAbiProfile {
+    MixinOnly,
+    ModLauncher,
+}
+
+pub(crate) fn probe_runtime_abi(
+    scanned: &ScannedArtifacts,
+    loader: LoaderFamily,
+    profile: RuntimeAbiProfile,
+) -> Readiness {
     let runtime_artifacts = scanned
         .artifacts
         .iter()
@@ -238,14 +248,14 @@ pub(crate) fn probe_runtime_abi(scanned: &ScannedArtifacts, loader: LoaderFamily
         );
     }
 
-    match loader {
-        LoaderFamily::Fabric | LoaderFamily::Quilt => Readiness {
+    match profile {
+        RuntimeAbiProfile::MixinOnly => Readiness {
             status: ReadinessStatus::Ready,
             loader: Some(loader),
             message: "runtime loader and Mixin ABI are available".to_string(),
             capabilities: vec!["mixin".to_string()],
         },
-        LoaderFamily::Forge | LoaderFamily::NeoForge => probe_modlauncher(loader, &classes),
+        RuntimeAbiProfile::ModLauncher => probe_modlauncher(loader, &classes),
     }
 }
 
@@ -1379,8 +1389,7 @@ mod tests {
         AuditRequest {
             environment: AuditEnvironment {
                 minecraft_version: "test".to_string(),
-                declared_loader: "fabric".to_string(),
-                detected_loader: "fabric".to_string(),
+                loader: crate::model::LoaderFamily::Fabric,
                 loader_version: "test".to_string(),
                 physical_side: PhysicalSide::Unknown,
                 java_feature: 17,

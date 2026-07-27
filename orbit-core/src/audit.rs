@@ -5,8 +5,8 @@ use std::path::{Path, PathBuf};
 
 use orbit_bytecode_audit::{
     AnalysisLimits, ArtifactInput, ArtifactKind, AuditEnvironment, AuditProgressEvent,
-    AuditProgressReporter, AuditProgressStage, AuditReport, AuditRequest, NestedJarPolicy,
-    PhysicalSide,
+    AuditProgressReporter, AuditProgressStage, AuditReport, AuditRequest, LoaderFamily,
+    NestedJarPolicy, PhysicalSide,
 };
 
 use crate::error::OrbitError;
@@ -178,8 +178,7 @@ pub fn audit_instance_with_progress(
         &AuditRequest {
             environment: AuditEnvironment {
                 minecraft_version: platform.minecraft_version.id,
-                declared_loader: manifest.project.modloader,
-                detected_loader: platform.loader.to_string(),
+                loader: audit_loader(platform.loader),
                 loader_version: platform.loader_version,
                 physical_side: match platform.physical_environment {
                     crate::metadata::Environment::Client => PhysicalSide::Client,
@@ -200,6 +199,15 @@ pub fn audit_instance_with_progress(
         }
         error => OrbitError::Other(anyhow::anyhow!(error)),
     })
+}
+
+fn audit_loader(loader: crate::loader::LoaderKind) -> LoaderFamily {
+    match loader {
+        crate::loader::LoaderKind::Fabric => LoaderFamily::Fabric,
+        crate::loader::LoaderKind::Quilt => LoaderFamily::Quilt,
+        crate::loader::LoaderKind::Forge => LoaderFamily::Forge,
+        crate::loader::LoaderKind::NeoForge => LoaderFamily::NeoForge,
+    }
 }
 
 fn discover_loader_runtime_game(

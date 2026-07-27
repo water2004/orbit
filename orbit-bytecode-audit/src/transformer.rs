@@ -4,8 +4,8 @@ use crate::classfile::{InstructionKind, ParsedClass, ParsedInstruction, ParsedMe
 use crate::jar::{ParsedArtifact, ScannedArtifacts};
 use crate::model::{
     Activation, Confidence, CoverageGap, Effect, Evidence, InactiveCandidate,
-    InactiveCandidateKind, LoaderFamily, Mechanism, MemberKind, MemberReference, Mutation,
-    MutationKind, Precision, Readiness, RequirementKind, ShapeRequirement, Target,
+    InactiveCandidateKind, Mechanism, MemberKind, MemberReference, Mutation, MutationKind,
+    Precision, RequirementKind, ShapeRequirement, Target,
 };
 
 const ITRANSFORMER: &str = "cpw/mods/modlauncher/api/ITransformer";
@@ -50,33 +50,33 @@ pub(crate) struct TransformerAnalysis {
     pub coverage_gaps: Vec<CoverageGap>,
 }
 
-pub(crate) fn analyze_with_progress(
-    scanned: &mut ScannedArtifacts,
-    readiness: &Readiness,
+pub(crate) fn skip_with_progress(
     progress: Option<&crate::progress::AuditProgressReporter>,
 ) -> TransformerAnalysis {
     use crate::progress::{AuditProgressEvent, AuditProgressStage, emit};
 
-    if !matches!(
-        readiness.loader,
-        Some(LoaderFamily::Forge | LoaderFamily::NeoForge)
-    ) {
-        emit(
-            progress,
-            AuditProgressEvent::StageStarted {
-                stage: AuditProgressStage::AnalyzeTransformers,
-                total: Some(0),
-            },
-        );
-        emit(
-            progress,
-            AuditProgressEvent::StageFinished {
-                stage: AuditProgressStage::AnalyzeTransformers,
-                completed: 0,
-            },
-        );
-        return TransformerAnalysis::default();
-    }
+    emit(
+        progress,
+        AuditProgressEvent::StageStarted {
+            stage: AuditProgressStage::AnalyzeTransformers,
+            total: Some(0),
+        },
+    );
+    emit(
+        progress,
+        AuditProgressEvent::StageFinished {
+            stage: AuditProgressStage::AnalyzeTransformers,
+            completed: 0,
+        },
+    );
+    TransformerAnalysis::default()
+}
+
+pub(crate) fn analyze_modlauncher_with_progress(
+    scanned: &mut ScannedArtifacts,
+    progress: Option<&crate::progress::AuditProgressReporter>,
+) -> TransformerAnalysis {
+    use crate::progress::{AuditProgressEvent, AuditProgressStage, emit};
 
     let mut effects = Vec::new();
     let mut inactive_candidates = Vec::new();
@@ -1717,14 +1717,7 @@ mod tests {
             )],
         );
         let mut scanned = scanned(vec![artifact], universe);
-        let readiness = Readiness {
-            status: crate::model::ReadinessStatus::Ready,
-            loader: Some(LoaderFamily::Forge),
-            message: "ready".to_string(),
-            capabilities: Vec::new(),
-        };
-
-        let analysis = analyze_with_progress(&mut scanned, &readiness, None);
+        let analysis = analyze_modlauncher_with_progress(&mut scanned, None);
 
         assert_eq!(analysis.effects.len(), 2);
         assert!(analysis.effects.iter().all(|effect| {

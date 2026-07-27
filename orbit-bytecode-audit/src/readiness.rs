@@ -1,27 +1,16 @@
 use crate::AuditError;
-use crate::model::{ArtifactKind, AuditRequest, LoaderFamily, Readiness, ReadinessStatus};
+use crate::model::{ArtifactKind, AuditRequest, Readiness, ReadinessStatus};
 
 pub fn probe_readiness(request: &AuditRequest) -> Result<Readiness, AuditError> {
-    let loader = match preflight(request) {
-        Ok(loader) => loader,
+    match preflight(request) {
+        Ok(()) => {}
         Err(readiness) => return Ok(readiness),
-    };
+    }
     let scanned = crate::jar::scan_artifacts_with_progress(request, None)?;
-    Ok(crate::jar::probe_runtime_abi(&scanned, loader))
+    Ok(crate::backend::for_loader(request.environment.loader).probe_readiness(&scanned))
 }
 
-pub(crate) fn preflight(request: &AuditRequest) -> Result<LoaderFamily, Readiness> {
-    if request.environment.declared_loader != request.environment.detected_loader {
-        return Err(Readiness {
-            status: ReadinessStatus::Ambiguous,
-            loader: None,
-            message: format!(
-                "orbit.toml declares loader '{}', but the current instance detects '{}'",
-                request.environment.declared_loader, request.environment.detected_loader
-            ),
-            capabilities: Vec::new(),
-        });
-    }
+pub(crate) fn preflight(request: &AuditRequest) -> Result<(), Readiness> {
     if !request
         .artifacts
         .iter()
@@ -58,21 +47,7 @@ pub(crate) fn preflight(request: &AuditRequest) -> Result<LoaderFamily, Readines
             capabilities: Vec::new(),
         });
     }
-    let loader = match request.environment.detected_loader.as_str() {
-        "fabric" => LoaderFamily::Fabric,
-        "quilt" => LoaderFamily::Quilt,
-        "forge" => LoaderFamily::Forge,
-        "neoforge" => LoaderFamily::NeoForge,
-        other => {
-            return Err(Readiness {
-                status: ReadinessStatus::Unsupported,
-                loader: None,
-                message: format!("loader '{other}' is not supported by bytecode audit"),
-                capabilities: Vec::new(),
-            });
-        }
-    };
-    Ok(loader)
+    Ok(())
 }
 
 #[cfg(test)]
@@ -299,8 +274,13 @@ mod tests {
         AuditRequest {
             environment: AuditEnvironment {
                 minecraft_version: "test".to_string(),
-                declared_loader: loader.to_string(),
-                detected_loader: loader.to_string(),
+                loader: match loader {
+                    "fabric" => crate::model::LoaderFamily::Fabric,
+                    "quilt" => crate::model::LoaderFamily::Quilt,
+                    "forge" => crate::model::LoaderFamily::Forge,
+                    "neoforge" => crate::model::LoaderFamily::NeoForge,
+                    _ => panic!("unsupported test loader"),
+                },
                 loader_version: "test".to_string(),
                 physical_side: PhysicalSide::Unknown,
                 java_feature: 17,

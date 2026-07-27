@@ -46,7 +46,7 @@ fn environment_table(report: &orbit_core::AuditReport) -> String {
         Cell::new(&report.environment.minecraft_version),
         Cell::new(format!(
             "{} {}",
-            report.environment.detected_loader, report.environment.loader_version
+            report.environment.loader, report.environment.loader_version
         )),
         Cell::new(format!("{namespace}\n{mapping}\nalignment complete")),
     ]);

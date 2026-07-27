@@ -13,6 +13,41 @@ use crate::model::{
 const MIXIN_ANNOTATION: &str = "Lorg/spongepowered/asm/mixin/Mixin;";
 const DEFAULT_PRIORITY: i32 = 1000;
 
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct MixinDiscoveryPlan {
+    fabric_metadata: bool,
+    quilt_metadata: bool,
+    manifest: bool,
+    neoforge_metadata: bool,
+}
+
+impl MixinDiscoveryPlan {
+    pub(crate) const FABRIC: Self = Self {
+        fabric_metadata: true,
+        quilt_metadata: false,
+        manifest: false,
+        neoforge_metadata: false,
+    };
+    pub(crate) const QUILT: Self = Self {
+        fabric_metadata: true,
+        quilt_metadata: true,
+        manifest: false,
+        neoforge_metadata: false,
+    };
+    pub(crate) const FORGE: Self = Self {
+        fabric_metadata: false,
+        quilt_metadata: false,
+        manifest: true,
+        neoforge_metadata: false,
+    };
+    pub(crate) const NEOFORGE: Self = Self {
+        fabric_metadata: false,
+        quilt_metadata: false,
+        manifest: true,
+        neoforge_metadata: true,
+    };
+}
+
 #[derive(Debug, Default)]
 pub(crate) struct MixinRegistry {
     pub configs: Vec<RegisteredMixinConfig>,
@@ -105,21 +140,21 @@ struct PluginEvaluation {
 pub(crate) fn discover(
     scanned: &mut ScannedArtifacts,
     request: &crate::model::AuditRequest,
+    plan: MixinDiscoveryPlan,
 ) -> MixinRegistry {
     let mut declarations = Vec::new();
     for artifact in &scanned.artifacts {
-        match request.environment.detected_loader.as_str() {
-            "fabric" => discover_fabric(artifact, &mut declarations),
-            "quilt" => {
-                discover_fabric(artifact, &mut declarations);
-                discover_quilt(artifact, &mut declarations);
-            }
-            "forge" => discover_forge(artifact, &mut declarations),
-            "neoforge" => {
-                discover_neoforge(artifact, &request.active_mod_ids, &mut declarations);
-                discover_manifest(artifact, &mut declarations);
-            }
-            _ => {}
+        if plan.fabric_metadata {
+            discover_fabric(artifact, &mut declarations);
+        }
+        if plan.quilt_metadata {
+            discover_quilt(artifact, &mut declarations);
+        }
+        if plan.neoforge_metadata {
+            discover_neoforge(artifact, &request.active_mod_ids, &mut declarations);
+        }
+        if plan.manifest {
+            discover_manifest(artifact, &mut declarations);
         }
         discover_static_calls(artifact, &mut declarations);
     }
@@ -269,10 +304,6 @@ fn discover_quilt(artifact: &ParsedArtifact, output: &mut Vec<ConfigDeclaration>
             }
         }
     }
-}
-
-fn discover_forge(artifact: &ParsedArtifact, output: &mut Vec<ConfigDeclaration>) {
-    discover_manifest(artifact, output);
 }
 
 fn discover_manifest(artifact: &ParsedArtifact, output: &mut Vec<ConfigDeclaration>) {
@@ -1337,6 +1368,19 @@ mod tests {
 
     use super::*;
 
+    fn discover(
+        scanned: &mut ScannedArtifacts,
+        request: &crate::model::AuditRequest,
+    ) -> MixinRegistry {
+        let plan = match request.environment.loader {
+            crate::model::LoaderFamily::Fabric => MixinDiscoveryPlan::FABRIC,
+            crate::model::LoaderFamily::Quilt => MixinDiscoveryPlan::QUILT,
+            crate::model::LoaderFamily::Forge => MixinDiscoveryPlan::FORGE,
+            crate::model::LoaderFamily::NeoForge => MixinDiscoveryPlan::NEOFORGE,
+        };
+        super::discover(scanned, request, plan)
+    }
+
     #[test]
     fn fabric_registration_filters_side_and_associates_each_refmap() {
         let mut scanned =
@@ -1970,8 +2014,13 @@ requiredMods = ["dependency"]
         AuditRequest {
             environment: AuditEnvironment {
                 minecraft_version: "test".to_string(),
-                declared_loader: loader.to_string(),
-                detected_loader: loader.to_string(),
+                loader: match loader {
+                    "fabric" => crate::model::LoaderFamily::Fabric,
+                    "quilt" => crate::model::LoaderFamily::Quilt,
+                    "forge" => crate::model::LoaderFamily::Forge,
+                    "neoforge" => crate::model::LoaderFamily::NeoForge,
+                    _ => panic!("unsupported test loader"),
+                },
                 loader_version: "test".to_string(),
                 physical_side,
                 java_feature: 17,
