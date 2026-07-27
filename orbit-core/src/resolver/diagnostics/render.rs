@@ -187,11 +187,12 @@ fn is_excluded_semantic_singleton(versions: &pubgrub::Ranges<SolverVersion>) -> 
 #[cfg(test)]
 mod rendering_tests {
     use super::*;
+    use crate::loader::LoaderKind;
     use crate::resolver::types::solver_range;
 
     #[test]
     fn renders_fabric_wildcard_without_synthetic_bounds() {
-        let versions = solver_range(Version::parse_constraint("0.9.x", "fabric"));
+        let versions = solver_range(Version::parse_constraint("0.9.x", LoaderKind::Fabric));
 
         assert_eq!(display_versions(&versions), "0.9.x");
     }
@@ -200,7 +201,7 @@ mod rendering_tests {
     fn recognizes_internal_exclusion_of_one_semantic_version() {
         let versions = solver_range(pubgrub::Ranges::singleton(Version::parse(
             "1.11.2+mc26.1.2",
-            "fabric",
+            LoaderKind::Fabric,
         )))
         .complement();
 

@@ -201,8 +201,9 @@ fn read_jarjar_metadata<R: Read + Seek>(
                 "Jar-in-Jar entry '{id}' has an empty required field"
             )));
         }
-        let version = crate::versions::Version::parse(&jar.version.artifact_version, "forge");
-        if !crate::versions::Version::parse_constraint(&jar.version.range, "forge")
+        let version =
+            crate::versions::Version::parse(&jar.version.artifact_version, LoaderKind::Forge);
+        if !crate::versions::Version::parse_constraint(&jar.version.range, LoaderKind::Forge)
             .contains(&version)
         {
             return Err(OrbitError::Other(anyhow::anyhow!(

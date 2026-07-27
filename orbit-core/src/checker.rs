@@ -47,6 +47,9 @@ pub async fn check_compatibility_with_progress(
     jar_cache: &crate::jar_cache::JarCache,
     progress: Option<ProgressReporter>,
 ) -> Result<Vec<CheckResult>, OrbitError> {
+    let target_loader = target_loader
+        .parse::<crate::loader::LoaderKind>()
+        .map_err(|message: String| OrbitError::Other(anyhow::anyhow!(message)))?;
     let catalog = crate::outdated::download_candidate_catalog(
         crate::outdated::CandidateDiscoveryInput {
             instance_dir,
@@ -54,7 +57,7 @@ pub async fn check_compatibility_with_progress(
             additional_remotes: &[],
             lockfile,
             mc_version: target_mc_version,
-            loader: target_loader,
+            loader: target_loader.as_str(),
             jar_cache,
             progress,
         },

@@ -12,6 +12,7 @@ use std::collections::{BTreeMap, HashMap};
 
 use pubgrub::Ranges;
 
+use crate::loader::LoaderKind;
 use crate::lockfile::{OrbitLockfile, PackageEntry};
 use crate::manifest::OrbitManifest;
 use crate::metadata::Environment;
@@ -123,7 +124,7 @@ pub(crate) fn check_lockfile_graph_with_loader(
     lockfile: &OrbitLockfile,
     loader_package: Option<&types::PlatformCandidate>,
 ) -> Result<(), String> {
-    let graph = build_solver_graph(manifest, lockfile, &HashMap::new(), loader_package);
+    let graph = build_solver_graph(manifest, lockfile, &HashMap::new(), loader_package)?;
     match pubgrub::resolve(&graph.provider, graph.root_package, graph.root_version) {
         Ok(_) => Ok(()),
         Err(pubgrub::PubGrubError::NoSolution(derivation_tree)) => {
@@ -144,7 +145,7 @@ pub(crate) fn resolve_lockfile_for_target(
     loader_package: Option<&types::PlatformCandidate>,
 ) -> Result<pubgrub::SelectedDependencies<SolverPackage, SolverVersion>, String> {
     let graph =
-        build_solver_graph_for_target(manifest, lockfile, &HashMap::new(), loader_package, target);
+        build_solver_graph_for_target(manifest, lockfile, &HashMap::new(), loader_package, target)?;
     match pubgrub::resolve(&graph.provider, graph.root_package, graph.root_version) {
         Ok(solution) => Ok(solution),
         Err(pubgrub::PubGrubError::NoSolution(derivation_tree)) => {
@@ -233,7 +234,7 @@ pub(crate) fn selected_runtime_load(
                 )
                 && let Some(artifact) = artifacts.iter().find(|artifact| {
                     artifact.id == *artifact_id
-                        && Version::parse(&artifact.version, "forge") == *selected_version
+                        && Version::parse(&artifact.version, LoaderKind::Forge) == *selected_version
                 })
             {
                 selected.loader_nested_jars.insert(if prefix.is_empty() {
@@ -277,7 +278,7 @@ pub(crate) fn selected_runtime_load(
             && let Some((prefix, artifacts)) = embedded_artifacts_at_path(entry, &identity.path)
             && let Some(artifact) = artifacts.iter().find(|artifact| {
                 artifact.id == *artifact_id
-                    && Version::parse(&artifact.version, "forge") == *selected_version
+                    && Version::parse(&artifact.version, LoaderKind::Forge) == *selected_version
             })
         {
             let path = if prefix.is_empty() {
@@ -440,7 +441,7 @@ pub async fn resolve_candidate_portfolio_with_progress(
         lockfile,
         &catalog.candidates,
         catalog.loader_package.as_ref(),
-    );
+    )?;
     let mut maximized_mods: Vec<_> = catalog
         .candidates
         .keys()
@@ -450,7 +451,7 @@ pub async fn resolve_candidate_portfolio_with_progress(
     maximized_mods.sort();
     maximized_mods.dedup();
     let maximized_packages = maximized_mods.into_iter().map(SolverPackage::logical);
-    let watched_candidates = highest_candidates(&catalog.candidates, &manifest.project.modloader);
+    let watched_candidates = highest_candidates(&catalog.candidates, graph.loader);
     let mut trace = diagnostics::ResolutionTrace::with_progress(watched_candidates, progress);
     let solutions = match pubgrub::resolve_maximal_solutions_with_observer(
         &graph.provider,
@@ -510,7 +511,7 @@ pub async fn resolve_candidate_portfolio_with_progress(
     let report_context = ReportContext {
         lockfile,
         candidates: &catalog.candidates,
-        loader: &manifest.project.modloader,
+        loader: graph.loader,
         exclusions: &graph.exclusions,
         overrides: &graph.overrides,
         target: graph.target,
@@ -526,7 +527,7 @@ pub async fn resolve_candidate_portfolio_with_progress(
 struct ReportContext<'a> {
     lockfile: &'a OrbitLockfile,
     candidates: &'a HashMap<String, Vec<CandidateVersion>>,
-    loader: &'a str,
+    loader: LoaderKind,
     exclusions: &'a graph::ExclusionMap,
     overrides: &'a graph::OverrideMap,
     target: Environment,
@@ -742,7 +743,7 @@ fn selected_candidate_description(
 
 fn highest_candidates(
     candidates: &HashMap<String, Vec<CandidateVersion>>,
-    loader: &str,
+    loader: LoaderKind,
 ) -> impl Iterator<Item = (String, SolverVersion)> {
     let mut watched: Vec<_> = candidates
         .iter()
@@ -768,10 +769,10 @@ fn highest_candidates(
     watched.into_iter()
 }
 
-fn highest_candidate<'a>(
-    candidates: Option<&'a [CandidateVersion]>,
-    loader: &str,
-) -> Option<&'a CandidateVersion> {
+fn highest_candidate(
+    candidates: Option<&[CandidateVersion]>,
+    loader: LoaderKind,
+) -> Option<&CandidateVersion> {
     candidates?
         .iter()
         .max_by_key(|candidate| Version::parse(&candidate.jar_version, loader))

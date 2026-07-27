@@ -4,6 +4,7 @@ use std::collections::{HashMap, HashSet};
 
 use pubgrub::{IncompatibilityConstraint, IncompatibilityConstraintTerm, Ranges};
 
+use crate::loader::{LoaderKind, NestedPriorityPolicy};
 use crate::lockfile::{BundledMod, OrbitLockfile};
 use crate::manifest::OrbitManifest;
 use crate::metadata::{
@@ -25,7 +26,7 @@ pub(crate) type OverrideMap = HashMap<String, String>;
 
 #[derive(Clone, Copy)]
 struct GraphContext<'a> {
-    loader: &'a str,
+    loader: LoaderKind,
     exclusions: &'a ExclusionMap,
     overrides: &'a OverrideMap,
     target: Environment,
@@ -71,6 +72,7 @@ pub(crate) struct SolverGraph {
     pub(crate) provider: OrbitDependencyProvider,
     pub(crate) root_package: SolverPackage,
     pub(crate) root_version: SolverVersion,
+    pub(crate) loader: LoaderKind,
     pub(crate) exclusions: ExclusionMap,
     pub(crate) overrides: OverrideMap,
     pub(crate) target: Environment,
@@ -81,7 +83,7 @@ pub(crate) fn build_solver_graph(
     lockfile: &OrbitLockfile,
     candidates: &HashMap<String, Vec<CandidateVersion>>,
     loader_package: Option<&PlatformCandidate>,
-) -> SolverGraph {
+) -> Result<SolverGraph, String> {
     build_solver_graph_for_target(
         manifest,
         lockfile,
@@ -97,8 +99,11 @@ pub(crate) fn build_solver_graph_for_target(
     candidates: &HashMap<String, Vec<CandidateVersion>>,
     loader_package: Option<&PlatformCandidate>,
     target: Environment,
-) -> SolverGraph {
-    let loader = &manifest.project.modloader;
+) -> Result<SolverGraph, String> {
+    let loader = manifest
+        .project
+        .loader_kind()
+        .map_err(|error| error.to_string())?;
     let exclusions = manifest_exclusions(manifest);
     let overrides = manifest_overrides(manifest);
     let mut provider = OrbitDependencyProvider::new();
@@ -133,14 +138,15 @@ pub(crate) fn build_solver_graph_for_target(
     provider.add_package_incompatibilities(root_package.clone(), root_version.clone(), Vec::new());
     ensure_referenced_packages(&mut provider);
 
-    SolverGraph {
+    Ok(SolverGraph {
         provider,
         root_package,
         root_version,
+        loader,
         exclusions,
         overrides,
         target,
-    }
+    })
 }
 
 fn register_platform_packages(
@@ -149,18 +155,14 @@ fn register_platform_packages(
     loader_package: Option<&PlatformCandidate>,
     context: &GraphContext<'_>,
 ) {
-    let loader = &manifest.project.modloader;
+    let loader = context.loader;
     register_leaf(
         provider,
         "minecraft",
         Version::parse(&manifest.project.mc_version, loader),
     );
 
-    let canonical_loader = match loader.as_str() {
-        "fabric" => "fabricloader",
-        "quilt" => "quilt_loader",
-        other => other,
-    };
+    let canonical_loader = loader.semantics().canonical_package;
     let loader_version = Version::parse(&manifest.project.modloader_version, loader);
     if let Some(metadata) = loader_package
         .filter(|metadata| metadata.mod_id == canonical_loader)
@@ -171,28 +173,8 @@ fn register_platform_packages(
         register_leaf(provider, canonical_loader, loader_version.clone());
     }
 
-    match loader.as_str() {
-        "fabric" => register_leaf(provider, "fabric", loader_version),
-        "quilt" => register_leaf(
-            provider,
-            "quiltloader",
-            Version::parse(&manifest.project.modloader_version, loader),
-        ),
-        "forge" => {
-            let major = manifest
-                .project
-                .modloader_version
-                .split('.')
-                .next()
-                .unwrap_or(&manifest.project.modloader_version);
-            register_leaf(provider, "javafml", Version::parse(major, loader));
-            register_leaf(provider, "lowcodefml", Version::parse(major, loader));
-        }
-        "neoforge" => {
-            register_leaf(provider, "javafml", Version::parse("1", loader));
-            register_leaf(provider, "lowcodefml", Version::parse("1", loader));
-        }
-        _ => {}
+    for (capability, version) in loader.platform_capabilities(&manifest.project.modloader_version) {
+        register_leaf(provider, capability, Version::parse(&version, loader));
     }
 
     register_leaf(
@@ -538,7 +520,7 @@ fn register_bundled_lock(
 fn bundled_links(
     mods: &[BundledMod],
     parent: &CandidateIdentity,
-    loader: &str,
+    loader: LoaderKind,
 ) -> Vec<BundledLink> {
     mods.iter()
         .enumerate()
@@ -559,7 +541,7 @@ fn bundled_links(
 fn candidate_bundled_links(
     mods: &[BundledCandidate],
     parent: &CandidateIdentity,
-    loader: &str,
+    loader: LoaderKind,
 ) -> Vec<BundledLink> {
     mods.iter()
         .enumerate()
@@ -584,7 +566,7 @@ fn bundled_link(
     origin: &crate::jar::JarModOrigin,
     parent: &CandidateIdentity,
     index: usize,
-    loader: &str,
+    loader: LoaderKind,
 ) -> BundledLink {
     let mut path = parent.path.clone();
     path.push(index);
@@ -670,7 +652,7 @@ fn register_module(
     add_version(provider, package.clone(), solver_version.clone());
     provider.add_candidate_priority(
         identity.clone(),
-        if loader == "fabric" {
+        if loader.semantics().nested_priority == NestedPriorityPolicy::ParentOrder {
             parent_priority
         } else {
             Vec::new()
@@ -719,7 +701,7 @@ fn register_module(
 
     if let Some(artifact) = source_artifact {
         let artifact_package = SolverPackage::EmbeddedArtifact(artifact.id.clone());
-        let artifact_version = Version::parse(&artifact.version, "forge");
+        let artifact_version = Version::parse(&artifact.version, LoaderKind::Forge);
         register_proxy_candidate(
             provider,
             &mut dependencies,
@@ -733,7 +715,7 @@ fn register_module(
 
     for artifact in embedded_artifacts {
         let artifact_package = SolverPackage::EmbeddedArtifact(artifact.id.clone());
-        let artifact_version = Version::parse(&artifact.version, "forge");
+        let artifact_version = Version::parse(&artifact.version, LoaderKind::Forge);
         let has_mod_provider = bundled.iter().any(|link| {
             nested_artifact(&link.origin).is_some_and(|source| {
                 source.id == artifact.id
@@ -754,7 +736,10 @@ fn register_module(
         }
         dependencies.push((
             artifact_package,
-            solver_range(Version::parse_constraint(&artifact.requirement, "forge")),
+            solver_range(Version::parse_constraint(
+                &artifact.requirement,
+                LoaderKind::Forge,
+            )),
         ));
     }
     if let Some((owner_package, owner_version)) = owner {
@@ -841,7 +826,7 @@ fn register_proxy_candidate(
 
 fn root_dependencies(
     manifest: &OrbitManifest,
-    loader: &str,
+    loader: LoaderKind,
     overrides: &OverrideMap,
     target: Environment,
 ) -> Vec<(SolverPackage, Ranges<SolverVersion>)> {
@@ -872,11 +857,7 @@ fn root_dependencies(
             loader,
         ))),
     ));
-    let canonical_loader = match loader {
-        "fabric" => "fabricloader",
-        "quilt" => "quilt_loader",
-        other => other,
-    };
+    let canonical_loader = loader.semantics().canonical_package;
     dependencies.push((
         SolverPackage::Platform(canonical_loader.to_string()),
         solver_range(Ranges::singleton(Version::parse(
@@ -927,7 +908,7 @@ pub(crate) fn manifest_overrides(manifest: &OrbitManifest) -> OverrideMap {
 pub(crate) fn dependency_constraint(
     package: &str,
     constraint: &str,
-    loader: &str,
+    loader: LoaderKind,
     overrides: &OverrideMap,
 ) -> Ranges<SolverVersion> {
     solver_range(Version::parse_constraint(
@@ -1023,6 +1004,26 @@ mod tests {
     use crate::lockfile::{LockMeta, PackageEntry};
     use crate::metadata::{DependencyKind, DependencyOrdering, ModDependency};
     use crate::resolver::ordering::resolution_warnings;
+
+    fn build_solver_graph(
+        manifest: &OrbitManifest,
+        lockfile: &OrbitLockfile,
+        candidates: &HashMap<String, Vec<CandidateVersion>>,
+        loader_package: Option<&PlatformCandidate>,
+    ) -> SolverGraph {
+        super::build_solver_graph(manifest, lockfile, candidates, loader_package).unwrap()
+    }
+
+    fn build_solver_graph_for_target(
+        manifest: &OrbitManifest,
+        lockfile: &OrbitLockfile,
+        candidates: &HashMap<String, Vec<CandidateVersion>>,
+        loader_package: Option<&PlatformCandidate>,
+        target: Environment,
+    ) -> SolverGraph {
+        super::build_solver_graph_for_target(manifest, lockfile, candidates, loader_package, target)
+            .unwrap()
+    }
 
     fn dependency(id: &str, requirement: &str, kind: DependencyKind) -> DependencyExpression {
         ModDependency {
@@ -1791,7 +1792,7 @@ z_parent = { version = "*", remotes = [{ type = "file", path = "z_parent.jar" }]
             &lockfile,
             &HashMap::new(),
             &solution,
-            &manifest.project.modloader,
+            manifest.project.loader_kind().unwrap(),
             &graph.exclusions,
             &graph.overrides,
             graph.target,

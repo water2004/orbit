@@ -60,6 +60,14 @@ pub struct ProjectMeta {
     pub version: Option<String>,
 }
 
+impl ProjectMeta {
+    pub(crate) fn loader_kind(&self) -> Result<crate::loader::LoaderKind, OrbitError> {
+        self.modloader.parse().map_err(|message: String| {
+            OrbitError::Other(anyhow::anyhow!("invalid project.modloader: {message}"))
+        })
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ResolverConfig {
@@ -248,6 +256,7 @@ impl OrbitManifest {
     }
 
     pub fn validate(&self) -> Result<(), OrbitError> {
+        self.project.loader_kind()?;
         for (package, dependency) in &self.dependencies {
             dependency.validate(package)?;
         }

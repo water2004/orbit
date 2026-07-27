@@ -9,6 +9,8 @@ use pubgrub::Ranges;
 use std::cmp::Ordering;
 use std::hash::{Hash, Hasher};
 
+use crate::loader::{LoaderKind, VersionScheme};
+
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub enum Version {
     Fabric(fabric::SemanticVersion),
@@ -72,30 +74,28 @@ impl Version {
 
     /// Parse a raw version string into a Version.
     /// The version string should come from the mod's own fabric.mod.json, not a platform release name.
-    pub fn parse(raw: &str, loader: &str) -> Self {
-        match loader {
-            "fabric" | "quilt" => {
+    pub fn parse(raw: &str, loader: LoaderKind) -> Self {
+        match loader.semantics().version_scheme {
+            VersionScheme::FabricPredicate => {
                 if let Ok(v) = fabric::SemanticVersion::parse(raw, true) {
                     Self::Fabric(v)
                 } else {
                     Self::Generic(raw.to_string())
                 }
             }
-            "forge" | "neoforge" => Self::Maven(maven::MavenVersion::parse(raw)),
-            _ => Self::Generic(raw.to_string()),
+            VersionScheme::MavenRange => Self::Maven(maven::MavenVersion::parse(raw)),
         }
     }
 
-    pub fn parse_constraint(raw: &str, loader: &str) -> Ranges<Self> {
+    pub fn parse_constraint(raw: &str, loader: LoaderKind) -> Ranges<Self> {
         let constraint = raw.trim();
         if constraint.is_empty() || constraint == "*" {
             return Ranges::full();
         }
 
-        match loader {
-            "fabric" | "quilt" => fabric::parse_constraint(constraint),
-            "forge" | "neoforge" => maven::parse_constraint(constraint),
-            _ => Ranges::singleton(Self::parse(constraint, loader)),
+        match loader.semantics().version_scheme {
+            VersionScheme::FabricPredicate => fabric::parse_constraint(constraint),
+            VersionScheme::MavenRange => maven::parse_constraint(constraint),
         }
     }
 }

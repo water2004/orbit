@@ -551,8 +551,8 @@ fn discover_server_platform(
         )));
     }
     if requested_loader_version.is_some_and(|requested| {
-        crate::versions::Version::parse(requested, server.loader.as_str())
-            != crate::versions::Version::parse(&server.loader_version, server.loader.as_str())
+        crate::versions::Version::parse(requested, server.loader)
+            != crate::versions::Version::parse(&server.loader_version, server.loader)
     }) {
         return Err(OrbitError::Other(anyhow::anyhow!(
             "dedicated-server metadata selects {} loader version '{}', not requested '{}'",
@@ -620,8 +620,8 @@ fn build_discovered_platform(
                         expected_mod_id
                     )));
                 }
-                if crate::versions::Version::parse(&metadata.version, loader.as_str())
-                    != crate::versions::Version::parse(&loader_version, loader.as_str())
+                if crate::versions::Version::parse(&metadata.version, loader)
+                    != crate::versions::Version::parse(&loader_version, loader)
                 {
                     return Err(OrbitError::Other(anyhow::anyhow!(
                         "{loader} loader JAR '{}' declares version '{}', but launcher metadata \
@@ -952,8 +952,8 @@ fn find_loader_jar(
         .filter(|path| {
             crate::jar::read_mod_metadata(path, loader.as_str()).is_ok_and(|metadata| {
                 metadata.mod_id == expected_mod_id
-                    && crate::versions::Version::parse(&metadata.version, loader.as_str())
-                        == crate::versions::Version::parse(version, loader.as_str())
+                    && crate::versions::Version::parse(&metadata.version, loader)
+                        == crate::versions::Version::parse(version, loader)
             })
         })
         .cloned()

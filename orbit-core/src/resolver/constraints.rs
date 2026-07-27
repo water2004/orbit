@@ -2,6 +2,7 @@
 
 use pubgrub::{IncompatibilityConstraint, IncompatibilityConstraintTerm, Ranges};
 
+use crate::loader::LoaderKind;
 use crate::metadata::{DependencyExpression, DependencyKind, Environment, ModDependency};
 use crate::resolver::provider::PackageIncompatibilities;
 use crate::resolver::types::{SolverPackage, SolverVersion};
@@ -13,7 +14,7 @@ use super::graph::{
 pub(super) fn compile_dependency_constraints(
     expressions: &[DependencyExpression],
     package: &str,
-    loader: &str,
+    loader: LoaderKind,
     exclusions: &ExclusionMap,
     overrides: &OverrideMap,
     target: Environment,
@@ -97,7 +98,7 @@ fn kind_formula(
     expression: &DependencyExpression,
     kind: DependencyKind,
     package: &str,
-    loader: &str,
+    loader: LoaderKind,
     exclusions: &ExclusionMap,
     overrides: &OverrideMap,
     target: Environment,
@@ -167,7 +168,7 @@ fn append_forbidden_formula(
 fn required_formula(
     expression: &DependencyExpression,
     package: &str,
-    loader: &str,
+    loader: LoaderKind,
     exclusions: &ExclusionMap,
     overrides: &OverrideMap,
     target: Environment,
@@ -218,7 +219,7 @@ fn required_formula(
 
 fn presence_formula(
     expression: &DependencyExpression,
-    loader: &str,
+    loader: LoaderKind,
     overrides: &OverrideMap,
 ) -> Formula {
     match expression {

@@ -70,6 +70,24 @@ impl LoaderKind {
             },
         }
     }
+
+    pub(crate) fn platform_capabilities(self, loader_version: &str) -> Vec<(&'static str, String)> {
+        match self {
+            Self::Fabric => vec![("fabric", loader_version.to_string())],
+            Self::Quilt => vec![("quiltloader", loader_version.to_string())],
+            Self::Forge => {
+                let major = loader_version.split('.').next().unwrap_or(loader_version);
+                vec![
+                    ("javafml", major.to_string()),
+                    ("lowcodefml", major.to_string()),
+                ]
+            }
+            Self::NeoForge => vec![
+                ("javafml", "1".to_string()),
+                ("lowcodefml", "1".to_string()),
+            ],
+        }
+    }
 }
 
 impl std::fmt::Display for LoaderKind {

@@ -190,8 +190,8 @@ fn load_loader_package(
                     expected_mod_id
                 )));
             }
-            if crate::versions::Version::parse(&metadata.version, loader.as_str())
-                != crate::versions::Version::parse(loader_version, loader.as_str())
+            if crate::versions::Version::parse(&metadata.version, loader)
+                != crate::versions::Version::parse(loader_version, loader)
             {
                 return Err(snapshot_error(format!(
                     "platform.loader_jar '{}' declares version '{}', but project.modloader_version is '{}'",

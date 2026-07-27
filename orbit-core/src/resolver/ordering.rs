@@ -4,6 +4,7 @@ use std::collections::{HashMap, HashSet};
 
 use pubgrub::{IncompatibilityConstraint, IncompatibilityConstraintTerm, Ranges};
 
+use crate::loader::LoaderKind;
 use crate::lockfile::{BundledMod, OrbitLockfile};
 use crate::metadata::{
     DependencyExpression, DependencyKind, DependencyOrdering, Environment, ProvidedMod,
@@ -35,7 +36,7 @@ pub(crate) fn register_ordering_cycles(
     provider: &mut OrbitDependencyProvider,
     lockfile: &OrbitLockfile,
     candidates: &HashMap<String, Vec<CandidateVersion>>,
-    loader: &str,
+    loader: LoaderKind,
     exclusions: &ExclusionMap,
     overrides: &OverrideMap,
     target: Environment,
@@ -117,7 +118,7 @@ pub(crate) fn register_ordering_cycles(
 fn module_records(
     lockfile: &OrbitLockfile,
     candidates: &HashMap<String, Vec<CandidateVersion>>,
-    loader: &str,
+    loader: LoaderKind,
 ) -> Vec<ModuleRecord> {
     fn insert_bundled_lock(
         records: &mut HashMap<(SolverPackage, SolverVersion), ModuleRecord>,
@@ -125,7 +126,7 @@ fn module_records(
         owner: &str,
         source: &str,
         prefix: &[usize],
-        loader: &str,
+        loader: LoaderKind,
     ) {
         for (index, metadata) in bundled.iter().enumerate() {
             let mut path = prefix.to_vec();
@@ -160,7 +161,7 @@ fn module_records(
         owner: &str,
         source: &str,
         prefix: &[usize],
-        loader: &str,
+        loader: LoaderKind,
     ) {
         for (index, metadata) in bundled.iter().enumerate() {
             let mut path = prefix.to_vec();
@@ -266,7 +267,7 @@ pub(crate) fn resolution_warnings(
     lockfile: &OrbitLockfile,
     candidates: &HashMap<String, Vec<CandidateVersion>>,
     solution: &pubgrub::SelectedDependencies<SolverPackage, SolverVersion>,
-    loader: &str,
+    loader: LoaderKind,
     exclusions: &ExclusionMap,
     overrides: &OverrideMap,
     target: Environment,
@@ -321,7 +322,7 @@ fn provides_matching_version(
     record: &ModuleRecord,
     id: &str,
     range: &Ranges<SolverVersion>,
-    loader: &str,
+    loader: LoaderKind,
 ) -> bool {
     if record.mod_id == id && range.contains(&record.solver_version) {
         return true;

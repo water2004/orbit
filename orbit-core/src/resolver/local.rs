@@ -23,7 +23,7 @@ pub(crate) fn check_local_graph(
             .map(IdentifiedMod::to_package_entry)
             .collect(),
     };
-    let graph = build_solver_graph(manifest, &lockfile, &HashMap::new(), None);
+    let graph = build_solver_graph(manifest, &lockfile, &HashMap::new(), None)?;
 
     match pubgrub::resolve(&graph.provider, graph.root_package, graph.root_version) {
         Ok(_) => Ok(()),
