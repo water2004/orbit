@@ -315,7 +315,17 @@ HMCL 作为行为基准的方式是建立差分 fixture：同一份官方 Minecr
 - PID、启动时间、退出码和日志路径的结构化事件；
 - headless Linux 上没有图形环境、浏览器和系统 keyring 的正常运行。
 
-不得自动接受 EULA。`--accept-eula` 必须是显式参数并在 JSON 结果中留下非秘密审计事实。
+不得自动接受 EULA，也不得让普通 `--yes`、默认配置或安装脚本静默代替法律确认。服务端
+bootstrap/install 在提交运行时和写入 `eula=true` 前，必须获取并展示
+[Minecraft 官方 EULA](https://www.minecraft.net/en-us/eula) 的完整正文，然后针对该正文的
+SHA-256 digest 明确询问用户是否同意。终端文本模式使用可滚动/pager 输出，不能只打印摘要
+或链接。
+
+JSON、GUI 和其他非交互调用使用两步协议：`server eula show` 返回完整正文、官方 URL、
+获取时间与 digest；随后 `server eula accept <digest>` 或 bootstrap 的等价参数只接受刚刚
+展示的 digest。Launcher 在实例 lock 中记录 URL、digest、接受时间和交互方式，不记录用户
+身份信息。官方正文 digest 变化后，下一次 server install/update 必须重新展示并确认；launch
+不隐式联网检查 EULA。无法取得完整正文时停止安装，不能用缓存摘要或旧链接伪造确认。
 
 后台服务需要一个持续拥有子进程 stdin 的 supervisor。首版若实现 `--detach`，必须同时
 实现本地 IPC、状态查询和优雅停止；不能只写 PID 后丢失 stdin。若该 supervisor 未完成，
@@ -501,16 +511,35 @@ External Yggdrasil/authlib-injector 接口即可通过通用 provider 使用，C
 
 ### 10.2 秘密存储
 
-账户列表只保存 provider、profile name、UUID、最后登录时间等非秘密元数据。refresh
-token、密码和会话秘密必须保存到：
+账户列表只保存 provider、profile name、UUID、最后登录时间等非秘密元数据。秘密通过
+core 的 `SecretStore` trait 按稳定 `account_id` 读取、原子替换和删除，不允许账户模块
+直接操作某个平台的密钥 API。
 
-- Windows Credential Manager；
-- macOS Keychain；
-- Linux Secret Service；
-- 或用户显式创建并解锁的本地加密 vault。
+持久化会话内容按 provider 区分：
 
-禁止在 keyring 不可用时静默写明文文件。headless Linux 服务端通常不需要账户；如果
-用户确实要在无 Secret Service 的客户端环境登录，必须显式选择加密 vault。
+- Microsoft 保存 refresh token、当前 access token、过期时间和轮换版本；启动先静默刷新，
+  成功持久化新 token 后才删除旧 token；
+- External Yggdrasil 保存 access token 与 client token；启动执行
+  `validate -> refresh -> interaction_required`，密码只用于首次 authenticate，永不保存；
+- Offline 不产生 secret record。
+
+Windows backend 使用当前用户作用域 DPAPI 保护任意长度的版本化 secret envelope，密文
+原子写入 Launcher data 目录；不得使用 machine scope。Linux 桌面 backend 使用 Secret
+Service。两者都应在同一操作系统登录会话中静默读取，不要求用户重复登录游戏账户。
+
+无 Secret Service 的 headless Linux 不允许静默降级到明文或内置应用密钥混淆。用户必须
+显式创建 Argon2id + XChaCha20-Poly1305 加密 vault；密码只能从安全 TTY、stdin 或 GUI IPC
+输入，不能出现在命令行。vault 解锁后可由当前登录会话内的 credential agent 保持主密钥，
+GUI/CLI 通过权限受限的 Unix Domain Socket 使用；agent 退出或用户退出登录后需要重新解锁
+vault，但不需要重新登录游戏账户。纯服务端 External Yggdrasil/Authlib Injector 配置不含
+用户 token，因此不依赖 vault。
+
+HMCL 只作为“公开账户 metadata 与私有可续期 session 分离、启动时静默 validate/refresh”
+的行为参考。不得复制其源码，也不得采用内置固定密钥的便携混淆作为安全存储。
+
+所有 secret buffer 在使用后清零；JSON、日志、错误、`launch --dry-run`、导出和诊断包只
+出现 `account_id`。logout 先尽力调用远端 invalidate/revoke，再删除本地 secret；远端不可用
+不能阻止本地凭据删除，但必须返回 warning。
 
 ### 10.3 非交互协议
 
