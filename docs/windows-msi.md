@@ -15,13 +15,13 @@ Orbit 的 Windows MSI 是 64 位、per-machine 安装包。它把 `orbit.exe` �
 系统 PATH；传递 `ADD_TO_PATH=0` 可以关闭：
 
 ```powershell
-msiexec.exe /i orbit-0.1.1-x86_64.msi /quiet ADD_TO_PATH=0
+msiexec.exe /i orbit-0.1.2-x86_64.msi /quiet ADD_TO_PATH=0
 ```
 
 静默卸载默认保留 AppData。只有显式传递 `REMOVE_APPDATA=1` 才删除上述两个默认目录：
 
 ```powershell
-msiexec.exe /x orbit-0.1.1-x86_64.msi /quiet REMOVE_APPDATA=1
+msiexec.exe /x orbit-0.1.2-x86_64.msi /quiet REMOVE_APPDATA=1
 ```
 
 ## 构建
