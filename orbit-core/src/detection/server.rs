@@ -578,10 +578,10 @@ fn resolve_minecraft_game_jar(
             )));
         }
     };
-    let game_jar = instance_dir
-        .join("versions")
-        .join(&entry.id)
-        .join(&entry.path);
+    // Mojang's bundler list already includes its version directory in the
+    // third field (for example `26.1.2/server-26.1.2.jar`). It is relative to
+    // `versions/`, not to `versions/<id>/`.
+    let game_jar = instance_dir.join("versions").join(&entry.path);
     verify_listed_file(
         instance_dir,
         &game_jar,
@@ -1320,7 +1320,7 @@ mod tests {
             &[
                 (
                     "META-INF/versions.list",
-                    format!("{minecraft_hash}\t26.1.2\tserver-26.1.2.jar\n").as_bytes(),
+                    format!("{minecraft_hash}\t26.1.2\t26.1.2/server-26.1.2.jar\n").as_bytes(),
                 ),
                 (
                     "META-INF/libraries.list",
