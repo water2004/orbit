@@ -4,6 +4,7 @@
 //! render terminal output and has no dependency on Orbit's mod-management
 //! crates.
 
+pub mod account;
 pub mod artifact;
 mod atomic_io;
 pub mod client;
@@ -23,7 +24,14 @@ pub mod operations;
 pub mod platform;
 pub mod registry;
 pub mod runtime;
+pub mod secret_store;
 
+pub use account::{
+    AccountLaunchIdentity, AccountMetadata, AccountProvider, AccountRepository,
+    ExternalYggdrasilLoginRequest, MicrosoftDeviceSession, MicrosoftLoginProgressEvent,
+    begin_microsoft_device_login, complete_microsoft_device_login, create_offline_account,
+    login_external_yggdrasil, resolve_launch_identity,
+};
 pub use artifact::{
     ArtifactCache, ArtifactRequest, ArtifactTransferEvent, CachedArtifact, ExpectedHash,
     hash_file_sha256,
@@ -33,7 +41,8 @@ pub use client::{
 };
 pub use config::{
     ConfigEntry, ConfigKey, ConfigMutation, GlobalConfig, InstallerConfig, JavaProvider,
-    UiPreference, get_config, list_config, set_config, unset_config,
+    UiPreference, YggdrasilProviderConfig, add_yggdrasil_provider, get_config, list_config,
+    remove_yggdrasil_provider, set_config, unset_config,
 };
 pub use context::{ContextIntent, ContextSource, ResolvedInstance, resolve_instance};
 pub use error::LauncherError;
@@ -78,3 +87,4 @@ pub use registry::{InstanceRegistry, RegistryEntry};
 pub use runtime::{
     NativeRuntimeEnvironment, RuntimeContext, RuntimeEnvironment, RuntimePathOptions, RuntimePaths,
 };
+pub use secret_store::{SecretStore, native_secret_store};

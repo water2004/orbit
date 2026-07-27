@@ -1,8 +1,9 @@
 use std::path::PathBuf;
 
 use orbit_launcher_core::{
-    ArtifactTransferEvent, ContextSource, InstallProgressEvent, InstallerOutputStream,
-    InstallerSide, InstanceManifest, JavaProgressEvent, LoaderInstallerEvent, RegistryEntry,
+    AccountMetadata, AccountProvider, ArtifactTransferEvent, ContextSource, InstallProgressEvent,
+    InstallerOutputStream, InstallerSide, InstanceManifest, JavaProgressEvent,
+    LoaderInstallerEvent, MicrosoftDeviceSession, MicrosoftLoginProgressEvent, RegistryEntry,
 };
 use serde::Serialize;
 
@@ -167,6 +168,34 @@ pub struct ConfigListView {
 }
 
 #[derive(Debug, Serialize)]
+pub struct YggdrasilProviderView {
+    pub id: String,
+    pub api_root: String,
+    pub allow_insecure_http: bool,
+}
+
+impl From<orbit_launcher_core::YggdrasilProviderConfig> for YggdrasilProviderView {
+    fn from(provider: orbit_launcher_core::YggdrasilProviderConfig) -> Self {
+        Self {
+            id: provider.id,
+            api_root: provider.api_root,
+            allow_insecure_http: provider.allow_insecure_http,
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct YggdrasilProviderListView {
+    pub providers: Vec<YggdrasilProviderView>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct YggdrasilProviderMutationView {
+    pub action: &'static str,
+    pub provider: YggdrasilProviderView,
+}
+
+#[derive(Debug, Serialize)]
 pub struct ConfigEntryView {
     pub key: &'static str,
     pub value: Option<String>,
@@ -224,6 +253,95 @@ pub struct InstallView {
     pub cached_artifacts: usize,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct AccountView {
+    pub id: String,
+    pub provider: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provider_id: Option<String>,
+    pub profile_id: String,
+    pub profile_name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub login_name: Option<String>,
+    pub is_default: bool,
+    pub secret_backend: String,
+    pub created_at_unix_seconds: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_authenticated_at_unix_seconds: Option<u64>,
+}
+
+impl AccountView {
+    pub fn new(
+        account: &AccountMetadata,
+        default: Option<uuid::Uuid>,
+        secret_backend: &str,
+    ) -> Self {
+        let provider_id = match &account.provider {
+            AccountProvider::ExternalYggdrasil { provider_id } => Some(provider_id.clone()),
+            _ => None,
+        };
+        Self {
+            id: account.id.to_string(),
+            provider: account.provider.as_str().to_string(),
+            provider_id,
+            profile_id: account.profile_id.to_string(),
+            profile_name: account.profile_name.clone(),
+            login_name: account.login_name.clone(),
+            is_default: default == Some(account.id),
+            secret_backend: secret_backend.to_string(),
+            created_at_unix_seconds: account.created_at_unix_seconds,
+            last_authenticated_at_unix_seconds: account.last_authenticated_at_unix_seconds,
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct AccountListView {
+    pub accounts: Vec<AccountView>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AccountLoginView {
+    pub method: &'static str,
+    #[serde(flatten)]
+    pub account: AccountView,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AccountSelectionView {
+    pub scope: &'static str,
+    pub account: Option<AccountView>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AccountLogoutView {
+    pub account: AccountView,
+    pub local_secret_deleted: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct MicrosoftDeviceSessionView {
+    pub login_session_id: String,
+    pub verification_uri: String,
+    pub user_code: String,
+    pub expires_at_unix_seconds: u64,
+    pub polling_interval_seconds: u64,
+    pub message: Option<String>,
+}
+
+impl From<MicrosoftDeviceSession> for MicrosoftDeviceSessionView {
+    fn from(session: MicrosoftDeviceSession) -> Self {
+        Self {
+            login_session_id: session.id.to_string(),
+            verification_uri: session.verification_uri,
+            user_code: session.user_code,
+            expires_at_unix_seconds: session.expires_at_unix_seconds,
+            polling_interval_seconds: session.polling_interval_seconds,
+            message: session.message,
+        }
+    }
+}
+
 #[derive(Debug, Serialize)]
 pub struct ProgressEnvelope {
     pub schema_version: u32,
@@ -235,11 +353,11 @@ pub struct ProgressEnvelope {
 }
 
 impl ProgressEnvelope {
-    pub fn new(sequence: u64, data: ProgressData) -> Self {
+    pub fn new(command: &'static str, sequence: u64, data: ProgressData) -> Self {
         Self {
             schema_version: SCHEMA_VERSION,
             kind: "progress",
-            command: "install",
+            command,
             sequence,
             data,
         }
@@ -309,6 +427,17 @@ pub enum ProgressData {
     },
     StagingVerified,
     Committed,
+    MicrosoftAuthorizationPolling {
+        attempt: u64,
+        elapsed_seconds: u64,
+        expires_at_unix_seconds: u64,
+    },
+    MicrosoftAuthorizationReceived,
+    XboxAuthenticated,
+    MinecraftAuthenticated,
+    AccountSessionStored {
+        account_id: String,
+    },
 }
 
 impl From<InstallProgressEvent> for ProgressData {
@@ -339,6 +468,30 @@ impl From<InstallProgressEvent> for ProgressData {
 }
 
 impl ProgressData {
+    pub fn from_microsoft(event: MicrosoftLoginProgressEvent) -> Self {
+        match event {
+            MicrosoftLoginProgressEvent::Polling {
+                attempt,
+                elapsed_seconds,
+                expires_at_unix_seconds,
+            } => Self::MicrosoftAuthorizationPolling {
+                attempt,
+                elapsed_seconds,
+                expires_at_unix_seconds,
+            },
+            MicrosoftLoginProgressEvent::AuthorizationReceived => {
+                Self::MicrosoftAuthorizationReceived
+            }
+            MicrosoftLoginProgressEvent::XboxAuthenticated => Self::XboxAuthenticated,
+            MicrosoftLoginProgressEvent::MinecraftAuthenticated => Self::MinecraftAuthenticated,
+            MicrosoftLoginProgressEvent::SessionStored { account_id } => {
+                Self::AccountSessionStored {
+                    account_id: account_id.to_string(),
+                }
+            }
+        }
+    }
+
     fn from_artifact(event: ArtifactTransferEvent) -> Self {
         match event {
             ArtifactTransferEvent::Started {

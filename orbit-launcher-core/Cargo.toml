@@ -22,10 +22,19 @@ sha2 = { workspace = true }
 sha1 = { workspace = true }
 hex = { workspace = true }
 futures-util = { workspace = true }
+async-trait = { workspace = true }
+zeroize = { workspace = true }
 tokio = { workspace = true }
 regex = { workspace = true }
 os_info = { workspace = true }
 shell-words = { workspace = true }
 zip = { workspace = true }
+md-5 = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Security_Cryptography", "Win32_System_Memory"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+secret-service = { version = "5.1.0", features = ["rt-tokio-crypto-rust"] }
 
 [dev-dependencies]

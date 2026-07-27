@@ -546,7 +546,7 @@ HMCL 只作为“公开账户 metadata 与私有可续期 session 分离、启�
 JSON 模式不得弹 prompt。登录拆成可恢复步骤：
 
 ```text
-orbit-launcher account login microsoft begin --flow device
+orbit-launcher account login microsoft begin
 orbit-launcher account login microsoft complete <login-session-id>
 ```
 
@@ -554,8 +554,7 @@ orbit-launcher account login microsoft complete <login-session-id>
 轮询并在成功后保存凭据。临时 device code 只能放入权限受限、到期自动删除的 auth session，
 不得出现在普通日志。
 
-text + TTY 下的便利命令 `account login microsoft` 可以顺序组合 begin/complete。GUI 应使用
-显式的两步协议。
+CLI 和 GUI 都使用显式的两步协议；这样退出或切换前端后仍能在有效期内继续同一个授权会话。
 
 ## 11. LaunchPlan
 

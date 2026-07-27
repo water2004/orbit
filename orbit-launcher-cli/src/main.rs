@@ -8,8 +8,10 @@ use std::time::{Duration, Instant};
 
 use clap::Parser;
 use cli::{Cli, OutputFormat, ProgressFormat};
+use orbit_launcher_core::MicrosoftLoginProgressEvent;
 use orbit_launcher_core::{EulaDocument, InstallProgressEvent, LauncherError};
 use output::{ErrorEnvelope, ProgressData, ProgressEnvelope, SuccessEnvelope};
+use zeroize::Zeroizing;
 
 #[tokio::main]
 async fn main() -> ExitCode {
@@ -58,6 +60,11 @@ fn command_name(command: &cli::Commands) -> &'static str {
             cli::ConfigCommands::Get { .. } => "config.get",
             cli::ConfigCommands::Set { .. } => "config.set",
             cli::ConfigCommands::Unset { .. } => "config.unset",
+            cli::ConfigCommands::Yggdrasil { command } => match command {
+                cli::YggdrasilProviderCommands::List => "config.yggdrasil.list",
+                cli::YggdrasilProviderCommands::Add { .. } => "config.yggdrasil.add",
+                cli::YggdrasilProviderCommands::Remove { .. } => "config.yggdrasil.remove",
+            },
         },
         cli::Commands::Instance { command } => match command {
             cli::InstanceCommands::Create { .. } => "instance.create",
@@ -73,6 +80,23 @@ fn command_name(command: &cli::Commands) -> &'static str {
                 cli::EulaCommands::Show => "server.eula.show",
                 cli::EulaCommands::Accept { .. } => "server.eula.accept",
             },
+        },
+        cli::Commands::Account { command } => match command {
+            cli::AccountCommands::Login { command } => match command {
+                cli::AccountLoginCommands::Offline { .. } => "account.login.offline",
+                cli::AccountLoginCommands::Yggdrasil { .. } => "account.login.yggdrasil",
+                cli::AccountLoginCommands::Microsoft { command } => match command {
+                    cli::MicrosoftLoginCommands::Begin => "account.login.microsoft.begin",
+                    cli::MicrosoftLoginCommands::Complete { .. } => {
+                        "account.login.microsoft.complete"
+                    }
+                },
+            },
+            cli::AccountCommands::List => "account.list",
+            cli::AccountCommands::Show { .. } => "account.show",
+            cli::AccountCommands::Select { .. } => "account.select",
+            cli::AccountCommands::Clear { .. } => "account.clear",
+            cli::AccountCommands::Logout { .. } => "account.logout",
         },
     }
 }
@@ -93,6 +117,14 @@ fn render_success(format: OutputFormat, output: app::CommandOutput) {
             app::CommandOutput::InstanceMutation(value) => print_json(command, value),
             app::CommandOutput::Rename(value) => print_json(command, value),
             app::CommandOutput::Default(value) => print_json(command, value),
+            app::CommandOutput::AccountList(value) => print_json(command, value),
+            app::CommandOutput::AccountDetail(value) => print_json(command, value),
+            app::CommandOutput::AccountLogin(value) => print_json(command, value),
+            app::CommandOutput::AccountSelection(value) => print_json(command, value),
+            app::CommandOutput::AccountLogout(value) => print_json(command, value),
+            app::CommandOutput::MicrosoftDeviceSession(value) => print_json(command, value),
+            app::CommandOutput::YggdrasilProviderList(value) => print_json(command, value),
+            app::CommandOutput::YggdrasilProviderMutation(value) => print_json(command, value),
         },
         OutputFormat::Text => render_text(output),
     }
@@ -200,7 +232,69 @@ fn render_text(output: app::CommandOutput) {
             Some(instance) => println!("Default instance: {} ({})", instance.name, instance.id),
             None => println!("No default instance is configured."),
         },
+        app::CommandOutput::AccountList(view) => {
+            if view.accounts.is_empty() {
+                println!("No launcher accounts are configured.");
+            } else {
+                for account in view.accounts {
+                    render_account(&account);
+                }
+            }
+        }
+        app::CommandOutput::AccountDetail(view) => render_account(&view),
+        app::CommandOutput::AccountLogin(view) => render_account(&view.account),
+        app::CommandOutput::AccountSelection(view) => match view.account {
+            Some(account) => println!(
+                "Selected {} ({}) for {} scope.",
+                account.profile_name, account.id, view.scope
+            ),
+            None => println!("Cleared the {} account selection.", view.scope),
+        },
+        app::CommandOutput::AccountLogout(view) => println!(
+            "Removed local session for {} ({}).",
+            view.account.profile_name, view.account.id
+        ),
+        app::CommandOutput::MicrosoftDeviceSession(view) => {
+            println!("Open: {}", view.verification_uri);
+            println!("Enter code: {}", view.user_code);
+            println!("Login session: {}", view.login_session_id);
+            println!(
+                "Then run: orbit-launcher account login microsoft complete {}",
+                view.login_session_id
+            );
+        }
+        app::CommandOutput::YggdrasilProviderList(view) => {
+            if view.providers.is_empty() {
+                println!("No External Yggdrasil providers are configured.");
+            } else {
+                for provider in view.providers {
+                    let insecure = if provider.allow_insecure_http {
+                        " [insecure HTTP allowed]"
+                    } else {
+                        ""
+                    };
+                    println!("{}  {}{}", provider.id, provider.api_root, insecure);
+                }
+            }
+        }
+        app::CommandOutput::YggdrasilProviderMutation(view) => println!(
+            "{} External Yggdrasil provider '{}' ({}).",
+            view.action, view.provider.id, view.provider.api_root
+        ),
     }
+}
+
+fn render_account(view: &output::AccountView) {
+    let default = if view.is_default { " [default]" } else { "" };
+    let provider = view
+        .provider_id
+        .as_ref()
+        .map(|id| format!("{}:{id}", view.provider))
+        .unwrap_or_else(|| view.provider.clone());
+    println!(
+        "{}  {}  {}  {}{}",
+        view.id, view.profile_name, view.profile_id, provider, default
+    );
 }
 
 fn render_config_entry(view: &output::ConfigEntryView) {
@@ -339,6 +433,13 @@ impl TerminalFrontend {
             }
             ProgressData::StagingVerified => eprintln!("Verified staged instance runtime."),
             ProgressData::Committed => eprintln!("Committed instance runtime."),
+            ProgressData::MicrosoftAuthorizationPolling { .. }
+            | ProgressData::MicrosoftAuthorizationReceived
+            | ProgressData::XboxAuthenticated
+            | ProgressData::MinecraftAuthenticated
+            | ProgressData::AccountSessionStored { .. } => {
+                unreachable!("authentication progress is rendered by its own command")
+            }
         }
     }
 }
@@ -351,7 +452,7 @@ impl app::Frontend for TerminalFrontend {
             ProgressFormat::Text => self.render_text_progress(data),
             ProgressFormat::Ndjson => {
                 self.sequence += 1;
-                let envelope = ProgressEnvelope::new(self.sequence, data);
+                let envelope = ProgressEnvelope::new("install", self.sequence, data);
                 eprintln!(
                     "{}",
                     serde_json::to_string(&envelope)
@@ -386,6 +487,76 @@ impl app::Frontend for TerminalFrontend {
         let mut input = String::new();
         std::io::stdin().lock().read_line(&mut input)?;
         Ok(input.trim() == "I AGREE")
+    }
+
+    fn read_password(
+        &mut self,
+        prompt: &str,
+        stdin: bool,
+    ) -> Result<Zeroizing<String>, LauncherError> {
+        if stdin {
+            let mut value = String::new();
+            let bytes = std::io::stdin().lock().read_line(&mut value)?;
+            if bytes == 0 {
+                return Err(LauncherError::InteractionRequired(
+                    "--password-stdin was specified but stdin contained no password".to_string(),
+                ));
+            }
+            while value.ends_with(['\r', '\n']) {
+                value.pop();
+            }
+            return Ok(Zeroizing::new(value));
+        }
+        if self.non_interactive
+            || self.output_format == OutputFormat::Json
+            || !std::io::stdin().is_terminal()
+            || !std::io::stderr().is_terminal()
+        {
+            return Err(LauncherError::InteractionRequired(
+                "a Yggdrasil password must be read from a secure TTY or --password-stdin"
+                    .to_string(),
+            ));
+        }
+        rpassword::prompt_password(prompt)
+            .map(Zeroizing::new)
+            .map_err(LauncherError::from)
+    }
+
+    fn microsoft_login_progress(&mut self, event: MicrosoftLoginProgressEvent) {
+        let data = ProgressData::from_microsoft(event);
+        match self.progress_format {
+            ProgressFormat::None => {}
+            ProgressFormat::Text => match data {
+                ProgressData::MicrosoftAuthorizationPolling {
+                    attempt,
+                    elapsed_seconds,
+                    ..
+                } => eprintln!(
+                    "Waiting for Microsoft authorization (attempt {attempt}, {elapsed_seconds}s)..."
+                ),
+                ProgressData::MicrosoftAuthorizationReceived => {
+                    eprintln!("Microsoft authorization received.")
+                }
+                ProgressData::XboxAuthenticated => eprintln!("Authenticated with Xbox Live."),
+                ProgressData::MinecraftAuthenticated => {
+                    eprintln!("Verified Minecraft ownership and profile.")
+                }
+                ProgressData::AccountSessionStored { .. } => {
+                    eprintln!("Stored the renewable account session securely.")
+                }
+                _ => unreachable!("Microsoft progress produced a non-authentication event"),
+            },
+            ProgressFormat::Ndjson => {
+                self.sequence += 1;
+                let envelope =
+                    ProgressEnvelope::new("account.login.microsoft.complete", self.sequence, data);
+                eprintln!(
+                    "{}",
+                    serde_json::to_string(&envelope)
+                        .expect("launcher progress views are serializable")
+                );
+            }
+        }
     }
 }
 

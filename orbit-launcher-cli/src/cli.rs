@@ -91,6 +91,70 @@ pub enum Commands {
         #[command(subcommand)]
         command: ServerCommands,
     },
+
+    /// Log in once, select accounts, and manage persisted sessions.
+    Account {
+        #[command(subcommand)]
+        command: AccountCommands,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum AccountCommands {
+    /// Create or renew an account session.
+    Login {
+        #[command(subcommand)]
+        command: AccountLoginCommands,
+    },
+    /// List non-secret account metadata.
+    List,
+    /// Show one account; defaults to the global selection.
+    Show { account: Option<String> },
+    /// Select an account for this client instance, or globally with --global.
+    Select {
+        account: String,
+        #[arg(long)]
+        global: bool,
+    },
+    /// Clear this client instance's account, or the global selection with --global.
+    Clear {
+        #[arg(long)]
+        global: bool,
+    },
+    /// Delete a persisted local account session and its non-secret metadata.
+    Logout { account: String },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum AccountLoginCommands {
+    /// Create a deterministic offline profile; this does not authenticate with Microsoft.
+    Offline { profile_name: String },
+    /// Use Microsoft's OAuth device authorization flow.
+    Microsoft {
+        #[command(subcommand)]
+        command: MicrosoftLoginCommands,
+    },
+    /// Authenticate against a configured standard External Yggdrasil provider.
+    Yggdrasil {
+        #[arg(long)]
+        provider: String,
+        #[arg(long)]
+        username: String,
+        /// Required when the account owns more than one Minecraft profile.
+        #[arg(long)]
+        profile: Option<String>,
+        /// Read exactly one password line from stdin, including in JSON/non-interactive mode.
+        #[arg(long)]
+        password_stdin: bool,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum MicrosoftLoginCommands {
+    /// Start device authorization and return a public user code.
+    Begin,
+    /// Poll and finish a previously started device authorization.
+    Complete { login_session_id: uuid::Uuid },
 }
 
 #[derive(Debug, Subcommand)]
@@ -122,6 +186,27 @@ pub enum ConfigCommands {
     Set { key: String, value: String },
     /// Remove an explicit setting and restore its default value.
     Unset { key: String },
+    /// Configure standard External Yggdrasil API roots.
+    Yggdrasil {
+        #[command(subcommand)]
+        command: YggdrasilProviderCommands,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum YggdrasilProviderCommands {
+    /// List configured providers.
+    List,
+    /// Add one provider with an exact API root.
+    Add {
+        id: String,
+        api_root: String,
+        /// Explicitly permit an HTTP API root; credentials can be intercepted.
+        #[arg(long)]
+        allow_insecure_http: bool,
+    },
+    /// Remove a provider; existing account metadata is preserved but cannot launch.
+    Remove { id: String },
 }
 
 #[derive(Debug, Subcommand)]

@@ -1,21 +1,29 @@
 use std::path::Path;
 
 use orbit_launcher_core::{
-    ConfigKey, ContextIntent, CreateInstanceRequest, EulaAcceptanceMethod, EulaDocument,
-    InstallProgressEvent, InstanceKind, InstanceRegistry, LauncherError, RuntimeContext,
-    ServerInstallPlan, accept_shown_eula, apply_install_plan, create_instance, get_config,
-    import_instance, list_config, prepare_install, remove_instance, rename_instance,
-    resolve_instance, resolve_instance_root, rollback_created_instance, set_config,
-    set_default_instance, show_current_eula, unset_config,
+    AccountRepository, ConfigKey, ContextIntent, CreateInstanceRequest, EulaAcceptanceMethod,
+    EulaDocument, ExternalYggdrasilLoginRequest, InstallProgressEvent, InstanceKind,
+    InstanceRegistry, LauncherError, ManifestFile, MicrosoftLoginProgressEvent, RuntimeContext,
+    ServerInstallPlan, YggdrasilProviderConfig, accept_shown_eula, add_yggdrasil_provider,
+    apply_install_plan, begin_microsoft_device_login, complete_microsoft_device_login,
+    create_instance, create_offline_account, get_config, import_instance, list_config,
+    login_external_yggdrasil, native_secret_store, prepare_install, remove_instance,
+    remove_yggdrasil_provider, rename_instance, resolve_instance, resolve_instance_root,
+    rollback_created_instance, set_config, set_default_instance, show_current_eula, unset_config,
 };
+use zeroize::Zeroizing;
 
 use crate::cli::{
-    Commands, ConfigCommands, DefaultCommands, EulaCommands, InstanceCommands, ServerCommands,
+    AccountCommands, AccountLoginCommands, Commands, ConfigCommands, DefaultCommands, EulaCommands,
+    InstanceCommands, MicrosoftLoginCommands, ServerCommands, YggdrasilProviderCommands,
 };
 use crate::output::{
+    AccountListView, AccountLoginView, AccountLogoutView, AccountSelectionView, AccountView,
     ConfigEntryView, ConfigListView, ConfigMutationAction, ConfigMutationView, ConfigPathView,
     DefaultView, EulaAcceptanceView, EulaDocumentView, InstallView, InstanceDetailView,
-    InstanceListView, InstanceMutationAction, InstanceMutationView, InstanceView, RenameView,
+    InstanceListView, InstanceMutationAction, InstanceMutationView, InstanceView,
+    MicrosoftDeviceSessionView, RenameView, YggdrasilProviderListView,
+    YggdrasilProviderMutationView, YggdrasilProviderView,
 };
 
 #[derive(Debug)]
@@ -32,6 +40,14 @@ pub enum CommandOutput {
     InstanceMutation(InstanceMutationView),
     Rename(RenameView),
     Default(DefaultView),
+    AccountList(AccountListView),
+    AccountDetail(AccountView),
+    AccountLogin(AccountLoginView),
+    AccountSelection(AccountSelectionView),
+    AccountLogout(AccountLogoutView),
+    MicrosoftDeviceSession(MicrosoftDeviceSessionView),
+    YggdrasilProviderList(YggdrasilProviderListView),
+    YggdrasilProviderMutation(YggdrasilProviderMutationView),
 }
 
 impl CommandOutput {
@@ -49,6 +65,21 @@ impl CommandOutput {
             Self::InstanceMutation(view) => view.action.command_name(),
             Self::Rename(_) => "instance.rename",
             Self::Default(_) => "instance.default",
+            Self::AccountList(_) => "account.list",
+            Self::AccountDetail(_) => "account.show",
+            Self::AccountLogin(view) => match view.method {
+                "offline" => "account.login.offline",
+                "microsoft" => "account.login.microsoft.complete",
+                _ => "account.login.yggdrasil",
+            },
+            Self::AccountSelection(_) => "account.select",
+            Self::AccountLogout(_) => "account.logout",
+            Self::MicrosoftDeviceSession(_) => "account.login.microsoft.begin",
+            Self::YggdrasilProviderList(_) => "config.yggdrasil.list",
+            Self::YggdrasilProviderMutation(view) => match view.action {
+                "added" => "config.yggdrasil.add",
+                _ => "config.yggdrasil.remove",
+            },
         }
     }
 }
@@ -57,6 +88,14 @@ pub trait Frontend: Send {
     fn progress(&mut self, event: InstallProgressEvent);
 
     fn confirm_eula(&mut self, document: &EulaDocument) -> Result<bool, LauncherError>;
+
+    fn read_password(
+        &mut self,
+        prompt: &str,
+        stdin: bool,
+    ) -> Result<Zeroizing<String>, LauncherError>;
+
+    fn microsoft_login_progress(&mut self, event: MicrosoftLoginProgressEvent);
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -127,7 +166,208 @@ pub async fn execute(
         Commands::Server { command } => {
             execute_server(command, instance_selector, current_dir, runtime).await
         }
+        Commands::Account { command } => {
+            execute_account(command, instance_selector, current_dir, runtime, frontend).await
+        }
     }
+}
+
+async fn execute_account(
+    command: AccountCommands,
+    instance_selector: Option<&str>,
+    current_dir: &Path,
+    runtime: &RuntimeContext,
+    frontend: &mut dyn Frontend,
+) -> Result<CommandOutput, AppError> {
+    let secrets = native_secret_store(runtime.paths())?;
+    let backend = secrets.backend_name().to_string();
+    match command {
+        AccountCommands::Login { command } => {
+            if instance_selector.is_some() {
+                return Err(AppError::Argument(
+                    "--instance is not valid for account login".to_string(),
+                ));
+            }
+            let (account, method) = match command {
+                AccountLoginCommands::Offline { profile_name } => (
+                    create_offline_account(runtime.paths(), &profile_name)?,
+                    "offline",
+                ),
+                AccountLoginCommands::Microsoft { command } => match command {
+                    MicrosoftLoginCommands::Begin => {
+                        let client = runtime.config().http_client()?;
+                        let session = begin_microsoft_device_login(
+                            runtime.paths(),
+                            runtime.config(),
+                            &client,
+                            secrets.as_ref(),
+                        )
+                        .await?;
+                        return Ok(CommandOutput::MicrosoftDeviceSession(session.into()));
+                    }
+                    MicrosoftLoginCommands::Complete { login_session_id } => {
+                        let client = runtime.config().http_client()?;
+                        let account = complete_microsoft_device_login(
+                            runtime.paths(),
+                            &client,
+                            secrets.as_ref(),
+                            login_session_id,
+                            |event| frontend.microsoft_login_progress(event),
+                        )
+                        .await?;
+                        (account, "microsoft")
+                    }
+                },
+                AccountLoginCommands::Yggdrasil {
+                    provider,
+                    username,
+                    profile,
+                    password_stdin,
+                } => {
+                    let password =
+                        frontend.read_password("External Yggdrasil password: ", password_stdin)?;
+                    let client = runtime.config().http_client()?;
+                    let account = login_external_yggdrasil(
+                        runtime.paths(),
+                        runtime.config(),
+                        &client,
+                        secrets.as_ref(),
+                        ExternalYggdrasilLoginRequest {
+                            provider_id: &provider,
+                            username: &username,
+                            password: &password,
+                            profile_selector: profile.as_deref(),
+                        },
+                    )
+                    .await?;
+                    (account, "external-yggdrasil")
+                }
+            };
+            let repository = AccountRepository::load(runtime.paths())?;
+            Ok(CommandOutput::AccountLogin(AccountLoginView {
+                method,
+                account: AccountView::new(&account, repository.default_account(), &backend),
+            }))
+        }
+        AccountCommands::List => {
+            if instance_selector.is_some() {
+                return Err(AppError::Argument(
+                    "--instance is not valid for account list".to_string(),
+                ));
+            }
+            let repository = AccountRepository::load(runtime.paths())?;
+            Ok(CommandOutput::AccountList(AccountListView {
+                accounts: repository
+                    .accounts()
+                    .iter()
+                    .map(|account| {
+                        AccountView::new(account, repository.default_account(), &backend)
+                    })
+                    .collect(),
+            }))
+        }
+        AccountCommands::Show { account } => {
+            if instance_selector.is_some() {
+                return Err(AppError::Argument(
+                    "--instance is not valid for account show".to_string(),
+                ));
+            }
+            let repository = AccountRepository::load(runtime.paths())?;
+            let account = match account {
+                Some(selector) => repository.get(&selector)?,
+                None => repository.selected(None)?,
+            };
+            Ok(CommandOutput::AccountDetail(AccountView::new(
+                account,
+                repository.default_account(),
+                &backend,
+            )))
+        }
+        AccountCommands::Select { account, global } => {
+            let mut repository = AccountRepository::load(runtime.paths())?;
+            let selected = repository.get(&account)?.clone();
+            if global {
+                if instance_selector.is_some() {
+                    return Err(AppError::Argument(
+                        "--instance cannot be combined with account select --global".to_string(),
+                    ));
+                }
+                repository.set_default(Some(selected.id))?;
+                Ok(CommandOutput::AccountSelection(AccountSelectionView {
+                    scope: "global",
+                    account: Some(AccountView::new(
+                        &selected,
+                        repository.default_account(),
+                        &backend,
+                    )),
+                }))
+            } else {
+                set_instance_account(instance_selector, current_dir, runtime, Some(selected.id))?;
+                Ok(CommandOutput::AccountSelection(AccountSelectionView {
+                    scope: "instance",
+                    account: Some(AccountView::new(
+                        &selected,
+                        repository.default_account(),
+                        &backend,
+                    )),
+                }))
+            }
+        }
+        AccountCommands::Clear { global } => {
+            if global {
+                if instance_selector.is_some() {
+                    return Err(AppError::Argument(
+                        "--instance cannot be combined with account clear --global".to_string(),
+                    ));
+                }
+                AccountRepository::load(runtime.paths())?.set_default(None)?;
+                Ok(CommandOutput::AccountSelection(AccountSelectionView {
+                    scope: "global",
+                    account: None,
+                }))
+            } else {
+                set_instance_account(instance_selector, current_dir, runtime, None)?;
+                Ok(CommandOutput::AccountSelection(AccountSelectionView {
+                    scope: "instance",
+                    account: None,
+                }))
+            }
+        }
+        AccountCommands::Logout { account } => {
+            if instance_selector.is_some() {
+                return Err(AppError::Argument(
+                    "--instance is not valid for account logout".to_string(),
+                ));
+            }
+            let mut repository = AccountRepository::load(runtime.paths())?;
+            let account = repository.get(&account)?.clone();
+            let view = AccountView::new(&account, repository.default_account(), &backend);
+            repository.remove(account.id, secrets.as_ref()).await?;
+            Ok(CommandOutput::AccountLogout(AccountLogoutView {
+                account: view,
+                local_secret_deleted: true,
+            }))
+        }
+    }
+}
+
+fn set_instance_account(
+    selector: Option<&str>,
+    current_dir: &Path,
+    runtime: &RuntimeContext,
+    account: Option<uuid::Uuid>,
+) -> Result<(), AppError> {
+    let registry = InstanceRegistry::load(&runtime.paths().instances_file())?;
+    let resolved = resolve_instance(&registry, selector, current_dir, ContextIntent::Sensitive)?;
+    if resolved.manifest.kind != InstanceKind::Client {
+        return Err(AppError::Argument(
+            "server instances do not use client accounts".to_string(),
+        ));
+    }
+    let mut manifest = ManifestFile::open(&resolved.entry.root)?;
+    manifest.inner.launch.account = account;
+    manifest.save()?;
+    Ok(())
 }
 
 struct InstallCommandRequest {
@@ -351,6 +591,44 @@ fn execute_config(
                 ConfigMutationAction::Unset,
             )))
         }
+        ConfigCommands::Yggdrasil { command } => match command {
+            YggdrasilProviderCommands::List => {
+                let config = orbit_launcher_core::GlobalConfig::load(&path)?;
+                Ok(CommandOutput::YggdrasilProviderList(
+                    YggdrasilProviderListView {
+                        providers: config
+                            .yggdrasil
+                            .providers
+                            .into_iter()
+                            .map(Into::into)
+                            .collect(),
+                    },
+                ))
+            }
+            YggdrasilProviderCommands::Add {
+                id,
+                api_root,
+                allow_insecure_http,
+            } => Ok(CommandOutput::YggdrasilProviderMutation(
+                YggdrasilProviderMutationView {
+                    action: "added",
+                    provider: YggdrasilProviderView::from(add_yggdrasil_provider(
+                        &path,
+                        YggdrasilProviderConfig {
+                            id,
+                            api_root,
+                            allow_insecure_http,
+                        },
+                    )?),
+                },
+            )),
+            YggdrasilProviderCommands::Remove { id } => Ok(
+                CommandOutput::YggdrasilProviderMutation(YggdrasilProviderMutationView {
+                    action: "removed",
+                    provider: remove_yggdrasil_provider(&path, &id)?.into(),
+                }),
+            ),
+        },
     }
 }
 
@@ -476,6 +754,18 @@ mod tests {
                 "test frontend does not prompt".to_string(),
             ))
         }
+
+        fn read_password(
+            &mut self,
+            _prompt: &str,
+            _stdin: bool,
+        ) -> Result<Zeroizing<String>, LauncherError> {
+            Err(LauncherError::InteractionRequired(
+                "test frontend does not read passwords".to_string(),
+            ))
+        }
+
+        fn microsoft_login_progress(&mut self, _event: MicrosoftLoginProgressEvent) {}
     }
 
     fn runtime(directory: &Path) -> RuntimeContext {

@@ -92,6 +92,14 @@ impl RuntimePaths {
     pub fn instances_file(&self) -> PathBuf {
         self.data_dir.join("instances.toml")
     }
+
+    pub fn accounts_file(&self) -> PathBuf {
+        self.data_dir.join("accounts.json")
+    }
+
+    pub fn auth_sessions_dir(&self) -> PathBuf {
+        self.data_dir.join("auth-sessions")
+    }
 }
 
 #[derive(Debug, Clone)]

@@ -4,7 +4,7 @@ use std::str::FromStr;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
-use toml_edit::{DocumentMut, Item, Table, value};
+use toml_edit::{ArrayOfTables, DocumentMut, Item, Table, value};
 
 use crate::atomic_io::write_atomic;
 use crate::error::LauncherError;
@@ -348,6 +348,74 @@ pub fn unset_config(path: &Path, key: ConfigKey) -> Result<ConfigMutation, Launc
     })
 }
 
+pub fn add_yggdrasil_provider(
+    path: &Path,
+    provider: YggdrasilProviderConfig,
+) -> Result<YggdrasilProviderConfig, LauncherError> {
+    let mut config = GlobalConfig::load(path)?;
+    if config
+        .yggdrasil
+        .providers
+        .iter()
+        .any(|existing| existing.id == provider.id)
+    {
+        return Err(LauncherError::InvalidConfig(format!(
+            "Yggdrasil provider '{}' already exists",
+            provider.id
+        )));
+    }
+    config.yggdrasil.providers.push(provider.clone());
+    config
+        .yggdrasil
+        .providers
+        .sort_by_key(|provider| provider.id.clone());
+    config.validate()?;
+    write_yggdrasil_providers(path, &config.yggdrasil.providers)?;
+    Ok(provider)
+}
+
+pub fn remove_yggdrasil_provider(
+    path: &Path,
+    provider_id: &str,
+) -> Result<YggdrasilProviderConfig, LauncherError> {
+    let mut config = GlobalConfig::load(path)?;
+    let index = config
+        .yggdrasil
+        .providers
+        .iter()
+        .position(|provider| provider.id == provider_id)
+        .ok_or_else(|| {
+            LauncherError::InvalidConfig(format!(
+                "Yggdrasil provider '{provider_id}' does not exist"
+            ))
+        })?;
+    let removed = config.yggdrasil.providers.remove(index);
+    write_yggdrasil_providers(path, &config.yggdrasil.providers)?;
+    Ok(removed)
+}
+
+fn write_yggdrasil_providers(
+    path: &Path,
+    providers: &[YggdrasilProviderConfig],
+) -> Result<(), LauncherError> {
+    let mut document = editable_document(path)?;
+    if !document.as_table().contains_key("yggdrasil") {
+        document.insert("yggdrasil", Item::Table(Table::new()));
+    }
+    let mut array = ArrayOfTables::new();
+    for provider in providers {
+        let mut table = Table::new();
+        table.insert("id", value(&provider.id));
+        table.insert("api_root", value(&provider.api_root));
+        if provider.allow_insecure_http {
+            table.insert("allow_insecure_http", value(true));
+        }
+        array.push(table);
+    }
+    document["yggdrasil"]["providers"] = Item::ArrayOfTables(array);
+    validate_and_write(path, &document)
+}
+
 fn load_document(path: &Path) -> Result<Option<DocumentMut>, LauncherError> {
     if !path.exists() {
         return Ok(None);
@@ -642,6 +710,29 @@ api_root = "http://auth.example.com/api/yggdrasil"
         let loaded = GlobalConfig::load(&path).unwrap();
         assert_eq!(loaded.network.concurrency, 4);
         assert_eq!(loaded.yggdrasil.providers[0].id, "private");
+    }
+
+    #[test]
+    fn yggdrasil_provider_commands_preserve_unrelated_comments() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("config.toml");
+        std::fs::write(&path, "schema = 1\n# keep me\n[network]\nconcurrency = 4\n").unwrap();
+        add_yggdrasil_provider(
+            &path,
+            YggdrasilProviderConfig {
+                id: "private".to_string(),
+                api_root: "https://auth.example/api/yggdrasil".to_string(),
+                allow_insecure_http: false,
+            },
+        )
+        .unwrap();
+        assert!(
+            std::fs::read_to_string(&path)
+                .unwrap()
+                .contains("# keep me")
+        );
+        let removed = remove_yggdrasil_provider(&path, "private").unwrap();
+        assert_eq!(removed.id, "private");
     }
 
     #[test]

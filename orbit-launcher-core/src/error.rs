@@ -29,6 +29,12 @@ pub enum LauncherError {
     #[error("interactive input is required: {0}")]
     InteractionRequired(String),
 
+    #[error("secure credential storage failed: {0}")]
+    SecretStore(String),
+
+    #[error("account authentication failed: {0}")]
+    Authentication(String),
+
     #[error("failed to parse launcher config.toml: {0}")]
     ConfigParse(#[source] toml::de::Error),
 
@@ -105,6 +111,8 @@ impl LauncherError {
             Self::InvalidLock(_) => "invalid_lock",
             Self::EulaRequired(_) => "eula_required",
             Self::InteractionRequired(_) => "interaction_required",
+            Self::SecretStore(_) => "secret_store",
+            Self::Authentication(_) => "authentication",
             Self::ConfigParse(_) => "config_parse",
             Self::ConfigDocumentParse(_) => "config_parse",
             Self::ManifestParse(_) => "manifest_parse",
