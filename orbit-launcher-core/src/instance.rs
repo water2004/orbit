@@ -327,6 +327,8 @@ pub struct ServerConfig {
     pub restart_limit: u32,
     pub restart_window_seconds: u64,
     pub restart_backoff_max_seconds: u64,
+    pub graceful_stop_timeout_seconds: u64,
+    pub kill_timeout_seconds: u64,
     pub authentication: ServerAuthenticationConfig,
 }
 
@@ -335,6 +337,8 @@ impl ServerConfig {
         if self.restart_limit == 0
             || self.restart_window_seconds == 0
             || self.restart_backoff_max_seconds == 0
+            || self.graceful_stop_timeout_seconds == 0
+            || self.kill_timeout_seconds == 0
         {
             return Err(LauncherError::InvalidManifest(
                 "server restart limits and timeouts must be greater than zero".to_string(),
@@ -351,6 +355,8 @@ impl Default for ServerConfig {
             restart_limit: 5,
             restart_window_seconds: 600,
             restart_backoff_max_seconds: 60,
+            graceful_stop_timeout_seconds: 30,
+            kill_timeout_seconds: 10,
             authentication: ServerAuthenticationConfig::default(),
         }
     }

@@ -1,6 +1,7 @@
 mod app;
 mod cli;
 mod output;
+mod supervisor_ipc;
 
 use std::io::{BufRead, IsTerminal, Write};
 use std::process::ExitCode;
@@ -10,7 +11,7 @@ use clap::Parser;
 use cli::{Cli, OutputFormat, ProgressFormat};
 use orbit_launcher_core::{
     EulaDocument, InstallProgressEvent, LaunchOutputStream, LaunchPreparationEvent,
-    LaunchProcessEvent, LauncherError, MicrosoftLoginProgressEvent,
+    LaunchProcessEvent, LauncherError, MicrosoftLoginProgressEvent, SupervisorEvent,
 };
 use output::{ErrorEnvelope, ProgressData, ProgressEnvelope, SuccessEnvelope};
 use zeroize::Zeroizing;
@@ -85,6 +86,10 @@ fn command_name(command: &cli::Commands) -> &'static str {
         },
         cli::Commands::Server { command } => match command {
             cli::ServerCommands::Run { .. } => "server.run",
+            cli::ServerCommands::Start => "server.start",
+            cli::ServerCommands::Stop => "server.stop",
+            cli::ServerCommands::Status => "server.status",
+            cli::ServerCommands::Command { .. } => "server.command",
             cli::ServerCommands::Eula { command } => match command {
                 cli::EulaCommands::Show => "server.eula.show",
                 cli::EulaCommands::Accept { .. } => "server.eula.accept",
@@ -107,6 +112,7 @@ fn command_name(command: &cli::Commands) -> &'static str {
             cli::AccountCommands::Clear { .. } => "account.clear",
             cli::AccountCommands::Logout { .. } => "account.logout",
         },
+        cli::Commands::Supervisor => "server.supervisor",
     }
 }
 
@@ -123,6 +129,10 @@ fn render_success(format: OutputFormat, output: app::CommandOutput) {
             app::CommandOutput::Install(value) => print_json(command, value),
             app::CommandOutput::LaunchPlan(value) => print_json(command, value),
             app::CommandOutput::LaunchResult(value) => print_json(command, value),
+            app::CommandOutput::ServerStart(value) => print_json(command, value),
+            app::CommandOutput::ServerStatus(value) => print_json(command, value),
+            app::CommandOutput::ServerControl(value) => print_json(command, value),
+            app::CommandOutput::SupervisorResult(value) => print_json(command, value),
             app::CommandOutput::InstanceList(value) => print_json(command, value),
             app::CommandOutput::InstanceDetail(value) => print_json(command, value),
             app::CommandOutput::InstanceMutation(value) => print_json(command, value),
@@ -217,6 +227,44 @@ fn render_text(output: app::CommandOutput) {
                 view.elapsed_milliseconds
             );
         }
+        app::CommandOutput::ServerStart(view) => {
+            println!(
+                "Started server supervisor {} for instance {}.",
+                view.state.supervisor_pid, view.state.instance_id
+            );
+            println!("  state: {}", view.state.phase.as_str());
+            println!("  stdout: {}", view.stdout_log.display());
+            println!("  stderr: {}", view.stderr_log.display());
+        }
+        app::CommandOutput::ServerStatus(view) => match view.state {
+            Some(state) => println!(
+                "Server supervisor {} is {} (child {}, generation {}, restarts {}).",
+                state.supervisor_pid,
+                state.phase.as_str(),
+                state
+                    .child_pid
+                    .map_or_else(|| "none".to_string(), |pid| pid.to_string()),
+                state.generation,
+                state.restarts
+            ),
+            None => println!("Server supervisor is not running."),
+        },
+        app::CommandOutput::ServerControl(view) => println!(
+            "Server {}: {} (accepted: {}, state: {}).",
+            view.action,
+            view.message,
+            view.accepted,
+            view.state.phase.as_str()
+        ),
+        app::CommandOutput::SupervisorResult(view) => println!(
+            "Server supervisor stopped after {} generation(s) and {} restart(s); exit {}, requested: {}, restart limit reached: {}.",
+            view.generations,
+            view.restarts,
+            view.final_exit_code
+                .map_or_else(|| "signal".to_string(), |code| code.to_string()),
+            view.stopped_by_request,
+            view.restart_limit_reached
+        ),
         app::CommandOutput::InstanceList(view) => {
             if view.instances.is_empty() {
                 println!("No launcher instances are registered.");
@@ -497,6 +545,40 @@ impl TerminalFrontend {
                 "Java process exited: {} (success: {success}).",
                 exit_code.map_or_else(|| "signal".to_string(), |code| code.to_string())
             ),
+            ProgressData::SupervisorSpawned { pid, generation } => {
+                eprintln!("Started server process {pid} (generation {generation}).")
+            }
+            ProgressData::SupervisorCommandSent { command } => {
+                eprintln!("Sent server command: {command}")
+            }
+            ProgressData::SupervisorStopRequested => {
+                eprintln!("Requested a graceful server stop.")
+            }
+            ProgressData::SupervisorExited {
+                exit_code,
+                success,
+                expected,
+                uptime_milliseconds,
+            } => eprintln!(
+                "Server exited: {} (success: {success}, expected: {expected}, uptime: {uptime_milliseconds} ms).",
+                exit_code.map_or_else(|| "signal".to_string(), |code| code.to_string())
+            ),
+            ProgressData::SupervisorBackoff {
+                delay_seconds,
+                restart_attempt,
+            } => {
+                eprintln!("Restart attempt {restart_attempt} begins in {delay_seconds} second(s).")
+            }
+            ProgressData::SupervisorRestarting { generation } => {
+                eprintln!("Starting server generation {generation}.")
+            }
+            ProgressData::SupervisorRestartLimitReached {
+                attempts,
+                window_seconds,
+            } => eprintln!(
+                "Restart limit reached: {attempts} restart(s) within {window_seconds} seconds."
+            ),
+            ProgressData::SupervisorStopped => eprintln!("Server supervisor stopped."),
         }
     }
 }
@@ -622,6 +704,10 @@ impl app::Frontend for TerminalFrontend {
 
     fn launch_process(&mut self, command: &'static str, event: LaunchProcessEvent) {
         self.render_launch_event(command, ProgressData::from_launch_process(event));
+    }
+
+    fn supervisor_event(&mut self, command: &'static str, event: SupervisorEvent) {
+        self.render_launch_event(command, ProgressData::from_supervisor(event));
     }
 }
 

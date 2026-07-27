@@ -1,17 +1,24 @@
+use std::fs::OpenOptions;
+use std::io::BufRead;
 use std::path::Path;
+use std::process::Stdio;
+use std::sync::{Arc, RwLock};
+use std::time::Duration;
 
 use orbit_launcher_core::{
     AccountRepository, ConfigKey, ContextIntent, CreateInstanceRequest, EulaAcceptanceMethod,
     EulaDocument, ExternalYggdrasilLoginRequest, InstallProgressEvent, InstanceKind,
     InstanceRegistry, LaunchPreparationEvent, LaunchProcessEvent, LauncherError, ManifestFile,
-    MicrosoftLoginProgressEvent, RuntimeContext, ServerInstallPlan, YggdrasilProviderConfig,
-    accept_shown_eula, add_yggdrasil_provider, apply_install_plan, begin_microsoft_device_login,
+    MicrosoftLoginProgressEvent, ResolvedInstance, RuntimeContext, ServerInstallPlan,
+    SupervisorControl, SupervisorEvent, YggdrasilProviderConfig, accept_shown_eula,
+    add_yggdrasil_provider, apply_install_plan, begin_microsoft_device_login,
     complete_microsoft_device_login, create_instance, create_offline_account, get_config,
     import_instance, list_config, login_external_yggdrasil, native_secret_store, prepare_install,
     prepare_launch, remove_instance, remove_yggdrasil_provider, rename_instance, resolve_instance,
     resolve_instance_root, resolve_launch_identity, rollback_created_instance, run_launch,
-    set_config, set_default_instance, show_current_eula, unset_config,
+    set_config, set_default_instance, show_current_eula, supervise_server, unset_config,
 };
+use tokio::sync::{mpsc, watch};
 use zeroize::Zeroizing;
 
 use crate::cli::{
@@ -23,8 +30,12 @@ use crate::output::{
     ConfigEntryView, ConfigListView, ConfigMutationAction, ConfigMutationView, ConfigPathView,
     DefaultView, EulaAcceptanceView, EulaDocumentView, InstallView, InstanceDetailView,
     InstanceListView, InstanceMutationAction, InstanceMutationView, InstanceView, LaunchPlanView,
-    LaunchResultView, MicrosoftDeviceSessionView, RenameView, YggdrasilProviderListView,
+    LaunchResultView, MicrosoftDeviceSessionView, RenameView, ServerControlView, ServerStartView,
+    ServerStatusView, SupervisorResultView, YggdrasilProviderListView,
     YggdrasilProviderMutationView, YggdrasilProviderView,
+};
+use crate::supervisor_ipc::{
+    IpcRequest, IpcServer, SupervisorLock, SupervisorState, request as supervisor_request,
 };
 
 #[derive(Debug)]
@@ -38,6 +49,10 @@ pub enum CommandOutput {
     Install(InstallView),
     LaunchPlan(LaunchPlanView),
     LaunchResult(LaunchResultView),
+    ServerStart(ServerStartView),
+    ServerStatus(ServerStatusView),
+    ServerControl(ServerControlView),
+    SupervisorResult(SupervisorResultView),
     InstanceList(InstanceListView),
     InstanceDetail(InstanceDetailView),
     InstanceMutation(InstanceMutationView),
@@ -77,6 +92,13 @@ impl CommandOutput {
                     "server.run"
                 }
             }
+            Self::ServerStart(_) => "server.start",
+            Self::ServerStatus(_) => "server.status",
+            Self::ServerControl(view) => match view.action {
+                "stop" => "server.stop",
+                _ => "server.command",
+            },
+            Self::SupervisorResult(_) => "server.supervisor",
             Self::InstanceList(_) => "instance.list",
             Self::InstanceDetail(_) => "instance.show",
             Self::InstanceMutation(view) => view.action.command_name(),
@@ -103,6 +125,9 @@ impl CommandOutput {
     pub const fn process_succeeded(&self) -> bool {
         match self {
             Self::LaunchResult(view) => view.success,
+            Self::SupervisorResult(view) => {
+                !view.restart_limit_reached && (view.stopped_by_request || view.final_success)
+            }
             _ => true,
         }
     }
@@ -124,6 +149,8 @@ pub trait Frontend: Send {
     fn launch_preparation(&mut self, command: &'static str, event: LaunchPreparationEvent);
 
     fn launch_process(&mut self, command: &'static str, event: LaunchProcessEvent);
+
+    fn supervisor_event(&mut self, command: &'static str, event: SupervisorEvent);
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -207,6 +234,9 @@ pub async fn execute(
         }
         Commands::Account { command } => {
             execute_account(command, instance_selector, current_dir, runtime, frontend).await
+        }
+        Commands::Supervisor => {
+            execute_internal_supervisor(instance_selector, current_dir, runtime, frontend).await
         }
     }
 }
@@ -614,23 +644,46 @@ async fn execute_server(
     runtime: &RuntimeContext,
     frontend: &mut dyn Frontend,
 ) -> Result<CommandOutput, AppError> {
-    let registry = InstanceRegistry::load(&runtime.paths().instances_file())?;
-    let resolved = resolve_instance(&registry, selector, current_dir, ContextIntent::Sensitive)?;
-    if resolved.manifest.kind != InstanceKind::Server {
-        return Err(AppError::Argument(format!(
-            "instance '{}' is a client; server commands require a server instance",
-            resolved.entry.name
-        )));
-    }
+    let resolved = resolve_server_instance(selector, current_dir, runtime)?;
     match command {
-        ServerCommands::Run { dry_run } => {
+        ServerCommands::Run { dry_run: true } => {
             execute_launch(
                 selector,
                 current_dir,
                 runtime,
                 frontend,
                 InstanceKind::Server,
-                dry_run,
+                true,
+            )
+            .await
+        }
+        ServerCommands::Run { dry_run: false } => {
+            execute_foreground_supervisor(&resolved, runtime, frontend).await
+        }
+        ServerCommands::Start => start_detached_supervisor(&resolved, runtime).await,
+        ServerCommands::Stop => {
+            execute_supervisor_control(&resolved, runtime, IpcRequest::Stop, "stop").await
+        }
+        ServerCommands::Status => {
+            let response = supervisor_request(
+                runtime.paths().data_dir(),
+                resolved.entry.id,
+                IpcRequest::Status,
+            )
+            .await?;
+            Ok(CommandOutput::ServerStatus(ServerStatusView {
+                running: response.is_some(),
+                state: response.map(|response| response.state),
+            }))
+        }
+        ServerCommands::Command { value } => {
+            let command = value.join(" ");
+            validate_console_command(&command)?;
+            execute_supervisor_control(
+                &resolved,
+                runtime,
+                IpcRequest::SendCommand { value: command },
+                "command",
             )
             .await
         }
@@ -662,6 +715,247 @@ async fn execute_server(
             }
         },
     }
+}
+
+fn resolve_server_instance(
+    selector: Option<&str>,
+    current_dir: &Path,
+    runtime: &RuntimeContext,
+) -> Result<ResolvedInstance, AppError> {
+    let registry = InstanceRegistry::load(&runtime.paths().instances_file())?;
+    let resolved = resolve_instance(&registry, selector, current_dir, ContextIntent::Sensitive)?;
+    if resolved.manifest.kind != InstanceKind::Server {
+        return Err(AppError::Argument(format!(
+            "instance '{}' is a client; server commands require a server instance",
+            resolved.entry.name
+        )));
+    }
+    Ok(resolved)
+}
+
+fn prepare_server_plan(
+    resolved: &ResolvedInstance,
+    runtime: &RuntimeContext,
+    frontend: &mut dyn Frontend,
+    command: &'static str,
+) -> Result<orbit_launcher_core::LaunchPlan, AppError> {
+    prepare_launch(
+        &resolved.entry.root,
+        runtime.paths(),
+        runtime.config(),
+        None,
+        |event| frontend.launch_preparation(command, event),
+    )
+    .map_err(AppError::from)
+}
+
+async fn execute_foreground_supervisor(
+    resolved: &ResolvedInstance,
+    runtime: &RuntimeContext,
+    frontend: &mut dyn Frontend,
+) -> Result<CommandOutput, AppError> {
+    let plan = prepare_server_plan(resolved, runtime, frontend, "server.run")?;
+    let config =
+        resolved.manifest.server.as_ref().ok_or_else(|| {
+            LauncherError::InvalidManifest("server configuration is missing".into())
+        })?;
+    let (controls, mut receiver) = mpsc::unbounded_channel();
+    let stdin_controls = controls.clone();
+    std::thread::spawn(move || {
+        for line in std::io::stdin().lock().lines().map_while(Result::ok) {
+            let command = line.trim();
+            if command.is_empty() {
+                continue;
+            }
+            let control = if command == "stop" {
+                SupervisorControl::Stop
+            } else {
+                SupervisorControl::Command(command.to_string())
+            };
+            if stdin_controls.send(control).is_err() {
+                break;
+            }
+        }
+    });
+    let signal_controls = controls.clone();
+    let signal_task = tokio::spawn(async move {
+        if tokio::signal::ctrl_c().await.is_ok() {
+            let _ = signal_controls.send(SupervisorControl::Stop);
+        }
+    });
+    drop(controls);
+    let result = supervise_server(plan, config, &mut receiver, |event| {
+        frontend.supervisor_event("server.run", event)
+    })
+    .await;
+    signal_task.abort();
+    Ok(CommandOutput::SupervisorResult(result?.into()))
+}
+
+async fn execute_internal_supervisor(
+    selector: Option<&str>,
+    current_dir: &Path,
+    runtime: &RuntimeContext,
+    frontend: &mut dyn Frontend,
+) -> Result<CommandOutput, AppError> {
+    let resolved = resolve_server_instance(selector, current_dir, runtime)?;
+    let _lock = SupervisorLock::acquire(&resolved.entry.root)?;
+    let plan = prepare_server_plan(&resolved, runtime, frontend, "server.supervisor")?;
+    let config =
+        resolved.manifest.server.clone().ok_or_else(|| {
+            LauncherError::InvalidManifest("server configuration is missing".into())
+        })?;
+    let state = Arc::new(RwLock::new(SupervisorState::starting(resolved.entry.id)?));
+    let server = IpcServer::bind(runtime.paths().data_dir(), resolved.entry.id).await?;
+    let (controls, mut receiver) = mpsc::unbounded_channel();
+    let (shutdown, shutdown_receiver) = watch::channel(false);
+    let ipc_task = tokio::spawn(server.serve(controls, Arc::clone(&state), shutdown_receiver));
+    let result = supervise_server(plan, &config, &mut receiver, |event| {
+        if let Ok(mut current) = state.write() {
+            current.apply(&event);
+        }
+        frontend.supervisor_event("server.supervisor", event);
+    })
+    .await;
+    let _ = shutdown.send(true);
+    ipc_task
+        .await
+        .map_err(|error| LauncherError::Launch(format!("supervisor IPC task failed: {error}")))??;
+    Ok(CommandOutput::SupervisorResult(result?.into()))
+}
+
+async fn start_detached_supervisor(
+    resolved: &ResolvedInstance,
+    runtime: &RuntimeContext,
+) -> Result<CommandOutput, AppError> {
+    if let Some(response) = supervisor_request(
+        runtime.paths().data_dir(),
+        resolved.entry.id,
+        IpcRequest::Status,
+    )
+    .await?
+    {
+        return Err(LauncherError::Launch(format!(
+            "server supervisor is already running as process {}",
+            response.state.supervisor_pid
+        ))
+        .into());
+    }
+
+    let log_directory = resolved.entry.root.join(".orbit-launcher");
+    std::fs::create_dir_all(&log_directory).map_err(LauncherError::from)?;
+    let stdout_log = log_directory.join("supervisor.stdout.log");
+    let stderr_log = log_directory.join("supervisor.stderr.log");
+    let stdout = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&stdout_log)
+        .map_err(LauncherError::from)?;
+    let stderr = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&stderr_log)
+        .map_err(LauncherError::from)?;
+    let executable = std::env::current_exe().map_err(LauncherError::from)?;
+    let mut command = std::process::Command::new(executable);
+    command
+        .arg("--instance")
+        .arg(resolved.entry.id.to_string())
+        .arg("--format")
+        .arg("json")
+        .arg("--progress-format")
+        .arg("ndjson")
+        .arg("--non-interactive")
+        .arg("--config-dir")
+        .arg(runtime.paths().config_dir())
+        .arg("--data-dir")
+        .arg(runtime.paths().data_dir())
+        .arg("--cache-dir")
+        .arg(runtime.paths().cache_dir())
+        .arg("__supervisor")
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(stdout))
+        .stderr(Stdio::from(stderr));
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x0800_0000);
+    }
+    let mut child = command.spawn().map_err(|error| {
+        LauncherError::Launch(format!("failed to start server supervisor: {error}"))
+    })?;
+    let expected_pid = child.id();
+    for _ in 0..150 {
+        if let Some(response) = supervisor_request(
+            runtime.paths().data_dir(),
+            resolved.entry.id,
+            IpcRequest::Status,
+        )
+        .await?
+        {
+            if response.state.supervisor_pid != expected_pid {
+                return Err(LauncherError::Launch(format!(
+                    "another supervisor won the startup race as process {}",
+                    response.state.supervisor_pid
+                ))
+                .into());
+            }
+            return Ok(CommandOutput::ServerStart(ServerStartView {
+                state: response.state,
+                stdout_log,
+                stderr_log,
+            }));
+        }
+        if let Some(status) = child.try_wait().map_err(LauncherError::from)? {
+            return Err(LauncherError::Launch(format!(
+                "server supervisor exited before becoming ready ({status}); inspect '{}' and '{}'",
+                stdout_log.display(),
+                stderr_log.display()
+            ))
+            .into());
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    Err(LauncherError::Launch(format!(
+        "server supervisor did not become ready within 30 seconds; inspect '{}' and '{}'",
+        stdout_log.display(),
+        stderr_log.display()
+    ))
+    .into())
+}
+
+async fn execute_supervisor_control(
+    resolved: &ResolvedInstance,
+    runtime: &RuntimeContext,
+    request: IpcRequest,
+    action: &'static str,
+) -> Result<CommandOutput, AppError> {
+    let response = supervisor_request(runtime.paths().data_dir(), resolved.entry.id, request)
+        .await?
+        .ok_or_else(|| LauncherError::Launch("server supervisor is not running".to_string()))?;
+    if !response.accepted {
+        return Err(LauncherError::Launch(response.message).into());
+    }
+    Ok(CommandOutput::ServerControl(ServerControlView {
+        action,
+        accepted: response.accepted,
+        message: response.message,
+        state: response.state,
+    }))
+}
+
+fn validate_console_command(command: &str) -> Result<(), AppError> {
+    if command.is_empty() {
+        return Err(AppError::Argument(
+            "server command must not be empty".to_string(),
+        ));
+    }
+    if command.len() > 32 * 1024 || command.chars().any(char::is_control) {
+        return Err(AppError::Argument(
+            "server command must be at most 32 KiB and contain no control characters".to_string(),
+        ));
+    }
+    Ok(())
 }
 
 fn execute_config(
@@ -874,6 +1168,8 @@ mod tests {
         fn launch_preparation(&mut self, _command: &'static str, _event: LaunchPreparationEvent) {}
 
         fn launch_process(&mut self, _command: &'static str, _event: LaunchProcessEvent) {}
+
+        fn supervisor_event(&mut self, _command: &'static str, _event: SupervisorEvent) {}
     }
 
     fn runtime(directory: &Path) -> RuntimeContext {

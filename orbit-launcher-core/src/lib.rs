@@ -76,7 +76,8 @@ pub use java::{
 };
 pub use launch::{
     LaunchOutputStream, LaunchPlan, LaunchPlanSummary, LaunchPreparationEvent, LaunchProcessEvent,
-    LaunchResult, prepare_launch, run_launch,
+    LaunchResult, SupervisorControl, SupervisorEvent, SupervisorResult, prepare_launch, run_launch,
+    supervise_server,
 };
 pub use loader::{LoaderSide, ResolvedLoaderProfile, resolve_loader_profile};
 pub use lockfile::{

@@ -19,6 +19,7 @@ uuid = { workspace = true }
 tokio = { workspace = true }
 zeroize = { workspace = true }
 rpassword = "7.4"
+fs2 = { workspace = true }
 
 [dev-dependencies]
 dunce = { workspace = true }

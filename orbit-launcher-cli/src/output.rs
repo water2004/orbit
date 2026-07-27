@@ -5,8 +5,11 @@ use orbit_launcher_core::{
     InstallerOutputStream, InstallerSide, InstanceManifest, JavaProgressEvent, LaunchOutputStream,
     LaunchPlanSummary, LaunchPreparationEvent, LaunchProcessEvent, LaunchResult,
     LoaderInstallerEvent, MicrosoftDeviceSession, MicrosoftLoginProgressEvent, RegistryEntry,
+    SupervisorEvent, SupervisorResult,
 };
 use serde::Serialize;
+
+use crate::supervisor_ipc::SupervisorState;
 
 pub const SCHEMA_VERSION: u32 = 1;
 
@@ -287,6 +290,53 @@ pub struct LaunchResultView {
     pub elapsed_milliseconds: u128,
 }
 
+#[derive(Debug, Serialize)]
+pub struct ServerStartView {
+    pub state: SupervisorState,
+    pub stdout_log: PathBuf,
+    pub stderr_log: PathBuf,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ServerStatusView {
+    pub running: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub state: Option<SupervisorState>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ServerControlView {
+    pub action: &'static str,
+    pub accepted: bool,
+    pub message: String,
+    pub state: SupervisorState,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SupervisorResultView {
+    pub instance_id: String,
+    pub generations: u32,
+    pub restarts: u32,
+    pub final_exit_code: Option<i32>,
+    pub final_success: bool,
+    pub stopped_by_request: bool,
+    pub restart_limit_reached: bool,
+}
+
+impl From<SupervisorResult> for SupervisorResultView {
+    fn from(result: SupervisorResult) -> Self {
+        Self {
+            instance_id: result.instance_id.to_string(),
+            generations: result.generations,
+            restarts: result.restarts,
+            final_exit_code: result.final_exit_code,
+            final_success: result.final_success,
+            stopped_by_request: result.stopped_by_request,
+            restart_limit_reached: result.restart_limit_reached,
+        }
+    }
+}
+
 impl From<LaunchResult> for LaunchResultView {
     fn from(result: LaunchResult) -> Self {
         Self {
@@ -504,6 +554,32 @@ pub enum ProgressData {
         exit_code: Option<i32>,
         success: bool,
     },
+    SupervisorSpawned {
+        pid: u32,
+        generation: u32,
+    },
+    SupervisorCommandSent {
+        command: String,
+    },
+    SupervisorStopRequested,
+    SupervisorExited {
+        exit_code: Option<i32>,
+        success: bool,
+        expected: bool,
+        uptime_milliseconds: u128,
+    },
+    SupervisorBackoff {
+        delay_seconds: u64,
+        restart_attempt: u32,
+    },
+    SupervisorRestarting {
+        generation: u32,
+    },
+    SupervisorRestartLimitReached {
+        attempts: u32,
+        window_seconds: u64,
+    },
+    SupervisorStopped,
 }
 
 impl From<InstallProgressEvent> for ProgressData {
@@ -553,6 +629,44 @@ impl ProgressData {
             LaunchProcessEvent::Exited { exit_code, success } => {
                 Self::ProcessExited { exit_code, success }
             }
+        }
+    }
+
+    pub fn from_supervisor(event: SupervisorEvent) -> Self {
+        match event {
+            SupervisorEvent::Spawned { pid, generation } => {
+                Self::SupervisorSpawned { pid, generation }
+            }
+            SupervisorEvent::Output { stream, line } => Self::ProcessOutput { stream, line },
+            SupervisorEvent::CommandSent { command } => Self::SupervisorCommandSent { command },
+            SupervisorEvent::StopRequested => Self::SupervisorStopRequested,
+            SupervisorEvent::Exited {
+                exit_code,
+                success,
+                expected,
+                uptime_milliseconds,
+            } => Self::SupervisorExited {
+                exit_code,
+                success,
+                expected,
+                uptime_milliseconds,
+            },
+            SupervisorEvent::Backoff {
+                delay_seconds,
+                restart_attempt,
+            } => Self::SupervisorBackoff {
+                delay_seconds,
+                restart_attempt,
+            },
+            SupervisorEvent::Restarting { generation } => Self::SupervisorRestarting { generation },
+            SupervisorEvent::RestartLimitReached {
+                attempts,
+                window_seconds,
+            } => Self::SupervisorRestartLimitReached {
+                attempts,
+                window_seconds,
+            },
+            SupervisorEvent::Stopped => Self::SupervisorStopped,
         }
     }
 

@@ -1,8 +1,9 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::process::Stdio;
+use std::time::Duration;
 use std::time::Instant;
 
 use serde::Serialize;
@@ -11,14 +12,16 @@ use zeroize::{Zeroize, Zeroizing};
 
 use base64::Engine;
 
-use tokio::io::{AsyncBufReadExt, AsyncRead, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWriteExt, BufReader};
 use tokio::sync::mpsc;
 
 use crate::account::AccountLaunchIdentity;
 use crate::artifact::hash_file_sha256;
 use crate::config::GlobalConfig;
 use crate::error::LauncherError;
-use crate::instance::{InstanceKind, ManifestFile, ServerAuthenticationProvider};
+use crate::instance::{
+    InstanceKind, ManifestFile, RestartPolicy, ServerAuthenticationProvider, ServerConfig,
+};
 use crate::java::verify_locked_java_runtime;
 use crate::lockfile::{LauncherLock, LockFile, LockedEntrypoint};
 use crate::runtime::RuntimePaths;
@@ -130,6 +133,57 @@ pub struct LaunchResult {
     pub exit_code: Option<i32>,
     pub success: bool,
     pub elapsed_milliseconds: u128,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SupervisorControl {
+    Command(String),
+    Stop,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SupervisorEvent {
+    Spawned {
+        pid: u32,
+        generation: u32,
+    },
+    Output {
+        stream: LaunchOutputStream,
+        line: String,
+    },
+    CommandSent {
+        command: String,
+    },
+    StopRequested,
+    Exited {
+        exit_code: Option<i32>,
+        success: bool,
+        expected: bool,
+        uptime_milliseconds: u128,
+    },
+    Backoff {
+        delay_seconds: u64,
+        restart_attempt: u32,
+    },
+    Restarting {
+        generation: u32,
+    },
+    RestartLimitReached {
+        attempts: u32,
+        window_seconds: u64,
+    },
+    Stopped,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SupervisorResult {
+    pub instance_id: Uuid,
+    pub generations: u32,
+    pub restarts: u32,
+    pub final_exit_code: Option<i32>,
+    pub final_success: bool,
+    pub stopped_by_request: bool,
+    pub restart_limit_reached: bool,
 }
 
 pub fn prepare_launch<F>(
@@ -286,6 +340,286 @@ where
         success,
         elapsed_milliseconds: started.elapsed().as_millis(),
     })
+}
+
+pub async fn supervise_server<F>(
+    plan: LaunchPlan,
+    config: &ServerConfig,
+    controls: &mut mpsc::UnboundedReceiver<SupervisorControl>,
+    mut event_handler: F,
+) -> Result<SupervisorResult, LauncherError>
+where
+    F: FnMut(SupervisorEvent),
+{
+    if plan.kind != InstanceKind::Server {
+        return Err(LauncherError::Launch(
+            "server supervisor requires a server launch plan".to_string(),
+        ));
+    }
+    validate_supervisor_config(config)?;
+    let mut generation = 0_u32;
+    let mut restarts = 0_u32;
+    let mut failures = VecDeque::new();
+    let mut restart_limit_reached = false;
+    let mut final_exit_code;
+    let mut final_success;
+    let mut stopped_by_request = false;
+
+    'supervisor: loop {
+        generation = generation.checked_add(1).ok_or_else(|| {
+            LauncherError::Launch("server generation counter overflowed".to_string())
+        })?;
+        if generation > 1 {
+            event_handler(SupervisorEvent::Restarting { generation });
+        }
+        let mut running = spawn_supervised_child(&plan).await?;
+        event_handler(SupervisorEvent::Spawned {
+            pid: running.pid,
+            generation,
+        });
+        let started = Instant::now();
+        let mut expected = false;
+        let mut output_open = true;
+        let status = loop {
+            tokio::select! {
+                status = running.child.wait() => break status?,
+                output = running.output.recv(), if output_open => {
+                    if let Some(output) = output {
+                        match output {
+                            Ok(LaunchProcessEvent::Output { stream, line }) => {
+                                event_handler(SupervisorEvent::Output { stream, line });
+                            }
+                            Ok(_) => unreachable!("output pumps only emit output events"),
+                            Err(error) => return Err(error),
+                        }
+                    } else {
+                        output_open = false;
+                    }
+                }
+                control = controls.recv() => {
+                    match control.unwrap_or(SupervisorControl::Stop) {
+                        SupervisorControl::Command(command) => {
+                            validate_server_command(&command)?;
+                            let stdin = running.stdin.as_mut().ok_or_else(|| {
+                                LauncherError::Launch("server stdin is unavailable".to_string())
+                            })?;
+                            stdin.write_all(command.as_bytes()).await?;
+                            stdin.write_all(b"\n").await?;
+                            stdin.flush().await?;
+                            event_handler(SupervisorEvent::CommandSent { command });
+                        }
+                        SupervisorControl::Stop => {
+                            expected = true;
+                            event_handler(SupervisorEvent::StopRequested);
+                            break stop_supervised_child(
+                                &mut running,
+                                Duration::from_secs(config.graceful_stop_timeout_seconds),
+                                Duration::from_secs(config.kill_timeout_seconds),
+                            ).await?;
+                        }
+                    }
+                }
+            }
+        };
+        for (stream, line) in running.finish_output().await? {
+            event_handler(SupervisorEvent::Output { stream, line });
+        }
+        let uptime = started.elapsed();
+        event_handler(SupervisorEvent::Exited {
+            exit_code: status.code(),
+            success: status.success(),
+            expected,
+            uptime_milliseconds: uptime.as_millis(),
+        });
+        final_exit_code = status.code();
+        final_success = status.success();
+        if expected || config.restart == RestartPolicy::Never {
+            stopped_by_request = expected;
+            break 'supervisor;
+        }
+
+        if uptime >= Duration::from_secs(config.restart_window_seconds) {
+            failures.clear();
+        }
+        let now = Instant::now();
+        let window = Duration::from_secs(config.restart_window_seconds);
+        while failures
+            .front()
+            .is_some_and(|failure| now.duration_since(*failure) > window)
+        {
+            failures.pop_front();
+        }
+        if failures.len() >= config.restart_limit as usize {
+            restart_limit_reached = true;
+            event_handler(SupervisorEvent::RestartLimitReached {
+                attempts: config.restart_limit,
+                window_seconds: config.restart_window_seconds,
+            });
+            break 'supervisor;
+        }
+        failures.push_back(now);
+        restarts = restarts.checked_add(1).ok_or_else(|| {
+            LauncherError::Launch("server restart counter overflowed".to_string())
+        })?;
+        let exponent = failures.len().saturating_sub(1).min(62) as u32;
+        let delay_seconds = 1_u64
+            .checked_shl(exponent)
+            .unwrap_or(u64::MAX)
+            .min(config.restart_backoff_max_seconds);
+        event_handler(SupervisorEvent::Backoff {
+            delay_seconds,
+            restart_attempt: restarts,
+        });
+        tokio::select! {
+            () = tokio::time::sleep(Duration::from_secs(delay_seconds)) => {}
+            control = controls.recv() => {
+                match control.unwrap_or(SupervisorControl::Stop) {
+                    SupervisorControl::Stop => {
+                        stopped_by_request = true;
+                        event_handler(SupervisorEvent::StopRequested);
+                        break 'supervisor;
+                    }
+                    SupervisorControl::Command(_) => {
+                        return Err(LauncherError::Launch(
+                            "cannot send a server command while restart backoff is active".to_string(),
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    event_handler(SupervisorEvent::Stopped);
+    Ok(SupervisorResult {
+        instance_id: plan.instance_id,
+        generations: generation,
+        restarts,
+        final_exit_code,
+        final_success,
+        stopped_by_request,
+        restart_limit_reached,
+    })
+}
+
+struct SupervisedChild {
+    child: tokio::process::Child,
+    stdin: Option<tokio::process::ChildStdin>,
+    output: mpsc::UnboundedReceiver<Result<LaunchProcessEvent, LauncherError>>,
+    stdout_task: tokio::task::JoinHandle<()>,
+    stderr_task: tokio::task::JoinHandle<()>,
+    pid: u32,
+}
+
+impl SupervisedChild {
+    async fn finish_output(mut self) -> Result<Vec<(LaunchOutputStream, String)>, LauncherError> {
+        self.stdout_task.await.map_err(|error| {
+            LauncherError::Launch(format!("stdout reader task failed: {error}"))
+        })?;
+        self.stderr_task.await.map_err(|error| {
+            LauncherError::Launch(format!("stderr reader task failed: {error}"))
+        })?;
+        let mut remaining = Vec::new();
+        while let Some(output) = self.output.recv().await {
+            match output? {
+                LaunchProcessEvent::Output { stream, line } => remaining.push((stream, line)),
+                _ => unreachable!("output pumps only emit output events"),
+            }
+        }
+        Ok(remaining)
+    }
+}
+
+async fn spawn_supervised_child(plan: &LaunchPlan) -> Result<SupervisedChild, LauncherError> {
+    let mut command = tokio::process::Command::from(plan.command());
+    command
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = command.spawn().map_err(|error| {
+        LauncherError::Launch(format!(
+            "failed to start Java executable '{}': {error}",
+            plan.executable().display()
+        ))
+    })?;
+    let pid = child.id().ok_or_else(|| {
+        LauncherError::Launch("spawned Java process has no process ID".to_string())
+    })?;
+    let stdin = child.stdin.take();
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| LauncherError::Launch("failed to capture Java stdout".to_string()))?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| LauncherError::Launch("failed to capture Java stderr".to_string()))?;
+    let (sender, output) = mpsc::unbounded_channel();
+    let stdout_task = tokio::spawn(pump_output(
+        stdout,
+        LaunchOutputStream::Stdout,
+        sender.clone(),
+    ));
+    let stderr_task = tokio::spawn(pump_output(stderr, LaunchOutputStream::Stderr, sender));
+    Ok(SupervisedChild {
+        child,
+        stdin,
+        output,
+        stdout_task,
+        stderr_task,
+        pid,
+    })
+}
+
+async fn stop_supervised_child(
+    running: &mut SupervisedChild,
+    graceful_timeout: Duration,
+    kill_timeout: Duration,
+) -> Result<std::process::ExitStatus, LauncherError> {
+    if let Some(stdin) = running.stdin.as_mut() {
+        let _ = stdin.write_all(b"stop\n").await;
+        let _ = stdin.flush().await;
+    }
+    match tokio::time::timeout(graceful_timeout, running.child.wait()).await {
+        Ok(status) => status.map_err(LauncherError::from),
+        Err(_) => {
+            running.child.start_kill()?;
+            tokio::time::timeout(kill_timeout, running.child.wait())
+                .await
+                .map_err(|_| {
+                    LauncherError::Launch(
+                        "server did not exit after graceful stop and forced termination"
+                            .to_string(),
+                    )
+                })?
+                .map_err(LauncherError::from)
+        }
+    }
+}
+
+fn validate_server_command(command: &str) -> Result<(), LauncherError> {
+    if command.is_empty()
+        || command.len() > 32 * 1024
+        || command.trim() != command
+        || command.chars().any(char::is_control)
+    {
+        return Err(LauncherError::Launch(
+            "server command must be a non-empty single line of at most 32 KiB".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_supervisor_config(config: &ServerConfig) -> Result<(), LauncherError> {
+    if config.restart_limit == 0
+        || config.restart_window_seconds == 0
+        || config.restart_backoff_max_seconds == 0
+        || config.graceful_stop_timeout_seconds == 0
+        || config.kill_timeout_seconds == 0
+    {
+        return Err(LauncherError::InvalidManifest(
+            "server supervisor limits and timeouts must be greater than zero".to_string(),
+        ));
+    }
+    Ok(())
 }
 
 async fn pump_output<R>(
@@ -647,6 +981,24 @@ where
 mod tests {
     use super::*;
 
+    fn successful_test_process_plan(working_directory: &Path) -> LaunchPlan {
+        LaunchPlan {
+            instance_id: Uuid::new_v4(),
+            kind: InstanceKind::Server,
+            java_executable: std::env::current_exe().unwrap(),
+            working_directory: working_directory.to_path_buf(),
+            arguments: vec![
+                "--exact".to_string(),
+                "__orbit_supervisor_child__".to_string(),
+            ],
+            redacted_arguments: vec![
+                "--exact".to_string(),
+                "__orbit_supervisor_child__".to_string(),
+            ],
+            sensitive_values: Vec::new(),
+        }
+    }
+
     #[test]
     fn expands_multiple_placeholders_without_shell_parsing() {
         let values = BTreeMap::from([
@@ -674,5 +1026,39 @@ mod tests {
         )
         .unwrap();
         assert_eq!(arguments, ["--token=<redacted>", "1.20.1"]);
+    }
+
+    #[tokio::test]
+    async fn supervisor_restarts_natural_zero_exit_until_limit() {
+        let directory = tempfile::tempdir().unwrap();
+        let plan = successful_test_process_plan(directory.path());
+        let instance_id = plan.instance_id;
+        let config = ServerConfig {
+            restart: RestartPolicy::OnUnexpectedExit,
+            restart_limit: 1,
+            restart_window_seconds: 60,
+            restart_backoff_max_seconds: 1,
+            ..ServerConfig::default()
+        };
+        let (_sender, mut controls) = mpsc::unbounded_channel();
+        let mut events = Vec::new();
+        let result = supervise_server(plan, &config, &mut controls, |event| events.push(event))
+            .await
+            .unwrap();
+
+        assert_eq!(result.instance_id, instance_id);
+        assert_eq!(result.generations, 2);
+        assert_eq!(result.restarts, 1);
+        assert!(result.final_success);
+        assert!(!result.stopped_by_request);
+        assert!(result.restart_limit_reached);
+        assert!(events.iter().any(|event| matches!(
+            event,
+            SupervisorEvent::Exited {
+                success: true,
+                expected: false,
+                ..
+            }
+        )));
     }
 }

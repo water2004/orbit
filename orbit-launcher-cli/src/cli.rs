@@ -104,6 +104,10 @@ pub enum Commands {
         #[command(subcommand)]
         command: AccountCommands,
     },
+
+    /// Internal detached supervisor entrypoint.
+    #[command(name = "__supervisor", hide = true)]
+    Supervisor,
 }
 
 #[derive(Debug, Subcommand)]
@@ -171,6 +175,17 @@ pub enum ServerCommands {
         /// Verify and print the command without starting Java.
         #[arg(long)]
         dry_run: bool,
+    },
+    /// Start a managed supervisor in the background for this login session.
+    Start,
+    /// Request a graceful stop through the managed supervisor.
+    Stop,
+    /// Query the managed supervisor without inspecting or guessing process IDs.
+    Status,
+    /// Send one Minecraft console command through the managed supervisor.
+    Command {
+        #[arg(required = true, trailing_var_arg = true)]
+        value: Vec<String>,
     },
     /// Display or accept the current official Minecraft EULA.
     Eula {
@@ -426,5 +441,32 @@ mod tests {
                 command: ServerCommands::Run { dry_run: true }
             }
         ));
+    }
+
+    #[test]
+    fn server_supervisor_commands_have_distinct_cli_shapes() {
+        for name in ["start", "stop", "status"] {
+            Cli::try_parse_from(["orbit-launcher", "server", name]).unwrap();
+        }
+        let command =
+            Cli::try_parse_from(["orbit-launcher", "server", "command", "say", "hello world"])
+                .unwrap();
+        let Commands::Server {
+            command: ServerCommands::Command { value },
+        } = command.command
+        else {
+            panic!("unexpected command");
+        };
+        assert_eq!(value, ["say", "hello world"]);
+    }
+
+    #[test]
+    fn internal_supervisor_entrypoint_is_parseable_but_hidden() {
+        let cli = Cli::try_parse_from(["orbit-launcher", "__supervisor"]).unwrap();
+        assert!(matches!(cli.command, Commands::Supervisor));
+        let help = Cli::try_parse_from(["orbit-launcher", "--help"])
+            .unwrap_err()
+            .to_string();
+        assert!(!help.contains("__supervisor"));
     }
 }
