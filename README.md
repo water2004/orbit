@@ -6,8 +6,9 @@ Orbit 是一个专为 Minecraft 打造的现代化命令行模组包管理器。
 
 无论你是跨目录管理数十个整合包的硬核玩家，还是需要严格进行版本控制的模组开发者，Orbit 都能为你带来类似 `npm` 或 `cargo` 般优雅的模组管理体验。
 
-独立的 Minecraft 运行时工具 `orbit-launcher` 正在开发中。它不依赖、不调用 Orbit，
-当前已实现全局实例注册、稳定 ID 和当前目录上下文；支持范围与命令见
+独立的 Minecraft 运行时工具 `orbit-launcher` 已提供首个可运行基线。它不依赖、不调用
+Orbit，支持全局实例、Minecraft/Java/主流 Loader 安装、持久账户、客户端启动以及带 IPC
+和异常重启的独立服务端 supervisor；支持范围与命令见
 [Orbit Launcher CLI](docs/orbit-launcher-cli.md) 和
 [架构约束](docs/orbit-launcher-architecture.md)。
 

@@ -1,7 +1,7 @@
 # Orbit Launcher CLI
 
-> 实现状态：实例、配置、账户持久化、Mojang Java runtime，以及 Vanilla、Fabric、Quilt、Forge、
-> NeoForge 客户端和独立服务端安装已可用；启动命令仍在后续提交中。
+> 实现状态：实例、配置、账户持久化、Mojang Java runtime，Vanilla、Fabric、Quilt、Forge、
+> NeoForge 客户端/独立服务端安装，以及客户端启动和受管理的服务端运行均已可用。
 > 未实现的命令不会以空壳形式出现在 CLI 中。
 
 `orbit-launcher` 与 Orbit 模组包管理器完全隔离。它使用自己的全局目录、实例注册表、
@@ -58,6 +58,12 @@ orbit-launcher instance default show
 
 orbit-launcher [--instance <id|name>] server eula show
 orbit-launcher [--instance <id|name>] server eula accept <sha256>
+orbit-launcher [--instance <id|name>] launch [--dry-run]
+orbit-launcher [--instance <id|name>] server run [--dry-run]
+orbit-launcher [--instance <id|name>] server start
+orbit-launcher [--instance <id|name>] server status
+orbit-launcher [--instance <id|name>] server command <command...>
+orbit-launcher [--instance <id|name>] server stop
 
 orbit-launcher account login offline <profile-name>
 orbit-launcher account login microsoft begin
@@ -128,6 +134,44 @@ Forge 与 NeoForge 从各自官方版本索引和 Maven 仓库解析精确 insta
 SHA-256，并且只有用户准确输入 `I AGREE` 才继续；没有 `--yes` 绕过。JSON、管道或
 `--non-interactive` 必须先对已有实例执行 `server eula show`，再用返回的 digest 执行
 `server eula accept`。接受记录与实际展示正文绑定；正文 digest 变化后必须重新接受。
+
+## 启动与服务端管理
+
+`launch` 和 `server run` 在启动前逐项校验 lock、受管 Java 和所有 Launcher 拥有的运行时
+文件；不会联网更新，也不会根据目录内容猜测替代 JAR。`--dry-run` 输出已经脱敏的精确命令，
+账户 token 不进入 stdout、stderr 或错误信息。客户端使用实例账户；服务端不读取客户端账户。
+
+`server run` 在前台运行 supervisor，直接输入 Minecraft 控制台命令即可发送到服务端；输入
+`stop` 或按 Ctrl+C 会发送 `stop`、等待 `graceful_stop_timeout_seconds`，超时才强制终止，
+随后最多再等待 `kill_timeout_seconds`。`server start` 启动同一套 supervisor 的后台形式，
+其标准输出和结构化进度分别写入实例的
+`.orbit-launcher/supervisor.stdout.log` 与 `.orbit-launcher/supervisor.stderr.log`。
+
+后台 supervisor 使用实例 UUID 作为身份，并通过当前用户可访问的 Windows Named Pipe 或
+权限为 `0600` 的 Unix Domain Socket 提供 `status`、`command` 和 `stop`。同一实例由文件锁
+保证至多有一个 supervisor；状态查询不扫描进程，也不根据旧 PID 猜测。它只承诺在当前登录
+会话内运行，不注册 Windows Service 或 systemd unit，也不提供开机启动和退出登录后保活。
+
+服务端实例 TOML 的默认策略如下：
+
+```toml
+[server]
+restart = "on-unexpected-exit"
+restart_limit = 5
+restart_window_seconds = 600
+restart_backoff_max_seconds = 60
+graceful_stop_timeout_seconds = 30
+kill_timeout_seconds = 10
+```
+
+只有用户 `server stop`、前台 Ctrl+C 或通过受管通道输入 `stop` 才属于预期退出。其他自然退出
+即使退出码为 0，也按异常退出处理；supervisor 使用上限受控的指数退避，并在固定窗口达到
+重启次数上限后停止。所有 generation、exit、backoff、restart 和 limit 事件都可用 NDJSON
+消费。`restart = "never"` 禁用自动重启；显式停服在任何策略下都不会重启。
+
+服务端 External Yggdrasil 只使用实例中明确配置的 provider，并在安装时锁定经官方元数据、
+SHA-256 和 JAR Manifest 验证的 Authlib Injector。客户端选择 External Yggdrasil 账户时也
+使用同一受管 agent。未配置、lock 不一致或 agent 校验失败都会直接报错，不猜测或降级。
 
 ## 全局路径
 

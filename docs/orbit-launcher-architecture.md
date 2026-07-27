@@ -1,6 +1,8 @@
 # Orbit Launcher 架构草案
 
-> 状态：架构约束已确认，开始实现（2026-07-28）。
+> 状态：首个可运行基线已实现（2026-07-28）。当前可用命令以
+> [`orbit-launcher-cli.md`](orbit-launcher-cli.md) 为准；本文同时保留明确标为“规划”的后续能力，
+> 规划内容不等于当前 CLI 已宣称支持。
 >
 > 本文定义 `orbit-launcher` 的产品边界、领域模型、CLI 协议、平台策略与实现顺序。
 > 文中的“必须”“不得”是实现约束；“建议”“待定”用于标出需要在评审后固化的决策。
@@ -193,10 +195,11 @@ LockedRuntime
 ```text
 config/
   config.toml
-  accounts.json              仅非秘密账户元数据
 data/
-  instances.json             实例 ID 到路径的注册表
+  instances.toml             实例 ID 到路径的注册表
+  accounts.json              仅非秘密账户元数据
   auth-sessions/             有期限的登录会话，不含最终 refresh token 明文
+  supervisors/               Linux 上按实例 ID 建立的权限受限 Unix socket
   runtimes/                  已物化的共享 Java runtime
 cache/
   objects/sha256/<digest>    内容寻址缓存
@@ -213,6 +216,8 @@ cache/
   .orbit-launcher/
     transaction.json         仅事务进行中存在
     generated/               生成的 argfile、classpath 和运行脚本数据
+    supervisor.lock          只用于单实例 supervisor 所有权，不作为 PID 猜测依据
+    supervisor.*.log         后台 supervisor 的 stdout/stderr
   ...                        标准运行时文件及不透明的用户文件
 ```
 
@@ -318,8 +323,7 @@ HMCL 作为行为基准的方式是建立差分 fixture：同一份官方 Minecr
 不得自动接受 EULA，也不得让普通 `--yes`、默认配置或安装脚本静默代替法律确认。服务端
 bootstrap/install 在提交运行时和写入 `eula=true` 前，必须获取并展示
 [Minecraft 官方 EULA](https://www.minecraft.net/en-us/eula) 的完整正文，然后针对该正文的
-SHA-256 digest 明确询问用户是否同意。终端文本模式使用可滚动/pager 输出，不能只打印摘要
-或链接。
+SHA-256 digest 明确询问用户是否同意。终端文本模式完整写出正文，不能只打印摘要或链接。
 
 JSON、GUI 和其他非交互调用使用两步协议：`server eula show` 返回完整正文、官方 URL、
 获取时间与 digest；随后 `server eula accept <digest>` 或 bootstrap 的等价参数只接受刚刚
@@ -327,9 +331,8 @@ JSON、GUI 和其他非交互调用使用两步协议：`server eula show` 返�
 身份信息。官方正文 digest 变化后，下一次 server install/update 必须重新展示并确认；launch
 不隐式联网检查 EULA。无法取得完整正文时停止安装，不能用缓存摘要或旧链接伪造确认。
 
-后台服务需要一个持续拥有子进程 stdin 的 supervisor。首版若实现 `--detach`，必须同时
-实现本地 IPC、状态查询和优雅停止；不能只写 PID 后丢失 stdin。若该 supervisor 未完成，
-首版只声明支持前台服务端，不能把普通后台 shell 进程宣传为受管理服务。
+后台服务由一个持续拥有子进程 stdin 的 supervisor 管理。`server start` 同时提供本地 IPC、
+状态查询、控制台命令和优雅停止；实现不得只写 PID 后丢失 stdin。
 
 ## 7. Loader adapter
 
@@ -527,12 +530,9 @@ Windows backend 使用当前用户作用域 DPAPI 保护任意长度的版本化
 原子写入 Launcher data 目录；不得使用 machine scope。Linux 桌面 backend 使用 Secret
 Service。两者都应在同一操作系统登录会话中静默读取，不要求用户重复登录游戏账户。
 
-无 Secret Service 的 headless Linux 不允许静默降级到明文或内置应用密钥混淆。用户必须
-显式创建 Argon2id + XChaCha20-Poly1305 加密 vault；密码只能从安全 TTY、stdin 或 GUI IPC
-输入，不能出现在命令行。vault 解锁后可由当前登录会话内的 credential agent 保持主密钥，
-GUI/CLI 通过权限受限的 Unix Domain Socket 使用；agent 退出或用户退出登录后需要重新解锁
-vault，但不需要重新登录游戏账户。纯服务端 External Yggdrasil/Authlib Injector 配置不含
-用户 token，因此不依赖 vault。
+无 Secret Service 的 headless Linux 当前明确返回 `secret_store`，不静默降级到明文或内置
+应用密钥混淆。加密 vault 与 credential agent 属于后续规划，当前不能写进可用能力列表。
+纯服务端 External Yggdrasil/Authlib Injector 配置不含用户 token，因此不依赖桌面 keyring。
 
 HMCL 只作为“公开账户 metadata 与私有可续期 session 分离、启动时静默 validate/refresh”
 的行为参考。不得复制其源码，也不得采用内置固定密钥的便携混淆作为安全存储。
@@ -620,19 +620,19 @@ RestartPolicy = Never | OnUnexpectedExit | Always
 
 supervisor 必须实现指数退避、最大退避、固定窗口内的重启次数上限，以及稳定运行后重置
 失败计数。每个 spawned、exited、backoff、restarting 和 restart_limit_reached 状态都进入
-结构化事件。前台 `server run` 在当前进程内监督；`server start --detach` 启动同一版本的
+结构化事件。前台 `server run` 在当前进程内监督；`server start` 启动同一版本的
 后台 supervisor，并通过 Windows Named Pipe 或 Unix Domain Socket 保有 stdin、status、
 command 和 stop 能力。
 
 detached supervisor 只承诺在当前登录会话内存活。不实现 Windows Service、systemd 或
 launchd，不承诺开机启动，也不承诺用户退出登录后继续运行。
 
-客户端和服务端共同使用 `ProcessBackend`，但 signal、Job Object、process group 和 IPC
-属于 Windows/Unix backend，不得充斥命令层。
+客户端与服务端共同使用 core 中的参数数组与进程事件模型；Windows Named Pipe 和 Unix
+Domain Socket 只存在于平台 IPC 模块，不进入安装或账户领域。
 
 ## 13. CLI 设计
 
-初始命令树：
+目标命令树如下；其中尚未出现在当前 CLI 的节点仍是规划，不是空壳命令：
 
 ```text
 orbit-launcher
@@ -830,6 +830,8 @@ restart = "on-unexpected-exit"
 restart_limit = 5
 restart_window_seconds = 600
 restart_backoff_max_seconds = 60
+graceful_stop_timeout_seconds = 30
+kill_timeout_seconds = 10
 
 [server.authentication]
 provider = "mojang" # mojang / external-yggdrasil
@@ -971,8 +973,8 @@ LaunchPlan golden test。没有测试覆盖的组合不得笼统宣称“支持�
 2. **Microsoft 应用注册**：需要项目自有的 Entra client ID。源码和开发构建允许显式配置，
    官方 release 通过 CI secret/variable 注入并记录应用所有权；没有 client ID 时相关命令
    明确报错，不阻塞其他模块实现。
-3. **Java provider**：支持 Mojang 和 Temurin；`auto` 使用公开、确定且可测试的 provider
-   顺序，不以异常作为静默回退。
+3. **Java provider**：当前安装事务只支持 Mojang 受管 runtime。Temurin 和 system Java 是
+   规划能力；在完整下载、校验和平台测试落地前不得宣称支持，也不得作为异常后的静默回退。
 4. **服务端后台模式**：`--detach` 与 supervisor、IPC、stop、自动重启一起交付；不实现
    Windows Service、systemd/launchd service、开机启动或退出登录后继续运行。
 5. **旧版本范围**：支持声明按 fixture 和 LaunchPlan golden test 逐步扩大；未覆盖组合不得
