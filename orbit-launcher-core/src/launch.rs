@@ -533,7 +533,8 @@ async fn spawn_supervised_child(plan: &LaunchPlan) -> Result<SupervisedChild, La
     command
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
     let mut child = command.spawn().map_err(|error| {
         LauncherError::Launch(format!(
             "failed to start Java executable '{}': {error}",

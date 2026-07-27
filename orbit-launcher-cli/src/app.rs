@@ -779,7 +779,7 @@ async fn execute_foreground_supervisor(
     });
     let signal_controls = controls.clone();
     let signal_task = tokio::spawn(async move {
-        if tokio::signal::ctrl_c().await.is_ok() {
+        if wait_for_shutdown_signal().await.is_ok() {
             let _ = signal_controls.send(SupervisorControl::Stop);
         }
     });
@@ -808,6 +808,12 @@ async fn execute_internal_supervisor(
     let state = Arc::new(RwLock::new(SupervisorState::starting(resolved.entry.id)?));
     let server = IpcServer::bind(runtime.paths().data_dir(), resolved.entry.id).await?;
     let (controls, mut receiver) = mpsc::unbounded_channel();
+    let signal_controls = controls.clone();
+    let signal_task = tokio::spawn(async move {
+        if wait_for_shutdown_signal().await.is_ok() {
+            let _ = signal_controls.send(SupervisorControl::Stop);
+        }
+    });
     let (shutdown, shutdown_receiver) = watch::channel(false);
     let ipc_task = tokio::spawn(server.serve(controls, Arc::clone(&state), shutdown_receiver));
     let result = supervise_server(plan, &config, &mut receiver, |event| {
@@ -817,11 +823,26 @@ async fn execute_internal_supervisor(
         frontend.supervisor_event("server.supervisor", event);
     })
     .await;
+    signal_task.abort();
     let _ = shutdown.send(true);
     ipc_task
         .await
         .map_err(|error| LauncherError::Launch(format!("supervisor IPC task failed: {error}")))??;
     Ok(CommandOutput::SupervisorResult(result?.into()))
+}
+
+#[cfg(windows)]
+async fn wait_for_shutdown_signal() -> Result<(), std::io::Error> {
+    tokio::signal::ctrl_c().await
+}
+
+#[cfg(unix)]
+async fn wait_for_shutdown_signal() -> Result<(), std::io::Error> {
+    let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+    tokio::select! {
+        result = tokio::signal::ctrl_c() => result,
+        _ = terminate.recv() => Ok(()),
+    }
 }
 
 async fn start_detached_supervisor(
