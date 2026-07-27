@@ -1,16 +1,20 @@
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::fs::OpenOptions;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use futures_util::{StreamExt, stream};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::artifact::{
     ArtifactCache, ArtifactTransferEvent, CachedArtifact, ExpectedHash, hash_file_sha256,
 };
 use crate::atomic_io::write_atomic;
+use crate::client::{ClientDownload, ResolvedVanillaClient, resolve_vanilla_client};
 use crate::config::JavaProvider;
 use crate::error::LauncherError;
 use crate::eula::{EulaAcceptance, EulaDocument, require_current_acceptance, show_current_eula};
@@ -23,6 +27,7 @@ use crate::lockfile::{
     LockedArtifact, LockedEntrypoint, LockedLoader, LockedMinecraft,
 };
 use crate::mojang::{MojangClient, ResolvedVanillaServer, VERSION_MANIFEST_V2_URL};
+use crate::platform::HostPlatform;
 use crate::runtime::RuntimePaths;
 
 const STATE_DIRECTORY: &str = ".orbit-launcher";
@@ -37,6 +42,40 @@ pub struct VanillaServerInstallPlan {
     java: MojangJavaPlan,
     eula: EulaDocument,
     acceptance: Option<EulaAcceptance>,
+}
+
+#[derive(Debug, Clone)]
+pub struct VanillaClientInstallPlan {
+    instance_id: Uuid,
+    minecraft_requirement: String,
+    resolved: ResolvedVanillaClient,
+    java: MojangJavaPlan,
+}
+
+impl VanillaClientInstallPlan {
+    pub fn minecraft_version(&self) -> &str {
+        &self.resolved.minecraft_version
+    }
+
+    pub fn java_major(&self) -> Option<u32> {
+        self.resolved.java.as_ref().map(|java| java.major)
+    }
+
+    pub fn artifact_count(&self) -> usize {
+        self.resolved.downloads.len() + 1
+    }
+
+    pub fn download_size(&self) -> Option<u64> {
+        self.resolved
+            .downloads
+            .iter()
+            .try_fold(0_u64, |total, download| {
+                download
+                    .request
+                    .expected_size
+                    .and_then(|size| total.checked_add(size))
+            })
+    }
 }
 
 impl VanillaServerInstallPlan {
@@ -85,6 +124,53 @@ pub struct InstallResult {
     pub cached_artifacts: usize,
 }
 
+pub async fn prepare_vanilla_client_install<F>(
+    instance_root: &Path,
+    client: &reqwest::Client,
+    default_java_provider: JavaProvider,
+    mut progress: F,
+) -> Result<VanillaClientInstallPlan, LauncherError>
+where
+    F: FnMut(InstallProgressEvent) + Send,
+{
+    let manifest = ManifestFile::open(instance_root)?.inner;
+    require_vanilla_client(&manifest)?;
+    progress(InstallProgressEvent::MetadataStarted);
+    let resolved = resolve_vanilla_client(
+        &MojangClient::new(client.clone()),
+        &manifest.minecraft.requirement,
+        &HostPlatform::native()?,
+    )
+    .await?;
+    progress(InstallProgressEvent::MinecraftResolved {
+        version: resolved.minecraft_version.clone(),
+        total_artifacts: resolved.downloads.len() + 1,
+    });
+    let java_requirement = resolved.java.as_ref().ok_or_else(|| {
+        LauncherError::UnsupportedRequirement(format!(
+            "Minecraft '{}' does not publish an authoritative Java runtime requirement",
+            resolved.minecraft_version
+        ))
+    })?;
+    let provider = selected_java_provider(&manifest, default_java_provider)?;
+    if provider != JavaProvider::Mojang {
+        return Err(LauncherError::UnsupportedRequirement(format!(
+            "Java provider '{}' is not yet implemented",
+            provider.as_str()
+        )));
+    }
+    let java = plan_mojang_java(client, java_requirement, JavaTarget::native()?, |event| {
+        progress(InstallProgressEvent::Java(event));
+    })
+    .await?;
+    Ok(VanillaClientInstallPlan {
+        instance_id: manifest.id,
+        minecraft_requirement: manifest.minecraft.requirement,
+        resolved,
+        java,
+    })
+}
+
 pub async fn prepare_vanilla_server_install<F>(
     instance_root: &Path,
     client: &reqwest::Client,
@@ -110,16 +196,7 @@ where
             resolved.minecraft_version
         ))
     })?;
-    let provider = match manifest.java.policy {
-        JavaPolicy::Auto => default_java_provider,
-        JavaPolicy::Managed => manifest.java.provider.unwrap_or(default_java_provider),
-        JavaPolicy::System => {
-            return Err(LauncherError::UnsupportedRequirement(
-                "system Java selection is not yet supported by the managed install transaction"
-                    .to_string(),
-            ));
-        }
-    };
+    let provider = selected_java_provider(&manifest, default_java_provider)?;
     if provider != JavaProvider::Mojang {
         return Err(LauncherError::UnsupportedRequirement(format!(
             "Java provider '{}' is not yet implemented",
@@ -147,6 +224,155 @@ where
         java,
         eula,
         acceptance,
+    })
+}
+
+pub async fn execute_vanilla_client_install<F>(
+    instance_root: &Path,
+    runtime_paths: &RuntimePaths,
+    client: &reqwest::Client,
+    plan: VanillaClientInstallPlan,
+    concurrency: usize,
+    mut progress: F,
+) -> Result<InstallResult, LauncherError>
+where
+    F: FnMut(InstallProgressEvent) + Send,
+{
+    if concurrency == 0 {
+        return Err(LauncherError::InvalidConfig(
+            "artifact download concurrency must be greater than zero".to_string(),
+        ));
+    }
+    let manifest = ManifestFile::open(instance_root)?.inner;
+    require_vanilla_client(&manifest)?;
+    if manifest.id != plan.instance_id
+        || manifest.minecraft.requirement != plan.minecraft_requirement
+    {
+        return Err(LauncherError::Transaction(
+            "instance manifest changed after the install plan was generated".to_string(),
+        ));
+    }
+
+    let transaction = InstallTransaction::begin(instance_root, "install")?;
+    let java = install_mojang_java(runtime_paths, client, plan.java, concurrency, |event| {
+        progress(InstallProgressEvent::Java(event));
+    })
+    .await?;
+    let progress = Arc::new(Mutex::new(progress));
+    let cache = ArtifactCache::new(runtime_paths.cache_dir());
+    let mut transfers = stream::iter(plan.resolved.downloads.iter().cloned().map(|download| {
+        let client = client.clone();
+        let cache = cache.clone();
+        let progress = Arc::clone(&progress);
+        async move {
+            let artifact = cache
+                .fetch(&client, &download.request, |event| {
+                    if let Ok(mut progress) = progress.lock() {
+                        progress(InstallProgressEvent::Artifact(event));
+                    }
+                })
+                .await?;
+            Ok::<_, LauncherError>((download, artifact))
+        }
+    }))
+    .buffer_unordered(concurrency);
+    let mut artifacts = BTreeMap::new();
+    let mut downloaded = java.downloaded_artifacts;
+    let mut cached = java.cached_artifacts;
+    while let Some(result) = transfers.next().await {
+        let (download, artifact) = result?;
+        downloaded += usize::from(!artifact.cache_hit);
+        cached += usize::from(artifact.cache_hit);
+        if artifacts
+            .insert(download.target.clone(), (download, artifact))
+            .is_some()
+        {
+            return Err(LauncherError::InvalidRemoteData(
+                "Minecraft metadata resolves multiple artifacts to the same instance path"
+                    .to_string(),
+            ));
+        }
+    }
+    cache.flush()?;
+
+    let mut locked_artifacts = Vec::new();
+    for (target, (download, artifact)) in &artifacts {
+        cache.materialize(artifact, &transaction.staging.join(target))?;
+        locked_artifacts.push(locked_artifact(download, artifact));
+    }
+    let version_json_target = format!("versions/{0}/{0}.json", plan.resolved.minecraft_version);
+    write_staged_file(
+        &transaction.staging,
+        &version_json_target,
+        &plan.resolved.version_json_bytes,
+    )?;
+    locked_artifacts.push(LockedArtifact {
+        logical_name: format!("Minecraft {} version JSON", plan.resolved.minecraft_version),
+        owner: ArtifactOwner::Minecraft,
+        source_url: plan.resolved.version_json_url.clone(),
+        upstream_sha1: Some(plan.resolved.version_json_sha1.clone()),
+        sha256: hex::encode(Sha256::digest(&plan.resolved.version_json_bytes)),
+        size: plan.resolved.version_json_bytes.len() as u64,
+        path: version_json_target,
+    });
+
+    let mut generated_files = extract_client_natives(&transaction.staging, &artifacts)?;
+    generated_files.extend(materialize_legacy_assets(
+        &transaction.staging,
+        &plan.resolved,
+    )?);
+    generated_files.sort();
+    generated_files.dedup();
+    locked_artifacts.sort_by(|left, right| left.path.cmp(&right.path));
+    let lock = LauncherLock {
+        schema: LOCK_SCHEMA,
+        instance_id: manifest.id,
+        kind: InstanceKind::Client,
+        minecraft: LockedMinecraft {
+            version: plan.resolved.minecraft_version.clone(),
+            version_type: plan.resolved.version_type,
+            version_manifest_url: VERSION_MANIFEST_V2_URL.to_string(),
+            version_manifest_sha256: plan.resolved.version_manifest_sha256,
+            version_json_url: plan.resolved.version_json_url,
+            version_json_sha1: plan.resolved.version_json_sha1,
+        },
+        loader: LockedLoader {
+            kind: LoaderKind::Vanilla,
+            version: None,
+            profile_url: None,
+            profile_sha256: None,
+        },
+        java: Some(java.locked),
+        entrypoint: LockedEntrypoint::Classpath {
+            main_class: plan.resolved.main_class,
+            classpath: plan.resolved.classpath,
+        },
+        arguments: LockedArguments {
+            jvm: plan.resolved.jvm_arguments,
+            game: plan.resolved.game_arguments,
+        },
+        artifacts: locked_artifacts,
+        generated_files,
+        eula: None,
+    };
+    lock.validate()?;
+    LockFile::new(&transaction.staging, lock.clone()).save()?;
+    verify_staged_client(&transaction.staging, &lock)?;
+    emit_install(&progress, InstallProgressEvent::StagingVerified)?;
+    let mut owned_files: Vec<_> = lock
+        .artifacts
+        .iter()
+        .map(|artifact| artifact.path.clone())
+        .chain(lock.generated_files.iter().cloned())
+        .collect();
+    owned_files.push(INSTANCE_LOCK_FILE.to_string());
+    owned_files.sort();
+    transaction.commit(&owned_files)?;
+    emit_install(&progress, InstallProgressEvent::Committed)?;
+    Ok(InstallResult {
+        lock,
+        downloaded_artifacts: downloaded,
+        cached_artifacts: cached,
     })
 }
 
@@ -182,6 +408,7 @@ where
             progress(InstallProgressEvent::Artifact(event));
         })
         .await?;
+    cache.flush()?;
     cache.materialize(&cached, &transaction.staging.join("server.jar"))?;
     std::fs::write(transaction.staging.join("eula.txt"), b"eula=true\n")?;
 
@@ -231,7 +458,11 @@ where
     LockFile::new(&transaction.staging, lock.clone()).save()?;
     verify_staged_server(&transaction.staging, &cached)?;
     progress(InstallProgressEvent::StagingVerified);
-    transaction.commit(&["server.jar", "eula.txt", INSTANCE_LOCK_FILE])?;
+    transaction.commit(&[
+        "server.jar".to_string(),
+        "eula.txt".to_string(),
+        INSTANCE_LOCK_FILE.to_string(),
+    ])?;
     progress(InstallProgressEvent::Committed);
     Ok(InstallResult {
         lock,
@@ -252,6 +483,282 @@ fn require_vanilla_server(manifest: &InstanceManifest) -> Result<(), LauncherErr
             manifest.loader.kind.as_str()
         )));
     }
+    Ok(())
+}
+
+fn require_vanilla_client(manifest: &InstanceManifest) -> Result<(), LauncherError> {
+    if manifest.kind != InstanceKind::Client {
+        return Err(LauncherError::UnsupportedRequirement(
+            "Vanilla client installation requires a client instance".to_string(),
+        ));
+    }
+    if manifest.loader.kind != LoaderKind::Vanilla {
+        return Err(LauncherError::UnsupportedRequirement(format!(
+            "Loader '{}' must use its own install adapter",
+            manifest.loader.kind.as_str()
+        )));
+    }
+    Ok(())
+}
+
+fn selected_java_provider(
+    manifest: &InstanceManifest,
+    default: JavaProvider,
+) -> Result<JavaProvider, LauncherError> {
+    match manifest.java.policy {
+        JavaPolicy::Auto => Ok(default),
+        JavaPolicy::Managed => Ok(manifest.java.provider.unwrap_or(default)),
+        JavaPolicy::System => Err(LauncherError::UnsupportedRequirement(
+            "system Java selection is not yet supported by the managed install transaction"
+                .to_string(),
+        )),
+    }
+}
+
+fn locked_artifact(download: &ClientDownload, artifact: &CachedArtifact) -> LockedArtifact {
+    let upstream_sha1 = match &download.request.expected_hash {
+        ExpectedHash::Sha1(value) => Some(value.clone()),
+        _ => None,
+    };
+    LockedArtifact {
+        logical_name: download.request.logical_name.clone(),
+        owner: download.owner,
+        source_url: download.request.url.clone(),
+        upstream_sha1,
+        sha256: artifact.sha256.clone(),
+        size: artifact.size,
+        path: download.target.clone(),
+    }
+}
+
+fn write_staged_file(root: &Path, relative: &str, bytes: &[u8]) -> Result<(), LauncherError> {
+    let target = root.join(relative);
+    if let Some(parent) = target.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(target, bytes)?;
+    Ok(())
+}
+
+fn extract_client_natives(
+    staging: &Path,
+    artifacts: &BTreeMap<String, (ClientDownload, CachedArtifact)>,
+) -> Result<Vec<String>, LauncherError> {
+    const MAX_NATIVE_ENTRY_BYTES: u64 = 512 * 1024 * 1024;
+    const MAX_TOTAL_NATIVE_BYTES: u64 = 1024 * 1024 * 1024;
+
+    let mut generated = BTreeMap::<String, String>::new();
+    let mut total_bytes = 0_u64;
+    for (archive_path, (download, _)) in artifacts {
+        let Some(extract) = &download.native_extract else {
+            continue;
+        };
+        for exclude in &extract.excludes {
+            validate_archive_prefix(exclude)?;
+        }
+        let file = std::fs::File::open(staging.join(archive_path))?;
+        let mut archive = zip::ZipArchive::new(file).map_err(|error| {
+            LauncherError::InvalidRemoteData(format!(
+                "native library '{}' is not a readable ZIP archive: {error}",
+                download.request.logical_name
+            ))
+        })?;
+        for index in 0..archive.len() {
+            let mut entry = archive.by_index(index).map_err(|error| {
+                LauncherError::InvalidRemoteData(format!(
+                    "native library '{}' contains an unreadable entry: {error}",
+                    download.request.logical_name
+                ))
+            })?;
+            let raw_name = entry.name().to_string();
+            if raw_name.contains('\\') {
+                return Err(LauncherError::InvalidRemoteData(format!(
+                    "native library '{}' contains a non-portable path",
+                    download.request.logical_name
+                )));
+            }
+            if entry.is_dir()
+                || extract
+                    .excludes
+                    .iter()
+                    .any(|exclude| raw_name.starts_with(exclude))
+            {
+                continue;
+            }
+            if entry
+                .unix_mode()
+                .is_some_and(|mode| mode & 0o170000 == 0o120000)
+            {
+                return Err(LauncherError::InvalidRemoteData(format!(
+                    "native library '{}' contains a symbolic link",
+                    download.request.logical_name
+                )));
+            }
+            let enclosed = entry.enclosed_name().ok_or_else(|| {
+                LauncherError::InvalidRemoteData(format!(
+                    "native library '{}' contains an unsafe path",
+                    download.request.logical_name
+                ))
+            })?;
+            let portable = path_to_portable(&enclosed)?;
+            if entry.size() > MAX_NATIVE_ENTRY_BYTES {
+                return Err(LauncherError::InvalidRemoteData(format!(
+                    "native entry '{portable}' exceeds {MAX_NATIVE_ENTRY_BYTES} bytes"
+                )));
+            }
+            total_bytes = total_bytes.checked_add(entry.size()).ok_or_else(|| {
+                LauncherError::InvalidRemoteData(
+                    "native extraction size exceeds the supported range".to_string(),
+                )
+            })?;
+            if total_bytes > MAX_TOTAL_NATIVE_BYTES {
+                return Err(LauncherError::InvalidRemoteData(format!(
+                    "native extraction exceeds {MAX_TOTAL_NATIVE_BYTES} bytes"
+                )));
+            }
+            let relative = format!("natives/{portable}");
+            let mut bytes = Vec::with_capacity(entry.size() as usize);
+            entry
+                .by_ref()
+                .take(MAX_NATIVE_ENTRY_BYTES + 1)
+                .read_to_end(&mut bytes)?;
+            if bytes.len() as u64 != entry.size() {
+                return Err(LauncherError::ArtifactIntegrity(format!(
+                    "native entry '{portable}' has inconsistent size metadata"
+                )));
+            }
+            let digest = hex::encode(Sha256::digest(&bytes));
+            if let Some(existing) = generated.get(&relative) {
+                if existing != &digest {
+                    return Err(LauncherError::InvalidRemoteData(format!(
+                        "native libraries produce conflicting file '{relative}'"
+                    )));
+                }
+                continue;
+            }
+            write_staged_file(staging, &relative, &bytes)?;
+            generated.insert(relative, digest);
+        }
+    }
+    Ok(generated.into_keys().collect())
+}
+
+fn validate_archive_prefix(prefix: &str) -> Result<(), LauncherError> {
+    let trimmed = prefix.trim_end_matches('/');
+    if trimmed.is_empty()
+        || prefix.contains('\\')
+        || trimmed
+            .split('/')
+            .any(|part| part.is_empty() || part == "." || part == "..")
+    {
+        return Err(LauncherError::InvalidRemoteData(format!(
+            "native extraction exclusion '{prefix}' is unsafe"
+        )));
+    }
+    Ok(())
+}
+
+fn path_to_portable(path: &Path) -> Result<String, LauncherError> {
+    let mut result = String::new();
+    for component in path.components() {
+        let std::path::Component::Normal(value) = component else {
+            return Err(LauncherError::InvalidRemoteData(format!(
+                "path '{}' is not portable",
+                path.display()
+            )));
+        };
+        let value = value.to_str().ok_or_else(|| {
+            LauncherError::InvalidRemoteData(format!(
+                "path '{}' is not valid UTF-8",
+                path.display()
+            ))
+        })?;
+        if value.chars().any(char::is_control) {
+            return Err(LauncherError::InvalidRemoteData(format!(
+                "path '{}' contains control characters",
+                path.display()
+            )));
+        }
+        if !result.is_empty() {
+            result.push('/');
+        }
+        result.push_str(value);
+    }
+    if result.is_empty() {
+        return Err(LauncherError::InvalidRemoteData(
+            "empty native entry path".to_string(),
+        ));
+    }
+    Ok(result)
+}
+
+fn materialize_legacy_assets(
+    staging: &Path,
+    resolved: &ResolvedVanillaClient,
+) -> Result<Vec<String>, LauncherError> {
+    if !resolved.legacy_virtual_assets && !resolved.map_assets_to_resources {
+        return Ok(Vec::new());
+    }
+    let mut generated = Vec::new();
+    for mapping in &resolved.asset_mappings {
+        let source = staging.join(&mapping.object_path);
+        let targets = [
+            resolved.legacy_virtual_assets.then(|| {
+                format!(
+                    "assets/virtual/{}/{}",
+                    resolved.asset_index_id, mapping.logical_path
+                )
+            }),
+            resolved
+                .map_assets_to_resources
+                .then(|| format!("resources/{}", mapping.logical_path)),
+        ];
+        for relative in targets.into_iter().flatten() {
+            let target = staging.join(&relative);
+            if let Some(parent) = target.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            std::fs::copy(&source, target)?;
+            generated.push(relative);
+        }
+    }
+    Ok(generated)
+}
+
+fn verify_staged_client(staging: &Path, lock: &LauncherLock) -> Result<(), LauncherError> {
+    for artifact in &lock.artifacts {
+        let path = staging.join(&artifact.path);
+        if std::fs::metadata(&path)?.len() != artifact.size
+            || hash_file_sha256(&path)? != artifact.sha256
+        {
+            return Err(LauncherError::ArtifactIntegrity(format!(
+                "staged artifact '{}' failed final verification",
+                artifact.logical_name
+            )));
+        }
+    }
+    for generated in &lock.generated_files {
+        if !staging.join(generated).is_file() {
+            return Err(LauncherError::Transaction(format!(
+                "staged generated file '{generated}' is missing"
+            )));
+        }
+    }
+    LockFile::open(staging)?;
+    Ok(())
+}
+
+fn emit_install<F>(
+    progress: &Arc<Mutex<F>>,
+    event: InstallProgressEvent,
+) -> Result<(), LauncherError>
+where
+    F: FnMut(InstallProgressEvent),
+{
+    let mut progress = progress.lock().map_err(|_| {
+        LauncherError::Transaction("install progress callback lock was poisoned".to_string())
+    })?;
+    progress(event);
     Ok(())
 }
 
@@ -291,7 +798,8 @@ struct TransactionJournal {
     schema: u32,
     id: Uuid,
     phase: String,
-    files: Vec<String>,
+    write_files: Vec<String>,
+    remove_files: Vec<String>,
 }
 
 struct InstallTransaction {
@@ -344,11 +852,19 @@ impl InstallTransaction {
         })
     }
 
-    fn commit(self, relative_files: &[&str]) -> Result<(), LauncherError> {
+    fn commit(self, relative_files: &[String]) -> Result<(), LauncherError> {
         let previous = load_previous_owned_paths(&self.root)?;
+        let next: HashSet<_> = relative_files.iter().cloned().collect();
+        if next.len() != relative_files.len() {
+            return Err(LauncherError::Transaction(
+                "install transaction contains duplicate target paths".to_string(),
+            ));
+        }
+        let mut stale: Vec<_> = previous.difference(&next).cloned().collect();
+        stale.sort();
         for relative in relative_files {
             let target = self.root.join(relative);
-            if target.exists() && *relative != INSTANCE_LOCK_FILE && !previous.contains(*relative) {
+            if target.exists() && relative != INSTANCE_LOCK_FILE && !previous.contains(relative) {
                 return Err(LauncherError::Transaction(format!(
                     "refusing to overwrite unowned instance file '{relative}'"
                 )));
@@ -363,42 +879,77 @@ impl InstallTransaction {
             schema: 1,
             id: self.id,
             phase: "committing".to_string(),
-            files: relative_files
-                .iter()
-                .map(|value| (*value).to_string())
-                .collect(),
+            write_files: relative_files.to_vec(),
+            remove_files: stale.clone(),
         };
         write_json_atomic(&self.state.join(TRANSACTION_JOURNAL), &journal)?;
 
         let backup_root = self.staging.join("backup");
+        let mut backup_paths: Vec<String> = relative_files
+            .iter()
+            .filter(|relative| self.root.join(relative).exists())
+            .cloned()
+            .collect();
+        backup_paths.extend(
+            stale
+                .iter()
+                .filter(|relative| self.root.join(relative).exists())
+                .cloned(),
+        );
+        backup_paths.sort();
+        backup_paths.dedup();
+        let mut backed_up = Vec::new();
+        for relative in &backup_paths {
+            let target = self.root.join(relative);
+            let backup = backup_root.join(relative);
+            if let Some(parent) = backup.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            if let Err(error) = std::fs::rename(&target, &backup) {
+                restore_backups(&self.root, &backup_root, &backed_up)?;
+                self.abort_after_rollback()?;
+                return Err(error.into());
+            }
+            backed_up.push(relative.clone());
+        }
+
         let mut committed = Vec::new();
         for relative in relative_files {
             let target = self.root.join(relative);
-            let backup = backup_root.join(relative);
-            let had_backup = target.exists();
-            if had_backup {
-                if let Some(parent) = backup.parent() {
-                    std::fs::create_dir_all(parent)?;
-                }
-                std::fs::rename(&target, &backup)?;
-            }
             let source = self.staging.join(relative);
-            if let Err(error) = std::fs::rename(&source, &target) {
-                if had_backup {
-                    let _ = std::fs::rename(&backup, &target);
-                }
-                rollback_committed(&self.root, &backup_root, &committed)?;
-                let _ = std::fs::remove_file(self.state.join(TRANSACTION_JOURNAL));
-                let _ = std::fs::remove_file(self.state.join(TRANSACTION_LOCK));
-                let _ = std::fs::remove_dir_all(&self.staging);
+            if let Some(parent) = target.parent()
+                && let Err(error) = std::fs::create_dir_all(parent)
+            {
+                rollback_transaction(&self.root, &backup_root, &committed, &backed_up)?;
+                self.abort_after_rollback()?;
                 return Err(error.into());
             }
-            committed.push(((*relative).to_string(), had_backup));
+            if let Err(error) = std::fs::rename(&source, &target) {
+                rollback_transaction(&self.root, &backup_root, &committed, &backed_up)?;
+                self.abort_after_rollback()?;
+                return Err(error.into());
+            }
+            committed.push(relative.clone());
         }
 
         std::fs::remove_file(self.state.join(TRANSACTION_JOURNAL))?;
         std::fs::remove_file(self.state.join(TRANSACTION_LOCK))?;
         std::fs::remove_dir_all(&self.staging)?;
+        Ok(())
+    }
+
+    fn abort_after_rollback(&self) -> Result<(), LauncherError> {
+        let journal = self.state.join(TRANSACTION_JOURNAL);
+        if journal.exists() {
+            std::fs::remove_file(journal)?;
+        }
+        let lock = self.state.join(TRANSACTION_LOCK);
+        if lock.exists() {
+            std::fs::remove_file(lock)?;
+        }
+        if self.staging.exists() {
+            std::fs::remove_dir_all(&self.staging)?;
+        }
         Ok(())
     }
 }
@@ -425,19 +976,32 @@ fn load_previous_owned_paths(root: &Path) -> Result<HashSet<String>, LauncherErr
         .collect())
 }
 
-fn rollback_committed(
+fn rollback_transaction(
     root: &Path,
     backup_root: &Path,
-    committed: &[(String, bool)],
+    committed: &[String],
+    backed_up: &[String],
 ) -> Result<(), LauncherError> {
-    for (relative, had_backup) in committed.iter().rev() {
+    for relative in committed.iter().rev() {
         let target = root.join(relative);
         if target.exists() {
             std::fs::remove_file(&target)?;
         }
-        if *had_backup {
-            std::fs::rename(backup_root.join(relative), target)?;
+    }
+    restore_backups(root, backup_root, backed_up)
+}
+
+fn restore_backups(
+    root: &Path,
+    backup_root: &Path,
+    backed_up: &[String],
+) -> Result<(), LauncherError> {
+    for relative in backed_up.iter().rev() {
+        let target = root.join(relative);
+        if let Some(parent) = target.parent() {
+            std::fs::create_dir_all(parent)?;
         }
+        std::fs::rename(backup_root.join(relative), target)?;
     }
     Ok(())
 }
@@ -462,6 +1026,49 @@ fn unix_seconds() -> Result<u64, LauncherError> {
 mod tests {
     use super::*;
 
+    fn previous_server_lock(id: Uuid) -> LauncherLock {
+        LauncherLock {
+            schema: LOCK_SCHEMA,
+            instance_id: id,
+            kind: InstanceKind::Server,
+            minecraft: LockedMinecraft {
+                version: "1.21.1".to_string(),
+                version_type: "release".to_string(),
+                version_manifest_url: VERSION_MANIFEST_V2_URL.to_string(),
+                version_manifest_sha256: "a".repeat(64),
+                version_json_url: "https://piston-meta.mojang.com/version.json".to_string(),
+                version_json_sha1: "b".repeat(40),
+            },
+            loader: LockedLoader {
+                kind: LoaderKind::Vanilla,
+                version: None,
+                profile_url: None,
+                profile_sha256: None,
+            },
+            java: None,
+            entrypoint: LockedEntrypoint::Jar {
+                path: "old/server.jar".to_string(),
+            },
+            arguments: LockedArguments::default(),
+            artifacts: vec![LockedArtifact {
+                logical_name: "old server".to_string(),
+                owner: ArtifactOwner::Minecraft,
+                source_url: "https://piston-data.mojang.com/old-server.jar".to_string(),
+                upstream_sha1: Some("c".repeat(40)),
+                sha256: "d".repeat(64),
+                size: 3,
+                path: "old/server.jar".to_string(),
+            }],
+            generated_files: vec!["old/generated.txt".to_string()],
+            eula: Some(EulaAcceptance {
+                url: crate::eula::MINECRAFT_EULA_URL.to_string(),
+                digest_sha256: "e".repeat(64),
+                accepted_at_unix_seconds: 1,
+                method: crate::eula::EulaAcceptanceMethod::DigestCommand,
+            }),
+        }
+    }
+
     #[test]
     fn transaction_refuses_to_replace_an_unowned_server_jar() {
         let directory = tempfile::tempdir().unwrap();
@@ -472,7 +1079,11 @@ mod tests {
         std::fs::write(transaction.staging.join(INSTANCE_LOCK_FILE), b"not reached").unwrap();
         assert!(
             transaction
-                .commit(&["server.jar", "eula.txt", INSTANCE_LOCK_FILE])
+                .commit(&[
+                    "server.jar".to_string(),
+                    "eula.txt".to_string(),
+                    INSTANCE_LOCK_FILE.to_string(),
+                ])
                 .is_err()
         );
         assert_eq!(
@@ -488,5 +1099,33 @@ mod tests {
         assert!(InstallTransaction::begin(directory.path(), "second").is_err());
         drop(first);
         assert!(InstallTransaction::begin(directory.path(), "third").is_ok());
+    }
+
+    #[test]
+    fn commit_creates_nested_parents_and_removes_stale_lock_owned_files() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(directory.path().join("old")).unwrap();
+        std::fs::write(directory.path().join("old/server.jar"), b"old").unwrap();
+        std::fs::write(directory.path().join("old/generated.txt"), b"old").unwrap();
+        LockFile::new(directory.path(), previous_server_lock(Uuid::new_v4()))
+            .save()
+            .unwrap();
+
+        let transaction = InstallTransaction::begin(directory.path(), "update").unwrap();
+        write_staged_file(&transaction.staging, "new/nested/server.jar", b"new").unwrap();
+        write_staged_file(&transaction.staging, INSTANCE_LOCK_FILE, b"new lock").unwrap();
+        transaction
+            .commit(&[
+                "new/nested/server.jar".to_string(),
+                INSTANCE_LOCK_FILE.to_string(),
+            ])
+            .unwrap();
+
+        assert_eq!(
+            std::fs::read(directory.path().join("new/nested/server.jar")).unwrap(),
+            b"new"
+        );
+        assert!(!directory.path().join("old/server.jar").exists());
+        assert!(!directory.path().join("old/generated.txt").exists());
     }
 }

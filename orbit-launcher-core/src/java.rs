@@ -13,6 +13,7 @@ use crate::atomic_io::write_atomic;
 use crate::error::LauncherError;
 use crate::lockfile::LockedJavaRuntime;
 use crate::mojang::MojangJavaRequirement;
+use crate::platform::{Architecture, HostPlatform, OperatingSystem};
 use crate::runtime::RuntimePaths;
 
 pub const MOJANG_RUNTIME_MANIFEST_URL: &str = "https://piston-meta.mojang.com/v1/products/java-runtime/2ec0cc96c44e5a76b9c8b7c39df7210883d12871/all.json";
@@ -32,16 +33,20 @@ pub enum JavaTarget {
 
 impl JavaTarget {
     pub fn native() -> Result<Self, LauncherError> {
-        match (std::env::consts::OS, std::env::consts::ARCH) {
-            ("windows", "x86_64") => Ok(Self::WindowsX64),
-            ("windows", "x86") => Ok(Self::WindowsX86),
-            ("windows", "aarch64") => Ok(Self::WindowsArm64),
-            ("linux", "x86_64") => Ok(Self::LinuxX64),
-            ("linux", "x86") => Ok(Self::LinuxX86),
-            ("macos", "x86_64") => Ok(Self::MacOsX64),
-            ("macos", "aarch64") => Ok(Self::MacOsArm64),
+        Self::for_platform(&HostPlatform::native()?)
+    }
+
+    pub fn for_platform(platform: &HostPlatform) -> Result<Self, LauncherError> {
+        match (platform.os, platform.architecture) {
+            (OperatingSystem::Windows, Architecture::X86_64) => Ok(Self::WindowsX64),
+            (OperatingSystem::Windows, Architecture::X86) => Ok(Self::WindowsX86),
+            (OperatingSystem::Windows, Architecture::Arm64) => Ok(Self::WindowsArm64),
+            (OperatingSystem::Linux, Architecture::X86_64) => Ok(Self::LinuxX64),
+            (OperatingSystem::Linux, Architecture::X86) => Ok(Self::LinuxX86),
+            (OperatingSystem::MacOs, Architecture::X86_64) => Ok(Self::MacOsX64),
+            (OperatingSystem::MacOs, Architecture::Arm64) => Ok(Self::MacOsArm64),
             (os, arch) => Err(LauncherError::UnsupportedRequirement(format!(
-                "Mojang does not publish a Java runtime mapping for {os}/{arch}"
+                "Mojang does not publish a Java runtime mapping for {os:?}/{arch:?}"
             ))),
         }
     }
@@ -296,6 +301,7 @@ where
         cached += usize::from(artifact.cache_hit);
         artifacts.insert(path, (request, executable, artifact));
     }
+    cache.flush()?;
 
     materialize_runtime(&staging, &plan, &cache, &artifacts, &progress)?;
     let inventory = JavaRuntimeInventory::from_plan(&plan, &artifacts);

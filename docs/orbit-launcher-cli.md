@@ -1,6 +1,6 @@
 # Orbit Launcher CLI
 
-> 实现状态：实例、配置、Mojang Java runtime 和 Vanilla 独立服务端安装已可用；客户端、
+> 实现状态：实例、配置、Mojang Java runtime 以及 Vanilla 客户端/独立服务端安装已可用；
 > Fabric/Quilt/Forge/NeoForge adapter、账户与启动命令仍在后续提交中。
 > 未实现的命令不会以空壳形式出现在 CLI 中。
 
@@ -31,9 +31,9 @@ orbit-launcher config unset <key>
 # 已有实例
 orbit-launcher [--instance <id|name>] install
 
-# 一条命令创建并安装 Vanilla 服务端
+# 一条命令创建并安装 Vanilla 客户端或服务端
 orbit-launcher install --new <name> [--root <path>] \
-  --kind server --minecraft <exact|latest-release|latest-snapshot>
+  --kind <client|server> --minecraft <exact|latest-release|latest-snapshot>
 
 orbit-launcher instance create \
   --name <name> \
@@ -69,11 +69,13 @@ Yggdrasil provider 属于复合对象，后续由账户领域命令管理，不�
 `install --new` 提供，不会复用 `instance create` 伪装安装成功。bootstrap 失败时会注销临时
 实例并删除 provisional manifest，不删除用户文件。
 
-当前 `install` 只接受 Vanilla server 实例。它先解析 Mojang version manifest v2、目标版本
-JSON 和该版本声明的 Java component/major，再一次性确定服务端 JAR 与 Java runtime 的完整
-下载队列。文件按上游 SHA-1 校验后进入本地 SHA-256 CAS；Java 文件并发下载，runtime 和
-实例分别在 staging 中验证，最后原子提交 `server.jar`、`eula.txt` 与
-`orbit-launcher.lock`。目标位置已有但不属于旧 lock 的文件时会拒绝覆盖。
+当前 `install` 接受 Vanilla client/server 实例。它先解析 Mojang version manifest v2、
+目标版本 JSON 和该版本声明的 Java component/major，再一次性确定完整下载队列。客户端
+严格执行 Mojang 的顺序规则、library/classifier、asset index、logging 配置与 native 解压
+语义；相同 asset 内容按哈希下载一次，但会保留全部 legacy virtual/resources 逻辑映射。
+文件按上游 SHA-1 校验后进入本地 SHA-256 CAS；下载可并发，runtime 和实例分别在 staging
+中验证后原子提交。旧 lock 拥有但新精确状态不再需要的文件会在同一事务中移除；目标位置
+已有但不属于旧 lock 的文件时拒绝覆盖。
 
 服务端安装每次都会获取当前官方 EULA。文本 TTY 会完整展示正文、官方 URL 和正文
 SHA-256，并且只有用户准确输入 `I AGREE` 才继续；没有 `--yes` 绕过。JSON、管道或

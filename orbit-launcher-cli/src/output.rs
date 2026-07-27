@@ -213,11 +213,13 @@ pub struct EulaAcceptanceView {
 #[derive(Debug, Serialize)]
 pub struct InstallView {
     pub instance_id: String,
+    pub kind: String,
     pub minecraft_version: String,
     pub loader: String,
     pub java_runtime_id: String,
     pub java_version: String,
-    pub eula_digest_sha256: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub eula_digest_sha256: Option<String>,
     pub downloaded_artifacts: usize,
     pub cached_artifacts: usize,
 }

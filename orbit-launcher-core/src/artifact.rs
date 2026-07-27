@@ -95,6 +95,7 @@ pub enum ArtifactTransferEvent {
 pub struct ArtifactCache {
     root: PathBuf,
     aliases: Arc<Mutex<Option<AliasIndex>>>,
+    aliases_dirty: Arc<Mutex<bool>>,
 }
 
 impl ArtifactCache {
@@ -102,6 +103,7 @@ impl ArtifactCache {
         Self {
             root: root.into(),
             aliases: Arc::new(Mutex::new(None)),
+            aliases_dirty: Arc::new(Mutex::new(false)),
         }
     }
 
@@ -273,6 +275,24 @@ impl ArtifactCache {
         Ok(())
     }
 
+    pub fn flush(&self) -> Result<(), LauncherError> {
+        let aliases = self.aliases.lock().map_err(|_| {
+            LauncherError::Transaction("artifact alias lock was poisoned".to_string())
+        })?;
+        let mut dirty = self.aliases_dirty.lock().map_err(|_| {
+            LauncherError::Transaction("artifact alias dirty flag was poisoned".to_string())
+        })?;
+        if !*dirty {
+            return Ok(());
+        }
+        aliases
+            .as_ref()
+            .expect("dirty alias index was initialized")
+            .save(&self.alias_path())?;
+        *dirty = false;
+        Ok(())
+    }
+
     fn find_cached(
         &self,
         request: &ArtifactRequest,
@@ -334,7 +354,10 @@ impl ArtifactCache {
         }
         let aliases = aliases.as_mut().expect("alias index was initialized");
         aliases.sha1.insert(sha1, sha256);
-        aliases.save(&self.alias_path())
+        *self.aliases_dirty.lock().map_err(|_| {
+            LauncherError::Transaction("artifact alias dirty flag was poisoned".to_string())
+        })? = true;
+        Ok(())
     }
 }
 

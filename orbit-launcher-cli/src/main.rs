@@ -135,7 +135,7 @@ fn render_text(output: app::CommandOutput) {
             view.digest_sha256, view.instance_id
         ),
         app::CommandOutput::Install(view) => {
-            println!("Installed instance {}.", view.instance_id);
+            println!("Installed {} instance {}.", view.kind, view.instance_id);
             println!("  Minecraft: {}", view.minecraft_version);
             println!("  loader: {}", view.loader);
             println!("  Java: {} ({})", view.java_version, view.java_runtime_id);
@@ -143,7 +143,9 @@ fn render_text(output: app::CommandOutput) {
                 "  artifacts: {} downloaded, {} cached",
                 view.downloaded_artifacts, view.cached_artifacts
             );
-            println!("  EULA SHA-256: {}", view.eula_digest_sha256);
+            if let Some(digest) = view.eula_digest_sha256 {
+                println!("  EULA SHA-256: {digest}");
+            }
         }
         app::CommandOutput::InstanceList(view) => {
             if view.instances.is_empty() {
@@ -311,7 +313,7 @@ impl TerminalFrontend {
             ProgressData::JavaRuntimeCached { runtime_id } => {
                 eprintln!("Using installed Java runtime {runtime_id}.")
             }
-            ProgressData::StagingVerified => eprintln!("Verified staged server runtime."),
+            ProgressData::StagingVerified => eprintln!("Verified staged instance runtime."),
             ProgressData::Committed => eprintln!("Committed instance runtime."),
         }
     }

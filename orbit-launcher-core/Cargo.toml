@@ -23,5 +23,9 @@ sha1 = { workspace = true }
 hex = { workspace = true }
 futures-util = { workspace = true }
 tokio = { workspace = true }
+regex = { workspace = true }
+os_info = { workspace = true }
+shell-words = { workspace = true }
+zip = { workspace = true }
 
 [dev-dependencies]

@@ -69,6 +69,15 @@ impl LauncherLock {
                 )));
             }
         }
+        if let LockedEntrypoint::Classpath { classpath, .. } = &self.entrypoint {
+            for entry in classpath {
+                if !paths.contains(entry.as_str()) {
+                    return Err(LauncherError::InvalidLock(format!(
+                        "classpath entry '{entry}' is not present in the artifact inventory"
+                    )));
+                }
+            }
+        }
         if let Some(eula) = &self.eula
             && (eula.url != crate::eula::MINECRAFT_EULA_URL
                 || eula.accepted_at_unix_seconds == 0
@@ -190,15 +199,40 @@ impl LockedJavaRuntime {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum LockedEntrypoint {
-    Jar { path: String },
-    Classpath { main_class: String },
+    Jar {
+        path: String,
+    },
+    Classpath {
+        main_class: String,
+        classpath: Vec<String>,
+    },
 }
 
 impl LockedEntrypoint {
     fn validate(&self) -> Result<(), LauncherError> {
         match self {
             Self::Jar { path } => validate_relative_path(path),
-            Self::Classpath { main_class } => validate_text(main_class, "main class"),
+            Self::Classpath {
+                main_class,
+                classpath,
+            } => {
+                validate_text(main_class, "main class")?;
+                if classpath.is_empty() {
+                    return Err(LauncherError::InvalidLock(
+                        "client classpath cannot be empty".to_string(),
+                    ));
+                }
+                let mut unique = HashSet::new();
+                for path in classpath {
+                    validate_relative_path(path)?;
+                    if !unique.insert(path) {
+                        return Err(LauncherError::InvalidLock(format!(
+                            "duplicate classpath entry '{path}'"
+                        )));
+                    }
+                }
+                Ok(())
+            }
         }
     }
 }

@@ -31,15 +31,81 @@ pub struct MojangClient {
     client: reqwest::Client,
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct MojangVersionDocument {
+    pub id: String,
+    pub version_type: String,
+    pub version_manifest_sha256: String,
+    pub version_json_url: String,
+    pub version_json_sha1: String,
+    pub bytes: Vec<u8>,
+}
+
 impl MojangClient {
     pub fn new(client: reqwest::Client) -> Self {
         Self { client }
+    }
+
+    pub(crate) fn http_client(&self) -> &reqwest::Client {
+        &self.client
     }
 
     pub async fn resolve_vanilla_server(
         &self,
         requirement: &str,
     ) -> Result<ResolvedVanillaServer, LauncherError> {
+        let document = self.fetch_version_document(requirement).await?;
+        let version: VersionJson = serde_json::from_slice(&document.bytes).map_err(|error| {
+            LauncherError::InvalidRemoteData(format!(
+                "failed to parse Mojang version JSON '{}': {error}",
+                document.id
+            ))
+        })?;
+        let server = version.downloads.server.ok_or_else(|| {
+            LauncherError::UnsupportedRequirement(format!(
+                "Minecraft '{}' does not publish a dedicated server artifact",
+                document.id
+            ))
+        })?;
+        server.validate("server JAR")?;
+        validate_mojang_url(
+            &server.url,
+            &["piston-data.mojang.com", "launcher.mojang.com"],
+            "server JAR",
+        )?;
+        let java = version.java_version.map(|java| MojangJavaRequirement {
+            component: java.component,
+            major: java.major_version,
+        });
+        if java
+            .as_ref()
+            .is_some_and(|java| java.component.trim().is_empty() || java.major == 0)
+        {
+            return Err(LauncherError::InvalidRemoteData(format!(
+                "Minecraft '{}' declares an invalid Java requirement",
+                document.id
+            )));
+        }
+        Ok(ResolvedVanillaServer {
+            minecraft_version: document.id.clone(),
+            version_type: document.version_type,
+            version_manifest_sha256: document.version_manifest_sha256,
+            version_json_url: document.version_json_url,
+            version_json_sha1: document.version_json_sha1,
+            server: ArtifactRequest {
+                logical_name: format!("Minecraft {} server", document.id),
+                url: server.url,
+                expected_hash: ExpectedHash::Sha1(server.sha1),
+                expected_size: Some(server.size),
+            },
+            java,
+        })
+    }
+
+    pub(crate) async fn fetch_version_document(
+        &self,
+        requirement: &str,
+    ) -> Result<MojangVersionDocument, LauncherError> {
         let manifest_bytes = self.fetch_metadata(VERSION_MANIFEST_V2_URL).await?;
         let manifest_sha256 = hex::encode(Sha256::digest(&manifest_bytes));
         let manifest: VersionManifest =
@@ -69,56 +135,26 @@ impl MojangClient {
                 entry.id
             )));
         }
-        let version: VersionJson = serde_json::from_slice(&version_bytes).map_err(|error| {
-            LauncherError::InvalidRemoteData(format!(
-                "failed to parse Mojang version JSON '{}': {error}",
-                entry.id
-            ))
-        })?;
-        if version.id != entry.id || version.version_type != entry.version_type {
+        let identity: VersionIdentity =
+            serde_json::from_slice(&version_bytes).map_err(|error| {
+                LauncherError::InvalidRemoteData(format!(
+                    "failed to parse Mojang version JSON identity '{}': {error}",
+                    entry.id
+                ))
+            })?;
+        if identity.id != entry.id || identity.version_type != entry.version_type {
             return Err(LauncherError::InvalidRemoteData(format!(
                 "Mojang version JSON identity for '{}' disagrees with the version manifest",
                 entry.id
             )));
         }
-        let server = version.downloads.server.ok_or_else(|| {
-            LauncherError::UnsupportedRequirement(format!(
-                "Minecraft '{}' does not publish a dedicated server artifact",
-                entry.id
-            ))
-        })?;
-        server.validate("server JAR")?;
-        validate_mojang_url(
-            &server.url,
-            &["piston-data.mojang.com", "launcher.mojang.com"],
-            "server JAR",
-        )?;
-        let java = version.java_version.map(|java| MojangJavaRequirement {
-            component: java.component,
-            major: java.major_version,
-        });
-        if java
-            .as_ref()
-            .is_some_and(|java| java.component.trim().is_empty() || java.major == 0)
-        {
-            return Err(LauncherError::InvalidRemoteData(format!(
-                "Minecraft '{}' declares an invalid Java requirement",
-                entry.id
-            )));
-        }
-        Ok(ResolvedVanillaServer {
-            minecraft_version: version.id,
-            version_type: version.version_type,
+        Ok(MojangVersionDocument {
+            id: entry.id.clone(),
+            version_type: entry.version_type.clone(),
             version_manifest_sha256: manifest_sha256,
             version_json_url: entry.url.clone(),
             version_json_sha1: entry.sha1.clone(),
-            server: ArtifactRequest {
-                logical_name: format!("Minecraft {} server", entry.id),
-                url: server.url,
-                expected_hash: ExpectedHash::Sha1(server.sha1),
-                expected_size: Some(server.size),
-            },
-            java,
+            bytes: version_bytes,
         })
     }
 
@@ -200,12 +236,16 @@ struct VersionEntry {
 
 #[derive(Debug, Deserialize)]
 struct VersionJson {
-    id: String,
-    #[serde(rename = "type")]
-    version_type: String,
     downloads: VersionDownloads,
     #[serde(rename = "javaVersion")]
     java_version: Option<JavaVersion>,
+}
+
+#[derive(Debug, Deserialize)]
+struct VersionIdentity {
+    id: String,
+    #[serde(rename = "type")]
+    version_type: String,
 }
 
 #[derive(Debug, Deserialize)]

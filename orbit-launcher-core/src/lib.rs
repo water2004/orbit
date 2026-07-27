@@ -6,6 +6,7 @@
 
 pub mod artifact;
 mod atomic_io;
+pub mod client;
 pub mod config;
 pub mod context;
 pub mod error;
@@ -16,12 +17,16 @@ pub mod java;
 pub mod lockfile;
 pub mod mojang;
 pub mod operations;
+pub mod platform;
 pub mod registry;
 pub mod runtime;
 
 pub use artifact::{
     ArtifactCache, ArtifactRequest, ArtifactTransferEvent, CachedArtifact, ExpectedHash,
     hash_file_sha256,
+};
+pub use client::{
+    AssetMapping, ClientDownload, NativeExtract, ResolvedVanillaClient, resolve_vanilla_client,
 };
 pub use config::{
     ConfigEntry, ConfigKey, ConfigMutation, GlobalConfig, JavaProvider, UiPreference, get_config,
@@ -34,7 +39,8 @@ pub use eula::{
     require_current_acceptance, show_current_eula,
 };
 pub use install::{
-    InstallProgressEvent, InstallResult, VanillaServerInstallPlan, execute_vanilla_server_install,
+    InstallProgressEvent, InstallResult, VanillaClientInstallPlan, VanillaServerInstallPlan,
+    execute_vanilla_client_install, execute_vanilla_server_install, prepare_vanilla_client_install,
     prepare_vanilla_server_install,
 };
 pub use instance::{
@@ -58,6 +64,7 @@ pub use operations::{
     RenameInstanceResult, create_instance, import_instance, remove_instance, rename_instance,
     resolve_instance_root, rollback_created_instance, set_default_instance,
 };
+pub use platform::{Architecture, HostPlatform, OperatingSystem};
 pub use registry::{InstanceRegistry, RegistryEntry};
 pub use runtime::{
     NativeRuntimeEnvironment, RuntimeContext, RuntimeEnvironment, RuntimePathOptions, RuntimePaths,
