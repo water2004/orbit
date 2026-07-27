@@ -8,16 +8,16 @@ $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
 if ([System.Environment]::OSVersion.Platform -ne [System.PlatformID]::Win32NT) {
-    throw "The Windows MSI must be built on Windows."
+    throw "The Orbit Launcher MSI must be built on Windows."
 }
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
-$manifestPath = Join-Path $repoRoot "orbit-cli\Cargo.toml"
-$wixSource = Join-Path $repoRoot "installer\windows\Package.wxs"
+$manifestPath = Join-Path $repoRoot "orbit-launcher-cli\Cargo.toml"
+$wixSource = Join-Path $repoRoot "installer\windows\LauncherPackage.wxs"
 $wixUiSource = Join-Path $repoRoot "installer\windows\OrbitUI.wxs"
 $licenseRtf = Join-Path $repoRoot "installer\windows\License.rtf"
 $toolManifest = Join-Path $repoRoot ".config\dotnet-tools.json"
-$executable = Join-Path $repoRoot "target\release\orbit.exe"
+$executable = Join-Path $repoRoot "target\release\orbit-launcher.exe"
 $license = Join-Path $repoRoot "LICENSE"
 
 if (-not $OutputDirectory) {
@@ -34,26 +34,19 @@ if (-not $wixVersion) {
 $cargoMetadata = cargo metadata --format-version 1 --no-deps --manifest-path $manifestPath |
     ConvertFrom-Json
 if ($LASTEXITCODE -ne 0) {
-    throw "Failed to read the Orbit package version from Cargo metadata."
+    throw "Failed to read the Orbit Launcher package version from Cargo metadata."
 }
-
-$orbitPackage = $cargoMetadata.packages |
-    Where-Object { $_.manifest_path -eq $manifestPath.Replace("\", "/") } |
+$launcherPackage = $cargoMetadata.packages |
+    Where-Object { $_.name -eq "orbit-launcher" } |
     Select-Object -First 1
-if (-not $orbitPackage) {
-    $orbitPackage = $cargoMetadata.packages |
-        Where-Object { $_.name -eq "orbit" } |
-        Select-Object -First 1
-}
-if (-not $orbitPackage) {
-    throw "Cargo metadata did not contain the orbit CLI package."
+if (-not $launcherPackage) {
+    throw "Cargo metadata did not contain the orbit-launcher package."
 }
 
-$version = $orbitPackage.version
+$version = $launcherPackage.version
 if ($version -notmatch "^\d+\.\d+\.\d+$") {
     throw "MSI versions must contain exactly three numeric fields; Cargo version '$version' is unsupported."
 }
-
 $versionParts = $version.Split(".") | ForEach-Object { [int] $_ }
 if ($versionParts[0] -gt 255 -or
     $versionParts[1] -gt 255 -or
@@ -64,12 +57,11 @@ if ($versionParts[0] -gt 255 -or
 Push-Location $repoRoot
 try {
     if (-not $SkipCargoBuild) {
-        cargo build --release --locked --package orbit
+        cargo build --release --locked --package orbit-launcher
         if ($LASTEXITCODE -ne 0) {
-            throw "The release build failed."
+            throw "The Orbit Launcher release build failed."
         }
     }
-
     if (-not (Test-Path -LiteralPath $executable -PathType Leaf)) {
         throw "Release executable not found at '$executable'."
     }
@@ -78,14 +70,12 @@ try {
     if ($LASTEXITCODE -ne 0) {
         throw "Restoring the pinned WiX tool failed."
     }
-
     dotnet tool run wix -- extension add `
         "WixToolset.UI.wixext/$wixVersion" `
         -acceptEula wix7
     if ($LASTEXITCODE -ne 0) {
         throw "Restoring the pinned WiX UI extension failed."
     }
-
     dotnet tool run wix -- extension add `
         "WixToolset.Util.wixext/$wixVersion" `
         -acceptEula wix7
@@ -94,32 +84,29 @@ try {
     }
 
     New-Item -ItemType Directory -Force -Path $OutputDirectory | Out-Null
-    $outputPath = Join-Path $OutputDirectory "orbit-$version-x86_64.msi"
-    $intermediatePath = Join-Path $repoRoot "target\wix\obj"
+    $outputPath = Join-Path $OutputDirectory "orbit-launcher-$version-x86_64.msi"
+    $intermediatePath = Join-Path $repoRoot "target\wix\launcher-obj"
 
     dotnet tool run wix -- build `
         -acceptEula wix7 `
         $wixSource `
         $wixUiSource `
         -arch x64 `
-        -d "OrbitVersion=$version" `
-        -d "OrbitExecutable=$executable" `
-        -d "OrbitLicense=$license" `
-        -d "OrbitLicenseRtf=$licenseRtf" `
-        -d "ProductDisplayName=Orbit" `
-        -d "ProductCommand=orbit" `
-        -d "ProductDataDescription=Deletes Orbit configuration, the instance registry, and cached JARs from the AppData paths recorded during installation. Custom paths and Minecraft instances are never removed." `
+        -d "LauncherVersion=$version" `
+        -d "LauncherExecutable=$executable" `
+        -d "LauncherLicense=$license" `
+        -d "LauncherLicenseRtf=$licenseRtf" `
+        -d "ProductDisplayName=Orbit Launcher" `
+        -d "ProductCommand=orbit-launcher" `
+        -d "ProductDataDescription=Deletes Orbit Launcher configuration, account metadata, encrypted local credentials, runtime registry, managed Java runtimes, and caches from the recorded AppData paths. Minecraft instances and custom paths are never removed." `
         -ext WixToolset.UI.wixext `
         -ext WixToolset.Util.wixext `
         -intermediatefolder $intermediatePath `
         -out $outputPath
     if ($LASTEXITCODE -ne 0) {
-        throw "WiX failed to build the MSI."
+        throw "WiX failed to build the Orbit Launcher MSI."
     }
 
-    # ICE61 warns whenever the upgrade range includes the current three-field
-    # MSI version. That inclusion is intentional: each build receives a fresh
-    # ProductCode and must replace an earlier build with the same Cargo version.
     dotnet tool run wix -- msi validate `
         -acceptEula wix7 `
         -sice ICE61 `

@@ -10,7 +10,8 @@ Orbit 是一个专为 Minecraft 打造的现代化命令行模组包管理器。
 Orbit，支持全局实例、Minecraft/Java/主流 Loader 安装、持久账户、客户端启动以及带 IPC
 和异常重启的独立服务端 supervisor；支持范围与命令见
 [Orbit Launcher CLI](docs/orbit-launcher-cli.md) 和
-[架构约束](docs/orbit-launcher-architecture.md)。
+[架构约束](docs/orbit-launcher-architecture.md)。独立 MSI/deb 与 tag 规则见
+[Orbit Launcher 发布](docs/orbit-launcher-packaging.md)。
 
 ---
 

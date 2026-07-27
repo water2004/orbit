@@ -945,9 +945,9 @@ artifact/实例的逻辑名称和可操作的 recovery。不得直接把 reqwest
 LaunchPlan golden test。没有测试覆盖的组合不得笼统宣称“支持”。遇到未知格式必须
 结构化报错，并附带安全的诊断信息。
 
-## 20. 实现与提交顺序
+## 20. 实现切片
 
-建议按可独立审阅、可单独测试的顺序提交：
+首个基线已经按以下可独立审阅、可单独测试的边界提交：
 
 1. `docs: define orbit-launcher boundaries and protocols`
 2. `feat(launcher): add instance, platform and configuration model`
@@ -962,8 +962,8 @@ LaunchPlan golden test。没有测试覆盖的组合不得笼统宣称“支持�
 11. `test(launcher): cover supported platform and loader matrix`
 12. `build: package orbit-launcher for MSI, deb and release archives`
 
-每笔功能提交必须同时包含对应测试和必要文档，不把全部测试补在最后。上面的顺序表示
-评审边界；实现中可拆得更细，但不能把多个未验证的大子系统塞进一笔提交。
+每笔功能提交同时包含对应测试；账户、Authlib Injector、LaunchPlan 与 supervisor 又进一步
+拆成独立提交。后续功能仍沿用同一约束，不把多个未验证的大子系统塞进一笔提交。
 
 ## 21. 已确认决策与外部前置
 
@@ -975,13 +975,13 @@ LaunchPlan golden test。没有测试覆盖的组合不得笼统宣称“支持�
    明确报错，不阻塞其他模块实现。
 3. **Java provider**：当前安装事务只支持 Mojang 受管 runtime。Temurin 和 system Java 是
    规划能力；在完整下载、校验和平台测试落地前不得宣称支持，也不得作为异常后的静默回退。
-4. **服务端后台模式**：`--detach` 与 supervisor、IPC、stop、自动重启一起交付；不实现
+4. **服务端后台模式**：`server start` 与 supervisor、IPC、stop、自动重启一起交付；不实现
    Windows Service、systemd/launchd service、开机启动或退出登录后继续运行。
 5. **旧版本范围**：支持声明按 fixture 和 LaunchPlan golden test 逐步扩大；未覆盖组合不得
    best-effort 宣称支持，遇到未知历史格式返回结构化 unsupported 错误。
 6. **实例删除策略**：默认只注销实例并保留目录；删除文件需要第二次明确选择，并默认保留
    world/save/截图。服务端世界同样处理。
-7. **发布形态**：`orbit-launcher` 使用自己的 MSI、deb 和压缩包发布物及版本生命周期，
+7. **发布形态**：`orbit-launcher` 使用自己的 MSI、deb 发布物及 `launcher-v*` 版本生命周期，
    不要求其他程序存在，也不把其他程序打进自己的安装包。
 
 ## 22. 参考实现与官方资料

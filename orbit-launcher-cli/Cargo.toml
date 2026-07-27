@@ -4,6 +4,24 @@ version = "0.1.0"
 edition = "2024"
 license = "MIT"
 description = "Cross-platform Minecraft runtime launcher"
+authors = ["Yuan Shui"]
+repository = "https://github.com/water2004/orbit"
+
+[package.metadata.deb]
+name = "orbit-launcher"
+maintainer = "Yuan Shui <water2004@users.noreply.github.com>"
+copyright = "2026, Yuan Shui"
+license-file = ["../LICENSE", "0"]
+extended-description = """\
+Orbit Launcher installs and launches verified Minecraft Java client and \
+dedicated-server runtimes without managing mods."""
+depends = "$auto"
+section = "games"
+priority = "optional"
+assets = [
+    ["target/release/orbit-launcher", "usr/bin/", "755"],
+    ["../docs/orbit-launcher-cli.md", "usr/share/doc/orbit-launcher/README.md", "644"],
+]
 
 [[bin]]
 name = "orbit-launcher"

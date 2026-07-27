@@ -58,7 +58,7 @@
           Height="15"
           Transparent="yes"
           NoPrefix="yes"
-          Text="Choose how Orbit integrates with Windows." />
+          Text="Choose how $(var.ProductDisplayName) integrates with Windows." />
         <Control
           Id="BannerBitmap"
           Type="Bitmap"
@@ -84,7 +84,7 @@
           Height="18"
           Property="ADD_TO_PATH"
           CheckBoxValue="1"
-          Text="Add Orbit to the system PATH" />
+          Text="Add $(var.ProductDisplayName) to the system PATH" />
         <Control
           Id="AddToPathDescription"
           Type="Text"
@@ -93,7 +93,7 @@
           Width="295"
           Height="32"
           NoPrefix="yes"
-          Text="Recommended. Makes the orbit command available in new Command Prompt, PowerShell, and terminal sessions." />
+          Text="Recommended. Makes the $(var.ProductCommand) command available in new Command Prompt, PowerShell, and terminal sessions." />
         <Control
           Id="ScopeDescription"
           Type="Text"
@@ -102,7 +102,7 @@
           Width="320"
           Height="32"
           NoPrefix="yes"
-          Text="Orbit is installed for all users. Administrator approval is required." />
+          Text="$(var.ProductDisplayName) is installed for all users. Administrator approval is required." />
         <Control
           Id="BottomLine"
           Type="Line"
@@ -164,7 +164,7 @@
           Height="15"
           Transparent="yes"
           NoPrefix="yes"
-          Text="Choose whether to keep your Orbit data." />
+          Text="Choose whether to keep your $(var.ProductDisplayName) data." />
         <Control
           Id="BannerBitmap"
           Type="Bitmap"
@@ -190,7 +190,7 @@
           Height="18"
           Property="REMOVE_APPDATA"
           CheckBoxValue="1"
-          Text="Remove Orbit data from the default AppData locations" />
+          Text="Remove $(var.ProductDisplayName) data from the default AppData locations" />
         <Control
           Id="RemoveAppDataDescription"
           Type="Text"
@@ -199,7 +199,7 @@
           Width="295"
           Height="48"
           NoPrefix="yes"
-          Text="Deletes Orbit configuration, the instance registry, and cached JARs from the AppData paths recorded during installation. Custom paths and Minecraft instances are never removed." />
+          Text="$(var.ProductDataDescription)" />
         <Control
           Id="KeepDataDescription"
           Type="Text"

@@ -1,0 +1,138 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Wix
+  xmlns="http://wixtoolset.org/schemas/v4/wxs"
+  xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util"
+  RequiredVersion="7.0.0">
+  <Package
+    Name="Orbit Launcher"
+    Manufacturer="water2004"
+    Version="$(var.LauncherVersion)"
+    Language="1033"
+    Scope="perMachine"
+    ProductCode="*"
+    UpgradeCode="C35B3F1B-5ED7-4DC6-BC4B-8FD14BED4525">
+
+    <SummaryInformation
+      Description="Orbit Launcher for Minecraft Java Edition"
+      Comments="Installs the independent Orbit Launcher command-line application." />
+
+    <MajorUpgrade
+      AllowSameVersionUpgrades="yes"
+      DowngradeErrorMessage="A newer version of Orbit Launcher is already installed."
+      Schedule="afterInstallInitialize" />
+
+    <MediaTemplate EmbedCab="yes" />
+
+    <Property Id="ARPCOMMENTS" Value="Independent Minecraft Java runtime launcher" />
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/water2004/orbit" />
+    <Property Id="ADD_TO_PATH" Value="1" Secure="yes" />
+    <Property Id="REMOVE_APPDATA" Value="0" Secure="yes" />
+    <Property Id="ORBIT_LAUNCHER_ROAMING_DATA" Secure="yes">
+      <RegistrySearch
+        Id="OrbitLauncherRoamingDataPathSearch"
+        Root="HKLM"
+        Key="Software\water2004\OrbitLauncher"
+        Name="RoamingDataPath"
+        Type="raw"
+        Bitness="always64" />
+    </Property>
+    <Property Id="ORBIT_LAUNCHER_LOCAL_DATA" Secure="yes">
+      <RegistrySearch
+        Id="OrbitLauncherLocalDataPathSearch"
+        Root="HKLM"
+        Key="Software\water2004\OrbitLauncher"
+        Name="LocalDataPath"
+        Type="raw"
+        Bitness="always64" />
+    </Property>
+
+    <UIRef Id="OrbitInstallUI" />
+    <WixVariable Id="WixUILicenseRtf" Value="$(var.LauncherLicenseRtf)" />
+
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="Orbit Launcher">
+        <Directory Id="BINDIR" Name="bin">
+          <Component
+            Id="OrbitLauncherExecutableComponent"
+            Guid="F8CC445D-0F46-43DA-8B47-8C7B5FE12BF2"
+            Bitness="always64">
+            <File
+              Id="OrbitLauncherExecutable"
+              Source="$(var.LauncherExecutable)"
+              Name="orbit-launcher.exe"
+              KeyPath="yes" />
+            <RegistryValue
+              Root="HKLM"
+              Key="Software\water2004\OrbitLauncher"
+              Name="RoamingDataPath"
+              Type="string"
+              Value="[AppDataFolder]orbit-launcher" />
+            <RegistryValue
+              Root="HKLM"
+              Key="Software\water2004\OrbitLauncher"
+              Name="LocalDataPath"
+              Type="string"
+              Value="[LocalAppDataFolder]orbit-launcher" />
+            <util:RemoveFolderEx
+              Id="RemoveOrbitLauncherRoamingData"
+              Property="ORBIT_LAUNCHER_ROAMING_DATA"
+              On="uninstall"
+              Condition="REMOVE_APPDATA = &quot;1&quot; AND NOT UPGRADINGPRODUCTCODE" />
+            <util:RemoveFolderEx
+              Id="RemoveOrbitLauncherLocalData"
+              Property="ORBIT_LAUNCHER_LOCAL_DATA"
+              On="uninstall"
+              Condition="REMOVE_APPDATA = &quot;1&quot; AND NOT UPGRADINGPRODUCTCODE" />
+          </Component>
+
+          <Component
+            Id="OrbitLauncherPathComponent"
+            Guid="7A4EF6DA-9E7D-4FC2-98DE-E7556D9F6558"
+            Bitness="always64">
+            <Environment
+              Id="OrbitLauncherSystemPath"
+              Name="PATH"
+              Value="[BINDIR]"
+              Action="set"
+              Part="last"
+              Permanent="no"
+              System="yes" />
+            <RegistryValue
+              Root="HKLM"
+              Key="Software\water2004\OrbitLauncher"
+              Name="PathIntegration"
+              Type="integer"
+              Value="1"
+              KeyPath="yes" />
+          </Component>
+        </Directory>
+
+        <Component
+          Id="OrbitLauncherLicenseComponent"
+          Guid="9D1BC1A8-B8A3-4585-8985-B0EF78559A2F">
+          <File
+            Id="OrbitLauncherLicense"
+            Source="$(var.LauncherLicense)"
+            Name="LICENSE.txt"
+            KeyPath="yes" />
+        </Component>
+      </Directory>
+    </StandardDirectory>
+
+    <Feature Id="OrbitLauncherFeature" Title="Orbit Launcher" Level="1">
+      <ComponentRef Id="OrbitLauncherExecutableComponent" />
+      <ComponentRef Id="OrbitLauncherLicenseComponent" />
+    </Feature>
+
+    <Feature
+      Id="PathFeature"
+      Title="Add Orbit Launcher to the system PATH"
+      Description="Makes the orbit-launcher command available in new terminals."
+      Level="1"
+      AllowAbsent="yes"
+      AllowAdvertise="no">
+      <Level Condition="ADD_TO_PATH &lt;&gt; &quot;1&quot;" Value="0" />
+      <ComponentRef Id="OrbitLauncherPathComponent" />
+    </Feature>
+  </Package>
+</Wix>
