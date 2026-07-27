@@ -18,6 +18,8 @@ pub struct GlobalConfig {
     #[serde(default)]
     pub network: NetworkConfig,
     #[serde(default)]
+    pub installer: InstallerConfig,
+    #[serde(default)]
     pub cache: CacheConfig,
     #[serde(default)]
     pub java: JavaGlobalConfig,
@@ -34,6 +36,7 @@ impl Default for GlobalConfig {
         Self {
             schema: CONFIG_SCHEMA,
             network: NetworkConfig::default(),
+            installer: InstallerConfig::default(),
             cache: CacheConfig::default(),
             java: JavaGlobalConfig::default(),
             microsoft: MicrosoftConfig::default(),
@@ -84,6 +87,11 @@ impl GlobalConfig {
         if self.network.connect_timeout_seconds == 0 || self.network.request_timeout_seconds == 0 {
             return Err(LauncherError::InvalidConfig(
                 "network timeouts must be greater than zero".to_string(),
+            ));
+        }
+        if self.installer.timeout_seconds == 0 {
+            return Err(LauncherError::InvalidConfig(
+                "installer.timeout-seconds must be greater than zero".to_string(),
             ));
         }
         self.cache.max_size_bytes()?;
@@ -144,6 +152,7 @@ pub enum ConfigKey {
     NetworkConcurrency,
     NetworkConnectTimeoutSeconds,
     NetworkRequestTimeoutSeconds,
+    InstallerTimeoutSeconds,
     CacheMaxSize,
     JavaDefaultProvider,
     MicrosoftClientId,
@@ -152,10 +161,11 @@ pub enum ConfigKey {
 }
 
 impl ConfigKey {
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 9] = [
         Self::NetworkConcurrency,
         Self::NetworkConnectTimeoutSeconds,
         Self::NetworkRequestTimeoutSeconds,
+        Self::InstallerTimeoutSeconds,
         Self::CacheMaxSize,
         Self::JavaDefaultProvider,
         Self::MicrosoftClientId,
@@ -168,6 +178,7 @@ impl ConfigKey {
             Self::NetworkConcurrency => "network.concurrency",
             Self::NetworkConnectTimeoutSeconds => "network.connect-timeout-seconds",
             Self::NetworkRequestTimeoutSeconds => "network.request-timeout-seconds",
+            Self::InstallerTimeoutSeconds => "installer.timeout-seconds",
             Self::CacheMaxSize => "cache.max-size",
             Self::JavaDefaultProvider => "java.default-provider",
             Self::MicrosoftClientId => "microsoft.client-id",
@@ -181,6 +192,7 @@ impl ConfigKey {
             Self::NetworkConcurrency => ("network", "concurrency"),
             Self::NetworkConnectTimeoutSeconds => ("network", "connect_timeout_seconds"),
             Self::NetworkRequestTimeoutSeconds => ("network", "request_timeout_seconds"),
+            Self::InstallerTimeoutSeconds => ("installer", "timeout_seconds"),
             Self::CacheMaxSize => ("cache", "max_size"),
             Self::JavaDefaultProvider => ("java", "default_provider"),
             Self::MicrosoftClientId => ("microsoft", "client_id"),
@@ -198,6 +210,7 @@ impl ConfigKey {
             Self::NetworkRequestTimeoutSeconds => {
                 Some(config.network.request_timeout_seconds.to_string())
             }
+            Self::InstallerTimeoutSeconds => Some(config.installer.timeout_seconds.to_string()),
             Self::CacheMaxSize => Some(config.cache.max_size.clone()),
             Self::JavaDefaultProvider => Some(config.java.default_provider.as_str().to_string()),
             Self::MicrosoftClientId => config.microsoft.client_id.clone(),
@@ -218,7 +231,9 @@ impl ConfigKey {
                 raw.parse::<u16>()
                     .map_err(|_| invalid("an integer from 1 to 65535"))? as i64,
             ),
-            Self::NetworkConnectTimeoutSeconds | Self::NetworkRequestTimeoutSeconds => value(
+            Self::NetworkConnectTimeoutSeconds
+            | Self::NetworkRequestTimeoutSeconds
+            | Self::InstallerTimeoutSeconds => value(
                 i64::try_from(
                     raw.parse::<u64>()
                         .map_err(|_| invalid("a positive integer"))?,
@@ -394,6 +409,20 @@ impl Default for NetworkConfig {
             concurrency: 8,
             connect_timeout_seconds: 15,
             request_timeout_seconds: 120,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct InstallerConfig {
+    pub timeout_seconds: u64,
+}
+
+impl Default for InstallerConfig {
+    fn default() -> Self {
+        Self {
+            timeout_seconds: 1_800,
         }
     }
 }

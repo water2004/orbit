@@ -1,11 +1,11 @@
 # Orbit Launcher CLI
 
-> 实现状态：实例、配置、Mojang Java runtime，以及 Vanilla/Fabric/Quilt 客户端和独立
-> 服务端安装已可用；Forge/NeoForge installer adapter、账户与启动命令仍在后续提交中。
+> 实现状态：实例、配置、Mojang Java runtime，以及 Vanilla、Fabric、Quilt、Forge、
+> NeoForge 客户端和独立服务端安装已可用；账户与启动命令仍在后续提交中。
 > 未实现的命令不会以空壳形式出现在 CLI 中。
 
 `orbit-launcher` 与 Orbit 模组包管理器完全隔离。它使用自己的全局目录、实例注册表、
-`orbit-launcher.toml` 和未来的 `orbit-launcher.lock`，不读取或调用 Orbit。
+`orbit-launcher.toml` 和 `orbit-launcher.lock`，不读取或调用 Orbit。
 
 ## 实例上下文
 
@@ -31,9 +31,10 @@ orbit-launcher config unset <key>
 # 已有实例
 orbit-launcher [--instance <id|name>] install
 
-# 一条命令创建并安装 Vanilla 客户端或服务端
+# 一条命令创建并安装客户端或服务端
 orbit-launcher install --new <name> [--root <path>] \
-  --kind <client|server> --minecraft <exact|latest-release|latest-snapshot>
+  --kind <client|server> --minecraft <exact|latest-release|latest-snapshot> \
+  [--loader <vanilla|fabric|quilt|forge|neoforge>] [--loader-version <requirement>]
 
 orbit-launcher instance create \
   --name <name> \
@@ -56,8 +57,8 @@ orbit-launcher [--instance <id|name>] server eula show
 orbit-launcher [--instance <id|name>] server eula accept <sha256>
 ```
 
-配置键是稳定协议，目前包括网络并发数与超时、缓存上限、Java 默认来源、Microsoft client
-ID，以及进度条和颜色偏好。`list`/`get` 会区分显式值与默认值；`unset` 删除显式值并恢复
+配置键是稳定协议，目前包括网络并发数与超时、installer 超时、缓存上限、Java 默认来源、
+Microsoft client ID，以及进度条和颜色偏好。`list`/`get` 会区分显式值与默认值；`unset` 删除显式值并恢复
 默认值。修改经过强类型解析和完整配置校验后原子写入，同时保留已有 TOML 注释。External
 Yggdrasil provider 属于复合对象，后续由账户领域命令管理，不接受任意 TOML 路径写入。
 
@@ -69,7 +70,7 @@ Yggdrasil provider 属于复合对象，后续由账户领域命令管理，不�
 `install --new` 提供，不会复用 `instance create` 伪装安装成功。bootstrap 失败时会注销临时
 实例并删除 provisional manifest，不删除用户文件。
 
-当前 `install` 接受 Vanilla/Fabric/Quilt client/server 实例。它先解析 Mojang version manifest v2、
+当前 `install` 接受 Vanilla/Fabric/Quilt/Forge/NeoForge client/server 实例。它先解析 Mojang version manifest v2、
 目标版本 JSON 和该版本声明的 Java component/major，再一次性确定完整下载队列。客户端
 严格执行 Mojang 的顺序规则、library/classifier、asset index、logging 配置与 native 解压
 语义；相同 asset 内容按哈希下载一次，但会保留全部 legacy virtual/resources 逻辑映射。
@@ -82,6 +83,14 @@ Loader libraries、main class 和参数合并到同一个精确运行时模型�
 但版本选择规则不混用：Fabric 支持 `latest`、官方 `stable` 标记和精确版本；Quilt 支持
 `latest` 和精确版本。Quilt Meta 没有 Loader stable 标记，因此 `stable` 会明确报错，不按
 版本字符串猜测。缺少内联哈希的官方 Maven 条目必须取得 `.sha1` sidecar 后才进入队列。
+
+Forge 与 NeoForge 从各自官方版本索引和 Maven 仓库解析精确 installer。Forge 的 `stable`
+对应官方 `recommended` promotion，`latest` 对应官方 `latest` promotion；NeoForge 的
+`stable` 只选择没有预发布后缀的兼容版本。installer 必须先通过官方 `.sha256` sidecar
+校验，并确认 JAR 内 `install_profile.json` 的 schema 与 Minecraft 版本。它随后只在安装
+事务的 staging 中由已安装的受管 Java 执行，并服从 `installer.timeout-seconds`（默认
+1800 秒）。Launcher 不执行 installer 生成的 `run.bat`/`run.sh`，而是检查客户端 profile
+或服务端平台 argfile，并将每个保留产物的 SHA-256 与 installer 来源写入 lock。
 
 服务端安装每次都会获取当前官方 EULA。文本 TTY 会完整展示正文、官方 URL 和正文
 SHA-256，并且只有用户准确输入 `I AGREE` 才继续；没有 `--yes` 绕过。JSON、管道或

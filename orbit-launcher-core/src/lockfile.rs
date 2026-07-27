@@ -69,12 +69,21 @@ impl LauncherLock {
                 )));
             }
         }
-        if let LockedEntrypoint::Classpath { classpath, .. } = &self.entrypoint {
-            for entry in classpath {
-                if !paths.contains(entry.as_str()) {
+        match &self.entrypoint {
+            LockedEntrypoint::Jar { path } | LockedEntrypoint::ArgumentFile { path } => {
+                if !paths.contains(path.as_str()) {
                     return Err(LauncherError::InvalidLock(format!(
-                        "classpath entry '{entry}' is not present in the artifact inventory"
+                        "entrypoint file '{path}' is not present in the artifact inventory"
                     )));
+                }
+            }
+            LockedEntrypoint::Classpath { classpath, .. } => {
+                for entry in classpath {
+                    if !paths.contains(entry.as_str()) {
+                        return Err(LauncherError::InvalidLock(format!(
+                            "classpath entry '{entry}' is not present in the artifact inventory"
+                        )));
+                    }
                 }
             }
         }
@@ -131,40 +140,96 @@ pub struct LockedLoader {
     pub kind: LoaderKind,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub profile_url: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub profile_sha256: Option<String>,
+    pub source: LockedLoaderSource,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
+pub enum LockedLoaderSource {
+    Vanilla,
+    Profile {
+        url: String,
+        sha256: String,
+    },
+    Installer {
+        url: String,
+        sha256: String,
+        install_profile_sha256: String,
+    },
 }
 
 impl LockedLoader {
+    pub const fn vanilla() -> Self {
+        Self {
+            kind: LoaderKind::Vanilla,
+            version: None,
+            source: LockedLoaderSource::Vanilla,
+        }
+    }
+
+    pub fn profile(kind: LoaderKind, version: String, url: String, sha256: String) -> Self {
+        Self {
+            kind,
+            version: Some(version),
+            source: LockedLoaderSource::Profile { url, sha256 },
+        }
+    }
+
+    pub fn installer(
+        kind: LoaderKind,
+        version: String,
+        url: String,
+        sha256: String,
+        install_profile_sha256: String,
+    ) -> Self {
+        Self {
+            kind,
+            version: Some(version),
+            source: LockedLoaderSource::Installer {
+                url,
+                sha256,
+                install_profile_sha256,
+            },
+        }
+    }
+
     fn validate(&self) -> Result<(), LauncherError> {
-        match self.kind {
-            LoaderKind::Vanilla
-                if self.version.is_some()
-                    || self.profile_url.is_some()
-                    || self.profile_sha256.is_some() =>
-            {
-                Err(LauncherError::InvalidLock(
-                    "Vanilla lock cannot contain Loader profile fields".to_string(),
-                ))
-            }
-            LoaderKind::Vanilla => Ok(()),
-            _ => {
+        match (&self.kind, &self.source) {
+            (LoaderKind::Vanilla, LockedLoaderSource::Vanilla) if self.version.is_none() => Ok(()),
+            (LoaderKind::Vanilla, _) => Err(LauncherError::InvalidLock(
+                "Vanilla lock cannot contain a Loader version or external source".to_string(),
+            )),
+            (
+                LoaderKind::Fabric | LoaderKind::Quilt,
+                LockedLoaderSource::Profile { url, sha256 },
+            ) => {
                 validate_text(
                     self.version.as_deref().unwrap_or_default(),
                     "Loader version",
                 )?;
-                validate_https(
-                    self.profile_url.as_deref().unwrap_or_default(),
-                    "Loader profile",
-                )?;
-                validate_digest(
-                    self.profile_sha256.as_deref().unwrap_or_default(),
-                    64,
-                    "Loader profile SHA-256",
-                )
+                validate_https(url, "Loader profile")?;
+                validate_digest(sha256, 64, "Loader profile SHA-256")
             }
+            (
+                LoaderKind::Forge | LoaderKind::Neoforge,
+                LockedLoaderSource::Installer {
+                    url,
+                    sha256,
+                    install_profile_sha256,
+                },
+            ) => {
+                validate_text(
+                    self.version.as_deref().unwrap_or_default(),
+                    "Loader version",
+                )?;
+                validate_https(url, "Loader installer")?;
+                validate_digest(sha256, 64, "Loader installer SHA-256")?;
+                validate_digest(install_profile_sha256, 64, "Loader install profile SHA-256")
+            }
+            _ => Err(LauncherError::InvalidLock(format!(
+                "Loader '{}' has an incompatible source kind",
+                self.kind.as_str()
+            ))),
         }
     }
 }
@@ -202,6 +267,9 @@ pub enum LockedEntrypoint {
     Jar {
         path: String,
     },
+    ArgumentFile {
+        path: String,
+    },
     Classpath {
         main_class: String,
         classpath: Vec<String>,
@@ -211,7 +279,7 @@ pub enum LockedEntrypoint {
 impl LockedEntrypoint {
     fn validate(&self) -> Result<(), LauncherError> {
         match self {
-            Self::Jar { path } => validate_relative_path(path),
+            Self::Jar { path } | Self::ArgumentFile { path } => validate_relative_path(path),
             Self::Classpath {
                 main_class,
                 classpath,
@@ -258,24 +326,42 @@ pub enum ArtifactOwner {
 pub struct LockedArtifact {
     pub logical_name: String,
     pub owner: ArtifactOwner,
-    pub source_url: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub upstream_sha1: Option<String>,
+    pub source: LockedArtifactSource,
     pub sha256: String,
     pub size: u64,
     pub path: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
+pub enum LockedArtifactSource {
+    Download {
+        url: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        upstream_sha1: Option<String>,
+    },
+    InstallerOutput {
+        installer_sha256: String,
+    },
+}
+
 impl LockedArtifact {
     fn validate(&self) -> Result<(), LauncherError> {
         validate_text(&self.logical_name, "artifact logical name")?;
-        validate_https(&self.source_url, "artifact source")?;
-        if let Some(sha1) = &self.upstream_sha1 {
-            validate_digest(sha1, 40, "artifact SHA-1")?;
+        match &self.source {
+            LockedArtifactSource::Download { url, upstream_sha1 } => {
+                validate_https(url, "artifact source")?;
+                if let Some(sha1) = upstream_sha1 {
+                    validate_digest(sha1, 40, "artifact SHA-1")?;
+                }
+            }
+            LockedArtifactSource::InstallerOutput { installer_sha256 } => {
+                validate_digest(installer_sha256, 64, "producer installer SHA-256")?;
+            }
         }
         validate_digest(&self.sha256, 64, "artifact SHA-256")?;
         validate_relative_path(&self.path)?;
-        if self.size == 0 {
+        if self.size == 0 && matches!(self.source, LockedArtifactSource::Download { .. }) {
             return Err(LauncherError::InvalidLock(format!(
                 "artifact '{}' has zero size",
                 self.logical_name
@@ -413,12 +499,7 @@ mod tests {
                 version_json_url: "https://piston-meta.mojang.com/version.json".to_string(),
                 version_json_sha1: "b".repeat(40),
             },
-            loader: LockedLoader {
-                kind: LoaderKind::Vanilla,
-                version: None,
-                profile_url: None,
-                profile_sha256: None,
-            },
+            loader: LockedLoader::vanilla(),
             java: None,
             entrypoint: LockedEntrypoint::Jar {
                 path: "server.jar".to_string(),
@@ -427,8 +508,10 @@ mod tests {
             artifacts: vec![LockedArtifact {
                 logical_name: "Minecraft server".to_string(),
                 owner: ArtifactOwner::Minecraft,
-                source_url: "https://piston-data.mojang.com/server.jar".to_string(),
-                upstream_sha1: Some("c".repeat(40)),
+                source: LockedArtifactSource::Download {
+                    url: "https://piston-data.mojang.com/server.jar".to_string(),
+                    upstream_sha1: Some("c".repeat(40)),
+                },
                 sha256: "d".repeat(64),
                 size: 100,
                 path: "server.jar".to_string(),

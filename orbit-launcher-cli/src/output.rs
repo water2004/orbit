@@ -1,8 +1,8 @@
 use std::path::PathBuf;
 
 use orbit_launcher_core::{
-    ArtifactTransferEvent, ContextSource, InstallProgressEvent, InstanceManifest,
-    JavaProgressEvent, RegistryEntry,
+    ArtifactTransferEvent, ContextSource, InstallProgressEvent, InstallerOutputStream,
+    InstallerSide, InstanceManifest, JavaProgressEvent, LoaderInstallerEvent, RegistryEntry,
 };
 use serde::Serialize;
 
@@ -291,6 +291,22 @@ pub enum ProgressData {
     JavaRuntimeCached {
         runtime_id: String,
     },
+    LoaderInstallerStarted {
+        loader: String,
+        version: String,
+        side: String,
+    },
+    LoaderInstallerOutput {
+        stream: String,
+        line: String,
+    },
+    LoaderInstallerOutputSuppressed {
+        maximum_lines: usize,
+    },
+    LoaderInstallerFinished {
+        loader: String,
+        version: String,
+    },
     StagingVerified,
     Committed,
 }
@@ -315,6 +331,7 @@ impl From<InstallProgressEvent> for ProgressData {
             },
             InstallProgressEvent::Artifact(event) => Self::from_artifact(event),
             InstallProgressEvent::Java(event) => Self::from_java(event),
+            InstallProgressEvent::LoaderInstaller(event) => Self::from_installer(event),
             InstallProgressEvent::StagingVerified => Self::StagingVerified,
             InstallProgressEvent::Committed => Self::Committed,
         }
@@ -371,6 +388,39 @@ impl ProgressData {
             JavaProgressEvent::RuntimeCached { runtime_id } => {
                 Self::JavaRuntimeCached { runtime_id }
             }
+        }
+    }
+
+    fn from_installer(event: LoaderInstallerEvent) -> Self {
+        match event {
+            LoaderInstallerEvent::Started {
+                kind,
+                version,
+                side,
+            } => Self::LoaderInstallerStarted {
+                loader: kind.as_str().to_string(),
+                version,
+                side: match side {
+                    InstallerSide::Client => "client",
+                    InstallerSide::Server => "server",
+                }
+                .to_string(),
+            },
+            LoaderInstallerEvent::Output { stream, line } => Self::LoaderInstallerOutput {
+                stream: match stream {
+                    InstallerOutputStream::Stdout => "stdout",
+                    InstallerOutputStream::Stderr => "stderr",
+                }
+                .to_string(),
+                line,
+            },
+            LoaderInstallerEvent::OutputSuppressed { maximum_lines } => {
+                Self::LoaderInstallerOutputSuppressed { maximum_lines }
+            }
+            LoaderInstallerEvent::Finished { kind, version } => Self::LoaderInstallerFinished {
+                loader: kind.as_str().to_string(),
+                version,
+            },
         }
     }
 }

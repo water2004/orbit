@@ -233,6 +233,7 @@ struct TerminalFrontend {
     non_interactive: bool,
     sequence: u64,
     last_text_progress: Instant,
+    installer_output_lines: u64,
 }
 
 impl TerminalFrontend {
@@ -247,6 +248,7 @@ impl TerminalFrontend {
             non_interactive,
             sequence: 0,
             last_text_progress: Instant::now() - Duration::from_secs(2),
+            installer_output_lines: 0,
         }
     }
 
@@ -312,6 +314,28 @@ impl TerminalFrontend {
             }
             ProgressData::JavaRuntimeCached { runtime_id } => {
                 eprintln!("Using installed Java runtime {runtime_id}.")
+            }
+            ProgressData::LoaderInstallerStarted {
+                loader,
+                version,
+                side,
+            } => {
+                self.installer_output_lines = 0;
+                eprintln!("Running official {loader} {version} installer for {side}...");
+            }
+            ProgressData::LoaderInstallerOutput { stream, line } => {
+                self.installer_output_lines += 1;
+                if self.installer_output_lines <= 20
+                    || self.installer_output_lines.is_multiple_of(100)
+                {
+                    eprintln!("[{stream}] {line}")
+                }
+            }
+            ProgressData::LoaderInstallerOutputSuppressed { maximum_lines } => eprintln!(
+                "Installer output exceeded {maximum_lines} lines; additional lines are suppressed."
+            ),
+            ProgressData::LoaderInstallerFinished { loader, version } => {
+                eprintln!("Official {loader} {version} installer completed.")
             }
             ProgressData::StagingVerified => eprintln!("Verified staged instance runtime."),
             ProgressData::Committed => eprintln!("Committed instance runtime."),

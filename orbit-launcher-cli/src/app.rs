@@ -2,13 +2,11 @@ use std::path::Path;
 
 use orbit_launcher_core::{
     ConfigKey, ContextIntent, CreateInstanceRequest, EulaAcceptanceMethod, EulaDocument,
-    InstallProgressEvent, InstanceKind, InstanceRegistry, LauncherError, LoaderKind,
-    ProfileLoaderInstallPlan, RuntimeContext, VanillaServerInstallPlan, accept_shown_eula,
-    create_instance, execute_vanilla_client_install, execute_vanilla_server_install, get_config,
-    import_instance, list_config, prepare_profile_loader_install, prepare_vanilla_client_install,
-    prepare_vanilla_server_install, remove_instance, rename_instance, resolve_instance,
-    resolve_instance_root, rollback_created_instance, set_config, set_default_instance,
-    show_current_eula, unset_config,
+    InstallProgressEvent, InstanceKind, InstanceRegistry, LauncherError, RuntimeContext,
+    ServerInstallPlan, accept_shown_eula, apply_install_plan, create_instance, get_config,
+    import_instance, list_config, prepare_install, remove_instance, rename_instance,
+    resolve_instance, resolve_instance_root, rollback_created_instance, set_config,
+    set_default_instance, show_current_eula, unset_config,
 };
 
 use crate::cli::{
@@ -214,92 +212,27 @@ async fn execute_existing_install(
 ) -> Result<CommandOutput, AppError> {
     let registry = InstanceRegistry::load(&runtime.paths().instances_file())?;
     let resolved = resolve_instance(&registry, selector, current_dir, ContextIntent::Sensitive)?;
-    if !matches!(
-        resolved.manifest.loader.kind,
-        LoaderKind::Vanilla | LoaderKind::Fabric | LoaderKind::Quilt
-    ) {
-        return Err(LauncherError::UnsupportedRequirement(format!(
-            "installation for {} {} is not implemented yet",
-            resolved.manifest.kind.as_str(),
-            resolved.manifest.loader.kind.as_str()
-        ))
-        .into());
-    }
     let client = runtime.config().http_client()?;
-    let result = if resolved.manifest.loader.kind == LoaderKind::Vanilla {
-        match resolved.manifest.kind {
-            InstanceKind::Client => {
-                let plan = prepare_vanilla_client_install(
-                    &resolved.entry.root,
-                    &client,
-                    runtime.config().java.default_provider,
-                    |event| frontend.progress(event),
-                )
-                .await?;
-                execute_vanilla_client_install(
-                    &resolved.entry.root,
-                    runtime.paths(),
-                    &client,
-                    plan,
-                    usize::from(runtime.config().network.concurrency),
-                    |event| frontend.progress(event),
-                )
-                .await?
-            }
-            InstanceKind::Server => {
-                let plan = prepare_vanilla_server_install(
-                    &resolved.entry.root,
-                    &client,
-                    runtime.config().java.default_provider,
-                    |event| frontend.progress(event),
-                )
-                .await?;
-                ensure_server_eula_accepted(&resolved.entry.root, &plan, frontend)?;
-                execute_vanilla_server_install(
-                    &resolved.entry.root,
-                    runtime.paths(),
-                    &client,
-                    plan,
-                    usize::from(runtime.config().network.concurrency),
-                    |event| frontend.progress(event),
-                )
-                .await?
-            }
-        }
-    } else {
-        let plan = prepare_profile_loader_install(
-            &resolved.entry.root,
-            &client,
-            runtime.config().java.default_provider,
-            |event| frontend.progress(event),
-        )
-        .await?;
-        match plan {
-            ProfileLoaderInstallPlan::Client(plan) => {
-                execute_vanilla_client_install(
-                    &resolved.entry.root,
-                    runtime.paths(),
-                    &client,
-                    plan,
-                    usize::from(runtime.config().network.concurrency),
-                    |event| frontend.progress(event),
-                )
-                .await?
-            }
-            ProfileLoaderInstallPlan::Server(plan) => {
-                ensure_server_eula_accepted(&resolved.entry.root, &plan, frontend)?;
-                execute_vanilla_server_install(
-                    &resolved.entry.root,
-                    runtime.paths(),
-                    &client,
-                    plan,
-                    usize::from(runtime.config().network.concurrency),
-                    |event| frontend.progress(event),
-                )
-                .await?
-            }
-        }
-    };
+    let plan = prepare_install(
+        &resolved.entry.root,
+        &client,
+        runtime.config().java.default_provider,
+        |event| frontend.progress(event),
+    )
+    .await?;
+    if let Some(server) = plan.server() {
+        ensure_server_eula_accepted(&resolved.entry.root, server, frontend)?;
+    }
+    let result = apply_install_plan(
+        &resolved.entry.root,
+        runtime.paths(),
+        &client,
+        plan,
+        usize::from(runtime.config().network.concurrency),
+        runtime.config().installer.timeout_seconds,
+        |event| frontend.progress(event),
+    )
+    .await?;
     let java = result.lock.java.as_ref().ok_or_else(|| {
         LauncherError::InvalidLock("completed install did not lock a Java runtime".to_string())
     })?;
@@ -322,7 +255,7 @@ async fn execute_existing_install(
 
 fn ensure_server_eula_accepted(
     instance_root: &Path,
-    plan: &VanillaServerInstallPlan,
+    plan: &ServerInstallPlan,
     frontend: &mut dyn Frontend,
 ) -> Result<(), AppError> {
     if plan.eula_is_accepted() {

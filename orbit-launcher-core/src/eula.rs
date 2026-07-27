@@ -263,4 +263,22 @@ mod tests {
         let text = extract_eula_text(partial).unwrap();
         assert!(EulaDocument::new(MINECRAFT_EULA_URL.to_string(), text).is_err());
     }
+
+    #[tokio::test]
+    #[ignore = "uses the live official Minecraft EULA page"]
+    async fn live_official_page_yields_a_complete_displayable_document() {
+        let directory = tempfile::tempdir().unwrap();
+        let client = reqwest::Client::builder()
+            .user_agent("orbit-launcher-tests/0.1")
+            .build()
+            .unwrap();
+        let document = show_current_eula(directory.path(), &client).await.unwrap();
+        assert!(document.text.len() >= 4_000);
+        assert!(
+            document.text[..document.text.len().min(256)]
+                .contains("Minecraft End(er)-User License Agreement")
+        );
+        assert!(document.text.contains("COMPANY INFORMATION"));
+        assert!(document.text.ends_with('\n'));
+    }
 }

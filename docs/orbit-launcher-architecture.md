@@ -165,7 +165,7 @@ LockedRuntime
   java_runtime_id + major + vendor + platform
   main_class
   resolved_arguments
-  artifact inventory
+  artifact inventory          Download | InstallerOutput provenance + SHA-256
   generated runtime files
 ```
 
@@ -359,11 +359,11 @@ Forge/NeoForge installer 是被下载并执行的 Java 程序。Launcher 必须�
 
 - 只从配置的官方仓库和解析出的精确版本下载；
 - 在 staging 目录内用已选择的受管 Java 执行；
-- 捕获 stdout/stderr、退出码和超时；
+- 捕获并限量转发 stdout/stderr，检查退出码，并服从可配置超时；
 - 执行后重新检查生成的 version、libraries、argfile 和主入口；
 - 不把 `run.sh` / `run.bat` 当作跨平台事实来源；
-- 将 installer 格式版本和输出清单写入 lock；
-- 遇到未知 installer schema 时返回 `unsupported_loader_installer`，不猜测参数。
+- 将 installer URL、installer SHA-256、`install_profile.json` SHA-256 和逐文件输出清单写入 lock；
+- 遇到未知 installer schema 时返回 `unsupported_requirement`，不猜测参数。
 
 Loader 更新只替换 lock 中由 Launcher 拥有的运行时文件。其他实例文件不进入计划。
 

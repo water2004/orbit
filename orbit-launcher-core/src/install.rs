@@ -18,6 +18,11 @@ use crate::client::{ClientDownload, ResolvedVanillaClient, resolve_vanilla_clien
 use crate::config::JavaProvider;
 use crate::error::LauncherError;
 use crate::eula::{EulaAcceptance, EulaDocument, require_current_acceptance, show_current_eula};
+use crate::installer::{
+    INSTALLER_STAGING_NAME, InstallerSide, LoaderInstallerEvent, ResolvedLoaderInstaller,
+    inspect_loader_installer, installed_server_argument_file, read_installed_client_profile,
+    resolve_loader_installer, run_loader_installer,
+};
 use crate::instance::{InstanceKind, InstanceManifest, JavaPolicy, LoaderKind, ManifestFile};
 use crate::java::{
     JavaProgressEvent, JavaTarget, MojangJavaPlan, install_mojang_java, plan_mojang_java,
@@ -25,7 +30,7 @@ use crate::java::{
 use crate::loader::{LoaderSide, ResolvedLoaderProfile, resolve_loader_profile};
 use crate::lockfile::{
     ArtifactOwner, INSTANCE_LOCK_FILE, LOCK_SCHEMA, LauncherLock, LockFile, LockedArguments,
-    LockedArtifact, LockedEntrypoint, LockedLoader, LockedMinecraft,
+    LockedArtifact, LockedArtifactSource, LockedEntrypoint, LockedLoader, LockedMinecraft,
 };
 use crate::mojang::{MojangClient, ResolvedVanillaServer, VERSION_MANIFEST_V2_URL};
 use crate::platform::HostPlatform;
@@ -36,7 +41,7 @@ const TRANSACTION_LOCK: &str = "transaction.lock";
 const TRANSACTION_JOURNAL: &str = "transaction.json";
 
 #[derive(Debug, Clone)]
-pub struct VanillaServerInstallPlan {
+pub struct ServerInstallPlan {
     instance_id: Uuid,
     minecraft_requirement: String,
     loader_requirement: Option<String>,
@@ -44,26 +49,42 @@ pub struct VanillaServerInstallPlan {
     java: MojangJavaPlan,
     eula: EulaDocument,
     acceptance: Option<EulaAcceptance>,
-    loader_profile: Option<ResolvedLoaderProfile>,
+    loader: PlannedLoader,
 }
 
 #[derive(Debug, Clone)]
-pub struct VanillaClientInstallPlan {
+pub struct ClientInstallPlan {
     instance_id: Uuid,
     minecraft_requirement: String,
     loader_requirement: Option<String>,
     resolved: ResolvedVanillaClient,
     java: MojangJavaPlan,
-    loader_profile: Option<ResolvedLoaderProfile>,
+    loader: PlannedLoader,
 }
 
 #[derive(Debug, Clone)]
-pub enum ProfileLoaderInstallPlan {
-    Client(VanillaClientInstallPlan),
-    Server(VanillaServerInstallPlan),
+enum PlannedLoader {
+    Vanilla,
+    Profile(ResolvedLoaderProfile),
+    Installer(ResolvedLoaderInstaller),
 }
 
-impl VanillaClientInstallPlan {
+#[derive(Debug, Clone)]
+pub enum InstallPlan {
+    Client(ClientInstallPlan),
+    Server(ServerInstallPlan),
+}
+
+impl InstallPlan {
+    pub const fn server(&self) -> Option<&ServerInstallPlan> {
+        match self {
+            Self::Client(_) => None,
+            Self::Server(plan) => Some(plan),
+        }
+    }
+}
+
+impl ClientInstallPlan {
     pub fn minecraft_version(&self) -> &str {
         &self.resolved.minecraft_version
     }
@@ -89,7 +110,7 @@ impl VanillaClientInstallPlan {
     }
 }
 
-impl VanillaServerInstallPlan {
+impl ServerInstallPlan {
     pub fn minecraft_version(&self) -> &str {
         &self.resolved.minecraft_version
     }
@@ -124,6 +145,7 @@ pub enum InstallProgressEvent {
     },
     Artifact(ArtifactTransferEvent),
     Java(JavaProgressEvent),
+    LoaderInstaller(LoaderInstallerEvent),
     StagingVerified,
     Committed,
 }
@@ -135,12 +157,12 @@ pub struct InstallResult {
     pub cached_artifacts: usize,
 }
 
-pub async fn prepare_vanilla_client_install<F>(
+async fn prepare_vanilla_client_install<F>(
     instance_root: &Path,
     client: &reqwest::Client,
     default_java_provider: JavaProvider,
     mut progress: F,
-) -> Result<VanillaClientInstallPlan, LauncherError>
+) -> Result<ClientInstallPlan, LauncherError>
 where
     F: FnMut(InstallProgressEvent) + Send,
 {
@@ -174,22 +196,22 @@ where
         progress(InstallProgressEvent::Java(event));
     })
     .await?;
-    Ok(VanillaClientInstallPlan {
+    Ok(ClientInstallPlan {
         instance_id: manifest.id,
         minecraft_requirement: manifest.minecraft.requirement,
         loader_requirement: manifest.loader.requirement,
         resolved,
         java,
-        loader_profile: None,
+        loader: PlannedLoader::Vanilla,
     })
 }
 
-pub async fn prepare_vanilla_server_install<F>(
+async fn prepare_vanilla_server_install<F>(
     instance_root: &Path,
     client: &reqwest::Client,
     default_java_provider: JavaProvider,
     mut progress: F,
-) -> Result<VanillaServerInstallPlan, LauncherError>
+) -> Result<ServerInstallPlan, LauncherError>
 where
     F: FnMut(InstallProgressEvent) + Send,
 {
@@ -230,7 +252,7 @@ where
         digest_sha256: eula.digest_sha256.clone(),
         accepted: acceptance.is_some(),
     });
-    Ok(VanillaServerInstallPlan {
+    Ok(ServerInstallPlan {
         instance_id: manifest.id,
         minecraft_requirement: manifest.minecraft.requirement,
         loader_requirement: manifest.loader.requirement,
@@ -238,16 +260,16 @@ where
         java,
         eula,
         acceptance,
-        loader_profile: None,
+        loader: PlannedLoader::Vanilla,
     })
 }
 
-pub async fn prepare_profile_loader_install<F>(
+async fn prepare_profile_loader_install<F>(
     instance_root: &Path,
     client: &reqwest::Client,
     default_java_provider: JavaProvider,
     mut progress: F,
-) -> Result<ProfileLoaderInstallPlan, LauncherError>
+) -> Result<InstallPlan, LauncherError>
 where
     F: FnMut(InstallProgressEvent) + Send,
 {
@@ -303,13 +325,13 @@ where
                 &mut progress,
             )
             .await?;
-            Ok(ProfileLoaderInstallPlan::Client(VanillaClientInstallPlan {
+            Ok(InstallPlan::Client(ClientInstallPlan {
                 instance_id: manifest.id,
                 minecraft_requirement: manifest.minecraft.requirement,
                 loader_requirement: manifest.loader.requirement,
                 resolved,
                 java,
-                loader_profile: Some(profile),
+                loader: PlannedLoader::Profile(profile),
             }))
         }
         InstanceKind::Server => {
@@ -358,7 +380,7 @@ where
                 digest_sha256: eula.digest_sha256.clone(),
                 accepted: acceptance.is_some(),
             });
-            Ok(ProfileLoaderInstallPlan::Server(VanillaServerInstallPlan {
+            Ok(InstallPlan::Server(ServerInstallPlan {
                 instance_id: manifest.id,
                 minecraft_requirement: manifest.minecraft.requirement,
                 loader_requirement: manifest.loader.requirement,
@@ -366,8 +388,169 @@ where
                 java,
                 eula,
                 acceptance,
-                loader_profile: Some(profile),
+                loader: PlannedLoader::Profile(profile),
             }))
+        }
+    }
+}
+
+async fn prepare_installer_loader_install<F>(
+    instance_root: &Path,
+    client: &reqwest::Client,
+    default_java_provider: JavaProvider,
+    mut progress: F,
+) -> Result<InstallPlan, LauncherError>
+where
+    F: FnMut(InstallProgressEvent) + Send,
+{
+    let manifest = ManifestFile::open(instance_root)?.inner;
+    if !matches!(
+        manifest.loader.kind,
+        LoaderKind::Forge | LoaderKind::Neoforge
+    ) {
+        return Err(LauncherError::UnsupportedRequirement(format!(
+            "Loader '{}' does not use the installer pipeline",
+            manifest.loader.kind.as_str()
+        )));
+    }
+    let loader_requirement = manifest.loader.requirement.as_deref().ok_or_else(|| {
+        LauncherError::InvalidManifest(
+            "installer Loader requires a version requirement".to_string(),
+        )
+    })?;
+    progress(InstallProgressEvent::MetadataStarted);
+    let mojang = MojangClient::new(client.clone());
+    match manifest.kind {
+        InstanceKind::Client => {
+            let resolved = resolve_vanilla_client(
+                &mojang,
+                &manifest.minecraft.requirement,
+                &HostPlatform::native()?,
+            )
+            .await?;
+            let installer = resolve_loader_installer(
+                client,
+                manifest.loader.kind,
+                &resolved.minecraft_version,
+                loader_requirement,
+            )
+            .await?;
+            progress(InstallProgressEvent::MinecraftResolved {
+                version: resolved.minecraft_version.clone(),
+                total_artifacts: resolved.downloads.len() + 2,
+            });
+            let java_requirement = resolved.java.as_ref().ok_or_else(|| {
+                LauncherError::UnsupportedRequirement(format!(
+                    "Minecraft '{}' does not publish an authoritative Java runtime requirement",
+                    resolved.minecraft_version
+                ))
+            })?;
+            let java = plan_selected_java(
+                client,
+                &manifest,
+                default_java_provider,
+                java_requirement,
+                &mut progress,
+            )
+            .await?;
+            Ok(InstallPlan::Client(ClientInstallPlan {
+                instance_id: manifest.id,
+                minecraft_requirement: manifest.minecraft.requirement,
+                loader_requirement: manifest.loader.requirement,
+                resolved,
+                java,
+                loader: PlannedLoader::Installer(installer),
+            }))
+        }
+        InstanceKind::Server => {
+            let resolved = mojang
+                .resolve_vanilla_server(&manifest.minecraft.requirement)
+                .await?;
+            let installer = resolve_loader_installer(
+                client,
+                manifest.loader.kind,
+                &resolved.minecraft_version,
+                loader_requirement,
+            )
+            .await?;
+            progress(InstallProgressEvent::MinecraftResolved {
+                version: resolved.minecraft_version.clone(),
+                total_artifacts: 2,
+            });
+            let java_requirement = resolved.java.as_ref().ok_or_else(|| {
+                LauncherError::UnsupportedRequirement(format!(
+                    "Minecraft '{}' does not publish an authoritative Java runtime requirement",
+                    resolved.minecraft_version
+                ))
+            })?;
+            let java = plan_selected_java(
+                client,
+                &manifest,
+                default_java_provider,
+                java_requirement,
+                &mut progress,
+            )
+            .await?;
+            let eula = show_current_eula(instance_root, client).await?;
+            let acceptance = match require_current_acceptance(instance_root, &eula) {
+                Ok(acceptance) => Some(acceptance),
+                Err(LauncherError::EulaRequired(_)) => None,
+                Err(error) => return Err(error),
+            };
+            progress(InstallProgressEvent::EulaChecked {
+                digest_sha256: eula.digest_sha256.clone(),
+                accepted: acceptance.is_some(),
+            });
+            Ok(InstallPlan::Server(ServerInstallPlan {
+                instance_id: manifest.id,
+                minecraft_requirement: manifest.minecraft.requirement,
+                loader_requirement: manifest.loader.requirement,
+                resolved,
+                java,
+                eula,
+                acceptance,
+                loader: PlannedLoader::Installer(installer),
+            }))
+        }
+    }
+}
+
+pub async fn prepare_install<F>(
+    instance_root: &Path,
+    client: &reqwest::Client,
+    default_java_provider: JavaProvider,
+    progress: F,
+) -> Result<InstallPlan, LauncherError>
+where
+    F: FnMut(InstallProgressEvent) + Send,
+{
+    let manifest = ManifestFile::open(instance_root)?.inner;
+    match manifest.loader.kind {
+        LoaderKind::Vanilla => match manifest.kind {
+            InstanceKind::Client => prepare_vanilla_client_install(
+                instance_root,
+                client,
+                default_java_provider,
+                progress,
+            )
+            .await
+            .map(InstallPlan::Client),
+            InstanceKind::Server => prepare_vanilla_server_install(
+                instance_root,
+                client,
+                default_java_provider,
+                progress,
+            )
+            .await
+            .map(InstallPlan::Server),
+        },
+        LoaderKind::Fabric | LoaderKind::Quilt => {
+            prepare_profile_loader_install(instance_root, client, default_java_provider, progress)
+                .await
+        }
+        LoaderKind::Forge | LoaderKind::Neoforge => {
+            prepare_installer_loader_install(instance_root, client, default_java_provider, progress)
+                .await
         }
     }
 }
@@ -413,12 +596,13 @@ fn ensure_loader_java_compatible(
     Ok(())
 }
 
-pub async fn execute_vanilla_client_install<F>(
+async fn execute_client_install<F>(
     instance_root: &Path,
     runtime_paths: &RuntimePaths,
     client: &reqwest::Client,
-    plan: VanillaClientInstallPlan,
+    plan: ClientInstallPlan,
     concurrency: usize,
+    installer_timeout_seconds: u64,
     mut progress: F,
 ) -> Result<InstallResult, LauncherError>
 where
@@ -439,15 +623,64 @@ where
             "instance manifest changed after the install plan was generated".to_string(),
         ));
     }
-    let (resolved, locked_loader) = merge_client_profile(plan.resolved, plan.loader_profile)?;
-
     let transaction = InstallTransaction::begin(instance_root, "install")?;
     let java = install_mojang_java(runtime_paths, client, plan.java, concurrency, |event| {
         progress(InstallProgressEvent::Java(event));
     })
     .await?;
-    let progress = Arc::new(Mutex::new(progress));
     let cache = ArtifactCache::new(runtime_paths.cache_dir());
+    let mut downloaded = java.downloaded_artifacts;
+    let mut cached = java.cached_artifacts;
+    let mut installer_producer = None;
+    let (resolved, locked_loader) = match plan.loader {
+        PlannedLoader::Vanilla => (plan.resolved, LockedLoader::vanilla()),
+        PlannedLoader::Profile(profile) => merge_client_profile(plan.resolved, profile)?,
+        PlannedLoader::Installer(installer) => {
+            let installer_artifact = cache
+                .fetch(client, &installer.artifact, |event| {
+                    progress(InstallProgressEvent::Artifact(event));
+                })
+                .await?;
+            downloaded += usize::from(!installer_artifact.cache_hit);
+            cached += usize::from(installer_artifact.cache_hit);
+            let inspected = inspect_loader_installer(&installer_artifact.object_path, &installer)?;
+            let staged_installer = transaction.staging.join(INSTALLER_STAGING_NAME);
+            cache.materialize(&installer_artifact, &staged_installer)?;
+            run_loader_installer(
+                &java.root.join(&java.locked.executable),
+                &staged_installer,
+                &installer,
+                InstallerSide::Client,
+                &transaction.staging,
+                std::time::Duration::from_secs(installer_timeout_seconds),
+                |event| progress(InstallProgressEvent::LoaderInstaller(event)),
+            )
+            .await?;
+            let installed_profile = read_installed_client_profile(
+                &transaction.staging,
+                &installer,
+                &HostPlatform::native()?,
+            )?;
+            cleanup_installer_scaffolding(&transaction.staging)?;
+            let locked = LockedLoader::installer(
+                installer.kind,
+                installer.version.clone(),
+                installer.artifact.url.clone(),
+                installer_artifact.sha256.clone(),
+                inspected.install_profile_sha256,
+            );
+            installer_producer = Some((
+                installer_artifact.sha256,
+                format!("{} {}", installer.kind.as_str(), installer.version),
+            ));
+            (
+                merge_client_installer_profile(plan.resolved, installed_profile)?,
+                locked,
+            )
+        }
+    };
+    cache.flush()?;
+    let progress = Arc::new(Mutex::new(progress));
     let mut transfers = stream::iter(resolved.downloads.iter().cloned().map(|download| {
         let client = client.clone();
         let cache = cache.clone();
@@ -465,8 +698,6 @@ where
     }))
     .buffer_unordered(concurrency);
     let mut artifacts = BTreeMap::new();
-    let mut downloaded = java.downloaded_artifacts;
-    let mut cached = java.cached_artifacts;
     while let Some(result) = transfers.next().await {
         let (download, artifact) = result?;
         downloaded += usize::from(!artifact.cache_hit);
@@ -497,12 +728,27 @@ where
     locked_artifacts.push(LockedArtifact {
         logical_name: format!("Minecraft {} version JSON", resolved.minecraft_version),
         owner: ArtifactOwner::Minecraft,
-        source_url: resolved.version_json_url.clone(),
-        upstream_sha1: Some(resolved.version_json_sha1.clone()),
+        source: LockedArtifactSource::Download {
+            url: resolved.version_json_url.clone(),
+            upstream_sha1: Some(resolved.version_json_sha1.clone()),
+        },
         sha256: hex::encode(Sha256::digest(&resolved.version_json_bytes)),
         size: resolved.version_json_bytes.len() as u64,
         path: version_json_target,
     });
+
+    if let Some((installer_sha256, logical_name)) = installer_producer {
+        let excluded: HashSet<_> = locked_artifacts
+            .iter()
+            .map(|artifact| artifact.path.clone())
+            .collect();
+        locked_artifacts.extend(collect_installer_outputs(
+            &transaction.staging,
+            &excluded,
+            &installer_sha256,
+            &logical_name,
+        )?);
+    }
 
     let mut generated_files = extract_client_natives(&transaction.staging, &artifacts)?;
     generated_files.extend(materialize_legacy_assets(&transaction.staging, &resolved)?);
@@ -556,12 +802,13 @@ where
     })
 }
 
-pub async fn execute_vanilla_server_install<F>(
+async fn execute_server_install<F>(
     instance_root: &Path,
     runtime_paths: &RuntimePaths,
     client: &reqwest::Client,
-    plan: VanillaServerInstallPlan,
+    plan: ServerInstallPlan,
     concurrency: usize,
+    installer_timeout_seconds: u64,
     mut progress: F,
 ) -> Result<InstallResult, LauncherError>
 where
@@ -583,21 +830,80 @@ where
         ));
     }
     let acceptance = require_current_acceptance(instance_root, &plan.eula)?;
-    let (loader, entrypoint, arguments, mut downloads) =
-        server_profile_parts(&plan.resolved, plan.loader_profile)?;
-    downloads.push(ClientDownload {
-        request: plan.resolved.server.clone(),
-        target: "server.jar".to_string(),
-        owner: ArtifactOwner::Minecraft,
-        native_extract: None,
-    });
     let transaction = InstallTransaction::begin(instance_root, "install")?;
     let java = install_mojang_java(runtime_paths, client, plan.java, concurrency, |event| {
         progress(InstallProgressEvent::Java(event))
     })
     .await?;
-    let progress = Arc::new(Mutex::new(progress));
     let cache = ArtifactCache::new(runtime_paths.cache_dir());
+    let mut downloaded = java.downloaded_artifacts;
+    let mut cached = java.cached_artifacts;
+    let mut installer_producer = None;
+    let installer_loader = matches!(&plan.loader, PlannedLoader::Installer(_));
+    let (loader, entrypoint, arguments, mut downloads) = match plan.loader {
+        PlannedLoader::Vanilla => server_profile_parts(&plan.resolved, None)?,
+        PlannedLoader::Profile(profile) => server_profile_parts(&plan.resolved, Some(profile))?,
+        PlannedLoader::Installer(installer) => {
+            let installer_artifact = cache
+                .fetch(client, &installer.artifact, |event| {
+                    progress(InstallProgressEvent::Artifact(event));
+                })
+                .await?;
+            downloaded += usize::from(!installer_artifact.cache_hit);
+            cached += usize::from(installer_artifact.cache_hit);
+            let inspected = inspect_loader_installer(&installer_artifact.object_path, &installer)?;
+            let staged_installer = transaction.staging.join(INSTALLER_STAGING_NAME);
+            cache.materialize(&installer_artifact, &staged_installer)?;
+            run_loader_installer(
+                &java.root.join(&java.locked.executable),
+                &staged_installer,
+                &installer,
+                InstallerSide::Server,
+                &transaction.staging,
+                std::time::Duration::from_secs(installer_timeout_seconds),
+                |event| progress(InstallProgressEvent::LoaderInstaller(event)),
+            )
+            .await?;
+            let argument_file = installed_server_argument_file(
+                &transaction.staging,
+                &installer,
+                &HostPlatform::native()?,
+            )?;
+            cleanup_installer_scaffolding(&transaction.staging)?;
+            let locked = LockedLoader::installer(
+                installer.kind,
+                installer.version.clone(),
+                installer.artifact.url.clone(),
+                installer_artifact.sha256.clone(),
+                inspected.install_profile_sha256,
+            );
+            installer_producer = Some((
+                installer_artifact.sha256,
+                format!("{} {}", installer.kind.as_str(), installer.version),
+            ));
+            (
+                locked,
+                LockedEntrypoint::ArgumentFile {
+                    path: argument_file,
+                },
+                LockedArguments {
+                    jvm: Vec::new(),
+                    game: vec!["nogui".to_string()],
+                },
+                Vec::new(),
+            )
+        }
+    };
+    if !installer_loader {
+        downloads.push(ClientDownload {
+            request: plan.resolved.server.clone(),
+            target: "server.jar".to_string(),
+            owner: ArtifactOwner::Minecraft,
+            native_extract: None,
+        });
+    }
+    cache.flush()?;
+    let progress = Arc::new(Mutex::new(progress));
     let mut transfers = stream::iter(downloads.into_iter().map(|download| {
         let client = client.clone();
         let cache = cache.clone();
@@ -615,8 +921,6 @@ where
     }))
     .buffer_unordered(concurrency);
     let mut artifacts = BTreeMap::new();
-    let mut downloaded = java.downloaded_artifacts;
-    let mut cached = java.cached_artifacts;
     while let Some(result) = transfers.next().await {
         let (download, artifact) = result?;
         downloaded += usize::from(!artifact.cache_hit);
@@ -635,6 +939,18 @@ where
     for (target, (download, artifact)) in &artifacts {
         cache.materialize(artifact, &transaction.staging.join(target))?;
         locked_artifacts.push(locked_artifact(download, artifact));
+    }
+    if let Some((installer_sha256, logical_name)) = installer_producer {
+        let excluded: HashSet<_> = locked_artifacts
+            .iter()
+            .map(|artifact| artifact.path.clone())
+            .collect();
+        locked_artifacts.extend(collect_installer_outputs(
+            &transaction.staging,
+            &excluded,
+            &installer_sha256,
+            &logical_name,
+        )?);
     }
     locked_artifacts.sort_by(|left, right| left.path.cmp(&right.path));
     std::fs::write(transaction.staging.join("eula.txt"), b"eula=true\n")?;
@@ -680,6 +996,46 @@ where
     })
 }
 
+pub async fn apply_install_plan<F>(
+    instance_root: &Path,
+    runtime_paths: &RuntimePaths,
+    client: &reqwest::Client,
+    plan: InstallPlan,
+    concurrency: usize,
+    installer_timeout_seconds: u64,
+    progress: F,
+) -> Result<InstallResult, LauncherError>
+where
+    F: FnMut(InstallProgressEvent) + Send,
+{
+    match plan {
+        InstallPlan::Client(plan) => {
+            execute_client_install(
+                instance_root,
+                runtime_paths,
+                client,
+                plan,
+                concurrency,
+                installer_timeout_seconds,
+                progress,
+            )
+            .await
+        }
+        InstallPlan::Server(plan) => {
+            execute_server_install(
+                instance_root,
+                runtime_paths,
+                client,
+                plan,
+                concurrency,
+                installer_timeout_seconds,
+                progress,
+            )
+            .await
+        }
+    }
+}
+
 fn require_vanilla_server(manifest: &InstanceManifest) -> Result<(), LauncherError> {
     if manifest.kind != InstanceKind::Server {
         return Err(LauncherError::UnsupportedRequirement(
@@ -703,7 +1059,11 @@ fn require_supported_server(manifest: &InstanceManifest) -> Result<(), LauncherE
     }
     if !matches!(
         manifest.loader.kind,
-        LoaderKind::Vanilla | LoaderKind::Fabric | LoaderKind::Quilt
+        LoaderKind::Vanilla
+            | LoaderKind::Fabric
+            | LoaderKind::Quilt
+            | LoaderKind::Forge
+            | LoaderKind::Neoforge
     ) {
         return Err(LauncherError::UnsupportedRequirement(format!(
             "Loader '{}' must use its own installer adapter",
@@ -727,12 +1087,7 @@ fn server_profile_parts(
 > {
     let Some(profile) = profile else {
         return Ok((
-            LockedLoader {
-                kind: LoaderKind::Vanilla,
-                version: None,
-                profile_url: None,
-                profile_sha256: None,
-            },
+            LockedLoader::vanilla(),
             LockedEntrypoint::Jar {
                 path: "server.jar".to_string(),
             },
@@ -755,12 +1110,12 @@ fn server_profile_parts(
         ));
     }
     Ok((
-        LockedLoader {
-            kind: profile.kind,
-            version: Some(profile.version),
-            profile_url: Some(profile.profile_url),
-            profile_sha256: Some(profile.profile_sha256),
-        },
+        LockedLoader::profile(
+            profile.kind,
+            profile.version,
+            profile.profile_url,
+            profile.profile_sha256,
+        ),
         LockedEntrypoint::Classpath {
             main_class: profile.main_class,
             classpath,
@@ -796,7 +1151,11 @@ fn require_supported_client(manifest: &InstanceManifest) -> Result<(), LauncherE
     }
     if !matches!(
         manifest.loader.kind,
-        LoaderKind::Vanilla | LoaderKind::Fabric | LoaderKind::Quilt
+        LoaderKind::Vanilla
+            | LoaderKind::Fabric
+            | LoaderKind::Quilt
+            | LoaderKind::Forge
+            | LoaderKind::Neoforge
     ) {
         return Err(LauncherError::UnsupportedRequirement(format!(
             "Loader '{}' must use its own installer adapter",
@@ -808,19 +1167,8 @@ fn require_supported_client(manifest: &InstanceManifest) -> Result<(), LauncherE
 
 fn merge_client_profile(
     mut resolved: ResolvedVanillaClient,
-    profile: Option<ResolvedLoaderProfile>,
+    profile: ResolvedLoaderProfile,
 ) -> Result<(ResolvedVanillaClient, LockedLoader), LauncherError> {
-    let Some(profile) = profile else {
-        return Ok((
-            resolved,
-            LockedLoader {
-                kind: LoaderKind::Vanilla,
-                version: None,
-                profile_url: None,
-                profile_sha256: None,
-            },
-        ));
-    };
     let mut occupied: HashSet<_> = resolved
         .downloads
         .iter()
@@ -844,13 +1192,32 @@ fn merge_client_profile(
     resolved.game_arguments.extend(profile.game_arguments);
     Ok((
         resolved,
-        LockedLoader {
-            kind: profile.kind,
-            version: Some(profile.version),
-            profile_url: Some(profile.profile_url),
-            profile_sha256: Some(profile.profile_sha256),
-        },
+        LockedLoader::profile(
+            profile.kind,
+            profile.version,
+            profile.profile_url,
+            profile.profile_sha256,
+        ),
     ))
+}
+
+fn merge_client_installer_profile(
+    mut resolved: ResolvedVanillaClient,
+    profile: crate::installer::InstalledClientProfile,
+) -> Result<ResolvedVanillaClient, LauncherError> {
+    let mut occupied: HashSet<_> = resolved.classpath.iter().cloned().collect();
+    let mut classpath = Vec::new();
+    for entry in profile.classpath {
+        if occupied.insert(entry.clone()) {
+            classpath.push(entry);
+        }
+    }
+    classpath.extend(resolved.classpath);
+    resolved.classpath = classpath;
+    resolved.main_class = profile.main_class;
+    resolved.jvm_arguments.extend(profile.jvm_arguments);
+    resolved.game_arguments.extend(profile.game_arguments);
+    Ok(resolved)
 }
 
 fn selected_java_provider(
@@ -875,12 +1242,108 @@ fn locked_artifact(download: &ClientDownload, artifact: &CachedArtifact) -> Lock
     LockedArtifact {
         logical_name: download.request.logical_name.clone(),
         owner: download.owner,
-        source_url: download.request.url.clone(),
-        upstream_sha1,
+        source: LockedArtifactSource::Download {
+            url: download.request.url.clone(),
+            upstream_sha1,
+        },
         sha256: artifact.sha256.clone(),
         size: artifact.size,
         path: download.target.clone(),
     }
+}
+
+fn cleanup_installer_scaffolding(staging: &Path) -> Result<(), LauncherError> {
+    for relative in [
+        INSTALLER_STAGING_NAME,
+        ".orbit-loader-installer.jar.log",
+        "launcher_profiles.json",
+        "run.bat",
+        "run.sh",
+        "user_jvm_args.txt",
+    ] {
+        let path = staging.join(relative);
+        if path.exists() {
+            let metadata = std::fs::symlink_metadata(&path)?;
+            if !metadata.file_type().is_file() || metadata.file_type().is_symlink() {
+                return Err(LauncherError::Transaction(format!(
+                    "official Loader installer created unsafe scaffolding path '{relative}'"
+                )));
+            }
+            std::fs::remove_file(path)?;
+        }
+    }
+    Ok(())
+}
+
+fn collect_installer_outputs(
+    staging: &Path,
+    excluded: &HashSet<String>,
+    installer_sha256: &str,
+    logical_name: &str,
+) -> Result<Vec<LockedArtifact>, LauncherError> {
+    const MAX_OUTPUT_FILES: usize = 100_000;
+    const MAX_OUTPUT_BYTES: u64 = 64 * 1024 * 1024 * 1024;
+
+    let mut directories = vec![staging.to_path_buf()];
+    let mut files = Vec::new();
+    let mut total_bytes = 0_u64;
+    while let Some(directory) = directories.pop() {
+        for entry in std::fs::read_dir(&directory)? {
+            let entry = entry?;
+            let metadata = std::fs::symlink_metadata(entry.path())?;
+            if metadata.file_type().is_symlink() {
+                return Err(LauncherError::InvalidRemoteData(format!(
+                    "official Loader installer produced a symbolic link at '{}'",
+                    entry.path().display()
+                )));
+            }
+            if metadata.is_dir() {
+                directories.push(entry.path());
+                continue;
+            }
+            if !metadata.is_file() {
+                return Err(LauncherError::InvalidRemoteData(format!(
+                    "official Loader installer produced an unsupported filesystem object at '{}'",
+                    entry.path().display()
+                )));
+            }
+            let path = entry.path();
+            let relative = path.strip_prefix(staging).map_err(|_| {
+                LauncherError::Transaction("Loader installer output escaped staging".to_string())
+            })?;
+            let relative = crate::lockfile::portable_relative_path(relative)?;
+            if excluded.contains(&relative) {
+                continue;
+            }
+            total_bytes = total_bytes.checked_add(metadata.len()).ok_or_else(|| {
+                LauncherError::InvalidRemoteData(
+                    "Loader installer output size overflowed".to_string(),
+                )
+            })?;
+            if files.len() >= MAX_OUTPUT_FILES || total_bytes > MAX_OUTPUT_BYTES {
+                return Err(LauncherError::InvalidRemoteData(
+                    "Loader installer output exceeds the supported inventory limits".to_string(),
+                ));
+            }
+            files.push((relative, path, metadata.len()));
+        }
+    }
+    files.sort_by(|left, right| left.0.cmp(&right.0));
+    files
+        .into_iter()
+        .map(|(relative, path, size)| {
+            Ok(LockedArtifact {
+                logical_name: format!("{logical_name} installer output"),
+                owner: ArtifactOwner::Loader,
+                source: LockedArtifactSource::InstallerOutput {
+                    installer_sha256: installer_sha256.to_string(),
+                },
+                sha256: hash_file_sha256(&path)?,
+                size,
+                path: relative,
+            })
+        })
+        .collect()
 }
 
 fn write_staged_file(root: &Path, relative: &str, bytes: &[u8]) -> Result<(), LauncherError> {
@@ -1394,12 +1857,7 @@ mod tests {
                 version_json_url: "https://piston-meta.mojang.com/version.json".to_string(),
                 version_json_sha1: "b".repeat(40),
             },
-            loader: LockedLoader {
-                kind: LoaderKind::Vanilla,
-                version: None,
-                profile_url: None,
-                profile_sha256: None,
-            },
+            loader: LockedLoader::vanilla(),
             java: None,
             entrypoint: LockedEntrypoint::Jar {
                 path: "old/server.jar".to_string(),
@@ -1408,8 +1866,10 @@ mod tests {
             artifacts: vec![LockedArtifact {
                 logical_name: "old server".to_string(),
                 owner: ArtifactOwner::Minecraft,
-                source_url: "https://piston-data.mojang.com/old-server.jar".to_string(),
-                upstream_sha1: Some("c".repeat(40)),
+                source: LockedArtifactSource::Download {
+                    url: "https://piston-data.mojang.com/old-server.jar".to_string(),
+                    upstream_sha1: Some("c".repeat(40)),
+                },
                 sha256: "d".repeat(64),
                 size: 3,
                 path: "old/server.jar".to_string(),
