@@ -282,14 +282,14 @@ mod tests {
         std::fs::remove_file(&path).unwrap();
 
         assert!(written.contains("full structured evidence"));
-        assert!(written.contains("\"schema_version\": 4"));
+        assert!(written.contains("\"schema_version\": 5"));
     }
 
     #[test]
     fn json_keeps_fixed_schema_version() {
         let report = empty_report();
         let value = serde_json::to_value(report).unwrap();
-        assert_eq!(value["schema_version"], 4);
+        assert_eq!(value["schema_version"], 5);
         assert!(value.get("coverage").is_some());
         assert!(value.get("warnings").is_some());
     }
