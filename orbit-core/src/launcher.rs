@@ -28,6 +28,57 @@ pub(crate) enum LauncherLayoutKind {
     DedicatedServer,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum LayoutPrecedence {
+    Standalone,
+    SharedGameRoot,
+    IsolatedVersion,
+    DedicatedServer,
+    LauncherOwnedInstance,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LayoutEvidence {
+    MultiMcPack,
+    CurseForgeMetadata,
+    GdLauncherMetadata,
+    DedicatedServerMarker,
+    IsolatedVersionDirectory,
+    SharedVersionsDirectory,
+    StandaloneProfileOrJar,
+}
+
+impl std::fmt::Display for LayoutEvidence {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::MultiMcPack => "Prism Launcher/MultiMC component metadata",
+            Self::CurseForgeMetadata => "CurseForge instance metadata",
+            Self::GdLauncherMetadata => "GDLauncher instance metadata",
+            Self::DedicatedServerMarker => "dedicated-server marker",
+            Self::IsolatedVersionDirectory => "isolated versions/<instance> layout",
+            Self::SharedVersionsDirectory => "shared versions/ game root",
+            Self::StandaloneProfileOrJar => "standalone launcher profile or Minecraft JAR",
+        })
+    }
+}
+
+#[derive(Debug)]
+struct LayoutCandidate {
+    layout: LauncherLayout,
+    precedence: LayoutPrecedence,
+    evidence: LayoutEvidence,
+}
+
+impl LayoutCandidate {
+    fn new(layout: LauncherLayout, precedence: LayoutPrecedence, evidence: LayoutEvidence) -> Self {
+        Self {
+            layout,
+            precedence,
+            evidence,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct LauncherLayout {
     pub kind: LauncherLayoutKind,
@@ -54,34 +105,51 @@ impl LauncherLayout {
             ));
         }
 
-        if let Some(layout) = discover_multimc(instance_dir)? {
-            return Ok(layout);
-        }
-        if let Some(layout) = discover_curseforge(instance_dir)? {
-            return Ok(layout);
-        }
-        if let Some(layout) = discover_gdlauncher(instance_dir)? {
-            return Ok(layout);
-        }
-        // Dedicated-server markers are stronger than the generic versions/
-        // and standalone layouts. Server installers commonly create both.
+        let mut candidates = Vec::new();
+        push_candidate(
+            &mut candidates,
+            discover_multimc(instance_dir)?,
+            LayoutPrecedence::LauncherOwnedInstance,
+            LayoutEvidence::MultiMcPack,
+        );
+        push_candidate(
+            &mut candidates,
+            discover_curseforge(instance_dir)?,
+            LayoutPrecedence::LauncherOwnedInstance,
+            LayoutEvidence::CurseForgeMetadata,
+        );
+        push_candidate(
+            &mut candidates,
+            discover_gdlauncher(instance_dir)?,
+            LayoutPrecedence::LauncherOwnedInstance,
+            LayoutEvidence::GdLauncherMetadata,
+        );
         if is_dedicated_server(instance_dir) {
-            return discover_dedicated_server(instance_dir);
+            candidates.push(LayoutCandidate::new(
+                discover_dedicated_server(instance_dir)?,
+                LayoutPrecedence::DedicatedServer,
+                LayoutEvidence::DedicatedServerMarker,
+            ));
         }
-        if let Some(layout) = discover_isolated_version(instance_dir)? {
-            return Ok(layout);
-        }
-        if let Some(layout) = discover_shared_game_root(instance_dir)? {
-            return Ok(layout);
-        }
-        if let Some(layout) = discover_standalone(instance_dir)? {
-            return Ok(layout);
-        }
-        Err(invalid_game_directory(
-            instance_dir,
-            "no launcher profile, launcher instance metadata, Minecraft version JAR, or \
-             dedicated-server marker was found",
-        ))
+        push_candidate(
+            &mut candidates,
+            discover_isolated_version(instance_dir)?,
+            LayoutPrecedence::IsolatedVersion,
+            LayoutEvidence::IsolatedVersionDirectory,
+        );
+        push_candidate(
+            &mut candidates,
+            discover_shared_game_root(instance_dir)?,
+            LayoutPrecedence::SharedGameRoot,
+            LayoutEvidence::SharedVersionsDirectory,
+        );
+        push_candidate(
+            &mut candidates,
+            discover_standalone(instance_dir)?,
+            LayoutPrecedence::Standalone,
+            LayoutEvidence::StandaloneProfileOrJar,
+        );
+        select_layout(instance_dir, candidates)
     }
 
     pub(crate) fn component_version(&self, uid: &str) -> Option<&str> {
@@ -113,6 +181,52 @@ impl LauncherLayout {
         versions.dedup();
         versions
     }
+}
+
+fn push_candidate(
+    candidates: &mut Vec<LayoutCandidate>,
+    layout: Option<LauncherLayout>,
+    precedence: LayoutPrecedence,
+    evidence: LayoutEvidence,
+) {
+    if let Some(layout) = layout {
+        candidates.push(LayoutCandidate::new(layout, precedence, evidence));
+    }
+}
+
+fn select_layout(
+    instance_dir: &Path,
+    mut candidates: Vec<LayoutCandidate>,
+) -> Result<LauncherLayout, OrbitError> {
+    let Some(highest) = candidates
+        .iter()
+        .map(|candidate| candidate.precedence)
+        .max()
+    else {
+        return Err(invalid_game_directory(
+            instance_dir,
+            "no launcher profile, launcher instance metadata, Minecraft version JAR, or \
+             dedicated-server marker was found",
+        ));
+    };
+    let mut selected = candidates
+        .drain(..)
+        .filter(|candidate| candidate.precedence == highest)
+        .collect::<Vec<_>>();
+    if selected.len() != 1 {
+        return Err(invalid_game_directory(
+            instance_dir,
+            &format!(
+                "conflicting layout evidence at the same precedence: {}",
+                selected
+                    .iter()
+                    .map(|candidate| candidate.evidence.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        ));
+    }
+    Ok(selected.pop().expect("exactly one candidate").layout)
 }
 
 fn discover_dedicated_server(instance_dir: &Path) -> Result<LauncherLayout, OrbitError> {
@@ -533,6 +647,23 @@ mod tests {
         assert!(layout.profile_paths.contains(&version.join("server.json")));
         assert!(layout.game_jar_directories.contains(&version));
         assert!(layout.game_jar_directories.contains(&fabric_runtime));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn conflicting_launcher_owned_markers_are_rejected() {
+        let root = temp_dir("ambiguous-launcher");
+        let instance_root = root.join("profile");
+        let game_dir = instance_root.join("instance");
+        std::fs::create_dir_all(&game_dir).unwrap();
+        std::fs::write(instance_root.join("instance.json"), "{}").unwrap();
+        std::fs::write(game_dir.join("minecraftinstance.json"), "{}").unwrap();
+
+        let error = LauncherLayout::discover(&game_dir).unwrap_err().to_string();
+
+        assert!(error.contains("conflicting layout evidence"));
+        assert!(error.contains("CurseForge"));
+        assert!(error.contains("GDLauncher"));
         std::fs::remove_dir_all(root).unwrap();
     }
 }
