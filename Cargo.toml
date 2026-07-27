@@ -3,6 +3,8 @@ resolver = "2"
 members = [
     "orbit-cli",
     "orbit-core",
+    "orbit-launcher-cli",
+    "orbit-launcher-core",
     "orbit-bytecode-audit",
     "orbit-loader-json",
     "curseforge-wrapper",
@@ -37,4 +39,6 @@ zip = "3.0.0"
 indexmap = { version = "2.0", features = ["serde"] }
 ristretto_classfile = "0.31.0"
 tempfile = "3.27"
+uuid = { version = "1.24.0", features = ["serde", "v4"] }
+dunce = "1.0.5"
 orbit-loader-json = { path = "orbit-loader-json" }

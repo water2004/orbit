@@ -1,0 +1,19 @@
+[package]
+name = "orbit-launcher-core"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "Platform-independent core for Orbit Launcher"
+
+[dependencies]
+serde = { workspace = true }
+toml = { workspace = true }
+toml_edit = { workspace = true }
+thiserror = { workspace = true }
+tempfile = { workspace = true }
+url = { workspace = true }
+uuid = { workspace = true }
+dunce = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }

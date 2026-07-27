@@ -1,0 +1,22 @@
+[package]
+name = "orbit-launcher"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "Cross-platform Minecraft runtime launcher"
+
+[[bin]]
+name = "orbit-launcher"
+path = "src/main.rs"
+
+[dependencies]
+clap = { workspace = true }
+orbit-launcher-core = { path = "../orbit-launcher-core" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+uuid = { workspace = true }
+
+[dev-dependencies]
+dunce = { workspace = true }
+tempfile = { workspace = true }
