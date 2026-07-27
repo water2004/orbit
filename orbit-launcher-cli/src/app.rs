@@ -3,11 +3,12 @@ use std::path::Path;
 use orbit_launcher_core::{
     ConfigKey, ContextIntent, CreateInstanceRequest, EulaAcceptanceMethod, EulaDocument,
     InstallProgressEvent, InstanceKind, InstanceRegistry, LauncherError, LoaderKind,
-    RuntimeContext, accept_shown_eula, create_instance, execute_vanilla_client_install,
-    execute_vanilla_server_install, get_config, import_instance, list_config,
-    prepare_vanilla_client_install, prepare_vanilla_server_install, remove_instance,
-    rename_instance, resolve_instance, resolve_instance_root, rollback_created_instance,
-    set_config, set_default_instance, show_current_eula, unset_config,
+    ProfileLoaderInstallPlan, RuntimeContext, VanillaServerInstallPlan, accept_shown_eula,
+    create_instance, execute_vanilla_client_install, execute_vanilla_server_install, get_config,
+    import_instance, list_config, prepare_profile_loader_install, prepare_vanilla_client_install,
+    prepare_vanilla_server_install, remove_instance, rename_instance, resolve_instance,
+    resolve_instance_root, rollback_created_instance, set_config, set_default_instance,
+    show_current_eula, unset_config,
 };
 
 use crate::cli::{
@@ -213,7 +214,10 @@ async fn execute_existing_install(
 ) -> Result<CommandOutput, AppError> {
     let registry = InstanceRegistry::load(&runtime.paths().instances_file())?;
     let resolved = resolve_instance(&registry, selector, current_dir, ContextIntent::Sensitive)?;
-    if resolved.manifest.loader.kind != LoaderKind::Vanilla {
+    if !matches!(
+        resolved.manifest.loader.kind,
+        LoaderKind::Vanilla | LoaderKind::Fabric | LoaderKind::Quilt
+    ) {
         return Err(LauncherError::UnsupportedRequirement(format!(
             "installation for {} {} is not implemented yet",
             resolved.manifest.kind.as_str(),
@@ -222,55 +226,78 @@ async fn execute_existing_install(
         .into());
     }
     let client = runtime.config().http_client()?;
-    let result = match resolved.manifest.kind {
-        InstanceKind::Client => {
-            let plan = prepare_vanilla_client_install(
-                &resolved.entry.root,
-                &client,
-                runtime.config().java.default_provider,
-                |event| frontend.progress(event),
-            )
-            .await?;
-            execute_vanilla_client_install(
-                &resolved.entry.root,
-                runtime.paths(),
-                &client,
-                plan,
-                usize::from(runtime.config().network.concurrency),
-                |event| frontend.progress(event),
-            )
-            .await?
-        }
-        InstanceKind::Server => {
-            let plan = prepare_vanilla_server_install(
-                &resolved.entry.root,
-                &client,
-                runtime.config().java.default_provider,
-                |event| frontend.progress(event),
-            )
-            .await?;
-            if !plan.eula_is_accepted() {
-                if !frontend.confirm_eula(plan.eula())? {
-                    return Err(LauncherError::EulaRequired(
-                        "the user did not accept the current Minecraft EULA".to_string(),
-                    )
-                    .into());
-                }
-                accept_shown_eula(
+    let result = if resolved.manifest.loader.kind == LoaderKind::Vanilla {
+        match resolved.manifest.kind {
+            InstanceKind::Client => {
+                let plan = prepare_vanilla_client_install(
                     &resolved.entry.root,
-                    &plan.eula().digest_sha256,
-                    EulaAcceptanceMethod::InteractivePrompt,
-                )?;
+                    &client,
+                    runtime.config().java.default_provider,
+                    |event| frontend.progress(event),
+                )
+                .await?;
+                execute_vanilla_client_install(
+                    &resolved.entry.root,
+                    runtime.paths(),
+                    &client,
+                    plan,
+                    usize::from(runtime.config().network.concurrency),
+                    |event| frontend.progress(event),
+                )
+                .await?
             }
-            execute_vanilla_server_install(
-                &resolved.entry.root,
-                runtime.paths(),
-                &client,
-                plan,
-                usize::from(runtime.config().network.concurrency),
-                |event| frontend.progress(event),
-            )
-            .await?
+            InstanceKind::Server => {
+                let plan = prepare_vanilla_server_install(
+                    &resolved.entry.root,
+                    &client,
+                    runtime.config().java.default_provider,
+                    |event| frontend.progress(event),
+                )
+                .await?;
+                ensure_server_eula_accepted(&resolved.entry.root, &plan, frontend)?;
+                execute_vanilla_server_install(
+                    &resolved.entry.root,
+                    runtime.paths(),
+                    &client,
+                    plan,
+                    usize::from(runtime.config().network.concurrency),
+                    |event| frontend.progress(event),
+                )
+                .await?
+            }
+        }
+    } else {
+        let plan = prepare_profile_loader_install(
+            &resolved.entry.root,
+            &client,
+            runtime.config().java.default_provider,
+            |event| frontend.progress(event),
+        )
+        .await?;
+        match plan {
+            ProfileLoaderInstallPlan::Client(plan) => {
+                execute_vanilla_client_install(
+                    &resolved.entry.root,
+                    runtime.paths(),
+                    &client,
+                    plan,
+                    usize::from(runtime.config().network.concurrency),
+                    |event| frontend.progress(event),
+                )
+                .await?
+            }
+            ProfileLoaderInstallPlan::Server(plan) => {
+                ensure_server_eula_accepted(&resolved.entry.root, &plan, frontend)?;
+                execute_vanilla_server_install(
+                    &resolved.entry.root,
+                    runtime.paths(),
+                    &client,
+                    plan,
+                    usize::from(runtime.config().network.concurrency),
+                    |event| frontend.progress(event),
+                )
+                .await?
+            }
         }
     };
     let java = result.lock.java.as_ref().ok_or_else(|| {
@@ -291,6 +318,28 @@ async fn execute_existing_install(
         downloaded_artifacts: result.downloaded_artifacts,
         cached_artifacts: result.cached_artifacts,
     }))
+}
+
+fn ensure_server_eula_accepted(
+    instance_root: &Path,
+    plan: &VanillaServerInstallPlan,
+    frontend: &mut dyn Frontend,
+) -> Result<(), AppError> {
+    if plan.eula_is_accepted() {
+        return Ok(());
+    }
+    if !frontend.confirm_eula(plan.eula())? {
+        return Err(LauncherError::EulaRequired(
+            "the user did not accept the current Minecraft EULA".to_string(),
+        )
+        .into());
+    }
+    accept_shown_eula(
+        instance_root,
+        &plan.eula().digest_sha256,
+        EulaAcceptanceMethod::InteractivePrompt,
+    )?;
+    Ok(())
 }
 
 async fn execute_server(

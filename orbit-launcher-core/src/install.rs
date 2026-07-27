@@ -22,6 +22,7 @@ use crate::instance::{InstanceKind, InstanceManifest, JavaPolicy, LoaderKind, Ma
 use crate::java::{
     JavaProgressEvent, JavaTarget, MojangJavaPlan, install_mojang_java, plan_mojang_java,
 };
+use crate::loader::{LoaderSide, ResolvedLoaderProfile, resolve_loader_profile};
 use crate::lockfile::{
     ArtifactOwner, INSTANCE_LOCK_FILE, LOCK_SCHEMA, LauncherLock, LockFile, LockedArguments,
     LockedArtifact, LockedEntrypoint, LockedLoader, LockedMinecraft,
@@ -38,18 +39,28 @@ const TRANSACTION_JOURNAL: &str = "transaction.json";
 pub struct VanillaServerInstallPlan {
     instance_id: Uuid,
     minecraft_requirement: String,
+    loader_requirement: Option<String>,
     resolved: ResolvedVanillaServer,
     java: MojangJavaPlan,
     eula: EulaDocument,
     acceptance: Option<EulaAcceptance>,
+    loader_profile: Option<ResolvedLoaderProfile>,
 }
 
 #[derive(Debug, Clone)]
 pub struct VanillaClientInstallPlan {
     instance_id: Uuid,
     minecraft_requirement: String,
+    loader_requirement: Option<String>,
     resolved: ResolvedVanillaClient,
     java: MojangJavaPlan,
+    loader_profile: Option<ResolvedLoaderProfile>,
+}
+
+#[derive(Debug, Clone)]
+pub enum ProfileLoaderInstallPlan {
+    Client(VanillaClientInstallPlan),
+    Server(VanillaServerInstallPlan),
 }
 
 impl VanillaClientInstallPlan {
@@ -166,8 +177,10 @@ where
     Ok(VanillaClientInstallPlan {
         instance_id: manifest.id,
         minecraft_requirement: manifest.minecraft.requirement,
+        loader_requirement: manifest.loader.requirement,
         resolved,
         java,
+        loader_profile: None,
     })
 }
 
@@ -220,11 +233,184 @@ where
     Ok(VanillaServerInstallPlan {
         instance_id: manifest.id,
         minecraft_requirement: manifest.minecraft.requirement,
+        loader_requirement: manifest.loader.requirement,
         resolved,
         java,
         eula,
         acceptance,
+        loader_profile: None,
     })
+}
+
+pub async fn prepare_profile_loader_install<F>(
+    instance_root: &Path,
+    client: &reqwest::Client,
+    default_java_provider: JavaProvider,
+    mut progress: F,
+) -> Result<ProfileLoaderInstallPlan, LauncherError>
+where
+    F: FnMut(InstallProgressEvent) + Send,
+{
+    let manifest = ManifestFile::open(instance_root)?.inner;
+    if !matches!(manifest.loader.kind, LoaderKind::Fabric | LoaderKind::Quilt) {
+        return Err(LauncherError::UnsupportedRequirement(format!(
+            "Loader '{}' does not use the profile install pipeline",
+            manifest.loader.kind.as_str()
+        )));
+    }
+    let loader_requirement = manifest.loader.requirement.as_deref().ok_or_else(|| {
+        LauncherError::InvalidManifest("profile Loader requires a version requirement".to_string())
+    })?;
+    progress(InstallProgressEvent::MetadataStarted);
+    let mojang = MojangClient::new(client.clone());
+    match manifest.kind {
+        InstanceKind::Client => {
+            let resolved = resolve_vanilla_client(
+                &mojang,
+                &manifest.minecraft.requirement,
+                &HostPlatform::native()?,
+            )
+            .await?;
+            let profile = resolve_loader_profile(
+                client,
+                manifest.loader.kind,
+                &resolved.minecraft_version,
+                loader_requirement,
+                LoaderSide::Client,
+            )
+            .await?;
+            progress(InstallProgressEvent::MinecraftResolved {
+                version: resolved.minecraft_version.clone(),
+                total_artifacts: resolved.downloads.len() + profile.downloads.len() + 1,
+            });
+            ensure_loader_java_compatible(
+                resolved.java.as_ref(),
+                profile.minimum_java_major,
+                profile.kind,
+                &profile.version,
+            )?;
+            let java_requirement = resolved.java.as_ref().ok_or_else(|| {
+                LauncherError::UnsupportedRequirement(format!(
+                    "Minecraft '{}' does not publish an authoritative Java runtime requirement",
+                    resolved.minecraft_version
+                ))
+            })?;
+            let java = plan_selected_java(
+                client,
+                &manifest,
+                default_java_provider,
+                java_requirement,
+                &mut progress,
+            )
+            .await?;
+            Ok(ProfileLoaderInstallPlan::Client(VanillaClientInstallPlan {
+                instance_id: manifest.id,
+                minecraft_requirement: manifest.minecraft.requirement,
+                loader_requirement: manifest.loader.requirement,
+                resolved,
+                java,
+                loader_profile: Some(profile),
+            }))
+        }
+        InstanceKind::Server => {
+            let resolved = mojang
+                .resolve_vanilla_server(&manifest.minecraft.requirement)
+                .await?;
+            let profile = resolve_loader_profile(
+                client,
+                manifest.loader.kind,
+                &resolved.minecraft_version,
+                loader_requirement,
+                LoaderSide::Server,
+            )
+            .await?;
+            progress(InstallProgressEvent::MinecraftResolved {
+                version: resolved.minecraft_version.clone(),
+                total_artifacts: profile.downloads.len() + 1,
+            });
+            ensure_loader_java_compatible(
+                resolved.java.as_ref(),
+                profile.minimum_java_major,
+                profile.kind,
+                &profile.version,
+            )?;
+            let java_requirement = resolved.java.as_ref().ok_or_else(|| {
+                LauncherError::UnsupportedRequirement(format!(
+                    "Minecraft '{}' does not publish an authoritative Java runtime requirement",
+                    resolved.minecraft_version
+                ))
+            })?;
+            let java = plan_selected_java(
+                client,
+                &manifest,
+                default_java_provider,
+                java_requirement,
+                &mut progress,
+            )
+            .await?;
+            let eula = show_current_eula(instance_root, client).await?;
+            let acceptance = match require_current_acceptance(instance_root, &eula) {
+                Ok(acceptance) => Some(acceptance),
+                Err(LauncherError::EulaRequired(_)) => None,
+                Err(error) => return Err(error),
+            };
+            progress(InstallProgressEvent::EulaChecked {
+                digest_sha256: eula.digest_sha256.clone(),
+                accepted: acceptance.is_some(),
+            });
+            Ok(ProfileLoaderInstallPlan::Server(VanillaServerInstallPlan {
+                instance_id: manifest.id,
+                minecraft_requirement: manifest.minecraft.requirement,
+                loader_requirement: manifest.loader.requirement,
+                resolved,
+                java,
+                eula,
+                acceptance,
+                loader_profile: Some(profile),
+            }))
+        }
+    }
+}
+
+async fn plan_selected_java<F>(
+    client: &reqwest::Client,
+    manifest: &InstanceManifest,
+    default_java_provider: JavaProvider,
+    requirement: &crate::mojang::MojangJavaRequirement,
+    progress: &mut F,
+) -> Result<MojangJavaPlan, LauncherError>
+where
+    F: FnMut(InstallProgressEvent) + Send,
+{
+    let provider = selected_java_provider(manifest, default_java_provider)?;
+    if provider != JavaProvider::Mojang {
+        return Err(LauncherError::UnsupportedRequirement(format!(
+            "Java provider '{}' is not yet implemented",
+            provider.as_str()
+        )));
+    }
+    plan_mojang_java(client, requirement, JavaTarget::native()?, |event| {
+        progress(InstallProgressEvent::Java(event));
+    })
+    .await
+}
+
+fn ensure_loader_java_compatible(
+    minecraft: Option<&crate::mojang::MojangJavaRequirement>,
+    loader_minimum: Option<u32>,
+    kind: LoaderKind,
+    version: &str,
+) -> Result<(), LauncherError> {
+    if let (Some(minecraft), Some(loader_minimum)) = (minecraft, loader_minimum)
+        && minecraft.major < loader_minimum
+    {
+        return Err(LauncherError::UnsupportedRequirement(format!(
+            "{} {version} requires Java {loader_minimum} or newer, but Minecraft metadata selects Java {}",
+            kind.as_str(),
+            minecraft.major
+        )));
+    }
+    Ok(())
 }
 
 pub async fn execute_vanilla_client_install<F>(
@@ -244,14 +430,16 @@ where
         ));
     }
     let manifest = ManifestFile::open(instance_root)?.inner;
-    require_vanilla_client(&manifest)?;
+    require_supported_client(&manifest)?;
     if manifest.id != plan.instance_id
         || manifest.minecraft.requirement != plan.minecraft_requirement
+        || manifest.loader.requirement != plan.loader_requirement
     {
         return Err(LauncherError::Transaction(
             "instance manifest changed after the install plan was generated".to_string(),
         ));
     }
+    let (resolved, locked_loader) = merge_client_profile(plan.resolved, plan.loader_profile)?;
 
     let transaction = InstallTransaction::begin(instance_root, "install")?;
     let java = install_mojang_java(runtime_paths, client, plan.java, concurrency, |event| {
@@ -260,7 +448,7 @@ where
     .await?;
     let progress = Arc::new(Mutex::new(progress));
     let cache = ArtifactCache::new(runtime_paths.cache_dir());
-    let mut transfers = stream::iter(plan.resolved.downloads.iter().cloned().map(|download| {
+    let mut transfers = stream::iter(resolved.downloads.iter().cloned().map(|download| {
         let client = client.clone();
         let cache = cache.clone();
         let progress = Arc::clone(&progress);
@@ -300,27 +488,24 @@ where
         cache.materialize(artifact, &transaction.staging.join(target))?;
         locked_artifacts.push(locked_artifact(download, artifact));
     }
-    let version_json_target = format!("versions/{0}/{0}.json", plan.resolved.minecraft_version);
+    let version_json_target = format!("versions/{0}/{0}.json", resolved.minecraft_version);
     write_staged_file(
         &transaction.staging,
         &version_json_target,
-        &plan.resolved.version_json_bytes,
+        &resolved.version_json_bytes,
     )?;
     locked_artifacts.push(LockedArtifact {
-        logical_name: format!("Minecraft {} version JSON", plan.resolved.minecraft_version),
+        logical_name: format!("Minecraft {} version JSON", resolved.minecraft_version),
         owner: ArtifactOwner::Minecraft,
-        source_url: plan.resolved.version_json_url.clone(),
-        upstream_sha1: Some(plan.resolved.version_json_sha1.clone()),
-        sha256: hex::encode(Sha256::digest(&plan.resolved.version_json_bytes)),
-        size: plan.resolved.version_json_bytes.len() as u64,
+        source_url: resolved.version_json_url.clone(),
+        upstream_sha1: Some(resolved.version_json_sha1.clone()),
+        sha256: hex::encode(Sha256::digest(&resolved.version_json_bytes)),
+        size: resolved.version_json_bytes.len() as u64,
         path: version_json_target,
     });
 
     let mut generated_files = extract_client_natives(&transaction.staging, &artifacts)?;
-    generated_files.extend(materialize_legacy_assets(
-        &transaction.staging,
-        &plan.resolved,
-    )?);
+    generated_files.extend(materialize_legacy_assets(&transaction.staging, &resolved)?);
     generated_files.sort();
     generated_files.dedup();
     locked_artifacts.sort_by(|left, right| left.path.cmp(&right.path));
@@ -329,27 +514,22 @@ where
         instance_id: manifest.id,
         kind: InstanceKind::Client,
         minecraft: LockedMinecraft {
-            version: plan.resolved.minecraft_version.clone(),
-            version_type: plan.resolved.version_type,
+            version: resolved.minecraft_version.clone(),
+            version_type: resolved.version_type,
             version_manifest_url: VERSION_MANIFEST_V2_URL.to_string(),
-            version_manifest_sha256: plan.resolved.version_manifest_sha256,
-            version_json_url: plan.resolved.version_json_url,
-            version_json_sha1: plan.resolved.version_json_sha1,
+            version_manifest_sha256: resolved.version_manifest_sha256,
+            version_json_url: resolved.version_json_url,
+            version_json_sha1: resolved.version_json_sha1,
         },
-        loader: LockedLoader {
-            kind: LoaderKind::Vanilla,
-            version: None,
-            profile_url: None,
-            profile_sha256: None,
-        },
+        loader: locked_loader,
         java: Some(java.locked),
         entrypoint: LockedEntrypoint::Classpath {
-            main_class: plan.resolved.main_class,
-            classpath: plan.resolved.classpath,
+            main_class: resolved.main_class,
+            classpath: resolved.classpath,
         },
         arguments: LockedArguments {
-            jvm: plan.resolved.jvm_arguments,
-            game: plan.resolved.game_arguments,
+            jvm: resolved.jvm_arguments,
+            game: resolved.game_arguments,
         },
         artifacts: locked_artifacts,
         generated_files,
@@ -387,35 +567,78 @@ pub async fn execute_vanilla_server_install<F>(
 where
     F: FnMut(InstallProgressEvent) + Send,
 {
+    if concurrency == 0 {
+        return Err(LauncherError::InvalidConfig(
+            "artifact download concurrency must be greater than zero".to_string(),
+        ));
+    }
     let manifest = ManifestFile::open(instance_root)?.inner;
-    require_vanilla_server(&manifest)?;
+    require_supported_server(&manifest)?;
     if manifest.id != plan.instance_id
         || manifest.minecraft.requirement != plan.minecraft_requirement
+        || manifest.loader.requirement != plan.loader_requirement
     {
         return Err(LauncherError::Transaction(
             "instance manifest changed after the install plan was generated".to_string(),
         ));
     }
     let acceptance = require_current_acceptance(instance_root, &plan.eula)?;
+    let (loader, entrypoint, arguments, mut downloads) =
+        server_profile_parts(&plan.resolved, plan.loader_profile)?;
+    downloads.push(ClientDownload {
+        request: plan.resolved.server.clone(),
+        target: "server.jar".to_string(),
+        owner: ArtifactOwner::Minecraft,
+        native_extract: None,
+    });
     let transaction = InstallTransaction::begin(instance_root, "install")?;
     let java = install_mojang_java(runtime_paths, client, plan.java, concurrency, |event| {
         progress(InstallProgressEvent::Java(event))
     })
     .await?;
+    let progress = Arc::new(Mutex::new(progress));
     let cache = ArtifactCache::new(runtime_paths.cache_dir());
-    let cached = cache
-        .fetch(client, &plan.resolved.server, |event| {
-            progress(InstallProgressEvent::Artifact(event));
-        })
-        .await?;
+    let mut transfers = stream::iter(downloads.into_iter().map(|download| {
+        let client = client.clone();
+        let cache = cache.clone();
+        let progress = Arc::clone(&progress);
+        async move {
+            let artifact = cache
+                .fetch(&client, &download.request, |event| {
+                    if let Ok(mut progress) = progress.lock() {
+                        progress(InstallProgressEvent::Artifact(event));
+                    }
+                })
+                .await?;
+            Ok::<_, LauncherError>((download, artifact))
+        }
+    }))
+    .buffer_unordered(concurrency);
+    let mut artifacts = BTreeMap::new();
+    let mut downloaded = java.downloaded_artifacts;
+    let mut cached = java.cached_artifacts;
+    while let Some(result) = transfers.next().await {
+        let (download, artifact) = result?;
+        downloaded += usize::from(!artifact.cache_hit);
+        cached += usize::from(artifact.cache_hit);
+        if artifacts
+            .insert(download.target.clone(), (download, artifact))
+            .is_some()
+        {
+            return Err(LauncherError::InvalidRemoteData(
+                "server metadata resolves multiple artifacts to the same instance path".to_string(),
+            ));
+        }
+    }
     cache.flush()?;
-    cache.materialize(&cached, &transaction.staging.join("server.jar"))?;
+    let mut locked_artifacts = Vec::new();
+    for (target, (download, artifact)) in &artifacts {
+        cache.materialize(artifact, &transaction.staging.join(target))?;
+        locked_artifacts.push(locked_artifact(download, artifact));
+    }
+    locked_artifacts.sort_by(|left, right| left.path.cmp(&right.path));
     std::fs::write(transaction.staging.join("eula.txt"), b"eula=true\n")?;
 
-    let upstream_sha1 = match &plan.resolved.server.expected_hash {
-        ExpectedHash::Sha1(value) => Some(value.clone()),
-        _ => None,
-    };
     let lock = LauncherLock {
         schema: LOCK_SCHEMA,
         instance_id: manifest.id,
@@ -428,46 +651,32 @@ where
             version_json_url: plan.resolved.version_json_url,
             version_json_sha1: plan.resolved.version_json_sha1,
         },
-        loader: LockedLoader {
-            kind: LoaderKind::Vanilla,
-            version: None,
-            profile_url: None,
-            profile_sha256: None,
-        },
+        loader,
         java: Some(java.locked),
-        entrypoint: LockedEntrypoint::Jar {
-            path: "server.jar".to_string(),
-        },
-        arguments: LockedArguments {
-            jvm: Vec::new(),
-            game: vec!["nogui".to_string()],
-        },
-        artifacts: vec![LockedArtifact {
-            logical_name: plan.resolved.server.logical_name,
-            owner: ArtifactOwner::Minecraft,
-            source_url: plan.resolved.server.url,
-            upstream_sha1,
-            sha256: cached.sha256.clone(),
-            size: cached.size,
-            path: "server.jar".to_string(),
-        }],
+        entrypoint,
+        arguments,
+        artifacts: locked_artifacts,
         generated_files: vec!["eula.txt".to_string()],
         eula: Some(acceptance),
     };
     lock.validate()?;
     LockFile::new(&transaction.staging, lock.clone()).save()?;
-    verify_staged_server(&transaction.staging, &cached)?;
-    progress(InstallProgressEvent::StagingVerified);
-    transaction.commit(&[
-        "server.jar".to_string(),
-        "eula.txt".to_string(),
-        INSTANCE_LOCK_FILE.to_string(),
-    ])?;
-    progress(InstallProgressEvent::Committed);
+    verify_staged_server(&transaction.staging, &lock)?;
+    emit_install(&progress, InstallProgressEvent::StagingVerified)?;
+    let mut owned_files: Vec<_> = lock
+        .artifacts
+        .iter()
+        .map(|artifact| artifact.path.clone())
+        .chain(lock.generated_files.iter().cloned())
+        .collect();
+    owned_files.push(INSTANCE_LOCK_FILE.to_string());
+    owned_files.sort();
+    transaction.commit(&owned_files)?;
+    emit_install(&progress, InstallProgressEvent::Committed)?;
     Ok(InstallResult {
         lock,
-        downloaded_artifacts: usize::from(!cached.cache_hit) + java.downloaded_artifacts,
-        cached_artifacts: usize::from(cached.cache_hit) + java.cached_artifacts,
+        downloaded_artifacts: downloaded,
+        cached_artifacts: cached,
     })
 }
 
@@ -486,6 +695,84 @@ fn require_vanilla_server(manifest: &InstanceManifest) -> Result<(), LauncherErr
     Ok(())
 }
 
+fn require_supported_server(manifest: &InstanceManifest) -> Result<(), LauncherError> {
+    if manifest.kind != InstanceKind::Server {
+        return Err(LauncherError::UnsupportedRequirement(
+            "server installation requires a server instance".to_string(),
+        ));
+    }
+    if !matches!(
+        manifest.loader.kind,
+        LoaderKind::Vanilla | LoaderKind::Fabric | LoaderKind::Quilt
+    ) {
+        return Err(LauncherError::UnsupportedRequirement(format!(
+            "Loader '{}' must use its own installer adapter",
+            manifest.loader.kind.as_str()
+        )));
+    }
+    Ok(())
+}
+
+fn server_profile_parts(
+    resolved: &ResolvedVanillaServer,
+    profile: Option<ResolvedLoaderProfile>,
+) -> Result<
+    (
+        LockedLoader,
+        LockedEntrypoint,
+        LockedArguments,
+        Vec<ClientDownload>,
+    ),
+    LauncherError,
+> {
+    let Some(profile) = profile else {
+        return Ok((
+            LockedLoader {
+                kind: LoaderKind::Vanilla,
+                version: None,
+                profile_url: None,
+                profile_sha256: None,
+            },
+            LockedEntrypoint::Jar {
+                path: "server.jar".to_string(),
+            },
+            LockedArguments {
+                jvm: Vec::new(),
+                game: vec!["nogui".to_string()],
+            },
+            Vec::new(),
+        ));
+    };
+    let mut classpath = profile.classpath.clone();
+    classpath.push("server.jar".to_string());
+    let mut game_arguments = profile.game_arguments.clone();
+    if !game_arguments.iter().any(|argument| argument == "nogui") {
+        game_arguments.push("nogui".to_string());
+    }
+    if resolved.server.url.is_empty() {
+        return Err(LauncherError::InvalidRemoteData(
+            "resolved Minecraft server artifact is empty".to_string(),
+        ));
+    }
+    Ok((
+        LockedLoader {
+            kind: profile.kind,
+            version: Some(profile.version),
+            profile_url: Some(profile.profile_url),
+            profile_sha256: Some(profile.profile_sha256),
+        },
+        LockedEntrypoint::Classpath {
+            main_class: profile.main_class,
+            classpath,
+        },
+        LockedArguments {
+            jvm: profile.jvm_arguments,
+            game: game_arguments,
+        },
+        profile.downloads,
+    ))
+}
+
 fn require_vanilla_client(manifest: &InstanceManifest) -> Result<(), LauncherError> {
     if manifest.kind != InstanceKind::Client {
         return Err(LauncherError::UnsupportedRequirement(
@@ -499,6 +786,71 @@ fn require_vanilla_client(manifest: &InstanceManifest) -> Result<(), LauncherErr
         )));
     }
     Ok(())
+}
+
+fn require_supported_client(manifest: &InstanceManifest) -> Result<(), LauncherError> {
+    if manifest.kind != InstanceKind::Client {
+        return Err(LauncherError::UnsupportedRequirement(
+            "client installation requires a client instance".to_string(),
+        ));
+    }
+    if !matches!(
+        manifest.loader.kind,
+        LoaderKind::Vanilla | LoaderKind::Fabric | LoaderKind::Quilt
+    ) {
+        return Err(LauncherError::UnsupportedRequirement(format!(
+            "Loader '{}' must use its own installer adapter",
+            manifest.loader.kind.as_str()
+        )));
+    }
+    Ok(())
+}
+
+fn merge_client_profile(
+    mut resolved: ResolvedVanillaClient,
+    profile: Option<ResolvedLoaderProfile>,
+) -> Result<(ResolvedVanillaClient, LockedLoader), LauncherError> {
+    let Some(profile) = profile else {
+        return Ok((
+            resolved,
+            LockedLoader {
+                kind: LoaderKind::Vanilla,
+                version: None,
+                profile_url: None,
+                profile_sha256: None,
+            },
+        ));
+    };
+    let mut occupied: HashSet<_> = resolved
+        .downloads
+        .iter()
+        .map(|download| download.target.clone())
+        .collect();
+    for download in profile.downloads {
+        if !occupied.insert(download.target.clone()) {
+            return Err(LauncherError::InvalidRemoteData(format!(
+                "{} profile library conflicts with inherited Minecraft path '{}'",
+                profile.kind.as_str(),
+                download.target
+            )));
+        }
+        resolved.downloads.push(download);
+    }
+    let mut classpath = profile.classpath;
+    classpath.extend(resolved.classpath);
+    resolved.classpath = classpath;
+    resolved.main_class = profile.main_class;
+    resolved.jvm_arguments.extend(profile.jvm_arguments);
+    resolved.game_arguments.extend(profile.game_arguments);
+    Ok((
+        resolved,
+        LockedLoader {
+            kind: profile.kind,
+            version: Some(profile.version),
+            profile_url: Some(profile.profile_url),
+            profile_sha256: Some(profile.profile_sha256),
+        },
+    ))
 }
 
 fn selected_java_provider(
@@ -762,14 +1114,17 @@ where
     Ok(())
 }
 
-fn verify_staged_server(staging: &Path, artifact: &CachedArtifact) -> Result<(), LauncherError> {
-    let server = staging.join("server.jar");
-    if std::fs::metadata(&server)?.len() != artifact.size
-        || hash_file_sha256(&server)? != artifact.sha256
-    {
-        return Err(LauncherError::ArtifactIntegrity(
-            "staged Minecraft server JAR failed final verification".to_string(),
-        ));
+fn verify_staged_server(staging: &Path, lock: &LauncherLock) -> Result<(), LauncherError> {
+    for artifact in &lock.artifacts {
+        let path = staging.join(&artifact.path);
+        if std::fs::metadata(&path)?.len() != artifact.size
+            || hash_file_sha256(&path)? != artifact.sha256
+        {
+            return Err(LauncherError::ArtifactIntegrity(format!(
+                "staged server artifact '{}' failed final verification",
+                artifact.logical_name
+            )));
+        }
     }
     let eula = std::fs::read_to_string(staging.join("eula.txt"))?;
     if eula != "eula=true\n" {

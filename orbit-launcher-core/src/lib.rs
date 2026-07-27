@@ -14,7 +14,9 @@ pub mod eula;
 pub mod install;
 pub mod instance;
 pub mod java;
+pub mod loader;
 pub mod lockfile;
+mod maven;
 pub mod mojang;
 pub mod operations;
 pub mod platform;
@@ -39,9 +41,9 @@ pub use eula::{
     require_current_acceptance, show_current_eula,
 };
 pub use install::{
-    InstallProgressEvent, InstallResult, VanillaClientInstallPlan, VanillaServerInstallPlan,
-    execute_vanilla_client_install, execute_vanilla_server_install, prepare_vanilla_client_install,
-    prepare_vanilla_server_install,
+    InstallProgressEvent, InstallResult, ProfileLoaderInstallPlan, VanillaClientInstallPlan,
+    VanillaServerInstallPlan, execute_vanilla_client_install, execute_vanilla_server_install,
+    prepare_profile_loader_install, prepare_vanilla_client_install, prepare_vanilla_server_install,
 };
 pub use instance::{
     INSTANCE_MANIFEST_FILE, InstanceKind, InstanceManifest, JavaPolicy, LoaderKind, ManifestFile,
@@ -51,6 +53,7 @@ pub use java::{
     JavaProgressEvent, JavaTarget, MOJANG_RUNTIME_MANIFEST_URL, ManagedJavaRuntime, MojangJavaPlan,
     install_mojang_java, plan_mojang_java,
 };
+pub use loader::{LoaderSide, ResolvedLoaderProfile, resolve_loader_profile};
 pub use lockfile::{
     ArtifactOwner, INSTANCE_LOCK_FILE, LOCK_SCHEMA, LauncherLock, LockFile, LockedArguments,
     LockedArtifact, LockedEntrypoint, LockedJavaRuntime, LockedLoader, LockedMinecraft,

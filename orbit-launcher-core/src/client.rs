@@ -7,6 +7,7 @@ use sha1::{Digest, Sha1};
 use crate::artifact::{ArtifactRequest, ExpectedHash};
 use crate::error::LauncherError;
 use crate::lockfile::ArtifactOwner;
+use crate::maven::artifact_url;
 use crate::mojang::{MojangClient, MojangJavaRequirement};
 use crate::platform::HostPlatform;
 
@@ -423,26 +424,11 @@ fn legacy_library_download(
     classifier: Option<&str>,
     native: bool,
 ) -> Result<ClientDownload, LauncherError> {
-    let path = maven_path(&library.name, classifier)?;
-    let root = library.url.as_deref().unwrap_or(DEFAULT_LIBRARY_ROOT);
-    let root = url::Url::parse(root).map_err(|error| {
-        LauncherError::InvalidRemoteData(format!(
-            "legacy library '{}' has invalid repository URL: {error}",
-            library.name
-        ))
-    })?;
-    if root.scheme() != "https" {
-        return Err(LauncherError::InvalidRemoteData(format!(
-            "legacy library '{}' repository must use HTTPS",
-            library.name
-        )));
-    }
-    let url = root.join(&path).map_err(|error| {
-        LauncherError::InvalidRemoteData(format!(
-            "legacy library '{}' URL cannot be resolved: {error}",
-            library.name
-        ))
-    })?;
+    let (path, url) = artifact_url(
+        library.url.as_deref().unwrap_or(DEFAULT_LIBRARY_ROOT),
+        &library.name,
+        classifier,
+    )?;
     let expected_hash = library
         .checksums
         .first()
@@ -455,7 +441,7 @@ fn legacy_library_download(
     Ok(ClientDownload {
         request: ArtifactRequest {
             logical_name: format!("library {}", library.name),
-            url: url.to_string(),
+            url,
             expected_hash,
             expected_size: None,
         },
@@ -465,37 +451,6 @@ fn legacy_library_download(
             excludes: library.extract.clone().unwrap_or_default().exclude,
         }),
     })
-}
-
-fn maven_path(name: &str, classifier_override: Option<&str>) -> Result<String, LauncherError> {
-    let (coordinate, extension) = name.split_once('@').unwrap_or((name, "jar"));
-    let parts: Vec<_> = coordinate.split(':').collect();
-    if !(3..=4).contains(&parts.len())
-        || parts.iter().any(|part| {
-            part.is_empty()
-                || part.contains(['/', '\\'])
-                || part == &"."
-                || part == &".."
-                || part.chars().any(char::is_control)
-        })
-        || extension.is_empty()
-        || !extension
-            .chars()
-            .all(|character| character.is_ascii_alphanumeric())
-    {
-        return Err(LauncherError::InvalidRemoteData(format!(
-            "Maven coordinate '{name}' is invalid"
-        )));
-    }
-    let group = parts[0].replace('.', "/");
-    let artifact = parts[1];
-    let version = parts[2];
-    let classifier = classifier_override
-        .or_else(|| parts.get(3).copied())
-        .map(|classifier| format!("-{classifier}"))
-        .unwrap_or_default();
-    let filename = format!("{artifact}-{version}{classifier}.{extension}");
-    Ok(format!("{group}/{artifact}/{version}/{filename}"))
 }
 
 async fn fetch_bounded(
@@ -739,6 +694,7 @@ struct LoggingClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::maven::artifact_path;
     use crate::platform::{Architecture, OperatingSystem};
 
     fn platform() -> HostPlatform {
@@ -765,10 +721,10 @@ mod tests {
     #[test]
     fn maven_coordinates_produce_standard_paths_without_traversal() {
         assert_eq!(
-            maven_path("com.example:demo:1.0:natives-windows@zip", None).unwrap(),
+            artifact_path("com.example:demo:1.0:natives-windows@zip", None).unwrap(),
             "com/example/demo/1.0/demo-1.0-natives-windows.zip"
         );
-        assert!(maven_path("../evil:demo:1.0", None).is_err());
+        assert!(artifact_path("../evil:demo:1.0", None).is_err());
     }
 
     #[test]

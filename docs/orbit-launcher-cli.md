@@ -1,7 +1,7 @@
 # Orbit Launcher CLI
 
-> 实现状态：实例、配置、Mojang Java runtime 以及 Vanilla 客户端/独立服务端安装已可用；
-> Fabric/Quilt/Forge/NeoForge adapter、账户与启动命令仍在后续提交中。
+> 实现状态：实例、配置、Mojang Java runtime，以及 Vanilla/Fabric/Quilt 客户端和独立
+> 服务端安装已可用；Forge/NeoForge installer adapter、账户与启动命令仍在后续提交中。
 > 未实现的命令不会以空壳形式出现在 CLI 中。
 
 `orbit-launcher` 与 Orbit 模组包管理器完全隔离。它使用自己的全局目录、实例注册表、
@@ -69,13 +69,19 @@ Yggdrasil provider 属于复合对象，后续由账户领域命令管理，不�
 `install --new` 提供，不会复用 `instance create` 伪装安装成功。bootstrap 失败时会注销临时
 实例并删除 provisional manifest，不删除用户文件。
 
-当前 `install` 接受 Vanilla client/server 实例。它先解析 Mojang version manifest v2、
+当前 `install` 接受 Vanilla/Fabric/Quilt client/server 实例。它先解析 Mojang version manifest v2、
 目标版本 JSON 和该版本声明的 Java component/major，再一次性确定完整下载队列。客户端
 严格执行 Mojang 的顺序规则、library/classifier、asset index、logging 配置与 native 解压
 语义；相同 asset 内容按哈希下载一次，但会保留全部 legacy virtual/resources 逻辑映射。
 文件按上游 SHA-1 校验后进入本地 SHA-256 CAS；下载可并发，runtime 和实例分别在 staging
 中验证后原子提交。旧 lock 拥有但新精确状态不再需要的文件会在同一事务中移除；目标位置
 已有但不属于旧 lock 的文件时拒绝覆盖。
+
+Fabric 与 Quilt 都通过各自官方 Meta API 解析与目标 Minecraft 版本匹配的 profile，并将
+Loader libraries、main class 和参数合并到同一个精确运行时模型。两者共享 profile 机制，
+但版本选择规则不混用：Fabric 支持 `latest`、官方 `stable` 标记和精确版本；Quilt 支持
+`latest` 和精确版本。Quilt Meta 没有 Loader stable 标记，因此 `stable` 会明确报错，不按
+版本字符串猜测。缺少内联哈希的官方 Maven 条目必须取得 `.sha1` sidecar 后才进入队列。
 
 服务端安装每次都会获取当前官方 EULA。文本 TTY 会完整展示正文、官方 URL 和正文
 SHA-256，并且只有用户准确输入 `I AGREE` 才继续；没有 `--yes` 绕过。JSON、管道或
