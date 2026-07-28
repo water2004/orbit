@@ -20,6 +20,7 @@ use crate::runtime::RuntimePaths;
 pub const MOJANG_RUNTIME_MANIFEST_URL: &str = "https://piston-meta.mojang.com/v1/products/java-runtime/2ec0cc96c44e5a76b9c8b7c39df7210883d12871/all.json";
 const MAX_METADATA_BYTES: u64 = 16 * 1024 * 1024;
 const RUNTIME_INVENTORY_FILE: &str = "orbit-launcher-runtime.toml";
+const RUNTIME_STAGING_DIRECTORY: &str = ".staging";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum JavaTarget {
@@ -184,6 +185,9 @@ pub fn list_managed_java_runtimes(
             continue;
         }
         let root = directory.path();
+        if root.file_name().and_then(|name| name.to_str()) == Some(RUNTIME_STAGING_DIRECTORY) {
+            continue;
+        }
         let inventory = JavaRuntimeInventory::load(&root.join(RUNTIME_INVENTORY_FILE))?;
         if root.file_name().and_then(|name| name.to_str()) != Some(&inventory.runtime_id) {
             return Err(LauncherError::InvalidLock(format!(
@@ -452,7 +456,7 @@ where
     }
 
     let staging = runtimes_root
-        .join(".staging")
+        .join(RUNTIME_STAGING_DIRECTORY)
         .join(Uuid::new_v4().to_string());
     std::fs::create_dir_all(&staging)?;
     let _staging_guard = StagingDirectoryGuard(staging.clone());
@@ -881,13 +885,22 @@ impl JavaRuntimeInventory {
         for file in &self.files {
             validate_portable_path(&file.path)?;
             let path = root.join(path_from_portable(&file.path));
-            if std::fs::metadata(&path).is_err()
-                || std::fs::metadata(&path)?.len() != file.size
-                || crate::artifact::hash_file_sha256(&path)? != file.sha256
-            {
+            let metadata = std::fs::metadata(&path).map_err(|error| {
+                LauncherError::ArtifactIntegrity(format!(
+                    "managed Java runtime '{}' cannot read '{}': {error}",
+                    self.runtime_id, file.path
+                ))
+            })?;
+            let actual_hash = crate::artifact::hash_file_sha256(&path).map_err(|error| {
+                LauncherError::ArtifactIntegrity(format!(
+                    "managed Java runtime '{}' cannot hash '{}': {error}",
+                    self.runtime_id, file.path
+                ))
+            })?;
+            if metadata.len() != file.size || actual_hash != file.sha256 {
                 return Err(LauncherError::ArtifactIntegrity(format!(
-                    "managed Java runtime file '{}' failed verification",
-                    file.path
+                    "managed Java runtime '{}' file '{}' failed verification",
+                    self.runtime_id, file.path
                 )));
             }
         }
@@ -1203,6 +1216,13 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let paths = test_paths(directory.path());
         let root = write_runtime_fixture(&paths);
+        std::fs::create_dir_all(
+            paths
+                .data_dir()
+                .join("runtimes")
+                .join(RUNTIME_STAGING_DIRECTORY),
+        )
+        .unwrap();
 
         let listed = list_managed_java_runtimes(&paths, true).unwrap();
         assert_eq!(listed.len(), 1);
