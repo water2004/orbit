@@ -34,7 +34,7 @@
 | 全局配置命令 | ✅ | `config path/list/get/set/unset`；强类型校验、单字段原子更新、注释保留、密钥脱敏、环境覆盖不回写 |
 | 根包环境过滤 | ✅ | TOML `env` 可选；缺失时跟随 lock/JAR 声明；`orbit env ... auto` 可设置覆盖或恢复自动 |
 | Loader JSON 容错 | ✅ | Fabric-compatible 字符串控制字符；仅限 JAR 内 loader/Mixin/refmap，其他 JSON 保持严格 |
-| 字节码运行时符号对齐 | ✅ | Fabric/Quilt 按实际 Tiny capability 投影；Forge/NeoForge 验证 Loader runtime game；未对齐时在 finding 前停止 |
+| 字节码运行时符号对齐 | ✅ | Fabric 按 MappingConfiguration、Quilt 按自身 unobfuscated/Tiny 决策选择 official 或投影；Forge/NeoForge 验证 Loader runtime game；未对齐时在 finding 前停止 |
 | i18n | ✅ | `orbit`、`orbit-launcher` 与 GUI 共用 `system`（默认）/`en`/`zh-CN` 语言模型；CLI help、文本结果、进度、询问和结构化错误均在展示边界翻译，机器字段保持稳定 |
 | 原生 GUI | ✅ | egui/wgpu 原生进程薄壳；语言、系统/浅色/深色主题与强调色独立持久化；Runtime 官方版本目录与 Java 管理、Mods 更新诊断/Pareto 交互、search/info/audit/account/server；只调用 schema 2 CLI，不链接 core 或保留兼容路径 |
 

@@ -424,10 +424,11 @@ ABI；现代 Forge/NeoForge 还必须具有可识别的 ModLauncher `ITransforme
 InjectionPoint 和解释预算耗尽进入 warning/coverage；缺失基础游戏或运行库则停止。
 “JAR 没有 refmap”本身不是 warning。
 
-ABI probe 后先建立 Loader runtime namespace。Fabric/Quilt 使用当前 classpath 的
-Tiny mapping 内容做能力探测和 Class Universe 投影，不按 Minecraft/Loader 版本判断；
-Forge/NeoForge 使用 launcher 选择且内嵌版本匹配的 runtime game JAR。mapping 缺失、
-冲突或无法唯一识别时直接返回高层 readiness 错误，不继续输出具体 Mod 风险。
+ABI probe 后先建立 Loader runtime namespace。Fabric 有实际 Tiny 类 mapping 时投影
+Class Universe，否则按 Loader 原生规则使用 official identity。Quilt 26.1+ 的无混淆
+游戏同样使用 official identity；旧 Quilt 运行时才要求 intermediary mapping。
+Forge/NeoForge 使用 launcher 选择且内嵌版本匹配的 runtime game JAR。Loader 规则要求的
+mapping 缺失、冲突或无法唯一识别时直接返回高层 readiness 错误，不继续输出具体 Mod 风险。
 
 审计通过 core 强类型事件报告六个真实阶段：准备 Loader-selected runtime、顶层工件
 扫描、readiness、Mixin 分析、Transformer 分析和冲突比较。已知总量的阶段显示实际计数；非交互

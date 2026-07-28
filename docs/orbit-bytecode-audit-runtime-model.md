@@ -10,6 +10,7 @@
 | 项目 | revision |
 |---|---|
 | FabricMC/fabric-loader | `0.19.3` / `35b0b1c0268eb5f9d377322db491b0bb436541a8`，并比较 `0.16.14`、`0.17.3`、`0.18.6`、`0.19.1`、`0.19.2` |
+| QuiltMC/quilt-loader | `c5c3b0f6e67bfa2f0744856b277b1d92884c3965` |
 | SpongePowered/Mixin | `releases/0.8.7` / `4053421aa10aaac6127d969028a29c94fe3054f6` |
 | FabricMC/tiny-remapper | `7834504ce1be97df03e99723bef456e40241c607` |
 | FabricMC/mapping-io | `06f4ec3f872d7e9b6643919c4c48059b911f97c2` |
@@ -25,6 +26,12 @@ Fabric Loader 的 `MappingConfiguration` 依据 mapping 内容决定目标 names
 环境中有实际类映射时运行时游戏类进入 intermediary，没有类映射时保持 official。
 `MinecraftGameProvider` 在把游戏类加入运行 classpath 前完成该转换。稳定边界是
 mapping namespace/内容和转换发生顺序，不是缓存目录名、内部 Java 类名或版本号。
+
+Quilt 的 Minecraft provider 有独立决策：版本被标记为 unobfuscated，或其规范化版本
+高于 `25.0`（正常发布版本即 Minecraft 26.1 及以后）时，选择
+`EmptyMappingConfiguration`，游戏保持 official；旧的混淆版本才进入 Tiny 到
+intermediary 的转换路径。Orbit 复现的是这条上游选择规则，不把“缺少 mapping”统一
+解释成错误，也不把 Quilt 的选择强塞进 Fabric backend。
 
 Tiny v1/v2 是可探测资源格式。Orbit 读取当前 classpath 已有的 mapping，按 Minecraft
 类名对 namespace 做精确覆盖匹配，再投影完整内部 Class Universe。它不需要生成可运行
@@ -51,8 +58,9 @@ ModLauncher provider 返回 readiness incomplete。
 ## Orbit 抽象
 
 四个显式 `AuditBackend` 分别选择 runtime ABI profile、namespace alignment、Mixin
-注册来源与 Transformer 能力：Fabric 和 Quilt 共享 Tiny 投影实现但保留不同 metadata
-入口；Forge 和 NeoForge 共享 ModLauncher 解释器但保留不同注册入口。后续统一输出
+注册来源与 Transformer 能力：Fabric 和 Quilt 共享 Tiny parser/投影器，但各自决定
+何时使用 official identity 与何时要求 intermediary；Forge 和 NeoForge 共享
+ModLauncher 解释器但保留不同注册入口。后续统一输出
 `NamespaceReport`、效果和冲突模型。`LoaderArtifactUnit` 表达 resolver 已选顶层内容及
 活动 nested 成员。`ClassDefinitionId` 保留 loader unit、artifact、entry、原始/运行时
 类名和内容哈希。所有 Mixin、Transformer、hard reference 与 duplicate-class 比较只
@@ -63,5 +71,6 @@ activation 与最终 finding activation 分层。Overwrite 合并先构造按优
 CandidateClassState；确定失败进入 unary risk，Plugin/namespace/定义歧义则分别进入
 coverage 或 readiness。
 
-这些抽象依赖资源格式、ABI 形状、实际 JAR 内容和生命周期顺序，未引用 Minecraft
-版本阈值、Loader 版本前缀或 Mod 白名单。
+这些抽象依赖资源格式、ABI 形状、实际 JAR 内容和生命周期顺序。唯一的 Minecraft
+版本边界是 Quilt Minecraft provider 自身选择 unobfuscated game configuration 的公开
+规则；Orbit 不另造 Loader 版本前缀、Mod 白名单或推测性兜底。

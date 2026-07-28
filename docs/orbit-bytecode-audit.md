@@ -64,12 +64,15 @@ Fabric/Quilt 要求实际 Loader marker 与 Mixin annotation ABI。Forge/NeoForg
 ABI readiness 之后、任何 Mixin/Transformer finding 之前，audit 必须完成 runtime
 namespace alignment：
 
-- Fabric/Quilt 从当前 classpath 的 Tiny v1/v2 资源读取 namespace 和类/成员映射；
-- mapping 含实际类记录时，以 Minecraft JAR 对各 namespace 的精确类名覆盖确定输入
-  namespace，再把整个基础游戏 Class Universe 投影到 `intermediary`；
-- Loader 提供空 mapping artifact 时，这是可探测的 official identity capability；
-- mapping 缺失、多个来源冲突或输入 JAR 无法唯一匹配时返回
-  `Incomplete`/`Ambiguous`，在生成具体风险和 warning 前停止；
+- Fabric 从当前 classpath 的 Tiny v1/v2 资源读取 namespace 和类/成员映射；存在可用
+  类记录时，以 Minecraft JAR 对各 namespace 的精确类名覆盖确定输入 namespace，再把
+  整个基础游戏 Class Universe 投影到 `intermediary`；没有有效类 mapping 时严格按照
+  Fabric Loader 的 `MappingConfiguration` 保持 `official` 恒等命名空间；
+- Quilt 保留自己的命名空间决策：Minecraft 26.1 及以后无混淆运行时由 Loader 选择
+  `EmptyMappingConfiguration`，保持 `official`，不会要求并不存在的 intermediary JAR；
+  旧的混淆运行时仍必须提供可用的 intermediary mapping；
+- Loader 规则要求 mapping 时，mapping 缺失、多个来源冲突或输入 JAR 无法唯一匹配会
+  返回 `Incomplete`/`Ambiguous`，在生成具体风险和 warning 前停止；
 - Forge/NeoForge 优先采用 platform snapshot classpath 中版本可验证、实际包含
   `net/minecraft` 类的 Loader runtime game JAR；否则只有基础游戏与已注册转换共享
   可观察的类空间时才允许 identity 分析。
