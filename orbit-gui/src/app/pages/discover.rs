@@ -85,9 +85,13 @@ pub(super) fn render(
                 }
                 for (index, result) in app.search_results.iter().cloned().enumerate() {
                     let add = result.clone();
-                    let icon = result.icon_url.as_ref().map_or_else(
+                    let icon_path = result
+                        .icon_url
+                        .as_deref()
+                        .and_then(|url| app.remote_images.path(url));
+                    let icon = icon_path.map_or_else(
                         || ui::icon_tile(OrbitIcon::Mods, cx).into_any_element(),
-                        |url| {
+                        |path| {
                             div()
                                 .relative()
                                 .size(px(48.))
@@ -100,7 +104,7 @@ pub(super) fn render(
                                 .justify_center()
                                 .child(gpui_component::Icon::new(OrbitIcon::Mods).size(px(20.)))
                                 .child(
-                                    img(url.clone())
+                                    img(path.to_path_buf())
                                         .absolute()
                                         .inset_0()
                                         .size_full()

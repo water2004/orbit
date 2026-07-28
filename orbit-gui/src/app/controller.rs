@@ -296,8 +296,9 @@ impl OrbitApp {
 
     pub(super) fn process_events(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
         let events = self.bridge.drain();
+        let images_changed = self.remote_images.drain();
         if events.is_empty() {
-            return false;
+            return images_changed;
         }
         let mut reload_selected = false;
         let mut refresh_accounts = false;
@@ -593,6 +594,13 @@ impl OrbitApp {
                 self.search_results = response.results;
                 self.search_truncated = response.truncated;
                 self.search_state = SearchState::Completed;
+                for url in self
+                    .search_results
+                    .iter()
+                    .filter_map(|result| result.icon_url.as_deref())
+                {
+                    self.remote_images.request(url);
+                }
             }
             Intent::Outdated => {
                 let response: OutdatedResults = decode(result)?;

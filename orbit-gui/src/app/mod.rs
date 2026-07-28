@@ -18,6 +18,7 @@ use serde_json::Value;
 use crate::assets::OrbitIcon;
 use crate::model::*;
 use crate::process::{ProcessBridge, TaskId};
+use crate::remote_images::RemoteImageBridge;
 
 mod components;
 mod controller;
@@ -213,6 +214,7 @@ impl Inputs {
 pub struct OrbitApp {
     pub(super) preferences: Preferences,
     pub(super) bridge: ProcessBridge,
+    pub(super) remote_images: RemoteImageBridge,
     pub(super) tasks: BTreeMap<TaskId, TaskView>,
     pub(super) intents: HashMap<TaskId, Intent>,
     pub(super) runtime_instances: Vec<RuntimeInstance>,
@@ -318,6 +320,7 @@ impl OrbitApp {
         let mut app = Self {
             preferences,
             bridge: ProcessBridge::default(),
+            remote_images: RemoteImageBridge::new(),
             tasks: BTreeMap::new(),
             intents: HashMap::new(),
             runtime_instances: Vec::new(),
