@@ -5,8 +5,8 @@ use comfy_table::{
     Attribute, Cell, Color, ContentArrangement, Table, presets::UTF8_HORIZONTAL_ONLY,
 };
 use orbit_core::{
-    CheckResult, InstanceEntry, ListedPackage, OutdatedMod, PackageChange, PackageChangeKind,
-    RemovedPackage, ResolutionReport, SyncReport,
+    InstanceEntry, ListedPackage, OutdatedMod, PackageChange, PackageChangeKind, RemovedPackage,
+    ResolutionReport, SyncReport,
     providers::{ModInfo, SearchResultItem, SideSupport},
     resolver::types::{CandidateDiagnostic, CandidateDiagnosticKind},
 };
@@ -20,16 +20,15 @@ pub use audit::audit_report;
 pub(crate) use progress_ndjson::write_machine_line;
 pub use progress_ndjson::{ndjson_audit_reporter, ndjson_progress_reporter};
 pub use view::{
-    CacheOutput, CheckOutput, CheckSummary, ConfigEntryOutput, ConfigEntryView, ConfigListOutput,
-    ConfigPathOutput, ConfigValueView, DependencyEnvironmentOutput, DiagnosticView, ErrorJson,
-    ExportOutput, ImportOutput, InitOutput, InstanceDefaultOutput, InstanceRemoveOutput,
-    InstancesOutput, JsonEnvelope, OutdatedOutput, OutdatedSummary, PurgeOutput, RemoveOutput,
-    RemovedPackageView, SearchFilters, SearchOutput, SearchResultView,
+    CacheOutput, ConfigEntryOutput, ConfigEntryView, ConfigListOutput, ConfigPathOutput,
+    ConfigValueView, DependencyEnvironmentOutput, DiagnosticView, ErrorJson, ExportOutput,
+    ImportOutput, InitOutput, InstanceDefaultOutput, InstanceRemoveOutput, InstancesOutput,
+    JsonEnvelope, MigrationExportView, MigrationOutput, MigrationSummary, OutdatedOutput,
+    OutdatedSummary, PurgeOutput, RemoveOutput, SearchFilters, SearchOutput, SearchResultView,
 };
 pub use view::{
-    check_result_view, diagnostic_view, info_view, instance_view, list_view, outdated_mod_view,
-    package_change_view, remote_view, restore_view, search_result_view, sync_view,
-    transaction_view,
+    diagnostic_view, info_view, install_instance_view, instance_view, list_view, outdated_mod_view,
+    package_change_view, remote_view, search_result_view, sync_view, transaction_view,
 };
 
 /// Render format for command results.
@@ -106,7 +105,6 @@ pub fn print_json<T: serde::Serialize>(command: &'static str, view: &T) {
 const ABSENT: &str = "—";
 
 const COMPATIBLE_MARK: &str = "\u{2713}";
-const INCOMPATIBLE_MARK: &str = "\u{2717}";
 
 pub fn config_entries_table(entries: &[ConfigEntryView]) -> String {
     let mut table = output_table(["Key", "Type", "File/default value"]);
@@ -476,30 +474,6 @@ pub fn search_results_table(results: &[(&str, &SearchResultItem)], ref_mc: Optio
     table.to_string()
 }
 
-/// Render `orbit check` compatibility results as an adaptive table.
-pub fn check_results_table(results: &[CheckResult]) -> String {
-    let mut table = output_table(["Package", "Current", "Status", "Available", "Provider"]);
-    for result in results {
-        let (mark, available) = if let Some(version) = &result.available_version {
-            (COMPATIBLE_MARK, version.clone())
-        } else {
-            (INCOMPATIBLE_MARK, ABSENT.to_string())
-        };
-        table.add_row([
-            Cell::new(&result.mod_name),
-            Cell::new(&result.current_version),
-            Cell::new(mark),
-            Cell::new(available),
-            Cell::new(if result.available_version.is_some() {
-                &result.provider
-            } else {
-                ABSENT
-            }),
-        ]);
-    }
-    table.to_string()
-}
-
 /// Render the registered instance list as an adaptive table.
 ///
 /// `current_path` marks the row matching the current working directory with
@@ -611,10 +585,10 @@ pub fn sync_report_table(report: &SyncReport) -> String {
             Cell::new(ABSENT),
         ]);
     }
-    for package in &report.unlocked {
+    for package in &report.removed {
         table.add_row([
             Cell::new("?").fg(Color::Magenta),
-            Cell::new(tr!("unlocked")),
+            Cell::new(tr!("removed from lock")),
             Cell::new(package),
             Cell::new(ABSENT),
         ]);
@@ -912,34 +886,6 @@ mod tests {
     }
 
     #[test]
-    fn check_table_distinguishes_compatible_from_blocking_results() {
-        let results = vec![
-            CheckResult {
-                mod_name: "sodium".to_string(),
-                current_version: "0.8".to_string(),
-                provider: "modrinth".to_string(),
-                compatible: true,
-                available_version: Some("0.9".to_string()),
-            },
-            CheckResult {
-                mod_name: "voxy".to_string(),
-                current_version: "1.0".to_string(),
-                provider: "modrinth".to_string(),
-                compatible: false,
-                available_version: None,
-            },
-        ];
-        let output = check_results_table(&results);
-
-        assert!(output.contains('\u{2713}'));
-        assert!(output.contains('\u{2717}'));
-        assert!(output.contains("0.9"));
-        assert!(output.contains("voxy"));
-        // The blocking row shows the absent marker, not a "no compatible" string.
-        assert!(output.contains(ABSENT));
-    }
-
-    #[test]
     fn instances_table_marks_current_and_default_entries() {
         let instances = vec![
             InstanceEntry {
@@ -1018,9 +964,7 @@ mod tests {
             added: vec!["sodium".to_string()],
             changed: vec!["lithium".to_string()],
             missing: vec!["fabric-api".to_string()],
-            unlocked: vec!["voxy".to_string()],
-            removed: Vec::new(),
-            diagnostics: Vec::new(),
+            removed: vec!["voxy".to_string()],
             warnings: Vec::new(),
         };
         let output = sync_report_table(&report);
@@ -1028,7 +972,7 @@ mod tests {
         assert!(output.contains("platform:mc_version"));
         assert!(output.contains("added"));
         assert!(output.contains("missing"));
-        assert!(output.contains("unlocked"));
+        assert!(output.contains("removed from lock"));
     }
 
     #[test]

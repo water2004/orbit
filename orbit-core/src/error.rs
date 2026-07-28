@@ -11,7 +11,9 @@ pub enum OrbitError {
     #[error("failed to serialize orbit.toml: {0}")]
     ManifestSerialize(#[from] toml::ser::Error),
 
-    #[error("orbit.lock not found — run 'orbit install' first")]
+    #[error(
+        "orbit.lock not found — run 'orbit sync' to record local state or 'orbit fix' to resolve orbit.toml"
+    )]
     LockfileNotFound,
 
     #[error("mod '{0}' not found")]

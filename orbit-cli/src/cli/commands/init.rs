@@ -167,7 +167,7 @@ pub async fn handle(
     };
 
     let providers = create_identification_providers(&ctx.runtime.config().auth)?;
-    let output = run_init(input, &providers, super::install_interaction(ctx)).await?;
+    let output = run_init(input, &providers).await?;
 
     let identified = output
         .scanned_mods
@@ -187,14 +187,7 @@ pub async fn handle(
             scanned_mods: output.scanned_mods.len(),
             identified,
             unknown,
-            removed: output
-                .removed
-                .iter()
-                .map(|r| crate::cli::output::RemovedPackageView {
-                    mod_id: r.mod_id.clone(),
-                    version: r.version.clone(),
-                })
-                .collect(),
+            lock_created: output.lock_created,
             dependency_error: output.dependency_error.clone(),
         };
         crate::cli::output::print_json("init", &view);
@@ -213,13 +206,15 @@ pub async fn handle(
             )
         );
         println!("  {}", tr!("[dry-run] would create orbit.toml"));
-        println!(
-            "  {}",
-            tr!(
-                "[dry-run] would create orbit.lock (%{entries} entries)",
-                entries = output.locked_packages
-            )
-        );
+        if output.lock_created {
+            println!(
+                "  {}",
+                tr!(
+                    "[dry-run] would create orbit.lock (%{entries} entries)",
+                    entries = output.locked_packages
+                )
+            );
+        }
     } else {
         println!(
             "{}",
@@ -231,13 +226,20 @@ pub async fn handle(
             )
         );
         println!("  {}", tr!("orbit.toml created"));
-        println!(
-            "  {}",
-            tr!(
-                "orbit.lock created (%{entries} entries)",
-                entries = output.locked_packages
-            )
-        );
+        if output.lock_created {
+            println!(
+                "  {}",
+                tr!(
+                    "orbit.lock created (%{entries} entries)",
+                    entries = output.locked_packages
+                )
+            );
+        } else {
+            println!(
+                "  {}",
+                tr!("orbit.lock was not created because local package selection is required.")
+            );
+        }
     }
     if output.scanned_mods.is_empty() {
         println!("  {}", tr!("No mods were found in the mods/ directory."));
@@ -260,31 +262,7 @@ pub async fn handle(
                 detail = error
             )
         );
-        eprintln!(
-            "{}",
-            tr!("Use 'orbit install' or 'orbit sync' to fix missing dependencies.")
-        );
-    }
-    for package in &output.removed {
-        if ctx.dry_run {
-            println!(
-                "  {}",
-                tr!(
-                    "[dry-run] would remove unselected package %{package} v%{version}",
-                    package = package.mod_id,
-                    version = package.version
-                )
-            );
-        } else {
-            println!(
-                "  {}",
-                tr!(
-                    "Removed unselected package %{package} v%{version}",
-                    package = package.mod_id,
-                    version = package.version
-                )
-            );
-        }
+        eprintln!("{}", tr!("Run 'orbit fix' to resolve the package graph."));
     }
     if !ctx.dry_run {
         orbit_core::register_instance(
@@ -297,7 +275,12 @@ pub async fn handle(
                 is_default: false,
             },
         )?;
-        println!("  {}", tr!("Run 'orbit install' to restore missing mods."));
+        if output.dependency_error.is_some() || !output.lock_created {
+            println!(
+                "  {}",
+                tr!("Run 'orbit fix' to create a feasible exact lock.")
+            );
+        }
     }
 
     Ok(())

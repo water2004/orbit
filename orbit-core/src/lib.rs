@@ -23,13 +23,12 @@ pub mod versions;
 // 业务逻辑模块
 pub mod archive;
 pub mod audit;
-pub mod checker;
 pub mod installer;
 pub mod jar_cache;
 mod launcher;
 pub mod loader;
+pub mod migration;
 pub mod outdated;
-mod package_reconciliation;
 mod platform;
 mod platform_detection;
 pub mod purge;
@@ -44,7 +43,6 @@ pub use archive::{
     import_manifest, import_mrpack,
 };
 pub use audit::{audit_instance, audit_instance_with_progress};
-pub use checker::{CheckResult, check_compatibility, check_compatibility_with_progress};
 pub use config::{
     ConfigKey, ConfigValue, GlobalConfig, InstanceEntry, InstancesRegistry, clear_default_instance,
     persist_config_field, register_instance, remove_instance, set_default_instance,
@@ -53,10 +51,11 @@ pub use dependency_environment::{DependencyEnvironmentReport, set_dependency_env
 pub use error::OrbitError;
 pub use installer::{
     InstallIntent, InstallInteraction, InstallOptions, InstallPrompt, InstallReport, InstallTarget,
-    InstalledMod, ListOutput, ListedPackage, PackageSelector, RemoveReport, RemovedPackage,
-    RestoreOptions, RestoreReport, install_local_file_to_instance, install_to_instance,
-    list_dependencies, list_installed, list_installed_for_target, materialize_listed_package_icon,
-    remove_from_instance, restore_instance, upgrade_all_in_instance,
+    InstalledMod, InstanceInstallOptions, InstanceInstallReport, ListOutput, ListedPackage,
+    PackageSelection, PackageSelector, RemoveReport, RemovedPackage, fix_instance,
+    install_instance, install_local_file_to_instance, install_to_instance, list_dependencies,
+    list_installed, list_installed_for_target, materialize_listed_package_icon,
+    remove_from_instance, upgrade_all_in_instance,
 };
 pub use jar_cache::{CachePruneSummary, CacheSummary, JarCache, clean_cache, inspect_cache};
 pub use loader::LoaderKind;
@@ -65,6 +64,9 @@ pub use manifest::{
     DependencySpec, OrbitManifest, PackageRemote, PlatformArtifact, PlatformSnapshot,
 };
 pub use metadata::mojang::McVersion;
+pub use migration::{
+    MigrationExportReport, MigrationInteraction, MigrationPlan, export_migration, plan_migration,
+};
 pub use orbit_bytecode_audit as audit_model;
 pub use orbit_bytecode_audit::{
     Activation as AuditActivation, ArtifactKind as AuditArtifactKind, AuditReport,

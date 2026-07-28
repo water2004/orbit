@@ -1,16 +1,17 @@
 pub mod add;
 pub mod audit;
 pub mod cache;
-pub mod check;
 pub mod config;
 pub mod env;
 pub mod export;
+pub mod fix;
 pub mod import;
 pub mod info;
 pub mod init;
 pub mod install;
 pub mod instances;
 pub mod list;
+pub mod migrate;
 pub mod outdated;
 pub mod purge;
 pub mod remote;
@@ -144,9 +145,9 @@ pub trait CommandHandler {
 
 pub use add::handle as handle_add;
 pub use audit::handle as handle_audit;
-pub use check::handle as handle_check;
 pub use config::handle as handle_config;
 pub use export::handle as handle_export;
+pub use fix::handle as handle_fix;
 pub use import::handle as handle_import;
 pub use info::handle as handle_info;
 pub use init::handle as handle_init;

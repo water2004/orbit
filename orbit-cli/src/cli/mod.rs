@@ -85,7 +85,7 @@ pub enum Commands {
         command: InstanceCommands,
     },
 
-    /// Restore the mod environment from the manifest.
+    /// Install the exact package realization recorded by orbit.lock.
     Install {
         /// Target environment: client / server / both (default).
         #[arg(long)]
@@ -96,13 +96,10 @@ pub enum Commands {
         /// Skip optional dependencies.
         #[arg(long)]
         no_optional: bool,
-        /// Use only the lockfile without network resolution (production).
-        #[arg(long)]
-        locked: bool,
-        /// Alias for --locked.
-        #[arg(long)]
-        frozen: bool,
     },
+
+    /// Resolve and repair the package set declared by orbit.toml.
+    Fix,
 
     /// Add a mod.
     Add {
@@ -218,13 +215,10 @@ pub enum Commands {
         format: String,
     },
 
-    /// Preflight a cross-version upgrade.
-    Check {
-        /// Target Minecraft version (for example 1.21).
-        version: String,
-        /// Target loader.
-        #[arg(long)]
-        modloader: Option<String>,
+    /// Plan or export a package migration into an installed target runtime.
+    Migrate {
+        #[command(subcommand)]
+        command: MigrateCommands,
     },
 
     /// Statically analyze bytecode compatibility risks in the current instance (read-only).
@@ -349,9 +343,8 @@ impl CommandHandler for Commands {
                 target,
                 group,
                 no_optional,
-                locked,
-                frozen,
-            } => handle_install(target, group, no_optional, locked || frozen, ctx).await,
+            } => handle_install(target, group, no_optional, ctx).await,
+            Commands::Fix => handle_fix(ctx).await,
             Commands::Add {
                 mod_name,
                 platform,
@@ -387,7 +380,7 @@ impl CommandHandler for Commands {
                 target,
                 format,
             } => handle_export(file, target, format, ctx).await,
-            Commands::Check { version, modloader } => handle_check(version, modloader, ctx).await,
+            Commands::Migrate { command } => command.execute(ctx).await,
             Commands::Audit {
                 min_risk,
                 fail_on_risk,
@@ -408,6 +401,7 @@ impl Commands {
             Self::Init { .. } => "init",
             Self::Instances { .. } => "instances",
             Self::Install { .. } => "install",
+            Self::Fix => "fix",
             Self::Add { .. } => "add",
             Self::Env { .. } => "env",
             Self::Remove { .. } => "remove",
@@ -420,7 +414,7 @@ impl Commands {
             Self::List { .. } => "list",
             Self::Import { .. } => "import",
             Self::Export { .. } => "export",
-            Self::Check { .. } => "check",
+            Self::Migrate { .. } => "migrate",
             Self::Audit { .. } => "audit",
             Self::Cache { .. } => "cache",
             Self::Config { .. } => "config",
@@ -432,6 +426,7 @@ impl Commands {
         matches!(
             self,
             Self::Install { .. }
+                | Self::Fix
                 | Self::Add { .. }
                 | Self::Env { .. }
                 | Self::Remove { .. }
@@ -439,11 +434,28 @@ impl Commands {
                 | Self::Sync
                 | Self::Upgrade { .. }
                 | Self::Import { .. }
+                | Self::Migrate {
+                    command: MigrateCommands::Export { .. }
+                }
                 | Self::Remote {
                     command: RemoteCommands::Add { .. } | RemoteCommands::Remove { .. }
                 }
         )
     }
+}
+
+#[derive(Subcommand)]
+pub enum MigrateCommands {
+    /// Resolve the complete package graph for an installed target runtime.
+    Check {
+        /// Exact target game-instance directory created by a launcher.
+        target: PathBuf,
+    },
+    /// Write target orbit.toml, orbit.lock, and configuration into that runtime.
+    Export {
+        /// Exact target game-instance directory created by a launcher.
+        target: PathBuf,
+    },
 }
 
 impl CommandHandler for InstanceCommands {
@@ -466,11 +478,20 @@ impl CommandHandler for CacheCommands {
     }
 }
 
+impl CommandHandler for MigrateCommands {
+    async fn execute(self, ctx: &commands::CliContext) -> Result<()> {
+        match self {
+            Self::Check { target } => commands::migrate::handle_check(target, ctx).await,
+            Self::Export { target } => commands::migrate::handle_export(target, ctx).await,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use clap::Parser;
 
-    use super::{Cli, Commands, ConfigCommands, RemoteCommands};
+    use super::{Cli, Commands, ConfigCommands, MigrateCommands, PathBuf, RemoteCommands};
 
     #[test]
     fn audit_defaults_do_not_request_a_report_file() {
@@ -490,8 +511,6 @@ mod tests {
                 target: None,
                 group: None,
                 no_optional: false,
-                locked: false,
-                frozen: false,
             }
             .mutates_instance()
         );
@@ -574,5 +593,21 @@ mod tests {
 
         assert_eq!(key, "cache.capacity-mib");
         assert_eq!(value, "2048");
+    }
+
+    #[test]
+    fn migration_is_namespaced_and_only_export_mutates() {
+        let check = Cli::try_parse_from(["orbit", "migrate", "check", "target"]).unwrap();
+        let Commands::Migrate {
+            command: MigrateCommands::Check { target },
+        } = check.command
+        else {
+            panic!("migrate check was not parsed");
+        };
+        assert_eq!(target, PathBuf::from("target"));
+
+        let export = Cli::try_parse_from(["orbit", "migrate", "export", "target"]).unwrap();
+        assert!(export.command.mutates_instance());
+        assert!(Cli::try_parse_from(["orbit", "check", "1.21"]).is_err());
     }
 }

@@ -7,47 +7,29 @@ pub async fn handle(ctx: &CliContext) -> Result<()> {
     let instance_dir = ctx.instance_dir()?;
     let providers =
         orbit_core::providers::create_identification_providers(&ctx.runtime.config().auth)?;
-    let report = orbit_core::sync_instance(
-        &instance_dir,
-        &providers,
-        ctx.dry_run,
-        super::install_interaction(ctx),
-    )
-    .await?;
+    let report = orbit_core::sync_instance(&instance_dir, &providers, ctx.dry_run).await?;
 
     if ctx.output.format == OutputFormat::Text {
-        super::print_resolution_diagnostics(&report.diagnostics);
         super::print_resolution_warnings(&report.warnings);
 
         let deltas = crate::cli::output::sync_report_table(&report);
         if deltas != tr!("No local changes.") {
             println!("{deltas}");
         }
-        if !report.removed.is_empty() {
-            println!("\n{}", tr!("Removed unselected package versions:"));
-            println!(
-                "{}",
-                crate::cli::output::removed_packages_table(&report.removed)
-            );
-        }
         println!(
             "{}",
             tr!(
-                "Sync %{state}: %{platform} platform change(s), %{added} added, %{changed} changed, %{removed} removed, %{missing} missing, %{unlocked} unlocked.",
+                "Sync %{state}: %{platform} platform change(s), %{added} added, %{changed} changed, %{removed} removed from lock, %{missing} missing on disk.",
                 state = tr!(if ctx.dry_run { "preview" } else { "complete" }),
                 platform = report.platform_changes.len(),
                 added = report.added.len(),
                 changed = report.changed.len(),
                 removed = report.removed.len(),
-                missing = report.missing.len(),
-                unlocked = report.unlocked.len()
+                missing = report.missing.len()
             )
         );
-        if !report.missing.is_empty() || !report.unlocked.is_empty() {
-            println!(
-                "{}",
-                tr!("Run 'orbit install' to restore missing or unlocked mods.")
-            );
+        if !report.missing.is_empty() {
+            println!("{}", tr!("Run 'orbit fix' to resolve missing packages."));
         }
         return Ok(());
     }

@@ -27,7 +27,7 @@ pub struct InitInput {
 pub struct InitOutput {
     pub manifest: OrbitManifest,
     pub scanned_mods: Vec<ScannedMod>,
-    pub removed: Vec<crate::installer::RemovedPackage>,
+    pub lock_created: bool,
     pub locked_packages: usize,
     pub dependency_error: Option<String>,
 }
@@ -140,7 +140,6 @@ pub(crate) fn scan_mods_dir(
 pub async fn run_init(
     input: InitInput,
     providers: &[Box<dyn crate::providers::ModProvider>],
-    interaction: crate::installer::InstallInteraction,
 ) -> Result<InitOutput, OrbitError> {
     if input.instance_dir.join("orbit.toml").exists() {
         return Err(OrbitError::Other(anyhow::anyhow!(
@@ -230,70 +229,66 @@ pub async fn run_init(
         overrides: Default::default(),
     };
 
-    // 4. Resolve the local candidate set through the same portfolio path used
-    // by sync. Duplicate files for one mod_id are versions of one package.
-    let crate::installer::InstallInteraction {
-        select_package: _,
-        select_resolution,
-        confirm_install,
-        progress: _,
-    } = interaction;
-    let loader_package = platform.loader_package;
-    let (selected_lock_entries, removed, dependency_error) =
-        match crate::package_reconciliation::select_local_packages(
-            &manifest,
-            &lock_entries,
-            loader_package,
-            select_resolution,
-        )
-        .await
-        {
-            Ok(selection) => {
-                if confirm_install.is_some_and(|confirm| {
-                    !confirm(&crate::package_reconciliation::confirmation_report(
-                        &selection,
-                    ))
-                }) {
-                    return Err(OrbitError::Other(anyhow::anyhow!(
-                        "initialization cancelled before removing unselected package versions"
-                    )));
-                }
-                (selection.selected_entries, selection.removed, None)
-            }
-            // A lock records one selected realization per package. If the
-            // local graph has no solution, there is no valid selection to
-            // persist. The manifest still retains every managed local remote
-            // so `install` can retry after the candidate universe changes.
-            Err(error) => (Vec::new(), Vec::new(), Some(error)),
-        };
-
-    // 5. Write the selected package graph. If the graph is incomplete, retain
-    // every local file and report the resolver error without guessing a cleanup.
+    // 4. Initialization records factual local state. It never chooses among
+    // duplicate realizations or changes the package set; those actions belong
+    // exclusively to `fix`.
+    let duplicates = duplicate_packages(&lock_entries);
+    let lock_created = duplicates.is_empty();
     let lockfile = crate::lockfile::OrbitLockfile {
         meta: crate::lockfile::LockMeta {
             mc_version: mc_ver,
             modloader: loader_name.to_string(),
             modloader_version: loader_ver,
         },
-        packages: selected_lock_entries,
+        packages: if lock_created {
+            lock_entries
+        } else {
+            Vec::new()
+        },
     };
     let locked_packages = lockfile.packages.len();
+    let dependency_error = if lock_created {
+        crate::resolver::check_lockfile_graph_with_loader(
+            &manifest,
+            &lockfile,
+            platform.loader_package.as_ref(),
+        )
+        .err()
+        .map(|error| error.to_string())
+    } else {
+        Some(format!(
+            "multiple local realizations exist for: {}; run 'orbit fix' to select a feasible package solution",
+            duplicates.join(", ")
+        ))
+    };
 
     let manifest_file = crate::workspace::ManifestFile::new(&input.instance_dir, manifest.clone());
     let lock = crate::workspace::Lockfile::new(&input.instance_dir, lockfile);
     if !input.dry_run {
         manifest_file.save()?;
-        lock.save()?;
-        crate::package_reconciliation::remove_unselected_packages(&input.instance_dir, &removed)?;
+        if lock_created {
+            lock.save()?;
+        }
     }
 
     Ok(InitOutput {
         manifest,
         scanned_mods: scanned,
-        removed,
+        lock_created,
         locked_packages,
         dependency_error,
     })
+}
+
+fn duplicate_packages(entries: &[crate::lockfile::PackageEntry]) -> Vec<String> {
+    let mut counts = std::collections::BTreeMap::<String, usize>::new();
+    for entry in entries {
+        *counts.entry(entry.mod_id.clone()).or_default() += 1;
+    }
+    counts
+        .into_iter()
+        .filter_map(|(package, count)| (count > 1).then_some(package))
+        .collect()
 }
 
 #[cfg(test)]
@@ -457,11 +452,10 @@ mod tests {
             dry_run: false,
         };
 
-        let error =
-            match run_init(input, &[], crate::installer::InstallInteraction::default()).await {
-                Ok(_) => panic!("init unexpectedly overwrote an existing manifest"),
-                Err(error) => error.to_string(),
-            };
+        let error = match run_init(input, &[]).await {
+            Ok(_) => panic!("init unexpectedly overwrote an existing manifest"),
+            Err(error) => error.to_string(),
+        };
 
         assert!(error.contains("already exists"));
         assert!(
@@ -473,7 +467,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn init_confirms_and_removes_unselected_versions_of_one_package() {
+    async fn init_records_duplicate_sources_without_selecting_or_deleting_them() {
         let directory = temp_instance_dir("duplicate-packages");
         crate::platform_detection::test_support::write_platform(
             &directory, "1.20.1", "fabric", "0.16.10",
@@ -491,66 +485,25 @@ mod tests {
             dry_run,
         };
 
-        let preview = run_init(
-            input(true),
-            &[],
-            crate::installer::InstallInteraction::default(),
-        )
-        .await
-        .unwrap();
-        assert_eq!(preview.removed[0].filename, "alpha-1.jar");
+        let preview = run_init(input(true), &[]).await.unwrap();
+        assert!(!preview.lock_created);
+        assert_eq!(preview.locked_packages, 0);
         assert!(!directory.join("orbit.toml").exists());
         assert!(mods.join("alpha-1.jar").exists());
 
-        let error = match run_init(
-            input(false),
-            &[],
-            crate::installer::InstallInteraction {
-                select_package: None,
-                select_resolution: None,
-                confirm_install: Some(Box::new(|report| {
-                    assert_eq!(report.removed.len(), 1);
-                    assert_eq!(report.removed[0].filename, "alpha-1.jar");
-                    false
-                })),
-                progress: None,
-            },
-        )
-        .await
-        {
-            Ok(_) => panic!("init unexpectedly ignored rejected package cleanup"),
-            Err(error) => error,
-        };
-        assert!(error.to_string().contains("initialization cancelled"));
-        assert!(!directory.join("orbit.toml").exists());
+        let output = run_init(input(false), &[]).await.unwrap();
+
+        assert!(!output.lock_created);
+        assert_eq!(output.locked_packages, 0);
+        assert!(output.dependency_error.as_deref().is_some_and(|error| {
+            error.contains("multiple local realizations") && error.contains("orbit fix")
+        }));
         assert!(mods.join("alpha-1.jar").exists());
-
-        let output = run_init(
-            input(false),
-            &[],
-            crate::installer::InstallInteraction {
-                select_package: None,
-                select_resolution: None,
-                confirm_install: Some(Box::new(|_| true)),
-                progress: None,
-            },
-        )
-        .await
-        .unwrap();
-
-        assert_eq!(output.locked_packages, 1);
-        assert_eq!(output.removed[0].filename, "alpha-1.jar");
-        assert!(!mods.join("alpha-1.jar").exists());
         assert!(mods.join("alpha-2.jar").exists());
-        assert_eq!(
-            crate::workspace::Lockfile::open(&directory)
-                .unwrap()
-                .inner
-                .find("alpha")
-                .unwrap()
-                .version,
-            "2"
-        );
+        assert!(matches!(
+            crate::workspace::Lockfile::open(&directory),
+            Err(OrbitError::LockfileNotFound)
+        ));
         assert_eq!(
             output.manifest.dependencies["alpha"].version_constraint(),
             Some("*")

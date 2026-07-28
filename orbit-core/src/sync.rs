@@ -1,10 +1,10 @@
-//! Reconciles the manifest, lockfile, and local `mods/` directory without downloading JARs.
+//! Reconciles the manifest, lockfile, and local `mods/` directory without dependency solving.
 //!
 //! Local artifacts are batch-identified by every available provider before
 //! reconciliation. Provider metadata is used only to recover source locators;
 //! package identity and dependency metadata still come exclusively from JARs.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 
 use crate::error::OrbitError;
@@ -12,7 +12,6 @@ use crate::identification::{IdentifiedMod, identify_mods};
 use crate::lockfile::LockMeta;
 use crate::manifest::DependencySpec;
 use crate::workspace::{Lockfile, ManifestFile};
-use crate::{InstallInteraction, RemovedPackage};
 
 #[derive(Debug, Clone, Default)]
 pub struct SyncReport {
@@ -20,9 +19,8 @@ pub struct SyncReport {
     pub added: Vec<String>,
     pub changed: Vec<String>,
     pub missing: Vec<String>,
-    pub unlocked: Vec<String>,
-    pub removed: Vec<RemovedPackage>,
-    pub diagnostics: Vec<crate::resolver::types::CandidateDiagnostic>,
+    /// Packages that disappeared from the factual lock because no matching JAR exists.
+    pub removed: Vec<String>,
     pub warnings: Vec<String>,
 }
 
@@ -37,7 +35,6 @@ pub async fn sync_instance(
     instance_dir: &Path,
     providers: &[Box<dyn crate::providers::ModProvider>],
     dry_run: bool,
-    interaction: InstallInteraction,
 ) -> Result<SyncReport, OrbitError> {
     let mut manifest = ManifestFile::open(instance_dir)?;
     // Reconciliation must observe the launcher as it exists now. The manifest
@@ -52,7 +49,7 @@ pub async fn sync_instance(
         &discovered_platform,
         platform_snapshot,
     );
-    let mut lockfile = Lockfile::open_or_default(
+    let previous_lock = Lockfile::open_or_default(
         instance_dir,
         LockMeta {
             mc_version: manifest.inner.project.mc_version.clone(),
@@ -65,16 +62,10 @@ pub async fn sync_instance(
         modloader: manifest.inner.project.modloader.clone(),
         modloader_version: manifest.inner.project.modloader_version.clone(),
     };
-    let lock_metadata_changed = lockfile.inner.meta.mc_version != refreshed_lock_meta.mc_version
-        || lockfile.inner.meta.modloader != refreshed_lock_meta.modloader
-        || lockfile.inner.meta.modloader_version != refreshed_lock_meta.modloader_version;
-    lockfile.inner.meta = refreshed_lock_meta;
     let scanned = crate::init::scan_mods_dir(instance_dir, discovered_platform.loader)?;
     let mut identified = identify_mods(&scanned, providers).await?;
-    let mut superseded_managed_remotes = std::collections::HashMap::<
-        String,
-        std::collections::HashSet<crate::manifest::PackageRemote>,
-    >::new();
+    let mut superseded_managed_remotes =
+        HashMap::<String, HashSet<crate::manifest::PackageRemote>>::new();
     for package in &identified {
         if package
             .remotes
@@ -94,8 +85,7 @@ pub async fn sync_instance(
         .iter()
         .map(IdentifiedMod::to_package_entry)
         .collect();
-    let mut discovered_remotes =
-        std::collections::HashMap::<String, Vec<crate::manifest::PackageRemote>>::new();
+    let mut discovered_remotes = HashMap::<String, Vec<crate::manifest::PackageRemote>>::new();
     for entry in &local_entries {
         discovered_remotes
             .entry(entry.mod_id.clone())
@@ -122,87 +112,21 @@ pub async fn sync_instance(
         }
     }
 
-    let InstallInteraction {
-        select_package: _,
-        select_resolution,
-        confirm_install,
-        progress: _,
-    } = interaction;
-    let loader_package = discovered_platform.loader_package;
-    let selection = match crate::package_reconciliation::select_local_packages(
-        &manifest.inner,
-        &local_entries,
-        loader_package,
-        select_resolution,
-    )
-    .await
-    {
-        Ok(selection) => selection,
-        Err(error) => {
-            let discovered: HashSet<_> = local_entries
-                .iter()
-                .map(|entry| entry.mod_id.as_str())
-                .collect();
-            let mut report = SyncReport {
-                platform_changes,
-                ..SyncReport::default()
-            };
-            for package in manifest.inner.dependencies.keys() {
-                if discovered.contains(package.as_str()) {
-                    continue;
-                }
-                if lockfile.inner.find(package).is_some() {
-                    report.missing.push(package.clone());
-                } else {
-                    report.unlocked.push(package.clone());
-                }
-            }
-            if report.missing.is_empty() && report.unlocked.is_empty() {
-                return Err(OrbitError::Conflict(error));
-            }
-            report.missing.sort();
-            report.unlocked.sort();
-            if !dry_run && (!report.platform_changes.is_empty() || lock_metadata_changed) {
-                manifest.save()?;
-                lockfile.save()?;
-            }
-            return Ok(report);
-        }
-    };
-    if confirm_install.is_some_and(|confirm| {
-        !confirm(&crate::package_reconciliation::confirmation_report(
-            &selection,
-        ))
-    }) {
-        return Ok(SyncReport::default());
-    }
-    let crate::package_reconciliation::LocalPackageSelection {
-        selected_entries,
-        removed,
-        resolution,
-    } = selection;
-
     let mut report = SyncReport {
         platform_changes,
-        removed: removed.clone(),
-        diagnostics: resolution.diagnostics.clone(),
-        warnings: resolution.warnings.clone(),
         ..SyncReport::default()
     };
-    for entry in &selected_entries {
+    for entry in &local_entries {
         if !manifest.inner.dependencies.contains_key(&entry.mod_id) {
             report.added.push(entry.mod_id.clone());
         }
-        match lockfile.inner.find(&entry.mod_id) {
+        match previous_lock.inner.find(&entry.mod_id) {
             Some(locked)
                 if locked.sha256 != entry.sha256
                     || locked.filename != entry.filename
                     || locked.version != entry.version =>
             {
                 report.changed.push(entry.mod_id.clone());
-            }
-            None if manifest.inner.dependencies.contains_key(&entry.mod_id) => {
-                report.unlocked.push(entry.mod_id.clone());
             }
             _ => {}
         }
@@ -211,21 +135,32 @@ pub async fn sync_instance(
     report.added.dedup();
     report.changed.sort();
     report.changed.dedup();
-    report.unlocked.sort();
-    report.unlocked.dedup();
-
-    if dry_run {
-        return Ok(report);
+    let discovered: HashSet<_> = local_entries
+        .iter()
+        .map(|entry| entry.mod_id.as_str())
+        .collect();
+    for package in manifest.inner.dependencies.keys() {
+        if !discovered.contains(package.as_str()) {
+            report.missing.push(package.clone());
+        }
     }
+    for entry in &previous_lock.inner.packages {
+        if !discovered.contains(entry.mod_id.as_str()) {
+            report.removed.push(entry.mod_id.clone());
+        }
+    }
+    report.missing.sort();
+    report.missing.dedup();
+    report.removed.sort();
+    report.removed.dedup();
 
-    crate::package_reconciliation::remove_unselected_packages(instance_dir, &removed)?;
-    for entry in &selected_entries {
+    for entry in &local_entries {
         let requirement = manifest
             .inner
             .dependencies
             .entry(entry.mod_id.clone())
             .or_insert_with(|| DependencySpec {
-                version: entry.version.clone(),
+                version: "*".to_string(),
                 optional: false,
                 env: None,
                 exclude: Vec::new(),
@@ -233,7 +168,32 @@ pub async fn sync_instance(
             });
         requirement.remotes = entry.remotes.clone();
     }
-    lockfile.inner.packages = selected_entries;
+
+    let duplicate_groups = duplicate_package_groups(&local_entries);
+    if !duplicate_groups.is_empty() {
+        if !dry_run {
+            // The manifest can truthfully retain every discovered source, but a
+            // lock is one selected realization per package. Sync must never pick
+            // that realization or delete a candidate on the user's behalf.
+            manifest.save()?;
+        }
+        return Err(OrbitError::Other(anyhow::anyhow!(
+            "sync found multiple local realizations for the same package and cannot create a factual lock without choosing a solution:\n{}\nrun 'orbit fix' to resolve and confirm the package changes",
+            format_duplicate_groups(&duplicate_groups)
+        )));
+    }
+
+    if dry_run {
+        return Ok(report);
+    }
+
+    let mut lockfile = Lockfile::new(
+        instance_dir,
+        crate::lockfile::OrbitLockfile {
+            meta: refreshed_lock_meta,
+            packages: local_entries,
+        },
+    );
     lockfile
         .inner
         .packages
@@ -248,6 +208,32 @@ pub async fn sync_instance(
         ));
     }
     Ok(report)
+}
+
+fn duplicate_package_groups(
+    entries: &[crate::lockfile::PackageEntry],
+) -> BTreeMap<String, Vec<String>> {
+    let mut groups = BTreeMap::<String, Vec<String>>::new();
+    for entry in entries {
+        groups
+            .entry(entry.mod_id.clone())
+            .or_default()
+            .push(format!("{} ({})", entry.filename, entry.version));
+    }
+    groups.retain(|_, realizations| realizations.len() > 1);
+    for realizations in groups.values_mut() {
+        realizations.sort();
+        realizations.dedup();
+    }
+    groups
+}
+
+fn format_duplicate_groups(groups: &BTreeMap<String, Vec<String>>) -> String {
+    groups
+        .iter()
+        .map(|(package, realizations)| format!("  - {package}: {}", realizations.join(", ")))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn describe_platform_changes(
@@ -369,7 +355,6 @@ mod tests {
     };
     use async_trait::async_trait;
     use std::io::Write;
-    use std::sync::{Arc, Mutex};
     use zip::write::SimpleFileOptions;
 
     fn test_dir(name: &str) -> std::path::PathBuf {
@@ -463,9 +448,7 @@ physical_environment = "client"
         .unwrap();
         ManifestFile::new(&directory, manifest).save().unwrap();
 
-        sync_instance(&directory, &[], false, InstallInteraction::default())
-            .await
-            .unwrap();
+        sync_instance(&directory, &[], false).await.unwrap();
         let local_lock = Lockfile::open(&directory).unwrap();
         let local = local_lock.inner.find("alpha").unwrap();
         let sha512 = local.sha512.clone();
@@ -494,14 +477,7 @@ physical_environment = "client"
             }],
         });
 
-        sync_instance(
-            &directory,
-            &[provider],
-            false,
-            InstallInteraction::default(),
-        )
-        .await
-        .unwrap();
+        sync_instance(&directory, &[provider], false).await.unwrap();
 
         let manifest = ManifestFile::open(&directory).unwrap();
         assert_eq!(
@@ -523,7 +499,7 @@ physical_environment = "client"
     }
 
     #[tokio::test]
-    async fn reports_missing_and_unlocked_manifest_dependencies() {
+    async fn reports_manifest_dependencies_missing_from_disk_and_stale_lock_entries() {
         let directory = test_dir("states");
         std::fs::create_dir_all(&directory).unwrap();
         crate::platform_detection::test_support::write_platform(&directory, "1", "fabric", "1");
@@ -607,17 +583,30 @@ physical_environment = "client"
         .save()
         .unwrap();
 
-        let report = sync_instance(&directory, &[], true, InstallInteraction::default())
-            .await
-            .unwrap();
+        let report = sync_instance(&directory, &[], false).await.unwrap();
 
-        assert_eq!(report.missing, vec!["missing"]);
-        assert_eq!(report.unlocked, vec!["unlocked"]);
+        assert_eq!(report.missing, vec!["missing", "unlocked"]);
+        assert_eq!(report.removed, vec!["missing"]);
+        assert!(
+            Lockfile::open(&directory)
+                .unwrap()
+                .inner
+                .packages
+                .is_empty()
+        );
+        assert_eq!(
+            ManifestFile::open(&directory)
+                .unwrap()
+                .inner
+                .dependencies
+                .len(),
+            2
+        );
         std::fs::remove_dir_all(directory).unwrap();
     }
 
     #[tokio::test]
-    async fn duplicate_package_versions_are_confirmed_and_removed_as_top_level_packages() {
+    async fn duplicate_package_realizations_require_fix_without_selecting_or_deleting() {
         let directory = test_dir("duplicates");
         crate::platform_detection::test_support::write_platform(
             &directory, "1.20.1", "fabric", "0.16.10",
@@ -663,53 +652,18 @@ alpha = { version = "*", remotes = [{ type = "file", path = "alpha.jar" }] }
             vec!["alpha", "alpha"]
         );
 
-        let preview = Arc::new(Mutex::new(Vec::new()));
-        let captured = Arc::clone(&preview);
-        let aborted = sync_instance(
-            &directory,
-            &[],
-            false,
-            InstallInteraction {
-                select_package: None,
-                select_resolution: None,
-                confirm_install: Some(Box::new(move |report| {
-                    assert!(!report.removed.is_empty(), "{report:?}");
-                    *captured.lock().unwrap() = report.removed.clone();
-                    false
-                })),
-                progress: None,
-            },
-        )
-        .await
-        .unwrap();
-        assert!(aborted.removed.is_empty());
-        assert_eq!(preview.lock().unwrap()[0].filename, "a-1.jar");
-        assert!(mods.join("a-1.jar").exists());
+        let error = sync_instance(&directory, &[], false).await.unwrap_err();
 
-        let applied = sync_instance(
-            &directory,
-            &[],
-            false,
-            InstallInteraction {
-                select_package: None,
-                select_resolution: None,
-                confirm_install: Some(Box::new(|_| true)),
-                progress: None,
-            },
-        )
-        .await
-        .unwrap();
-        assert_eq!(applied.removed[0].filename, "a-1.jar");
-        assert!(!mods.join("a-1.jar").exists());
+        assert!(error.to_string().contains("orbit fix"));
+        assert!(error.to_string().contains("alpha"));
+        assert!(mods.join("a-1.jar").exists());
         assert!(mods.join("a-2.jar").exists());
-        let refreshed = Lockfile::open(&directory).unwrap();
-        let alpha = refreshed.inner.find("alpha").unwrap();
-        assert_eq!(alpha.version, "2");
-        assert_eq!(alpha.remotes.len(), 3);
-        assert_eq!(
-            ManifestFile::open(&directory).unwrap().inner.dependencies["alpha"].env(),
-            None
-        );
+        assert!(matches!(
+            Lockfile::open(&directory),
+            Err(OrbitError::LockfileNotFound)
+        ));
+        let refreshed = ManifestFile::open(&directory).unwrap();
+        let alpha = &refreshed.inner.dependencies["alpha"];
         assert_eq!(
             alpha
                 .remotes
@@ -756,9 +710,7 @@ alpha = { version = "*", remotes = [{ type = "file", path = "alpha.jar" }] }
         };
         ManifestFile::new(&directory, manifest).save().unwrap();
 
-        let report = sync_instance(&directory, &[], false, InstallInteraction::default())
-            .await
-            .unwrap();
+        let report = sync_instance(&directory, &[], false).await.unwrap();
         let refreshed = ManifestFile::open(&directory).unwrap();
 
         assert!(
@@ -828,9 +780,7 @@ alpha = { version = "*", remotes = [{ type = "file", path = "alpha.jar" }] }
         };
         ManifestFile::new(&directory, manifest).save().unwrap();
 
-        let report = sync_instance(&directory, &[], false, InstallInteraction::default())
-            .await
-            .unwrap();
+        let report = sync_instance(&directory, &[], false).await.unwrap();
         let refreshed = ManifestFile::open(&directory).unwrap();
 
         assert!(report.platform_changes.iter().any(|change| {

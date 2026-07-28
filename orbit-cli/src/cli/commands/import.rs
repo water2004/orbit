@@ -79,19 +79,13 @@ pub async fn handle(file: String, merge_strategy: Option<String>, ctx: &CliConte
                 let providers = orbit_core::providers::create_identification_providers(
                     &ctx.runtime.config().auth,
                 )?;
-                let sync = orbit_core::sync_instance(
-                    &instance_dir,
-                    &providers,
-                    false,
-                    super::install_interaction(ctx),
-                )
-                .await?;
+                let sync = orbit_core::sync_instance(&instance_dir, &providers, false).await?;
                 match ctx.output.format {
                     OutputFormat::Text => {
                         println!(
                             "{}",
                             tr!(
-                                "Imported %{archives} archive file(s); sync added %{added}, changed %{changed}, and removed %{removed} package version(s).",
+                                "Imported %{archives} archive file(s); sync added %{added}, changed %{changed}, and removed %{removed} stale lock entry(s).",
                                 archives = report.extracted.len(),
                                 added = sync.added.len(),
                                 changed = sync.changed.len(),

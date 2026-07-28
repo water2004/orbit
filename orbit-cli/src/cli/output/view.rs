@@ -155,31 +155,41 @@ pub struct BundledView {
 }
 
 // ---------------------------------------------------------------------------
-// check
+// migrate
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Serialize)]
-pub struct CheckOutput {
+pub struct MigrationOutput {
+    pub subcommand: String,
+    pub dry_run: bool,
+    pub target_directory: String,
+    pub source_mc_version: String,
     pub target_mc_version: String,
     pub target_loader: String,
-    pub summary: CheckSummary,
-    pub results: Vec<CheckResultView>,
+    pub target_loader_version: String,
+    pub summary: MigrationSummary,
+    pub changes: Vec<PackageChangeView>,
+    pub diagnostics: Vec<DiagnosticView>,
+    pub warnings: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub export: Option<MigrationExportView>,
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct CheckSummary {
-    pub total: usize,
-    pub compatible: usize,
-    pub blocking: usize,
+pub struct MigrationSummary {
+    pub selected_packages: usize,
+    pub installs: usize,
+    pub upgrades: usize,
+    pub downgrades: usize,
+    pub replacements: usize,
+    pub removals: usize,
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct CheckResultView {
-    pub mod_name: String,
-    pub current_version: String,
-    pub provider: String,
-    pub compatible: bool,
-    pub available_version: Option<String>,
+pub struct MigrationExportView {
+    pub applied: bool,
+    pub config_files: usize,
+    pub config_bytes: u64,
 }
 
 // ---------------------------------------------------------------------------
@@ -281,9 +291,8 @@ pub struct SyncOutput {
     pub added: Vec<String>,
     pub changed: Vec<String>,
     pub missing: Vec<String>,
-    pub unlocked: Vec<String>,
-    pub removed: Vec<RemovedPackageView>,
-    pub diagnostics: Vec<DiagnosticView>,
+    /// Packages removed from the rebuilt lock because no local JAR exists.
+    pub removed: Vec<String>,
     pub warnings: Vec<String>,
 }
 
@@ -294,7 +303,6 @@ pub struct SyncSummary {
     pub changed: usize,
     pub removed: usize,
     pub missing: usize,
-    pub unlocked: usize,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -313,6 +321,22 @@ pub struct RemovedPackageView {
 // ---------------------------------------------------------------------------
 // install / add / upgrade (transaction report)
 // ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize)]
+pub struct InstanceInstallOutput {
+    pub dry_run: bool,
+    pub summary: InstanceInstallSummary,
+    pub installed: Vec<String>,
+    pub already_present: Vec<String>,
+    pub skipped: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct InstanceInstallSummary {
+    pub installed: usize,
+    pub already_present: usize,
+    pub skipped: usize,
+}
 
 #[derive(Debug, Clone, Serialize)]
 pub struct TransactionOutput {
@@ -403,7 +427,7 @@ pub struct InitOutput {
     pub scanned_mods: usize,
     pub identified: usize,
     pub unknown: usize,
-    pub removed: Vec<RemovedPackageView>,
+    pub lock_created: bool,
     pub dependency_error: Option<String>,
 }
 
@@ -474,8 +498,8 @@ pub enum ConfigValueView {
 use orbit_core::providers::{ModInfo, SearchResultItem, SideSupport};
 use orbit_core::resolver::types::{CandidateDiagnostic, CandidateDiagnosticKind};
 use orbit_core::{
-    CheckResult, InstanceEntry, ListedPackage, OutdatedMod, PackageChange, PackageChangeKind,
-    RemoteReport, RemovedPackage, SyncReport,
+    InstanceEntry, ListedPackage, OutdatedMod, PackageChange, PackageChangeKind, RemoteReport,
+    RemovedPackage, SyncReport,
 };
 
 /// Stable string codes for `CandidateDiagnosticKind` / `PackageChangeKind`.
@@ -611,16 +635,6 @@ pub fn listed_package_view(
     }
 }
 
-pub fn check_result_view(result: &CheckResult) -> CheckResultView {
-    CheckResultView {
-        mod_name: result.mod_name.clone(),
-        current_version: result.current_version.clone(),
-        provider: result.provider.clone(),
-        compatible: result.compatible,
-        available_version: result.available_version.clone(),
-    }
-}
-
 pub fn outdated_mod_view(m: &OutdatedMod) -> OutdatedModView {
     OutdatedModView {
         mod_id: m.mod_id.clone(),
@@ -702,7 +716,6 @@ pub fn sync_view(report: &SyncReport, dry_run: bool) -> SyncOutput {
             changed: report.changed.len(),
             removed: report.removed.len(),
             missing: report.missing.len(),
-            unlocked: report.unlocked.len(),
         },
         platform_changes: report
             .platform_changes
@@ -712,9 +725,7 @@ pub fn sync_view(report: &SyncReport, dry_run: bool) -> SyncOutput {
         added: report.added.clone(),
         changed: report.changed.clone(),
         missing: report.missing.clone(),
-        unlocked: report.unlocked.clone(),
-        removed: report.removed.iter().map(removed_package_view).collect(),
-        diagnostics: report.diagnostics.iter().map(diagnostic_view).collect(),
+        removed: report.removed.clone(),
         warnings: report.warnings.clone(),
     }
 }
@@ -742,7 +753,24 @@ pub fn list_view(
 // Transaction report (install / add / upgrade)
 // ---------------------------------------------------------------------------
 
-use orbit_core::{InstallReport, RestoreReport};
+use orbit_core::{InstallReport, InstanceInstallReport};
+
+pub fn install_instance_view(
+    report: &InstanceInstallReport,
+    dry_run: bool,
+) -> InstanceInstallOutput {
+    InstanceInstallOutput {
+        dry_run,
+        summary: InstanceInstallSummary {
+            installed: report.installed.len(),
+            already_present: report.already_present.len(),
+            skipped: report.skipped.len(),
+        },
+        installed: report.installed.clone(),
+        already_present: report.already_present.clone(),
+        skipped: report.skipped.clone(),
+    }
+}
 
 pub fn transaction_view(report: &InstallReport, dry_run: bool) -> TransactionOutput {
     TransactionOutput {
@@ -764,34 +792,6 @@ pub fn transaction_view(report: &InstallReport, dry_run: bool) -> TransactionOut
             .collect(),
         removed: report.removed.iter().map(removed_package_view).collect(),
         already_satisfied: report.already_satisfied.clone(),
-        diagnostics: report.diagnostics.iter().map(diagnostic_view).collect(),
-        warnings: report.warnings.clone(),
-    }
-}
-
-/// Restore uses a different report shape but maps to the same transaction
-/// view-model family. `installed` is omitted because restore reports package
-/// names as opaque strings rather than full `InstalledMod` records.
-pub fn restore_view(report: &RestoreReport, dry_run: bool) -> TransactionOutput {
-    TransactionOutput {
-        dry_run,
-        summary: TransactionSummary {
-            installed: report.restored.len(),
-            removed: report.removed.len(),
-            already_satisfied: report.already_present.len(),
-            skipped_optional: report.skipped.len(),
-        },
-        changes: Vec::new(),
-        installed: report
-            .restored
-            .iter()
-            .map(|name| InstalledView {
-                mod_id: name.clone(),
-                version: String::new(),
-            })
-            .collect(),
-        removed: report.removed.iter().map(removed_package_view).collect(),
-        already_satisfied: report.already_present.clone(),
         diagnostics: report.diagnostics.iter().map(diagnostic_view).collect(),
         warnings: report.warnings.clone(),
     }

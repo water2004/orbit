@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use zip::write::SimpleFileOptions;
 
 use crate::error::OrbitError;
-use crate::installer::RestoreOptions;
+use crate::installer::PackageSelection;
 use crate::manifest::DependencySpec;
 use crate::workspace::{Lockfile, ManifestFile};
 
@@ -215,9 +215,9 @@ pub fn export_instance(
     let (selected, _) = crate::installer::selected_packages(
         &manifest.inner,
         &lockfile.inner,
-        &RestoreOptions {
+        &PackageSelection {
             target,
-            ..RestoreOptions::default()
+            ..PackageSelection::default()
         },
         loader_package.as_ref(),
     )?;
