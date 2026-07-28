@@ -42,7 +42,7 @@ impl AssetSource for OrbitAssets {
             "icons/mods.svg" | "icons/gallery-vertical-end.svg" => {
                 include_bytes!("../assets/icons/mods.svg")
             }
-            "icons/orbit.svg" => include_bytes!("../assets/icons/orbit.svg"),
+            "icons/orbit.svg" => include_bytes!("../../assets/orbit.svg"),
             "icons/play.svg" => include_bytes!("../assets/icons/play.svg"),
             "icons/plus.svg" => include_bytes!("../assets/icons/plus.svg"),
             "icons/refresh.svg" | "icons/redo.svg" | "icons/redo-2.svg" => {

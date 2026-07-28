@@ -406,8 +406,7 @@ impl OrbitApp {
                                     refresh_packages: true,
                                 } => reload_selected = true,
                                 Intent::RuntimeMutated => refresh_registries = true,
-                                Intent::RuntimeCreatedForMigration { .. }
-                                | Intent::MigrationInstalled { .. } => refresh_registries = true,
+                                Intent::MigrationInstalled { .. } => refresh_registries = true,
                                 Intent::AccountMutated => {
                                     refresh_accounts = true;
                                     reload_selected = true;
@@ -650,12 +649,26 @@ impl OrbitApp {
             Intent::MinecraftDirectory => {
                 self.minecraft_directory = Some(decode(result)?);
             }
-            Intent::RuntimeCreatedForMigration { source } => {
+            Intent::MigrationSourceExported {
+                source_pack,
+                launcher_args,
+            } => {
+                self.launcher_task_args(
+                    "Creating migration target",
+                    Intent::RuntimeCreatedForMigration {
+                        source_pack: source_pack.clone(),
+                    },
+                    None,
+                    launcher_args.clone(),
+                    None,
+                );
+            }
+            Intent::RuntimeCreatedForMigration { source_pack } => {
                 let installed: LauncherInstallResult = decode(result)?;
                 self.launcher_task(
                     "Loading migration target",
                     Intent::MigrationTargetResolved {
-                        source: source.clone(),
+                        source_pack: source_pack.clone(),
                         target_id: installed.instance_id.clone(),
                     },
                     Some(installed.instance_id),
@@ -663,7 +676,10 @@ impl OrbitApp {
                     None,
                 );
             }
-            Intent::MigrationTargetResolved { source, target_id } => {
+            Intent::MigrationTargetResolved {
+                source_pack,
+                target_id,
+            } => {
                 let detail: RuntimeInstanceDetail = decode(result)?;
                 self.orbit_task_args(
                     "Exporting mod migration",
@@ -675,8 +691,11 @@ impl OrbitApp {
                         "migrate".into(),
                         "export".into(),
                         detail.instance.directory.to_string_lossy().into_owned(),
+                        "--source-pack".into(),
+                        source_pack.to_string_lossy().into_owned(),
+                        "--consume-source-pack".into(),
                     ],
-                    Some(source.clone()),
+                    Some(detail.instance.directory.clone()),
                     None,
                 );
             }
@@ -1014,25 +1033,35 @@ impl OrbitApp {
                 self.new_instance.loader_version.clone(),
             ]);
         }
-        let intent = if mode == RuntimeFlowMode::Migrate {
+        if mode == RuntimeFlowMode::Migrate {
             let Some(source) = self.migration_source.clone() else {
                 return;
             };
-            Intent::RuntimeCreatedForMigration { source }
+            let source_pack = migration_source_pack_path();
+            self.orbit_task_args(
+                "Exporting migration source",
+                Intent::MigrationSourceExported {
+                    source_pack: source_pack.clone(),
+                    launcher_args: command,
+                },
+                vec![
+                    "export".into(),
+                    source_pack.to_string_lossy().into_owned(),
+                    "--format".into(),
+                    "zip".into(),
+                ],
+                Some(source),
+                None,
+            );
         } else {
-            Intent::RuntimeMutated
-        };
-        self.launcher_task_args(
-            if mode == RuntimeFlowMode::Migrate {
-                "Creating migration target"
-            } else {
-                "Creating runtime"
-            },
-            intent,
-            None,
-            command,
-            None,
-        );
+            self.launcher_task_args(
+                "Creating runtime",
+                Intent::RuntimeMutated,
+                None,
+                command,
+                None,
+            );
+        }
         self.migration_source = None;
     }
 
@@ -1556,6 +1585,16 @@ fn adjacent_binaries() -> (PathBuf, PathBuf) {
     } else {
         (directory.join("orbit"), directory.join("orbit-launcher"))
     }
+}
+
+fn migration_source_pack_path() -> PathBuf {
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_nanos());
+    std::env::temp_dir().join(format!(
+        "orbit-migration-source-{}-{nonce}.zip",
+        std::process::id()
+    ))
 }
 
 fn decode<T: DeserializeOwned>(value: Value) -> anyhow::Result<T> {

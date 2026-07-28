@@ -1,11 +1,14 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
-  <defs>
-    <linearGradient id="orbit-gradient" x1="18" y1="110" x2="110" y2="18" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#5d67ff"/>
-      <stop offset="1" stop-color="#8b5cf6"/>
-    </linearGradient>
-  </defs>
-  <circle cx="64" cy="64" r="39" fill="none" stroke="url(#orbit-gradient)" stroke-width="17"/>
-  <circle cx="95" cy="33" r="9" fill="url(#orbit-gradient)"/>
-  <circle cx="64" cy="64" r="7" fill="url(#orbit-gradient)"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" fill="none">
+  <title>Orbit</title>
+  <g transform="rotate(-90 64 64)" stroke-width="16">
+    <circle cx="64" cy="64" r="42" pathLength="112" stroke="#596CF2" stroke-dasharray="28 84"/>
+    <circle cx="64" cy="64" r="42" pathLength="112" stroke="#F04D61" stroke-dasharray="12 100" stroke-dashoffset="-28"/>
+    <circle cx="64" cy="64" r="42" pathLength="112" stroke="#F38B3C" stroke-dasharray="12 100" stroke-dashoffset="-40"/>
+    <circle cx="64" cy="64" r="42" pathLength="112" stroke="#F3C64A" stroke-dasharray="12 100" stroke-dashoffset="-52"/>
+    <circle cx="64" cy="64" r="42" pathLength="112" stroke="#55B96B" stroke-dasharray="12 100" stroke-dashoffset="-64"/>
+    <circle cx="64" cy="64" r="42" pathLength="112" stroke="#37BFC7" stroke-dasharray="12 100" stroke-dashoffset="-76"/>
+    <circle cx="64" cy="64" r="42" pathLength="112" stroke="#4D8BEF" stroke-dasharray="12 100" stroke-dashoffset="-88"/>
+    <circle cx="64" cy="64" r="42" pathLength="112" stroke="#A060D1" stroke-dasharray="12 100" stroke-dashoffset="-100"/>
+  </g>
+  <circle cx="64" cy="64" r="10" fill="#596CF2"/>
 </svg>

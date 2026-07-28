@@ -405,13 +405,31 @@ pub enum Intent {
     LauncherConfigMutated,
     OrbitConfigMutated,
     MinecraftDirectoryMoved,
-    Mutated { refresh_packages: bool },
+    Mutated {
+        refresh_packages: bool,
+    },
     RuntimeMutated,
-    RuntimeCreatedForMigration { source: PathBuf },
-    MigrationTargetResolved { source: PathBuf, target_id: String },
-    MigrationExported { target: PathBuf, target_id: String },
-    MigrationInstalled { target_id: String },
-    ModpackImported { target: PathBuf },
+    MigrationSourceExported {
+        source_pack: PathBuf,
+        launcher_args: Vec<String>,
+    },
+    RuntimeCreatedForMigration {
+        source_pack: PathBuf,
+    },
+    MigrationTargetResolved {
+        source_pack: PathBuf,
+        target_id: String,
+    },
+    MigrationExported {
+        target: PathBuf,
+        target_id: String,
+    },
+    MigrationInstalled {
+        target_id: String,
+    },
+    ModpackImported {
+        target: PathBuf,
+    },
     AccountMutated,
     YggdrasilProviderMutated,
     JavaRuntimeMutated,
