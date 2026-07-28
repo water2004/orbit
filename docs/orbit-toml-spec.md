@@ -218,9 +218,11 @@ bundled = []
    project/release 与依赖差异说明选项，绝不显示哈希。
 8. 任何会移除未选包版本的方案都在写盘前列出并确认。
 
-`sync` 是纯本地重新探测与对账，不调用 provider、不下载修复；它保留 manifest 已知
-远端，并把当前本地内容写为锁定工件来源。`install` 才执行完整联网发现与修复，但只
-消费 `[platform]` 快照，不承担平台探测或快照刷新。
+`sync` 重新探测并对账本地内容，不下载 JAR、不修复缺失依赖；它使用 Modrinth 和已配置
+CurseForge 的批量哈希接口恢复来源。匹配结果只决定 remote/artifact source，包身份、
+版本和依赖仍只取自 JAR。所有 provider 均未匹配时才写入本地持久源；查询错误不得静默
+降级成 `file`。`install` 才执行完整联网候选发现与修复，但只消费 `[platform]` 快照，
+不承担平台探测或快照刷新。
 
 ## 5. 远端管理
 
@@ -241,5 +243,7 @@ API 返回的 project ID。`remove` 不能删除最后一个远端。列表序�
 
 ## 6. 版本控制
 
-应同时提交 `orbit.toml` 与 `orbit.lock`。`.orbit/sources/` 是本地远端的持久源，
-若团队或构建机需要还原这些本地包，也必须随项目分发，或先为包增加可访问的网络远端。
+应同时提交 `orbit.toml` 与 `orbit.lock`。`.orbit/sources/` 是真正本地远端的实例级持久源，
+不是全局 JAR cache，也不受 LRU 淘汰；provider 已识别内容不会复制到这里，失去引用的
+自动副本由 sync 清理。若团队或构建机需要还原这些本地包，也必须随项目分发，或先为包
+增加可访问的网络远端。

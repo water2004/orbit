@@ -282,8 +282,10 @@ manifest/lockfile。旧 `[project]` 版本和 `[platform]` 路径都只是用于
 
 平台与包变更由统一展示层渲染为单张自适应表格（`~`/`+`/`-`/`?` 标记 platform、added、
 changed、missing、unlocked），未选中包版本仍使用统一删除表，物理文件名不进入表格。
-它既不下载 JAR，也不访问 Modrinth/CurseForge 识别接口。既有 manifest remotes 会保留；
-当前本地内容作为 lock 的精确恢复来源。dry-run 不保存对账结果。同 ID 的所有本地文件
+它不下载 JAR，但会访问 Modrinth 以及已配置的 CurseForge 批量哈希识别接口。匹配成功
+时以 provider project/release 替换同一内容的自动 managed-file 回退；只有所有 provider
+均未匹配的内容才成为本地精确恢复来源。provider 查询失败会报错，不能静默把所有 JAR
+降级成 `file`。dry-run 不保存对账结果。同 ID 的所有本地文件
 先作为候选统一求解；不会按扫描顺序让后一个覆盖前一个。
 实际删除 `removed` 前总会展示逻辑包 ID、版本和动作并确认；物理文件名不占用用户决策
 界面。

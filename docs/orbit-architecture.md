@@ -200,8 +200,9 @@ Jar-in-Jar artifact 使用独立的 Maven 坐标包并精确绑定 owner 候选�
 降级、替换或删除都在写盘前展示并确认。upgrade 方案只要求至少一个包相对当前版本变新，
 允许其他包降级。
 
-`sync` 复用相同本地图和方案/确认模型，但明确不进入 provider 阶段；联网闭包修复只由
-`install` 执行。
+`sync` 复用相同本地图和方案/确认模型，并只调用可用 provider 的批量哈希识别接口，把本地
+精确内容恢复为 project/release 远端；它不枚举版本、不下载 JAR，也不修复依赖闭包。联网
+下载和闭包修复只由 `install` 执行。
 
 根包环境具有两层正交语义：`orbit.toml` 的可选 `env` 是用户 target 过滤覆盖，lock 的
 `environment` 是精确候选从 JAR 解析出的事实。TOML 缺失覆盖时，locked 路径直接使用

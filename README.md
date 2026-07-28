@@ -128,7 +128,7 @@ schema、字段名、枚举码和错误码不随语言变化。Windows 控制台
 
 | 命令 | 描述 |
 | :--- | :--- |
-| `orbit sync` | **纯本地状态双向对齐**。重新探测 Minecraft/loader 工件并扫描 `mods/`，同 ID 文件统一求解并确认清理未选版本；不下载 JAR，也不调用 provider。 |
+| `orbit sync` | **状态双向对齐**。重新探测 Minecraft/loader 工件并扫描 `mods/`，通过可用 provider 批量哈希识别来源，同 ID 文件统一求解并确认清理未选版本；不下载 JAR、不联网修复依赖。 |
 | `orbit outdated [mod]` | **检查过时模组（只读）**。显示可行更新；更高候选受阻或没有适用 JAR 时同时给出原因。 |
 | `orbit upgrade [mod]` | **执行更新**。单包模式必须让该包变新；方案也可包含依赖降级/替换/删除，确认后更新文件与 lock。 |
 

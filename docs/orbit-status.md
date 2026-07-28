@@ -95,7 +95,7 @@
 | `remote add/remove/list` | 验证并管理包的多个 discovery remotes；不能删除最后一个；删除远端时保留当前 lock 的精确恢复来源；list 输出自适应表格 |
 | `install` / `restore` | 严格校验 TOML 平台快照；不探测、不兜底、不刷新；sync 后的 loader 变化由共享图判定 |
 | `remove` / `upgrade` / `outdated` | 使用 Fat Lockfile、保留受阻候选原因、自适应表格与多解差异高亮 |
-| `sync` | 完全离线重新探测平台并扫描 mods；保留既有 remotes，按包选择候选并确认移除未选版本；平台与包变更统一表格 |
+| `sync` | 重新探测平台并扫描 mods；批量哈希识别 provider 来源但不下载或修复 JAR；按包选择候选并确认移除未选版本；平台与包变更统一表格 |
 | `check` | 实例目标兼容性预检；结果自适应表格 |
 | `audit` | 四个 Loader backend 复用 Loader-selected runtime，先对齐 namespace，再进入共享 Mixin/Transformer 效果与冲突流水线；unary/pairwise 分离 + schema 5 JSON/显式完整 report |
 | `list` / `info` | 展示包信息、逻辑依赖和 bundled；非树形 list 与 info 均使用自适应表格 |
@@ -126,8 +126,8 @@
   变新、其他包可降级”是对同批 Pareto 解的操作分类。
 - 远端 project relation 会递归构造下载闭包；JAR `mod_id` 从不作为 slug/project
   查询。闭包缺少实际 required identity 时由 resolver 正常证明无解。
-- `sync` 保持纯本地对账，既不下载也不调用 provider；`install` 才构造远端候选闭包
-  修复依赖图。
+- `sync` 不下载或修复 JAR，但必须调用可用 provider 的批量哈希接口恢复来源；识别失败
+  直接报错，不能伪造本地来源。`install` 才构造远端候选闭包修复依赖图。
 - 共享游戏根目录若同时暴露多个 Minecraft/loader 候选，没有通用办法从目录本身判断
   launcher 下一次会启动哪一个；Orbit 明确报歧义，要求使用隔离实例或在 init 显式选择，
   不按目录顺序猜测。

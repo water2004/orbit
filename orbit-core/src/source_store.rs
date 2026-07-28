@@ -11,6 +11,12 @@ use crate::manifest::PackageRemote;
 
 const SOURCE_DIRECTORY: &str = ".orbit/sources";
 
+pub(crate) fn managed_remote(sha512: &str) -> PackageRemote {
+    PackageRemote::File {
+        path: format!("{SOURCE_DIRECTORY}/{sha512}.jar"),
+    }
+}
+
 pub(crate) fn preserve_local_remote(
     instance_dir: &Path,
     source: &Path,
@@ -21,7 +27,9 @@ pub(crate) fn preserve_local_remote(
             "cannot preserve a local package source without a SHA-512 content identity"
         )));
     }
-    let relative = format!("{SOURCE_DIRECTORY}/{sha512}.jar");
+    let PackageRemote::File { path: relative } = managed_remote(sha512) else {
+        unreachable!("managed source is always a file remote")
+    };
     let destination = instance_dir.join(Path::new(&relative));
     if destination.exists() {
         verify_source(&destination, sha512)?;
@@ -52,6 +60,82 @@ pub(crate) fn preserve_local_remote(
         }
     }
     Ok(PackageRemote::File { path: relative })
+}
+
+/// Remove content-addressed local sources that are no longer referenced by
+/// either the manifest or lock. The store is authoritative for genuinely
+/// local packages, so pruning is reference based rather than capacity based.
+pub(crate) fn prune_unreferenced(
+    instance_dir: &Path,
+    manifest: &crate::manifest::OrbitManifest,
+    lockfile: &crate::lockfile::OrbitLockfile,
+) -> Result<usize, OrbitError> {
+    let source_directory = instance_dir.join(SOURCE_DIRECTORY);
+    if !source_directory.is_dir() {
+        return Ok(0);
+    }
+
+    let mut referenced = std::collections::HashSet::new();
+    for remote in manifest
+        .dependencies
+        .values()
+        .flat_map(|dependency| dependency.remotes.iter())
+        .chain(
+            lockfile
+                .packages
+                .iter()
+                .flat_map(|package| package.remotes.iter()),
+        )
+    {
+        if let PackageRemote::File { path } = remote
+            && let Some(filename) = managed_filename(path)
+        {
+            referenced.insert(filename);
+        }
+    }
+    for source in lockfile
+        .packages
+        .iter()
+        .flat_map(|package| package.artifact_sources.iter())
+    {
+        if let crate::lockfile::ArtifactSource::File { path } = source
+            && let Some(filename) = managed_filename(path)
+        {
+            referenced.insert(filename);
+        }
+    }
+
+    let mut removed = 0;
+    for entry in std::fs::read_dir(&source_directory)? {
+        let entry = entry?;
+        if !entry.file_type()?.is_file() {
+            continue;
+        }
+        let filename = entry.file_name().to_string_lossy().into_owned();
+        if valid_managed_filename(&filename) && !referenced.contains(&filename) {
+            std::fs::remove_file(entry.path())?;
+            removed += 1;
+        }
+    }
+    if std::fs::read_dir(&source_directory)?.next().is_none() {
+        std::fs::remove_dir(&source_directory)?;
+    }
+    Ok(removed)
+}
+
+fn managed_filename(path: &str) -> Option<String> {
+    let normalized = path.replace('\\', "/");
+    normalized
+        .strip_prefix(&format!("{SOURCE_DIRECTORY}/"))
+        .filter(|filename| valid_managed_filename(filename))
+        .map(str::to_string)
+}
+
+fn valid_managed_filename(filename: &str) -> bool {
+    let Some(hash) = filename.strip_suffix(".jar") else {
+        return false;
+    };
+    hash.len() == 128 && hash.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
 pub(crate) fn preserve_if_instance_output(
@@ -137,5 +221,58 @@ mod tests {
         assert!(directory.path().join(path).is_file());
         assert_eq!(remote.display_locator(), "file:managed local source");
         assert!(!remote.display_locator().contains(&sha512));
+    }
+
+    #[test]
+    fn reference_pruning_never_treats_the_local_source_store_as_an_lru_cache() {
+        let directory = tempfile::tempdir().unwrap();
+        let kept_hash = "a".repeat(128);
+        let removed_hash = "b".repeat(128);
+        let source_directory = directory.path().join(SOURCE_DIRECTORY);
+        std::fs::create_dir_all(&source_directory).unwrap();
+        std::fs::write(source_directory.join(format!("{kept_hash}.jar")), b"kept").unwrap();
+        std::fs::write(
+            source_directory.join(format!("{removed_hash}.jar")),
+            b"removed",
+        )
+        .unwrap();
+        std::fs::write(source_directory.join("notes.txt"), b"untouched").unwrap();
+        let manifest: crate::manifest::OrbitManifest = toml::from_str(&format!(
+            r#"
+[project]
+name = "test"
+mc_version = "1"
+modloader = "fabric"
+modloader_version = "1"
+[platform]
+minecraft_jar = {{ path = "minecraft.jar", sha256 = "test" }}
+loader_jar = {{ path = "loader.jar", sha256 = "test" }}
+runtime_jars = []
+physical_environment = "client"
+[dependencies]
+alpha = {{ version = "*", remotes = [{{ type = "file", path = ".orbit/sources/{kept_hash}.jar" }}] }}
+"#
+        ))
+        .unwrap();
+        let lockfile = crate::lockfile::OrbitLockfile {
+            meta: crate::lockfile::LockMeta {
+                mc_version: "1".to_string(),
+                modloader: "fabric".to_string(),
+                modloader_version: "1".to_string(),
+            },
+            packages: Vec::new(),
+        };
+
+        assert_eq!(
+            prune_unreferenced(directory.path(), &manifest, &lockfile).unwrap(),
+            1
+        );
+        assert!(source_directory.join(format!("{kept_hash}.jar")).is_file());
+        assert!(
+            !source_directory
+                .join(format!("{removed_hash}.jar"))
+                .exists()
+        );
+        assert!(source_directory.join("notes.txt").is_file());
     }
 }

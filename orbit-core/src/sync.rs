@@ -1,4 +1,8 @@
 //! Reconciles the manifest, lockfile, and local `mods/` directory without downloading JARs.
+//!
+//! Local artifacts are batch-identified by every available provider before
+//! reconciliation. Provider metadata is used only to recover source locators;
+//! package identity and dependency metadata still come exclusively from JARs.
 
 use std::collections::HashSet;
 use std::path::Path;
@@ -31,6 +35,7 @@ pub struct PlatformChange {
 
 pub async fn sync_instance(
     instance_dir: &Path,
+    providers: &[Box<dyn crate::providers::ModProvider>],
     dry_run: bool,
     interaction: InstallInteraction,
 ) -> Result<SyncReport, OrbitError> {
@@ -65,7 +70,23 @@ pub async fn sync_instance(
         || lockfile.inner.meta.modloader_version != refreshed_lock_meta.modloader_version;
     lockfile.inner.meta = refreshed_lock_meta;
     let scanned = crate::init::scan_mods_dir(instance_dir, discovered_platform.loader)?;
-    let mut identified = identify_mods(&scanned, &[]).await?;
+    let mut identified = identify_mods(&scanned, providers).await?;
+    let mut superseded_managed_remotes = std::collections::HashMap::<
+        String,
+        std::collections::HashSet<crate::manifest::PackageRemote>,
+    >::new();
+    for package in &identified {
+        if package
+            .remotes
+            .iter()
+            .any(|remote| remote.provider() != "file")
+        {
+            superseded_managed_remotes
+                .entry(package.package_id())
+                .or_default()
+                .insert(crate::source_store::managed_remote(&package.sha512));
+        }
+    }
     if !dry_run {
         crate::identification::preserve_local_sources(instance_dir, &mut identified)?;
     }
@@ -88,7 +109,14 @@ pub async fn sync_instance(
     for entry in &mut local_entries {
         entry.remotes = discovered_remotes[&entry.mod_id].clone();
         if let Some(requirement) = manifest.inner.dependencies.get(&entry.mod_id) {
-            entry.remotes.extend(requirement.remotes.iter().cloned());
+            let superseded = superseded_managed_remotes.get(&entry.mod_id);
+            entry.remotes.extend(
+                requirement
+                    .remotes
+                    .iter()
+                    .filter(|remote| !superseded.is_some_and(|items| items.contains(*remote)))
+                    .cloned(),
+            );
             entry.remotes.sort();
             entry.remotes.dedup();
         }
@@ -192,7 +220,7 @@ pub async fn sync_instance(
 
     crate::package_reconciliation::remove_unselected_packages(instance_dir, &removed)?;
     for entry in &selected_entries {
-        manifest
+        let requirement = manifest
             .inner
             .dependencies
             .entry(entry.mod_id.clone())
@@ -203,6 +231,7 @@ pub async fn sync_instance(
                 exclude: Vec::new(),
                 remotes: entry.remotes.clone(),
             });
+        requirement.remotes = entry.remotes.clone();
     }
     lockfile.inner.packages = selected_entries;
     lockfile
@@ -211,6 +240,13 @@ pub async fn sync_instance(
         .sort_by(|left, right| left.mod_id.cmp(&right.mod_id));
     manifest.save()?;
     lockfile.save()?;
+    if let Err(error) =
+        crate::source_store::prune_unreferenced(instance_dir, &manifest.inner, &lockfile.inner)
+    {
+        report.warnings.push(format!(
+            "could not prune unreferenced managed local package sources: {error}"
+        ));
+    }
     Ok(report)
 }
 
@@ -327,6 +363,11 @@ mod tests {
     use super::*;
     use crate::lockfile::{ArtifactSource, OrbitLockfile, PackageEntry};
     use crate::manifest::{OrbitManifest, PackageRemote, ProjectMeta, ResolverConfig};
+    use crate::providers::{
+        ArtifactDownloadClient, ArtifactFingerprint, ModInfo, ModProvider, ModrinthResolvedInfo,
+        RemoteArtifact, SearchResultItem,
+    };
+    use async_trait::async_trait;
     use std::io::Write;
     use std::sync::{Arc, Mutex};
     use zip::write::SimpleFileOptions;
@@ -347,6 +388,138 @@ mod tests {
         )
         .unwrap();
         archive.finish().unwrap();
+    }
+
+    struct IdentificationProvider {
+        downloader: ArtifactDownloadClient,
+        artifacts: Vec<RemoteArtifact>,
+    }
+
+    #[async_trait]
+    impl ModProvider for IdentificationProvider {
+        fn name(&self) -> &'static str {
+            "modrinth"
+        }
+
+        fn artifact_downloader(&self) -> &ArtifactDownloadClient {
+            &self.downloader
+        }
+
+        async fn search(
+            &self,
+            _query: &str,
+            _mc_version: Option<&str>,
+            _loader: Option<&str>,
+            _limit: usize,
+        ) -> Result<Vec<SearchResultItem>, OrbitError> {
+            Ok(Vec::new())
+        }
+
+        async fn get_mod_info(&self, slug: &str) -> Result<ModInfo, OrbitError> {
+            Err(OrbitError::ModNotFound(slug.to_string()))
+        }
+
+        async fn identify_artifacts(
+            &self,
+            _artifacts: &[ArtifactFingerprint],
+        ) -> Result<Vec<RemoteArtifact>, OrbitError> {
+            Ok(self.artifacts.clone())
+        }
+
+        async fn get_versions(
+            &self,
+            slug: &str,
+            _mc_version: Option<&str>,
+            _loader: Option<&str>,
+        ) -> Result<Vec<RemoteArtifact>, OrbitError> {
+            Err(OrbitError::ModNotFound(slug.to_string()))
+        }
+    }
+
+    #[tokio::test]
+    async fn provider_identification_replaces_the_exact_managed_fallback_and_prunes_its_copy() {
+        let directory = test_dir("identify-remotes");
+        crate::platform_detection::test_support::write_platform(
+            &directory, "1.20.1", "fabric", "0.16.10",
+        );
+        let mods = directory.join("mods");
+        std::fs::create_dir_all(&mods).unwrap();
+        write_fabric_jar(&mods.join("alpha.jar"), "1");
+        let manifest: OrbitManifest = toml::from_str(
+            r#"
+[project]
+name = "test"
+mc_version = "1.20.1"
+modloader = "fabric"
+modloader_version = "0.16.10"
+[platform]
+minecraft_jar = { path = "minecraft.jar", sha256 = "test" }
+loader_jar = { path = "loader.jar", sha256 = "test" }
+runtime_jars = []
+physical_environment = "client"
+[dependencies]
+"#,
+        )
+        .unwrap();
+        ManifestFile::new(&directory, manifest).save().unwrap();
+
+        sync_instance(&directory, &[], false, InstallInteraction::default())
+            .await
+            .unwrap();
+        let local_lock = Lockfile::open(&directory).unwrap();
+        let local = local_lock.inner.find("alpha").unwrap();
+        let sha512 = local.sha512.clone();
+        let managed = directory
+            .join(".orbit")
+            .join("sources")
+            .join(format!("{sha512}.jar"));
+        assert!(managed.is_file());
+
+        let provider: Box<dyn ModProvider> = Box::new(IdentificationProvider {
+            downloader: ArtifactDownloadClient::anonymous("orbit-sync-test").unwrap(),
+            artifacts: vec![RemoteArtifact {
+                sha1: local.sha1.clone(),
+                sha512,
+                slug: "alpha".to_string(),
+                provider: "modrinth".to_string(),
+                modrinth: Some(ModrinthResolvedInfo {
+                    project_id: "alpha-project".to_string(),
+                    version_id: "alpha-version".to_string(),
+                }),
+                curseforge: None,
+                download_url: "https://cdn.modrinth.com/data/alpha/versions/one/alpha.jar"
+                    .to_string(),
+                filename: "alpha.jar".to_string(),
+                related_projects: Vec::new(),
+            }],
+        });
+
+        sync_instance(
+            &directory,
+            &[provider],
+            false,
+            InstallInteraction::default(),
+        )
+        .await
+        .unwrap();
+
+        let manifest = ManifestFile::open(&directory).unwrap();
+        assert_eq!(
+            manifest.inner.dependencies["alpha"].remotes,
+            vec![PackageRemote::Modrinth {
+                project_id: "alpha-project".to_string()
+            }]
+        );
+        let lock = Lockfile::open(&directory).unwrap();
+        let alpha = lock.inner.find("alpha").unwrap();
+        assert_eq!(alpha.remotes, manifest.inner.dependencies["alpha"].remotes);
+        assert!(matches!(
+            alpha.artifact_sources.as_slice(),
+            [ArtifactSource::Modrinth { project_id, version_id, .. }]
+                if project_id == "alpha-project" && version_id == "alpha-version"
+        ));
+        assert!(!managed.exists());
+        std::fs::remove_dir_all(directory).unwrap();
     }
 
     #[tokio::test]
@@ -434,7 +607,7 @@ mod tests {
         .save()
         .unwrap();
 
-        let report = sync_instance(&directory, true, InstallInteraction::default())
+        let report = sync_instance(&directory, &[], true, InstallInteraction::default())
             .await
             .unwrap();
 
@@ -494,6 +667,7 @@ alpha = { version = "*", remotes = [{ type = "file", path = "alpha.jar" }] }
         let captured = Arc::clone(&preview);
         let aborted = sync_instance(
             &directory,
+            &[],
             false,
             InstallInteraction {
                 select_package: None,
@@ -514,6 +688,7 @@ alpha = { version = "*", remotes = [{ type = "file", path = "alpha.jar" }] }
 
         let applied = sync_instance(
             &directory,
+            &[],
             false,
             InstallInteraction {
                 select_package: None,
@@ -581,7 +756,7 @@ alpha = { version = "*", remotes = [{ type = "file", path = "alpha.jar" }] }
         };
         ManifestFile::new(&directory, manifest).save().unwrap();
 
-        let report = sync_instance(&directory, false, InstallInteraction::default())
+        let report = sync_instance(&directory, &[], false, InstallInteraction::default())
             .await
             .unwrap();
         let refreshed = ManifestFile::open(&directory).unwrap();
@@ -653,7 +828,7 @@ alpha = { version = "*", remotes = [{ type = "file", path = "alpha.jar" }] }
         };
         ManifestFile::new(&directory, manifest).save().unwrap();
 
-        let report = sync_instance(&directory, false, InstallInteraction::default())
+        let report = sync_instance(&directory, &[], false, InstallInteraction::default())
             .await
             .unwrap();
         let refreshed = ManifestFile::open(&directory).unwrap();

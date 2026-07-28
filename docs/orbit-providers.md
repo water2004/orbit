@@ -101,8 +101,9 @@ slug 跨平台猜项目。
 Modrinth 始终参与，只有已配置 API Key 时才加入 CurseForge。它不会因为用户没有 Key
 而破坏默认初始化，也不会跳过一个已显式配置但认证失败的 provider 错误。
 
-`orbit sync` 是例外：它按设计完全离线，只扫描当前实例并保留既有远端，不调用任何
-哈希识别 API。联网修复属于 `orbit install`。
+`orbit sync` 与 init 使用同一 identification factory：Modrinth 始终参与，配置 Key 后
+CurseForge 也参与批量哈希识别。sync 不枚举项目候选、不下载 JAR、不联网修复依赖；
+provider 错误会终止对账，不能把未完成识别的内容伪装成 `file`。
 
 - `mr:` → 只用 Modrinth；
 - `cf:` → 只用 CurseForge；

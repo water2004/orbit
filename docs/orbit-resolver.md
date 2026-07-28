@@ -240,9 +240,10 @@ Minecraft/loader 没有返回任何 JAR 声明某个已锁 `mod_id`，outdated �
 Minecraft/loader 下的全部 JAR 候选。所有 project 先完成版本枚举并进入同一下载队列，
 统一下载、读取真实 JAR 元数据后才交给求解器；只给现有包的锁定版本会制造假冲突。
 
-`sync` 只对本地 `mods/`、manifest 与 lockfile 对账，既不下载也不调用 provider
-哈希识别接口；它保留 manifest 中已有的远端，并把当前本地内容记录为精确恢复来源。
-`install` 才会通过完整远端 artifact 闭包重建候选并修复缺失或不兼容的包。
+`sync` 对本地 `mods/`、manifest 与 lockfile 对账，并批量调用可用 provider 的哈希识别
+接口恢复 remote 与精确 artifact source；它不下载 JAR，也不构造远端候选闭包。仅所有
+provider 都未匹配的内容才记录为本地持久来源。`install` 才会通过完整远端 artifact
+闭包重建候选并修复缺失或不兼容的包。
 
 ## 8. 可读错误的约束
 
