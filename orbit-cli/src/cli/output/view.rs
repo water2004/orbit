@@ -12,33 +12,7 @@
 
 use serde::Serialize;
 
-/// Envelope version. Bumped on breaking changes to the envelope itself (field
-/// renames/removals). Adding optional fields or new commands does not bump it.
-pub const ENVELOPE_SCHEMA_VERSION: u32 = 1;
-
-/// Outer JSON envelope for every command result.
-#[derive(Debug, Clone, Serialize)]
-pub struct JsonEnvelope<T: Serialize> {
-    pub schema_version: u32,
-    pub command: &'static str,
-    pub ok: bool,
-    pub result: T,
-}
-
-impl<T: Serialize> JsonEnvelope<T> {
-    pub fn new(command: &'static str, result: T) -> Self {
-        Self {
-            schema_version: ENVELOPE_SCHEMA_VERSION,
-            command,
-            ok: true,
-            result,
-        }
-    }
-
-    pub fn to_json(&self) -> String {
-        serde_json::to_string_pretty(self).expect("command view-models are serializable")
-    }
-}
+pub use orbit_machine_protocol::{ErrorEnvelope as ErrorJson, SuccessEnvelope as JsonEnvelope};
 
 // ---------------------------------------------------------------------------
 // search
@@ -486,35 +460,6 @@ pub enum ConfigValueView {
 }
 
 // ---------------------------------------------------------------------------
-// Error JSON
-// ---------------------------------------------------------------------------
-
-#[derive(Debug, Clone, Serialize)]
-pub struct ErrorJson {
-    #[serde(rename = "type")]
-    pub kind: &'static str,
-    pub code: &'static str,
-    pub message: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub detail: Option<serde_json::Value>,
-}
-
-impl ErrorJson {
-    pub fn new(code: &'static str, message: String) -> Self {
-        Self {
-            kind: "error",
-            code,
-            message,
-            detail: None,
-        }
-    }
-
-    pub fn to_json(&self) -> String {
-        serde_json::to_string(self).expect("error json is serializable")
-    }
-}
-
-// ---------------------------------------------------------------------------
 // Conversions from core domain types to view-models.
 //
 // These keep the (hash/filename/secret)-free boundary explicit: a field that
@@ -858,7 +803,10 @@ mod tests {
         };
         let envelope = JsonEnvelope::new("search", &view);
         let json = serde_json::to_value(&envelope).unwrap();
-        assert_eq!(json["schema_version"], ENVELOPE_SCHEMA_VERSION);
+        assert_eq!(
+            json["schema_version"],
+            orbit_machine_protocol::SCHEMA_VERSION
+        );
         assert_eq!(json["command"], "search");
         assert_eq!(json["ok"], true);
         assert_eq!(json["result"]["query"], "sodium");
@@ -974,9 +922,11 @@ mod tests {
 
     #[test]
     fn error_json_has_type_error_and_stable_code() {
-        let error = ErrorJson::new("mod_not_found", "mod 'foo' not found".into());
+        let error = ErrorJson::new("info", "mod_not_found", "mod 'foo' not found");
         let json = serde_json::to_value(&error).unwrap();
         assert_eq!(json["type"], "error");
+        assert_eq!(json["command"], "info");
+        assert_eq!(json["ok"], false);
         assert_eq!(json["code"], "mod_not_found");
         assert_eq!(json["message"], "mod 'foo' not found");
         assert!(json.get("detail").is_none());

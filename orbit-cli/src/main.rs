@@ -10,6 +10,7 @@ use cli::{
 #[tokio::main]
 async fn main() {
     let cli = Cli::parse();
+    let command = cli.command.command_name();
     let format = cli.format;
     // `--progress-format ndjson` opts into the structured stderr protocol.
     // `--quiet` always silences progress. Text-mode progress (spinner/bar) is
@@ -28,10 +29,11 @@ async fn main() {
     }) {
         Ok(runtime) => runtime,
         Err(error) => {
-            exit_with_error(&error.into(), output);
+            exit_with_error(&error.into(), output, command);
         }
     };
     let ctx = CliContext {
+        command,
         verbose: cli.verbose,
         quiet: cli.quiet,
         yes: cli.yes,
@@ -44,21 +46,24 @@ async fn main() {
     let cache_result = ctx.runtime.prune_jar_cache().map_err(anyhow::Error::from);
     match (command_result, cache_result) {
         (Ok(()), Ok(_)) => {}
-        (Err(error), Ok(_)) | (Ok(()), Err(error)) => exit_with_error(&error, output),
+        (Err(error), Ok(_)) | (Ok(()), Err(error)) => exit_with_error(&error, output, command),
         (Err(command_error), Err(cache_error)) => {
             let message =
                 format!("{command_error}; JAR cache LRU cleanup also failed: {cache_error}");
             let combined = command_error.context(message);
-            exit_with_error(&combined, output);
+            exit_with_error(&combined, output, command);
         }
     }
 }
 
-fn exit_with_error(error: &anyhow::Error, output: OutputCfg) -> ! {
+fn exit_with_error(error: &anyhow::Error, output: OutputCfg, command: &'static str) -> ! {
     let code = error_code(error);
     if output.format == OutputFormat::Json {
-        let json = cli::output::ErrorJson::new(code, redacted_message(error, code));
-        eprintln!("{}", json.to_json());
+        let json = cli::output::ErrorJson::new(command, code, redacted_message(error, code));
+        eprintln!(
+            "{}",
+            serde_json::to_string(&json).expect("error envelope is serializable")
+        );
     } else {
         eprintln!("error: {error}");
     }

@@ -27,6 +27,7 @@ use std::path::{Path, PathBuf};
 /// 全局 CLI 上下文，传递给所有命令 handler。
 #[derive(Debug, Clone)]
 pub struct CliContext {
+    pub command: &'static str,
     pub verbose: bool,
     pub quiet: bool,
     pub yes: bool,
@@ -148,7 +149,7 @@ pub fn install_interaction(ctx: &CliContext) -> orbit_core::InstallInteraction {
 
 pub fn operation_progress(ctx: &CliContext) -> Option<orbit_core::ProgressReporter> {
     if ctx.output.ndjson_progress() {
-        return Some(crate::cli::output::ndjson_progress_reporter());
+        return Some(crate::cli::output::ndjson_progress_reporter(ctx.command));
     }
     crate::cli::progress::reporter(ctx.quiet, &ctx.runtime.config().ui.progress_bar)
 }

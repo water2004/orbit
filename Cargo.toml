@@ -5,6 +5,7 @@ members = [
     "orbit-core",
     "orbit-launcher-cli",
     "orbit-launcher-core",
+    "orbit-machine-protocol",
     "orbit-bytecode-audit",
     "orbit-loader-json",
     "curseforge-wrapper",
@@ -53,3 +54,4 @@ base64 = "0.22"
 fs2 = "0.4"
 dunce = "1.0.5"
 orbit-loader-json = { path = "orbit-loader-json" }
+orbit-machine-protocol = { path = "orbit-machine-protocol" }

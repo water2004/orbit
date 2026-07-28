@@ -591,7 +591,8 @@ impl app::Frontend for TerminalFrontend {
             ProgressFormat::Text => self.render_text_progress(data),
             ProgressFormat::Ndjson => {
                 self.sequence += 1;
-                let envelope = ProgressEnvelope::new("install", self.sequence, data);
+                let phase = data.phase();
+                let envelope = ProgressEnvelope::new("install", self.sequence, phase, data);
                 eprintln!(
                     "{}",
                     serde_json::to_string(&envelope)
@@ -687,8 +688,13 @@ impl app::Frontend for TerminalFrontend {
             },
             ProgressFormat::Ndjson => {
                 self.sequence += 1;
-                let envelope =
-                    ProgressEnvelope::new("account.login.microsoft.complete", self.sequence, data);
+                let phase = data.phase();
+                let envelope = ProgressEnvelope::new(
+                    "account.login.microsoft.complete",
+                    self.sequence,
+                    phase,
+                    data,
+                );
                 eprintln!(
                     "{}",
                     serde_json::to_string(&envelope)
@@ -718,7 +724,8 @@ impl TerminalFrontend {
             ProgressFormat::Text => self.render_text_progress(data),
             ProgressFormat::Ndjson => {
                 self.sequence += 1;
-                let envelope = ProgressEnvelope::new(command, self.sequence, data);
+                let phase = data.phase();
+                let envelope = ProgressEnvelope::new(command, self.sequence, phase, data);
                 eprintln!(
                     "{}",
                     serde_json::to_string(&envelope)

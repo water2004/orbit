@@ -397,6 +397,31 @@ impl CommandHandler for Commands {
 }
 
 impl Commands {
+    pub fn command_name(&self) -> &'static str {
+        match self {
+            Self::Init { .. } => "init",
+            Self::Instances { .. } => "instances",
+            Self::Install { .. } => "install",
+            Self::Add { .. } => "add",
+            Self::Env { .. } => "env",
+            Self::Remove { .. } => "remove",
+            Self::Purge { .. } => "purge",
+            Self::Sync => "sync",
+            Self::Outdated { .. } => "outdated",
+            Self::Upgrade { .. } => "upgrade",
+            Self::Search { .. } => "search",
+            Self::Info { .. } => "info",
+            Self::List { .. } => "list",
+            Self::Import { .. } => "import",
+            Self::Export { .. } => "export",
+            Self::Check { .. } => "check",
+            Self::Audit { .. } => "audit",
+            Self::Cache { .. } => "cache",
+            Self::Config { .. } => "config",
+            Self::Remote { .. } => "remote",
+        }
+    }
+
     fn mutates_instance(&self) -> bool {
         matches!(
             self,

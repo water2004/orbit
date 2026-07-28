@@ -84,13 +84,21 @@ pub fn render<T: serde::Serialize>(
 ) {
     match cfg.format {
         OutputFormat::Text => print!("{}", text(view)),
-        OutputFormat::Json => println!("{}", JsonEnvelope::new(command, view).to_json()),
+        OutputFormat::Json => println!(
+            "{}",
+            serde_json::to_string_pretty(&JsonEnvelope::new(command, view))
+                .expect("command view-models are serializable")
+        ),
     }
 }
 
 /// Print a JSON envelope directly to stdout.
 pub fn print_json<T: serde::Serialize>(command: &'static str, view: &T) {
-    println!("{}", JsonEnvelope::new(command, view).to_json());
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&JsonEnvelope::new(command, view))
+            .expect("command view-models are serializable")
+    );
 }
 
 const ABSENT: &str = "—";

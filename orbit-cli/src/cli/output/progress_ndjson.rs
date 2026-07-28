@@ -13,32 +13,18 @@
 //! secrets cross this boundary.
 
 use std::io::Write;
-use std::sync::Mutex;
+use std::sync::{
+    Mutex,
+    atomic::{AtomicU64, Ordering},
+};
 
 use orbit_core::{AuditProgressEvent, ProgressEvent};
+use orbit_machine_protocol::{ProgressEnvelope, ProgressPhase};
 use serde::Serialize;
 
 /// Phase of a package operation, used as the `phase` field of the NDJSON
 /// envelope. Derived from the event variant rather than stored on the core
 /// type so core stays free of presentation concerns.
-#[derive(Debug, Clone, Copy, Serialize)]
-#[serde(rename_all = "snake_case")]
-enum Phase {
-    Discovery,
-    Download,
-    Resolution,
-    Apply,
-    Audit,
-}
-
-#[derive(Debug, Serialize)]
-struct ProgressEnvelope<'a, T: Serialize> {
-    #[serde(rename = "type")]
-    kind: &'static str,
-    phase: Phase,
-    data: ProgressData<'a, T>,
-}
-
 /// Inner envelope carrying the original event. The core event itself
 /// serializes with `#[serde(tag = "event")]`, so the resulting line is
 /// `{"type":"progress","phase":"...","data":{"event":"...","...":...}}`.
@@ -60,25 +46,32 @@ fn write_line(writer: &StderrWriter, line: &str) {
 
 /// Reporter for package-operation progress (`ProgressEvent`).
 pub struct NdjsonProgressReporter {
+    command: &'static str,
     writer: StderrWriter,
+    sequence: AtomicU64,
 }
 
 impl NdjsonProgressReporter {
-    pub fn new() -> Self {
+    pub fn new(command: &'static str) -> Self {
         Self {
+            command,
             writer: Mutex::new(std::io::stderr()),
+            sequence: AtomicU64::new(0),
         }
     }
 
     pub fn reporter(self) -> orbit_core::ProgressReporter {
         let writer = self.writer;
+        let command = self.command;
+        let sequence = self.sequence;
         std::sync::Arc::new(move |event: ProgressEvent| {
             let phase = phase_for(&event);
-            let envelope = ProgressEnvelope {
-                kind: "progress",
+            let envelope = ProgressEnvelope::new(
+                command,
+                sequence.fetch_add(1, Ordering::Relaxed) + 1,
                 phase,
-                data: ProgressData { event: &event },
-            };
+                ProgressData { event: &event },
+            );
             let line = serde_json::to_string(&envelope).unwrap_or_else(|_| "{}".into());
             write_line(&writer, &line);
         })
@@ -87,24 +80,31 @@ impl NdjsonProgressReporter {
 
 /// Reporter for audit progress (`AuditProgressEvent`).
 pub struct NdjsonAuditReporter {
+    command: &'static str,
     writer: StderrWriter,
+    sequence: AtomicU64,
 }
 
 impl NdjsonAuditReporter {
-    pub fn new() -> Self {
+    pub fn new(command: &'static str) -> Self {
         Self {
+            command,
             writer: Mutex::new(std::io::stderr()),
+            sequence: AtomicU64::new(0),
         }
     }
 
     pub fn reporter(self) -> orbit_core::AuditProgressReporter {
         let writer = self.writer;
+        let command = self.command;
+        let sequence = self.sequence;
         std::sync::Arc::new(move |event: AuditProgressEvent| {
-            let envelope = ProgressEnvelope {
-                kind: "progress",
-                phase: Phase::Audit,
-                data: ProgressData { event: &event },
-            };
+            let envelope = ProgressEnvelope::new(
+                command,
+                sequence.fetch_add(1, Ordering::Relaxed) + 1,
+                ProgressPhase::Audit,
+                ProgressData { event: &event },
+            );
             let line = serde_json::to_string(&envelope).unwrap_or_else(|_| "{}".into());
             write_line(&writer, &line);
         })
@@ -112,30 +112,30 @@ impl NdjsonAuditReporter {
 }
 
 /// Convenience constructors matching the existing `progress::reporter` shape.
-pub fn ndjson_progress_reporter() -> orbit_core::ProgressReporter {
-    NdjsonProgressReporter::new().reporter()
+pub fn ndjson_progress_reporter(command: &'static str) -> orbit_core::ProgressReporter {
+    NdjsonProgressReporter::new(command).reporter()
 }
 
-pub fn ndjson_audit_reporter() -> orbit_core::AuditProgressReporter {
-    NdjsonAuditReporter::new().reporter()
+pub fn ndjson_audit_reporter(command: &'static str) -> orbit_core::AuditProgressReporter {
+    NdjsonAuditReporter::new(command).reporter()
 }
 
-fn phase_for(event: &ProgressEvent) -> Phase {
+fn phase_for(event: &ProgressEvent) -> ProgressPhase {
     match event {
         ProgressEvent::DiscoveryStarted
         | ProgressEvent::DiscoveringProject { .. }
-        | ProgressEvent::DiscoveryFinished { .. } => Phase::Discovery,
+        | ProgressEvent::DiscoveryFinished { .. } => ProgressPhase::Discovery,
         ProgressEvent::CandidateDownloadStarted { .. }
         | ProgressEvent::CandidateArtifact { .. }
-        | ProgressEvent::CandidateDownloadFinished { .. } => Phase::Download,
+        | ProgressEvent::CandidateDownloadFinished { .. } => ProgressPhase::Download,
         ProgressEvent::ResolutionStarted { .. }
         | ProgressEvent::ResolutionWorkStarted { .. }
         | ProgressEvent::ResolutionWorkFinished { .. }
         | ProgressEvent::ResolutionActivity { .. }
-        | ProgressEvent::ResolutionFinished { .. } => Phase::Resolution,
+        | ProgressEvent::ResolutionFinished { .. } => ProgressPhase::Resolution,
         ProgressEvent::ApplyStarted { .. }
         | ProgressEvent::ApplyArtifact { .. }
-        | ProgressEvent::ApplyFinished { .. } => Phase::Apply,
+        | ProgressEvent::ApplyFinished { .. } => ProgressPhase::Apply,
     }
 }
 
@@ -152,14 +152,18 @@ mod tests {
             filename: "secret-filename.jar".to_string(),
             state: ArtifactProgressState::Finished,
         };
-        let envelope = ProgressEnvelope {
-            kind: "progress",
-            phase: Phase::Download,
-            data: ProgressData { event: &event },
-        };
+        let envelope = ProgressEnvelope::new(
+            "install",
+            1,
+            ProgressPhase::Download,
+            ProgressData { event: &event },
+        );
         let json = serde_json::to_string(&envelope).unwrap();
 
         assert!(json.contains("\"type\":\"progress\""));
+        assert!(json.contains("\"schema_version\":2"));
+        assert!(json.contains("\"command\":\"install\""));
+        assert!(json.contains("\"sequence\":1"));
         assert!(json.contains("\"phase\":\"download\""));
         assert!(json.contains("\"event\":\"CandidateArtifact\""));
         assert!(json.contains("\"state\":\"finished\""));
@@ -192,11 +196,12 @@ mod tests {
             stage: orbit_core::AuditProgressStage::ScanArtifacts,
             total: Some(10),
         };
-        let envelope = ProgressEnvelope {
-            kind: "progress",
-            phase: Phase::Audit,
-            data: ProgressData { event: &event },
-        };
+        let envelope = ProgressEnvelope::new(
+            "audit",
+            1,
+            ProgressPhase::Audit,
+            ProgressData { event: &event },
+        );
         let json = serde_json::to_string(&envelope).unwrap();
         assert!(json.contains("\"phase\":\"audit\""));
         assert!(json.contains("\"stage\":\"scan_artifacts\""));

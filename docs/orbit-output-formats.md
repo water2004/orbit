@@ -32,7 +32,7 @@ orbit [--format text|json] [--progress-format none|ndjson] <command> ...
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
-| `schema_version` | number | 本命令结果的 schema 版本，从 1 开始，破坏性变更才递增 |
+| `schema_version` | number | 统一机器协议版本，当前为 2；破坏性变更才递增 |
 | `command` | string | 命令名（如 `"search"`、`"install"`） |
 | `ok` | boolean | `true` |
 | `result` | object | 命令特定结果体 |
@@ -41,7 +41,7 @@ orbit [--format text|json] [--progress-format none|ndjson] <command> ...
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "command": "search",
   "ok": true,
   "result": { ... }
@@ -56,7 +56,7 @@ orbit [--format text|json] [--progress-format none|ndjson] <command> ...
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "command": "search",
   "ok": true,
   "result": {
@@ -94,7 +94,7 @@ orbit [--format text|json] [--progress-format none|ndjson] <command> ...
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "command": "info",
   "ok": true,
   "result": {
@@ -143,7 +143,7 @@ orbit [--format text|json] [--progress-format none|ndjson] <command> ...
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "command": "list",
   "ok": true,
   "result": {
@@ -172,7 +172,7 @@ schema 文档源码。
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "command": "env",
   "ok": true,
   "result": {
@@ -191,7 +191,7 @@ schema 文档源码。
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "command": "check",
   "ok": true,
   "result": {
@@ -222,7 +222,7 @@ schema 文档源码。
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "command": "outdated",
   "ok": true,
   "result": {
@@ -254,7 +254,7 @@ schema 文档源码。
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "command": "instances",
   "ok": true,
   "result": {
@@ -277,7 +277,7 @@ schema 文档源码。
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "command": "instances",
   "ok": true,
   "result": { "subcommand": "default", "name": "alpha" }
@@ -288,7 +288,7 @@ schema 文档源码。
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "command": "instances",
   "ok": true,
   "result": { "subcommand": "remove", "name": "alpha" }
@@ -299,7 +299,7 @@ schema 文档源码。
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "command": "remote",
   "ok": true,
   "result": {
@@ -319,7 +319,7 @@ schema 文档源码。
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "command": "sync",
   "ok": true,
   "result": {
@@ -352,7 +352,7 @@ schema 文档源码。
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "command": "install",
   "ok": true,
   "result": {
@@ -392,7 +392,7 @@ schema 文档源码。
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "command": "remove",
   "ok": true,
   "result": {
@@ -408,7 +408,7 @@ schema 文档源码。
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "command": "import",
   "ok": true,
   "result": {
@@ -424,7 +424,7 @@ schema 文档源码。
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "command": "export",
   "ok": true,
   "result": {
@@ -440,7 +440,7 @@ schema 文档源码。
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "command": "init",
   "ok": true,
   "result": {
@@ -465,7 +465,7 @@ schema 文档源码。
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "command": "cache",
   "ok": true,
   "result": {
@@ -486,7 +486,7 @@ schema 文档源码。
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "command": "config",
   "ok": true,
   "result": {
@@ -500,7 +500,7 @@ schema 文档源码。
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "command": "config",
   "ok": true,
   "result": {
@@ -533,7 +533,7 @@ schema 文档源码。
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "command": "config",
   "ok": true,
   "result": {
@@ -560,7 +560,7 @@ schema 文档源码。
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "command": "audit",
   "ok": true,
   "result": {
@@ -582,18 +582,21 @@ schema 版本。schema 5 的 `environment.loader` 是唯一、已验证的 loade
 
 ## 4. NDJSON 进度协议
 
-`--progress-format ndjson` 时，每个进度事件输出一行 JSON 到 **stderr**，格式：
+`--progress-format ndjson` 时，每个进度事件输出一行 JSON 到 **stderr**。Orbit 与
+Orbit Launcher 直接使用 `orbit-machine-protocol` 中同一个信封类型，格式：
 
 ```json
-{"type":"progress","phase":"discovery","event":"DiscoveringProject","data":{...}}
+{"schema_version":2,"type":"progress","command":"install","sequence":1,"phase":"discovery","data":{"event":"DiscoveringProject","provider":"modrinth","locator":"AANobbMI","pending_projects":2,"artifacts_found":8}}
 ```
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
 | `type` | string | 固定 `"progress"`；最终无单独 `result` 行（结果走 stdout） |
-| `phase` | string | `discovery` / `download` / `resolution` / `apply` / `audit` |
-| `event` | string | 事件名，对应 core `ProgressEvent` / `AuditProgressEvent` 变体名 |
-| `data` | object | 事件特定字段（计数、阶段、包名等） |
+| `schema_version` | number | 与成功/错误信封相同的机器协议版本，当前为 2 |
+| `command` | string | 产生事件的现有 CLI 命令 |
+| `sequence` | number | 单进程内从 1 开始严格递增 |
+| `phase` | string | `discovery` / `download` / `resolution` / `apply` / `audit`；Launcher 另有 `metadata` / `eula` / `java` / `loader` / `authentication` / `launch` / `process` / `supervisor` |
+| `data` | object | 内含 `event` 与事件特定字段（计数、阶段、包名等） |
 
 进度事件不包含内容哈希、物理 JAR 文件名或 provider 密钥。调用方按 `phase`/`event` 分流，无需解析自然语言。
 
@@ -635,12 +638,15 @@ schema 版本。schema 5 的 `environment.loader` 是唯一、已验证的 loade
 - **stderr 输出一行结构化错误 JSON**：
 
 ```json
-{"type":"error","code":"mod_not_found","message":"mod 'foo' not found","detail":null}
+{"schema_version":2,"type":"error","command":"info","ok":false,"code":"mod_not_found","message":"mod 'foo' not found"}
 ```
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
 | `type` | string | 固定 `"error"` |
+| `schema_version` | number | 与成功/进度信封相同，当前为 2 |
+| `command` | string | 失败的现有 CLI 命令 |
+| `ok` | boolean | 固定 `false` |
 | `code` | string | 稳定错误码，见下表 |
 | `message` | string | 面向人类的简短描述（不含敏感数据） |
 | `detail` | object \| null | 可选的结构化补充（如冲突涉及的包列表） |
@@ -669,7 +675,9 @@ schema 版本。schema 5 的 `environment.loader` 是唯一、已验证的 loade
 
 ## 6. 稳定性承诺
 
-- 信封 `schema_version` 按命令独立维护；破坏性字段变更才递增，非破坏性（新增可选字段）不递增。
+- 成功、错误和进度共用 `orbit-machine-protocol` 的单一 `schema_version`；破坏性字段变更
+  一次性提升整个进程协议，不保留旧信封或备用解析路径。
 - 错误码 `code` 是稳定契约，自动化可基于其分支；`message` 可随版本变化，不应作为判据。
-- 进度事件名（`event`、`phase`）是稳定契约；`data` 字段新增不破坏，删除或重命名才需协议版本（暂定从 1 起，未来若破坏性变更引入 `protocol_version` 字段）。
+- 进度事件名（`data.event`、`phase`）是稳定契约；`data` 字段新增不破坏，删除或重命名
+  必须提升现有 `schema_version`。
 - 内容哈希、物理 JAR 文件名、provider 密钥永不出现在任何 JSON 输出（结果或进度）。

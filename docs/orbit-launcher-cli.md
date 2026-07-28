@@ -192,7 +192,7 @@ SHA-256 和 JAR Manifest 验证的 Authlib Injector。客户端选择 External Y
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "command": "instance.show",
   "ok": true,
   "result": {
@@ -216,6 +216,8 @@ SHA-256 和 JAR Manifest 验证的 Authlib Injector。客户端选择 External Y
 
 `--progress-format text|ndjson|none` 控制 stderr 进度，默认 `text`。安装进度来自真实阶段、
 文件下载字节数、缓存命中、Java 物化计数、staging 校验和事务提交；NDJSON 使用
-`schema_version/type/command/sequence/data.event` 稳定字段。最终 JSON 只写 stdout，进度与
+`schema_version/type/command/sequence/phase/data.event` 稳定字段。成功、错误和进度均直接
+使用与 Orbit 本体共享的 `orbit-machine-protocol` schema 2，不存在 Launcher/GUI 专用信封。
+最终 JSON 只写 stdout，进度与
 错误只写 stderr。Microsoft `complete` 的轮询、Xbox、Minecraft 和安全持久化阶段也使用
 同一 NDJSON envelope，且不会包含 device code 或任何 token。

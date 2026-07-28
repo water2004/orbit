@@ -702,7 +702,7 @@ stdout 成功结果：
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "command": "install",
   "ok": true,
   "result": {
@@ -720,9 +720,10 @@ JSON 错误写入 stderr，使用稳定 code：
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "type": "error",
   "command": "install",
+  "ok": false,
   "code": "unsupported_target_artifact",
   "message": "No Java runtime is available for the selected target",
   "detail": {
@@ -740,13 +741,14 @@ JSON 错误写入 stderr，使用稳定 code：
 长命令的 stderr 事件：
 
 ```json
-{"schema_version":1,"type":"progress","command":"install","sequence":7,"data":{"event":"plan_expanded","completed":18,"total":327}}
-{"schema_version":1,"type":"progress","command":"install","sequence":8,"data":{"event":"artifact_finished","name":"Minecraft client","state":"cached","completed":19,"total":327}}
+{"schema_version":2,"type":"progress","command":"install","sequence":7,"phase":"metadata","data":{"event":"minecraft_resolved","version":"1.21.1","total_artifacts":327}}
+{"schema_version":2,"type":"progress","command":"install","sequence":8,"phase":"download","data":{"event":"artifact_finished","logical_name":"Minecraft client","size":24876123}}
 ```
 
 约束：
 
 - `sequence` 在单进程内严格递增；
+- `phase` 与 Orbit 包管理命令共用同一个枚举；GUI 不从 `event` 名称猜阶段；
 - 已知总工作量通过 `total` 提供，发现新工作时可以增加但不能减少；
 - 下载、安装器、Java 和登录轮询都必须提供心跳或进度，不能长时间无输出；
 - 进度事件不得包含完整 URL query、token、密码或本地凭据路径；

@@ -10,49 +10,7 @@ use orbit_launcher_core::{
 use serde::Serialize;
 
 use crate::supervisor_ipc::SupervisorState;
-
-pub const SCHEMA_VERSION: u32 = 1;
-
-#[derive(Debug, Serialize)]
-pub struct SuccessEnvelope<T> {
-    pub schema_version: u32,
-    pub command: &'static str,
-    pub ok: bool,
-    pub result: T,
-}
-
-impl<T> SuccessEnvelope<T> {
-    pub fn new(command: &'static str, result: T) -> Self {
-        Self {
-            schema_version: SCHEMA_VERSION,
-            command,
-            ok: true,
-            result,
-        }
-    }
-}
-
-#[derive(Debug, Serialize)]
-pub struct ErrorEnvelope<'a> {
-    pub schema_version: u32,
-    #[serde(rename = "type")]
-    pub kind: &'static str,
-    pub command: &'a str,
-    pub code: &'a str,
-    pub message: &'a str,
-}
-
-impl<'a> ErrorEnvelope<'a> {
-    pub fn new(command: &'a str, code: &'a str, message: &'a str) -> Self {
-        Self {
-            schema_version: SCHEMA_VERSION,
-            kind: "error",
-            command,
-            code,
-            message,
-        }
-    }
-}
+pub use orbit_machine_protocol::{ErrorEnvelope, ProgressEnvelope, ProgressPhase, SuccessEnvelope};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct InstanceView {
@@ -440,28 +398,6 @@ impl From<MicrosoftDeviceSession> for MicrosoftDeviceSessionView {
 }
 
 #[derive(Debug, Serialize)]
-pub struct ProgressEnvelope {
-    pub schema_version: u32,
-    #[serde(rename = "type")]
-    pub kind: &'static str,
-    pub command: &'static str,
-    pub sequence: u64,
-    pub data: ProgressData,
-}
-
-impl ProgressEnvelope {
-    pub fn new(command: &'static str, sequence: u64, data: ProgressData) -> Self {
-        Self {
-            schema_version: SCHEMA_VERSION,
-            kind: "progress",
-            command,
-            sequence,
-            data,
-        }
-    }
-}
-
-#[derive(Debug, Serialize)]
 #[serde(tag = "event", rename_all = "snake_case")]
 pub enum ProgressData {
     MetadataStarted,
@@ -610,6 +546,46 @@ impl From<InstallProgressEvent> for ProgressData {
 }
 
 impl ProgressData {
+    pub const fn phase(&self) -> ProgressPhase {
+        match self {
+            Self::MetadataStarted | Self::MinecraftResolved { .. } => ProgressPhase::Metadata,
+            Self::EulaChecked { .. } => ProgressPhase::Eula,
+            Self::ArtifactStarted { .. }
+            | Self::ArtifactBytes { .. }
+            | Self::ArtifactCached { .. }
+            | Self::ArtifactFinished { .. } => ProgressPhase::Download,
+            Self::JavaManifestStarted
+            | Self::JavaRuntimeResolved { .. }
+            | Self::JavaMaterialized { .. }
+            | Self::JavaRuntimeVerified { .. }
+            | Self::JavaRuntimeCached { .. } => ProgressPhase::Java,
+            Self::LoaderInstallerStarted { .. }
+            | Self::LoaderInstallerOutput { .. }
+            | Self::LoaderInstallerOutputSuppressed { .. }
+            | Self::LoaderInstallerFinished { .. } => ProgressPhase::Loader,
+            Self::StagingVerified | Self::Committed => ProgressPhase::Apply,
+            Self::MicrosoftAuthorizationPolling { .. }
+            | Self::MicrosoftAuthorizationReceived
+            | Self::XboxAuthenticated
+            | Self::MinecraftAuthenticated
+            | Self::AccountSessionStored { .. } => ProgressPhase::Authentication,
+            Self::LaunchArtifactVerified { .. }
+            | Self::LaunchJavaVerified { .. }
+            | Self::LaunchPlanReady => ProgressPhase::Launch,
+            Self::ProcessSpawned { .. }
+            | Self::ProcessOutput { .. }
+            | Self::ProcessExited { .. } => ProgressPhase::Process,
+            Self::SupervisorSpawned { .. }
+            | Self::SupervisorCommandSent { .. }
+            | Self::SupervisorStopRequested
+            | Self::SupervisorExited { .. }
+            | Self::SupervisorBackoff { .. }
+            | Self::SupervisorRestarting { .. }
+            | Self::SupervisorRestartLimitReached { .. }
+            | Self::SupervisorStopped => ProgressPhase::Supervisor,
+        }
+    }
+
     pub fn from_launch_preparation(event: LaunchPreparationEvent) -> Self {
         match event {
             LaunchPreparationEvent::ArtifactVerified { completed, total } => {
@@ -820,8 +796,13 @@ mod tests {
     fn error_envelope_has_stable_gui_fields() {
         let envelope = ErrorEnvelope::new("instance.show", "instance_not_found", "missing");
         let json = serde_json::to_value(envelope).unwrap();
-        assert_eq!(json["schema_version"], 1);
+        assert_eq!(
+            json["schema_version"],
+            orbit_machine_protocol::SCHEMA_VERSION
+        );
         assert_eq!(json["type"], "error");
+        assert_eq!(json["command"], "instance.show");
+        assert_eq!(json["ok"], false);
         assert_eq!(json["code"], "instance_not_found");
     }
 

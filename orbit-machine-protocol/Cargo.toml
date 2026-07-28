@@ -1,0 +1,11 @@
+[package]
+name = "orbit-machine-protocol"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "Shared process protocol for Orbit command-line frontends"
+repository = "https://github.com/water2004/orbit"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }

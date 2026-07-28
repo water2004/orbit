@@ -30,6 +30,7 @@ portable = ["orbit-core/portable"]
 [dependencies]
 # 内部依赖
 orbit-core = { path = "../orbit-core" }
+orbit-machine-protocol.workspace = true
 
 # 工作区依赖
 tokio.workspace = true
