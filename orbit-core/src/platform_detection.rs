@@ -15,6 +15,8 @@ use crate::metadata::mojang::McVersion;
 use crate::metadata::version_profile::{MavenCoord, VersionProfile};
 use crate::resolver::types::PlatformCandidate;
 
+mod orbit_launcher;
+
 #[derive(Debug, Clone)]
 pub(crate) struct DiscoveredPlatform {
     pub minecraft_version: McVersion,
@@ -130,6 +132,30 @@ pub fn detect_loader_candidates(
     requested_loader: Option<&str>,
 ) -> Result<Vec<InitLoaderCandidate>, OrbitError> {
     let requested_loader = requested_loader.map(parse_loader).transpose()?;
+    if let Some(runtime) = orbit_launcher::discover(
+        instance_dir,
+        Some(minecraft_version),
+        requested_loader,
+        None,
+    )? {
+        let name = LoaderDetectionService::new()
+            .known_loaders()
+            .into_iter()
+            .find_map(|(loader, name)| (loader == runtime.loader).then_some(name))
+            .ok_or_else(|| {
+                OrbitError::Other(anyhow::anyhow!(
+                    "Orbit Launcher lock returned unregistered loader '{}'",
+                    runtime.loader
+                ))
+            })?;
+        return Ok(vec![InitLoaderCandidate {
+            loader: runtime.loader,
+            name: name.to_string(),
+            versions: vec![runtime.loader_version],
+            evidence: vec!["selected by orbit-launcher.lock".to_string()],
+            certain: true,
+        }]);
+    }
     if let Some(server) = crate::detection::server::discover_server_runtime(instance_dir)? {
         if server.minecraft.id != minecraft_version {
             return Err(OrbitError::Other(anyhow::anyhow!(
@@ -249,6 +275,9 @@ pub fn detect_mc_version(instance_dir: &Path) -> Result<McVersion, OrbitError> {
 
 /// Returns every actual Minecraft runtime version visible to this instance.
 pub fn detect_mc_versions(instance_dir: &Path) -> Result<Vec<McVersion>, OrbitError> {
+    if let Some(version) = orbit_launcher::minecraft_version(instance_dir)? {
+        return Ok(vec![version]);
+    }
     if let Some(server) = crate::detection::server::discover_server_runtime(instance_dir)? {
         return Ok(vec![server.minecraft]);
     }
@@ -498,6 +527,14 @@ fn discover_platform(
     requested_loader: Option<LoaderKind>,
     requested_loader_version: Option<&str>,
 ) -> Result<DiscoveredPlatform, OrbitError> {
+    if let Some(runtime) = orbit_launcher::discover(
+        instance_dir,
+        requested_mc_version,
+        requested_loader,
+        requested_loader_version,
+    )? {
+        return Ok(runtime);
+    }
     if let Some(server) = crate::detection::server::discover_server_runtime(instance_dir)? {
         return discover_server_platform(
             instance_dir,
