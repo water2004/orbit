@@ -18,13 +18,16 @@ pub mod installer;
 pub mod instance;
 pub mod java;
 pub mod launch;
+pub mod layout;
 pub mod loader;
 pub mod lockfile;
 mod maven;
 pub mod mojang;
+mod natives;
 pub mod operations;
 pub mod platform;
 pub mod registry;
+pub mod repository;
 pub mod runtime;
 pub mod secret_store;
 pub mod versions;
@@ -49,8 +52,9 @@ pub use client::{
 };
 pub use config::{
     ConfigEntry, ConfigKey, ConfigMutation, GlobalConfig, InstallerConfig, JavaProvider,
-    UiPreference, YggdrasilProviderConfig, add_yggdrasil_provider, get_config, list_config,
-    remove_yggdrasil_provider, set_config, unset_config,
+    MinecraftGlobalConfig, UiPreference, YggdrasilProviderConfig, add_yggdrasil_provider,
+    get_config, list_config, remove_yggdrasil_provider, set_config, set_minecraft_directory,
+    unset_config,
 };
 pub use context::{ContextIntent, ContextSource, ResolvedInstance, resolve_instance};
 pub use error::LauncherError;
@@ -83,11 +87,13 @@ pub use launch::{
     LaunchResult, SupervisorControl, SupervisorEvent, SupervisorResult, prepare_launch, run_launch,
     supervise_server,
 };
+pub use layout::{InstanceLocation, validate_directory_name};
 pub use loader::{LoaderSide, ResolvedLoaderProfile, resolve_loader_profile};
 pub use lockfile::{
     ArtifactOwner, INSTANCE_LOCK_FILE, LOCK_SCHEMA, LauncherLock, LockFile, LockedArguments,
     LockedArtifact, LockedArtifactSource, LockedAuthlibInjector, LockedEntrypoint,
-    LockedJavaRuntime, LockedLoader, LockedLoaderSource, LockedMinecraft, portable_relative_path,
+    LockedJavaRuntime, LockedLoader, LockedLoaderSource, LockedMinecraft, LockedNativeExtraction,
+    portable_relative_path,
 };
 pub use mojang::{
     MinecraftVersion, MinecraftVersionCatalog, MojangClient, MojangJavaRequirement,
@@ -96,11 +102,12 @@ pub use mojang::{
 pub use operations::{
     ConfigureInstanceRequest, ConfigureInstanceResult, CreateInstanceRequest, CreateInstanceResult,
     ImportInstanceResult, RemoveInstanceResult, RenameInstanceResult, configure_instance,
-    create_instance, import_instance, remove_instance, rename_instance, resolve_instance_root,
+    create_instance, import_instance, remove_instance, rename_instance, resolve_directory,
     rollback_created_instance, set_default_instance,
 };
 pub use platform::{Architecture, HostPlatform, OperatingSystem};
 pub use registry::{InstanceRegistry, RegistryEntry};
+pub use repository::{MinecraftDirectoryMove, RepositoryMoveEvent, move_minecraft_directory};
 pub use runtime::{
     NativeRuntimeEnvironment, RuntimeContext, RuntimeEnvironment, RuntimePathOptions, RuntimePaths,
 };

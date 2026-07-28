@@ -12,7 +12,8 @@ use cli::{Cli, OutputFormat, ProgressFormat};
 use orbit_i18n::tr;
 use orbit_launcher_core::{
     EulaDocument, InstallProgressEvent, LaunchOutputStream, LaunchPreparationEvent,
-    LaunchProcessEvent, LauncherError, MicrosoftLoginProgressEvent, SupervisorEvent,
+    LaunchProcessEvent, LauncherError, MicrosoftLoginProgressEvent, RepositoryMoveEvent,
+    SupervisorEvent,
 };
 use output::{ErrorEnvelope, ProgressData, ProgressEnvelope, SuccessEnvelope};
 use zeroize::Zeroizing;
@@ -130,6 +131,10 @@ fn command_name(command: &cli::Commands) -> &'static str {
             cli::JavaCommands::Verify { .. } => "java.verify",
             cli::JavaCommands::Remove { .. } => "java.remove",
         },
+        cli::Commands::Minecraft { command } => match command {
+            cli::MinecraftCommands::Directory => "minecraft.directory",
+            cli::MinecraftCommands::Move { .. } => "minecraft.move",
+        },
         cli::Commands::Supervisor => "server.supervisor",
     }
 }
@@ -170,6 +175,8 @@ fn render_success(format: OutputFormat, output: app::CommandOutput) {
             app::CommandOutput::MinecraftVersions(value) => print_json(command, value),
             app::CommandOutput::LoaderVersions(value) => print_json(command, value),
             app::CommandOutput::JavaRequirement(value) => print_json(command, value),
+            app::CommandOutput::MinecraftDirectory(value) => print_json(command, value),
+            app::CommandOutput::MinecraftDirectoryMove(value) => print_json(command, value),
         },
         OutputFormat::Text => render_text(output),
     }
@@ -391,7 +398,7 @@ fn render_text(output: app::CommandOutput) {
                         instance.id,
                         instance.name,
                         instance.kind,
-                        instance.root.display(),
+                        instance.directory.display(),
                         default
                     );
                 }
@@ -401,7 +408,10 @@ fn render_text(output: app::CommandOutput) {
             println!("{} ({})", view.instance.name, view.instance.id);
             println!(
                 "  {}",
-                tr!("Root: %{path}", path = view.instance.root.display())
+                tr!(
+                    "Directory: %{path}",
+                    path = view.instance.directory.display()
+                )
             );
             println!(
                 "  {}",
@@ -440,7 +450,7 @@ fn render_text(output: app::CommandOutput) {
                     action = tr!(view.action.as_str()),
                     name = view.instance.name,
                     id = view.instance.id,
-                    path = view.instance.root.display()
+                    path = view.instance.directory.display()
                 )
             );
             if view.action == output::InstanceMutationAction::Removed {
@@ -697,6 +707,33 @@ fn render_text(output: app::CommandOutput) {
                 )
             ),
         },
+        app::CommandOutput::MinecraftDirectory(view) => println!(
+            "{}",
+            tr!(
+                "Managed Minecraft directory: %{path} (%{source})",
+                path = view.directory.display(),
+                source = tr!(if view.explicit { "explicit" } else { "default" })
+            )
+        ),
+        app::CommandOutput::MinecraftDirectoryMove(view) => {
+            println!(
+                "{}",
+                tr!(
+                    "Moved managed Minecraft directory from %{previous} to %{current}.",
+                    previous = view.previous.display(),
+                    current = view.current.display()
+                )
+            );
+            if !view.source_removed {
+                println!(
+                    "{}",
+                    tr!(
+                        "The verified destination is active, but the old directory could not be removed: %{path}",
+                        path = view.previous.display()
+                    )
+                );
+            }
+        }
     }
 }
 
@@ -865,12 +902,12 @@ fn localized_launcher_error(error: &LauncherError) -> String {
             "Path '%{path}' is already registered to another instance",
             path = path.display()
         ),
-        LauncherError::RelativeInstanceRoot(path) => tr!(
-            "Instance root must be an absolute path: '%{path}'",
+        LauncherError::RelativeInstanceDirectory(path) => tr!(
+            "Instance directory must be an absolute path: '%{path}'",
             path = path.display()
         ),
-        LauncherError::InstanceRootNotDirectory(path) => tr!(
-            "Instance root is not a directory: '%{path}'",
+        LauncherError::InstancePathNotDirectory(path) => tr!(
+            "Instance path is not a directory: '%{path}'",
             path = path.display()
         ),
         LauncherError::InstanceContextRequired => {
@@ -1095,7 +1132,43 @@ impl TerminalFrontend {
                     tr!("Verified managed Java runtime %{id}.", id = runtime_id)
                 )
             }
+            ProgressData::LaunchNativesPrepared { files } => eprintln!(
+                "{}",
+                tr!("Prepared %{files} native runtime file(s).", files = files)
+            ),
             ProgressData::LaunchPlanReady => eprintln!("{}", tr!("Launch plan is ready.")),
+            ProgressData::RepositoryCopying { completed, total }
+                if completed == total || completed % 100 == 0 =>
+            {
+                eprintln!(
+                    "{}",
+                    tr!(
+                        "Copying Minecraft directory: %{completed}/%{total} files.",
+                        completed = completed,
+                        total = total
+                    )
+                )
+            }
+            ProgressData::RepositoryCopying { .. } => {}
+            ProgressData::RepositoryVerifying { completed, total }
+                if completed == total || completed % 100 == 0 =>
+            {
+                eprintln!(
+                    "{}",
+                    tr!(
+                        "Verifying Minecraft directory: %{completed}/%{total} files.",
+                        completed = completed,
+                        total = total
+                    )
+                )
+            }
+            ProgressData::RepositoryVerifying { .. } => {}
+            ProgressData::RepositorySwitching => {
+                eprintln!("{}", tr!("Switching registered client instances."))
+            }
+            ProgressData::RepositoryRemovingSource => {
+                eprintln!("{}", tr!("Removing the verified source directory."))
+            }
             ProgressData::ProcessSpawned { pid } => {
                 eprintln!("{}", tr!("Started Java process %{pid}.", pid = pid))
             }
@@ -1337,6 +1410,10 @@ impl app::Frontend for TerminalFrontend {
 
     fn supervisor_event(&mut self, command: &'static str, event: SupervisorEvent) {
         self.render_launch_event(command, ProgressData::from_supervisor(event));
+    }
+
+    fn repository_move(&mut self, event: RepositoryMoveEvent) {
+        self.render_launch_event("minecraft.move", ProgressData::from_repository(event));
     }
 }
 

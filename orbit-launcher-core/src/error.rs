@@ -77,11 +77,11 @@ pub enum LauncherError {
     #[error("path '{0}' is already registered to another instance")]
     DuplicateInstancePath(PathBuf),
 
-    #[error("instance root must be an absolute path: '{0}'")]
-    RelativeInstanceRoot(PathBuf),
+    #[error("instance directory must be an absolute path: '{0}'")]
+    RelativeInstanceDirectory(PathBuf),
 
-    #[error("instance root is not a directory: '{0}'")]
-    InstanceRootNotDirectory(PathBuf),
+    #[error("instance path is not a directory: '{0}'")]
+    InstancePathNotDirectory(PathBuf),
 
     #[error("instance context is required; change to an instance directory or pass --instance")]
     InstanceContextRequired,
@@ -139,8 +139,8 @@ impl LauncherError {
             Self::DuplicateInstanceName(_) => "duplicate_instance_name",
             Self::DuplicateInstanceId(_) => "duplicate_instance_id",
             Self::DuplicateInstancePath(_) => "duplicate_instance_path",
-            Self::RelativeInstanceRoot(_) => "relative_instance_root",
-            Self::InstanceRootNotDirectory(_) => "instance_root_not_directory",
+            Self::RelativeInstanceDirectory(_) => "relative_instance_directory",
+            Self::InstancePathNotDirectory(_) => "instance_path_not_directory",
             Self::InstanceContextRequired => "instance_context_required",
             Self::ExplicitInstanceRequired(_) => "explicit_instance_required",
             Self::InstanceRegistryMismatch(_) => "instance_registry_mismatch",

@@ -261,7 +261,7 @@ pub fn remove_managed_java_runtime(
     let registry = crate::registry::InstanceRegistry::load(&runtime_paths.instances_file())?;
     let mut used_by = Vec::new();
     for instance in &registry.instances {
-        let Some(lock) = LockFile::open_optional(&instance.root)? else {
+        let Some(lock) = LockFile::open_optional(instance.instance_directory())? else {
             continue;
         };
         if lock
@@ -1176,6 +1176,7 @@ mod tests {
                     sha256: "d".repeat(64),
                     size: 100,
                     path: "server.jar".to_string(),
+                    native_extraction: None,
                 }],
                 generated_files: vec!["eula.txt".to_string()],
                 eula: Some(EulaAcceptance {
@@ -1241,7 +1242,7 @@ mod tests {
         let created = create_instance(
             &paths,
             CreateInstanceRequest {
-                root: instance_root.clone(),
+                directory: instance_root.clone(),
                 name: "server".to_string(),
                 kind: InstanceKind::Server,
                 minecraft_requirement: "1.21.1".to_string(),

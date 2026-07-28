@@ -23,7 +23,9 @@ use crate::instance::{
     InstanceKind, ManifestFile, RestartPolicy, ServerAuthenticationProvider, ServerConfig,
 };
 use crate::java::verify_locked_java_runtime;
+use crate::layout::InstanceLocation;
 use crate::lockfile::{LauncherLock, LockFile, LockedEntrypoint};
+use crate::natives::prepare_native_directory;
 use crate::runtime::RuntimePaths;
 
 const LAUNCHER_NAME: &str = "orbit-launcher";
@@ -33,6 +35,7 @@ const REDACTED: &str = "<redacted>";
 pub enum LaunchPreparationEvent {
     ArtifactVerified { completed: usize, total: usize },
     JavaVerified { runtime_id: String },
+    NativesPrepared { files: usize },
     PlanReady,
 }
 
@@ -187,7 +190,7 @@ pub struct SupervisorResult {
 }
 
 pub fn prepare_launch<F>(
-    instance_root: &Path,
+    location: &InstanceLocation,
     runtime_paths: &RuntimePaths,
     config: &GlobalConfig,
     identity: Option<AccountLaunchIdentity>,
@@ -196,11 +199,20 @@ pub fn prepare_launch<F>(
 where
     F: FnMut(LaunchPreparationEvent),
 {
-    let root = dunce::canonicalize(instance_root)?;
-    let manifest = ManifestFile::open(&root)?.inner;
-    let lock = LockFile::open(&root)?.inner;
+    location
+        .validate()
+        .map_err(LauncherError::InvalidRegistry)?;
+    let instance_root = dunce::canonicalize(location.instance_directory())?;
+    let artifact_root = dunce::canonicalize(location.artifact_directory())?;
+    let manifest = ManifestFile::open(&instance_root)?.inner;
+    let lock = LockFile::open(&instance_root)?.inner;
     validate_manifest_lock(&manifest, &lock)?;
-    verify_instance_files(&root, &lock, &mut progress)?;
+    if manifest.kind != location.kind() {
+        return Err(LauncherError::InstanceRegistryMismatch(
+            "registered instance layout kind disagrees with orbit-launcher.toml".to_string(),
+        ));
+    }
+    verify_instance_files(&artifact_root, &instance_root, &lock, &mut progress)?;
 
     let locked_java = lock.java.as_ref().ok_or_else(|| {
         LauncherError::InvalidLock("installed instance does not lock a Java runtime".to_string())
@@ -210,16 +222,31 @@ where
         runtime_id: locked_java.runtime_id.clone(),
     });
 
-    let placeholders = build_placeholders(&root, &manifest, &lock, identity.as_ref())?;
+    if manifest.kind == InstanceKind::Client {
+        let files = prepare_native_directory(
+            &artifact_root,
+            &instance_root.join("natives"),
+            &lock.artifacts,
+        )?;
+        progress(LaunchPreparationEvent::NativesPrepared { files });
+    }
+
+    let placeholders = build_placeholders(
+        &artifact_root,
+        &instance_root,
+        &manifest,
+        &lock,
+        identity.as_ref(),
+    )?;
     let authentication_arguments =
-        authentication_arguments(&root, &manifest, &lock, config, identity.as_ref())?;
+        authentication_arguments(&artifact_root, &manifest, &lock, config, identity.as_ref())?;
     let classpath_explicit = lock
         .arguments
         .jvm
         .iter()
         .any(|argument| argument.contains("${classpath}"));
     let arguments = assemble_arguments(
-        &root,
+        &artifact_root,
         &manifest,
         &lock,
         classpath_explicit,
@@ -227,7 +254,7 @@ where
         &authentication_arguments,
     )?;
     let redacted_arguments = assemble_arguments(
-        &root,
+        &artifact_root,
         &manifest,
         &lock,
         classpath_explicit,
@@ -245,7 +272,7 @@ where
         instance_id: manifest.id,
         kind: manifest.kind,
         java_executable,
-        working_directory: root,
+        working_directory: instance_root,
         arguments,
         redacted_arguments,
         sensitive_values,
@@ -669,7 +696,8 @@ fn validate_manifest_lock(
 }
 
 fn verify_instance_files<F>(
-    root: &Path,
+    artifact_root: &Path,
+    instance_root: &Path,
     lock: &LauncherLock,
     progress: &mut F,
 ) -> Result<(), LauncherError>
@@ -678,7 +706,7 @@ where
 {
     let total = lock.artifacts.len();
     for (index, artifact) in lock.artifacts.iter().enumerate() {
-        let path = root.join(path_from_portable(&artifact.path));
+        let path = artifact_root.join(path_from_portable(&artifact.path));
         let metadata = std::fs::metadata(&path).map_err(|error| {
             LauncherError::ArtifactIntegrity(format!(
                 "installed artifact '{}' is unavailable: {error}",
@@ -700,14 +728,14 @@ where
         });
     }
     for generated in &lock.generated_files {
-        if !root.join(path_from_portable(generated)).is_file() {
+        if !artifact_root.join(path_from_portable(generated)).is_file() {
             return Err(LauncherError::ArtifactIntegrity(format!(
                 "generated runtime file '{generated}' is missing"
             )));
         }
     }
     if lock.kind == InstanceKind::Server
-        && std::fs::read_to_string(root.join("eula.txt"))?.trim() != "eula=true"
+        && std::fs::read_to_string(instance_root.join("eula.txt"))?.trim() != "eula=true"
     {
         return Err(LauncherError::EulaRequired(
             "eula.txt no longer records acceptance; install again or accept the EULA".to_string(),
@@ -722,7 +750,8 @@ struct PlaceholderSets {
 }
 
 fn build_placeholders(
-    root: &Path,
+    artifact_root: &Path,
+    instance_root: &Path,
     manifest: &crate::instance::InstanceManifest,
     lock: &LauncherLock,
     identity: Option<&AccountLaunchIdentity>,
@@ -743,7 +772,7 @@ fn build_placeholders(
     let classpath = match &lock.entrypoint {
         LockedEntrypoint::Classpath { classpath, .. } => classpath
             .iter()
-            .map(|path| root.join(path_from_portable(path)))
+            .map(|path| artifact_root.join(path_from_portable(path)))
             .collect::<Vec<_>>(),
         _ => Vec::new(),
     };
@@ -755,7 +784,7 @@ fn build_placeholders(
     let mut values = BTreeMap::from([
         (
             "${natives_directory}",
-            root.join("natives").display().to_string(),
+            instance_root.join("natives").display().to_string(),
         ),
         ("${launcher_name}", LAUNCHER_NAME.to_string()),
         ("${launcher_version}", env!("CARGO_PKG_VERSION").to_string()),
@@ -763,14 +792,17 @@ fn build_placeholders(
         ("${classpath_separator}", classpath_separator().to_string()),
         (
             "${library_directory}",
-            root.join("libraries").display().to_string(),
+            artifact_root.join("libraries").display().to_string(),
         ),
         (
             "${libraries_directory}",
-            root.join("libraries").display().to_string(),
+            artifact_root.join("libraries").display().to_string(),
         ),
-        ("${game_directory}", root.display().to_string()),
-        ("${assets_root}", root.join("assets").display().to_string()),
+        ("${game_directory}", instance_root.display().to_string()),
+        (
+            "${assets_root}",
+            artifact_root.join("assets").display().to_string(),
+        ),
         ("${assets_index_name}", asset_index),
         ("${version_name}", lock.minecraft.version.clone()),
         ("${version_type}", lock.minecraft.version_type.clone()),

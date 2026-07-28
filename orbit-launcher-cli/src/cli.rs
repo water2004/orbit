@@ -62,9 +62,9 @@ pub enum Commands {
         /// Create and install a new named instance in one command.
         #[arg(long)]
         new: Option<String>,
-        /// New instance root; only valid with --new and defaults to the current directory.
+        /// Dedicated server directory; only valid for a new server and defaults to the current directory.
         #[arg(long)]
-        root: Option<PathBuf>,
+        server_directory: Option<PathBuf>,
         /// New instance kind; required with --new.
         #[arg(long, value_enum)]
         kind: Option<InstanceKindArg>,
@@ -122,6 +122,12 @@ pub enum Commands {
         command: JavaCommands,
     },
 
+    /// Inspect or relocate the single managed multi-version Minecraft repository.
+    Minecraft {
+        #[command(subcommand)]
+        command: MinecraftCommands,
+    },
+
     /// Internal detached supervisor entrypoint.
     #[command(name = "__supervisor", hide = true)]
     Supervisor,
@@ -164,6 +170,14 @@ pub enum JavaCommands {
     Verify { runtime_id: String },
     /// Remove an unreferenced runtime; instance locks prevent unsafe removal.
     Remove { runtime_id: String },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum MinecraftCommands {
+    /// Print the exact managed Minecraft repository directory.
+    Directory,
+    /// Move the whole repository and every registered client instance.
+    Move { destination: PathBuf },
 }
 
 #[derive(Debug, Subcommand)]
@@ -291,9 +305,9 @@ pub enum InstanceCommands {
     Create {
         #[arg(long)]
         name: String,
-        /// Instance root; defaults to the exact current directory.
+        /// Dedicated server directory; invalid for clients and defaults to the current directory.
         #[arg(long)]
-        root: Option<PathBuf>,
+        server_directory: Option<PathBuf>,
         #[arg(long, value_enum)]
         kind: InstanceKindArg,
         #[arg(long)]
@@ -307,9 +321,9 @@ pub enum InstanceCommands {
 
     /// Register an existing orbit-launcher.toml, including after moving it.
     Import {
-        /// Instance root; defaults to the exact current directory.
+        /// Exact isolated client game directory or dedicated server directory; defaults to current directory.
         #[arg(long)]
-        root: Option<PathBuf>,
+        directory: Option<PathBuf>,
     },
 
     /// List globally registered instances.
@@ -482,7 +496,7 @@ mod tests {
             "install",
             "--new",
             "server",
-            "--root",
+            "--server-directory",
             "./server",
             "--kind",
             "server",
@@ -492,7 +506,7 @@ mod tests {
         .unwrap();
         let Commands::Install {
             new,
-            root,
+            server_directory,
             kind,
             minecraft,
             ..
@@ -501,7 +515,10 @@ mod tests {
             panic!("unexpected command");
         };
         assert_eq!(new.as_deref(), Some("server"));
-        assert_eq!(root.as_deref(), Some(std::path::Path::new("./server")));
+        assert_eq!(
+            server_directory.as_deref(),
+            Some(std::path::Path::new("./server"))
+        );
         assert_eq!(kind, Some(InstanceKindArg::Server));
         assert_eq!(minecraft.as_deref(), Some("latest-release"));
         assert_eq!(cli.progress_format, ProgressFormat::Text);

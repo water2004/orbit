@@ -99,19 +99,24 @@ adapter 中。
 Instance
   id                  稳定的 Launcher 内部 ID
   name                用户可见名称
-  root                游戏/服务端目录的绝对路径
   kind                Client | DedicatedServer
+  location            Client { minecraft_directory, game_directory }
+                      | DedicatedServer { server_directory }
   desired             用户配置的版本和更新策略
   locked              已解析、已安装的精确状态
 ```
 
-实例目录必须是用户显式创建或导入的目录。注册表中的路径只是索引，实例自身文件是事实
-来源；移动实例后可通过 `instance import` 重新注册。
+客户端不是扁平单版本目录。所有客户端共享一个由 Launcher 托管的标准 Minecraft 仓库，
+`minecraft_directory` 保存 `assets`、`libraries` 和版本工件；每个实例的 `game_directory`
+严格为 `<minecraft_directory>/versions/<name>`，保存该实例的 manifest/lock、`mods`、`config`、
+`saves` 和启动工作目录。Dedicated server 仍使用一个明确的 `server_directory`，因为服务端
+分发本身就是单根模型。
 
-`id` 是不可变 UUID；`name` 是全局唯一但可修改的人类名称；`root` 可以在实例移动和重新
-导入后变化。GUI 和 supervisor 必须始终使用 `id`，不能把名称或绝对路径当作进程身份。
-路径只允许出现在 `instance create`、`instance import` 或 `install --new` 的创建边界，
-日常命令不得要求位置参数形式的实例路径。
+`id` 是不可变 UUID；`name` 是全局唯一但可修改的人类名称。GUI 和 supervisor 必须始终
+使用 `id`，不能把名称或绝对路径当作进程身份。客户端仓库只通过
+`minecraft move <absolute-destination>` 整体迁移；该事务同时更新全部客户端 location，
+不能逐实例产生多个隐式仓库。导入客户端时目录必须是 `versions/` 的直接子目录，不猜测
+扁平布局。服务端路径只在 create/import/bootstrap 边界出现。
 
 命令实例上下文按固定优先级解析：
 
@@ -201,16 +206,28 @@ data/
   auth-sessions/             有期限的登录会话，不含最终 refresh token 明文
   supervisors/               Linux 上按实例 ID 建立的权限受限 Unix socket
   runtimes/                  已物化的共享 Java runtime
+  minecraft/                 缺省托管客户端仓库，可由 minecraft move 整体迁移
 cache/
   objects/sha256/<digest>    内容寻址缓存
   metadata/                  带 ETag/过期信息的远端元数据
   staging/                   可恢复的临时事务
 ```
 
-### 5.2 实例目录
+### 5.2 实例与工件目录
 
 ```text
-<instance>/
+<minecraft-directory>/
+  assets/                    客户端共享官方资源
+  libraries/                 客户端共享 Minecraft/Loader 库
+  versions/
+    <instance-name>/         客户端隔离 game directory
+      <instance-name>.json   可供标准启动器读取的派生版本 profile
+      orbit-launcher.toml
+      orbit-launcher.lock
+      mods/ config/ saves/
+      natives/               启动准备阶段从锁定 classifier JAR 重建
+
+<server-directory>/
   orbit-launcher.toml        用户意图和启动设置
   orbit-launcher.lock        精确运行时与 artifact inventory
   .orbit-launcher/
@@ -221,8 +238,10 @@ cache/
   ...                        标准运行时文件及不透明的用户文件
 ```
 
-`orbit-launcher.lock` 必须使用相对实例根目录的规范路径，并记录 schema version。秘密、
-access token、refresh token、密码和 device code 不得进入配置、lock、日志或错误 detail。
+客户端 lock 的 artifact path 相对 `minecraft_directory`，因此可以同时锁定共享库和
+`versions/<instance-name>/...` 中的实例文件；服务端 lock path 相对 server directory。所有路径
+必须是规范便携相对路径并记录 schema version。秘密、access token、refresh token、密码和
+device code 不得进入配置、lock、日志或错误 detail。
 
 ## 6. Minecraft 元数据与安装
 
@@ -599,7 +618,8 @@ LaunchPlan
 - 结构化上报 spawned、running、stdout/stderr line、exited；
 - 可选择是否将游戏输出原样转发到当前终端；
 - Launcher 被中断时，不默认杀死已经成功启动的客户端；
-- 临时 natives 只在进程结束且没有其他进程引用后清理。
+- 安装只锁定 native classifier JAR 与排除规则；每次启动准备在实例版本目录中事务式重建
+  `natives`，不把解压结果纳入安装工件，也不在安装时重复解包。
 
 服务端：
 
@@ -641,7 +661,8 @@ Domain Socket 只存在于平台 IPC 模块，不进入安装或账户领域。
 orbit-launcher
   instance create|import|list|show|rename|remove|default
   versions minecraft|loader|java
-  install [--new <name>] [--root <path>] [--kind <client|server>]
+  minecraft directory|move
+  install [--new <name>] [--server-directory <path>] [--kind <client|server>]
   update [--minecraft] [--loader] [--java]
   verify
   repair
@@ -701,18 +722,24 @@ text + TTY 可以选择版本、账户和更新方案。以下情况禁止 promp
 orbit-launcher install --new main-server --kind server \
   --minecraft 1.21.1 --loader fabric --loader-version stable --java auto
 
-# 从任意目录创建；--root 只在这个创建边界出现
-orbit-launcher install --new main-client --root <path> --kind client \
+# 客户端始终进入托管仓库的 versions/<name>，不接受自由 root
+orbit-launcher install --new main-client --kind client \
   --minecraft latest-release --loader fabric --loader-version stable --java auto
+
+# 服务端可明确选目录；缺省仍为当前目录
+orbit-launcher install --new main-server --server-directory <path> --kind server \
+  --minecraft 1.21.1 --loader fabric --loader-version stable --java auto
 
 # 已有局部或显式全局实例
 orbit-launcher install
 orbit-launcher --instance <id> install
 ```
 
-`--new` 默认把当前目录作为 root。bootstrap 必须在一个事务内完成实例文件、artifact 和
-全局注册：安装失败不得留下一个宣称可用的注册表条目；成功结果返回稳定 `instance_id`。
-客户端安装不要求账户，账户只在 launch 时使用。
+客户端 `--new` 固定使用平台 data 目录中的唯一托管 Minecraft 仓库，game directory 为
+`versions/<name>`；共享 assets/libraries 与实例可变内容在领域模型中是两个明确根。服务端
+`--new` 默认把当前目录作为 server directory，也可传 `--server-directory`。bootstrap 必须
+在一个事务内完成实例文件、artifact 和全局注册：安装失败不得留下一个宣称可用的注册表
+条目；成功结果返回稳定 `instance_id`。客户端安装不要求账户，账户只在 launch 时使用。
 
 ## 14. 输出协议
 
@@ -796,7 +823,7 @@ JSON 错误写入 stderr，使用稳定 code：
 全局 `config.toml`：
 
 ```toml
-schema = 1
+schema = 2
 
 [network]
 concurrency = 8
@@ -805,6 +832,10 @@ request_timeout_seconds = 120
 
 [cache]
 max_size = "20 GiB"
+
+[minecraft]
+# 缺省为平台 data 目录下的 minecraft；必须是绝对路径。
+directory = "/srv/orbit-client-repository"
 
 [java]
 default_provider = "mojang"

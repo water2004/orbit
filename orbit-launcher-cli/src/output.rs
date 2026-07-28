@@ -1,11 +1,11 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use orbit_launcher_core::{
     AccountMetadata, AccountProvider, ArtifactTransferEvent, ContextSource, InstallProgressEvent,
     InstallerOutputStream, InstallerSide, InstanceManifest, JavaProgressEvent, LaunchOutputStream,
     LaunchPlanSummary, LaunchPreparationEvent, LaunchProcessEvent, LaunchResult,
     LoaderInstallerEvent, MicrosoftDeviceSession, MicrosoftLoginProgressEvent, RegistryEntry,
-    SupervisorEvent, SupervisorResult,
+    RepositoryMoveEvent, SupervisorEvent, SupervisorResult,
 };
 use serde::Serialize;
 
@@ -16,7 +16,9 @@ pub use orbit_machine_protocol::{ErrorEnvelope, ProgressEnvelope, ProgressPhase,
 pub struct InstanceView {
     pub id: String,
     pub name: String,
-    pub root: PathBuf,
+    pub directory: PathBuf,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub minecraft_directory: Option<PathBuf>,
     pub kind: String,
     pub is_default: bool,
 }
@@ -26,9 +28,37 @@ impl InstanceView {
         Self {
             id: entry.id.to_string(),
             name: entry.name.clone(),
-            root: entry.root.clone(),
-            kind: entry.kind.as_str().to_string(),
+            directory: entry.instance_directory().to_path_buf(),
+            minecraft_directory: entry.location.minecraft_directory().map(Path::to_path_buf),
+            kind: entry.kind().as_str().to_string(),
             is_default: default == Some(entry.id),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct MinecraftDirectoryView {
+    pub directory: PathBuf,
+    pub explicit: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct MinecraftDirectoryMoveView {
+    pub previous: PathBuf,
+    pub current: PathBuf,
+    pub files: u64,
+    pub copied_across_filesystems: bool,
+    pub source_removed: bool,
+}
+
+impl From<orbit_launcher_core::MinecraftDirectoryMove> for MinecraftDirectoryMoveView {
+    fn from(value: orbit_launcher_core::MinecraftDirectoryMove) -> Self {
+        Self {
+            previous: value.previous,
+            current: value.current,
+            files: value.files,
+            copied_across_filesystems: value.copied_across_filesystems,
+            source_removed: value.source_removed,
         }
     }
 }
@@ -641,7 +671,20 @@ pub enum ProgressData {
     LaunchJavaVerified {
         runtime_id: String,
     },
+    LaunchNativesPrepared {
+        files: usize,
+    },
     LaunchPlanReady,
+    RepositoryCopying {
+        completed: u64,
+        total: u64,
+    },
+    RepositoryVerifying {
+        completed: u64,
+        total: u64,
+    },
+    RepositorySwitching,
+    RepositoryRemovingSource,
     ProcessSpawned {
         pid: u32,
     },
@@ -734,7 +777,12 @@ impl ProgressData {
             | Self::AccountSessionStored { .. } => ProgressPhase::Authentication,
             Self::LaunchArtifactVerified { .. }
             | Self::LaunchJavaVerified { .. }
+            | Self::LaunchNativesPrepared { .. }
             | Self::LaunchPlanReady => ProgressPhase::Launch,
+            Self::RepositoryCopying { .. }
+            | Self::RepositoryVerifying { .. }
+            | Self::RepositorySwitching
+            | Self::RepositoryRemovingSource => ProgressPhase::Apply,
             Self::ProcessSpawned { .. }
             | Self::ProcessOutput { .. }
             | Self::ProcessExited { .. } => ProgressPhase::Process,
@@ -757,7 +805,23 @@ impl ProgressData {
             LaunchPreparationEvent::JavaVerified { runtime_id } => {
                 Self::LaunchJavaVerified { runtime_id }
             }
+            LaunchPreparationEvent::NativesPrepared { files } => {
+                Self::LaunchNativesPrepared { files }
+            }
             LaunchPreparationEvent::PlanReady => Self::LaunchPlanReady,
+        }
+    }
+
+    pub fn from_repository(event: RepositoryMoveEvent) -> Self {
+        match event {
+            RepositoryMoveEvent::Copying { completed, total } => {
+                Self::RepositoryCopying { completed, total }
+            }
+            RepositoryMoveEvent::Verifying { completed, total } => {
+                Self::RepositoryVerifying { completed, total }
+            }
+            RepositoryMoveEvent::SwitchingRegistry => Self::RepositorySwitching,
+            RepositoryMoveEvent::RemovingSource => Self::RepositoryRemovingSource,
         }
     }
 
@@ -953,7 +1017,17 @@ impl ConfigMutationView {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use orbit_launcher_core::{ContextSource, InstanceKind, InstanceManifest, LoaderKind};
+    use orbit_launcher_core::{
+        ContextSource, InstanceKind, InstanceLocation, InstanceManifest, LoaderKind,
+    };
+
+    fn absolute(path: &str) -> PathBuf {
+        if cfg!(windows) {
+            PathBuf::from(format!(r"C:\{path}"))
+        } else {
+            PathBuf::from(format!("/{path}"))
+        }
+    }
 
     #[test]
     fn error_envelope_has_stable_gui_fields() {
@@ -975,8 +1049,7 @@ mod tests {
         let entry = RegistryEntry {
             id,
             name: "server".to_string(),
-            root: PathBuf::from("/srv/minecraft"),
-            kind: InstanceKind::Server,
+            location: InstanceLocation::server(absolute("srv/minecraft")).unwrap(),
         };
         let json = serde_json::to_value(InstanceView::from_entry(&entry, Some(id))).unwrap();
         assert_eq!(json["id"], id.to_string());
@@ -990,8 +1063,11 @@ mod tests {
         let entry = RegistryEntry {
             id,
             name: "client".to_string(),
-            root: PathBuf::from("/games/client"),
-            kind: InstanceKind::Client,
+            location: InstanceLocation::client(
+                absolute("games/minecraft"),
+                absolute("games/minecraft/versions/client"),
+            )
+            .unwrap(),
         };
         let mut manifest = InstanceManifest::new(
             id,

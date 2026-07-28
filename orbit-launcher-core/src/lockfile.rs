@@ -10,7 +10,7 @@ use crate::eula::EulaAcceptance;
 use crate::instance::{InstanceKind, LoaderKind};
 
 pub const INSTANCE_LOCK_FILE: &str = "orbit-launcher.lock";
-pub const LOCK_SCHEMA: u32 = 3;
+pub const LOCK_SCHEMA: u32 = 4;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -394,6 +394,15 @@ pub struct LockedArtifact {
     pub sha256: String,
     pub size: u64,
     pub path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub native_extraction: Option<LockedNativeExtraction>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LockedNativeExtraction {
+    #[serde(default)]
+    pub excludes: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -406,6 +415,10 @@ pub enum LockedArtifactSource {
     },
     InstallerOutput {
         installer_sha256: String,
+    },
+    Derived {
+        source_sha256: String,
+        description: String,
     },
 }
 
@@ -422,9 +435,27 @@ impl LockedArtifact {
             LockedArtifactSource::InstallerOutput { installer_sha256 } => {
                 validate_digest(installer_sha256, 64, "producer installer SHA-256")?;
             }
+            LockedArtifactSource::Derived {
+                source_sha256,
+                description,
+            } => {
+                validate_digest(source_sha256, 64, "derived artifact source SHA-256")?;
+                validate_text(description, "derived artifact description")?;
+            }
         }
         validate_digest(&self.sha256, 64, "artifact SHA-256")?;
         validate_relative_path(&self.path)?;
+        if let Some(native) = &self.native_extraction {
+            let mut unique = HashSet::new();
+            for prefix in &native.excludes {
+                validate_archive_prefix(prefix)?;
+                if !unique.insert(prefix) {
+                    return Err(LauncherError::InvalidLock(format!(
+                        "duplicate native extraction exclusion '{prefix}'"
+                    )));
+                }
+            }
+        }
         if self.size == 0 && matches!(self.source, LockedArtifactSource::Download { .. }) {
             return Err(LauncherError::InvalidLock(format!(
                 "artifact '{}' has zero size",
@@ -433,6 +464,21 @@ impl LockedArtifact {
         }
         Ok(())
     }
+}
+
+fn validate_archive_prefix(prefix: &str) -> Result<(), LauncherError> {
+    let trimmed = prefix.trim_end_matches('/');
+    if trimmed.is_empty()
+        || prefix.contains('\\')
+        || trimmed
+            .split('/')
+            .any(|part| part.is_empty() || part == "." || part == "..")
+    {
+        return Err(LauncherError::InvalidLock(format!(
+            "native extraction exclusion '{prefix}' is unsafe"
+        )));
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone)]
@@ -603,6 +649,7 @@ mod tests {
                 sha256: "d".repeat(64),
                 size: 100,
                 path: "server.jar".to_string(),
+                native_extraction: None,
             }],
             generated_files: vec!["eula.txt".to_string()],
             eula: Some(EulaAcceptance {

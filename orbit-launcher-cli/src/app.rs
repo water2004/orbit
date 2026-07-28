@@ -9,23 +9,23 @@ use orbit_launcher_core::{
     AccountRepository, ConfigKey, ContextIntent, CreateInstanceRequest, EulaAcceptanceMethod,
     EulaDocument, ExternalYggdrasilLoginRequest, InstallProgressEvent, InstanceKind,
     InstanceRegistry, LaunchPreparationEvent, LaunchProcessEvent, LauncherError, ManifestFile,
-    MicrosoftLoginProgressEvent, ResolvedInstance, RuntimeContext, ServerInstallPlan,
-    SupervisorControl, SupervisorEvent, YggdrasilProviderConfig, accept_shown_eula,
-    add_yggdrasil_provider, apply_install_plan, begin_microsoft_device_login,
+    MicrosoftLoginProgressEvent, RepositoryMoveEvent, ResolvedInstance, RuntimeContext,
+    ServerInstallPlan, SupervisorControl, SupervisorEvent, YggdrasilProviderConfig,
+    accept_shown_eula, add_yggdrasil_provider, apply_install_plan, begin_microsoft_device_login,
     complete_microsoft_device_login, configure_instance, create_instance, create_offline_account,
-    get_config, import_instance, list_config, login_external_yggdrasil, native_secret_store,
-    prepare_install, prepare_launch, remove_instance, remove_yggdrasil_provider, rename_instance,
-    resolve_instance, resolve_instance_root, resolve_launch_identity, rollback_created_instance,
-    run_launch, set_config, set_default_instance, show_current_eula, supervise_server,
-    unset_config,
+    get_config, import_instance, list_config, login_external_yggdrasil, move_minecraft_directory,
+    native_secret_store, prepare_install, prepare_launch, remove_instance,
+    remove_yggdrasil_provider, rename_instance, resolve_directory, resolve_instance,
+    resolve_launch_identity, rollback_created_instance, run_launch, set_config,
+    set_default_instance, show_current_eula, supervise_server, unset_config,
 };
 use tokio::sync::{mpsc, watch};
 use zeroize::Zeroizing;
 
 use crate::cli::{
     AccountCommands, AccountLoginCommands, Commands, ConfigCommands, DefaultCommands, EulaCommands,
-    InstanceCommands, JavaCommands, MicrosoftLoginCommands, ServerCommands, VersionCommands,
-    YggdrasilProviderCommands,
+    InstanceCommands, JavaCommands, MicrosoftLoginCommands, MinecraftCommands, ServerCommands,
+    VersionCommands, YggdrasilProviderCommands,
 };
 use crate::output::{
     AccountListView, AccountLoginView, AccountLogoutView, AccountSelectionView, AccountView,
@@ -34,9 +34,9 @@ use crate::output::{
     InstanceListView, InstanceMutationAction, InstanceMutationView, InstanceView,
     JavaRequirementView, JavaRuntimeListView, JavaRuntimeMutationView, LaunchPlanView,
     LaunchResultView, LoaderVersionCatalogView, MicrosoftDeviceSessionView,
-    MinecraftVersionCatalogView, RenameView, ServerControlView, ServerStartView, ServerStatusView,
-    SupervisorResultView, YggdrasilProviderListView, YggdrasilProviderMutationView,
-    YggdrasilProviderView,
+    MinecraftDirectoryMoveView, MinecraftDirectoryView, MinecraftVersionCatalogView, RenameView,
+    ServerControlView, ServerStartView, ServerStatusView, SupervisorResultView,
+    YggdrasilProviderListView, YggdrasilProviderMutationView, YggdrasilProviderView,
 };
 use crate::supervisor_ipc::{
     IpcRequest, IpcServer, SupervisorLock, SupervisorState, request as supervisor_request,
@@ -76,6 +76,8 @@ pub enum CommandOutput {
     MinecraftVersions(MinecraftVersionCatalogView),
     LoaderVersions(LoaderVersionCatalogView),
     JavaRequirement(JavaRequirementView),
+    MinecraftDirectory(MinecraftDirectoryView),
+    MinecraftDirectoryMove(MinecraftDirectoryMoveView),
 }
 
 impl CommandOutput {
@@ -138,6 +140,8 @@ impl CommandOutput {
             Self::MinecraftVersions(_) => "versions.minecraft",
             Self::LoaderVersions(_) => "versions.loader",
             Self::JavaRequirement(_) => "versions.java",
+            Self::MinecraftDirectory(_) => "minecraft.directory",
+            Self::MinecraftDirectoryMove(_) => "minecraft.move",
         }
     }
 
@@ -170,6 +174,8 @@ pub trait Frontend: Send {
     fn launch_process(&mut self, command: &'static str, event: LaunchProcessEvent);
 
     fn supervisor_event(&mut self, command: &'static str, event: SupervisorEvent);
+
+    fn repository_move(&mut self, event: RepositoryMoveEvent);
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -199,7 +205,7 @@ pub async fn execute(
     match command {
         Commands::Install {
             new,
-            root,
+            server_directory,
             kind,
             minecraft,
             loader,
@@ -212,7 +218,7 @@ pub async fn execute(
                 frontend,
                 InstallCommandRequest {
                     new_name: new,
-                    root,
+                    server_directory,
                     kind,
                     minecraft,
                     loader,
@@ -255,6 +261,14 @@ pub async fn execute(
             execute_account(command, instance_selector, current_dir, runtime, frontend).await
         }
         Commands::Java { command } => execute_java(command, instance_selector, runtime),
+        Commands::Minecraft { command } => {
+            if instance_selector.is_some() {
+                return Err(AppError::Argument(
+                    "--instance is not valid for Minecraft repository commands".to_string(),
+                ));
+            }
+            execute_minecraft(command, current_dir, runtime, frontend)
+        }
         Commands::Versions { command } => {
             execute_versions(command, instance_selector, runtime).await
         }
@@ -347,6 +361,32 @@ fn execute_java(
     }
 }
 
+fn execute_minecraft(
+    command: MinecraftCommands,
+    current_dir: &Path,
+    runtime: &RuntimeContext,
+    frontend: &mut dyn Frontend,
+) -> Result<CommandOutput, AppError> {
+    match command {
+        MinecraftCommands::Directory => {
+            Ok(CommandOutput::MinecraftDirectory(MinecraftDirectoryView {
+                directory: runtime.minecraft_directory(),
+                explicit: runtime.config().minecraft.directory.is_some(),
+            }))
+        }
+        MinecraftCommands::Move { destination } => {
+            let destination = resolve_directory(current_dir, Some(&destination))?;
+            let moved = move_minecraft_directory(
+                runtime.paths(),
+                runtime.config(),
+                &destination,
+                |event| frontend.repository_move(event),
+            )?;
+            Ok(CommandOutput::MinecraftDirectoryMove(moved.into()))
+        }
+    }
+}
+
 async fn execute_launch(
     selector: Option<&str>,
     current_dir: &Path,
@@ -387,7 +427,7 @@ async fn execute_launch(
         None
     };
     let plan = prepare_launch(
-        &resolved.entry.root,
+        &resolved.entry.location,
         runtime.paths(),
         runtime.config(),
         identity,
@@ -592,7 +632,7 @@ fn set_instance_account(
             "server instances do not use client accounts".to_string(),
         ));
     }
-    let mut manifest = ManifestFile::open(&resolved.entry.root)?;
+    let mut manifest = ManifestFile::open(resolved.entry.instance_directory())?;
     manifest.inner.launch.account = account;
     manifest.save()?;
     Ok(())
@@ -600,7 +640,7 @@ fn set_instance_account(
 
 struct InstallCommandRequest {
     new_name: Option<String>,
-    root: Option<std::path::PathBuf>,
+    server_directory: Option<std::path::PathBuf>,
     kind: Option<crate::cli::InstanceKindArg>,
     minecraft: Option<String>,
     loader: Option<crate::cli::LoaderKindArg>,
@@ -620,19 +660,33 @@ async fn execute_install(
                 "--instance cannot be combined with install --new".to_string(),
             ));
         }
-        let kind = request
+        let kind: InstanceKind = request
             .kind
-            .ok_or_else(|| AppError::Argument("install --new requires --kind".to_string()))?;
+            .ok_or_else(|| AppError::Argument("install --new requires --kind".to_string()))?
+            .into();
         let minecraft = request
             .minecraft
             .ok_or_else(|| AppError::Argument("install --new requires --minecraft".to_string()))?;
-        let root = resolve_instance_root(current_dir, request.root.as_deref())?;
+        let directory = match kind {
+            InstanceKind::Client => {
+                if request.server_directory.is_some() {
+                    return Err(AppError::Argument(
+                        "--server-directory is invalid for client instances; use 'minecraft move' to relocate the managed repository"
+                            .to_string(),
+                    ));
+                }
+                runtime.minecraft_directory()
+            }
+            InstanceKind::Server => {
+                resolve_directory(current_dir, request.server_directory.as_deref())?
+            }
+        };
         Some(create_instance(
             runtime.paths(),
             CreateInstanceRequest {
-                root,
+                directory,
                 name,
-                kind: kind.into(),
+                kind,
                 minecraft_requirement: minecraft,
                 loader_kind: request
                     .loader
@@ -642,14 +696,14 @@ async fn execute_install(
             },
         )?)
     } else {
-        if request.root.is_some()
+        if request.server_directory.is_some()
             || request.kind.is_some()
             || request.minecraft.is_some()
             || request.loader.is_some()
             || request.loader_version.is_some()
         {
             return Err(AppError::Argument(
-                "--root, --kind, --minecraft, --loader, and --loader-version require install --new"
+                "--server-directory, --kind, --minecraft, --loader, and --loader-version require install --new"
                     .to_string(),
             ));
         }
@@ -682,17 +736,17 @@ async fn execute_existing_install(
     let resolved = resolve_instance(&registry, selector, current_dir, ContextIntent::Sensitive)?;
     let client = runtime.config().http_client()?;
     let plan = prepare_install(
-        &resolved.entry.root,
+        &resolved.entry.location,
         &client,
         runtime.config().java.default_provider,
         |event| frontend.progress(event),
     )
     .await?;
     if let Some(server) = plan.server() {
-        ensure_server_eula_accepted(&resolved.entry.root, server, frontend)?;
+        ensure_server_eula_accepted(resolved.entry.instance_directory(), server, frontend)?;
     }
     let result = apply_install_plan(
-        &resolved.entry.root,
+        &resolved.entry.location,
         runtime.paths(),
         &client,
         plan,
@@ -796,7 +850,8 @@ async fn execute_server(
         ServerCommands::Eula { command } => match command {
             EulaCommands::Show => {
                 let client = runtime.config().http_client()?;
-                let document = show_current_eula(&resolved.entry.root, &client).await?;
+                let document =
+                    show_current_eula(resolved.entry.instance_directory(), &client).await?;
                 Ok(CommandOutput::EulaDocument(EulaDocumentView {
                     instance_id: resolved.entry.id.to_string(),
                     url: document.url,
@@ -807,7 +862,7 @@ async fn execute_server(
             }
             EulaCommands::Accept { digest } => {
                 let acceptance = accept_shown_eula(
-                    &resolved.entry.root,
+                    resolved.entry.instance_directory(),
                     &digest,
                     EulaAcceptanceMethod::DigestCommand,
                 )?;
@@ -846,7 +901,7 @@ fn prepare_server_plan(
     command: &'static str,
 ) -> Result<orbit_launcher_core::LaunchPlan, AppError> {
     prepare_launch(
-        &resolved.entry.root,
+        &resolved.entry.location,
         runtime.paths(),
         runtime.config(),
         None,
@@ -905,7 +960,7 @@ async fn execute_internal_supervisor(
     frontend: &mut dyn Frontend,
 ) -> Result<CommandOutput, AppError> {
     let resolved = resolve_server_instance(selector, current_dir, runtime)?;
-    let _lock = SupervisorLock::acquire(&resolved.entry.root)?;
+    let _lock = SupervisorLock::acquire(resolved.entry.instance_directory())?;
     let plan = prepare_server_plan(&resolved, runtime, frontend, "server.supervisor")?;
     let config =
         resolved.manifest.server.clone().ok_or_else(|| {
@@ -969,7 +1024,7 @@ async fn start_detached_supervisor(
         .into());
     }
 
-    let log_directory = resolved.entry.root.join(".orbit-launcher");
+    let log_directory = resolved.entry.instance_directory().join(".orbit-launcher");
     std::fs::create_dir_all(&log_directory).map_err(LauncherError::from)?;
     let stdout_log = log_directory.join("supervisor.stdout.log");
     let stderr_log = log_directory.join("supervisor.stderr.log");
@@ -1176,19 +1231,33 @@ fn execute_instance(
     match command {
         InstanceCommands::Create {
             name,
-            root,
+            server_directory,
             kind,
             minecraft,
             loader,
             loader_version,
         } => {
-            let root = resolve_instance_root(current_dir, root.as_deref())?;
+            let kind: InstanceKind = kind.into();
+            let directory = match kind {
+                InstanceKind::Client => {
+                    if server_directory.is_some() {
+                        return Err(AppError::Argument(
+                            "--server-directory is invalid for client instances; use 'minecraft move' to relocate the managed repository"
+                                .to_string(),
+                        ));
+                    }
+                    runtime.minecraft_directory()
+                }
+                InstanceKind::Server => {
+                    resolve_directory(current_dir, server_directory.as_deref())?
+                }
+            };
             let created = create_instance(
                 runtime.paths(),
                 CreateInstanceRequest {
-                    root,
+                    directory,
                     name,
-                    kind: kind.into(),
+                    kind,
                     minecraft_requirement: minecraft,
                     loader_kind: loader.into(),
                     loader_requirement: loader_version,
@@ -1200,9 +1269,9 @@ fn execute_instance(
                 files_deleted: false,
             }))
         }
-        InstanceCommands::Import { root } => {
-            let root = resolve_instance_root(current_dir, root.as_deref())?;
-            let imported = import_instance(runtime.paths(), &root)?;
+        InstanceCommands::Import { directory } => {
+            let directory = resolve_directory(current_dir, directory.as_deref())?;
+            let imported = import_instance(runtime.paths(), &directory)?;
             let registry = InstanceRegistry::load(&registry_path)?;
             Ok(CommandOutput::InstanceMutation(InstanceMutationView {
                 instance: InstanceView::from_entry(&imported.entry, registry.default_instance),
@@ -1223,7 +1292,8 @@ fn execute_instance(
             let registry = InstanceRegistry::load(&registry_path)?;
             let resolved =
                 resolve_instance(&registry, selector, current_dir, ContextIntent::ReadOnly)?;
-            let installed = orbit_launcher_core::LockFile::open_optional(&resolved.entry.root)?;
+            let installed =
+                orbit_launcher_core::LockFile::open_optional(resolved.entry.instance_directory())?;
             Ok(CommandOutput::InstanceDetail(InstanceDetailView::new(
                 &resolved.entry,
                 &resolved.manifest,
@@ -1272,7 +1342,9 @@ fn execute_instance(
                     java_policy: java_policy.map(Into::into),
                 },
             )?;
-            let installed = orbit_launcher_core::LockFile::open_optional(&configured.entry.root)?;
+            let installed = orbit_launcher_core::LockFile::open_optional(
+                configured.entry.instance_directory(),
+            )?;
             Ok(CommandOutput::InstanceConfigured(InstanceDetailView::new(
                 &configured.entry,
                 &configured.manifest,
@@ -1345,6 +1417,8 @@ mod tests {
         fn launch_process(&mut self, _command: &'static str, _event: LaunchProcessEvent) {}
 
         fn supervisor_event(&mut self, _command: &'static str, _event: SupervisorEvent) {}
+
+        fn repository_move(&mut self, _event: RepositoryMoveEvent) {}
     }
 
     fn runtime(directory: &Path) -> RuntimeContext {
@@ -1367,7 +1441,7 @@ mod tests {
         let created = execute_instance(
             InstanceCommands::Create {
                 name: "server".to_string(),
-                root: None,
+                server_directory: None,
                 kind: InstanceKindArg::Server,
                 minecraft: "1.21.1".to_string(),
                 loader: LoaderKindArg::Fabric,
@@ -1415,7 +1489,7 @@ mod tests {
         execute_instance(
             InstanceCommands::Create {
                 name: "client".to_string(),
-                root: None,
+                server_directory: None,
                 kind: InstanceKindArg::Client,
                 minecraft: "latest-release".to_string(),
                 loader: LoaderKindArg::Vanilla,

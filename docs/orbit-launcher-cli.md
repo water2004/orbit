@@ -35,23 +35,26 @@ orbit-launcher config yggdrasil list
 orbit-launcher config yggdrasil add <id> <api-root> [--allow-insecure-http]
 orbit-launcher config yggdrasil remove <id>
 
+orbit-launcher minecraft directory
+orbit-launcher minecraft move <absolute-destination>
+
 # 已有实例
 orbit-launcher [--instance <id|name>] install
 
 # 一条命令创建并安装客户端或服务端
-orbit-launcher install --new <name> [--root <path>] \
+orbit-launcher install --new <name> [--server-directory <path>] \
   --kind <client|server> --minecraft <exact|latest-release|latest-snapshot> \
   [--loader <vanilla|fabric|quilt|forge|neoforge>] [--loader-version <requirement>]
 
 orbit-launcher instance create \
   --name <name> \
-  [--root <path>] \
+  [--server-directory <path>] \
   --kind <client|server> \
   --minecraft <requirement> \
   [--loader <vanilla|fabric|quilt|forge|neoforge>] \
   [--loader-version <requirement>]
 
-orbit-launcher instance import [--root <path>]
+orbit-launcher instance import --directory <path>
 orbit-launcher instance list
 orbit-launcher [--instance <id|name>] instance show
 orbit-launcher [--instance <id|name>] instance rename <new-name>
@@ -121,8 +124,13 @@ token，启动前按 `validate -> refresh -> interaction_required` 处理。一�
 账户且不能与 `--instance` 同用。服务端实例不使用客户端账户。`logout` 删除本地秘密与元
 数据；若实例仍引用该 account ID，之后启动会明确报错，不会静默选择另一个账号。
 
-`create` 和 `import` 中省略 `--root` 时只使用当前目录。相对 `--root` 相对当前目录解析，
-注册表持久化规范化绝对路径，但路径不是实例身份。`remove` 只注销实例并保留全部文件。
+客户端 `create/install --new` 不接受任意 root：它们始终使用唯一托管 Minecraft 仓库，并把
+game directory 建为 `<minecraft-directory>/versions/<name>`。该目录是实例的可变运行目录，
+所以 `mods`、`config`、`saves` 都在版本目录内；共享 `libraries`、`assets` 和原版/Loader
+version 工件留在仓库根。服务端使用 `--server-directory`；省略时使用当前目录，方便 headless
+部署。`instance import --directory` 必须指向现有实例的精确目录；客户端目录必须是某个
+`versions/` 的直接子目录，不接受扁平单版本目录兜底。注册表持久化规范化绝对路径，但路径
+不是实例身份。`remove` 只注销实例并保留全部文件。
 `instance configure` 原子修改现有 `orbit-launcher.toml` 的期望运行时，不下载、不修改 lock；
 随后运行同一个 `install` 事务完成 Minecraft、loader 与 Java 更新。切换到非 Vanilla loader
 时必须同时给出 loader requirement；切换到 Vanilla 会删除 loader requirement。
@@ -140,8 +148,10 @@ component/major。新建、更新和修复复用这些只读目录与同一个 `
 
 当前 `install` 接受 Vanilla/Fabric/Quilt/Forge/NeoForge client/server 实例。它先解析 Mojang version manifest v2、
 目标版本 JSON 和该版本声明的 Java component/major，再一次性确定完整下载队列。客户端
-严格执行 Mojang 的顺序规则、library/classifier、asset index、logging 配置与 native 解压
-语义；相同 asset 内容按哈希下载一次，但会保留全部 legacy virtual/resources 逻辑映射。
+严格执行 Mojang 的顺序规则、library/classifier、asset index、logging 配置与 native 选择
+语义；安装只保存经校验的 native classifier JAR 及排除规则，启动准备阶段才重建实例自己的
+`natives` 目录，不在安装阶段做无意义的全量解压。相同 asset 内容按哈希下载一次，但会保留
+全部 legacy virtual/resources 逻辑映射。
 文件按上游 SHA-1 校验后进入本地 SHA-256 CAS；下载可并发，runtime 和实例分别在 staging
 中验证后原子提交。旧 lock 拥有但新精确状态不再需要的文件会在同一事务中移除；目标位置
 已有但不属于旧 lock 的文件时拒绝覆盖。
@@ -227,6 +237,11 @@ SHA-256 和 JAR Manifest 验证的 Authlib Injector。客户端选择 External Y
 
 实例注册表位于 data 目录的 `instances.toml`。配置、data 和 cache 路径彼此独立；业务模块
 不直接读取 AppData、HOME 或 XDG 环境变量。
+
+客户端仓库缺省为 Launcher data 目录下的 `minecraft`：Windows 位于当前用户 AppData，Linux
+遵循 XDG data，macOS 使用 Application Support。用 `minecraft directory` 查看准确路径；
+`minecraft move <absolute-destination>` 迁移完整仓库并原子改写所有客户端注册位置。同卷使用
+rename，跨卷逐文件复制并用 SHA-256 验证后才切换注册表与配置；服务器目录不会随之移动。
 
 ## JSON
 

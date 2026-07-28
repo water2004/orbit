@@ -7,15 +7,16 @@ use crate::instance::{
     INSTANCE_MANIFEST_FILE, InstanceKind, InstanceManifest, JavaPolicy, LoaderKind, ManifestFile,
     validate_instance_name,
 };
+use crate::layout::{InstanceLocation, validate_directory_name};
 use crate::registry::{InstanceRegistry, RegistryEntry};
 use crate::runtime::RuntimePaths;
 
-pub fn resolve_instance_root(
+pub fn resolve_directory(
     current_dir: &Path,
     requested: Option<&Path>,
 ) -> Result<PathBuf, LauncherError> {
     if !current_dir.is_absolute() {
-        return Err(LauncherError::RelativeInstanceRoot(
+        return Err(LauncherError::RelativeInstanceDirectory(
             current_dir.to_path_buf(),
         ));
     }
@@ -29,7 +30,8 @@ pub fn resolve_instance_root(
 
 #[derive(Debug, Clone)]
 pub struct CreateInstanceRequest {
-    pub root: PathBuf,
+    /// Minecraft repository directory for clients, dedicated server directory for servers.
+    pub directory: PathBuf,
     pub name: String,
     pub kind: InstanceKind,
     pub minecraft_requirement: String,
@@ -47,8 +49,8 @@ pub fn create_instance(
     paths: &RuntimePaths,
     request: CreateInstanceRequest,
 ) -> Result<CreateInstanceResult, LauncherError> {
-    if !request.root.is_absolute() {
-        return Err(LauncherError::RelativeInstanceRoot(request.root));
+    if !request.directory.is_absolute() {
+        return Err(LauncherError::RelativeInstanceDirectory(request.directory));
     }
     let manifest = InstanceManifest::new(
         Uuid::new_v4(),
@@ -60,36 +62,76 @@ pub fn create_instance(
     )?;
     let registry_path = paths.instances_file();
     let mut registry = InstanceRegistry::load(&registry_path)?;
-    let root_created = !request.root.exists();
-    if root_created {
-        std::fs::create_dir_all(&request.root)?;
-    } else if !request.root.is_dir() {
-        return Err(LauncherError::InstanceRootNotDirectory(request.root));
+    if request.kind == InstanceKind::Client {
+        validate_directory_name(&manifest.name).map_err(LauncherError::InvalidManifest)?;
     }
-    let root = dunce::canonicalize(&request.root)?;
+    let requested_directory = request.directory;
+    let directory_created = !requested_directory.exists();
+    if directory_created {
+        std::fs::create_dir_all(&requested_directory)?;
+    } else if !requested_directory.is_dir() {
+        return Err(LauncherError::InstancePathNotDirectory(requested_directory));
+    }
+    let directory = dunce::canonicalize(&requested_directory)?;
+    let instance_directory_created;
+    let location = match manifest.kind {
+        InstanceKind::Client => {
+            let game_directory = directory.join("versions").join(&manifest.name);
+            instance_directory_created = !game_directory.exists();
+            std::fs::create_dir_all(&game_directory)?;
+            let game_directory = dunce::canonicalize(game_directory)?;
+            InstanceLocation::client(directory.clone(), game_directory)?
+        }
+        InstanceKind::Server => {
+            instance_directory_created = directory_created;
+            InstanceLocation::server(directory.clone())?
+        }
+    };
+    let root = location.instance_directory().to_path_buf();
     let manifest_path = root.join(INSTANCE_MANIFEST_FILE);
     if manifest_path.exists() {
-        cleanup_created_root(&root, root_created);
+        cleanup_created_directories(
+            &directory,
+            &root,
+            directory_created,
+            instance_directory_created,
+        );
         return Err(LauncherError::InvalidManifest(format!(
             "{} already exists; import the instance or use its local context",
             manifest_path.display()
         )));
     }
 
-    let entry = RegistryEntry::from_manifest(root.clone(), &manifest);
-    if let Err(error) = registry.ensure_available(entry.id, &entry.name, &entry.root) {
-        cleanup_created_root(&root, root_created);
+    let entry = RegistryEntry::from_manifest(location, &manifest);
+    if let Err(error) = registry.ensure_available(entry.id, &entry.name, entry.instance_directory())
+    {
+        cleanup_created_directories(
+            &directory,
+            &root,
+            directory_created,
+            instance_directory_created,
+        );
         return Err(error);
     }
 
     if let Err(error) = ManifestFile::new(&root, manifest.clone()).save() {
-        cleanup_created_root(&root, root_created);
+        cleanup_created_directories(
+            &directory,
+            &root,
+            directory_created,
+            instance_directory_created,
+        );
         return Err(error);
     }
     registry.push(entry.clone());
     if let Err(error) = registry.save(&registry_path) {
         let cleanup_result = std::fs::remove_file(&manifest_path);
-        cleanup_created_root(&root, root_created);
+        cleanup_created_directories(
+            &directory,
+            &root,
+            directory_created,
+            instance_directory_created,
+        );
         return match cleanup_result {
             Ok(()) => Err(error),
             Err(cleanup_error) => Err(LauncherError::Transaction(format!(
@@ -101,9 +143,13 @@ pub fn create_instance(
     Ok(CreateInstanceResult { entry, manifest })
 }
 
-fn cleanup_created_root(root: &Path, root_created: bool) {
+fn cleanup_created_directories(base: &Path, root: &Path, base_created: bool, root_created: bool) {
     if root_created {
         let _ = std::fs::remove_dir(root);
+    }
+    if base_created && base != root {
+        let _ = std::fs::remove_dir(base.join("versions"));
+        let _ = std::fs::remove_dir(base);
     }
 }
 
@@ -119,14 +165,15 @@ pub fn import_instance(
     root: &Path,
 ) -> Result<ImportInstanceResult, LauncherError> {
     if !root.is_absolute() {
-        return Err(LauncherError::RelativeInstanceRoot(root.to_path_buf()));
+        return Err(LauncherError::RelativeInstanceDirectory(root.to_path_buf()));
     }
     if !root.is_dir() {
-        return Err(LauncherError::InstanceRootNotDirectory(root.to_path_buf()));
+        return Err(LauncherError::InstancePathNotDirectory(root.to_path_buf()));
     }
     let root = dunce::canonicalize(root)?;
     let manifest = ManifestFile::open(&root)?.inner;
-    let entry = RegistryEntry::from_manifest(root.clone(), &manifest);
+    let location = InstanceLocation::import(&root, manifest.kind)?;
+    let entry = RegistryEntry::from_manifest(location, &manifest);
     let registry_path = paths.instances_file();
     let mut registry = InstanceRegistry::load(&registry_path)?;
 
@@ -138,7 +185,7 @@ pub fn import_instance(
         if other.name.eq_ignore_ascii_case(&entry.name) {
             return Err(LauncherError::DuplicateInstanceName(entry.name));
         }
-        if other.root == root {
+        if other.instance_directory() == root {
             return Err(LauncherError::DuplicateInstancePath(root));
         }
     }
@@ -151,8 +198,12 @@ pub fn import_instance(
         .find(|existing| existing.id == entry.id)
     {
         newly_registered = false;
-        if existing.root != root {
-            if existing.root.join(INSTANCE_MANIFEST_FILE).is_file() {
+        if existing.instance_directory() != root {
+            if existing
+                .instance_directory()
+                .join(INSTANCE_MANIFEST_FILE)
+                .is_file()
+            {
                 return Err(LauncherError::DuplicateInstanceId(entry.id));
             }
             moved = true;
@@ -225,7 +276,7 @@ pub fn configure_instance(
         .find(selector)
         .cloned()
         .ok_or_else(|| LauncherError::InstanceNotFound(selector.to_string()))?;
-    let mut manifest_file = ManifestFile::open(&entry.root)?;
+    let mut manifest_file = ManifestFile::open(entry.instance_directory())?;
     if manifest_file.inner.id != entry.id {
         return Err(LauncherError::InstanceRegistryMismatch(format!(
             "registry entry '{}' and manifest have different IDs",
@@ -301,7 +352,7 @@ pub fn rename_instance(
     {
         return Err(LauncherError::DuplicateInstanceName(new_name.to_string()));
     }
-    let mut manifest_file = ManifestFile::open(&current.root)?;
+    let mut manifest_file = ManifestFile::open(current.instance_directory())?;
     if manifest_file.inner.id != current.id {
         return Err(LauncherError::InstanceRegistryMismatch(format!(
             "registry entry '{}' and manifest have different IDs",
@@ -320,7 +371,7 @@ pub fn rename_instance(
 
     manifest_file.save()?;
     if let Err(registry_error) = registry.save(&registry_path) {
-        let rollback = ManifestFile::new(&current.root, old_manifest).save();
+        let rollback = ManifestFile::new(current.instance_directory(), old_manifest).save();
         return match rollback {
             Ok(()) => Err(registry_error),
             Err(rollback_error) => Err(LauncherError::Transaction(format!(
@@ -365,7 +416,7 @@ pub fn rollback_created_instance(
         .find(selector)
         .cloned()
         .ok_or_else(|| LauncherError::InstanceNotFound(selector.to_string()))?;
-    let manifest = ManifestFile::open(&entry.root)?;
+    let manifest = ManifestFile::open(entry.instance_directory())?;
     if manifest.inner.id != entry.id {
         return Err(LauncherError::InstanceRegistryMismatch(format!(
             "cannot roll back instance '{}' because its manifest ID changed",
@@ -373,7 +424,7 @@ pub fn rollback_created_instance(
         )));
     }
     let removed = remove_instance(paths, selector)?.entry;
-    std::fs::remove_file(entry.root.join(INSTANCE_MANIFEST_FILE)).map_err(|error| {
+    std::fs::remove_file(entry.instance_directory().join(INSTANCE_MANIFEST_FILE)).map_err(|error| {
         LauncherError::Transaction(format!(
             "unregistered failed bootstrap '{}' but could not remove its provisional manifest: {error}",
             entry.name
@@ -398,7 +449,7 @@ mod tests {
 
     fn request(root: PathBuf, name: &str) -> CreateInstanceRequest {
         CreateInstanceRequest {
-            root,
+            directory: root,
             name: name.to_string(),
             kind: InstanceKind::Server,
             minecraft_requirement: "1.21.1".to_string(),
@@ -432,6 +483,36 @@ mod tests {
                 .instances
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn client_creation_uses_one_repository_and_an_isolated_version_directory() {
+        let directory = tempfile::tempdir().unwrap();
+        let paths = paths(directory.path());
+        let repository = directory.path().join("minecraft");
+        let created = create_instance(
+            &paths,
+            CreateInstanceRequest {
+                directory: repository.clone(),
+                name: "fabric-1.21.1".to_string(),
+                kind: InstanceKind::Client,
+                minecraft_requirement: "1.21.1".to_string(),
+                loader_kind: LoaderKind::Fabric,
+                loader_requirement: Some("stable".to_string()),
+            },
+        )
+        .unwrap();
+
+        let repository = dunce::canonicalize(repository).unwrap();
+        let game_directory = repository.join("versions/fabric-1.21.1");
+        assert_eq!(created.entry.instance_directory(), game_directory);
+        assert_eq!(
+            created.entry.location.minecraft_directory(),
+            Some(repository.as_path())
+        );
+        assert!(game_directory.join(INSTANCE_MANIFEST_FILE).is_file());
+        assert!(!repository.join(INSTANCE_MANIFEST_FILE).exists());
+        assert!(!repository.join("mods").exists());
     }
 
     #[test]
@@ -479,7 +560,7 @@ mod tests {
         create_instance(
             &paths,
             CreateInstanceRequest {
-                root,
+                directory: root,
                 name: "server".to_string(),
                 kind: InstanceKind::Server,
                 minecraft_requirement: "1.21.1".to_string(),
@@ -544,7 +625,7 @@ mod tests {
         let created = create_instance(
             &paths,
             CreateInstanceRequest {
-                root: root.clone(),
+                directory: root.clone(),
                 name: "server".to_string(),
                 kind: InstanceKind::Server,
                 minecraft_requirement: "1.21.1".to_string(),

@@ -1,13 +1,14 @@
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::atomic_io::write_atomic;
 use crate::error::LauncherError;
-use crate::instance::{InstanceKind, InstanceManifest, validate_instance_name};
+use crate::instance::{InstanceManifest, validate_instance_name};
+use crate::layout::InstanceLocation;
 
-pub const REGISTRY_SCHEMA: u32 = 1;
+pub const REGISTRY_SCHEMA: u32 = 2;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -80,13 +81,12 @@ impl InstanceRegistry {
                     entry.name
                 )));
             }
-            if self.instances[..index]
-                .iter()
-                .any(|other| other.root == entry.root)
-            {
+            if self.instances[..index].iter().any(|other| {
+                other.location.instance_directory() == entry.location.instance_directory()
+            }) {
                 return Err(LauncherError::InvalidRegistry(format!(
                     "duplicate instance path '{}'",
-                    entry.root.display()
+                    entry.location.instance_directory().display()
                 )));
             }
         }
@@ -123,7 +123,7 @@ impl InstanceRegistry {
         &self,
         id: Uuid,
         name: &str,
-        root: &Path,
+        instance_directory: &Path,
     ) -> Result<(), LauncherError> {
         if self.instances.iter().any(|entry| entry.id == id) {
             return Err(LauncherError::DuplicateInstanceId(id));
@@ -135,8 +135,14 @@ impl InstanceRegistry {
         {
             return Err(LauncherError::DuplicateInstanceName(name.to_string()));
         }
-        if self.instances.iter().any(|entry| entry.root == root) {
-            return Err(LauncherError::DuplicateInstancePath(root.to_path_buf()));
+        if self
+            .instances
+            .iter()
+            .any(|entry| entry.location.instance_directory() == instance_directory)
+        {
+            return Err(LauncherError::DuplicateInstancePath(
+                instance_directory.to_path_buf(),
+            ));
         }
         Ok(())
     }
@@ -160,18 +166,24 @@ impl InstanceRegistry {
 pub struct RegistryEntry {
     pub id: Uuid,
     pub name: String,
-    pub root: PathBuf,
-    pub kind: InstanceKind,
+    pub location: InstanceLocation,
 }
 
 impl RegistryEntry {
-    pub fn from_manifest(root: PathBuf, manifest: &InstanceManifest) -> Self {
+    pub fn from_manifest(location: InstanceLocation, manifest: &InstanceManifest) -> Self {
         Self {
             id: manifest.id,
             name: manifest.name.clone(),
-            root,
-            kind: manifest.kind,
+            location,
         }
+    }
+
+    pub fn kind(&self) -> crate::instance::InstanceKind {
+        self.location.kind()
+    }
+
+    pub fn instance_directory(&self) -> &Path {
+        self.location.instance_directory()
     }
 
     pub fn validate(&self) -> Result<(), LauncherError> {
@@ -182,12 +194,9 @@ impl RegistryEntry {
         }
         validate_instance_name(&self.name)
             .map_err(|error| LauncherError::InvalidRegistry(error.to_string()))?;
-        if !self.root.is_absolute() {
-            return Err(LauncherError::InvalidRegistry(format!(
-                "instance root '{}' is not absolute",
-                self.root.display()
-            )));
-        }
+        self.location
+            .validate()
+            .map_err(LauncherError::InvalidRegistry)?;
         Ok(())
     }
 }
@@ -195,13 +204,13 @@ impl RegistryEntry {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
     fn entry(root: PathBuf, name: &str) -> RegistryEntry {
         RegistryEntry {
             id: Uuid::new_v4(),
             name: name.to_string(),
-            root,
-            kind: InstanceKind::Client,
+            location: InstanceLocation::server(root).unwrap(),
         }
     }
 

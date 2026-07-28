@@ -129,6 +129,14 @@ impl RuntimeContext {
     pub fn config(&self) -> &GlobalConfig {
         &self.config
     }
+
+    pub fn minecraft_directory(&self) -> PathBuf {
+        self.config
+            .minecraft
+            .directory
+            .clone()
+            .unwrap_or_else(|| self.paths.data_dir().join("minecraft"))
+    }
 }
 
 #[cfg(target_os = "windows")]

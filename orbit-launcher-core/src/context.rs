@@ -55,22 +55,22 @@ pub fn resolve_instance(
         let manifest_file = ManifestFile::open(&current_root)?;
         let entry = registry.find_by_id(manifest_file.inner.id).ok_or_else(|| {
             LauncherError::InstanceRegistryMismatch(format!(
-                "local instance '{}' is not registered; run 'orbit-launcher instance import --root {}'",
+                "local instance '{}' is not registered; run 'orbit-launcher instance import --directory {}'",
                 manifest_file.inner.name,
                 current_root.display()
             ))
         })?;
-        let registered_root = dunce::canonicalize(&entry.root).map_err(|error| {
+        let registered_root = dunce::canonicalize(entry.instance_directory()).map_err(|error| {
             LauncherError::InstanceRegistryMismatch(format!(
                 "registered path '{}' is unavailable: {error}; import the moved instance",
-                entry.root.display()
+                entry.instance_directory().display()
             ))
         })?;
         if registered_root != current_root {
             return Err(LauncherError::InstanceRegistryMismatch(format!(
                 "local instance ID '{}' is registered at '{}'; import the moved instance",
                 entry.id,
-                entry.root.display()
+                entry.instance_directory().display()
             )));
         }
         return verify_pair(entry, manifest_file.inner, ContextSource::CurrentDirectory);
@@ -91,7 +91,7 @@ fn verify_registered(
     entry: &RegistryEntry,
     source: ContextSource,
 ) -> Result<ResolvedInstance, LauncherError> {
-    let manifest = ManifestFile::open(&entry.root)?.inner;
+    let manifest = ManifestFile::open(entry.instance_directory())?.inner;
     verify_pair(entry, manifest, source)
 }
 
@@ -100,11 +100,14 @@ fn verify_pair(
     manifest: InstanceManifest,
     source: ContextSource,
 ) -> Result<ResolvedInstance, LauncherError> {
-    if entry.id != manifest.id || entry.name != manifest.name || entry.kind != manifest.kind {
+    if entry.id != manifest.id || entry.name != manifest.name || entry.kind() != manifest.kind {
         return Err(LauncherError::InstanceRegistryMismatch(format!(
             "registry entry '{}' does not match {}",
             entry.name,
-            entry.root.join(INSTANCE_MANIFEST_FILE).display()
+            entry
+                .instance_directory()
+                .join(INSTANCE_MANIFEST_FILE)
+                .display()
         )));
     }
     Ok(ResolvedInstance {
@@ -118,11 +121,13 @@ fn verify_pair(
 mod tests {
     use super::*;
     use crate::instance::{InstanceKind, InstanceManifest, LoaderKind};
+    use crate::layout::InstanceLocation;
     use crate::registry::REGISTRY_SCHEMA;
     use uuid::Uuid;
 
     fn registered_instance(root: &Path, name: &str) -> (InstanceRegistry, RegistryEntry) {
-        std::fs::create_dir_all(root).unwrap();
+        let game_directory = root.join("versions").join(name);
+        std::fs::create_dir_all(&game_directory).unwrap();
         let manifest = InstanceManifest::new(
             Uuid::new_v4(),
             name,
@@ -132,9 +137,13 @@ mod tests {
             None,
         )
         .unwrap();
-        ManifestFile::new(root, manifest.clone()).save().unwrap();
+        ManifestFile::new(&game_directory, manifest.clone())
+            .save()
+            .unwrap();
         let root = dunce::canonicalize(root).unwrap();
-        let entry = RegistryEntry::from_manifest(root, &manifest);
+        let game_directory = dunce::canonicalize(game_directory).unwrap();
+        let location = InstanceLocation::client(root, game_directory).unwrap();
+        let entry = RegistryEntry::from_manifest(location, &manifest);
         let registry = InstanceRegistry {
             schema: REGISTRY_SCHEMA,
             default_instance: Some(entry.id),
@@ -159,8 +168,13 @@ mod tests {
         .unwrap();
         assert_eq!(explicit.source, ContextSource::Explicit);
 
-        let local =
-            resolve_instance(&registry, None, &entry.root, ContextIntent::Sensitive).unwrap();
+        let local = resolve_instance(
+            &registry,
+            None,
+            entry.instance_directory(),
+            ContextIntent::Sensitive,
+        )
+        .unwrap();
         assert_eq!(local.source, ContextSource::CurrentDirectory);
 
         let default =

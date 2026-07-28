@@ -1,5 +1,5 @@
 use std::collections::HashSet;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::time::Duration;
 
@@ -9,7 +9,7 @@ use toml_edit::{ArrayOfTables, DocumentMut, Item, Table, value};
 use crate::atomic_io::write_atomic;
 use crate::error::LauncherError;
 
-pub const CONFIG_SCHEMA: u32 = 1;
+pub const CONFIG_SCHEMA: u32 = 2;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -21,6 +21,8 @@ pub struct GlobalConfig {
     pub installer: InstallerConfig,
     #[serde(default)]
     pub cache: CacheConfig,
+    #[serde(default)]
+    pub minecraft: MinecraftGlobalConfig,
     #[serde(default)]
     pub java: JavaGlobalConfig,
     #[serde(default)]
@@ -38,6 +40,7 @@ impl Default for GlobalConfig {
             network: NetworkConfig::default(),
             installer: InstallerConfig::default(),
             cache: CacheConfig::default(),
+            minecraft: MinecraftGlobalConfig::default(),
             java: JavaGlobalConfig::default(),
             microsoft: MicrosoftConfig::default(),
             yggdrasil: YggdrasilConfig::default(),
@@ -95,6 +98,14 @@ impl GlobalConfig {
             ));
         }
         self.cache.max_size_bytes()?;
+        if let Some(directory) = &self.minecraft.directory
+            && !directory.is_absolute()
+        {
+            return Err(LauncherError::InvalidConfig(format!(
+                "minecraft.directory '{}' must be absolute",
+                directory.display()
+            )));
+        }
         if let Some(client_id) = &self.microsoft.client_id
             && (client_id.trim() != client_id
                 || client_id.is_empty()
@@ -348,6 +359,21 @@ pub fn unset_config(path: &Path, key: ConfigKey) -> Result<ConfigMutation, Launc
     })
 }
 
+pub fn set_minecraft_directory(path: &Path, directory: &Path) -> Result<(), LauncherError> {
+    if !directory.is_absolute() {
+        return Err(LauncherError::InvalidConfig(format!(
+            "Minecraft directory '{}' must be absolute",
+            directory.display()
+        )));
+    }
+    let mut document = editable_document(path)?;
+    if !document.as_table().contains_key("minecraft") {
+        document.insert("minecraft", Item::Table(Table::new()));
+    }
+    document["minecraft"]["directory"] = value(directory.display().to_string());
+    validate_and_write(path, &document)
+}
+
 pub fn add_yggdrasil_provider(
     path: &Path,
     provider: YggdrasilProviderConfig,
@@ -499,6 +525,13 @@ impl Default for InstallerConfig {
 #[serde(default, deny_unknown_fields)]
 pub struct CacheConfig {
     pub max_size: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct MinecraftGlobalConfig {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub directory: Option<PathBuf>,
 }
 
 impl CacheConfig {
@@ -678,12 +711,12 @@ mod tests {
 
     #[test]
     fn rejects_unknown_fields_and_insecure_yggdrasil_by_default() {
-        let unknown = "schema = 1\nunknown = true\n";
+        let unknown = "schema = 2\nunknown = true\n";
         assert!(toml::from_str::<GlobalConfig>(unknown).is_err());
 
         let config: GlobalConfig = toml::from_str(
             r#"
-schema = 1
+schema = 2
 [[yggdrasil.providers]]
 id = "private"
 api_root = "http://auth.example.com/api/yggdrasil"
@@ -716,7 +749,7 @@ api_root = "http://auth.example.com/api/yggdrasil"
     fn yggdrasil_provider_commands_preserve_unrelated_comments() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("config.toml");
-        std::fs::write(&path, "schema = 1\n# keep me\n[network]\nconcurrency = 4\n").unwrap();
+        std::fs::write(&path, "schema = 2\n# keep me\n[network]\nconcurrency = 4\n").unwrap();
         add_yggdrasil_provider(
             &path,
             YggdrasilProviderConfig {
@@ -749,7 +782,7 @@ api_root = "http://auth.example.com/api/yggdrasil"
         let path = directory.path().join("config.toml");
         std::fs::write(
             &path,
-            "schema = 1\n\n[network]\n# Keep this explanation.\nconcurrency = 6\n",
+            "schema = 2\n\n[network]\n# Keep this explanation.\nconcurrency = 6\n",
         )
         .unwrap();
 
