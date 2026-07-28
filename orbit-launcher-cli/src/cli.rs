@@ -144,6 +144,8 @@ pub enum AccountCommands {
     List,
     /// Show one account; defaults to the global selection.
     Show { account: Option<String> },
+    /// Refresh one account session and its public profile metadata.
+    Refresh { account: String },
     /// Select an account for this client instance, or globally with --global.
     Select {
         account: String,
@@ -536,6 +538,24 @@ mod tests {
                 command: ServerCommands::Run { dry_run: true }
             }
         ));
+    }
+
+    #[test]
+    fn account_refresh_requires_an_explicit_account_selector() {
+        let cli = Cli::try_parse_from([
+            "orbit-launcher",
+            "account",
+            "refresh",
+            "player@example.test",
+        ])
+        .unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Account {
+                command: AccountCommands::Refresh { account }
+            } if account == "player@example.test"
+        ));
+        assert!(Cli::try_parse_from(["orbit-launcher", "account", "refresh"]).is_err());
     }
 
     #[test]

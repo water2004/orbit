@@ -117,6 +117,7 @@ fn command_name(command: &cli::Commands) -> &'static str {
             },
             cli::AccountCommands::List => "account.list",
             cli::AccountCommands::Show { .. } => "account.show",
+            cli::AccountCommands::Refresh { .. } => "account.refresh",
             cli::AccountCommands::Select { .. } => "account.select",
             cli::AccountCommands::Clear { .. } => "account.clear",
             cli::AccountCommands::Logout { .. } => "account.logout",
@@ -164,6 +165,7 @@ fn render_success(format: OutputFormat, output: app::CommandOutput) {
             app::CommandOutput::Default(value) => print_json(command, value),
             app::CommandOutput::AccountList(value) => print_json(command, value),
             app::CommandOutput::AccountDetail(value) => print_json(command, value),
+            app::CommandOutput::AccountRefresh(value) => print_json(command, value),
             app::CommandOutput::AccountLogin(value) => print_json(command, value),
             app::CommandOutput::AccountSelection(value) => print_json(command, value),
             app::CommandOutput::AccountLogout(value) => print_json(command, value),
@@ -520,6 +522,10 @@ fn render_text(output: app::CommandOutput) {
             }
         }
         app::CommandOutput::AccountDetail(view) => render_account(&view),
+        app::CommandOutput::AccountRefresh(view) => {
+            println!("{}", tr!("Refreshed account profile."));
+            render_account(&view);
+        }
         app::CommandOutput::AccountLogin(view) => render_account(&view.account),
         app::CommandOutput::AccountSelection(view) => match view.account {
             Some(account) => println!(

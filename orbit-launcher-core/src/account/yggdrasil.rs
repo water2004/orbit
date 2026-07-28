@@ -6,6 +6,7 @@ use crate::config::{GlobalConfig, YggdrasilProviderConfig};
 use crate::error::LauncherError;
 use crate::runtime::RuntimePaths;
 use crate::secret_store::SecretStore;
+use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 
 const MAX_AUTH_RESPONSE_BYTES: usize = 1024 * 1024;
@@ -77,6 +78,7 @@ pub async fn login_external_yggdrasil(
         .await?
     };
     let profile_id = parse_profile_id(&session.selected_profile.id, "Yggdrasil")?;
+    let skin_url = fetch_profile_skin(client, provider, profile_id).await?;
     let now = now_unix_seconds()?;
     let secret = AccountSecret::ExternalYggdrasil {
         access_token: session.access_token,
@@ -92,6 +94,7 @@ pub async fn login_external_yggdrasil(
             },
             profile_id,
             profile_name: session.selected_profile.name,
+            skin_url,
             login_name: Some(request.username.to_string()),
             created_at_unix_seconds: now,
             last_authenticated_at_unix_seconds: Some(now),
@@ -138,8 +141,10 @@ pub(super) async fn resolve_yggdrasil_identity(
             account.profile_id, profile_id
         )));
     }
+    let skin_url = fetch_profile_skin(client, provider, profile_id).await?;
     let mut updated = account;
     updated.profile_name = refreshed.selected_profile.name;
+    updated.skin_url = skin_url;
     updated.last_authenticated_at_unix_seconds = Some(now_unix_seconds()?);
     let access_token = refreshed.access_token.clone();
     let secret = AccountSecret::ExternalYggdrasil {
@@ -174,6 +179,69 @@ fn identity(
         yggdrasil_api_root: Some(api_root),
         yggdrasil_prefetched_metadata: Some(prefetched_metadata),
     }
+}
+
+async fn fetch_profile_skin(
+    client: &reqwest::Client,
+    provider: &YggdrasilProviderConfig,
+    profile_id: uuid::Uuid,
+) -> Result<Option<String>, LauncherError> {
+    let endpoint = crate::yggdrasil::provider_api_root(provider)?
+        .join(&format!(
+            "sessionserver/session/minecraft/profile/{}?unsigned=true",
+            profile_id.simple()
+        ))
+        .map_err(|error| {
+            LauncherError::Authentication(format!(
+                "cannot build Yggdrasil profile endpoint: {error}"
+            ))
+        })?;
+    let response = client.get(endpoint).send().await?;
+    if matches!(response.status().as_u16(), 204 | 404) {
+        return Ok(None);
+    }
+    let status = response.status();
+    let bytes = response.bytes().await?;
+    if bytes.len() > MAX_AUTH_RESPONSE_BYTES {
+        return Err(LauncherError::Authentication(
+            "Yggdrasil profile response is too large".to_string(),
+        ));
+    }
+    if !status.is_success() {
+        return Err(LauncherError::Authentication(format!(
+            "Yggdrasil profile lookup failed with HTTP {}",
+            status.as_u16()
+        )));
+    }
+    let profile: SessionProfile = serde_json::from_slice(&bytes).map_err(|error| {
+        LauncherError::Authentication(format!(
+            "Yggdrasil profile response is invalid JSON: {error}"
+        ))
+    })?;
+    let Some(encoded) = profile
+        .properties
+        .iter()
+        .find(|property| property.name == "textures")
+        .map(|property| property.value.as_str())
+    else {
+        return Ok(None);
+    };
+    let decoded = base64::engine::general_purpose::STANDARD
+        .decode(encoded)
+        .map_err(|error| {
+            LauncherError::Authentication(format!(
+                "Yggdrasil textures property is not valid Base64: {error}"
+            ))
+        })?;
+    let payload: TexturePayload = serde_json::from_slice(&decoded).map_err(|error| {
+        LauncherError::Authentication(format!(
+            "Yggdrasil textures property is invalid JSON: {error}"
+        ))
+    })?;
+    let Some(url) = payload.textures.skin.map(|skin| skin.url) else {
+        return Ok(None);
+    };
+    Ok(super::normalize_skin_url(&url))
 }
 
 async fn validate_session(
@@ -461,6 +529,35 @@ struct AuthenticationResponse {
 struct GameProfile {
     id: String,
     name: String,
+}
+
+#[derive(Deserialize)]
+struct SessionProfile {
+    #[serde(default)]
+    properties: Vec<ProfileProperty>,
+}
+
+#[derive(Deserialize)]
+struct ProfileProperty {
+    name: String,
+    value: String,
+}
+
+#[derive(Deserialize)]
+struct TexturePayload {
+    #[serde(default)]
+    textures: ProfileTextures,
+}
+
+#[derive(Default, Deserialize)]
+struct ProfileTextures {
+    #[serde(rename = "SKIN")]
+    skin: Option<ProfileSkin>,
+}
+
+#[derive(Deserialize)]
+struct ProfileSkin {
+    url: String,
 }
 
 impl GameProfile {

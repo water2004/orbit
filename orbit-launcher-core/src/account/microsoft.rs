@@ -226,6 +226,7 @@ where
         expires_at_unix_seconds: session.expires_at_unix_seconds,
         token_type: session.token_type,
     };
+    let skin_url = session.profile.skin_url();
     let account = persist_authenticated_account(
         paths,
         secrets,
@@ -234,6 +235,7 @@ where
             provider: AccountProvider::Microsoft,
             profile_id,
             profile_name: session.profile.name,
+            skin_url,
             login_name: None,
             created_at_unix_seconds: now,
             last_authenticated_at_unix_seconds: Some(now),
@@ -320,8 +322,10 @@ pub(super) async fn resolve_microsoft_identity(
         )));
     }
     let access_token = session.access_token.to_string();
+    let skin_url = session.profile.skin_url();
     let mut updated = account;
     updated.profile_name = session.profile.name;
+    updated.skin_url = skin_url;
     updated.last_authenticated_at_unix_seconds = Some(now_unix_seconds()?);
     let secret = AccountSecret::Microsoft {
         refresh_token: oauth.refresh_token,
@@ -796,6 +800,23 @@ struct RemoteServiceError {
 struct MinecraftProfile {
     id: String,
     name: String,
+    #[serde(default)]
+    skins: Vec<MinecraftSkin>,
+}
+
+impl MinecraftProfile {
+    fn skin_url(&self) -> Option<String> {
+        self.skins
+            .iter()
+            .find(|skin| skin.state.as_deref().is_none_or(|state| state == "ACTIVE"))
+            .and_then(|skin| super::normalize_skin_url(&skin.url))
+    }
+}
+
+#[derive(Deserialize)]
+struct MinecraftSkin {
+    url: String,
+    state: Option<String>,
 }
 
 enum ProfileLookup {

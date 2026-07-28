@@ -65,6 +65,7 @@ pub enum CommandOutput {
     Default(DefaultView),
     AccountList(AccountListView),
     AccountDetail(AccountView),
+    AccountRefresh(AccountView),
     AccountLogin(AccountLoginView),
     AccountSelection(AccountSelectionView),
     AccountLogout(AccountLogoutView),
@@ -119,6 +120,7 @@ impl CommandOutput {
             Self::Default(_) => "instance.default",
             Self::AccountList(_) => "account.list",
             Self::AccountDetail(_) => "account.show",
+            Self::AccountRefresh(_) => "account.refresh",
             Self::AccountLogin(view) => match view.method {
                 "offline" => "account.login.offline",
                 "microsoft" => "account.login.microsoft.complete",
@@ -546,6 +548,32 @@ async fn execute_account(
                 None => repository.selected(None)?,
             };
             Ok(CommandOutput::AccountDetail(AccountView::new(
+                account,
+                repository.default_account(),
+                &backend,
+            )))
+        }
+        AccountCommands::Refresh { account } => {
+            if instance_selector.is_some() {
+                return Err(AppError::Argument(
+                    "--instance is not valid for account refresh".to_string(),
+                ));
+            }
+            let account_id = AccountRepository::load(runtime.paths())?.get(&account)?.id;
+            let client = runtime.config().http_client()?;
+            drop(
+                resolve_launch_identity(
+                    runtime.paths(),
+                    runtime.config(),
+                    &client,
+                    secrets.as_ref(),
+                    Some(account_id),
+                )
+                .await?,
+            );
+            let repository = AccountRepository::load(runtime.paths())?;
+            let account = repository.get(&account_id.to_string())?;
+            Ok(CommandOutput::AccountRefresh(AccountView::new(
                 account,
                 repository.default_account(),
                 &backend,

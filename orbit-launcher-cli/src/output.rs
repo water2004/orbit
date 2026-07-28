@@ -510,6 +510,8 @@ pub struct AccountView {
     pub profile_id: String,
     pub profile_name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub skin_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub login_name: Option<String>,
     pub is_default: bool,
     pub secret_backend: String,
@@ -534,6 +536,7 @@ impl AccountView {
             provider_id,
             profile_id: account.profile_id.to_string(),
             profile_name: account.profile_name.clone(),
+            skin_url: account.skin_url.clone(),
             login_name: account.login_name.clone(),
             is_default: default == Some(account.id),
             secret_backend: secret_backend.to_string(),

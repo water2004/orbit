@@ -22,7 +22,7 @@ pub use microsoft::{
 };
 pub use yggdrasil::{ExternalYggdrasilLoginRequest, login_external_yggdrasil};
 
-pub const ACCOUNTS_SCHEMA: u32 = 1;
+pub const ACCOUNTS_SCHEMA: u32 = 2;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
@@ -50,6 +50,8 @@ pub struct AccountMetadata {
     pub profile_id: Uuid,
     pub profile_name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub skin_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub login_name: Option<String>,
     pub created_at_unix_seconds: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -64,6 +66,9 @@ impl AccountMetadata {
             ));
         }
         validate_profile_name(&self.profile_name)?;
+        if let Some(skin_url) = &self.skin_url {
+            validate_skin_url(skin_url)?;
+        }
         if self.created_at_unix_seconds == 0 {
             return Err(LauncherError::Authentication(
                 "account creation time is invalid".to_string(),
@@ -353,6 +358,7 @@ pub fn create_offline_account(
         provider: AccountProvider::Offline,
         profile_id: Uuid::from_bytes(digest),
         profile_name: profile_name.to_string(),
+        skin_url: None,
         login_name: None,
         created_at_unix_seconds: now,
         last_authenticated_at_unix_seconds: None,
@@ -480,6 +486,39 @@ fn validate_profile_name(name: &str) -> Result<(), LauncherError> {
     Ok(())
 }
 
+fn validate_skin_url(value: &str) -> Result<(), LauncherError> {
+    let url = url::Url::parse(value).map_err(|error| {
+        LauncherError::Authentication(format!("account skin URL is invalid: {error}"))
+    })?;
+    if url.scheme() != "https"
+        || url.host_str().is_none()
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.fragment().is_some()
+    {
+        return Err(LauncherError::Authentication(
+            "account skin URL must be an HTTPS URL without credentials or a fragment".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn normalize_skin_url(value: &str) -> Option<String> {
+    let mut url = url::Url::parse(value).ok()?;
+    if url.scheme() == "http" && url.set_scheme("https").is_err() {
+        return None;
+    }
+    if url.scheme() != "https"
+        || url.host_str().is_none()
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.fragment().is_some()
+    {
+        return None;
+    }
+    Some(url.into())
+}
+
 fn validate_offline_name(name: &str) -> Result<(), LauncherError> {
     if !(1..=16).contains(&name.len())
         || !name
@@ -536,6 +575,16 @@ mod tests {
     }
 
     #[test]
+    fn skin_urls_are_https_and_never_make_identity_loading_depend_on_bad_presentation_data() {
+        assert_eq!(
+            normalize_skin_url("http://textures.minecraft.net/texture/abc").as_deref(),
+            Some("https://textures.minecraft.net/texture/abc")
+        );
+        assert!(normalize_skin_url("file:///tmp/skin.png").is_none());
+        assert!(normalize_skin_url("https://user@example.test/skin.png").is_none());
+    }
+
+    #[test]
     fn account_file_contains_no_secret_fields() {
         let directory = tempfile::tempdir().unwrap();
         create_offline_account(&paths(directory.path()), "Player_1").unwrap();
@@ -565,6 +614,7 @@ mod tests {
                 profile_id: Uuid::new_v4(),
                 profile_name: "Player".to_string(),
                 login_name: None,
+                skin_url: None,
                 created_at_unix_seconds: now,
                 last_authenticated_at_unix_seconds: Some(now),
             },
