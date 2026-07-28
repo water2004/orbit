@@ -167,7 +167,7 @@ fn run_process(
         command.current_dir(directory);
     }
 
-    let mut child = match command.group_spawn() {
+    let mut child = match spawn_process_group(&mut command) {
         Ok(child) => child,
         Err(error) => {
             let cli = match request.kind {
@@ -357,6 +357,16 @@ fn run_process(
         cancelled,
     });
 }
+
+fn spawn_process_group(command: &mut Command) -> std::io::Result<command_group::GroupChild> {
+    let mut group = command.group();
+    #[cfg(target_os = "windows")]
+    group.creation_flags(CREATE_NO_WINDOW);
+    group.spawn()
+}
+
+#[cfg(target_os = "windows")]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 fn read_utf8_stream(mut reader: impl Read, stream: &str) -> Result<String, String> {
     let mut bytes = Vec::new();

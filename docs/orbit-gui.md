@@ -13,8 +13,9 @@ Linux 同时启用 Wayland/X11 窗口后端。图片由原生客户端读取 CLI
 
 GUI 默认只接受与自身相邻的 `orbit(.exe)` 和 `orbit-launcher(.exe)`，也允许用户在设置页
 明确选择准确路径。它不扫描 `PATH`，不链接 core，不在 CLI 失败后改走文件直读或兼容 API。
-Windows MSI 与 Linux deb 都将三个程序安装在同一目录；Windows 同时创建开始菜单入口，
-Linux 安装 desktop entry 与 scalable 图标。
+Windows MSI 的完整安装档位与 Linux deb 将三个程序安装在同一目录；Windows 的完整档位
+同时创建开始菜单入口，Linux 安装 desktop entry 与 scalable 图标。Windows MSI 也允许只
+安装 Orbit，或安装 Orbit + Launcher；没有 GUI 时不会创建桌面入口。
 
 界面语言、主题和强调色都是独立的展示策略。语言可选跟随系统（默认）、English 或简体中文；
 GUI 将同一个显式 `--language system|en|zh-CN` 传给每次 CLI 调用，因此窗口文本、CLI 提示、
@@ -35,6 +36,9 @@ eframe 原生持久化。页面的信息架构、空状态和任务流不依赖�
 - stderr：schema 2 progress、interaction、error envelope 或受限日志；
 - stdin：同一进程上的 schema 2 `interaction_response`；
 - 取消：终止整个子进程组/Windows Job，包含 installer 或 Java 子进程。
+
+Windows 上 `orbit-gui.exe` 始终使用 GUI 子系统，GUI 创建的 CLI 进程组始终带
+`CREATE_NO_WINDOW`；交互完全走上述管道，不会为 GUI 本身或每次 CLI 调用创建控制台窗口。
 
 这三条协议流都明确规定为 UTF-8，而不是“当前代码页”。Orbit 的 Rust CLI 在 Windows 真实
 控制台上通过标准库的 Unicode 控制台实现输出，重定向/管道则写入 UTF-8 字节；GUI 对管道
