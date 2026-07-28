@@ -794,7 +794,7 @@ fn render_error(format: OutputFormat, command: &str, code: &str, message: &str) 
     }
     match code {
         "argument" => ExitCode::from(2),
-        "interaction_required" | "eula_required" => ExitCode::from(4),
+        "interaction_required" | "reauthentication_required" | "eula_required" => ExitCode::from(4),
         _ => ExitCode::from(1),
     }
 }
@@ -857,6 +857,11 @@ fn localized_launcher_error(error: &LauncherError) -> String {
         LauncherError::Authentication(detail) => {
             tr!("Account authentication failed: %{detail}", detail = detail)
         }
+        LauncherError::ReauthenticationRequired { account_id, detail } => tr!(
+            "Account %{account} must be signed in again: %{detail}",
+            account = account_id,
+            detail = detail
+        ),
         LauncherError::Launch(detail) => {
             tr!("Launch preparation failed: %{detail}", detail = detail)
         }

@@ -1,11 +1,12 @@
 use std::path::{Path, PathBuf};
 
 use orbit_launcher_core::{
-    AccountMetadata, AccountProvider, ArtifactTransferEvent, ContextSource, InstallProgressEvent,
-    InstallerOutputStream, InstallerSide, InstanceManifest, JavaProgressEvent, LaunchOutputStream,
-    LaunchPlanSummary, LaunchPreparationEvent, LaunchProcessEvent, LaunchResult,
-    LoaderInstallerEvent, MicrosoftDeviceSession, MicrosoftLoginProgressEvent, RegistryEntry,
-    RepositoryMoveEvent, SupervisorEvent, SupervisorResult,
+    AccountAuthenticationState, AccountMetadata, AccountProvider, ArtifactTransferEvent,
+    ContextSource, InstallProgressEvent, InstallerOutputStream, InstallerSide, InstanceManifest,
+    JavaProgressEvent, LaunchOutputStream, LaunchPlanSummary, LaunchPreparationEvent,
+    LaunchProcessEvent, LaunchResult, LoaderInstallerEvent, MicrosoftDeviceSession,
+    MicrosoftLoginProgressEvent, RegistryEntry, RepositoryMoveEvent, SupervisorEvent,
+    SupervisorResult,
 };
 use serde::Serialize;
 
@@ -509,6 +510,7 @@ pub struct AccountView {
     pub provider_id: Option<String>,
     pub profile_id: String,
     pub profile_name: String,
+    pub authentication_state: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub skin_url: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -536,6 +538,11 @@ impl AccountView {
             provider_id,
             profile_id: account.profile_id.to_string(),
             profile_name: account.profile_name.clone(),
+            authentication_state: match account.authentication_state {
+                AccountAuthenticationState::Active => "active",
+                AccountAuthenticationState::ReauthenticationRequired => "reauthentication-required",
+            }
+            .to_string(),
             skin_url: account.skin_url.clone(),
             login_name: account.login_name.clone(),
             is_default: default == Some(account.id),

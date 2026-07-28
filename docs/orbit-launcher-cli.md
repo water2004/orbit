@@ -109,9 +109,11 @@ authlib-injector 的 API Location Indication（`X-Authlib-Injector-API-Location`
 `--allow-insecure-http` 是会暴露账号密码与 token 的明确危险选择。账户请求固定使用 API root
 下的 `authserver/authenticate`、`authserver/refresh` 与 `authserver/validate`。
 
-`accounts.json` schema 2 只保存 account ID、provider、角色 UUID/name、可选 HTTPS 皮肤纹理
-URL 和时间等非秘密元数据。皮肤只用于展示，URL 无效或缺失不会改变账户身份；token、密码和
-纹理内容都不进入该文件。
+`accounts.json` 是 Launcher 管理的全局内部状态，不是实例配置，也不属于
+`orbit-launcher.toml`。其 schema 3 只保存 account ID、provider、角色 UUID/name、认证状态、可选 HTTPS
+皮肤纹理 URL 和时间等非秘密元数据。皮肤只用于展示，URL 无效或缺失不会改变账户身份；token、
+密码和纹理内容都不进入该文件。格式尚未发布，因此不保留旧 schema 迁移路径；不匹配时明确
+报错，不能伪装成空账户列表。
 Windows 的 token 由当前用户作用域 DPAPI 加密后原子落盘；Linux 桌面使用当前登录会话的
 Freedesktop Secret Service。Secret Service 不存在或被锁定时命令直接报 `secret_store`，
 不会回退到明文文件。Microsoft device code 和最终 refresh/access token 都只进入同一秘密
@@ -124,6 +126,9 @@ token，启动前按 `validate -> refresh -> interaction_required` 处理。一�
 必须显式传 `--profile`。Offline 账号不产生秘密记录，也不会显示成已通过 Microsoft 验证。
 `account refresh` 显式执行同一会话续期路径，并更新公开角色名和皮肤 URL；GUI 的账户卡片
 只调用该命令，不自行请求 Microsoft 或 Yggdrasil API。
+只有 token 端点明确拒绝 refresh token、Yggdrasil 明确返回会话无效，或本地秘密缺失/损坏时，
+账户才进入 `reauthentication-required`。超时、限流和服务端故障不会把账户误标为失效。重新
+登录复用原 account ID 并原子恢复 `active`；登录开始失败不得写 `accounts.json`。
 
 `account select` 默认修改具体客户端实例的 `[launch].account`；`--global` 只修改全局缺省
 账户且不能与 `--instance` 同用。服务端实例不使用客户端账户。`logout` 删除本地秘密与元

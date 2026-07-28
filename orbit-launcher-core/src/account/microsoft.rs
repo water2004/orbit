@@ -235,6 +235,7 @@ where
             provider: AccountProvider::Microsoft,
             profile_id,
             profile_name: session.profile.name,
+            authentication_state: super::AccountAuthenticationState::Active,
             skin_url,
             login_name: None,
             created_at_unix_seconds: now,
@@ -301,13 +302,25 @@ pub(super) async fn resolve_microsoft_identity(
     let status = response.status();
     let oauth: OAuthTokenResponse = decode_json("Microsoft token refresh", response).await?;
     if !status.is_success() {
-        return Err(LauncherError::InteractionRequired(format!(
-            "Microsoft session cannot be refreshed ({}); log in again",
-            oauth
-                .error_description
-                .as_deref()
-                .or(oauth.error.as_deref())
-                .unwrap_or("the token endpoint rejected the request")
+        let detail = oauth
+            .error_description
+            .as_deref()
+            .or(oauth.error.as_deref())
+            .unwrap_or("the token endpoint rejected the request");
+        if matches!(status.as_u16(), 400 | 401)
+            && matches!(
+                oauth.error.as_deref(),
+                Some("invalid_grant" | "interaction_required" | "invalid_request")
+            )
+        {
+            return Err(LauncherError::ReauthenticationRequired {
+                account_id: account.id,
+                detail: detail.to_string(),
+            });
+        }
+        return Err(LauncherError::Authentication(format!(
+            "Microsoft token refresh failed with HTTP {}: {detail}",
+            status.as_u16()
         )));
     }
     let oauth = oauth.require_tokens_with_fallback(refresh_token.clone())?;
@@ -841,6 +854,42 @@ mod tests {
         if option_env!("ORBIT_MICROSOFT_CLIENT_ID").is_none() {
             assert!(microsoft_client_id(&config).is_err());
         }
+    }
+
+    #[tokio::test]
+    async fn missing_client_id_does_not_mutate_existing_accounts() {
+        if option_env!("ORBIT_MICROSOFT_CLIENT_ID").is_some() {
+            return;
+        }
+        let directory = tempfile::tempdir().unwrap();
+        let paths = RuntimePaths::resolve(&crate::runtime::RuntimePathOptions {
+            config_dir: Some(directory.path().join("config")),
+            data_dir: Some(directory.path().join("data")),
+            cache_dir: Some(directory.path().join("cache")),
+        })
+        .unwrap();
+        super::super::create_offline_account(&paths, "ExistingPlayer").unwrap();
+        let before = std::fs::read(paths.accounts_file()).unwrap();
+        let store = crate::secret_store::test_support::MemorySecretStore::default();
+
+        let error = begin_microsoft_device_login(
+            &paths,
+            &GlobalConfig::default(),
+            &reqwest::Client::new(),
+            &store,
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(error.code(), "authentication");
+        assert_eq!(std::fs::read(paths.accounts_file()).unwrap(), before);
+        assert_eq!(
+            super::super::AccountRepository::load(&paths)
+                .unwrap()
+                .accounts()
+                .len(),
+            1
+        );
     }
 
     #[test]

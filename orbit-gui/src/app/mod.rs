@@ -228,6 +228,7 @@ pub struct OrbitApp {
     pub(super) outdated_diagnostics: Vec<ResolutionDiagnostic>,
     pub(super) outdated_warnings: Vec<String>,
     pub(super) accounts: Vec<Account>,
+    pub(super) accounts_error: Option<String>,
     pub(super) yggdrasil_providers: Vec<YggdrasilProvider>,
     pub(super) java_runtimes: Vec<JavaRuntime>,
     pub(super) java_verification_requested: bool,
@@ -332,6 +333,7 @@ impl OrbitApp {
             outdated_diagnostics: Vec::new(),
             outdated_warnings: Vec::new(),
             accounts: Vec::new(),
+            accounts_error: None,
             yggdrasil_providers: Vec::new(),
             java_runtimes: Vec::new(),
             java_verification_requested: false,
@@ -493,8 +495,24 @@ impl OrbitApp {
                                 div()
                                     .truncate()
                                     .text_xs()
-                                    .text_color(cx.theme().muted_foreground)
-                                    .child(pages::account_provider_label(&account.provider)),
+                                    .text_color(
+                                        if account.authentication_state
+                                            == "reauthentication-required"
+                                        {
+                                            cx.theme().danger
+                                        } else {
+                                            cx.theme().muted_foreground
+                                        },
+                                    )
+                                    .child(
+                                        if account.authentication_state
+                                            == "reauthentication-required"
+                                        {
+                                            tr!("Sign-in expired").into_owned()
+                                        } else {
+                                            pages::account_provider_label(&account.provider)
+                                        },
+                                    ),
                             ),
                     )
                     .into_any_element(),

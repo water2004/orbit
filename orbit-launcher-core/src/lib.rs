@@ -34,10 +34,10 @@ pub mod versions;
 pub mod yggdrasil;
 
 pub use account::{
-    AccountLaunchIdentity, AccountMetadata, AccountProvider, AccountRepository,
-    ExternalYggdrasilLoginRequest, MicrosoftDeviceSession, MicrosoftLoginProgressEvent,
-    begin_microsoft_device_login, complete_microsoft_device_login, create_offline_account,
-    login_external_yggdrasil, resolve_launch_identity,
+    AccountAuthenticationState, AccountLaunchIdentity, AccountMetadata, AccountProvider,
+    AccountRepository, ExternalYggdrasilLoginRequest, MicrosoftDeviceSession,
+    MicrosoftLoginProgressEvent, begin_microsoft_device_login, complete_microsoft_device_login,
+    create_offline_account, login_external_yggdrasil, resolve_launch_identity,
 };
 pub use artifact::{
     ArtifactCache, ArtifactRequest, ArtifactTransferEvent, CachedArtifact, ExpectedHash,

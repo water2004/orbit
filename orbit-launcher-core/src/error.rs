@@ -35,6 +35,12 @@ pub enum LauncherError {
     #[error("account authentication failed: {0}")]
     Authentication(String),
 
+    #[error("account '{account_id}' must be signed in again: {detail}")]
+    ReauthenticationRequired {
+        account_id: uuid::Uuid,
+        detail: String,
+    },
+
     #[error("launch preparation failed: {0}")]
     Launch(String),
 
@@ -125,6 +131,7 @@ impl LauncherError {
             Self::InteractionRequired(_) => "interaction_required",
             Self::SecretStore(_) => "secret_store",
             Self::Authentication(_) => "authentication",
+            Self::ReauthenticationRequired { .. } => "reauthentication_required",
             Self::Launch(_) => "launch",
             Self::ConfigParse(_) => "config_parse",
             Self::ConfigDocumentParse(_) => "config_parse",

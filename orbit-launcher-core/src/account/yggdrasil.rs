@@ -94,6 +94,7 @@ pub async fn login_external_yggdrasil(
             },
             profile_id,
             profile_name: session.selected_profile.name,
+            authentication_state: super::AccountAuthenticationState::Active,
             skin_url,
             login_name: Some(request.username.to_string()),
             created_at_unix_seconds: now,
@@ -133,7 +134,15 @@ pub(super) async fn resolve_yggdrasil_identity(
             prefetched_metadata,
         ));
     }
-    let refreshed = refresh_session(client, provider, access_token, client_token, None).await?;
+    let refreshed = refresh_session(client, provider, access_token, client_token, None)
+        .await
+        .map_err(|error| match error {
+            LauncherError::InteractionRequired(detail) => LauncherError::ReauthenticationRequired {
+                account_id: account.id,
+                detail,
+            },
+            other => other,
+        })?;
     let profile_id = parse_profile_id(&refreshed.selected_profile.id, "Yggdrasil")?;
     if profile_id != account.profile_id {
         return Err(LauncherError::Authentication(format!(
@@ -288,7 +297,7 @@ async fn refresh_session(
     )
     .await
     .map_err(|error| match error {
-        LauncherError::Authentication(message) => LauncherError::InteractionRequired(format!(
+        LauncherError::InteractionRequired(message) => LauncherError::InteractionRequired(format!(
             "External Yggdrasil session cannot be refreshed ({message}); log in again with the account password"
         )),
         other => other,
@@ -337,11 +346,11 @@ where
         )));
     }
     if !status.is_success() {
-        return Err(parse_remote_error(
-            operation.name(),
-            status.as_u16(),
-            &bytes,
-        ));
+        let error = parse_remote_error(operation.name(), status.as_u16(), &bytes);
+        if operation == AuthserverOperation::Refresh && matches!(status.as_u16(), 400 | 401 | 403) {
+            return Err(LauncherError::InteractionRequired(error.to_string()));
+        }
+        return Err(error);
     }
     serde_json::from_slice(&bytes).map_err(|error| {
         LauncherError::Authentication(format!(

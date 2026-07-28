@@ -59,25 +59,38 @@ pub(super) fn render(
 }
 
 fn dashboard(app: &OrbitApp, cx: &mut Context<OrbitApp>) -> impl IntoElement {
+    let load_error = app.accounts_error.clone();
     if app.accounts.is_empty() {
-        return ui::themed_card(cx).child(ui::empty_state(
-            OrbitIcon::Account,
-            tr!("No saved accounts").into_owned(),
-            tr!("Add an identity for client launch. Server installations do not require a selected player account.").into_owned(),
-            None,
-            cx,
-        )).into_any_element();
+        if let Some(error) = load_error {
+            return account_load_error(error, cx).into_any_element();
+        }
+        return ui::themed_card(cx)
+            .child(ui::empty_state(
+                OrbitIcon::Account,
+                tr!("No saved accounts").into_owned(),
+                tr!("Add an identity for client launch. Server installations do not require a selected player account.").into_owned(),
+                None,
+                cx,
+            ))
+            .into_any_element();
     }
     let selected_account = app
         .instance_detail
         .as_ref()
         .and_then(|detail| detail.selected_account_id.clone());
     let mut list = v_flex().gap_3();
+    if let Some(error) = load_error {
+        list = list.child(account_load_error(error, cx));
+    }
     for (index, account) in app.accounts.iter().cloned().enumerate() {
         let use_id = account.id.clone();
         let default_id = account.id.clone();
         let refresh_id = account.id.clone();
         let remove_id = account.id.clone();
+        let reauthenticate = account.authentication_state == "reauthentication-required";
+        let reauth_provider = account.provider.clone();
+        let reauth_provider_id = account.provider_id.clone();
+        let reauth_login_name = account.login_name.clone();
         let used_here = selected_account.as_deref() == Some(account.id.as_str());
         list = list.child(
             ui::themed_card(cx).child(
@@ -99,7 +112,8 @@ fn dashboard(app: &OrbitApp, cx: &mut Context<OrbitApp>) -> impl IntoElement {
                                     .gap_2()
                                     .child(div().text_lg().font_semibold().child(account.profile_name.clone()))
                                     .when(account.is_default, |row| row.child(ui::pill(tr!("Default").into_owned(), cx.theme().primary.opacity(0.13), cx.theme().primary)))
-                                    .when(used_here, |row| row.child(ui::pill(tr!("Used here").into_owned(), cx.theme().success.opacity(0.13), cx.theme().success))),
+                                    .when(used_here, |row| row.child(ui::pill(tr!("Used here").into_owned(), cx.theme().success.opacity(0.13), cx.theme().success)))
+                                    .when(reauthenticate, |row| row.child(ui::pill(tr!("Sign-in expired").into_owned(), cx.theme().danger.opacity(0.13), cx.theme().danger))),
                             )
                             .child(div().text_xs().text_color(cx.theme().muted_foreground).child(format!("{}{}", provider_label(&account.provider), account.provider_id.as_deref().map(|id| format!(" · {id}")).unwrap_or_default()))),
                     )
@@ -115,7 +129,32 @@ fn dashboard(app: &OrbitApp, cx: &mut Context<OrbitApp>) -> impl IntoElement {
                             .ghost()
                             .on_click(cx.listener(move |this, _, _, cx| { this.select_account(default_id.clone(), true); cx.notify(); })),
                     ))
-                    .when(account.provider != "offline", |row| row.child(
+                    .when(reauthenticate, |row| row.child(
+                        Button::new(("account-reauthenticate", index))
+                            .label(tr!("Sign in again").into_owned())
+                            .primary()
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                if reauth_provider == "microsoft" {
+                                    this.begin_microsoft_login();
+                                } else if reauth_provider == "external-yggdrasil" {
+                                    this.ygg_provider = reauth_provider_id.clone().unwrap_or_default();
+                                    if let Some(login_name) = &reauth_login_name {
+                                        this.inputs.ygg_username.update(cx, |input, cx| {
+                                            input.set_value(login_name.clone(), window, cx)
+                                        });
+                                    }
+                                    this.account_flow = Some(
+                                        if this.yggdrasil_providers.iter().any(|provider| provider.id == this.ygg_provider) {
+                                            AccountFlow::YggdrasilLogin
+                                        } else {
+                                            AccountFlow::YggdrasilEndpoints
+                                        },
+                                    );
+                                }
+                                cx.notify();
+                            })),
+                    ))
+                    .when(!reauthenticate && account.provider != "offline", |row| row.child(
                         Button::new(("account-refresh", index))
                             .icon(OrbitIcon::Refresh)
                             .ghost()
@@ -143,6 +182,42 @@ fn dashboard(app: &OrbitApp, cx: &mut Context<OrbitApp>) -> impl IntoElement {
         );
     }
     list.into_any_element()
+}
+
+fn account_load_error(error: String, cx: &mut Context<OrbitApp>) -> impl IntoElement {
+    ui::themed_card(cx)
+        .border_color(cx.theme().danger.opacity(0.45))
+        .child(
+            h_flex()
+                .gap_3()
+                .items_center()
+                .child(ui::icon_tile(OrbitIcon::Warning, cx))
+                .child(
+                    v_flex()
+                        .flex_1()
+                        .gap_1()
+                        .child(
+                            div()
+                                .font_semibold()
+                                .child(tr!("Could not load saved accounts").into_owned()),
+                        )
+                        .child(
+                            div()
+                                .text_sm()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(error),
+                        ),
+                )
+                .child(
+                    Button::new("accounts-retry-load")
+                        .icon(OrbitIcon::Refresh)
+                        .label(tr!("Retry").into_owned())
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.reload_accounts();
+                            cx.notify();
+                        })),
+                ),
+        )
 }
 
 fn method_choices(_app: &OrbitApp, cx: &mut Context<OrbitApp>) -> impl IntoElement {

@@ -85,13 +85,7 @@ impl OrbitApp {
                 ["config", "yggdrasil", "list"],
                 None,
             );
-            self.launcher_task(
-                "Loading accounts",
-                Intent::Accounts,
-                None,
-                ["account", "list"],
-                None,
-            );
+            self.reload_accounts();
             self.launcher_task(
                 "Loading launcher settings",
                 Intent::LauncherConfig,
@@ -109,7 +103,10 @@ impl OrbitApp {
         } else {
             self.runtime_instances.clear();
             self.instance_detail = None;
-            self.accounts.clear();
+            self.accounts_error = Some(tr!(
+                "Orbit Launcher was not found at %{path}.",
+                path = self.preferences.launcher_binary.display()
+            ));
             self.yggdrasil_providers.clear();
             self.java_runtimes.clear();
             self.minecraft_versions.clear();
@@ -133,6 +130,16 @@ impl OrbitApp {
             self.orbit_config.clear();
             self.orbit_config_path = None;
         }
+    }
+
+    pub(super) fn reload_accounts(&mut self) {
+        self.launcher_task(
+            "Loading accounts",
+            Intent::Accounts,
+            None,
+            ["account", "list"],
+            None,
+        );
     }
 
     pub(super) fn load_selected(&mut self, _window: &mut Window, _cx: &mut Context<Self>) {
@@ -426,8 +433,18 @@ impl OrbitApp {
                                 .get(&task_id)
                                 .and_then(|task| task.error_message.clone())
                                 .unwrap_or_else(|| error.to_string());
+                            let error_code = self
+                                .tasks
+                                .get(&task_id)
+                                .and_then(|task| task.error_code.as_deref());
                             if matches!(intent, Intent::Search) {
                                 self.search_state = SearchState::Failed(message.clone());
+                            }
+                            if matches!(intent, Intent::Accounts) {
+                                self.accounts_error = Some(message.clone());
+                            }
+                            if error_code == Some("reauthentication_required") {
+                                refresh_accounts = true;
                             }
                             if let Some(task) = self.tasks.get_mut(&task_id) {
                                 task.state = if cancelled || task.state == TaskState::Cancelled {
@@ -586,7 +603,10 @@ impl OrbitApp {
                 self.mod_view = 1;
             }
             Intent::Audit => self.audit = Some(wire::audit_summary(&result)),
-            Intent::Accounts => self.accounts = decode::<AccountList>(result)?.accounts,
+            Intent::Accounts => {
+                self.accounts = decode::<AccountList>(result)?.accounts;
+                self.accounts_error = None;
+            }
             Intent::YggdrasilProviders => {
                 self.yggdrasil_providers = decode::<YggdrasilProviderList>(result)?.providers;
                 if !self

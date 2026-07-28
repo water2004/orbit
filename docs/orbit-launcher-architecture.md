@@ -206,7 +206,7 @@ config/
   config.toml
 data/
   instances.toml             实例 ID 到路径的注册表
-  accounts.json              schema 2 非秘密账户元数据与可选皮肤 URL
+  accounts.json              schema 3 非秘密账户状态与可选皮肤 URL
   auth-sessions/             有期限的登录会话，不含最终 refresh token 明文
   supervisors/               Linux 上按实例 ID 建立的权限受限 Unix socket
   runtimes/                  已物化的共享 Java runtime

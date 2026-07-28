@@ -22,7 +22,14 @@ pub use microsoft::{
 };
 pub use yggdrasil::{ExternalYggdrasilLoginRequest, login_external_yggdrasil};
 
-pub const ACCOUNTS_SCHEMA: u32 = 2;
+pub const ACCOUNTS_SCHEMA: u32 = 3;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum AccountAuthenticationState {
+    Active,
+    ReauthenticationRequired,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
@@ -49,6 +56,7 @@ pub struct AccountMetadata {
     pub provider: AccountProvider,
     pub profile_id: Uuid,
     pub profile_name: String,
+    pub authentication_state: AccountAuthenticationState,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub skin_url: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -66,6 +74,13 @@ impl AccountMetadata {
             ));
         }
         validate_profile_name(&self.profile_name)?;
+        if self.provider == AccountProvider::Offline
+            && self.authentication_state != AccountAuthenticationState::Active
+        {
+            return Err(LauncherError::Authentication(
+                "offline accounts cannot require reauthentication".to_string(),
+            ));
+        }
         if let Some(skin_url) = &self.skin_url {
             validate_skin_url(skin_url)?;
         }
@@ -275,6 +290,24 @@ impl AccountRepository {
         Ok(account)
     }
 
+    fn require_reauthentication(&mut self, account_id: Uuid) -> Result<(), LauncherError> {
+        let account = self
+            .document
+            .accounts
+            .iter_mut()
+            .find(|account| account.id == account_id)
+            .ok_or_else(|| {
+                LauncherError::Authentication(format!("account '{account_id}' does not exist"))
+            })?;
+        if account.provider == AccountProvider::Offline {
+            return Err(LauncherError::Authentication(
+                "offline accounts cannot require reauthentication".to_string(),
+            ));
+        }
+        account.authentication_state = AccountAuthenticationState::ReauthenticationRequired;
+        self.save()
+    }
+
     pub async fn remove(
         &mut self,
         account_id: Uuid,
@@ -358,6 +391,7 @@ pub fn create_offline_account(
         provider: AccountProvider::Offline,
         profile_id: Uuid::from_bytes(digest),
         profile_name: profile_name.to_string(),
+        authentication_state: AccountAuthenticationState::Active,
         skin_url: None,
         login_name: None,
         created_at_unix_seconds: now,
@@ -374,7 +408,14 @@ pub async fn resolve_launch_identity(
 ) -> Result<AccountLaunchIdentity, LauncherError> {
     let repository = AccountRepository::load(paths)?;
     let account = repository.selected(explicit_account)?.clone();
-    match &account.provider {
+    if account.authentication_state == AccountAuthenticationState::ReauthenticationRequired {
+        return Err(LauncherError::ReauthenticationRequired {
+            account_id: account.id,
+            detail: "the saved session has expired or was revoked".to_string(),
+        });
+    }
+    let account_id = account.id;
+    let result = match &account.provider {
         AccountProvider::Offline => Ok(AccountLaunchIdentity {
             account_id: account.id,
             profile_id: account.profile_id,
@@ -393,7 +434,11 @@ pub async fn resolve_launch_identity(
             let provider = find_yggdrasil_provider(config, provider_id)?;
             yggdrasil::resolve_yggdrasil_identity(paths, client, secrets, account, provider).await
         }
+    };
+    if matches!(result, Err(LauncherError::ReauthenticationRequired { .. })) {
+        AccountRepository::load(paths)?.require_reauthentication(account_id)?;
     }
+    result
 }
 
 async fn persist_authenticated_account(
@@ -402,6 +447,7 @@ async fn persist_authenticated_account(
     mut metadata: AccountMetadata,
     secret: &AccountSecret,
 ) -> Result<AccountMetadata, LauncherError> {
+    metadata.authentication_state = AccountAuthenticationState::Active;
     let mut repository = AccountRepository::load(paths)?;
     if let Some((id, created)) = repository.existing_id(&metadata) {
         metadata.id = id;
@@ -432,17 +478,17 @@ async fn load_account_secret(
         secrets
             .load(&account_secret_key(account_id))
             .await?
-            .ok_or_else(|| {
-                LauncherError::Authentication(format!(
-                    "account '{account_id}' has no stored session; log in again"
-                ))
+            .ok_or_else(|| LauncherError::ReauthenticationRequired {
+                account_id,
+                detail: "the saved session is missing".to_string(),
             })?,
     );
     serde_json::from_slice(&bytes).map_err(|error| {
         bytes.zeroize();
-        LauncherError::Authentication(format!(
-            "stored session for account '{account_id}' is invalid: {error}"
-        ))
+        LauncherError::ReauthenticationRequired {
+            account_id,
+            detail: format!("the saved session is invalid: {error}"),
+        }
     })
 }
 
@@ -613,6 +659,7 @@ mod tests {
                 provider: AccountProvider::Microsoft,
                 profile_id: Uuid::new_v4(),
                 profile_name: "Player".to_string(),
+                authentication_state: AccountAuthenticationState::Active,
                 login_name: None,
                 skin_url: None,
                 created_at_unix_seconds: now,
@@ -627,5 +674,25 @@ mod tests {
         let metadata = std::fs::read_to_string(paths.accounts_file()).unwrap();
         assert!(!metadata.contains("refresh-secret"));
         assert!(!metadata.contains("access-secret"));
+
+        let mut repository = AccountRepository::load(&paths).unwrap();
+        repository.require_reauthentication(account.id).unwrap();
+        let stale = AccountRepository::load(&paths)
+            .unwrap()
+            .get(&account.id.to_string())
+            .unwrap()
+            .clone();
+        assert_eq!(
+            stale.authentication_state,
+            AccountAuthenticationState::ReauthenticationRequired
+        );
+        let restored = persist_authenticated_account(&paths, &store, stale, &secret)
+            .await
+            .unwrap();
+        assert_eq!(restored.id, account.id);
+        assert_eq!(
+            restored.authentication_state,
+            AccountAuthenticationState::Active
+        );
     }
 }

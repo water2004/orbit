@@ -253,6 +253,8 @@ pub struct Account {
     pub provider: String,
     pub provider_id: Option<String>,
     pub profile_name: String,
+    pub login_name: Option<String>,
+    pub authentication_state: String,
     pub skin_url: Option<String>,
     pub is_default: bool,
 }
