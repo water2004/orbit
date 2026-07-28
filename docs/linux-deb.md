@@ -23,8 +23,8 @@ sudo apt remove orbit
 
 ## 本地构建
 
-本地构建要求 Linux、稳定版 Rust、Python 3、`dpkg-deb`、eframe 官方列出的原生 GUI
-开发库与固定版本 `cargo-deb 3.7.0`：
+本地构建要求 Linux、稳定版 Rust、Python 3、`dpkg-deb`、GPUI 的 Wayland/X11 原生开发库
+与固定版本 `cargo-deb 3.7.0`：
 
 ```bash
 sudo apt-get install libclang-dev libgtk-3-dev libssl-dev \

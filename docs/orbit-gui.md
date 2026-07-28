@@ -6,10 +6,11 @@
 
 ## 原生技术边界
 
-界面使用 `eframe/egui`。默认 renderer 是 `wgpu`：Windows 通常映射到 D3D12，Linux 映射
-到 Vulkan；这是原生 GPU 渲染后端，不是 WebView、浏览器或 HTML/JavaScript 运行时。
-Linux 同时启用 Wayland/X11 窗口后端。图片由原生客户端读取 CLI 返回的展示 URL；URL
-从不参与包身份、版本或依赖判断。
+界面使用 Zed Industries 的 Apache-2.0 `gpui` 与 Longbridge 的 Apache-2.0
+`gpui-component` 控件库；后者不是 Zed 官方控件集。窗口、文本、输入、滚动和动画均为原生
+GPUI 元素，不包含 WebView、浏览器或 HTML/JavaScript 运行时。滚动直接消费平台连续滚轮
+事件，触控板的惯性阶段不会被离散成固定行数。图片由原生客户端读取 CLI 返回的展示 URL；
+URL 从不参与包身份、版本或依赖判断。
 
 GUI 默认只接受与自身相邻的 `orbit(.exe)` 和 `orbit-launcher(.exe)`，也允许用户在设置页
 明确选择准确路径。它不扫描 `PATH`，不链接 core，不在 CLI 失败后改走文件直读或兼容 API。
@@ -21,14 +22,14 @@ Windows MSI 的完整安装档位与 Linux deb 将三个程序安装在同一目
 GUI 将同一个显式 `--language system|en|zh-CN` 传给每次 CLI 调用，因此窗口文本、CLI 提示、
 进度与结构化错误保持一致。中文模式从系统字体数据库选择微软雅黑、Noto Sans CJK SC、思源
 黑体等真实 CJK 字体，不硬编码某个平台的字体路径；系统缺少可用中文字体时明确报错。偏好由
-eframe 原生持久化。页面的信息架构、空状态和任务流不依赖某个主题或语言才能成立。
+GUI 自己的展示偏好保存在独立 `preferences.json`。页面的信息架构、空状态和任务流不依赖
+某个主题或语言才能成立。
 
-源码同样按这一边界分层：`app.rs` 只保留共享状态、任务调度、结果归并和命令动作；
-`app/pages/` 分别实现 Home、Mods、Discover、Audit、Runtime、Accounts、Server、Settings
-与 Activity；`process.rs`/`wire.rs` 是唯一进程协议入口；`theme.rs` 只处理共享展示 token 与控件，
-`model.rs` 只承载稳定 view model。页面不能自行读取 TOML、lock、JAR 或 Launcher 存储。
-文本与密码输入必须使用 `theme.rs` 的语义化表单组件；页面不得直接创建 `TextEdit` 或自行
-决定高度、内边距和常用宽度。这样主题、焦点反馈、密码遮蔽和中英文提示始终走同一路径。
+源码同样按这一边界分层：`app/mod.rs` 保存共享状态与 GPUI shell，`app/controller.rs` 是唯一
+命令动作和结果归并入口；`app/pages/` 分别实现 Home、Library、Discover、Audit、Runtime、
+Accounts、Server、Settings 与 Activity；`process.rs`/`wire.rs` 是唯一进程协议入口，
+`theme.rs` 只处理共享展示 token，`model.rs` 只承载稳定 view model。页面不能自行读取 TOML、
+lock、JAR、账户或 Launcher 存储。
 
 ## 单一进程协议
 
@@ -66,6 +67,11 @@ Runtime 页使用 Launcher 的官方只读目录，而不是自由输入后试�
 4. `instance show` 同时给出 desired intent 与 installed lock 摘要，界面突出当前/目标差异；
 5. 保存调用 `instance configure`，安装或更新调用同一个 `install` 事务。
 
+客户端只使用 Launcher 托管的标准 Minecraft 仓库，并把可变游戏目录固定为
+`<minecraft-directory>/versions/<instance-name>`；因此 `mods`、`config`、`saves` 等不会落在
+共享仓库根目录。服务端仍选择一个明确目录。设置页通过 `orbit-launcher minecraft directory`
+显示仓库，并通过 `orbit-launcher minecraft move` 迁移整个仓库；GUI 不自行移动文件。
+
 Java 不单独猜版本。安装事务根据目标 Minecraft 自动下载并验证 Mojang managed runtime。
 Runtime 页可列出、完整校验和清理未使用 Java；任一注册实例 lock 仍引用的 runtime 不能删除。
 
@@ -93,6 +99,9 @@ Mods 页以 lock 中逻辑包为单位显示环境、根/传递关系、依赖�
   验证，GUI 不自行拼接认证路径；
 - Server：EULA 完整正文及 digest 接受、启动/停止/状态/控制台命令；
 - Activity：真实阶段、动态完成量、日志、结构化错误和取消。
+- Settings：GUI 偏好只由 GUI 保存；Launcher 与 Orbit 的业务配置分别通过
+  `orbit-launcher config ...` / `orbit config ...` 读取、设置和恢复默认值。没有安装 Orbit 时
+  明确禁用 Orbit 配置区，不读取其 TOML 猜值。
 
 Activity 折叠条始终保留当前任务、当前阶段、完成量和紧凑进度条；展开态只增加历史任务，
 不把同一进度信息重复成高大的纵向卡片。

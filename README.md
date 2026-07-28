@@ -14,8 +14,8 @@ Orbit，支持全局实例、Minecraft/Java/主流 Loader 安装、持久账户�
 [Orbit Launcher 发布](docs/orbit-launcher-packaging.md)。
 
 原生桌面前端 `orbit-gui` 以同目录的 `orbit` 与 `orbit-launcher` 为唯一业务入口，提供版本
-浏览、运行时/Java 管理、模组更新与方案选择、audit、账户和服务端界面。它使用原生
-egui/wgpu（D3D12/Vulkan），不含 WebView；边界与交互约束见
+浏览、运行时/Java 管理、模组更新与方案选择、audit、账户和服务端界面。它使用 GPUI 与
+原生系统窗口，不含 WebView；边界与交互约束见
 [Orbit GUI](docs/orbit-gui.md)。
 
 ---
