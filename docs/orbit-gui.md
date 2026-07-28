@@ -83,16 +83,23 @@ Java 不单独猜版本。安装事务根据目标 Minecraft 自动下载并验�
 Java 设置页列出、完整校验和清理未使用 Java；任一注册实例 lock 仍引用的 runtime 不能删除。
 Runtime 页只负责创建、导入、更新和启动实例，避免同一管理动作出现两个入口。
 
-跨版本迁移也由 Runtime 页编排领域流程：先用 Launcher 官方目录创建并安装真实目标实例，
-再从源实例调用 `orbit migrate export <目标目录>`，最后在目标调用 `orbit install`。GUI
+跨版本迁移也由 Runtime 页编排领域流程：先从源实例调用同一个 `orbit export` 管线生成并
+校验便携源包；只有该步骤成功后才用 Launcher 官方目录创建并安装真实目标实例，再调用
+`orbit migrate export <目标目录> --source-pack <源包> --consume-source-pack`，最后在目标调用
+`orbit install`。GUI
 不自己拼目标 TOML、不逐包检查兼容性，也不链接 Orbit core；迁移联合求解完全属于
 Orbit CLI/core。用户取消迁移方案或写盘确认时，GUI 不会继续调用目标 `install`，源实例始终
-保持不变。
+保持不变。目标的 `mods/`、`config/` 等可变目录不由 Launcher 预先制造；和 HMCL 的隔离
+运行目录语义一样，领域命令在第一次真正物化对应内容时创建它们。
 
 Runtime 页也把整合包作为领域动作呈现：安装 Orbit ZIP/TOML 或 Modrinth mrpack 时调用
 `orbit import`，用户明确确认覆盖后再调用 `orbit fix` 求解并展示准确方案；导出分别调用
 `orbit export --format zip` 与 `orbit export --format mrpack`。GUI 不解析归档、不改写清单，
 也不根据扩展名实现第二套导入规则。
+
+普通 Orbit 导出与迁移源快照都显示 CLI 的真实字节进度并可取消。JAR 已是压缩容器，core
+以 ZIP Stored 写入；配置和小型元数据才使用 Deflate。被取消或失败的导出不会被当作可用包，
+下一次对同一路径导出会先清理精确的事务临时文件。
 
 ### Mods
 

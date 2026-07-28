@@ -10,6 +10,11 @@ Orbit 的 Windows MSI 是 64 位、per-machine 套件安装包。安装向导提
 桌面应用入口；GUI 使用相邻的两个 CLI，不扫描 `PATH`。安装选项可把该目录加入系统
 `PATH`；卸载时会移除由 MSI 添加的 `PATH` 项。安装需要管理员权限。
 
+项目图标的唯一设计源是 `assets/orbit.svg`：中心点与外环四分之一使用同一主色，外环其余
+四分之三由七段等长彩虹色组成。`orbit-gui` 的 Rust build script 在 Windows 构建时从该 SVG
+生成多尺寸 ICO 并嵌入 PE 资源，因此开始菜单、任务栏和 `orbit-gui.exe` 本身均有图标；
+仓库不维护一份会漂移的手工 ICO 源文件。
+
 双击 MSI 会进入标准安装向导，依次提供欢迎页、MIT 许可页、安装目录选择、安装档位与
 Windows 集成选项、安装确认、进度和完成页。“加入系统 PATH”默认勾选，但用户可以在
 安装前取消。已安装后再次运行同一 MSI，可以修改安装档位和 PATH 集成、修复或卸载。

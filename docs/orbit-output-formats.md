@@ -442,6 +442,11 @@ orbit [--format text|json] [--progress-format none|ndjson] <command> ...
 
 ### `import` / `export`
 
+导出期间 NDJSON 使用 `phase: "export"`，事件依次为 `ExportStarted`、零个或多个
+`ExportAdvanced`、`ExportFinished`。`ExportAdvanced.completed/total` 是校验与实际归档写入
+的字节工作量，`completed_packages/packages` 是已完成校验的逻辑包数；事件不包含物理 JAR
+文件名。取消进程不会产生伪造的 finished 事件。
+
 ```json
 {
   "schema_version": 2,

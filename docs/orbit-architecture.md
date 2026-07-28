@@ -210,11 +210,13 @@ project/release 远端，并按磁盘事实重建 lock；它不枚举版本、�
 TOML/lock。联网候选闭包发现、可行解选择、未选包删除以及 TOML/lock 同步收敛只由
 `fix` 执行。
 
-迁移先要求 Launcher 创建一个真实目标实例，再由同一个 `migration::plan_migration()`
-读取目标 Minecraft/Loader JAR、枚举目标版本候选并选择 Pareto 解。`migrate check` 只
+迁移先通过普通 archive exporter 冻结一个校验通过的便携源实例；该步骤成功后 Launcher
+才创建真实目标实例。随后同一个 `migration::plan_migration()` 从便携源读取包与配置事实、
+从目标读取 Minecraft/Loader JAR，枚举目标版本候选并选择 Pareto 解。`migrate check` 只
 展示这份计划；`migrate export` 复用同一计划写入目标 `orbit.toml`、`orbit.lock` 和
 配置文件，拒绝覆盖已有目标状态。导出不复制模组 JAR，随后在目标运行 `orbit install`
-按新 lock 精确物化，因而预检和导出不会走两条推导路径。
+按新 lock 精确物化，因而预检和导出不会走两条推导路径。便携源包不会替代真实目标平台
+探测；它只消除源实例在目标创建期间发生变化的竞态。
 
 根包环境具有两层正交语义：`orbit.toml` 的可选 `env` 是用户 target 过滤覆盖，lock 的
 `environment` 是精确候选从 JAR 解析出的事实。TOML 缺失覆盖时，locked 路径直接使用

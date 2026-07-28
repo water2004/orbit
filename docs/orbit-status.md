@@ -24,7 +24,7 @@
 | PubGrub fork 远端 | ✅ | 功能分支已发布，Orbit 固定到完整 commit SHA |
 | 多解选择 | ✅ | fork 原生枚举 Pareto 极大解；唯一解自动选择，多解经同一进程的终端或 schema 2 机器交互明确选择；`--yes` 不代选 |
 | 本地重复包 | ✅ | init/sync 保留全部事实并要求 fix；fix 确认后删除未选顶层实现并同步清理 lock/TOML/source |
-| 版本迁移 | ✅ | `migrate check/export` 对 Launcher 已安装目标运行时共用同一精确规划；export 写状态与配置，目标 install 物化 JAR |
+| 版本迁移 | ✅ | 先由普通 export 冻结源包，成功后才创建目标；`migrate check/export --source-pack` 对 Launcher 已安装目标运行时共用同一精确规划，目标 install 物化 JAR |
 | 远端身份边界 | ✅ | provider 只给下载 locator；一个 locator 的多种真实 mod_id 按 JAR 身份分区并选择 |
 | Provider 分层 | ✅ | Modrinth / CurseForge HTTP 与 DTO 各在独立 wrapper，core 只做领域适配 |
 | 跨平台全局路径 | ✅ | RuntimeEnvironment + 显式路径；system/executable 布局 |
@@ -37,7 +37,7 @@
 | Loader JSON 容错 | ✅ | Fabric-compatible 字符串控制字符；仅限 JAR 内 loader/Mixin/refmap，其他 JSON 保持严格 |
 | 字节码运行时符号对齐 | ✅ | Fabric 按 MappingConfiguration、Quilt 按自身 unobfuscated/Tiny 决策选择 official 或投影；Forge/NeoForge 验证 Loader runtime game；未对齐时在 finding 前停止 |
 | i18n | ✅ | `orbit`、`orbit-launcher` 与 GUI 共用 `system`（默认）/`en`/`zh-CN` 语言模型；CLI help、文本结果、进度、询问和结构化错误均在展示边界翻译，机器字段保持稳定 |
-| 原生 GUI | ✅ | GPUI + gpui-component 原生进程薄壳；紧凑任务条、连续触控板滚动、原生短过渡、语言/主题/强调色；Runtime 新实例迁移、Orbit ZIP/Modrinth mrpack 导入导出、Java、Mods、audit、account/server；设置页只经两套 schema 2 CLI 管理 Launcher/Orbit 配置和客户端仓库，不链接 core 或直读业务 TOML |
+| 原生 GUI | ✅ | GPUI + gpui-component 原生进程薄壳；紧凑任务条、连续触控板滚动、原生短过渡、语言/主题/强调色；Runtime 先导出再创建的新实例迁移、可取消且有字节进度的 Orbit ZIP/Modrinth mrpack 导入导出、Java、Mods、audit、account/server；设置页只经两套 schema 2 CLI 管理 Launcher/Orbit 配置和客户端仓库，不链接 core 或直读业务 TOML |
 
 ## 2. 保留的正确规范
 

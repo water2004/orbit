@@ -377,15 +377,18 @@ ZIP 与 mrpack index 路径都经过规范化，绝对路径、`..` 与非 mods 
 orbit export [output] [--target client|server|both] [--format zip|mrpack]
 ```
 
-导出 manifest、lockfile 与目标选择中校验通过的 JAR。未指定文件名时使用安全化的项目
-名称和版本。`mrpack` 生成 Modrinth index；在线文件可成为 downloads，必须内嵌的本地
-文件放入 overrides。dry-run 只统计计划。
+导出 manifest、lockfile、目标选择中校验通过的 JAR，以及 `config/`、`defaultconfigs/`、
+`serverconfig/`、`options.txt` 中不存在符号链接的可移植配置。未指定文件名时使用安全化的
+项目名称和版本。JAR 使用 ZIP Stored，避免对压缩容器二次 Deflate；校验和归档写入发出真实
+字节进度。`mrpack` 生成 Modrinth index；在线文件可成为 downloads，必须内嵌的本地文件和
+配置放入 overrides。dry-run 校验并统计计划，但不创建输出。
 
 ### `orbit migrate check` / `orbit migrate export`
 
 ```text
 orbit migrate check <target-instance-directory>
 orbit migrate export <target-instance-directory>
+orbit migrate export <target-instance-directory> --source-pack <source.zip> --consume-source-pack
 ```
 
 目标必须是 Launcher 已安装完成的真实游戏实例目录。两个子命令调用同一个迁移规划器：
@@ -395,8 +398,13 @@ orbit migrate export <target-instance-directory>
 `check` 只展示将发生的安装、升级、降级、替换和删除。`export` 复用同一规划路径，将目标
 平台快照、入选 lock 和源实例的 `config/`、`defaultconfigs/`、`serverconfig/`、
 `options.txt` 写入目标；拒绝覆盖已有 Orbit 状态或配置。它不复制/安装模组 JAR，随后必须
-在目标目录运行 `orbit install`。GUI 的迁移向导只编排 Launcher 创建目标、migrate export、
-目标 install 三个 CLI 操作。
+在目标目录运行 `orbit install`。GUI 的迁移向导只编排源 export、Launcher 创建目标、
+migrate export 与目标 install 四个 CLI 操作。
+
+`--source-pack` 接受同一 `orbit export --format zip` 生成的便携源快照。规划器先在受限临时
+目录安全解包并验证 TOML/lock，再将该冻结源状态和真实目标运行时联合求解；它不会从 GUI
+状态或文件名猜源包。`--consume-source-pack` 只在用户确认且目标状态写入成功后删除源包。
+GUI 因而先导出源快照，成功后才新建目标实例，再执行上述目标规划与 install。
 
 ### `orbit audit`
 

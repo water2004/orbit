@@ -214,10 +214,15 @@
     依赖图规划器；目标是 Launcher 已安装的准确实例目录，平台 JAR、路径、哈希和 Loader
     元数据从该目录探测。禁止按目标版本逐包探测、伪造 platform snapshot 或在 export 后
     重新走另一条求解路径。export 只写目标 TOML/lock 与配置，JAR 物化仍只由目标中的
-    `orbit install` 完成。
+    `orbit install` 完成。`--source-pack` 只冻结源实例事实，不能替代真实目标探测。
 71. **GUI 的整合包和迁移动作只能编排现有 CLI**。Orbit ZIP/TOML 与 Modrinth mrpack 导入
     走 `orbit import -> orbit fix`；两种导出分别走 `orbit export --format zip|mrpack`；迁移走
-    `Launcher install --new -> orbit migrate export -> 目标 orbit install`。取消任一确认后不得
-    偷偷继续后续阶段，GUI 禁止自行解析归档或生成 TOML/lock。
+    `源 orbit export -> Launcher install --new -> orbit migrate export --source-pack -> 目标
+    orbit install`。源导出失败时禁止创建目标；取消任一确认后不得偷偷继续后续阶段，GUI
+    禁止自行解析归档或生成 TOML/lock。
 72. **GUI 动画只描述界面状态变化**。页面、向导步骤、模态框、抽屉和提示可以使用 GPUI
     原生短过渡；任务进度只能来自 CLI 强类型事件，禁止用定时动画制造下载、求解或安装进度。
+73. **便携包只有一个导出事实管线**。普通 Orbit ZIP 和迁移源快照必须共用同一个 core
+    exporter，包含校验后的包、TOML/lock 与允许的配置根；已经压缩的 JAR 使用 ZIP Stored，
+    不能再次 Deflate。校验和写入按真实字节发强类型进度，失败输出必须由事务临时文件清理。
+    `migrate export --source-pack` 必须从该快照规划，成功确认后才可消费临时源包。
