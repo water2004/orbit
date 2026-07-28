@@ -100,7 +100,9 @@ Microsoft client ID，以及进度条和颜色偏好。`list`/`get` 会区分显
 默认值。修改经过强类型解析和完整配置校验后原子写入，同时保留已有 TOML 注释。External
 Yggdrasil provider 属于复合对象，由 `config yggdrasil` 的强类型命令管理，不接受任意 TOML
 路径写入。API root 默认必须使用 HTTPS；`--allow-insecure-http` 是会暴露账号密码与 token
-的明确危险选择。
+的明确危险选择。API root 本身用于 `GET` 标准 metadata；账户请求固定使用其下的
+`authserver/authenticate`、`authserver/refresh` 与 `authserver/validate`，不得把这些操作名
+直接拼到 root 后。
 
 `accounts.json` 只保存 account ID、provider、角色 UUID/name 和时间等非秘密元数据。
 Windows 的 token 由当前用户作用域 DPAPI 加密后原子落盘；Linux 桌面使用当前登录会话的

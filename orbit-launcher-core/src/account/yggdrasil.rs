@@ -35,7 +35,7 @@ pub async fn login_external_yggdrasil(
     let response: AuthenticationResponse = post_json(
         client,
         provider,
-        "authenticate",
+        AuthserverOperation::Authenticate,
         &AuthenticateRequest {
             agent: Agent {
                 name: "Minecraft",
@@ -120,7 +120,7 @@ pub(super) async fn resolve_yggdrasil_identity(
         )));
     };
     let prefetched_metadata = fetch_provider_metadata(client, provider).await?;
-    let api_root = endpoint(provider, "")?.to_string();
+    let api_root = provider_api_root(provider)?.to_string();
     if validate_session(client, provider, access_token, client_token).await? {
         return Ok(identity(
             &account,
@@ -180,7 +180,7 @@ async fn fetch_provider_metadata(
     client: &reqwest::Client,
     provider: &YggdrasilProviderConfig,
 ) -> Result<String, LauncherError> {
-    let response = client.get(endpoint(provider, "")?).send().await?;
+    let response = client.get(provider_api_root(provider)?).send().await?;
     let status = response.status();
     let bytes = response.bytes().await?;
     if bytes.len() > MAX_AUTH_RESPONSE_BYTES {
@@ -215,7 +215,10 @@ async fn validate_session(
     client_token: &str,
 ) -> Result<bool, LauncherError> {
     let response = client
-        .post(endpoint(provider, "validate")?)
+        .post(authserver_endpoint(
+            provider,
+            AuthserverOperation::Validate,
+        )?)
         .json(&CredentialRequest {
             access_token,
             client_token,
@@ -239,7 +242,7 @@ async fn refresh_session(
     let response: AuthenticationResponse = post_json(
         client,
         provider,
-        "refresh",
+        AuthserverOperation::Refresh,
         &RefreshRequest {
             access_token,
             client_token,
@@ -277,7 +280,7 @@ async fn refresh_session(
 async fn post_json<T, R>(
     client: &reqwest::Client,
     provider: &YggdrasilProviderConfig,
-    path: &str,
+    operation: AuthserverOperation,
     request: &T,
 ) -> Result<R, LauncherError>
 where
@@ -285,7 +288,7 @@ where
     R: for<'de> Deserialize<'de>,
 {
     let response = client
-        .post(endpoint(provider, path)?)
+        .post(authserver_endpoint(provider, operation)?)
         .json(request)
         .send()
         .await?;
@@ -293,24 +296,44 @@ where
     let bytes = response.bytes().await?;
     if bytes.len() > MAX_AUTH_RESPONSE_BYTES {
         return Err(LauncherError::Authentication(format!(
-            "Yggdrasil {path} response exceeds {MAX_AUTH_RESPONSE_BYTES} bytes"
+            "Yggdrasil {} response exceeds {MAX_AUTH_RESPONSE_BYTES} bytes",
+            operation.name()
         )));
     }
     if !status.is_success() {
-        return Err(parse_remote_error(path, status.as_u16(), &bytes));
+        return Err(parse_remote_error(
+            operation.name(),
+            status.as_u16(),
+            &bytes,
+        ));
     }
     serde_json::from_slice(&bytes).map_err(|error| {
-        LauncherError::Authentication(format!("Yggdrasil {path} returned invalid JSON: {error}"))
+        LauncherError::Authentication(format!(
+            "Yggdrasil {} returned invalid JSON: {error}",
+            operation.name()
+        ))
     })
 }
 
-fn endpoint(provider: &YggdrasilProviderConfig, path: &str) -> Result<url::Url, LauncherError> {
+fn provider_api_root(provider: &YggdrasilProviderConfig) -> Result<url::Url, LauncherError> {
     let mut root = provider.api_root.clone();
     if !root.ends_with('/') {
         root.push('/');
     }
-    url::Url::parse(&root)
-        .and_then(|url| url.join(path))
+    url::Url::parse(&root).map_err(|error| {
+        LauncherError::Authentication(format!(
+            "Yggdrasil provider '{}' has an invalid API root: {error}",
+            provider.id
+        ))
+    })
+}
+
+fn authserver_endpoint(
+    provider: &YggdrasilProviderConfig,
+    operation: AuthserverOperation,
+) -> Result<url::Url, LauncherError> {
+    provider_api_root(provider)?
+        .join(operation.relative_path())
         .map_err(|error| {
             LauncherError::Authentication(format!(
                 "Yggdrasil provider '{}' has an invalid API root: {error}",
@@ -412,6 +435,31 @@ struct AuthenticatedSession {
     selected_profile: GameProfile,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AuthserverOperation {
+    Authenticate,
+    Refresh,
+    Validate,
+}
+
+impl AuthserverOperation {
+    const fn name(self) -> &'static str {
+        match self {
+            Self::Authenticate => "authenticate",
+            Self::Refresh => "refresh",
+            Self::Validate => "validate",
+        }
+    }
+
+    const fn relative_path(self) -> &'static str {
+        match self {
+            Self::Authenticate => "authserver/authenticate",
+            Self::Refresh => "authserver/refresh",
+            Self::Validate => "authserver/validate",
+        }
+    }
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct AuthenticateRequest<'a> {
@@ -500,15 +548,34 @@ mod tests {
     }
 
     #[test]
-    fn endpoint_preserves_the_configured_yggdrasil_root_path() {
+    fn authserver_endpoints_preserve_the_configured_yggdrasil_root_path() {
         let provider = YggdrasilProviderConfig {
             id: "private".to_string(),
             api_root: "https://example.com/api/yggdrasil".to_string(),
             allow_insecure_http: false,
         };
         assert_eq!(
-            endpoint(&provider, "authenticate").unwrap().as_str(),
-            "https://example.com/api/yggdrasil/authenticate"
+            provider_api_root(&provider).unwrap().as_str(),
+            "https://example.com/api/yggdrasil/"
         );
+        for (operation, expected) in [
+            (
+                AuthserverOperation::Authenticate,
+                "https://example.com/api/yggdrasil/authserver/authenticate",
+            ),
+            (
+                AuthserverOperation::Refresh,
+                "https://example.com/api/yggdrasil/authserver/refresh",
+            ),
+            (
+                AuthserverOperation::Validate,
+                "https://example.com/api/yggdrasil/authserver/validate",
+            ),
+        ] {
+            assert_eq!(
+                authserver_endpoint(&provider, operation).unwrap().as_str(),
+                expected
+            );
+        }
     }
 }
