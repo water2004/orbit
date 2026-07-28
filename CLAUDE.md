@@ -184,3 +184,24 @@
 62. **audit 进度也必须来自 core 强类型事实**。依次报告输入准备、readiness、顶层
     artifact、Mixin、Transformer 和冲突比较；已知总量使用真实计数，plain 输出节流。
     禁止定时假进度、解析日志或在进度中打印物理 JAR 文件名。
+63. **GUI 是严格的原生进程薄壳，不是第二业务实现**。`orbit-gui` 只能调用同目录或用户
+    明确选择的 `orbit` / `orbit-launcher`，使用共享 schema 的 stdout/stderr/stdin；禁止链接
+    core、扫描 PATH、直读业务文件、增加 GUI 专用接口或在失败后走兼容路径。wgpu 是原生
+    D3D12/Vulkan renderer，不代表 WebView。
+64. **运行时版本选择必须来自 Launcher 官方目录**。Minecraft、Loader 和 Java 要求由
+    `versions minecraft|loader|java` 返回，并与 install 共用 metadata adapter。新建和更新
+    都比较 `instance show` 的 desired 与 installed，再走 `configure -> install`；GUI 不得以
+    自由文本、版本字符串猜测或安装失败重试代替目录与兼容关系。
+65. **GUI 必须渲染领域任务而不是命令表单**。Mods 更新显示可行升级和未升级诊断，方案
+    选择突出差异并展示包级删除；Runtime 显示当前/目标/Java；长任务显示真实进度和取消。
+    CLI 参数只属于进程桥，不得作为主要用户交互层级。
+66. **主题不能代替界面设计**。GUI 必须把跟随系统、浅色、深色与强调色作为独立、持久的
+    展示策略；任一主题下都要保持同一信息层级、可读对比度和非颜色差异提示。页面实现放在
+    `app/pages/`，`app.rs` 只保留共享状态、进程调度与动作控制，禁止重新堆成单文件命令表单。
+67. **CLI 与 GUI 共用一种语言模型**。`orbit`、`orbit-launcher` 和 `orbit-gui` 只支持
+    `system`（缺省）、`en`、`zh-CN`；CLI help、文本结果、进度、询问与错误在展示边界翻译，
+    core/domain 类型和 JSON 字段、枚举码、错误码不得本地化。GUI 每次调用 CLI 都显式传递
+    当前语言，不得维护第二套命令语义。
+68. **机器协议编码固定为严格 UTF-8**。不得依赖或猜测 Windows ACP/OEM code page；真实
+    控制台交给 Rust 标准库 Unicode 输出，管道/重定向使用 UTF-8。GUI 对 stdout/stderr 严格
+    解码，非法字节必须产生 protocol error，不得使用 lossy replacement 或静默丢行。

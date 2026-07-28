@@ -13,6 +13,11 @@ Orbit，支持全局实例、Minecraft/Java/主流 Loader 安装、持久账户�
 [架构约束](docs/orbit-launcher-architecture.md)。独立 MSI/deb 与 tag 规则见
 [Orbit Launcher 发布](docs/orbit-launcher-packaging.md)。
 
+原生桌面前端 `orbit-gui` 以同目录的 `orbit` 与 `orbit-launcher` 为唯一业务入口，提供版本
+浏览、运行时/Java 管理、模组更新与方案选择、audit、账户和服务端界面。它使用原生
+egui/wgpu（D3D12/Vulkan），不含 WebView；边界与交互约束见
+[Orbit GUI](docs/orbit-gui.md)。
+
 ---
 
 ## ✨ 核心特性
@@ -37,7 +42,8 @@ Orbit，支持全局实例、Minecraft/Java/主流 Loader 安装、持久账户�
 
 Windows x64 用户可以从 release 页面下载
 `orbit-<version>-x86_64.msi`。MSI 会把 Orbit 安装到
-`%ProgramFiles%\Orbit\bin`；安装向导默认勾选加入系统 `PATH`，也可以取消。
+`%ProgramFiles%\Orbit\bin`；其中包含相邻的 `orbit`、`orbit-launcher` 和原生
+`orbit-gui`，并创建开始菜单入口。安装向导默认勾选加入系统 `PATH`，也可以取消。
 安装需要管理员权限。重复运行同一安装包会进入修改/修复/卸载界面；同版本的新构建
 也能覆盖旧构建。卸载时可选择是否删除默认 AppData 中的 Orbit 配置和缓存。
 
@@ -45,7 +51,7 @@ Windows x64 用户可以从 release 页面下载
 [Windows MSI](docs/windows-msi.md)。
 
 Debian/Ubuntu amd64 可从同一个 GitHub Release 下载
-`orbit_<version>-1_amd64.deb`：
+`orbit_<version>-1_amd64.deb`。该包同样安装完整套件、桌面入口和图标：
 
 ```bash
 sudo apt install ./orbit_0.1.2-1_amd64.deb
@@ -101,6 +107,11 @@ orbit purge voxelmap
 ## 📖 命令参考 (CLI Reference)
 
 Orbit 采用**目录优先**的上下文逻辑。命令会默认作用于当前所在目录的 `orbit.toml`，如果你在非项目目录执行命令，它将作用于你设置的**全局默认实例**（或通过 `-i <实例名>` 显式指定）。
+
+`orbit` 与 `orbit-launcher` 均提供全局 `--language system|en|zh-CN`，缺省为 `system`；help、
+文本结果、进度、询问和错误会使用同一语言。JSON/NDJSON/stdin 机器协议固定为严格 UTF-8，
+schema、字段名、枚举码和错误码不随语言变化。Windows 控制台不要求切换 code page；管道中的
+非法 UTF-8 会明确报协议错误，而不会被替换或静默忽略。
 
 ### 1. 实例管理 (Instance Management)
 

@@ -7,6 +7,10 @@
 `orbit-launcher` 与 Orbit 模组包管理器完全隔离。它使用自己的全局目录、实例注册表、
 `orbit-launcher.toml` 和 `orbit-launcher.lock`，不读取或调用 Orbit。
 
+全局 `--language system|en|zh-CN` 控制 help、文本输出、进度、交互提示和结构化错误中的展示
+文字，缺省 `system`。JSON/NDJSON 的 schema、字段、枚举码与错误码保持稳定，协议编码固定为
+UTF-8，不依赖 Windows 当前代码页。
+
 ## 实例上下文
 
 实例选择顺序固定为：

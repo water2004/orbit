@@ -7,7 +7,8 @@
 2. tag 严格等于 `v` 加 `orbit-cli/Cargo.toml` 的三段版本，例如 `v0.1.0`；
 3. 存在非空的 `docs/releases/v<version>.md` 人工发行说明；
 4. 全工作区测试通过；
-5. Windows MSI 与 Linux deb 都成功构建并通过各自校验。
+5. 含 `orbit`、`orbit-launcher`、`orbit-gui` 的 Windows MSI 与 Linux deb 都成功构建并
+   通过各自校验。
 
 推荐发布步骤：
 
@@ -22,8 +23,8 @@ git push origin v0.1.0
 
 workflow 会：
 
-1. 在 `windows-latest` 通过仓库固定的 WiX 7 构建并验证 x64 MSI；
-2. 在 `ubuntu-22.04` 原生构建 amd64 ELF，并用固定的 cargo-deb 3.7.0 生成 deb；
+1. 在 `windows-latest` 通过仓库固定的 WiX 7 构建并验证完整套件的 x64 MSI；
+2. 在 `ubuntu-22.04` 原生构建三个 amd64 ELF，并用固定的 cargo-deb 3.7.0 生成完整套件 deb；
 3. 汇总两个产物并生成 `SHA256SUMS`；
 4. 把 `docs/releases/v<version>.md` 作为正式说明前半部分，再使用 GitHub Release Notes
    API 与 `.github/release.yml` 的类别追加 PR/贡献者变更记录；
