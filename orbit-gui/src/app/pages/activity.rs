@@ -6,6 +6,7 @@ use gpui::{
 };
 use gpui_component::{
     ActiveTheme, Disableable, Icon, Selectable, StyledExt,
+    animation::cubic_bezier,
     button::{Button, ButtonVariants},
     h_flex,
     input::Input,
@@ -34,6 +35,7 @@ pub(in crate::app) fn render_strip(app: &OrbitApp, cx: &mut Context<OrbitApp>) -
     let completed = task.completed;
     let total = task.total;
     v_flex()
+        .relative()
         .h(px(54.))
         .flex_shrink_0()
         .border_t_1()
@@ -267,6 +269,15 @@ fn render_drawer(app: &OrbitApp, cx: &mut Context<OrbitApp>) -> impl IntoElement
                 .overflow_y_scrollbar()
                 .p_3()
                 .child(history),
+        )
+        .with_animation(
+            "activity-drawer-open",
+            Animation::new(Duration::from_millis(180)).with_easing(cubic_bezier(0.2, 0.8, 0.2, 1.)),
+            |drawer, delta| {
+                drawer
+                    .right(px(-32.) + delta * px(32.))
+                    .opacity(0.7 + delta * 0.3)
+            },
         )
 }
 
@@ -615,6 +626,7 @@ fn render_toast(app: &OrbitApp, cx: &mut Context<OrbitApp>) -> impl IntoElement 
         ToastKind::Danger => cx.theme().danger,
     };
     h_flex()
+        .relative()
         .absolute()
         .top(px(74.))
         .right(px(20.))
@@ -636,6 +648,15 @@ fn render_toast(app: &OrbitApp, cx: &mut Context<OrbitApp>) -> impl IntoElement 
                     this.toast = None;
                     cx.notify();
                 })),
+        )
+        .with_animation(
+            "toast-enter",
+            Animation::new(Duration::from_millis(180)).with_easing(cubic_bezier(0.2, 0.8, 0.2, 1.)),
+            |toast, delta| {
+                toast
+                    .right(px(-12.) + delta * px(32.))
+                    .opacity(0.6 + delta * 0.4)
+            },
         )
 }
 

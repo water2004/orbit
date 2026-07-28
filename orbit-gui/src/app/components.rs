@@ -1,9 +1,14 @@
+use std::time::Duration;
+
 use gpui::{
-    AnyElement, App, Div, InteractiveElement, IntoElement, ParentElement, SharedString, Styled,
-    StyledImage, Window, div, img, prelude::FluentBuilder as _, px,
+    Animation, AnimationExt, AnyElement, App, Div, ElementId, InteractiveElement, IntoElement,
+    ParentElement, SharedString, Styled, StyledImage, Window, div, img,
+    prelude::FluentBuilder as _, px,
 };
 use gpui_component::{
-    ActiveTheme, Icon, StyledExt, h_flex,
+    ActiveTheme, Icon, StyledExt,
+    animation::cubic_bezier,
+    h_flex,
     input::{Input, InputState},
     scroll::ScrollableElement,
     v_flex,
@@ -52,6 +57,23 @@ pub(super) fn page(
                 .pb_5()
                 .child(content),
         )
+}
+
+pub(super) fn reveal(id: impl Into<ElementId>, content: AnyElement) -> AnyElement {
+    div()
+        .relative()
+        .size_full()
+        .child(content)
+        .with_animation(
+            id,
+            Animation::new(Duration::from_millis(180)).with_easing(cubic_bezier(0.2, 0.8, 0.2, 1.)),
+            |element, delta| {
+                element
+                    .top(px(8.) - delta * px(8.))
+                    .opacity(0.55 + delta * 0.45)
+            },
+        )
+        .into_any_element()
 }
 
 pub(super) fn card() -> Div {
@@ -284,7 +306,7 @@ pub(super) fn divider(cx: &App) -> Div {
     div().h(px(1.)).w_full().bg(cx.theme().border)
 }
 
-pub(super) fn modal_backdrop(content: impl IntoElement, cx: &App) -> Div {
+pub(super) fn modal_backdrop(content: impl IntoElement, cx: &App) -> impl IntoElement {
     div()
         .absolute()
         .inset_0()
@@ -294,10 +316,16 @@ pub(super) fn modal_backdrop(content: impl IntoElement, cx: &App) -> Div {
         .p_6()
         .bg(cx.theme().overlay)
         .child(content)
+        .with_animation(
+            "modal-backdrop",
+            Animation::new(Duration::from_millis(160)).with_easing(cubic_bezier(0.2, 0.8, 0.2, 1.)),
+            |element, delta| element.opacity(delta),
+        )
 }
 
-pub(super) fn modal(width: f32, content: impl IntoElement, cx: &App) -> Div {
+pub(super) fn modal(width: f32, content: impl IntoElement, cx: &App) -> impl IntoElement {
     v_flex()
+        .relative()
         .w(px(width))
         .max_w_full()
         .max_h(px(640.))
@@ -311,6 +339,15 @@ pub(super) fn modal(width: f32, content: impl IntoElement, cx: &App) -> Div {
         .shadow_2xl()
         .bg(cx.theme().popover)
         .child(content)
+        .with_animation(
+            "modal-surface",
+            Animation::new(Duration::from_millis(190)).with_easing(cubic_bezier(0.2, 0.8, 0.2, 1.)),
+            |element, delta| {
+                element
+                    .top(px(12.) - delta * px(12.))
+                    .opacity(0.6 + delta * 0.4)
+            },
+        )
 }
 
 pub(super) fn render_json_summary(value: &serde_json::Value, cx: &App) -> Div {

@@ -143,9 +143,9 @@ pub(super) fn render(
                             .flex_wrap()
                             .child(
                                 Button::new("home-change")
-                                    .label(tr!("Change version").into_owned())
+                                    .label(tr!("Upgrade or migrate").into_owned())
                                     .on_click(cx.listener(|this, _, _, cx| {
-                                        this.begin_runtime_flow(RuntimeFlowMode::Update);
+                                        this.begin_runtime_flow(RuntimeFlowMode::Migrate);
                                         this.preferences.page = Page::Runtime;
                                         cx.notify();
                                     })),

@@ -61,6 +61,21 @@ pub struct RuntimeInstanceList {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+pub struct LauncherInstallResult {
+    pub instance_id: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct MigrationResult {
+    pub export: Option<MigrationExportResult>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct MigrationExportResult {
+    pub applied: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
 pub struct LauncherConfigEntry {
     pub key: String,
     pub value: Option<String>,
@@ -107,7 +122,6 @@ pub struct DesiredRuntime {
     pub minecraft: String,
     pub loader: String,
     pub loader_version: Option<String>,
-    pub java_policy: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -393,7 +407,11 @@ pub enum Intent {
     MinecraftDirectoryMoved,
     Mutated { refresh_packages: bool },
     RuntimeMutated,
-    RuntimeConfiguredForInstall,
+    RuntimeCreatedForMigration { source: PathBuf },
+    MigrationTargetResolved { source: PathBuf, target_id: String },
+    MigrationExported { target: PathBuf, target_id: String },
+    MigrationInstalled { target_id: String },
+    ModpackImported { target: PathBuf },
     AccountMutated,
     YggdrasilProviderMutated,
     JavaRuntimeMutated,

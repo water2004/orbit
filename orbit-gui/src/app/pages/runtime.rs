@@ -21,9 +21,20 @@ pub(super) fn render(
     cx: &mut Context<OrbitApp>,
 ) -> gpui::AnyElement {
     if let Some(flow) = app.runtime_flow {
-        render_flow(app, window, cx, flow).into_any_element()
+        let transition = match flow.step {
+            RuntimeFlowStep::Minecraft => "runtime-flow-minecraft",
+            RuntimeFlowStep::Components => "runtime-flow-components",
+            RuntimeFlowStep::Review => "runtime-flow-review",
+        };
+        ui::reveal(
+            transition,
+            render_flow(app, window, cx, flow).into_any_element(),
+        )
     } else {
-        render_dashboard(app, window, cx).into_any_element()
+        ui::reveal(
+            "runtime-dashboard",
+            render_dashboard(app, window, cx).into_any_element(),
+        )
     }
 }
 
@@ -44,6 +55,9 @@ fn render_dashboard(
 
     let mut content = v_flex().gap_4();
     if let Some(instance) = selected {
+        let orbit_initialized = instance.directory.join("orbit.toml").is_file();
+        let orbit_export_name = archive_name(&instance.name, "zip");
+        let mrpack_export_name = archive_name(&instance.name, "mrpack");
         let detail = app.instance_detail.clone();
         let installed = detail.as_ref().and_then(|item| item.installed.as_ref());
         let desired = detail.as_ref().map(|item| &item.desired);
@@ -133,15 +147,68 @@ fn render_dashboard(
                         .gap_2()
                         .flex_wrap()
                         .child(
-                            Button::new("runtime-update")
-                                .label(tr!("Change version").into_owned())
-                                .on_click(cx.listener(|this, _, _, cx| { this.begin_runtime_flow(RuntimeFlowMode::Update); cx.notify(); })),
+                            Button::new("runtime-migrate")
+                                .label(tr!("Upgrade or migrate").into_owned())
+                                .on_click(cx.listener(|this, _, _, cx| { this.begin_runtime_flow(RuntimeFlowMode::Migrate); cx.notify(); })),
                         )
                         .child(
                             Button::new("runtime-repair")
                                 .label(tr!("Verify and repair").into_owned())
                                 .on_click(cx.listener(|this, _, _, cx| { this.install_runtime(); cx.notify(); })),
                         )
+                        .when(orbit_initialized, |row| {
+                            row.child(
+                                Button::new("runtime-modpack-install")
+                                    .icon(OrbitIcon::Download)
+                                    .label(tr!("Install modpack").into_owned())
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        if let Some(path) = rfd::FileDialog::new()
+                                            .add_filter("Orbit / Modrinth", &["zip", "mrpack", "toml"])
+                                            .pick_file()
+                                        {
+                                            this.confirmation = Some(Confirmation {
+                                                title: tr!("Install this modpack?").into_owned(),
+                                                body: tr!("The imported manifest and archive files replace conflicting instance content, then Fix computes and presents the exact package solution before materializing it.").into_owned(),
+                                                action: ConfirmationAction::InstallModpack(path),
+                                            });
+                                        }
+                                        cx.notify();
+                                    })),
+                            )
+                            .child(
+                                Button::new("runtime-export-orbit")
+                                    .label(tr!("Export Orbit pack").into_owned())
+                                    .ghost()
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        if let Some(path) = rfd::FileDialog::new()
+                                            .add_filter("Orbit pack", &["zip"])
+                                            .set_file_name(&orbit_export_name)
+                                            .save_file()
+                                        {
+                                            this.export_modpack(with_extension(path, "zip"), "zip");
+                                        }
+                                        cx.notify();
+                                    })),
+                            )
+                            .child(
+                                Button::new("runtime-export-mrpack")
+                                    .label(tr!("Export Modrinth pack").into_owned())
+                                    .ghost()
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        if let Some(path) = rfd::FileDialog::new()
+                                            .add_filter("Modrinth pack", &["mrpack"])
+                                            .set_file_name(&mrpack_export_name)
+                                            .save_file()
+                                        {
+                                            this.export_modpack(
+                                                with_extension(path, "mrpack"),
+                                                "mrpack",
+                                            );
+                                        }
+                                        cx.notify();
+                                    })),
+                            )
+                        })
                         .when(!instance.is_default, |row| row.child(
                             Button::new("runtime-default")
                                 .label(tr!("Make default").into_owned())
@@ -241,6 +308,7 @@ fn render_flow(
         .ghost()
         .on_click(cx.listener(|this, _, _, cx| {
             this.runtime_flow = None;
+            this.migration_source = None;
             cx.notify();
         }));
     let content = v_flex()
@@ -254,10 +322,9 @@ fn render_flow(
             RuntimeFlowStep::Review => render_review_step(app, window, cx, flow).into_any_element(),
         });
     ui::page(
-        if flow.mode == RuntimeFlowMode::Create {
-            tr!("Create installation")
-        } else {
-            tr!("Update installation")
+        match flow.mode {
+            RuntimeFlowMode::Create => tr!("Create installation"),
+            RuntimeFlowMode::Migrate => tr!("Migrate installation"),
         }
         .into_owned(),
         tr!("Choose exact catalog entries; installation uses one transactional path").into_owned(),
@@ -315,52 +382,44 @@ fn render_minecraft_step(
     let filter = app
         .input_value(&app.inputs.minecraft_filter, cx)
         .to_ascii_lowercase();
-    let active = if flow.mode == RuntimeFlowMode::Create {
-        &app.new_instance.minecraft
-    } else {
-        &app.runtime_edit.minecraft
-    };
-    let mut list = v_flex().gap_3();
-    if flow.mode == RuntimeFlowMode::Create {
-        list = list
-            .child(ui::section_title(
-                tr!("Installation type").into_owned(),
-                tr!(
-                    "Client instances use the managed repository; servers use an explicit directory"
-                )
+    let active = &app.new_instance.minecraft;
+    let list = v_flex()
+        .gap_3()
+        .child(ui::section_title(
+            tr!("Installation type").into_owned(),
+            tr!("Client instances use the managed repository; servers use an explicit directory")
                 .into_owned(),
-                cx,
-            ))
-            .child(
-                h_flex()
-                    .gap_2()
-                    .child(
-                        Button::new("new-kind-client")
-                            .icon(OrbitIcon::Runtime)
-                            .label(tr!("Client").into_owned())
-                            .selected(app.new_instance.kind == 0)
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.new_instance.kind = 0;
-                                cx.notify();
-                            })),
-                    )
-                    .child(
-                        Button::new("new-kind-server")
-                            .icon(OrbitIcon::Server)
-                            .label(tr!("Server").into_owned())
-                            .selected(app.new_instance.kind == 1)
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.new_instance.kind = 1;
-                                cx.notify();
-                            })),
-                    ),
-            )
-            .child(ui::section_title(
-                tr!("Minecraft version").into_owned(),
-                tr!("Select an exact entry from Mojang's official catalog").into_owned(),
-                cx,
-            ));
-    }
+            cx,
+        ))
+        .child(
+            h_flex()
+                .gap_2()
+                .child(
+                    Button::new("new-kind-client")
+                        .icon(OrbitIcon::Runtime)
+                        .label(tr!("Client").into_owned())
+                        .selected(app.new_instance.kind == 0)
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.new_instance.kind = 0;
+                            cx.notify();
+                        })),
+                )
+                .child(
+                    Button::new("new-kind-server")
+                        .icon(OrbitIcon::Server)
+                        .label(tr!("Server").into_owned())
+                        .selected(app.new_instance.kind == 1)
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.new_instance.kind = 1;
+                            cx.notify();
+                        })),
+                ),
+        )
+        .child(ui::section_title(
+            tr!("Minecraft version").into_owned(),
+            tr!("Select an exact entry from Mojang's official catalog").into_owned(),
+            cx,
+        ));
     let list = list
         .child(
             h_flex()
@@ -447,24 +506,13 @@ fn render_minecraft_step(
                         ),
                 )
                 .on_click(cx.listener(move |this, _, window, cx| {
-                    if flow.mode == RuntimeFlowMode::Create {
-                        this.new_instance.minecraft = version_id.clone();
-                        this.new_instance.loader_version.clear();
-                        let suggestion = suggested_instance_name(
-                            &version_id,
-                            loaders()[this.new_instance.loader],
-                        );
-                        this.new_instance.name = suggestion.clone();
-                        name_input.update(cx, |input, cx| input.set_value(suggestion, window, cx));
-                    } else {
-                        this.runtime_edit.minecraft = version_id.clone();
-                        this.runtime_edit.loader_version.clear();
-                    }
-                    let loader = if flow.mode == RuntimeFlowMode::Create {
-                        this.new_instance.loader
-                    } else {
-                        this.runtime_edit.loader
-                    };
+                    this.new_instance.minecraft = version_id.clone();
+                    this.new_instance.loader_version.clear();
+                    let suggestion =
+                        suggested_instance_name(&version_id, loaders()[this.new_instance.loader]);
+                    this.new_instance.name = suggestion.clone();
+                    name_input.update(cx, |input, cx| input.set_value(suggestion, window, cx));
+                    let loader = this.new_instance.loader;
                     this.request_runtime_metadata(&version_id, loader);
                     this.runtime_flow = Some(RuntimeFlow {
                         step: RuntimeFlowStep::Components,
@@ -492,19 +540,11 @@ fn render_components_step(
     cx: &mut Context<OrbitApp>,
     flow: RuntimeFlow,
 ) -> impl IntoElement {
-    let (minecraft, loader_index, selected_version) = if flow.mode == RuntimeFlowMode::Create {
-        (
-            app.new_instance.minecraft.clone(),
-            app.new_instance.loader,
-            app.new_instance.loader_version.clone(),
-        )
-    } else {
-        (
-            app.runtime_edit.minecraft.clone(),
-            app.runtime_edit.loader,
-            app.runtime_edit.loader_version.clone(),
-        )
-    };
+    let (minecraft, loader_index, selected_version) = (
+        app.new_instance.minecraft.clone(),
+        app.new_instance.loader,
+        app.new_instance.loader_version.clone(),
+    );
     let mut body = v_flex()
         .gap_4()
         .child(ui::section_title(
@@ -523,22 +563,17 @@ fn render_components_step(
                         .label(title_case(loader))
                         .selected(loader_index == index)
                         .on_click(cx.listener(move |this, _, window, cx| {
-                            if flow.mode == RuntimeFlowMode::Create {
-                                let current = name_input.read(cx).value().to_string();
-                                let replace_name =
-                                    current.trim().is_empty() || current == this.new_instance.name;
-                                this.new_instance.loader = index;
-                                this.new_instance.loader_version.clear();
-                                if replace_name {
-                                    let suggestion = suggested_instance_name(&minecraft, loader);
-                                    this.new_instance.name = suggestion.clone();
-                                    name_input.update(cx, |input, cx| {
-                                        input.set_value(suggestion, window, cx)
-                                    });
-                                }
-                            } else {
-                                this.runtime_edit.loader = index;
-                                this.runtime_edit.loader_version.clear();
+                            let current = name_input.read(cx).value().to_string();
+                            let replace_name =
+                                current.trim().is_empty() || current == this.new_instance.name;
+                            this.new_instance.loader = index;
+                            this.new_instance.loader_version.clear();
+                            if replace_name {
+                                let suggestion = suggested_instance_name(&minecraft, loader);
+                                this.new_instance.name = suggestion.clone();
+                                name_input.update(cx, |input, cx| {
+                                    input.set_value(suggestion, window, cx)
+                                });
                             }
                             this.request_runtime_metadata(&minecraft, index);
                             cx.notify();
@@ -666,11 +701,7 @@ fn loader_version_row(
                 }),
         )
         .on_click(cx.listener(move |this, _, _, cx| {
-            if flow.mode == RuntimeFlowMode::Create {
-                this.new_instance.loader_version = version_id.clone();
-            } else {
-                this.runtime_edit.loader_version = version_id.clone();
-            }
+            this.new_instance.loader_version = version_id.clone();
             this.runtime_flow = Some(RuntimeFlow {
                 step: RuntimeFlowStep::Review,
                 ..flow
@@ -685,19 +716,11 @@ fn render_review_step(
     cx: &mut Context<OrbitApp>,
     flow: RuntimeFlow,
 ) -> impl IntoElement {
-    let (minecraft, loader, loader_version) = if flow.mode == RuntimeFlowMode::Create {
-        (
-            app.new_instance.minecraft.clone(),
-            app.new_instance.loader,
-            app.new_instance.loader_version.clone(),
-        )
-    } else {
-        (
-            app.runtime_edit.minecraft.clone(),
-            app.runtime_edit.loader,
-            app.runtime_edit.loader_version.clone(),
-        )
-    };
+    let (minecraft, loader, loader_version) = (
+        app.new_instance.minecraft.clone(),
+        app.new_instance.loader,
+        app.new_instance.loader_version.clone(),
+    );
     let java = app
         .java_requirements
         .get(&minecraft)
@@ -706,8 +729,18 @@ fn render_review_step(
             || tr!("Automatic").into_owned(),
             |major| format!("Java {major}"),
         );
+    let mut summary = ui::themed_card(cx);
+    if flow.mode == RuntimeFlowMode::Migrate
+        && let Some(source) = &app.migration_source
+    {
+        summary = summary.child(ui::key_value(
+            tr!("Source installation").into_owned(),
+            source.display().to_string(),
+            cx,
+        ));
+    }
     let mut body = v_flex().gap_4().child(
-        ui::themed_card(cx)
+        summary
             .child(ui::key_value(tr!("Minecraft").into_owned(), minecraft, cx))
             .child(ui::key_value(
                 tr!("Loader").into_owned(),
@@ -720,18 +753,17 @@ fn render_review_step(
             ))
             .child(ui::key_value(tr!("Java").into_owned(), java, cx)),
     );
-    if flow.mode == RuntimeFlowMode::Create {
-        let name = app.inputs.new_name.clone();
-        let server_directory = app.inputs.new_server_directory.clone();
-        let directory_browse = server_directory.clone();
-        body = body.child(ui::field(
-            tr!("Installation name").into_owned(),
-            tr!("Used by global Launcher instance selection").into_owned(),
-            &name,
-            cx,
-        ));
-        if app.new_instance.kind == 0 {
-            body = body.child(
+    let name = app.inputs.new_name.clone();
+    let server_directory = app.inputs.new_server_directory.clone();
+    let directory_browse = server_directory.clone();
+    body = body.child(ui::field(
+        tr!("Installation name").into_owned(),
+        tr!("Used by global Launcher instance selection").into_owned(),
+        &name,
+        cx,
+    ));
+    if app.new_instance.kind == 0 {
+        body = body.child(
                 ui::themed_card(cx).child(
                     div()
                         .text_sm()
@@ -739,98 +771,73 @@ fn render_review_step(
                         .child(tr!("This client will use the managed Minecraft directory and an isolated versions/<instance> game directory.").into_owned()),
                 ),
             );
-        } else {
-            body = body.child(
-                v_flex()
-                    .gap_1p5()
-                    .child(
-                        div()
-                            .text_sm()
-                            .font_semibold()
-                            .child(tr!("Server directory").into_owned()),
-                    )
-                    .child(
-                        h_flex()
-                            .gap_2()
-                            .child(
-                                Input::new(&server_directory)
-                                    .flex_1()
-                                    .prefix(gpui_component::Icon::new(OrbitIcon::Folder)),
-                            )
-                            .child(
-                                Button::new("new-server-directory-browse")
-                                    .label(tr!("Browse").into_owned())
-                                    .on_click(cx.listener(move |_, _, window, cx| {
-                                        OrbitApp::choose_directory(&directory_browse, window, cx)
-                                    })),
-                            ),
-                    ),
-            );
-        }
-        body = body.child(
-            h_flex()
-                .justify_end()
-                .gap_2()
-                .child(
-                    Button::new("review-back")
-                        .label(tr!("Back").into_owned())
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.runtime_flow = Some(RuntimeFlow {
-                                step: RuntimeFlowStep::Components,
-                                ..flow
-                            });
-                            cx.notify();
-                        })),
-                )
-                .child(
-                    Button::new("review-create")
-                        .icon(OrbitIcon::Download)
-                        .label(tr!("Create and install").into_owned())
-                        .primary()
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.new_instance.name = name.read(cx).value().trim().to_string();
-                            this.new_instance.server_directory =
-                                server_directory.read(cx).value().trim().to_string();
-                            if !this.new_instance.name.is_empty()
-                                && (this.new_instance.kind == 0
-                                    || !this.new_instance.server_directory.is_empty())
-                            {
-                                this.create_runtime();
-                                this.runtime_flow = None;
-                            }
-                            cx.notify();
-                        })),
-                ),
-        );
     } else {
         body = body.child(
-            h_flex()
-                .justify_end()
-                .gap_2()
+            v_flex()
+                .gap_1p5()
                 .child(
-                    Button::new("review-update-back")
-                        .label(tr!("Back").into_owned())
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.runtime_flow = Some(RuntimeFlow {
-                                step: RuntimeFlowStep::Components,
-                                ..flow
-                            });
-                            cx.notify();
-                        })),
+                    div()
+                        .text_sm()
+                        .font_semibold()
+                        .child(tr!("Server directory").into_owned()),
                 )
                 .child(
-                    Button::new("review-update")
-                        .icon(OrbitIcon::Download)
-                        .label(tr!("Apply and install").into_owned())
-                        .primary()
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.configure_runtime_and_install();
-                            this.runtime_flow = None;
-                            cx.notify();
-                        })),
+                    h_flex()
+                        .gap_2()
+                        .child(
+                            Input::new(&server_directory)
+                                .flex_1()
+                                .prefix(gpui_component::Icon::new(OrbitIcon::Folder)),
+                        )
+                        .child(
+                            Button::new("new-server-directory-browse")
+                                .label(tr!("Browse").into_owned())
+                                .on_click(cx.listener(move |_, _, window, cx| {
+                                    OrbitApp::choose_directory(&directory_browse, window, cx)
+                                })),
+                        ),
                 ),
         );
     }
+    body = body.child(
+        h_flex()
+            .justify_end()
+            .gap_2()
+            .child(
+                Button::new("review-back")
+                    .label(tr!("Back").into_owned())
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.runtime_flow = Some(RuntimeFlow {
+                            step: RuntimeFlowStep::Components,
+                            ..flow
+                        });
+                        cx.notify();
+                    })),
+            )
+            .child(
+                Button::new("review-create")
+                    .icon(OrbitIcon::Download)
+                    .label(if flow.mode == RuntimeFlowMode::Migrate {
+                        tr!("Create, migrate and install").into_owned()
+                    } else {
+                        tr!("Create and install").into_owned()
+                    })
+                    .primary()
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.new_instance.name = name.read(cx).value().trim().to_string();
+                        this.new_instance.server_directory =
+                            server_directory.read(cx).value().trim().to_string();
+                        if !this.new_instance.name.is_empty()
+                            && (this.new_instance.kind == 0
+                                || !this.new_instance.server_directory.is_empty())
+                        {
+                            this.create_runtime(flow.mode);
+                            this.runtime_flow = None;
+                        }
+                        cx.notify();
+                    })),
+            ),
+    );
     body
 }
 
@@ -842,9 +849,40 @@ fn suggested_instance_name(minecraft: &str, loader: &str) -> String {
     }
 }
 
+fn archive_name(instance: &str, extension: &str) -> String {
+    let mut stem = String::new();
+    let mut separator = false;
+    for character in instance.chars() {
+        if character.is_alphanumeric() || matches!(character, '-' | '_') {
+            stem.push(character);
+            separator = false;
+        } else if !separator && !stem.is_empty() {
+            stem.push('-');
+            separator = true;
+        }
+    }
+    let stem = stem.trim_matches('-');
+    format!(
+        "{}.{}",
+        if stem.is_empty() { "orbit-pack" } else { stem },
+        extension
+    )
+}
+
+fn with_extension(mut path: std::path::PathBuf, extension: &str) -> std::path::PathBuf {
+    if path
+        .extension()
+        .and_then(std::ffi::OsStr::to_str)
+        .is_none_or(|current| !current.eq_ignore_ascii_case(extension))
+    {
+        path.set_extension(extension);
+    }
+    path
+}
+
 #[cfg(test)]
 mod tests {
-    use super::minecraft_version_matches_filter;
+    use super::{archive_name, minecraft_version_matches_filter, with_extension};
 
     #[test]
     fn minecraft_channels_are_not_conflated() {
@@ -855,5 +893,19 @@ mod tests {
         assert!(minecraft_version_matches_filter("old_alpha", 2));
         assert!(minecraft_version_matches_filter("release", 3));
         assert!(!minecraft_version_matches_filter("release", 99));
+    }
+
+    #[test]
+    fn modpack_export_names_are_safe_and_keep_explicit_extensions() {
+        assert_eq!(
+            archive_name(" My Pack / 26.2 ", "mrpack"),
+            "My-Pack-26-2.mrpack"
+        );
+        assert_eq!(archive_name("///", "zip"), "orbit-pack.zip");
+
+        let without = with_extension(std::path::PathBuf::from("example"), "zip");
+        let explicit = with_extension(std::path::PathBuf::from("example.bundle"), "zip");
+        assert_eq!(without, std::path::PathBuf::from("example.zip"));
+        assert_eq!(explicit, std::path::PathBuf::from("example.zip"));
     }
 }

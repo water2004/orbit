@@ -1,4 +1,7 @@
-use std::collections::{BTreeMap, HashMap};
+use std::{
+    collections::{BTreeMap, HashMap},
+    path::PathBuf,
+};
 
 use gpui::{
     AnyElement, AppContext, Context, Entity, InteractiveElement, IntoElement, ParentElement,
@@ -31,13 +34,14 @@ pub(super) enum ConfirmationAction {
     UnregisterInstance(String),
     RemoveJavaRuntime(String),
     RemovePackage(String),
+    InstallModpack(PathBuf),
     AcceptEula(String),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum RuntimeFlowMode {
     Create,
-    Update,
+    Migrate,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -97,14 +101,6 @@ pub(super) struct NewInstanceForm {
     pub minecraft: String,
     pub loader: usize,
     pub loader_version: String,
-}
-
-#[derive(Default)]
-pub(super) struct RuntimeEditForm {
-    pub minecraft: String,
-    pub loader: usize,
-    pub loader_version: String,
-    pub java_policy: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -251,12 +247,12 @@ pub struct OrbitApp {
     pub(super) interaction: Option<PendingInteraction>,
     pub(super) toast: Option<Toast>,
     pub(super) new_instance: NewInstanceForm,
-    pub(super) runtime_edit: RuntimeEditForm,
     pub(super) ygg_provider: String,
     pub(super) ygg_allow_insecure_http: bool,
     pub(super) microsoft_session: Option<Value>,
     pub(super) eula_document: Option<Value>,
     pub(super) runtime_flow: Option<RuntimeFlow>,
+    pub(super) migration_source: Option<PathBuf>,
     pub(super) account_flow: Option<AccountFlow>,
     pub(super) ygg_endpoint_editor_open: bool,
     pub(super) inputs: Inputs,
@@ -357,12 +353,12 @@ impl OrbitApp {
             interaction: None,
             toast: None,
             new_instance: NewInstanceForm::default(),
-            runtime_edit: RuntimeEditForm::default(),
             ygg_provider: String::new(),
             ygg_allow_insecure_http: false,
             microsoft_session: None,
             eula_document: None,
             runtime_flow: None,
+            migration_source: None,
             account_flow: None,
             ygg_endpoint_editor_open: false,
             inputs,

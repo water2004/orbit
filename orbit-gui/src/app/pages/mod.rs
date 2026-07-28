@@ -19,14 +19,39 @@ pub(super) fn render(
     window: &mut Window,
     cx: &mut Context<OrbitApp>,
 ) -> AnyElement {
-    match app.preferences.page {
-        Page::Home => home::render(app, window, cx).into_any_element(),
-        Page::Library => library::render(app, window, cx).into_any_element(),
-        Page::Discover => discover::render(app, window, cx).into_any_element(),
-        Page::Audit => audit::render(app, window, cx).into_any_element(),
-        Page::Runtime => runtime::render(app, window, cx).into_any_element(),
-        Page::Accounts => accounts::render(app, window, cx).into_any_element(),
-        Page::Server => server::render(app, window, cx).into_any_element(),
-        Page::Settings => settings::render(app, window, cx).into_any_element(),
-    }
+    let (transition, content) = match app.preferences.page {
+        Page::Home => (
+            "page-home",
+            home::render(app, window, cx).into_any_element(),
+        ),
+        Page::Library => (
+            "page-library",
+            library::render(app, window, cx).into_any_element(),
+        ),
+        Page::Discover => (
+            "page-discover",
+            discover::render(app, window, cx).into_any_element(),
+        ),
+        Page::Audit => (
+            "page-audit",
+            audit::render(app, window, cx).into_any_element(),
+        ),
+        Page::Runtime => (
+            "page-runtime",
+            runtime::render(app, window, cx).into_any_element(),
+        ),
+        Page::Accounts => (
+            "page-accounts",
+            accounts::render(app, window, cx).into_any_element(),
+        ),
+        Page::Server => (
+            "page-server",
+            server::render(app, window, cx).into_any_element(),
+        ),
+        Page::Settings => (
+            "page-settings",
+            settings::render(app, window, cx).into_any_element(),
+        ),
+    };
+    crate::app::components::reveal(transition, content)
 }

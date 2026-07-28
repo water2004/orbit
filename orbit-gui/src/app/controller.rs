@@ -306,7 +306,6 @@ impl OrbitApp {
         let mut refresh_java_runtimes = false;
         let mut refresh_server = false;
         let mut refresh_registries = false;
-        let mut install_runtime_after_configure = false;
         let mut refresh_launcher_config = false;
         let mut refresh_orbit_config = false;
         let mut refresh_minecraft_directory = false;
@@ -407,9 +406,8 @@ impl OrbitApp {
                                     refresh_packages: true,
                                 } => reload_selected = true,
                                 Intent::RuntimeMutated => refresh_registries = true,
-                                Intent::RuntimeConfiguredForInstall => {
-                                    install_runtime_after_configure = true
-                                }
+                                Intent::RuntimeCreatedForMigration { .. }
+                                | Intent::MigrationInstalled { .. } => refresh_registries = true,
                                 Intent::AccountMutated => {
                                     refresh_accounts = true;
                                     reload_selected = true;
@@ -498,9 +496,6 @@ impl OrbitApp {
                 None,
             );
         }
-        if install_runtime_after_configure {
-            self.install_runtime();
-        }
         if refresh_launcher_config {
             self.launcher_task(
                 "Loading launcher settings",
@@ -571,22 +566,7 @@ impl OrbitApp {
             }
             Intent::LauncherInstanceDetail => {
                 let detail: RuntimeInstanceDetail = decode(result)?;
-                let target = detail.installed.as_ref();
-                self.runtime_edit.minecraft = target
-                    .map(|installed| installed.minecraft.clone())
-                    .unwrap_or_else(|| detail.desired.minecraft.clone());
-                self.runtime_edit.loader = loader_index(
-                    target
-                        .map(|installed| installed.loader.as_str())
-                        .unwrap_or(&detail.desired.loader),
-                );
-                self.runtime_edit.loader_version = target
-                    .and_then(|installed| installed.loader_version.clone())
-                    .or_else(|| detail.desired.loader_version.clone())
-                    .unwrap_or_default();
-                self.runtime_edit.java_policy = java_policy_index(&detail.desired.java_policy);
                 self.instance_detail = Some(detail);
-                self.load_runtime_metadata();
             }
             Intent::Packages => self.packages = decode::<PackageList>(result)?.packages,
             Intent::Search => {
@@ -670,12 +650,78 @@ impl OrbitApp {
             Intent::MinecraftDirectory => {
                 self.minecraft_directory = Some(decode(result)?);
             }
+            Intent::RuntimeCreatedForMigration { source } => {
+                let installed: LauncherInstallResult = decode(result)?;
+                self.launcher_task(
+                    "Loading migration target",
+                    Intent::MigrationTargetResolved {
+                        source: source.clone(),
+                        target_id: installed.instance_id.clone(),
+                    },
+                    Some(installed.instance_id),
+                    ["instance", "show"],
+                    None,
+                );
+            }
+            Intent::MigrationTargetResolved { source, target_id } => {
+                let detail: RuntimeInstanceDetail = decode(result)?;
+                self.orbit_task_args(
+                    "Exporting mod migration",
+                    Intent::MigrationExported {
+                        target: detail.instance.directory.clone(),
+                        target_id: target_id.clone(),
+                    },
+                    vec![
+                        "migrate".into(),
+                        "export".into(),
+                        detail.instance.directory.to_string_lossy().into_owned(),
+                    ],
+                    Some(source.clone()),
+                    None,
+                );
+            }
+            Intent::MigrationExported { target, target_id } => {
+                let migration: MigrationResult = decode(result)?;
+                if migration.export.is_some_and(|export| export.applied) {
+                    self.orbit_task_args(
+                        "Installing migrated mod environment",
+                        Intent::MigrationInstalled {
+                            target_id: target_id.clone(),
+                        },
+                        vec!["install".into()],
+                        Some(target.clone()),
+                        None,
+                    );
+                } else {
+                    self.toast = Some(Toast {
+                        message: tr!(
+                            "Migration export was cancelled; the new runtime was left without migrated mods."
+                        )
+                        .into_owned(),
+                        kind: ToastKind::Warning,
+                    });
+                }
+            }
+            Intent::MigrationInstalled { target_id } => {
+                self.preferences.selected_instance = Some(target_id.clone());
+                self.save_preferences();
+            }
+            Intent::ModpackImported { target } => {
+                self.orbit_task_args(
+                    "Resolving imported modpack",
+                    Intent::Mutated {
+                        refresh_packages: true,
+                    },
+                    vec!["fix".into()],
+                    Some(target.clone()),
+                    None,
+                );
+            }
             Intent::LauncherConfigMutated
             | Intent::OrbitConfigMutated
             | Intent::MinecraftDirectoryMoved
             | Intent::Mutated { .. }
             | Intent::RuntimeMutated
-            | Intent::RuntimeConfiguredForInstall
             | Intent::AccountMutated
             | Intent::YggdrasilProviderMutated
             | Intent::JavaRuntimeMutated
@@ -683,12 +729,6 @@ impl OrbitApp {
             | Intent::Generic => {}
         }
         Ok(())
-    }
-
-    fn load_runtime_metadata(&mut self) {
-        let minecraft = self.runtime_edit.minecraft.clone();
-        let loader = self.runtime_edit.loader;
-        self.request_runtime_metadata(&minecraft, loader);
     }
 
     pub(super) fn request_runtime_metadata(&mut self, minecraft: &str, loader_index: usize) {
@@ -770,11 +810,15 @@ impl OrbitApp {
     }
 
     pub(super) fn install_mods(&mut self) {
-        self.orbit_mutation("Installing mod environment", vec!["install".into()]);
+        self.orbit_mutation("Installing locked mod environment", vec!["install".into()]);
+    }
+
+    pub(super) fn fix_mods(&mut self) {
+        self.orbit_mutation("Repairing mod environment", vec!["fix".into()]);
     }
 
     pub(super) fn sync_instance(&mut self) {
-        self.orbit_mutation("Synchronizing instance", vec!["sync".into()]);
+        self.orbit_mutation("Rebuilding local package inventory", vec!["sync".into()]);
     }
 
     fn orbit_mutation(&mut self, label: &str, command: Vec<String>) {
@@ -941,37 +985,7 @@ impl OrbitApp {
         }
     }
 
-    pub(super) fn configure_runtime_and_install(&mut self) {
-        let Some(instance) = self.selected_instance().cloned() else {
-            return;
-        };
-        let java_policies = ["auto", "managed"];
-        let mut command = vec![
-            "instance".into(),
-            "configure".into(),
-            "--minecraft".into(),
-            self.runtime_edit.minecraft.clone(),
-            "--loader".into(),
-            loaders()[self.runtime_edit.loader].into(),
-            "--java-policy".into(),
-            java_policies[self.runtime_edit.java_policy].into(),
-        ];
-        if self.runtime_edit.loader != 0 {
-            command.extend([
-                "--loader-version".into(),
-                self.runtime_edit.loader_version.clone(),
-            ]);
-        }
-        self.launcher_task_args(
-            "Preparing runtime update",
-            Intent::RuntimeConfiguredForInstall,
-            Some(instance.id),
-            command,
-            None,
-        );
-    }
-
-    pub(super) fn create_runtime(&mut self) {
+    pub(super) fn create_runtime(&mut self, mode: RuntimeFlowMode) {
         let mut command = vec![
             "install".into(),
             "--new".into(),
@@ -1000,13 +1014,26 @@ impl OrbitApp {
                 self.new_instance.loader_version.clone(),
             ]);
         }
+        let intent = if mode == RuntimeFlowMode::Migrate {
+            let Some(source) = self.migration_source.clone() else {
+                return;
+            };
+            Intent::RuntimeCreatedForMigration { source }
+        } else {
+            Intent::RuntimeMutated
+        };
         self.launcher_task_args(
-            "Creating runtime",
-            Intent::RuntimeMutated,
+            if mode == RuntimeFlowMode::Migrate {
+                "Creating migration target"
+            } else {
+                "Creating runtime"
+            },
+            intent,
             None,
             command,
             None,
         );
+        self.migration_source = None;
     }
 
     pub(super) fn set_default_runtime(&mut self) {
@@ -1037,6 +1064,48 @@ impl OrbitApp {
                 "--directory".into(),
                 root,
             ],
+            None,
+        );
+    }
+
+    pub(super) fn install_modpack(&mut self, path: PathBuf) {
+        let Some(instance) = self.selected_instance().cloned() else {
+            return;
+        };
+        self.orbit_task_args(
+            "Importing modpack",
+            Intent::ModpackImported {
+                target: instance.directory.clone(),
+            },
+            vec![
+                "import".into(),
+                path.to_string_lossy().into_owned(),
+                "--merge-strategy".into(),
+                "prefer-import".into(),
+            ],
+            Some(instance.directory),
+            None,
+        );
+    }
+
+    pub(super) fn export_modpack(&mut self, path: PathBuf, format: &'static str) {
+        let Some(instance) = self.selected_instance().cloned() else {
+            return;
+        };
+        self.orbit_task_args(
+            if format == "mrpack" {
+                "Exporting Modrinth modpack"
+            } else {
+                "Exporting Orbit modpack"
+            },
+            Intent::Generic,
+            vec![
+                "export".into(),
+                path.to_string_lossy().into_owned(),
+                "--format".into(),
+                format.into(),
+            ],
+            Some(instance.directory),
             None,
         );
     }
@@ -1270,6 +1339,10 @@ impl OrbitApp {
                 self.remove_package(&id);
                 0
             }
+            ConfirmationAction::InstallModpack(path) => {
+                self.install_modpack(path);
+                0
+            }
             ConfirmationAction::AcceptEula(digest) => {
                 if let Some(instance) = self.selected_instance().cloned() {
                     self.launcher_task_args(
@@ -1396,13 +1469,22 @@ impl OrbitApp {
     }
 
     pub(super) fn begin_runtime_flow(&mut self, mode: RuntimeFlowMode) {
-        if mode == RuntimeFlowMode::Update
-            && let Some(detail) = &self.instance_detail
-        {
-            self.runtime_edit.minecraft = detail.desired.minecraft.clone();
-            self.runtime_edit.loader = loader_index(&detail.desired.loader);
-            self.runtime_edit.loader_version =
-                detail.desired.loader_version.clone().unwrap_or_default();
+        if mode == RuntimeFlowMode::Migrate {
+            let Some(source) = self.selected_instance().cloned() else {
+                return;
+            };
+            if !source.directory.join("orbit.toml").is_file() {
+                self.toast = Some(Toast {
+                    message: tr!("Initialize the selected source with Orbit before migrating it.")
+                        .into_owned(),
+                    kind: ToastKind::Warning,
+                });
+                return;
+            }
+            self.new_instance.kind = usize::from(source.kind == "server");
+            self.migration_source = Some(source.directory.clone());
+        } else {
+            self.migration_source = None;
         }
         self.runtime_flow = Some(RuntimeFlow {
             mode,
@@ -1425,17 +1507,6 @@ impl OrbitApp {
 
 pub(super) fn loaders() -> [&'static str; 5] {
     ["vanilla", "fabric", "forge", "neoforge", "quilt"]
-}
-
-pub(super) fn loader_index(loader: &str) -> usize {
-    loaders()
-        .iter()
-        .position(|candidate| *candidate == loader)
-        .unwrap_or(0)
-}
-
-fn java_policy_index(policy: &str) -> usize {
-    usize::from(policy == "managed")
 }
 
 pub(super) fn title_case(value: &str) -> String {

@@ -41,10 +41,18 @@ pub(super) fn render(
                 })),
         )
         .child(
+            Button::new("mods-fix")
+                .label(tr!("Fix").into_owned())
+                .primary()
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.fix_mods();
+                    cx.notify();
+                })),
+        )
+        .child(
             Button::new("mods-install")
                 .icon(OrbitIcon::Download)
                 .label(tr!("Install").into_owned())
-                .primary()
                 .on_click(cx.listener(|this, _, _, cx| {
                     this.install_mods();
                     cx.notify();
