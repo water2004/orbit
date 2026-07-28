@@ -18,7 +18,10 @@ pub async fn handle(
     }
     let instance_dir = ctx.instance_dir()?;
     let audit_progress = if ctx.output.ndjson_progress() {
-        Some(crate::cli::output::ndjson_audit_reporter(ctx.command))
+        Some(crate::cli::output::ndjson_audit_reporter(
+            ctx.command,
+            ctx.machine_sequence.clone(),
+        ))
     } else {
         crate::cli::progress::audit_reporter(ctx.quiet, &ctx.runtime.config().ui.progress_bar)
     };

@@ -19,8 +19,9 @@ CLI 不实现业务规则。core 不打印 UI 文本，而是返回结构化报�
 以 120 列为上限。平台 SDK、网络、ZIP 和文件系统位于边界模块。
 
 `orbit` 与 `orbit-launcher` 的 `--format json` / `--progress-format ndjson` 直接复用
-`orbit-machine-protocol` 的 schema 2 成功、错误和进度信封。原生 GUI 只是启动两个 CLI
-进程并消费这套契约；不存在 GUI 专用参数、旧 schema 别名、备用 JSON 路径或 core 直连。
+`orbit-machine-protocol` 的 schema 2 成功、错误、进度和交互信封。原生 GUI 只是启动两个
+CLI 进程：读取 stdout 最终结果与 stderr NDJSON，并向同一子进程 stdin 写回交互选择；
+不存在 GUI 专用参数、旧 schema 别名、备用 JSON 路径或 core 直连。
 
 PubGrub fork 位于
 [`water2004/pubgrub`](https://github.com/water2004/pubgrub/tree/codex/solver-observer) 的

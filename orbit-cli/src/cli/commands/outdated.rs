@@ -23,7 +23,7 @@ pub async fn handle(mod_name: Option<String>, ctx: &CliContext) -> Result<()> {
 
     let providers = super::create_instance_providers(&dir, None, &ctx.runtime)?;
 
-    let selector = super::resolution_selector(ctx.dry_run, ctx.yes);
+    let selector = super::resolution_selector(ctx);
     let progress = super::operation_progress(ctx);
     let report = if requested_package.is_some() {
         orbit_core::outdated::check_outdated_with_interaction(

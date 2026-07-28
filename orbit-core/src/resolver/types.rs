@@ -682,4 +682,4 @@ pub struct ResolutionPortfolio {
     pub alternatives: Vec<ResolutionReport>,
 }
 
-pub type ResolutionSelector = Box<dyn FnOnce(&[ResolutionReport]) -> usize + Send>;
+pub type ResolutionSelector = Box<dyn FnOnce(&[ResolutionReport]) -> Result<usize, String> + Send>;

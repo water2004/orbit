@@ -94,6 +94,101 @@ pub struct ProgressEnvelope<T> {
     pub data: T,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InteractionKind {
+    Package,
+    Resolution,
+    Confirmation,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InteractionChoice<T> {
+    pub id: String,
+    pub label: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    pub data: T,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InteractionEnvelope<T> {
+    pub schema_version: u32,
+    #[serde(rename = "type")]
+    pub kind: String,
+    pub command: String,
+    pub sequence: u64,
+    pub interaction_id: String,
+    pub interaction: InteractionKind,
+    pub prompt: String,
+    pub choices: Vec<InteractionChoice<T>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default_choice: Option<String>,
+    pub allow_cancel: bool,
+}
+
+impl<T> InteractionEnvelope<T> {
+    pub fn new(
+        command: impl Into<String>,
+        sequence: u64,
+        interaction_id: impl Into<String>,
+        interaction: InteractionKind,
+        prompt: impl Into<String>,
+        choices: Vec<InteractionChoice<T>>,
+    ) -> Self {
+        Self {
+            schema_version: SCHEMA_VERSION,
+            kind: "interaction".to_string(),
+            command: command.into(),
+            sequence,
+            interaction_id: interaction_id.into(),
+            interaction,
+            prompt: prompt.into(),
+            choices,
+            default_choice: None,
+            allow_cancel: true,
+        }
+    }
+
+    pub fn with_default(mut self, choice: impl Into<String>) -> Self {
+        self.default_choice = Some(choice.into());
+        self
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InteractionResponse {
+    pub schema_version: u32,
+    #[serde(rename = "type")]
+    pub kind: String,
+    pub interaction_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub selected_choice: Option<String>,
+    pub cancelled: bool,
+}
+
+impl InteractionResponse {
+    pub fn selected(interaction_id: impl Into<String>, choice: impl Into<String>) -> Self {
+        Self {
+            schema_version: SCHEMA_VERSION,
+            kind: "interaction_response".to_string(),
+            interaction_id: interaction_id.into(),
+            selected_choice: Some(choice.into()),
+            cancelled: false,
+        }
+    }
+
+    pub fn cancelled(interaction_id: impl Into<String>) -> Self {
+        Self {
+            schema_version: SCHEMA_VERSION,
+            kind: "interaction_response".to_string(),
+            interaction_id: interaction_id.into(),
+            selected_choice: None,
+            cancelled: true,
+        }
+    }
+}
+
 impl<T> ProgressEnvelope<T> {
     pub fn new(command: impl Into<String>, sequence: u64, phase: ProgressPhase, data: T) -> Self {
         Self {
@@ -128,5 +223,33 @@ mod tests {
         assert!(success.ok);
         assert!(!error.ok);
         assert_eq!(progress.sequence, 1);
+    }
+
+    #[test]
+    fn interaction_roundtrip_uses_the_same_schema_without_a_second_endpoint() {
+        let envelope = InteractionEnvelope::new(
+            "upgrade",
+            3,
+            "resolution-3",
+            InteractionKind::Resolution,
+            "Choose a solution",
+            vec![InteractionChoice {
+                id: "1".to_string(),
+                label: "Option 1".to_string(),
+                description: None,
+                data: serde_json::json!({"changes": []}),
+            }],
+        )
+        .with_default("1");
+        let encoded = serde_json::to_string(&envelope).unwrap();
+        let decoded: InteractionEnvelope<serde_json::Value> =
+            serde_json::from_str(&encoded).unwrap();
+        assert_eq!(decoded.schema_version, SCHEMA_VERSION);
+        assert_eq!(decoded.kind, "interaction");
+        assert_eq!(decoded.interaction, InteractionKind::Resolution);
+
+        let response = InteractionResponse::selected(decoded.interaction_id, "1");
+        assert_eq!(response.kind, "interaction_response");
+        assert!(!response.cancelled);
     }
 }

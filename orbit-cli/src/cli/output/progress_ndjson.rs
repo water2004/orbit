@@ -14,7 +14,7 @@
 
 use std::io::Write;
 use std::sync::{
-    Mutex,
+    Arc, Mutex, OnceLock,
     atomic::{AtomicU64, Ordering},
 };
 
@@ -38,7 +38,10 @@ struct ProgressData<'a, T: Serialize> {
 /// mutex so concurrent candidate-download tasks cannot interleave half-lines.
 type StderrWriter = Mutex<std::io::Stderr>;
 
-fn write_line(writer: &StderrWriter, line: &str) {
+static STDERR_WRITER: OnceLock<StderrWriter> = OnceLock::new();
+
+pub(crate) fn write_machine_line(line: &str) {
+    let writer = STDERR_WRITER.get_or_init(|| Mutex::new(std::io::stderr()));
     if let Ok(mut handle) = writer.lock() {
         let _ = writeln!(handle, "{line}");
     }
@@ -47,21 +50,15 @@ fn write_line(writer: &StderrWriter, line: &str) {
 /// Reporter for package-operation progress (`ProgressEvent`).
 pub struct NdjsonProgressReporter {
     command: &'static str,
-    writer: StderrWriter,
-    sequence: AtomicU64,
+    sequence: Arc<AtomicU64>,
 }
 
 impl NdjsonProgressReporter {
-    pub fn new(command: &'static str) -> Self {
-        Self {
-            command,
-            writer: Mutex::new(std::io::stderr()),
-            sequence: AtomicU64::new(0),
-        }
+    pub fn new(command: &'static str, sequence: Arc<AtomicU64>) -> Self {
+        Self { command, sequence }
     }
 
     pub fn reporter(self) -> orbit_core::ProgressReporter {
-        let writer = self.writer;
         let command = self.command;
         let sequence = self.sequence;
         std::sync::Arc::new(move |event: ProgressEvent| {
@@ -73,7 +70,7 @@ impl NdjsonProgressReporter {
                 ProgressData { event: &event },
             );
             let line = serde_json::to_string(&envelope).unwrap_or_else(|_| "{}".into());
-            write_line(&writer, &line);
+            write_machine_line(&line);
         })
     }
 }
@@ -81,21 +78,15 @@ impl NdjsonProgressReporter {
 /// Reporter for audit progress (`AuditProgressEvent`).
 pub struct NdjsonAuditReporter {
     command: &'static str,
-    writer: StderrWriter,
-    sequence: AtomicU64,
+    sequence: Arc<AtomicU64>,
 }
 
 impl NdjsonAuditReporter {
-    pub fn new(command: &'static str) -> Self {
-        Self {
-            command,
-            writer: Mutex::new(std::io::stderr()),
-            sequence: AtomicU64::new(0),
-        }
+    pub fn new(command: &'static str, sequence: Arc<AtomicU64>) -> Self {
+        Self { command, sequence }
     }
 
     pub fn reporter(self) -> orbit_core::AuditProgressReporter {
-        let writer = self.writer;
         let command = self.command;
         let sequence = self.sequence;
         std::sync::Arc::new(move |event: AuditProgressEvent| {
@@ -106,18 +97,24 @@ impl NdjsonAuditReporter {
                 ProgressData { event: &event },
             );
             let line = serde_json::to_string(&envelope).unwrap_or_else(|_| "{}".into());
-            write_line(&writer, &line);
+            write_machine_line(&line);
         })
     }
 }
 
 /// Convenience constructors matching the existing `progress::reporter` shape.
-pub fn ndjson_progress_reporter(command: &'static str) -> orbit_core::ProgressReporter {
-    NdjsonProgressReporter::new(command).reporter()
+pub fn ndjson_progress_reporter(
+    command: &'static str,
+    sequence: Arc<AtomicU64>,
+) -> orbit_core::ProgressReporter {
+    NdjsonProgressReporter::new(command, sequence).reporter()
 }
 
-pub fn ndjson_audit_reporter(command: &'static str) -> orbit_core::AuditProgressReporter {
-    NdjsonAuditReporter::new(command).reporter()
+pub fn ndjson_audit_reporter(
+    command: &'static str,
+    sequence: Arc<AtomicU64>,
+) -> orbit_core::AuditProgressReporter {
+    NdjsonAuditReporter::new(command, sequence).reporter()
 }
 
 fn phase_for(event: &ProgressEvent) -> ProgressPhase {

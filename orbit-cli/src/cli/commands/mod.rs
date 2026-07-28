@@ -28,6 +28,7 @@ use std::path::{Path, PathBuf};
 #[derive(Debug, Clone)]
 pub struct CliContext {
     pub command: &'static str,
+    pub machine_sequence: std::sync::Arc<std::sync::atomic::AtomicU64>,
     pub verbose: bool,
     pub quiet: bool,
     pub yes: bool,
@@ -136,29 +137,38 @@ pub use upgrade::handle as handle_upgrade;
 
 pub fn install_interaction(ctx: &CliContext) -> orbit_core::InstallInteraction {
     orbit_core::InstallInteraction {
-        select_package: package_selector(ctx.yes),
-        select_resolution: resolution_selector(ctx.dry_run, ctx.yes),
-        confirm_install: (!ctx.dry_run).then(|| {
-            let yes = ctx.yes;
-            Box::new(move |report: &orbit_core::InstallReport| prompt_install_report(report, yes))
-                as orbit_core::InstallPrompt
-        }),
+        select_package: package_selector(ctx),
+        select_resolution: resolution_selector(ctx),
+        confirm_install: (!ctx.dry_run).then(|| install_prompt(ctx)),
         progress: operation_progress(ctx),
     }
 }
 
 pub fn operation_progress(ctx: &CliContext) -> Option<orbit_core::ProgressReporter> {
     if ctx.output.ndjson_progress() {
-        return Some(crate::cli::output::ndjson_progress_reporter(ctx.command));
+        return Some(crate::cli::output::ndjson_progress_reporter(
+            ctx.command,
+            ctx.machine_sequence.clone(),
+        ));
     }
     crate::cli::progress::reporter(ctx.quiet, &ctx.runtime.config().ui.progress_bar)
 }
 
-fn package_selector(yes: bool) -> Option<orbit_core::PackageSelector> {
-    (!yes).then(|| Box::new(prompt_package) as orbit_core::PackageSelector)
+fn package_selector(ctx: &CliContext) -> Option<orbit_core::PackageSelector> {
+    if ctx.output.format == crate::cli::output::OutputFormat::Json {
+        let command = ctx.command;
+        let sequence = ctx.machine_sequence.clone();
+        Some(Box::new(move |packages| {
+            machine_select_package(command, &sequence, packages)
+        }))
+    } else {
+        // `--yes` confirms a transaction; it must never silently choose one
+        // real package identity over another.
+        Some(Box::new(prompt_package))
+    }
 }
 
-fn prompt_package(packages: &[String]) -> usize {
+fn prompt_package(packages: &[String]) -> Result<usize, String> {
     eprintln!("\nThe provider project contains multiple feasible JAR-declared packages:");
     for (index, package) in packages.iter().enumerate() {
         eprintln!("  {}. {package}", index + 1);
@@ -171,23 +181,271 @@ fn prompt_package(packages: &[String]) -> usize {
         use std::io::Write;
         std::io::stderr().flush().ok();
         let mut input = String::new();
-        if std::io::stdin().read_line(&mut input).is_err() || input.trim().is_empty() {
-            return 0;
+        let Ok(bytes_read) = std::io::stdin().read_line(&mut input) else {
+            return Err("package selection could not read stdin".to_string());
+        };
+        if bytes_read == 0 {
+            return Err("package selection was cancelled because stdin closed".to_string());
+        }
+        if input.trim().is_empty() {
+            return Ok(0);
         }
         if let Ok(choice) = input.trim().parse::<usize>()
             && (1..=packages.len()).contains(&choice)
         {
-            return choice - 1;
+            return Ok(choice - 1);
         }
         eprintln!("Please enter a number from 1 to {}.", packages.len());
     }
 }
 
-pub fn resolution_selector(_dry_run: bool, yes: bool) -> Option<orbit_core::ResolutionSelector> {
-    (!yes).then(|| Box::new(prompt_resolution) as orbit_core::ResolutionSelector)
+pub fn resolution_selector(ctx: &CliContext) -> Option<orbit_core::ResolutionSelector> {
+    if ctx.output.format == crate::cli::output::OutputFormat::Json {
+        let command = ctx.command;
+        let sequence = ctx.machine_sequence.clone();
+        Some(Box::new(move |alternatives| {
+            machine_select_resolution(command, &sequence, alternatives)
+        }))
+    } else {
+        // Every Pareto alternative remains an explicit decision even with
+        // `--yes`; only the subsequent apply confirmation is skipped.
+        Some(Box::new(prompt_resolution))
+    }
 }
 
-fn prompt_resolution(alternatives: &[orbit_core::ResolutionReport]) -> usize {
+fn install_prompt(ctx: &CliContext) -> orbit_core::InstallPrompt {
+    if ctx.yes {
+        return Box::new(|report| prompt_install_report(report, true));
+    }
+    if ctx.output.format == crate::cli::output::OutputFormat::Json {
+        let command = ctx.command;
+        let sequence = ctx.machine_sequence.clone();
+        Box::new(move |report| machine_confirm_install(command, &sequence, report))
+    } else {
+        Box::new(|report| prompt_install_report(report, false))
+    }
+}
+
+fn machine_select_package(
+    command: &'static str,
+    sequence: &std::sync::atomic::AtomicU64,
+    packages: &[String],
+) -> Result<usize, String> {
+    use orbit_machine_protocol::{InteractionChoice, InteractionKind};
+    let choices = packages
+        .iter()
+        .map(|package| InteractionChoice {
+            id: package.clone(),
+            label: package.clone(),
+            description: Some("JAR-declared logical package".to_string()),
+            data: serde_json::json!({ "package": package }),
+        })
+        .collect();
+    let envelope = machine_interaction(
+        command,
+        sequence,
+        "package",
+        InteractionKind::Package,
+        "Choose the JAR-declared package identity to add",
+        choices,
+        packages.first().cloned(),
+    );
+    let selected = read_machine_response(&envelope)?;
+    packages
+        .iter()
+        .position(|package| package == &selected)
+        .ok_or_else(|| format!("package interaction selected unknown choice '{selected}'"))
+}
+
+fn machine_select_resolution(
+    command: &'static str,
+    sequence: &std::sync::atomic::AtomicU64,
+    alternatives: &[orbit_core::ResolutionReport],
+) -> Result<usize, String> {
+    use orbit_machine_protocol::{InteractionEnvelope, InteractionKind};
+    let choices = resolution_interaction_choices(alternatives);
+    let envelope: InteractionEnvelope<serde_json::Value> = machine_interaction(
+        command,
+        sequence,
+        "resolution",
+        InteractionKind::Resolution,
+        "Choose one Pareto-maximal dependency solution",
+        choices,
+        Some("1".to_string()),
+    );
+    read_machine_response(&envelope)?
+        .parse::<usize>()
+        .ok()
+        .and_then(|selected| selected.checked_sub(1))
+        .filter(|selected| *selected < alternatives.len())
+        .ok_or_else(|| "resolution interaction selected an unknown choice".to_string())
+}
+
+fn resolution_interaction_choices(
+    alternatives: &[orbit_core::ResolutionReport],
+) -> Vec<orbit_machine_protocol::InteractionChoice<serde_json::Value>> {
+    use orbit_machine_protocol::InteractionChoice;
+    let signatures: Vec<Vec<String>> = alternatives
+        .iter()
+        .map(|alternative| {
+            alternative
+                .changes
+                .iter()
+                .map(|change| {
+                    serde_json::to_string(&crate::cli::output::package_change_view(change))
+                        .expect("package change view is serializable")
+                })
+                .collect()
+        })
+        .collect();
+    alternatives
+        .iter()
+        .enumerate()
+        .map(|(index, alternative)| {
+            let changes = alternative
+                .changes
+                .iter()
+                .enumerate()
+                .map(|(change_index, change)| {
+                    let signature = &signatures[index][change_index];
+                    let common = signatures
+                        .iter()
+                        .all(|candidate| candidate.iter().any(|item| item == signature));
+                    serde_json::json!({
+                        "different": !common,
+                        "change": crate::cli::output::package_change_view(change),
+                    })
+                })
+                .collect::<Vec<_>>();
+            InteractionChoice {
+                id: (index + 1).to_string(),
+                label: format!("Option {}", index + 1),
+                description: Some(format!(
+                    "{} logical package action{}",
+                    changes.len(),
+                    if changes.len() == 1 { "" } else { "s" }
+                )),
+                data: serde_json::json!({
+                    "changes": changes,
+                    "warnings": alternative.warnings,
+                    "diagnostics": alternative
+                        .diagnostics
+                        .iter()
+                        .map(crate::cli::output::diagnostic_view)
+                        .collect::<Vec<_>>(),
+                }),
+            }
+        })
+        .collect()
+}
+
+fn machine_confirm_install(
+    command: &'static str,
+    sequence: &std::sync::atomic::AtomicU64,
+    report: &orbit_core::InstallReport,
+) -> bool {
+    use orbit_machine_protocol::{InteractionChoice, InteractionKind};
+    if report.installed.is_empty() && report.removed.is_empty() && report.changes.is_empty() {
+        return true;
+    }
+    let plan = crate::cli::output::transaction_view(report, false);
+    let envelope = machine_interaction(
+        command,
+        sequence,
+        "confirmation",
+        InteractionKind::Confirmation,
+        "Review the logical package transaction before applying it",
+        vec![
+            InteractionChoice {
+                id: "proceed".to_string(),
+                label: "Apply changes".to_string(),
+                description: Some("Commit the displayed logical package actions".to_string()),
+                data: serde_json::to_value(plan).expect("transaction view is serializable"),
+            },
+            InteractionChoice {
+                id: "cancel".to_string(),
+                label: "Cancel".to_string(),
+                description: Some("Leave the instance unchanged".to_string()),
+                data: serde_json::json!({}),
+            },
+        ],
+        Some("cancel".to_string()),
+    );
+    read_machine_response(&envelope).is_ok_and(|choice| choice == "proceed")
+}
+
+fn machine_interaction(
+    command: &'static str,
+    sequence: &std::sync::atomic::AtomicU64,
+    id_prefix: &str,
+    interaction: orbit_machine_protocol::InteractionKind,
+    prompt: &str,
+    choices: Vec<orbit_machine_protocol::InteractionChoice<serde_json::Value>>,
+    default_choice: Option<String>,
+) -> orbit_machine_protocol::InteractionEnvelope<serde_json::Value> {
+    use std::sync::atomic::Ordering;
+    let sequence = sequence.fetch_add(1, Ordering::Relaxed) + 1;
+    let mut envelope = orbit_machine_protocol::InteractionEnvelope::new(
+        command,
+        sequence,
+        format!("{id_prefix}-{sequence}"),
+        interaction,
+        prompt,
+        choices,
+    );
+    envelope.default_choice = default_choice;
+    let line = serde_json::to_string(&envelope).expect("interaction envelope is serializable");
+    crate::cli::output::write_machine_line(&line);
+    envelope
+}
+
+fn read_machine_response(
+    request: &orbit_machine_protocol::InteractionEnvelope<serde_json::Value>,
+) -> Result<String, String> {
+    let mut input = String::new();
+    let bytes_read = std::io::stdin()
+        .read_line(&mut input)
+        .map_err(|error| format!("interaction response could not read stdin: {error}"))?;
+    if bytes_read == 0 {
+        return Err("interaction was cancelled because stdin closed".to_string());
+    }
+    validate_machine_response(request, input.trim())
+}
+
+fn validate_machine_response(
+    request: &orbit_machine_protocol::InteractionEnvelope<serde_json::Value>,
+    input: &str,
+) -> Result<String, String> {
+    let response: orbit_machine_protocol::InteractionResponse = serde_json::from_str(input)
+        .map_err(|error| format!("invalid interaction response: {error}"))?;
+    if response.schema_version != orbit_machine_protocol::SCHEMA_VERSION {
+        return Err(format!(
+            "interaction response schema {} does not match {}",
+            response.schema_version,
+            orbit_machine_protocol::SCHEMA_VERSION
+        ));
+    }
+    if response.kind != "interaction_response" {
+        return Err("interaction response has an invalid type".to_string());
+    }
+    if response.interaction_id != request.interaction_id {
+        return Err("interaction response does not match the pending request".to_string());
+    }
+    if response.cancelled {
+        return Err("interaction cancelled by user".to_string());
+    }
+    let selected = response
+        .selected_choice
+        .ok_or_else(|| "interaction response did not select a choice".to_string())?;
+    request
+        .choices
+        .iter()
+        .any(|choice| choice.id == selected)
+        .then_some(selected.clone())
+        .ok_or_else(|| format!("interaction selected unknown choice '{selected}'"))
+}
+
+fn prompt_resolution(alternatives: &[orbit_core::ResolutionReport]) -> Result<usize, String> {
     eprintln!("\nMultiple dependency solutions are available:");
     eprintln!("{}", crate::cli::output::resolution_choices(alternatives));
 
@@ -199,13 +457,21 @@ fn prompt_resolution(alternatives: &[orbit_core::ResolutionReport]) -> usize {
         use std::io::Write;
         std::io::stderr().flush().ok();
         let mut input = String::new();
-        if std::io::stdin().read_line(&mut input).is_err() || input.trim().is_empty() {
-            return 0;
+        let Ok(bytes_read) = std::io::stdin().read_line(&mut input) else {
+            return Err("dependency solution selection could not read stdin".to_string());
+        };
+        if bytes_read == 0 {
+            return Err(
+                "dependency solution selection was cancelled because stdin closed".to_string(),
+            );
+        }
+        if input.trim().is_empty() {
+            return Ok(0);
         }
         if let Ok(choice) = input.trim().parse::<usize>()
             && (1..=alternatives.len()).contains(&choice)
         {
-            return choice - 1;
+            return Ok(choice - 1);
         }
         eprintln!("Please enter a number from 1 to {}.", alternatives.len());
     }
@@ -439,7 +705,14 @@ pub fn parse_package_remote(provider: &str, locator: &str) -> Result<orbit_core:
 
 #[cfg(test)]
 mod tests {
-    use super::resolve_platform_target;
+    use orbit_core::{PackageChange, PackageChangeKind, ResolutionReport};
+    use orbit_machine_protocol::{
+        InteractionChoice, InteractionEnvelope, InteractionKind, InteractionResponse,
+    };
+
+    use super::{
+        resolution_interaction_choices, resolve_platform_target, validate_machine_response,
+    };
 
     #[test]
     fn platform_prefix_selects_one_provider() {
@@ -457,5 +730,84 @@ mod tests {
     fn conflicting_platform_selectors_are_rejected() {
         let error = resolve_platform_target("cf:238222", Some("modrinth")).unwrap_err();
         assert!(error.to_string().contains("selects curseforge"));
+    }
+
+    #[test]
+    fn machine_resolution_marks_only_non_common_actions_as_different() {
+        let common = package_change("fabric-api", "1", "2");
+        let choices = resolution_interaction_choices(&[
+            ResolutionReport {
+                changes: vec![common.clone(), package_change("sodium", "1", "2")],
+                ..ResolutionReport::default()
+            },
+            ResolutionReport {
+                changes: vec![common, package_change("lithium", "1", "2")],
+                ..ResolutionReport::default()
+            },
+        ]);
+
+        assert_eq!(choices.len(), 2);
+        for choice in choices {
+            let changes = choice.data["changes"].as_array().unwrap();
+            let fabric = changes
+                .iter()
+                .find(|change| change["change"]["package"] == "fabric-api")
+                .unwrap();
+            assert_eq!(fabric["different"], false);
+            assert_eq!(
+                changes
+                    .iter()
+                    .filter(|change| change["different"] == true)
+                    .count(),
+                1
+            );
+        }
+    }
+
+    #[test]
+    fn machine_response_must_match_schema_request_and_choice() {
+        let request = InteractionEnvelope::new(
+            "add",
+            4,
+            "package-4",
+            InteractionKind::Package,
+            "Choose package",
+            vec![InteractionChoice {
+                id: "sodium".to_string(),
+                label: "sodium".to_string(),
+                description: None,
+                data: serde_json::json!({}),
+            }],
+        );
+        let valid =
+            serde_json::to_string(&InteractionResponse::selected("package-4", "sodium")).unwrap();
+        assert_eq!(
+            validate_machine_response(&request, &valid).unwrap(),
+            "sodium"
+        );
+
+        let wrong_request =
+            serde_json::to_string(&InteractionResponse::selected("package-5", "sodium")).unwrap();
+        assert!(validate_machine_response(&request, &wrong_request).is_err());
+
+        let unknown_choice =
+            serde_json::to_string(&InteractionResponse::selected("package-4", "lithium")).unwrap();
+        assert!(validate_machine_response(&request, &unknown_choice).is_err());
+
+        let cancelled =
+            serde_json::to_string(&InteractionResponse::cancelled("package-4")).unwrap();
+        assert!(validate_machine_response(&request, &cancelled).is_err());
+    }
+
+    fn package_change(package: &str, current: &str, selected: &str) -> PackageChange {
+        PackageChange {
+            package: package.to_string(),
+            current_version: Some(current.to_string()),
+            selected_version: Some(selected.to_string()),
+            filename: Some(format!("{package}-old.jar")),
+            selected_filename: Some(format!("{package}-new.jar")),
+            selected_description: None,
+            kind: PackageChangeKind::Upgrade,
+        }
     }
 }

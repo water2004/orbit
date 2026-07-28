@@ -34,6 +34,7 @@ async fn main() {
     };
     let ctx = CliContext {
         command,
+        machine_sequence: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
         verbose: cli.verbose,
         quiet: cli.quiet,
         yes: cli.yes,

@@ -47,7 +47,7 @@ pub struct Cli {
     #[arg(short, long, global = true)]
     pub quiet: bool,
 
-    /// 跳过所有交互式确认
+    /// 跳过写入前确认；不会代替用户选择多个包身份或依赖方案
     #[arg(short = 'y', long, global = true)]
     pub yes: bool,
 

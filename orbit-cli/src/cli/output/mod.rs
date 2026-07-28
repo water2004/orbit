@@ -17,6 +17,7 @@ mod audit;
 mod progress_ndjson;
 
 pub use audit::audit_report;
+pub(crate) use progress_ndjson::write_machine_line;
 pub use progress_ndjson::{ndjson_audit_reporter, ndjson_progress_reporter};
 pub use view::{
     CacheOutput, CheckOutput, CheckSummary, ConfigEntryOutput, ConfigEntryView, ConfigListOutput,
@@ -27,7 +28,8 @@ pub use view::{
 };
 pub use view::{
     check_result_view, diagnostic_view, info_view, instance_view, list_view, outdated_mod_view,
-    remote_view, restore_view, search_result_view, sync_view, transaction_view,
+    package_change_view, remote_view, restore_view, search_result_view, sync_view,
+    transaction_view,
 };
 
 /// Render format for command results.

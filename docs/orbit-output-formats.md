@@ -22,7 +22,7 @@ orbit [--format text|json] [--progress-format none|ndjson] <command> ...
 | 流 | `--format text` | `--format json` |
 |----|-----------------|-----------------|
 | stdout | 表格/文本结果 | 单个 JSON 文档（结果） |
-| stderr | 进度条/交互提示/警告 | NDJSON 进度（若启用）+ 结构化错误 |
+| stderr | 进度条/交互提示/警告 | NDJSON 进度（若启用）+ NDJSON 交互请求 + 结构化错误 |
 
 **关键约束**：`--format json` 下 stdout 永远是且只是一个完整 JSON 文档（成功时是结果，失败时为空）；调用方可以安全 `orbit --format json ... | jq`。
 
@@ -630,7 +630,38 @@ Orbit Launcher 直接使用 `orbit-machine-protocol` 中同一个信封类型，
 | `audit` | `Advanced` | `{stage, completed, total}` |
 | `audit` | `StageFinished` | `{stage, completed}` |
 
-## 5. 错误协议
+## 5. 同进程交互协议
+
+`--format json` 的命令遇到多个真实包身份、多个 Pareto 极大解或写入前确认时，不启动
+第二条命令、不返回待恢复 token，也不静默采用第一个选项。CLI 在 **stderr** 输出一行
+`interaction` NDJSON，然后暂停并从同一个子进程的 **stdin** 读取一行响应：
+
+```json
+{"schema_version":2,"type":"interaction","command":"upgrade","sequence":12,"interaction_id":"resolution-12","interaction":"resolution","prompt":"Choose one Pareto-maximal dependency solution","choices":[{"id":"1","label":"Option 1","description":"2 logical package actions","data":{"changes":[{"different":true,"change":{"package":"sodium","action":"upgrade","current_version":"0.8.9","selected_version":"0.9.1"}}],"warnings":[],"diagnostics":[]}}],"default_choice":"1","allow_cancel":true}
+```
+
+调用方写回：
+
+```json
+{"schema_version":2,"type":"interaction_response","interaction_id":"resolution-12","selected_choice":"1","cancelled":false}
+```
+
+取消时省略 `selected_choice` 并令 `cancelled=true`。响应必须使用当前 schema、完全相同的
+`interaction_id` 和请求中存在的 choice ID；stdin 关闭、解析失败、错配或未知 choice
+都会终止本次事务，绝不回退到默认项。`sequence` 与该进程的 progress 事件共享同一个
+严格递增计数器，因此前端可以按实际发生顺序合并显示。
+
+| `interaction` | 说明 |
+|---|---|
+| `package` | 在同一 provider locator 返回的多个可行 JAR `mod_id` 中选择 |
+| `resolution` | 在完整 Pareto 极大解集合中选择；`data.changes[].different=true` 是不依赖颜色的差异标记 |
+| `confirmation` | 查看精确逻辑包事务并决定是否写入 |
+
+`--yes` 只跳过 `confirmation`，不会跳过 `package` 或 `resolution`。唯一包身份/唯一解不会
+产生选择请求。交互请求与进度一样不含哈希和物理 JAR 文件名；最终成功结果仍只在 stdout
+出现一次。
+
+## 6. 错误协议
 
 `--format json` 下命令失败时：
 
@@ -673,9 +704,10 @@ Orbit Launcher 直接使用 `orbit-machine-protocol` 中同一个信封类型，
 
 `checksum_mismatch` 的 `message` 不包含期望/实际哈希值（CLAUDE.md #41）。
 
-## 6. 稳定性承诺
+## 7. 稳定性承诺
 
-- 成功、错误和进度共用 `orbit-machine-protocol` 的单一 `schema_version`；破坏性字段变更
+- 成功、错误、进度、交互请求和交互响应共用 `orbit-machine-protocol` 的单一
+  `schema_version`；破坏性字段变更
   一次性提升整个进程协议，不保留旧信封或备用解析路径。
 - 错误码 `code` 是稳定契约，自动化可基于其分支；`message` 可随版本变化，不应作为判据。
 - 进度事件名（`data.event`、`phase`）是稳定契约；`data` 字段新增不破坏，删除或重命名

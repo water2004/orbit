@@ -38,9 +38,10 @@ pub(crate) fn select_resolution(
     let index = if portfolio.alternatives.len() == 1 {
         0
     } else {
-        selector
-            .map(|select| select(&portfolio.alternatives))
-            .unwrap_or(0)
+        match selector {
+            Some(select) => select(&portfolio.alternatives)?,
+            None => 0,
+        }
     };
     if index >= portfolio.alternatives.len() {
         return Err(format!(
@@ -1307,7 +1308,7 @@ iris = { version = "*", remotes = [{ type = "file", path = "iris.jar" }] }
             portfolio,
             Some(Box::new(|alternatives| {
                 assert_eq!(alternatives.len(), 2);
-                1
+                Ok(1)
             })),
         )
         .unwrap();
@@ -1321,12 +1322,29 @@ iris = { version = "*", remotes = [{ type = "file", path = "iris.jar" }] }
             alternatives: vec![ResolutionReport::default(), ResolutionReport::default()],
         };
 
-        let error = select_resolution(portfolio, Some(Box::new(|_| 2))).unwrap_err();
+        let error = select_resolution(portfolio, Some(Box::new(|_| Ok(2)))).unwrap_err();
 
         assert_eq!(
             error,
             "dependency solution selector returned invalid choice 3 for 2 alternatives"
         );
+    }
+
+    #[test]
+    fn cancelled_solution_selection_is_propagated_without_defaulting() {
+        let portfolio = ResolutionPortfolio {
+            alternatives: vec![ResolutionReport::default(), ResolutionReport::default()],
+        };
+
+        let error = select_resolution(
+            portfolio,
+            Some(Box::new(|_| {
+                Err("interaction cancelled by user".to_string())
+            })),
+        )
+        .unwrap_err();
+
+        assert_eq!(error, "interaction cancelled by user");
     }
 
     #[test]

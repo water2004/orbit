@@ -22,7 +22,7 @@
 | 多远端包模型 | ✅ | 每个根包非空 `remotes`；全部来源共同发现，完全相同字节跨 provider 合并 |
 | 内容候选身份 | ✅ | 本地 SHA-512 作为内部候选主键；同版本不同内容保持独立，CLI 只显示来源与依赖差异 |
 | PubGrub fork 远端 | ✅ | 功能分支已发布，Orbit 固定到完整 commit SHA |
-| 多解选择 | ✅ | fork 原生枚举 Pareto 极大解；唯一解自动选择，多解交互 |
+| 多解选择 | ✅ | fork 原生枚举 Pareto 极大解；唯一解自动选择，多解经同一进程的终端或 schema 2 机器交互明确选择；`--yes` 不代选 |
 | 本地重复包 | ✅ | init/sync 按 mod_id 合并为候选；确认后删除未选中的顶层包版本 |
 | 远端身份边界 | ✅ | provider 只给下载 locator；一个 locator 的多种真实 mod_id 按 JAR 身份分区并选择 |
 | Provider 分层 | ✅ | Modrinth / CurseForge HTTP 与 DTO 各在独立 wrapper，core 只做领域适配 |
@@ -30,7 +30,7 @@
 | Windows MSI | ✅ | x64 per-machine 向导、可选系统 PATH、同版本重建升级、维护模式、可选清理默认 AppData；发布产物仍需项目证书签名 |
 | Linux deb / Release | ✅ | amd64 deb 安装到 `/usr/bin`；仅 main 中版本匹配的 `v*` tag 触发 MSI+deb、SHA256SUMS、分类 release notes 与 GitHub Release |
 | 长事务进度 | ✅ | 包操作与 audit 均使用 core 强类型事件；候选/审计工件精确计数，求解工作总量随实际 run/probe 动态增长 |
-| JSON / 自动化输出 | ✅ | 全局 `--format text\|json` 与 `--progress-format none\|ndjson`；JSON 信封 + NDJSON 进度 + 结构化错误 JSON + 稳定错误码；view-model 层隔离哈希/文件名/密钥，并在现有 search/info 契约提供官方 icon/link/gallery 展示数据 |
+| JSON / 自动化输出 | ✅ | 全局 `--format text\|json` 与 `--progress-format none\|ndjson`；JSON 结果 + NDJSON 进度/交互 + stdin 响应 + 结构化错误与稳定错误码共用 schema 2；view-model 层隔离哈希/文件名/密钥，并在现有 search/info 契约提供官方 icon/link/gallery 展示数据 |
 | 全局配置命令 | ✅ | `config path/list/get/set/unset`；强类型校验、单字段原子更新、注释保留、密钥脱敏、环境覆盖不回写 |
 | 根包环境过滤 | ✅ | TOML `env` 可选；缺失时跟随 lock/JAR 声明；`orbit env ... auto` 可设置覆盖或恢复自动 |
 | Loader JSON 容错 | ✅ | Fabric-compatible 字符串控制字符；仅限 JAR 内 loader/Mixin/refmap，其他 JSON 保持严格 |

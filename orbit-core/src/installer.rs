@@ -19,7 +19,7 @@ mod local;
 pub use local::install_local_file_to_instance;
 
 pub type InstallPrompt = Box<dyn FnOnce(&InstallReport) -> bool + Send>;
-pub type PackageSelector = Box<dyn FnOnce(&[String]) -> usize + Send>;
+pub type PackageSelector = Box<dyn FnOnce(&[String]) -> Result<usize, String> + Send>;
 
 #[derive(Default)]
 pub struct InstallInteraction {
@@ -1045,9 +1045,10 @@ async fn resolve_requested_package(
             .iter()
             .map(|(package, _)| package.clone())
             .collect();
-        selector
-            .map(|select| select(&package_names))
-            .unwrap_or_default()
+        match selector {
+            Some(select) => select(&package_names).map_err(OrbitError::Conflict)?,
+            None => 0,
+        }
     };
     if index >= feasible.len() {
         return Err(OrbitError::Conflict(format!(
@@ -1889,10 +1890,10 @@ physical_environment = "client"
             catalog: &catalog,
             requirement: DependencySpec::new("*", Vec::new()),
             selector: Some(Box::new(|packages| {
-                packages
+                Ok(packages
                     .iter()
                     .position(|package| package == "gca_wrapper")
-                    .unwrap()
+                    .unwrap())
             })),
             progress: None,
         })
@@ -1936,7 +1937,7 @@ physical_environment = "client"
             requirement: DependencySpec::new("*", Vec::new()),
             selector: Some(Box::new(move |_| {
                 captured.store(true, Ordering::Relaxed);
-                0
+                Ok(0)
             })),
             progress: None,
         })
