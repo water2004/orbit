@@ -25,8 +25,12 @@
 
     <Property Id="ARPCOMMENTS" Value="Minecraft mod manager, runtime launcher, and native desktop application" />
     <Property Id="ARPURLINFOABOUT" Value="https://github.com/water2004/orbit" />
+    <Property Id="INSTALL_PROFILE" Value="complete" Secure="yes" />
     <Property Id="ADD_TO_PATH" Value="1" Secure="yes" />
     <Property Id="REMOVE_APPDATA" Value="0" Secure="yes" />
+    <Launch
+      Condition="INSTALL_PROFILE = &quot;orbit&quot; OR INSTALL_PROFILE = &quot;launcher&quot; OR INSTALL_PROFILE = &quot;complete&quot;"
+      Message="INSTALL_PROFILE must be orbit, launcher, or complete." />
     <Property Id="ORBIT_ROAMING_DATA" Secure="yes">
       <RegistrySearch
         Id="OrbitRoamingDataPathSearch"
@@ -93,18 +97,6 @@
               Name="LocalDataPath"
               Type="string"
               Value="[LocalAppDataFolder]orbit" />
-            <RegistryValue
-              Root="HKLM"
-              Key="Software\water2004\OrbitLauncher"
-              Name="RoamingDataPath"
-              Type="string"
-              Value="[AppDataFolder]orbit-launcher" />
-            <RegistryValue
-              Root="HKLM"
-              Key="Software\water2004\OrbitLauncher"
-              Name="LocalDataPath"
-              Type="string"
-              Value="[LocalAppDataFolder]orbit-launcher" />
             <util:RemoveFolderEx
               Id="RemoveOrbitRoamingData"
               Property="ORBIT_ROAMING_DATA"
@@ -113,16 +105,6 @@
             <util:RemoveFolderEx
               Id="RemoveOrbitLocalData"
               Property="ORBIT_LOCAL_DATA"
-              On="uninstall"
-              Condition="REMOVE_APPDATA = &quot;1&quot; AND NOT UPGRADINGPRODUCTCODE" />
-            <util:RemoveFolderEx
-              Id="RemoveOrbitSuiteLauncherRoamingData"
-              Property="ORBIT_LAUNCHER_ROAMING_DATA"
-              On="uninstall"
-              Condition="REMOVE_APPDATA = &quot;1&quot; AND NOT UPGRADINGPRODUCTCODE" />
-            <util:RemoveFolderEx
-              Id="RemoveOrbitSuiteLauncherLocalData"
-              Property="ORBIT_LAUNCHER_LOCAL_DATA"
               On="uninstall"
               Condition="REMOVE_APPDATA = &quot;1&quot; AND NOT UPGRADINGPRODUCTCODE" />
           </Component>
@@ -136,6 +118,28 @@
               Source="$(var.OrbitLauncherExecutable)"
               Name="orbit-launcher.exe"
               KeyPath="yes" />
+            <RegistryValue
+              Root="HKLM"
+              Key="Software\water2004\OrbitLauncher"
+              Name="RoamingDataPath"
+              Type="string"
+              Value="[AppDataFolder]orbit-launcher" />
+            <RegistryValue
+              Root="HKLM"
+              Key="Software\water2004\OrbitLauncher"
+              Name="LocalDataPath"
+              Type="string"
+              Value="[LocalAppDataFolder]orbit-launcher" />
+            <util:RemoveFolderEx
+              Id="RemoveOrbitSuiteLauncherRoamingData"
+              Property="ORBIT_LAUNCHER_ROAMING_DATA"
+              On="uninstall"
+              Condition="REMOVE_APPDATA = &quot;1&quot; AND NOT UPGRADINGPRODUCTCODE" />
+            <util:RemoveFolderEx
+              Id="RemoveOrbitSuiteLauncherLocalData"
+              Property="ORBIT_LAUNCHER_LOCAL_DATA"
+              On="uninstall"
+              Condition="REMOVE_APPDATA = &quot;1&quot; AND NOT UPGRADINGPRODUCTCODE" />
           </Component>
 
           <Component
@@ -192,11 +196,37 @@
     </StandardDirectory>
     <StandardDirectory Id="ProgramMenuFolder" />
 
-    <Feature Id="OrbitFeature" Title="Orbit" Level="1">
+    <Feature
+      Id="OrbitFeature"
+      Title="Orbit"
+      Description="Minecraft mod and dependency management CLI."
+      Level="1"
+      AllowAbsent="no"
+      AllowAdvertise="no">
       <ComponentRef Id="OrbitExecutableComponent" />
-      <ComponentRef Id="OrbitLauncherExecutableComponent" />
-      <ComponentRef Id="OrbitGuiExecutableComponent" />
       <ComponentRef Id="OrbitLicenseComponent" />
+    </Feature>
+
+    <Feature
+      Id="LauncherFeature"
+      Title="Orbit Launcher"
+      Description="Minecraft, loader, Java, account, and runtime management CLI."
+      Level="1"
+      AllowAbsent="yes"
+      AllowAdvertise="no">
+      <Level Condition="INSTALL_PROFILE = &quot;orbit&quot;" Value="0" />
+      <ComponentRef Id="OrbitLauncherExecutableComponent" />
+    </Feature>
+
+    <Feature
+      Id="GuiFeature"
+      Title="Orbit GUI"
+      Description="Native desktop interface for Orbit and Orbit Launcher."
+      Level="1"
+      AllowAbsent="yes"
+      AllowAdvertise="no">
+      <Level Condition="INSTALL_PROFILE &lt;&gt; &quot;complete&quot;" Value="0" />
+      <ComponentRef Id="OrbitGuiExecutableComponent" />
     </Feature>
 
     <Feature

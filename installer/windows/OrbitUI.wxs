@@ -76,10 +76,42 @@
           Width="370"
           Height="0" />
         <Control
+          Id="InstallProfile"
+          Type="RadioButtonGroup"
+          X="25"
+          Y="62"
+          Width="325"
+          Height="58"
+          Property="INSTALL_PROFILE">
+          <RadioButtonGroup Property="INSTALL_PROFILE">
+            <RadioButton
+              Value="orbit"
+              X="0"
+              Y="0"
+              Width="320"
+              Height="16"
+              Text="Orbit — mod management CLI" />
+            <RadioButton
+              Value="launcher"
+              X="0"
+              Y="20"
+              Width="320"
+              Height="16"
+              Text="Orbit + Launcher — game and Java management CLI" />
+            <RadioButton
+              Value="complete"
+              X="0"
+              Y="40"
+              Width="320"
+              Height="16"
+              Text="Complete — add the native desktop application (recommended)" />
+          </RadioButtonGroup>
+        </Control>
+        <Control
           Id="AddToPath"
           Type="CheckBox"
           X="25"
-          Y="75"
+          Y="137"
           Width="320"
           Height="18"
           Property="ADD_TO_PATH"
@@ -89,18 +121,18 @@
           Id="AddToPathDescription"
           Type="Text"
           X="44"
-          Y="97"
+          Y="159"
           Width="295"
-          Height="32"
+          Height="26"
           NoPrefix="yes"
           Text="Recommended. Makes the $(var.ProductCommand) command available in new Command Prompt, PowerShell, and terminal sessions." />
         <Control
           Id="ScopeDescription"
           Type="Text"
           X="25"
-          Y="150"
+          Y="199"
           Width="320"
-          Height="32"
+          Height="24"
           NoPrefix="yes"
           Text="$(var.ProductDisplayName) is installed for all users. Administrator approval is required." />
         <Control
@@ -351,22 +383,50 @@
         Dialog="OrbitOptionsDlg"
         Control="Next"
         Event="AddLocal"
-        Value="PathFeature"
+        Value="LauncherFeature"
         Order="1"
+        Condition="INSTALL_PROFILE = &quot;launcher&quot; OR INSTALL_PROFILE = &quot;complete&quot;" />
+      <Publish
+        Dialog="OrbitOptionsDlg"
+        Control="Next"
+        Event="Remove"
+        Value="LauncherFeature"
+        Order="2"
+        Condition="INSTALL_PROFILE = &quot;orbit&quot;" />
+      <Publish
+        Dialog="OrbitOptionsDlg"
+        Control="Next"
+        Event="AddLocal"
+        Value="GuiFeature"
+        Order="3"
+        Condition="INSTALL_PROFILE = &quot;complete&quot;" />
+      <Publish
+        Dialog="OrbitOptionsDlg"
+        Control="Next"
+        Event="Remove"
+        Value="GuiFeature"
+        Order="4"
+        Condition="INSTALL_PROFILE &lt;&gt; &quot;complete&quot;" />
+      <Publish
+        Dialog="OrbitOptionsDlg"
+        Control="Next"
+        Event="AddLocal"
+        Value="PathFeature"
+        Order="5"
         Condition="ADD_TO_PATH = &quot;1&quot;" />
       <Publish
         Dialog="OrbitOptionsDlg"
         Control="Next"
         Event="Remove"
         Value="PathFeature"
-        Order="2"
+        Order="6"
         Condition="ADD_TO_PATH &lt;&gt; &quot;1&quot;" />
       <Publish
         Dialog="OrbitOptionsDlg"
         Control="Next"
         Event="NewDialog"
         Value="VerifyReadyDlg"
-        Order="3" />
+        Order="7" />
 
       <Publish
         Dialog="VerifyReadyDlg"
@@ -406,22 +466,43 @@
       <Publish
         Dialog="MaintenanceTypeDlg"
         Control="ChangeButton"
+        Property="INSTALL_PROFILE"
+        Value="complete"
+        Order="2"
+        Condition="!GuiFeature = 3" />
+      <Publish
+        Dialog="MaintenanceTypeDlg"
+        Control="ChangeButton"
+        Property="INSTALL_PROFILE"
+        Value="launcher"
+        Order="3"
+        Condition="!GuiFeature &lt;&gt; 3 AND !LauncherFeature = 3" />
+      <Publish
+        Dialog="MaintenanceTypeDlg"
+        Control="ChangeButton"
+        Property="INSTALL_PROFILE"
+        Value="orbit"
+        Order="4"
+        Condition="!GuiFeature &lt;&gt; 3 AND !LauncherFeature &lt;&gt; 3" />
+      <Publish
+        Dialog="MaintenanceTypeDlg"
+        Control="ChangeButton"
         Property="ADD_TO_PATH"
         Value="1"
-        Order="2"
+        Order="5"
         Condition="!PathFeature = 3" />
       <Publish
         Dialog="MaintenanceTypeDlg"
         Control="ChangeButton"
         Property="ADD_TO_PATH"
-        Order="3"
+        Order="6"
         Condition="!PathFeature &lt;&gt; 3" />
       <Publish
         Dialog="MaintenanceTypeDlg"
         Control="ChangeButton"
         Event="NewDialog"
         Value="OrbitOptionsDlg"
-        Order="4" />
+        Order="7" />
       <Publish
         Dialog="MaintenanceTypeDlg"
         Control="RepairButton"

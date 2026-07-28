@@ -1,24 +1,29 @@
 # Windows MSI
 
-Orbit 的 Windows MSI 是 64 位、per-machine 套件安装包。它把 `orbit.exe`、
-`orbit-launcher.exe` 与 `orbit-gui.exe` 安装到同一个
-`%ProgramFiles%\Orbit\bin`，并在开始菜单创建 Orbit 桌面应用入口。GUI 因而只需使用
-相邻的两个 CLI，不扫描 `PATH`。安装选项可把该目录加入系统 `PATH`；卸载时会移除由
-MSI 添加的 `PATH` 项。安装需要管理员权限。
+Orbit 的 Windows MSI 是 64 位、per-machine 套件安装包。安装向导提供三个互斥档位：
 
-双击 MSI 会进入标准安装向导，依次提供欢迎页、MIT 许可页、安装目录选择、Windows
-集成选项、安装确认、进度和完成页。“加入系统 PATH”默认勾选，但用户可以在安装前
-取消。已安装后再次运行同一 MSI，可以修改 PATH 集成、修复或卸载。
+1. 仅安装 `orbit.exe`；
+2. 安装 `orbit.exe` 与 `orbit-launcher.exe`；
+3. 完整安装三个程序，即额外安装 `orbit-gui.exe`（默认）。
+
+所选程序安装到同一个 `%ProgramFiles%\Orbit\bin`。完整档位还会在开始菜单创建 Orbit
+桌面应用入口；GUI 使用相邻的两个 CLI，不扫描 `PATH`。安装选项可把该目录加入系统
+`PATH`；卸载时会移除由 MSI 添加的 `PATH` 项。安装需要管理员权限。
+
+双击 MSI 会进入标准安装向导，依次提供欢迎页、MIT 许可页、安装目录选择、安装档位与
+Windows 集成选项、安装确认、进度和完成页。“加入系统 PATH”默认勾选，但用户可以在
+安装前取消。已安装后再次运行同一 MSI，可以修改安装档位和 PATH 集成、修复或卸载。
 卸载向导还会提供“删除 Orbit AppData”复选框，默认不勾选。勾选后会递归删除安装时
 记录的 Orbit 与 Orbit Launcher 默认 roaming/local AppData；这包含 GUI 偏好、账户元数据、
 系统秘密存储中的本地凭据、实例注册表、managed Java 和缓存。自定义配置/缓存路径和
 Minecraft 实例不属于 MSI 管理范围，始终不会删除。
 
-`/quiet` 等标准 Windows Installer 参数仍可用于无人值守部署。静默安装默认加入
-系统 PATH；传递 `ADD_TO_PATH=0` 可以关闭：
+`/quiet` 等标准 Windows Installer 参数仍可用于无人值守部署。静默安装默认选择完整
+档位并加入系统 PATH。`INSTALL_PROFILE` 接受 `orbit`、`launcher` 或 `complete`；
+传递 `ADD_TO_PATH=0` 可以关闭 PATH 集成：
 
 ```powershell
-msiexec.exe /i orbit-0.1.2-x86_64.msi /quiet ADD_TO_PATH=0
+msiexec.exe /i orbit-0.1.2-x86_64.msi /quiet INSTALL_PROFILE=launcher ADD_TO_PATH=0
 ```
 
 静默卸载默认保留 AppData。只有显式传递 `REMOVE_APPDATA=1` 才删除上述两个默认目录：
