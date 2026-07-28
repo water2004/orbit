@@ -9,7 +9,7 @@
 
 - `[platform]` 精确记录且通过路径、哈希和元数据校验的 Minecraft JAR；
 - `[platform]` 精确记录且通过校验的 Loader 和运行时依赖 JAR；
-- 与 install/sync 相同的 Loader 求解图为当前物理端选择的顶层包和活动嵌套 JAR；
+- 当前精确 lock 与 Loader 图为物理端选择的顶层包和活动嵌套 JAR；
 - 上述活动内容中的 `.class`、Loader 模组元数据、Mixin config、refmap、manifest、
   NeoForge TOML 和 `META-INF/services`。
 
@@ -32,14 +32,14 @@ ClassFile 的 internal name 与 descriptor，只是先把基础游戏投影到 L
 orbit CLI → orbit-core → orbit-bytecode-audit
 ```
 
-core 严格消费 init/sync 写入的 platform snapshot，并复用其中物理端的 resolver
-solution 组装 Loader 实际选择的顶层 JAR、嵌套 archive chain、活动 mod ID/provides
+core 严格消费 init/sync 写入的 platform snapshot，并用当前精确 lock 通过共享 Loader
+图组装实际选择的顶层 JAR、嵌套 archive chain、活动 mod ID/provides
 和运行时路径。独立分析
 crate 不认识 Orbit manifest、lockfile、provider 或 CLI，只接收这份已选择的 Artifact
 列表与实际 Loader 环境，返回结构化报告。CLI 仅负责过滤、文本/JSON 展示和退出码。
 
 对于同一 mod ID 的多个顶层版本和 Loader 管理的多版本合并 JAR，core 不另写 audit
-专用猜测规则，而是直接消费与 install/sync 相同的求解结果。未选的顶层包版本和嵌套
+专用猜测规则，而是直接消费 lock 所确定、由共享 Loader 图展开的物理选择。未选的顶层包版本和嵌套
 实现不会进入 Class Universe，也不会注册 Mixin/Transformer。未被 lockfile 识别的
 顶层 JAR 仍会扫描并明确保留为未知输入，避免静默隐藏实例中的额外代码。
 

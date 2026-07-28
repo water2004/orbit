@@ -60,10 +60,9 @@ resolver/
   constraints 依赖表达式 → PubGrub 子句
   ordering    顺序环与软依赖 warning
   diagnostics 同次求解的原因
-installer/    事务、复制和恢复
-package_reconciliation
-              init/sync 共用的本地包候选选择与清理计划
-init/sync/    实例扫描与对账
+installer     精确 lock 物化与唯一修复事务
+migration     面向已安装目标运行时的共享迁移规划与导出
+init/sync     平台探测、本地事实扫描与清单对账
 audit         复用 resolver 的 Loader-selected runtime；不包含字节码判定规则
     ↓
 orbit-bytecode-audit
@@ -105,7 +104,7 @@ init / sync
   → launcher layout / platform_detection
   → 完整 platform snapshot
 
-其它命令
+联网求解命令（add/fix/upgrade/migrate）
   → manifest / exact platform snapshot validation
   → package remotes 的 provider project 闭包发现（联网命令）
   → 完整 artifact 队列
@@ -120,7 +119,7 @@ init / sync
   → 命令结束合并 LRU 索引并执行容量淘汰
 ```
 
-在线安装分为三个不可反向调用的阶段：
+联网求解分为三个不可反向调用的阶段：
 
 1. manifest、lock 与本次输入中的全部 package remotes 同时作为种子，provider 只按
    project relation 递归枚举当前 Minecraft/loader 的 artifact；
@@ -151,11 +150,11 @@ provider 合并为一个候选并累积来源，同版本不同字节仍是不�
 
 ## 4. 统一求解
 
-所有入口最终调用 `build_solver_graph()` 或带 target 的变体：
+所有需要判定可行包集合的入口最终调用 `build_solver_graph()` 或带 target 的变体：
 
 - 联网候选升级；
 - 本地扫描校验；
-- install / restore 的选择；
+- fix 与 migrate 的选择；
 - lockfile 校验；
 - outdated。
 
@@ -171,10 +170,12 @@ owner/source/path 绑定规则参与求解；它们不成为磁盘事务目标�
 `orbit.toml [platform]` 是完整、强制的运行时快照：Minecraft JAR、Loader JAR、
 其余 launcher runtime JAR、物理端，以及每个文件的 SHA-256。`platform_detection`
 封装 launcher profile、Prism/MultiMC component、Maven 坐标和目录候选等不稳定规则，
-生产代码中只有 `init` 和 `sync` 可以引用它。`platform` 则是无发现能力的严格消费者。
+生产代码中只有 `init`、`sync` 和面向另一个真实游戏目录的 migration planner 可以引用
+它。migration 的探测只用于读取用户明确指定的目标实例，不会刷新源实例。
+`platform` 则是无发现能力的严格消费者。
 
 `sync` 每次忽略旧快照，从当前 launcher 状态重建并整体替换快照，因此允许 launcher
-改名、移动、替换或升级 JAR。install/outdated/upgrade/export/audit 不 fresh scan、
+改名、移动、替换或升级 JAR。install/outdated/upgrade/archive export/audit 不 fresh scan、
 不修改 `[platform]`、不寻找替代文件：路径、哈希或 JAR 元数据与快照不符就要求先
 `orbit sync`。同步后的 loader 版本变化仍是求解事实，不先验等同于不兼容。
 
@@ -194,15 +195,26 @@ Jar-in-Jar artifact 使用独立的 Maven 坐标包并精确绑定 owner 候选�
 同一 mod_id 包下的代理候选。公共 loader `Version` 不包含来源编号，诊断也按强类型
 折叠内部边，不解析名称前缀。
 
-所有会形成新包集合的入口先得到同一种 `ResolutionReport`，再形成事务计划。fork 枚举
+所有会形成新包集合的入口先得到同一种 `ResolutionReport`，再形成事务计划。当前包括
+`add`、`fix`、`upgrade` 和迁移规划，不包括只记录事实的 `init`/`sync`，也不包括只按
+lock 物化的 `install`。fork 枚举
 完整 Pareto front：被另一个方案在全部已选包上等价或升级、且至少一项严格升级的方案
 不会返回；每个保留点一次排除完整支配区域。唯一解自动选择，多解由调用方选择；任何
 降级、替换或删除都在写盘前展示并确认。upgrade 方案只要求至少一个包相对当前版本变新，
 允许其他包降级。
 
-`sync` 复用相同本地图和方案/确认模型，并只调用可用 provider 的批量哈希识别接口，把本地
-精确内容恢复为 project/release 远端；它不枚举版本、不下载 JAR，也不修复依赖闭包。联网
-下载和闭包修复只由 `install` 执行。
+`sync` 只调用可用 provider 的批量哈希识别接口，把本地精确内容恢复为
+project/release 远端，并按磁盘事实重建 lock；它不枚举版本、不下载候选 JAR、不求解，
+也不删除重复实现。发现同一 `mod_id` 的多个本地实现时，sync 保留全部文件和 TOML
+来源并要求运行 `fix`。`install` 只物化现有 lock 的精确内容，既不求解也不修改
+TOML/lock。联网候选闭包发现、可行解选择、未选包删除以及 TOML/lock 同步收敛只由
+`fix` 执行。
+
+迁移先要求 Launcher 创建一个真实目标实例，再由同一个 `migration::plan_migration()`
+读取目标 Minecraft/Loader JAR、枚举目标版本候选并选择 Pareto 解。`migrate check` 只
+展示这份计划；`migrate export` 复用同一计划写入目标 `orbit.toml`、`orbit.lock` 和
+配置文件，拒绝覆盖已有目标状态。导出不复制模组 JAR，随后在目标运行 `orbit install`
+按新 lock 精确物化，因而预检和导出不会走两条推导路径。
 
 根包环境具有两层正交语义：`orbit.toml` 的可选 `env` 是用户 target 过滤覆盖，lock 的
 `environment` 是精确候选从 JAR 解析出的事实。TOML 缺失覆盖时，locked 路径直接使用

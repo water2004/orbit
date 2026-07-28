@@ -124,8 +124,8 @@
 47. **loader 加载条件必须进入共享图**。Fabric nested 使用 `if_possible`；Quilt 保留
     `always` / `if_possible` / `if_required`；Forge-family JarJar 按 artifact range
     选择。相同 ID 的多版本嵌套候选选择一个兼容项，不能要求所有候选同时成立。
-48. **所有包集合变更共享 portfolio 与事务报告**。add、本地 add、非 locked restore、
-    upgrade、sync、init 等不得各写选择规则。唯一 Pareto 极大解自动选择，多解交给交互层；
+48. **所有求解型包集合变更共享 portfolio 与事务报告**。add、本地 add、fix、upgrade、
+    migrate 等不得各写选择规则。唯一 Pareto 极大解自动选择，多解交给交互层；
     降级、替换和未选包删除即使在唯一解中也必须展示精确逻辑包版本动作并在写盘前确认。
     物理 JAR 文件名仅供事务层定位载体，不进入方案选择或包操作 UI。
 49. **upgrade 的定义是至少一个包相对当前安装版本变新**。允许同一方案中的其他包
@@ -189,9 +189,9 @@
     core、扫描 PATH、直读业务文件、增加 GUI 专用接口或在失败后走兼容路径。wgpu 是原生
     D3D12/Vulkan renderer，不代表 WebView。
 64. **运行时版本选择必须来自 Launcher 官方目录**。Minecraft、Loader 和 Java 要求由
-    `versions minecraft|loader|java` 返回，并与 install 共用 metadata adapter。新建和更新
-    都比较 `instance show` 的 desired 与 installed，再走 `configure -> install`；GUI 不得以
-    自由文本、版本字符串猜测或安装失败重试代替目录与兼容关系。
+    `versions minecraft|loader|java` 返回，并与 install 共用 metadata adapter。新建实例走
+    `install --new`；版本升级/迁移必须创建独立目标实例，禁止原地 configure 源实例。GUI
+    不得以自由文本、版本字符串猜测或安装失败重试代替目录与兼容关系。
 65. **GUI 必须渲染领域任务而不是命令表单**。Mods 更新显示可行升级和未升级诊断，方案
     选择突出差异并展示包级删除；Runtime 显示当前/目标/Java；长任务显示真实进度和取消。
     CLI 参数只属于进程桥，不得作为主要用户交互层级。
@@ -205,3 +205,19 @@
 68. **机器协议编码固定为严格 UTF-8**。不得依赖或猜测 Windows ACP/OEM code page；真实
     控制台交给 Rust 标准库 Unicode 输出，管道/重定向使用 UTF-8。GUI 对 stdout/stderr 严格
     解码，非法字节必须产生 protocol error，不得使用 lossy replacement 或静默丢行。
+69. **安装、对账和修复是三种不同职责**。`install` 只物化现有 lock 的精确内容，禁止发现
+    候选、求解、删除包或改写 TOML/lock；`sync` 可以联网做批量哈希来源识别，但只根据当前
+    平台与本地 JAR 重建事实状态和补充 TOML，禁止求解或删包；只有 `fix` 可以递归发现候选、
+    求解、让用户选择并确认、删除未选包，同时一致更新 `mods/`、`orbit.lock` 与 `orbit.toml`。
+    `init` 与 sync 一样不选择重复实现；存在重复时保留文件和来源，交给 fix。
+70. **迁移必须针对真实目标运行时规划**。`migrate check` 与 `migrate export` 共用一个联合
+    依赖图规划器；目标是 Launcher 已安装的准确实例目录，平台 JAR、路径、哈希和 Loader
+    元数据从该目录探测。禁止按目标版本逐包探测、伪造 platform snapshot 或在 export 后
+    重新走另一条求解路径。export 只写目标 TOML/lock 与配置，JAR 物化仍只由目标中的
+    `orbit install` 完成。
+71. **GUI 的整合包和迁移动作只能编排现有 CLI**。Orbit ZIP/TOML 与 Modrinth mrpack 导入
+    走 `orbit import -> orbit fix`；两种导出分别走 `orbit export --format zip|mrpack`；迁移走
+    `Launcher install --new -> orbit migrate export -> 目标 orbit install`。取消任一确认后不得
+    偷偷继续后续阶段，GUI 禁止自行解析归档或生成 TOML/lock。
+72. **GUI 动画只描述界面状态变化**。页面、向导步骤、模态框、抽屉和提示可以使用 GPUI
+    原生短过渡；任务进度只能来自 CLI 强类型事件，禁止用定时动画制造下载、求解或安装进度。

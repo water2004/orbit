@@ -219,15 +219,18 @@ Pareto front 或 co-Pareto front 本身仍可能很大；动态工作量说明�
 ## 7. 本地、安装与恢复路径
 
 `check_local_graph()` 不维护第二套手写解析器或检查器。它把 `IdentifiedMod` 转成同一
-`OrbitLockfile` 结构，再调用 `build_solver_graph()`。`init` 与 `sync` 进一步通过
-`package_reconciliation` 共享 `select_local_packages()`：本地同 ID 文件进入同一个
-候选集合，而不是按扫描顺序覆盖。
+`OrbitLockfile` 结构，再调用 `build_solver_graph()`。它只校验一份已经确定的本地
+选择，不替 `init`/`sync` 选择重复实现。
 
-`add`、非 locked `install`、`restore`、`upgrade`、`sync`、`init` 和 `outdated` 都消费
-同一种 `ResolutionReport`。多个 Pareto 极大解统一选择；选择完成后统一生成包事务计划。
-未选中的顶层包版本会列出精确 `mod_id`、版本和动作，实际写入或删除前必须确认；文件名
-只供事务执行层定位载体。即使方案唯一也不能跳过破坏性计划确认。嵌套 JAR 从不作为
-独立删除目标。
+`add`、`fix`、`upgrade`、`outdated` 与 `migrate` 消费同一种 `ResolutionReport`。
+多个 Pareto 极大解统一选择；选择完成后统一生成包事务计划。未选中的顶层包版本会列出
+精确 `mod_id`、版本和动作，实际写入或删除前必须确认；文件名只供事务执行层定位载体。
+即使方案唯一也不能跳过破坏性计划确认。嵌套 JAR 从不作为独立删除目标。
+
+`install` 不进入候选求解：它严格校验现有 lock 并只恢复其中记录的内容哈希。
+`init`/`sync` 也不进入候选求解：它们扫描当前磁盘事实；同一 `mod_id` 出现多个实现时
+保留所有顶层文件与 TOML source，并要求 `fix` 选择。这样事实采集、精确物化与修复没有
+隐含的第二条包选择路径。
 
 升级选择不会先丢弃“不含升级”的 Pareto 解再遗失其 observer 快照。统一的
 `select_upgrade_resolution` 先保留所有解上的候选诊断，再筛选批量升级解或“指定包自身
@@ -241,9 +244,18 @@ Minecraft/loader 下的全部 JAR 候选。所有 project 先完成版本枚举�
 统一下载、读取真实 JAR 元数据后才交给求解器；只给现有包的锁定版本会制造假冲突。
 
 `sync` 对本地 `mods/`、manifest 与 lockfile 对账，并批量调用可用 provider 的哈希识别
-接口恢复 remote 与精确 artifact source；它不下载 JAR，也不构造远端候选闭包。仅所有
-provider 都未匹配的内容才记录为本地持久来源。`install` 才会通过完整远端 artifact
+接口恢复 remote 与精确 artifact source；它不下载候选 JAR，也不构造远端候选闭包。
+仅所有 provider 都未匹配的内容才记录为本地持久来源。`fix` 才会通过完整远端 artifact
 闭包重建候选并修复缺失或不兼容的包。
+
+`fix` 成功提交时以所选逻辑包集合同时收敛三个状态：删除 `mods/` 中未选顶层实现，
+从 `orbit.lock` 删除未选包/候选，并从 `orbit.toml` 删除不再存在的根包、override、group
+引用和无效 file remote；最后清理不再被 TOML/lock 引用的 `.orbit/sources`。不能出现
+“磁盘删了但 lock/TOML 仍记录”的半套删除语义。
+
+迁移 planner 使用目标实例真实平台和空的目标安装状态构图；`migrate check` 与
+`migrate export` 直接复用同一个已选计划。export 产生可在目标由 `install` 精确物化的
+lock，不重新求解，也不会把源实例当前 JAR 当成目标已安装候选。
 
 ## 8. 可读错误的约束
 

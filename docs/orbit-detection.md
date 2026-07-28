@@ -161,7 +161,7 @@ profile 的 `inheritsFrom` 或 Prism component 只用于筛选；最终仍必须
 
 `platform_detection::discover_platform_for_init()` 只把 init 已选择的版本作为消歧条件；
 `platform_detection::rediscover_current_platform()` 不接受任何旧版本或旧路径参数，
-只供 sync 对账使用。两者都会定位 loader Maven 目录并枚举其中的实际 JAR，Minecraft JAR
+供 sync 对账以及 migration planner 读取用户明确指定的目标实例。两者都会定位 loader Maven 目录并枚举其中的实际 JAR，Minecraft JAR
 则以 JAR 内的 `version.json` 识别，均不假设文件名与版本相同。Fabric/Quilt loader
 元数据必须可解析；所有能解析的 loader bundled 模块进入平台候选图。最终 Minecraft、
 Loader、runtime JAR 的实际路径和 SHA-256，以及物理端才整体写入 `[platform]`。
@@ -178,7 +178,7 @@ Loader、runtime JAR 的实际路径和 SHA-256，以及物理端才整体写入
 - dedicated server 只接受上述官方落盘规格；不会执行 `launch.sh`、`run.sh`、
   `run.bat` 或用户自定义 wrapper，也不会从进程列表猜测实际启动项；
 - 多个 Minecraft、loader、loader version 或同级 Loader JAR 候选均视为歧义；
-  交互 init 可让用户选择版本，sync 不猜测；
+  交互 init 可让用户选择版本，sync/migrate 不猜测；
 - 游戏 `version.json` 的 Java 信息用于检测展示；resolver 依据目标 Minecraft 版本
   注册 `java` 平台包，并用模组 feature 与 class major 校验最低 Java。它不探测用户
   当前 shell 的 Java，因为安装目标应由实例版本决定；

@@ -14,8 +14,8 @@ Orbit，支持全局实例、Minecraft/Java/主流 Loader 安装、持久账户�
 [Orbit Launcher 发布](docs/orbit-launcher-packaging.md)。
 
 原生桌面前端 `orbit-gui` 以同目录的 `orbit` 与 `orbit-launcher` 为唯一业务入口，提供版本
-浏览、运行时/Java 管理、模组更新与方案选择、audit、账户和服务端界面。它使用 GPUI 与
-原生系统窗口，不含 WebView；边界与交互约束见
+浏览、新实例迁移、Orbit ZIP/Modrinth mrpack 导入导出、运行时/Java 管理、模组更新与方案
+选择、audit、账户和服务端界面。它使用 GPUI 原生控件与短过渡动画，不含 WebView；边界与交互约束见
 [Orbit GUI](docs/orbit-gui.md)。
 
 ---
@@ -23,7 +23,7 @@ Orbit，支持全局实例、Minecraft/Java/主流 Loader 安装、持久账户�
 ## ✨ 核心特性
 
 - **📂 非侵入式与多实例/服务器管理**：无需改变原有启动器结构。直接进入启动器实例或 Fabric、Quilt、Forge、NeoForge dedicated server 根目录即可初始化管理。
-- **🔄 拥抱混乱的双向同步**：手动往 `mods` 文件夹拖入了新 mod？启动器自动删除了文件？只需 `orbit sync`，Orbit 会识别变更并对齐状态。
+- **🔄 事实同步与显式修复**：`orbit sync` 联网识别本地 JAR 来源并如实重建 TOML/lock，但不选择版本或删包；需要改变包集合时由 `orbit fix` 展示完整方案并确认。
 - **🧹 彻底的深度清理 (`purge`)**：卸载模组时一并清理 `config/` 目录下残留的配置文件，保持环境绝对纯净。
 - **🌐 多来源**：支持 Modrinth、CurseForge 与本地 `file:` JAR；不同平台只负责候选发现，最终统一验证 JAR 并求解依赖。
 - **🧩 完整 Loader 语义**：Fabric、Quilt、Forge、NeoForge 先由各自适配器保真解析，再进入同一个规范化求解模型；支持端侧、软/硬依赖、`provides`、加载顺序、内嵌模组与 Jar-in-Jar。
@@ -32,7 +32,7 @@ Orbit，支持全局实例、Minecraft/Java/主流 Loader 安装、持久账户�
 - **📦 包级事务**：JAR 自声明的 `mod_id` 是包；同 ID 文件是版本候选。方案会同时展示升级、允许的依赖降级与未选包版本移除，确认后一次应用。
 - **⏱️ 可观察长事务**：在线候选发现、JAR 下载/缓存校验/解析、离线求解和最终物化分阶段显示；下载阶段提供精确完成数，求解阶段按新发现的搜索 run/probe 动态扩展总量。
 - **☕ 字节码下限检查**：根据目标 Minecraft 与 JAR class major 校验最低 Java；该检查不宣称能证明 API、Mixin 或运行时行为完全兼容。
-- **🚀 跨版本升级预检**：想升级 MC 主版本？`orbit check <version>` 可查询在线模组是否已有兼容版本。
+- **🚀 联合跨版本迁移**：`orbit migrate check <目标实例>` 对 Launcher 已安装的真实目标运行时求完整依赖解；`migrate export` 复用同一规划结果写入目标，再由 `orbit install` 精确物化。
 
 ---
 
@@ -89,16 +89,19 @@ orbit add zoomify --env client
 orbit env sodium client
 orbit env sodium auto
 
-# 5. 一键还原依赖环境 (新电脑 clone 后)
+# 5. 修复依赖图；如有多个 Pareto 极大解会要求选择
+orbit fix
+
+# 6. 按 orbit.lock 一键还原精确环境 (新电脑 clone 后)
 orbit install
 
-# 6. 一键部署到服务器 (自动剔除客户端模组)
-orbit install --target server --locked
+# 7. 一键部署到服务器 (自动过滤客户端模组)
+orbit install --target server
 
-# 7. 删除模组
+# 8. 删除模组
 orbit remove voxelmap
 
-# 8. 彻底扬了不再使用的模组及其配置文件
+# 9. 彻底扬了不再使用的模组及其配置文件
 orbit purge voxelmap
 ```
 
@@ -117,7 +120,7 @@ schema、字段名、枚举码和错误码不随语言变化。Windows 控制台
 
 | 命令 | 描述 |
 | :--- | :--- |
-| `orbit init <name>` | 在合法游戏目录中初始化实例，扫描现有 `mods/`；同 ID 文件作为候选求解，确认后移除未选版本。 |
+| `orbit init <name>` | 在合法游戏目录中初始化实例并记录本地事实；同 ID 存在多个实现时保留全部文件和远端，要求随后运行 `fix`。 |
 | `orbit instances list` | 列出所有被 Orbit 托管的 MC 实例及其路径（当前/默认实例会有 `*` 标记）。 |
 | `orbit instances default <name>`| 将指定实例设为全局默认。在任意目录下执行命令都将默认作用于它。 |
 | `orbit instances remove <name>` | 从 Orbit 全局列表中移除对该实例的追踪（**绝不会**删除硬盘上的文件）。 |
@@ -128,7 +131,8 @@ schema、字段名、枚举码和错误码不随语言变化。Windows 控制台
 
 | 命令 | 描述 |
 | :--- | :--- |
-| `orbit sync` | **状态双向对齐**。重新探测 Minecraft/loader 工件并扫描 `mods/`，通过可用 provider 批量哈希识别来源，同 ID 文件统一求解并确认清理未选版本；不下载 JAR、不联网修复依赖。 |
+| `orbit sync` | **事实对账**。重新探测平台、扫描 `mods/`，并联网调用可用 provider 的批量哈希 API 恢复来源；重建 lock、补充 TOML，但不发现依赖候选、不求解、不删除 JAR。 |
+| `orbit fix` | **依赖修复**。递归下载所有远端候选的 JAR 元数据、联合求解并展示方案；确认后安装入选包、删除未选包，并同步清理 TOML 与 lock。 |
 | `orbit outdated [mod]` | **检查过时模组（只读）**。显示可行更新；更高候选受阻或没有适用 JAR 时同时给出原因。 |
 | `orbit upgrade [mod]` | **执行更新**。单包模式必须让该包变新；方案也可包含依赖降级/替换/删除，确认后更新文件与 lock。 |
 
@@ -140,7 +144,7 @@ schema、字段名、枚举码和错误码不随语言变化。Windows 控制台
 | `orbit info <mod>` | 查看模组详细信息（描述、作者、版本历史、前置依赖、端侧支持等）。无需安装，直接请求平台 API。 |
 | `orbit add <mod>` | 添加新模组。支持自动查找、`mr:<project-id-or-search>`、`cf:<numeric-project-id>` 或 `file:./my-mod.jar`。可用 `--env client\|server\|both` 覆盖 JAR 声明。 |
 | `orbit env <package> <client\|server\|both\|auto>` | 修改根包环境过滤；`auto` 跟随 lock 中精确 JAR 的声明。 |
-| `orbit install` | 严格校验 TOML 平台快照后按 manifest/lock 补齐缺失 JAR；平台路径或内容变化时要求先 sync。 |
+| `orbit install` | 严格校验平台快照和 lock，仅物化 lock 已记录的精确 JAR；绝不求解、修复、删包或改写 TOML/lock。 |
 | `orbit remove <mod>` | 按 JAR `mod_id` 卸载包。删除其选中内容并移除 `orbit.toml`/lock 中的记录。 |
 | `orbit purge <mod>` | **深度清理**。在 `remove` 的基础上，启发式搜索并交互式询问以**彻底删除** `config/` 下的配置文件。 |
 | `orbit list` | 列出当前实例记录的所有模组及版本；支持 `--tree` 和 `--target`。 |
@@ -152,7 +156,8 @@ schema、字段名、枚举码和错误码不随语言变化。Windows 控制台
 | :--- | :--- |
 | `orbit import <file>` | 合并 TOML、导入安全 ZIP，或按 index/overrides 导入 mrpack，随后触发 `sync`。 |
 | `orbit export [file.zip]` | 将清单、锁文件和校验通过的 JAR 打包为 ZIP；也可输出 mrpack。 |
-| `orbit check <version>`| **跨版本升级预检**。检查当前安装的模组集合是否已经针对目标 MC 版本（如 `1.21`）发布了对应文件。 |
+| `orbit migrate check <目标实例目录>` | 对 Launcher 已安装的目标 Minecraft/Loader 运行时执行完整联合求解；不是逐包“是否有文件”的浅检查。 |
+| `orbit migrate export <目标实例目录>` | 复用同一迁移规划器，将目标 `orbit.toml`、`orbit.lock` 和模组配置写入空白目标实例；随后在目标运行 `orbit install`。 |
 | `orbit audit` | **字节码兼容风险分析（只读）**。复用 Loader 实际选择的顶层/嵌套运行时内容，由 Fabric/Quilt/Forge/NeoForge 后端确定注册与运行时规则，再进入共享 ClassFile/效果/冲突流水线；默认输出分类摘要，`--format json` 或显式 `--report <path>` 保留完整 schema 5 证据。不下载 mapping，也不把依赖声明本身当作风险证据。 |
 | `orbit cache clean` | 清理 Orbit 在后台全局保存的 `.jar` 下载缓存，释放磁盘空间。 |
 

@@ -88,15 +88,16 @@ sodium = { version = ">=0.5.9" }
 | `runtime_jars` | launcher 为该平台选择的其余运行时 JAR；按内容去重 |
 | `physical_environment` | `client`、`server` 或无法确定时的 `both` |
 
-只有 `init` 和 `sync` 读取 launcher profile、组件、libraries 或文件名候选。
+源实例只有 `init` 和 `sync` 读取 launcher profile、组件、libraries 或文件名候选。
+迁移 planner 还会读取用户明确指定、已经安装的目标实例，但不会刷新源实例。
 `install`、`add`、`outdated`、`upgrade`、`export`、`audit` 等其它命令只解析这些
 精确路径，并在使用前校验 SHA-256、Minecraft `version.json` 以及可解析的 Loader
 身份/版本。路径不存在、内容变化、字段缺失、元数据矛盾或列表重复时直接报错并要求
 运行 `orbit sync`；不会搜索同目录、按文件名猜替代项、回退到旧路径或静默刷新 TOML。
 
 `sync` 不受旧快照约束，会从当前 launcher 状态重新探测并整体替换快照。loader 或
-Minecraft 的变化只有经过 `sync` 才进入后续统一求解与 audit；loader 版本变化本身
-仍不被先验判为不兼容。
+Minecraft 的变化只有经过 `sync` 才进入后续 fix/upgrade 求解与 audit；loader 版本
+变化本身仍不被先验判为不兼容。
 
 共享游戏根与隔离版本目录都支持；每个隔离版本目录是独立 Orbit 实例。
 
@@ -216,13 +217,16 @@ bundled = []
 6. 同版本不同哈希候选都交给 PubGrub；哈希只保持候选唯一性，不参与版本高低比较。
 7. 唯一 Pareto 极大解自动采用；多个解必须询问。候选相同版本时，CLI 用 provider
    project/release 与依赖差异说明选项，绝不显示哈希。
-8. 任何会移除未选包版本的方案都在写盘前列出并确认。
+8. 任何会移除未选包版本的方案都在写盘前列出并确认；提交时同一选择必须同步清理
+   `mods/`、`orbit.lock`、`orbit.toml` 及不再引用的 managed local source。
 
-`sync` 重新探测并对账本地内容，不下载 JAR、不修复缺失依赖；它使用 Modrinth 和已配置
+`sync` 重新探测并对账本地内容，不下载候选 JAR、不求解、不修复缺失依赖；它使用 Modrinth 和已配置
 CurseForge 的批量哈希接口恢复来源。匹配结果只决定 remote/artifact source，包身份、
 版本和依赖仍只取自 JAR。所有 provider 均未匹配时才写入本地持久源；查询错误不得静默
-降级成 `file`。`install` 才执行完整联网候选发现与修复，但只消费 `[platform]` 快照，
-不承担平台探测或快照刷新。
+降级成 `file`。同一 `mod_id` 有多个本地实现时，sync 保留全部文件和 TOML source，拒绝
+替用户选择或重写 lock，并要求 `fix`。`fix` 才执行完整联网候选发现、求解和修复；
+`install` 只按现有 lock 精确恢复内容。两者都只消费 `[platform]` 快照，不承担源实例
+平台探测或快照刷新。
 
 ## 5. 远端管理
 
@@ -245,5 +249,5 @@ API 返回的 project ID。`remove` 不能删除最后一个远端。列表序�
 
 应同时提交 `orbit.toml` 与 `orbit.lock`。`.orbit/sources/` 是真正本地远端的实例级持久源，
 不是全局 JAR cache，也不受 LRU 淘汰；provider 已识别内容不会复制到这里，失去引用的
-自动副本由 sync 清理。若团队或构建机需要还原这些本地包，也必须随项目分发，或先为包
+自动副本由 sync/fix 清理。若团队或构建机需要还原这些本地包，也必须随项目分发，或先为包
 增加可访问的网络远端。

@@ -17,13 +17,13 @@
 拒绝执行，要求显式 `--instance` 或进入项目目录。当前受保护的命令是：
 
 ```text
-add install remove purge sync upgrade import remote-add remote-remove
+add install fix remove purge sync upgrade import migrate-export remote-add remote-remove
 ```
 
 `init` 始终初始化当前目录；实例注册表和 cache 命令操作全局数据；`export` 读取实例但只
 写用户指定的输出文件。
 
-凡是命令会确定一个包集合，都遵守同一策略：求解包键是 JAR 的 `mod_id`；唯一 Pareto
+凡是求解型命令会确定一个包集合，都遵守同一策略：求解包键是 JAR 的 `mod_id`；唯一 Pareto
 极大解自动选择，多个 Pareto 极大解必须明确选择（dry-run 也一样，`--yes` 也不能替用户
 选择）。
 选择之后，安装、升级、降级、同版本替换和删除合并成一个计划。只要计划会替换或删除
@@ -74,12 +74,13 @@ orbit init <name>
 4. 扫描 `mods/*.jar`，忽略 `.old` / `.disabled`，解析对应 loader 元数据与内嵌 JAR；
 5. 计算 SHA-1/SHA-256/SHA-512 和 CurseForge fingerprint；Modrinth 始终参与批量识别，
    已配置 API Key 时 CurseForge 也参与；
-6. 同一 `mod_id` 的顶层 JAR 作为一个包的候选；无法在线识别的本地源先复制到
-   `.orbit/sources/`，避免后续清理 `mods/` 时删除它；
-7. 候选经共享 PubGrub portfolio 选择；
-8. 多解时请求方案选择；未选中的顶层包版本列入删除计划并在写盘前确认；
-9. 将实际平台 JAR 的相对路径与 SHA-256 写入 manifest，生成 Fat Lockfile，再将实例
-   注册到全局 `instances.toml`。
+6. 同一 `mod_id` 的顶层 JAR 作为同一逻辑包的多个本地实现；无法在线识别的本地源复制到
+   `.orbit/sources/`，以便后续精确恢复；
+7. 不运行候选求解，也不删除或替用户选择重复实现；
+8. 没有重复实现时按本地事实生成 Fat Lockfile；存在重复时保留全部文件和 TOML source，
+   不创建含糊 lock，并明确要求 `orbit fix`；
+9. 将实际平台 JAR 的相对路径与 SHA-256 写入 manifest，再将实例注册到全局
+   `instances.toml`。
 
 无法识别平台来源的 JAR 以 `file` remote 写入 manifest；有解时也作为所选 package 的
 精确 lock 来源。每个根包都保存至少一个候选远端。同一顶层包 JAR 中的其他模块只进入
@@ -201,7 +202,7 @@ orbit remote remove <package> --index <one-based-index>
 ```
 
 `add` 会先下载并分析目标远端的全部候选，只有其中存在 JAR 实际声明 `<package>` 才写入。
-不同 provider 一视同仁，现有和新增远端在后续 add/install/outdated/upgrade 中全部进入
+不同 provider 一视同仁，现有和新增远端在后续 add/fix/outdated/upgrade/migrate 中全部进入
 同一个候选闭包。`remove` 不能删除最后一个远端。`list` 使用用户可读的 provider/project
 信息并以统一自适应表格展示，managed local source 用序号引用，不显示内容哈希。删除
 discovery remote 后，当前 lock 的精确恢复来源保留到下一次内容选择，因而不会让已锁定
@@ -214,31 +215,42 @@ orbit install
   [--target client|server|both]
   [--group <name>]
   [--no-optional]
-  [--locked | --frozen]
 ```
 
-这是实例还原命令，不接受模组名。它严格使用 `[platform]` 记录的 Minecraft、Loader
+这是精确物化命令，不接受模组名。它严格使用 `[platform]` 记录的 Minecraft、Loader
 和 runtime JAR 路径并校验内容，不读取 launcher profile、不搜索替代文件，也不刷新
 平台快照。路径、哈希或 JAR 元数据不一致时拒绝并要求先 `orbit sync`。sync 刷新后的
-loader JAR 及其 bundled 模块进入同一次求解，只在真实依赖约束不兼容时失败。
+loader JAR 及其 bundled 模块进入 lock 图校验；install 不另行选择候选。
 
 选择顺序：
 
 1. 根据 target、group 和 optional 过滤 manifest 根依赖；根包未配置 `env` 时使用
    lock 中选中 JAR 的 `environment`；
 2. 保留已选根的传递依赖闭包；
-3. 校验 manifest/lockfile 图；
+3. 要求 lock 已存在、平台 meta 与 manifest 完全一致，并校验精确 lock 图；
 4. 已存在且 SHA-256 正确的 JAR跳过；
 5. 缺失 JAR 从缓存、本地 `file:` 或 provider 来源恢复；
-6. 下载/复制后再次校验，并按需更新 lockfile。
+6. 下载/复制后再次校验。
 
-`--locked` 与 `--frozen` 同义：要求 lockfile 与 manifest 完整一致，禁止重新解析来源
-元数据。它不表示物理离线；缓存未命中时仍可使用 lockfile 已锁定的下载 URL。新模型
-要求每个 lock package 有 SHA-512、非空 remotes 和可恢复所选字节的精确来源；缺项的
-旧 lockfile 在任何模式下都会被拒绝，不会静默降级为空锁。
+`install` 没有 unlocked/frozen 分支；精确 lock 是唯一输入。它不表示物理离线：缓存未
+命中时仍可使用 lock 已记录的下载 URL。每个 package 必须有 SHA-512、非空 remotes 和
+可恢复所选字节的精确来源，缺项直接拒绝。该命令绝不发现候选、选择版本、修复依赖、
+删除未选包或改写 `orbit.toml` / `orbit.lock`。
 
-非 locked `install` 是依赖修复入口：lock 图不完整或冲突时会下载远端完整候选闭包，
-再按 JAR 元数据重新求解。`sync` 则只做本地对账，不承担联网修复。
+### `orbit fix`
+
+```text
+orbit fix
+```
+
+这是唯一修复入口。它从 TOML 与已有 lock 的全部远端递归枚举项目闭包，先把当前
+Minecraft/Loader 对应的所有候选 JAR 加入稳定下载队列，再统一下载、按内容哈希去重并
+读取 JAR 声明元数据，最后离线求完整 Pareto front。唯一解自动采用，多解必须选择；任何
+安装、升级、降级、替换或删除都在写入前展示并确认。
+
+提交时以逻辑包为单位：安装入选顶层 JAR，删除所有未入选的本地实现，并在同一事务中让
+`orbit.lock` 只保留入选解、让 `orbit.toml` 删除无效包声明/本地来源和空组。远端没有列出
+JAR 中真实 `mod_id` 依赖时，完整图无解并报告 PubGrub 原因，不在下载层伪造 slug 映射。
 
 ### `orbit remove`
 
@@ -274,21 +286,18 @@ manifest/lockfile。旧 `[project]` 版本和 `[platform]` 路径都只是用于
 | `added` | 磁盘新增 JAR，已识别并写入声明/锁 |
 | `changed` | 已锁文件内容或元数据变化，锁记录已更新 |
 | `missing` | manifest/lockfile 期望的 JAR 不在磁盘 |
-| `unlocked` | manifest 有顶层声明但 lockfile 无对应 package |
-| `removed` | 同一 `mod_id` 下未被所选方案采用的顶层包版本 |
+| `removed` | 旧 lock 中的包已没有对应本地 JAR，因此不进入重建后的 lock |
 
-平台刷新和包求解使用同一次实际 loader JAR 分析。loader 版本变化不被先验判为错误；
-若某个 mod 对新 loader 的真实约束不成立，正常返回依赖无解。
+sync 不做包求解。loader 版本变化会被如实写入平台快照和 lock meta；兼容性与依赖修复
+留给后续 `fix`，loader 版本本身不被先验判为不兼容。
 
-平台与包变更由统一展示层渲染为单张自适应表格（`~`/`+`/`-`/`?` 标记 platform、added、
-changed、missing、unlocked），未选中包版本仍使用统一删除表，物理文件名不进入表格。
-它不下载 JAR，但会访问 Modrinth 以及已配置的 CurseForge 批量哈希识别接口。匹配成功
+平台与包变更由统一展示层渲染为单张自适应表格。它不下载候选 JAR，但会联网访问
+Modrinth 以及已配置的 CurseForge 批量哈希识别接口。匹配成功
 时以 provider project/release 替换同一内容的自动 managed-file 回退；只有所有 provider
 均未匹配的内容才成为本地精确恢复来源。provider 查询失败会报错，不能静默把所有 JAR
-降级成 `file`。dry-run 不保存对账结果。同 ID 的所有本地文件
-先作为候选统一求解；不会按扫描顺序让后一个覆盖前一个。
-实际删除 `removed` 前总会展示逻辑包 ID、版本和动作并确认；物理文件名不占用用户决策
-界面。
+降级成 `file`。dry-run 不保存对账结果。sync 只用实际 JAR 重建事实 lock 并补充 TOML；
+缺失依赖也照实记录而不修复。同一 ID 有多个本地实现时，lock 无法无损表达选择，因此
+sync 保留全部 JAR 和来源、补充 TOML 后明确要求运行 `orbit fix`，绝不按扫描顺序覆盖或删除。
 
 ### `orbit outdated [mod]`
 
@@ -372,15 +381,22 @@ orbit export [output] [--target client|server|both] [--format zip|mrpack]
 名称和版本。`mrpack` 生成 Modrinth index；在线文件可成为 downloads，必须内嵌的本地
 文件放入 overrides。dry-run 只统计计划。
 
-### `orbit check`
+### `orbit migrate check` / `orbit migrate export`
 
 ```text
-orbit check <mc-version> [--modloader <loader>]
+orbit migrate check <target-instance-directory>
+orbit migrate export <target-instance-directory>
 ```
 
-对 lockfile 中在线 package 查询目标 Minecraft/loader 的兼容版本并返回逐包矩阵。结果由
-统一展示层渲染为自适应表格，兼容包标 `✓` 并显示可用版本与 provider，无兼容版本包标
-`✗`。本地 `file:` package 没有平台兼容性事实，会明确标为无法在线判断。
+目标必须是 Launcher 已安装完成的真实游戏实例目录。两个子命令调用同一个迁移规划器：
+从目标目录准确探测 Minecraft、Loader、runtime JAR、路径和哈希；按目标版本/Loader 下载
+所有远端候选 JAR 元数据；然后对完整依赖图联合求解，而不是逐包查询“有没有文件”。
+
+`check` 只展示将发生的安装、升级、降级、替换和删除。`export` 复用同一规划路径，将目标
+平台快照、入选 lock 和源实例的 `config/`、`defaultconfigs/`、`serverconfig/`、
+`options.txt` 写入目标；拒绝覆盖已有 Orbit 状态或配置。它不复制/安装模组 JAR，随后必须
+在目标目录运行 `orbit install`。GUI 的迁移向导只编排 Launcher 创建目标、migrate export、
+目标 install 三个 CLI 操作。
 
 ### `orbit audit`
 
@@ -394,7 +410,7 @@ orbit audit
 ```
 
 只读分析当前实例实际存在的 Minecraft、Loader、运行时依赖和 Mod JAR。它与
-`orbit check` 不同：`check` 查询目标版本是否有远端文件，`audit` 不联网、不读取
+`orbit migrate` 不同：migrate 联网下载候选元数据并联合求解目标图，`audit` 不联网、不读取
 provider 兼容声明，也不修改 manifest、lockfile、下载缓存或实例文件。输出格式由全局
 `--format` 控制（`text` 或 `json`），不再使用 per-command `--format`。
 
@@ -417,7 +433,7 @@ JSON 结果直接嵌入 audit 的 `AuditReport`（schema 5），顶层固定包�
 “未发现达到当前阈值的字节码兼容风险”，不宣称全部 Mod 兼容。
 
 core 严格读取 `[platform]` 中由 init/sync 固定的 Minecraft、Loader、runtime JAR
-与物理端，并复用 install/sync 的求解结果选择实际顶层和嵌套 JAR；audit 不读取
+与物理端，并按当前精确 lock 通过共享 Loader 图选择实际顶层和嵌套 JAR；audit 不读取
 launcher profile，也不另写 Loader classpath 发现规则。随后根据这些输入进行 capability
 probe。Fabric/Quilt 需要 Loader 与 Mixin
 ABI；现代 Forge/NeoForge 还必须具有可识别的 ModLauncher `ITransformer`、
@@ -469,20 +485,20 @@ orbit cache clean
 | `--verbose` 展示网络/解析细节 | 当前主要展示实例选择，没有统一结构化日志层 |
 | 用户取消使用独立退出码 3 | clap 参数错误为 2、普通错误为 1；部分取消当前为成功或普通错误 |
 | 全局运行配置控制网络/并发/UI | `ui.progress_bar` 已接入；代理、重试、语言、颜色和下载并发尚未全部接入 |
-| 大规模 restore 有界并发 | 候选验证并发，最终 JAR 物化仍按确定顺序执行 |
+| 大规模物化有界并发 | 候选验证并发，最终 JAR 物化仍按确定顺序执行 |
 
 已经实现、旧文档不应再标为缺失的内容：
 
 - 全部命令 handler 已接入 core，不再是 `exit(2)` 占位；
 - Forge、NeoForge、Quilt 检测和 JAR 解析；
-- `file:` 添加、全量 restore、target/group/optional；
-- list target、sync/check/purge、导入导出、实例与 cache；
+- `file:` 添加、精确 install、target/group/optional；
+- list target、sync/fix/migrate/purge、导入导出、实例与 cache；
 - 默认实例的修改型命令安全阻断；
 - 非交互 init 不猜 loader/版本，重复 init 不覆盖项目；
 - 全局 `--format text|json` 与 `--progress-format none|ndjson`；JSON 信封 + NDJSON 进度 +
   结构化错误 JSON + 稳定错误码 + 退出码（见 [orbit-output-formats.md](orbit-output-formats.md)）；
   audit 的 per-command `--format` 已删除并入全局选项。
 
-CurseForge 已接入 search/info/add/install/check/outdated/upgrade/restore 的共享
+CurseForge 已接入 search/info/add/fix/migrate/outdated/upgrade 和 lock 精确恢复的共享
 路径。它仍受 Core API Key 和项目第三方下载许可约束；这些是外部服务边界，不会用
 硬编码 ID 或猜测 CDN URL 规避。

@@ -67,7 +67,8 @@ Runtime 页使用 Launcher 的官方只读目录，而不是自由输入后试�
    来源声明的兼容版本；
 3. `versions java` 返回官方 version JSON 要求的 Java component/major；
 4. `instance show` 同时给出 desired intent 与 installed lock 摘要，界面突出当前/目标差异；
-5. 保存调用 `instance configure`，安装或更新调用同一个 `install` 事务。
+5. 新建实例直接调用 Launcher 的 `install --new` 事务；跨版本升级不改写源实例，而是进入下述
+   新实例迁移流程。
 
 版本清单默认显示正式版，并将 `release`、`snapshot`、`old_alpha/old_beta` 分成正式版、
 快照、历史版本三个互斥频道；“全部”是显式选择，不能再用“非正式版”冒充快照。
@@ -82,13 +83,27 @@ Java 不单独猜版本。安装事务根据目标 Minecraft 自动下载并验�
 Java 设置页列出、完整校验和清理未使用 Java；任一注册实例 lock 仍引用的 runtime 不能删除。
 Runtime 页只负责创建、导入、更新和启动实例，避免同一管理动作出现两个入口。
 
+跨版本迁移也由 Runtime 页编排领域流程：先用 Launcher 官方目录创建并安装真实目标实例，
+再从源实例调用 `orbit migrate export <目标目录>`，最后在目标调用 `orbit install`。GUI
+不自己拼目标 TOML、不逐包检查兼容性，也不链接 Orbit core；迁移联合求解完全属于
+Orbit CLI/core。用户取消迁移方案或写盘确认时，GUI 不会继续调用目标 `install`，源实例始终
+保持不变。
+
+Runtime 页也把整合包作为领域动作呈现：安装 Orbit ZIP/TOML 或 Modrinth mrpack 时调用
+`orbit import`，用户明确确认覆盖后再调用 `orbit fix` 求解并展示准确方案；导出分别调用
+`orbit export --format zip` 与 `orbit export --format mrpack`。GUI 不解析归档、不改写清单，
+也不根据扩展名实现第二套导入规则。
+
 ### Mods
 
 Mods 页以 lock 中逻辑包为单位显示环境、根/传递关系、依赖、contained 模块和多远端。首次
 接管由已安装 Launcher lock 的精确 Minecraft/Loader 版本调用 `orbit init`，不在 GUI 中
-重复探测。搜索、添加、sync、install、outdated、单包/全部 upgrade、环境与远端管理都调用
+重复探测。搜索、添加、sync、fix、install、outdated、单包/全部 upgrade、环境与远端管理都调用
 现有 Orbit 命令。GUI 不复制 CLI 的项目详情报告；Discover 只提供搜索所需的名称、摘要、
 来源、兼容标签和直接添加动作，需要完整项目数据时使用 `orbit info`。
+
+Mods 页把三个职责分别呈现：Sync 只重新探测并重建本地事实，Fix 才求解和修复包集合，
+Install 只按 lock 精确恢复缺失文件。GUI 不根据一个命令失败去偷偷调用另一个命令。
 
 `outdated` 的更新与诊断分开呈现：可升级项显示当前到目标的变化，受阻候选显示 solver
 保留的事实。`upgrade` 的多个 Pareto 极大方案、降级、替换和将删除的包在统一 interaction
@@ -123,6 +138,9 @@ Mods 页以 lock 中逻辑包为单位显示环境、根/传递关系、依赖�
 
 Activity 折叠条始终保留当前任务、当前阶段、完成量和紧凑进度条；展开态只增加历史任务，
 不把同一进度信息重复成高大的纵向卡片。
+
+页面、安装向导步骤、模态框、活动抽屉和提示使用 GPUI 原生短过渡动画。动画只表达视图层级
+变化；下载、解析、求解和物化进度仍只由 CLI 的强类型真实事件驱动，不按时间伪造完成量。
 
 Yggdrasil 密码使用可清零内存容器，只经子进程 stdin 传递，不进入任务日志、参数或持久化
 偏好。Microsoft token 仍只由 Launcher 的系统秘密存储负责。EULA 接受只提交用户刚查看的

@@ -65,7 +65,7 @@ pub trait ModProvider: Send + Sync {
 该类型刻意没有 `mod_id`、模组版本、依赖范围、环境、provides 或 bundled。
 lockfile 将候选发现入口统一保存在 `package.remotes`，将能恢复当前已选字节内容的
 精确工件统一保存在 `package.artifact_sources`。公共层不按平台复制
-install/restore/outdated/check 逻辑。
+add/fix/upgrade/outdated/migrate 逻辑。
 
 lockfile 的 `remotes` / `artifact_sources` 不保存或信任远端展示版本。平台 slug、
 project ID 和查询结果里的版本名都不能代替 JAR 身份。Orbit 先沿
@@ -93,7 +93,7 @@ identity 时，纯离线 solver 将其证明为无解。
 ## 5. Provider 集合与认证
 
 `create_providers()` 保持 `[resolver].catalogs` 的顺序，供无限定搜索稳定展示。
-对已有包执行 add/install/outdated/upgrade/check 时，manifest 与 lock 中所有确切
+对已有包执行 add/fix/outdated/upgrade/migrate 时，manifest 与 lock 中所有确切
 `remotes` 都加入同一发现任务；不会因第一个 provider 返回结果就停止，也不会按同名
 slug 跨平台猜项目。
 
@@ -154,7 +154,7 @@ unknown；不会从分类或文件名猜测。
 CurseForge 项目可以没有第三方可用的下载 URL。Orbit 只使用 API 返回的内联 URL 或
 download-url 端点；若任一目标文件不可用、缺 SHA-1 或无法取得 API download URL，
 整个发现阶段失败并列出文件，不会拿其余文件组成残缺候选集。完全没有匹配文件仍返回
-空候选，使完整多远端候选集和 `orbit check` 的“不兼容”结果保持正常。Orbit 不会拼接
+空候选，使完整多远端候选集和 `orbit migrate check` 的“不兼容”结果保持正常。Orbit 不会拼接
 CDN URL，也不会把 HTML 错误页当 JAR。
 
 根据 CurseForge 的

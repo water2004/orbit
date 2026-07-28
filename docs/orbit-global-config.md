@@ -150,7 +150,7 @@ orbit config unset network.proxy
 - `plain`：始终输出稳定的文本阶段和完成计数；
 - `off`：关闭进度事件展示；全局 `--quiet` 也会关闭。
 
-在线 add/install/check/outdated/upgrade 会分别呈现 project 闭包发现、候选 JAR
+在线 add/fix/migrate/outdated/upgrade 会分别呈现 project 闭包发现、候选 JAR
 下载/缓存校验/解析、离线求解和最终物化。候选 JAR 阶段有精确的 `已完成/总数`；
 发现闭包无法预知远端递归总量，因此使用带已用时间的 spinner。多解枚举则把实际开始的
 continuation run 和 maximality probe 作为工作单元：新分支出现时总量增长，完成时进度

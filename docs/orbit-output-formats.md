@@ -196,36 +196,47 @@ orbit [--format text|json] [--progress-format none|ndjson] <command> ...
 `configured: null` 表示持久化状态为 `auto`；`effective` 来自当前 lock。尚无选中 lock
 候选时 `effective` 也为 `null`，将在候选 JAR 解析和选择后确定。
 
-### `check`
+### `migrate check` / `migrate export`
 
 ```json
 {
   "schema_version": 2,
-  "command": "check",
+  "command": "migrate",
   "ok": true,
   "result": {
+    "subcommand": "check",
+    "dry_run": false,
+    "target_directory": "/home/u/instances/1.21-fabric",
+    "source_mc_version": "1.20.1",
     "target_mc_version": "1.21",
     "target_loader": "fabric",
-    "summary": { "total": 12, "compatible": 10, "blocking": 2 },
-    "results": [
+    "target_loader_version": "0.16.10",
+    "summary": {
+      "selected_packages": 12,
+      "installs": 0,
+      "upgrades": 8,
+      "downgrades": 1,
+      "replacements": 0,
+      "removals": 1
+    },
+    "changes": [
       {
-        "mod_name": "sodium",
+        "package": "sodium",
+        "kind": "upgrade",
         "current_version": "0.5.8",
-        "provider": "modrinth",
-        "compatible": true,
-        "available_version": "0.5.8"
-      },
-      {
-        "mod_name": "voxy",
-        "current_version": "1.0",
-        "provider": "modrinth",
-        "compatible": false,
-        "available_version": null
+        "selected_version": "0.6.0",
+        "selected_description": "Modrinth project AANobbMI, release mc1.21"
       }
-    ]
+    ],
+    "diagnostics": [],
+    "warnings": []
   }
 }
 ```
+
+`migrate export` 使用相同结果体并令 `subcommand` 为 `"export"`，另外包含
+`export: { "applied": true, "config_files": 14, "config_bytes": 8192 }`。两个子命令
+使用同一个目标运行时联合规划器；导出不会逐包重新检查。
 
 ### `outdated`
 
@@ -338,8 +349,7 @@ orbit [--format text|json] [--progress-format none|ndjson] <command> ...
       "added": 1,
       "changed": 1,
       "removed": 0,
-      "missing": 1,
-      "unlocked": 0
+      "missing": 1
     },
     "platform_changes": [
       { "field": "mc_version", "previous": "1.20", "current": "1.21" }
@@ -347,22 +357,39 @@ orbit [--format text|json] [--progress-format none|ndjson] <command> ...
     "added": ["sodium"],
     "changed": ["lithium"],
     "missing": ["fabric-api"],
-    "unlocked": [],
     "removed": [],
-    "diagnostics": [],
     "warnings": []
   }
 }
 ```
 
-### `install` / `add` / `upgrade`
+### `install`
+
+`install` 只报告精确 lock 物化结果，不返回求解方案或删除动作：
+
+```json
+{
+  "schema_version": 2,
+  "command": "install",
+  "ok": true,
+  "result": {
+    "dry_run": false,
+    "summary": { "installed": 3, "already_present": 8, "skipped": 1 },
+    "installed": ["sodium", "lithium", "fabric-api"],
+    "already_present": ["modmenu"],
+    "skipped": ["client-only-package"]
+  }
+}
+```
+
+### `add` / `fix` / `upgrade`
 
 共用事务报告 schema：
 
 ```json
 {
   "schema_version": 2,
-  "command": "install",
+  "command": "fix",
   "ok": true,
   "result": {
     "dry_run": false,
@@ -462,9 +489,7 @@ orbit [--format text|json] [--progress-format none|ndjson] <command> ...
     "scanned_mods": 8,
     "identified": 6,
     "unknown": 2,
-    "removed": [
-      { "mod_id": "duplicate-mod", "version": "1.0" }
-    ],
+    "lock_created": true,
     "dependency_error": null
   }
 }

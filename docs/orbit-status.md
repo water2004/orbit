@@ -1,6 +1,6 @@
 # Orbit 实现状态
 
-> 更新日期：2026-07-28。本文区分“正确规范曾未被代码执行”和“文档本身已经过时”。
+> 更新日期：2026-07-29。本文区分“正确规范曾未被代码执行”和“文档本身已经过时”。
 
 ## 1. 当前结论
 
@@ -17,13 +17,14 @@
 | 依赖求解 | ✅ | 强类型 occurrence 图、完整 Pareto front、any/all/unless、环境、provides、ordering、Java、JarJar |
 | 原因 | ✅ | 自定义 reason 参与原始推导；成功候选用同次 observer |
 | 本地校验 | ✅ | 转 Fat Lockfile 后复用统一建图 |
-| 安装/恢复/升级 | ✅ | 由求解结果选择顶层包候选并生成统一事务计划 |
+| 安装/修复/升级 | ✅ | install 精确物化 lock；fix/upgrade 由统一求解结果生成包事务计划 |
 | Modrinth / CurseForge / `file:` | ✅ | 查询、下载、识别、锁定；CurseForge 无 API Key 时拒绝创建 |
 | 多远端包模型 | ✅ | 每个根包非空 `remotes`；全部来源共同发现，完全相同字节跨 provider 合并 |
 | 内容候选身份 | ✅ | 本地 SHA-512 作为内部候选主键；同版本不同内容保持独立，CLI 只显示来源与依赖差异 |
 | PubGrub fork 远端 | ✅ | 功能分支已发布，Orbit 固定到完整 commit SHA |
 | 多解选择 | ✅ | fork 原生枚举 Pareto 极大解；唯一解自动选择，多解经同一进程的终端或 schema 2 机器交互明确选择；`--yes` 不代选 |
-| 本地重复包 | ✅ | init/sync 按 mod_id 合并为候选；确认后删除未选中的顶层包版本 |
+| 本地重复包 | ✅ | init/sync 保留全部事实并要求 fix；fix 确认后删除未选顶层实现并同步清理 lock/TOML/source |
+| 版本迁移 | ✅ | `migrate check/export` 对 Launcher 已安装目标运行时共用同一精确规划；export 写状态与配置，目标 install 物化 JAR |
 | 远端身份边界 | ✅ | provider 只给下载 locator；一个 locator 的多种真实 mod_id 按 JAR 身份分区并选择 |
 | Provider 分层 | ✅ | Modrinth / CurseForge HTTP 与 DTO 各在独立 wrapper，core 只做领域适配 |
 | 跨平台全局路径 | ✅ | RuntimeEnvironment + 显式路径；system/executable 布局 |
@@ -36,7 +37,7 @@
 | Loader JSON 容错 | ✅ | Fabric-compatible 字符串控制字符；仅限 JAR 内 loader/Mixin/refmap，其他 JSON 保持严格 |
 | 字节码运行时符号对齐 | ✅ | Fabric 按 MappingConfiguration、Quilt 按自身 unobfuscated/Tiny 决策选择 official 或投影；Forge/NeoForge 验证 Loader runtime game；未对齐时在 finding 前停止 |
 | i18n | ✅ | `orbit`、`orbit-launcher` 与 GUI 共用 `system`（默认）/`en`/`zh-CN` 语言模型；CLI help、文本结果、进度、询问和结构化错误均在展示边界翻译，机器字段保持稳定 |
-| 原生 GUI | ✅ | GPUI + gpui-component 原生进程薄壳；紧凑任务条、连续触控板滚动、语言/主题/强调色；Runtime、Java、Mods、audit、account/server；设置页只经两套 schema 2 CLI 管理 Launcher/Orbit 配置和客户端仓库，不链接 core 或直读业务 TOML |
+| 原生 GUI | ✅ | GPUI + gpui-component 原生进程薄壳；紧凑任务条、连续触控板滚动、原生短过渡、语言/主题/强调色；Runtime 新实例迁移、Orbit ZIP/Modrinth mrpack 导入导出、Java、Mods、audit、account/server；设置页只经两套 schema 2 CLI 管理 Launcher/Orbit 配置和客户端仓库，不链接 core 或直读业务 TOML |
 
 ## 2. 保留的正确规范
 
@@ -90,13 +91,14 @@
 
 | 命令 | 状态 |
 |---|---|
-| `init` | 拒绝空/任意目录，定位真实平台 JAR，扫描实例并确认重复包清理 |
+| `init` | 拒绝空/任意目录，定位真实平台 JAR，扫描实例；重复包全部保留并要求 fix |
 | `add` | Modrinth、CurseForge、搜索名和本地 JAR |
 | `remote add/remove/list` | 验证并管理包的多个 discovery remotes；不能删除最后一个；删除远端时保留当前 lock 的精确恢复来源；list 输出自适应表格 |
-| `install` / `restore` | 严格校验 TOML 平台快照；不探测、不兜底、不刷新；sync 后的 loader 变化由共享图判定 |
+| `install` | 严格校验 TOML/lock 平台，只物化 lock 的精确内容；不发现候选、不求解、不删除、不改 TOML/lock |
+| `fix` | 递归发现远端候选、统一求解并修复；包删除同时收敛 mods、lock、TOML 和 managed source |
 | `remove` / `upgrade` / `outdated` | 使用 Fat Lockfile、保留受阻候选原因、自适应表格与多解差异高亮 |
-| `sync` | 重新探测平台并扫描 mods；批量哈希识别 provider 来源但不下载或修复 JAR；按包选择候选并确认移除未选版本；平台与包变更统一表格 |
-| `check` | 实例目标兼容性预检；结果自适应表格 |
+| `sync` | 重新探测平台并扫描 mods；批量哈希识别 provider 来源，按磁盘事实重建 lock/补充 TOML；不求解、不下载候选、不删包 |
+| `migrate check/export` | 对真实目标实例规划完整包集合；check 预览，export 复用同一解写目标 Orbit 状态和配置 |
 | `audit` | 四个 Loader backend 复用 Loader-selected runtime，先对齐 namespace，再进入共享 Mixin/Transformer 效果与冲突流水线；unary/pairwise 分离 + schema 5 JSON/显式完整 report |
 | `list` / `info` | 展示包信息、逻辑依赖和 bundled；非树形 list 与 info 均使用自适应表格 |
 | `export` / `import` | Orbit archive 与 Modrinth pack |
@@ -126,8 +128,9 @@
   变新、其他包可降级”是对同批 Pareto 解的操作分类。
 - 远端 project relation 会递归构造下载闭包；JAR `mod_id` 从不作为 slug/project
   查询。闭包缺少实际 required identity 时由 resolver 正常证明无解。
-- `sync` 不下载或修复 JAR，但必须调用可用 provider 的批量哈希接口恢复来源；识别失败
-  直接报错，不能伪造本地来源。`install` 才构造远端候选闭包修复依赖图。
+- `sync` 不下载候选或修复 JAR，但必须调用可用 provider 的批量哈希接口恢复来源；识别
+  失败直接报错，不能伪造本地来源。`fix` 才构造远端候选闭包修复依赖图；`install`
+  只恢复 lock 中已有的精确工件。
 - 共享游戏根目录若同时暴露多个 Minecraft/loader 候选，没有通用办法从目录本身判断
   launcher 下一次会启动哪一个；Orbit 明确报歧义，要求使用隔离实例或在 init 显式选择，
   不按目录顺序猜测。
