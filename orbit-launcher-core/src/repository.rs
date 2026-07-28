@@ -46,7 +46,8 @@ where
         .clone()
         .unwrap_or_else(|| paths.data_dir().join("minecraft"));
     let source = canonical_or_normalized(&configured_source)?;
-    let destination = normalize_new_destination(destination)?;
+    let prepared_destination = prepare_destination(destination)?;
+    let destination = prepared_destination.path;
     if source == destination {
         return Err(LauncherError::InvalidConfig(
             "Minecraft directory is already at the requested destination".to_string(),
@@ -57,13 +58,6 @@ where
             "Minecraft directory cannot be moved into itself or one of its parents".to_string(),
         ));
     }
-    if destination.exists() {
-        return Err(LauncherError::Transaction(format!(
-            "Minecraft directory destination '{}' already exists",
-            destination.display()
-        )));
-    }
-
     let registry_path = paths.instances_file();
     let original_registry = InstanceRegistry::load(&registry_path)?;
     validate_client_repository(&original_registry, &source)?;
@@ -76,6 +70,9 @@ where
     if source_existed {
         if let Some(parent) = destination.parent() {
             std::fs::create_dir_all(parent)?;
+        }
+        if prepared_destination.existed_empty {
+            std::fs::remove_dir(&destination)?;
         }
         match std::fs::rename(&source, &destination) {
             Ok(()) => {}
@@ -107,10 +104,12 @@ where
                 })();
                 if let Err(error) = copied {
                     let _ = std::fs::remove_dir_all(&temporary);
+                    restore_empty_destination(&destination, prepared_destination.existed_empty)?;
                     return Err(error);
                 }
             }
             Err(error) => {
+                restore_empty_destination(&destination, prepared_destination.existed_empty)?;
                 return Err(LauncherError::Transaction(format!(
                     "cannot move Minecraft directory '{}' to '{}': {error}",
                     source.display(),
@@ -129,6 +128,7 @@ where
             &destination,
             copied_across_filesystems,
             source_existed,
+            prepared_destination.existed_empty,
         )?;
         return Err(error);
     }
@@ -139,6 +139,7 @@ where
             &destination,
             copied_across_filesystems,
             source_existed,
+            prepared_destination.existed_empty,
         );
         return match (registry_rollback, physical_rollback) {
             (Ok(()), Ok(())) => Err(error),
@@ -208,6 +209,37 @@ fn rewrite_client_locations(
         }
     }
     registry.validate()
+}
+
+struct PreparedDestination {
+    path: PathBuf,
+    existed_empty: bool,
+}
+
+fn prepare_destination(path: &Path) -> Result<PreparedDestination, LauncherError> {
+    if path.exists() {
+        let metadata = std::fs::symlink_metadata(path)?;
+        if metadata.file_type().is_symlink() || !metadata.is_dir() {
+            return Err(LauncherError::Transaction(format!(
+                "Minecraft directory destination '{}' must be a directory, not a file or symbolic link",
+                path.display()
+            )));
+        }
+        if std::fs::read_dir(path)?.next().transpose()?.is_some() {
+            return Err(LauncherError::Transaction(format!(
+                "Minecraft directory destination '{}' must be empty",
+                path.display()
+            )));
+        }
+        return Ok(PreparedDestination {
+            path: dunce::canonicalize(path)?,
+            existed_empty: true,
+        });
+    }
+    Ok(PreparedDestination {
+        path: normalize_new_destination(path)?,
+        existed_empty: false,
+    })
 }
 
 fn normalize_new_destination(path: &Path) -> Result<PathBuf, LauncherError> {
@@ -339,14 +371,25 @@ fn rollback_physical_move(
     destination: &Path,
     copied: bool,
     source_existed: bool,
+    destination_existed_empty: bool,
 ) -> Result<(), LauncherError> {
-    if !destination.exists() {
-        return Ok(());
+    if destination.exists() {
+        if copied || !source_existed {
+            std::fs::remove_dir_all(destination)?;
+        } else {
+            std::fs::rename(destination, source)?;
+        }
     }
-    if copied || !source_existed {
-        std::fs::remove_dir_all(destination)?;
-    } else {
-        std::fs::rename(destination, source)?;
+    restore_empty_destination(destination, destination_existed_empty)?;
+    Ok(())
+}
+
+fn restore_empty_destination(
+    destination: &Path,
+    destination_existed_empty: bool,
+) -> Result<(), LauncherError> {
+    if destination_existed_empty && !destination.exists() {
+        std::fs::create_dir(destination)?;
     }
     Ok(())
 }
@@ -424,6 +467,57 @@ mod tests {
         assert_eq!(
             std::fs::read(entry.instance_directory().join("marker.txt")).unwrap(),
             b"preserved"
+        );
+    }
+
+    #[test]
+    fn relocation_accepts_an_existing_empty_destination_selected_by_the_gui() {
+        let directory = tempfile::tempdir().unwrap();
+        let paths = RuntimePaths::resolve(&RuntimePathOptions {
+            config_dir: Some(directory.path().join("config")),
+            data_dir: Some(directory.path().join("data")),
+            cache_dir: Some(directory.path().join("cache")),
+        })
+        .unwrap();
+        let source = paths.data_dir().join("minecraft");
+        std::fs::create_dir_all(&source).unwrap();
+        std::fs::write(source.join("marker.txt"), b"preserved").unwrap();
+        let destination = directory.path().join("selected-empty-directory");
+        std::fs::create_dir(&destination).unwrap();
+
+        let moved =
+            move_minecraft_directory(&paths, &GlobalConfig::default(), &destination, |_| {})
+                .unwrap();
+
+        assert_eq!(moved.current, dunce::canonicalize(&destination).unwrap());
+        assert!(!source.exists());
+        assert_eq!(
+            std::fs::read(destination.join("marker.txt")).unwrap(),
+            b"preserved"
+        );
+    }
+
+    #[test]
+    fn relocation_rejects_a_nonempty_destination() {
+        let directory = tempfile::tempdir().unwrap();
+        let paths = RuntimePaths::resolve(&RuntimePathOptions {
+            config_dir: Some(directory.path().join("config")),
+            data_dir: Some(directory.path().join("data")),
+            cache_dir: Some(directory.path().join("cache")),
+        })
+        .unwrap();
+        let destination = directory.path().join("nonempty-directory");
+        std::fs::create_dir(&destination).unwrap();
+        std::fs::write(destination.join("unrelated.txt"), b"keep").unwrap();
+
+        let error =
+            move_minecraft_directory(&paths, &GlobalConfig::default(), &destination, |_| {})
+                .unwrap_err();
+
+        assert!(error.to_string().contains("must be empty"));
+        assert_eq!(
+            std::fs::read(destination.join("unrelated.txt")).unwrap(),
+            b"keep"
         );
     }
 }
