@@ -116,6 +116,22 @@ fn map_accent_color(color: Option<i64>) -> Option<u32> {
         .filter(|value| *value <= 0x00ff_ffff)
 }
 
+fn human_latest_version(
+    version_id: Option<&str>,
+    versions: &HashMap<String, String>,
+) -> Result<String, OrbitError> {
+    version_id
+        .map(|version_id| {
+            versions.get(version_id).cloned().ok_or_else(|| {
+                OrbitError::Other(anyhow::anyhow!(
+                    "Modrinth search returned version ID '{version_id}', but the version lookup omitted it"
+                ))
+            })
+        })
+        .transpose()
+        .map(|version| version.unwrap_or_default())
+}
+
 fn build_facets(mc_version: Option<&str>, loader: Option<&str>) -> Option<String> {
     let mut groups: Vec<Vec<String>> = Vec::new();
     if let Some(mc) = mc_version {
@@ -173,24 +189,47 @@ impl ModProvider for ModrinthProvider {
             .await
             .map_err(|e| OrbitError::Other(e.into()))?;
 
-        Ok(res
+        // The search endpoint exposes `latest_version` as a version ID. Resolve
+        // all of those IDs in one request so presentation layers receive the
+        // human-facing `version_number`, never an opaque Modrinth identifier.
+        let latest_version_ids: Vec<&str> = res
             .hits
+            .iter()
+            .filter_map(|hit| hit.latest_version.as_deref())
+            .collect();
+        let latest_versions = if latest_version_ids.is_empty() {
+            HashMap::new()
+        } else {
+            self.client
+                .get_versions_by_ids(&latest_version_ids)
+                .await
+                .map_err(|error| OrbitError::Other(error.into()))?
+                .into_iter()
+                .map(|version| (version.id, version.version_number))
+                .collect::<HashMap<_, _>>()
+        };
+
+        res.hits
             .into_iter()
-            .map(|hit| SearchResultItem {
-                project_id: hit.project_id,
-                slug: hit.slug,
-                name: hit.title,
-                description: hit.description,
-                latest_version: hit.latest_version.unwrap_or_default(),
-                downloads: hit.downloads as u64,
-                mc_versions: hit.versions,
-                client_side: map_side(&hit.client_side),
-                server_side: map_side(&hit.server_side),
-                categories: hit.categories.unwrap_or_default(),
-                icon_url: hit.icon_url,
-                accent_color: map_accent_color(hit.color),
+            .map(|hit| {
+                let latest_version =
+                    human_latest_version(hit.latest_version.as_deref(), &latest_versions)?;
+                Ok(SearchResultItem {
+                    project_id: hit.project_id,
+                    slug: hit.slug,
+                    name: hit.title,
+                    description: hit.description,
+                    latest_version,
+                    downloads: hit.downloads as u64,
+                    mc_versions: hit.versions,
+                    client_side: map_side(&hit.client_side),
+                    server_side: map_side(&hit.server_side),
+                    categories: hit.categories.unwrap_or_default(),
+                    icon_url: hit.icon_url,
+                    accent_color: map_accent_color(hit.color),
+                })
             })
-            .collect())
+            .collect()
     }
 
     async fn get_mod_info(&self, slug: &str) -> Result<ModInfo, OrbitError> {
@@ -401,5 +440,21 @@ impl ModProvider for ModrinthProvider {
                 })
             })
             .collect())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn search_version_ids_are_never_exposed_as_version_numbers() {
+        let versions = HashMap::from([("vf7UgZpC".to_string(), "mc26.1-0.9.1".to_string())]);
+        assert_eq!(
+            human_latest_version(Some("vf7UgZpC"), &versions).unwrap(),
+            "mc26.1-0.9.1"
+        );
+        assert!(human_latest_version(Some("missing"), &versions).is_err());
+        assert_eq!(human_latest_version(None, &versions).unwrap(), "");
     }
 }
