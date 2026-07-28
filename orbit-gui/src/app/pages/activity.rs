@@ -9,29 +9,31 @@ impl OrbitApp {
                 return;
             }
             egui::TopBottomPanel::bottom("activity-strip")
-                .exact_height(if self.activity_open { 220.0 } else { 66.0 })
+                .exact_height(if self.activity_open { 184.0 } else { 54.0 })
                 .frame(
                     egui::Frame::new()
                         .fill(theme::sidebar())
                         .stroke(Stroke::new(1.0, theme::border()))
-                        .inner_margin(egui::Margin::symmetric(22, 10)),
+                        .inner_margin(egui::Margin::symmetric(22, 7)),
                 )
                 .show(ctx, |ui| {
                     theme::apply_ui(ui);
                     ui.horizontal(|ui| {
                         status_dot(ui, task.state);
                         ui.vertical(|ui| {
-                            ui.label(RichText::new(&task.label).strong());
-                            if self.activity_open {
-                                ui.label(
-                                    RichText::new(&task.command)
-                                        .size(10.0)
-                                        .color(theme::muted()),
-                                );
-                            }
+                            ui.horizontal(|ui| {
+                                ui.label(RichText::new(&task.label).strong());
+                                if self.activity_open {
+                                    ui.label(
+                                        RichText::new(&task.command)
+                                            .size(10.0)
+                                            .color(theme::muted()),
+                                    );
+                                }
+                            });
                             ui.label(
                                 RichText::new(&task.status_line)
-                                    .size(12.0)
+                                    .size(11.0)
                                     .color(theme::muted()),
                             );
                         });
@@ -51,6 +53,18 @@ impl OrbitApp {
                             {
                                 self.bridge.cancel(task.id);
                             }
+                            if let (Some(completed), Some(total)) = (task.completed, task.total) {
+                                let percentage = if total == 0 {
+                                    0
+                                } else {
+                                    completed.saturating_mul(100) / total
+                                };
+                                ui.label(
+                                    RichText::new(format!("{completed}/{total} · {percentage}%"))
+                                        .size(10.0)
+                                        .color(theme::muted()),
+                                );
+                            }
                         });
                     });
                     if let (Some(completed), Some(total)) = (task.completed, task.total) {
@@ -59,9 +73,14 @@ impl OrbitApp {
                         } else {
                             (completed as f32 / total as f32).clamp(0.0, 1.0)
                         };
-                        ui.add(egui::ProgressBar::new(fraction).show_percentage());
+                        ui.add(
+                            egui::ProgressBar::new(fraction)
+                                .desired_height(5.0)
+                                .corner_radius(3),
+                        );
                     }
                     if self.activity_open {
+                        ui.add_space(3.0);
                         ui.separator();
                         ScrollArea::vertical().stick_to_bottom(true).show(ui, |ui| {
                             for task in self.tasks.values().rev().take(20) {
