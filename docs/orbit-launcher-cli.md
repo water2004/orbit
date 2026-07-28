@@ -155,6 +155,10 @@ Loader libraries、main class 和参数合并到同一个精确运行时模型�
 但版本选择规则不混用：Fabric 支持 `latest`、官方 `stable` 标记和精确版本；Quilt 支持
 `latest` 和精确版本。Quilt Meta 没有 Loader stable 标记，因此 `stable` 会明确报错，不按
 版本字符串猜测。缺少内联哈希的官方 Maven 条目必须取得 `.sha1` sidecar 后才进入队列。
+安装事务还会原样保存已校验的官方 Loader profile 到标准
+`versions/<profile-id>/<profile-id>.json`，把来源 URL、SHA-256 和路径写入 artifact inventory；
+不能只把合并结果留在私有 lock 中，否则其它只理解标准 Minecraft launcher profile 的工具
+无法确定实际 Loader 和完整 runtime classpath。更新 Loader 时旧 profile 由同一事务移除。
 
 Forge 与 NeoForge 从各自官方版本索引和 Maven 仓库解析精确 installer。Forge 的 `stable`
 对应官方 `recommended` promotion，`latest` 对应官方 `latest` promotion；NeoForge 的

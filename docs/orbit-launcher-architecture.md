@@ -651,6 +651,12 @@ orbit-launcher
   config path|get|set|unset|list
 ```
 
+Fabric/Quilt 的官方 profile 同时是可互操作的落盘事实。安装事务必须逐字节保留已验证响应，
+写到标准 `versions/<profile-id>/<profile-id>.json` 并作为 Loader artifact 纳入 lock；不得只在
+内存中合并后丢弃。Orbit、第三方启动器和诊断工具由此可以读取标准 profile，而不需要认识
+`orbit-launcher.lock`。Forge/NeoForge 则保留官方 installer 生成的 profile/argfile，二者在
+统一 runtime 模型之上维持各自真正不同的安装规格。
+
 当前 Java 管理已实现 `java list [--verify]`、`java verify <runtime-id>` 和
 `java remove <runtime-id>`。下载与更新不另设一条旁路：实例 `install` 根据官方 Minecraft
 version JSON 解析所需 Java component，把 Mojang runtime 与游戏/Loader 一起纳入同一个安装

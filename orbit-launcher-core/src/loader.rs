@@ -25,8 +25,10 @@ pub enum LoaderSide {
 pub struct ResolvedLoaderProfile {
     pub kind: LoaderKind,
     pub version: String,
+    pub profile_id: String,
     pub profile_url: String,
     pub profile_sha256: String,
+    pub profile_bytes: Vec<u8>,
     pub main_class: String,
     pub game_arguments: Vec<String>,
     pub jvm_arguments: Vec<String>,
@@ -92,7 +94,7 @@ pub async fn resolve_loader_profile(
             profile.inherits_from
         )));
     }
-    validate_text(&profile.id, "Loader profile ID")?;
+    validate_path_segment(&profile.id, "Loader profile ID")?;
     validate_text(&profile.main_class, "Loader main class")?;
     let game_arguments = string_arguments(&profile.arguments.game, "Loader game arguments")?;
     let jvm_arguments = string_arguments(&profile.arguments.jvm, "Loader JVM arguments")?;
@@ -124,8 +126,10 @@ pub async fn resolve_loader_profile(
     Ok(ResolvedLoaderProfile {
         kind,
         version,
+        profile_id: profile.id,
         profile_url,
         profile_sha256,
+        profile_bytes,
         main_class: profile.main_class,
         game_arguments,
         jvm_arguments,

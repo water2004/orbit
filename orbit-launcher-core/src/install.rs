@@ -722,9 +722,14 @@ where
     let mut downloaded = java.downloaded_artifacts;
     let mut cached = java.cached_artifacts;
     let mut installer_producer = None;
+    let mut loader_profile_artifact = None;
     let (mut resolved, locked_loader) = match plan.loader {
         PlannedLoader::Vanilla => (plan.resolved, LockedLoader::vanilla()),
-        PlannedLoader::Profile(profile) => merge_client_profile(plan.resolved, profile)?,
+        PlannedLoader::Profile(profile) => {
+            loader_profile_artifact =
+                Some(materialize_loader_profile(&transaction.staging, &profile)?);
+            merge_client_profile(plan.resolved, profile)?
+        }
         PlannedLoader::Installer(installer) => {
             let installer_artifact = cache
                 .fetch(client, &installer.artifact, |event| {
@@ -811,6 +816,7 @@ where
         cache.materialize(artifact, &transaction.staging.join(target))?;
         locked_artifacts.push(locked_artifact(download, artifact));
     }
+    locked_artifacts.extend(loader_profile_artifact);
     let version_json_target = format!("versions/{0}/{0}.json", resolved.minecraft_version);
     write_staged_file(
         &transaction.staging,
@@ -936,9 +942,14 @@ where
     let mut cached = java.cached_artifacts;
     let mut installer_producer = None;
     let installer_loader = matches!(&plan.loader, PlannedLoader::Installer(_));
+    let mut loader_profile_artifact = None;
     let (loader, entrypoint, arguments, mut downloads) = match plan.loader {
         PlannedLoader::Vanilla => server_profile_parts(&plan.resolved, None)?,
-        PlannedLoader::Profile(profile) => server_profile_parts(&plan.resolved, Some(profile))?,
+        PlannedLoader::Profile(profile) => {
+            loader_profile_artifact =
+                Some(materialize_loader_profile(&transaction.staging, &profile)?);
+            server_profile_parts(&plan.resolved, Some(profile))?
+        }
         PlannedLoader::Installer(installer) => {
             let installer_artifact = cache
                 .fetch(client, &installer.artifact, |event| {
@@ -1038,6 +1049,7 @@ where
         cache.materialize(artifact, &transaction.staging.join(target))?;
         locked_artifacts.push(locked_artifact(download, artifact));
     }
+    locked_artifacts.extend(loader_profile_artifact);
     if let Some((installer_sha256, logical_name)) = installer_producer {
         let excluded: HashSet<_> = locked_artifacts
             .iter()
@@ -1350,6 +1362,39 @@ fn locked_artifact(download: &ClientDownload, artifact: &CachedArtifact) -> Lock
         size: artifact.size,
         path: download.target.clone(),
     }
+}
+
+fn materialize_loader_profile(
+    staging: &Path,
+    profile: &ResolvedLoaderProfile,
+) -> Result<LockedArtifact, LauncherError> {
+    let target = crate::lockfile::portable_relative_path(Path::new(&format!(
+        "versions/{0}/{0}.json",
+        profile.profile_id
+    )))?;
+    let actual_sha256 = hex::encode(Sha256::digest(&profile.profile_bytes));
+    if actual_sha256 != profile.profile_sha256 {
+        return Err(LauncherError::ArtifactIntegrity(format!(
+            "{} Loader profile bytes no longer match resolved SHA-256",
+            profile.kind.as_str()
+        )));
+    }
+    write_staged_file(staging, &target, &profile.profile_bytes)?;
+    Ok(LockedArtifact {
+        logical_name: format!(
+            "{} {} launcher profile",
+            profile.kind.as_str(),
+            profile.version
+        ),
+        owner: ArtifactOwner::Loader,
+        source: LockedArtifactSource::Download {
+            url: profile.profile_url.clone(),
+            upstream_sha1: None,
+        },
+        sha256: profile.profile_sha256.clone(),
+        size: profile.profile_bytes.len() as u64,
+        path: target,
+    })
 }
 
 fn cleanup_installer_scaffolding(staging: &Path) -> Result<(), LauncherError> {
@@ -1943,6 +1988,41 @@ fn unix_seconds() -> Result<u64, LauncherError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn materializes_the_authoritative_loader_profile_as_a_locked_artifact() {
+        let directory = tempfile::tempdir().unwrap();
+        let bytes = br#"{"id":"fabric-loader-0.19.3-26.2","inheritsFrom":"26.2"}"#.to_vec();
+        let sha256 = hex::encode(Sha256::digest(&bytes));
+        let profile = ResolvedLoaderProfile {
+            kind: LoaderKind::Fabric,
+            version: "0.19.3".to_string(),
+            profile_id: "fabric-loader-0.19.3-26.2".to_string(),
+            profile_url: "https://meta.fabricmc.net/v2/versions/loader/26.2/0.19.3/profile/json"
+                .to_string(),
+            profile_sha256: sha256.clone(),
+            profile_bytes: bytes.clone(),
+            main_class: "net.fabricmc.loader.impl.launch.knot.KnotClient".to_string(),
+            game_arguments: Vec::new(),
+            jvm_arguments: Vec::new(),
+            downloads: Vec::new(),
+            classpath: Vec::new(),
+            minimum_java_major: None,
+        };
+
+        let artifact = materialize_loader_profile(directory.path(), &profile).unwrap();
+
+        assert_eq!(artifact.owner, ArtifactOwner::Loader);
+        assert_eq!(artifact.sha256, sha256);
+        assert_eq!(
+            artifact.path,
+            "versions/fabric-loader-0.19.3-26.2/fabric-loader-0.19.3-26.2.json"
+        );
+        assert_eq!(
+            std::fs::read(directory.path().join(&artifact.path)).unwrap(),
+            bytes
+        );
+    }
 
     fn previous_server_lock(id: Uuid) -> LauncherLock {
         LauncherLock {
