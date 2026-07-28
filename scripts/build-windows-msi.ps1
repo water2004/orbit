@@ -18,6 +18,8 @@ $wixUiSource = Join-Path $repoRoot "installer\windows\OrbitUI.wxs"
 $licenseRtf = Join-Path $repoRoot "installer\windows\License.rtf"
 $toolManifest = Join-Path $repoRoot ".config\dotnet-tools.json"
 $executable = Join-Path $repoRoot "target\release\orbit.exe"
+$launcherExecutable = Join-Path $repoRoot "target\release\orbit-launcher.exe"
+$guiExecutable = Join-Path $repoRoot "target\release\orbit-gui.exe"
 $license = Join-Path $repoRoot "LICENSE"
 
 if (-not $OutputDirectory) {
@@ -64,7 +66,7 @@ if ($versionParts[0] -gt 255 -or
 Push-Location $repoRoot
 try {
     if (-not $SkipCargoBuild) {
-        cargo build --release --locked --package orbit
+        cargo build --release --locked --package orbit --package orbit-launcher --package orbit-gui
         if ($LASTEXITCODE -ne 0) {
             throw "The release build failed."
         }
@@ -72,6 +74,12 @@ try {
 
     if (-not (Test-Path -LiteralPath $executable -PathType Leaf)) {
         throw "Release executable not found at '$executable'."
+    }
+    if (-not (Test-Path -LiteralPath $launcherExecutable -PathType Leaf)) {
+        throw "Release executable not found at '$launcherExecutable'."
+    }
+    if (-not (Test-Path -LiteralPath $guiExecutable -PathType Leaf)) {
+        throw "Release executable not found at '$guiExecutable'."
     }
 
     dotnet tool restore
@@ -104,11 +112,13 @@ try {
         -arch x64 `
         -d "OrbitVersion=$version" `
         -d "OrbitExecutable=$executable" `
+        -d "OrbitLauncherExecutable=$launcherExecutable" `
+        -d "OrbitGuiExecutable=$guiExecutable" `
         -d "OrbitLicense=$license" `
         -d "OrbitLicenseRtf=$licenseRtf" `
         -d "ProductDisplayName=Orbit" `
         -d "ProductCommand=orbit" `
-        -d "ProductDataDescription=Deletes Orbit configuration, the instance registry, and cached JARs from the AppData paths recorded during installation. Custom paths and Minecraft instances are never removed." `
+        -d "ProductDataDescription=Deletes Orbit and Orbit Launcher configuration, account metadata, encrypted local credentials, instance registries, managed Java runtimes, and caches from the AppData paths recorded during installation. Minecraft instances and custom paths are never removed." `
         -ext WixToolset.UI.wixext `
         -ext WixToolset.Util.wixext `
         -intermediatefolder $intermediatePath `

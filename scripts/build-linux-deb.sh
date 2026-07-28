@@ -42,17 +42,22 @@ if [[ "$skip_cargo_build" != true ]]; then
 	cargo build \
 		--release \
 		--locked \
-		--package "$package" \
+		--package orbit \
+		--package orbit-launcher \
+		--package orbit-gui \
 		--target "$target"
 fi
 
-binary="target/$target/release/orbit"
-if [[ ! -x "$binary" ]]; then
-	echo "release executable not found at '$binary'" >&2
-	exit 1
-fi
+for binary_name in orbit orbit-launcher orbit-gui; do
+	binary="target/$target/release/$binary_name"
+	if [[ ! -x "$binary" ]]; then
+		echo "release executable not found at '$binary'" >&2
+		exit 1
+	fi
+done
 
-"$binary" --help >/dev/null
+"target/$target/release/orbit" --help >/dev/null
+"target/$target/release/orbit-launcher" --help >/dev/null
 
 cargo deb \
 	--package "$package" \
