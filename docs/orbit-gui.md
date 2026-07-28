@@ -67,13 +67,15 @@ Runtime 页使用 Launcher 的官方只读目录，而不是自由输入后试�
 4. `instance show` 同时给出 desired intent 与 installed lock 摘要，界面突出当前/目标差异；
 5. 保存调用 `instance configure`，安装或更新调用同一个 `install` 事务。
 
-客户端只使用 Launcher 托管的标准 Minecraft 仓库，并把可变游戏目录固定为
+客户端只使用 Launcher 托管的 Minecraft 仓库，并把可变游戏目录固定为
 `<minecraft-directory>/versions/<instance-name>`；因此 `mods`、`config`、`saves` 等不会落在
-共享仓库根目录。服务端仍选择一个明确目录。设置页通过 `orbit-launcher minecraft directory`
+共享仓库根目录。该布局是 Launcher 的版本隔离策略，不是自称 Mojang 标准实例格式，也不
+生成 `<instance-name>.json`。服务端仍选择一个明确目录。设置页通过 `orbit-launcher minecraft directory`
 显示仓库，并通过 `orbit-launcher minecraft move` 迁移整个仓库；GUI 不自行移动文件。
 
 Java 不单独猜版本。安装事务根据目标 Minecraft 自动下载并验证 Mojang managed runtime。
-Runtime 页可列出、完整校验和清理未使用 Java；任一注册实例 lock 仍引用的 runtime 不能删除。
+Java 设置页列出、完整校验和清理未使用 Java；任一注册实例 lock 仍引用的 runtime 不能删除。
+Runtime 页只负责创建、导入、更新和启动实例，避免同一管理动作出现两个入口。
 
 ### Mods
 
@@ -92,16 +94,22 @@ Mods 页以 lock 中逻辑包为单位显示环境、根/传递关系、依赖�
 - Discover：展示 provider、名称、摘要和兼容标签，并提供直接添加；搜索任务在页面内明确区分
   尚未搜索、查询中、零结果和失败，失败不得伪装为空目录；
 - Compatibility：schema 5 readiness、coverage、warning 和按风险排序的证据摘要；
-- Accounts：先选择 Microsoft、Offline 或标准 External Yggdrasil，再进入对应登录任务；
+- Accounts：侧边栏底部始终显示当前实例账户或全局默认账户，主账户页显示由 CLI 提供的皮肤
+  头像（无皮肤时使用本地首字母占位）；先选择 Microsoft、Offline 或标准 External Yggdrasil，再进入对应登录任务；
   主页面只展示身份卡、全局默认和当前实例选择；External Yggdrasil 在添加账户时选择端点，
   端点的选择/新增/移除是独立步骤，确认端点后才进入单独的凭据表单；Settings 不承载账户
   认证端点；新增端点接受站点地址或精确 API root，由 CLI 完成 ALI 服务发现和 metadata
   验证，GUI 不自行拼接认证路径；
 - Server：EULA 完整正文及 digest 接受、启动/停止/状态/控制台命令；
 - Activity：真实阶段、动态完成量、日志、结构化错误和取消。
-- Settings：GUI 偏好只由 GUI 保存；Launcher 与 Orbit 的业务配置分别通过
+- Settings：使用原生设置分组、字段说明、枚举选择、路径选择和秘密输入，不把配置 key/value
+  表格直接暴露成“带窗口的 CLI”。GUI 偏好只由 GUI 保存；Launcher 与 Orbit 的业务配置分别通过
   `orbit-launcher config ...` / `orbit config ...` 读取、设置和恢复默认值。没有安装 Orbit 时
   明确禁用 Orbit 配置区，不读取其 TOML 猜值。
+
+安装进度区分“下载/组装 Mojang Java 逐文件清单”和真正的归档解压：普通 assets、libraries
+和 Java 文件不显示为解压；只有启动时重建 native 目录以及 Forge/NeoForge 官方 installer
+内部处理属于必要的提取步骤。
 
 Activity 折叠条始终保留当前任务、当前阶段、完成量和紧凑进度条；展开态只增加历史任务，
 不把同一进度信息重复成高大的纵向卡片。

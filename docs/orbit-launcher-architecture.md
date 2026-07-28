@@ -106,11 +106,15 @@ Instance
   locked              已解析、已安装的精确状态
 ```
 
-客户端不是扁平单版本目录。所有客户端共享一个由 Launcher 托管的标准 Minecraft 仓库，
+客户端不是扁平单版本目录。所有客户端共享一个由 Launcher 托管的 Minecraft 仓库，
 `minecraft_directory` 保存 `assets`、`libraries` 和版本工件；每个实例的 `game_directory`
 严格为 `<minecraft_directory>/versions/<name>`，保存该实例的 manifest/lock、`mods`、`config`、
 `saves` 和启动工作目录。Dedicated server 仍使用一个明确的 `server_directory`，因为服务端
 分发本身就是单根模型。
+
+`versions/<name>` 沿用 Minecraft 启动器生态的版本隔离目录习惯，但“把整个目录作为独立
+game directory”是 Orbit Launcher 的实例策略，不是 Mojang 规定的实例注册格式。Launcher
+不会为了伪装成官方版本而生成 `<name>.json`；第三方启动器也不应被假定能直接管理该实例。
 
 `id` 是不可变 UUID；`name` 是全局唯一但可修改的人类名称。GUI 和 supervisor 必须始终
 使用 `id`，不能把名称或绝对路径当作进程身份。客户端仓库只通过
@@ -202,7 +206,7 @@ config/
   config.toml
 data/
   instances.toml             实例 ID 到路径的注册表
-  accounts.json              仅非秘密账户元数据
+  accounts.json              schema 2 非秘密账户元数据与可选皮肤 URL
   auth-sessions/             有期限的登录会话，不含最终 refresh token 明文
   supervisors/               Linux 上按实例 ID 建立的权限受限 Unix socket
   runtimes/                  已物化的共享 Java runtime
@@ -221,9 +225,8 @@ cache/
   libraries/                 客户端共享 Minecraft/Loader 库
   versions/
     <instance-name>/         客户端隔离 game directory
-      <instance-name>.json   可供标准启动器读取的派生版本 profile
-      orbit-launcher.toml
-      orbit-launcher.lock
+      orbit-launcher.toml    用户意图与启动设置
+      orbit-launcher.lock    精确运行时、classpath 与工件清单
       mods/ config/ saves/
       natives/               启动准备阶段从锁定 classifier JAR 重建
 
@@ -670,16 +673,17 @@ orbit-launcher
   server eula show|accept
   server run|start|stop|status|command
   java list|discover|install|select|update|remove
-  account login|list|show|select|refresh|logout
+  account login|list|show|refresh|select|logout
   cache info|verify|gc|clean
   config path|get|set|unset|list
 ```
 
-Fabric/Quilt 的官方 profile 同时是可互操作的落盘事实。安装事务必须逐字节保留已验证响应，
-写到标准 `versions/<profile-id>/<profile-id>.json` 并作为 Loader artifact 纳入 lock；不得只在
-内存中合并后丢弃。Orbit、第三方启动器和诊断工具由此可以读取标准 profile，而不需要认识
-`orbit-launcher.lock`。Forge/NeoForge 则保留官方 installer 生成的 profile/argfile，二者在
-统一 runtime 模型之上维持各自真正不同的安装规格。
+Fabric/Quilt 的官方 profile 与 Forge/NeoForge installer profile 都是远端或安装过程输入，
+不是 Orbit Launcher 的持久化实例模型。安装器先校验这些输入，在内存中归一化 main class、
+参数和 classpath；事务只保留实际启动所需的 JAR/argfile，并把精确事实写入 lock。官方
+profile 原文可以进入元数据缓存，但不会复制到实例目录，也不会成为另一条启动或探测路径。
+Forge/NeoForge installer 临时生成的客户端 profile 在提取运行时事实后立即移除；installer
+实际生成且启动需要的库或服务端 argfile 仍按 hash 进入工件清单。
 
 当前 Java 管理已实现 `java list [--verify]`、`java verify <runtime-id>` 和
 `java remove <runtime-id>`。下载与更新不另设一条旁路：实例 `install` 根据官方 Minecraft

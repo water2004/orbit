@@ -89,6 +89,7 @@ orbit-launcher account login yggdrasil \
   --provider <id> --username <login-name> [--profile <name-or-uuid>] [--password-stdin]
 orbit-launcher account list
 orbit-launcher account show [<account-id|profile-name|profile-uuid>]
+orbit-launcher account refresh <account-id|profile-name|profile-uuid>
 orbit-launcher [--instance <id|name>] account select <account> [--global]
 orbit-launcher [--instance <id|name>] account clear [--global]
 orbit-launcher account logout <account>
@@ -108,7 +109,9 @@ authlib-injector 的 API Location Indication（`X-Authlib-Injector-API-Location`
 `--allow-insecure-http` 是会暴露账号密码与 token 的明确危险选择。账户请求固定使用 API root
 下的 `authserver/authenticate`、`authserver/refresh` 与 `authserver/validate`。
 
-`accounts.json` 只保存 account ID、provider、角色 UUID/name 和时间等非秘密元数据。
+`accounts.json` schema 2 只保存 account ID、provider、角色 UUID/name、可选 HTTPS 皮肤纹理
+URL 和时间等非秘密元数据。皮肤只用于展示，URL 无效或缺失不会改变账户身份；token、密码和
+纹理内容都不进入该文件。
 Windows 的 token 由当前用户作用域 DPAPI 加密后原子落盘；Linux 桌面使用当前登录会话的
 Freedesktop Secret Service。Secret Service 不存在或被锁定时命令直接报 `secret_store`，
 不会回退到明文文件。Microsoft device code 和最终 refresh/access token 都只进入同一秘密
@@ -119,6 +122,8 @@ Microsoft 登录拆为 `begin`/`complete`，便于 CLI/GUI 跨进程恢复；`co
 Yggdrasil 密码只从安全 TTY 或显式 `--password-stdin` 读取，永不保存；保存的是 access/client
 token，启动前按 `validate -> refresh -> interaction_required` 处理。一个账号有多个角色时
 必须显式传 `--profile`。Offline 账号不产生秘密记录，也不会显示成已通过 Microsoft 验证。
+`account refresh` 显式执行同一会话续期路径，并更新公开角色名和皮肤 URL；GUI 的账户卡片
+只调用该命令，不自行请求 Microsoft 或 Yggdrasil API。
 
 `account select` 默认修改具体客户端实例的 `[launch].account`；`--global` 只修改全局缺省
 账户且不能与 `--instance` 同用。服务端实例不使用客户端账户。`logout` 删除本地秘密与元
@@ -127,7 +132,8 @@ token，启动前按 `validate -> refresh -> interaction_required` 处理。一�
 客户端 `create/install --new` 不接受任意 root：它们始终使用唯一托管 Minecraft 仓库，并把
 game directory 建为 `<minecraft-directory>/versions/<name>`。该目录是实例的可变运行目录，
 所以 `mods`、`config`、`saves` 都在版本目录内；共享 `libraries`、`assets` 和原版/Loader
-version 工件留在仓库根。服务端使用 `--server-directory`；省略时使用当前目录，方便 headless
+工件留在仓库根。这是 Launcher 采用的版本隔离策略，不是 Mojang 规定的实例描述格式；目录
+中不会生成派生 `<name>.json`。服务端使用 `--server-directory`；省略时使用当前目录，方便 headless
 部署。`instance import --directory` 必须指向现有实例的精确目录；客户端目录必须是某个
 `versions/` 的直接子目录，不接受扁平单版本目录兜底。注册表持久化规范化绝对路径，但路径
 不是实例身份。`remove` 只注销实例并保留全部文件。
@@ -169,10 +175,9 @@ Loader libraries、main class 和参数合并到同一个精确运行时模型�
 但版本选择规则不混用：Fabric 支持 `latest`、官方 `stable` 标记和精确版本；Quilt 支持
 `latest` 和精确版本。Quilt Meta 没有 Loader stable 标记，因此 `stable` 会明确报错，不按
 版本字符串猜测。缺少内联哈希的官方 Maven 条目必须取得 `.sha1` sidecar 后才进入队列。
-安装事务还会原样保存已校验的官方 Loader profile 到标准
-`versions/<profile-id>/<profile-id>.json`，把来源 URL、SHA-256 和路径写入 artifact inventory；
-不能只把合并结果留在私有 lock 中，否则其它只理解标准 Minecraft launcher profile 的工具
-无法确定实际 Loader 和完整 runtime classpath。更新 Loader 时旧 profile 由同一事务移除。
+profile 只作为经校验的解析输入，完整 runtime classpath、入口和参数进入
+`orbit-launcher.lock`；实例目录不再复制 profile 或维护第二套可启动描述。需要审计来源时，
+lock 保留 profile URL 与 SHA-256，原始响应由元数据缓存负责。
 
 Forge 与 NeoForge 从各自官方版本索引和 Maven 仓库解析精确 installer。Forge 的 `stable`
 对应官方 `recommended` promotion，`latest` 对应官方 `latest` promotion；NeoForge 的

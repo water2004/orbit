@@ -43,6 +43,16 @@ detector。
 
 ## 3. Launcher 布局与 profile 扫描
 
+由 Orbit Launcher 管理的客户端是严格适配器，不进入下述通用扫描：当实例目录同时包含
+`orbit-launcher.toml` 与 schema 5 `orbit-launcher.lock` 时，`init`/`sync` 只读取 lock 的准确
+Minecraft、Loader、classpath、工件路径与 SHA-256，并验证实际 JAR 内元数据。只存在其中
+一个文件、schema 不匹配、路径/hash/身份不一致都会直接报错，不回退到 profile、文件名或
+相邻目录猜测。正常的 add/install/audit 等命令仍只消费 `orbit.toml` 中的平台快照。
+
+Orbit Launcher 的 `<minecraft-directory>/versions/<实例>` 是它选择的隔离 game directory；
+它不是 Mojang 规定的实例 manifest 格式，也不包含派生 `<实例>.json`。通用 HMCL/官方
+Launcher 探测规则仅适用于没有 Orbit Launcher 标记的外部实例。
+
 `LauncherLayout` 将常见启动器归一化成 profile、Minecraft JAR 搜索目录、共享
 libraries 和组件列表：
 
