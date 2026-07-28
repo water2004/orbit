@@ -80,10 +80,11 @@ Mods 页以 lock 中逻辑包为单位显示环境、根/传递关系、依赖�
 
 ### 其他页面
 
-- Discover：provider 展示信息、兼容标签、作者、链接、画廊、最近版本与依赖；
+- Discover：provider 展示信息、兼容标签、作者、链接、画廊、最近版本与依赖；搜索任务在页面内明确区分尚未搜索、查询中、零结果和失败，失败不得伪装为空目录；
 - Compatibility：schema 5 readiness、coverage、warning 和按风险排序的证据摘要；
 - Accounts：先选择 Microsoft、Offline 或标准 External Yggdrasil，再进入对应登录任务；
-  主页面只展示身份卡、全局默认和当前实例选择，Yggdrasil 服务配置位于 Settings；
+  主页面只展示身份卡、全局默认和当前实例选择；External Yggdrasil 在添加账户时选择端点，
+  同一流程可新增或移除端点，Settings 不承载账户认证端点；
 - Server：EULA 完整正文及 digest 接受、启动/停止/状态/控制台命令；
 - Activity：真实阶段、动态完成量、日志、结构化错误和取消。
 

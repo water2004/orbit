@@ -215,7 +215,7 @@ impl OrbitApp {
                             tr!("Create a local profile without online authentication")
                         }
                         AccountFlow::Yggdrasil => {
-                            tr!("Sign in through a configured authentication service")
+                            tr!("Choose or add an authentication endpoint, then sign in")
                         }
                     })
                     .color(theme::muted()),
@@ -257,45 +257,18 @@ impl OrbitApp {
                         self.offline_name.clear();
                         self.account_flow = Some(AccountFlow::Offline);
                     }
-                    let ygg_available = !self.yggdrasil_providers.is_empty();
                     if login_method_card(
                         &mut columns[2],
                         "YG",
                         "Yggdrasil",
-                        if ygg_available {
-                            "Use a configured external authentication service"
-                        } else {
-                            "Configure a service in Settings first"
-                        },
-                        ygg_available,
+                        "Use a standard external authentication endpoint",
+                        true,
                     )
                     .clicked()
                     {
-                        self.ygg_provider = self
-                            .yggdrasil_providers
-                            .first()
-                            .map(|provider| provider.id.clone())
-                            .unwrap_or_default();
-                        self.account_flow = Some(AccountFlow::Yggdrasil);
+                        self.begin_yggdrasil_flow();
                     }
                 });
-                if self.yggdrasil_providers.is_empty() {
-                    ui.add_space(10.0);
-                    ui.horizontal(|ui| {
-                        ui.label(
-                            RichText::new(tr!("Need a custom Yggdrasil service?"))
-                                .color(theme::muted()),
-                        );
-                        if ui
-                            .add(theme::ghost_button("Open authentication settings"))
-                            .clicked()
-                        {
-                            self.account_flow = None;
-                            self.preferences.page = Page::Settings;
-                            self.provider_editor_open = true;
-                        }
-                    });
-                }
             }
             AccountFlow::Offline => {
                 theme::elevated_card().show(ui, |ui| {
@@ -336,25 +309,85 @@ impl OrbitApp {
             AccountFlow::Yggdrasil => {
                 theme::elevated_card().show(ui, |ui| {
                     ui.set_max_width(620.0);
-                    ui.label(RichText::new(tr!("Authentication service")).strong());
-                    ComboBox::from_id_salt("account-yggdrasil-provider")
-                        .width(440.0)
-                        .selected_text(
-                            self.yggdrasil_providers
-                                .iter()
-                                .find(|provider| provider.id == self.ygg_provider)
-                                .map(|provider| provider.id.clone())
-                                .unwrap_or_else(|| tr!("Choose a service").into_owned()),
-                        )
-                        .show_ui(ui, |ui| {
-                            for provider in &self.yggdrasil_providers {
-                                ui.selectable_value(
-                                    &mut self.ygg_provider,
-                                    provider.id.clone(),
-                                    &provider.id,
+                    ui.horizontal(|ui| {
+                        ui.vertical(|ui| {
+                            ui.label(RichText::new(tr!("Authentication endpoint")).strong());
+                            if self.yggdrasil_providers.is_empty() {
+                                ui.label(
+                                    RichText::new(tr!("No Yggdrasil endpoint is configured yet."))
+                                        .size(12.0)
+                                        .color(theme::muted()),
                                 );
+                            } else {
+                                ComboBox::from_id_salt("account-yggdrasil-provider")
+                                    .width(390.0)
+                                    .selected_text(
+                                        self.yggdrasil_providers
+                                            .iter()
+                                            .find(|provider| provider.id == self.ygg_provider)
+                                            .map(|provider| provider.id.clone())
+                                            .unwrap_or_else(|| tr!("Choose an endpoint").into_owned()),
+                                    )
+                                    .show_ui(ui, |ui| {
+                                        for provider in &self.yggdrasil_providers {
+                                            ui.selectable_value(
+                                                &mut self.ygg_provider,
+                                                provider.id.clone(),
+                                                &provider.id,
+                                            );
+                                        }
+                                    });
                             }
                         });
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            if ui.add(theme::secondary_button(tr!("Add endpoint"))).clicked() {
+                                self.open_yggdrasil_endpoint_editor();
+                            }
+                        });
+                    });
+                    if let Some(provider) = self
+                        .yggdrasil_providers
+                        .iter()
+                        .find(|provider| provider.id == self.ygg_provider)
+                        .cloned()
+                    {
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                RichText::new(&provider.api_root)
+                                    .size(12.0)
+                                    .color(theme::muted()),
+                            );
+                            info_chip(
+                                ui,
+                                if provider.allow_insecure_http {
+                                    "INSECURE HTTP"
+                                } else {
+                                    "HTTPS"
+                                },
+                                if provider.allow_insecure_http {
+                                    theme::warning()
+                                } else {
+                                    theme::success()
+                                },
+                            );
+                            if ui.add(theme::ghost_button(tr!("Remove endpoint"))).clicked() {
+                                self.confirmation = Some(Confirmation {
+                                    title: tr!(
+                                        "Remove provider %{provider}?",
+                                        provider = provider.id
+                                    ),
+                                    body: tr!("Existing account metadata remains, but its session cannot be refreshed until the service is configured again.").into_owned(),
+                                    action: ConfirmationAction::RemoveYggdrasilProvider(
+                                        provider.id,
+                                    ),
+                                });
+                            }
+                        });
+                    }
+                    if self.ygg_endpoint_editor_open {
+                        self.show_yggdrasil_endpoint_editor(ui);
+                    }
+                    ui.separator();
                     ui.add_space(8.0);
                     ui.label(RichText::new(tr!("Username")).strong());
                     ui.add_sized(
@@ -386,9 +419,13 @@ impl OrbitApp {
                             );
                         });
                     ui.add_space(10.0);
+                    let endpoint_selected = self
+                        .yggdrasil_providers
+                        .iter()
+                        .any(|provider| provider.id == self.ygg_provider);
                     if ui
                         .add_enabled(
-                            !self.ygg_provider.is_empty()
+                            endpoint_selected
                                 && !self.ygg_username.trim().is_empty()
                                 && !self.ygg_password.is_empty(),
                             theme::primary_button("Sign in"),
@@ -422,5 +459,104 @@ impl OrbitApp {
                 });
             }
         }
+    }
+
+    fn begin_yggdrasil_flow(&mut self) {
+        self.ygg_provider = self
+            .yggdrasil_providers
+            .first()
+            .map(|provider| provider.id.clone())
+            .unwrap_or_default();
+        self.ygg_endpoint_editor_open = self.yggdrasil_providers.is_empty();
+        if self.ygg_endpoint_editor_open {
+            self.reset_yggdrasil_endpoint_editor();
+        }
+        self.account_flow = Some(AccountFlow::Yggdrasil);
+    }
+
+    fn open_yggdrasil_endpoint_editor(&mut self) {
+        self.reset_yggdrasil_endpoint_editor();
+        self.ygg_endpoint_editor_open = true;
+    }
+
+    fn reset_yggdrasil_endpoint_editor(&mut self) {
+        self.ygg_new_provider_id.clear();
+        self.ygg_api_root.clear();
+        self.ygg_allow_insecure_http = false;
+    }
+
+    fn show_yggdrasil_endpoint_editor(&mut self, ui: &mut egui::Ui) {
+        ui.add_space(8.0);
+        egui::Frame::new()
+            .fill(theme::surface_high())
+            .stroke(Stroke::new(1.0, theme::border()))
+            .corner_radius(9)
+            .inner_margin(egui::Margin::same(12))
+            .show(ui, |ui| {
+                ui.label(RichText::new(tr!("New authentication endpoint")).strong());
+                ui.label(
+                    RichText::new(tr!(
+                        "The endpoint is saved globally and can be reused by other accounts."
+                    ))
+                    .size(12.0)
+                    .color(theme::muted()),
+                );
+                egui::Grid::new("account-yggdrasil-endpoint-editor")
+                    .num_columns(2)
+                    .spacing([12.0, 9.0])
+                    .show(ui, |ui| {
+                        ui.label(tr!("Endpoint name"));
+                        ui.add(
+                            TextEdit::singleline(&mut self.ygg_new_provider_id)
+                                .hint_text("my-service"),
+                        );
+                        ui.end_row();
+                        ui.label(tr!("API root"));
+                        ui.add(
+                            TextEdit::singleline(&mut self.ygg_api_root)
+                                .hint_text("https://auth.example.com/api/yggdrasil")
+                                .desired_width(390.0),
+                        );
+                        ui.end_row();
+                    });
+                ui.checkbox(
+                    &mut self.ygg_allow_insecure_http,
+                    tr!("Allow unencrypted HTTP (credentials can be intercepted)"),
+                );
+                ui.horizontal(|ui| {
+                    if ui
+                        .add_enabled(
+                            !self.ygg_new_provider_id.trim().is_empty()
+                                && !self.ygg_api_root.trim().is_empty(),
+                            theme::primary_button(tr!("Save endpoint")),
+                        )
+                        .clicked()
+                    {
+                        let provider_id = self.ygg_new_provider_id.trim().to_string();
+                        let mut command = vec![
+                            "config".into(),
+                            "yggdrasil".into(),
+                            "add".into(),
+                            provider_id.clone(),
+                            self.ygg_api_root.trim().to_string(),
+                        ];
+                        if self.ygg_allow_insecure_http {
+                            command.push("--allow-insecure-http".into());
+                        }
+                        self.ygg_provider = provider_id;
+                        self.launcher_task_args(
+                            &tr!("Saving authentication endpoint"),
+                            Intent::YggdrasilProviderMutated,
+                            None,
+                            command,
+                            None,
+                        );
+                        self.ygg_endpoint_editor_open = false;
+                    }
+                    if ui.add(theme::ghost_button(tr!("Cancel"))).clicked() {
+                        self.ygg_endpoint_editor_open = false;
+                    }
+                });
+            });
     }
 }

@@ -5,7 +5,7 @@ impl OrbitApp {
         theme::section_title(
             ui,
             &tr!("Settings"),
-            &tr!("Appearance, language, authentication services, and desktop integration"),
+            &tr!("Appearance, language, and desktop integration"),
         );
 
         theme::card().show(ui, |ui| {
@@ -63,139 +63,6 @@ impl OrbitApp {
                     self.preferences.theme_mode,
                     self.preferences.accent_theme,
                 );
-            }
-        });
-
-        ui.add_space(14.0);
-        theme::card().show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.vertical(|ui| {
-                    ui.label(RichText::new(tr!("Yggdrasil services")).size(18.0).strong());
-                    ui.label(
-                        RichText::new(tr!("Custom authentication endpoints available to the account sign-in flow."))
-                            .size(12.0)
-                            .color(theme::muted()),
-                    );
-                });
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if ui.add(theme::secondary_button(tr!("Add service"))).clicked() {
-                        self.provider_editor_open = true;
-                        self.ygg_new_provider_id.clear();
-                        self.ygg_api_root.clear();
-                        self.ygg_allow_insecure_http = false;
-                    }
-                });
-            });
-            ui.add_space(8.0);
-            if self.yggdrasil_providers.is_empty() && !self.provider_editor_open {
-                ui.label(
-                    RichText::new(tr!("No custom service configured"))
-                        .color(theme::muted()),
-                );
-            }
-            for provider in self.yggdrasil_providers.clone() {
-                ui.horizontal(|ui| {
-                    version_badge(ui, "YG", 38.0);
-                    ui.vertical(|ui| {
-                        ui.label(RichText::new(&provider.id).strong());
-                        ui.label(
-                            RichText::new(&provider.api_root)
-                                .size(12.0)
-                                .color(theme::muted()),
-                        );
-                    });
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if ui.add(theme::ghost_button(tr!("Remove"))).clicked() {
-                            self.confirmation = Some(Confirmation {
-                                title: tr!("Remove provider %{provider}?", provider = provider.id),
-                                body: tr!("Existing account metadata remains, but its session cannot be refreshed until the service is configured again.").into_owned(),
-                                action: ConfirmationAction::RemoveYggdrasilProvider(
-                                    provider.id.clone(),
-                                ),
-                            });
-                        }
-                        let transport = if provider.allow_insecure_http {
-                            tr!("INSECURE HTTP").into_owned()
-                        } else {
-                            "HTTPS".to_string()
-                        };
-                        info_chip(
-                            ui,
-                            &transport,
-                            if provider.allow_insecure_http {
-                                theme::warning()
-                            } else {
-                                theme::success()
-                            },
-                        );
-                    });
-                });
-                ui.separator();
-            }
-            if self.provider_editor_open {
-                ui.add_space(6.0);
-                egui::Frame::new()
-                    .fill(theme::surface_high())
-                    .stroke(Stroke::new(1.0, theme::border()))
-                    .corner_radius(9)
-                    .inner_margin(egui::Margin::same(12))
-                    .show(ui, |ui| {
-                        ui.label(RichText::new(tr!("New authentication service")).strong());
-                        egui::Grid::new("provider-editor")
-                            .num_columns(2)
-                            .spacing([12.0, 9.0])
-                            .show(ui, |ui| {
-                                ui.label(tr!("Name"));
-                                ui.add(
-                                    TextEdit::singleline(&mut self.ygg_new_provider_id)
-                                        .hint_text("my-service"),
-                                );
-                                ui.end_row();
-                                ui.label(tr!("API root"));
-                                ui.add(
-                                    TextEdit::singleline(&mut self.ygg_api_root)
-                                        .hint_text("https://auth.example.com/api/yggdrasil")
-                                        .desired_width(420.0),
-                                );
-                                ui.end_row();
-                            });
-                        ui.checkbox(
-                            &mut self.ygg_allow_insecure_http,
-                            tr!("Allow unencrypted HTTP (credentials can be intercepted)"),
-                        );
-                        ui.horizontal(|ui| {
-                            if ui
-                                .add_enabled(
-                                    !self.ygg_new_provider_id.trim().is_empty()
-                                        && !self.ygg_api_root.trim().is_empty(),
-                                    theme::primary_button(tr!("Save service")),
-                                )
-                                .clicked()
-                            {
-                                let mut command = vec![
-                                    "config".into(),
-                                    "yggdrasil".into(),
-                                    "add".into(),
-                                    self.ygg_new_provider_id.trim().to_string(),
-                                    self.ygg_api_root.trim().to_string(),
-                                ];
-                                if self.ygg_allow_insecure_http {
-                                    command.push("--allow-insecure-http".into());
-                                }
-                                self.launcher_task_args(
-                                    &tr!("Saving authentication service"),
-                                    Intent::YggdrasilProviderMutated,
-                                    None,
-                                    command,
-                                    None,
-                                );
-                                self.provider_editor_open = false;
-                            }
-                            if ui.add(theme::ghost_button(tr!("Cancel"))).clicked() {
-                                self.provider_editor_open = false;
-                            }
-                        });
-                    });
             }
         });
 

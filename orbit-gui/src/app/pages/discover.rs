@@ -24,9 +24,18 @@ impl OrbitApp {
                     .hint_text(tr!("Search by name or project"))
                     .desired_width(420.0),
             );
-            if (ui.add(theme::primary_button("Search")).clicked()
+            if response.changed() {
+                self.search_results.clear();
+                self.search_truncated = false;
+                self.search_state = SearchState::Idle;
+            }
+            let running = matches!(self.search_state, SearchState::Running);
+            if (ui
+                .add_enabled(!running, theme::primary_button("Search"))
+                .clicked()
                 || response.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter)))
                 && !self.search_query.trim().is_empty()
+                && !running
             {
                 self.search_catalog();
             }
@@ -49,7 +58,8 @@ impl OrbitApp {
                                     .corner_radius(10),
                             );
                         } else {
-                            let (rect, _) = ui.allocate_exact_size(Vec2::splat(58.0), Sense::hover());
+                            let (rect, _) =
+                                ui.allocate_exact_size(Vec2::splat(58.0), Sense::hover());
                             ui.painter().rect_filled(rect, 10, theme::accent_soft());
                             ui.painter().text(
                                 rect.center(),
@@ -96,18 +106,18 @@ impl OrbitApp {
                                             tr!("Other MC version")
                                         })
                                         .size(11.0)
-                                        .color(if compatible {
-                                            theme::success()
-                                        } else {
-                                            theme::warning()
-                                        }),
+                                        .color(
+                                            if compatible {
+                                                theme::success()
+                                            } else {
+                                                theme::warning()
+                                            },
+                                        ),
                                     );
                                 }
                                 for category in result.categories.iter().take(3) {
                                     ui.label(
-                                        RichText::new(category)
-                                            .size(11.0)
-                                            .color(theme::muted()),
+                                        RichText::new(category).size(11.0).color(theme::muted()),
                                     );
                                 }
                                 if let Some(mc) = result.mc_versions.first() {
@@ -142,7 +152,24 @@ impl OrbitApp {
                 ui.add_space(8.0);
             }
             if self.search_results.is_empty() {
-                empty_state(ui, "Search the catalog", "Project icons and compatibility data come from the existing Orbit JSON response.");
+                match &self.search_state {
+                    SearchState::Idle => empty_state(
+                        ui,
+                        "Search the catalog",
+                        "Results are filtered by the selected Minecraft installation.",
+                    ),
+                    SearchState::Running => empty_state(
+                        ui,
+                        "Searching the catalog…",
+                        "Orbit is querying every catalog configured for this installation.",
+                    ),
+                    SearchState::Completed => empty_state(
+                        ui,
+                        "No matching mods",
+                        "Try another query or check the selected Minecraft and loader filters.",
+                    ),
+                    SearchState::Failed(message) => empty_state(ui, "Search failed", message),
+                }
             }
         });
     }

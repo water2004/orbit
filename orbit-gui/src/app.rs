@@ -51,6 +51,15 @@ enum AccountFlow {
     Yggdrasil,
 }
 
+#[derive(Debug, Clone, Default)]
+enum SearchState {
+    #[default]
+    Idle,
+    Running,
+    Completed,
+    Failed(String),
+}
+
 #[derive(Debug, Clone)]
 struct Confirmation {
     title: String,
@@ -114,6 +123,7 @@ pub struct OrbitApp {
     search_query: String,
     search_results: Vec<SearchResult>,
     search_truncated: bool,
+    search_state: SearchState,
     project_info: Option<ProjectInfo>,
     package_editor: Option<PackageEditor>,
     outdated: Vec<OutdatedPackage>,
@@ -153,7 +163,7 @@ pub struct OrbitApp {
     server_command: String,
     runtime_flow: Option<RuntimeFlow>,
     account_flow: Option<AccountFlow>,
-    provider_editor_open: bool,
+    ygg_endpoint_editor_open: bool,
 }
 
 impl OrbitApp {
@@ -193,6 +203,7 @@ impl OrbitApp {
             search_query: String::new(),
             search_results: Vec::new(),
             search_truncated: false,
+            search_state: SearchState::Idle,
             project_info: None,
             package_editor: None,
             outdated: Vec::new(),
@@ -232,7 +243,7 @@ impl OrbitApp {
             server_command: String::new(),
             runtime_flow: None,
             account_flow: None,
-            provider_editor_open: false,
+            ygg_endpoint_editor_open: false,
         };
         app.refresh_registries();
         app
@@ -530,6 +541,10 @@ impl OrbitApp {
                     }
                 }
                 BridgeEvent::SpawnFailed { task_id, message } => {
+                    let intent = self.intents.remove(&task_id).unwrap_or(Intent::Generic);
+                    if matches!(intent, Intent::Search) {
+                        self.search_state = SearchState::Failed(message.clone());
+                    }
                     if let Some(task) = self.tasks.get_mut(&task_id) {
                         task.state = TaskState::Failed;
                         task.status_line = message.clone();
@@ -561,6 +576,9 @@ impl OrbitApp {
                     match result {
                         Ok(envelope) => {
                             if let Err(error) = self.apply_result(&intent, envelope.result) {
+                                if matches!(intent, Intent::Search) {
+                                    self.search_state = SearchState::Failed(error.to_string());
+                                }
                                 if let Some(task) = self.tasks.get_mut(&task_id) {
                                     task.state = TaskState::Failed;
                                     task.status_line = error.to_string();
@@ -596,6 +614,14 @@ impl OrbitApp {
                             }
                         }
                         Err(error) => {
+                            if matches!(intent, Intent::Search) {
+                                let message = self
+                                    .tasks
+                                    .get(&task_id)
+                                    .and_then(|task| task.error_message.clone())
+                                    .unwrap_or_else(|| error.to_string());
+                                self.search_state = SearchState::Failed(message);
+                            }
                             if let Some(task) = self.tasks.get_mut(&task_id) {
                                 task.state = if cancelled || task.state == TaskState::Cancelled {
                                     TaskState::Cancelled
@@ -707,6 +733,7 @@ impl OrbitApp {
                 let response: SearchResults = decode(result)?;
                 self.search_results = response.results;
                 self.search_truncated = response.truncated;
+                self.search_state = SearchState::Completed;
             }
             Intent::ProjectInfo => self.project_info = Some(decode(result)?),
             Intent::Outdated => {
@@ -1212,6 +1239,9 @@ impl OrbitApp {
     }
 
     fn search_catalog(&mut self) {
+        self.search_results.clear();
+        self.search_truncated = false;
+        self.search_state = SearchState::Running;
         let mut command = vec!["search".into(), self.search_query.trim().into()];
         if let Some(detail) = &self.instance_detail {
             command.extend(["--mc-version".into(), detail.desired.minecraft.clone()]);
