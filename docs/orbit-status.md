@@ -30,7 +30,7 @@
 | Windows MSI | ✅ | x64 per-machine 向导、可选系统 PATH、同版本重建升级、维护模式、可选清理默认 AppData；发布产物仍需项目证书签名 |
 | Linux deb / Release | ✅ | amd64 deb 安装到 `/usr/bin`；仅 main 中版本匹配的 `v*` tag 触发 MSI+deb、SHA256SUMS、分类 release notes 与 GitHub Release |
 | 长事务进度 | ✅ | 包操作与 audit 均使用 core 强类型事件；候选/审计工件精确计数，求解工作总量随实际 run/probe 动态增长 |
-| JSON / 自动化输出 | ✅ | 全局 `--format text\|json` 与 `--progress-format none\|ndjson`；JSON 信封 + NDJSON 进度 + 结构化错误 JSON + 稳定错误码；view-model 层隔离哈希/文件名/密钥 |
+| JSON / 自动化输出 | ✅ | 全局 `--format text\|json` 与 `--progress-format none\|ndjson`；JSON 信封 + NDJSON 进度 + 结构化错误 JSON + 稳定错误码；view-model 层隔离哈希/文件名/密钥，并在现有 search/info 契约提供官方 icon/link/gallery 展示数据 |
 | 全局配置命令 | ✅ | `config path/list/get/set/unset`；强类型校验、单字段原子更新、注释保留、密钥脱敏、环境覆盖不回写 |
 | 根包环境过滤 | ✅ | TOML `env` 可选；缺失时跟随 lock/JAR 声明；`orbit env ... auto` 可设置覆盖或恢复自动 |
 | Loader JSON 容错 | ✅ | Fabric-compatible 字符串控制字符；仅限 JAR 内 loader/Mixin/refmap，其他 JSON 保持严格 |

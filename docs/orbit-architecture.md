@@ -30,6 +30,12 @@ wrapper 输出适配成统一的 `RemoteArtifact` / 查询模型。
 `providers/download.rs` 是所有平台共用的 artifact transport；provider 只配置自己的
 运行时认证策略，不会复制安装器或 resolver。
 
+查询模型还统一携带 provider 官方返回的 icon、RGB accent、project links 与 gallery，
+供 CLI JSON/原生 GUI 展示。它们与 `RemoteArtifact` 严格分离：展示 URL 不得成为包身份、
+远端 locator、候选版本或下载可信依据。Modrinth adapter 映射 project/search 字段；
+CurseForge wrapper 先按官方 Core API 的 `ModLinks` / `ModAsset` DTO 解析，再由 core
+adapter 映射，CLI/GUI 不直接理解 provider 专属响应。
+
 ## 2. core 分层
 
 ```text

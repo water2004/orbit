@@ -330,9 +330,10 @@ orbit list [--tree] [--target client|server|both]
 
 - `search` 合并已配置 provider 的结果并应用可选的 Minecraft/loader 过滤；结果由统一
   展示层渲染为自适应表格，按 slug/名称、平台、下载量和最新 MC 版本分列，参考 MC 版本
-  存在时附加 `✓` 兼容列；
+  存在时附加 `✓` 兼容列；同一现有 JSON 结果还返回最新展示版本、side、categories、
+  provider 官方 icon URL 与 RGB accent，原生界面无需调用另一套查询接口；
 - `info` 按 provider 顺序查询详情；`mr:` / `cf:` 前缀可显式选择来源；字段渲染为自适应
-  表格，内嵌 recent versions 子表；
+  表格，内嵌 recent versions 子表；JSON 同时返回 provider 官方 project links 与 gallery；
 - `list` 从 lockfile 展示版本、全部 remotes、manifest env/optional；`--tree` 展示依赖，
   `--target` 过滤根并保留传递闭包。非树形模式输出统一表格，bundled 模块进入 Notes 列。
 

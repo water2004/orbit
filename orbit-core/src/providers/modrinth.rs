@@ -6,7 +6,8 @@ use std::collections::HashMap;
 use super::rate_limiter::RateLimiter;
 use super::{
     ArtifactDownloadClient, ArtifactFingerprint, CatalogDependency, ModInfo, ModProvider,
-    ModrinthResolvedInfo, RemoteArtifact, RemoteProjectLocator, SearchResultItem, SideSupport,
+    ModrinthResolvedInfo, ProjectImage, RemoteArtifact, RemoteProjectLocator, SearchResultItem,
+    SideSupport,
 };
 use crate::error::OrbitError;
 
@@ -109,6 +110,12 @@ fn map_side(side: &str) -> Option<SideSupport> {
     }
 }
 
+fn map_accent_color(color: Option<i64>) -> Option<u32> {
+    color
+        .and_then(|value| u32::try_from(value).ok())
+        .filter(|value| *value <= 0x00ff_ffff)
+}
+
 fn build_facets(mc_version: Option<&str>, loader: Option<&str>) -> Option<String> {
     let mut groups: Vec<Vec<String>> = Vec::new();
     if let Some(mc) = mc_version {
@@ -180,6 +187,8 @@ impl ModProvider for ModrinthProvider {
                 client_side: map_side(&hit.client_side),
                 server_side: map_side(&hit.server_side),
                 categories: hit.categories.unwrap_or_default(),
+                icon_url: hit.icon_url,
+                accent_color: map_accent_color(hit.color),
             })
             .collect())
     }
@@ -228,6 +237,23 @@ impl ModProvider for ModrinthProvider {
             client_side: map_side(&project.client_side),
             server_side: map_side(&project.server_side),
             categories: project.categories,
+            icon_url: project.icon_url,
+            accent_color: map_accent_color(project.color),
+            website_url: Some(format!("https://modrinth.com/mod/{}", project.slug)),
+            source_url: project.source_url,
+            issues_url: project.issues_url,
+            wiki_url: project.wiki_url,
+            gallery: project
+                .gallery
+                .unwrap_or_default()
+                .into_iter()
+                .map(|image| ProjectImage {
+                    url: image.url,
+                    thumbnail_url: None,
+                    title: image.title,
+                    description: image.description,
+                })
+                .collect(),
             recent_versions: recent,
             dependencies,
         })

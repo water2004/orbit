@@ -43,7 +43,10 @@ pub async fn handle(
     }
 
     let mut results: Vec<(&str, orbit_core::providers::SearchResultItem)> = Vec::new();
-    let platforms = providers.iter().map(|p| p.name().to_string()).collect::<Vec<_>>();
+    let platforms = providers
+        .iter()
+        .map(|p| p.name().to_string())
+        .collect::<Vec<_>>();
     for provider in &providers {
         for item in provider
             .search(&query, mc_version.as_deref(), modloader.as_deref(), limit)
@@ -93,20 +96,16 @@ pub async fn handle(
         results: views,
     };
 
-    render(
-        ctx.output,
-        "search",
-        &output,
-        |view| {
-            let rows: Vec<(&str, &orbit_core::providers::SearchResultItem)> = results
-                .iter()
-                .map(|(provider, item)| (*provider, item))
-                .collect();
-            let mut table = crate::cli::output::search_results_table(&rows, view.ref_mc_version.as_deref());
-            table.push('\n');
-            table.push_str(&format!("Found {} results.", view.results.len()));
-            table
-        },
-    );
+    render(ctx.output, "search", &output, |view| {
+        let rows: Vec<(&str, &orbit_core::providers::SearchResultItem)> = results
+            .iter()
+            .map(|(provider, item)| (*provider, item))
+            .collect();
+        let mut table =
+            crate::cli::output::search_results_table(&rows, view.ref_mc_version.as_deref());
+        table.push('\n');
+        table.push_str(&format!("Found {} results.", view.results.len()));
+        table
+    });
     Ok(())
 }

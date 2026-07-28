@@ -71,8 +71,14 @@ orbit [--format text|json] [--progress-format none|ndjson] <command> ...
         "project_id": "AANobbMI",
         "platform": "modrinth",
         "description": "Rendering engine replacement",
+        "latest_version": "0.5.8",
         "downloads": 1500000,
         "mc_versions": ["1.20", "1.21"],
+        "client_side": "required",
+        "server_side": "unsupported",
+        "categories": ["optimization"],
+        "icon_url": "https://cdn.modrinth.com/data/AANobbMI/icon.png",
+        "accent_color": 1193046,
         "compatible": true
       }
     ],
@@ -104,6 +110,20 @@ orbit [--format text|json] [--progress-format none|ndjson] <command> ...
     "client_side": "required",
     "server_side": "unsupported",
     "categories": ["optimization"],
+    "icon_url": "https://cdn.modrinth.com/data/AANobbMI/icon.png",
+    "accent_color": 1193046,
+    "website_url": "https://modrinth.com/mod/sodium",
+    "source_url": "https://github.com/CaffeineMC/sodium",
+    "issues_url": "https://github.com/CaffeineMC/sodium/issues",
+    "wiki_url": null,
+    "gallery": [
+      {
+        "url": "https://cdn.modrinth.com/data/AANobbMI/images/example.png",
+        "thumbnail_url": null,
+        "title": "In game",
+        "description": null
+      }
+    ],
     "recent_versions": [
       { "version": "0.5.8", "mc_versions": ["1.21"], "loader": "fabric", "released_at": "2024-06-01T00:00:00Z" }
     ],
@@ -113,6 +133,11 @@ orbit [--format text|json] [--progress-format none|ndjson] <command> ...
   }
 }
 ```
+
+`icon_url`、链接和 `gallery` 是 provider 托管的纯展示数据，供原生 GUI 等调用方使用；
+它们不参与包身份、依赖约束、候选去重或下载校验。`accent_color` 是 `0xRRGGBB` 的十进制
+表示。CurseForge 数据严格映射 Core API 的 `logo`、`screenshots` 与 `links`，不从网页
+或文件名猜测。
 
 ### `list`
 

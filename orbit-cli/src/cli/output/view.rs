@@ -67,8 +67,14 @@ pub struct SearchResultView {
     pub project_id: String,
     pub platform: String,
     pub description: String,
+    pub latest_version: String,
     pub downloads: u64,
     pub mc_versions: Vec<String>,
+    pub client_side: String,
+    pub server_side: String,
+    pub categories: Vec<String>,
+    pub icon_url: Option<String>,
+    pub accent_color: Option<u32>,
     /// `None` when no reference MC version was supplied; `Some(bool)` otherwise.
     pub compatible: Option<bool>,
 }
@@ -91,8 +97,23 @@ pub struct InfoOutput {
     pub client_side: String,
     pub server_side: String,
     pub categories: Vec<String>,
+    pub icon_url: Option<String>,
+    pub accent_color: Option<u32>,
+    pub website_url: Option<String>,
+    pub source_url: Option<String>,
+    pub issues_url: Option<String>,
+    pub wiki_url: Option<String>,
+    pub gallery: Vec<ProjectImageView>,
     pub recent_versions: Vec<ModVersionView>,
     pub dependencies: Vec<DependencyView>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ProjectImageView {
+    pub url: String,
+    pub thumbnail_url: Option<String>,
+    pub title: Option<String>,
+    pub description: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -549,8 +570,14 @@ pub fn search_result_view(
         project_id: item.project_id.clone(),
         platform: platform.to_string(),
         description: item.description.clone(),
+        latest_version: item.latest_version.clone(),
         downloads: item.downloads,
         mc_versions: item.mc_versions.clone(),
+        client_side: side_label(item.client_side.as_ref()),
+        server_side: side_label(item.server_side.as_ref()),
+        categories: item.categories.clone(),
+        icon_url: item.icon_url.clone(),
+        accent_color: item.accent_color,
         compatible: ref_mc.map(|rmc| item.mc_versions.iter().any(|v| v == rmc)),
     }
 }
@@ -569,6 +596,22 @@ pub fn info_view(provider: &str, info: &ModInfo) -> InfoOutput {
         client_side: side_label(info.client_side.as_ref()),
         server_side: side_label(info.server_side.as_ref()),
         categories: info.categories.clone(),
+        icon_url: info.icon_url.clone(),
+        accent_color: info.accent_color,
+        website_url: info.website_url.clone(),
+        source_url: info.source_url.clone(),
+        issues_url: info.issues_url.clone(),
+        wiki_url: info.wiki_url.clone(),
+        gallery: info
+            .gallery
+            .iter()
+            .map(|image| ProjectImageView {
+                url: image.url.clone(),
+                thumbnail_url: image.thumbnail_url.clone(),
+                title: image.title.clone(),
+                description: image.description.clone(),
+            })
+            .collect(),
         recent_versions: info
             .recent_versions
             .iter()
@@ -739,10 +782,7 @@ pub fn list_view(
 
 use orbit_core::{InstallReport, RestoreReport};
 
-pub fn transaction_view(
-    report: &InstallReport,
-    dry_run: bool,
-) -> TransactionOutput {
+pub fn transaction_view(report: &InstallReport, dry_run: bool) -> TransactionOutput {
     TransactionOutput {
         dry_run,
         summary: TransactionSummary {
@@ -940,5 +980,33 @@ mod tests {
         assert_eq!(json["code"], "mod_not_found");
         assert_eq!(json["message"], "mod 'foo' not found");
         assert!(json.get("detail").is_none());
+    }
+
+    #[test]
+    fn search_json_exposes_presentation_metadata_without_artifact_identity() {
+        let item = SearchResultItem {
+            project_id: "AANobbMI".into(),
+            slug: "sodium".into(),
+            name: "Sodium".into(),
+            description: "Renderer".into(),
+            latest_version: "mc26.1-0.9.1".into(),
+            downloads: 42,
+            mc_versions: vec!["26.1".into()],
+            client_side: Some(SideSupport::Required),
+            server_side: Some(SideSupport::Unsupported),
+            categories: vec!["optimization".into()],
+            icon_url: Some("https://cdn.modrinth.com/icon.png".into()),
+            accent_color: Some(0x12_34_56),
+        };
+
+        let value =
+            serde_json::to_value(search_result_view("modrinth", &item, Some("26.1"))).unwrap();
+        assert_eq!(value["icon_url"], "https://cdn.modrinth.com/icon.png");
+        assert_eq!(value["accent_color"], 0x12_34_56);
+        assert_eq!(value["latest_version"], "mc26.1-0.9.1");
+        assert_eq!(value["client_side"], "required");
+        assert_eq!(value["server_side"], "unsupported");
+        assert!(value.get("sha512").is_none());
+        assert!(value.get("filename").is_none());
     }
 }

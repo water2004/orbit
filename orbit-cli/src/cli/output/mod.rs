@@ -406,10 +406,7 @@ fn truncate(text: &str, max: usize) -> String {
 /// `ref_mc` enables a `✓` compatibility column when the caller resolved a
 /// reference Minecraft version. Rows are grouped by provider but rendered in a
 /// single table so the output stays readable when redirected.
-pub fn search_results_table(
-    results: &[(&str, &SearchResultItem)],
-    ref_mc: Option<&str>,
-) -> String {
+pub fn search_results_table(results: &[(&str, &SearchResultItem)], ref_mc: Option<&str>) -> String {
     let mut table = if ref_mc.is_some() {
         output_table(["", "Package", "Platform", "Downloads", "MC versions"])
     } else {
@@ -424,8 +421,7 @@ pub fn search_results_table(
             .map(String::as_str)
             .collect::<Vec<_>>()
             .join(", ");
-        let name_part = if item.name.to_lowercase() != item.slug.to_lowercase().replace('-', " ")
-        {
+        let name_part = if item.name.to_lowercase() != item.slug.to_lowercase().replace('-', " ") {
             format!("{} — {}", item.slug, item.name)
         } else {
             item.slug.clone()
@@ -603,20 +599,17 @@ pub fn sync_report_table(report: &SyncReport) -> String {
 /// Render `orbit info` details as an adaptive table.
 pub fn mod_info_table(provider: &str, info: &ModInfo) -> String {
     let mut table = output_table(["Field", "Value"]);
-    table.add_row([Cell::new("name"), Cell::new(format!("{} ({provider})", info.name))]);
+    table.add_row([
+        Cell::new("name"),
+        Cell::new(format!("{} ({provider})", info.name)),
+    ]);
     table.add_row([Cell::new("id"), Cell::new(&info.project_id)]);
     table.add_row([Cell::new("slug"), Cell::new(&info.slug)]);
-    table.add_row([
-        Cell::new("description"),
-        Cell::new(&info.description),
-    ]);
+    table.add_row([Cell::new("description"), Cell::new(&info.description)]);
     if !info.authors.is_empty() {
         table.add_row([Cell::new("authors"), Cell::new(info.authors.join(", "))]);
     }
-    table.add_row([
-        Cell::new("latest version"),
-        Cell::new(&info.latest_version),
-    ]);
+    table.add_row([Cell::new("latest version"), Cell::new(&info.latest_version)]);
     table.add_row([
         Cell::new("client side"),
         Cell::new(side_label(info.client_side.as_ref())),
@@ -631,7 +624,10 @@ pub fn mod_info_table(provider: &str, info: &ModInfo) -> String {
     ]);
     table.add_row([Cell::new("downloads"), Cell::new(info.downloads)]);
     if !info.categories.is_empty() {
-        table.add_row([Cell::new("categories"), Cell::new(info.categories.join(", "))]);
+        table.add_row([
+            Cell::new("categories"),
+            Cell::new(info.categories.join(", ")),
+        ]);
     }
     if !info.recent_versions.is_empty() {
         let mut versions = Table::new();
@@ -647,7 +643,10 @@ pub fn mod_info_table(provider: &str, info: &ModInfo) -> String {
                 Cell::new(&version.released_at),
             ]);
         }
-        table.add_row([Cell::new("recent versions"), Cell::new(versions.to_string())]);
+        table.add_row([
+            Cell::new("recent versions"),
+            Cell::new(versions.to_string()),
+        ]);
     }
     let deps = if info.dependencies.is_empty() {
         "(none)".to_string()
@@ -660,7 +659,11 @@ pub fn mod_info_table(provider: &str, info: &ModInfo) -> String {
                     .as_deref()
                     .or(dependency.project_id.as_deref())
                     .unwrap_or("unknown");
-                let kind = if dependency.required { "required" } else { "optional" };
+                let kind = if dependency.required {
+                    "required"
+                } else {
+                    "optional"
+                };
                 format!("{name} ({kind})")
             })
             .collect::<Vec<_>>()
@@ -825,7 +828,12 @@ mod tests {
         assert!(!message.contains("up to date"));
     }
 
-    fn search_item(slug: &str, name: &str, downloads: u64, mc_versions: &[&str]) -> SearchResultItem {
+    fn search_item(
+        slug: &str,
+        name: &str,
+        downloads: u64,
+        mc_versions: &[&str],
+    ) -> SearchResultItem {
         SearchResultItem {
             project_id: format!("id-{slug}"),
             slug: slug.to_string(),
@@ -837,6 +845,8 @@ mod tests {
             client_side: None,
             server_side: None,
             categories: Vec::new(),
+            icon_url: None,
+            accent_color: None,
         }
     }
 
@@ -999,6 +1009,13 @@ mod tests {
             client_side: Some(SideSupport::Required),
             server_side: Some(SideSupport::Unsupported),
             categories: vec!["optimization".to_string()],
+            icon_url: None,
+            accent_color: None,
+            website_url: None,
+            source_url: None,
+            issues_url: None,
+            wiki_url: None,
+            gallery: Vec::new(),
             recent_versions: Vec::new(),
             dependencies: Vec::new(),
         };

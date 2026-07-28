@@ -388,17 +388,7 @@ impl CommandHandler for Commands {
                 mod_filter,
                 report,
                 limit,
-            } => {
-                handle_audit(
-                    min_risk,
-                    fail_on_risk,
-                    mod_filter,
-                    report,
-                    limit,
-                    ctx,
-                )
-                .await
-            }
+            } => handle_audit(min_risk, fail_on_risk, mod_filter, report, limit, ctx).await,
             Commands::Cache { command } => command.execute(ctx).await,
             Commands::Config { command } => handle_config(command, ctx).await,
             Commands::Remote { command } => handle_remote(command, ctx).await,
@@ -542,14 +532,8 @@ mod tests {
 
     #[test]
     fn config_set_accepts_canonical_typed_key_syntax() {
-        let cli = Cli::try_parse_from([
-            "orbit",
-            "config",
-            "set",
-            "cache.capacity-mib",
-            "2048",
-        ])
-        .unwrap();
+        let cli =
+            Cli::try_parse_from(["orbit", "config", "set", "cache.capacity-mib", "2048"]).unwrap();
         let Commands::Config {
             command: ConfigCommands::Set { key, value },
         } = cli.command

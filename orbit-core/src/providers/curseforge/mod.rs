@@ -9,7 +9,8 @@ use tokio::sync::OnceCell;
 use super::rate_limiter::RateLimiter;
 use super::{
     ArtifactDownloadClient, ArtifactFingerprint, CatalogDependency, CurseForgeResolvedInfo,
-    ModInfo, ModProvider, ModVersionInfo, RemoteArtifact, RemoteProjectLocator, SearchResultItem,
+    ModInfo, ModProvider, ModVersionInfo, ProjectImage, RemoteArtifact, RemoteProjectLocator,
+    SearchResultItem,
 };
 use crate::error::OrbitError;
 
@@ -403,6 +404,8 @@ impl ModProvider for CurseForgeProvider {
                         .into_iter()
                         .map(|category| category.name)
                         .collect(),
+                    icon_url: project.logo.map(|logo| logo.thumbnail_url),
+                    accent_color: None,
                 });
                 if results.len() == limit {
                     break;
@@ -430,6 +433,7 @@ impl ModProvider for CurseForgeProvider {
             .map(|file| file.dependencies.clone())
             .unwrap_or_default();
         let dependency_projects = self.dependency_slugs(&files).await?;
+        let links = project.links.clone();
         Ok(ModInfo {
             project_id: project.id.to_string(),
             slug: project.slug,
@@ -452,6 +456,22 @@ impl ModProvider for CurseForgeProvider {
                 .categories
                 .into_iter()
                 .map(|category| category.name)
+                .collect(),
+            icon_url: project.logo.map(|logo| logo.thumbnail_url),
+            accent_color: None,
+            website_url: links.as_ref().and_then(|value| value.website_url.clone()),
+            source_url: links.as_ref().and_then(|value| value.source_url.clone()),
+            issues_url: links.as_ref().and_then(|value| value.issues_url.clone()),
+            wiki_url: links.as_ref().and_then(|value| value.wiki_url.clone()),
+            gallery: project
+                .screenshots
+                .into_iter()
+                .map(|image| ProjectImage {
+                    url: image.url,
+                    thumbnail_url: Some(image.thumbnail_url),
+                    title: (!image.title.is_empty()).then_some(image.title),
+                    description: (!image.description.is_empty()).then_some(image.description),
+                })
                 .collect(),
             recent_versions: files
                 .iter()

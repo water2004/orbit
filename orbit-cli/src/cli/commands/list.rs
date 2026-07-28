@@ -132,9 +132,14 @@ fn collect_tree(
         let connector = if last { "  +-- " } else { "  |-- " };
         let child_prefix = format!("{prefix}{}", if last { "      " } else { "  |   " });
         if let Some(child) = index.get(dep_name) {
-            let line = format!("{prefix}{connector}{} v{} ({}, {}{})",
-                child.mod_id, child.version, child.remotes.join(", "), child.environment,
-                if child.optional { ", optional" } else { "" });
+            let line = format!(
+                "{prefix}{connector}{} v{} ({}, {}{})",
+                child.mod_id,
+                child.version,
+                child.remotes.join(", "),
+                child.environment,
+                if child.optional { ", optional" } else { "" }
+            );
             lines.push(line);
             collect_tree(child, &child_prefix, last, index, visited, lines);
         }

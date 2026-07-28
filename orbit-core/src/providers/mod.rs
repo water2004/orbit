@@ -276,6 +276,20 @@ pub struct SearchResultItem {
     pub client_side: Option<SideSupport>,
     pub server_side: Option<SideSupport>,
     pub categories: Vec<String>,
+    /// Provider-hosted project icon used only for presentation. It never
+    /// participates in artifact identity or dependency resolution.
+    pub icon_url: Option<String>,
+    /// Provider-generated RGB accent color (`0xRRGGBB`).
+    pub accent_color: Option<u32>,
+}
+
+/// Provider-hosted project image used by presentation clients.
+#[derive(Debug, Clone)]
+pub struct ProjectImage {
+    pub url: String,
+    pub thumbnail_url: Option<String>,
+    pub title: Option<String>,
+    pub description: Option<String>,
 }
 
 /// orbit info 命令的完整输出结构
@@ -292,6 +306,13 @@ pub struct ModInfo {
     pub client_side: Option<SideSupport>,
     pub server_side: Option<SideSupport>,
     pub categories: Vec<String>,
+    pub icon_url: Option<String>,
+    pub accent_color: Option<u32>,
+    pub website_url: Option<String>,
+    pub source_url: Option<String>,
+    pub issues_url: Option<String>,
+    pub wiki_url: Option<String>,
+    pub gallery: Vec<ProjectImage>,
     pub recent_versions: Vec<ModVersionInfo>,
     pub dependencies: Vec<CatalogDependency>,
 }

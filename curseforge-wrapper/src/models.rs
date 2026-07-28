@@ -49,10 +49,43 @@ pub struct Mod {
     #[serde(default)]
     pub authors: Vec<ModAuthor>,
     #[serde(default)]
+    pub links: Option<ModLinks>,
+    #[serde(default)]
+    pub logo: Option<ModAsset>,
+    #[serde(default)]
+    pub screenshots: Vec<ModAsset>,
+    #[serde(default)]
     pub latest_files: Vec<File>,
     #[serde(default)]
     pub latest_files_indexes: Vec<FileIndex>,
     pub is_available: bool,
+}
+
+/// Relevant project links exposed by the CurseForge Core API.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModLinks {
+    #[serde(default)]
+    pub website_url: Option<String>,
+    #[serde(default)]
+    pub wiki_url: Option<String>,
+    #[serde(default)]
+    pub issues_url: Option<String>,
+    #[serde(default)]
+    pub source_url: Option<String>,
+}
+
+/// A CurseForge project image. The same official shape is used for the logo
+/// and screenshot list.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModAsset {
+    pub id: u32,
+    pub mod_id: u32,
+    pub title: String,
+    pub description: String,
+    pub thumbnail_url: String,
+    pub url: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -229,5 +262,59 @@ mod tests {
         .unwrap();
 
         assert_eq!(file.sha1(), "sha1");
+    }
+
+    #[test]
+    fn project_presentation_assets_follow_the_official_core_api_shape() {
+        let project: Mod = serde_json::from_str(
+            r#"{
+                "id": 42,
+                "name": "Example",
+                "slug": "example",
+                "summary": "Example mod",
+                "downloadCount": 7,
+                "categories": [],
+                "authors": [],
+                "links": {
+                    "websiteUrl": "https://example.invalid/project",
+                    "wikiUrl": null,
+                    "issuesUrl": "https://example.invalid/issues",
+                    "sourceUrl": "https://example.invalid/source"
+                },
+                "logo": {
+                    "id": 1,
+                    "modId": 42,
+                    "title": "Logo",
+                    "description": "",
+                    "thumbnailUrl": "https://example.invalid/logo-small.png",
+                    "url": "https://example.invalid/logo.png"
+                },
+                "screenshots": [{
+                    "id": 2,
+                    "modId": 42,
+                    "title": "World",
+                    "description": "In game",
+                    "thumbnailUrl": "https://example.invalid/world-small.png",
+                    "url": "https://example.invalid/world.png"
+                }],
+                "latestFiles": [],
+                "latestFilesIndexes": [],
+                "isAvailable": true
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            project
+                .logo
+                .as_ref()
+                .map(|asset| asset.thumbnail_url.as_str()),
+            Some("https://example.invalid/logo-small.png")
+        );
+        assert_eq!(project.screenshots.len(), 1);
+        assert_eq!(
+            project.links.and_then(|links| links.source_url),
+            Some("https://example.invalid/source".to_string())
+        );
     }
 }
