@@ -27,6 +27,7 @@ pub mod platform;
 pub mod registry;
 pub mod runtime;
 pub mod secret_store;
+pub mod versions;
 
 pub use account::{
     AccountLaunchIdentity, AccountMetadata, AccountProvider, AccountRepository,
@@ -88,7 +89,8 @@ pub use lockfile::{
     LockedJavaRuntime, LockedLoader, LockedLoaderSource, LockedMinecraft, portable_relative_path,
 };
 pub use mojang::{
-    MojangClient, MojangJavaRequirement, ResolvedVanillaServer, VERSION_MANIFEST_V2_URL,
+    MinecraftVersion, MinecraftVersionCatalog, MojangClient, MojangJavaRequirement,
+    ResolvedVanillaServer, VERSION_MANIFEST_V2_URL,
 };
 pub use operations::{
     ConfigureInstanceRequest, ConfigureInstanceResult, CreateInstanceRequest, CreateInstanceResult,
@@ -102,3 +104,4 @@ pub use runtime::{
     NativeRuntimeEnvironment, RuntimeContext, RuntimeEnvironment, RuntimePathOptions, RuntimePaths,
 };
 pub use secret_store::{SecretStore, native_secret_store};
+pub use versions::{LoaderVersion, list_loader_versions};

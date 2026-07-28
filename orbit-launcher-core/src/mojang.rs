@@ -26,6 +26,22 @@ pub struct MojangJavaRequirement {
     pub major: u32,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MinecraftVersionCatalog {
+    pub latest_release: String,
+    pub latest_snapshot: String,
+    pub versions: Vec<MinecraftVersion>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MinecraftVersion {
+    pub id: String,
+    pub version_type: String,
+    pub release_time: String,
+    pub latest_release: bool,
+    pub latest_snapshot: bool,
+}
+
 #[derive(Debug, Clone)]
 pub struct MojangClient {
     client: reqwest::Client,
@@ -48,6 +64,41 @@ impl MojangClient {
 
     pub(crate) fn http_client(&self) -> &reqwest::Client {
         &self.client
+    }
+
+    pub async fn list_versions(&self) -> Result<MinecraftVersionCatalog, LauncherError> {
+        let manifest_bytes = self.fetch_metadata(VERSION_MANIFEST_V2_URL).await?;
+        let manifest = parse_version_manifest(&manifest_bytes)?;
+        Ok(version_catalog(manifest))
+    }
+
+    pub async fn resolve_java_requirement(
+        &self,
+        minecraft_requirement: &str,
+    ) -> Result<Option<MojangJavaRequirement>, LauncherError> {
+        let document = self.fetch_version_document(minecraft_requirement).await?;
+        let version: VersionJavaIdentity =
+            serde_json::from_slice(&document.bytes).map_err(|error| {
+                LauncherError::InvalidRemoteData(format!(
+                    "failed to parse Java requirement for Minecraft '{}': {error}",
+                    document.id
+                ))
+            })?;
+        version
+            .java_version
+            .map(|java| {
+                if java.component.trim().is_empty() || java.major_version == 0 {
+                    return Err(LauncherError::InvalidRemoteData(format!(
+                        "Minecraft '{}' declares an invalid Java requirement",
+                        document.id
+                    )));
+                }
+                Ok(MojangJavaRequirement {
+                    component: java.component,
+                    major: java.major_version,
+                })
+            })
+            .transpose()
     }
 
     pub async fn resolve_vanilla_server(
@@ -108,12 +159,7 @@ impl MojangClient {
     ) -> Result<MojangVersionDocument, LauncherError> {
         let manifest_bytes = self.fetch_metadata(VERSION_MANIFEST_V2_URL).await?;
         let manifest_sha256 = hex::encode(Sha256::digest(&manifest_bytes));
-        let manifest: VersionManifest =
-            serde_json::from_slice(&manifest_bytes).map_err(|error| {
-                LauncherError::InvalidRemoteData(format!(
-                    "failed to parse Mojang version manifest v2: {error}"
-                ))
-            })?;
+        let manifest = parse_version_manifest(&manifest_bytes)?;
         let version_id = manifest.resolve(requirement)?;
         let entry = manifest
             .versions
@@ -232,11 +278,19 @@ struct VersionEntry {
     version_type: String,
     url: String,
     sha1: String,
+    #[serde(rename = "releaseTime")]
+    release_time: String,
 }
 
 #[derive(Debug, Deserialize)]
 struct VersionJson {
     downloads: VersionDownloads,
+    #[serde(rename = "javaVersion")]
+    java_version: Option<JavaVersion>,
+}
+
+#[derive(Debug, Deserialize)]
+struct VersionJavaIdentity {
     #[serde(rename = "javaVersion")]
     java_version: Option<JavaVersion>,
 }
@@ -277,6 +331,46 @@ struct JavaVersion {
     component: String,
     #[serde(rename = "majorVersion")]
     major_version: u32,
+}
+
+fn parse_version_manifest(bytes: &[u8]) -> Result<VersionManifest, LauncherError> {
+    let manifest: VersionManifest = serde_json::from_slice(bytes).map_err(|error| {
+        LauncherError::InvalidRemoteData(format!(
+            "failed to parse Mojang version manifest v2: {error}"
+        ))
+    })?;
+    if manifest.latest.release.trim().is_empty()
+        || manifest.latest.snapshot.trim().is_empty()
+        || manifest.versions.iter().any(|version| {
+            version.id.trim().is_empty()
+                || version.version_type.trim().is_empty()
+                || version.release_time.trim().is_empty()
+        })
+    {
+        return Err(LauncherError::InvalidRemoteData(
+            "Mojang version manifest contains an incomplete version entry".to_string(),
+        ));
+    }
+    Ok(manifest)
+}
+
+fn version_catalog(manifest: VersionManifest) -> MinecraftVersionCatalog {
+    let versions = manifest
+        .versions
+        .into_iter()
+        .map(|version| MinecraftVersion {
+            latest_release: version.id == manifest.latest.release,
+            latest_snapshot: version.id == manifest.latest.snapshot,
+            id: version.id,
+            version_type: version.version_type,
+            release_time: version.release_time,
+        })
+        .collect();
+    MinecraftVersionCatalog {
+        latest_release: manifest.latest.release,
+        latest_snapshot: manifest.latest.snapshot,
+        versions,
+    }
 }
 
 fn validate_mojang_url(
@@ -324,8 +418,8 @@ mod tests {
             r#"{
                 "latest":{"release":"1.21.1","snapshot":"25w01a"},
                 "versions":[
-                    {"id":"1.21.1","type":"release","url":"https://piston-meta.mojang.com/a","sha1":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
-                    {"id":"25w01a","type":"snapshot","url":"https://piston-meta.mojang.com/b","sha1":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}
+                    {"id":"1.21.1","type":"release","url":"https://piston-meta.mojang.com/a","sha1":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","releaseTime":"2024-08-08T12:00:00Z"},
+                    {"id":"25w01a","type":"snapshot","url":"https://piston-meta.mojang.com/b","sha1":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","releaseTime":"2025-01-02T12:00:00Z"}
                 ]
             }"#,
         )
@@ -334,6 +428,10 @@ mod tests {
         assert_eq!(manifest.resolve("25w01a").unwrap(), "25w01a");
         assert!(manifest.resolve("latest").is_err());
         assert!(manifest.resolve("missing").is_err());
+        let catalog = version_catalog(manifest);
+        assert!(catalog.versions[0].latest_release);
+        assert!(catalog.versions[1].latest_snapshot);
+        assert_eq!(catalog.versions[0].release_time, "2024-08-08T12:00:00Z");
     }
 
     #[test]

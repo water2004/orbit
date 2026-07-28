@@ -9,6 +9,7 @@ use crate::error::LauncherError;
 use crate::instance::LoaderKind;
 use crate::lockfile::ArtifactOwner;
 use crate::maven::artifact_url;
+use crate::versions::LoaderVersion;
 
 const FABRIC_META_ROOT: &str = "https://meta.fabricmc.net/v2/versions/loader";
 const QUILT_META_ROOT: &str = "https://meta.quiltmc.org/v3/versions/loader";
@@ -32,6 +33,22 @@ pub struct ResolvedLoaderProfile {
     pub downloads: Vec<ClientDownload>,
     pub classpath: Vec<String>,
     pub minimum_java_major: Option<u32>,
+}
+
+pub(crate) async fn list_profile_loader_versions(
+    client: &reqwest::Client,
+    kind: LoaderKind,
+    minecraft_version: &str,
+) -> Result<Vec<LoaderVersion>, LauncherError> {
+    validate_path_segment(minecraft_version, "Minecraft version")?;
+    match kind {
+        LoaderKind::Fabric => list_fabric_versions(client, minecraft_version).await,
+        LoaderKind::Quilt => list_quilt_versions(client, minecraft_version).await,
+        _ => Err(LauncherError::UnsupportedRequirement(format!(
+            "Loader '{}' does not use a launcher profile adapter",
+            kind.as_str()
+        ))),
+    }
 }
 
 pub async fn resolve_loader_profile(
@@ -123,6 +140,24 @@ async fn resolve_fabric_version(
     minecraft: &str,
     requirement: &str,
 ) -> Result<(String, Option<u32>), LauncherError> {
+    let versions = list_fabric_versions(client, minecraft).await?;
+    let selected = match requirement {
+        "latest" => versions.iter().find(|entry| entry.latest),
+        "stable" => versions.iter().find(|entry| entry.stable),
+        exact => versions.iter().find(|entry| entry.version == exact),
+    }
+    .ok_or_else(|| {
+        LauncherError::UnsupportedRequirement(format!(
+            "Fabric Loader requirement '{requirement}' has no version for Minecraft {minecraft}"
+        ))
+    })?;
+    Ok((selected.version.clone(), selected.minimum_java_major))
+}
+
+async fn list_fabric_versions(
+    client: &reqwest::Client,
+    minecraft: &str,
+) -> Result<Vec<LoaderVersion>, LauncherError> {
     let url = endpoint(FABRIC_META_ROOT, &[minecraft])?;
     let bytes = fetch_bounded(client, &url, MAX_PROFILE_BYTES, "Fabric Loader versions").await?;
     let versions: Vec<FabricMetadata> = serde_json::from_slice(&bytes).map_err(|error| {
@@ -130,20 +165,17 @@ async fn resolve_fabric_version(
             "failed to parse Fabric Loader versions for Minecraft {minecraft}: {error}"
         ))
     })?;
-    let selected = match requirement {
-        "latest" => versions.first(),
-        "stable" => versions.iter().find(|entry| entry.loader.stable),
-        exact => versions.iter().find(|entry| entry.loader.version == exact),
-    }
-    .ok_or_else(|| {
-        LauncherError::UnsupportedRequirement(format!(
-            "Fabric Loader requirement '{requirement}' has no version for Minecraft {minecraft}"
-        ))
-    })?;
-    Ok((
-        selected.loader.version.clone(),
-        selected.launcher_meta.min_java_version,
-    ))
+    Ok(versions
+        .into_iter()
+        .enumerate()
+        .map(|(index, entry)| LoaderVersion {
+            version: entry.loader.version,
+            stable: entry.loader.stable,
+            recommended: false,
+            latest: index == 0,
+            minimum_java_major: entry.launcher_meta.min_java_version,
+        })
+        .collect())
 }
 
 async fn resolve_quilt_version(
@@ -157,6 +189,22 @@ async fn resolve_quilt_version(
                 .to_string(),
         ));
     }
+    let versions = list_quilt_versions(client, minecraft).await?;
+    let selected = match requirement {
+        "latest" => versions.iter().find(|entry| entry.latest),
+        exact => versions.iter().find(|entry| entry.version == exact),
+    };
+    selected.map(|entry| entry.version.clone()).ok_or_else(|| {
+        LauncherError::UnsupportedRequirement(format!(
+            "Quilt Loader requirement '{requirement}' has no version for Minecraft {minecraft}"
+        ))
+    })
+}
+
+async fn list_quilt_versions(
+    client: &reqwest::Client,
+    minecraft: &str,
+) -> Result<Vec<LoaderVersion>, LauncherError> {
     let compatible_url = endpoint(QUILT_META_ROOT, &[minecraft])?;
     let compatible_bytes = fetch_bounded(
         client,
@@ -175,32 +223,31 @@ async fn resolve_quilt_version(
         .into_iter()
         .map(|entry| entry.loader.version)
         .collect();
-    let selected = if requirement == "latest" {
-        let all_bytes = fetch_bounded(
-            client,
-            QUILT_META_ROOT,
-            MAX_PROFILE_BYTES,
-            "Quilt Loader index",
-        )
-        .await?;
-        let all: Vec<QuiltLoaderVersion> = serde_json::from_slice(&all_bytes).map_err(|error| {
-            LauncherError::InvalidRemoteData(format!(
-                "failed to parse the ordered Quilt Loader index: {error}"
-            ))
-        })?;
-        all.into_iter()
-            .map(|entry| entry.version)
-            .find(|version| compatible.contains(version))
-    } else {
-        compatible
-            .contains(requirement)
-            .then(|| requirement.to_string())
-    };
-    selected.ok_or_else(|| {
-        LauncherError::UnsupportedRequirement(format!(
-            "Quilt Loader requirement '{requirement}' has no version for Minecraft {minecraft}"
+    let all_bytes = fetch_bounded(
+        client,
+        QUILT_META_ROOT,
+        MAX_PROFILE_BYTES,
+        "Quilt Loader index",
+    )
+    .await?;
+    let all: Vec<QuiltLoaderVersion> = serde_json::from_slice(&all_bytes).map_err(|error| {
+        LauncherError::InvalidRemoteData(format!(
+            "failed to parse the ordered Quilt Loader index: {error}"
         ))
-    })
+    })?;
+    Ok(all
+        .into_iter()
+        .map(|entry| entry.version)
+        .filter(|version| compatible.contains(version))
+        .enumerate()
+        .map(|(index, version)| LoaderVersion {
+            version,
+            stable: false,
+            recommended: false,
+            latest: index == 0,
+            minimum_java_major: None,
+        })
+        .collect())
 }
 
 async fn resolve_profile_library(

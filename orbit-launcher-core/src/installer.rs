@@ -13,6 +13,7 @@ use crate::error::LauncherError;
 use crate::instance::LoaderKind;
 use crate::maven::artifact_path;
 use crate::platform::{HostPlatform, OperatingSystem};
+use crate::versions::LoaderVersion;
 
 const FORGE_METADATA_URL: &str =
     "https://files.minecraftforge.net/net/minecraftforge/forge/maven-metadata.json";
@@ -82,6 +83,22 @@ pub struct InstalledClientProfile {
     pub game_arguments: Vec<String>,
     pub jvm_arguments: Vec<String>,
     pub classpath: Vec<String>,
+}
+
+pub(crate) async fn list_installer_loader_versions(
+    client: &reqwest::Client,
+    kind: LoaderKind,
+    minecraft_version: &str,
+) -> Result<Vec<LoaderVersion>, LauncherError> {
+    validate_identifier(minecraft_version, "Minecraft version")?;
+    match kind {
+        LoaderKind::Forge => list_forge_versions(client, minecraft_version).await,
+        LoaderKind::Neoforge => list_neoforge_versions(client, minecraft_version).await,
+        _ => Err(LauncherError::UnsupportedRequirement(format!(
+            "Loader '{}' does not publish an official installer artifact",
+            kind.as_str()
+        ))),
+    }
 }
 
 pub async fn resolve_loader_installer(
@@ -520,6 +537,37 @@ async fn resolve_forge_version(
     minecraft: &str,
     requirement: &str,
 ) -> Result<String, LauncherError> {
+    let versions = list_forge_versions(client, minecraft).await?;
+    let selected = match requirement {
+        "latest" => versions.iter().find(|version| version.latest),
+        "stable" => versions.iter().find(|version| version.recommended),
+        exact => {
+            let full = if exact.starts_with(&format!("{minecraft}-")) {
+                exact.to_string()
+            } else {
+                format!("{minecraft}-{exact}")
+            };
+            versions.iter().find(|version| version.version == full)
+        }
+    };
+    selected
+        .map(|version| version.version.clone())
+        .ok_or_else(|| {
+            let channel = if requirement == "stable" {
+                "recommended promotion or exact version"
+            } else {
+                "installer"
+            };
+            LauncherError::UnsupportedRequirement(format!(
+                "Forge requirement '{requirement}' has no {channel} for Minecraft {minecraft}"
+            ))
+        })
+}
+
+async fn list_forge_versions(
+    client: &reqwest::Client,
+    minecraft: &str,
+) -> Result<Vec<LoaderVersion>, LauncherError> {
     let bytes = fetch_bounded(
         client,
         FORGE_METADATA_URL,
@@ -535,47 +583,35 @@ async fn resolve_forge_version(
             "Forge publishes no installer versions for Minecraft {minecraft}"
         ))
     })?;
-    let selected = match requirement {
-        "latest" | "stable" => {
-            let bytes = fetch_bounded(
-                client,
-                FORGE_PROMOTIONS_URL,
-                MAX_METADATA_BYTES,
-                "Forge promotions index",
-            )
-            .await?;
-            let promotions: ForgePromotions = serde_json::from_slice(&bytes).map_err(|error| {
-                LauncherError::InvalidRemoteData(format!(
-                    "failed to parse Forge promotions index: {error}"
-                ))
-            })?;
-            let channel = if requirement == "latest" {
-                "latest"
-            } else {
-                "recommended"
-            };
-            let promoted = promotions
-                .promos
-                .get(&format!("{minecraft}-{channel}"))
-                .ok_or_else(|| {
-                    LauncherError::UnsupportedRequirement(format!(
-                        "Forge has no {channel} promotion for Minecraft {minecraft}; use an exact version"
-                    ))
-                })?;
-            format!("{minecraft}-{promoted}")
-        }
-        exact if exact.starts_with(&format!("{minecraft}-")) => exact.to_string(),
-        exact => format!("{minecraft}-{exact}"),
+    let bytes = fetch_bounded(
+        client,
+        FORGE_PROMOTIONS_URL,
+        MAX_METADATA_BYTES,
+        "Forge promotions index",
+    )
+    .await?;
+    let promotions: ForgePromotions = serde_json::from_slice(&bytes).map_err(|error| {
+        LauncherError::InvalidRemoteData(format!("failed to parse Forge promotions index: {error}"))
+    })?;
+    let promoted = |channel: &str| {
+        promotions
+            .promos
+            .get(&format!("{minecraft}-{channel}"))
+            .map(|version| format!("{minecraft}-{version}"))
     };
-    compatible
+    let latest = promoted("latest");
+    let recommended = promoted("recommended");
+    Ok(compatible
         .iter()
-        .any(|candidate| candidate == &selected)
-        .then_some(selected)
-        .ok_or_else(|| {
-            LauncherError::UnsupportedRequirement(format!(
-                "Forge requirement '{requirement}' has no installer for Minecraft {minecraft}"
-            ))
+        .rev()
+        .map(|version| LoaderVersion {
+            version: version.clone(),
+            stable: recommended.as_deref() == Some(version),
+            recommended: recommended.as_deref() == Some(version),
+            latest: latest.as_deref() == Some(version),
+            minimum_java_major: None,
         })
+        .collect())
 }
 
 async fn resolve_neoforge_version(
@@ -583,6 +619,33 @@ async fn resolve_neoforge_version(
     minecraft: &str,
     requirement: &str,
 ) -> Result<(String, String), LauncherError> {
+    let versions = list_neoforge_versions(client, minecraft).await?;
+    let selected = match requirement {
+        "latest" => versions.iter().find(|version| version.latest),
+        "stable" => versions.iter().find(|version| version.stable),
+        exact => versions.iter().find(|version| version.version == exact),
+    }
+    .ok_or_else(|| {
+        LauncherError::UnsupportedRequirement(format!(
+            "NeoForge requirement '{requirement}' has no installer for Minecraft {minecraft}"
+        ))
+    })?
+    .version
+    .clone();
+    let legacy = minecraft == "1.20.1";
+    let (artifact, root) = if legacy {
+        ("forge", format!("{NEOFORGE_MAVEN_ROOT}/forge"))
+    } else {
+        ("neoforge", format!("{NEOFORGE_MAVEN_ROOT}/neoforge"))
+    };
+    let url = format!("{root}/{selected}/{artifact}-{selected}-installer.jar");
+    Ok((selected, url))
+}
+
+async fn list_neoforge_versions(
+    client: &reqwest::Client,
+    minecraft: &str,
+) -> Result<Vec<LoaderVersion>, LauncherError> {
     let legacy = minecraft == "1.20.1";
     let endpoint = if legacy {
         NEOFORGE_LEGACY_VERSIONS_URL
@@ -599,35 +662,23 @@ async fn resolve_neoforge_version(
     let index: NeoForgeVersionIndex = serde_json::from_slice(&bytes).map_err(|error| {
         LauncherError::InvalidRemoteData(format!("failed to parse NeoForge version index: {error}"))
     })?;
-    let compatible: Vec<_> = index
+    let mut compatible: Vec<_> = index
         .versions
         .into_iter()
         .filter(|version| neoforge_minecraft_version(version, legacy).as_deref() == Some(minecraft))
         .collect();
-    let selected = match requirement {
-        "latest" => compatible.last().cloned(),
-        "stable" => compatible
-            .iter()
-            .rev()
-            .find(|version| !is_prerelease(version))
-            .cloned(),
-        exact => compatible
-            .iter()
-            .find(|version| version.as_str() == exact)
-            .cloned(),
-    }
-    .ok_or_else(|| {
-        LauncherError::UnsupportedRequirement(format!(
-            "NeoForge requirement '{requirement}' has no installer for Minecraft {minecraft}"
-        ))
-    })?;
-    let (artifact, root) = if legacy {
-        ("forge", format!("{NEOFORGE_MAVEN_ROOT}/forge"))
-    } else {
-        ("neoforge", format!("{NEOFORGE_MAVEN_ROOT}/neoforge"))
-    };
-    let url = format!("{root}/{selected}/{artifact}-{selected}-installer.jar");
-    Ok((selected, url))
+    compatible.reverse();
+    Ok(compatible
+        .into_iter()
+        .enumerate()
+        .map(|(index, version)| LoaderVersion {
+            stable: !is_prerelease(&version),
+            recommended: false,
+            latest: index == 0,
+            version,
+            minimum_java_major: None,
+        })
+        .collect())
 }
 
 fn neoforge_minecraft_version(version: &str, legacy: bool) -> Option<String> {

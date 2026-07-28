@@ -637,7 +637,7 @@ Domain Socket 只存在于平台 IPC 模块，不进入安装或账户领域。
 ```text
 orbit-launcher
   instance create|import|list|show|rename|remove|default
-  versions minecraft|loader
+  versions minecraft|loader|java
   install [--new <name>] [--root <path>] [--kind <client|server>]
   update [--minecraft] [--loader] [--java]
   verify
@@ -656,6 +656,11 @@ orbit-launcher
 version JSON 解析所需 Java component，把 Mojang runtime 与游戏/Loader 一起纳入同一个安装
 事务。删除前扫描全部已注册实例 lock；仍被引用的 runtime 必须拒绝删除。`discover`、手动
 `install/select/update` 仍是规划节点，不得由 GUI 猜测或模拟。
+
+版本选择的只读面已经实现为 `versions minecraft`、`versions loader` 和 `versions java`。
+它们与安装器复用同一 Mojang/Loader 官方 metadata adapter；前端只展示并提交精确 choice，
+不维护第二份版本排序或兼容规则。实例 `show` 同时返回 desired intent 与可选的 installed lock
+摘要，更新界面必须用两者形成差异，而不能把 `stable/latest-release` 当作已安装版本。
 
 全局选项：
 

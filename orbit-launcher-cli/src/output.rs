@@ -44,6 +44,7 @@ pub struct InstanceDetailView {
     pub instance: InstanceView,
     pub context: ContextSource,
     pub desired: DesiredRuntimeView,
+    pub installed: Option<InstalledRuntimeView>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub selected_account_id: Option<String>,
 }
@@ -52,6 +53,7 @@ impl InstanceDetailView {
     pub fn new(
         entry: &RegistryEntry,
         manifest: &InstanceManifest,
+        installed: Option<&orbit_launcher_core::LauncherLock>,
         default: Option<uuid::Uuid>,
         context: ContextSource,
     ) -> Self {
@@ -64,7 +66,46 @@ impl InstanceDetailView {
                 loader_version: manifest.loader.requirement.clone(),
                 java_policy: manifest.java.policy.as_str().to_string(),
             },
+            installed: installed.map(InstalledRuntimeView::from),
             selected_account_id: manifest.launch.account.map(|account| account.to_string()),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct InstalledRuntimeView {
+    pub minecraft: String,
+    pub loader: String,
+    pub loader_version: Option<String>,
+    pub java: Option<InstalledJavaView>,
+}
+
+impl From<&orbit_launcher_core::LauncherLock> for InstalledRuntimeView {
+    fn from(lock: &orbit_launcher_core::LauncherLock) -> Self {
+        Self {
+            minecraft: lock.minecraft.version.clone(),
+            loader: lock.loader.kind.as_str().to_string(),
+            loader_version: lock.loader.version.clone(),
+            java: lock.java.as_ref().map(InstalledJavaView::from),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct InstalledJavaView {
+    pub provider: String,
+    pub version: String,
+    pub major: u32,
+    pub platform: String,
+}
+
+impl From<&orbit_launcher_core::LockedJavaRuntime> for InstalledJavaView {
+    fn from(java: &orbit_launcher_core::LockedJavaRuntime) -> Self {
+        Self {
+            provider: java.provider.clone(),
+            version: java.version.clone(),
+            major: java.major,
+            platform: java.platform.clone(),
         }
     }
 }
@@ -75,6 +116,80 @@ pub struct DesiredRuntimeView {
     pub loader: String,
     pub loader_version: Option<String>,
     pub java_policy: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct MinecraftVersionCatalogView {
+    pub latest_release: String,
+    pub latest_snapshot: String,
+    pub versions: Vec<MinecraftVersionView>,
+}
+
+impl From<orbit_launcher_core::MinecraftVersionCatalog> for MinecraftVersionCatalogView {
+    fn from(catalog: orbit_launcher_core::MinecraftVersionCatalog) -> Self {
+        Self {
+            latest_release: catalog.latest_release,
+            latest_snapshot: catalog.latest_snapshot,
+            versions: catalog.versions.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct MinecraftVersionView {
+    pub id: String,
+    pub version_type: String,
+    pub release_time: String,
+    pub latest_release: bool,
+    pub latest_snapshot: bool,
+}
+
+impl From<orbit_launcher_core::MinecraftVersion> for MinecraftVersionView {
+    fn from(version: orbit_launcher_core::MinecraftVersion) -> Self {
+        Self {
+            id: version.id,
+            version_type: version.version_type,
+            release_time: version.release_time,
+            latest_release: version.latest_release,
+            latest_snapshot: version.latest_snapshot,
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct LoaderVersionCatalogView {
+    pub loader: String,
+    pub minecraft: String,
+    pub versions: Vec<LoaderVersionView>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct LoaderVersionView {
+    pub version: String,
+    pub stable: bool,
+    pub recommended: bool,
+    pub latest: bool,
+    pub minimum_java_major: Option<u32>,
+}
+
+impl From<orbit_launcher_core::LoaderVersion> for LoaderVersionView {
+    fn from(version: orbit_launcher_core::LoaderVersion) -> Self {
+        Self {
+            version: version.version,
+            stable: version.stable,
+            recommended: version.recommended,
+            latest: version.latest,
+            minimum_java_major: version.minimum_java_major,
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct JavaRequirementView {
+    pub minecraft: String,
+    pub required: bool,
+    pub component: Option<String>,
+    pub major: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -889,7 +1004,8 @@ mod tests {
         .unwrap();
         manifest.launch.account = Some(account);
 
-        let detail = InstanceDetailView::new(&entry, &manifest, None, ContextSource::Explicit);
+        let detail =
+            InstanceDetailView::new(&entry, &manifest, None, None, ContextSource::Explicit);
         let json = serde_json::to_value(detail).unwrap();
         assert_eq!(json["selected_account_id"], account.to_string());
     }

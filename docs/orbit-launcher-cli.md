@@ -61,6 +61,11 @@ orbit-launcher instance default set <id|name>
 orbit-launcher instance default clear
 orbit-launcher instance default show
 
+orbit-launcher versions minecraft
+orbit-launcher versions loader \
+  --loader <fabric|quilt|forge|neoforge> --minecraft <exact-version>
+orbit-launcher versions java --minecraft <exact-version>
+
 orbit-launcher [--instance <id|name>] server eula show
 orbit-launcher [--instance <id|name>] server eula accept <sha256>
 orbit-launcher [--instance <id|name>] launch [--dry-run]
@@ -114,6 +119,12 @@ token，启动前按 `validate -> refresh -> interaction_required` 处理。一�
 `instance configure` 原子修改现有 `orbit-launcher.toml` 的期望运行时，不下载、不修改 lock；
 随后运行同一个 `install` 事务完成 Minecraft、loader 与 Java 更新。切换到非 Vanilla loader
 时必须同时给出 loader requirement；切换到 Vanilla 会删除 loader requirement。
+
+GUI 与其他前端不得用自由文本或安装失败重试来猜版本。`versions minecraft` 直接返回 Mojang
+version manifest v2 的完整有序目录、类型、发布时间及 latest 标记；选定精确 Minecraft 后，
+`versions loader` 返回对应官方来源声明的全部兼容 Loader 版本与 latest/stable/recommended
+标记。`versions java` 读取该 Minecraft 的官方 version JSON，返回必须自动下载的 Java
+component/major。新建、更新和修复复用这些只读目录与同一个 `configure -> install` 事务。
 
 非 Vanilla Loader 必须提供 `--loader-version`；Vanilla 禁止提供该参数。当前 `create` 只
 建立用户意图和全局注册，不下载任何内容。一次命令创建并安装将由真实安装事务入口
@@ -227,6 +238,17 @@ SHA-256 和 JAR Manifest 验证的 Authlib Injector。客户端选择 External Y
       "loader": "fabric",
       "loader_version": "stable",
       "java_policy": "auto"
+    },
+    "installed": {
+      "minecraft": "1.21.1",
+      "loader": "fabric",
+      "loader_version": "0.16.14",
+      "java": {
+        "provider": "mojang",
+        "version": "21.0.3",
+        "major": 21,
+        "platform": "windows-x64"
+      }
     }
   }
 }

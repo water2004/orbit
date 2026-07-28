@@ -113,6 +113,11 @@ fn command_name(command: &cli::Commands) -> &'static str {
             cli::AccountCommands::Clear { .. } => "account.clear",
             cli::AccountCommands::Logout { .. } => "account.logout",
         },
+        cli::Commands::Versions { command } => match command {
+            cli::VersionCommands::Minecraft => "versions.minecraft",
+            cli::VersionCommands::Loader { .. } => "versions.loader",
+            cli::VersionCommands::Java { .. } => "versions.java",
+        },
         cli::Commands::Java { command } => match command {
             cli::JavaCommands::List { .. } => "java.list",
             cli::JavaCommands::Verify { .. } => "java.verify",
@@ -155,6 +160,9 @@ fn render_success(format: OutputFormat, output: app::CommandOutput) {
             app::CommandOutput::YggdrasilProviderMutation(value) => print_json(command, value),
             app::CommandOutput::JavaRuntimeList(value) => print_json(command, value),
             app::CommandOutput::JavaRuntimeMutation(value) => print_json(command, value),
+            app::CommandOutput::MinecraftVersions(value) => print_json(command, value),
+            app::CommandOutput::LoaderVersions(value) => print_json(command, value),
+            app::CommandOutput::JavaRequirement(value) => print_json(command, value),
         },
         OutputFormat::Text => render_text(output),
     }
@@ -420,6 +428,63 @@ fn render_text(output: app::CommandOutput) {
             view.runtime.major,
             view.runtime.version
         ),
+        app::CommandOutput::MinecraftVersions(view) => {
+            println!(
+                "Minecraft versions (latest release {}, latest snapshot {}):",
+                view.latest_release, view.latest_snapshot
+            );
+            for version in view.versions {
+                let latest = if version.latest_release {
+                    " [latest release]"
+                } else if version.latest_snapshot {
+                    " [latest snapshot]"
+                } else {
+                    ""
+                };
+                println!(
+                    "{}  {}  {}{}",
+                    version.id, version.version_type, version.release_time, latest
+                );
+            }
+        }
+        app::CommandOutput::LoaderVersions(view) => {
+            println!(
+                "{} versions compatible with Minecraft {}:",
+                view.loader, view.minecraft
+            );
+            for version in view.versions {
+                let mut tags = Vec::new();
+                if version.recommended {
+                    tags.push("recommended");
+                }
+                if version.stable {
+                    tags.push("stable");
+                }
+                if version.latest {
+                    tags.push("latest");
+                }
+                let tags = if tags.is_empty() {
+                    String::new()
+                } else {
+                    format!(" [{}]", tags.join(", "))
+                };
+                let java = version
+                    .minimum_java_major
+                    .map(|major| format!(" · Java {major}+"))
+                    .unwrap_or_default();
+                println!("{}{}{}", version.version, tags, java);
+            }
+        }
+        app::CommandOutput::JavaRequirement(view) => match (view.component, view.major) {
+            (Some(component), Some(major)) => println!(
+                "Minecraft {} requires Java {} ({component}).",
+                view.minecraft, major
+            ),
+            _ => println!(
+                "Minecraft {} publishes no managed Java requirement.",
+                view.minecraft
+            ),
+        },
     }
 }
 

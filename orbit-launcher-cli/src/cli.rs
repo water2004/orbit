@@ -105,6 +105,12 @@ pub enum Commands {
         command: AccountCommands,
     },
 
+    /// Browse authoritative Minecraft, Loader, and Java runtime metadata.
+    Versions {
+        #[command(subcommand)]
+        command: VersionCommands,
+    },
+
     /// Inspect, verify, and remove managed Java runtimes.
     Java {
         #[command(subcommand)]
@@ -153,6 +159,24 @@ pub enum JavaCommands {
     Verify { runtime_id: String },
     /// Remove an unreferenced runtime; instance locks prevent unsafe removal.
     Remove { runtime_id: String },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum VersionCommands {
+    /// List Mojang Minecraft versions in official manifest order.
+    Minecraft,
+    /// List official Loader versions compatible with one exact Minecraft version.
+    Loader {
+        #[arg(long, value_enum)]
+        loader: LoaderKindArg,
+        #[arg(long)]
+        minecraft: String,
+    },
+    /// Show the authoritative Java component required by one exact Minecraft version.
+    Java {
+        #[arg(long)]
+        minecraft: String,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -554,6 +578,36 @@ mod tests {
             remove.command,
             Commands::Java {
                 command: JavaCommands::Remove { .. }
+            }
+        ));
+    }
+
+    #[test]
+    fn version_catalog_commands_require_explicit_compatibility_axes() {
+        let minecraft = Cli::try_parse_from(["orbit-launcher", "versions", "minecraft"]).unwrap();
+        assert!(matches!(
+            minecraft.command,
+            Commands::Versions {
+                command: VersionCommands::Minecraft
+            }
+        ));
+        let loader = Cli::try_parse_from([
+            "orbit-launcher",
+            "versions",
+            "loader",
+            "--loader",
+            "fabric",
+            "--minecraft",
+            "1.21.1",
+        ])
+        .unwrap();
+        assert!(matches!(
+            loader.command,
+            Commands::Versions {
+                command: VersionCommands::Loader {
+                    loader: LoaderKindArg::Fabric,
+                    ..
+                }
             }
         ));
     }

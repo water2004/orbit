@@ -24,7 +24,7 @@ use zeroize::Zeroizing;
 
 use crate::cli::{
     AccountCommands, AccountLoginCommands, Commands, ConfigCommands, DefaultCommands, EulaCommands,
-    InstanceCommands, JavaCommands, MicrosoftLoginCommands, ServerCommands,
+    InstanceCommands, JavaCommands, MicrosoftLoginCommands, ServerCommands, VersionCommands,
     YggdrasilProviderCommands,
 };
 use crate::output::{
@@ -32,8 +32,9 @@ use crate::output::{
     ConfigEntryView, ConfigListView, ConfigMutationAction, ConfigMutationView, ConfigPathView,
     DefaultView, EulaAcceptanceView, EulaDocumentView, InstallView, InstanceDetailView,
     InstanceListView, InstanceMutationAction, InstanceMutationView, InstanceView,
-    JavaRuntimeListView, JavaRuntimeMutationView, LaunchPlanView, LaunchResultView,
-    MicrosoftDeviceSessionView, RenameView, ServerControlView, ServerStartView, ServerStatusView,
+    JavaRequirementView, JavaRuntimeListView, JavaRuntimeMutationView, LaunchPlanView,
+    LaunchResultView, LoaderVersionCatalogView, MicrosoftDeviceSessionView,
+    MinecraftVersionCatalogView, RenameView, ServerControlView, ServerStartView, ServerStatusView,
     SupervisorResultView, YggdrasilProviderListView, YggdrasilProviderMutationView,
     YggdrasilProviderView,
 };
@@ -72,6 +73,9 @@ pub enum CommandOutput {
     YggdrasilProviderMutation(YggdrasilProviderMutationView),
     JavaRuntimeList(JavaRuntimeListView),
     JavaRuntimeMutation(JavaRuntimeMutationView),
+    MinecraftVersions(MinecraftVersionCatalogView),
+    LoaderVersions(LoaderVersionCatalogView),
+    JavaRequirement(JavaRequirementView),
 }
 
 impl CommandOutput {
@@ -131,6 +135,9 @@ impl CommandOutput {
                 "verified" => "java.verify",
                 _ => "java.remove",
             },
+            Self::MinecraftVersions(_) => "versions.minecraft",
+            Self::LoaderVersions(_) => "versions.loader",
+            Self::JavaRequirement(_) => "versions.java",
         }
     }
 
@@ -248,8 +255,53 @@ pub async fn execute(
             execute_account(command, instance_selector, current_dir, runtime, frontend).await
         }
         Commands::Java { command } => execute_java(command, instance_selector, runtime),
+        Commands::Versions { command } => {
+            execute_versions(command, instance_selector, runtime).await
+        }
         Commands::Supervisor => {
             execute_internal_supervisor(instance_selector, current_dir, runtime, frontend).await
+        }
+    }
+}
+
+async fn execute_versions(
+    command: VersionCommands,
+    instance_selector: Option<&str>,
+    runtime: &RuntimeContext,
+) -> Result<CommandOutput, AppError> {
+    if instance_selector.is_some() {
+        return Err(AppError::Argument(
+            "--instance is not valid for global version catalogs".to_string(),
+        ));
+    }
+    let client = runtime.config().http_client()?;
+    match command {
+        VersionCommands::Minecraft => Ok(CommandOutput::MinecraftVersions(
+            orbit_launcher_core::MojangClient::new(client)
+                .list_versions()
+                .await?
+                .into(),
+        )),
+        VersionCommands::Loader { loader, minecraft } => {
+            let loader: orbit_launcher_core::LoaderKind = loader.into();
+            let versions =
+                orbit_launcher_core::list_loader_versions(&client, loader, &minecraft).await?;
+            Ok(CommandOutput::LoaderVersions(LoaderVersionCatalogView {
+                loader: loader.as_str().to_string(),
+                minecraft,
+                versions: versions.into_iter().map(Into::into).collect(),
+            }))
+        }
+        VersionCommands::Java { minecraft } => {
+            let requirement = orbit_launcher_core::MojangClient::new(client)
+                .resolve_java_requirement(&minecraft)
+                .await?;
+            Ok(CommandOutput::JavaRequirement(JavaRequirementView {
+                minecraft,
+                required: requirement.is_some(),
+                component: requirement.as_ref().map(|value| value.component.clone()),
+                major: requirement.map(|value| value.major),
+            }))
         }
     }
 }
@@ -1162,9 +1214,11 @@ fn execute_instance(
             let registry = InstanceRegistry::load(&registry_path)?;
             let resolved =
                 resolve_instance(&registry, selector, current_dir, ContextIntent::ReadOnly)?;
+            let installed = orbit_launcher_core::LockFile::open_optional(&resolved.entry.root)?;
             Ok(CommandOutput::InstanceDetail(InstanceDetailView::new(
                 &resolved.entry,
                 &resolved.manifest,
+                installed.as_ref().map(|lock| &lock.inner),
                 registry.default_instance,
                 resolved.source,
             )))
@@ -1209,9 +1263,11 @@ fn execute_instance(
                     java_policy: java_policy.map(Into::into),
                 },
             )?;
+            let installed = orbit_launcher_core::LockFile::open_optional(&configured.entry.root)?;
             Ok(CommandOutput::InstanceConfigured(InstanceDetailView::new(
                 &configured.entry,
                 &configured.manifest,
+                installed.as_ref().map(|lock| &lock.inner),
                 registry.default_instance,
                 resolved.source,
             )))
