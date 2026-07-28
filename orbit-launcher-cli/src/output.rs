@@ -512,7 +512,7 @@ pub struct AccountView {
     pub profile_name: String,
     pub authentication_state: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub skin_url: Option<String>,
+    pub avatar_path: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub login_name: Option<String>,
     pub is_default: bool,
@@ -527,6 +527,7 @@ impl AccountView {
         account: &AccountMetadata,
         default: Option<uuid::Uuid>,
         secret_backend: &str,
+        paths: &orbit_launcher_core::runtime::RuntimePaths,
     ) -> Self {
         let provider_id = match &account.provider {
             AccountProvider::ExternalYggdrasil { provider_id } => Some(provider_id.clone()),
@@ -543,7 +544,9 @@ impl AccountView {
                 AccountAuthenticationState::ReauthenticationRequired => "reauthentication-required",
             }
             .to_string(),
-            skin_url: account.skin_url.clone(),
+            avatar_path: orbit_launcher_core::account::account_avatar_path(paths, account)
+                .filter(|path| path.is_file())
+                .map(|path| path.to_string_lossy().into_owned()),
             login_name: account.login_name.clone(),
             is_default: default == Some(account.id),
             secret_backend: secret_backend.to_string(),

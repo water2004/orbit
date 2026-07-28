@@ -34,6 +34,7 @@ anyhow.workspace = true
 thiserror.workspace = true
 indexmap.workspace = true
 tempfile.workspace = true
+image.workspace = true
 java-properties = "2.0"
 pubgrub = { git = "https://github.com/water2004/pubgrub.git", rev = "c334509daecf91611af2729b2db91af7eba6f076" }
 

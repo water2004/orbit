@@ -211,6 +211,8 @@ pub struct LanguageLoaderRequirement {
 pub struct ModFileMetadata {
     pub loader: super::LoaderKind,
     pub license: Option<String>,
+    /// Loader-declared archive entry used as the package icon.
+    pub icon: Option<String>,
     pub language_loader: Option<LanguageLoaderRequirement>,
     pub mods: Vec<ModMetadata>,
     pub embedded_jars: Vec<String>,

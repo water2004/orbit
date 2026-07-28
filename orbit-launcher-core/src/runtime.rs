@@ -100,6 +100,10 @@ impl RuntimePaths {
     pub fn auth_sessions_dir(&self) -> PathBuf {
         self.data_dir.join("auth-sessions")
     }
+
+    pub fn account_avatars_dir(&self) -> PathBuf {
+        self.cache_dir.join("account-avatars")
+    }
 }
 
 #[derive(Debug, Clone)]

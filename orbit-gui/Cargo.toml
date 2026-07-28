@@ -17,6 +17,8 @@ directories = "6.0.0"
 gpui-component = "0.5.1"
 orbit-i18n = { workspace = true }
 orbit-machine-protocol = { workspace = true }
+reqwest = { workspace = true }
+futures-util = { workspace = true }
 rfd = { version = "0.17.2", features = ["common-controls-v6"] }
 serde = { workspace = true }
 serde_json = { workspace = true }

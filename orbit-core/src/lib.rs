@@ -55,8 +55,8 @@ pub use installer::{
     InstallIntent, InstallInteraction, InstallOptions, InstallPrompt, InstallReport, InstallTarget,
     InstalledMod, ListOutput, ListedPackage, PackageSelector, RemoveReport, RemovedPackage,
     RestoreOptions, RestoreReport, install_local_file_to_instance, install_to_instance,
-    list_dependencies, list_installed, list_installed_for_target, remove_from_instance,
-    restore_instance, upgrade_all_in_instance,
+    list_dependencies, list_installed, list_installed_for_target, materialize_listed_package_icon,
+    remove_from_instance, restore_instance, upgrade_all_in_instance,
 };
 pub use jar_cache::{CachePruneSummary, CacheSummary, JarCache, clean_cache, inspect_cache};
 pub use loader::LoaderKind;

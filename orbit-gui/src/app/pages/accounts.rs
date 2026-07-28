@@ -98,7 +98,7 @@ fn dashboard(app: &OrbitApp, cx: &mut Context<OrbitApp>) -> impl IntoElement {
                     .gap_3()
                     .items_center()
                     .child(ui::account_avatar(
-                        account.skin_url.as_deref(),
+                        account.avatar_path.as_deref(),
                         initials(&account.profile_name),
                         42.,
                         cx,

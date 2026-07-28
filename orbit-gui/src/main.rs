@@ -5,6 +5,7 @@ extern crate orbit_i18n;
 
 mod app;
 mod assets;
+mod http_images;
 mod model;
 mod process;
 mod theme;
@@ -14,9 +15,13 @@ use gpui::{
     App, AppContext, Application, Bounds, TitlebarOptions, WindowBounds, WindowOptions, px, size,
 };
 use gpui_component::Root;
+use std::sync::Arc;
 
 fn main() {
     Application::new()
+        .with_http_client(Arc::new(
+            http_images::ImageHttpClient::new().expect("failed to initialize the image client"),
+        ))
         .with_assets(assets::OrbitAssets)
         .run(|cx: &mut App| {
             gpui_component::init(cx);

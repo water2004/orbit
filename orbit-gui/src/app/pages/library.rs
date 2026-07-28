@@ -159,7 +159,7 @@ pub(super) fn render(
                             .py_3()
                             .gap_3()
                             .items_center()
-                            .child(ui::icon_tile(OrbitIcon::Mods, cx))
+                            .child(ui::package_icon(package.icon_path.as_deref(), cx))
                             .child(
                                 v_flex()
                                     .min_w_0()

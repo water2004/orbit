@@ -64,6 +64,7 @@ impl MetadataParser for FabricParser {
         Ok(ModFileMetadata {
             loader: LoaderKind::Fabric,
             license: object.get("license").and_then(first_string),
+            icon: parse_icon(object.get("icon")),
             language_loader: None,
             mods: vec![ModMetadata {
                 id: id.clone(),
@@ -80,6 +81,21 @@ impl MetadataParser for FabricParser {
             embedded_jars,
             substitution_properties: Default::default(),
         })
+    }
+}
+
+fn parse_icon(value: Option<&Value>) -> Option<String> {
+    match value? {
+        Value::String(path) => (!path.trim().is_empty()).then(|| path.clone()),
+        Value::Object(paths) => paths
+            .iter()
+            .filter_map(|(size, value)| {
+                Some((size.parse::<u32>().ok()?, value.as_str()?.to_string()))
+            })
+            .filter(|(_, path)| !path.trim().is_empty())
+            .max_by_key(|(size, _)| *size)
+            .map(|(_, path)| path),
+        _ => None,
     }
 }
 
@@ -337,6 +353,14 @@ mod tests {
     fn requires_identity_fields() {
         let error = FabricParser.parse(r#"{"id":"example"}"#).unwrap_err();
         assert!(error.to_string().contains("version"));
+    }
+
+    #[test]
+    fn selects_the_largest_declared_icon() {
+        let parsed = FabricParser
+            .parse(r#"{"id":"example","version":"1","icon":{"16":"small.png","128":"large.png"}}"#)
+            .unwrap();
+        assert_eq!(parsed.icon.as_deref(), Some("large.png"));
     }
 
     #[test]

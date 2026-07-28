@@ -114,6 +114,10 @@ authlib-injector 的 API Location Indication（`X-Authlib-Injector-API-Location`
 皮肤纹理 URL 和时间等非秘密元数据。皮肤只用于展示，URL 无效或缺失不会改变账户身份；token、
 密码和纹理内容都不进入该文件。格式尚未发布，因此不保留旧 schema 迁移路径；不匹配时明确
 报错，不能伪装成空账户列表。
+账户 JSON view 不把皮肤纹理 URL 当作可直接显示的头像。Launcher 根据 Minecraft 皮肤布局
+裁取脸部 `(8,8)-(16,16)`，再叠加帽子层 `(40,8)-(48,16)`，按 64 像素逻辑宽度适配
+64×32、64×64 和等比例高清皮肤，最后返回全局派生缓存中的 `avatar_path`。GUI 只显示该
+本地路径；皮肤 URL 变化会产生新指纹路径，登出会删除对应派生头像。
 Windows 的 token 由当前用户作用域 DPAPI 加密后原子落盘；Linux 桌面使用当前登录会话的
 Freedesktop Secret Service。Secret Service 不存在或被锁定时命令直接报 `secret_store`，
 不会回退到明文文件。Microsoft device code 和最终 refresh/access token 都只进入同一秘密

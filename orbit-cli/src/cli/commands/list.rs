@@ -19,7 +19,13 @@ pub async fn handle(tree: bool, target: Option<String>, ctx: &CliContext) -> Res
         } else {
             crate::cli::output::print_json(
                 "list",
-                &list_view(&output.packages, target.as_deref(), tree, None),
+                &list_view(
+                    &output.packages,
+                    target.as_deref(),
+                    tree,
+                    None,
+                    Some(ctx.runtime.paths().cache_dir()),
+                ),
             );
         }
         return Ok(());
@@ -36,7 +42,13 @@ pub async fn handle(tree: bool, target: Option<String>, ctx: &CliContext) -> Res
                 );
             }
             OutputFormat::Json => {
-                let view = list_view(&output.packages, target.as_deref(), false, None);
+                let view = list_view(
+                    &output.packages,
+                    target.as_deref(),
+                    false,
+                    None,
+                    Some(ctx.runtime.paths().cache_dir()),
+                );
                 crate::cli::output::print_json("list", &view);
             }
         }
@@ -77,7 +89,13 @@ fn print_tree(
                 collect_tree(pkg, "", true, &index, &mut visited, &mut text_lines);
             }
         }
-        let view = list_view(&output.packages, target, true, Some(roots));
+        let view = list_view(
+            &output.packages,
+            target,
+            true,
+            Some(roots),
+            Some(ctx.runtime.paths().cache_dir()),
+        );
         crate::cli::output::print_json("list", &view);
         return Ok(());
     }

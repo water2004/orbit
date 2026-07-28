@@ -6,11 +6,11 @@ use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use orbit_launcher_core::{
-    AccountRepository, ConfigKey, ContextIntent, CreateInstanceRequest, EulaAcceptanceMethod,
-    EulaDocument, ExternalYggdrasilLoginRequest, InstallProgressEvent, InstanceKind,
-    InstanceRegistry, LaunchPreparationEvent, LaunchProcessEvent, LauncherError, ManifestFile,
-    MicrosoftLoginProgressEvent, RepositoryMoveEvent, ResolvedInstance, RuntimeContext,
-    ServerInstallPlan, SupervisorControl, SupervisorEvent, YggdrasilProviderConfig,
+    AccountMetadata, AccountRepository, ConfigKey, ContextIntent, CreateInstanceRequest,
+    EulaAcceptanceMethod, EulaDocument, ExternalYggdrasilLoginRequest, InstallProgressEvent,
+    InstanceKind, InstanceRegistry, LaunchPreparationEvent, LaunchProcessEvent, LauncherError,
+    ManifestFile, MicrosoftLoginProgressEvent, RepositoryMoveEvent, ResolvedInstance,
+    RuntimeContext, ServerInstallPlan, SupervisorControl, SupervisorEvent, YggdrasilProviderConfig,
     accept_shown_eula, add_yggdrasil_provider, apply_install_plan, begin_microsoft_device_login,
     complete_microsoft_device_login, configure_instance, create_instance, create_offline_account,
     get_config, import_instance, list_config, login_external_yggdrasil, move_minecraft_directory,
@@ -516,7 +516,12 @@ async fn execute_account(
             let repository = AccountRepository::load(runtime.paths())?;
             Ok(CommandOutput::AccountLogin(AccountLoginView {
                 method,
-                account: AccountView::new(&account, repository.default_account(), &backend),
+                account: AccountView::new(
+                    &account,
+                    repository.default_account(),
+                    &backend,
+                    runtime.paths(),
+                ),
             }))
         }
         AccountCommands::List => {
@@ -526,12 +531,20 @@ async fn execute_account(
                 ));
             }
             let repository = AccountRepository::load(runtime.paths())?;
+            let accounts = repository.accounts().to_vec();
+            ensure_account_presentations(runtime, &accounts).await;
+            let repository = AccountRepository::load(runtime.paths())?;
             Ok(CommandOutput::AccountList(AccountListView {
                 accounts: repository
                     .accounts()
                     .iter()
                     .map(|account| {
-                        AccountView::new(account, repository.default_account(), &backend)
+                        AccountView::new(
+                            account,
+                            repository.default_account(),
+                            &backend,
+                            runtime.paths(),
+                        )
                     })
                     .collect(),
             }))
@@ -546,11 +559,16 @@ async fn execute_account(
             let account = match account {
                 Some(selector) => repository.get(&selector)?,
                 None => repository.selected(None)?,
-            };
+            }
+            .clone();
+            ensure_account_presentations(runtime, std::slice::from_ref(&account)).await;
+            let repository = AccountRepository::load(runtime.paths())?;
+            let account = repository.get(&account.id.to_string())?;
             Ok(CommandOutput::AccountDetail(AccountView::new(
                 account,
                 repository.default_account(),
                 &backend,
+                runtime.paths(),
             )))
         }
         AccountCommands::Refresh { account } => {
@@ -572,11 +590,15 @@ async fn execute_account(
                 .await?,
             );
             let repository = AccountRepository::load(runtime.paths())?;
+            let account = repository.get(&account_id.to_string())?.clone();
+            ensure_account_presentations(runtime, std::slice::from_ref(&account)).await;
+            let repository = AccountRepository::load(runtime.paths())?;
             let account = repository.get(&account_id.to_string())?;
             Ok(CommandOutput::AccountRefresh(AccountView::new(
                 account,
                 repository.default_account(),
                 &backend,
+                runtime.paths(),
             )))
         }
         AccountCommands::Select { account, global } => {
@@ -595,6 +617,7 @@ async fn execute_account(
                         &selected,
                         repository.default_account(),
                         &backend,
+                        runtime.paths(),
                     )),
                 }))
             } else {
@@ -605,6 +628,7 @@ async fn execute_account(
                         &selected,
                         repository.default_account(),
                         &backend,
+                        runtime.paths(),
                     )),
                 }))
             }
@@ -637,13 +661,34 @@ async fn execute_account(
             }
             let mut repository = AccountRepository::load(runtime.paths())?;
             let account = repository.get(&account)?.clone();
-            let view = AccountView::new(&account, repository.default_account(), &backend);
+            let view = AccountView::new(
+                &account,
+                repository.default_account(),
+                &backend,
+                runtime.paths(),
+            );
             repository.remove(account.id, secrets.as_ref()).await?;
+            orbit_launcher_core::account::remove_account_avatars(runtime.paths(), account.id)?;
             Ok(CommandOutput::AccountLogout(AccountLogoutView {
                 account: view,
                 local_secret_deleted: true,
             }))
         }
+    }
+}
+
+async fn ensure_account_presentations(runtime: &RuntimeContext, accounts: &[AccountMetadata]) {
+    let Ok(client) = runtime.config().http_client() else {
+        return;
+    };
+    for account in accounts {
+        let _ = orbit_launcher_core::account::ensure_account_presentation(
+            runtime.paths(),
+            runtime.config(),
+            &client,
+            account,
+        )
+        .await;
     }
 }
 

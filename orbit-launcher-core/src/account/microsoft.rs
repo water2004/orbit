@@ -244,6 +244,7 @@ where
         &secret,
     )
     .await?;
+    let _ = super::ensure_account_avatar(paths, client, &account).await;
     cleanup_device_session(paths, secrets, session_id).await?;
     progress(MicrosoftLoginProgressEvent::SessionStored {
         account_id: account.id,
@@ -347,6 +348,7 @@ pub(super) async fn resolve_microsoft_identity(
         token_type: session.token_type,
     };
     let updated = persist_authenticated_account(paths, secrets, updated, &secret).await?;
+    let _ = super::ensure_account_avatar(paths, client, &updated).await;
     Ok(identity(&updated, access_token))
 }
 

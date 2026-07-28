@@ -367,19 +367,24 @@ fn render_minecraft_step(
                 .gap_2()
                 .child(ui::search_input(&app.inputs.minecraft_filter).flex_1())
                 .children(
-                    [tr!("All"), tr!("Release"), tr!("Snapshot")]
-                        .into_iter()
-                        .enumerate()
-                        .map(|(index, label)| {
-                            Button::new(("minecraft-kind", index))
-                                .label(label.into_owned())
-                                .ghost()
-                                .selected(app.minecraft_version_type == index)
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    this.minecraft_version_type = index;
-                                    cx.notify();
-                                }))
-                        }),
+                    [
+                        tr!("Release"),
+                        tr!("Snapshot"),
+                        tr!("Historical"),
+                        tr!("All"),
+                    ]
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, label)| {
+                        Button::new(("minecraft-kind", index))
+                            .label(label.into_owned())
+                            .ghost()
+                            .selected(app.minecraft_version_type == index)
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.minecraft_version_type = index;
+                                cx.notify();
+                            }))
+                    }),
                 ),
         )
         .child(
@@ -395,11 +400,8 @@ fn render_minecraft_step(
         .minecraft_versions
         .iter()
         .filter(|version| {
-            let type_matches = match app.minecraft_version_type {
-                1 => version.version_type == "release",
-                2 => version.version_type != "release",
-                _ => true,
-            };
+            let type_matches =
+                minecraft_version_matches_filter(&version.version_type, app.minecraft_version_type);
             type_matches && (filter.is_empty() || version.id.to_ascii_lowercase().contains(&filter))
         })
         .take(120)
@@ -473,6 +475,16 @@ fn render_minecraft_step(
         );
     }
     list.child(rows)
+}
+
+fn minecraft_version_matches_filter(version_type: &str, filter: usize) -> bool {
+    match filter {
+        0 => version_type == "release",
+        1 => version_type == "snapshot",
+        2 => matches!(version_type, "old_alpha" | "old_beta"),
+        3 => true,
+        _ => false,
+    }
 }
 
 fn render_components_step(
@@ -827,5 +839,21 @@ fn suggested_instance_name(minecraft: &str, loader: &str) -> String {
         minecraft.to_string()
     } else {
         format!("{}-{}", minecraft, title_case(loader))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::minecraft_version_matches_filter;
+
+    #[test]
+    fn minecraft_channels_are_not_conflated() {
+        assert!(minecraft_version_matches_filter("release", 0));
+        assert!(!minecraft_version_matches_filter("snapshot", 0));
+        assert!(minecraft_version_matches_filter("snapshot", 1));
+        assert!(!minecraft_version_matches_filter("old_beta", 1));
+        assert!(minecraft_version_matches_filter("old_alpha", 2));
+        assert!(minecraft_version_matches_filter("release", 3));
+        assert!(!minecraft_version_matches_filter("release", 99));
     }
 }

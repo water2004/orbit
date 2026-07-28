@@ -9,8 +9,9 @@
 界面使用 Zed Industries 的 Apache-2.0 `gpui` 与 Longbridge 的 Apache-2.0
 `gpui-component` 控件库；后者不是 Zed 官方控件集。窗口、文本、输入、滚动和动画均为原生
 GPUI 元素，不包含 WebView、浏览器或 HTML/JavaScript 运行时。滚动直接消费平台连续滚轮
-事件，触控板的惯性阶段不会被离散成固定行数。图片由原生客户端读取 CLI 返回的展示 URL；
-URL 从不参与包身份、版本或依赖判断。
+事件，触控板的惯性阶段不会被离散成固定行数。远端项目图片由原生 HTTP 图片客户端读取
+CLI 返回的展示 URL；已安装模组与账户头像只读取 CLI 返回的本地规范化图片路径。图片从不
+参与包身份、版本或依赖判断，GUI 也不打开 JAR、解析皮肤或猜测缓存位置。
 
 GUI 默认只接受与自身相邻的 `orbit(.exe)` 和 `orbit-launcher(.exe)`，也允许用户在设置页
 明确选择准确路径。它不扫描 `PATH`，不链接 core，不在 CLI 失败后改走文件直读或兼容 API。
@@ -52,7 +53,8 @@ page 猜测，也不以替换字符掩盖损坏。JSON 的字段名、枚举码�
 GUI 对 schema 严格匹配；旧 schema 直接显示 protocol error，不猜字段。Orbit 的包身份、
 Pareto 方案和写盘确认都在 CLI/core 的同一执行路径中产生，GUI 只将暂停点渲染为可读卡片。
 方案中共同动作只显示一次，`different: true` 的选项差异用 `◆` 与文字同时突出。物理 JAR
-文件名和候选哈希不作为包名或方案标题展示。
+文件名和候选哈希不作为包名或方案标题展示。交互选项卡必须使用内容自适应高度，长摘要在
+独立滚动区内滚动；标题、选项与取消按钮不能重叠。
 
 ## 交互模型
 
@@ -66,6 +68,9 @@ Runtime 页使用 Launcher 的官方只读目录，而不是自由输入后试�
 3. `versions java` 返回官方 version JSON 要求的 Java component/major；
 4. `instance show` 同时给出 desired intent 与 installed lock 摘要，界面突出当前/目标差异；
 5. 保存调用 `instance configure`，安装或更新调用同一个 `install` 事务。
+
+版本清单默认显示正式版，并将 `release`、`snapshot`、`old_alpha/old_beta` 分成正式版、
+快照、历史版本三个互斥频道；“全部”是显式选择，不能再用“非正式版”冒充快照。
 
 客户端只使用 Launcher 托管的 Minecraft 仓库，并把可变游戏目录固定为
 `<minecraft-directory>/versions/<instance-name>`；因此 `mods`、`config`、`saves` 等不会落在
@@ -93,9 +98,12 @@ Mods 页以 lock 中逻辑包为单位显示环境、根/传递关系、依赖�
 
 - Discover：展示 provider、名称、摘要和兼容标签，并提供直接添加；搜索任务在页面内明确区分
   尚未搜索、查询中、零结果和失败，失败不得伪装为空目录；
+  provider 图标 URL 由 GUI 的原生 HTTP client 加载并保留本地图标占位；版本标签只显示 CLI
+  返回的人类版本号，不解释 provider 的 opaque ID；
 - Compatibility：schema 5 readiness、coverage、warning 和按风险排序的证据摘要；
-- Accounts：侧边栏底部始终显示当前实例账户或全局默认账户，主账户页显示由 CLI 提供的皮肤
-  头像（无皮肤时使用本地首字母占位）；先选择 Microsoft、Offline 或标准 External Yggdrasil，再进入对应登录任务；
+- Accounts：侧边栏底部始终显示当前实例账户或全局默认账户，主账户页显示 Launcher 从皮肤
+  脸部底层与帽子层合成后由 CLI 提供的 `avatar_path`（无皮肤时使用本地首字母占位）；GUI
+  不把完整皮肤材质裁剪成头像；先选择 Microsoft、Offline 或标准 External Yggdrasil，再进入对应登录任务；
   主页面只展示身份卡、全局默认和当前实例选择；External Yggdrasil 在添加账户时选择端点，
   端点的选择/新增/移除是独立步骤，确认端点后才进入单独的凭据表单；Settings 不承载账户
   认证端点；新增端点接受站点地址或精确 API root，由 CLI 完成 ALI 服务发现和 metadata

@@ -178,6 +178,7 @@ pub struct JavaRequirement {
 pub struct InstalledPackage {
     pub mod_id: String,
     pub version: String,
+    pub icon_path: Option<String>,
     #[serde(default)]
     pub remotes: Vec<String>,
     pub configured_environment: Option<String>,
@@ -255,7 +256,7 @@ pub struct Account {
     pub profile_name: String,
     pub login_name: Option<String>,
     pub authentication_state: String,
-    pub skin_url: Option<String>,
+    pub avatar_path: Option<String>,
     pub is_default: bool,
 }
 

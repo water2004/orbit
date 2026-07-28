@@ -1,3 +1,4 @@
+mod avatar;
 mod microsoft;
 mod yggdrasil;
 
@@ -16,6 +17,7 @@ use crate::error::LauncherError;
 use crate::runtime::RuntimePaths;
 use crate::secret_store::SecretStore;
 
+pub use avatar::{account_avatar_path, ensure_account_avatar, remove_account_avatars};
 pub use microsoft::{
     MicrosoftDeviceSession, MicrosoftLoginProgressEvent, begin_microsoft_device_login,
     complete_microsoft_device_login,
@@ -439,6 +441,29 @@ pub async fn resolve_launch_identity(
         AccountRepository::load(paths)?.require_reauthentication(account_id)?;
     }
     result
+}
+
+/// Refresh presentation-only account metadata and materialize a display-ready
+/// avatar. Authentication state and private sessions are not changed.
+pub async fn ensure_account_presentation(
+    paths: &RuntimePaths,
+    config: &GlobalConfig,
+    client: &reqwest::Client,
+    account: &AccountMetadata,
+) -> Result<AccountMetadata, LauncherError> {
+    let mut account = account.clone();
+    if account.skin_url.is_none()
+        && let AccountProvider::ExternalYggdrasil { provider_id } = &account.provider
+    {
+        let provider = find_yggdrasil_provider(config, provider_id)?;
+        account.skin_url =
+            yggdrasil::fetch_profile_skin(client, provider, account.profile_id).await?;
+        if account.skin_url.is_some() {
+            account = AccountRepository::load(paths)?.upsert(account)?;
+        }
+    }
+    let _ = ensure_account_avatar(paths, client, &account).await?;
+    Ok(account)
 }
 
 async fn persist_authenticated_account(

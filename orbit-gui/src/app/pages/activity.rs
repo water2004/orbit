@@ -280,7 +280,9 @@ fn render_interaction(app: &OrbitApp, cx: &mut Context<OrbitApp>) -> impl IntoEl
             Button::new(("interaction-choice", index))
                 .ghost()
                 .w_full()
-                .p_3()
+                .h_auto()
+                .px_3()
+                .py_3()
                 .selected(different)
                 .child(
                     v_flex()
@@ -328,7 +330,14 @@ fn render_interaction(app: &OrbitApp, cx: &mut Context<OrbitApp>) -> impl IntoEl
                         .text_color(cx.theme().muted_foreground)
                         .child(tr!("◆ marks actions that differ between choices.").into_owned()),
                 )
-                .child(div().max_h(px(470.)).overflow_y_scrollbar().child(choices))
+                .child(
+                    div()
+                        .min_h_0()
+                        .max_h(px(430.))
+                        .overflow_y_scrollbar()
+                        .pr_1()
+                        .child(choices),
+                )
                 .when(pending.envelope.allow_cancel, |modal| {
                     modal.child(
                         h_flex().justify_end().child(

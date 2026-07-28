@@ -593,6 +593,30 @@ pub struct ListedPackage {
     pub dependencies: Vec<String>,
     /// 顶层包内容中声明的其他模组模块 (mod_id, version)
     pub bundled: Vec<(String, String)>,
+    /// Loader-declared icon source retained for machine presentation output.
+    pub icon: Option<PackageIcon>,
+}
+
+#[derive(Debug, Clone)]
+pub struct PackageIcon {
+    jar_path: PathBuf,
+    archive_entry: String,
+    sha256: String,
+}
+
+pub fn materialize_listed_package_icon(
+    package: &ListedPackage,
+    cache_root: &Path,
+) -> Result<Option<PathBuf>, OrbitError> {
+    let Some(icon) = &package.icon else {
+        return Ok(None);
+    };
+    crate::jar::materialize_mod_icon(
+        &icon.jar_path,
+        &icon.archive_entry,
+        &icon.sha256,
+        cache_root,
+    )
 }
 
 /// 读取 lockfile 中所有已安装模组供 list 命令展示。
@@ -600,7 +624,15 @@ pub fn list_installed(instance_dir: &Path) -> Result<ListOutput, OrbitError> {
     let manifest = ManifestFile::open(instance_dir)?;
     let lock = Lockfile::open(instance_dir)?;
     let roots = manifest.inner.dependencies.keys().cloned().collect();
-    Ok(list_output(&manifest.inner, &lock.inner, None, roots))
+    let loader = manifest.inner.project.loader_kind()?;
+    Ok(list_output(
+        instance_dir,
+        &manifest.inner,
+        &lock.inner,
+        loader,
+        None,
+        roots,
+    ))
 }
 
 /// Read installed packages selected for a client/server target.
@@ -635,16 +667,20 @@ pub fn list_installed_for_target(
         .cloned()
         .collect();
     Ok(list_output(
+        instance_dir,
         &manifest.inner,
         &lock.inner,
+        platform.loader,
         Some(&selected),
         roots,
     ))
 }
 
 fn list_output(
+    instance_dir: &Path,
     manifest: &OrbitManifest,
     lockfile: &OrbitLockfile,
+    loader: crate::loader::LoaderKind,
     selected: Option<&std::collections::HashSet<String>>,
     roots: Vec<String>,
 ) -> ListOutput {
@@ -654,6 +690,20 @@ fn list_output(
         .filter(|entry| selected.is_none_or(|selected| selected.contains(&entry.mod_id)))
         .map(|entry| {
             let requirement = manifest.dependencies.get(&entry.mod_id);
+            let jar_path = instance_dir.join("mods").join(&entry.filename);
+            let icon = jar_path
+                .is_file()
+                .then(|| {
+                    crate::jar::read_mod_icon_entry(&jar_path, loader)
+                        .ok()
+                        .flatten()
+                        .map(|archive_entry| PackageIcon {
+                            jar_path,
+                            archive_entry,
+                            sha256: entry.sha256.clone(),
+                        })
+                })
+                .flatten();
             ListedPackage {
                 mod_id: entry.mod_id.clone(),
                 version: entry.version.clone(),
@@ -677,6 +727,7 @@ fn list_output(
                     .map(str::to_string)
                     .collect(),
                 bundled: bundled_pairs(&entry.bundled),
+                icon,
             }
         })
         .collect();

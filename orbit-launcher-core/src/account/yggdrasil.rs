@@ -84,7 +84,7 @@ pub async fn login_external_yggdrasil(
         access_token: session.access_token,
         client_token: session.client_token,
     };
-    persist_authenticated_account(
+    let account = persist_authenticated_account(
         paths,
         secrets,
         AccountMetadata {
@@ -102,7 +102,9 @@ pub async fn login_external_yggdrasil(
         },
         &secret,
     )
-    .await
+    .await?;
+    let _ = super::ensure_account_avatar(paths, client, &account).await;
+    Ok(account)
 }
 
 pub(super) async fn resolve_yggdrasil_identity(
@@ -161,6 +163,7 @@ pub(super) async fn resolve_yggdrasil_identity(
         client_token: refreshed.client_token,
     };
     let updated = persist_authenticated_account(paths, secrets, updated, &secret).await?;
+    let _ = super::ensure_account_avatar(paths, client, &updated).await;
     Ok(identity(
         &updated,
         access_token,
@@ -190,7 +193,7 @@ fn identity(
     }
 }
 
-async fn fetch_profile_skin(
+pub(super) async fn fetch_profile_skin(
     client: &reqwest::Client,
     provider: &YggdrasilProviderConfig,
     profile_id: uuid::Uuid,

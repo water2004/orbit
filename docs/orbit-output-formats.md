@@ -89,6 +89,8 @@ orbit [--format text|json] [--progress-format none|ndjson] <command> ...
 
 - `ref_mc_version` 缺省时为 `null`；`compatible` 仅在 `ref_mc_version` 非 null 时存在，否则为 `null`。
 - `truncated`：是否因 `--limit` 截断了结果。
+- `latest_version` 始终是面向用户的版本号。Modrinth 搜索响应中的 opaque version ID 会由
+  Orbit 批量查询 `/versions` 后转换为 `version_number`，绝不直接显示为版本。
 
 ### `info`
 
@@ -153,6 +155,7 @@ orbit [--format text|json] [--progress-format none|ndjson] <command> ...
       {
         "mod_id": "sodium",
         "version": "0.5.8",
+        "icon_path": "/home/user/.cache/orbit/presentation/mod-icons/content.png",
         "remotes": ["modrinth:AANobbMI"],
         "configured_environment": null,
         "environment": "both",
@@ -170,6 +173,9 @@ orbit [--format text|json] [--progress-format none|ndjson] <command> ...
 的有效值：显式 TOML 覆盖优先，否则来自 lock 中精确候选的 JAR 声明。`root=false`
 表示传递包，不能直接设置根过滤或 discovery remote。`tree: true` 时额外返回 `roots`
 与每个包的 `dependents`，结构见 schema 文档源码。
+`icon_path` 是 Orbit CLI 从当前精确 JAR 的 Loader 元数据读取、限制尺寸并规范化为 PNG 后
+写入全局展示缓存的本地路径；缺少或无效图标时省略。GUI 不打开 JAR，也不拿远端项目图标
+冒充已安装内容的图标。
 
 ### `env`
 

@@ -475,7 +475,7 @@ impl OrbitApp {
                     .gap_2()
                     .items_center()
                     .child(components::account_avatar(
-                        account.skin_url.as_deref(),
+                        account.avatar_path.as_deref(),
                         pages::account_initials(&account.profile_name),
                         32.,
                         cx,

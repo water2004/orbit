@@ -13,7 +13,7 @@ pub use fingerprint::{compute_curseforge_fingerprint, curseforge_fingerprint};
 
 use sha2::{Digest, Sha256};
 use std::io::Read;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::error::OrbitError;
 use crate::loader::LoaderKind;
@@ -106,6 +106,103 @@ pub fn read_mod_metadata(path: &Path, loader: LoaderKind) -> Result<JarModMetada
             path.display()
         ))
     })
+}
+
+/// Read the loader-declared icon archive entry without exposing JAR parsing to
+/// presentation clients.
+pub fn read_mod_icon_entry(path: &Path, loader: LoaderKind) -> Result<Option<String>, OrbitError> {
+    let file = std::fs::File::open(path).map_err(OrbitError::Io)?;
+    let mut archive = zip::ZipArchive::new(file).map_err(OrbitError::Zip)?;
+    let metadata = match loader {
+        LoaderKind::Fabric => {
+            let Some((_, content)) = read_metadata_entry(&mut archive, &["fabric.mod.json"])?
+            else {
+                return Ok(None);
+            };
+            let parser = crate::metadata::fabric::FabricParser;
+            crate::metadata::MetadataParser::parse(&parser, &content)?
+        }
+        LoaderKind::Quilt => {
+            if let Some((_, content)) = read_metadata_entry(&mut archive, &["quilt.mod.json"])? {
+                crate::metadata::quilt::parse_quilt(&content)?
+            } else {
+                let Some((_, content)) = read_metadata_entry(&mut archive, &["fabric.mod.json"])?
+                else {
+                    return Ok(None);
+                };
+                let parser = crate::metadata::fabric::FabricParser;
+                crate::metadata::MetadataParser::parse(&parser, &content)?
+            }
+        }
+        LoaderKind::Forge | LoaderKind::NeoForge => {
+            let targets: &[&str] = if loader == LoaderKind::NeoForge {
+                &["META-INF/neoforge.mods.toml", "META-INF/mods.toml"]
+            } else {
+                &["META-INF/mods.toml"]
+            };
+            let Some((source, content)) = read_metadata_entry(&mut archive, targets)? else {
+                return Ok(None);
+            };
+            crate::metadata::forge::parse_for_loader(&content, loader, &source)?
+        }
+    };
+    Ok(metadata.icon)
+}
+
+/// Decode and normalize one loader-declared icon into the global presentation
+/// cache. The returned path is safe for native GUI image loading.
+pub fn materialize_mod_icon(
+    jar_path: &Path,
+    icon_entry: &str,
+    sha256: &str,
+    cache_root: &Path,
+) -> Result<Option<PathBuf>, OrbitError> {
+    const MAX_ICON_BYTES: u64 = 4 * 1024 * 1024;
+    if icon_entry.trim().is_empty() || sha256.len() != 64 {
+        return Ok(None);
+    }
+    let destination = cache_root
+        .join("presentation")
+        .join("mod-icons")
+        .join(format!("{}.png", sha256.to_ascii_lowercase()));
+    if destination.is_file() {
+        return Ok(Some(destination));
+    }
+
+    let file = std::fs::File::open(jar_path)?;
+    let mut archive = zip::ZipArchive::new(file)?;
+    let mut entry = match archive.by_name(icon_entry) {
+        Ok(entry) if !entry.is_dir() && entry.size() <= MAX_ICON_BYTES => entry,
+        _ => return Ok(None),
+    };
+    let mut bytes = Vec::with_capacity(entry.size() as usize);
+    entry.read_to_end(&mut bytes)?;
+
+    let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes));
+    reader = reader.with_guessed_format().map_err(|error| {
+        OrbitError::Other(anyhow::anyhow!(
+            "cannot determine icon format for '{}': {error}",
+            jar_path.display()
+        ))
+    })?;
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(4096);
+    limits.max_image_height = Some(4096);
+    limits.max_alloc = Some(64 * 1024 * 1024);
+    reader.limits(limits);
+    let image = reader.decode().map_err(|error| {
+        OrbitError::Other(anyhow::anyhow!(
+            "cannot decode loader-declared icon '{}' in '{}': {error}",
+            icon_entry,
+            jar_path.display()
+        ))
+    })?;
+    let mut encoded = std::io::Cursor::new(Vec::new());
+    image
+        .write_to(&mut encoded, image::ImageFormat::Png)
+        .map_err(|error| OrbitError::Other(error.into()))?;
+    crate::jar_cache::write_atomic(&destination, encoded.get_ref())?;
+    Ok(Some(destination))
 }
 
 pub(crate) fn read_mod_metadata_if_present(

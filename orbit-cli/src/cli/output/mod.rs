@@ -998,6 +998,7 @@ mod tests {
             optional: false,
             dependencies: Vec::new(),
             bundled: vec![("fabric-api-base".to_string(), "0.100".to_string())],
+            icon: None,
         };
         let output = installed_packages_table(&[package]);
 

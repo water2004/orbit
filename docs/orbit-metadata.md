@@ -21,6 +21,7 @@ JAR/ZIP I/O（jar）
 
 - `loader`
 - `license`
+- `icon`（JAR 内的 Loader-declared 展示资源路径）
 - `language_loader`
 - `mods: Vec<ModMetadata>`
 - `embedded_jars`
@@ -50,10 +51,10 @@ Quilt 的嵌套 `any` / `all` 通过递归 `DependencyExpression` 保真。一�
 
 | Loader | 元数据文件 | 完整映射 |
 |---|---|---|
-| Fabric | `fabric.mod.json` | identity、environment、六类依赖、数组版本、provides、jars |
-| Quilt | `quilt.mod.json` | identity、depends/breaks、any/all/unless、optional、provides version、jars；缺失时可读取 Fabric JAR |
-| Forge | `META-INF/mods.toml` | 多 `[[mods]]`、mandatory、versionRange、ordering、side、reason、features、properties、language loader、JarJar |
-| NeoForge | `META-INF/neoforge.mods.toml` | required/optional/incompatible/discouraged、ordering、side、features；兼容旧文件名 |
+| Fabric | `fabric.mod.json` | identity、environment、六类依赖、数组版本、provides、jars、string/size-map icon |
+| Quilt | `quilt.mod.json` | identity、depends/breaks、any/all/unless、optional、provides version、jars、metadata icon；缺失时可读取 Fabric JAR |
+| Forge | `META-INF/mods.toml` | 多 `[[mods]]`、mandatory、versionRange、ordering、side、reason、features、properties、language loader、logoFile、JarJar |
+| NeoForge | `META-INF/neoforge.mods.toml` | required/optional/incompatible/discouraged、ordering、side、features、logoFile；兼容旧文件名 |
 
 Fabric/Quilt 使用 Fabric predicate；Forge/NeoForge 使用 Maven ComparableVersion 与
 Maven version range。版本约束的解释只发生在 `versions/`，parser 保留原始文本。

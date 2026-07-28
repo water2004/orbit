@@ -45,6 +45,7 @@ pub(crate) fn parse_quilt(content: &str) -> Result<ModFileMetadata, OrbitError> 
         license: metadata
             .and_then(|metadata| metadata.get("license"))
             .and_then(first_string),
+        icon: metadata.and_then(|metadata| parse_icon(metadata.get("icon"))),
         language_loader: None,
         mods: vec![ModMetadata {
             id: id.clone(),
@@ -72,6 +73,21 @@ pub(crate) fn parse_quilt(content: &str) -> Result<ModFileMetadata, OrbitError> 
         embedded_jars: parse_jars(loader.get("jars").or_else(|| root.get("jars"))),
         substitution_properties: Default::default(),
     })
+}
+
+fn parse_icon(value: Option<&Value>) -> Option<String> {
+    match value? {
+        Value::String(path) => (!path.trim().is_empty()).then(|| path.clone()),
+        Value::Object(paths) => paths
+            .iter()
+            .filter_map(|(size, value)| {
+                Some((size.parse::<u32>().ok()?, value.as_str()?.to_string()))
+            })
+            .filter(|(_, path)| !path.trim().is_empty())
+            .max_by_key(|(size, _)| *size)
+            .map(|(_, path)| path),
+        _ => None,
+    }
 }
 
 fn parse_load_condition(value: Option<&Value>) -> Result<ModLoadCondition, OrbitError> {
@@ -399,5 +415,14 @@ second line\"}
         .unwrap();
 
         assert_eq!(parsed.mods[0].description, "first line\nsecond line");
+    }
+
+    #[test]
+    fn reads_the_loader_metadata_icon() {
+        let parsed = parse_quilt(
+            r#"{"quilt_loader":{"id":"example","version":"1","metadata":{"icon":"icon.png"}}}"#,
+        )
+        .unwrap();
+        assert_eq!(parsed.icon.as_deref(), Some("icon.png"));
     }
 }

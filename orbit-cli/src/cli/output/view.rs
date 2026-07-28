@@ -137,6 +137,8 @@ pub struct ListOutput {
 pub struct ListedPackageView {
     pub mod_id: String,
     pub version: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub icon_path: Option<String>,
     pub remotes: Vec<String>,
     pub configured_environment: Option<String>,
     pub environment: String,
@@ -581,10 +583,17 @@ pub fn info_view(provider: &str, info: &ModInfo) -> InfoOutput {
     }
 }
 
-pub fn listed_package_view(pkg: &ListedPackage) -> ListedPackageView {
+pub fn listed_package_view(
+    pkg: &ListedPackage,
+    presentation_cache: Option<&std::path::Path>,
+) -> ListedPackageView {
     ListedPackageView {
         mod_id: pkg.mod_id.clone(),
         version: pkg.version.clone(),
+        icon_path: presentation_cache
+            .and_then(|cache| orbit_core::materialize_listed_package_icon(pkg, cache).ok())
+            .flatten()
+            .map(|path| path.to_string_lossy().into_owned()),
         remotes: pkg.remotes.clone(),
         configured_environment: pkg.configured_environment.clone(),
         environment: pkg.environment.clone(),
@@ -716,11 +725,15 @@ pub fn list_view(
     target: Option<&str>,
     tree: bool,
     roots: Option<Vec<String>>,
+    presentation_cache: Option<&std::path::Path>,
 ) -> ListOutput {
     ListOutput {
         target: target.map(str::to_string),
         tree,
-        packages: packages.iter().map(listed_package_view).collect(),
+        packages: packages
+            .iter()
+            .map(|package| listed_package_view(package, presentation_cache))
+            .collect(),
         roots,
     }
 }
@@ -844,9 +857,10 @@ mod tests {
             optional: false,
             dependencies: Vec::new(),
             bundled: Vec::new(),
+            icon: None,
         };
 
-        let value = serde_json::to_value(listed_package_view(&package)).unwrap();
+        let value = serde_json::to_value(listed_package_view(&package, None)).unwrap();
         assert_eq!(value["root"], true);
         assert!(value["configured_environment"].is_null());
         assert_eq!(value["environment"], "client");

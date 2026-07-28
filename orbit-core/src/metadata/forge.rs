@@ -21,6 +21,8 @@ struct ModsToml {
     loader_version: String,
     #[serde(default)]
     license: Option<String>,
+    #[serde(default, rename = "logoFile")]
+    logo_file: Option<String>,
     #[serde(default, rename = "clientSideOnly")]
     client_side_only: bool,
     #[serde(default)]
@@ -190,6 +192,7 @@ pub(crate) fn parse_for_loader(
     Ok(ModFileMetadata {
         loader,
         license: Some(license),
+        icon: raw.logo_file.filter(|path| !path.trim().is_empty()),
         language_loader,
         mods,
         embedded_jars: Vec::new(),
@@ -391,5 +394,23 @@ modId = "forge"
         )
         .unwrap_err();
         assert!(error.to_string().contains("missing mandatory"));
+    }
+
+    #[test]
+    fn reads_the_file_level_logo() {
+        let parsed = parse_for_loader(
+            r#"
+modLoader = "javafml"
+loaderVersion = "[47,)"
+license = "MIT"
+logoFile = "logo.png"
+[[mods]]
+modId = "example"
+"#,
+            LoaderKind::Forge,
+            "META-INF/mods.toml",
+        )
+        .unwrap();
+        assert_eq!(parsed.icon.as_deref(), Some("logo.png"));
     }
 }

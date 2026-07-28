@@ -89,12 +89,23 @@ pub(super) fn render(
                         || ui::icon_tile(OrbitIcon::Mods, cx).into_any_element(),
                         |url| {
                             div()
+                                .relative()
                                 .size(px(48.))
                                 .flex_shrink_0()
                                 .rounded_lg()
                                 .overflow_hidden()
                                 .bg(cx.theme().secondary)
-                                .child(img(url.clone()).size_full().object_fit(gpui::ObjectFit::Cover))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .child(gpui_component::Icon::new(OrbitIcon::Mods).size(px(20.)))
+                                .child(
+                                    img(url.clone())
+                                        .absolute()
+                                        .inset_0()
+                                        .size_full()
+                                        .object_fit(gpui::ObjectFit::Cover),
+                                )
                                 .into_any_element()
                         },
                     );

@@ -1,6 +1,6 @@
 use gpui::{
     AnyElement, App, Div, InteractiveElement, IntoElement, ParentElement, SharedString, Styled,
-    StyledImage, Window, div, img, px,
+    StyledImage, Window, div, img, prelude::FluentBuilder as _, px,
 };
 use gpui_component::{
     ActiveTheme, Icon, StyledExt, h_flex,
@@ -225,8 +225,23 @@ pub(super) fn icon_tile(icon: OrbitIcon, cx: &App) -> Div {
         .child(Icon::new(icon).size(px(20.)))
 }
 
+pub(super) fn package_icon(icon_path: Option<&str>, cx: &App) -> Div {
+    icon_tile(OrbitIcon::Mods, cx)
+        .relative()
+        .overflow_hidden()
+        .when_some(icon_path, |frame, path| {
+            frame.child(
+                img(std::path::PathBuf::from(path))
+                    .absolute()
+                    .inset_0()
+                    .size_full()
+                    .object_fit(gpui::ObjectFit::Cover),
+            )
+        })
+}
+
 pub(super) fn account_avatar(
-    skin_url: Option<&str>,
+    avatar_path: Option<&str>,
     fallback: impl Into<SharedString>,
     size: f32,
     cx: &App,
@@ -237,29 +252,24 @@ pub(super) fn account_avatar(
         .flex_shrink_0()
         .rounded_lg()
         .overflow_hidden()
-        .bg(cx.theme().secondary);
-    if let Some(url) = skin_url {
-        let texture_size = size * 8.;
-        frame
-            .child(
-                img(url.to_string())
+        .bg(cx.theme().secondary)
+        .flex()
+        .items_center()
+        .justify_center()
+        .text_color(cx.theme().primary)
+        .font_semibold()
+        .child(fallback.into());
+    frame
+        .when_some(avatar_path, |frame, path| {
+            frame.child(
+                img(std::path::PathBuf::from(path))
                     .absolute()
-                    .top(px(-size))
-                    .left(px(-size))
-                    .size(px(texture_size))
-                    .object_fit(gpui::ObjectFit::Fill),
+                    .inset_0()
+                    .size_full()
+                    .object_fit(gpui::ObjectFit::Cover),
             )
-            .into_any_element()
-    } else {
-        frame
-            .flex()
-            .items_center()
-            .justify_center()
-            .text_color(cx.theme().primary)
-            .font_semibold()
-            .child(fallback.into())
-            .into_any_element()
-    }
+        })
+        .into_any_element()
 }
 
 pub(super) fn state_color(success: bool, cx: &App) -> gpui::Hsla {
@@ -289,7 +299,10 @@ pub(super) fn modal_backdrop(content: impl IntoElement, cx: &App) -> Div {
 pub(super) fn modal(width: f32, content: impl IntoElement, cx: &App) -> Div {
     v_flex()
         .w(px(width))
-        .max_h_full()
+        .max_w_full()
+        .max_h(px(640.))
+        .min_h_0()
+        .overflow_hidden()
         .p_5()
         .gap_4()
         .rounded_lg()

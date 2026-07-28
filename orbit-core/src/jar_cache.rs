@@ -160,7 +160,7 @@ pub(super) fn normalized_hash(value: &str, expected_len: usize) -> Option<String
         .then(|| value.to_ascii_lowercase())
 }
 
-pub(super) fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), OrbitError> {
+pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), OrbitError> {
     let parent = path.parent().ok_or_else(|| {
         OrbitError::Other(anyhow::anyhow!(
             "cache file '{}' has no parent directory",
