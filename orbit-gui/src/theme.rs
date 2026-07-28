@@ -410,6 +410,55 @@ pub fn danger_button(label: impl Into<String>) -> egui::Button<'static> {
     .stroke(Stroke::NONE)
     .corner_radius(8)
 }
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum InputWidth {
+    Fill,
+    Form,
+    Compact,
+}
+
+pub fn text_field(
+    ui: &mut egui::Ui,
+    value: &mut String,
+    hint: &str,
+    width: InputWidth,
+) -> egui::Response {
+    add_text_field(ui, value, hint, width, false)
+}
+
+pub fn password_field(
+    ui: &mut egui::Ui,
+    value: &mut String,
+    hint: &str,
+    width: InputWidth,
+) -> egui::Response {
+    add_text_field(ui, value, hint, width, true)
+}
+
+fn add_text_field(
+    ui: &mut egui::Ui,
+    value: &mut String,
+    hint: &str,
+    width: InputWidth,
+    password: bool,
+) -> egui::Response {
+    let available = ui.available_width();
+    let desired = match width {
+        InputWidth::Fill => available,
+        InputWidth::Form => 420.0_f32.min(available),
+        InputWidth::Compact => 300.0_f32.min(available),
+    };
+    ui.add_sized(
+        [desired, 40.0],
+        egui::TextEdit::singleline(value)
+            .hint_text(orbit_i18n::text(hint))
+            .desired_width(desired)
+            .margin(Margin::symmetric(11, 8))
+            .password(password),
+    )
+}
+
 pub fn section_title(ui: &mut egui::Ui, title: &str, subtitle: &str) {
     ui.label(RichText::new(orbit_i18n::text(title)).size(23.0).strong());
     ui.label(RichText::new(orbit_i18n::text(subtitle)).color(muted()));

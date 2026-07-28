@@ -19,10 +19,11 @@ impl OrbitApp {
             return;
         }
         ui.horizontal(|ui| {
-            let response = ui.add(
-                TextEdit::singleline(&mut self.search_query)
-                    .hint_text(tr!("Search by name or project"))
-                    .desired_width(420.0),
+            let response = theme::text_field(
+                ui,
+                &mut self.search_query,
+                "Search by name or project",
+                theme::InputWidth::Form,
             );
             if response.changed() {
                 self.search_results.clear();
@@ -142,9 +143,6 @@ impl OrbitApp {
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                             if ui.add(theme::primary_button("Add")).clicked() {
                                 self.add_search_result(&result);
-                            }
-                            if ui.button(tr!("Details")).clicked() {
-                                self.show_project_info(&result);
                             }
                         });
                     });

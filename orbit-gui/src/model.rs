@@ -202,60 +202,6 @@ pub struct SearchResults {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-pub struct ProjectInfo {
-    pub provider: String,
-    pub project_id: String,
-    pub slug: String,
-    pub name: String,
-    pub description: String,
-    #[serde(default)]
-    pub authors: Vec<String>,
-    pub latest_version: String,
-    pub downloads: u64,
-    pub license: Option<String>,
-    pub client_side: String,
-    pub server_side: String,
-    #[serde(default)]
-    pub categories: Vec<String>,
-    pub icon_url: Option<String>,
-    pub accent_color: Option<u32>,
-    pub website_url: Option<String>,
-    pub source_url: Option<String>,
-    pub issues_url: Option<String>,
-    pub wiki_url: Option<String>,
-    #[serde(default)]
-    pub gallery: Vec<ProjectImage>,
-    #[serde(default)]
-    pub recent_versions: Vec<ProjectVersion>,
-    #[serde(default)]
-    pub dependencies: Vec<ProjectDependency>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct ProjectImage {
-    pub url: String,
-    pub thumbnail_url: Option<String>,
-    pub title: Option<String>,
-    pub description: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct ProjectVersion {
-    pub version: String,
-    #[serde(default)]
-    pub mc_versions: Vec<String>,
-    pub loader: String,
-    pub released_at: String,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct ProjectDependency {
-    pub slug: Option<String>,
-    pub project_id: Option<String>,
-    pub required: bool,
-}
-
-#[derive(Debug, Clone, Deserialize)]
 pub struct OutdatedPackage {
     pub mod_id: String,
     pub current_version: String,
@@ -408,7 +354,6 @@ pub enum Intent {
     OrbitInstances,
     Packages,
     Search,
-    ProjectInfo,
     Outdated,
     Audit,
     Accounts,

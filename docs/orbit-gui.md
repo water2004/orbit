@@ -25,8 +25,10 @@ eframe 原生持久化。页面的信息架构、空状态和任务流不依赖�
 
 源码同样按这一边界分层：`app.rs` 只保留共享状态、任务调度、结果归并和命令动作；
 `app/pages/` 分别实现 Home、Mods、Discover、Audit、Runtime、Accounts、Server、Settings
-与 Activity；`process.rs`/`wire.rs` 是唯一进程协议入口；`theme.rs` 只处理展示 token，
+与 Activity；`process.rs`/`wire.rs` 是唯一进程协议入口；`theme.rs` 只处理共享展示 token 与控件，
 `model.rs` 只承载稳定 view model。页面不能自行读取 TOML、lock、JAR 或 Launcher 存储。
+文本与密码输入必须使用 `theme.rs` 的语义化表单组件；页面不得直接创建 `TextEdit` 或自行
+决定高度、内边距和常用宽度。这样主题、焦点反馈、密码遮蔽和中英文提示始终走同一路径。
 
 ## 单一进程协议
 
@@ -71,8 +73,9 @@ Runtime 页可列出、完整校验和清理未使用 Java；任一注册实例 
 
 Mods 页以 lock 中逻辑包为单位显示环境、根/传递关系、依赖、contained 模块和多远端。首次
 接管由已安装 Launcher lock 的精确 Minecraft/Loader 版本调用 `orbit init`，不在 GUI 中
-重复探测。搜索、详情、添加、sync、install、outdated、单包/全部 upgrade、环境与远端管理
-都调用现有 Orbit 命令。
+重复探测。搜索、添加、sync、install、outdated、单包/全部 upgrade、环境与远端管理都调用
+现有 Orbit 命令。GUI 不复制 CLI 的项目详情报告；Discover 只提供搜索所需的名称、摘要、
+来源、兼容标签和直接添加动作，需要完整项目数据时使用 `orbit info`。
 
 `outdated` 的更新与诊断分开呈现：可升级项显示当前到目标的变化，受阻候选显示 solver
 保留的事实。`upgrade` 的多个 Pareto 极大方案、降级、替换和将删除的包在统一 interaction
@@ -80,11 +83,13 @@ Mods 页以 lock 中逻辑包为单位显示环境、根/传递关系、依赖�
 
 ### 其他页面
 
-- Discover：provider 展示信息、兼容标签、作者、链接、画廊、最近版本与依赖；搜索任务在页面内明确区分尚未搜索、查询中、零结果和失败，失败不得伪装为空目录；
+- Discover：展示 provider、名称、摘要和兼容标签，并提供直接添加；搜索任务在页面内明确区分
+  尚未搜索、查询中、零结果和失败，失败不得伪装为空目录；
 - Compatibility：schema 5 readiness、coverage、warning 和按风险排序的证据摘要；
 - Accounts：先选择 Microsoft、Offline 或标准 External Yggdrasil，再进入对应登录任务；
   主页面只展示身份卡、全局默认和当前实例选择；External Yggdrasil 在添加账户时选择端点，
-  同一流程可新增或移除端点，Settings 不承载账户认证端点；
+  端点的选择/新增/移除是独立步骤，确认端点后才进入单独的凭据表单；Settings 不承载账户
+  认证端点；
 - Server：EULA 完整正文及 digest 接受、启动/停止/状态/控制台命令；
 - Activity：真实阶段、动态完成量、日志、结构化错误和取消。
 

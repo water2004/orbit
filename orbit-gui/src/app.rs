@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 
 use eframe::egui::{
-    self, Align, Color32, ComboBox, Layout, RichText, ScrollArea, Sense, Stroke, TextEdit, Vec2,
+    self, Align, Color32, ComboBox, Layout, RichText, ScrollArea, Sense, Stroke, Vec2,
 };
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -48,7 +48,8 @@ struct RuntimeFlow {
 enum AccountFlow {
     Choose,
     Offline,
-    Yggdrasil,
+    YggdrasilEndpoints,
+    YggdrasilLogin,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -124,7 +125,6 @@ pub struct OrbitApp {
     search_results: Vec<SearchResult>,
     search_truncated: bool,
     search_state: SearchState,
-    project_info: Option<ProjectInfo>,
     package_editor: Option<PackageEditor>,
     outdated: Vec<OutdatedPackage>,
     outdated_checked: bool,
@@ -204,7 +204,6 @@ impl OrbitApp {
             search_results: Vec::new(),
             search_truncated: false,
             search_state: SearchState::Idle,
-            project_info: None,
             package_editor: None,
             outdated: Vec::new(),
             outdated_checked: false,
@@ -735,7 +734,6 @@ impl OrbitApp {
                 self.search_truncated = response.truncated;
                 self.search_state = SearchState::Completed;
             }
-            Intent::ProjectInfo => self.project_info = Some(decode(result)?),
             Intent::Outdated => {
                 let response: OutdatedResults = decode(result)?;
                 self.outdated = response.updates;
@@ -1275,21 +1273,6 @@ impl OrbitApp {
                 None,
             );
         }
-    }
-
-    fn show_project_info(&mut self, result: &SearchResult) {
-        let locator = match result.platform.as_str() {
-            "modrinth" => format!("mr:{}", result.project_id),
-            "curseforge" => format!("cf:{}", result.project_id),
-            _ => result.project_id.clone(),
-        };
-        self.orbit_task_args(
-            &tr!("Loading %{name} details", name = result.name),
-            Intent::ProjectInfo,
-            vec!["info".into(), locator],
-            self.selected_root(),
-            None,
-        );
     }
 
     fn install_runtime(&mut self) {
@@ -1885,12 +1868,6 @@ fn human_bytes(bytes: u64) -> String {
         format!("{bytes} {}", UNITS[unit])
     } else {
         format!("{value:.1} {}", UNITS[unit])
-    }
-}
-
-fn project_link(ui: &mut egui::Ui, label: &str, url: Option<&str>) {
-    if let Some(url) = url {
-        ui.hyperlink_to(orbit_i18n::text(label), url);
     }
 }
 

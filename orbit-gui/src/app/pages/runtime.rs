@@ -415,10 +415,11 @@ impl OrbitApp {
                 }
             });
         });
-        ui.add(
-            TextEdit::singleline(&mut self.minecraft_version_filter)
-                .hint_text(tr!("Search versions"))
-                .desired_width(f32::INFINITY),
+        theme::text_field(
+            ui,
+            &mut self.minecraft_version_filter,
+            "Search versions",
+            theme::InputWidth::Fill,
         );
         ui.add_space(8.0);
 
@@ -786,18 +787,21 @@ impl OrbitApp {
                         .spacing([16.0, 12.0])
                         .show(ui, |ui| {
                             ui.label(tr!("Name"));
-                            ui.add(
-                                TextEdit::singleline(&mut self.new_instance.name)
-                                    .hint_text(tr!("My Minecraft")),
+                            theme::text_field(
+                                ui,
+                                &mut self.new_instance.name,
+                                "My Minecraft",
+                                theme::InputWidth::Form,
                             );
                             ui.end_row();
 
                             ui.label(tr!("Folder"));
                             ui.horizontal(|ui| {
-                                ui.add(
-                                    TextEdit::singleline(&mut self.new_instance.root)
-                                        .hint_text(tr!("Choose an empty installation folder"))
-                                        .desired_width(390.0),
+                                theme::text_field(
+                                    ui,
+                                    &mut self.new_instance.root,
+                                    "Choose an empty installation folder",
+                                    theme::InputWidth::Form,
                                 );
                                 if ui.add(theme::secondary_button("Browse")).clicked()
                                     && let Some(path) = rfd::FileDialog::new().pick_folder()

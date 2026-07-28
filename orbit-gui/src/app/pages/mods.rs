@@ -176,10 +176,11 @@ impl OrbitApp {
         ui.add_space(8.0);
 
         if self.mod_view == 0 {
-            ui.add_sized(
-                [ui.available_width(), 40.0],
-                TextEdit::singleline(&mut self.package_filter)
-                    .hint_text(tr!("Search installed packages")),
+            theme::text_field(
+                ui,
+                &mut self.package_filter,
+                "Search installed packages",
+                theme::InputWidth::Fill,
             );
             ui.add_space(10.0);
             let filter = self.package_filter.trim().to_ascii_lowercase();

@@ -204,14 +204,15 @@ impl OrbitApp {
                                         );
                                     }
                                 });
-                            ui.add(
-                                TextEdit::singleline(&mut editor.remote_locator)
-                                    .hint_text(match editor.remote_provider {
-                                        0 => "Local JAR path",
-                                        1 => "Modrinth project ID",
-                                        _ => "CurseForge numeric project ID",
-                                    })
-                                    .desired_width(310.0),
+                            theme::text_field(
+                                ui,
+                                &mut editor.remote_locator,
+                                match editor.remote_provider {
+                                    0 => "Local JAR path",
+                                    1 => "Modrinth project ID",
+                                    _ => "CurseForge numeric project ID",
+                                },
+                                theme::InputWidth::Compact,
                             );
                             if editor.remote_provider == 0 && ui.button(tr!("Browse…")).clicked()
                                 && let Some(path) = rfd::FileDialog::new()
@@ -242,168 +243,6 @@ impl OrbitApp {
                     }
                 });
             self.package_editor = keep_open.then_some(editor);
-        }
-        if let Some(project) = self.project_info.clone() {
-            egui::Window::new(&project.name)
-                .collapsible(false)
-                .default_size([820.0, 650.0])
-                .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
-                .show(ctx, |ui| {
-                    theme::apply_ui(ui);
-                    ScrollArea::vertical().show(ui, |ui| {
-                        ui.horizontal(|ui| {
-                            if let Some(icon) = &project.icon_url {
-                                ui.add(
-                                    egui::Image::new(icon)
-                                        .fit_to_exact_size(Vec2::splat(84.0))
-                                        .corner_radius(14),
-                                );
-                            }
-                            ui.vertical(|ui| {
-                                ui.heading(&project.name);
-                                ui.label(
-                                    RichText::new(tr!(
-                                        "%{provider} · %{slug} · %{downloads} downloads",
-                                        provider = project.provider,
-                                        slug = project.slug,
-                                        downloads = compact_number(project.downloads)
-                                    ))
-                                    .color(theme::muted()),
-                                );
-                                ui.label(tr!(
-                                    "Latest %{version} · client %{client} · server %{server}",
-                                    version = project.latest_version,
-                                    client = project.client_side,
-                                    server = project.server_side
-                                ));
-                                if !project.authors.is_empty() {
-                                    ui.label(
-                                        RichText::new(tr!(
-                                            "By %{authors}",
-                                            authors = project.authors.join(", ")
-                                        ))
-                                        .color(theme::muted()),
-                                    );
-                                }
-                            });
-                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                if ui.add(theme::primary_button("Add to instance")).clicked() {
-                                    let result = SearchResult {
-                                        slug: project.slug.clone(),
-                                        name: project.name.clone(),
-                                        project_id: project.project_id.clone(),
-                                        platform: project.provider.clone(),
-                                        description: project.description.clone(),
-                                        latest_version: project.latest_version.clone(),
-                                        downloads: project.downloads,
-                                        mc_versions: Vec::new(),
-                                        client_side: project.client_side.clone(),
-                                        server_side: project.server_side.clone(),
-                                        categories: project.categories.clone(),
-                                        icon_url: project.icon_url.clone(),
-                                        accent_color: project.accent_color,
-                                        compatible: None,
-                                    };
-                                    self.add_search_result(&result);
-                                    self.project_info = None;
-                                }
-                            });
-                        });
-                        ui.add_space(12.0);
-                        ui.label(&project.description);
-                        ui.horizontal_wrapped(|ui| {
-                            if let Some(license) = &project.license {
-                                ui.label(
-                                    RichText::new(tr!("License %{license}", license = license))
-                                        .color(theme::muted()),
-                                );
-                            }
-                            for category in &project.categories {
-                                ui.label(RichText::new(category).color(theme::muted()));
-                            }
-                        });
-                        ui.horizontal_wrapped(|ui| {
-                            project_link(ui, "Website", project.website_url.as_deref());
-                            project_link(ui, "Source", project.source_url.as_deref());
-                            project_link(ui, "Issues", project.issues_url.as_deref());
-                            project_link(ui, "Wiki", project.wiki_url.as_deref());
-                        });
-
-                        if !project.gallery.is_empty() {
-                            ui.separator();
-                            ui.heading(tr!("Gallery"));
-                            ui.horizontal_wrapped(|ui| {
-                                for image in project.gallery.iter().take(8) {
-                                    ui.vertical(|ui| {
-                                        ui.add(
-                                            egui::Image::new(
-                                                image.thumbnail_url.as_ref().unwrap_or(&image.url),
-                                            )
-                                            .fit_to_exact_size(Vec2::new(220.0, 124.0))
-                                            .corner_radius(10),
-                                        );
-                                        if let Some(title) = &image.title {
-                                            ui.label(RichText::new(title).strong());
-                                        }
-                                        if let Some(description) = &image.description {
-                                            ui.label(
-                                                RichText::new(description)
-                                                    .size(11.0)
-                                                    .color(theme::muted()),
-                                            );
-                                        }
-                                    });
-                                }
-                            });
-                        }
-
-                        if !project.recent_versions.is_empty() {
-                            ui.separator();
-                            ui.heading(tr!("Recent versions"));
-                            egui::Grid::new("project-versions")
-                                .num_columns(4)
-                                .striped(true)
-                                .show(ui, |ui| {
-                                    ui.strong(tr!("Version"));
-                                    ui.strong(tr!("Loader"));
-                                    ui.strong(tr!("Minecraft"));
-                                    ui.strong(tr!("Released"));
-                                    ui.end_row();
-                                    for version in project.recent_versions.iter().take(12) {
-                                        ui.label(&version.version);
-                                        ui.label(&version.loader);
-                                        ui.label(version.mc_versions.join(", "));
-                                        ui.label(&version.released_at);
-                                        ui.end_row();
-                                    }
-                                });
-                        }
-                        if !project.dependencies.is_empty() {
-                            ui.separator();
-                            ui.heading(tr!("Catalog relationships"));
-                            for dependency in &project.dependencies {
-                                let project = dependency
-                                    .slug
-                                    .clone()
-                                    .or_else(|| dependency.project_id.clone())
-                                    .unwrap_or_else(|| tr!("unknown project").into_owned());
-                                ui.label(format!(
-                                    "{} {}",
-                                    if dependency.required {
-                                        tr!("Required")
-                                    } else {
-                                        tr!("Optional")
-                                    },
-                                    project
-                                ));
-                            }
-                        }
-                    });
-                    ui.separator();
-                    if ui.button(tr!("Close")).clicked() {
-                        self.project_info = None;
-                    }
-                });
         }
         if let Some(pending) = self.interaction.clone() {
             egui::Window::new(match pending.envelope.interaction {

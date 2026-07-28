@@ -85,10 +85,11 @@ impl OrbitApp {
             theme::card().show(&mut columns[0], |ui| {
                 ui.heading(tr!("Console command"));
                 ui.horizontal(|ui| {
-                    let response = ui.add(
-                        TextEdit::singleline(&mut self.server_command)
-                            .hint_text("say Hello")
-                            .desired_width(280.0),
+                    let response = theme::text_field(
+                        ui,
+                        &mut self.server_command,
+                        "say Hello",
+                        theme::InputWidth::Compact,
                     );
                     let submit = ui.button(tr!("Send")).clicked()
                         || response.lost_focus()
