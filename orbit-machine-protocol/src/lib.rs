@@ -72,6 +72,7 @@ pub enum ProgressPhase {
     Download,
     Resolution,
     Apply,
+    Export,
     Audit,
     Metadata,
     Eula,

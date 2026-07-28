@@ -145,33 +145,28 @@ pub async fn import_mrpack(
 
 pub(super) fn write_contents(
     archive: &mut zip::ZipWriter<std::fs::File>,
-    options: SimpleFileOptions,
+    metadata_options: SimpleFileOptions,
+    artifact_options: SimpleFileOptions,
     manifest: &crate::manifest::OrbitManifest,
-    sources: &[(&crate::lockfile::PackageEntry, PathBuf)],
-    instance_dir: &Path,
+    lock_toml: &str,
+    sources: &[(&crate::lockfile::PackageEntry, PathBuf, u64)],
+    progress: &mut super::ExportTracker,
 ) -> Result<(), OrbitError> {
     let index = build_index(manifest, sources);
-    archive.start_file("modrinth.index.json", options)?;
+    archive.start_file("modrinth.index.json", metadata_options)?;
     archive.write_all(serde_json::to_string_pretty(&index)?.as_bytes())?;
-    add_file(
-        archive,
-        "overrides/orbit.toml",
-        &instance_dir.join("orbit.toml"),
-        options,
-    )?;
-    add_file(
-        archive,
-        "overrides/orbit.lock",
-        &instance_dir.join("orbit.lock"),
-        options,
-    )?;
-    for (entry, source) in sources {
-        if download_url(entry).is_none() {
+    archive.start_file("overrides/orbit.toml", metadata_options)?;
+    archive.write_all(manifest.to_toml_string()?.as_bytes())?;
+    archive.start_file("overrides/orbit.lock", metadata_options)?;
+    archive.write_all(lock_toml.as_bytes())?;
+    for (entry, source, _) in sources {
+        if is_embedded(entry) {
             add_file(
                 archive,
                 &format!("overrides/mods/{}", entry.filename),
                 source,
-                options,
+                artifact_options,
+                Some(progress),
             )?;
         }
     }
@@ -299,11 +294,11 @@ fn write_jar(
 
 fn build_index(
     manifest: &crate::manifest::OrbitManifest,
-    sources: &[(&crate::lockfile::PackageEntry, PathBuf)],
+    sources: &[(&crate::lockfile::PackageEntry, PathBuf, u64)],
 ) -> serde_json::Value {
     let files: Vec<_> = sources
         .iter()
-        .filter_map(|(entry, source)| {
+        .filter_map(|(entry, source, _)| {
             let download_url = download_url(entry)?;
             let (client, server) = environment(manifest, entry);
             Some(json!({
@@ -356,6 +351,10 @@ fn download_url(entry: &crate::lockfile::PackageEntry) -> Option<&str> {
         })?;
     let url = url::Url::parse(download_url).ok()?;
     (url.scheme() == "https").then_some(download_url)
+}
+
+pub(super) fn is_embedded(entry: &crate::lockfile::PackageEntry) -> bool {
+    download_url(entry).is_none()
 }
 
 fn environment(

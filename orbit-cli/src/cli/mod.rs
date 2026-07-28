@@ -450,11 +450,20 @@ pub enum MigrateCommands {
     Check {
         /// Exact target game-instance directory created by a launcher.
         target: PathBuf,
+        /// Portable Orbit ZIP captured before the target instance was created.
+        #[arg(long)]
+        source_pack: Option<PathBuf>,
     },
     /// Write target orbit.toml, orbit.lock, and configuration into that runtime.
     Export {
         /// Exact target game-instance directory created by a launcher.
         target: PathBuf,
+        /// Portable Orbit ZIP captured before the target instance was created.
+        #[arg(long)]
+        source_pack: Option<PathBuf>,
+        /// Remove --source-pack after a successful, confirmed export.
+        #[arg(long, requires = "source_pack")]
+        consume_source_pack: bool,
     },
 }
 
@@ -481,8 +490,18 @@ impl CommandHandler for CacheCommands {
 impl CommandHandler for MigrateCommands {
     async fn execute(self, ctx: &commands::CliContext) -> Result<()> {
         match self {
-            Self::Check { target } => commands::migrate::handle_check(target, ctx).await,
-            Self::Export { target } => commands::migrate::handle_export(target, ctx).await,
+            Self::Check {
+                target,
+                source_pack,
+            } => commands::migrate::handle_check(target, source_pack, ctx).await,
+            Self::Export {
+                target,
+                source_pack,
+                consume_source_pack,
+            } => {
+                commands::migrate::handle_export(target, source_pack, consume_source_pack, ctx)
+                    .await
+            }
         }
     }
 }
@@ -599,14 +618,28 @@ mod tests {
     fn migration_is_namespaced_and_only_export_mutates() {
         let check = Cli::try_parse_from(["orbit", "migrate", "check", "target"]).unwrap();
         let Commands::Migrate {
-            command: MigrateCommands::Check { target },
+            command:
+                MigrateCommands::Check {
+                    target,
+                    source_pack,
+                },
         } = check.command
         else {
             panic!("migrate check was not parsed");
         };
         assert_eq!(target, PathBuf::from("target"));
+        assert!(source_pack.is_none());
 
-        let export = Cli::try_parse_from(["orbit", "migrate", "export", "target"]).unwrap();
+        let export = Cli::try_parse_from([
+            "orbit",
+            "migrate",
+            "export",
+            "target",
+            "--source-pack",
+            "source.zip",
+            "--consume-source-pack",
+        ])
+        .unwrap();
         assert!(export.command.mutates_instance());
         assert!(Cli::try_parse_from(["orbit", "check", "1.21"]).is_err());
     }

@@ -5,14 +5,23 @@ use anyhow::Result;
 use super::CliContext;
 use crate::cli::output::{MigrationExportView, MigrationOutput, MigrationSummary, OutputFormat};
 
-pub async fn handle_check(target: PathBuf, ctx: &CliContext) -> Result<()> {
-    let plan = build_plan(target, ctx).await?;
+pub async fn handle_check(
+    target: PathBuf,
+    source_pack: Option<PathBuf>,
+    ctx: &CliContext,
+) -> Result<()> {
+    let plan = build_plan(target, source_pack.as_deref(), ctx).await?;
     render_plan(&plan, "check", None, ctx);
     Ok(())
 }
 
-pub async fn handle_export(target: PathBuf, ctx: &CliContext) -> Result<()> {
-    let plan = build_plan(target, ctx).await?;
+pub async fn handle_export(
+    target: PathBuf,
+    source_pack: Option<PathBuf>,
+    consume_source_pack: bool,
+    ctx: &CliContext,
+) -> Result<()> {
+    let plan = build_plan(target, source_pack.as_deref(), ctx).await?;
     let preview = orbit_core::export_migration(&plan, true)?;
     let confirmed = ctx.dry_run || confirm_export(&plan, &preview, ctx);
     let report = if confirmed {
@@ -21,6 +30,12 @@ pub async fn handle_export(target: PathBuf, ctx: &CliContext) -> Result<()> {
         preview
     };
     let applied = confirmed && !ctx.dry_run;
+    if applied
+        && consume_source_pack
+        && let Some(source_pack) = source_pack.as_deref()
+    {
+        orbit_core::consume_portable_instance(source_pack)?;
+    }
 
     render_plan(
         &plan,
@@ -58,7 +73,27 @@ pub async fn handle_export(target: PathBuf, ctx: &CliContext) -> Result<()> {
     Ok(())
 }
 
-async fn build_plan(target: PathBuf, ctx: &CliContext) -> Result<orbit_core::MigrationPlan> {
+async fn build_plan(
+    target: PathBuf,
+    source_pack: Option<&std::path::Path>,
+    ctx: &CliContext,
+) -> Result<orbit_core::MigrationPlan> {
+    let interaction = orbit_core::MigrationInteraction {
+        select_resolution: super::resolution_selector(ctx),
+        progress: super::operation_progress(ctx),
+    };
+    if let Some(source_pack) = source_pack {
+        let source = orbit_core::extract_portable_instance(source_pack)?;
+        let providers = super::create_instance_providers(source.path(), None, &ctx.runtime)?;
+        return Ok(orbit_core::plan_migration_from_portable(
+            source,
+            &target,
+            &providers,
+            ctx.runtime.jar_cache(),
+            interaction,
+        )
+        .await?);
+    }
     let source = ctx.instance_dir()?;
     let providers = super::create_instance_providers(&source, None, &ctx.runtime)?;
     Ok(orbit_core::plan_migration(
@@ -66,10 +101,7 @@ async fn build_plan(target: PathBuf, ctx: &CliContext) -> Result<orbit_core::Mig
         &target,
         &providers,
         ctx.runtime.jar_cache(),
-        orbit_core::MigrationInteraction {
-            select_resolution: super::resolution_selector(ctx),
-            progress: super::operation_progress(ctx),
-        },
+        interaction,
     )
     .await?)
 }

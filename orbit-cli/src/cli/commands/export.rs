@@ -22,7 +22,14 @@ pub async fn handle(
             ))
         }
     };
-    let report = orbit_core::export_instance(&instance_dir, &output, target, &format, ctx.dry_run)?;
+    let report = orbit_core::export_instance(
+        &instance_dir,
+        &output,
+        target,
+        &format,
+        ctx.dry_run,
+        super::operation_progress(ctx),
+    )?;
     match ctx.output.format {
         OutputFormat::Text => {
             println!(

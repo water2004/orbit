@@ -8,6 +8,7 @@ use zip::write::SimpleFileOptions;
 use crate::error::OrbitError;
 use crate::installer::PackageSelection;
 use crate::manifest::DependencySpec;
+use crate::progress::{ProgressEvent, ProgressReporter, emit as emit_progress};
 use crate::workspace::{Lockfile, ManifestFile};
 
 mod mrpack;
@@ -34,6 +35,21 @@ pub struct ExportReport {
     pub path: PathBuf,
     pub packages: usize,
     pub bytes: u64,
+}
+
+#[derive(Debug, Clone)]
+pub struct PortableInstance {
+    directory: std::sync::Arc<tempfile::TempDir>,
+}
+
+impl PortableInstance {
+    pub fn path(&self) -> &Path {
+        self.directory.path()
+    }
+
+    pub(crate) fn owner(&self) -> std::sync::Arc<tempfile::TempDir> {
+        self.directory.clone()
+    }
 }
 
 pub fn import_manifest<F>(
@@ -196,12 +212,115 @@ pub fn import_archive(
     Ok(report)
 }
 
+pub fn extract_portable_instance(source: &Path) -> Result<PortableInstance, OrbitError> {
+    if !source.is_file() {
+        return Err(OrbitError::Other(anyhow::anyhow!(
+            "portable Orbit pack not found: {}",
+            source.display()
+        )));
+    }
+    let directory = std::sync::Arc::new(tempfile::tempdir()?);
+    let mut archive = zip::ZipArchive::new(std::fs::File::open(source)?)?;
+    let mut extracted = std::collections::BTreeSet::new();
+    let mut total_size = 0_u64;
+    for index in 0..archive.len() {
+        let mut entry = archive.by_index(index)?;
+        if !entry.is_file() {
+            continue;
+        }
+        if entry
+            .unix_mode()
+            .is_some_and(|mode| mode & 0o170_000 == 0o120_000)
+        {
+            return Err(OrbitError::Other(anyhow::anyhow!(
+                "portable Orbit pack contains a symbolic link"
+            )));
+        }
+        let Some(enclosed) = entry.enclosed_name() else {
+            return Err(OrbitError::Other(anyhow::anyhow!(
+                "portable Orbit pack contains an unsafe path"
+            )));
+        };
+        let Some(relative) = portable_entry_path(&enclosed) else {
+            continue;
+        };
+        if !extracted.insert(relative.clone()) {
+            return Err(OrbitError::Other(anyhow::anyhow!(
+                "portable Orbit pack contains duplicate path '{}'",
+                relative.display()
+            )));
+        }
+        total_size = total_size.saturating_add(entry.size());
+        if total_size > 8 * 1024 * 1024 * 1024 {
+            return Err(OrbitError::Other(anyhow::anyhow!(
+                "portable Orbit pack expands beyond the 8 GiB safety limit"
+            )));
+        }
+        let destination = directory.path().join(&relative);
+        if let Some(parent) = destination.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let mut output = std::fs::File::create(destination)?;
+        std::io::copy(&mut entry, &mut output)?;
+        output.sync_all()?;
+    }
+    if !directory.path().join("orbit.toml").is_file()
+        || !directory.path().join("orbit.lock").is_file()
+    {
+        return Err(OrbitError::Other(anyhow::anyhow!(
+            "portable Orbit pack must contain orbit.toml and orbit.lock"
+        )));
+    }
+    ManifestFile::open(directory.path())?;
+    Lockfile::open(directory.path())?;
+    Ok(PortableInstance { directory })
+}
+
+pub fn consume_portable_instance(source: &Path) -> Result<(), OrbitError> {
+    if source.exists() {
+        std::fs::remove_file(source)?;
+    }
+    Ok(())
+}
+
+fn portable_entry_path(path: &Path) -> Option<PathBuf> {
+    let components: Vec<_> = path.components().collect();
+    if components.len() == 1
+        && matches!(
+            components[0].as_os_str().to_str(),
+            Some("orbit.toml" | "orbit.lock" | "options.txt")
+        )
+    {
+        return Some(path.to_path_buf());
+    }
+    if components.len() == 2
+        && components[0].as_os_str() == "mods"
+        && components[1]
+            .as_os_str()
+            .to_string_lossy()
+            .to_ascii_lowercase()
+            .ends_with(".jar")
+    {
+        return Some(path.to_path_buf());
+    }
+    if components.len() >= 2
+        && matches!(
+            components[0].as_os_str().to_str(),
+            Some("config" | "defaultconfigs" | "serverconfig")
+        )
+    {
+        return Some(path.to_path_buf());
+    }
+    None
+}
+
 pub fn export_instance(
     instance_dir: &Path,
     output: &Path,
     target: Option<String>,
     format: &str,
     dry_run: bool,
+    progress: Option<ProgressReporter>,
 ) -> Result<ExportReport, OrbitError> {
     if !matches!(format, "zip" | "mrpack") {
         return Err(OrbitError::Other(anyhow::anyhow!(
@@ -222,8 +341,8 @@ pub fn export_instance(
         loader_package.as_ref(),
     )?;
     let mut sources = Vec::new();
-    for package in selected {
-        let entry = lockfile.inner.find(&package).ok_or_else(|| {
+    for package in &selected {
+        let entry = lockfile.inner.find(package).ok_or_else(|| {
             OrbitError::Other(anyhow::anyhow!(
                 "orbit.lock is missing export package '{package}'"
             ))
@@ -240,8 +359,37 @@ pub fn export_instance(
                 source.display()
             )));
         }
-        if !entry.sha256.is_empty() {
-            let actual = crate::jar::compute_sha256(&source)?;
+        let bytes = std::fs::metadata(&source)?.len();
+        sources.push((entry, source, bytes));
+    }
+    let (portable_manifest, portable_lock) =
+        portable_state(&manifest.inner, &lockfile.inner, &selected);
+    let portable_manifest_toml = portable_manifest.to_toml_string()?;
+    let portable_lock_toml = portable_lock.to_toml_string()?;
+    let config_sources = portable_config_sources(instance_dir)?;
+    let config_bytes: u64 = config_sources.iter().map(|source| source.bytes).sum();
+    let package_bytes: u64 = sources.iter().map(|(_, _, bytes)| bytes).sum();
+    let archived_bytes: u64 = if format == "mrpack" {
+        sources
+            .iter()
+            .filter(|(entry, _, _)| mrpack::is_embedded(entry))
+            .map(|(_, _, bytes)| bytes)
+            .sum()
+    } else {
+        package_bytes
+    };
+    let total_work = if dry_run {
+        package_bytes
+    } else {
+        package_bytes + archived_bytes + config_bytes
+    };
+    let mut tracker = ExportTracker::new(progress, sources.len(), total_work);
+    tracker.started();
+    for (index, (entry, source, source_bytes)) in sources.iter().enumerate() {
+        if entry.sha256.is_empty() {
+            tracker.advance(*source_bytes);
+        } else {
+            let actual = compute_sha256_with_progress(source, &mut tracker)?;
             if actual != entry.sha256 {
                 return Err(OrbitError::ChecksumMismatch {
                     name: entry.filename.clone(),
@@ -250,20 +398,15 @@ pub fn export_instance(
                 });
             }
         }
-        sources.push((entry, source));
+        tracker.complete_package(index + 1);
     }
-    let bytes = sources
-        .iter()
-        .map(|(_, path)| std::fs::metadata(path).map(|metadata| metadata.len()))
-        .collect::<Result<Vec<_>, _>>()?
-        .into_iter()
-        .sum();
     let report = ExportReport {
         path: output.to_path_buf(),
         packages: sources.len(),
-        bytes,
+        bytes: package_bytes + config_bytes,
     };
     if dry_run {
+        tracker.finished();
         return Ok(report);
     }
     if let Some(parent) = output.parent()
@@ -272,44 +415,71 @@ pub fn export_instance(
         std::fs::create_dir_all(parent)?;
     }
     let temporary = temporary_output_path(output);
+    if temporary.exists() {
+        std::fs::remove_file(&temporary)?;
+    }
+    let pending = PendingOutput::new(temporary.clone());
     let file = std::fs::File::create(&temporary)?;
     let mut archive = zip::ZipWriter::new(file);
-    let options = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+    let metadata_options =
+        SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+    let artifact_options =
+        SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
     if format == "mrpack" {
         mrpack::write_contents(
             &mut archive,
-            options,
-            &manifest.inner,
+            metadata_options,
+            artifact_options,
+            &portable_manifest,
+            &portable_lock_toml,
             &sources,
-            instance_dir,
+            &mut tracker,
         )?;
     } else {
-        add_file(
+        add_content(
             &mut archive,
             "orbit.toml",
-            &instance_dir.join("orbit.toml"),
-            options,
+            portable_manifest_toml.as_bytes(),
+            metadata_options,
         )?;
-        add_file(
+        add_content(
             &mut archive,
             "orbit.lock",
-            &instance_dir.join("orbit.lock"),
-            options,
+            portable_lock_toml.as_bytes(),
+            metadata_options,
         )?;
-        for (entry, source) in &sources {
+        for (entry, source, _) in &sources {
             add_file(
                 &mut archive,
                 &format!("mods/{}", entry.filename),
                 source,
-                options,
+                artifact_options,
+                Some(&mut tracker),
             )?;
         }
     }
-    archive.finish()?;
+    for source in &config_sources {
+        let relative = archive_path(&source.relative);
+        let destination = if format == "mrpack" {
+            format!("overrides/{relative}")
+        } else {
+            relative
+        };
+        add_file(
+            &mut archive,
+            &destination,
+            &source.source,
+            metadata_options,
+            Some(&mut tracker),
+        )?;
+    }
+    archive.finish()?.sync_all()?;
     if output.exists() {
         std::fs::remove_file(output)?;
     }
-    std::fs::rename(temporary, output)?;
+    std::fs::rename(&temporary, output)?;
+    pending.commit();
+    tracker.finished();
     Ok(report)
 }
 
@@ -318,6 +488,7 @@ fn add_file(
     archive_path: &str,
     source: &Path,
     options: SimpleFileOptions,
+    mut progress: Option<&mut ExportTracker>,
 ) -> Result<(), OrbitError> {
     archive.start_file(archive_path, options)?;
     let mut input = std::fs::File::open(source)?;
@@ -328,8 +499,167 @@ fn add_file(
             break;
         }
         archive.write_all(&buffer[..read])?;
+        if let Some(progress) = progress.as_mut() {
+            progress.advance(read as u64);
+        }
     }
     Ok(())
+}
+
+fn add_content(
+    archive: &mut zip::ZipWriter<std::fs::File>,
+    archive_path: &str,
+    content: &[u8],
+    options: SimpleFileOptions,
+) -> Result<(), OrbitError> {
+    archive.start_file(archive_path, options)?;
+    archive.write_all(content)?;
+    Ok(())
+}
+
+fn portable_state(
+    manifest: &crate::manifest::OrbitManifest,
+    lockfile: &crate::lockfile::OrbitLockfile,
+    selected: &[String],
+) -> (
+    crate::manifest::OrbitManifest,
+    crate::lockfile::OrbitLockfile,
+) {
+    let selected: std::collections::BTreeSet<_> = selected.iter().map(String::as_str).collect();
+    let mut portable_manifest = manifest.clone();
+    portable_manifest
+        .dependencies
+        .retain(|package, _| selected.contains(package.as_str()));
+
+    let mut portable_lock = lockfile.clone();
+    portable_lock
+        .packages
+        .retain(|entry| selected.contains(entry.mod_id.as_str()));
+    for entry in &mut portable_lock.packages {
+        let path = format!("mods/{}", entry.filename);
+        let remote = crate::manifest::PackageRemote::File { path: path.clone() };
+        if !entry.remotes.contains(&remote) {
+            entry.remotes.push(remote.clone());
+            entry.remotes.sort();
+        }
+        let source = crate::lockfile::ArtifactSource::File { path };
+        if !entry.artifact_sources.contains(&source) {
+            entry.artifact_sources.push(source);
+        }
+        if let Some(dependency) = portable_manifest.dependencies.get_mut(&entry.mod_id)
+            && !dependency.remotes.contains(&remote)
+        {
+            dependency.remotes.push(remote);
+            dependency.remotes.sort();
+        }
+    }
+    (portable_manifest, portable_lock)
+}
+
+fn compute_sha256_with_progress(
+    source: &Path,
+    progress: &mut ExportTracker,
+) -> Result<String, OrbitError> {
+    use sha2::{Digest as _, Sha256};
+
+    let mut file = std::fs::File::open(source)?;
+    let mut digest = Sha256::new();
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let read = file.read(&mut buffer)?;
+        if read == 0 {
+            break;
+        }
+        digest.update(&buffer[..read]);
+        progress.advance(read as u64);
+    }
+    Ok(hex::encode(digest.finalize()))
+}
+
+struct ExportTracker {
+    progress: Option<ProgressReporter>,
+    packages: usize,
+    completed_packages: usize,
+    completed_bytes: u64,
+    total_bytes: u64,
+}
+
+impl ExportTracker {
+    fn new(progress: Option<ProgressReporter>, packages: usize, total_bytes: u64) -> Self {
+        Self {
+            progress,
+            packages,
+            completed_packages: 0,
+            completed_bytes: 0,
+            total_bytes,
+        }
+    }
+
+    fn started(&self) {
+        emit_progress(
+            self.progress.as_ref(),
+            ProgressEvent::ExportStarted {
+                packages: self.packages,
+                total_bytes: self.total_bytes,
+            },
+        );
+    }
+
+    fn advance(&mut self, bytes: u64) {
+        self.completed_bytes = self
+            .completed_bytes
+            .saturating_add(bytes)
+            .min(self.total_bytes);
+        emit_progress(
+            self.progress.as_ref(),
+            ProgressEvent::ExportAdvanced {
+                completed: self.completed_bytes,
+                total: self.total_bytes,
+                completed_packages: self.completed_packages,
+                packages: self.packages,
+            },
+        );
+    }
+
+    fn complete_package(&mut self, completed: usize) {
+        self.completed_packages = completed;
+    }
+
+    fn finished(&self) {
+        emit_progress(
+            self.progress.as_ref(),
+            ProgressEvent::ExportFinished {
+                packages: self.packages,
+                total_bytes: self.total_bytes,
+            },
+        );
+    }
+}
+
+struct PendingOutput {
+    path: PathBuf,
+    committed: bool,
+}
+
+impl PendingOutput {
+    fn new(path: PathBuf) -> Self {
+        Self {
+            path,
+            committed: false,
+        }
+    }
+
+    fn commit(mut self) {
+        self.committed = true;
+    }
+}
+
+impl Drop for PendingOutput {
+    fn drop(&mut self) {
+        if !self.committed && self.path.is_file() {
+            let _ = std::fs::remove_file(&self.path);
+        }
+    }
 }
 
 fn temporary_output_path(output: &Path) -> PathBuf {
@@ -338,6 +668,66 @@ fn temporary_output_path(output: &Path) -> PathBuf {
         .map(|filename| filename.to_string_lossy())
         .unwrap_or_default();
     output.with_file_name(format!(".{filename}.tmp"))
+}
+
+#[derive(Debug)]
+pub(crate) struct PortableFile {
+    pub source: PathBuf,
+    pub relative: PathBuf,
+    pub bytes: u64,
+}
+
+pub(crate) fn portable_config_sources(
+    instance_dir: &Path,
+) -> Result<Vec<PortableFile>, OrbitError> {
+    const ROOTS: [&str; 4] = ["config", "defaultconfigs", "serverconfig", "options.txt"];
+    let mut sources = Vec::new();
+    for root in ROOTS {
+        let path = instance_dir.join(root);
+        if path.exists() {
+            collect_portable_files(instance_dir, &path, &mut sources)?;
+        }
+    }
+    sources.sort_by(|left, right| left.relative.cmp(&right.relative));
+    Ok(sources)
+}
+
+fn collect_portable_files(
+    instance_dir: &Path,
+    path: &Path,
+    sources: &mut Vec<PortableFile>,
+) -> Result<(), OrbitError> {
+    let metadata = std::fs::symlink_metadata(path)?;
+    if metadata.file_type().is_symlink() {
+        return Err(OrbitError::Other(anyhow::anyhow!(
+            "portable instance content contains a symbolic link: {}",
+            path.display()
+        )));
+    }
+    if metadata.is_dir() {
+        for entry in std::fs::read_dir(path)? {
+            collect_portable_files(instance_dir, &entry?.path(), sources)?;
+        }
+    } else if metadata.is_file() {
+        let relative = path.strip_prefix(instance_dir).map_err(|_| {
+            OrbitError::Other(anyhow::anyhow!(
+                "portable instance content escaped its instance directory"
+            ))
+        })?;
+        sources.push(PortableFile {
+            source: path.to_path_buf(),
+            relative: relative.to_path_buf(),
+            bytes: metadata.len(),
+        });
+    }
+    Ok(())
+}
+
+fn archive_path(path: &Path) -> String {
+    path.components()
+        .map(|component| component.as_os_str().to_string_lossy())
+        .collect::<Vec<_>>()
+        .join("/")
 }
 
 #[cfg(test)]
@@ -471,6 +861,8 @@ mod tests {
             .unwrap();
         let jar = directory.join("mods/example.jar");
         std::fs::write(&jar, b"example").unwrap();
+        std::fs::create_dir_all(directory.join("config")).unwrap();
+        std::fs::write(directory.join("config/example.toml"), b"enabled = true\n").unwrap();
         Lockfile::new(
             &directory,
             OrbitLockfile {
@@ -505,13 +897,54 @@ mod tests {
         .unwrap();
         let output = directory.join("pack.zip");
 
-        let report = export_instance(&directory, &output, None, "zip", false).unwrap();
+        let events = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let captured = events.clone();
+        let progress: ProgressReporter = std::sync::Arc::new(move |event| {
+            captured.lock().unwrap().push(event);
+        });
+        let report =
+            export_instance(&directory, &output, None, "zip", false, Some(progress)).unwrap();
         let mut archive = zip::ZipArchive::new(std::fs::File::open(&output).unwrap()).unwrap();
 
         assert_eq!(report.packages, 1);
         assert!(archive.by_name("orbit.toml").is_ok());
         assert!(archive.by_name("orbit.lock").is_ok());
-        assert!(archive.by_name("mods/example.jar").is_ok());
+        assert!(archive.by_name("config/example.toml").is_ok());
+        let jar = archive.by_name("mods/example.jar").unwrap();
+        assert_eq!(jar.compression(), zip::CompressionMethod::Stored);
+        drop(jar);
+        let events = events.lock().unwrap();
+        assert!(matches!(
+            events.first(),
+            Some(ProgressEvent::ExportStarted { packages: 1, .. })
+        ));
+        assert!(events.iter().any(|event| matches!(
+            event,
+            ProgressEvent::ExportAdvanced {
+                completed,
+                total,
+                ..
+            } if completed == total
+        )));
+        assert!(matches!(
+            events.last(),
+            Some(ProgressEvent::ExportFinished { packages: 1, .. })
+        ));
+        drop(archive);
+        let portable = extract_portable_instance(&output).unwrap();
+        let portable_manifest = ManifestFile::open(portable.path()).unwrap();
+        assert!(portable_manifest.inner.dependencies["example"]
+            .remotes
+            .iter()
+            .any(|remote| matches!(remote, PackageRemote::File { path } if path == "mods/example.jar")));
+        let portable_lock = Lockfile::open(portable.path()).unwrap();
+        assert!(portable_lock.inner.packages[0].artifact_sources.iter().any(
+            |source| matches!(source, ArtifactSource::File { path } if path == "mods/example.jar")
+        ));
+        assert_eq!(
+            std::fs::read_to_string(portable.path().join("config/example.toml")).unwrap(),
+            "enabled = true\n"
+        );
         std::fs::remove_dir_all(directory).unwrap();
     }
 
@@ -607,7 +1040,7 @@ mod tests {
         .unwrap();
         let output = directory.join("pack.mrpack");
 
-        export_instance(&directory, &output, None, "mrpack", false).unwrap();
+        export_instance(&directory, &output, None, "mrpack", false, None).unwrap();
         let mut archive = zip::ZipArchive::new(std::fs::File::open(&output).unwrap()).unwrap();
         let index: serde_json::Value = {
             let mut entry = archive.by_name("modrinth.index.json").unwrap();

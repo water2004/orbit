@@ -34,6 +34,7 @@ pub struct MigrationPlan {
     target_dir: PathBuf,
     target_manifest: crate::manifest::OrbitManifest,
     target_lockfile: OrbitLockfile,
+    _source_owner: Option<std::sync::Arc<tempfile::TempDir>>,
 }
 
 impl MigrationPlan {
@@ -210,7 +211,22 @@ pub async fn plan_migration(
         target_dir,
         target_manifest,
         target_lockfile,
+        _source_owner: None,
     })
+}
+
+pub async fn plan_migration_from_portable(
+    source: crate::archive::PortableInstance,
+    target_dir: &Path,
+    providers: &[Box<dyn ModProvider>],
+    jar_cache: &crate::jar_cache::JarCache,
+    interaction: MigrationInteraction,
+) -> Result<MigrationPlan, OrbitError> {
+    let owner = source.owner();
+    let mut plan =
+        plan_migration(source.path(), target_dir, providers, jar_cache, interaction).await?;
+    plan._source_owner = Some(owner);
+    Ok(plan)
 }
 
 /// Export a previously selected plan into the installed target instance.
@@ -221,7 +237,7 @@ pub fn export_migration(
     dry_run: bool,
 ) -> Result<MigrationExportReport, OrbitError> {
     validate_target_is_unchanged(plan)?;
-    let config_sources = migration_config_sources(&plan.source_dir)?;
+    let config_sources = crate::archive::portable_config_sources(&plan.source_dir)?;
     let config_files = config_sources.len();
     let config_bytes = config_sources.iter().map(|source| source.bytes).sum();
     let report = MigrationExportReport {
@@ -266,13 +282,6 @@ pub fn export_migration(
     }
     result?;
     Ok(report)
-}
-
-#[derive(Debug)]
-struct ConfigSource {
-    source: PathBuf,
-    relative: PathBuf,
-    bytes: u64,
 }
 
 fn migration_changes(
@@ -348,59 +357,9 @@ fn validate_target_is_unchanged(plan: &MigrationPlan) -> Result<(), OrbitError> 
     Ok(())
 }
 
-fn migration_config_sources(source_dir: &Path) -> Result<Vec<ConfigSource>, OrbitError> {
-    const ROOTS: [&str; 4] = ["config", "defaultconfigs", "serverconfig", "options.txt"];
-    let mut sources = Vec::new();
-    for root in ROOTS {
-        let path = source_dir.join(root);
-        if !path.exists() {
-            continue;
-        }
-        collect_config_files(source_dir, &path, &mut sources)?;
-    }
-    sources.sort_by(|left, right| left.relative.cmp(&right.relative));
-    Ok(sources)
-}
-
-fn collect_config_files(
-    source_root: &Path,
-    path: &Path,
-    sources: &mut Vec<ConfigSource>,
-) -> Result<(), OrbitError> {
-    let metadata = std::fs::symlink_metadata(path)?;
-    if metadata.file_type().is_symlink() {
-        return Err(OrbitError::Other(anyhow::anyhow!(
-            "migration configuration contains a symbolic link: {}",
-            path.display()
-        )));
-    }
-    if metadata.is_dir() {
-        for entry in std::fs::read_dir(path)? {
-            collect_config_files(source_root, &entry?.path(), sources)?;
-        }
-        return Ok(());
-    }
-    if metadata.is_file() {
-        let relative = path
-            .strip_prefix(source_root)
-            .map_err(|_| {
-                OrbitError::Other(anyhow::anyhow!(
-                    "migration configuration escaped the source instance"
-                ))
-            })?
-            .to_path_buf();
-        sources.push(ConfigSource {
-            source: path.to_path_buf(),
-            relative,
-            bytes: metadata.len(),
-        });
-    }
-    Ok(())
-}
-
 fn stage_and_commit(
     plan: &MigrationPlan,
-    config_sources: &[ConfigSource],
+    config_sources: &[crate::archive::PortableFile],
     staging: &Path,
 ) -> Result<(), OrbitError> {
     ManifestFile::new(staging, plan.target_manifest.clone()).save()?;
@@ -521,8 +480,11 @@ mod tests {
         std::fs::write(source.join("config/example.toml"), "enabled = true\n").unwrap();
 
         let cache = crate::jar_cache::JarCache::open(root.path().join("cache")).unwrap();
-        let plan = plan_migration(
-            &source,
+        let pack = root.path().join("source.zip");
+        crate::archive::export_instance(&source, &pack, None, "zip", false, None).unwrap();
+        let portable = crate::archive::extract_portable_instance(&pack).unwrap();
+        let plan = plan_migration_from_portable(
+            portable,
             &target,
             &[],
             &cache,

@@ -133,6 +133,9 @@ fn phase_for(event: &ProgressEvent) -> ProgressPhase {
         ProgressEvent::ApplyStarted { .. }
         | ProgressEvent::ApplyArtifact { .. }
         | ProgressEvent::ApplyFinished { .. } => ProgressPhase::Apply,
+        ProgressEvent::ExportStarted { .. }
+        | ProgressEvent::ExportAdvanced { .. }
+        | ProgressEvent::ExportFinished { .. } => ProgressPhase::Export,
     }
 }
 

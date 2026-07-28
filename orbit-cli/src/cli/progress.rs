@@ -308,6 +308,34 @@ impl ProgressRenderer {
                     total = total
                 ),
             ),
+            ProgressEvent::ExportStarted {
+                packages,
+                total_bytes,
+            } => start_bar(
+                &mut state,
+                usize::try_from(total_bytes).unwrap_or(usize::MAX),
+                tr!("Exporting %{packages} package(s)", packages = packages),
+            ),
+            ProgressEvent::ExportAdvanced {
+                completed,
+                total,
+                completed_packages,
+                packages,
+            } => {
+                if let Some(bar) = &state.bar {
+                    bar.set_length(total);
+                    bar.set_position(completed);
+                    bar.set_message(tr!(
+                        "Exporting packages %{completed}/%{total}",
+                        completed = completed_packages,
+                        total = packages
+                    ));
+                }
+            }
+            ProgressEvent::ExportFinished { packages, .. } => finish(
+                &mut state,
+                tr!("Exported %{packages} package(s)", packages = packages),
+            ),
         }
     }
 }
@@ -546,6 +574,14 @@ fn plain_line(event: &ProgressEvent, state: &mut RenderState) -> Option<String> 
             "[4/4] Applied/verified %{total} selected packages.",
             total = total
         )),
+        ProgressEvent::ExportStarted { packages, .. } => Some(tr!(
+            "Exporting %{packages} package(s)...",
+            packages = packages
+        )),
+        ProgressEvent::ExportAdvanced { .. } => None,
+        ProgressEvent::ExportFinished { packages, .. } => {
+            Some(tr!("Exported %{packages} package(s).", packages = packages))
+        }
         ProgressEvent::CandidateArtifact {
             state: ArtifactProgressState::Started | ArtifactProgressState::AlreadyPresent,
             ..

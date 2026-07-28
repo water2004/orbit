@@ -97,6 +97,20 @@ pub enum ProgressEvent {
     ApplyFinished {
         total: usize,
     },
+    ExportStarted {
+        packages: usize,
+        total_bytes: u64,
+    },
+    ExportAdvanced {
+        completed: u64,
+        total: u64,
+        completed_packages: usize,
+        packages: usize,
+    },
+    ExportFinished {
+        packages: usize,
+        total_bytes: u64,
+    },
 }
 
 pub(crate) fn emit(progress: Option<&ProgressReporter>, event: ProgressEvent) {
