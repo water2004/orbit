@@ -138,7 +138,9 @@ pub struct ListedPackageView {
     pub mod_id: String,
     pub version: String,
     pub remotes: Vec<String>,
+    pub configured_environment: Option<String>,
     pub environment: String,
+    pub root: bool,
     pub optional: bool,
     pub dependencies: Vec<String>,
     pub bundled: Vec<BundledView>,
@@ -584,7 +586,9 @@ pub fn listed_package_view(pkg: &ListedPackage) -> ListedPackageView {
         mod_id: pkg.mod_id.clone(),
         version: pkg.version.clone(),
         remotes: pkg.remotes.clone(),
+        configured_environment: pkg.configured_environment.clone(),
         environment: pkg.environment.clone(),
+        root: pkg.root,
         optional: pkg.optional,
         dependencies: pkg.dependencies.clone(),
         bundled: pkg
@@ -784,7 +788,8 @@ pub fn restore_view(report: &RestoreReport, dry_run: bool) -> TransactionOutput 
 mod tests {
     use super::*;
     use orbit_core::{
-        InstallReport, OutdatedMod, PackageChange, PackageChangeKind, RemovedPackage,
+        InstallReport, ListedPackage, OutdatedMod, PackageChange, PackageChangeKind,
+        RemovedPackage,
         resolver::types::{CandidateDiagnostic, CandidateDiagnosticKind},
     };
 
@@ -825,6 +830,26 @@ mod tests {
 
         assert!(json["result"]["configured"].is_null());
         assert_eq!(json["result"]["effective"], "client");
+    }
+
+    #[test]
+    fn package_list_exposes_root_and_configured_environment_for_management() {
+        let package = ListedPackage {
+            mod_id: "sodium".into(),
+            version: "0.9.1".into(),
+            remotes: vec!["modrinth:AANobbMI".into()],
+            configured_environment: None,
+            environment: "client".into(),
+            root: true,
+            optional: false,
+            dependencies: Vec::new(),
+            bundled: Vec::new(),
+        };
+
+        let value = serde_json::to_value(listed_package_view(&package)).unwrap();
+        assert_eq!(value["root"], true);
+        assert!(value["configured_environment"].is_null());
+        assert_eq!(value["environment"], "client");
     }
 
     #[test]

@@ -154,7 +154,9 @@ orbit [--format text|json] [--progress-format none|ndjson] <command> ...
         "mod_id": "sodium",
         "version": "0.5.8",
         "remotes": ["modrinth:AANobbMI"],
+        "configured_environment": null,
         "environment": "both",
+        "root": true,
         "optional": false,
         "dependencies": ["fabric-api"],
         "bundled": [{ "mod_id": "sodium-base", "version": "0.5.8" }]
@@ -164,9 +166,10 @@ orbit [--format text|json] [--progress-format none|ndjson] <command> ...
 }
 ```
 
-`environment` 是实际用于根过滤的有效值：显式 TOML 覆盖优先，否则来自 lock 中精确
-候选的 JAR 声明。`tree: true` 时额外返回 `roots` 与每个包的 `dependents`，结构见
-schema 文档源码。
+`configured_environment: null` 表示 TOML 使用 `auto`；`environment` 是实际用于根过滤
+的有效值：显式 TOML 覆盖优先，否则来自 lock 中精确候选的 JAR 声明。`root=false`
+表示传递包，不能直接设置根过滤或 discovery remote。`tree: true` 时额外返回 `roots`
+与每个包的 `dependents`，结构见 schema 文档源码。
 
 ### `env`
 

@@ -32,7 +32,7 @@ pub async fn handle(command: RemoteCommands, ctx: &CliContext) -> Result<()> {
                 super::operation_progress(ctx),
             )
             .await?;
-            print_report(&report, ctx);
+            print_report(&report, "add", ctx);
         }
         RemoteCommands::Remove {
             package,
@@ -60,18 +60,17 @@ pub async fn handle(command: RemoteCommands, ctx: &CliContext) -> Result<()> {
             };
             let report =
                 orbit_core::remove_package_remote(&instance_dir, &package, &remote, ctx.dry_run)?;
-            print_report(&report, ctx);
+            print_report(&report, "remove", ctx);
         }
         RemoteCommands::List { package } => {
             let report = orbit_core::list_package_remotes(&instance_dir, &package)?;
-            print_report(&report, ctx);
+            print_report(&report, "list", ctx);
         }
     }
     Ok(())
 }
 
-fn print_report(report: &orbit_core::RemoteReport, ctx: &CliContext) {
-    let subcommand = if ctx.dry_run { "add" } else { "list" };
+fn print_report(report: &orbit_core::RemoteReport, subcommand: &str, ctx: &CliContext) {
     match ctx.output.format {
         OutputFormat::Text => {
             let header = if ctx.dry_run {

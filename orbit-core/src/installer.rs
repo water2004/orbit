@@ -583,7 +583,11 @@ pub struct ListedPackage {
     pub mod_id: String,
     pub version: String,
     pub remotes: Vec<String>,
+    /// Explicit root-package override; `None` means follow the selected JAR.
+    pub configured_environment: Option<String>,
+    /// Effective environment after applying the optional override.
     pub environment: String,
+    pub root: bool,
     pub optional: bool,
     /// 依赖的 mod_id 列表
     pub dependencies: Vec<String>,
@@ -658,11 +662,15 @@ fn list_output(
                     .iter()
                     .map(PackageRemote::display_locator)
                     .collect(),
+                configured_environment: requirement
+                    .and_then(DependencySpec::env)
+                    .map(|environment| environment.as_str().to_string()),
                 environment: requirement
                     .map(|requirement| requirement.effective_environment(entry.environment))
                     .unwrap_or(entry.environment)
                     .as_str()
                     .to_string(),
+                root: requirement.is_some(),
                 optional: requirement.is_some_and(DependencySpec::optional),
                 dependencies: declared_dependency_ids(&entry.dependencies)
                     .into_iter()
