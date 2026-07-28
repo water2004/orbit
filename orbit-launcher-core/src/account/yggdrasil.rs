@@ -119,8 +119,8 @@ pub(super) async fn resolve_yggdrasil_identity(
             account.id
         )));
     };
-    let prefetched_metadata = fetch_provider_metadata(client, provider).await?;
-    let api_root = provider_api_root(provider)?.to_string();
+    let prefetched_metadata = crate::yggdrasil::fetch_provider_metadata(client, provider).await?;
+    let api_root = crate::yggdrasil::provider_api_root(provider)?.to_string();
     if validate_session(client, provider, access_token, client_token).await? {
         return Ok(identity(
             &account,
@@ -174,38 +174,6 @@ fn identity(
         yggdrasil_api_root: Some(api_root),
         yggdrasil_prefetched_metadata: Some(prefetched_metadata),
     }
-}
-
-async fn fetch_provider_metadata(
-    client: &reqwest::Client,
-    provider: &YggdrasilProviderConfig,
-) -> Result<String, LauncherError> {
-    let response = client.get(provider_api_root(provider)?).send().await?;
-    let status = response.status();
-    let bytes = response.bytes().await?;
-    if bytes.len() > MAX_AUTH_RESPONSE_BYTES {
-        return Err(LauncherError::Authentication(format!(
-            "Yggdrasil provider metadata exceeds {MAX_AUTH_RESPONSE_BYTES} bytes"
-        )));
-    }
-    if !status.is_success() {
-        return Err(parse_remote_error("metadata", status.as_u16(), &bytes));
-    }
-    let metadata: serde_json::Value = serde_json::from_slice(&bytes).map_err(|error| {
-        LauncherError::Authentication(format!(
-            "Yggdrasil provider metadata is invalid JSON: {error}"
-        ))
-    })?;
-    if !metadata.is_object() {
-        return Err(LauncherError::Authentication(
-            "Yggdrasil provider metadata must be a JSON object".to_string(),
-        ));
-    }
-    serde_json::to_string(&metadata).map_err(|error| {
-        LauncherError::Authentication(format!(
-            "failed to preserve Yggdrasil provider metadata: {error}"
-        ))
-    })
 }
 
 async fn validate_session(
@@ -315,24 +283,11 @@ where
     })
 }
 
-fn provider_api_root(provider: &YggdrasilProviderConfig) -> Result<url::Url, LauncherError> {
-    let mut root = provider.api_root.clone();
-    if !root.ends_with('/') {
-        root.push('/');
-    }
-    url::Url::parse(&root).map_err(|error| {
-        LauncherError::Authentication(format!(
-            "Yggdrasil provider '{}' has an invalid API root: {error}",
-            provider.id
-        ))
-    })
-}
-
 fn authserver_endpoint(
     provider: &YggdrasilProviderConfig,
     operation: AuthserverOperation,
 ) -> Result<url::Url, LauncherError> {
-    provider_api_root(provider)?
+    crate::yggdrasil::provider_api_root(provider)?
         .join(operation.relative_path())
         .map_err(|error| {
             LauncherError::Authentication(format!(
@@ -555,7 +510,9 @@ mod tests {
             allow_insecure_http: false,
         };
         assert_eq!(
-            provider_api_root(&provider).unwrap().as_str(),
+            crate::yggdrasil::provider_api_root(&provider)
+                .unwrap()
+                .as_str(),
             "https://example.com/api/yggdrasil/"
         );
         for (operation, expected) in [

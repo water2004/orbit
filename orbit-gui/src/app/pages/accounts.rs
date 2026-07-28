@@ -578,7 +578,14 @@ impl OrbitApp {
                     "my-service",
                     theme::InputWidth::Form,
                 );
-                ui.label(RichText::new(tr!("API root")).strong());
+                ui.label(RichText::new(tr!("Authentication address")).strong());
+                ui.label(
+                    RichText::new(tr!(
+                        "Enter the service website or exact API root. Orbit resolves and validates the endpoint before saving it."
+                    ))
+                    .size(11.0)
+                    .color(theme::muted()),
+                );
                 theme::text_field(
                     ui,
                     &mut self.ygg_api_root,

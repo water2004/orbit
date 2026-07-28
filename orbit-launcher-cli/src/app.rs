@@ -238,7 +238,7 @@ pub async fn execute(
                     "--instance is not valid for configuration commands".to_string(),
                 ));
             }
-            execute_config(command, runtime)
+            execute_config(command, runtime).await
         }
         Commands::Instance { command } => {
             if instance_selector.is_some() && !command.accepts_instance_context() {
@@ -1085,7 +1085,7 @@ fn validate_console_command(command: &str) -> Result<(), AppError> {
     Ok(())
 }
 
-fn execute_config(
+async fn execute_config(
     command: ConfigCommands,
     runtime: &RuntimeContext,
 ) -> Result<CommandOutput, AppError> {
@@ -1134,19 +1134,28 @@ fn execute_config(
                 id,
                 api_root,
                 allow_insecure_http,
-            } => Ok(CommandOutput::YggdrasilProviderMutation(
-                YggdrasilProviderMutationView {
-                    action: "added",
-                    provider: YggdrasilProviderView::from(add_yggdrasil_provider(
-                        &path,
-                        YggdrasilProviderConfig {
-                            id,
-                            api_root,
-                            allow_insecure_http,
-                        },
-                    )?),
-                },
-            )),
+            } => {
+                let client = runtime.config().http_client()?;
+                let api_root = orbit_launcher_core::discover_yggdrasil_api_root(
+                    &client,
+                    &api_root,
+                    allow_insecure_http,
+                )
+                .await?;
+                Ok(CommandOutput::YggdrasilProviderMutation(
+                    YggdrasilProviderMutationView {
+                        action: "added",
+                        provider: YggdrasilProviderView::from(add_yggdrasil_provider(
+                            &path,
+                            YggdrasilProviderConfig {
+                                id,
+                                api_root,
+                                allow_insecure_http,
+                            },
+                        )?),
+                    },
+                ))
+            }
             YggdrasilProviderCommands::Remove { id } => Ok(
                 CommandOutput::YggdrasilProviderMutation(YggdrasilProviderMutationView {
                     action: "removed",

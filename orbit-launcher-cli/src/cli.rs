@@ -262,7 +262,7 @@ pub enum ConfigCommands {
     Set { key: String, value: String },
     /// Remove an explicit setting and restore its default value.
     Unset { key: String },
-    /// Configure standard External Yggdrasil API roots.
+    /// Configure standard External Yggdrasil endpoints.
     Yggdrasil {
         #[command(subcommand)]
         command: YggdrasilProviderCommands,
@@ -273,11 +273,11 @@ pub enum ConfigCommands {
 pub enum YggdrasilProviderCommands {
     /// List configured providers.
     List,
-    /// Add one provider with an exact API root.
+    /// Discover and add a provider from a website or exact API root.
     Add {
         id: String,
         api_root: String,
-        /// Explicitly permit an HTTP API root; credentials can be intercepted.
+        /// Explicitly permit an HTTP endpoint; credentials can be intercepted.
         #[arg(long)]
         allow_insecure_http: bool,
     },

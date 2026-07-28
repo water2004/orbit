@@ -28,6 +28,7 @@ pub mod registry;
 pub mod runtime;
 pub mod secret_store;
 pub mod versions;
+pub mod yggdrasil;
 
 pub use account::{
     AccountLaunchIdentity, AccountMetadata, AccountProvider, AccountRepository,
@@ -105,3 +106,4 @@ pub use runtime::{
 };
 pub use secret_store::{SecretStore, native_secret_store};
 pub use versions::{LoaderVersion, list_loader_versions};
+pub use yggdrasil::discover_yggdrasil_api_root;
