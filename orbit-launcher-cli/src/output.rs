@@ -44,6 +44,8 @@ pub struct InstanceDetailView {
     pub instance: InstanceView,
     pub context: ContextSource,
     pub desired: DesiredRuntimeView,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub selected_account_id: Option<String>,
 }
 
 impl InstanceDetailView {
@@ -62,6 +64,7 @@ impl InstanceDetailView {
                 loader_version: manifest.loader.requirement.clone(),
                 java_policy: manifest.java.policy.as_str().to_string(),
             },
+            selected_account_id: manifest.launch.account.map(|account| account.to_string()),
         }
     }
 }
@@ -790,7 +793,7 @@ impl ConfigMutationView {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use orbit_launcher_core::InstanceKind;
+    use orbit_launcher_core::{ContextSource, InstanceKind, InstanceManifest, LoaderKind};
 
     #[test]
     fn error_envelope_has_stable_gui_fields() {
@@ -818,5 +821,31 @@ mod tests {
         let json = serde_json::to_value(InstanceView::from_entry(&entry, Some(id))).unwrap();
         assert_eq!(json["id"], id.to_string());
         assert_eq!(json["is_default"], true);
+    }
+
+    #[test]
+    fn instance_detail_exposes_the_exact_selected_account() {
+        let id = uuid::Uuid::new_v4();
+        let account = uuid::Uuid::new_v4();
+        let entry = RegistryEntry {
+            id,
+            name: "client".to_string(),
+            root: PathBuf::from("/games/client"),
+            kind: InstanceKind::Client,
+        };
+        let mut manifest = InstanceManifest::new(
+            id,
+            "client",
+            InstanceKind::Client,
+            "1.21.1",
+            LoaderKind::Vanilla,
+            None,
+        )
+        .unwrap();
+        manifest.launch.account = Some(account);
+
+        let detail = InstanceDetailView::new(&entry, &manifest, None, ContextSource::Explicit);
+        let json = serde_json::to_value(detail).unwrap();
+        assert_eq!(json["selected_account_id"], account.to_string());
     }
 }

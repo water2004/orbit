@@ -202,6 +202,7 @@ SHA-256 和 JAR Manifest 验证的 Authlib Injector。客户端选择 External Y
     "kind": "server",
     "is_default": false,
     "context": "explicit",
+    "selected_account_id": "ebc2d5d2-4e8b-4e52-a119-c459c971b7ff",
     "desired": {
       "minecraft": "1.21.1",
       "loader": "fabric",
