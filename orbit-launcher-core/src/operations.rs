@@ -4,7 +4,7 @@ use uuid::Uuid;
 
 use crate::error::LauncherError;
 use crate::instance::{
-    INSTANCE_MANIFEST_FILE, InstanceKind, InstanceManifest, LoaderKind, ManifestFile,
+    INSTANCE_MANIFEST_FILE, InstanceKind, InstanceManifest, JavaPolicy, LoaderKind, ManifestFile,
     validate_instance_name,
 };
 use crate::registry::{InstanceRegistry, RegistryEntry};
@@ -201,6 +201,87 @@ pub struct RenameInstanceResult {
     pub new_name: String,
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct ConfigureInstanceRequest {
+    pub minecraft_requirement: Option<String>,
+    pub loader_kind: Option<LoaderKind>,
+    pub loader_requirement: Option<String>,
+    pub java_policy: Option<JavaPolicy>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ConfigureInstanceResult {
+    pub entry: RegistryEntry,
+    pub manifest: InstanceManifest,
+}
+
+pub fn configure_instance(
+    paths: &RuntimePaths,
+    selector: &str,
+    request: ConfigureInstanceRequest,
+) -> Result<ConfigureInstanceResult, LauncherError> {
+    let registry = InstanceRegistry::load(&paths.instances_file())?;
+    let entry = registry
+        .find(selector)
+        .cloned()
+        .ok_or_else(|| LauncherError::InstanceNotFound(selector.to_string()))?;
+    let mut manifest_file = ManifestFile::open(&entry.root)?;
+    if manifest_file.inner.id != entry.id {
+        return Err(LauncherError::InstanceRegistryMismatch(format!(
+            "registry entry '{}' and manifest have different IDs",
+            entry.name
+        )));
+    }
+
+    if let Some(requirement) = request.minecraft_requirement {
+        manifest_file.inner.minecraft.requirement = requirement;
+    }
+    if let Some(loader) = request.loader_kind {
+        let changed_kind = loader != manifest_file.inner.loader.kind;
+        if changed_kind && loader != LoaderKind::Vanilla && request.loader_requirement.is_none() {
+            return Err(LauncherError::InvalidManifest(format!(
+                "switching to {} requires an explicit loader version requirement",
+                loader.as_str()
+            )));
+        }
+        manifest_file.inner.loader.kind = loader;
+        manifest_file.inner.loader.requirement = match loader {
+            LoaderKind::Vanilla => None,
+            _ => request.loader_requirement.or_else(|| {
+                (!changed_kind)
+                    .then(|| manifest_file.inner.loader.requirement.clone())
+                    .flatten()
+            }),
+        };
+    } else if let Some(requirement) = request.loader_requirement {
+        if manifest_file.inner.loader.kind == LoaderKind::Vanilla {
+            return Err(LauncherError::InvalidManifest(
+                "vanilla instances cannot have a loader version requirement".to_string(),
+            ));
+        }
+        manifest_file.inner.loader.requirement = Some(requirement);
+    }
+    if let Some(policy) = request.java_policy {
+        if policy == JavaPolicy::System {
+            return Err(LauncherError::UnsupportedRequirement(
+                "system Java is not supported by the managed install and launch pipeline"
+                    .to_string(),
+            ));
+        }
+        manifest_file.inner.java.policy = policy;
+        manifest_file.inner.java.path = None;
+        if policy == JavaPolicy::Auto {
+            manifest_file.inner.java.provider = None;
+        }
+    }
+    manifest_file.inner.validate()?;
+    manifest_file.save()?;
+    Ok(ConfigureInstanceResult {
+        entry,
+        manifest: manifest_file.inner,
+    })
+}
+
 pub fn rename_instance(
     paths: &RuntimePaths,
     selector: &str,
@@ -351,6 +432,73 @@ mod tests {
                 .instances
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn configure_updates_desired_runtime_without_touching_registry_identity() {
+        let directory = tempfile::tempdir().unwrap();
+        let paths = paths(directory.path());
+        let root = directory.path().join("server");
+        let created = create_instance(&paths, request(root.clone(), "server")).unwrap();
+
+        let configured = configure_instance(
+            &paths,
+            "server",
+            ConfigureInstanceRequest {
+                minecraft_requirement: Some("1.22".to_string()),
+                loader_kind: Some(LoaderKind::Neoforge),
+                loader_requirement: Some("latest".to_string()),
+                java_policy: Some(JavaPolicy::Managed),
+            },
+        )
+        .unwrap();
+
+        assert_eq!(configured.entry.id, created.entry.id);
+        assert_eq!(configured.manifest.minecraft.requirement, "1.22");
+        assert_eq!(configured.manifest.loader.kind, LoaderKind::Neoforge);
+        assert_eq!(
+            configured.manifest.loader.requirement.as_deref(),
+            Some("latest")
+        );
+        assert_eq!(configured.manifest.java.policy, JavaPolicy::Managed);
+        assert_eq!(
+            InstanceRegistry::load(&paths.instances_file())
+                .unwrap()
+                .find("server")
+                .unwrap()
+                .id,
+            created.entry.id
+        );
+    }
+
+    #[test]
+    fn configure_requires_a_version_when_switching_to_a_non_vanilla_loader() {
+        let directory = tempfile::tempdir().unwrap();
+        let paths = paths(directory.path());
+        let root = directory.path().join("server");
+        create_instance(
+            &paths,
+            CreateInstanceRequest {
+                root,
+                name: "server".to_string(),
+                kind: InstanceKind::Server,
+                minecraft_requirement: "1.21.1".to_string(),
+                loader_kind: LoaderKind::Vanilla,
+                loader_requirement: None,
+            },
+        )
+        .unwrap();
+
+        let error = configure_instance(
+            &paths,
+            "server",
+            ConfigureInstanceRequest {
+                loader_kind: Some(LoaderKind::Fabric),
+                ..ConfigureInstanceRequest::default()
+            },
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("loader version requirement"));
     }
 
     #[test]

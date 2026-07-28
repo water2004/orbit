@@ -105,6 +105,12 @@ pub enum Commands {
         command: AccountCommands,
     },
 
+    /// Inspect, verify, and remove managed Java runtimes.
+    Java {
+        #[command(subcommand)]
+        command: JavaCommands,
+    },
+
     /// Internal detached supervisor entrypoint.
     #[command(name = "__supervisor", hide = true)]
     Supervisor,
@@ -134,6 +140,19 @@ pub enum AccountCommands {
     },
     /// Delete a persisted local account session and its non-secret metadata.
     Logout { account: String },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum JavaCommands {
+    /// List installed managed runtimes; optionally verify every file.
+    List {
+        #[arg(long)]
+        verify: bool,
+    },
+    /// Verify one installed runtime by its stable ID.
+    Verify { runtime_id: String },
+    /// Remove an unreferenced runtime; instance locks prevent unsafe removal.
+    Remove { runtime_id: String },
 }
 
 #[derive(Debug, Subcommand)]
@@ -273,6 +292,18 @@ pub enum InstanceCommands {
     /// Rename the explicit or local instance.
     Rename { new_name: String },
 
+    /// Change desired Minecraft, loader, or Java policy before installing.
+    Configure {
+        #[arg(long)]
+        minecraft: Option<String>,
+        #[arg(long, value_enum)]
+        loader: Option<LoaderKindArg>,
+        #[arg(long)]
+        loader_version: Option<String>,
+        #[arg(long, value_enum)]
+        java_policy: Option<JavaPolicyArg>,
+    },
+
     /// Unregister the explicit or local instance without deleting its files.
     Remove,
 
@@ -285,7 +316,10 @@ pub enum InstanceCommands {
 
 impl InstanceCommands {
     pub const fn accepts_instance_context(&self) -> bool {
-        matches!(self, Self::Show | Self::Rename { .. } | Self::Remove)
+        matches!(
+            self,
+            Self::Show | Self::Rename { .. } | Self::Configure { .. } | Self::Remove
+        )
     }
 }
 
@@ -321,6 +355,21 @@ pub enum LoaderKindArg {
     Quilt,
     Forge,
     Neoforge,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum JavaPolicyArg {
+    Auto,
+    Managed,
+}
+
+impl From<JavaPolicyArg> for orbit_launcher_core::JavaPolicy {
+    fn from(value: JavaPolicyArg) -> Self {
+        match value {
+            JavaPolicyArg::Auto => Self::Auto,
+            JavaPolicyArg::Managed => Self::Managed,
+        }
+    }
 }
 
 impl From<LoaderKindArg> for orbit_launcher_core::LoaderKind {
@@ -458,6 +507,55 @@ mod tests {
             panic!("unexpected command");
         };
         assert_eq!(value, ["say", "hello world"]);
+    }
+
+    #[test]
+    fn instance_configure_accepts_runtime_policy_updates() {
+        let cli = Cli::try_parse_from([
+            "orbit-launcher",
+            "--instance",
+            "client",
+            "instance",
+            "configure",
+            "--minecraft",
+            "latest-release",
+            "--loader",
+            "fabric",
+            "--loader-version",
+            "stable",
+            "--java-policy",
+            "managed",
+        ])
+        .unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Instance {
+                command: InstanceCommands::Configure {
+                    loader: Some(LoaderKindArg::Fabric),
+                    java_policy: Some(JavaPolicyArg::Managed),
+                    ..
+                }
+            }
+        ));
+    }
+
+    #[test]
+    fn java_management_commands_are_global_and_explicit() {
+        let list = Cli::try_parse_from(["orbit-launcher", "java", "list", "--verify"]).unwrap();
+        assert!(matches!(
+            list.command,
+            Commands::Java {
+                command: JavaCommands::List { verify: true }
+            }
+        ));
+        let remove =
+            Cli::try_parse_from(["orbit-launcher", "java", "remove", "runtime-21"]).unwrap();
+        assert!(matches!(
+            remove.command,
+            Commands::Java {
+                command: JavaCommands::Remove { .. }
+            }
+        ));
     }
 
     #[test]

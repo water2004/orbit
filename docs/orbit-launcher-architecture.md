@@ -651,6 +651,12 @@ orbit-launcher
   config path|get|set|unset|list
 ```
 
+当前 Java 管理已实现 `java list [--verify]`、`java verify <runtime-id>` 和
+`java remove <runtime-id>`。下载与更新不另设一条旁路：实例 `install` 根据官方 Minecraft
+version JSON 解析所需 Java component，把 Mojang runtime 与游戏/Loader 一起纳入同一个安装
+事务。删除前扫描全部已注册实例 lock；仍被引用的 runtime 必须拒绝删除。`discover`、手动
+`install/select/update` 仍是规划节点，不得由 GUI 猜测或模拟。
+
 全局选项：
 
 ```text

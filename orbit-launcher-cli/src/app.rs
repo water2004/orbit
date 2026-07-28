@@ -12,27 +12,30 @@ use orbit_launcher_core::{
     MicrosoftLoginProgressEvent, ResolvedInstance, RuntimeContext, ServerInstallPlan,
     SupervisorControl, SupervisorEvent, YggdrasilProviderConfig, accept_shown_eula,
     add_yggdrasil_provider, apply_install_plan, begin_microsoft_device_login,
-    complete_microsoft_device_login, create_instance, create_offline_account, get_config,
-    import_instance, list_config, login_external_yggdrasil, native_secret_store, prepare_install,
-    prepare_launch, remove_instance, remove_yggdrasil_provider, rename_instance, resolve_instance,
-    resolve_instance_root, resolve_launch_identity, rollback_created_instance, run_launch,
-    set_config, set_default_instance, show_current_eula, supervise_server, unset_config,
+    complete_microsoft_device_login, configure_instance, create_instance, create_offline_account,
+    get_config, import_instance, list_config, login_external_yggdrasil, native_secret_store,
+    prepare_install, prepare_launch, remove_instance, remove_yggdrasil_provider, rename_instance,
+    resolve_instance, resolve_instance_root, resolve_launch_identity, rollback_created_instance,
+    run_launch, set_config, set_default_instance, show_current_eula, supervise_server,
+    unset_config,
 };
 use tokio::sync::{mpsc, watch};
 use zeroize::Zeroizing;
 
 use crate::cli::{
     AccountCommands, AccountLoginCommands, Commands, ConfigCommands, DefaultCommands, EulaCommands,
-    InstanceCommands, MicrosoftLoginCommands, ServerCommands, YggdrasilProviderCommands,
+    InstanceCommands, JavaCommands, MicrosoftLoginCommands, ServerCommands,
+    YggdrasilProviderCommands,
 };
 use crate::output::{
     AccountListView, AccountLoginView, AccountLogoutView, AccountSelectionView, AccountView,
     ConfigEntryView, ConfigListView, ConfigMutationAction, ConfigMutationView, ConfigPathView,
     DefaultView, EulaAcceptanceView, EulaDocumentView, InstallView, InstanceDetailView,
-    InstanceListView, InstanceMutationAction, InstanceMutationView, InstanceView, LaunchPlanView,
-    LaunchResultView, MicrosoftDeviceSessionView, RenameView, ServerControlView, ServerStartView,
-    ServerStatusView, SupervisorResultView, YggdrasilProviderListView,
-    YggdrasilProviderMutationView, YggdrasilProviderView,
+    InstanceListView, InstanceMutationAction, InstanceMutationView, InstanceView,
+    JavaRuntimeListView, JavaRuntimeMutationView, LaunchPlanView, LaunchResultView,
+    MicrosoftDeviceSessionView, RenameView, ServerControlView, ServerStartView, ServerStatusView,
+    SupervisorResultView, YggdrasilProviderListView, YggdrasilProviderMutationView,
+    YggdrasilProviderView,
 };
 use crate::supervisor_ipc::{
     IpcRequest, IpcServer, SupervisorLock, SupervisorState, request as supervisor_request,
@@ -57,6 +60,7 @@ pub enum CommandOutput {
     InstanceDetail(InstanceDetailView),
     InstanceMutation(InstanceMutationView),
     Rename(RenameView),
+    InstanceConfigured(InstanceDetailView),
     Default(DefaultView),
     AccountList(AccountListView),
     AccountDetail(AccountView),
@@ -66,6 +70,8 @@ pub enum CommandOutput {
     MicrosoftDeviceSession(MicrosoftDeviceSessionView),
     YggdrasilProviderList(YggdrasilProviderListView),
     YggdrasilProviderMutation(YggdrasilProviderMutationView),
+    JavaRuntimeList(JavaRuntimeListView),
+    JavaRuntimeMutation(JavaRuntimeMutationView),
 }
 
 impl CommandOutput {
@@ -103,6 +109,7 @@ impl CommandOutput {
             Self::InstanceDetail(_) => "instance.show",
             Self::InstanceMutation(view) => view.action.command_name(),
             Self::Rename(_) => "instance.rename",
+            Self::InstanceConfigured(_) => "instance.configure",
             Self::Default(_) => "instance.default",
             Self::AccountList(_) => "account.list",
             Self::AccountDetail(_) => "account.show",
@@ -118,6 +125,11 @@ impl CommandOutput {
             Self::YggdrasilProviderMutation(view) => match view.action {
                 "added" => "config.yggdrasil.add",
                 _ => "config.yggdrasil.remove",
+            },
+            Self::JavaRuntimeList(_) => "java.list",
+            Self::JavaRuntimeMutation(view) => match view.action {
+                "verified" => "java.verify",
+                _ => "java.remove",
             },
         }
     }
@@ -235,9 +247,51 @@ pub async fn execute(
         Commands::Account { command } => {
             execute_account(command, instance_selector, current_dir, runtime, frontend).await
         }
+        Commands::Java { command } => execute_java(command, instance_selector, runtime),
         Commands::Supervisor => {
             execute_internal_supervisor(instance_selector, current_dir, runtime, frontend).await
         }
+    }
+}
+
+fn execute_java(
+    command: JavaCommands,
+    instance_selector: Option<&str>,
+    runtime: &RuntimeContext,
+) -> Result<CommandOutput, AppError> {
+    if instance_selector.is_some() {
+        return Err(AppError::Argument(
+            "--instance is not valid for global Java runtime management".to_string(),
+        ));
+    }
+    match command {
+        JavaCommands::List { verify } => Ok(CommandOutput::JavaRuntimeList(JavaRuntimeListView {
+            verification_requested: verify,
+            runtimes: orbit_launcher_core::list_managed_java_runtimes(runtime.paths(), verify)?
+                .into_iter()
+                .map(Into::into)
+                .collect(),
+        })),
+        JavaCommands::Verify { runtime_id } => Ok(CommandOutput::JavaRuntimeMutation(
+            JavaRuntimeMutationView {
+                action: "verified",
+                runtime: orbit_launcher_core::verify_managed_java_runtime(
+                    runtime.paths(),
+                    &runtime_id,
+                )?
+                .into(),
+            },
+        )),
+        JavaCommands::Remove { runtime_id } => Ok(CommandOutput::JavaRuntimeMutation(
+            JavaRuntimeMutationView {
+                action: "removed",
+                runtime: orbit_launcher_core::remove_managed_java_runtime(
+                    runtime.paths(),
+                    &runtime_id,
+                )?
+                .into(),
+            },
+        )),
     }
 }
 
@@ -1126,6 +1180,41 @@ fn execute_instance(
                 old_name: renamed.old_name,
                 new_name: renamed.new_name,
             }))
+        }
+        InstanceCommands::Configure {
+            minecraft,
+            loader,
+            loader_version,
+            java_policy,
+        } => {
+            if minecraft.is_none()
+                && loader.is_none()
+                && loader_version.is_none()
+                && java_policy.is_none()
+            {
+                return Err(AppError::Argument(
+                    "instance configure requires at least one desired runtime option".to_string(),
+                ));
+            }
+            let registry = InstanceRegistry::load(&registry_path)?;
+            let resolved =
+                resolve_instance(&registry, selector, current_dir, ContextIntent::Sensitive)?;
+            let configured = configure_instance(
+                runtime.paths(),
+                &resolved.entry.id.to_string(),
+                orbit_launcher_core::ConfigureInstanceRequest {
+                    minecraft_requirement: minecraft,
+                    loader_kind: loader.map(Into::into),
+                    loader_requirement: loader_version,
+                    java_policy: java_policy.map(Into::into),
+                },
+            )?;
+            Ok(CommandOutput::InstanceConfigured(InstanceDetailView::new(
+                &configured.entry,
+                &configured.manifest,
+                registry.default_instance,
+                resolved.source,
+            )))
         }
         InstanceCommands::Remove => {
             let registry = InstanceRegistry::load(&registry_path)?;

@@ -81,6 +81,7 @@ fn command_name(command: &cli::Commands) -> &'static str {
             cli::InstanceCommands::List => "instance.list",
             cli::InstanceCommands::Show => "instance.show",
             cli::InstanceCommands::Rename { .. } => "instance.rename",
+            cli::InstanceCommands::Configure { .. } => "instance.configure",
             cli::InstanceCommands::Remove => "instance.remove",
             cli::InstanceCommands::Default { .. } => "instance.default",
         },
@@ -112,6 +113,11 @@ fn command_name(command: &cli::Commands) -> &'static str {
             cli::AccountCommands::Clear { .. } => "account.clear",
             cli::AccountCommands::Logout { .. } => "account.logout",
         },
+        cli::Commands::Java { command } => match command {
+            cli::JavaCommands::List { .. } => "java.list",
+            cli::JavaCommands::Verify { .. } => "java.verify",
+            cli::JavaCommands::Remove { .. } => "java.remove",
+        },
         cli::Commands::Supervisor => "server.supervisor",
     }
 }
@@ -137,6 +143,7 @@ fn render_success(format: OutputFormat, output: app::CommandOutput) {
             app::CommandOutput::InstanceDetail(value) => print_json(command, value),
             app::CommandOutput::InstanceMutation(value) => print_json(command, value),
             app::CommandOutput::Rename(value) => print_json(command, value),
+            app::CommandOutput::InstanceConfigured(value) => print_json(command, value),
             app::CommandOutput::Default(value) => print_json(command, value),
             app::CommandOutput::AccountList(value) => print_json(command, value),
             app::CommandOutput::AccountDetail(value) => print_json(command, value),
@@ -146,6 +153,8 @@ fn render_success(format: OutputFormat, output: app::CommandOutput) {
             app::CommandOutput::MicrosoftDeviceSession(value) => print_json(command, value),
             app::CommandOutput::YggdrasilProviderList(value) => print_json(command, value),
             app::CommandOutput::YggdrasilProviderMutation(value) => print_json(command, value),
+            app::CommandOutput::JavaRuntimeList(value) => print_json(command, value),
+            app::CommandOutput::JavaRuntimeMutation(value) => print_json(command, value),
         },
         OutputFormat::Text => render_text(output),
     }
@@ -314,6 +323,16 @@ fn render_text(output: app::CommandOutput) {
                 view.old_name, view.new_name, view.id
             );
         }
+        app::CommandOutput::InstanceConfigured(view) => {
+            println!("Updated desired runtime for {}.", view.instance.name);
+            println!("  Minecraft: {}", view.desired.minecraft);
+            println!(
+                "  Loader: {} {}",
+                view.desired.loader,
+                view.desired.loader_version.as_deref().unwrap_or("managed")
+            );
+            println!("  Java policy: {}", view.desired.java_policy);
+        }
         app::CommandOutput::Default(view) => match view.instance {
             Some(instance) => println!("Default instance: {} ({})", instance.name, instance.id),
             None => println!("No default instance is configured."),
@@ -366,6 +385,40 @@ fn render_text(output: app::CommandOutput) {
         app::CommandOutput::YggdrasilProviderMutation(view) => println!(
             "{} External Yggdrasil provider '{}' ({}).",
             view.action, view.provider.id, view.provider.api_root
+        ),
+        app::CommandOutput::JavaRuntimeList(view) => {
+            if view.runtimes.is_empty() {
+                println!("No managed Java runtimes are installed.");
+            }
+            for runtime in view.runtimes {
+                println!(
+                    "{}: Java {} {} ({}, {}, {} files, {}){}",
+                    runtime.runtime_id,
+                    runtime.major,
+                    runtime.version,
+                    runtime.provider,
+                    runtime.platform,
+                    runtime.files,
+                    human_bytes(runtime.bytes),
+                    if runtime.verified == Some(true) {
+                        " [verified]"
+                    } else {
+                        ""
+                    }
+                );
+                println!("  executable: {}", runtime.executable.display());
+            }
+        }
+        app::CommandOutput::JavaRuntimeMutation(view) => println!(
+            "{} managed Java runtime {} (Java {} {}).",
+            if view.action == "verified" {
+                "Verified"
+            } else {
+                "Removed"
+            },
+            view.runtime.runtime_id,
+            view.runtime.major,
+            view.runtime.version
         ),
     }
 }

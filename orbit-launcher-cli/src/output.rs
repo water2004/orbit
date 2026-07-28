@@ -77,6 +77,51 @@ pub struct DesiredRuntimeView {
     pub java_policy: String,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct JavaRuntimeView {
+    pub runtime_id: String,
+    pub provider: String,
+    pub component: String,
+    pub platform: String,
+    pub version: String,
+    pub major: u32,
+    pub root: PathBuf,
+    pub executable: PathBuf,
+    pub files: usize,
+    pub bytes: u64,
+    pub verified: Option<bool>,
+}
+
+impl From<orbit_launcher_core::InstalledJavaRuntime> for JavaRuntimeView {
+    fn from(runtime: orbit_launcher_core::InstalledJavaRuntime) -> Self {
+        Self {
+            runtime_id: runtime.runtime_id,
+            provider: runtime.provider,
+            component: runtime.component,
+            platform: runtime.platform,
+            version: runtime.version,
+            major: runtime.major,
+            root: runtime.root,
+            executable: runtime.executable,
+            files: runtime.files,
+            bytes: runtime.bytes,
+            verified: runtime.verified,
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct JavaRuntimeListView {
+    pub verification_requested: bool,
+    pub runtimes: Vec<JavaRuntimeView>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct JavaRuntimeMutationView {
+    pub action: &'static str,
+    pub runtime: JavaRuntimeView,
+}
+
 #[derive(Debug, Serialize)]
 pub struct InstanceMutationView {
     pub instance: InstanceView,

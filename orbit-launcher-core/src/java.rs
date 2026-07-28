@@ -1,5 +1,5 @@
 use std::collections::{BTreeMap, HashSet};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, Mutex};
 
@@ -11,6 +11,7 @@ use uuid::Uuid;
 use crate::artifact::{ArtifactCache, ArtifactRequest, ArtifactTransferEvent, ExpectedHash};
 use crate::atomic_io::write_atomic;
 use crate::error::LauncherError;
+use crate::lockfile::LockFile;
 use crate::lockfile::LockedJavaRuntime;
 use crate::mojang::MojangJavaRequirement;
 use crate::platform::{Architecture, HostPlatform, OperatingSystem};
@@ -149,6 +150,157 @@ pub struct ManagedJavaRuntime {
     pub root: PathBuf,
     pub downloaded_artifacts: usize,
     pub cached_artifacts: usize,
+}
+
+#[derive(Debug, Clone)]
+pub struct InstalledJavaRuntime {
+    pub runtime_id: String,
+    pub provider: String,
+    pub component: String,
+    pub platform: String,
+    pub version: String,
+    pub major: u32,
+    pub root: PathBuf,
+    pub executable: PathBuf,
+    pub files: usize,
+    pub bytes: u64,
+    /// `None` means the caller requested inventory-only listing.
+    pub verified: Option<bool>,
+}
+
+pub fn list_managed_java_runtimes(
+    runtime_paths: &RuntimePaths,
+    verify: bool,
+) -> Result<Vec<InstalledJavaRuntime>, LauncherError> {
+    let runtimes_root = runtime_paths.data_dir().join("runtimes");
+    if !runtimes_root.exists() {
+        return Ok(Vec::new());
+    }
+    let mut directories = std::fs::read_dir(&runtimes_root)?.collect::<Result<Vec<_>, _>>()?;
+    directories.sort_by_key(std::fs::DirEntry::file_name);
+    let mut runtimes = Vec::new();
+    for directory in directories {
+        if !directory.file_type()?.is_dir() {
+            continue;
+        }
+        let root = directory.path();
+        let inventory = JavaRuntimeInventory::load(&root.join(RUNTIME_INVENTORY_FILE))?;
+        if root.file_name().and_then(|name| name.to_str()) != Some(&inventory.runtime_id) {
+            return Err(LauncherError::InvalidLock(format!(
+                "Java runtime directory '{}' does not match inventory ID '{}'",
+                root.display(),
+                inventory.runtime_id
+            )));
+        }
+        if verify {
+            inventory.verify_files(&root)?;
+        }
+        let expected_executable = if inventory.platform.starts_with("windows") {
+            "bin/java.exe"
+        } else {
+            "bin/java"
+        };
+        let executable = inventory
+            .files
+            .iter()
+            .find(|file| file.executable && file.path == expected_executable)
+            .ok_or_else(|| {
+                LauncherError::InvalidLock(format!(
+                    "managed Java runtime '{}' has no executable",
+                    inventory.runtime_id
+                ))
+            })?;
+        let bytes = inventory.files.iter().try_fold(0_u64, |total, file| {
+            total.checked_add(file.size).ok_or_else(|| {
+                LauncherError::InvalidLock(format!(
+                    "managed Java runtime '{}' size overflows",
+                    inventory.runtime_id
+                ))
+            })
+        })?;
+        runtimes.push(InstalledJavaRuntime {
+            runtime_id: inventory.runtime_id,
+            provider: inventory.provider,
+            component: inventory.component,
+            platform: inventory.platform,
+            version: inventory.version,
+            major: inventory.major,
+            root: root.clone(),
+            executable: root.join(path_from_portable(&executable.path)),
+            files: inventory.files.len(),
+            bytes,
+            verified: verify.then_some(true),
+        });
+    }
+    Ok(runtimes)
+}
+
+pub fn verify_managed_java_runtime(
+    runtime_paths: &RuntimePaths,
+    runtime_id: &str,
+) -> Result<InstalledJavaRuntime, LauncherError> {
+    list_managed_java_runtimes(runtime_paths, true)?
+        .into_iter()
+        .find(|runtime| runtime.runtime_id == runtime_id)
+        .ok_or_else(|| LauncherError::JavaRuntimeNotFound(runtime_id.to_string()))
+}
+
+pub fn remove_managed_java_runtime(
+    runtime_paths: &RuntimePaths,
+    runtime_id: &str,
+) -> Result<InstalledJavaRuntime, LauncherError> {
+    validate_runtime_id(runtime_id)?;
+    let runtime = list_managed_java_runtimes(runtime_paths, false)?
+        .into_iter()
+        .find(|runtime| runtime.runtime_id == runtime_id)
+        .ok_or_else(|| LauncherError::JavaRuntimeNotFound(runtime_id.to_string()))?;
+    let registry = crate::registry::InstanceRegistry::load(&runtime_paths.instances_file())?;
+    let mut used_by = Vec::new();
+    for instance in &registry.instances {
+        let Some(lock) = LockFile::open_optional(&instance.root)? else {
+            continue;
+        };
+        if lock
+            .inner
+            .java
+            .as_ref()
+            .is_some_and(|java| java.runtime_id == runtime_id)
+        {
+            used_by.push(instance.name.clone());
+        }
+    }
+    if !used_by.is_empty() {
+        return Err(LauncherError::JavaRuntimeInUse {
+            runtime_id: runtime_id.to_string(),
+            instances: used_by.join(", "),
+        });
+    }
+
+    let runtimes_root = dunce::canonicalize(runtime_paths.data_dir().join("runtimes"))?;
+    let target = dunce::canonicalize(&runtime.root)?;
+    if target.parent() != Some(runtimes_root.as_path()) {
+        return Err(LauncherError::InvalidConfig(format!(
+            "managed Java runtime '{}' resolves outside the runtime directory",
+            runtime_id
+        )));
+    }
+    std::fs::remove_dir_all(&target)?;
+    Ok(runtime)
+}
+
+fn validate_runtime_id(runtime_id: &str) -> Result<(), LauncherError> {
+    let mut components = Path::new(runtime_id).components();
+    let valid = matches!(components.next(), Some(Component::Normal(value)) if value == runtime_id)
+        && components.next().is_none()
+        && !runtime_id.is_empty()
+        && !runtime_id.chars().any(char::is_control);
+    if valid {
+        Ok(())
+    } else {
+        Err(LauncherError::InvalidConfig(format!(
+            "managed Java runtime ID '{runtime_id}' is invalid"
+        )))
+    }
 }
 
 /// Verifies that a lock still refers to the exact managed runtime installed in
@@ -902,6 +1054,128 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::eula::{EulaAcceptance, EulaAcceptanceMethod};
+    use crate::instance::{InstanceKind, LoaderKind};
+    use crate::lockfile::{
+        ArtifactOwner, LOCK_SCHEMA, LauncherLock, LockedArguments, LockedArtifact,
+        LockedArtifactSource, LockedEntrypoint, LockedJavaRuntime, LockedLoader, LockedMinecraft,
+    };
+    use crate::operations::{CreateInstanceRequest, create_instance};
+
+    fn test_paths(root: &Path) -> RuntimePaths {
+        RuntimePaths::resolve(&crate::runtime::RuntimePathOptions {
+            config_dir: Some(root.join("config")),
+            data_dir: Some(root.join("data")),
+            cache_dir: Some(root.join("cache")),
+        })
+        .unwrap()
+    }
+
+    fn write_runtime_fixture(paths: &RuntimePaths) -> PathBuf {
+        let root = paths.data_dir().join("runtimes/runtime-21");
+        std::fs::create_dir_all(root.join("bin")).unwrap();
+        let executable = root.join(if cfg!(windows) {
+            "bin/java.exe"
+        } else {
+            "bin/java"
+        });
+        std::fs::write(&executable, b"managed-java").unwrap();
+        let relative = if cfg!(windows) {
+            "bin/java.exe"
+        } else {
+            "bin/java"
+        };
+        JavaRuntimeInventory {
+            schema: 1,
+            runtime_id: "runtime-21".to_string(),
+            provider: "mojang".to_string(),
+            component: "java-runtime-delta".to_string(),
+            platform: if cfg!(windows) {
+                "windows-x64".to_string()
+            } else {
+                "linux".to_string()
+            },
+            version: "21.0.7".to_string(),
+            major: 21,
+            manifest_url: "https://example.invalid/manifest.json".to_string(),
+            manifest_sha1: "0".repeat(40),
+            files: vec![RuntimeInventoryFile {
+                path: relative.to_string(),
+                source_url: "https://example.invalid/java".to_string(),
+                upstream_sha1: "0".repeat(40),
+                sha256: crate::artifact::hash_file_sha256(&executable).unwrap(),
+                size: 12,
+                executable: true,
+            }],
+        }
+        .save(&root.join(RUNTIME_INVENTORY_FILE))
+        .unwrap();
+        root
+    }
+
+    fn write_server_lock(root: &Path, instance_id: Uuid) {
+        LockFile::new(
+            root,
+            LauncherLock {
+                schema: LOCK_SCHEMA,
+                instance_id,
+                kind: InstanceKind::Server,
+                minecraft: LockedMinecraft {
+                    version: "1.21.1".to_string(),
+                    version_type: "release".to_string(),
+                    asset_index: None,
+                    version_manifest_url:
+                        "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json"
+                            .to_string(),
+                    version_manifest_sha256: "a".repeat(64),
+                    version_json_url: "https://piston-meta.mojang.com/version.json".to_string(),
+                    version_json_sha1: "b".repeat(40),
+                },
+                loader: LockedLoader::vanilla(),
+                java: Some(LockedJavaRuntime {
+                    runtime_id: "runtime-21".to_string(),
+                    provider: "mojang".to_string(),
+                    version: "21.0.7".to_string(),
+                    major: 21,
+                    platform: if cfg!(windows) {
+                        "windows-x64".to_string()
+                    } else {
+                        "linux".to_string()
+                    },
+                    executable: if cfg!(windows) {
+                        "bin/java.exe".to_string()
+                    } else {
+                        "bin/java".to_string()
+                    },
+                }),
+                authlib_injector: None,
+                entrypoint: LockedEntrypoint::Jar {
+                    path: "server.jar".to_string(),
+                },
+                arguments: LockedArguments::default(),
+                artifacts: vec![LockedArtifact {
+                    logical_name: "Minecraft server".to_string(),
+                    owner: ArtifactOwner::Minecraft,
+                    source: LockedArtifactSource::Download {
+                        url: "https://piston-data.mojang.com/server.jar".to_string(),
+                        upstream_sha1: Some("c".repeat(40)),
+                    },
+                    sha256: "d".repeat(64),
+                    size: 100,
+                    path: "server.jar".to_string(),
+                }],
+                generated_files: vec!["eula.txt".to_string()],
+                eula: Some(EulaAcceptance {
+                    url: crate::eula::MINECRAFT_EULA_URL.to_string(),
+                    digest_sha256: "e".repeat(64),
+                    accepted_at_unix_seconds: 1,
+                    method: EulaAcceptanceMethod::DigestCommand,
+                }),
+            },
+        )
+        .save()
+        .unwrap();
+    }
 
     #[test]
     fn link_validation_keeps_every_target_inside_the_runtime() {
@@ -920,5 +1194,50 @@ mod tests {
     #[test]
     fn runtime_id_sanitization_cannot_create_directories() {
         assert_eq!(sanitize_id("21/../../evil"), "21_.._.._evil");
+        assert!(validate_runtime_id("../evil").is_err());
+        assert!(validate_runtime_id("runtime-21").is_ok());
+    }
+
+    #[test]
+    fn managed_runtime_list_verifies_and_removes_unreferenced_runtime() {
+        let directory = tempfile::tempdir().unwrap();
+        let paths = test_paths(directory.path());
+        let root = write_runtime_fixture(&paths);
+
+        let listed = list_managed_java_runtimes(&paths, true).unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].major, 21);
+        assert_eq!(listed[0].verified, Some(true));
+        remove_managed_java_runtime(&paths, "runtime-21").unwrap();
+        assert!(!root.exists());
+    }
+
+    #[test]
+    fn managed_runtime_removal_refuses_a_locked_instance_reference() {
+        let directory = tempfile::tempdir().unwrap();
+        let paths = test_paths(directory.path());
+        let runtime_root = write_runtime_fixture(&paths);
+        let instance_root = directory.path().join("server");
+        let created = create_instance(
+            &paths,
+            CreateInstanceRequest {
+                root: instance_root.clone(),
+                name: "server".to_string(),
+                kind: InstanceKind::Server,
+                minecraft_requirement: "1.21.1".to_string(),
+                loader_kind: LoaderKind::Vanilla,
+                loader_requirement: None,
+            },
+        )
+        .unwrap();
+        write_server_lock(&instance_root, created.entry.id);
+
+        let error = remove_managed_java_runtime(&paths, "runtime-21").unwrap_err();
+        assert!(matches!(
+            error,
+            LauncherError::JavaRuntimeInUse { runtime_id, instances }
+                if runtime_id == "runtime-21" && instances == "server"
+        ));
+        assert!(runtime_root.exists());
     }
 }

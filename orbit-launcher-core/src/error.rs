@@ -97,6 +97,15 @@ pub enum LauncherError {
     #[error("instance transaction failed: {0}")]
     Transaction(String),
 
+    #[error("managed Java runtime '{0}' is not installed")]
+    JavaRuntimeNotFound(String),
+
+    #[error("managed Java runtime '{runtime_id}' is still used by instances: {instances}")]
+    JavaRuntimeInUse {
+        runtime_id: String,
+        instances: String,
+    },
+
     #[error("system data directories are unsupported on this platform; pass explicit directories")]
     UnsupportedPlatform,
 }
@@ -136,6 +145,8 @@ impl LauncherError {
             Self::ExplicitInstanceRequired(_) => "explicit_instance_required",
             Self::InstanceRegistryMismatch(_) => "instance_registry_mismatch",
             Self::Transaction(_) => "transaction",
+            Self::JavaRuntimeNotFound(_) => "java_runtime_not_found",
+            Self::JavaRuntimeInUse { .. } => "java_runtime_in_use",
             Self::UnsupportedPlatform => "unsupported_platform",
         }
     }

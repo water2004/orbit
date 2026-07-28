@@ -71,8 +71,10 @@ pub use instance::{
     RestartPolicy,
 };
 pub use java::{
-    JavaProgressEvent, JavaTarget, MOJANG_RUNTIME_MANIFEST_URL, ManagedJavaRuntime, MojangJavaPlan,
-    install_mojang_java, plan_mojang_java, verify_locked_java_runtime,
+    InstalledJavaRuntime, JavaProgressEvent, JavaTarget, MOJANG_RUNTIME_MANIFEST_URL,
+    ManagedJavaRuntime, MojangJavaPlan, install_mojang_java, list_managed_java_runtimes,
+    plan_mojang_java, remove_managed_java_runtime, verify_locked_java_runtime,
+    verify_managed_java_runtime,
 };
 pub use launch::{
     LaunchOutputStream, LaunchPlan, LaunchPlanSummary, LaunchPreparationEvent, LaunchProcessEvent,
@@ -89,9 +91,10 @@ pub use mojang::{
     MojangClient, MojangJavaRequirement, ResolvedVanillaServer, VERSION_MANIFEST_V2_URL,
 };
 pub use operations::{
-    CreateInstanceRequest, CreateInstanceResult, ImportInstanceResult, RemoveInstanceResult,
-    RenameInstanceResult, create_instance, import_instance, remove_instance, rename_instance,
-    resolve_instance_root, rollback_created_instance, set_default_instance,
+    ConfigureInstanceRequest, ConfigureInstanceResult, CreateInstanceRequest, CreateInstanceResult,
+    ImportInstanceResult, RemoveInstanceResult, RenameInstanceResult, configure_instance,
+    create_instance, import_instance, remove_instance, rename_instance, resolve_instance_root,
+    rollback_created_instance, set_default_instance,
 };
 pub use platform::{Architecture, HostPlatform, OperatingSystem};
 pub use registry::{InstanceRegistry, RegistryEntry};

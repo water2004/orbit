@@ -51,6 +51,11 @@ orbit-launcher instance import [--root <path>]
 orbit-launcher instance list
 orbit-launcher [--instance <id|name>] instance show
 orbit-launcher [--instance <id|name>] instance rename <new-name>
+orbit-launcher [--instance <id|name>] instance configure \
+  [--minecraft <requirement>] \
+  [--loader <vanilla|fabric|quilt|forge|neoforge>] \
+  [--loader-version <requirement>] \
+  [--java-policy <auto|managed>]
 orbit-launcher [--instance <id|name>] instance remove
 orbit-launcher instance default set <id|name>
 orbit-launcher instance default clear
@@ -75,6 +80,10 @@ orbit-launcher account show [<account-id|profile-name|profile-uuid>]
 orbit-launcher [--instance <id|name>] account select <account> [--global]
 orbit-launcher [--instance <id|name>] account clear [--global]
 orbit-launcher account logout <account>
+
+orbit-launcher java list [--verify]
+orbit-launcher java verify <runtime-id>
+orbit-launcher java remove <runtime-id>
 ```
 
 配置键是稳定协议，目前包括网络并发数与超时、installer 超时、缓存上限、Java 默认来源、
@@ -102,6 +111,9 @@ token，启动前按 `validate -> refresh -> interaction_required` 处理。一�
 
 `create` 和 `import` 中省略 `--root` 时只使用当前目录。相对 `--root` 相对当前目录解析，
 注册表持久化规范化绝对路径，但路径不是实例身份。`remove` 只注销实例并保留全部文件。
+`instance configure` 原子修改现有 `orbit-launcher.toml` 的期望运行时，不下载、不修改 lock；
+随后运行同一个 `install` 事务完成 Minecraft、loader 与 Java 更新。切换到非 Vanilla loader
+时必须同时给出 loader requirement；切换到 Vanilla 会删除 loader requirement。
 
 非 Vanilla Loader 必须提供 `--loader-version`；Vanilla 禁止提供该参数。当前 `create` 只
 建立用户意图和全局注册，不下载任何内容。一次命令创建并安装将由真实安装事务入口
@@ -115,6 +127,13 @@ token，启动前按 `validate -> refresh -> interaction_required` 处理。一�
 文件按上游 SHA-1 校验后进入本地 SHA-256 CAS；下载可并发，runtime 和实例分别在 staging
 中验证后原子提交。旧 lock 拥有但新精确状态不再需要的文件会在同一事务中移除；目标位置
 已有但不属于旧 lock 的文件时拒绝覆盖。
+
+Java 下载不是 GUI 或独立脚本的第二条实现：`install` 根据目标 Minecraft 官方 version JSON
+中的 component/major 解析 Mojang Java runtime manifest，将全部文件加入统一下载队列，逐项
+校验 SHA-1 后物化到 Launcher data `runtimes/<runtime-id>`，并在实例 lock 中记录精确 runtime。
+`java list` 查看已安装版本、平台、路径、文件数与大小；`--verify` / `java verify` 重新校验
+完整 inventory。`java remove` 只允许删除没有被任何已注册实例 lock 引用的 runtime，且只删除
+经过目录边界校验的单个 runtime 目录。
 
 Fabric 与 Quilt 都通过各自官方 Meta API 解析与目标 Minecraft 版本匹配的 profile，并将
 Loader libraries、main class 和参数合并到同一个精确运行时模型。两者共享 profile 机制，

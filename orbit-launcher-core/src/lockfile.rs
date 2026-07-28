@@ -452,6 +452,14 @@ impl LockFile {
         })
     }
 
+    pub fn open_optional(root: &Path) -> Result<Option<Self>, LauncherError> {
+        let path = root.join(INSTANCE_LOCK_FILE);
+        if !path.exists() {
+            return Ok(None);
+        }
+        Self::open(root).map(Some)
+    }
+
     pub fn new(root: &Path, inner: LauncherLock) -> Self {
         Self {
             root: root.to_path_buf(),
