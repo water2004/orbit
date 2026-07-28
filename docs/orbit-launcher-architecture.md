@@ -502,9 +502,11 @@ Orbit Launcher 必须使用自己的 Microsoft Entra application/client ID。cli
 
 Offline account 只生成离线身份，不得把它描述为已经通过 Microsoft 验证。
 
-External Yggdrasil 使用 authlib-injector 兼容的标准 API metadata；API root 本身只用于
-metadata，账户登录、角色选择和令牌续期固定调用 root 下的 `authserver/authenticate`、
-`authserver/refresh` 与 `authserver/validate`，不得把操作名直接拼到 root 后。
+External Yggdrasil 使用 authlib-injector 兼容的标准 API metadata。用户新增端点时，Launcher
+必须按 ALI 规范向输入地址发送 GET、跟随 HTTP 重定向、解析可为相对或绝对 URL 的
+`X-Authlib-Injector-API-Location`，验证目标 metadata 后只保存精确 API root；缺少协议只补
+HTTPS，不允许静默降级到 HTTP。账户登录、角色选择和令牌续期固定调用 root 下的
+`authserver/authenticate`、`authserver/refresh` 与 `authserver/validate`。
 服务端配置外置认证后，Launcher 必须下载并校验精确的 Authlib Injector artifact，把
 `-javaagent` 和经验证的 API root 写入服务端 `LaunchPlan`；客户端启动外置账户时使用同一
 受管 agent。agent 路径、版本、来源与 hash 写入 launcher lock，但账户 token 不得进入。

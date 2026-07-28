@@ -89,9 +89,13 @@ Mods 页以 lock 中逻辑包为单位显示环境、根/传递关系、依赖�
 - Accounts：先选择 Microsoft、Offline 或标准 External Yggdrasil，再进入对应登录任务；
   主页面只展示身份卡、全局默认和当前实例选择；External Yggdrasil 在添加账户时选择端点，
   端点的选择/新增/移除是独立步骤，确认端点后才进入单独的凭据表单；Settings 不承载账户
-  认证端点；
+  认证端点；新增端点接受站点地址或精确 API root，由 CLI 完成 ALI 服务发现和 metadata
+  验证，GUI 不自行拼接认证路径；
 - Server：EULA 完整正文及 digest 接受、启动/停止/状态/控制台命令；
 - Activity：真实阶段、动态完成量、日志、结构化错误和取消。
+
+Activity 折叠条始终保留当前任务、当前阶段、完成量和紧凑进度条；展开态只增加历史任务，
+不把同一进度信息重复成高大的纵向卡片。
 
 Yggdrasil 密码使用可清零内存容器，只经子进程 stdin 传递，不进入任务日志、参数或持久化
 偏好。Microsoft token 仍只由 Launcher 的系统秘密存储负责。EULA 接受只提交用户刚查看的

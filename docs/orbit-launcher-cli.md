@@ -99,10 +99,11 @@ orbit-launcher java remove <runtime-id>
 Microsoft client ID，以及进度条和颜色偏好。`list`/`get` 会区分显式值与默认值；`unset` 删除显式值并恢复
 默认值。修改经过强类型解析和完整配置校验后原子写入，同时保留已有 TOML 注释。External
 Yggdrasil provider 属于复合对象，由 `config yggdrasil` 的强类型命令管理，不接受任意 TOML
-路径写入。API root 默认必须使用 HTTPS；`--allow-insecure-http` 是会暴露账号密码与 token
-的明确危险选择。API root 本身用于 `GET` 标准 metadata；账户请求固定使用其下的
-`authserver/authenticate`、`authserver/refresh` 与 `authserver/validate`，不得把这些操作名
-直接拼到 root 后。
+路径写入。`add` 接受站点地址或精确 API root：缺少协议时只补全 HTTPS，随后执行
+authlib-injector 的 API Location Indication（`X-Authlib-Injector-API-Location`）服务发现，
+验证标准 metadata，并且只持久化解析后的精确 API root。API root 默认必须使用 HTTPS；
+`--allow-insecure-http` 是会暴露账号密码与 token 的明确危险选择。账户请求固定使用 API root
+下的 `authserver/authenticate`、`authserver/refresh` 与 `authserver/validate`。
 
 `accounts.json` 只保存 account ID、provider、角色 UUID/name 和时间等非秘密元数据。
 Windows 的 token 由当前用户作用域 DPAPI 加密后原子落盘；Linux 桌面使用当前登录会话的
@@ -150,7 +151,8 @@ Java 下载不是 GUI 或独立脚本的第二条实现：`install` 根据目标
 校验 SHA-1 后物化到 Launcher data `runtimes/<runtime-id>`，并在实例 lock 中记录精确 runtime。
 `java list` 查看已安装版本、平台、路径、文件数与大小；`--verify` / `java verify` 重新校验
 完整 inventory。`java remove` 只允许删除没有被任何已注册实例 lock 引用的 runtime，且只删除
-经过目录边界校验的单个 runtime 目录。
+经过目录边界校验的单个 runtime 目录。`runtimes/.staging` 是安装事务的内部工作区，不属于
+runtime inventory，也不得被 `list`、`verify` 或 `remove` 枚举为已安装 Java。
 
 Fabric 与 Quilt 都通过各自官方 Meta API 解析与目标 Minecraft 版本匹配的 profile，并将
 Loader libraries、main class 和参数合并到同一个精确运行时模型。两者共享 profile 机制，
