@@ -4,28 +4,42 @@
 extern crate orbit_i18n;
 
 mod app;
-mod icon;
+mod assets;
 mod model;
 mod process;
 mod theme;
 mod wire;
 
-fn main() -> eframe::Result {
-    let options = eframe::NativeOptions {
-        viewport: eframe::egui::ViewportBuilder::default()
-            .with_title("Orbit")
-            .with_icon(icon::app_icon())
-            .with_inner_size([1280.0, 800.0])
-            .with_min_inner_size([960.0, 640.0]),
-        ..Default::default()
-    };
+use gpui::{
+    App, AppContext, Application, Bounds, TitlebarOptions, WindowBounds, WindowOptions, px, size,
+};
+use gpui_component::Root;
 
-    eframe::run_native(
-        "Orbit",
-        options,
-        Box::new(|creation| {
-            egui_extras::install_image_loaders(&creation.egui_ctx);
-            Ok(Box::new(app::OrbitApp::new(creation)))
-        }),
-    )
+fn main() {
+    Application::new()
+        .with_assets(assets::OrbitAssets)
+        .run(|cx: &mut App| {
+            gpui_component::init(cx);
+            let options = WindowOptions {
+                window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
+                    None,
+                    size(px(1220.), px(780.)),
+                    cx,
+                ))),
+                window_min_size: Some(size(px(940.), px(620.))),
+                titlebar: Some(TitlebarOptions {
+                    title: Some("Orbit".into()),
+                    ..Default::default()
+                }),
+                app_id: Some("dev.orbit.gui".to_string()),
+                ..Default::default()
+            };
+
+            cx.open_window(options, |window, cx| {
+                let app = cx.new(|cx| app::OrbitApp::new(window, cx));
+                cx.new(|cx| Root::new(app, window, cx))
+            })
+            .expect("failed to open Orbit window");
+            cx.activate(true);
+        });
 }

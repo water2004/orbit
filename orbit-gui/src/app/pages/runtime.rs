@@ -1,925 +1,855 @@
-use super::super::*;
+use gpui::{Context, IntoElement, ParentElement, Styled, Window, div, prelude::FluentBuilder as _};
+use gpui_component::{
+    ActiveTheme, Selectable, StyledExt,
+    button::{Button, ButtonVariants},
+    h_flex,
+    input::Input,
+    v_flex,
+};
 
-impl OrbitApp {
-    pub(crate) fn show_runtime(&mut self, ui: &mut egui::Ui) {
-        if let Some(flow) = self.runtime_flow {
-            self.show_runtime_flow(ui, flow);
-        } else {
-            self.show_runtime_dashboard(ui);
-        }
+use super::super::{
+    Confirmation, ConfirmationAction, OrbitApp, RuntimeFlow, RuntimeFlowMode, RuntimeFlowStep,
+};
+use crate::app::components as ui;
+use crate::app::controller::{human_bytes, loaders, title_case};
+use crate::assets::OrbitIcon;
+use crate::model::{LoaderVersion, MinecraftVersion};
+
+pub(super) fn render(
+    app: &mut OrbitApp,
+    window: &mut Window,
+    cx: &mut Context<OrbitApp>,
+) -> gpui::AnyElement {
+    if let Some(flow) = app.runtime_flow {
+        render_flow(app, window, cx, flow).into_any_element()
+    } else {
+        render_dashboard(app, window, cx).into_any_element()
     }
+}
 
-    fn show_runtime_dashboard(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
-            ui.vertical(|ui| {
-                ui.label(RichText::new(tr!("Game installations")).size(25.0).strong());
-                ui.label(
-                    RichText::new(tr!(
-                        "Minecraft, mod loaders, and Java managed as one runtime"
-                    ))
-                    .color(theme::muted()),
-                );
-            });
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if !self.runtime_instances.is_empty()
-                    && ui.add(theme::primary_button("New installation")).clicked()
-                {
-                    self.begin_runtime_flow(RuntimeFlowMode::Create);
-                }
-                if ui.add(theme::secondary_button("Import folder")).clicked()
-                    && let Some(path) = rfd::FileDialog::new().pick_folder()
-                {
-                    self.runtime_edit.import_root = path.display().to_string();
-                    self.import_runtime();
-                }
-            });
-        });
-        ui.add_space(18.0);
-
-        let selected = self.selected_instance().cloned();
-        if let Some(instance) = selected.clone() {
-            let detail = self.instance_detail.clone();
-            theme::elevated_card().show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    version_badge(
-                        ui,
-                        detail
-                            .as_ref()
-                            .and_then(|item| item.installed.as_ref())
-                            .map(|item| item.minecraft.as_str())
-                            .unwrap_or("MC"),
-                        64.0,
-                    );
-                    ui.vertical(|ui| {
-                        ui.horizontal(|ui| {
-                            ui.label(RichText::new(&instance.name).size(23.0).strong());
-                            info_chip(
-                                ui,
-                                if instance.kind == "server" {
-                                    "SERVER"
-                                } else {
-                                    "CLIENT"
-                                },
-                                theme::accent(),
-                            );
-                            if instance.is_default {
-                                info_chip(ui, "DEFAULT", theme::success());
-                            }
-                        });
-                        if let Some(installed) =
-                            detail.as_ref().and_then(|item| item.installed.as_ref())
-                        {
-                            let loader = match &installed.loader_version {
-                                Some(version) => {
-                                    format!("{} {}", title_case(&installed.loader), version)
-                                }
-                                None => title_case(&installed.loader),
-                            };
-                            ui.label(
-                                RichText::new(format!(
-                                    "Minecraft {}   ·   {}   ·   {}",
-                                    installed.minecraft,
-                                    loader,
-                                    installed
-                                        .java
-                                        .as_ref()
-                                        .map(|java| {
-                                            format!(
-                                                "Java {} · {} {} ({})",
-                                                java.major,
-                                                java.provider,
-                                                java.version,
-                                                java.platform
-                                            )
-                                        })
-                                        .unwrap_or_else(|| tr!("Java pending").into_owned())
-                                ))
-                                .color(theme::muted()),
-                            );
-                        } else {
-                            ui.label(
-                                RichText::new(tr!("Runtime files have not been installed yet"))
-                                    .color(theme::warning()),
-                            );
-                        }
-                        let path = ui.label(
-                            RichText::new(instance.root.display().to_string())
-                                .size(11.0)
-                                .color(theme::muted()),
-                        );
-                        if let Some(detail) = &detail {
-                            path.on_hover_text(tr!(
-                                "Discovered from %{context} context",
-                                context = detail.context
-                            ));
-                        }
-                    });
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        let launch_label = if instance.kind == "server" {
-                            "Start server"
-                        } else {
-                            "Launch"
-                        };
-                        if ui.add(theme::primary_button(launch_label)).clicked() {
-                            let (label, command, intent) = if instance.kind == "server" {
-                                (
-                                    "Starting server",
-                                    vec!["server".into(), "start".into()],
-                                    Intent::ServerMutated,
-                                )
-                            } else {
-                                ("Launching game", vec!["launch".into()], Intent::Generic)
-                            };
-                            self.launcher_task_args(
-                                label,
-                                intent,
-                                Some(instance.id.clone()),
-                                command,
-                                None,
-                            );
-                        }
-                    });
-                });
-                ui.add_space(16.0);
-                ui.separator();
-                ui.add_space(8.0);
-                ui.horizontal_wrapped(|ui| {
-                    if ui.add(theme::secondary_button("Change version")).clicked() {
-                        self.begin_runtime_flow(RuntimeFlowMode::Update);
-                    }
-                    if ui.add(theme::secondary_button("Verify and repair")).clicked() {
-                        self.install_runtime();
-                    }
-                    if !instance.is_default
-                        && ui.add(theme::ghost_button("Make default")).clicked()
-                    {
-                        self.set_default_runtime();
-                    }
-                    if instance.kind == "server"
-                        && ui.add(theme::ghost_button("Server controls")).clicked()
-                    {
-                        self.preferences.page = Page::Server;
-                    }
-                    if ui.add(theme::ghost_button("Unregister")).clicked() {
-                        self.confirmation = Some(Confirmation {
-                            title: tr!("Unregister %{name}?", name = instance.name),
-                            body: tr!("This removes the installation from Orbit Launcher without deleting its game directory.").into_owned(),
-                            action: ConfirmationAction::UnregisterInstance(instance.id.clone()),
-                        });
-                    }
-                });
-            });
-        } else {
-            theme::elevated_card().show(ui, |ui| {
-                ui.set_min_width(ui.available_width());
-                ui.horizontal(|ui| {
-                    theme::orbit_mark(ui, 48.0);
-                    ui.vertical(|ui| {
-                        ui.label(
-                            RichText::new(tr!("Build your first Minecraft installation"))
-                                .size(19.0)
-                                .strong(),
-                        );
-                        ui.label(
-                            RichText::new(tr!(
-                                "Choose Minecraft and a loader; Java is resolved automatically."
-                            ))
-                            .color(theme::muted()),
-                        );
-                    });
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if ui.add(theme::primary_button("Choose version")).clicked() {
-                            self.begin_runtime_flow(RuntimeFlowMode::Create);
-                        }
-                    });
-                });
-            });
-        }
-
-        if !self.runtime_instances.is_empty() {
-            ui.add_space(22.0);
-            ui.horizontal(|ui| {
-                ui.label(RichText::new(tr!("Your installations")).size(19.0).strong());
-                ui.label(
-                    RichText::new(tr!(
-                        "%{count} registered",
-                        count = self.runtime_instances.len()
-                    ))
-                    .size(12.0)
-                    .color(theme::muted()),
-                );
-            });
-            ui.add_space(8.0);
-            for pair in self.runtime_instances.clone().chunks(2) {
-                ui.columns(2, |columns| {
-                    for (column, instance) in pair.iter().enumerate() {
-                        let selected = self.preferences.selected_instance.as_deref()
-                            == Some(instance.id.as_str());
-                        let response = egui::Frame::new()
-                            .fill(if selected {
-                                theme::accent_soft()
-                            } else {
-                                theme::surface()
-                            })
-                            .stroke(Stroke::new(
-                                1.0,
-                                if selected {
-                                    theme::accent()
-                                } else {
-                                    theme::border()
-                                },
-                            ))
-                            .corner_radius(14)
-                            .inner_margin(egui::Margin::same(18))
-                            .show(&mut columns[column], |ui| {
-                                ui.set_min_height(58.0);
-                                ui.horizontal(|ui| {
-                                    version_badge(
-                                        ui,
-                                        if instance.kind == "server" {
-                                            "SV"
-                                        } else {
-                                            "MC"
-                                        },
-                                        42.0,
-                                    );
-                                    ui.vertical(|ui| {
-                                        ui.label(RichText::new(&instance.name).strong());
-                                        ui.label(
-                                            RichText::new(format!(
-                                                "{} · {}",
-                                                title_case(&instance.kind),
-                                                instance.root.display()
-                                            ))
-                                            .size(11.0)
-                                            .color(theme::muted()),
-                                        );
-                                    });
-                                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                        if selected {
-                                            info_chip(ui, "OPEN", theme::accent());
-                                        }
-                                    });
-                                });
-                            });
-                        if response.response.interact(Sense::click()).clicked() && !selected {
-                            self.preferences.selected_instance = Some(instance.id.clone());
-                            self.load_selected();
-                        }
-                    }
-                });
-                ui.add_space(10.0);
-            }
-        }
-
-        ui.add_space(22.0);
-        ui.horizontal(|ui| {
-            ui.label(RichText::new(tr!("Managed Java")).size(19.0).strong());
-            ui.label(
-                RichText::new(tr!("Shared, verified runtimes"))
-                    .size(12.0)
-                    .color(theme::muted()),
-            );
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if ui.add(theme::ghost_button("Verify all")).clicked() {
-                    self.refresh_java_runtimes(true);
-                }
-            });
-        });
-        ui.add_space(8.0);
-        theme::card().show(ui, |ui| {
-            ui.set_min_width(ui.available_width());
-            if self.java_runtimes.is_empty() {
-                ui.horizontal(|ui| {
-                    version_badge(ui, "J", 42.0);
-                    ui.vertical(|ui| {
-                        ui.label(RichText::new(tr!("Installed automatically when needed")).strong());
-                        ui.label(
-                            RichText::new(tr!("No managed Java runtime is currently stored"))
-                                .color(theme::muted()),
-                        );
-                    });
-                });
-            }
-            for runtime in self.java_runtimes.clone() {
-                ui.horizontal(|ui| {
-                    version_badge(ui, &runtime.major.to_string(), 42.0);
-                    ui.vertical(|ui| {
-                        ui.label(
-                            RichText::new(format!("Java {} · {}", runtime.major, runtime.version))
-                                .strong(),
-                        );
-                        ui.label(
-                            RichText::new(tr!(
-                                "%{component} · %{platform} · %{files} files · %{bytes}",
-                                component = runtime.component,
-                                platform = runtime.platform,
-                                files = runtime.files,
-                                bytes = human_bytes(runtime.bytes)
-                            ))
-                            .size(11.0)
-                            .color(theme::muted()),
-                        )
-                        .on_hover_text(tr!(
-                            "Provider: %{provider}\nRuntime: %{runtime}\nExecutable: %{executable}",
-                            provider = runtime.provider,
-                            runtime = runtime.root.display(),
-                            executable = runtime.executable.display()
-                        ));
-                    });
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if ui.add(theme::ghost_button("Remove")).clicked() {
-                            self.confirmation = Some(Confirmation {
-                                title: tr!("Remove Java %{major}?", major = runtime.major),
-                                body: tr!("The launcher first checks every registered installation and refuses to remove a runtime that is still in use.").into_owned(),
-                                action: ConfirmationAction::RemoveJavaRuntime(
-                                    runtime.runtime_id.clone(),
-                                ),
-                            });
-                        }
-                        if runtime.verified == Some(true) {
-                            info_chip(ui, "VERIFIED", theme::success());
-                        } else if ui.add(theme::ghost_button("Verify")).clicked() {
-                            self.verify_java_runtime(&runtime.runtime_id);
-                        }
-                    });
-                });
-                ui.separator();
-            }
-        });
-    }
-
-    fn show_runtime_flow(&mut self, ui: &mut egui::Ui, flow: RuntimeFlow) {
-        ui.horizontal(|ui| {
-            if ui.add(theme::ghost_button("Back")).clicked() {
-                match flow.step {
-                    RuntimeFlowStep::Minecraft => self.runtime_flow = None,
-                    RuntimeFlowStep::Components => {
-                        self.runtime_flow = Some(RuntimeFlow {
-                            step: RuntimeFlowStep::Minecraft,
-                            ..flow
-                        });
-                    }
-                    RuntimeFlowStep::Review => {
-                        self.runtime_flow = Some(RuntimeFlow {
-                            step: RuntimeFlowStep::Components,
-                            ..flow
-                        });
-                    }
-                }
-            }
-            ui.vertical(|ui| {
-                ui.label(
-                    RichText::new(match flow.mode {
-                        RuntimeFlowMode::Create => tr!("New installation"),
-                        RuntimeFlowMode::Update => tr!("Change game version"),
-                    })
-                    .size(25.0)
-                    .strong(),
-                );
-                ui.label(
-                    RichText::new(tr!("Minecraft first, then loader, then one final review"))
-                        .color(theme::muted()),
-                );
-            });
-        });
-        ui.add_space(16.0);
-        runtime_steps(ui, flow.step);
-        ui.add_space(18.0);
-
-        match flow.step {
-            RuntimeFlowStep::Minecraft => self.show_minecraft_picker(ui, flow),
-            RuntimeFlowStep::Components => self.show_component_picker(ui, flow),
-            RuntimeFlowStep::Review => self.show_runtime_review(ui, flow),
-        }
-    }
-
-    fn show_minecraft_picker(&mut self, ui: &mut egui::Ui, flow: RuntimeFlow) {
-        ui.horizontal(|ui| {
-            ui.label(RichText::new(tr!("Choose Minecraft")).size(20.0).strong());
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                for (index, label) in ["Release", "Snapshot", "Historical", "All"]
-                    .iter()
-                    .enumerate()
-                    .rev()
-                {
-                    if ui
-                        .selectable_label(
-                            self.minecraft_version_type == index,
-                            orbit_i18n::text(label),
-                        )
-                        .clicked()
-                    {
-                        self.minecraft_version_type = index;
-                    }
-                }
-            });
-        });
-        theme::text_field(
-            ui,
-            &mut self.minecraft_version_filter,
-            "Search versions",
-            theme::InputWidth::Fill,
+fn render_dashboard(
+    app: &mut OrbitApp,
+    _window: &mut Window,
+    cx: &mut Context<OrbitApp>,
+) -> impl IntoElement {
+    let selected = app.selected_instance().cloned();
+    let actions = h_flex()
+        .gap_2()
+        .child(
+            Button::new("runtime-import")
+                .label(tr!("Import").into_owned())
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.runtime_flow = None;
+                    cx.notify();
+                })),
+        )
+        .child(
+            Button::new("runtime-create")
+                .icon(OrbitIcon::Plus)
+                .label(tr!("Create installation").into_owned())
+                .primary()
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.begin_runtime_flow(RuntimeFlowMode::Create);
+                    cx.notify();
+                })),
         );
-        ui.add_space(8.0);
 
-        let needle = self.minecraft_version_filter.trim().to_ascii_lowercase();
-        let versions: Vec<_> = self
-            .minecraft_versions
-            .iter()
-            .filter(|version| {
-                minecraft_type_matches(version, self.minecraft_version_type)
-                    && (needle.is_empty() || version.id.to_ascii_lowercase().contains(&needle))
-            })
-            .take(160)
-            .cloned()
-            .collect();
+    let mut content = v_flex().gap_4();
+    if let Some(instance) = selected {
+        let detail = app.instance_detail.clone();
+        let installed = detail.as_ref().and_then(|item| item.installed.as_ref());
+        let desired = detail.as_ref().map(|item| &item.desired);
+        let current = installed.map_or_else(
+            || tr!("Not installed").into_owned(),
+            |item| {
+                format!(
+                    "{} · {} {}",
+                    item.minecraft,
+                    title_case(&item.loader),
+                    item.loader_version.clone().unwrap_or_default()
+                )
+            },
+        );
+        let target = desired.map_or_else(
+            || "—".to_string(),
+            |item| {
+                format!(
+                    "{} · {} {}",
+                    item.minecraft,
+                    title_case(&item.loader),
+                    item.loader_version.clone().unwrap_or_default()
+                )
+            },
+        );
+        let instance_id = instance.id.clone();
+        content = content.child(
+            ui::themed_card(cx)
+                .child(
+                    h_flex()
+                        .items_center()
+                        .justify_between()
+                        .gap_3()
+                        .child(
+                            h_flex()
+                                .gap_3()
+                                .items_center()
+                                .child(ui::icon_tile(if instance.kind == "server" { OrbitIcon::Server } else { OrbitIcon::Runtime }, cx))
+                                .child(
+                                    v_flex()
+                                        .gap_1()
+                                        .child(div().text_xl().font_semibold().child(instance.name.clone()))
+                                        .child(div().text_xs().text_color(cx.theme().muted_foreground).child(instance.directory.display().to_string())),
+                                ),
+                        )
+                        .child(
+                            Button::new("runtime-launch")
+                                .icon(OrbitIcon::Play)
+                                .label(if instance.kind == "server" { tr!("Start server") } else { tr!("Launch game") }.into_owned())
+                                .primary()
+                                .on_click(cx.listener(|this, _, _, cx| { this.launch_selected(); cx.notify(); })),
+                        ),
+                )
+                .child(ui::divider(cx))
+                .child(ui::key_value(tr!("Installed").into_owned(), current, cx))
+                .child(ui::key_value(tr!("Desired").into_owned(), target, cx))
+                .children(instance.minecraft_directory.as_ref().map(|repository| {
+                    ui::key_value(
+                        tr!("Shared repository").into_owned(),
+                        repository.display().to_string(),
+                        cx,
+                    )
+                }))
+                .children(detail.as_ref().map(|detail| {
+                    ui::key_value(
+                        tr!("Context").into_owned(),
+                        detail.context.clone(),
+                        cx,
+                    )
+                }))
+                .child(ui::key_value(
+                    tr!("Java").into_owned(),
+                    installed.and_then(|item| item.java.as_ref()).map_or_else(
+                        || tr!("Pending").into_owned(),
+                        |java| format!(
+                            "Java {} · {} · {} · {}",
+                            java.major,
+                            java.version,
+                            java.provider,
+                            java.platform
+                        ),
+                    ),
+                    cx,
+                ))
+                .child(
+                    h_flex()
+                        .gap_2()
+                        .flex_wrap()
+                        .child(
+                            Button::new("runtime-update")
+                                .label(tr!("Change version").into_owned())
+                                .on_click(cx.listener(|this, _, _, cx| { this.begin_runtime_flow(RuntimeFlowMode::Update); cx.notify(); })),
+                        )
+                        .child(
+                            Button::new("runtime-repair")
+                                .label(tr!("Verify and repair").into_owned())
+                                .on_click(cx.listener(|this, _, _, cx| { this.install_runtime(); cx.notify(); })),
+                        )
+                        .when(!instance.is_default, |row| row.child(
+                            Button::new("runtime-default")
+                                .label(tr!("Make default").into_owned())
+                                .ghost()
+                                .on_click(cx.listener(|this, _, _, cx| { this.set_default_runtime(); cx.notify(); })),
+                        ))
+                        .child(
+                            Button::new("runtime-unregister")
+                                .label(tr!("Unregister").into_owned())
+                                .ghost()
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.confirmation = Some(Confirmation {
+                                        title: tr!("Unregister installation?").into_owned(),
+                                        body: tr!("This removes the installation from Launcher without deleting its game directory.").into_owned(),
+                                        action: ConfirmationAction::UnregisterInstance(instance_id.clone()),
+                                    });
+                                    cx.notify();
+                                })),
+                        ),
+                ),
+        );
+    } else {
+        content = content.child(ui::themed_card(cx).child(ui::empty_state(
+            OrbitIcon::Runtime,
+            tr!("No managed installations").into_owned(),
+            tr!("Create a client or server installation from the official Minecraft and Loader catalogs.").into_owned(),
+            None,
+            cx,
+        )));
+    }
 
-        if versions.is_empty() {
-            empty_state(
-                ui,
-                "No matching Minecraft versions",
-                "Change the search or version category.",
-            );
-            return;
+    let import_input = app.inputs.import_root.clone();
+    let import_read = import_input.clone();
+    let import_browse = import_input.clone();
+    content = content
+        .child(ui::section_title(
+            tr!("Import existing installation").into_owned(),
+            tr!("Launcher detection validates the selected directory").into_owned(),
+            cx,
+        ))
+        .child(
+            ui::compact_card(cx).child(
+                h_flex()
+                    .gap_2()
+                    .child(
+                        Input::new(&import_input)
+                            .flex_1()
+                            .prefix(gpui_component::Icon::new(OrbitIcon::Folder)),
+                    )
+                    .child(
+                        Button::new("runtime-import-browse")
+                            .label(tr!("Browse").into_owned())
+                            .on_click(cx.listener(move |_, _, window, cx| {
+                                OrbitApp::choose_directory(&import_browse, window, cx)
+                            })),
+                    )
+                    .child(
+                        Button::new("runtime-import-apply")
+                            .label(tr!("Import").into_owned())
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                let root = import_read.read(cx).value().trim().to_string();
+                                if !root.is_empty() {
+                                    this.import_runtime(root);
+                                }
+                                cx.notify();
+                            })),
+                    ),
+            ),
+        )
+        .child(ui::section_title(
+            tr!("Managed Java").into_owned(),
+            tr!("Shared runtimes installed automatically when required").into_owned(),
+            cx,
+        ));
+
+    let mut java_list = ui::themed_card(cx).p_0().gap_0();
+    if app.java_runtimes.is_empty() {
+        java_list = java_list.child(ui::empty_state(
+            OrbitIcon::Java,
+            tr!("No managed Java runtime stored").into_owned(),
+            tr!("Launcher will install the exact required Java component with the next runtime transaction.").into_owned(),
+            None,
+            cx,
+        ));
+    }
+    for (index, runtime) in app.java_runtimes.iter().cloned().enumerate() {
+        if index > 0 {
+            java_list = java_list.child(ui::divider(cx));
         }
+        let verify = runtime.runtime_id.clone();
+        let remove = runtime.runtime_id.clone();
+        java_list = java_list.child(
+            h_flex()
+                .px_4()
+                .py_3()
+                .gap_3()
+                .items_center()
+                .child(ui::icon_tile(OrbitIcon::Java, cx))
+                .child(
+                    v_flex()
+                        .flex_1()
+                        .gap_1()
+                        .child(div().font_semibold().child(format!("Java {} · {}", runtime.major, runtime.version)))
+                        .child(div().text_xs().text_color(cx.theme().muted_foreground).child(format!(
+                            "{} · {} · {} · {} · {} {}",
+                            runtime.provider,
+                            runtime.component,
+                            runtime.platform,
+                            human_bytes(runtime.bytes),
+                            runtime.files,
+                            tr!("files")
+                        ))),
+                )
+                .when(runtime.verified == Some(true), |row| row.child(ui::pill(tr!("Verified").into_owned(), cx.theme().success.opacity(0.13), cx.theme().success)))
+                .child(
+                    Button::new(("java-verify", index))
+                        .label(tr!("Verify").into_owned())
+                        .ghost()
+                        .on_click(cx.listener(move |this, _, _, cx| { this.verify_java_runtime(&verify); cx.notify(); })),
+                )
+                .child(
+                    Button::new(("java-remove", index))
+                        .icon(OrbitIcon::Trash)
+                        .ghost()
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.confirmation = Some(Confirmation {
+                                title: tr!("Remove managed Java runtime?").into_owned(),
+                                body: tr!("Launcher will refuse removal while any registered installation still references it.").into_owned(),
+                                action: ConfirmationAction::RemoveJavaRuntime(remove.clone()),
+                            });
+                            cx.notify();
+                        })),
+                ),
+        );
+    }
+    content = content.child(java_list);
 
-        for version in versions {
-            let selected = match flow.mode {
-                RuntimeFlowMode::Create => self.new_instance.minecraft == version.id,
-                RuntimeFlowMode::Update => self.runtime_edit.minecraft == version.id,
-            };
-            let response = egui::Frame::new()
-                .fill(if selected {
-                    theme::accent_soft()
-                } else {
-                    theme::surface()
-                })
-                .stroke(Stroke::new(
-                    1.0,
-                    if selected {
-                        theme::accent()
+    ui::page(
+        tr!("Installations").into_owned(),
+        tr!("Minecraft, Loader and Java lifecycle from official metadata").into_owned(),
+        actions,
+        content,
+        cx,
+    )
+}
+
+fn render_flow(
+    app: &mut OrbitApp,
+    window: &mut Window,
+    cx: &mut Context<OrbitApp>,
+    flow: RuntimeFlow,
+) -> impl IntoElement {
+    let actions = Button::new("runtime-flow-close")
+        .label(tr!("Close").into_owned())
+        .ghost()
+        .on_click(cx.listener(|this, _, _, cx| {
+            this.runtime_flow = None;
+            cx.notify();
+        }));
+    let content = v_flex()
+        .gap_4()
+        .child(render_steps(flow.step, cx))
+        .child(match flow.step {
+            RuntimeFlowStep::Minecraft => render_minecraft_step(app, cx, flow).into_any_element(),
+            RuntimeFlowStep::Components => render_components_step(app, cx, flow).into_any_element(),
+            RuntimeFlowStep::Review => render_review_step(app, window, cx, flow).into_any_element(),
+        });
+    ui::page(
+        if flow.mode == RuntimeFlowMode::Create {
+            tr!("Create installation")
+        } else {
+            tr!("Update installation")
+        }
+        .into_owned(),
+        tr!("Choose exact catalog entries; installation uses one transactional path").into_owned(),
+        actions,
+        content,
+        cx,
+    )
+}
+
+fn render_steps(active: RuntimeFlowStep, cx: &gpui::App) -> impl IntoElement {
+    let steps = [
+        (RuntimeFlowStep::Minecraft, tr!("Minecraft").into_owned()),
+        (RuntimeFlowStep::Components, tr!("Components").into_owned()),
+        (RuntimeFlowStep::Review, tr!("Review").into_owned()),
+    ];
+    h_flex()
+        .gap_2()
+        .children(steps.into_iter().enumerate().map(|(index, (step, label))| {
+            h_flex()
+                .gap_2()
+                .items_center()
+                .child(ui::pill(
+                    (index + 1).to_string(),
+                    if step == active {
+                        cx.theme().primary
                     } else {
-                        theme::border()
+                        cx.theme().secondary
+                    },
+                    if step == active {
+                        cx.theme().primary_foreground
+                    } else {
+                        cx.theme().secondary_foreground
                     },
                 ))
-                .corner_radius(12)
-                .inner_margin(egui::Margin::symmetric(16, 12))
-                .show(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        version_badge(
-                            ui,
-                            match version.version_type.as_str() {
-                                "release" => "R",
-                                "snapshot" => "S",
-                                _ => "H",
-                            },
-                            42.0,
-                        );
-                        ui.vertical(|ui| {
-                            ui.horizontal(|ui| {
-                                ui.label(RichText::new(&version.id).size(17.0).strong());
-                                if version.latest_release {
-                                    info_chip(ui, "LATEST", theme::success());
-                                } else if version.latest_snapshot {
-                                    info_chip(ui, "LATEST SNAPSHOT", theme::warning());
-                                }
-                            });
-                            ui.label(
-                                RichText::new(format!(
-                                    "{} · released {}",
-                                    title_case(&version.version_type),
-                                    version
-                                        .release_time
-                                        .get(..10)
-                                        .unwrap_or(&version.release_time)
-                                ))
-                                .size(12.0)
-                                .color(theme::muted()),
-                            );
-                        });
-                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                            ui.label(
-                                RichText::new(if selected {
-                                    tr!("Selected")
-                                } else {
-                                    tr!("Choose")
-                                })
-                                .color(if selected {
-                                    theme::accent_hover()
-                                } else {
-                                    theme::muted()
-                                }),
-                            );
-                        });
-                    });
-                });
-            if response.response.interact(Sense::click()).clicked() {
-                match flow.mode {
-                    RuntimeFlowMode::Create => {
-                        if self.new_instance.minecraft != version.id {
-                            self.new_instance.minecraft = version.id.clone();
-                            self.new_instance.loader_version.clear();
-                        }
-                        let loader = self.new_instance.loader;
-                        self.request_runtime_metadata(&version.id, loader);
-                    }
-                    RuntimeFlowMode::Update => {
-                        if self.runtime_edit.minecraft != version.id {
-                            self.runtime_edit.minecraft = version.id.clone();
-                            self.runtime_edit.loader_version.clear();
-                        }
-                        let loader = self.runtime_edit.loader;
-                        self.request_runtime_metadata(&version.id, loader);
-                    }
-                }
-                self.runtime_flow = Some(RuntimeFlow {
-                    step: RuntimeFlowStep::Components,
-                    ..flow
-                });
-            }
-            ui.add_space(8.0);
+                .child(
+                    div()
+                        .text_sm()
+                        .font_medium()
+                        .text_color(if step == active {
+                            cx.theme().foreground
+                        } else {
+                            cx.theme().muted_foreground
+                        })
+                        .child(label),
+                )
+        }))
+}
+
+fn render_minecraft_step(
+    app: &mut OrbitApp,
+    cx: &mut Context<OrbitApp>,
+    flow: RuntimeFlow,
+) -> impl IntoElement {
+    let filter = app
+        .input_value(&app.inputs.minecraft_filter, cx)
+        .to_ascii_lowercase();
+    let active = if flow.mode == RuntimeFlowMode::Create {
+        &app.new_instance.minecraft
+    } else {
+        &app.runtime_edit.minecraft
+    };
+    let list = v_flex()
+        .gap_3()
+        .child(
+            h_flex()
+                .gap_2()
+                .child(ui::search_input(&app.inputs.minecraft_filter).flex_1())
+                .children(
+                    [tr!("All"), tr!("Release"), tr!("Snapshot")]
+                        .into_iter()
+                        .enumerate()
+                        .map(|(index, label)| {
+                            Button::new(("minecraft-kind", index))
+                                .label(label.into_owned())
+                                .ghost()
+                                .selected(app.minecraft_version_type == index)
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.minecraft_version_type = index;
+                                    cx.notify();
+                                }))
+                        }),
+                ),
+        )
+        .child(
+            div()
+                .text_xs()
+                .text_color(cx.theme().muted_foreground)
+                .child(
+                    tr!("Showing at most 120 matches; filter to reach older releases.")
+                        .into_owned(),
+                ),
+        );
+    let matches: Vec<MinecraftVersion> = app
+        .minecraft_versions
+        .iter()
+        .filter(|version| {
+            let type_matches = match app.minecraft_version_type {
+                1 => version.version_type == "release",
+                2 => version.version_type != "release",
+                _ => true,
+            };
+            type_matches && (filter.is_empty() || version.id.to_ascii_lowercase().contains(&filter))
+        })
+        .take(120)
+        .cloned()
+        .collect();
+    let mut rows = ui::themed_card(cx).p_0().gap_0();
+    for (index, version) in matches.into_iter().enumerate() {
+        if index > 0 {
+            rows = rows.child(ui::divider(cx));
         }
-    }
-
-    fn show_component_picker(&mut self, ui: &mut egui::Ui, flow: RuntimeFlow) {
-        let (minecraft, selected_loader, selected_loader_version) = match flow.mode {
-            RuntimeFlowMode::Create => (
-                self.new_instance.minecraft.clone(),
-                self.new_instance.loader,
-                self.new_instance.loader_version.clone(),
-            ),
-            RuntimeFlowMode::Update => (
-                self.runtime_edit.minecraft.clone(),
-                self.runtime_edit.loader,
-                self.runtime_edit.loader_version.clone(),
-            ),
-        };
-        let loaders = ["vanilla", "fabric", "forge", "neoforge", "quilt"];
-
-        ui.horizontal(|ui| {
-            version_badge(ui, &minecraft, 52.0);
-            ui.vertical(|ui| {
-                ui.label(
-                    RichText::new(format!("Minecraft {minecraft}"))
-                        .size(20.0)
-                        .strong(),
-                );
-                ui.label(
-                    RichText::new(tr!(
-                        "Choose one loader. Compatible versions come from its official catalog."
-                    ))
-                    .color(theme::muted()),
-                );
-            });
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if ui.add(theme::ghost_button("Change Minecraft")).clicked() {
-                    self.runtime_flow = Some(RuntimeFlow {
-                        step: RuntimeFlowStep::Minecraft,
+        let version_id = version.id.clone();
+        rows = rows.child(
+            Button::new(("minecraft-version", index))
+                .ghost()
+                .selected(active == &version.id)
+                .w_full()
+                .rounded(gpui_component::button::ButtonRounded::None)
+                .child(
+                    h_flex()
+                        .w_full()
+                        .px_2()
+                        .py_1()
+                        .justify_between()
+                        .child(
+                            h_flex()
+                                .gap_2()
+                                .child(div().font_semibold().child(version.id))
+                                .child(ui::neutral_pill(title_case(&version.version_type), cx))
+                                .when(version.latest_release || version.latest_snapshot, |row| {
+                                    row.child(ui::pill(
+                                        tr!("Latest").into_owned(),
+                                        cx.theme().primary.opacity(0.13),
+                                        cx.theme().primary,
+                                    ))
+                                }),
+                        )
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(version.release_time),
+                        ),
+                )
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    if flow.mode == RuntimeFlowMode::Create {
+                        this.new_instance.minecraft = version_id.clone();
+                        this.new_instance.loader_version.clear();
+                    } else {
+                        this.runtime_edit.minecraft = version_id.clone();
+                        this.runtime_edit.loader_version.clear();
+                    }
+                    let loader = if flow.mode == RuntimeFlowMode::Create {
+                        this.new_instance.loader
+                    } else {
+                        this.runtime_edit.loader
+                    };
+                    this.request_runtime_metadata(&version_id, loader);
+                    this.runtime_flow = Some(RuntimeFlow {
+                        step: RuntimeFlowStep::Components,
                         ..flow
                     });
-                }
-            });
-        });
-        ui.add_space(18.0);
+                    cx.notify();
+                })),
+        );
+    }
+    list.child(rows)
+}
 
-        ui.label(RichText::new(tr!("Mod loader")).size(18.0).strong());
-        ui.add_space(6.0);
-        for (index, loader) in loaders.iter().enumerate() {
-            let selected = selected_loader == index;
-            let response = selectable_runtime_row(
-                ui,
-                &title_case(loader),
-                match *loader {
-                    "vanilla" => "The official game without a mod loader",
-                    "fabric" => "Lightweight loader with a broad modern mod ecosystem",
-                    "forge" => "Established loader for the Forge ecosystem",
-                    "neoforge" => "Modern continuation of the Forge ecosystem",
-                    "quilt" => "Fabric-compatible loader with Quilt extensions",
-                    _ => "",
-                },
-                selected,
-                None,
-            );
-            if response.clicked() && !selected {
-                match flow.mode {
-                    RuntimeFlowMode::Create => {
-                        self.new_instance.loader = index;
-                        self.new_instance.loader_version.clear();
-                    }
-                    RuntimeFlowMode::Update => {
-                        self.runtime_edit.loader = index;
-                        self.runtime_edit.loader_version.clear();
-                    }
-                }
-                self.request_runtime_metadata(&minecraft, index);
-            }
-            ui.add_space(7.0);
-        }
-
-        if selected_loader != 0 {
-            ui.add_space(12.0);
-            ui.label(
-                RichText::new(tr!(
-                    "%{loader} version",
-                    loader = title_case(loaders[selected_loader])
-                ))
-                .size(18.0)
-                .strong(),
-            );
-            ui.label(
-                RichText::new(tr!("Recommended and stable releases are marked; the exact version is kept in the runtime lock."))
-                    .size(12.0)
-                    .color(theme::muted()),
-            );
-            ui.add_space(6.0);
-            let key = (loaders[selected_loader].to_string(), minecraft.clone());
-            if let Some(versions) = self.loader_version_catalogs.get(&key).cloned() {
-                if versions.is_empty() {
-                    ui.label(
-                        RichText::new(tr!(
-                            "No compatible loader release was reported for this Minecraft version."
-                        ))
-                        .color(theme::warning()),
-                    );
-                }
-                for version in versions.into_iter().take(24) {
-                    let tags = loader_version_tags(&version);
-                    let selected = selected_loader_version == version.version;
-                    let requirement = version.minimum_java_major.map_or_else(
-                        || tr!("Compatible release").into_owned(),
-                        |major| tr!("Requires at least Java %{major}", major = major),
-                    );
-                    let response = selectable_runtime_row(
-                        ui,
-                        &version.version,
-                        &requirement,
-                        selected,
-                        (!tags.is_empty()).then_some(tags.as_str()),
-                    );
-                    if response.clicked() {
-                        match flow.mode {
-                            RuntimeFlowMode::Create => {
-                                self.new_instance.loader_version = version.version;
+fn render_components_step(
+    app: &mut OrbitApp,
+    cx: &mut Context<OrbitApp>,
+    flow: RuntimeFlow,
+) -> impl IntoElement {
+    let (minecraft, loader_index, selected_version) = if flow.mode == RuntimeFlowMode::Create {
+        (
+            app.new_instance.minecraft.clone(),
+            app.new_instance.loader,
+            app.new_instance.loader_version.clone(),
+        )
+    } else {
+        (
+            app.runtime_edit.minecraft.clone(),
+            app.runtime_edit.loader,
+            app.runtime_edit.loader_version.clone(),
+        )
+    };
+    let mut body = v_flex()
+        .gap_4()
+        .child(ui::section_title(
+            tr!("Loader").into_owned(),
+            minecraft.clone(),
+            cx,
+        ))
+        .child(
+            h_flex()
+                .gap_2()
+                .flex_wrap()
+                .children(loaders().into_iter().enumerate().map(|(index, loader)| {
+                    let minecraft = minecraft.clone();
+                    Button::new(("loader", index))
+                        .label(title_case(loader))
+                        .selected(loader_index == index)
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            if flow.mode == RuntimeFlowMode::Create {
+                                this.new_instance.loader = index;
+                                this.new_instance.loader_version.clear();
+                            } else {
+                                this.runtime_edit.loader = index;
+                                this.runtime_edit.loader_version.clear();
                             }
-                            RuntimeFlowMode::Update => {
-                                self.runtime_edit.loader_version = version.version;
-                            }
-                        }
-                    }
-                    ui.add_space(7.0);
-                }
-            } else {
-                ui.horizontal(|ui| {
-                    ui.spinner();
-                    ui.label(
-                        RichText::new(tr!("Loading compatible loader versions"))
-                            .color(theme::muted()),
-                    );
-                });
-            }
-        }
-
-        ui.add_space(16.0);
-        theme::card().show(ui, |ui| {
-            ui.horizontal(|ui| {
-                version_badge(ui, "J", 40.0);
-                ui.vertical(|ui| {
-                    ui.label(RichText::new(tr!("Java is resolved automatically")).strong());
-                    ui.label(java_requirement_label(
-                        self.java_requirements.get(&minecraft),
-                    ));
-                });
-            });
-        });
-
-        let loader_ready = selected_loader == 0 || !selected_loader_version.is_empty();
-        let java_ready = self
+                            this.request_runtime_metadata(&minecraft, index);
+                            cx.notify();
+                        }))
+                })),
+        );
+    if loader_index == 0 {
+        let java = app
             .java_requirements
             .get(&minecraft)
-            .is_some_and(|requirement| requirement.required);
-        ui.add_space(16.0);
-        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            if ui
-                .add_enabled(
-                    loader_ready && java_ready,
-                    theme::primary_button("Review installation"),
-                )
-                .clicked()
-            {
-                self.runtime_flow = Some(RuntimeFlow {
-                    step: RuntimeFlowStep::Review,
-                    ..flow
-                });
-            }
-            if !java_ready {
-                ui.label(
-                    RichText::new(tr!("Waiting for official Java metadata"))
-                        .size(12.0)
-                        .color(theme::muted()),
-                );
-            }
-        });
+            .and_then(|item| item.major)
+            .map_or_else(
+                || tr!("Resolving…").into_owned(),
+                |major| format!("Java {major}"),
+            );
+        return body
+            .child(ui::compact_card(cx).child(ui::key_value(
+                tr!("Required Java").into_owned(),
+                java,
+                cx,
+            )))
+            .child(
+                h_flex().justify_end().child(
+                    Button::new("components-next-vanilla")
+                        .label(tr!("Review").into_owned())
+                        .primary()
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.runtime_flow = Some(RuntimeFlow {
+                                step: RuntimeFlowStep::Review,
+                                ..flow
+                            });
+                            cx.notify();
+                        })),
+                ),
+            );
     }
-
-    fn show_runtime_review(&mut self, ui: &mut egui::Ui, flow: RuntimeFlow) {
-        let loaders = ["vanilla", "fabric", "forge", "neoforge", "quilt"];
-        let (minecraft, loader, loader_version) = match flow.mode {
-            RuntimeFlowMode::Create => (
-                self.new_instance.minecraft.clone(),
-                loaders[self.new_instance.loader].to_string(),
-                self.new_instance.loader_version.clone(),
-            ),
-            RuntimeFlowMode::Update => (
-                self.runtime_edit.minecraft.clone(),
-                loaders[self.runtime_edit.loader].to_string(),
-                self.runtime_edit.loader_version.clone(),
-            ),
-        };
-
-        ui.label(RichText::new(tr!("Review")).size(20.0).strong());
-        ui.label(
-            RichText::new(tr!("Only the target state is shown here; the launcher performs one verified transaction."))
-                .color(theme::muted()),
+    let key = (loaders()[loader_index].to_string(), minecraft.clone());
+    let versions = app
+        .loader_version_catalogs
+        .get(&key)
+        .cloned()
+        .unwrap_or_default();
+    body = body.child(ui::section_title(
+        tr!("Compatible Loader versions").into_owned(),
+        tr!("Provider metadata for the selected Minecraft version").into_owned(),
+        cx,
+    ));
+    if versions.is_empty() {
+        body = body.child(
+            ui::themed_card(cx).child(ui::empty_state(
+                OrbitIcon::Refresh,
+                tr!("Loading Loader versions").into_owned(),
+                tr!("Compatible entries are being fetched from the Loader's official metadata.")
+                    .into_owned(),
+                None,
+                cx,
+            )),
         );
-        ui.add_space(12.0);
+    } else {
+        let mut rows = ui::themed_card(cx).p_0().gap_0();
+        for (index, version) in versions.into_iter().take(100).enumerate() {
+            if index > 0 {
+                rows = rows.child(ui::divider(cx));
+            }
+            rows = rows.child(loader_version_row(
+                version,
+                index,
+                selected_version.clone(),
+                minecraft.clone(),
+                flow,
+                cx,
+            ));
+        }
+        body = body.child(rows);
+    }
+    body
+}
 
-        theme::elevated_card().show(ui, |ui| {
-            ui.horizontal(|ui| {
-                summary_value(ui, "MINECRAFT", &minecraft);
-                ui.separator();
-                summary_value(
-                    ui,
-                    "LOADER",
-                    &if loader == "vanilla" {
-                        "Vanilla".to_string()
-                    } else {
-                        format!("{} {}", title_case(&loader), loader_version)
-                    },
-                );
-                ui.separator();
-                summary_value(
-                    ui,
-                    "JAVA",
-                    &self
-                        .java_requirements
-                        .get(&minecraft)
-                        .and_then(|requirement| requirement.major)
-                        .map(|major| tr!("Java %{major} · managed", major = major))
-                        .unwrap_or_else(|| tr!("Resolving").into_owned()),
-                );
+fn loader_version_row(
+    version: LoaderVersion,
+    index: usize,
+    selected: String,
+    _minecraft: String,
+    flow: RuntimeFlow,
+    cx: &mut Context<OrbitApp>,
+) -> impl IntoElement {
+    let version_id = version.version.clone();
+    Button::new(("loader-version", index))
+        .ghost()
+        .selected(selected == version.version)
+        .w_full()
+        .rounded(gpui_component::button::ButtonRounded::None)
+        .child(
+            h_flex()
+                .w_full()
+                .px_2()
+                .py_1()
+                .gap_2()
+                .child(div().font_semibold().child(version.version))
+                .when(version.recommended, |row| {
+                    row.child(ui::pill(
+                        tr!("Recommended").into_owned(),
+                        cx.theme().success.opacity(0.13),
+                        cx.theme().success,
+                    ))
+                })
+                .when(version.stable, |row| {
+                    row.child(ui::neutral_pill(tr!("Stable").into_owned(), cx))
+                })
+                .when(version.latest, |row| {
+                    row.child(ui::pill(
+                        tr!("Latest").into_owned(),
+                        cx.theme().primary.opacity(0.13),
+                        cx.theme().primary,
+                    ))
+                })
+                .when_some(version.minimum_java_major, |row, major| {
+                    row.child(
+                        div()
+                            .ml_auto()
+                            .text_xs()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(format!("Java {major}+")),
+                    )
+                }),
+        )
+        .on_click(cx.listener(move |this, _, _, cx| {
+            if flow.mode == RuntimeFlowMode::Create {
+                this.new_instance.loader_version = version_id.clone();
+            } else {
+                this.runtime_edit.loader_version = version_id.clone();
+            }
+            this.runtime_flow = Some(RuntimeFlow {
+                step: RuntimeFlowStep::Review,
+                ..flow
             });
-        });
+            cx.notify();
+        }))
+}
 
-        ui.add_space(14.0);
-        match flow.mode {
-            RuntimeFlowMode::Create => {
-                theme::card().show(ui, |ui| {
-                    ui.label(RichText::new(tr!("Installation details")).size(18.0).strong());
-                    ui.label(
-                        RichText::new(tr!("These identify the installation; runtime versions remain locked separately."))
-                            .size(12.0)
-                            .color(theme::muted()),
-                    );
-                    ui.add_space(10.0);
-                    egui::Grid::new("runtime-create-review")
-                        .num_columns(2)
-                        .spacing([16.0, 12.0])
-                        .show(ui, |ui| {
-                            ui.label(tr!("Name"));
-                            theme::text_field(
-                                ui,
-                                &mut self.new_instance.name,
-                                "My Minecraft",
-                                theme::InputWidth::Form,
-                            );
-                            ui.end_row();
-
-                            ui.label(tr!("Folder"));
-                            ui.horizontal(|ui| {
-                                theme::text_field(
-                                    ui,
-                                    &mut self.new_instance.root,
-                                    "Choose an empty installation folder",
-                                    theme::InputWidth::Form,
-                                );
-                                if ui.add(theme::secondary_button("Browse")).clicked()
-                                    && let Some(path) = rfd::FileDialog::new().pick_folder()
-                                {
-                                    self.new_instance.root = path.display().to_string();
-                                }
-                            });
-                            ui.end_row();
-
-                            ui.label(tr!("Usage"));
-                            ui.horizontal(|ui| {
-                                ui.selectable_value(&mut self.new_instance.kind, 0, tr!("Client"));
-                                ui.selectable_value(&mut self.new_instance.kind, 1, tr!("Server"));
-                            });
-                            ui.end_row();
-                        });
-                });
-            }
-            RuntimeFlowMode::Update => {
-                if let Some(detail) = self.instance_detail.clone() {
-                    theme::card().show(ui, |ui| {
-                        ui.label(RichText::new(&detail.instance.name).size(18.0).strong());
-                        ui.label(
-                            RichText::new(tr!(
-                                "The installed runtime will be replaced by the selected target."
-                            ))
-                            .color(theme::muted()),
-                        );
-                        ui.add_space(10.0);
-                        if let Some(installed) = detail.installed {
-                            change_row(ui, "Minecraft", &installed.minecraft, &minecraft);
-                            change_row(
-                                ui,
-                                "Loader",
-                                &format!(
-                                    "{} {}",
-                                    title_case(&installed.loader),
-                                    installed.loader_version.unwrap_or_default()
-                                ),
-                                &format!("{} {}", title_case(&loader), loader_version),
-                            );
-                        } else {
-                            ui.label(
-                                RichText::new(tr!(
-                                    "This installation has no completed runtime yet."
-                                ))
-                                .color(theme::warning()),
-                            );
-                        }
-                    });
-                }
-            }
-        }
-
-        ui.add_space(18.0);
-        let valid = match flow.mode {
-            RuntimeFlowMode::Create => {
-                !self.new_instance.name.trim().is_empty()
-                    && !self.new_instance.root.trim().is_empty()
-            }
-            RuntimeFlowMode::Update => self.selected_instance().is_some(),
-        };
-        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            let label = match flow.mode {
-                RuntimeFlowMode::Create => "Create and install",
-                RuntimeFlowMode::Update => "Apply and install",
-            };
-            if ui
-                .add_enabled(valid, theme::primary_button(label))
-                .clicked()
-            {
-                self.runtime_flow = None;
-                match flow.mode {
-                    RuntimeFlowMode::Create => self.create_runtime(),
-                    RuntimeFlowMode::Update => self.configure_runtime_and_install(),
-                }
-            }
-            ui.label(
-                RichText::new(tr!("Downloads are verified before activation"))
-                    .size(12.0)
-                    .color(theme::muted()),
+fn render_review_step(
+    app: &mut OrbitApp,
+    _window: &mut Window,
+    cx: &mut Context<OrbitApp>,
+    flow: RuntimeFlow,
+) -> impl IntoElement {
+    let (minecraft, loader, loader_version) = if flow.mode == RuntimeFlowMode::Create {
+        (
+            app.new_instance.minecraft.clone(),
+            app.new_instance.loader,
+            app.new_instance.loader_version.clone(),
+        )
+    } else {
+        (
+            app.runtime_edit.minecraft.clone(),
+            app.runtime_edit.loader,
+            app.runtime_edit.loader_version.clone(),
+        )
+    };
+    let java = app
+        .java_requirements
+        .get(&minecraft)
+        .and_then(|item| item.major)
+        .map_or_else(
+            || tr!("Automatic").into_owned(),
+            |major| format!("Java {major}"),
+        );
+    let mut body = v_flex().gap_4().child(
+        ui::themed_card(cx)
+            .child(ui::key_value(tr!("Minecraft").into_owned(), minecraft, cx))
+            .child(ui::key_value(
+                tr!("Loader").into_owned(),
+                if loader == 0 {
+                    title_case(loaders()[loader])
+                } else {
+                    format!("{} {}", title_case(loaders()[loader]), loader_version)
+                },
+                cx,
+            ))
+            .child(ui::key_value(tr!("Java").into_owned(), java, cx)),
+    );
+    if flow.mode == RuntimeFlowMode::Create {
+        let name = app.inputs.new_name.clone();
+        let server_directory = app.inputs.new_server_directory.clone();
+        let directory_browse = server_directory.clone();
+        body = body
+            .child(ui::field(
+                tr!("Installation name").into_owned(),
+                tr!("Used by global Launcher instance selection").into_owned(),
+                &name,
+                cx,
+            ))
+            .child(
+                h_flex()
+                    .gap_2()
+                    .child(
+                        Button::new("new-kind-client")
+                            .label(tr!("Client").into_owned())
+                            .selected(app.new_instance.kind == 0)
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.new_instance.kind = 0;
+                                cx.notify();
+                            })),
+                    )
+                    .child(
+                        Button::new("new-kind-server")
+                            .label(tr!("Server").into_owned())
+                            .selected(app.new_instance.kind == 1)
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.new_instance.kind = 1;
+                                cx.notify();
+                            })),
+                    ),
             );
-        });
-    }
-
-    pub(in crate::app) fn begin_runtime_flow(&mut self, mode: RuntimeFlowMode) {
-        if mode == RuntimeFlowMode::Create {
-            self.new_instance = NewInstanceForm {
-                minecraft: self.latest_minecraft_release.clone().unwrap_or_default(),
-                ..NewInstanceForm::default()
-            };
-            if !self.new_instance.minecraft.is_empty() {
-                let minecraft = self.new_instance.minecraft.clone();
-                self.request_runtime_metadata(&minecraft, 0);
-            }
+        if app.new_instance.kind == 0 {
+            body = body.child(
+                ui::themed_card(cx).child(
+                    div()
+                        .text_sm()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(tr!("This client will use the managed Minecraft directory and an isolated versions/<instance> game directory.").into_owned()),
+                ),
+            );
         } else {
-            let Some(detail) = self.instance_detail.clone() else {
-                return;
-            };
-            let target = detail.installed.as_ref();
-            self.runtime_edit.name = detail.instance.name;
-            self.runtime_edit.minecraft = target
-                .map(|installed| installed.minecraft.clone())
-                .unwrap_or(detail.desired.minecraft);
-            self.runtime_edit.loader = loader_index(
-                target
-                    .map(|installed| installed.loader.as_str())
-                    .unwrap_or(&detail.desired.loader),
+            body = body.child(
+                v_flex()
+                    .gap_1p5()
+                    .child(
+                        div()
+                            .text_sm()
+                            .font_semibold()
+                            .child(tr!("Server directory").into_owned()),
+                    )
+                    .child(
+                        h_flex()
+                            .gap_2()
+                            .child(
+                                Input::new(&server_directory)
+                                    .flex_1()
+                                    .prefix(gpui_component::Icon::new(OrbitIcon::Folder)),
+                            )
+                            .child(
+                                Button::new("new-server-directory-browse")
+                                    .label(tr!("Browse").into_owned())
+                                    .on_click(cx.listener(move |_, _, window, cx| {
+                                        OrbitApp::choose_directory(&directory_browse, window, cx)
+                                    })),
+                            ),
+                    ),
             );
-            self.runtime_edit.loader_version = target
-                .and_then(|installed| installed.loader_version.clone())
-                .or(detail.desired.loader_version)
-                .unwrap_or_default();
-            self.runtime_edit.java_policy = java_policy_index(&detail.desired.java_policy);
         }
-        self.runtime_flow = Some(RuntimeFlow {
-            mode,
-            step: RuntimeFlowStep::Minecraft,
-        });
+        body = body.child(
+            h_flex()
+                .justify_end()
+                .gap_2()
+                .child(
+                    Button::new("review-back")
+                        .label(tr!("Back").into_owned())
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.runtime_flow = Some(RuntimeFlow {
+                                step: RuntimeFlowStep::Components,
+                                ..flow
+                            });
+                            cx.notify();
+                        })),
+                )
+                .child(
+                    Button::new("review-create")
+                        .icon(OrbitIcon::Download)
+                        .label(tr!("Create and install").into_owned())
+                        .primary()
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.new_instance.name = name.read(cx).value().trim().to_string();
+                            this.new_instance.server_directory =
+                                server_directory.read(cx).value().trim().to_string();
+                            if !this.new_instance.name.is_empty()
+                                && (this.new_instance.kind == 0
+                                    || !this.new_instance.server_directory.is_empty())
+                            {
+                                this.create_runtime();
+                                this.runtime_flow = None;
+                            }
+                            cx.notify();
+                        })),
+                ),
+        );
+    } else {
+        body = body.child(
+            h_flex()
+                .justify_end()
+                .gap_2()
+                .child(
+                    Button::new("review-update-back")
+                        .label(tr!("Back").into_owned())
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.runtime_flow = Some(RuntimeFlow {
+                                step: RuntimeFlowStep::Components,
+                                ..flow
+                            });
+                            cx.notify();
+                        })),
+                )
+                .child(
+                    Button::new("review-update")
+                        .icon(OrbitIcon::Download)
+                        .label(tr!("Apply and install").into_owned())
+                        .primary()
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.configure_runtime_and_install();
+                            this.runtime_flow = None;
+                            cx.notify();
+                        })),
+                ),
+        );
     }
+    body
 }

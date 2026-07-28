@@ -1,468 +1,669 @@
-use super::super::*;
+use std::time::Duration;
 
-impl OrbitApp {
-    pub(crate) fn show_activity(&mut self, ctx: &egui::Context) {
-        let latest = self.tasks.values().next_back().cloned();
-        if let Some(task) = latest {
-            if !self.activity_open && !matches!(task.state, TaskState::Running | TaskState::Failed)
-            {
-                return;
-            }
-            egui::TopBottomPanel::bottom("activity-strip")
-                .exact_height(if self.activity_open { 184.0 } else { 54.0 })
-                .frame(
-                    egui::Frame::new()
-                        .fill(theme::sidebar())
-                        .stroke(Stroke::new(1.0, theme::border()))
-                        .inner_margin(egui::Margin::symmetric(22, 7)),
+use gpui::{
+    Animation, AnimationExt, AnyElement, Context, IntoElement, ParentElement, Styled, Window, div,
+    ease_in_out, prelude::FluentBuilder as _, px, relative,
+};
+use gpui_component::{
+    ActiveTheme, Disableable, Icon, Selectable, StyledExt,
+    button::{Button, ButtonVariants},
+    h_flex,
+    input::Input,
+    progress::Progress,
+    scroll::ScrollableElement,
+    v_flex,
+};
+
+use super::super::{OrbitApp, TaskState, ToastKind};
+use crate::app::components as ui;
+use crate::assets::OrbitIcon;
+
+pub(in crate::app) fn render_strip(app: &OrbitApp, cx: &mut Context<OrbitApp>) -> impl IntoElement {
+    let task = app
+        .tasks
+        .values()
+        .rev()
+        .find(|task| task.state == TaskState::Running)
+        .or_else(|| app.tasks.values().next_back());
+    let Some(task) = task else {
+        return div().into_any_element();
+    };
+    let running = task.state == TaskState::Running;
+    let task_id = task.id;
+    let progress = progress_percent(task.completed, task.total);
+    let completed = task.completed;
+    let total = task.total;
+    v_flex()
+        .h(px(54.))
+        .flex_shrink_0()
+        .border_t_1()
+        .border_color(cx.theme().border)
+        .bg(cx.theme().group_box)
+        .child(
+            h_flex()
+                .h(px(43.))
+                .px_4()
+                .gap_2()
+                .items_center()
+                .child(
+                    div()
+                        .size(px(7.))
+                        .rounded_full()
+                        .bg(task_state_color(task.state, cx)),
                 )
-                .show(ctx, |ui| {
-                    theme::apply_ui(ui);
-                    ui.horizontal(|ui| {
-                        status_dot(ui, task.state);
-                        ui.vertical(|ui| {
-                            ui.horizontal(|ui| {
-                                ui.label(RichText::new(&task.label).strong());
-                                if self.activity_open {
-                                    ui.label(
-                                        RichText::new(&task.command)
-                                            .size(10.0)
-                                            .color(theme::muted()),
-                                    );
+                .child(div().font_medium().child(task.label.clone()))
+                .child(
+                    div()
+                        .text_sm()
+                        .text_color(cx.theme().muted_foreground)
+                        .overflow_hidden()
+                        .flex_1()
+                        .child(task.status_line.clone()),
+                )
+                .when(completed.is_some() || total.is_some(), |row| {
+                    row.child(
+                        div()
+                            .text_xs()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(match (completed, total) {
+                                (Some(done), Some(total)) => format!("{done} / {total}"),
+                                (Some(done), None) => done.to_string(),
+                                _ => String::new(),
+                            }),
+                    )
+                })
+                .when(running, |row| {
+                    row.child(
+                        Button::new("strip-cancel")
+                            .label(tr!("Cancel").into_owned())
+                            .ghost()
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.bridge.cancel(task_id);
+                                if let Some(task) = this.tasks.get_mut(&task_id) {
+                                    task.state = TaskState::Cancelled;
+                                    task.status_line = tr!("Cancelling…").into_owned();
                                 }
-                            });
-                            ui.label(
-                                RichText::new(&task.status_line)
-                                    .size(11.0)
-                                    .color(theme::muted()),
-                            );
-                        });
-                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                            if ui
-                                .button(if self.activity_open {
-                                    tr!("Hide")
-                                } else {
-                                    tr!("Activity")
-                                })
-                                .clicked()
-                            {
-                                self.activity_open = !self.activity_open;
-                            }
-                            if task.state == TaskState::Running
-                                && ui.button(tr!("Cancel")).clicked()
-                            {
-                                self.bridge.cancel(task.id);
-                            }
-                            if let (Some(completed), Some(total)) = (task.completed, task.total) {
-                                let percentage = completed
-                                    .saturating_mul(100)
-                                    .checked_div(total)
-                                    .unwrap_or_default();
-                                ui.label(
-                                    RichText::new(format!("{completed}/{total} · {percentage}%"))
-                                        .size(10.0)
-                                        .color(theme::muted()),
-                                );
-                            }
-                        });
-                    });
-                    if let (Some(completed), Some(total)) = (task.completed, task.total) {
-                        let fraction = if total == 0 {
-                            0.0
-                        } else {
-                            (completed as f32 / total as f32).clamp(0.0, 1.0)
-                        };
-                        ui.add(
-                            egui::ProgressBar::new(fraction)
-                                .desired_height(5.0)
-                                .corner_radius(3),
-                        );
-                    }
-                    if self.activity_open {
-                        ui.add_space(3.0);
-                        ui.separator();
-                        ScrollArea::vertical().stick_to_bottom(true).show(ui, |ui| {
-                            for task in self.tasks.values().rev().take(20) {
-                                ui.horizontal(|ui| {
-                                    status_dot(ui, task.state);
-                                    ui.label(RichText::new(&task.label).strong());
-                                    ui.label(
-                                        RichText::new(&task.command)
-                                            .size(10.0)
-                                            .color(theme::muted()),
-                                    );
-                                    ui.label(
-                                        RichText::new(&task.status_line).color(theme::muted()),
-                                    );
-                                });
-                                if let Some(message) = &task.error_message {
-                                    ui.label(
-                                        RichText::new(message).size(12.0).color(theme::danger()),
-                                    );
-                                }
-                            }
-                        });
-                    }
-                });
-        }
+                                cx.notify();
+                            })),
+                    )
+                })
+                .child(
+                    Button::new("strip-open")
+                        .icon(OrbitIcon::Activity)
+                        .label(tr!("Activity").into_owned())
+                        .ghost()
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.activity_open = !this.activity_open;
+                            cx.notify();
+                        })),
+                ),
+        )
+        .child(match progress {
+            Some(value) => Progress::new().h(px(6.)).value(value).into_any_element(),
+            None if running => indeterminate(cx).into_any_element(),
+            None => Progress::new()
+                .h(px(6.))
+                .value(if task.state == TaskState::Succeeded {
+                    100.
+                } else {
+                    0.
+                })
+                .into_any_element(),
+        })
+        .into_any_element()
+}
+
+fn indeterminate(cx: &gpui::App) -> impl IntoElement {
+    div()
+        .relative()
+        .h(px(6.))
+        .w_full()
+        .overflow_hidden()
+        .bg(cx.theme().primary.opacity(0.18))
+        .child(
+            div()
+                .absolute()
+                .left_0()
+                .top_0()
+                .h_full()
+                .w(relative(0.32))
+                .rounded_full()
+                .bg(cx.theme().primary)
+                .with_animation(
+                    "activity-indeterminate",
+                    Animation::new(Duration::from_millis(1100))
+                        .repeat()
+                        .with_easing(ease_in_out),
+                    |bar, delta| bar.left(relative(delta * 0.68)),
+                ),
+        )
+}
+
+pub(in crate::app) fn render_overlays(
+    app: &mut OrbitApp,
+    _window: &mut Window,
+    cx: &mut Context<OrbitApp>,
+) -> Vec<AnyElement> {
+    let mut overlays = Vec::new();
+    if app.activity_open {
+        overlays.push(render_drawer(app, cx).into_any_element());
     }
 
-    pub(crate) fn show_overlays(&mut self, ctx: &egui::Context) {
-        if let Some(mut editor) = self.package_editor.clone() {
-            let mut keep_open = true;
-            egui::Window::new(tr!("Manage %{package}", package = editor.package.mod_id))
-                .collapsible(false)
-                .resizable(true)
-                .default_width(620.0)
-                .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
-                .show(ctx, |ui| {
-                theme::apply_ui(ui);
-                    ui.label(
-                        RichText::new(format!(
-                            "{} · effective environment {}",
-                            editor.package.version, editor.package.environment
-                        ))
-                        .color(theme::muted()),
-                    );
-                    if !editor.package.root {
-                        ui.add_space(12.0);
-                        ui.label(
-                            RichText::new(tr!("This is a transitive package. Its source and environment are controlled by the root dependency plan."))
-                            .color(theme::warning()),
-                        );
-                    } else {
-                        ui.separator();
-                        ui.heading(tr!("Environment filter"));
-                        ui.horizontal(|ui| {
-                            ComboBox::from_id_salt("package-environment")
-                                .selected_text(match editor.environment.as_str() {
-                                    "auto" => tr!("Auto (JAR declaration)").into_owned(),
-                                    "client" => tr!("Client").into_owned(),
-                                    "server" => tr!("Server").into_owned(),
-                                    "both" => tr!("Both").into_owned(),
-                                    other => other.to_string(),
-                                })
-                                .show_ui(ui, |ui| {
-                                    ui.selectable_value(
-                                        &mut editor.environment,
-                                        "auto".into(),
-                                        tr!("Auto (JAR declaration)"),
-                                    );
-                                    ui.selectable_value(
-                                        &mut editor.environment,
-                                        "client".into(),
-                                        tr!("Client"),
-                                    );
-                                    ui.selectable_value(
-                                        &mut editor.environment,
-                                        "server".into(),
-                                        tr!("Server"),
-                                    );
-                                    ui.selectable_value(
-                                        &mut editor.environment,
-                                        "both".into(),
-                                        tr!("Both"),
-                                    );
-                                });
-                            let configured = editor
-                                .package
-                                .configured_environment
-                                .as_deref()
-                                .unwrap_or("auto");
-                            if ui
-                                .add_enabled(editor.environment != configured, egui::Button::new(tr!("Apply")))
-                                .clicked()
-                            {
-                                self.set_package_environment(
-                                    &editor.package.mod_id,
-                                    &editor.environment,
-                                );
-                                keep_open = false;
-                            }
-                        });
+    if app.interaction.is_some() {
+        overlays.push(render_interaction(app, cx).into_any_element());
+    } else if app.confirmation.is_some() {
+        overlays.push(render_confirmation(app, cx).into_any_element());
+    } else if app.microsoft_session.is_some() {
+        overlays.push(render_microsoft(app, cx).into_any_element());
+    } else if app.eula_document.is_some() {
+        overlays.push(render_eula(app, cx).into_any_element());
+    } else if app.package_editor.is_some() {
+        overlays.push(render_package_editor(app, cx).into_any_element());
+    }
+    if app.toast.is_some() {
+        overlays.push(render_toast(app, cx).into_any_element());
+    }
+    overlays
+}
 
-                        ui.separator();
-                        ui.heading(tr!("Package remotes"));
-                        for (index, remote) in editor.package.remotes.iter().enumerate() {
-                            ui.horizontal(|ui| {
-                                ui.label(RichText::new(remote).monospace());
-                                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                    let remove = ui.add_enabled(
-                                        editor.package.remotes.len() > 1,
-                                        egui::Button::new(tr!("Remove")),
-                                    );
-                                    if remove.clicked() {
-                                        self.remove_package_remote(
-                                            &editor.package.mod_id,
-                                            index + 1,
-                                        );
-                                        keep_open = false;
-                                    }
-                                });
-                            });
-                        }
-                        if editor.package.remotes.len() == 1 {
-                            ui.label(
-                                RichText::new(tr!("The final remote cannot be removed."))
-                                    .size(11.0)
-                                    .color(theme::muted()),
-                            );
-                        }
-                        ui.add_space(8.0);
-                        ui.horizontal(|ui| {
-                            let providers = ["file", "modrinth", "curseforge"];
-                            ComboBox::from_id_salt("remote-provider")
-                                .selected_text(providers[editor.remote_provider])
-                                .show_ui(ui, |ui| {
-                                    for (index, provider) in providers.iter().enumerate() {
-                                        ui.selectable_value(
-                                            &mut editor.remote_provider,
-                                            index,
-                                            *provider,
-                                        );
-                                    }
-                                });
-                            theme::text_field(
-                                ui,
-                                &mut editor.remote_locator,
-                                match editor.remote_provider {
-                                    0 => "Local JAR path",
-                                    1 => "Modrinth project ID",
-                                    _ => "CurseForge numeric project ID",
-                                },
-                                theme::InputWidth::Compact,
-                            );
-                            if editor.remote_provider == 0 && ui.button(tr!("Browse…")).clicked()
-                                && let Some(path) = rfd::FileDialog::new()
-                                    .add_filter(tr!("Java archive").into_owned(), &["jar"])
-                                    .pick_file()
-                            {
-                                editor.remote_locator = path.display().to_string();
-                            }
-                            if ui
-                                .add_enabled(
-                                    !editor.remote_locator.trim().is_empty(),
-                                    egui::Button::new(tr!("Add remote")),
-                                )
-                                .clicked()
-                            {
-                                self.add_package_remote(
-                                    &editor.package.mod_id,
-                                    providers[editor.remote_provider],
-                                    editor.remote_locator.trim(),
-                                );
-                                keep_open = false;
-                            }
-                        });
-                    }
-                    ui.separator();
-                    if ui.button(tr!("Close")).clicked() {
-                        keep_open = false;
-                    }
-                });
-            self.package_editor = keep_open.then_some(editor);
-        }
-        if let Some(pending) = self.interaction.clone() {
-            egui::Window::new(match pending.envelope.interaction {
-                orbit_machine_protocol::InteractionKind::Package => tr!("Choose package identity"),
-                orbit_machine_protocol::InteractionKind::Resolution => {
-                    tr!("Choose dependency solution")
-                }
-                orbit_machine_protocol::InteractionKind::Confirmation => tr!("Review changes"),
-            })
-            .collapsible(false)
-            .resizable(true)
-            .default_width(680.0)
-            .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
-            .show(ctx, |ui| {
-                theme::apply_ui(ui);
-                ui.label(RichText::new(&pending.envelope.prompt).size(17.0).strong());
-                ui.label(
-                    RichText::new(tr!("Review the differences before continuing."))
-                        .size(11.0)
-                        .color(theme::muted()),
-                );
-                ui.add_space(10.0);
-                ScrollArea::vertical().max_height(430.0).show(ui, |ui| {
-                    for choice in &pending.envelope.choices {
-                        let is_default =
-                            pending.envelope.default_choice.as_deref() == Some(choice.id.as_str());
-                        theme::card().show(ui, |ui| {
-                            ui.horizontal(|ui| {
-                                ui.vertical(|ui| {
-                                    ui.horizontal(|ui| {
-                                        ui.label(RichText::new(&choice.label).strong());
-                                        if is_default {
-                                            ui.label(
-                                                RichText::new(tr!("DEFAULT"))
-                                                    .size(10.0)
-                                                    .color(theme::muted()),
-                                            );
-                                        }
-                                    });
-                                    if let Some(description) = &choice.description {
-                                        ui.label(
-                                            RichText::new(description)
-                                                .size(12.0)
-                                                .color(theme::muted()),
-                                        );
-                                    }
-                                });
-                                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                    if ui.add(theme::primary_button("Choose")).clicked() {
-                                        let response =
-                                            orbit_machine_protocol::InteractionResponse::selected(
-                                                pending.envelope.interaction_id.clone(),
-                                                choice.id.clone(),
-                                            );
-                                        self.bridge.send_line(
-                                            pending.task_id,
-                                            serde_json::to_string(&response)
-                                                .expect("interaction response is serializable"),
-                                        );
-                                        self.interaction = None;
-                                    }
-                                });
-                            });
-                            render_interaction_data(ui, &choice.data);
-                        });
-                        ui.add_space(8.0);
-                    }
-                });
-                if pending.envelope.allow_cancel && ui.button(tr!("Cancel operation")).clicked() {
-                    let response = orbit_machine_protocol::InteractionResponse::cancelled(
-                        pending.envelope.interaction_id,
-                    );
-                    self.bridge.send_line(
-                        pending.task_id,
-                        serde_json::to_string(&response)
-                            .expect("interaction response is serializable"),
-                    );
-                    if let Some(task) = self.tasks.get_mut(&pending.task_id) {
-                        task.state = TaskState::Cancelled;
-                        task.status_line = tr!("Cancelled by user").into_owned();
-                    }
-                    self.interaction = None;
-                }
-            });
-        }
-        if let Some(confirmation) = self.confirmation.clone() {
-            egui::Window::new(&confirmation.title)
-                .collapsible(false)
-                .resizable(false)
-                .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
-                .show(ctx, |ui| {
-                    theme::apply_ui(ui);
-                    ui.set_max_width(460.0);
-                    ui.label(&confirmation.body);
-                    ui.add_space(14.0);
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if ui.add(theme::danger_button("Continue")).clicked() {
-                            self.confirmation = None;
-                            self.execute_confirmation(confirmation.action);
-                        }
-                        if ui.button(tr!("Cancel")).clicked() {
-                            self.confirmation = None;
-                        }
-                    });
-                });
-        }
-        if let Some(session) = self.microsoft_session.clone() {
-            egui::Window::new(tr!("Microsoft sign in"))
-                .collapsible(false)
-                .resizable(false)
-                .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
-                .show(ctx, |ui| {
-                    theme::apply_ui(ui);
-                    let code = session
-                        .get("user_code")
-                        .and_then(Value::as_str)
-                        .unwrap_or("—");
-                    let url = session
-                        .get("verification_uri")
-                        .and_then(Value::as_str)
-                        .unwrap_or("https://microsoft.com/devicelogin");
-                    ui.label(tr!("Open the Microsoft device page and enter:"));
-                    ui.label(
-                        RichText::new(code)
-                            .size(30.0)
-                            .strong()
-                            .color(theme::accent()),
-                    );
-                    ui.hyperlink_to(url, url);
-                    ui.add_space(12.0);
-                    ui.horizontal(|ui| {
-                        if ui.add(theme::primary_button("Complete sign in")).clicked()
-                            && let Some(id) =
-                                session.get("login_session_id").and_then(Value::as_str)
-                        {
-                            self.launcher_task_args(
-                                "Completing Microsoft sign in",
-                                Intent::AccountMutated,
-                                None,
-                                vec![
-                                    "account".into(),
-                                    "login".into(),
-                                    "microsoft".into(),
-                                    "complete".into(),
-                                    id.into(),
-                                ],
-                                None,
-                            );
-                            self.microsoft_session = None;
-                        }
-                        if ui.button(tr!("Close")).clicked() {
-                            self.microsoft_session = None;
-                        }
-                    });
-                });
-        }
-        if let Some(document) = self.eula_document.clone() {
-            egui::Window::new(tr!("Minecraft EULA"))
-                .collapsible(false)
-                .default_size([720.0, 600.0])
-                .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
-                .show(ctx, |ui| {
-                theme::apply_ui(ui);
-                    let url = document.get("url").and_then(Value::as_str).unwrap_or_default();
-                    let digest = document
-                        .get("digest_sha256")
-                        .and_then(Value::as_str)
-                        .unwrap_or_default();
-                    ui.hyperlink_to(tr!("Official document"), url);
-                    ui.label(RichText::new(format!("SHA-256 {digest}")).size(11.0).color(theme::muted()));
-                    ui.separator();
-                    ScrollArea::vertical().max_height(430.0).show(ui, |ui| {
-                        ui.label(document.get("text").and_then(Value::as_str).unwrap_or(""));
-                    });
-                    ui.separator();
-                    ui.horizontal(|ui| {
-                        if ui.add(theme::primary_button("I agree")).clicked() && !digest.is_empty() {
-                            self.confirmation = Some(Confirmation {
+fn render_drawer(app: &OrbitApp, cx: &mut Context<OrbitApp>) -> impl IntoElement {
+    let mut history = v_flex().gap_2();
+    for task in app.tasks.values().rev() {
+        let task_id = task.id;
+        let progress = progress_percent(task.completed, task.total);
+        history = history.child(
+            ui::compact_card(cx)
+                .child(
+                    h_flex()
+                        .gap_2()
+                        .items_center()
+                        .child(
+                            div()
+                                .size(px(7.))
+                                .rounded_full()
+                                .bg(task_state_color(task.state, cx)),
+                        )
+                        .child(div().font_semibold().flex_1().child(task.label.clone()))
+                        .child(ui::neutral_pill(task.command.clone(), cx))
+                        .when(task.state == TaskState::Running, |row| {
+                            row.child(
+                                Button::new(("drawer-cancel", task_id as usize))
+                                    .label(tr!("Cancel").into_owned())
+                                    .ghost()
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.bridge.cancel(task_id);
+                                        cx.notify();
+                                    })),
+                            )
+                        }),
+                )
+                .child(
+                    div()
+                        .text_sm()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(task.status_line.clone()),
+                )
+                .when_some(progress, |card, value| {
+                    card.child(Progress::new().h(px(5.)).value(value))
+                })
+                .when_some(task.error_message.clone(), |card, error| {
+                    card.child(div().text_sm().text_color(cx.theme().danger).child(error))
+                })
+                .when(!task.log.is_empty(), |card| {
+                    card.child(v_flex().gap_1().children(
+                        task.log.iter().rev().take(4).rev().cloned().map(|line| {
+                            div()
+                                .font_family("monospace")
+                                .text_xs()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(line)
+                        }),
+                    ))
+                }),
+        );
+    }
+    v_flex()
+        .absolute()
+        .top(px(58.))
+        .right_0()
+        .bottom(if app.tasks.is_empty() {
+            px(0.)
+        } else {
+            px(54.)
+        })
+        .w(px(440.))
+        .border_l_1()
+        .border_color(cx.theme().border)
+        .shadow_2xl()
+        .bg(cx.theme().background)
+        .child(
+            h_flex()
+                .h(px(54.))
+                .px_4()
+                .items_center()
+                .justify_between()
+                .border_b_1()
+                .border_color(cx.theme().border)
+                .child(
+                    div()
+                        .text_lg()
+                        .font_semibold()
+                        .child(tr!("Activity").into_owned()),
+                )
+                .child(
+                    Button::new("drawer-close")
+                        .icon(OrbitIcon::Close)
+                        .ghost()
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.activity_open = false;
+                            cx.notify();
+                        })),
+                ),
+        )
+        .child(
+            div()
+                .flex_1()
+                .min_h_0()
+                .overflow_y_scrollbar()
+                .p_3()
+                .child(history),
+        )
+}
+
+fn render_interaction(app: &OrbitApp, cx: &mut Context<OrbitApp>) -> impl IntoElement {
+    let pending = app.interaction.as_ref().expect("checked").clone();
+    let mut choices = v_flex().gap_2();
+    for (index, choice) in pending.envelope.choices.iter().cloned().enumerate() {
+        let choice_id = choice.id.clone();
+        let different = has_difference(&choice.data);
+        choices = choices.child(
+            Button::new(("interaction-choice", index))
+                .ghost()
+                .w_full()
+                .p_3()
+                .selected(different)
+                .child(
+                    v_flex()
+                        .w_full()
+                        .gap_2()
+                        .items_start()
+                        .child(
+                            h_flex()
+                                .w_full()
+                                .gap_2()
+                                .child(if different { "◆" } else { "◇" })
+                                .child(div().font_semibold().child(choice.label))
+                                .when_some(choice.description, |row, description| {
+                                    row.child(
+                                        div()
+                                            .ml_auto()
+                                            .text_xs()
+                                            .text_color(cx.theme().muted_foreground)
+                                            .child(description),
+                                    )
+                                }),
+                        )
+                        .child(ui::render_json_summary(&choice.data, cx)),
+                )
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.answer_interaction(Some(choice_id.clone()));
+                    cx.notify();
+                })),
+        );
+    }
+    ui::modal_backdrop(
+        ui::modal(
+            700.,
+            v_flex()
+                .gap_4()
+                .child(
+                    div()
+                        .text_xl()
+                        .font_semibold()
+                        .child(pending.envelope.prompt),
+                )
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(tr!("◆ marks actions that differ between choices.").into_owned()),
+                )
+                .child(div().max_h(px(470.)).overflow_y_scrollbar().child(choices))
+                .when(pending.envelope.allow_cancel, |modal| {
+                    modal.child(
+                        h_flex().justify_end().child(
+                            Button::new("interaction-cancel")
+                                .label(tr!("Cancel operation").into_owned())
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.answer_interaction(None);
+                                    cx.notify();
+                                })),
+                        ),
+                    )
+                }),
+            cx,
+        ),
+        cx,
+    )
+}
+
+fn render_confirmation(app: &OrbitApp, cx: &mut Context<OrbitApp>) -> impl IntoElement {
+    let confirmation = app.confirmation.as_ref().expect("checked").clone();
+    let action = confirmation.action.clone();
+    ui::modal_backdrop(
+        ui::modal(
+            480.,
+            v_flex()
+                .gap_4()
+                .child(div().text_xl().font_semibold().child(confirmation.title))
+                .child(
+                    div()
+                        .text_sm()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(confirmation.body),
+                )
+                .child(
+                    h_flex()
+                        .justify_end()
+                        .gap_2()
+                        .child(
+                            Button::new("confirm-cancel")
+                                .label(tr!("Cancel").into_owned())
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.confirmation = None;
+                                    cx.notify();
+                                })),
+                        )
+                        .child(
+                            Button::new("confirm-continue")
+                                .label(tr!("Continue").into_owned())
+                                .danger()
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.confirmation = None;
+                                    this.execute_confirmation(action.clone());
+                                    cx.notify();
+                                })),
+                        ),
+                ),
+            cx,
+        ),
+        cx,
+    )
+}
+
+fn render_microsoft(app: &OrbitApp, cx: &mut Context<OrbitApp>) -> impl IntoElement {
+    let session = app.microsoft_session.as_ref().expect("checked").clone();
+    let code = session
+        .get("user_code")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("—")
+        .to_string();
+    let url = session
+        .get("verification_uri")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("https://microsoft.com/devicelogin")
+        .to_string();
+    let session_id = session
+        .get("login_session_id")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string);
+    ui::modal_backdrop(
+        ui::modal(
+            500.,
+            v_flex()
+                .gap_4()
+                .child(
+                    div()
+                        .text_xl()
+                        .font_semibold()
+                        .child(tr!("Microsoft sign in").into_owned()),
+                )
+                .child(
+                    div()
+                        .text_sm()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(
+                            tr!("Open the Microsoft device page and enter this code:").into_owned(),
+                        ),
+                )
+                .child(
+                    div()
+                        .text_3xl()
+                        .font_semibold()
+                        .text_color(cx.theme().primary)
+                        .child(code),
+                )
+                .child(div().text_sm().child(url))
+                .child(
+                    h_flex()
+                        .justify_end()
+                        .gap_2()
+                        .child(
+                            Button::new("microsoft-close")
+                                .label(tr!("Close").into_owned())
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.microsoft_session = None;
+                                    cx.notify();
+                                })),
+                        )
+                        .when_some(session_id, |row, session_id| {
+                            row.child(
+                                Button::new("microsoft-complete")
+                                    .label(tr!("Complete sign in").into_owned())
+                                    .primary()
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.complete_microsoft_login(session_id.clone());
+                                        cx.notify();
+                                    })),
+                            )
+                        }),
+                ),
+            cx,
+        ),
+        cx,
+    )
+}
+
+fn render_eula(app: &OrbitApp, cx: &mut Context<OrbitApp>) -> impl IntoElement {
+    let document = app.eula_document.as_ref().expect("checked").clone();
+    let text = document
+        .get("text")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    let url = document
+        .get("url")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    let digest = document
+        .get("digest_sha256")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    let accept_digest = digest.clone();
+    ui::modal_backdrop(
+        ui::modal(
+            760.,
+            v_flex()
+                .h(px(580.))
+                .gap_3()
+                .child(div().text_xl().font_semibold().child("Minecraft EULA"))
+                .child(div().text_sm().text_color(cx.theme().primary).child(url))
+                .child(div().text_xs().text_color(cx.theme().muted_foreground).child(format!("SHA-256 {digest}")))
+                .child(div().flex_1().min_h_0().overflow_y_scrollbar().p_3().rounded_lg().bg(cx.theme().secondary).child(text))
+                .child(
+                    h_flex().justify_end().gap_2()
+                        .child(Button::new("eula-close").label(tr!("Close without accepting").into_owned()).on_click(cx.listener(|this, _, _, cx| { this.eula_document = None; cx.notify(); })))
+                        .child(Button::new("eula-accept").label(tr!("I agree").into_owned()).primary().disabled(accept_digest.is_empty()).on_click(cx.listener(move |this, _, _, cx| {
+                            this.eula_document = None;
+                            this.confirmation = Some(super::super::Confirmation {
                                 title: tr!("Accept the Minecraft EULA?").into_owned(),
                                 body: tr!("This records acceptance of exactly the displayed document digest for the selected server.").into_owned(),
-                                action: ConfirmationAction::AcceptEula(digest.to_string()),
+                                action: super::super::ConfirmationAction::AcceptEula(accept_digest.clone()),
                             });
-                            self.eula_document = None;
-                        }
-                        if ui.button(tr!("Close without accepting")).clicked() {
-                            self.eula_document = None;
-                        }
-                    });
-                });
+                            cx.notify();
+                        }))),
+                ),
+            cx,
+        ),
+        cx,
+    )
+}
+
+fn render_package_editor(app: &OrbitApp, cx: &mut Context<OrbitApp>) -> impl IntoElement {
+    let editor = app.package_editor.as_ref().expect("checked").clone();
+    let package_id = editor.package.mod_id.clone();
+    let remote_input = app.inputs.remote_locator.clone();
+    let remote_read = remote_input.clone();
+    let providers = ["file", "modrinth", "curseforge"];
+    let mut remotes = v_flex().gap_2();
+    for (index, remote) in editor.package.remotes.iter().cloned().enumerate() {
+        let package = package_id.clone();
+        remotes = remotes.child(
+            h_flex()
+                .gap_2()
+                .items_center()
+                .child(div().flex_1().text_sm().child(remote))
+                .child(
+                    Button::new(("remote-remove", index))
+                        .icon(OrbitIcon::Trash)
+                        .ghost()
+                        .disabled(editor.package.remotes.len() <= 1)
+                        .tooltip(
+                            if editor.package.remotes.len() <= 1 {
+                                tr!("The last remote cannot be removed")
+                            } else {
+                                tr!("Remove remote")
+                            }
+                            .into_owned(),
+                        )
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.remove_package_remote(&package, index);
+                            this.package_editor = None;
+                            cx.notify();
+                        })),
+                ),
+        );
+    }
+    let environment = editor.environment.clone();
+    ui::modal_backdrop(
+        ui::modal(
+            620.,
+            v_flex()
+                .gap_4()
+                .child(
+                    h_flex()
+                        .justify_between()
+                        .child(div().text_xl().font_semibold().child(package_id.clone()))
+                        .child(Button::new("package-close").icon(OrbitIcon::Close).ghost().on_click(cx.listener(|this, _, _, cx| { this.package_editor = None; cx.notify(); }))),
+                )
+                .child(ui::section_title(tr!("Environment").into_owned(), tr!("Auto follows the JAR declaration; loaders without a declaration default to both").into_owned(), cx))
+                .child(
+                    h_flex().gap_2().children(["auto", "client", "server", "both"].into_iter().enumerate().map(|(index, value)| {
+                        let package = package_id.clone();
+                        Button::new(("package-env", index))
+                            .label(title_environment(value))
+                            .selected(environment == value)
+                            .on_click(cx.listener(move |this, _, _, cx| { this.set_package_environment(&package, value); this.package_editor = None; cx.notify(); }))
+                    })),
+                )
+                .child(ui::section_title(tr!("Remotes").into_owned(), tr!("All sources are hash-deduplicated and analyzed equally").into_owned(), cx))
+                .child(remotes)
+                .child(
+                    h_flex().gap_2().children(providers.into_iter().enumerate().map(|(index, provider)| {
+                        Button::new(("remote-provider", index))
+                            .label(provider)
+                            .selected(editor.remote_provider == index)
+                            .on_click(cx.listener(move |this, _, _, cx| { if let Some(editor) = &mut this.package_editor { editor.remote_provider = index; } cx.notify(); }))
+                    })),
+                )
+                .child(
+                    h_flex()
+                        .gap_2()
+                        .child(Input::new(&remote_input).flex_1())
+                        .child(Button::new("remote-add").icon(OrbitIcon::Plus).label(tr!("Add remote").into_owned()).primary().on_click(cx.listener(move |this, _, window, cx| {
+                            let locator = remote_read.read(cx).value().trim().to_string();
+                            if !locator.is_empty() {
+                                let provider = this.package_editor.as_ref().map(|item| providers[item.remote_provider]).unwrap_or("file");
+                                this.add_package_remote(&package_id, provider, &locator);
+                                remote_read.update(cx, |state, cx| state.set_value("", window, cx));
+                                this.package_editor = None;
+                            }
+                            cx.notify();
+                        }))),
+                ),
+            cx,
+        ),
+        cx,
+    )
+}
+
+fn render_toast(app: &OrbitApp, cx: &mut Context<OrbitApp>) -> impl IntoElement {
+    let toast = app.toast.as_ref().expect("checked").clone();
+    let color = match toast.kind {
+        ToastKind::Warning => cx.theme().warning,
+        ToastKind::Danger => cx.theme().danger,
+    };
+    h_flex()
+        .absolute()
+        .top(px(74.))
+        .right(px(20.))
+        .w(px(430.))
+        .p_3()
+        .gap_3()
+        .rounded_lg()
+        .border_1()
+        .border_color(color)
+        .shadow_lg()
+        .bg(cx.theme().popover)
+        .child(Icon::new(OrbitIcon::Warning).text_color(color))
+        .child(div().flex_1().text_sm().child(toast.message))
+        .child(
+            Button::new("toast-close")
+                .icon(OrbitIcon::Close)
+                .ghost()
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.toast = None;
+                    cx.notify();
+                })),
+        )
+}
+
+fn progress_percent(completed: Option<u64>, total: Option<u64>) -> Option<f32> {
+    let (completed, total) = (completed?, total?);
+    if total == 0 {
+        return None;
+    }
+    Some((completed.min(total) as f64 * 100. / total as f64) as f32)
+}
+
+fn task_state_color(state: TaskState, cx: &gpui::App) -> gpui::Hsla {
+    match state {
+        TaskState::Running => cx.theme().primary,
+        TaskState::Succeeded => cx.theme().success,
+        TaskState::Failed => cx.theme().danger,
+        TaskState::Cancelled => cx.theme().muted_foreground,
+    }
+}
+
+fn has_difference(value: &serde_json::Value) -> bool {
+    match value {
+        serde_json::Value::Object(object) => {
+            object.get("different").and_then(serde_json::Value::as_bool) == Some(true)
+                || object.values().any(has_difference)
         }
-        if let Some((message, color)) = self.toast.clone() {
-            egui::Area::new("toast".into())
-                .anchor(egui::Align2::RIGHT_TOP, [-24.0, 82.0])
-                .show(ctx, |ui| {
-                    theme::apply_ui(ui);
-                    theme::card().show(ui, |ui| {
-                        ui.label(RichText::new(message).color(color));
-                        if ui.small_button(tr!("Dismiss")).clicked() {
-                            self.toast = None;
-                        }
-                    });
-                });
-        }
+        serde_json::Value::Array(values) => values.iter().any(has_difference),
+        _ => false,
+    }
+}
+
+fn title_environment(value: &str) -> String {
+    match value {
+        "auto" => tr!("Automatic").into_owned(),
+        "client" => tr!("Client").into_owned(),
+        "server" => tr!("Server").into_owned(),
+        "both" => tr!("Both").into_owned(),
+        _ => value.to_string(),
     }
 }

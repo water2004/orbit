@@ -1,0 +1,1547 @@
+use std::path::{Path, PathBuf};
+
+use directories::ProjectDirs;
+use gpui::{Context, Entity, Window};
+use gpui_component::{IndexPath, select::SelectState};
+use orbit_machine_protocol::InteractionResponse;
+use serde::de::DeserializeOwned;
+use serde_json::Value;
+use zeroize::Zeroizing;
+
+use super::*;
+use crate::process::{BridgeEvent, CliKind, ProcessRequest};
+use crate::wire;
+
+const PREFERENCES_FILE: &str = "preferences.json";
+
+pub(super) fn load_preferences() -> Preferences {
+    let adjacent = adjacent_binaries();
+    let fallback = Preferences {
+        page: Page::Home,
+        orbit_binary: adjacent.0,
+        launcher_binary: adjacent.1,
+        selected_instance: None,
+        language: orbit_i18n::LanguageMode::default(),
+        theme_mode: crate::theme::ThemeMode::default(),
+        accent_theme: crate::theme::AccentTheme::default(),
+    };
+    let Some(path) = preferences_path() else {
+        return fallback;
+    };
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|document| serde_json::from_str(&document).ok())
+        .unwrap_or(fallback)
+}
+
+fn preferences_path() -> Option<PathBuf> {
+    ProjectDirs::from("dev", "Orbit", "Orbit GUI")
+        .map(|dirs| dirs.config_dir().join(PREFERENCES_FILE))
+}
+
+impl OrbitApp {
+    pub(super) fn save_preferences(&self) {
+        let Some(path) = preferences_path() else {
+            return;
+        };
+        let Some(parent) = path.parent() else {
+            return;
+        };
+        if std::fs::create_dir_all(parent).is_err() {
+            return;
+        }
+        if let Ok(document) = serde_json::to_vec_pretty(&self.preferences) {
+            let _ = std::fs::write(path, document);
+        }
+    }
+
+    pub(super) fn refresh_registries(&mut self) {
+        if self.preferences.launcher_binary.is_file() {
+            self.launcher_task(
+                "Loading runtime instances",
+                Intent::LauncherInstances,
+                None,
+                ["instance", "list"],
+                None,
+            );
+            self.launcher_task(
+                "Loading Minecraft versions",
+                Intent::MinecraftVersions,
+                None,
+                ["versions", "minecraft"],
+                None,
+            );
+            self.launcher_task(
+                "Loading managed Java runtimes",
+                Intent::JavaRuntimes,
+                None,
+                ["java", "list"],
+                None,
+            );
+            self.launcher_task(
+                "Loading Yggdrasil providers",
+                Intent::YggdrasilProviders,
+                None,
+                ["config", "yggdrasil", "list"],
+                None,
+            );
+            self.launcher_task(
+                "Loading accounts",
+                Intent::Accounts,
+                None,
+                ["account", "list"],
+                None,
+            );
+            self.launcher_task(
+                "Loading launcher settings",
+                Intent::LauncherConfig,
+                None,
+                ["config", "list"],
+                None,
+            );
+            self.launcher_task(
+                "Loading Minecraft directory",
+                Intent::MinecraftDirectory,
+                None,
+                ["minecraft", "directory"],
+                None,
+            );
+        } else {
+            self.runtime_instances.clear();
+            self.instance_detail = None;
+            self.accounts.clear();
+            self.yggdrasil_providers.clear();
+            self.java_runtimes.clear();
+            self.minecraft_versions.clear();
+            self.launcher_config.clear();
+            self.minecraft_directory = None;
+            self.toast = Some(Toast {
+                message: tr!(
+                    "Orbit Launcher was not found at %{path}.",
+                    path = self.preferences.launcher_binary.display()
+                ),
+                kind: ToastKind::Warning,
+            });
+        }
+        if self.preferences.orbit_binary.is_file() {
+            self.orbit_task(
+                "Loading Orbit settings",
+                Intent::OrbitConfig,
+                ["config", "list"],
+            );
+        } else {
+            self.orbit_config.clear();
+            self.orbit_config_path = None;
+        }
+    }
+
+    pub(super) fn load_selected(&mut self, _window: &mut Window, _cx: &mut Context<Self>) {
+        let Some(instance) = self.selected_instance().cloned() else {
+            self.instance_detail = None;
+            self.packages.clear();
+            return;
+        };
+        self.launcher_task(
+            "Loading instance",
+            Intent::LauncherInstanceDetail,
+            Some(instance.id.clone()),
+            ["instance", "show"],
+            None,
+        );
+        if instance.directory.join("orbit.toml").is_file() {
+            self.orbit_task_at(
+                "Loading installed mods",
+                Intent::Packages,
+                ["list"],
+                Some(instance.directory.clone()),
+                None,
+            );
+        } else {
+            self.packages.clear();
+        }
+        if instance.kind == "server" {
+            self.launcher_task(
+                "Checking server",
+                Intent::ServerStatus,
+                Some(instance.id),
+                ["server", "status"],
+                None,
+            );
+        }
+    }
+
+    pub(super) fn launcher_task<const N: usize>(
+        &mut self,
+        label: &str,
+        intent: Intent,
+        instance: Option<String>,
+        command: [&str; N],
+        initial_stdin: Option<Zeroizing<String>>,
+    ) -> TaskId {
+        self.launcher_task_args(
+            label,
+            intent,
+            instance,
+            command.into_iter().map(str::to_string).collect(),
+            initial_stdin,
+        )
+    }
+
+    pub(super) fn launcher_task_args(
+        &mut self,
+        label: &str,
+        intent: Intent,
+        instance: Option<String>,
+        command: Vec<String>,
+        initial_stdin: Option<Zeroizing<String>>,
+    ) -> TaskId {
+        let mut args = vec![
+            "--language".to_string(),
+            self.preferences.language.argument().to_string(),
+            "--format".to_string(),
+            "json".to_string(),
+            "--progress-format".to_string(),
+            "ndjson".to_string(),
+            "--non-interactive".to_string(),
+        ];
+        if let Some(instance) = instance {
+            args.push("--instance".to_string());
+            args.push(instance);
+        }
+        args.extend(command);
+        self.spawn(
+            ProcessRequest {
+                kind: CliKind::Launcher,
+                program: self.preferences.launcher_binary.clone(),
+                args,
+                working_directory: None,
+                label: label.to_string(),
+                initial_stdin,
+            },
+            intent,
+        )
+    }
+
+    pub(super) fn orbit_task<const N: usize>(
+        &mut self,
+        label: &str,
+        intent: Intent,
+        command: [&str; N],
+    ) -> TaskId {
+        self.orbit_task_at(label, intent, command, None, None)
+    }
+
+    pub(super) fn orbit_task_at<const N: usize>(
+        &mut self,
+        label: &str,
+        intent: Intent,
+        command: [&str; N],
+        working_directory: Option<PathBuf>,
+        initial_stdin: Option<Zeroizing<String>>,
+    ) -> TaskId {
+        self.orbit_task_args(
+            label,
+            intent,
+            command.into_iter().map(str::to_string).collect(),
+            working_directory,
+            initial_stdin,
+        )
+    }
+
+    pub(super) fn orbit_task_args(
+        &mut self,
+        label: &str,
+        intent: Intent,
+        command: Vec<String>,
+        working_directory: Option<PathBuf>,
+        initial_stdin: Option<Zeroizing<String>>,
+    ) -> TaskId {
+        let mut args = vec![
+            "--language".to_string(),
+            self.preferences.language.argument().to_string(),
+            "--format".to_string(),
+            "json".to_string(),
+            "--progress-format".to_string(),
+            "ndjson".to_string(),
+        ];
+        args.extend(command);
+        self.spawn(
+            ProcessRequest {
+                kind: CliKind::Orbit,
+                program: self.preferences.orbit_binary.clone(),
+                args,
+                working_directory,
+                label: label.to_string(),
+                initial_stdin,
+            },
+            intent,
+        )
+    }
+
+    fn spawn(&mut self, request: ProcessRequest, intent: Intent) -> TaskId {
+        let label = orbit_i18n::text(&request.label).into_owned();
+        let command = request.command_name();
+        let id = self.bridge.spawn(request);
+        self.tasks.insert(id, TaskView::running(id, label, command));
+        self.intents.insert(id, intent);
+        id
+    }
+
+    pub(super) fn process_events(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let events = self.bridge.drain();
+        if events.is_empty() {
+            return false;
+        }
+        let mut reload_selected = false;
+        let mut refresh_accounts = false;
+        let mut refresh_yggdrasil_providers = false;
+        let mut refresh_java_runtimes = false;
+        let mut refresh_server = false;
+        let mut refresh_registries = false;
+        let mut install_runtime_after_configure = false;
+        let mut refresh_launcher_config = false;
+        let mut refresh_orbit_config = false;
+        let mut refresh_minecraft_directory = false;
+
+        for event in events {
+            match event {
+                BridgeEvent::Started {
+                    task_id,
+                    process_id,
+                } => {
+                    if let Some(task) = self.tasks.get_mut(&task_id) {
+                        task.log.push(tr!("Process %{id} started", id = process_id));
+                    }
+                }
+                BridgeEvent::Progress { task_id, envelope } => {
+                    if let Some(task) = self.tasks.get_mut(&task_id) {
+                        let (completed, total) = wire::progress_numbers(&envelope.data);
+                        task.phase = Some(envelope.phase);
+                        task.completed = completed;
+                        task.total = total;
+                        task.status_line = wire::progress_label(&envelope.data);
+                        if let Some(line) = envelope
+                            .data
+                            .get("line")
+                            .and_then(Value::as_str)
+                            .filter(|line| !line.is_empty())
+                        {
+                            push_bounded(&mut task.log, line.to_string());
+                        }
+                    }
+                }
+                BridgeEvent::MachineError { task_id, envelope } => {
+                    if let Some(task) = self.tasks.get_mut(&task_id) {
+                        task.error_code = Some(envelope.code);
+                        task.error_message = Some(envelope.message.clone());
+                        task.status_line = envelope.message;
+                    }
+                }
+                BridgeEvent::Interaction { task_id, envelope } => {
+                    if let Some(task) = self.tasks.get_mut(&task_id) {
+                        task.status_line = envelope.prompt.clone();
+                    }
+                    self.interaction = Some(PendingInteraction { task_id, envelope });
+                }
+                BridgeEvent::ProtocolError { task_id, message } => {
+                    if let Some(task) = self.tasks.get_mut(&task_id) {
+                        task.error_code = Some("protocol".to_string());
+                        task.error_message = Some(message.clone());
+                        task.status_line = message;
+                    }
+                }
+                BridgeEvent::Log { task_id, line } => {
+                    if let Some(task) = self.tasks.get_mut(&task_id) {
+                        push_bounded(&mut task.log, line);
+                    }
+                }
+                BridgeEvent::SpawnFailed { task_id, message } => {
+                    let intent = self.intents.remove(&task_id).unwrap_or(Intent::Generic);
+                    if matches!(intent, Intent::Search) {
+                        self.search_state = SearchState::Failed(message.clone());
+                    }
+                    if let Some(task) = self.tasks.get_mut(&task_id) {
+                        task.state = TaskState::Failed;
+                        task.status_line = message.clone();
+                        task.error_message = Some(message);
+                    }
+                }
+                BridgeEvent::Finished {
+                    task_id,
+                    status,
+                    stdout,
+                    cancelled,
+                } => {
+                    let intent = self.intents.remove(&task_id).unwrap_or(Intent::Generic);
+                    let result = if status == Some(0) && !cancelled {
+                        wire::success_document(&stdout).map(|envelope| envelope.result)
+                    } else {
+                        Err(anyhow::anyhow!(
+                            "{}",
+                            tr!(
+                                "Command exited with status %{status}",
+                                status = status.map_or_else(
+                                    || tr!("unknown").into_owned(),
+                                    |value| value.to_string()
+                                )
+                            )
+                        ))
+                    };
+                    match result.and_then(|value| self.apply_result(&intent, value, window, cx)) {
+                        Ok(()) => {
+                            if let Some(task) = self.tasks.get_mut(&task_id) {
+                                task.state = TaskState::Succeeded;
+                                task.status_line = tr!("Completed").into_owned();
+                            }
+                            match intent {
+                                Intent::LauncherInstances
+                                | Intent::Mutated {
+                                    refresh_packages: true,
+                                } => reload_selected = true,
+                                Intent::RuntimeMutated => refresh_registries = true,
+                                Intent::RuntimeConfiguredForInstall => {
+                                    install_runtime_after_configure = true
+                                }
+                                Intent::AccountMutated => {
+                                    refresh_accounts = true;
+                                    reload_selected = true;
+                                }
+                                Intent::YggdrasilProviderMutated => {
+                                    refresh_yggdrasil_providers = true
+                                }
+                                Intent::JavaRuntimeMutated => refresh_java_runtimes = true,
+                                Intent::ServerMutated => refresh_server = true,
+                                Intent::LauncherConfigMutated => refresh_launcher_config = true,
+                                Intent::OrbitConfigMutated => refresh_orbit_config = true,
+                                Intent::MinecraftDirectoryMoved => {
+                                    refresh_minecraft_directory = true;
+                                    refresh_registries = true;
+                                }
+                                _ => {}
+                            }
+                        }
+                        Err(error) => {
+                            let message = self
+                                .tasks
+                                .get(&task_id)
+                                .and_then(|task| task.error_message.clone())
+                                .unwrap_or_else(|| error.to_string());
+                            if matches!(intent, Intent::Search) {
+                                self.search_state = SearchState::Failed(message.clone());
+                            }
+                            if let Some(task) = self.tasks.get_mut(&task_id) {
+                                task.state = if cancelled || task.state == TaskState::Cancelled {
+                                    TaskState::Cancelled
+                                } else {
+                                    TaskState::Failed
+                                };
+                                task.status_line = message.clone();
+                                task.error_message = Some(message);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if reload_selected {
+            self.load_selected(window, cx);
+        }
+        if refresh_registries {
+            self.refresh_registries();
+        }
+        if refresh_accounts {
+            self.launcher_task(
+                "Refreshing accounts",
+                Intent::Accounts,
+                None,
+                ["account", "list"],
+                None,
+            );
+        }
+        if refresh_yggdrasil_providers {
+            self.launcher_task(
+                "Refreshing Yggdrasil providers",
+                Intent::YggdrasilProviders,
+                None,
+                ["config", "yggdrasil", "list"],
+                None,
+            );
+        }
+        if refresh_java_runtimes {
+            self.refresh_java_runtimes(false);
+        }
+        if refresh_server && let Some(instance) = self.selected_instance().cloned() {
+            self.launcher_task(
+                "Refreshing server state",
+                Intent::ServerStatus,
+                Some(instance.id),
+                ["server", "status"],
+                None,
+            );
+        }
+        if install_runtime_after_configure {
+            self.install_runtime();
+        }
+        if refresh_launcher_config {
+            self.launcher_task(
+                "Loading launcher settings",
+                Intent::LauncherConfig,
+                None,
+                ["config", "list"],
+                None,
+            );
+        }
+        if refresh_orbit_config {
+            self.orbit_task(
+                "Loading Orbit settings",
+                Intent::OrbitConfig,
+                ["config", "list"],
+            );
+        }
+        if refresh_minecraft_directory {
+            self.launcher_task(
+                "Loading Minecraft directory",
+                Intent::MinecraftDirectory,
+                None,
+                ["minecraft", "directory"],
+                None,
+            );
+        }
+        true
+    }
+
+    fn apply_result(
+        &mut self,
+        intent: &Intent,
+        result: Value,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> anyhow::Result<()> {
+        match intent {
+            Intent::LauncherInstances => {
+                self.runtime_instances = decode::<RuntimeInstanceList>(result)?.instances;
+                let selected_exists = self
+                    .preferences
+                    .selected_instance
+                    .as_ref()
+                    .is_some_and(|id| self.runtime_instances.iter().any(|item| &item.id == id));
+                if !selected_exists {
+                    self.preferences.selected_instance = self
+                        .runtime_instances
+                        .iter()
+                        .find(|item| item.is_default)
+                        .or_else(|| self.runtime_instances.first())
+                        .map(|item| item.id.clone());
+                    self.save_preferences();
+                }
+                let options: Vec<InstanceOption> = self
+                    .runtime_instances
+                    .iter()
+                    .map(|item| InstanceOption {
+                        id: item.id.clone(),
+                        title: format!("{} · {}", item.name, title_case(&item.kind)).into(),
+                    })
+                    .collect();
+                let selected = self.preferences.selected_instance.clone();
+                self.instance_select.update(cx, |state, cx| {
+                    state.set_items(options, window, cx);
+                    if let Some(selected) = selected {
+                        state.set_selected_value(&selected, window, cx);
+                    }
+                });
+            }
+            Intent::LauncherInstanceDetail => {
+                let detail: RuntimeInstanceDetail = decode(result)?;
+                let target = detail.installed.as_ref();
+                self.runtime_edit.minecraft = target
+                    .map(|installed| installed.minecraft.clone())
+                    .unwrap_or_else(|| detail.desired.minecraft.clone());
+                self.runtime_edit.loader = loader_index(
+                    target
+                        .map(|installed| installed.loader.as_str())
+                        .unwrap_or(&detail.desired.loader),
+                );
+                self.runtime_edit.loader_version = target
+                    .and_then(|installed| installed.loader_version.clone())
+                    .or_else(|| detail.desired.loader_version.clone())
+                    .unwrap_or_default();
+                self.runtime_edit.java_policy = java_policy_index(&detail.desired.java_policy);
+                self.instance_detail = Some(detail);
+                self.load_runtime_metadata();
+            }
+            Intent::Packages => self.packages = decode::<PackageList>(result)?.packages,
+            Intent::Search => {
+                let response: SearchResults = decode(result)?;
+                self.search_results = response.results;
+                self.search_truncated = response.truncated;
+                self.search_state = SearchState::Completed;
+            }
+            Intent::Outdated => {
+                let response: OutdatedResults = decode(result)?;
+                self.outdated = response.updates;
+                self.outdated_diagnostics = response.diagnostics;
+                self.outdated_warnings = response.warnings;
+                self.outdated_checked = true;
+                self.mod_view = 1;
+            }
+            Intent::Audit => self.audit = Some(wire::audit_summary(&result)),
+            Intent::Accounts => self.accounts = decode::<AccountList>(result)?.accounts,
+            Intent::YggdrasilProviders => {
+                self.yggdrasil_providers = decode::<YggdrasilProviderList>(result)?.providers;
+                if !self
+                    .yggdrasil_providers
+                    .iter()
+                    .any(|provider| provider.id == self.ygg_provider)
+                {
+                    self.ygg_provider = self
+                        .yggdrasil_providers
+                        .first()
+                        .map(|provider| provider.id.clone())
+                        .unwrap_or_default();
+                }
+            }
+            Intent::JavaRuntimes => {
+                let response: JavaRuntimeList = decode(result)?;
+                self.java_verification_requested = response.verification_requested;
+                self.java_runtimes = response.runtimes;
+            }
+            Intent::MinecraftVersions => {
+                let response: MinecraftVersionCatalog = decode(result)?;
+                self.latest_minecraft_release = Some(response.latest_release.clone());
+                self.latest_minecraft_snapshot = Some(response.latest_snapshot);
+                self.minecraft_versions = response.versions;
+                if self.new_instance.minecraft.is_empty() {
+                    self.new_instance.minecraft = response.latest_release;
+                    let minecraft = self.new_instance.minecraft.clone();
+                    self.request_runtime_metadata(&minecraft, self.new_instance.loader);
+                }
+            }
+            Intent::LoaderVersions => {
+                let response: LoaderVersionCatalog = decode(result)?;
+                self.loader_version_catalogs
+                    .insert((response.loader, response.minecraft), response.versions);
+            }
+            Intent::JavaRequirement => {
+                let response: JavaRequirement = decode(result)?;
+                self.java_requirements
+                    .insert(response.minecraft.clone(), response);
+            }
+            Intent::ServerStatus => self.server_status = Some(decode(result)?),
+            Intent::MicrosoftBegin => self.microsoft_session = Some(result),
+            Intent::EulaShow => self.eula_document = Some(result),
+            Intent::LauncherConfig => {
+                let response: LauncherConfigList = decode(result)?;
+                self.launcher_config = response.settings;
+                if !self.launcher_config.iter().any(|entry| {
+                    Some(entry.key.as_str()) == self.selected_launcher_config.as_deref()
+                }) {
+                    self.selected_launcher_config =
+                        self.launcher_config.first().map(|entry| entry.key.clone());
+                }
+                self.load_selected_launcher_config(window, cx);
+            }
+            Intent::OrbitConfig => {
+                let response: OrbitConfigList = decode(result)?;
+                self.orbit_config_path = Some(response.config_path);
+                self.orbit_config = response.entries;
+                if !self
+                    .orbit_config
+                    .iter()
+                    .any(|entry| Some(entry.key.as_str()) == self.selected_orbit_config.as_deref())
+                {
+                    self.selected_orbit_config =
+                        self.orbit_config.first().map(|entry| entry.key.clone());
+                }
+                self.load_selected_orbit_config(window, cx);
+            }
+            Intent::MinecraftDirectory => {
+                self.minecraft_directory = Some(decode(result)?);
+            }
+            Intent::LauncherConfigMutated
+            | Intent::OrbitConfigMutated
+            | Intent::MinecraftDirectoryMoved
+            | Intent::Mutated { .. }
+            | Intent::RuntimeMutated
+            | Intent::RuntimeConfiguredForInstall
+            | Intent::AccountMutated
+            | Intent::YggdrasilProviderMutated
+            | Intent::JavaRuntimeMutated
+            | Intent::ServerMutated
+            | Intent::Generic => {}
+        }
+        Ok(())
+    }
+
+    fn load_runtime_metadata(&mut self) {
+        let minecraft = self.runtime_edit.minecraft.clone();
+        let loader = self.runtime_edit.loader;
+        self.request_runtime_metadata(&minecraft, loader);
+    }
+
+    pub(super) fn request_runtime_metadata(&mut self, minecraft: &str, loader_index: usize) {
+        if minecraft.is_empty() {
+            return;
+        }
+        if !self.java_requirements.contains_key(minecraft) {
+            self.launcher_task_args(
+                "Resolving Java requirement",
+                Intent::JavaRequirement,
+                None,
+                vec![
+                    "versions".into(),
+                    "java".into(),
+                    "--minecraft".into(),
+                    minecraft.into(),
+                ],
+                None,
+            );
+        }
+        let loader = loaders()[loader_index];
+        let key = (loader.to_string(), minecraft.to_string());
+        if loader != "vanilla" && !self.loader_version_catalogs.contains_key(&key) {
+            self.launcher_task_args(
+                "Loading compatible loader versions",
+                Intent::LoaderVersions,
+                None,
+                vec![
+                    "versions".into(),
+                    "loader".into(),
+                    "--loader".into(),
+                    loader.into(),
+                    "--minecraft".into(),
+                    minecraft.into(),
+                ],
+                None,
+            );
+        }
+    }
+
+    pub(super) fn selected_root(&self) -> Option<PathBuf> {
+        self.selected_instance().map(|item| item.directory.clone())
+    }
+
+    pub(super) fn reload_packages(&mut self) {
+        if let Some(root) = self.selected_root() {
+            self.orbit_task_at(
+                "Loading installed mods",
+                Intent::Packages,
+                ["list"],
+                Some(root),
+                None,
+            );
+        }
+    }
+
+    pub(super) fn run_outdated(&mut self) {
+        if let Some(root) = self.selected_root() {
+            self.orbit_task_at(
+                "Checking feasible upgrades",
+                Intent::Outdated,
+                ["outdated"],
+                Some(root),
+                None,
+            );
+        }
+    }
+
+    pub(super) fn run_audit(&mut self) {
+        if let Some(root) = self.selected_root() {
+            self.orbit_task_at(
+                "Auditing bytecode compatibility",
+                Intent::Audit,
+                ["audit"],
+                Some(root),
+                None,
+            );
+        }
+    }
+
+    pub(super) fn install_mods(&mut self) {
+        self.orbit_mutation("Installing mod environment", vec!["install".into()]);
+    }
+
+    pub(super) fn sync_instance(&mut self) {
+        self.orbit_mutation("Synchronizing instance", vec!["sync".into()]);
+    }
+
+    fn orbit_mutation(&mut self, label: &str, command: Vec<String>) {
+        if let Some(root) = self.selected_root() {
+            self.orbit_task_args(
+                label,
+                Intent::Mutated {
+                    refresh_packages: true,
+                },
+                command,
+                Some(root),
+                None,
+            );
+        }
+    }
+
+    pub(super) fn initialize_orbit(&mut self) {
+        let Some(detail) = self.instance_detail.clone() else {
+            self.warn(tr!("Select a Launcher instance first.").into_owned());
+            return;
+        };
+        let Some(installed) = detail.installed else {
+            self.warn(tr!("Install the Minecraft runtime before initializing Orbit.").into_owned());
+            return;
+        };
+        if installed.loader == "vanilla" {
+            self.warn(
+                tr!("Orbit mod management requires Fabric, Quilt, Forge, or NeoForge.")
+                    .into_owned(),
+            );
+            return;
+        }
+        let Some(loader_version) = installed.loader_version else {
+            self.toast = Some(Toast {
+                message: tr!("The installed runtime lock has no exact Loader version.")
+                    .into_owned(),
+                kind: ToastKind::Danger,
+            });
+            return;
+        };
+        self.orbit_task_args(
+            "Initializing mod workspace",
+            Intent::Mutated {
+                refresh_packages: true,
+            },
+            vec![
+                "init".into(),
+                detail.instance.name,
+                "--mc-version".into(),
+                installed.minecraft,
+                "--modloader".into(),
+                installed.loader,
+                "--modloader-version".into(),
+                loader_version,
+            ],
+            Some(detail.instance.directory),
+            None,
+        );
+    }
+
+    fn warn(&mut self, message: String) {
+        self.toast = Some(Toast {
+            message,
+            kind: ToastKind::Warning,
+        });
+    }
+
+    pub(super) fn upgrade_package(&mut self, package: &str) {
+        self.orbit_mutation(
+            &tr!("Upgrading %{package}", package = package),
+            vec!["upgrade".into(), package.into()],
+        );
+    }
+
+    pub(super) fn remove_package(&mut self, package: &str) {
+        self.orbit_mutation(
+            &tr!("Removing %{package}", package = package),
+            vec!["remove".into(), package.into()],
+        );
+    }
+
+    pub(super) fn upgrade_all_packages(&mut self) {
+        self.orbit_mutation("Upgrading mod environment", vec!["upgrade".into()]);
+    }
+
+    pub(super) fn set_package_environment(&mut self, package: &str, environment: &str) {
+        self.orbit_mutation(
+            &tr!("Updating %{package} environment", package = package),
+            vec!["env".into(), package.into(), environment.into()],
+        );
+    }
+
+    pub(super) fn add_package_remote(&mut self, package: &str, provider: &str, locator: &str) {
+        self.orbit_mutation(
+            &tr!(
+                "Adding %{provider} remote to %{package}",
+                provider = provider,
+                package = package
+            ),
+            vec![
+                "remote".into(),
+                "add".into(),
+                package.into(),
+                provider.into(),
+                locator.into(),
+            ],
+        );
+    }
+
+    pub(super) fn remove_package_remote(&mut self, package: &str, index: usize) {
+        self.orbit_mutation(
+            &tr!("Removing remote from %{package}", package = package),
+            vec![
+                "remote".into(),
+                "remove".into(),
+                package.into(),
+                "--index".into(),
+                index.to_string(),
+            ],
+        );
+    }
+
+    pub(super) fn search_catalog(&mut self, query: String) {
+        self.search_results.clear();
+        self.search_truncated = false;
+        self.search_state = SearchState::Running;
+        let mut command = vec!["search".into(), query];
+        if let Some(detail) = &self.instance_detail {
+            command.extend(["--mc-version".into(), detail.desired.minecraft.clone()]);
+            if detail.desired.loader != "vanilla" {
+                command.extend(["--modloader".into(), detail.desired.loader.clone()]);
+            }
+        }
+        self.orbit_task_args(
+            "Searching mod catalogs",
+            Intent::Search,
+            command,
+            self.selected_root(),
+            None,
+        );
+    }
+
+    pub(super) fn add_search_result(&mut self, result: &SearchResult) {
+        let locator = match result.platform.as_str() {
+            "modrinth" => format!("mr:{}", result.project_id),
+            "curseforge" => format!("cf:{}", result.project_id),
+            _ => result.project_id.clone(),
+        };
+        self.orbit_mutation(
+            &tr!("Adding %{name}", name = result.name),
+            vec!["add".into(), locator],
+        );
+    }
+
+    pub(super) fn install_runtime(&mut self) {
+        if let Some(instance) = self.selected_instance().cloned() {
+            self.launcher_task(
+                "Installing runtime",
+                Intent::RuntimeMutated,
+                Some(instance.id),
+                ["install"],
+                None,
+            );
+        }
+    }
+
+    pub(super) fn configure_runtime_and_install(&mut self) {
+        let Some(instance) = self.selected_instance().cloned() else {
+            return;
+        };
+        let java_policies = ["auto", "managed"];
+        let mut command = vec![
+            "instance".into(),
+            "configure".into(),
+            "--minecraft".into(),
+            self.runtime_edit.minecraft.clone(),
+            "--loader".into(),
+            loaders()[self.runtime_edit.loader].into(),
+            "--java-policy".into(),
+            java_policies[self.runtime_edit.java_policy].into(),
+        ];
+        if self.runtime_edit.loader != 0 {
+            command.extend([
+                "--loader-version".into(),
+                self.runtime_edit.loader_version.clone(),
+            ]);
+        }
+        self.launcher_task_args(
+            "Preparing runtime update",
+            Intent::RuntimeConfiguredForInstall,
+            Some(instance.id),
+            command,
+            None,
+        );
+    }
+
+    pub(super) fn create_runtime(&mut self) {
+        let mut command = vec![
+            "install".into(),
+            "--new".into(),
+            self.new_instance.name.clone(),
+            "--kind".into(),
+            if self.new_instance.kind == 0 {
+                "client"
+            } else {
+                "server"
+            }
+            .into(),
+            "--minecraft".into(),
+            self.new_instance.minecraft.clone(),
+            "--loader".into(),
+            loaders()[self.new_instance.loader].into(),
+        ];
+        if self.new_instance.kind == 1 {
+            command.extend([
+                "--server-directory".into(),
+                self.new_instance.server_directory.clone(),
+            ]);
+        }
+        if self.new_instance.loader != 0 {
+            command.extend([
+                "--loader-version".into(),
+                self.new_instance.loader_version.clone(),
+            ]);
+        }
+        self.launcher_task_args(
+            "Creating runtime",
+            Intent::RuntimeMutated,
+            None,
+            command,
+            None,
+        );
+    }
+
+    pub(super) fn set_default_runtime(&mut self) {
+        if let Some(instance) = self.selected_instance().cloned() {
+            self.launcher_task_args(
+                "Selecting default instance",
+                Intent::RuntimeMutated,
+                None,
+                vec![
+                    "instance".into(),
+                    "default".into(),
+                    "set".into(),
+                    instance.id,
+                ],
+                None,
+            );
+        }
+    }
+
+    pub(super) fn import_runtime(&mut self, root: String) {
+        self.launcher_task_args(
+            "Importing runtime instance",
+            Intent::RuntimeMutated,
+            None,
+            vec![
+                "instance".into(),
+                "import".into(),
+                "--directory".into(),
+                root,
+            ],
+            None,
+        );
+    }
+
+    pub(super) fn refresh_java_runtimes(&mut self, verify: bool) {
+        let mut command = vec!["java".into(), "list".into()];
+        if verify {
+            command.push("--verify".into());
+        }
+        self.launcher_task_args(
+            if verify {
+                "Verifying managed Java runtimes"
+            } else {
+                "Loading managed Java runtimes"
+            },
+            Intent::JavaRuntimes,
+            None,
+            command,
+            None,
+        );
+    }
+
+    pub(super) fn verify_java_runtime(&mut self, runtime_id: &str) {
+        self.launcher_task_args(
+            "Verifying managed Java runtime",
+            Intent::JavaRuntimeMutated,
+            None,
+            vec!["java".into(), "verify".into(), runtime_id.into()],
+            None,
+        );
+    }
+
+    pub(super) fn launch_selected(&mut self) {
+        if let Some(instance) = self.selected_instance().cloned() {
+            let (label, command, intent) = if instance.kind == "server" {
+                (
+                    "Starting server",
+                    vec!["server".into(), "start".into()],
+                    Intent::ServerMutated,
+                )
+            } else {
+                ("Launching game", vec!["launch".into()], Intent::Generic)
+            };
+            self.launcher_task_args(label, intent, Some(instance.id), command, None);
+        }
+    }
+
+    pub(super) fn server_action(&mut self, action: &str) {
+        if let Some(instance) = self.selected_instance().cloned() {
+            let (label, intent) = match action {
+                "start" => ("Starting server", Intent::ServerMutated),
+                "stop" => ("Stopping server", Intent::ServerMutated),
+                "eula" => ("Loading Minecraft EULA", Intent::EulaShow),
+                _ => return,
+            };
+            let command = if action == "eula" {
+                vec!["server".into(), "eula".into(), "show".into()]
+            } else {
+                vec!["server".into(), action.into()]
+            };
+            self.launcher_task_args(label, intent, Some(instance.id), command, None);
+        }
+    }
+
+    pub(super) fn send_server_command(&mut self, command: String) {
+        if let Some(instance) = self.selected_instance().cloned() {
+            let mut args = vec!["server".into(), "command".into()];
+            args.extend(command.split_whitespace().map(str::to_string));
+            self.launcher_task_args(
+                "Sending server command",
+                Intent::Generic,
+                Some(instance.id),
+                args,
+                None,
+            );
+        }
+    }
+
+    pub(super) fn begin_microsoft_login(&mut self) {
+        self.launcher_task(
+            "Starting Microsoft sign in",
+            Intent::MicrosoftBegin,
+            None,
+            ["account", "login", "microsoft", "begin"],
+            None,
+        );
+        self.account_flow = None;
+    }
+
+    pub(super) fn complete_microsoft_login(&mut self, session: String) {
+        self.launcher_task_args(
+            "Completing Microsoft sign in",
+            Intent::AccountMutated,
+            None,
+            vec![
+                "account".into(),
+                "login".into(),
+                "microsoft".into(),
+                "complete".into(),
+                session,
+            ],
+            None,
+        );
+        self.microsoft_session = None;
+    }
+
+    pub(super) fn create_offline_account(&mut self, name: String) {
+        self.launcher_task_args(
+            "Creating offline account",
+            Intent::AccountMutated,
+            None,
+            vec!["account".into(), "login".into(), "offline".into(), name],
+            None,
+        );
+        self.account_flow = None;
+    }
+
+    pub(super) fn yggdrasil_login(
+        &mut self,
+        username: String,
+        profile: String,
+        password: Zeroizing<String>,
+    ) {
+        let mut command = vec![
+            "account".into(),
+            "login".into(),
+            "yggdrasil".into(),
+            "--provider".into(),
+            self.ygg_provider.clone(),
+            "--username".into(),
+            username,
+            "--password-stdin".into(),
+        ];
+        if !profile.is_empty() {
+            command.extend(["--profile".into(), profile]);
+        }
+        self.launcher_task_args(
+            "Signing in",
+            Intent::AccountMutated,
+            None,
+            command,
+            Some(password),
+        );
+        self.account_flow = None;
+    }
+
+    pub(super) fn add_yggdrasil_provider(&mut self, id: String, root: String) {
+        let mut command = vec![
+            "config".into(),
+            "yggdrasil".into(),
+            "add".into(),
+            id.clone(),
+            root,
+        ];
+        if self.ygg_allow_insecure_http {
+            command.push("--allow-insecure-http".into());
+        }
+        self.ygg_provider = id;
+        self.launcher_task_args(
+            "Saving authentication endpoint",
+            Intent::YggdrasilProviderMutated,
+            None,
+            command,
+            None,
+        );
+        self.ygg_endpoint_editor_open = false;
+    }
+
+    pub(super) fn select_account(&mut self, account: String, global: bool) {
+        let mut command = vec!["account".into(), "select".into(), account];
+        let instance = if global {
+            command.push("--global".into());
+            None
+        } else {
+            self.selected_instance().map(|item| item.id.clone())
+        };
+        self.launcher_task_args(
+            if global {
+                "Selecting default account"
+            } else {
+                "Selecting installation account"
+            },
+            Intent::AccountMutated,
+            instance,
+            command,
+            None,
+        );
+    }
+
+    pub(super) fn execute_confirmation(&mut self, action: ConfirmationAction) {
+        match action {
+            ConfirmationAction::LogoutAccount(id) => self.launcher_task_args(
+                "Logging out account",
+                Intent::AccountMutated,
+                None,
+                vec!["account".into(), "logout".into(), id],
+                None,
+            ),
+            ConfirmationAction::RemoveYggdrasilProvider(id) => self.launcher_task_args(
+                "Removing Yggdrasil provider",
+                Intent::YggdrasilProviderMutated,
+                None,
+                vec!["config".into(), "yggdrasil".into(), "remove".into(), id],
+                None,
+            ),
+            ConfirmationAction::UnregisterInstance(id) => self.launcher_task(
+                "Unregistering instance",
+                Intent::RuntimeMutated,
+                Some(id),
+                ["instance", "remove"],
+                None,
+            ),
+            ConfirmationAction::RemoveJavaRuntime(id) => self.launcher_task_args(
+                "Removing managed Java runtime",
+                Intent::JavaRuntimeMutated,
+                None,
+                vec!["java".into(), "remove".into(), id],
+                None,
+            ),
+            ConfirmationAction::RemovePackage(id) => {
+                self.remove_package(&id);
+                0
+            }
+            ConfirmationAction::AcceptEula(digest) => {
+                if let Some(instance) = self.selected_instance().cloned() {
+                    self.launcher_task_args(
+                        "Accepting Minecraft EULA",
+                        Intent::ServerMutated,
+                        Some(instance.id),
+                        vec!["server".into(), "eula".into(), "accept".into(), digest],
+                        None,
+                    )
+                } else {
+                    0
+                }
+            }
+        };
+    }
+
+    pub(super) fn answer_interaction(&mut self, choice: Option<String>) {
+        let Some(pending) = self.interaction.take() else {
+            return;
+        };
+        let interaction_id = pending.envelope.interaction_id;
+        let response = match choice {
+            Some(choice) => InteractionResponse::selected(interaction_id, choice),
+            None => InteractionResponse::cancelled(interaction_id),
+        };
+        self.bridge.send_line(
+            pending.task_id,
+            serde_json::to_string(&response).expect("interaction response serializes"),
+        );
+        if response.cancelled
+            && let Some(task) = self.tasks.get_mut(&pending.task_id)
+        {
+            task.state = TaskState::Cancelled;
+            task.status_line = tr!("Cancelled by user").into_owned();
+        }
+    }
+
+    pub(super) fn set_language(&mut self, language: orbit_i18n::LanguageMode) {
+        self.preferences.language = language;
+        orbit_i18n::install(language);
+        self.save_preferences();
+    }
+
+    pub(super) fn set_theme(
+        &mut self,
+        mode: crate::theme::ThemeMode,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.preferences.theme_mode = mode;
+        crate::theme::apply(window, cx, mode, self.preferences.accent_theme);
+        self.save_preferences();
+    }
+
+    pub(super) fn set_accent(
+        &mut self,
+        accent: crate::theme::AccentTheme,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.preferences.accent_theme = accent;
+        crate::theme::apply(window, cx, self.preferences.theme_mode, accent);
+        self.save_preferences();
+    }
+
+    pub(super) fn save_binary_paths(&mut self, orbit: String, launcher: String) {
+        self.preferences.orbit_binary = PathBuf::from(orbit);
+        self.preferences.launcher_binary = PathBuf::from(launcher);
+        self.save_preferences();
+        self.refresh_registries();
+    }
+
+    fn load_selected_launcher_config(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let value = self
+            .selected_launcher_config
+            .as_deref()
+            .and_then(|key| self.launcher_config.iter().find(|entry| entry.key == key))
+            .and_then(|entry| entry.value.clone())
+            .unwrap_or_default();
+        self.inputs
+            .launcher_config_value
+            .update(cx, |state, cx| state.set_value(value, window, cx));
+    }
+
+    fn load_selected_orbit_config(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let value = self
+            .selected_orbit_config
+            .as_deref()
+            .and_then(|key| self.orbit_config.iter().find(|entry| entry.key == key))
+            .filter(|entry| !entry.sensitive)
+            .map(OrbitConfigEntry::display_value)
+            .unwrap_or_default();
+        self.inputs
+            .orbit_config_value
+            .update(cx, |state, cx| state.set_value(value, window, cx));
+    }
+
+    pub(super) fn select_launcher_config(
+        &mut self,
+        key: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.selected_launcher_config = Some(key);
+        self.load_selected_launcher_config(window, cx);
+    }
+
+    pub(super) fn select_orbit_config(
+        &mut self,
+        key: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.selected_orbit_config = Some(key);
+        self.load_selected_orbit_config(window, cx);
+    }
+
+    pub(super) fn set_launcher_config(&mut self, value: String) {
+        let Some(key) = self.selected_launcher_config.clone() else {
+            return;
+        };
+        self.launcher_task_args(
+            "Saving launcher setting",
+            Intent::LauncherConfigMutated,
+            None,
+            vec!["config".into(), "set".into(), key, value],
+            None,
+        );
+    }
+
+    pub(super) fn unset_launcher_config(&mut self) {
+        let Some(key) = self.selected_launcher_config.clone() else {
+            return;
+        };
+        self.launcher_task_args(
+            "Resetting launcher setting",
+            Intent::LauncherConfigMutated,
+            None,
+            vec!["config".into(), "unset".into(), key],
+            None,
+        );
+    }
+
+    pub(super) fn set_orbit_config(&mut self, value: String) {
+        let Some(key) = self.selected_orbit_config.clone() else {
+            return;
+        };
+        self.orbit_task_args(
+            "Saving Orbit setting",
+            Intent::OrbitConfigMutated,
+            vec!["config".into(), "set".into(), key, value],
+            None,
+            None,
+        );
+    }
+
+    pub(super) fn unset_orbit_config(&mut self) {
+        let Some(key) = self.selected_orbit_config.clone() else {
+            return;
+        };
+        self.orbit_task_args(
+            "Resetting Orbit setting",
+            Intent::OrbitConfigMutated,
+            vec!["config".into(), "unset".into(), key],
+            None,
+            None,
+        );
+    }
+
+    pub(super) fn move_minecraft_directory(&mut self, destination: String) {
+        if destination.is_empty() {
+            return;
+        }
+        self.launcher_task_args(
+            "Moving Minecraft directory",
+            Intent::MinecraftDirectoryMoved,
+            None,
+            vec!["minecraft".into(), "move".into(), destination],
+            None,
+        );
+    }
+
+    pub(super) fn begin_runtime_flow(&mut self, mode: RuntimeFlowMode) {
+        if mode == RuntimeFlowMode::Update
+            && let Some(detail) = &self.instance_detail
+        {
+            self.runtime_edit.minecraft = detail.desired.minecraft.clone();
+            self.runtime_edit.loader = loader_index(&detail.desired.loader);
+            self.runtime_edit.loader_version =
+                detail.desired.loader_version.clone().unwrap_or_default();
+        }
+        self.runtime_flow = Some(RuntimeFlow {
+            mode,
+            step: RuntimeFlowStep::Minecraft,
+        });
+    }
+
+    pub(super) fn choose_directory(
+        input: &Entity<gpui_component::input::InputState>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(path) = rfd::FileDialog::new().pick_folder() {
+            input.update(cx, |state, cx| {
+                state.set_value(path.display().to_string(), window, cx)
+            });
+        }
+    }
+}
+
+pub(super) fn loaders() -> [&'static str; 5] {
+    ["vanilla", "fabric", "forge", "neoforge", "quilt"]
+}
+
+pub(super) fn loader_index(loader: &str) -> usize {
+    loaders()
+        .iter()
+        .position(|candidate| *candidate == loader)
+        .unwrap_or(0)
+}
+
+fn java_policy_index(policy: &str) -> usize {
+    usize::from(policy == "managed")
+}
+
+pub(super) fn title_case(value: &str) -> String {
+    match value.to_ascii_lowercase().as_str() {
+        "neoforge" => "NeoForge".to_string(),
+        "minecraft" => "Minecraft".to_string(),
+        "fabric" => "Fabric".to_string(),
+        "forge" => "Forge".to_string(),
+        "quilt" => "Quilt".to_string(),
+        "vanilla" => "Vanilla".to_string(),
+        "client" => tr!("Client").into_owned(),
+        "server" => tr!("Server").into_owned(),
+        other => {
+            let mut chars = other.chars();
+            chars.next().map_or_else(String::new, |first| {
+                first.to_uppercase().collect::<String>() + chars.as_str()
+            })
+        }
+    }
+}
+
+pub(super) fn human_bytes(bytes: u64) -> String {
+    const UNITS: [&str; 4] = ["B", "KiB", "MiB", "GiB"];
+    let mut value = bytes as f64;
+    let mut unit = 0;
+    while value >= 1024. && unit < UNITS.len() - 1 {
+        value /= 1024.;
+        unit += 1;
+    }
+    if unit == 0 {
+        format!("{} {}", bytes, UNITS[unit])
+    } else {
+        format!("{value:.1} {}", UNITS[unit])
+    }
+}
+
+fn adjacent_binaries() -> (PathBuf, PathBuf) {
+    let directory = std::env::current_exe()
+        .ok()
+        .and_then(|path| path.parent().map(Path::to_path_buf))
+        .unwrap_or_default();
+    if cfg!(windows) {
+        (
+            directory.join("orbit.exe"),
+            directory.join("orbit-launcher.exe"),
+        )
+    } else {
+        (directory.join("orbit"), directory.join("orbit-launcher"))
+    }
+}
+
+fn decode<T: DeserializeOwned>(value: Value) -> anyhow::Result<T> {
+    serde_json::from_value(value).map_err(Into::into)
+}
+
+fn push_bounded(log: &mut Vec<String>, line: String) {
+    const LIMIT: usize = 500;
+    if log.len() == LIMIT {
+        log.remove(0);
+    }
+    log.push(line);
+}
+
+#[allow(dead_code)]
+fn set_select_index<D: gpui_component::select::SelectDelegate + 'static>(
+    state: &Entity<SelectState<D>>,
+    index: usize,
+    window: &mut Window,
+    cx: &mut Context<OrbitApp>,
+) {
+    state.update(cx, |state, cx| {
+        state.set_selected_index(Some(IndexPath::default().row(index)), window, cx)
+    });
+}

@@ -1,129 +1,175 @@
-use super::super::*;
+use gpui::{Context, IntoElement, ParentElement, Styled, Window, div, prelude::FluentBuilder as _};
+use gpui_component::{
+    ActiveTheme, StyledExt,
+    button::{Button, ButtonVariants},
+    h_flex,
+    input::Input,
+    v_flex,
+};
 
-impl OrbitApp {
-    pub(crate) fn show_server(&mut self, ui: &mut egui::Ui) {
-        theme::section_title(
-            ui,
-            "Server",
-            "Managed foreground runtime and crash restart supervisor",
+use super::super::OrbitApp;
+use crate::app::components as ui;
+use crate::assets::OrbitIcon;
+
+pub(super) fn render(
+    app: &mut OrbitApp,
+    _window: &mut Window,
+    cx: &mut Context<OrbitApp>,
+) -> impl IntoElement {
+    let Some(instance) = app.selected_instance().cloned() else {
+        return ui::page(
+            tr!("Server").into_owned(),
+            tr!("Process supervision, console and Minecraft EULA").into_owned(),
+            div(),
+            ui::themed_card(cx).child(ui::empty_state(
+                OrbitIcon::Server,
+                tr!("No server selected").into_owned(),
+                tr!("Select a server installation from the top bar.").into_owned(),
+                None,
+                cx,
+            )),
+            cx,
         );
-        let Some(instance) = self.selected_instance().cloned() else {
-            empty_state(
-                ui,
-                "No server selected",
-                "Select a server runtime from the top bar.",
-            );
-            return;
-        };
-        let running = self
-            .server_status
-            .as_ref()
-            .is_some_and(|status| status.running);
-        theme::elevated_card().show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.vertical(|ui| {
-                    ui.label(
-                        RichText::new(if running {
-                            tr!("RUNNING")
-                        } else {
-                            tr!("STOPPED")
-                        })
-                        .color(if running {
-                            theme::success()
-                        } else {
-                            theme::muted()
-                        }),
-                    );
-                    ui.heading(&instance.name);
-                    ui.label(
-                        RichText::new(instance.root.display().to_string()).color(theme::muted()),
-                    );
-                    if let Some(state) = self
-                        .server_status
-                        .as_ref()
-                        .and_then(|status| status.state.as_ref())
-                    {
-                        let generation = state.get("generation").and_then(Value::as_u64);
-                        let pid = state.get("pid").and_then(Value::as_u64);
-                        ui.label(
-                            RichText::new(tr!(
-                                "PID %{pid} · generation %{generation}",
-                                pid = pid.map_or_else(|| "—".into(), |value| value.to_string()),
-                                generation = generation
-                                    .map_or_else(|| "—".into(), |value| value.to_string())
-                            ))
-                            .size(11.0)
-                            .color(theme::muted()),
-                        );
-                    }
-                });
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if running {
-                        if ui.add(theme::danger_button("Stop server")).clicked() {
-                            self.launcher_task(
-                                "Stopping server",
-                                Intent::ServerMutated,
-                                Some(instance.id.clone()),
-                                ["server", "stop"],
-                                None,
-                            );
-                        }
-                    } else if ui.add(theme::primary_button("Start server")).clicked() {
-                        self.launcher_task(
-                            "Starting server",
-                            Intent::ServerMutated,
-                            Some(instance.id.clone()),
-                            ["server", "start"],
-                            None,
-                        );
-                    }
-                });
-            });
-        });
-        ui.add_space(14.0);
-        ui.columns(2, |columns| {
-            theme::card().show(&mut columns[0], |ui| {
-                ui.heading(tr!("Console command"));
-                ui.horizontal(|ui| {
-                    let response = theme::text_field(
-                        ui,
-                        &mut self.server_command,
-                        "say Hello",
-                        theme::InputWidth::Compact,
-                    );
-                    let submit = ui.button(tr!("Send")).clicked()
-                        || response.lost_focus()
-                            && ui.input(|input| input.key_pressed(egui::Key::Enter));
-                    if submit && running && !self.server_command.trim().is_empty() {
-                        let command = std::mem::take(&mut self.server_command);
-                        let mut args = vec!["server".into(), "command".into()];
-                        args.extend(command.split_whitespace().map(str::to_string));
-                        self.launcher_task_args(
-                            "Sending server command",
-                            Intent::Generic,
-                            Some(instance.id.clone()),
-                            args,
-                            None,
-                        );
-                    }
-                });
-            });
-            theme::card().show(&mut columns[1], |ui| {
-                ui.heading(tr!("Minecraft EULA"));
-                ui.label(
-                    RichText::new(tr!("View the complete current document before accepting."))
-                        .color(theme::muted()),
-                );
-                if ui.button(tr!("Show EULA")).clicked() {
-                    self.launcher_task(
-                        "Loading Minecraft EULA",
-                        Intent::EulaShow,
-                        Some(instance.id),
-                        ["server", "eula", "show"],
-                        None,
-                    );
-                }
-            });
-        });
-    }
+    };
+    let running = app
+        .server_status
+        .as_ref()
+        .is_some_and(|status| status.running);
+    let actions = Button::new("server-toggle")
+        .icon(if running {
+            OrbitIcon::Close
+        } else {
+            OrbitIcon::Play
+        })
+        .label(
+            if running {
+                tr!("Stop server")
+            } else {
+                tr!("Start server")
+            }
+            .into_owned(),
+        )
+        .with_variant(if running {
+            gpui_component::button::ButtonVariant::Danger
+        } else {
+            gpui_component::button::ButtonVariant::Primary
+        })
+        .on_click(cx.listener(move |this, _, _, cx| {
+            this.server_action(if running { "stop" } else { "start" });
+            cx.notify();
+        }));
+    let command_input = app.inputs.server_command.clone();
+    let command_read = command_input.clone();
+    let status_detail = app
+        .server_status
+        .as_ref()
+        .and_then(|status| status.state.as_ref());
+    let content = v_flex()
+        .gap_4()
+        .child(
+            ui::themed_card(cx)
+                .child(
+                    h_flex()
+                        .gap_3()
+                        .items_center()
+                        .child(ui::icon_tile(OrbitIcon::Server, cx))
+                        .child(
+                            v_flex()
+                                .flex_1()
+                                .gap_1()
+                                .child(div().text_xl().font_semibold().child(instance.name))
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(cx.theme().muted_foreground)
+                                        .child(instance.directory.display().to_string()),
+                                ),
+                        )
+                        .child(ui::pill(
+                            if running {
+                                tr!("Running")
+                            } else {
+                                tr!("Stopped")
+                            }
+                            .into_owned(),
+                            ui::state_color(running, cx).opacity(0.14),
+                            ui::state_color(running, cx),
+                        )),
+                )
+                .when_some(status_detail, |card, state| {
+                    card.child(ui::render_json_summary(state, cx))
+                }),
+        )
+        .child(
+            h_flex()
+                .gap_3()
+                .items_start()
+                .child(
+                    ui::themed_card(cx)
+                        .flex_1()
+                        .child(ui::section_title(
+                            tr!("Console command").into_owned(),
+                            tr!("Sent to the supervised server process").into_owned(),
+                            cx,
+                        ))
+                        .child(
+                            h_flex()
+                                .gap_2()
+                                .child(
+                                    Input::new(&command_input)
+                                        .flex_1()
+                                        .prefix(gpui_component::Icon::new(OrbitIcon::Terminal)),
+                                )
+                                .child(
+                                    Button::new("server-send")
+                                        .label(tr!("Send").into_owned())
+                                        .primary()
+                                        .on_click(cx.listener(move |this, _, window, cx| {
+                                            let command =
+                                                command_read.read(cx).value().trim().to_string();
+                                            if !command.is_empty() {
+                                                this.send_server_command(command);
+                                                command_read.update(cx, |state, cx| {
+                                                    state.set_value("", window, cx)
+                                                });
+                                            }
+                                            cx.notify();
+                                        })),
+                                ),
+                        ),
+                )
+                .child(
+                    ui::themed_card(cx)
+                        .flex_1()
+                        .child(ui::section_title(
+                            "Minecraft EULA",
+                            tr!("Required before first server launch").into_owned(),
+                            cx,
+                        ))
+                        .child(
+                            div()
+                                .text_sm()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(
+                                    tr!("View the complete current document before accepting.")
+                                        .into_owned(),
+                                ),
+                        )
+                        .child(
+                            Button::new("server-eula")
+                                .label(tr!("Show EULA").into_owned())
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.server_action("eula");
+                                    cx.notify();
+                                })),
+                        ),
+                ),
+        );
+    ui::page(
+        tr!("Server").into_owned(),
+        tr!("Process supervision, console and Minecraft EULA").into_owned(),
+        actions,
+        content,
+        cx,
+    )
 }

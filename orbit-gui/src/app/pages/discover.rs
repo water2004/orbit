@@ -1,174 +1,178 @@
-use super::super::*;
+use gpui::{Context, IntoElement, ParentElement, Styled, StyledImage, Window, div, img, px};
+use gpui_component::{
+    ActiveTheme, StyledExt,
+    button::{Button, ButtonVariants},
+    h_flex, v_flex,
+};
 
-impl OrbitApp {
-    pub(crate) fn show_discover(&mut self, ui: &mut egui::Ui) {
-        theme::section_title(
-            ui,
-            "Discover mods",
-            "Search every configured provider through Orbit",
+use super::super::{OrbitApp, SearchState};
+use crate::app::components as ui;
+use crate::assets::OrbitIcon;
+
+pub(super) fn render(
+    app: &mut OrbitApp,
+    _window: &mut Window,
+    cx: &mut Context<OrbitApp>,
+) -> impl IntoElement {
+    let query_input = app.inputs.search_query.clone();
+    let actions = h_flex()
+        .w(px(430.))
+        .gap_2()
+        .child(ui::search_input(&query_input).flex_1())
+        .child(
+            Button::new("discover-search")
+                .icon(OrbitIcon::Search)
+                .label(tr!("Search").into_owned())
+                .primary()
+                .loading(matches!(app.search_state, SearchState::Running))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    let query = query_input.read(cx).value().trim().to_string();
+                    if !query.is_empty() {
+                        this.search_catalog(query);
+                        cx.notify();
+                    }
+                })),
         );
-        if self.selected_instance().is_none() {
-            ui.add_space(12.0);
-            if installation_required_card(
-                ui,
-                "Choose an installation to browse for",
-                "Search results are filtered by the exact Minecraft and loader target.",
-            ) {
-                self.preferences.page = Page::Runtime;
-            }
-            return;
-        }
-        ui.horizontal(|ui| {
-            let response = theme::text_field(
-                ui,
-                &mut self.search_query,
-                "Search by name or project",
-                theme::InputWidth::Form,
-            );
-            if response.changed() {
-                self.search_results.clear();
-                self.search_truncated = false;
-                self.search_state = SearchState::Idle;
-            }
-            let running = matches!(self.search_state, SearchState::Running);
-            if (ui
-                .add_enabled(!running, theme::primary_button("Search"))
-                .clicked()
-                || response.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter)))
-                && !self.search_query.trim().is_empty()
-                && !running
-            {
-                self.search_catalog();
-            }
-        });
-        if self.search_truncated {
-            ui.label(
-                RichText::new(tr!("Results were truncated by the current limit."))
-                    .color(theme::warning()),
-            );
-        }
-        ui.add_space(10.0);
-        ScrollArea::vertical().show(ui, |ui| {
-            for result in self.search_results.clone() {
-                theme::card().show(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        if let Some(icon) = &result.icon_url {
-                            ui.add(
-                                egui::Image::new(icon)
-                                    .fit_to_exact_size(Vec2::splat(58.0))
-                                    .corner_radius(10),
-                            );
-                        } else {
-                            let (rect, _) =
-                                ui.allocate_exact_size(Vec2::splat(58.0), Sense::hover());
-                            ui.painter().rect_filled(rect, 10, theme::accent_soft());
-                            ui.painter().text(
-                                rect.center(),
-                                egui::Align2::CENTER_CENTER,
-                                result.name.chars().next().unwrap_or('?'),
-                                egui::FontId::proportional(24.0),
-                                Color32::WHITE,
-                            );
-                        }
-                        ui.vertical(|ui| {
-                            ui.horizontal(|ui| {
-                                ui.label(RichText::new(&result.name).size(17.0).strong());
-                                if result.name != result.slug {
-                                    ui.label(
-                                        RichText::new(&result.slug)
-                                            .size(11.0)
-                                            .color(theme::muted()),
-                                    );
-                                }
-                                ui.label(
-                                    RichText::new(&result.platform)
-                                        .size(11.0)
-                                        .color(theme::muted()),
-                                );
-                            });
-                            ui.label(RichText::new(&result.description).color(theme::muted()));
-                            ui.label(
-                                RichText::new(tr!(
-                                    "%{downloads} downloads · %{version} · %{client} / %{server}",
-                                    downloads = compact_number(result.downloads),
-                                    version = result.latest_version,
-                                    client = result.client_side,
-                                    server = result.server_side
-                                ))
-                                .size(12.0)
-                                .color(theme::muted()),
-                            );
-                            ui.horizontal_wrapped(|ui| {
-                                if let Some(compatible) = result.compatible {
-                                    ui.label(
-                                        RichText::new(if compatible {
-                                            tr!("Compatible")
-                                        } else {
-                                            tr!("Other MC version")
-                                        })
-                                        .size(11.0)
-                                        .color(
-                                            if compatible {
-                                                theme::success()
-                                            } else {
-                                                theme::warning()
-                                            },
-                                        ),
-                                    );
-                                }
-                                for category in result.categories.iter().take(3) {
-                                    ui.label(
-                                        RichText::new(category).size(11.0).color(theme::muted()),
-                                    );
-                                }
-                                if let Some(mc) = result.mc_versions.first() {
-                                    ui.label(
-                                        RichText::new(format!("MC {mc}"))
-                                            .size(11.0)
-                                            .color(theme::muted()),
-                                    );
-                                }
-                                if let Some(accent) = result.accent_color {
-                                    let color = Color32::from_rgb(
-                                        ((accent >> 16) & 0xff) as u8,
-                                        ((accent >> 8) & 0xff) as u8,
-                                        (accent & 0xff) as u8,
-                                    );
-                                    let (rect, _) =
-                                        ui.allocate_exact_size(Vec2::splat(8.0), Sense::hover());
-                                    ui.painter().circle_filled(rect.center(), 4.0, color);
-                                }
-                            });
-                        });
-                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                            if ui.add(theme::primary_button("Add")).clicked() {
-                                self.add_search_result(&result);
-                            }
-                        });
-                    });
-                });
-                ui.add_space(8.0);
-            }
-            if self.search_results.is_empty() {
-                match &self.search_state {
-                    SearchState::Idle => empty_state(
-                        ui,
-                        "Search the catalog",
-                        "Results are filtered by the selected Minecraft installation.",
-                    ),
-                    SearchState::Running => empty_state(
-                        ui,
-                        "Searching the catalog…",
-                        "Orbit is querying every catalog configured for this installation.",
-                    ),
-                    SearchState::Completed => empty_state(
-                        ui,
-                        "No matching mods",
-                        "Try another query or check the selected Minecraft and loader filters.",
-                    ),
-                    SearchState::Failed(message) => empty_state(ui, "Search failed", message),
+
+    let content = if app.selected_instance().is_none() {
+        ui::themed_card(cx).child(ui::empty_state(
+            OrbitIcon::Runtime,
+            tr!("No installation selected").into_owned(),
+            tr!("Select an installation so catalog search can filter by its exact Minecraft and Loader versions.").into_owned(),
+            None,
+            cx,
+        )).into_any_element()
+    } else {
+        match &app.search_state {
+            SearchState::Idle => ui::themed_card(cx).child(ui::empty_state(
+                OrbitIcon::Browse,
+                tr!("Browse compatible projects").into_owned(),
+                tr!("Search Modrinth and configured CurseForge catalogs without treating provider slugs as package identity.").into_owned(),
+                None,
+                cx,
+            )).into_any_element(),
+            SearchState::Running => ui::themed_card(cx).child(ui::empty_state(
+                OrbitIcon::Search,
+                tr!("Searching mod catalogs").into_owned(),
+                tr!("Results will appear as providers answer.").into_owned(),
+                None,
+                cx,
+            )).into_any_element(),
+            SearchState::Failed(message) => ui::themed_card(cx).child(ui::empty_state(
+                OrbitIcon::Warning,
+                tr!("Search failed").into_owned(),
+                message.clone(),
+                None,
+                cx,
+            )).into_any_element(),
+            SearchState::Completed if app.search_results.is_empty() => ui::themed_card(cx).child(ui::empty_state(
+                OrbitIcon::Search,
+                tr!("No projects found").into_owned(),
+                tr!("Try a broader project name or verify the selected installation metadata.").into_owned(),
+                None,
+                cx,
+            )).into_any_element(),
+            SearchState::Completed => {
+                let mut results = v_flex().gap_3();
+                if app.search_truncated {
+                    results = results.child(
+                        ui::compact_card(cx).child(
+                            div().text_sm().text_color(cx.theme().warning).child(
+                                tr!("The provider returned a truncated result set; refine the query for more precise matches.").into_owned(),
+                            ),
+                        ),
+                    );
                 }
+                for (index, result) in app.search_results.iter().cloned().enumerate() {
+                    let add = result.clone();
+                    let icon = result.icon_url.as_ref().map_or_else(
+                        || ui::icon_tile(OrbitIcon::Mods, cx).into_any_element(),
+                        |url| {
+                            div()
+                                .size(px(48.))
+                                .flex_shrink_0()
+                                .rounded_lg()
+                                .overflow_hidden()
+                                .bg(cx.theme().secondary)
+                                .child(img(url.clone()).size_full().object_fit(gpui::ObjectFit::Cover))
+                                .into_any_element()
+                        },
+                    );
+                    let compatibility = result.compatible.map_or_else(
+                        || tr!("Compatibility unknown").into_owned(),
+                        |value| if value { tr!("Compatible") } else { tr!("Not compatible") }.into_owned(),
+                    );
+                    results = results.child(
+                        ui::themed_card(cx).child(
+                            h_flex()
+                                .min_w_0()
+                                .gap_3()
+                                .items_start()
+                                .child(icon)
+                                .child(
+                                    v_flex()
+                                        .min_w_0()
+                                        .flex_1()
+                                        .gap_2()
+                                        .child(
+                                            h_flex()
+                                                .gap_2()
+                                                .items_center()
+                                                .child(div().text_lg().font_semibold().child(result.name.clone()))
+                                                .child(ui::neutral_pill(result.platform.clone(), cx))
+                                                .child(ui::pill(
+                                                    compatibility,
+                                                    if result.compatible == Some(false) { cx.theme().danger } else { cx.theme().success }.opacity(0.13),
+                                                    if result.compatible == Some(false) { cx.theme().danger } else { cx.theme().success },
+                                                )),
+                                        )
+                                        .child(
+                                            div()
+                                                .text_sm()
+                                                .text_color(cx.theme().muted_foreground)
+                                                .max_w(px(680.))
+                                                .child(result.description.clone()),
+                                        )
+                                        .child(
+                                            h_flex()
+                                                .gap_2()
+                                                .flex_wrap()
+                                                .child(ui::neutral_pill(format!("{} {}", tr!("Latest"), result.latest_version), cx))
+                                                .child(ui::neutral_pill(format!("{} ↓", compact_number(result.downloads)), cx))
+                                                .children(result.categories.iter().take(3).cloned().map(|category| ui::neutral_pill(category, cx))),
+                                        ),
+                                )
+                                .child(
+                                    Button::new(("discover-add", index))
+                                        .icon(OrbitIcon::Plus)
+                                        .label(tr!("Add").into_owned())
+                                        .primary()
+                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                            this.add_search_result(&add);
+                                            cx.notify();
+                                        })),
+                                ),
+                        ),
+                    );
+                }
+                results.into_any_element()
             }
-        });
+        }
+    };
+
+    ui::page(
+        tr!("Browse").into_owned(),
+        tr!("Provider discovery filtered by the selected runtime").into_owned(),
+        actions,
+        content,
+        cx,
+    )
+}
+
+fn compact_number(value: u64) -> String {
+    match value {
+        0..=999 => value.to_string(),
+        1_000..=999_999 => format!("{:.1}K", value as f64 / 1_000.),
+        _ => format!("{:.1}M", value as f64 / 1_000_000.),
     }
 }

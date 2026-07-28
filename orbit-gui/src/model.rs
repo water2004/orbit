@@ -49,7 +49,8 @@ impl Page {
 pub struct RuntimeInstance {
     pub id: String,
     pub name: String,
-    pub root: PathBuf,
+    pub directory: PathBuf,
+    pub minecraft_directory: Option<PathBuf>,
     pub kind: String,
     pub is_default: bool,
 }
@@ -57,6 +58,49 @@ pub struct RuntimeInstance {
 #[derive(Debug, Deserialize)]
 pub struct RuntimeInstanceList {
     pub instances: Vec<RuntimeInstance>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct LauncherConfigEntry {
+    pub key: String,
+    pub value: Option<String>,
+    pub explicit: bool,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct LauncherConfigList {
+    pub settings: Vec<LauncherConfigEntry>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct OrbitConfigEntry {
+    pub key: String,
+    pub value_type: String,
+    pub sensitive: bool,
+    pub value: Option<Value>,
+}
+
+impl OrbitConfigEntry {
+    pub fn display_value(&self) -> String {
+        match self.value.as_ref() {
+            Some(Value::String(value)) => value.clone(),
+            Some(Value::Number(value)) => value.to_string(),
+            Some(value) => value.to_string(),
+            None => String::new(),
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct OrbitConfigList {
+    pub config_path: PathBuf,
+    pub entries: Vec<OrbitConfigEntry>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct MinecraftDirectory {
+    pub directory: PathBuf,
+    pub explicit: bool,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -128,24 +172,7 @@ pub struct LoaderVersionCatalog {
 #[derive(Debug, Clone, Deserialize)]
 pub struct JavaRequirement {
     pub minecraft: String,
-    pub required: bool,
-    pub component: Option<String>,
     pub major: Option<u32>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct OrbitInstance {
-    pub name: String,
-    pub path: String,
-    pub mc_version: String,
-    pub modloader: String,
-    pub is_default: bool,
-    pub is_current: bool,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct OrbitInstanceList {
-    pub instances: Vec<OrbitInstance>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -177,7 +204,6 @@ pub struct PackageList {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct SearchResult {
-    pub slug: String,
     pub name: String,
     pub project_id: String,
     pub platform: String,
@@ -185,13 +211,8 @@ pub struct SearchResult {
     pub latest_version: String,
     pub downloads: u64,
     #[serde(default)]
-    pub mc_versions: Vec<String>,
-    pub client_side: String,
-    pub server_side: String,
-    #[serde(default)]
     pub categories: Vec<String>,
     pub icon_url: Option<String>,
-    pub accent_color: Option<u32>,
     pub compatible: Option<bool>,
 }
 
@@ -233,7 +254,6 @@ pub struct Account {
     pub provider: String,
     pub provider_id: Option<String>,
     pub profile_name: String,
-    pub login_name: Option<String>,
     pub is_default: bool,
 }
 
@@ -262,8 +282,6 @@ pub struct JavaRuntime {
     pub platform: String,
     pub version: String,
     pub major: u32,
-    pub root: PathBuf,
-    pub executable: PathBuf,
     pub files: usize,
     pub bytes: u64,
     pub verified: Option<bool>,
@@ -351,7 +369,6 @@ impl TaskView {
 pub enum Intent {
     LauncherInstances,
     LauncherInstanceDetail,
-    OrbitInstances,
     Packages,
     Search,
     Outdated,
@@ -365,6 +382,12 @@ pub enum Intent {
     ServerStatus,
     MicrosoftBegin,
     EulaShow,
+    LauncherConfig,
+    OrbitConfig,
+    MinecraftDirectory,
+    LauncherConfigMutated,
+    OrbitConfigMutated,
+    MinecraftDirectoryMoved,
     Mutated { refresh_packages: bool },
     RuntimeMutated,
     RuntimeConfiguredForInstall,

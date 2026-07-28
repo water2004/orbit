@@ -1,103 +1,144 @@
-use super::super::*;
+use gpui::{Context, IntoElement, ParentElement, Styled, Window, div};
+use gpui_component::{
+    ActiveTheme, StyledExt,
+    button::{Button, ButtonVariants},
+    h_flex, v_flex,
+};
 
-impl OrbitApp {
-    pub(crate) fn show_audit(&mut self, ui: &mut egui::Ui) {
-        theme::section_title(
-            ui,
-            "Compatibility audit",
-            "Loader-aware bytecode and Mixin risk analysis",
-        );
-        if self.selected_instance().is_none() {
-            ui.add_space(12.0);
-            if installation_required_card(
-                ui,
-                "Choose an installation to audit",
-                "The loader runtime and exact game JAR define the audit namespace.",
-            ) {
-                self.preferences.page = Page::Runtime;
+use super::super::OrbitApp;
+use crate::app::components as ui;
+use crate::assets::OrbitIcon;
+
+pub(super) fn render(
+    app: &mut OrbitApp,
+    _window: &mut Window,
+    cx: &mut Context<OrbitApp>,
+) -> impl IntoElement {
+    let actions = Button::new("audit-run")
+        .icon(OrbitIcon::Audit)
+        .label(
+            if app.audit.is_some() {
+                tr!("Run a fresh check")
+            } else {
+                tr!("Run audit")
             }
-            return;
-        }
-        ui.horizontal(|ui| {
-            if ui.add(theme::primary_button("Run audit")).clicked() {
-                self.run_audit();
-            }
-            ui.label(RichText::new(tr!("Analysis is read-only.")).color(theme::muted()));
-        });
-        ui.add_space(12.0);
-        if let Some(audit) = &self.audit {
-            ui.columns(4, |columns| {
-                metric_card(
-                    &mut columns[0],
-                    "Readiness",
-                    audit.readiness.clone(),
-                    "Loader backend",
-                );
-                metric_card(
-                    &mut columns[1],
-                    "Artifacts",
-                    audit.artifacts.to_string(),
-                    "Runtime inputs",
-                );
-                metric_card(
-                    &mut columns[2],
-                    "Warnings",
-                    audit.warnings.to_string(),
-                    "Coverage warnings",
-                );
-                metric_card(
-                    &mut columns[3],
-                    "Findings",
-                    audit.findings.len().to_string(),
-                    "Ranked risks",
-                );
-            });
-            if audit.coverage_gaps > 0 {
-                ui.label(
-                    RichText::new(tr!(
-                        "%{count} analysis coverage gap(s) require review.",
-                        count = audit.coverage_gaps
+            .into_owned(),
+        )
+        .primary()
+        .on_click(cx.listener(|this, _, _, cx| {
+            this.run_audit();
+            cx.notify();
+        }));
+
+    let content = if app.selected_instance().is_none() {
+        ui::themed_card(cx)
+            .child(ui::empty_state(
+                OrbitIcon::Runtime,
+                tr!("No installation selected").into_owned(),
+                tr!("Select an installation before evaluating its runtime bytecode.").into_owned(),
+                None,
+                cx,
+            ))
+            .into_any_element()
+    } else if let Some(audit) = &app.audit {
+        let mut body = v_flex()
+            .gap_4()
+            .child(
+                h_flex()
+                    .gap_3()
+                    .flex_wrap()
+                    .child(ui::metric(
+                        tr!("Readiness").into_owned(),
+                        audit.readiness.clone(),
+                        tr!("Runtime namespace and inputs").into_owned(),
+                        cx,
                     ))
-                    .color(theme::warning()),
+                    .child(ui::metric(
+                        tr!("Artifacts").into_owned(),
+                        audit.artifacts.to_string(),
+                        tr!("Logical runtime inputs").into_owned(),
+                        cx,
+                    ))
+                    .child(ui::metric(
+                        tr!("Warnings").into_owned(),
+                        audit.warnings.to_string(),
+                        tr!("Coverage warnings").into_owned(),
+                        cx,
+                    ))
+                    .child(ui::metric(
+                        tr!("Coverage gaps").into_owned(),
+                        audit.coverage_gaps.to_string(),
+                        tr!("Unresolved analysis scope").into_owned(),
+                        cx,
+                    )),
+            )
+            .child(ui::section_title(
+                tr!("Ranked risks").into_owned(),
+                tr!("Loader-aware bytecode and Mixin evidence").into_owned(),
+                cx,
+            ));
+        if audit.findings.is_empty() {
+            body = body.child(
+                ui::themed_card(cx).child(ui::empty_state(
+                    OrbitIcon::Audit,
+                    tr!("No compatibility risks found").into_owned(),
+                    tr!("The current audit did not find a reportable bytecode or Mixin risk.")
+                        .into_owned(),
+                    None,
+                    cx,
+                )),
+            );
+        } else {
+            for finding in &audit.findings {
+                let color = risk_color(finding.risk, cx);
+                body = body.child(
+                    ui::compact_card(cx)
+                        .child(
+                            h_flex()
+                                .gap_2()
+                                .items_center()
+                                .child(ui::pill(
+                                    format!("{} · {}", finding.severity, finding.risk),
+                                    color.opacity(0.14),
+                                    color,
+                                ))
+                                .child(div().font_semibold().child(finding.packages.clone()))
+                                .child(ui::neutral_pill(finding.confidence.clone(), cx)),
+                        )
+                        .child(div().text_sm().font_medium().child(finding.rule.clone()))
+                        .child(
+                            div()
+                                .text_sm()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(finding.reason.clone()),
+                        ),
                 );
             }
-            ui.add_space(12.0);
-            ScrollArea::vertical().show(ui, |ui| {
-                for finding in &audit.findings {
-                    theme::card().show(ui, |ui| {
-                        ui.horizontal(|ui| {
-                            let color = risk_color(finding.risk);
-                            ui.label(
-                                RichText::new(format!("{:02}", finding.risk))
-                                    .size(22.0)
-                                    .strong()
-                                    .color(color),
-                            );
-                            ui.vertical(|ui| {
-                                ui.label(RichText::new(&finding.packages).strong());
-                                ui.label(RichText::new(&finding.rule).color(color));
-                                ui.label(RichText::new(&finding.reason).color(theme::muted()));
-                                ui.label(
-                                    RichText::new(tr!(
-                                        "%{severity} severity · %{confidence} confidence",
-                                        severity = finding.severity,
-                                        confidence = finding.confidence
-                                    ))
-                                    .size(12.0)
-                                    .color(theme::muted()),
-                                );
-                            });
-                        });
-                    });
-                    ui.add_space(8.0);
-                }
-            });
-        } else {
-            empty_state(
-                ui,
-                "No audit report",
-                "Run a fresh analysis for the selected runtime.",
-            );
         }
+        body.into_any_element()
+    } else {
+        ui::themed_card(cx).child(ui::empty_state(
+            OrbitIcon::Audit,
+            tr!("No audit report yet").into_owned(),
+            tr!("Run a fresh analysis against the selected runtime's exact Minecraft, Loader and mod package inputs.").into_owned(),
+            None,
+            cx,
+        )).into_any_element()
+    };
+
+    ui::page(
+        tr!("Compatibility audit").into_owned(),
+        tr!("Loader-specific runtime namespaces, bytecode and active Mixin risk").into_owned(),
+        actions,
+        content,
+        cx,
+    )
+}
+
+fn risk_color(risk: u8, cx: &gpui::App) -> gpui::Hsla {
+    match risk {
+        0..=34 => cx.theme().success,
+        35..=69 => cx.theme().warning,
+        _ => cx.theme().danger,
     }
 }

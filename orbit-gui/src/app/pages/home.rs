@@ -1,203 +1,315 @@
-use super::super::*;
+use gpui::{Context, IntoElement, ParentElement, Styled, Window, div, px};
+use gpui_component::{
+    ActiveTheme, StyledExt,
+    button::{Button, ButtonVariants},
+    h_flex, v_flex,
+};
 
-impl OrbitApp {
-    pub(crate) fn show_home(&mut self, ui: &mut egui::Ui) {
-        let instance = self.selected_instance().cloned();
-        theme::elevated_card().show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.vertical(|ui| {
-                    ui.label(
-                        RichText::new(if instance.is_some() {
-                            tr!("READY TO PLAY")
-                        } else {
-                            tr!("WELCOME TO ORBIT")
-                        })
-                        .size(11.0)
-                        .color(theme::success()),
-                    );
-                    ui.add_space(4.0);
-                    if let Some(instance) = &instance {
-                        ui.heading(&instance.name);
-                    } else {
-                        ui.heading(tr!("No runtime instance selected"));
-                    }
-                    let subtitle = self.instance_detail.as_ref().map_or_else(
-                        || tr!("Create or import a runtime to begin").into_owned(),
-                        |detail| {
-                            let loader_version = detail
-                                .desired
-                                .loader_version
-                                .clone()
-                                .unwrap_or_else(|| tr!("managed").into_owned());
-                            tr!(
-                                "Minecraft %{minecraft} · %{loader} %{loader_version} · Java %{java}",
-                                minecraft = detail.desired.minecraft,
-                                loader = detail.desired.loader,
-                                loader_version = loader_version,
-                                java = detail.desired.java_policy
-                            )
-                        },
-                    );
-                    ui.label(RichText::new(subtitle).color(theme::muted()));
-                });
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if instance.is_none() {
-                        if ui.add(theme::primary_button("New installation")).clicked() {
-                            self.preferences.page = Page::Runtime;
-                            self.begin_runtime_flow(RuntimeFlowMode::Create);
-                        }
-                        if ui.add(theme::secondary_button("Import folder")).clicked()
-                            && let Some(path) = rfd::FileDialog::new().pick_folder()
-                        {
-                            self.runtime_edit.import_root = path.display().to_string();
-                            self.import_runtime();
-                        }
-                        return;
-                    }
-                    let label = if self.is_server() {
-                        "Start server"
-                    } else {
-                        "Launch game"
-                    };
-                    if ui
-                        .add_enabled(instance.is_some(), theme::primary_button(label))
-                        .clicked()
-                        && let Some(instance) = instance.clone()
-                    {
-                        let command = if instance.kind == "server" {
-                            vec!["server".into(), "start".into()]
-                        } else {
-                            vec!["launch".into()]
-                        };
-                        let intent = if instance.kind == "server" {
-                            Intent::ServerMutated
-                        } else {
-                            Intent::Generic
-                        };
-                        self.launcher_task_args(label, intent, Some(instance.id), command, None);
-                    }
-                });
-            });
-        });
-        if instance.is_none() {
-            ui.add_space(18.0);
-            theme::section_title(
-                ui,
-                "One workspace, clear responsibilities",
-                "Runtime and mod management stay separate behind one native interface",
-            );
-            ui.columns(3, |columns| {
-                capability_card(
-                    &mut columns[0],
-                    "01",
-                    "Game runtime",
-                    "Minecraft, mod loaders, and managed Java are installed as one verified runtime.",
-                );
-                capability_card(
-                    &mut columns[1],
-                    "02",
-                    "Mod workspace",
-                    "Logical packages, dependency solutions, updates, and audits come from Orbit.",
-                );
-                capability_card(
-                    &mut columns[2],
-                    "03",
-                    "Play and serve",
-                    "Accounts, client sessions, and crash-restarting servers remain Launcher tasks.",
-                );
-            });
-            return;
-        }
-        ui.add_space(16.0);
-        ui.columns(3, |columns| {
-            metric_card(
-                &mut columns[0],
-                "Installed mods",
-                self.packages.len().to_string(),
-                "Exact lock state",
-            );
-            metric_card(
-                &mut columns[1],
-                "Updates",
-                self.outdated.len().to_string(),
-                if self.outdated.is_empty() {
-                    "Run a fresh check"
+use super::super::{OrbitApp, RuntimeFlowMode};
+use crate::app::components as ui;
+use crate::assets::OrbitIcon;
+use crate::model::Page;
+
+pub(super) fn render(
+    app: &mut OrbitApp,
+    _window: &mut Window,
+    cx: &mut Context<OrbitApp>,
+) -> impl IntoElement {
+    let instance = app.selected_instance().cloned();
+    let actions = if instance.is_some() {
+        Button::new("home-launch")
+            .icon(OrbitIcon::Play)
+            .label(
+                if app.is_server() {
+                    tr!("Start server")
                 } else {
-                    "Feasible upgrades"
-                },
-            );
-            metric_card(
-                &mut columns[2],
-                "Audit findings",
-                self.audit
+                    tr!("Launch game")
+                }
+                .into_owned(),
+            )
+            .primary()
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.launch_selected();
+                cx.notify();
+            }))
+            .into_any_element()
+    } else {
+        div().into_any_element()
+    };
+
+    let content = if let Some(instance) = instance {
+        let detail = app.instance_detail.clone();
+        let installed = detail.as_ref().and_then(|item| item.installed.as_ref());
+        let minecraft = installed
+            .map(|item| item.minecraft.as_str())
+            .unwrap_or_else(|| {
+                detail
                     .as_ref()
-                    .map_or(0, |audit| audit.findings.len())
-                    .to_string(),
-                "Bytecode compatibility",
-            );
-        });
-        ui.add_space(16.0);
-        theme::section_title(ui, "Quick actions", "The most common instance workflows");
-        ui.columns(2, |columns| {
-            if quick_action(
-                &mut columns[0],
-                "01",
-                "Find mods",
-                "Browse compatible projects",
-            ) {
-                self.preferences.page = Page::Discover;
-            }
-            if quick_action(
-                &mut columns[1],
-                "02",
-                "Check updates",
-                "Compare the complete mod set",
-            ) {
-                self.run_outdated();
-            }
-        });
-        ui.add_space(10.0);
-        ui.columns(2, |columns| {
-            if quick_action(
-                &mut columns[0],
-                "03",
-                "Compatibility",
-                "Review bytecode risks",
-            ) {
-                self.preferences.page = Page::Audit;
-                self.run_audit();
-            }
-            if quick_action(
-                &mut columns[1],
-                "04",
-                "Installation",
-                "Versions, loader, and Java",
-            ) {
-                self.preferences.page = Page::Runtime;
-            }
-        });
-        if !self.outdated.is_empty() {
-            ui.add_space(18.0);
-            theme::section_title(
-                ui,
-                "Feasible updates",
-                "Each item comes from Orbit's solver portfolio",
-            );
-            for update in self.outdated.clone().into_iter().take(4) {
-                ui.horizontal(|ui| {
-                    ui.label(RichText::new(&update.mod_id).strong());
-                    ui.label(
-                        RichText::new(format!(
-                            "{}  →  {}",
-                            update.current_version, update.new_version
-                        ))
-                        .color(theme::success()),
-                    );
-                    if ui.small_button(tr!("Upgrade")).clicked() {
-                        self.upgrade_package(&update.mod_id);
-                    }
-                });
-            }
-        }
-    }
+                    .map_or("—", |item| item.desired.minecraft.as_str())
+            });
+        let loader = installed
+            .map(|item| item.loader.as_str())
+            .unwrap_or_else(|| {
+                detail
+                    .as_ref()
+                    .map_or("—", |item| item.desired.loader.as_str())
+            });
+        let java = installed.and_then(|item| item.java.as_ref()).map_or_else(
+            || tr!("Pending").into_owned(),
+            |java| format!("Java {}", java.major),
+        );
+        let runtime_ready = installed.is_some();
+        let orbit_ready = instance.directory.join("orbit.toml").is_file();
+
+        v_flex()
+            .gap_4()
+            .child(
+                ui::themed_card(cx)
+                    .child(
+                        h_flex()
+                            .items_center()
+                            .justify_between()
+                            .gap_4()
+                            .child(
+                                h_flex()
+                                    .min_w_0()
+                                    .gap_3()
+                                    .items_center()
+                                    .child(ui::icon_tile(
+                                        if instance.kind == "server" {
+                                            OrbitIcon::Server
+                                        } else {
+                                            OrbitIcon::Home
+                                        },
+                                        cx,
+                                    ))
+                                    .child(
+                                        v_flex()
+                                            .min_w_0()
+                                            .gap_1()
+                                            .child(
+                                                div()
+                                                    .text_xl()
+                                                    .font_semibold()
+                                                    .child(instance.name.clone()),
+                                            )
+                                            .child(
+                                                div()
+                                                    .text_sm()
+                                                    .text_color(cx.theme().muted_foreground)
+                                                    .overflow_hidden()
+                                                    .child(
+                                                        instance.directory.display().to_string(),
+                                                    ),
+                                            ),
+                                    ),
+                            )
+                            .child(ui::pill(
+                                if runtime_ready {
+                                    tr!("Ready")
+                                } else {
+                                    tr!("Not installed")
+                                }
+                                .into_owned(),
+                                ui::state_color(runtime_ready, cx).opacity(0.14),
+                                ui::state_color(runtime_ready, cx),
+                            )),
+                    )
+                    .child(ui::divider(cx))
+                    .child(
+                        h_flex()
+                            .gap_6()
+                            .flex_wrap()
+                            .child(ui::key_value(
+                                tr!("Minecraft").into_owned(),
+                                minecraft.to_string(),
+                                cx,
+                            ))
+                            .child(ui::key_value(
+                                tr!("Loader").into_owned(),
+                                crate::app::controller::title_case(loader),
+                                cx,
+                            ))
+                            .child(ui::key_value(tr!("Java").into_owned(), java, cx))
+                            .child(ui::key_value(
+                                tr!("Kind").into_owned(),
+                                crate::app::controller::title_case(&instance.kind),
+                                cx,
+                            )),
+                    )
+                    .child(
+                        h_flex()
+                            .gap_2()
+                            .flex_wrap()
+                            .child(
+                                Button::new("home-change")
+                                    .label(tr!("Change version").into_owned())
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.begin_runtime_flow(RuntimeFlowMode::Update);
+                                        this.preferences.page = Page::Runtime;
+                                        cx.notify();
+                                    })),
+                            )
+                            .child(
+                                Button::new("home-repair")
+                                    .label(tr!("Verify and repair").into_owned())
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.install_runtime();
+                                        cx.notify();
+                                    })),
+                            ),
+                    ),
+            )
+            .child(
+                h_flex()
+                    .gap_3()
+                    .flex_wrap()
+                    .child(ui::metric(
+                        tr!("Mods").into_owned(),
+                        app.packages.len().to_string(),
+                        if orbit_ready {
+                            tr!("Managed logical packages")
+                        } else {
+                            tr!("Orbit is not initialized")
+                        }
+                        .into_owned(),
+                        cx,
+                    ))
+                    .child(ui::metric(
+                        tr!("Updates").into_owned(),
+                        if app.outdated_checked {
+                            app.outdated.len().to_string()
+                        } else {
+                            "—".to_string()
+                        },
+                        tr!("Latest feasible solver result").into_owned(),
+                        cx,
+                    ))
+                    .child(ui::metric(
+                        tr!("Compatibility").into_owned(),
+                        app.audit
+                            .as_ref()
+                            .map_or_else(|| "—".to_string(), |audit| audit.readiness.clone()),
+                        tr!("Latest bytecode audit").into_owned(),
+                        cx,
+                    )),
+            )
+            .child(ui::section_title(
+                tr!("Quick actions").into_owned(),
+                tr!("Common workspace tasks").into_owned(),
+                cx,
+            ))
+            .child(
+                h_flex()
+                    .gap_3()
+                    .flex_wrap()
+                    .child(quick_action(
+                        "quick-mods",
+                        OrbitIcon::Mods,
+                        tr!("Manage mods").into_owned(),
+                        tr!("Install, sync and update logical packages").into_owned(),
+                        cx.listener(|this, _, _, cx| {
+                            this.preferences.page = Page::Library;
+                            cx.notify();
+                        }),
+                        cx,
+                    ))
+                    .child(quick_action(
+                        "quick-browse",
+                        OrbitIcon::Browse,
+                        tr!("Browse projects").into_owned(),
+                        tr!("Search compatible provider catalogs").into_owned(),
+                        cx.listener(|this, _, _, cx| {
+                            this.preferences.page = Page::Discover;
+                            cx.notify();
+                        }),
+                        cx,
+                    ))
+                    .child(quick_action(
+                        "quick-audit",
+                        OrbitIcon::Audit,
+                        tr!("Run compatibility audit").into_owned(),
+                        tr!("Inspect bytecode and active Mixin risk").into_owned(),
+                        cx.listener(|this, _, _, cx| {
+                            this.preferences.page = Page::Audit;
+                            this.run_audit();
+                            cx.notify();
+                        }),
+                        cx,
+                    )),
+            )
+            .into_any_element()
+    } else {
+        ui::themed_card(cx)
+            .child(ui::empty_state(
+                OrbitIcon::Runtime,
+                tr!("No installation selected").into_owned(),
+                tr!(
+                    "Create a managed Minecraft installation or import an existing game directory."
+                )
+                .into_owned(),
+                Some(
+                    h_flex()
+                        .pt_2()
+                        .gap_2()
+                        .child(
+                            Button::new("empty-create")
+                                .icon(OrbitIcon::Plus)
+                                .label(tr!("Create installation").into_owned())
+                                .primary()
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.begin_runtime_flow(RuntimeFlowMode::Create);
+                                    this.preferences.page = Page::Runtime;
+                                    cx.notify();
+                                })),
+                        )
+                        .into_any_element(),
+                ),
+                cx,
+            ))
+            .into_any_element()
+    };
+
+    ui::page(
+        tr!("Home").into_owned(),
+        tr!("Your current Minecraft workspace at a glance").into_owned(),
+        actions,
+        content,
+        cx,
+    )
+}
+
+fn quick_action(
+    id: &'static str,
+    icon: OrbitIcon,
+    title: String,
+    detail: String,
+    handler: impl Fn(&gpui::ClickEvent, &mut Window, &mut gpui::App) + 'static,
+    cx: &gpui::App,
+) -> impl IntoElement {
+    Button::new(id)
+        .ghost()
+        .w(px(250.))
+        .h(px(78.))
+        .p_3()
+        .justify_start()
+        .child(
+            h_flex()
+                .gap_3()
+                .items_center()
+                .child(ui::icon_tile(icon, cx))
+                .child(
+                    v_flex()
+                        .gap_1()
+                        .items_start()
+                        .child(div().font_semibold().child(title))
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(detail),
+                        ),
+                ),
+        )
+        .on_click(handler)
 }
