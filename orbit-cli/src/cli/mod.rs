@@ -6,6 +6,8 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
+use orbit_i18n::LanguageMode;
+
 pub use output::{OutputFormat, ProgressFormat};
 
 #[derive(Parser)]
@@ -15,244 +17,248 @@ pub struct Cli {
     #[command(subcommand)]
     pub command: Commands,
 
-    /// 指定操作的实例名称
+    /// Presentation language: system / en / zh-CN (system by default).
+    #[arg(long, global = true, default_value_t = LanguageMode::System)]
+    pub language: LanguageMode,
+
+    /// Select an instance by name.
     #[arg(short = 'i', long, global = true)]
     pub instance: Option<String>,
 
-    /// 全局配置文件的精确路径
+    /// Exact global configuration file path.
     #[arg(long, global = true)]
     pub config: Option<PathBuf>,
 
-    /// 全局 JAR 缓存目录的精确路径
+    /// Exact global JAR cache directory.
     #[arg(long, global = true)]
     pub cache_dir: Option<PathBuf>,
 
-    /// 默认路径布局: system / executable
+    /// Default path layout: system / executable.
     #[arg(long, global = true)]
     pub data_layout: Option<orbit_core::PathLayout>,
 
-    /// 输出格式: text / json
+    /// Output format: text / json.
     #[arg(long, global = true, value_enum, default_value_t = OutputFormat::Text)]
     pub format: OutputFormat,
 
-    /// 进度协议: none / ndjson（仅 stderr）
+    /// Progress protocol: none / ndjson (stderr only).
     #[arg(long, global = true, value_enum, default_value_t = ProgressFormat::None)]
     pub progress_format: ProgressFormat,
 
-    /// 输出详细日志
+    /// Show detailed logs.
     #[arg(short, long, global = true)]
     pub verbose: bool,
 
-    /// 静默模式，仅输出错误
+    /// Quiet mode; only print errors.
     #[arg(short, long, global = true)]
     pub quiet: bool,
 
-    /// 跳过写入前确认；不会代替用户选择多个包身份或依赖方案
+    /// Skip write confirmation; package identity and resolution choices still require a decision.
     #[arg(short = 'y', long, global = true)]
     pub yes: bool,
 
-    /// 仅模拟执行，不修改任何文件
+    /// Simulate the operation without changing files.
     #[arg(long, global = true)]
     pub dry_run: bool,
 }
 
 #[derive(Subcommand)]
 pub enum Commands {
-    /// 初始化当前目录为 Orbit 项目
+    /// Initialize the current directory as an Orbit project.
     Init {
-        /// 实例名称
+        /// Instance name.
         name: String,
-        /// Minecraft 版本
+        /// Minecraft version.
         #[arg(long)]
         mc_version: Option<String>,
-        /// 模组加载器
+        /// Mod loader.
         #[arg(long)]
         modloader: Option<String>,
-        /// 加载器版本
+        /// Loader version.
         #[arg(long)]
         modloader_version: Option<String>,
     },
 
-    /// 实例管理
+    /// Manage instances.
     Instances {
         #[command(subcommand)]
         command: InstanceCommands,
     },
 
-    /// 根据清单还原模组环境
+    /// Restore the mod environment from the manifest.
     Install {
-        /// 目标环境: client / server / both (默认)
+        /// Target environment: client / server / both (default).
         #[arg(long)]
         target: Option<String>,
-        /// 仅安装指定分组
+        /// Install only the selected group.
         #[arg(long)]
         group: Option<String>,
-        /// 跳过可选依赖
+        /// Skip optional dependencies.
         #[arg(long)]
         no_optional: bool,
-        /// 仅使用 lockfile，不发起网络解析（生产环境）
+        /// Use only the lockfile without network resolution (production).
         #[arg(long)]
         locked: bool,
-        /// --locked 的别名（兼容 npm 用户）
+        /// Alias for --locked.
         #[arg(long)]
         frozen: bool,
     },
 
-    /// 添加新模组
+    /// Add a mod.
     Add {
-        /// 模组名称，支持前缀: mr:name, cf:name, file:path
+        /// Mod name; supports mr:name, cf:name, and file:path prefixes.
         mod_name: String,
-        /// 指定平台
+        /// Select a provider.
         #[arg(long)]
         platform: Option<String>,
-        /// 版本约束
+        /// Version requirement.
         #[arg(long)]
         version: Option<String>,
-        /// 端侧限定: client / server / both
+        /// Environment filter: client / server / both.
         #[arg(long)]
         env: Option<String>,
-        /// 标记为可选依赖
+        /// Mark as an optional dependency.
         #[arg(long)]
         optional: bool,
-        /// 不安装传递依赖
+        /// Do not install transitive dependencies.
         #[arg(long)]
         no_deps: bool,
     },
 
-    /// 设置根包的环境过滤；auto 跟随选中 JAR 的声明
+    /// Set a root package environment filter; auto follows the selected JAR declaration.
     Env {
-        /// JAR 元数据声明的 mod_id
+        /// mod_id declared by JAR metadata.
         package: String,
-        /// client / server / both / auto
+        /// client / server / both / auto.
         environment: String,
     },
 
-    /// 卸载模组
+    /// Remove a mod.
     Remove {
-        /// 模组名称
+        /// Mod name.
         mod_name: String,
     },
 
-    /// 深度清理模组及其配置文件
+    /// Remove a mod and its configuration files.
     Purge {
-        /// 模组名称
+        /// Mod name.
         mod_name: String,
     },
 
-    /// 本地状态双向对齐
+    /// Reconcile local state in both directions.
     Sync,
 
-    /// 检查过时模组（只读）
+    /// Check for outdated mods (read-only).
     Outdated {
-        /// 指定模组名称
+        /// Optional mod name.
         mod_name: Option<String>,
     },
 
-    /// 执行模组升级
+    /// Upgrade mods.
     Upgrade {
-        /// 指定模组名称，不填则升级所有
+        /// Optional mod name; omit to upgrade all.
         mod_name: Option<String>,
     },
 
-    /// 搜索模组
+    /// Search for mods.
     Search {
-        /// 搜索关键词
+        /// Search query.
         query: String,
-        /// 指定平台
+        /// Select a provider.
         #[arg(long)]
         platform: Option<String>,
-        /// 结果数量限制
+        /// Result limit.
         #[arg(long, default_value = "20")]
         limit: usize,
-        /// 按 Minecraft 版本过滤
+        /// Filter by Minecraft version.
         #[arg(long)]
         mc_version: Option<String>,
-        /// 按模组加载器过滤 (fabric, forge, quilt, etc.)
+        /// Filter by mod loader (Fabric, Forge, Quilt, etc.).
         #[arg(long)]
         modloader: Option<String>,
     },
 
-    /// 查看模组详细信息
+    /// Show mod details.
     Info {
-        /// 模组名称
+        /// Mod name.
         mod_name: String,
-        /// 指定平台
+        /// Select a provider.
         #[arg(long)]
         platform: Option<String>,
     },
 
-    /// 列出已安装模组
+    /// List installed mods.
     List {
-        /// 树状展示依赖关系
+        /// Show dependencies as a tree.
         #[arg(long)]
         tree: bool,
-        /// 按环境过滤
+        /// Filter by environment.
         #[arg(long)]
         target: Option<String>,
     },
 
-    /// 导入外部模组清单
+    /// Import an external mod manifest.
     Import {
-        /// 文件路径 (.toml 或 .zip)
+        /// File path (.toml or .zip).
         file: String,
-        /// 合并策略
+        /// Merge strategy.
         #[arg(long)]
         merge_strategy: Option<String>,
     },
 
-    /// 导出当前实例为压缩包
+    /// Export the current instance as an archive.
     Export {
-        /// 输出文件路径
+        /// Output file path.
         file: Option<String>,
-        /// 目标环境过滤
+        /// Target environment filter.
         #[arg(long)]
         target: Option<String>,
-        /// 导出格式: zip / mrpack
+        /// Export format: zip / mrpack.
         #[arg(long, default_value = "zip")]
         format: String,
     },
 
-    /// 跨版本升级预检
+    /// Preflight a cross-version upgrade.
     Check {
-        /// 目标 MC 版本 (如 1.21)
+        /// Target Minecraft version (for example 1.21).
         version: String,
-        /// 目标加载器
+        /// Target loader.
         #[arg(long)]
         modloader: Option<String>,
     },
 
-    /// 静态分析当前实例中 Mod 的字节码兼容风险（只读）
+    /// Statically analyze bytecode compatibility risks in the current instance (read-only).
     Audit {
-        /// 仅显示综合风险指数达到该值的风险（0-100）
+        /// Show only findings at or above this risk score (0-100).
         #[arg(long, default_value_t = 0, value_parser = clap::value_parser!(u8).range(0..=100))]
         min_risk: u8,
-        /// 存在综合风险指数达到该值的风险时返回非零退出码（0-100）
+        /// Return non-zero when a finding reaches this risk score (0-100).
         #[arg(long, value_parser = clap::value_parser!(u8).range(0..=100))]
         fail_on_risk: Option<u8>,
-        /// 仅显示涉及该 Mod（ID、文件名或展示名）的风险
+        /// Show only findings involving this mod (ID, file name, or display name).
         #[arg(long = "mod")]
         mod_filter: Option<String>,
-        /// 将未截断的完整结构化报告写入 JSON 文件
+        /// Write the complete untruncated structured report to a JSON file.
         #[arg(long)]
         report: Option<PathBuf>,
-        /// 文本模式最多展示的高排名风险数
+        /// Maximum high-ranked findings shown in text mode.
         #[arg(long, default_value_t = 20)]
         limit: usize,
     },
 
-    /// 清理全局下载缓存
+    /// Clean the global download cache.
     Cache {
         #[command(subcommand)]
         command: CacheCommands,
     },
 
-    /// 查看或修改全局配置
+    /// Inspect or change global configuration.
     Config {
         #[command(subcommand)]
         command: ConfigCommands,
     },
 
-    /// 管理一个包的候选来源
+    /// Manage candidate sources for a package.
     Remote {
         #[command(subcommand)]
         command: RemoteCommands,
@@ -261,56 +267,56 @@ pub enum Commands {
 
 #[derive(Subcommand)]
 pub enum InstanceCommands {
-    /// 列出所有被托管的 MC 实例
+    /// List all managed Minecraft instances.
     List,
-    /// 将指定实例设为全局默认
+    /// Set an instance as the global default.
     Default { name: String },
-    /// 移除对该实例的追踪
+    /// Stop tracking an instance.
     Remove { name: String },
 }
 
 #[derive(Subcommand)]
 pub enum CacheCommands {
-    /// 清理下载缓存
+    /// Clean the download cache.
     Clean,
 }
 
 #[derive(Subcommand)]
 pub enum ConfigCommands {
-    /// 显示实际使用的全局配置文件路径
+    /// Show the exact global configuration file path in use.
     Path,
-    /// 列出所有受支持字段的文件层值
+    /// List file-level values for every supported field.
     List,
-    /// 读取一个配置文件字段
+    /// Read a configuration field.
     Get {
-        /// 配置键，例如 cache.capacity-mib
+        /// Configuration key, for example cache.capacity-mib.
         key: String,
     },
-    /// 设置一个经过类型校验的配置文件字段
+    /// Set a configuration field after typed validation.
     Set {
-        /// 配置键，例如 cache.capacity-mib
+        /// Configuration key, for example cache.capacity-mib.
         key: String,
-        /// 新值
+        /// New value.
         value: String,
     },
-    /// 清除可选字段，或把必填字段恢复为默认值
+    /// Clear an optional field or restore a required field to its default.
     Unset {
-        /// 配置键，例如 network.proxy
+        /// Configuration key, for example network.proxy.
         key: String,
     },
 }
 
 #[derive(Subcommand)]
 pub enum RemoteCommands {
-    /// 验证并添加一个来源
+    /// Validate and add a source.
     Add {
         package: String,
-        /// file / modrinth / curseforge
+        /// file / modrinth / curseforge.
         provider: String,
-        /// 文件路径、Modrinth project ID 或 CurseForge 数值 project ID
+        /// File path, Modrinth project ID, or numeric CurseForge project ID.
         locator: String,
     },
-    /// 移除一个来源；不能移除最后一个
+    /// Remove a source; the final source cannot be removed.
     Remove {
         package: String,
         /// file / modrinth / curseforge (omit when using --index)
@@ -321,7 +327,7 @@ pub enum RemoteCommands {
         #[arg(long, conflicts_with_all = ["provider", "locator"])]
         index: Option<usize>,
     },
-    /// 列出一个包的所有来源
+    /// List every source for a package.
     List { package: String },
 }
 

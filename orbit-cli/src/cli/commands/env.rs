@@ -19,15 +19,28 @@ pub fn handle(package: String, environment: String, ctx: &CliContext) -> Result<
     };
     match ctx.output.format {
         OutputFormat::Text => {
-            let prefix = if output.dry_run { "[dry-run] " } else { "" };
-            let configured = output.configured.as_deref().unwrap_or("auto");
+            let prefix = if output.dry_run {
+                tr!("[dry-run] ")
+            } else {
+                tr!("")
+            };
+            let configured = output
+                .configured
+                .clone()
+                .unwrap_or_else(|| tr!("auto").into_owned());
             let effective = output
                 .effective
-                .as_deref()
-                .unwrap_or("pending JAR selection");
+                .clone()
+                .unwrap_or_else(|| tr!("pending JAR selection").into_owned());
             println!(
-                "{prefix}{} env = {configured} (effective: {effective})",
-                output.package
+                "{}",
+                tr!(
+                    "%{prefix}%{package} env = %{configured} (effective: %{effective})",
+                    prefix = prefix,
+                    package = output.package,
+                    configured = tr!(&configured),
+                    effective = tr!(&effective)
+                )
             );
         }
         OutputFormat::Json => crate::cli::output::print_json("env", &output),

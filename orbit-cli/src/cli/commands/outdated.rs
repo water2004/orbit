@@ -9,14 +9,19 @@ use crate::cli::output::{
 
 pub async fn handle(mod_name: Option<String>, ctx: &CliContext) -> Result<()> {
     let dir = ctx.instance_dir()?;
-    let manifest_file = ManifestFile::open(&dir).context("failed to read orbit.toml")?;
-    let lock = orbit_core::workspace::Lockfile::open(&dir).context("failed to read orbit.lock")?;
+    let manifest_file =
+        ManifestFile::open(&dir).with_context(|| tr!("Failed to read orbit.toml").into_owned())?;
+    let lock = orbit_core::workspace::Lockfile::open(&dir)
+        .with_context(|| tr!("Failed to read orbit.lock").into_owned())?;
     let requested_package = mod_name
         .as_deref()
         .map(|name| -> Result<String> {
-            let entry = lock
-                .find_entry(name)
-                .ok_or_else(|| anyhow::anyhow!("'{name}' was not found in orbit.lock"))?;
+            let entry = lock.find_entry(name).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "{}",
+                    tr!("'%{name}' was not found in orbit.lock", name = name)
+                )
+            })?;
             Ok(entry.mod_id.clone())
         })
         .transpose()?;
@@ -51,7 +56,7 @@ pub async fn handle(mod_name: Option<String>, ctx: &CliContext) -> Result<()> {
         )
         .await
     }
-    .context("failed to check for updates")?;
+    .with_context(|| tr!("Failed to check for updates").into_owned())?;
     let diagnostics: Vec<DiagnosticView> = report
         .diagnostics
         .iter()
@@ -110,7 +115,7 @@ pub async fn handle(mod_name: Option<String>, ctx: &CliContext) -> Result<()> {
 
     match ctx.output.format {
         OutputFormat::Text => {
-            println!("\nUpdates available:");
+            println!("\n{}", tr!("Updates available:"));
             println!("{}", crate::cli::output::outdated_table(&results));
         }
         OutputFormat::Json => {

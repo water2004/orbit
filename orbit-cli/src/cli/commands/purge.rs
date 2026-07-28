@@ -5,10 +5,14 @@ use crate::cli::output::{OutputFormat, PurgeOutput};
 
 pub async fn handle(mod_name: String, ctx: &CliContext) -> Result<()> {
     let instance_dir = ctx.instance_dir()?;
-    let lock = orbit_core::Lockfile::open(&instance_dir).context("failed to read orbit.lock")?;
-    let entry = lock
-        .find_entry(&mod_name)
-        .ok_or_else(|| anyhow::anyhow!("'{mod_name}' is not installed"))?;
+    let lock = orbit_core::Lockfile::open(&instance_dir)
+        .with_context(|| tr!("Failed to read orbit.lock").into_owned())?;
+    let entry = lock.find_entry(&mod_name).ok_or_else(|| {
+        anyhow::anyhow!(
+            "{}",
+            tr!("Package '%{package}' is not installed", package = mod_name)
+        )
+    })?;
     let mod_id = entry.mod_id.clone();
     let config_dir = instance_dir.join("config");
     let candidates = orbit_core::find_config_candidates(&mod_id, None, &config_dir)?;
@@ -19,9 +23,12 @@ pub async fn handle(mod_name: String, ctx: &CliContext) -> Result<()> {
         match ctx.output.format {
             OutputFormat::Text => {
                 println!(
-                    "[dry-run] would purge '{}' and {} config file(s).",
-                    removed.mod_id,
-                    selected.len()
+                    "{}",
+                    tr!(
+                        "[dry-run] would purge '%{package}' and %{configs} config file(s).",
+                        package = removed.mod_id,
+                        configs = selected.len()
+                    )
                 );
             }
             OutputFormat::Json => {
@@ -41,10 +48,13 @@ pub async fn handle(mod_name: String, ctx: &CliContext) -> Result<()> {
     match ctx.output.format {
         OutputFormat::Text => {
             println!(
-                "Purged {}: removed {} jar and {} config file(s).",
-                removed.mod_id,
-                usize::from(removed.jar_deleted),
-                removed_configs.len()
+                "{}",
+                tr!(
+                    "Purged %{package}: removed %{files} package file set(s) and %{configs} config file(s).",
+                    package = removed.mod_id,
+                    files = usize::from(removed.jar_deleted),
+                    configs = removed_configs.len()
+                )
             );
         }
         OutputFormat::Json => {
@@ -68,7 +78,13 @@ fn select_candidates(
     if candidates.is_empty() {
         return Ok(Vec::new());
     }
-    eprintln!("Found {} candidate config file(s):", candidates.len());
+    eprintln!(
+        "{}",
+        tr!(
+            "Found %{count} candidate config file(s):",
+            count = candidates.len()
+        )
+    );
     let mut selected = Vec::new();
     for candidate in candidates {
         if ctx.yes || ctx.dry_run {
@@ -76,7 +92,14 @@ fn select_candidates(
             selected.push(candidate.clone());
             continue;
         }
-        eprint!("  {} [{}] remove? [y/N] ", candidate.path, candidate.reason);
+        eprint!(
+            "  {}",
+            tr!(
+                "%{path} [%{reason}] remove? [y/N] ",
+                path = candidate.path,
+                reason = candidate.reason
+            )
+        );
         use std::io::Write;
         std::io::stdout().flush()?;
         let mut input = String::new();

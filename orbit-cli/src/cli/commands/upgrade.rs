@@ -13,7 +13,13 @@ pub async fn handle(mod_name: Option<String>, ctx: &CliContext) -> Result<()> {
     if let Some(name) = mod_name {
         let lockfile = orbit_core::Lockfile::open(&instance_dir)?;
         let entry = lockfile.find_entry(&name).ok_or_else(|| {
-            anyhow::anyhow!("Package '{name}' is not installed. Use its JAR-declared mod_id.")
+            anyhow::anyhow!(
+                "{}",
+                tr!(
+                    "Package '%{package}' is not installed. Use its JAR-declared mod_id.",
+                    package = name
+                )
+            )
         })?;
         let package = entry.mod_id.clone();
         let providers = super::create_instance_providers(&instance_dir, None, &ctx.runtime)?;
@@ -57,11 +63,18 @@ pub async fn handle(mod_name: Option<String>, ctx: &CliContext) -> Result<()> {
             }
             Err(OrbitError::ModNotFound(_)) => {
                 anyhow::bail!(
-                    "Mod '{package}' is not installed or no candidate source is available."
+                    "{}",
+                    tr!(
+                        "Package '%{package}' is not installed or no candidate source is available.",
+                        package = package
+                    )
                 );
             }
-            Err(OrbitError::Conflict(msg)) => anyhow::bail!("Dependency conflict:\n\n  {msg}"),
-            Err(e) => anyhow::bail!("Upgrade failed: {e}"),
+            Err(OrbitError::Conflict(msg)) => anyhow::bail!(
+                "{}",
+                tr!("Dependency conflict:\n\n  %{detail}", detail = msg)
+            ),
+            Err(e) => anyhow::bail!("{}", tr!("Upgrade failed: %{detail}", detail = e)),
         }
     } else {
         let providers = super::create_instance_providers(&instance_dir, None, &ctx.runtime)?;
@@ -92,8 +105,11 @@ pub async fn handle(mod_name: Option<String>, ctx: &CliContext) -> Result<()> {
                 }
                 Ok(())
             }
-            Err(OrbitError::Conflict(msg)) => anyhow::bail!("Dependency conflict:\n\n  {msg}"),
-            Err(e) => anyhow::bail!("Upgrade failed: {e}"),
+            Err(OrbitError::Conflict(msg)) => anyhow::bail!(
+                "{}",
+                tr!("Dependency conflict:\n\n  %{detail}", detail = msg)
+            ),
+            Err(e) => anyhow::bail!("{}", tr!("Upgrade failed: %{detail}", detail = e)),
         }
     }
 }

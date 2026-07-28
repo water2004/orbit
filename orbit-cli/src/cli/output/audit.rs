@@ -8,19 +8,21 @@ pub fn audit_report(report: &orbit_core::AuditReport, limit: usize) -> String {
     let mut sections = vec![environment_table(report), summary_table(report)];
 
     if report.risks.is_empty() && report.unary_risks.is_empty() {
-        sections.push("未发现达到当前阈值的字节码兼容风险。".to_string());
         sections.push(
-            "Use --format json or --report <path> for the complete structured report.".to_string(),
+            tr!("No bytecode compatibility risks reached the current threshold.").into_owned(),
+        );
+        sections.push(
+            tr!("Use --format json or --report <path> for the complete structured report.")
+                .into_owned(),
         );
     } else {
-        sections.push(format!(
-            "Structural compatibility risks: {}",
-            report.risks.len() + report.unary_risks.len()
+        sections.push(tr!(
+            "Structural compatibility risks: %{count}",
+            count = report.risks.len() + report.unary_risks.len()
         ));
         sections.push(risks_table(report, limit));
         sections.push(
-            "Use --format json or --report <path> for all evidence, selectors, warnings, and offsets."
-                .to_string(),
+            tr!("Use --format json or --report <path> for all evidence, selectors, warnings, and offsets.").into_owned(),
         );
     }
 
@@ -35,7 +37,7 @@ fn environment_table(report: &orbit_core::AuditReport) -> String {
         .namespace
         .runtime_namespace
         .map(namespace_label)
-        .unwrap_or("unknown");
+        .unwrap_or_else(|| tr!("unknown"));
     let mapping = report
         .namespace
         .mapping_sources
@@ -48,9 +50,12 @@ fn environment_table(report: &orbit_core::AuditReport) -> String {
             "{} {}",
             report.environment.loader, report.environment.loader_version
         )),
-        Cell::new(format!("{namespace}\n{mapping}\nalignment complete")),
+        Cell::new(format!(
+            "{namespace}\n{mapping}\n{}",
+            tr!("alignment complete")
+        )),
     ]);
-    format!("Bytecode audit\n{table}")
+    format!("{}\n{table}", tr!("Bytecode audit"))
 }
 
 fn summary_table(report: &orbit_core::AuditReport) -> String {
@@ -72,7 +77,7 @@ fn summary_table(report: &orbit_core::AuditReport) -> String {
         ),
         Cell::new(report.warnings.len()),
     ]);
-    format!("Summary\n{table}")
+    format!("{}\n{table}", tr!("Summary"))
 }
 
 enum DisplayRisk<'a> {
@@ -121,16 +126,17 @@ fn risks_table(report: &orbit_core::AuditReport, limit: usize) -> String {
                     .unwrap_or(&risk.artifact_id);
                 (
                     risk.risk_index,
-                    format!(
-                        "Package: {artifact}\nEnvironment: {}\nTarget: {}\nReason: {}\nRule: {}\nImpact: {} · Confidence: {} · Activation: {} · Precision: {}",
-                        risk.environment_target,
-                        format_target(&risk.target),
-                        risk.reason,
-                        risk.rule,
-                        severity_label(risk.severity).to_ascii_lowercase(),
-                        confidence_label(risk.confidence),
-                        activation_label(risk.activation),
-                        precision_label(risk.precision),
+                    tr!(
+                        "Package: %{artifact}\nEnvironment: %{environment}\nTarget: %{target}\nReason: %{reason}\nRule: %{rule}\nImpact: %{impact} · Confidence: %{confidence} · Activation: %{activation} · Precision: %{precision}",
+                        artifact = artifact,
+                        environment = risk.environment_target,
+                        target = format_target(&risk.target),
+                        reason = risk.reason,
+                        rule = risk.rule,
+                        impact = severity_label(risk.severity),
+                        confidence = confidence_label(risk.confidence),
+                        activation = activation_label(risk.activation),
+                        precision = precision_label(risk.precision),
                     ),
                 )
             }
@@ -155,39 +161,52 @@ fn risks_table(report: &orbit_core::AuditReport, limit: usize) -> String {
                         })
                     })
                     .collect::<BTreeSet<_>>();
-                let mut details = format!(
-                    "Packages: {left} ↔ {right}\nTarget: {}\nReason: {}\nRule: {}\nImpact: {} · Confidence: {} · Activation: {} · Precision: {}",
-                    format_target(&risk.target),
-                    risk.reason,
-                    risk.rule,
-                    severity_label(risk.severity).to_ascii_lowercase(),
-                    confidence_label(risk.confidence),
-                    activation_label(risk.activation),
-                    precision_label(risk.precision),
+                let mut details = tr!(
+                    "Packages: %{left} ↔ %{right}\nTarget: %{target}\nReason: %{reason}\nRule: %{rule}\nImpact: %{impact} · Confidence: %{confidence} · Activation: %{activation} · Precision: %{precision}",
+                    left = left,
+                    right = right,
+                    target = format_target(&risk.target),
+                    reason = risk.reason,
+                    rule = risk.rule,
+                    impact = severity_label(risk.severity),
+                    confidence = confidence_label(risk.confidence),
+                    activation = activation_label(risk.activation),
+                    precision = precision_label(risk.precision),
                 );
                 if !sources.is_empty() {
-                    details.push_str("\nSource: ");
+                    details.push_str(&tr!("\nSource: "));
                     details.push_str(&sources.into_iter().collect::<Vec<_>>().join(" × "));
                 }
                 (risk.risk_index, details)
             }
         };
         table.add_row([
-            Cell::new(format!("#{}\nRISK {risk_index}", index + 1)),
+            Cell::new(tr!(
+                "#%{number}\nRISK %{risk}",
+                number = index + 1,
+                risk = risk_index
+            )),
             Cell::new(details),
         ]);
     }
 
-    format!("Risks (showing {shown} of {total})\n{table}")
+    format!(
+        "{}\n{table}",
+        tr!(
+            "Risks (showing %{shown} of %{total})",
+            shown = shown,
+            total = total
+        )
+    )
 }
 
-fn precision_label(precision: orbit_core::AuditPrecision) -> &'static str {
+fn precision_label(precision: orbit_core::AuditPrecision) -> std::borrow::Cow<'static, str> {
     match precision {
-        orbit_core::AuditPrecision::Instruction => "instruction",
-        orbit_core::AuditPrecision::Pattern => "pattern",
-        orbit_core::AuditPrecision::Method => "method",
-        orbit_core::AuditPrecision::Class => "class",
-        orbit_core::AuditPrecision::Unknown => "unknown",
+        orbit_core::AuditPrecision::Instruction => tr!("instruction"),
+        orbit_core::AuditPrecision::Pattern => tr!("pattern"),
+        orbit_core::AuditPrecision::Method => tr!("method"),
+        orbit_core::AuditPrecision::Class => tr!("class"),
+        orbit_core::AuditPrecision::Unknown => tr!("unknown"),
     }
 }
 
@@ -198,51 +217,51 @@ fn format_target(target: &orbit_core::audit_model::Target) -> String {
     )
 }
 
-fn namespace_label(namespace: orbit_core::AuditSymbolNamespace) -> &'static str {
+fn namespace_label(namespace: orbit_core::AuditSymbolNamespace) -> std::borrow::Cow<'static, str> {
     match namespace {
-        orbit_core::AuditSymbolNamespace::Runtime => "runtime",
-        orbit_core::AuditSymbolNamespace::Official => "official",
-        orbit_core::AuditSymbolNamespace::Intermediary => "intermediary",
-        orbit_core::AuditSymbolNamespace::Srg => "srg",
-        orbit_core::AuditSymbolNamespace::Named => "named",
-        orbit_core::AuditSymbolNamespace::Identity => "identity",
-        orbit_core::AuditSymbolNamespace::Unknown => "unknown",
+        orbit_core::AuditSymbolNamespace::Runtime => tr!("runtime"),
+        orbit_core::AuditSymbolNamespace::Official => tr!("official"),
+        orbit_core::AuditSymbolNamespace::Intermediary => tr!("intermediary"),
+        orbit_core::AuditSymbolNamespace::Srg => tr!("srg"),
+        orbit_core::AuditSymbolNamespace::Named => tr!("named"),
+        orbit_core::AuditSymbolNamespace::Identity => tr!("identity"),
+        orbit_core::AuditSymbolNamespace::Unknown => tr!("unknown"),
     }
 }
 
-fn severity_label(severity: orbit_core::AuditSeverity) -> &'static str {
+fn severity_label(severity: orbit_core::AuditSeverity) -> std::borrow::Cow<'static, str> {
     match severity {
-        orbit_core::AuditSeverity::Low => "LOW",
-        orbit_core::AuditSeverity::Medium => "MEDIUM",
-        orbit_core::AuditSeverity::High => "HIGH",
-        orbit_core::AuditSeverity::Critical => "CRITICAL",
+        orbit_core::AuditSeverity::Low => tr!("LOW"),
+        orbit_core::AuditSeverity::Medium => tr!("MEDIUM"),
+        orbit_core::AuditSeverity::High => tr!("HIGH"),
+        orbit_core::AuditSeverity::Critical => tr!("CRITICAL"),
     }
 }
 
-fn confidence_label(confidence: orbit_core::AuditConfidence) -> &'static str {
+fn confidence_label(confidence: orbit_core::AuditConfidence) -> std::borrow::Cow<'static, str> {
     match confidence {
-        orbit_core::AuditConfidence::Low => "low",
-        orbit_core::AuditConfidence::Medium => "medium",
-        orbit_core::AuditConfidence::High => "high",
-        orbit_core::AuditConfidence::Exact => "exact",
+        orbit_core::AuditConfidence::Low => tr!("low"),
+        orbit_core::AuditConfidence::Medium => tr!("medium"),
+        orbit_core::AuditConfidence::High => tr!("high"),
+        orbit_core::AuditConfidence::Exact => tr!("exact"),
     }
 }
 
-fn activation_label(activation: orbit_core::AuditActivation) -> &'static str {
+fn activation_label(activation: orbit_core::AuditActivation) -> std::borrow::Cow<'static, str> {
     match activation {
-        orbit_core::AuditActivation::Definite => "definite",
-        orbit_core::AuditActivation::Conditional => "conditional",
-        orbit_core::AuditActivation::Candidate => "candidate",
-        orbit_core::AuditActivation::Unknown => "unknown",
+        orbit_core::AuditActivation::Definite => tr!("definite"),
+        orbit_core::AuditActivation::Conditional => tr!("conditional"),
+        orbit_core::AuditActivation::Candidate => tr!("candidate"),
+        orbit_core::AuditActivation::Unknown => tr!("unknown"),
     }
 }
 
-fn mechanism_label(mechanism: orbit_core::AuditMechanism) -> &'static str {
+fn mechanism_label(mechanism: orbit_core::AuditMechanism) -> std::borrow::Cow<'static, str> {
     match mechanism {
-        orbit_core::AuditMechanism::Mixin => "Mixin",
-        orbit_core::AuditMechanism::MixinExtras => "MixinExtras",
-        orbit_core::AuditMechanism::ModLauncherTransformer => "ModLauncher transformer",
-        orbit_core::AuditMechanism::JavaCoremod => "Java coremod",
-        orbit_core::AuditMechanism::BinaryShape => "binary shape",
+        orbit_core::AuditMechanism::Mixin => tr!("Mixin"),
+        orbit_core::AuditMechanism::MixinExtras => tr!("MixinExtras"),
+        orbit_core::AuditMechanism::ModLauncherTransformer => tr!("ModLauncher transformer"),
+        orbit_core::AuditMechanism::JavaCoremod => tr!("Java coremod"),
+        orbit_core::AuditMechanism::BinaryShape => tr!("binary shape"),
     }
 }

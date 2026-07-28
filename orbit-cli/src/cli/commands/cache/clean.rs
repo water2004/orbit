@@ -11,7 +11,7 @@ pub async fn handle(ctx: &CliContext) -> Result<()> {
     let summary = orbit_core::inspect_cache(ctx.runtime.paths().cache_dir(), &protected_paths)?;
     if summary.files == 0 {
         match ctx.output.format {
-            OutputFormat::Text => println!("Cache is already empty."),
+            OutputFormat::Text => println!("{}", tr!("Cache is already empty.")),
             OutputFormat::Json => {
                 crate::cli::output::print_json(
                     "cache",
@@ -32,15 +32,18 @@ pub async fn handle(ctx: &CliContext) -> Result<()> {
 
     if ctx.output.format == OutputFormat::Text {
         println!(
-            "Cache contains {} file(s), {} at {}.",
-            summary.files,
-            format_bytes(summary.bytes),
-            summary.path.display()
+            "{}",
+            tr!(
+                "Cache contains %{files} file(s), %{bytes} at %{path}.",
+                files = summary.files,
+                bytes = format_bytes(summary.bytes),
+                path = summary.path.display()
+            )
         );
     }
     if ctx.dry_run {
         match ctx.output.format {
-            OutputFormat::Text => println!("[dry-run] Cache was not modified."),
+            OutputFormat::Text => println!("{}", tr!("[dry-run] Cache was not modified.")),
             OutputFormat::Json => {
                 crate::cli::output::print_json(
                     "cache",
@@ -59,14 +62,20 @@ pub async fn handle(ctx: &CliContext) -> Result<()> {
         return Ok(());
     }
     if !ctx.yes && ctx.output.format == OutputFormat::Text && !confirm()? {
-        println!("Cache clean cancelled.");
+        println!("{}", tr!("Cache clean cancelled."));
         return Ok(());
     }
 
     let cleaned = orbit_core::clean_cache(ctx.runtime.paths().cache_dir(), &protected_paths)?;
     match ctx.output.format {
         OutputFormat::Text => {
-            println!("Cleaned cache: freed {}.", format_bytes(cleaned.bytes));
+            println!(
+                "{}",
+                tr!(
+                    "Cleaned cache: freed %{bytes}.",
+                    bytes = format_bytes(cleaned.bytes)
+                )
+            );
         }
         OutputFormat::Json => {
             crate::cli::output::print_json(
@@ -87,7 +96,7 @@ pub async fn handle(ctx: &CliContext) -> Result<()> {
 }
 
 fn confirm() -> Result<bool> {
-    eprint!("Delete all cached files? [y/N] ");
+    eprint!("{}", tr!("Delete all cached files? [y/N] "));
     use std::io::Write;
     std::io::stdout().flush()?;
     let mut input = String::new();

@@ -14,7 +14,7 @@ pub async fn handle(
     ctx: &CliContext,
 ) -> Result<()> {
     if limit == 0 {
-        anyhow::bail!("--limit must be at least 1");
+        anyhow::bail!("{}", tr!("--limit must be at least 1"));
     }
     let instance_dir = ctx.instance_dir()?;
     let audit_progress = if ctx.output.ndjson_progress() {
@@ -29,8 +29,11 @@ pub async fn handle(
     let selected_artifacts = selected_artifacts(&full_report, mod_filter.as_deref());
     if mod_filter.is_some() && selected_artifacts.as_ref().is_some_and(HashMap::is_empty) {
         anyhow::bail!(
-            "no installed Mod artifact matches --mod '{}'",
-            mod_filter.as_deref().unwrap_or_default()
+            "{}",
+            tr!(
+                "No installed Mod artifact matches --mod '%{filter}'",
+                filter = mod_filter.as_deref().unwrap_or_default()
+            )
         );
     }
     let threshold_exceeded = fail_on_risk.is_some_and(|threshold| {
@@ -58,20 +61,21 @@ pub async fn handle(
         crate::cli::output::OutputFormat::Text => {
             print!("{}", crate::cli::output::audit_report(&report, limit));
             if let Some(path) = &report_path {
-                println!("Detailed report written to: {}", path.display());
+                println!(
+                    "{}",
+                    tr!("Detailed report written to: %{path}", path = path.display())
+                );
             }
         }
         crate::cli::output::OutputFormat::Json => {
             crate::cli::output::print_json("audit", &report);
         }
     }
-    if ctx.output.format == crate::cli::output::OutputFormat::Text
-        && let Some(path) = &report_path
-    {
-        eprintln!("Detailed report written to: {}", path.display());
-    }
     if threshold_exceeded {
-        anyhow::bail!("bytecode audit found risk at or above the --fail-on-risk threshold");
+        anyhow::bail!(
+            "{}",
+            tr!("Bytecode audit found risk at or above the --fail-on-risk threshold")
+        );
     }
     Ok(())
 }
@@ -131,8 +135,8 @@ mod tests {
     fn no_risk_wording_does_not_claim_compatibility() {
         let report = empty_report();
         let text = crate::cli::output::audit_report(&report, 20);
-        assert!(text.contains("未发现达到当前阈值的字节码兼容风险。"));
-        assert!(!text.contains("所有 Mod 均兼容"));
+        assert!(text.contains("No bytecode compatibility risks reached the current threshold."));
+        assert!(!text.contains("All Mods are compatible"));
     }
 
     #[test]

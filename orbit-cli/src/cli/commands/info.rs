@@ -33,5 +33,11 @@ pub async fn handle(mod_name: String, platform: Option<String>, ctx: &CliContext
             Err(error) => return Err(error.into()),
         }
     }
-    anyhow::bail!("Could not find '{slug}' on any configured platform.")
+    anyhow::bail!(
+        "{}",
+        tr!(
+            "Could not find '%{slug}' on any configured platform.",
+            slug = slug
+        )
+    )
 }

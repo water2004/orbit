@@ -11,11 +11,11 @@ pub async fn handle(tree: bool, target: Option<String>, ctx: &CliContext) -> Res
         Some(target) => list_installed_for_target(&dir, target),
         None => list_installed(&dir),
     }
-    .context("failed to read installed packages")?;
+    .with_context(|| tr!("Failed to read installed packages").into_owned())?;
 
     if output.packages.is_empty() {
         if ctx.output.format == OutputFormat::Text {
-            println!("No mods installed.");
+            println!("{}", tr!("No mods installed."));
         } else {
             crate::cli::output::print_json(
                 "list",
@@ -68,7 +68,7 @@ fn print_tree(
             if let Some(pkg) = index.get(root) {
                 collect_tree(pkg, "", true, &index, &mut visited, &mut text_lines);
             } else {
-                text_lines.push(format!("{root} (not installed)"));
+                text_lines.push(tr!("%{package} (not installed)", package = root));
             }
         }
         let known: HashSet<&str> = top_level.iter().copied().collect();
@@ -86,7 +86,7 @@ fn print_tree(
         if let Some(pkg) = index.get(root) {
             print_node(pkg, "", true, &index, &mut visited);
         } else {
-            println!("{} (not installed)", root);
+            println!("{}", tr!("%{package} (not installed)", package = root));
         }
     }
 
@@ -112,7 +112,11 @@ fn collect_tree(
         lines.push(format!("{prefix}{} v{} (*)", pkg.mod_id, pkg.version));
         return;
     }
-    let optional = if pkg.optional { ", optional" } else { "" };
+    let optional = if pkg.optional {
+        format!(", {}", tr!("optional"))
+    } else {
+        String::new()
+    };
     lines.push(format!(
         "{prefix}{} v{} ({}, {}{})",
         pkg.mod_id,
@@ -138,7 +142,11 @@ fn collect_tree(
                 child.version,
                 child.remotes.join(", "),
                 child.environment,
-                if child.optional { ", optional" } else { "" }
+                if child.optional {
+                    format!(", {}", tr!("optional"))
+                } else {
+                    String::new()
+                }
             );
             lines.push(line);
             collect_tree(child, &child_prefix, last, index, visited, lines);
@@ -161,7 +169,10 @@ fn print_node(
     print_package_line(prefix, pkg);
 
     for (name, ver) in &pkg.bundled {
-        println!("{prefix}  + bundled: {name} v{ver}");
+        println!(
+            "{prefix}  + {}",
+            tr!("bundled: %{name} v%{version}", name = name, version = ver)
+        );
     }
 
     let deps: Vec<&str> = pkg
@@ -214,7 +225,11 @@ fn print_children(
 }
 
 fn print_package_line(prefix: &str, package: &orbit_core::ListedPackage) {
-    let optional = if package.optional { ", optional" } else { "" };
+    let optional = if package.optional {
+        format!(", {}", tr!("optional"))
+    } else {
+        String::new()
+    };
     println!(
         "{prefix}{} v{} ({}, {}{})",
         package.mod_id,

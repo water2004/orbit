@@ -31,6 +31,7 @@ path = "src/main.rs"
 clap = { workspace = true }
 orbit-launcher-core = { path = "../orbit-launcher-core" }
 orbit-machine-protocol.workspace = true
+orbit-i18n = { workspace = true, features = ["clap"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }

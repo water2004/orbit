@@ -24,21 +24,29 @@ pub async fn handle(
 
     if ctx.output.format == OutputFormat::Text {
         eprintln!(
-            "Searching for \"{query}\" on {}{}...",
-            providers
-                .iter()
-                .map(|provider| provider.name())
-                .collect::<Vec<_>>()
-                .join(", "),
-            if mc_version.is_some() || modloader.is_some() {
-                format!(
-                    " (mc={}, loader={})",
-                    mc_version.as_deref().unwrap_or("any"),
-                    modloader.as_deref().unwrap_or("any")
-                )
-            } else {
-                String::new()
-            }
+            "{}",
+            tr!(
+                "Searching for \"%{query}\" on %{providers}%{filters}…",
+                query = query,
+                providers = providers
+                    .iter()
+                    .map(|provider| provider.name())
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                filters = if mc_version.is_some() || modloader.is_some() {
+                    tr!(
+                        " (Minecraft %{minecraft}, loader %{loader})",
+                        minecraft = mc_version
+                            .as_deref()
+                            .map_or_else(|| tr!("any").into_owned(), ToString::to_string),
+                        loader = modloader
+                            .as_deref()
+                            .map_or_else(|| tr!("any").into_owned(), ToString::to_string)
+                    )
+                } else {
+                    String::new()
+                }
+            )
         );
     }
 
@@ -60,7 +68,7 @@ pub async fn handle(
 
     if results.is_empty() {
         if ctx.output.format == OutputFormat::Text {
-            eprintln!("No results found for '{query}'.");
+            eprintln!("{}", tr!("No results found for '%{query}'.", query = query));
         } else {
             crate::cli::output::print_json(
                 "search",
@@ -104,7 +112,7 @@ pub async fn handle(
         let mut table =
             crate::cli::output::search_results_table(&rows, view.ref_mc_version.as_deref());
         table.push('\n');
-        table.push_str(&format!("Found {} results.", view.results.len()));
+        table.push_str(&tr!("Found %{count} results.", count = view.results.len()));
         table
     });
     Ok(())

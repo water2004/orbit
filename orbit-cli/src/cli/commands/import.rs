@@ -21,9 +21,13 @@ pub async fn handle(file: String, merge_strategy: Option<String>, ctx: &CliConte
                 ctx.dry_run,
                 |package, existing, incoming| {
                     eprint!(
-                        "'{package}' differs (existing {}, imported {}). Use imported value? [y/N] ",
-                        existing.version_constraint().unwrap_or("*"),
-                        incoming.version_constraint().unwrap_or("*")
+                        "{}",
+                        tr!(
+                            "'%{package}' differs (existing %{existing}, imported %{imported}). Use imported value? [y/N] ",
+                            package = package,
+                            existing = existing.version_constraint().unwrap_or("*"),
+                            imported = incoming.version_constraint().unwrap_or("*")
+                        )
                     );
                     use std::io::Write;
                     std::io::stdout().flush()?;
@@ -38,12 +42,15 @@ pub async fn handle(file: String, merge_strategy: Option<String>, ctx: &CliConte
             match ctx.output.format {
                 OutputFormat::Text => {
                     println!(
-                        "Import {}: {} added, {} remote sets merged, {} replaced, {} kept.",
-                        if ctx.dry_run { "preview" } else { "complete" },
-                        report.added.len(),
-                        report.merged.len(),
-                        report.replaced.len(),
-                        report.kept.len()
+                        "{}",
+                        tr!(
+                            "Import %{state}: %{added} added, %{merged} remote sets merged, %{replaced} replaced, %{kept} kept.",
+                            state = tr!(if ctx.dry_run { "preview" } else { "complete" }),
+                            added = report.added.len(),
+                            merged = report.merged.len(),
+                            replaced = report.replaced.len(),
+                            kept = report.kept.len()
+                        )
                     );
                 }
                 OutputFormat::Json => {
@@ -78,11 +85,14 @@ pub async fn handle(file: String, merge_strategy: Option<String>, ctx: &CliConte
                 match ctx.output.format {
                     OutputFormat::Text => {
                         println!(
-                            "Imported {} JAR(s); sync added {}, changed {}, and removed {} package version(s).",
-                            report.extracted.len(),
-                            sync.added.len(),
-                            sync.changed.len(),
-                            sync.removed.len()
+                            "{}",
+                            tr!(
+                                "Imported %{archives} archive file(s); sync added %{added}, changed %{changed}, and removed %{removed} package version(s).",
+                                archives = report.extracted.len(),
+                                added = sync.added.len(),
+                                changed = sync.changed.len(),
+                                removed = sync.removed.len()
+                            )
                         );
                     }
                     OutputFormat::Json => {
@@ -103,10 +113,13 @@ pub async fn handle(file: String, merge_strategy: Option<String>, ctx: &CliConte
                 match ctx.output.format {
                     OutputFormat::Text => {
                         println!(
-                            "Import {}: {} JAR(s) to extract, {} existing file(s) kept.",
-                            if ctx.dry_run { "preview" } else { "complete" },
-                            report.extracted.len(),
-                            report.kept.len()
+                            "{}",
+                            tr!(
+                                "Import %{state}: %{archives} archive file(s) to extract, %{kept} existing file(s) kept.",
+                                state = tr!(if ctx.dry_run { "preview" } else { "complete" }),
+                                archives = report.extracted.len(),
+                                kept = report.kept.len()
+                            )
                         );
                     }
                     OutputFormat::Json => {
@@ -125,7 +138,10 @@ pub async fn handle(file: String, merge_strategy: Option<String>, ctx: &CliConte
                 }
             }
         }
-        _ => anyhow::bail!("Unsupported file format. Expected .toml, .zip, or .mrpack."),
+        _ => anyhow::bail!(
+            "{}",
+            tr!("Unsupported file format. Expected .toml, .zip, or .mrpack.")
+        ),
     }
     Ok(())
 }
@@ -143,7 +159,11 @@ fn parse_strategy(
         "prefer-import" => Ok(orbit_core::ImportMergeStrategy::PreferImport),
         "interactive" => Ok(orbit_core::ImportMergeStrategy::Interactive),
         other => anyhow::bail!(
-            "Unknown merge strategy '{other}'. Expected prefer-existing, prefer-import, or interactive."
+            "{}",
+            tr!(
+                "Unknown merge strategy '%{strategy}'. Expected prefer-existing, prefer-import, or interactive.",
+                strategy = other
+            )
         ),
     }
 }

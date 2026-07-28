@@ -12,17 +12,26 @@ pub async fn handle(input: String, ctx: &CliContext) -> Result<()> {
             match ctx.output.format {
                 OutputFormat::Text => {
                     if ctx.dry_run {
-                        println!("[dry-run] would remove '{}'.", report.mod_id);
+                        println!(
+                            "{}",
+                            tr!(
+                                "[dry-run] would remove '%{package}'.",
+                                package = report.mod_id
+                            )
+                        );
                         return Ok(());
                     }
                     println!(
-                        "Removed '{}'{}.",
-                        report.mod_id,
-                        if report.jar_deleted {
-                            " and its JAR file"
-                        } else {
-                            ""
-                        }
+                        "{}",
+                        tr!(
+                            "Removed '%{package}'%{files}.",
+                            package = report.mod_id,
+                            files = if report.jar_deleted {
+                                tr!(" and its package files").into_owned()
+                            } else {
+                                String::new()
+                            }
+                        )
                     );
                 }
                 OutputFormat::Json => {
@@ -41,36 +50,57 @@ pub async fn handle(input: String, ctx: &CliContext) -> Result<()> {
             if ctx.output.format == OutputFormat::Json {
                 anyhow::bail!(OrbitError::ModNotFound(input));
             }
-            let deps = list_dependencies(&instance_dir).context("failed to list dependencies")?;
+            let deps = list_dependencies(&instance_dir)
+                .with_context(|| tr!("Failed to list dependencies").into_owned())?;
             if deps.is_empty() {
-                anyhow::bail!("No dependencies in orbit.toml.");
+                anyhow::bail!("{}", tr!("No dependencies in orbit.toml."));
             }
-            eprintln!("'{input}' not found in orbit.toml. Installed dependencies:");
+            eprintln!(
+                "{}",
+                tr!(
+                    "'%{input}' was not found in orbit.toml. Installed dependencies:",
+                    input = input
+                )
+            );
             for (i, package) in deps.iter().enumerate() {
                 eprintln!("  [{i}] {package}");
             }
             let key = if ctx.yes {
-                anyhow::bail!("'{input}' not found. Use an exact JAR-declared mod_id.");
+                anyhow::bail!(
+                    "{}",
+                    tr!(
+                        "'%{input}' was not found. Use an exact JAR-declared mod_id.",
+                        input = input
+                    )
+                );
             } else {
-                eprint!("\nChoose a number (or press Enter to cancel): ");
+                eprint!("\n{}", tr!("Choose a number (or press Enter to cancel): "));
                 let mut choice = String::new();
                 std::io::stdin().read_line(&mut choice).ok();
                 let trimmed = choice.trim();
                 if trimmed.is_empty() {
-                    anyhow::bail!("Remove cancelled.");
+                    anyhow::bail!("{}", tr!("Remove cancelled."));
                 }
                 match trimmed.parse::<usize>() {
                     Ok(i) if i < deps.len() => deps[i].clone(),
-                    _ => anyhow::bail!("Invalid choice."),
+                    _ => anyhow::bail!("{}", tr!("Invalid choice.")),
                 }
             };
             Box::pin(handle(key, ctx)).await
         }
         Err(OrbitError::Conflict(msg)) => anyhow::bail!("{msg}"),
         Err(OrbitError::ManifestNotFound) => {
-            anyhow::bail!("orbit.toml not found in this directory.")
+            anyhow::bail!(
+                "{}",
+                tr!("orbit.toml was not found in the current instance")
+            )
         }
-        Err(OrbitError::LockfileNotFound) => anyhow::bail!("orbit.lock not found."),
-        Err(e) => anyhow::bail!("Remove failed: {e}"),
+        Err(OrbitError::LockfileNotFound) => {
+            anyhow::bail!(
+                "{}",
+                tr!("orbit.lock was not found in the current instance")
+            )
+        }
+        Err(e) => anyhow::bail!("{}", tr!("Remove failed: %{detail}", detail = e)),
     }
 }

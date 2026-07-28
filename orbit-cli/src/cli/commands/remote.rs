@@ -44,17 +44,28 @@ pub async fn handle(command: RemoteCommands, ctx: &CliContext) -> Result<()> {
                 let listed = orbit_core::list_package_remotes(&instance_dir, &package)?;
                 if index == 0 || index > listed.remotes.len() {
                     anyhow::bail!(
-                        "remote index {index} is out of range for package '{package}' (1..={})",
-                        listed.remotes.len()
+                        "{}",
+                        tr!(
+                            "Remote index %{index} is out of range for package '%{package}' (1..=%{maximum})",
+                            index = index,
+                            package = package,
+                            maximum = listed.remotes.len()
+                        )
                     );
                 }
                 listed.remotes[index - 1].clone()
             } else {
                 let provider = provider.as_deref().ok_or_else(|| {
-                    anyhow::anyhow!("remote remove requires PROVIDER LOCATOR or --index")
+                    anyhow::anyhow!(
+                        "{}",
+                        tr!("Remote remove requires PROVIDER LOCATOR or --index")
+                    )
                 })?;
                 let locator = locator.as_deref().ok_or_else(|| {
-                    anyhow::anyhow!("remote remove requires PROVIDER LOCATOR or --index")
+                    anyhow::anyhow!(
+                        "{}",
+                        tr!("Remote remove requires PROVIDER LOCATOR or --index")
+                    )
                 })?;
                 super::parse_package_remote(provider, locator)?
             };
@@ -74,16 +85,16 @@ fn print_report(report: &orbit_core::RemoteReport, subcommand: &str, ctx: &CliCo
     match ctx.output.format {
         OutputFormat::Text => {
             let header = if ctx.dry_run {
-                format!(
-                    "Would keep {} remote(s) for {}:",
-                    report.remotes.len(),
-                    report.package
+                tr!(
+                    "Would keep %{count} remote(s) for %{package}:",
+                    count = report.remotes.len(),
+                    package = report.package
                 )
             } else {
-                format!(
-                    "Package has {} remote(s) for {}:",
-                    report.remotes.len(),
-                    report.package
+                tr!(
+                    "Package %{package} has %{count} remote(s):",
+                    package = report.package,
+                    count = report.remotes.len()
                 )
             };
             println!(

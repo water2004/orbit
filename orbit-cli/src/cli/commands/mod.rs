@@ -44,36 +44,55 @@ impl CliContext {
         if let Some(name) = &self.instance {
             let registry =
                 orbit_core::InstancesRegistry::load(self.runtime.paths().instances_file())
-                    .context("failed to load instances registry")?;
+                    .with_context(|| tr!("Failed to load the instances registry").into_owned())?;
             let entry = registry.find(name).ok_or_else(|| {
                 anyhow::anyhow!(
-                    "unknown instance '{name}'. Run 'orbit instances list' to see registered instances."
+                    "{}",
+                    tr!("Unknown instance '%{name}'. Run 'orbit instances list' to see registered instances.", name = name)
                 )
             })?;
             let path = PathBuf::from(&entry.path);
             if self.verbose && !self.quiet {
-                eprintln!("Using instance '{name}' at {}", path.display());
+                eprintln!(
+                    "{}",
+                    tr!(
+                        "Using instance '%{name}' at %{path}",
+                        name = name,
+                        path = path.display()
+                    )
+                );
             }
             return Ok(path);
         }
 
-        let path = std::env::current_dir().context("failed to get current directory")?;
+        let path = std::env::current_dir()
+            .with_context(|| tr!("Failed to get the current directory").into_owned())?;
         if path.join("orbit.toml").exists() {
             if self.verbose && !self.quiet {
-                eprintln!("Using current directory as instance: {}", path.display());
+                eprintln!(
+                    "{}",
+                    tr!(
+                        "Using the current directory as instance: %{path}",
+                        path = path.display()
+                    )
+                );
             }
             return Ok(path);
         }
 
-        let registry = orbit_core::InstancesRegistry::load(self.runtime.paths().instances_file())
-            .context("failed to load instances registry")?;
+        let registry =
+            orbit_core::InstancesRegistry::load(self.runtime.paths().instances_file())
+                .with_context(|| tr!("Failed to load the instances registry").into_owned())?;
         if let Some(instance) = registry.default_instance() {
             let default_path = PathBuf::from(&instance.path);
             if self.verbose && !self.quiet {
                 eprintln!(
-                    "Using default instance '{}' at {}",
-                    instance.name,
-                    default_path.display()
+                    "{}",
+                    tr!(
+                        "Using default instance '%{name}' at %{path}",
+                        name = instance.name,
+                        path = default_path.display()
+                    )
                 );
             }
             return Ok(default_path);
@@ -81,8 +100,11 @@ impl CliContext {
 
         if self.verbose && !self.quiet {
             eprintln!(
-                "No project or default instance found; using {}",
-                path.display()
+                "{}",
+                tr!(
+                    "No project or default instance was found; using %{path}",
+                    path = path.display()
+                )
             );
         }
         Ok(path)
@@ -94,19 +116,22 @@ impl CliContext {
         if self.instance.is_some() {
             return Ok(());
         }
-        let current_dir = std::env::current_dir().context("failed to get current directory")?;
+        let current_dir = std::env::current_dir()
+            .with_context(|| tr!("Failed to get the current directory").into_owned())?;
         if current_dir.join("orbit.toml").exists() {
             return Ok(());
         }
-        let registry = orbit_core::InstancesRegistry::load(self.runtime.paths().instances_file())
-            .context("failed to load instances registry")?;
+        let registry =
+            orbit_core::InstancesRegistry::load(self.runtime.paths().instances_file())
+                .with_context(|| tr!("Failed to load the instances registry").into_owned())?;
         if let Some(instance) = registry.default_instance() {
             anyhow::bail!(
-                "refusing to modify the default instance '{}' from outside its project \
-                 directory; pass --instance '{}' or change to {}",
-                instance.name,
-                instance.name,
-                instance.path
+                "{}",
+                tr!(
+                    "Refusing to modify default instance '%{name}' outside its project directory; pass --instance '%{name}' or change to %{path}",
+                    name = instance.name,
+                    path = instance.path
+                )
             );
         }
         Ok(())
@@ -169,23 +194,29 @@ fn package_selector(ctx: &CliContext) -> Option<orbit_core::PackageSelector> {
 }
 
 fn prompt_package(packages: &[String]) -> Result<usize, String> {
-    eprintln!("\nThe provider project contains multiple feasible JAR-declared packages:");
+    eprintln!(
+        "\n{}",
+        tr!("The provider project contains multiple feasible JAR-declared packages:")
+    );
     for (index, package) in packages.iter().enumerate() {
         eprintln!("  {}. {package}", index + 1);
     }
     loop {
         eprint!(
-            "\nChoose the package to add [1-{}] (default 1): ",
-            packages.len()
+            "\n{}",
+            tr!(
+                "Choose the package to add [1-%{count}] (default 1): ",
+                count = packages.len()
+            )
         );
         use std::io::Write;
         std::io::stderr().flush().ok();
         let mut input = String::new();
         let Ok(bytes_read) = std::io::stdin().read_line(&mut input) else {
-            return Err("package selection could not read stdin".to_string());
+            return Err(tr!("Package selection could not read stdin").into_owned());
         };
         if bytes_read == 0 {
-            return Err("package selection was cancelled because stdin closed".to_string());
+            return Err(tr!("Package selection was cancelled because stdin closed").into_owned());
         }
         if input.trim().is_empty() {
             return Ok(0);
@@ -195,7 +226,13 @@ fn prompt_package(packages: &[String]) -> Result<usize, String> {
         {
             return Ok(choice - 1);
         }
-        eprintln!("Please enter a number from 1 to {}.", packages.len());
+        eprintln!(
+            "{}",
+            tr!(
+                "Please enter a number from 1 to %{count}.",
+                count = packages.len()
+            )
+        );
     }
 }
 
@@ -237,7 +274,7 @@ fn machine_select_package(
         .map(|package| InteractionChoice {
             id: package.clone(),
             label: package.clone(),
-            description: Some("JAR-declared logical package".to_string()),
+            description: Some(tr!("JAR-declared logical package").into_owned()),
             data: serde_json::json!({ "package": package }),
         })
         .collect();
@@ -246,7 +283,7 @@ fn machine_select_package(
         sequence,
         "package",
         InteractionKind::Package,
-        "Choose the JAR-declared package identity to add",
+        &tr!("Choose the JAR-declared package identity to add"),
         choices,
         packages.first().cloned(),
     );
@@ -254,7 +291,12 @@ fn machine_select_package(
     packages
         .iter()
         .position(|package| package == &selected)
-        .ok_or_else(|| format!("package interaction selected unknown choice '{selected}'"))
+        .ok_or_else(|| {
+            tr!(
+                "Package interaction selected unknown choice '%{choice}'",
+                choice = selected
+            )
+        })
 }
 
 fn machine_select_resolution(
@@ -269,7 +311,7 @@ fn machine_select_resolution(
         sequence,
         "resolution",
         InteractionKind::Resolution,
-        "Choose one Pareto-maximal dependency solution",
+        &tr!("Choose one Pareto-maximal dependency solution"),
         choices,
         Some("1".to_string()),
     );
@@ -278,7 +320,7 @@ fn machine_select_resolution(
         .ok()
         .and_then(|selected| selected.checked_sub(1))
         .filter(|selected| *selected < alternatives.len())
-        .ok_or_else(|| "resolution interaction selected an unknown choice".to_string())
+        .ok_or_else(|| tr!("Resolution interaction selected an unknown choice").into_owned())
 }
 
 fn resolution_interaction_choices(
@@ -319,11 +361,10 @@ fn resolution_interaction_choices(
                 .collect::<Vec<_>>();
             InteractionChoice {
                 id: (index + 1).to_string(),
-                label: format!("Option {}", index + 1),
-                description: Some(format!(
-                    "{} logical package action{}",
-                    changes.len(),
-                    if changes.len() == 1 { "" } else { "s" }
+                label: tr!("Option %{number}", number = index + 1),
+                description: Some(tr!(
+                    "%{count} logical package action(s)",
+                    count = changes.len()
                 )),
                 data: serde_json::json!({
                     "changes": changes,
@@ -354,18 +395,18 @@ fn machine_confirm_install(
         sequence,
         "confirmation",
         InteractionKind::Confirmation,
-        "Review the logical package transaction before applying it",
+        &tr!("Review the logical package transaction before applying it"),
         vec![
             InteractionChoice {
                 id: "proceed".to_string(),
-                label: "Apply changes".to_string(),
-                description: Some("Commit the displayed logical package actions".to_string()),
+                label: tr!("Apply changes").into_owned(),
+                description: Some(tr!("Commit the displayed logical package actions").into_owned()),
                 data: serde_json::to_value(plan).expect("transaction view is serializable"),
             },
             InteractionChoice {
                 id: "cancel".to_string(),
-                label: "Cancel".to_string(),
-                description: Some("Leave the instance unchanged".to_string()),
+                label: tr!("Cancel").into_owned(),
+                description: Some(tr!("Leave the instance unchanged").into_owned()),
                 data: serde_json::json!({}),
             },
         ],
@@ -403,11 +444,14 @@ fn read_machine_response(
     request: &orbit_machine_protocol::InteractionEnvelope<serde_json::Value>,
 ) -> Result<String, String> {
     let mut input = String::new();
-    let bytes_read = std::io::stdin()
-        .read_line(&mut input)
-        .map_err(|error| format!("interaction response could not read stdin: {error}"))?;
+    let bytes_read = std::io::stdin().read_line(&mut input).map_err(|error| {
+        tr!(
+            "Interaction response could not read stdin: %{error}",
+            error = error
+        )
+    })?;
     if bytes_read == 0 {
-        return Err("interaction was cancelled because stdin closed".to_string());
+        return Err(tr!("Interaction was cancelled because stdin closed").into_owned());
     }
     validate_machine_response(request, input.trim())
 }
@@ -417,52 +461,61 @@ fn validate_machine_response(
     input: &str,
 ) -> Result<String, String> {
     let response: orbit_machine_protocol::InteractionResponse = serde_json::from_str(input)
-        .map_err(|error| format!("invalid interaction response: {error}"))?;
+        .map_err(|error| tr!("Invalid interaction response: %{error}", error = error))?;
     if response.schema_version != orbit_machine_protocol::SCHEMA_VERSION {
-        return Err(format!(
-            "interaction response schema {} does not match {}",
-            response.schema_version,
-            orbit_machine_protocol::SCHEMA_VERSION
+        return Err(tr!(
+            "Interaction response schema %{actual} does not match %{expected}",
+            actual = response.schema_version,
+            expected = orbit_machine_protocol::SCHEMA_VERSION
         ));
     }
     if response.kind != "interaction_response" {
-        return Err("interaction response has an invalid type".to_string());
+        return Err(tr!("Interaction response has an invalid type").into_owned());
     }
     if response.interaction_id != request.interaction_id {
-        return Err("interaction response does not match the pending request".to_string());
+        return Err(tr!("Interaction response does not match the pending request").into_owned());
     }
     if response.cancelled {
-        return Err("interaction cancelled by user".to_string());
+        return Err(tr!("Interaction cancelled by user").into_owned());
     }
     let selected = response
         .selected_choice
-        .ok_or_else(|| "interaction response did not select a choice".to_string())?;
+        .ok_or_else(|| tr!("Interaction response did not select a choice").into_owned())?;
     request
         .choices
         .iter()
         .any(|choice| choice.id == selected)
         .then_some(selected.clone())
-        .ok_or_else(|| format!("interaction selected unknown choice '{selected}'"))
+        .ok_or_else(|| {
+            tr!(
+                "Interaction selected unknown choice '%{choice}'",
+                choice = selected
+            )
+        })
 }
 
 fn prompt_resolution(alternatives: &[orbit_core::ResolutionReport]) -> Result<usize, String> {
-    eprintln!("\nMultiple dependency solutions are available:");
+    eprintln!("\n{}", tr!("Multiple dependency solutions are available:"));
     eprintln!("{}", crate::cli::output::resolution_choices(alternatives));
 
     loop {
         eprint!(
-            "\nChoose a dependency solution [1-{}] (default 1): ",
-            alternatives.len()
+            "\n{}",
+            tr!(
+                "Choose a dependency solution [1-%{count}] (default 1): ",
+                count = alternatives.len()
+            )
         );
         use std::io::Write;
         std::io::stderr().flush().ok();
         let mut input = String::new();
         let Ok(bytes_read) = std::io::stdin().read_line(&mut input) else {
-            return Err("dependency solution selection could not read stdin".to_string());
+            return Err(tr!("Dependency solution selection could not read stdin").into_owned());
         };
         if bytes_read == 0 {
             return Err(
-                "dependency solution selection was cancelled because stdin closed".to_string(),
+                tr!("Dependency solution selection was cancelled because stdin closed")
+                    .into_owned(),
             );
         }
         if input.trim().is_empty() {
@@ -473,7 +526,13 @@ fn prompt_resolution(alternatives: &[orbit_core::ResolutionReport]) -> Result<us
         {
             return Ok(choice - 1);
         }
-        eprintln!("Please enter a number from 1 to {}.", alternatives.len());
+        eprintln!(
+            "{}",
+            tr!(
+                "Please enter a number from 1 to %{count}.",
+                count = alternatives.len()
+            )
+        );
     }
 }
 
@@ -482,14 +541,14 @@ pub fn prompt_install_report(report: &orbit_core::InstallReport, yes: bool) -> b
         return true;
     }
     if !report.changes.is_empty() {
-        eprintln!("\nPlanned package transaction:");
+        eprintln!("\n{}", tr!("Planned package transaction:"));
         eprintln!(
             "{}",
             crate::cli::output::package_changes_table(&report.changes)
         );
     }
     if !report.installed.is_empty() {
-        eprintln!("\nSelected package contents:");
+        eprintln!("\n{}", tr!("Selected package contents:"));
         for m in &report.installed {
             eprintln!("  {} v{}", m.mod_id, m.version);
             for expression in &m.dependencies {
@@ -506,7 +565,10 @@ pub fn prompt_install_report(report: &orbit_core::InstallReport, yes: bool) -> b
         }
     }
     if report.changes.is_empty() && !report.removed.is_empty() {
-        eprintln!("\nThe following unselected package versions will be removed:");
+        eprintln!(
+            "\n{}",
+            tr!("The following unselected package versions will be removed:")
+        );
         eprintln!(
             "{}",
             crate::cli::output::removed_packages_table(&report.removed)
@@ -514,14 +576,17 @@ pub fn prompt_install_report(report: &orbit_core::InstallReport, yes: bool) -> b
     }
     if !report.already_satisfied.is_empty() {
         eprintln!(
-            "\nAlready satisfied: {}",
-            report.already_satisfied.join(", ")
+            "\n{}",
+            tr!(
+                "Already satisfied: %{packages}",
+                packages = report.already_satisfied.join(", ")
+            )
         );
     }
     if yes {
         return true;
     }
-    eprint!("\nDo you want to continue? [Y/n] ");
+    eprint!("\n{}", tr!("Do you want to continue? [Y/n] "));
     use std::io::Write;
     std::io::stdout().flush().ok();
     let mut input = String::new();
@@ -533,8 +598,10 @@ pub fn prompt_install_report(report: &orbit_core::InstallReport, yes: bool) -> b
 fn print_bundled_mod(bundled: &orbit_core::BundledMod, depth: usize) {
     let indent = "    ".repeat(depth);
     eprintln!(
-        "      ↳ {indent}[bundled] {} {}",
-        bundled.mod_id, bundled.version
+        "      ↳ {indent}[{}] {} {}",
+        tr!("bundled"),
+        bundled.mod_id,
+        bundled.version
     );
     for child in &bundled.bundled {
         print_bundled_mod(child, depth + 1);
@@ -545,14 +612,14 @@ pub fn print_resolution_diagnostics(
     diagnostics: &[orbit_core::resolver::types::CandidateDiagnostic],
 ) {
     if !diagnostics.is_empty() {
-        eprintln!("\nUpgrade diagnostics:");
+        eprintln!("\n{}", tr!("Upgrade diagnostics:"));
         eprintln!("{}", crate::cli::output::diagnostics_table(diagnostics));
     }
 }
 
 pub fn print_resolution_warnings(warnings: &[String]) {
     if !warnings.is_empty() {
-        eprintln!("\nDependency ordering warnings:");
+        eprintln!("\n{}", tr!("Dependency ordering warnings:"));
         for warning in warnings {
             eprintln!("  • {warning}");
         }
@@ -572,7 +639,7 @@ pub fn print_transaction_result(
             print_resolution_diagnostics(&report.diagnostics);
             print_resolution_warnings(&report.warnings);
             if ctx.dry_run {
-                println!("\n{command} preview:");
+                println!("\n{}", tr!("%{command} preview:", command = command));
                 println!(
                     "{}",
                     crate::cli::output::package_changes_table(&report.changes)
@@ -580,12 +647,15 @@ pub fn print_transaction_result(
                 return;
             }
             if report.installed.is_empty() && report.removed.is_empty() {
-                println!("No new mods were installed.");
+                println!("{}", tr!("No new mods were installed."));
             } else {
                 println!(
-                    "\nApplied {} selected package version(s) and removed {} unselected package version(s).",
-                    report.installed.len(),
-                    report.removed.len()
+                    "\n{}",
+                    tr!(
+                        "Applied %{installed} selected package version(s) and removed %{removed} unselected package version(s).",
+                        installed = report.installed.len(),
+                        removed = report.removed.len()
+                    )
                 );
             }
         }
@@ -607,7 +677,9 @@ pub fn create_instance_providers(
         match orbit_core::ManifestFile::open(instance_dir) {
             Ok(manifest) => manifest.inner.resolver.catalogs,
             Err(orbit_core::OrbitError::ManifestNotFound) => vec!["modrinth".to_string()],
-            Err(error) => return Err(error).context("failed to read orbit.toml"),
+            Err(error) => {
+                return Err(error).with_context(|| tr!("Failed to read orbit.toml").into_owned());
+            }
         }
     };
     if platform.is_none()
@@ -644,7 +716,7 @@ pub fn create_instance_providers(
         }
     }
     orbit_core::providers::create_providers(&catalogs, &runtime.config().auth)
-        .context("failed to create providers")
+        .with_context(|| tr!("Failed to create providers").into_owned())
 }
 
 pub fn resolve_platform_target<'a>(
@@ -659,7 +731,10 @@ pub fn resolve_platform_target<'a>(
         (None, input)
     };
     if target.is_empty() {
-        anyhow::bail!("platform prefix must be followed by a project slug or ID");
+        anyhow::bail!(
+            "{}",
+            tr!("A platform prefix must be followed by a project slug or ID")
+        );
     }
 
     let requested_platform = requested_platform.map(normalize_platform);
@@ -667,7 +742,13 @@ pub fn resolve_platform_target<'a>(
         && prefixed != requested
     {
         anyhow::bail!(
-            "'{input}' selects {prefixed}, but --platform selects {requested}; use one platform"
+            "{}",
+            tr!(
+                "'%{input}' selects %{prefixed}, but --platform selects %{requested}; use one platform",
+                input = input,
+                prefixed = prefixed,
+                requested = requested
+            )
         );
     }
     Ok((
@@ -696,10 +777,19 @@ pub fn parse_package_remote(provider: &str, locator: &str) -> Result<orbit_core:
         }),
         "curseforge" => Ok(orbit_core::PackageRemote::Curseforge {
             project_id: locator.parse().map_err(|_| {
-                anyhow::anyhow!("CurseForge remotes require a numeric project ID, got '{locator}'")
+                anyhow::anyhow!(
+                    "{}",
+                    tr!(
+                        "CurseForge remotes require a numeric project ID, got '%{locator}'",
+                        locator = locator
+                    )
+                )
             })?,
         }),
-        other => anyhow::bail!("unsupported package remote '{other}'"),
+        other => anyhow::bail!(
+            "{}",
+            tr!("Unsupported package remote '%{remote}'", remote = other)
+        ),
     }
 }
 

@@ -26,11 +26,14 @@ pub async fn handle(
     match ctx.output.format {
         OutputFormat::Text => {
             println!(
-                "Export {}: {} package(s), {}, output {}.",
-                if ctx.dry_run { "preview" } else { "complete" },
-                report.packages,
-                format_bytes(report.bytes),
-                report.path.display()
+                "{}",
+                tr!(
+                    "Export %{state}: %{packages} package(s), %{bytes}, output %{path}.",
+                    state = tr!(if ctx.dry_run { "preview" } else { "complete" }),
+                    packages = report.packages,
+                    bytes = format_bytes(report.bytes),
+                    path = report.path.display()
+                )
             );
         }
         OutputFormat::Json => {

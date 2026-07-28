@@ -147,7 +147,7 @@ impl ProgressRenderer {
         match event {
             ProgressEvent::DiscoveryStarted => start_spinner(
                 &mut state,
-                "[1/4] Discovering provider projects and candidate versions",
+                tr!("[1/4] Discovering provider projects and candidate versions"),
             ),
             ProgressEvent::DiscoveringProject {
                 provider,
@@ -156,8 +156,12 @@ impl ProgressRenderer {
                 artifacts_found,
             } => set_message(
                 &state,
-                format!(
-                    "[1/4] {provider}: {locator} ({pending_projects} pending, {artifacts_found} JARs found)"
+                tr!(
+                    "[1/4] %{provider}: %{locator} (%{pending} pending, %{artifacts} JARs found)",
+                    provider = provider,
+                    locator = locator,
+                    pending = pending_projects,
+                    artifacts = artifacts_found
                 ),
             ),
             ProgressEvent::DiscoveryFinished {
@@ -165,12 +169,19 @@ impl ProgressRenderer {
                 artifacts,
             } => finish(
                 &mut state,
-                format!("[1/4] Found {artifacts} candidate JARs in {projects} projects"),
+                tr!(
+                    "[1/4] Found %{artifacts} candidate JARs in %{projects} projects",
+                    artifacts = artifacts,
+                    projects = projects
+                ),
             ),
             ProgressEvent::CandidateDownloadStarted { total } => start_bar(
                 &mut state,
                 total,
-                format!("[2/4] Downloading, verifying, and parsing {total} candidate JARs"),
+                tr!(
+                    "[2/4] Downloading, verifying, and parsing %{total} candidate JARs",
+                    total = total
+                ),
             ),
             ProgressEvent::CandidateArtifact {
                 completed,
@@ -182,17 +193,25 @@ impl ProgressRenderer {
                     bar.set_length(total as u64);
                     bar.set_position(completed as u64);
                     let action = match artifact_state {
-                        ArtifactProgressState::Started => "processing",
-                        ArtifactProgressState::Finished => "parsed",
-                        ArtifactProgressState::AlreadyPresent => "cached",
-                        ArtifactProgressState::Failed => "failed",
+                        ArtifactProgressState::Started => tr!("processing"),
+                        ArtifactProgressState::Finished => tr!("parsed"),
+                        ArtifactProgressState::AlreadyPresent => tr!("cached"),
+                        ArtifactProgressState::Failed => tr!("failed"),
                     };
-                    bar.set_message(format!("[2/4] {action} candidate {completed}/{total}"));
+                    bar.set_message(tr!(
+                        "[2/4] %{action} candidate %{completed}/%{total}",
+                        action = action,
+                        completed = completed,
+                        total = total
+                    ));
                 }
             }
             ProgressEvent::CandidateDownloadFinished { total } => finish(
                 &mut state,
-                format!("[2/4] Downloaded/verified and parsed {total} candidate JARs"),
+                tr!(
+                    "[2/4] Downloaded/verified and parsed %{total} candidate JARs",
+                    total = total
+                ),
             ),
             ProgressEvent::ResolutionStarted {
                 packages,
@@ -202,8 +221,10 @@ impl ProgressRenderer {
                 start_bar(
                     &mut state,
                     0,
-                    format!(
-                        "[3/4] Resolving {packages} packages across {candidates} JAR candidates"
+                    tr!(
+                        "[3/4] Resolving %{packages} packages across %{candidates} JAR candidates",
+                        packages = packages,
+                        candidates = candidates
                     ),
                 );
             }
@@ -245,13 +266,17 @@ impl ProgressRenderer {
                 let counters = state.resolution_counters();
                 finish(
                     &mut state,
-                    format!("[3/4] Found {solutions} Pareto-maximal solution(s) · {counters}"),
+                    tr!(
+                        "[3/4] Found %{solutions} Pareto-maximal solution(s) · %{counters}",
+                        solutions = solutions,
+                        counters = counters
+                    ),
                 );
             }
             ProgressEvent::ApplyStarted { total } => start_bar(
                 &mut state,
                 total,
-                format!("[4/4] Applying {total} selected packages"),
+                tr!("[4/4] Applying %{total} selected packages", total = total),
             ),
             ProgressEvent::ApplyArtifact {
                 completed,
@@ -263,17 +288,25 @@ impl ProgressRenderer {
                     bar.set_length(total as u64);
                     bar.set_position(completed as u64);
                     let action = match artifact_state {
-                        ArtifactProgressState::Started => "applying",
-                        ArtifactProgressState::Finished => "installed",
-                        ArtifactProgressState::AlreadyPresent => "already present",
-                        ArtifactProgressState::Failed => "failed",
+                        ArtifactProgressState::Started => tr!("applying"),
+                        ArtifactProgressState::Finished => tr!("installed"),
+                        ArtifactProgressState::AlreadyPresent => tr!("already present"),
+                        ArtifactProgressState::Failed => tr!("failed"),
                     };
-                    bar.set_message(format!("[4/4] {action} package {completed}/{total}"));
+                    bar.set_message(tr!(
+                        "[4/4] %{action} package %{completed}/%{total}",
+                        action = action,
+                        completed = completed,
+                        total = total
+                    ));
                 }
             }
             ProgressEvent::ApplyFinished { total } => finish(
                 &mut state,
-                format!("[4/4] Applied/verified {total} selected packages"),
+                tr!(
+                    "[4/4] Applied/verified %{total} selected packages",
+                    total = total
+                ),
             ),
         }
     }
@@ -311,15 +344,15 @@ impl RenderState {
     }
 
     fn resolution_counters(&self) -> String {
-        format!(
-            "work {}/{}, {} decisions, {} propagations, {} backtracks, {} conflicts, {} solutions",
-            self.resolution_completed,
-            self.resolution_total,
-            self.decisions,
-            self.propagations,
-            self.backtracks,
-            self.conflicts,
-            self.solutions
+        tr!(
+            "work %{completed}/%{total}, %{decisions} decisions, %{propagations} propagations, %{backtracks} backtracks, %{conflicts} conflicts, %{solutions} solutions",
+            completed = self.resolution_completed,
+            total = self.resolution_total,
+            decisions = self.decisions,
+            propagations = self.propagations,
+            backtracks = self.backtracks,
+            conflicts = self.conflicts,
+            solutions = self.solutions
         )
     }
 }
@@ -380,103 +413,139 @@ fn clear(state: &mut RenderState) {
 fn plain_line(event: &ProgressEvent, state: &mut RenderState) -> Option<String> {
     match event {
         ProgressEvent::DiscoveryStarted => {
-            Some("[1/4] Discovering provider projects and candidate versions...".to_string())
+            Some(tr!("[1/4] Discovering provider projects and candidate versions...").into_owned())
         }
         ProgressEvent::DiscoveringProject {
             provider,
             locator,
             pending_projects,
             artifacts_found,
-        } => Some(format!(
-            "  {provider}: checking {locator} ({pending_projects} pending, {artifacts_found} JARs found)"
+        } => Some(tr!(
+            "  %{provider}: checking %{locator} (%{pending} pending, %{artifacts} JARs found)",
+            provider = provider,
+            locator = locator,
+            pending = pending_projects,
+            artifacts = artifacts_found
         )),
         ProgressEvent::DiscoveryFinished {
             projects,
             artifacts,
-        } => Some(format!(
-            "[1/4] Found {artifacts} candidate JARs in {projects} projects."
+        } => Some(tr!(
+            "[1/4] Found %{artifacts} candidate JARs in %{projects} projects.",
+            artifacts = artifacts,
+            projects = projects
         )),
-        ProgressEvent::CandidateDownloadStarted { total } => Some(format!(
-            "[2/4] Downloading, verifying, and parsing {total} candidate JARs..."
+        ProgressEvent::CandidateDownloadStarted { total } => Some(tr!(
+            "[2/4] Downloading, verifying, and parsing %{total} candidate JARs...",
+            total = total
         )),
         ProgressEvent::CandidateArtifact {
             completed,
             total,
             filename: _,
             state: ArtifactProgressState::Finished,
-        } => Some(format!("  [{completed}/{total}] parsed candidate")),
+        } => Some(tr!(
+            "  [%{completed}/%{total}] parsed candidate",
+            completed = completed,
+            total = total
+        )),
         ProgressEvent::CandidateArtifact {
             completed,
             total,
             filename: _,
             state: ArtifactProgressState::Failed,
-        } => Some(format!("  [{completed}/{total}] candidate failed")),
+        } => Some(tr!(
+            "  [%{completed}/%{total}] candidate failed",
+            completed = completed,
+            total = total
+        )),
         ProgressEvent::CandidateDownloadFinished { total } => {
-            Some(format!("[2/4] Parsed {total} candidate JARs."))
+            Some(tr!("[2/4] Parsed %{total} candidate JARs.", total = total))
         }
         ProgressEvent::ResolutionStarted {
             packages,
             candidates,
         } => {
             state.reset_resolution();
-            Some(format!(
-                "[3/4] Resolving {packages} packages across {candidates} JAR candidates..."
+            Some(tr!(
+                "[3/4] Resolving %{packages} packages across %{candidates} JAR candidates...",
+                packages = packages,
+                candidates = candidates
             ))
         }
         ProgressEvent::ResolutionWorkStarted { work } => {
             state.resolution_total += 1;
-            Some(format!(
-                "  [{}/{}] solver discovered: {}",
-                state.resolution_completed,
-                state.resolution_total,
-                work_started_label(work)
+            Some(tr!(
+                "  [%{completed}/%{total}] solver discovered: %{work}",
+                completed = state.resolution_completed,
+                total = state.resolution_total,
+                work = work_started_label(work)
             ))
         }
         ProgressEvent::ResolutionWorkFinished { work } => {
             state.resolution_completed += 1;
-            Some(format!(
-                "  [{}/{}] solver completed: {}",
-                state.resolution_completed,
-                state.resolution_total,
-                work_finished_label(work)
+            Some(tr!(
+                "  [%{completed}/%{total}] solver completed: %{work}",
+                completed = state.resolution_completed,
+                total = state.resolution_total,
+                work = work_finished_label(work)
             ))
         }
         ProgressEvent::ResolutionActivity { activity } => {
             state.record_activity(activity);
-            matches!(activity, ResolutionActivity::Solution)
-                .then(|| format!("  solver found solution {}", state.solutions))
+            matches!(activity, ResolutionActivity::Solution).then(|| {
+                tr!(
+                    "  solver found solution %{solutions}",
+                    solutions = state.solutions
+                )
+            })
         }
         ProgressEvent::ResolutionFinished { solutions } => {
             state.solutions = *solutions;
-            Some(format!(
-                "[3/4] Found {solutions} Pareto-maximal solution(s) · {}.",
-                state.resolution_counters()
+            Some(tr!(
+                "[3/4] Found %{solutions} Pareto-maximal solution(s) · %{counters}.",
+                solutions = solutions,
+                counters = state.resolution_counters()
             ))
         }
-        ProgressEvent::ApplyStarted { total } => {
-            Some(format!("[4/4] Applying {total} selected packages..."))
-        }
+        ProgressEvent::ApplyStarted { total } => Some(tr!(
+            "[4/4] Applying %{total} selected packages...",
+            total = total
+        )),
         ProgressEvent::ApplyArtifact {
             completed,
             total,
             filename: _,
             state: ArtifactProgressState::Finished,
-        } => Some(format!("  [{completed}/{total}] installed package")),
+        } => Some(tr!(
+            "  [%{completed}/%{total}] installed package",
+            completed = completed,
+            total = total
+        )),
         ProgressEvent::ApplyArtifact {
             completed,
             total,
             filename: _,
             state: ArtifactProgressState::AlreadyPresent,
-        } => Some(format!("  [{completed}/{total}] package already present")),
+        } => Some(tr!(
+            "  [%{completed}/%{total}] package already present",
+            completed = completed,
+            total = total
+        )),
         ProgressEvent::ApplyArtifact {
             completed,
             total,
             filename: _,
             state: ArtifactProgressState::Failed,
-        } => Some(format!("  [{completed}/{total}] package failed")),
-        ProgressEvent::ApplyFinished { total } => {
-            Some(format!("[4/4] Applied/verified {total} selected packages."))
-        }
+        } => Some(tr!(
+            "  [%{completed}/%{total}] package failed",
+            completed = completed,
+            total = total
+        )),
+        ProgressEvent::ApplyFinished { total } => Some(tr!(
+            "[4/4] Applied/verified %{total} selected packages.",
+            total = total
+        )),
         ProgressEvent::CandidateArtifact {
             state: ArtifactProgressState::Started | ArtifactProgressState::AlreadyPresent,
             ..
@@ -527,60 +596,79 @@ fn audit_stage_number(stage: AuditProgressStage) -> usize {
     }
 }
 
-fn audit_stage_present(stage: AuditProgressStage) -> &'static str {
+fn audit_stage_present(stage: AuditProgressStage) -> std::borrow::Cow<'static, str> {
     match stage {
-        AuditProgressStage::PrepareInputs => "Preparing the active runtime classpath",
-        AuditProgressStage::Readiness => "Checking audit prerequisites",
-        AuditProgressStage::ScanArtifacts => "Scanning bytecode artifacts",
-        AuditProgressStage::AnalyzeMixins => "Analyzing Mixins",
-        AuditProgressStage::AnalyzeTransformers => "Analyzing Transformers",
-        AuditProgressStage::DetectConflicts => "Comparing recovered effects",
+        AuditProgressStage::PrepareInputs => tr!("Preparing the active runtime classpath"),
+        AuditProgressStage::Readiness => tr!("Checking audit prerequisites"),
+        AuditProgressStage::ScanArtifacts => tr!("Scanning bytecode artifacts"),
+        AuditProgressStage::AnalyzeMixins => tr!("Analyzing Mixins"),
+        AuditProgressStage::AnalyzeTransformers => tr!("Analyzing Transformers"),
+        AuditProgressStage::DetectConflicts => tr!("Comparing recovered effects"),
     }
 }
 
 fn audit_stage_finished(stage: AuditProgressStage, completed: usize) -> String {
     match stage {
-        AuditProgressStage::PrepareInputs => "Prepared the active runtime classpath".to_string(),
-        AuditProgressStage::Readiness => "Audit prerequisites are ready".to_string(),
-        AuditProgressStage::ScanArtifacts => format!("Scanned {completed} bytecode artifacts"),
-        AuditProgressStage::AnalyzeMixins => format!("Analyzed {completed} Mixins"),
+        AuditProgressStage::PrepareInputs => {
+            tr!("Prepared the active runtime classpath").into_owned()
+        }
+        AuditProgressStage::Readiness => tr!("Audit prerequisites are ready").into_owned(),
+        AuditProgressStage::ScanArtifacts => tr!(
+            "Scanned %{completed} bytecode artifacts",
+            completed = completed
+        ),
+        AuditProgressStage::AnalyzeMixins => {
+            tr!("Analyzed %{completed} Mixins", completed = completed)
+        }
         AuditProgressStage::AnalyzeTransformers => {
-            format!("Analyzed {completed} Transformers")
+            tr!("Analyzed %{completed} Transformers", completed = completed)
         }
         AuditProgressStage::DetectConflicts => {
-            format!("Detected {completed} compatibility-risk candidates")
+            tr!(
+                "Detected %{completed} compatibility-risk candidates",
+                completed = completed
+            )
         }
     }
 }
 
 fn work_started_label(work: &ResolutionWork) -> String {
     match work {
-        ResolutionWork::EnumerationRun { run } => format!("search run {run}"),
+        ResolutionWork::EnumerationRun { run } => tr!("search run %{run}", run = run),
         ResolutionWork::MaximalityProbe { package } => {
-            format!("checking whether {package} can be upgraded")
+            tr!(
+                "checking whether %{package} can be upgraded",
+                package = package
+            )
         }
     }
 }
 
 fn work_finished_label(work: &ResolutionWork) -> String {
     match work {
-        ResolutionWork::EnumerationRun { run } => format!("search run {run}"),
+        ResolutionWork::EnumerationRun { run } => tr!("search run %{run}", run = run),
         ResolutionWork::MaximalityProbe { package } => {
-            format!("checked maximality of {package}")
+            tr!("checked maximality of %{package}", package = package)
         }
     }
 }
 
 fn activity_label(activity: &ResolutionActivity) -> String {
     match activity {
-        ResolutionActivity::Decision { package } => format!("deciding {package}"),
-        ResolutionActivity::Propagation { package } => format!("propagating {package}"),
+        ResolutionActivity::Decision { package } => tr!("deciding %{package}", package = package),
+        ResolutionActivity::Propagation { package } => {
+            tr!("propagating %{package}", package = package)
+        }
         ResolutionActivity::Backtrack {
             from_level,
             to_level,
-        } => format!("backtracking {from_level} → {to_level}"),
-        ResolutionActivity::Conflict => "resolving a conflict".to_string(),
-        ResolutionActivity::Solution => "retained a Pareto-maximal solution".to_string(),
+        } => tr!(
+            "backtracking %{from} → %{to}",
+            from = from_level,
+            to = to_level
+        ),
+        ResolutionActivity::Conflict => tr!("resolving a conflict").into_owned(),
+        ResolutionActivity::Solution => tr!("retained a Pareto-maximal solution").into_owned(),
     }
 }
 

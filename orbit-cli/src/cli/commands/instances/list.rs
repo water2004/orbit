@@ -7,7 +7,10 @@ pub async fn handle(ctx: &CliContext) -> Result<()> {
     let registry = orbit_core::InstancesRegistry::load(ctx.runtime.paths().instances_file())?;
     if registry.instances.is_empty() {
         if ctx.output.format == OutputFormat::Text {
-            println!("No instances registered. Use 'orbit init' to get started.");
+            println!(
+                "{}",
+                tr!("No instances registered. Use 'orbit init' to get started.")
+            );
         } else {
             crate::cli::output::print_json(
                 "instances",

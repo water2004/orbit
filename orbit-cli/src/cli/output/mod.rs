@@ -155,13 +155,17 @@ pub fn diagnostics_table(diagnostics: &[CandidateDiagnostic]) -> String {
     for diagnostic in diagnostics {
         let summary = match diagnostic.kind {
             CandidateDiagnosticKind::NoCompatibleCandidate => {
-                "no compatible remote candidate was discovered"
+                tr!("no compatible remote candidate was discovered")
             }
-            CandidateDiagnosticKind::ExcludedByPropagation => "excluded by dependency propagation",
-            CandidateDiagnosticKind::Backtracked => "backtracked after a dependency conflict",
-            CandidateDiagnosticKind::Unexplained => "the solver recorded no excluding derivation",
+            CandidateDiagnosticKind::ExcludedByPropagation => {
+                tr!("excluded by dependency propagation")
+            }
+            CandidateDiagnosticKind::Backtracked => tr!("backtracked after a dependency conflict"),
+            CandidateDiagnosticKind::Unexplained => {
+                tr!("the solver recorded no excluding derivation")
+            }
         };
-        let mut reason = summary.to_string();
+        let mut reason = summary.into_owned();
         for fact in &diagnostic.facts {
             reason.push_str("\n• ");
             reason.push_str(fact);
@@ -198,7 +202,7 @@ pub fn removed_packages_table(removals: &[RemovedPackage]) -> String {
         table.add_row([
             Cell::new(&package.mod_id),
             Cell::new(&package.version),
-            Cell::new("remove"),
+            Cell::new(tr!("remove")),
         ]);
     }
     table.to_string()
@@ -206,10 +210,13 @@ pub fn removed_packages_table(removals: &[RemovedPackage]) -> String {
 
 pub fn no_upgrade_message(package: Option<&str>, has_diagnostics: bool) -> String {
     match (package, has_diagnostics) {
-        (Some(package), true) => format!("No feasible upgrade is available for {package}."),
-        (Some(package), false) => format!("{package} is up to date."),
-        (None, true) => "No feasible package upgrades are available.".to_string(),
-        (None, false) => "All packages are up to date.".to_string(),
+        (Some(package), true) => tr!(
+            "No feasible upgrade is available for %{package}.",
+            package = package
+        ),
+        (Some(package), false) => tr!("%{package} is up to date.", package = package),
+        (None, true) => tr!("No feasible package upgrades are available.").into_owned(),
+        (None, false) => tr!("All packages are up to date.").into_owned(),
     }
 }
 
@@ -247,7 +254,7 @@ pub fn resolution_choices(alternatives: &[ResolutionReport]) -> String {
         })
         .collect();
     if !common_rows.is_empty() {
-        output.push_str("Common actions:\n");
+        output.push_str(&tr!("Common actions:\n"));
         output.push_str(&changes_table(common_rows, false));
         output.push('\n');
     }
@@ -256,7 +263,10 @@ pub fn resolution_choices(alternatives: &[ResolutionReport]) -> String {
         if index > 0 || !output.is_empty() {
             output.push('\n');
         }
-        output.push_str(&format!("Option {} — differing actions:\n", index + 1));
+        output.push_str(&tr!(
+            "Option %{number} — differing actions:\n",
+            number = index + 1
+        ));
         let mut rows = Vec::new();
         for package in &differing {
             if let Some(changes) = logical[index].get(package) {
@@ -276,15 +286,15 @@ pub fn resolution_choices(alternatives: &[ResolutionReport]) -> String {
             }
         }
         if rows.is_empty() {
-            output.push_str("  No logical package action differs.\n");
+            output.push_str(&tr!("  No logical package action differs.\n"));
         } else {
             output.push_str(&changes_table(rows, true));
             output.push('\n');
         }
         if !alternative.warnings.is_empty() {
-            output.push_str(&format!(
-                "  {} dependency ordering warning(s)\n",
-                alternative.warnings.len()
+            output.push_str(&tr!(
+                "  %{count} dependency ordering warning(s)\n",
+                count = alternative.warnings.len()
             ));
         }
     }
@@ -354,8 +364,13 @@ fn changes_table<'a>(
 ) -> String {
     let mut table = error_table(["", "Package", "Current", "Selected", "Candidate", "Action"]);
     for (marker, package, current, selected, candidate, action) in rows {
-        let cells = [marker, package, current, selected, candidate, action].map(|value| {
-            let cell = Cell::new(value);
+        let values = [marker, package, current, selected, candidate, action];
+        let cells = values.into_iter().enumerate().map(|(index, value)| {
+            let cell = if index == 5 {
+                Cell::new(tr!(value))
+            } else {
+                Cell::new(value)
+            };
             if highlight {
                 cell.fg(Color::Yellow).add_attribute(Attribute::Bold)
             } else {
@@ -380,7 +395,7 @@ fn configured_table<const N: usize>(headers: [&str; N], stderr: bool) -> Table {
     table
         .load_preset(UTF8_HORIZONTAL_ONLY)
         .set_content_arrangement(ContentArrangement::Dynamic)
-        .set_header(headers);
+        .set_header(headers.map(|header| tr!(header).into_owned()));
     if stderr {
         table.use_stderr();
     }
@@ -526,10 +541,10 @@ pub fn remote_list_table(report: &orbit_core::RemoteReport, header: Option<&str>
             Cell::new(remote.display_locator()),
         ]);
     }
-    let default_header = format!(
-        "Package has {} remote(s) for {}:",
-        report.remotes.len(),
-        report.package
+    let default_header = tr!(
+        "Package has %{count} remote(s) for %{package}:",
+        count = report.remotes.len(),
+        package = report.package
     );
     let header = header.unwrap_or(&default_header);
     format!("{header}\n{table}")
@@ -541,10 +556,14 @@ pub fn installed_packages_table(packages: &[ListedPackage]) -> String {
     for package in packages {
         let mut notes = Vec::new();
         if package.optional {
-            notes.push("optional".to_string());
+            notes.push(tr!("optional").into_owned());
         }
         for (name, ver) in &package.bundled {
-            notes.push(format!("+ bundled: {name} v{ver}"));
+            notes.push(tr!(
+                "+ bundled: %{name} v%{version}",
+                name = name,
+                version = ver
+            ));
         }
         table.add_row([
             Cell::new(&package.mod_id),
@@ -571,7 +590,7 @@ pub fn sync_report_table(report: &SyncReport) -> String {
     for package in &report.added {
         table.add_row([
             Cell::new("+").fg(Color::Green),
-            Cell::new("added"),
+            Cell::new(tr!("added")),
             Cell::new(ABSENT),
             Cell::new(package),
         ]);
@@ -579,7 +598,7 @@ pub fn sync_report_table(report: &SyncReport) -> String {
     for package in &report.changed {
         table.add_row([
             Cell::new("~").fg(Color::Yellow),
-            Cell::new("changed"),
+            Cell::new(tr!("changed")),
             Cell::new(ABSENT),
             Cell::new(package),
         ]);
@@ -587,7 +606,7 @@ pub fn sync_report_table(report: &SyncReport) -> String {
     for package in &report.missing {
         table.add_row([
             Cell::new("-").fg(Color::Red),
-            Cell::new("missing"),
+            Cell::new(tr!("missing")),
             Cell::new(package),
             Cell::new(ABSENT),
         ]);
@@ -595,13 +614,13 @@ pub fn sync_report_table(report: &SyncReport) -> String {
     for package in &report.unlocked {
         table.add_row([
             Cell::new("?").fg(Color::Magenta),
-            Cell::new("unlocked"),
+            Cell::new(tr!("unlocked")),
             Cell::new(package),
             Cell::new(ABSENT),
         ]);
     }
     if table.row_count() == 0 {
-        return "No local changes.".to_string();
+        return tr!("No local changes.").into_owned();
     }
     table.to_string()
 }
@@ -610,32 +629,42 @@ pub fn sync_report_table(report: &SyncReport) -> String {
 pub fn mod_info_table(provider: &str, info: &ModInfo) -> String {
     let mut table = output_table(["Field", "Value"]);
     table.add_row([
-        Cell::new("name"),
+        Cell::new(tr!("name")),
         Cell::new(format!("{} ({provider})", info.name)),
     ]);
-    table.add_row([Cell::new("id"), Cell::new(&info.project_id)]);
-    table.add_row([Cell::new("slug"), Cell::new(&info.slug)]);
-    table.add_row([Cell::new("description"), Cell::new(&info.description)]);
+    table.add_row([Cell::new(tr!("id")), Cell::new(&info.project_id)]);
+    table.add_row([Cell::new(tr!("slug")), Cell::new(&info.slug)]);
+    table.add_row([Cell::new(tr!("description")), Cell::new(&info.description)]);
     if !info.authors.is_empty() {
-        table.add_row([Cell::new("authors"), Cell::new(info.authors.join(", "))]);
+        table.add_row([
+            Cell::new(tr!("authors")),
+            Cell::new(info.authors.join(", ")),
+        ]);
     }
-    table.add_row([Cell::new("latest version"), Cell::new(&info.latest_version)]);
     table.add_row([
-        Cell::new("client side"),
+        Cell::new(tr!("latest version")),
+        Cell::new(&info.latest_version),
+    ]);
+    table.add_row([
+        Cell::new(tr!("client side")),
         Cell::new(side_label(info.client_side.as_ref())),
     ]);
     table.add_row([
-        Cell::new("server side"),
+        Cell::new(tr!("server side")),
         Cell::new(side_label(info.server_side.as_ref())),
     ]);
     table.add_row([
-        Cell::new("license"),
-        Cell::new(info.license.as_deref().unwrap_or("unknown")),
+        Cell::new(tr!("license")),
+        Cell::new(
+            info.license
+                .as_deref()
+                .map_or_else(|| tr!("unknown"), std::borrow::Cow::Borrowed),
+        ),
     ]);
-    table.add_row([Cell::new("downloads"), Cell::new(info.downloads)]);
+    table.add_row([Cell::new(tr!("downloads")), Cell::new(info.downloads)]);
     if !info.categories.is_empty() {
         table.add_row([
-            Cell::new("categories"),
+            Cell::new(tr!("categories")),
             Cell::new(info.categories.join(", ")),
         ]);
     }
@@ -644,7 +673,9 @@ pub fn mod_info_table(provider: &str, info: &ModInfo) -> String {
         versions
             .load_preset(UTF8_HORIZONTAL_ONLY)
             .set_content_arrangement(ContentArrangement::Dynamic)
-            .set_header(["Version", "MC", "Loader", "Released"]);
+            .set_header(
+                ["Version", "MC", "Loader", "Released"].map(|header| tr!(header).into_owned()),
+            );
         for version in &info.recent_versions {
             versions.add_row([
                 Cell::new(&version.version),
@@ -654,41 +685,41 @@ pub fn mod_info_table(provider: &str, info: &ModInfo) -> String {
             ]);
         }
         table.add_row([
-            Cell::new("recent versions"),
+            Cell::new(tr!("recent versions")),
             Cell::new(versions.to_string()),
         ]);
     }
     let deps = if info.dependencies.is_empty() {
-        "(none)".to_string()
+        tr!("(none)").into_owned()
     } else {
         info.dependencies
             .iter()
             .map(|dependency| {
                 let name = dependency
                     .slug
-                    .as_deref()
-                    .or(dependency.project_id.as_deref())
-                    .unwrap_or("unknown");
+                    .clone()
+                    .or_else(|| dependency.project_id.clone())
+                    .unwrap_or_else(|| tr!("unknown").into_owned());
                 let kind = if dependency.required {
-                    "required"
+                    tr!("required")
                 } else {
-                    "optional"
+                    tr!("optional")
                 };
                 format!("{name} ({kind})")
             })
             .collect::<Vec<_>>()
             .join("\n")
     };
-    table.add_row([Cell::new("dependencies"), Cell::new(deps)]);
+    table.add_row([Cell::new(tr!("dependencies")), Cell::new(deps)]);
     table.to_string()
 }
 
-fn side_label(side: Option<&SideSupport>) -> &'static str {
+fn side_label(side: Option<&SideSupport>) -> std::borrow::Cow<'static, str> {
     match side {
-        Some(SideSupport::Required) => "required",
-        Some(SideSupport::Optional) => "optional",
-        Some(SideSupport::Unsupported) => "unsupported",
-        None => "unknown",
+        Some(SideSupport::Required) => tr!("required"),
+        Some(SideSupport::Optional) => tr!("optional"),
+        Some(SideSupport::Unsupported) => tr!("unsupported"),
+        None => tr!("unknown"),
     }
 }
 

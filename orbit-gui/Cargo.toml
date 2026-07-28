@@ -1,0 +1,30 @@
+[package]
+name = "orbit-gui"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "Native desktop shell for Orbit and Orbit Launcher"
+repository = "https://github.com/water2004/orbit"
+
+[[bin]]
+name = "orbit-gui"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = { workspace = true }
+command-group = "5.0.1"
+eframe = { version = "0.33.3", default-features = false, features = ["accesskit", "default_fonts", "persistence", "wayland", "wgpu", "x11"] }
+egui_extras = { version = "0.33.3", features = ["all_loaders"] }
+fontdb = "0.23.0"
+orbit-i18n = { workspace = true }
+orbit-machine-protocol = { workspace = true }
+rfd = { version = "0.17.2", features = ["common-controls-v6"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+zeroize = { workspace = true }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+wgpu = { version = "27.0.1", default-features = false, features = ["dx12", "std", "wgsl"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+wgpu = { version = "27.0.1", default-features = false, features = ["gles", "std", "vulkan", "wgsl"] }

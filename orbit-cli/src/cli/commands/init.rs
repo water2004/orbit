@@ -22,36 +22,51 @@ pub async fn handle(
             Ok(versions) if versions.len() == 1 => {
                 let ver = &versions[0];
                 println!(
-                    "✓ Detected Minecraft version: {} ({})",
-                    ver.id,
-                    if ver.stable { "stable" } else { "snapshot" }
+                    "{}",
+                    tr!(
+                        "✓ Detected Minecraft version: %{version} (%{channel})",
+                        version = ver.id,
+                        channel = tr!(if ver.stable { "stable" } else { "snapshot" })
+                    )
                 );
                 ver.id.clone()
             }
             Ok(versions) if versions.len() > 1 && ctx.yes => {
                 anyhow::bail!(
-                    "multiple Minecraft versions were detected: {}; \
-                     pass --mc-version when using --yes",
-                    versions
-                        .iter()
-                        .map(|version| version.id.as_str())
-                        .collect::<Vec<_>>()
-                        .join(", ")
+                    "{}",
+                    tr!(
+                        "Multiple Minecraft versions were detected: %{versions}; pass --mc-version when using --yes",
+                        versions = versions
+                            .iter()
+                            .map(|version| version.id.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )
                 )
             }
             Ok(versions) if versions.len() > 1 => select_mc_version(&versions)?,
             Ok(_) if ctx.yes => anyhow::bail!(
-                "could not detect the Minecraft version; pass --mc-version when using --yes"
+                "{}",
+                tr!("Could not detect the Minecraft version; pass --mc-version when using --yes")
             ),
             Ok(_) => prompt_mc_version()?,
             Err(error) if ctx.yes => {
                 anyhow::bail!(
-                    "could not detect the Minecraft version: {error}; \
-                     pass --mc-version when using --yes"
+                    "{}",
+                    tr!(
+                        "Could not detect the Minecraft version: %{detail}; pass --mc-version when using --yes",
+                        detail = error
+                    )
                 )
             }
             Err(error) => {
-                eprintln!("? Automatic Minecraft detection failed: {error}");
+                eprintln!(
+                    "{}",
+                    tr!(
+                        "? Automatic Minecraft detection failed: %{detail}",
+                        detail = error
+                    )
+                );
                 prompt_mc_version()?
             }
         },
@@ -62,7 +77,15 @@ pub async fn handle(
         let detected = detect_loader_candidates(&instance_dir, &mc_ver, Some(requested_loader))?
             .into_iter()
             .next()
-            .ok_or_else(|| anyhow::anyhow!("no detector result for '{requested_loader}'"))?;
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "{}",
+                    tr!(
+                        "No detector result for '%{loader}'",
+                        loader = requested_loader
+                    )
+                )
+            })?;
         let loader = detected.loader.to_string();
         let version =
             choose_loader_version(modloader_version, detected.versions, &loader, ctx.yes)?;
@@ -84,10 +107,13 @@ pub async fn handle(
                     ctx.yes,
                 )?;
                 println!(
-                    "✓ Detected {} loader {} ({})",
-                    loader,
-                    ver,
-                    info.evidence.join(", ")
+                    "{}",
+                    tr!(
+                        "✓ Detected %{loader} loader %{version} (%{evidence})",
+                        loader = loader,
+                        version = ver,
+                        evidence = info.evidence.join(", ")
+                    )
                 );
                 (loader, ver)
             }
@@ -98,19 +124,33 @@ pub async fn handle(
                     .collect::<Vec<_>>()
                     .join(", ");
                 anyhow::bail!(
-                    "multiple modloaders match Minecraft {mc_ver}: {candidates}; pass --modloader"
+                    "{}",
+                    tr!(
+                        "Multiple mod loaders match Minecraft %{minecraft}: %{loaders}; pass --modloader",
+                        minecraft = mc_ver,
+                        loaders = candidates
+                    )
                 );
             }
             _ => {
                 if ctx.yes {
                     anyhow::bail!(
-                        "could not auto-detect the modloader; pass --modloader and \
-                         --modloader-version when using --yes"
+                        "{}",
+                        tr!(
+                            "Could not auto-detect the mod loader; pass --modloader and --modloader-version when using --yes"
+                        )
                     );
                 }
                 let (l, name) = select_loader_interactive()?;
                 let ver = choose_loader_version(modloader_version, Vec::new(), &l, ctx.yes)?;
-                eprintln!("  Using {} loader {}", name, ver);
+                eprintln!(
+                    "  {}",
+                    tr!(
+                        "Using %{loader} loader %{version}",
+                        loader = name,
+                        version = ver
+                    )
+                );
                 (l, ver)
             }
         }
@@ -164,46 +204,85 @@ pub async fn handle(
     // ── 4. 输出结果 ────────────────────────────
     if ctx.dry_run {
         println!(
-            "[dry-run] would initialize Orbit project '{name}' ({loader}, MC {})",
-            output.manifest.project.mc_version
+            "{}",
+            tr!(
+                "[dry-run] would initialize Orbit project '%{name}' (%{loader}, Minecraft %{minecraft})",
+                name = name,
+                loader = loader,
+                minecraft = output.manifest.project.mc_version
+            )
         );
-        println!("  [dry-run] would create orbit.toml");
+        println!("  {}", tr!("[dry-run] would create orbit.toml"));
         println!(
-            "  [dry-run] would create orbit.lock ({} entries)",
-            output.locked_packages
+            "  {}",
+            tr!(
+                "[dry-run] would create orbit.lock (%{entries} entries)",
+                entries = output.locked_packages
+            )
         );
     } else {
         println!(
-            "✓ Initialized Orbit project '{name}' ({loader}, MC {})",
-            output.manifest.project.mc_version
+            "{}",
+            tr!(
+                "✓ Initialized Orbit project '%{name}' (%{loader}, Minecraft %{minecraft})",
+                name = name,
+                loader = loader,
+                minecraft = output.manifest.project.mc_version
+            )
         );
-        println!("  orbit.toml created");
-        println!("  orbit.lock created ({} entries)", output.locked_packages);
+        println!("  {}", tr!("orbit.toml created"));
+        println!(
+            "  {}",
+            tr!(
+                "orbit.lock created (%{entries} entries)",
+                entries = output.locked_packages
+            )
+        );
     }
     if output.scanned_mods.is_empty() {
-        println!("  No mods found in mods/ directory.");
+        println!("  {}", tr!("No mods were found in the mods/ directory."));
     } else {
         println!(
-            "  Scanned {} mods ({} identified, {} unknown)",
-            output.scanned_mods.len(),
-            identified,
-            unknown,
+            "  {}",
+            tr!(
+                "Scanned %{total} mods (%{identified} identified, %{unknown} unknown)",
+                total = output.scanned_mods.len(),
+                identified = identified,
+                unknown = unknown
+            )
         );
     }
     if let Some(error) = &output.dependency_error {
-        eprintln!("Dependency graph verification failed:\n{error}");
-        eprintln!("Use 'orbit install' or 'orbit sync' to fix missing dependencies.");
+        eprintln!(
+            "{}",
+            tr!(
+                "Dependency graph verification failed:\n%{detail}",
+                detail = error
+            )
+        );
+        eprintln!(
+            "{}",
+            tr!("Use 'orbit install' or 'orbit sync' to fix missing dependencies.")
+        );
     }
     for package in &output.removed {
         if ctx.dry_run {
             println!(
-                "  [dry-run] would remove unselected package {} v{}",
-                package.mod_id, package.version
+                "  {}",
+                tr!(
+                    "[dry-run] would remove unselected package %{package} v%{version}",
+                    package = package.mod_id,
+                    version = package.version
+                )
             );
         } else {
             println!(
-                "  Removed unselected package {} v{}",
-                package.mod_id, package.version
+                "  {}",
+                tr!(
+                    "Removed unselected package %{package} v%{version}",
+                    package = package.mod_id,
+                    version = package.version
+                )
             );
         }
     }
@@ -218,7 +297,7 @@ pub async fn handle(
                 is_default: false,
             },
         )?;
-        println!("  Run 'orbit install' to restore missing mods.");
+        println!("  {}", tr!("Run 'orbit install' to restore missing mods."));
     }
 
     Ok(())
@@ -229,13 +308,16 @@ pub async fn handle(
 fn select_loader_interactive() -> Result<(String, String)> {
     let loaders = known_loader_choices();
     if loaders.is_empty() {
-        anyhow::bail!("no modloaders available for detection");
+        anyhow::bail!("{}", tr!("No mod loaders are available for detection"));
     }
-    eprintln!("? Could not auto-detect modloader. Available loaders:");
+    eprintln!(
+        "{}",
+        tr!("? Could not auto-detect a mod loader. Available loaders:")
+    );
     for (i, (loader, name)) in loaders.iter().enumerate() {
         eprintln!("  [{}] {} ({})", i + 1, name, loader);
     }
-    eprint!("Choose a loader [1]: ");
+    eprint!("{}", tr!("Choose a loader [1]: "));
     let mut input = String::new();
     std::io::stdin().read_line(&mut input)?;
     let index = if input.trim().is_empty() {
@@ -247,29 +329,32 @@ fn select_loader_interactive() -> Result<(String, String)> {
             .ok()
             .and_then(|index| index.checked_sub(1))
             .filter(|index| *index < loaders.len())
-            .ok_or_else(|| anyhow::anyhow!("invalid modloader choice"))?
+            .ok_or_else(|| anyhow::anyhow!("{}", tr!("Invalid mod loader choice")))?
     };
     let (loader, name) = &loaders[index];
     Ok((loader.clone(), name.clone()))
 }
 
 fn prompt_mc_version() -> Result<String> {
-    eprint!("? Minecraft version: ");
+    eprint!("{}", tr!("? Minecraft version: "));
     let mut input = String::new();
     std::io::stdin().read_line(&mut input)?;
     let version = input.trim();
     if version.is_empty() {
-        anyhow::bail!("Minecraft version is required; pass --mc-version");
+        anyhow::bail!(
+            "{}",
+            tr!("Minecraft version is required; pass --mc-version")
+        );
     }
     Ok(version.to_string())
 }
 
 fn select_mc_version(versions: &[orbit_core::McVersion]) -> Result<String> {
-    eprintln!("? Multiple Minecraft versions are available:");
+    eprintln!("{}", tr!("? Multiple Minecraft versions are available:"));
     for (index, version) in versions.iter().enumerate() {
         eprintln!("  [{}] {}", index + 1, version.id);
     }
-    eprint!("Choose a Minecraft version [1]: ");
+    eprint!("{}", tr!("Choose a Minecraft version [1]: "));
     let mut input = String::new();
     std::io::stdin().read_line(&mut input)?;
     let index = if input.trim().is_empty() {
@@ -281,7 +366,7 @@ fn select_mc_version(versions: &[orbit_core::McVersion]) -> Result<String> {
             .ok()
             .and_then(|index| index.checked_sub(1))
             .filter(|index| *index < versions.len())
-            .ok_or_else(|| anyhow::anyhow!("invalid Minecraft version choice"))?
+            .ok_or_else(|| anyhow::anyhow!("{}", tr!("Invalid Minecraft version choice")))?
     };
     Ok(versions[index].id.clone())
 }
@@ -303,16 +388,25 @@ fn choose_loader_version(
     if detected.len() > 1 {
         if non_interactive {
             anyhow::bail!(
-                "multiple {loader} loader versions were detected: {}; \
-                 pass --modloader-version when using --yes",
-                detected.join(", ")
+                "{}",
+                tr!(
+                    "Multiple %{loader} loader versions were detected: %{versions}; pass --modloader-version when using --yes",
+                    loader = loader,
+                    versions = detected.join(", ")
+                )
             );
         }
-        eprintln!("? Multiple {loader} loader versions are available:");
+        eprintln!(
+            "{}",
+            tr!(
+                "? Multiple %{loader} loader versions are available:",
+                loader = loader
+            )
+        );
         for (index, version) in detected.iter().enumerate() {
             eprintln!("  [{}] {version}", index + 1);
         }
-        eprint!("Choose a loader version [1]: ");
+        eprint!("{}", tr!("Choose a loader version [1]: "));
         let mut input = String::new();
         std::io::stdin().read_line(&mut input)?;
         let index = if input.trim().is_empty() {
@@ -324,22 +418,27 @@ fn choose_loader_version(
                 .ok()
                 .and_then(|index| index.checked_sub(1))
                 .filter(|index| *index < detected.len())
-                .ok_or_else(|| anyhow::anyhow!("invalid loader version choice"))?
+                .ok_or_else(|| anyhow::anyhow!("{}", tr!("Invalid loader version choice")))?
         };
         return Ok(detected[index].clone());
     }
     if non_interactive {
         anyhow::bail!(
-            "could not detect the {loader} loader version; pass --modloader-version when using --yes"
+            "{}",
+            tr!(
+                "Could not detect the %{loader} loader version; pass --modloader-version when using --yes",
+                loader = loader
+            )
         );
     }
-    eprint!("? {loader} loader version: ");
+    eprint!("{}", tr!("? %{loader} loader version: ", loader = loader));
     let mut input = String::new();
     std::io::stdin().read_line(&mut input)?;
     let version = input.trim();
     if version.is_empty() {
         anyhow::bail!(
-            "loader version is required for reproducible installs; pass --modloader-version"
+            "{}",
+            tr!("A loader version is required for reproducible installs; pass --modloader-version")
         );
     }
     Ok(version.to_string())

@@ -1,0 +1,17 @@
+[package]
+name = "orbit-i18n"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "Shared presentation localization for Orbit applications"
+repository = "https://github.com/water2004/orbit"
+
+[features]
+default = []
+clap = ["dep:clap"]
+
+[dependencies]
+clap = { workspace = true, optional = true }
+rust-i18n = "4.2.1"
+serde = { workspace = true }
+sys-locale = "0.3.2"

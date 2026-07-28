@@ -1,6 +1,9 @@
+#[macro_use]
+extern crate orbit_i18n;
+
 mod cli;
 
-use clap::Parser;
+use clap::{CommandFactory, FromArgMatches};
 use cli::output::{OutputCfg, OutputFormat, ProgressFormat};
 use cli::{
     Cli,
@@ -9,7 +12,11 @@ use cli::{
 
 #[tokio::main]
 async fn main() {
-    let cli = Cli::parse();
+    let requested_language = orbit_i18n::requested_from_args(std::env::args_os());
+    orbit_i18n::install(requested_language);
+    let matches = orbit_i18n::get_matches(Cli::command());
+    let cli = Cli::from_arg_matches(&matches).expect("Clap matches the derived CLI schema");
+    orbit_i18n::install(cli.language);
     let command = cli.command.command_name();
     let format = cli.format;
     // `--progress-format ndjson` opts into the structured stderr protocol.
@@ -49,8 +56,11 @@ async fn main() {
         (Ok(()), Ok(_)) => {}
         (Err(error), Ok(_)) | (Ok(()), Err(error)) => exit_with_error(&error, output, command),
         (Err(command_error), Err(cache_error)) => {
-            let message =
-                format!("{command_error}; JAR cache LRU cleanup also failed: {cache_error}");
+            let message = tr!(
+                "%{command}; JAR cache LRU cleanup also failed: %{cache}",
+                command = command_error,
+                cache = cache_error
+            );
             let combined = command_error.context(message);
             exit_with_error(&combined, output, command);
         }
@@ -60,13 +70,13 @@ async fn main() {
 fn exit_with_error(error: &anyhow::Error, output: OutputCfg, command: &'static str) -> ! {
     let code = error_code(error);
     if output.format == OutputFormat::Json {
-        let json = cli::output::ErrorJson::new(command, code, redacted_message(error, code));
+        let json = cli::output::ErrorJson::new(command, code, localized_error(error));
         eprintln!(
             "{}",
             serde_json::to_string(&json).expect("error envelope is serializable")
         );
     } else {
-        eprintln!("error: {error}");
+        eprintln!("{}: {}", tr!("error"), localized_error(error));
     }
     std::process::exit(exit_code_for(code));
 }
@@ -104,12 +114,59 @@ fn orbit_error_code(error: &orbit_core::OrbitError) -> &'static str {
 /// Human-facing message with secrets redacted. The checksum mismatch error
 /// already omits hashes in its Display impl; we keep the redaction boundary
 /// explicit here so future error variants cannot leak by accident.
-fn redacted_message(error: &anyhow::Error, _code: &str) -> String {
-    error
+fn localized_error(error: &anyhow::Error) -> String {
+    for cause in error.chain() {
+        if let Some(error) = cause.downcast_ref::<orbit_core::OrbitError>() {
+            return localized_orbit_error(error);
+        }
+    }
+    let detail = error
         .chain()
         .next()
-        .map(|cause| cause.to_string())
-        .unwrap_or_else(|| "unknown error".to_string())
+        .map(ToString::to_string)
+        .unwrap_or_else(|| tr!("unknown error").into_owned());
+    tr!("Operation failed: %{detail}", detail = detail)
+}
+
+fn localized_orbit_error(error: &orbit_core::OrbitError) -> String {
+    use orbit_core::OrbitError::*;
+    match error {
+        ManifestNotFound => tr!("orbit.toml was not found in the current instance").into_owned(),
+        ManifestParse(detail) => tr!("Failed to parse orbit.toml: %{detail}", detail = detail),
+        ManifestSerialize(detail) => {
+            tr!("Failed to serialize orbit.toml: %{detail}", detail = detail)
+        }
+        LockfileNotFound => tr!("orbit.lock was not found in the current instance").into_owned(),
+        ModNotFound(package) => tr!("Package '%{package}' was not found", package = package),
+        VersionMismatch {
+            mod_name,
+            constraint,
+        } => tr!(
+            "No version of '%{package}' satisfies constraint '%{constraint}'",
+            package = mod_name,
+            constraint = constraint
+        ),
+        Conflict(detail) => tr!("Dependency conflict: %{detail}", detail = detail),
+        ChecksumMismatch { name, .. } => tr!(
+            "Content verification failed for '%{name}'; downloaded bytes differ from the trusted source",
+            name = name
+        ),
+        ProviderApiKeyRequired {
+            provider,
+            environment_variable,
+            config_key,
+        } => tr!(
+            "%{provider} requires an API key; set %{environment} or %{config} in config.toml",
+            provider = provider,
+            environment = environment_variable,
+            config = config_key
+        ),
+        Io(detail) => tr!("I/O operation failed: %{detail}", detail = detail),
+        Network(detail) => tr!("Network operation failed: %{detail}", detail = detail),
+        Json(detail) => tr!("Failed to parse JSON: %{detail}", detail = detail),
+        Zip(detail) => tr!("Failed to process ZIP data: %{detail}", detail = detail),
+        Other(detail) => tr!("Operation failed: %{detail}", detail = detail),
+    }
 }
 
 fn exit_code_for(code: &str) -> i32 {

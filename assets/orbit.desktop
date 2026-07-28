@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Orbit
+Comment=Manage Minecraft installations and mods
+Exec=orbit-gui
+Icon=orbit
+Terminal=false
+Categories=Game;Utility;
+Keywords=Minecraft;Mods;Launcher;
+StartupNotify=true

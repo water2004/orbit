@@ -38,29 +38,38 @@ pub async fn handle(
 
         if ctx.dry_run {
             for package in &report.restored {
-                println!("  [dry-run] would restore {package}");
+                println!(
+                    "  {}",
+                    tr!("[dry-run] would restore %{package}", package = package)
+                );
             }
             if !report.removed.is_empty() {
-                println!("\nPackages to remove:");
+                println!("\n{}", tr!("Packages to remove:"));
                 println!(
                     "{}",
                     crate::cli::output::removed_packages_table(&report.removed)
                 );
             }
             println!(
-                "Restore preview: {} to restore, {} to remove, {} already present, {} skipped.",
-                report.restored.len(),
-                report.removed.len(),
-                report.already_present.len(),
-                report.skipped.len()
+                "{}",
+                tr!(
+                    "Restore preview: %{restore} to restore, %{remove} to remove, %{present} already present, %{skipped} skipped.",
+                    restore = report.restored.len(),
+                    remove = report.removed.len(),
+                    present = report.already_present.len(),
+                    skipped = report.skipped.len()
+                )
             );
         } else {
             println!(
-                "Installed {} mods, removed {} unselected package version(s), skipped {} already present and {} excluded by policy.",
-                report.restored.len(),
-                report.removed.len(),
-                report.already_present.len(),
-                report.skipped.len()
+                "{}",
+                tr!(
+                    "Installed %{installed} mods, removed %{removed} unselected package version(s), skipped %{present} already present and %{excluded} excluded by policy.",
+                    installed = report.restored.len(),
+                    removed = report.removed.len(),
+                    present = report.already_present.len(),
+                    excluded = report.skipped.len()
+                )
             );
         }
         return Ok(());

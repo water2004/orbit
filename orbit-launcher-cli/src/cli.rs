@@ -1,10 +1,15 @@
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand, ValueEnum};
+use orbit_i18n::LanguageMode;
 
 #[derive(Debug, Parser)]
 #[command(name = "orbit-launcher", version, about = "Minecraft runtime launcher")]
 pub struct Cli {
+    /// Presentation language: system / en / zh-CN (system by default).
+    #[arg(long, global = true, default_value_t = LanguageMode::System)]
+    pub language: LanguageMode,
+
     /// Select a registered instance by stable ID or name.
     #[arg(long, global = true)]
     pub instance: Option<String>,

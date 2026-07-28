@@ -24,7 +24,10 @@ pub async fn handle(
             .as_deref()
             .is_some_and(|platform| platform != "file")
         {
-            anyhow::bail!("file: dependencies cannot be combined with --platform");
+            anyhow::bail!(
+                "{}",
+                tr!("file: dependencies cannot be combined with --platform")
+            );
         }
         let instance_dir = ctx.instance_dir()?;
         let providers = if no_deps {
@@ -48,7 +51,7 @@ pub async fn handle(
             super::install_interaction(ctx),
         )
         .await
-        .map_err(|error| anyhow::anyhow!("Add failed: {error}"))?;
+        .map_err(|error| anyhow::anyhow!("{}", tr!("Add failed: %{detail}", detail = error)))?;
         super::print_transaction_result("add", &report, ctx);
         return Ok(());
     }
@@ -64,7 +67,7 @@ pub async fn handle(
     let provider_name = selected_platform
         .as_deref()
         .or_else(|| providers.first().map(|provider| provider.name()))
-        .ok_or_else(|| anyhow::anyhow!("no provider is configured for add"))?;
+        .ok_or_else(|| anyhow::anyhow!("{}", tr!("No provider is configured for add")))?;
     let remote = super::parse_package_remote(provider_name, slug)?;
 
     match install_to_instance(
@@ -99,16 +102,25 @@ pub async fn handle(
                 let results = provider
                     .search(slug, None, None, 5)
                     .await
-                    .context("search failed")?;
+                    .with_context(|| tr!("Search failed").into_owned())?;
                 if !results.is_empty() {
                     suggestion = Some((provider.name().to_string(), results));
                     break;
                 }
             }
             let Some((suggestion_platform, results)) = suggestion else {
-                anyhow::bail!("No mod found for '{slug}' on any configured platform.");
+                anyhow::bail!(
+                    "{}",
+                    tr!(
+                        "No mod was found for '%{slug}' on any configured provider.",
+                        slug = slug
+                    )
+                );
             };
-            eprintln!("Could not find '{slug}'. Did you mean:");
+            eprintln!(
+                "{}",
+                tr!("Could not find '%{slug}'. Did you mean:", slug = slug)
+            );
             for (i, item) in results.iter().enumerate() {
                 let dl = format_downloads(item.downloads);
                 eprintln!(
@@ -129,19 +141,22 @@ pub async fn handle(
             let project_id = if ctx.yes {
                 results[0].project_id.clone()
             } else {
-                eprint!("\nChoose a number (or press Enter to cancel): ");
+                eprint!("\n{}", tr!("Choose a number (or press Enter to cancel): "));
                 let mut input = String::new();
                 std::io::stdin().read_line(&mut input).ok();
                 let trimmed = input.trim();
                 if trimmed.is_empty() {
-                    anyhow::bail!("Add cancelled.");
+                    anyhow::bail!("{}", tr!("Add cancelled."));
                 }
                 match trimmed.parse::<usize>() {
                     Ok(idx) if idx < results.len() => results[idx].project_id.clone(),
-                    _ => anyhow::bail!("Invalid choice."),
+                    _ => anyhow::bail!("{}", tr!("Invalid choice.")),
                 }
             };
-            eprintln!("Installing project {project_id}...");
+            eprintln!(
+                "{}",
+                tr!("Installing project %{project}…", project = project_id)
+            );
             Box::pin(handle(
                 project_id,
                 Some(suggestion_platform),
@@ -153,8 +168,11 @@ pub async fn handle(
             ))
             .await
         }
-        Err(OrbitError::Conflict(msg)) => anyhow::bail!("Dependency conflict:\n\n  {msg}"),
-        Err(e) => anyhow::bail!("Add failed: {e}"),
+        Err(OrbitError::Conflict(msg)) => anyhow::bail!(
+            "{}",
+            tr!("Dependency conflict:\n\n  %{detail}", detail = msg)
+        ),
+        Err(e) => anyhow::bail!("{}", tr!("Add failed: %{detail}", detail = e)),
     }
 }
 

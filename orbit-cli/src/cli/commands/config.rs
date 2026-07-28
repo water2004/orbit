@@ -66,7 +66,11 @@ pub async fn handle(command: ConfigCommands, ctx: &CliContext) -> Result<()> {
                     orbit_core::InstancesRegistry::load(ctx.runtime.paths().instances_file())?;
                 if registry.find(instance_name).is_none() {
                     anyhow::bail!(
-                        "instance '{instance_name}' not found; run 'orbit instances list' to see registered instances"
+                        "{}",
+                        tr!(
+                            "Instance '%{instance}' was not found; run 'orbit instances list' to see registered instances",
+                            instance = instance_name
+                        )
                     );
                 }
                 if !ctx.dry_run {
@@ -139,7 +143,7 @@ fn render_entry(
 ) {
     match ctx.output.format {
         OutputFormat::Text => {
-            let prefix = if dry_run { "[dry-run] " } else { "" };
+            let prefix = if dry_run { tr!("[dry-run] ") } else { tr!("") };
             let value = match &entry.value {
                 Some(ConfigValueView::Text(value)) => value.clone(),
                 Some(ConfigValueView::Integer(value)) => value.to_string(),
