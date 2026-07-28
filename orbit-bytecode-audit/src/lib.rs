@@ -75,7 +75,7 @@ pub fn analyze_with_progress(
         },
     );
     let namespace = backend
-        .align_namespace(&mut scanned)
+        .align_namespace(&mut scanned, request)
         .map_err(AuditError::NotReady)?;
     let mut registry = backend.discover_mixins(&mut scanned, request);
     let mixin_analysis = mixin::analyze_with_progress(&mut scanned, &registry, progress);

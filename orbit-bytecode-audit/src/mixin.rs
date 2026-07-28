@@ -5178,8 +5178,7 @@ mod tests {
             }],
         });
 
-        crate::namespace::align_fabric_runtime(&mut scanned, crate::model::LoaderFamily::Fabric)
-            .unwrap();
+        crate::namespace::align_fabric_runtime(&mut scanned).unwrap();
         let analysis = analyze_detailed(&mut scanned);
 
         assert!(analysis.unary_risks.iter().all(|risk| {

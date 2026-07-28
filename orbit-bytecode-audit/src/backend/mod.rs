@@ -20,8 +20,11 @@ pub(crate) trait AuditBackend {
 
     fn probe_readiness(&self, scanned: &ScannedArtifacts) -> Readiness;
 
-    fn align_namespace(&self, scanned: &mut ScannedArtifacts)
-    -> Result<NamespaceReport, Readiness>;
+    fn align_namespace(
+        &self,
+        scanned: &mut ScannedArtifacts,
+        request: &AuditRequest,
+    ) -> Result<NamespaceReport, Readiness>;
 
     fn discover_mixins(
         &self,

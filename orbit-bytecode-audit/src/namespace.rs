@@ -131,11 +131,73 @@ impl MappingTree {
 
 pub(crate) fn align_fabric_runtime(
     scanned: &mut ScannedArtifacts,
-    loader: LoaderFamily,
 ) -> Result<NamespaceReport, Readiness> {
     let mapping_trees = discover_tiny_mappings(&scanned.artifacts);
     let mapping_sources = mapping_trees.iter().map(MappingTree::report).collect();
-    align_fabric_family(scanned, loader, mapping_trees, mapping_sources)
+    align_tiny_runtime(
+        scanned,
+        LoaderFamily::Fabric,
+        mapping_trees,
+        mapping_sources,
+        Some(
+            "the Fabric classpath contains no effective class mappings; Fabric Loader therefore retains the official runtime namespace",
+        ),
+    )
+}
+
+pub(crate) fn align_quilt_runtime(
+    scanned: &mut ScannedArtifacts,
+    minecraft_version: &str,
+) -> Result<NamespaceReport, Readiness> {
+    let mapping_trees = discover_tiny_mappings(&scanned.artifacts);
+    let mapping_sources = mapping_trees.iter().map(MappingTree::report).collect();
+    if quilt_uses_unobfuscated_game(minecraft_version) {
+        scanned.coverage.nested_artifact_units = scanned.artifacts.len();
+        return Ok(identity_report(
+            scanned,
+            SymbolNamespace::Official,
+            mapping_sources,
+            "Quilt Loader selects its unobfuscated-game mapping configuration and retains the official runtime namespace",
+        ));
+    }
+    align_tiny_runtime(
+        scanned,
+        LoaderFamily::Quilt,
+        mapping_trees,
+        mapping_sources,
+        None,
+    )
+}
+
+/// Mirrors Quilt's Minecraft provider rule: normalized versions newer than
+/// 25.0, or versions explicitly identified as unobfuscated, use
+/// `EmptyMappingConfiguration` and remain in the official namespace.
+fn quilt_uses_unobfuscated_game(minecraft_version: &str) -> bool {
+    if minecraft_version
+        .to_ascii_lowercase()
+        .contains("unobfuscated")
+    {
+        return true;
+    }
+
+    let numeric_prefix = minecraft_version
+        .trim()
+        .chars()
+        .take_while(|character| character.is_ascii_digit() || *character == '.')
+        .collect::<String>();
+    let mut components = numeric_prefix
+        .split('.')
+        .filter(|component| !component.is_empty())
+        .map(str::parse::<u32>);
+    let Some(Ok(major)) = components.next() else {
+        return false;
+    };
+    let minor = match components.next() {
+        Some(Ok(value)) => value,
+        Some(Err(_)) => return false,
+        None => 0,
+    };
+    major > 25 || major == 25 && minor > 0
 }
 
 pub(crate) fn align_modlauncher_runtime(
@@ -149,22 +211,13 @@ pub(crate) fn align_modlauncher_runtime(
     align_modlauncher_family(scanned, loader, mapping_sources)
 }
 
-fn align_fabric_family(
+fn align_tiny_runtime(
     scanned: &mut ScannedArtifacts,
     loader: LoaderFamily,
     trees: Vec<MappingTree>,
     mapping_sources: Vec<MappingSource>,
+    identity_without_mappings: Option<&str>,
 ) -> Result<NamespaceReport, Readiness> {
-    if trees.is_empty() {
-        scanned.coverage.namespace_alignment_failures += 1;
-        return Err(namespace_not_ready(
-            loader,
-            ReadinessStatus::Incomplete,
-            "Bytecode audit could not establish the loader runtime namespace. No Loader mapping resource was present in the supplied runtime classpath."
-                .to_string(),
-            Vec::new(),
-        ));
-    }
     let usable = trees
         .iter()
         .filter(|tree| {
@@ -172,14 +225,20 @@ fn align_fabric_family(
         })
         .collect::<Vec<_>>();
     if usable.is_empty() {
-        let report = identity_report(
-            scanned,
-            SymbolNamespace::Official,
-            mapping_sources,
-            "the Loader mapping resources contain no class mappings; Fabric therefore uses the official runtime namespace",
-        );
-        scanned.coverage.nested_artifact_units = scanned.artifacts.len();
-        return Ok(report);
+        if let Some(detail) = identity_without_mappings {
+            let report =
+                identity_report(scanned, SymbolNamespace::Official, mapping_sources, detail);
+            scanned.coverage.nested_artifact_units = scanned.artifacts.len();
+            return Ok(report);
+        }
+        scanned.coverage.namespace_alignment_failures += 1;
+        return Err(namespace_not_ready(
+            loader,
+            ReadinessStatus::Incomplete,
+            "Bytecode audit could not establish the Quilt runtime namespace. This Minecraft version requires an intermediary class mapping, but none was present in the supplied runtime classpath."
+                .to_string(),
+            Vec::new(),
+        ));
     }
 
     let minecraft_names = minecraft_class_names(scanned);
@@ -1308,7 +1367,7 @@ mod tests {
             ),
         ]);
 
-        let report = align_fabric_runtime(&mut scanned, LoaderFamily::Fabric).unwrap();
+        let report = align_fabric_runtime(&mut scanned).unwrap();
 
         assert_eq!(
             report.runtime_namespace,
@@ -1353,7 +1412,7 @@ mod tests {
             ),
         ]);
 
-        align_fabric_runtime(&mut scanned, LoaderFamily::Fabric).unwrap();
+        align_fabric_runtime(&mut scanned).unwrap();
 
         assert_eq!(scanned.artifacts[0].classes[0].methods[0].name, "method_1");
         assert_eq!(scanned.artifacts[0].classes[1].methods[0].name, "method_1");
@@ -1381,7 +1440,7 @@ mod tests {
             ),
         ]);
 
-        let report = align_fabric_runtime(&mut scanned, LoaderFamily::Fabric).unwrap();
+        let report = align_fabric_runtime(&mut scanned).unwrap();
 
         assert_eq!(report.class_mapping_coverage.total, 2);
         assert_eq!(report.class_mapping_coverage.mapped, 1);
@@ -1390,7 +1449,44 @@ mod tests {
     }
 
     #[test]
-    fn missing_fabric_mapping_capability_stops_before_findings() {
+    fn fabric_without_mapping_data_uses_official_identity_namespace() {
+        let mut scanned = scanned(vec![artifact(
+            "minecraft",
+            ArtifactKind::Minecraft,
+            vec![class("net/minecraft/Game")],
+            Vec::new(),
+        )]);
+
+        let report = align_fabric_runtime(&mut scanned).unwrap();
+
+        assert_eq!(report.runtime_namespace, Some(SymbolNamespace::Official));
+        assert!(matches!(
+            report.alignment,
+            NamespaceAlignment::Aligned {
+                runtime_namespace: SymbolNamespace::Official
+            }
+        ));
+        assert_eq!(scanned.coverage.namespace_alignment_failures, 0);
+        assert_eq!(scanned.artifacts[0].classes[0].name, "net/minecraft/Game");
+    }
+
+    #[test]
+    fn quilt_unobfuscated_game_uses_official_identity_without_mappings() {
+        let mut scanned = scanned(vec![artifact(
+            "minecraft",
+            ArtifactKind::Minecraft,
+            vec![class("net/minecraft/Game")],
+            Vec::new(),
+        )]);
+
+        let report = align_quilt_runtime(&mut scanned, "26.1").unwrap();
+
+        assert_eq!(report.runtime_namespace, Some(SymbolNamespace::Official));
+        assert_eq!(scanned.coverage.namespace_alignment_failures, 0);
+    }
+
+    #[test]
+    fn quilt_obfuscated_game_still_requires_intermediary_mappings() {
         let mut scanned = scanned(vec![artifact(
             "minecraft",
             ArtifactKind::Minecraft,
@@ -1398,10 +1494,19 @@ mod tests {
             Vec::new(),
         )]);
 
-        let readiness = align_fabric_runtime(&mut scanned, LoaderFamily::Fabric).unwrap_err();
+        let readiness = align_quilt_runtime(&mut scanned, "1.21.11").unwrap_err();
 
         assert_eq!(readiness.status, ReadinessStatus::Incomplete);
         assert_eq!(scanned.coverage.namespace_alignment_failures, 1);
+    }
+
+    #[test]
+    fn quilt_unobfuscated_rule_matches_current_loader_boundary() {
+        assert!(!quilt_uses_unobfuscated_game("25.0"));
+        assert!(quilt_uses_unobfuscated_game("26.1"));
+        assert!(quilt_uses_unobfuscated_game("26.1-pre1"));
+        assert!(quilt_uses_unobfuscated_game("custom-unobfuscated"));
+        assert!(!quilt_uses_unobfuscated_game("1.21.11"));
     }
 
     #[test]
@@ -1439,7 +1544,7 @@ mod tests {
             ),
         ]);
 
-        let report = align_fabric_runtime(&mut scanned, LoaderFamily::Fabric).unwrap();
+        let report = align_fabric_runtime(&mut scanned).unwrap();
         let unit = report
             .loader_units
             .iter()

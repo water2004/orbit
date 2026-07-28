@@ -21,8 +21,9 @@ impl AuditBackend for FabricBackend {
     fn align_namespace(
         &self,
         scanned: &mut ScannedArtifacts,
+        _request: &AuditRequest,
     ) -> Result<NamespaceReport, Readiness> {
-        crate::namespace::align_fabric_runtime(scanned, LoaderFamily::Fabric)
+        crate::namespace::align_fabric_runtime(scanned)
     }
 
     fn discover_mixins(

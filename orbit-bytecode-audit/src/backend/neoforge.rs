@@ -25,6 +25,7 @@ impl AuditBackend for NeoForgeBackend {
     fn align_namespace(
         &self,
         scanned: &mut ScannedArtifacts,
+        _request: &AuditRequest,
     ) -> Result<NamespaceReport, Readiness> {
         crate::namespace::align_modlauncher_runtime(scanned, LoaderFamily::NeoForge)
     }
