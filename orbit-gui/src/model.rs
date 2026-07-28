@@ -75,7 +75,6 @@ pub struct LauncherConfigList {
 #[derive(Debug, Clone, Deserialize)]
 pub struct OrbitConfigEntry {
     pub key: String,
-    pub value_type: String,
     pub sensitive: bool,
     pub value: Option<Value>,
 }
@@ -254,6 +253,7 @@ pub struct Account {
     pub provider: String,
     pub provider_id: Option<String>,
     pub profile_name: String,
+    pub skin_url: Option<String>,
     pub is_default: bool,
 }
 

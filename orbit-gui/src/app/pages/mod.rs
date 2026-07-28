@@ -4,6 +4,7 @@ use super::OrbitApp;
 use crate::model::Page;
 
 mod accounts;
+pub(super) use accounts::{initials as account_initials, provider_label as account_provider_label};
 pub(super) mod activity;
 mod audit;
 mod discover;

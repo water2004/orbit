@@ -1,6 +1,6 @@
 use gpui::{
     AnyElement, App, Div, InteractiveElement, IntoElement, ParentElement, SharedString, Styled,
-    Window, div, px,
+    StyledImage, Window, div, img, px,
 };
 use gpui_component::{
     ActiveTheme, Icon, StyledExt, h_flex,
@@ -223,6 +223,43 @@ pub(super) fn icon_tile(icon: OrbitIcon, cx: &App) -> Div {
         .bg(cx.theme().secondary)
         .text_color(cx.theme().primary)
         .child(Icon::new(icon).size(px(20.)))
+}
+
+pub(super) fn account_avatar(
+    skin_url: Option<&str>,
+    fallback: impl Into<SharedString>,
+    size: f32,
+    cx: &App,
+) -> AnyElement {
+    let frame = div()
+        .relative()
+        .size(px(size))
+        .flex_shrink_0()
+        .rounded_lg()
+        .overflow_hidden()
+        .bg(cx.theme().secondary);
+    if let Some(url) = skin_url {
+        let texture_size = size * 8.;
+        frame
+            .child(
+                img(url.to_string())
+                    .absolute()
+                    .top(px(-size))
+                    .left(px(-size))
+                    .size(px(texture_size))
+                    .object_fit(gpui::ObjectFit::Fill),
+            )
+            .into_any_element()
+    } else {
+        frame
+            .flex()
+            .items_center()
+            .justify_center()
+            .text_color(cx.theme().primary)
+            .font_semibold()
+            .child(fallback.into())
+            .into_any_element()
+    }
 }
 
 pub(super) fn state_color(success: bool, cx: &App) -> gpui::Hsla {

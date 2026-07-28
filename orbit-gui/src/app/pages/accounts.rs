@@ -1,5 +1,6 @@
 use gpui::{
-    Context, IntoElement, ParentElement, Styled, Window, div, prelude::FluentBuilder as _, px,
+    Context, InteractiveElement, IntoElement, ParentElement, StatefulInteractiveElement, Styled,
+    Window, div, prelude::FluentBuilder as _, px,
 };
 use gpui_component::{
     ActiveTheme, StyledExt,
@@ -75,6 +76,7 @@ fn dashboard(app: &OrbitApp, cx: &mut Context<OrbitApp>) -> impl IntoElement {
     for (index, account) in app.accounts.iter().cloned().enumerate() {
         let use_id = account.id.clone();
         let default_id = account.id.clone();
+        let refresh_id = account.id.clone();
         let remove_id = account.id.clone();
         let used_here = selected_account.as_deref() == Some(account.id.as_str());
         list = list.child(
@@ -82,18 +84,12 @@ fn dashboard(app: &OrbitApp, cx: &mut Context<OrbitApp>) -> impl IntoElement {
                 h_flex()
                     .gap_3()
                     .items_center()
-                    .child(
-                        div()
-                            .size(px(42.))
-                            .rounded_full()
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .bg(cx.theme().primary.opacity(0.14))
-                            .text_color(cx.theme().primary)
-                            .font_semibold()
-                            .child(initials(&account.profile_name)),
-                    )
+                    .child(ui::account_avatar(
+                        account.skin_url.as_deref(),
+                        initials(&account.profile_name),
+                        42.,
+                        cx,
+                    ))
                     .child(
                         v_flex()
                             .flex_1()
@@ -118,6 +114,16 @@ fn dashboard(app: &OrbitApp, cx: &mut Context<OrbitApp>) -> impl IntoElement {
                             .label(tr!("Make default").into_owned())
                             .ghost()
                             .on_click(cx.listener(move |this, _, _, cx| { this.select_account(default_id.clone(), true); cx.notify(); })),
+                    ))
+                    .when(account.provider != "offline", |row| row.child(
+                        Button::new(("account-refresh", index))
+                            .icon(OrbitIcon::Refresh)
+                            .ghost()
+                            .tooltip(tr!("Refresh account profile").into_owned())
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.refresh_account(&refresh_id);
+                                cx.notify();
+                            })),
                     ))
                     .child(
                         Button::new(("account-remove", index))
@@ -201,16 +207,26 @@ fn method_card(
     handler: impl Fn(&gpui::ClickEvent, &mut Window, &mut gpui::App) + 'static,
     cx: &gpui::App,
 ) -> impl IntoElement {
-    Button::new(id)
-        .ghost()
-        .w(px(250.))
-        .h(px(145.))
+    div()
+        .id(id)
+        .w(px(238.))
+        .min_h(px(164.))
         .p_4()
+        .rounded_lg()
+        .border_1()
+        .border_color(cx.theme().border)
+        .bg(cx.theme().group_box)
+        .shadow_xs()
+        .cursor_pointer()
+        .hover(|style| {
+            style
+                .bg(cx.theme().secondary)
+                .border_color(cx.theme().primary.opacity(0.55))
+        })
         .child(
-            v_flex()
-                .size_full()
+            h_flex()
                 .items_start()
-                .gap_3()
+                .justify_between()
                 .child(
                     div()
                         .size(px(40.))
@@ -223,10 +239,17 @@ fn method_card(
                         .font_semibold()
                         .child(mark.into()),
                 )
+                .child(div().text_color(cx.theme().muted_foreground).child("→")),
+        )
+        .child(
+            v_flex()
+                .mt_4()
+                .gap_2()
                 .child(div().text_lg().font_semibold().child(title.into()))
                 .child(
                     div()
-                        .text_xs()
+                        .text_sm()
+                        .line_height(gpui::relative(1.45))
                         .text_color(cx.theme().muted_foreground)
                         .child(detail.into()),
                 ),
@@ -460,7 +483,7 @@ fn yggdrasil_form(
         )
 }
 
-fn initials(value: &str) -> String {
+pub(crate) fn initials(value: &str) -> String {
     value
         .split_whitespace()
         .filter_map(|part| part.chars().next())
@@ -469,7 +492,7 @@ fn initials(value: &str) -> String {
         .collect()
 }
 
-fn provider_label(provider: &str) -> String {
+pub(crate) fn provider_label(provider: &str) -> String {
     match provider {
         "microsoft" => "Microsoft".to_string(),
         "offline" => tr!("Offline").into_owned(),

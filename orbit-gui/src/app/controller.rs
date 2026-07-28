@@ -633,27 +633,11 @@ impl OrbitApp {
             Intent::LauncherConfig => {
                 let response: LauncherConfigList = decode(result)?;
                 self.launcher_config = response.settings;
-                if !self.launcher_config.iter().any(|entry| {
-                    Some(entry.key.as_str()) == self.selected_launcher_config.as_deref()
-                }) {
-                    self.selected_launcher_config =
-                        self.launcher_config.first().map(|entry| entry.key.clone());
-                }
-                self.load_selected_launcher_config(window, cx);
             }
             Intent::OrbitConfig => {
                 let response: OrbitConfigList = decode(result)?;
                 self.orbit_config_path = Some(response.config_path);
                 self.orbit_config = response.entries;
-                if !self
-                    .orbit_config
-                    .iter()
-                    .any(|entry| Some(entry.key.as_str()) == self.selected_orbit_config.as_deref())
-                {
-                    self.selected_orbit_config =
-                        self.orbit_config.first().map(|entry| entry.key.clone());
-                }
-                self.load_selected_orbit_config(window, cx);
             }
             Intent::MinecraftDirectory => {
                 self.minecraft_directory = Some(decode(result)?);
@@ -1072,6 +1056,16 @@ impl OrbitApp {
         }
     }
 
+    pub(super) fn refresh_account(&mut self, account_id: &str) {
+        self.launcher_task_args(
+            "Refreshing account profile",
+            Intent::AccountMutated,
+            None,
+            vec!["account".into(), "refresh".into(), account_id.into()],
+            None,
+        );
+    }
+
     pub(super) fn server_action(&mut self, action: &str) {
         if let Some(instance) = self.selected_instance().cloned() {
             let (label, intent) = match action {
@@ -1320,55 +1314,7 @@ impl OrbitApp {
         self.refresh_registries();
     }
 
-    fn load_selected_launcher_config(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let value = self
-            .selected_launcher_config
-            .as_deref()
-            .and_then(|key| self.launcher_config.iter().find(|entry| entry.key == key))
-            .and_then(|entry| entry.value.clone())
-            .unwrap_or_default();
-        self.inputs
-            .launcher_config_value
-            .update(cx, |state, cx| state.set_value(value, window, cx));
-    }
-
-    fn load_selected_orbit_config(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let value = self
-            .selected_orbit_config
-            .as_deref()
-            .and_then(|key| self.orbit_config.iter().find(|entry| entry.key == key))
-            .filter(|entry| !entry.sensitive)
-            .map(OrbitConfigEntry::display_value)
-            .unwrap_or_default();
-        self.inputs
-            .orbit_config_value
-            .update(cx, |state, cx| state.set_value(value, window, cx));
-    }
-
-    pub(super) fn select_launcher_config(
-        &mut self,
-        key: String,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.selected_launcher_config = Some(key);
-        self.load_selected_launcher_config(window, cx);
-    }
-
-    pub(super) fn select_orbit_config(
-        &mut self,
-        key: String,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.selected_orbit_config = Some(key);
-        self.load_selected_orbit_config(window, cx);
-    }
-
-    pub(super) fn set_launcher_config(&mut self, value: String) {
-        let Some(key) = self.selected_launcher_config.clone() else {
-            return;
-        };
+    pub(super) fn set_launcher_config(&mut self, key: String, value: String) {
         self.launcher_task_args(
             "Saving launcher setting",
             Intent::LauncherConfigMutated,
@@ -1378,10 +1324,7 @@ impl OrbitApp {
         );
     }
 
-    pub(super) fn unset_launcher_config(&mut self) {
-        let Some(key) = self.selected_launcher_config.clone() else {
-            return;
-        };
+    pub(super) fn unset_launcher_config(&mut self, key: String) {
         self.launcher_task_args(
             "Resetting launcher setting",
             Intent::LauncherConfigMutated,
@@ -1391,10 +1334,7 @@ impl OrbitApp {
         );
     }
 
-    pub(super) fn set_orbit_config(&mut self, value: String) {
-        let Some(key) = self.selected_orbit_config.clone() else {
-            return;
-        };
+    pub(super) fn set_orbit_config(&mut self, key: String, value: String) {
         self.orbit_task_args(
             "Saving Orbit setting",
             Intent::OrbitConfigMutated,
@@ -1404,10 +1344,7 @@ impl OrbitApp {
         );
     }
 
-    pub(super) fn unset_orbit_config(&mut self) {
-        let Some(key) = self.selected_orbit_config.clone() else {
-            return;
-        };
+    pub(super) fn unset_orbit_config(&mut self, key: String) {
         self.orbit_task_args(
             "Resetting Orbit setting",
             Intent::OrbitConfigMutated,

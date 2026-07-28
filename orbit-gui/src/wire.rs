@@ -96,12 +96,63 @@ pub fn progress_label(data: &Value) -> String {
     let subject = data
         .get("package")
         .or_else(|| data.get("logical_name"))
+        .or_else(|| data.get("runtime_id"))
+        .or_else(|| data.get("loader"))
         .or_else(|| data.get("provider"))
         .and_then(Value::as_str);
+    let label = progress_event_label(event);
     match subject {
-        Some(subject) => format!("{} · {}", orbit_i18n::text(&humanize(event)), subject),
-        None => orbit_i18n::text(&humanize(event)).into_owned(),
+        Some(subject) => format!("{} · {}", label, subject),
+        None => label,
     }
+}
+
+fn progress_event_label(event: &str) -> String {
+    let key = match event {
+        "metadata_started" => "Resolving official metadata",
+        "minecraft_resolved" => "Minecraft metadata resolved",
+        "eula_checked" => "Checking Minecraft EULA",
+        "artifact_started" | "artifact_bytes" => "Downloading file",
+        "artifact_cached" => "Using cached file",
+        "artifact_finished" => "Download complete",
+        "java_manifest_started" => "Loading managed Java manifest",
+        "java_runtime_resolved" => "Managed Java runtime resolved",
+        "java_materialized" => "Assembling managed Java runtime files",
+        "java_runtime_verified" => "Managed Java runtime verified",
+        "java_runtime_cached" => "Using cached Java runtime",
+        "loader_installer_started" => "Running official Loader installer",
+        "loader_installer_output" => "Loader installer output",
+        "loader_installer_output_suppressed" => "Loader installer output truncated",
+        "loader_installer_finished" => "Loader installation complete",
+        "staging_verified" => "Verifying staged runtime",
+        "committed" => "Committing instance runtime",
+        "microsoft_authorization_polling" => "Waiting for Microsoft authorization",
+        "microsoft_authorization_received" => "Microsoft authorization received",
+        "xbox_authenticated" => "Xbox services authenticated",
+        "minecraft_authenticated" => "Minecraft account authenticated",
+        "account_session_stored" => "Account session stored",
+        "launch_artifact_verified" => "Verifying launch files",
+        "launch_java_verified" => "Verifying launch Java runtime",
+        "launch_natives_prepared" => "Preparing native libraries",
+        "launch_plan_ready" => "Launch plan ready",
+        "repository_copying" => "Moving Minecraft repository",
+        "repository_verifying" => "Verifying moved repository",
+        "repository_switching" => "Switching Minecraft repository",
+        "repository_removing_source" => "Removing old repository files",
+        "process_spawned" => "Game process started",
+        "process_output" => "Game process output",
+        "process_exited" => "Game process exited",
+        "supervisor_spawned" => "Server supervisor started",
+        "supervisor_command_sent" => "Sending supervisor command",
+        "supervisor_stop_requested" => "Stopping supervised server",
+        "supervisor_exited" => "Supervised server exited",
+        "supervisor_backoff" => "Waiting before server restart",
+        "supervisor_restarting" => "Restarting server",
+        "supervisor_restart_limit_reached" => "Server restart limit reached",
+        "supervisor_stopped" => "Server supervisor stopped",
+        _ => return orbit_i18n::text(&humanize(event)).into_owned(),
+    };
+    orbit_i18n::text(key).into_owned()
 }
 
 fn humanize(value: &str) -> String {
@@ -271,6 +322,19 @@ mod tests {
         .unwrap()
         .unwrap();
         assert_eq!(error.code, "network");
+    }
+
+    #[test]
+    fn java_materialization_is_presented_as_file_assembly_not_archive_extraction() {
+        let progress = serde_json::json!({
+            "event": "java_materialized",
+            "completed": 12,
+            "total": 24
+        });
+        assert_eq!(
+            progress_label(&progress),
+            orbit_i18n::text("Assembling managed Java runtime files")
+        );
     }
 
     #[test]

@@ -1,8 +1,9 @@
 use std::collections::{BTreeMap, HashMap};
 
 use gpui::{
-    AnyElement, AppContext, Context, Entity, IntoElement, ParentElement, Render, SharedString,
-    Styled, Subscription, Task, Timer, Window, div, prelude::FluentBuilder as _, px,
+    AnyElement, AppContext, Context, Entity, InteractiveElement, IntoElement, ParentElement,
+    Render, SharedString, StatefulInteractiveElement, Styled, Subscription, Task, Timer, Window,
+    div, prelude::FluentBuilder as _, px,
 };
 use gpui_component::{
     ActiveTheme, Icon, Selectable, StyledExt,
@@ -160,8 +161,6 @@ pub(super) struct Inputs {
     pub orbit_binary: Entity<InputState>,
     pub launcher_binary: Entity<InputState>,
     pub remote_locator: Entity<InputState>,
-    pub launcher_config_value: Entity<InputState>,
-    pub orbit_config_value: Entity<InputState>,
     pub minecraft_move_destination: Entity<InputState>,
 }
 
@@ -202,8 +201,6 @@ impl Inputs {
                     .default_value(preferences.launcher_binary.display().to_string())
             }),
             remote_locator: input(window, cx, tr!("Remote locator").into_owned()),
-            launcher_config_value: input(window, cx, tr!("Setting value").into_owned()),
-            orbit_config_value: input(window, cx, tr!("Setting value").into_owned()),
             minecraft_move_destination: input(
                 window,
                 cx,
@@ -239,8 +236,6 @@ pub struct OrbitApp {
     pub(super) orbit_config: Vec<OrbitConfigEntry>,
     pub(super) orbit_config_path: Option<std::path::PathBuf>,
     pub(super) minecraft_directory: Option<MinecraftDirectory>,
-    pub(super) selected_launcher_config: Option<String>,
-    pub(super) selected_orbit_config: Option<String>,
     pub(super) latest_minecraft_release: Option<String>,
     pub(super) latest_minecraft_snapshot: Option<String>,
     pub(super) minecraft_version_type: usize,
@@ -345,8 +340,6 @@ impl OrbitApp {
             orbit_config: Vec::new(),
             orbit_config_path: None,
             minecraft_directory: None,
-            selected_launcher_config: None,
-            selected_orbit_config: None,
             latest_minecraft_release: None,
             latest_minecraft_snapshot: None,
             minecraft_version_type: 0,
@@ -415,6 +408,9 @@ impl OrbitApp {
     fn render_sidebar(&self, cx: &mut Context<Self>) -> AnyElement {
         let mut nav = v_flex().gap_1();
         for page in Page::ALL {
+            if page == Page::Accounts {
+                continue;
+            }
             if page == Page::Server && !self.is_server() {
                 continue;
             }
@@ -445,6 +441,90 @@ impl OrbitApp {
                     })),
             );
         }
+
+        let selected_account_id = self
+            .instance_detail
+            .as_ref()
+            .and_then(|detail| detail.selected_account_id.as_deref());
+        let active_account = selected_account_id
+            .and_then(|id| self.accounts.iter().find(|account| account.id == id))
+            .or_else(|| self.accounts.iter().find(|account| account.is_default));
+        let accounts_selected = self.preferences.page == Page::Accounts;
+        let account_entry = div()
+            .id("sidebar-account")
+            .w_full()
+            .p_2()
+            .rounded_lg()
+            .border_1()
+            .border_color(if accounts_selected {
+                cx.theme().primary.opacity(0.45)
+            } else {
+                cx.theme().border
+            })
+            .bg(if accounts_selected {
+                cx.theme().primary.opacity(0.1)
+            } else {
+                cx.theme().group_box
+            })
+            .cursor_pointer()
+            .hover(|style| style.bg(cx.theme().secondary))
+            .child(match active_account {
+                Some(account) => h_flex()
+                    .gap_2()
+                    .items_center()
+                    .child(components::account_avatar(
+                        account.skin_url.as_deref(),
+                        pages::account_initials(&account.profile_name),
+                        32.,
+                        cx,
+                    ))
+                    .child(
+                        v_flex()
+                            .min_w_0()
+                            .flex_1()
+                            .child(
+                                div()
+                                    .truncate()
+                                    .text_sm()
+                                    .font_medium()
+                                    .child(account.profile_name.clone()),
+                            )
+                            .child(
+                                div()
+                                    .truncate()
+                                    .text_xs()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child(pages::account_provider_label(&account.provider)),
+                            ),
+                    )
+                    .into_any_element(),
+                None => h_flex()
+                    .gap_2()
+                    .items_center()
+                    .child(components::icon_tile(OrbitIcon::Account, cx))
+                    .child(
+                        v_flex()
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .font_medium()
+                                    .child(tr!("Add account").into_owned()),
+                            )
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child(tr!("Required for client login").into_owned()),
+                            ),
+                    )
+                    .into_any_element(),
+            })
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.preferences.page = Page::Accounts;
+                this.account_flow = None;
+                this.save_preferences();
+                cx.notify();
+            }));
 
         v_flex()
             .w(px(202.))
@@ -477,7 +557,8 @@ impl OrbitApp {
                             ),
                     ),
             )
-            .child(nav)
+            .child(nav.flex_1())
+            .child(account_entry)
             .into_any_element()
     }
 

@@ -11,7 +11,7 @@ use super::super::{
     Confirmation, ConfirmationAction, OrbitApp, RuntimeFlow, RuntimeFlowMode, RuntimeFlowStep,
 };
 use crate::app::components as ui;
-use crate::app::controller::{human_bytes, loaders, title_case};
+use crate::app::controller::{loaders, title_case};
 use crate::assets::OrbitIcon;
 use crate::model::{LoaderVersion, MinecraftVersion};
 
@@ -33,26 +33,14 @@ fn render_dashboard(
     cx: &mut Context<OrbitApp>,
 ) -> impl IntoElement {
     let selected = app.selected_instance().cloned();
-    let actions = h_flex()
-        .gap_2()
-        .child(
-            Button::new("runtime-import")
-                .label(tr!("Import").into_owned())
-                .on_click(cx.listener(|this, _, _, cx| {
-                    this.runtime_flow = None;
-                    cx.notify();
-                })),
-        )
-        .child(
-            Button::new("runtime-create")
-                .icon(OrbitIcon::Plus)
-                .label(tr!("Create installation").into_owned())
-                .primary()
-                .on_click(cx.listener(|this, _, _, cx| {
-                    this.begin_runtime_flow(RuntimeFlowMode::Create);
-                    cx.notify();
-                })),
-        );
+    let actions = Button::new("runtime-create")
+        .icon(OrbitIcon::Plus)
+        .label(tr!("Create installation").into_owned())
+        .primary()
+        .on_click(cx.listener(|this, _, _, cx| {
+            this.begin_runtime_flow(RuntimeFlowMode::Create);
+            cx.notify();
+        }));
 
     let mut content = v_flex().gap_4();
     if let Some(instance) = selected {
@@ -176,11 +164,20 @@ fn render_dashboard(
                 ),
         );
     } else {
+        let create = Button::new("runtime-empty-create")
+            .icon(OrbitIcon::Plus)
+            .label(tr!("Create installation").into_owned())
+            .primary()
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.begin_runtime_flow(RuntimeFlowMode::Create);
+                cx.notify();
+            }))
+            .into_any_element();
         content = content.child(ui::themed_card(cx).child(ui::empty_state(
             OrbitIcon::Runtime,
             tr!("No managed installations").into_owned(),
             tr!("Create a client or server installation from the official Minecraft and Loader catalogs.").into_owned(),
-            None,
+            Some(create),
             cx,
         )));
     }
@@ -222,74 +219,7 @@ fn render_dashboard(
                             })),
                     ),
             ),
-        )
-        .child(ui::section_title(
-            tr!("Managed Java").into_owned(),
-            tr!("Shared runtimes installed automatically when required").into_owned(),
-            cx,
-        ));
-
-    let mut java_list = ui::themed_card(cx).p_0().gap_0();
-    if app.java_runtimes.is_empty() {
-        java_list = java_list.child(ui::empty_state(
-            OrbitIcon::Java,
-            tr!("No managed Java runtime stored").into_owned(),
-            tr!("Launcher will install the exact required Java component with the next runtime transaction.").into_owned(),
-            None,
-            cx,
-        ));
-    }
-    for (index, runtime) in app.java_runtimes.iter().cloned().enumerate() {
-        if index > 0 {
-            java_list = java_list.child(ui::divider(cx));
-        }
-        let verify = runtime.runtime_id.clone();
-        let remove = runtime.runtime_id.clone();
-        java_list = java_list.child(
-            h_flex()
-                .px_4()
-                .py_3()
-                .gap_3()
-                .items_center()
-                .child(ui::icon_tile(OrbitIcon::Java, cx))
-                .child(
-                    v_flex()
-                        .flex_1()
-                        .gap_1()
-                        .child(div().font_semibold().child(format!("Java {} · {}", runtime.major, runtime.version)))
-                        .child(div().text_xs().text_color(cx.theme().muted_foreground).child(format!(
-                            "{} · {} · {} · {} · {} {}",
-                            runtime.provider,
-                            runtime.component,
-                            runtime.platform,
-                            human_bytes(runtime.bytes),
-                            runtime.files,
-                            tr!("files")
-                        ))),
-                )
-                .when(runtime.verified == Some(true), |row| row.child(ui::pill(tr!("Verified").into_owned(), cx.theme().success.opacity(0.13), cx.theme().success)))
-                .child(
-                    Button::new(("java-verify", index))
-                        .label(tr!("Verify").into_owned())
-                        .ghost()
-                        .on_click(cx.listener(move |this, _, _, cx| { this.verify_java_runtime(&verify); cx.notify(); })),
-                )
-                .child(
-                    Button::new(("java-remove", index))
-                        .icon(OrbitIcon::Trash)
-                        .ghost()
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.confirmation = Some(Confirmation {
-                                title: tr!("Remove managed Java runtime?").into_owned(),
-                                body: tr!("Launcher will refuse removal while any registered installation still references it.").into_owned(),
-                                action: ConfirmationAction::RemoveJavaRuntime(remove.clone()),
-                            });
-                            cx.notify();
-                        })),
-                ),
         );
-    }
-    content = content.child(java_list);
 
     ui::page(
         tr!("Installations").into_owned(),
@@ -317,7 +247,9 @@ fn render_flow(
         .gap_4()
         .child(render_steps(flow.step, cx))
         .child(match flow.step {
-            RuntimeFlowStep::Minecraft => render_minecraft_step(app, cx, flow).into_any_element(),
+            RuntimeFlowStep::Minecraft => {
+                render_minecraft_step(app, window, cx, flow).into_any_element()
+            }
             RuntimeFlowStep::Components => render_components_step(app, cx, flow).into_any_element(),
             RuntimeFlowStep::Review => render_review_step(app, window, cx, flow).into_any_element(),
         });
@@ -376,6 +308,7 @@ fn render_steps(active: RuntimeFlowStep, cx: &gpui::App) -> impl IntoElement {
 
 fn render_minecraft_step(
     app: &mut OrbitApp,
+    _window: &mut Window,
     cx: &mut Context<OrbitApp>,
     flow: RuntimeFlow,
 ) -> impl IntoElement {
@@ -387,8 +320,48 @@ fn render_minecraft_step(
     } else {
         &app.runtime_edit.minecraft
     };
-    let list = v_flex()
-        .gap_3()
+    let mut list = v_flex().gap_3();
+    if flow.mode == RuntimeFlowMode::Create {
+        list = list
+            .child(ui::section_title(
+                tr!("Installation type").into_owned(),
+                tr!(
+                    "Client instances use the managed repository; servers use an explicit directory"
+                )
+                .into_owned(),
+                cx,
+            ))
+            .child(
+                h_flex()
+                    .gap_2()
+                    .child(
+                        Button::new("new-kind-client")
+                            .icon(OrbitIcon::Runtime)
+                            .label(tr!("Client").into_owned())
+                            .selected(app.new_instance.kind == 0)
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.new_instance.kind = 0;
+                                cx.notify();
+                            })),
+                    )
+                    .child(
+                        Button::new("new-kind-server")
+                            .icon(OrbitIcon::Server)
+                            .label(tr!("Server").into_owned())
+                            .selected(app.new_instance.kind == 1)
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.new_instance.kind = 1;
+                                cx.notify();
+                            })),
+                    ),
+            )
+            .child(ui::section_title(
+                tr!("Minecraft version").into_owned(),
+                tr!("Select an exact entry from Mojang's official catalog").into_owned(),
+                cx,
+            ));
+    }
+    let list = list
         .child(
             h_flex()
                 .gap_2()
@@ -438,6 +411,7 @@ fn render_minecraft_step(
             rows = rows.child(ui::divider(cx));
         }
         let version_id = version.id.clone();
+        let name_input = app.inputs.new_name.clone();
         rows = rows.child(
             Button::new(("minecraft-version", index))
                 .ghost()
@@ -470,10 +444,16 @@ fn render_minecraft_step(
                                 .child(version.release_time),
                         ),
                 )
-                .on_click(cx.listener(move |this, _, _, cx| {
+                .on_click(cx.listener(move |this, _, window, cx| {
                     if flow.mode == RuntimeFlowMode::Create {
                         this.new_instance.minecraft = version_id.clone();
                         this.new_instance.loader_version.clear();
+                        let suggestion = suggested_instance_name(
+                            &version_id,
+                            loaders()[this.new_instance.loader],
+                        );
+                        this.new_instance.name = suggestion.clone();
+                        name_input.update(cx, |input, cx| input.set_value(suggestion, window, cx));
                     } else {
                         this.runtime_edit.minecraft = version_id.clone();
                         this.runtime_edit.loader_version.clear();
@@ -526,13 +506,24 @@ fn render_components_step(
                 .flex_wrap()
                 .children(loaders().into_iter().enumerate().map(|(index, loader)| {
                     let minecraft = minecraft.clone();
+                    let name_input = app.inputs.new_name.clone();
                     Button::new(("loader", index))
                         .label(title_case(loader))
                         .selected(loader_index == index)
-                        .on_click(cx.listener(move |this, _, _, cx| {
+                        .on_click(cx.listener(move |this, _, window, cx| {
                             if flow.mode == RuntimeFlowMode::Create {
+                                let current = name_input.read(cx).value().to_string();
+                                let replace_name =
+                                    current.trim().is_empty() || current == this.new_instance.name;
                                 this.new_instance.loader = index;
                                 this.new_instance.loader_version.clear();
+                                if replace_name {
+                                    let suggestion = suggested_instance_name(&minecraft, loader);
+                                    this.new_instance.name = suggestion.clone();
+                                    name_input.update(cx, |input, cx| {
+                                        input.set_value(suggestion, window, cx)
+                                    });
+                                }
                             } else {
                                 this.runtime_edit.loader = index;
                                 this.runtime_edit.loader_version.clear();
@@ -721,35 +712,12 @@ fn render_review_step(
         let name = app.inputs.new_name.clone();
         let server_directory = app.inputs.new_server_directory.clone();
         let directory_browse = server_directory.clone();
-        body = body
-            .child(ui::field(
-                tr!("Installation name").into_owned(),
-                tr!("Used by global Launcher instance selection").into_owned(),
-                &name,
-                cx,
-            ))
-            .child(
-                h_flex()
-                    .gap_2()
-                    .child(
-                        Button::new("new-kind-client")
-                            .label(tr!("Client").into_owned())
-                            .selected(app.new_instance.kind == 0)
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.new_instance.kind = 0;
-                                cx.notify();
-                            })),
-                    )
-                    .child(
-                        Button::new("new-kind-server")
-                            .label(tr!("Server").into_owned())
-                            .selected(app.new_instance.kind == 1)
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.new_instance.kind = 1;
-                                cx.notify();
-                            })),
-                    ),
-            );
+        body = body.child(ui::field(
+            tr!("Installation name").into_owned(),
+            tr!("Used by global Launcher instance selection").into_owned(),
+            &name,
+            cx,
+        ));
         if app.new_instance.kind == 0 {
             body = body.child(
                 ui::themed_card(cx).child(
@@ -852,4 +820,12 @@ fn render_review_step(
         );
     }
     body
+}
+
+fn suggested_instance_name(minecraft: &str, loader: &str) -> String {
+    if loader == "vanilla" {
+        minecraft.to_string()
+    } else {
+        format!("{}-{}", minecraft, title_case(loader))
+    }
 }

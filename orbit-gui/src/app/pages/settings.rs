@@ -1,15 +1,23 @@
-use gpui::{Context, IntoElement, ParentElement, Styled, Window, div, px};
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
+
+use gpui::{
+    App, AppContext, Context, Entity, IntoElement, ParentElement, SharedString, Styled, Window,
+    div, px,
+};
 use gpui_component::{
     ActiveTheme, Selectable, StyledExt,
     button::{Button, ButtonVariants},
     h_flex,
-    input::Input,
+    input::{Input, InputState},
+    setting::{SettingField, SettingGroup, SettingItem, SettingPage, Settings},
     v_flex,
 };
 
-use super::super::OrbitApp;
+use super::super::{Confirmation, ConfirmationAction, OrbitApp};
 use crate::app::components as ui;
 use crate::assets::OrbitIcon;
+use crate::model::{LauncherConfigEntry, OrbitConfigEntry};
 use crate::theme::{AccentTheme, ThemeMode};
 
 pub(super) fn render(
@@ -17,432 +25,856 @@ pub(super) fn render(
     _window: &mut Window,
     cx: &mut Context<OrbitApp>,
 ) -> impl IntoElement {
-    let orbit_input = app.inputs.orbit_binary.clone();
-    let launcher_input = app.inputs.launcher_binary.clone();
-    let orbit_read = orbit_input.clone();
-    let launcher_read = launcher_input.clone();
-    let orbit_browse = orbit_input.clone();
-    let launcher_browse = launcher_input.clone();
+    let orbit_available = app.preferences.orbit_binary.is_file();
+    let app = cx.entity();
+    let pages = [
+        appearance_page(&app),
+        launcher_page(&app),
+        java_page(&app),
+        orbit_page(&app, orbit_available),
+    ];
 
-    let move_input = app.inputs.minecraft_move_destination.clone();
-    let move_read = move_input.clone();
-    let move_browse = move_input.clone();
-    let managed_directory = app
-        .minecraft_directory
-        .as_ref()
-        .map(|directory| directory.directory.display().to_string())
-        .unwrap_or_else(|| tr!("Loading…").into_owned());
-    let managed_directory_mode = app
-        .minecraft_directory
-        .as_ref()
-        .map(|directory| {
-            if directory.explicit {
-                tr!("Custom location").into_owned()
-            } else {
-                tr!("Platform default").into_owned()
-            }
-        })
-        .unwrap_or_default();
+    div().size_full().child(
+        Settings::new("orbit-settings")
+            .sidebar_width(px(196.))
+            .pages(pages),
+    )
+}
 
-    let launcher_config_value = app.inputs.launcher_config_value.clone();
-    let launcher_config_read = launcher_config_value.clone();
-    let mut launcher_keys = h_flex().gap_2().flex_wrap();
-    for (index, entry) in app.launcher_config.clone().into_iter().enumerate() {
-        let key = entry.key.clone();
-        let label = if entry.explicit {
-            tr!("%{key} · custom", key = entry.key)
-        } else {
-            tr!("%{key} · default", key = entry.key)
-        };
-        launcher_keys = launcher_keys.child(
-            Button::new(("launcher-setting", index))
-                .label(label)
-                .selected(app.selected_launcher_config.as_deref() == Some(entry.key.as_str()))
-                .on_click(cx.listener(move |this, _, window, cx| {
-                    this.select_launcher_config(key.clone(), window, cx);
-                    cx.notify();
+fn appearance_page(app: &Entity<OrbitApp>) -> SettingPage {
+    SettingPage::new(tr!("General").into_owned())
+        .description(
+            tr!("Language, visual style, and the exact programs controlled by this thin GUI")
+                .into_owned(),
+        )
+        .group(
+            SettingGroup::new()
+                .title(tr!("Presentation").into_owned())
+                .item(language_item(app))
+                .item(theme_item(app))
+                .item(accent_item(app)),
+        )
+        .group(
+            SettingGroup::new()
+                .title(tr!("Command-line programs").into_owned())
+                .description(
+                    tr!("The GUI invokes these programs through their JSON protocol; it does not duplicate their business logic.").into_owned(),
+                )
+                .item(binary_paths_item(app)),
+        )
+}
+
+fn launcher_page(app: &Entity<OrbitApp>) -> SettingPage {
+    SettingPage::new(tr!("Launcher").into_owned())
+        .description(
+            tr!("Minecraft storage, download behavior, installer limits, and authentication")
+                .into_owned(),
+        )
+        .group(
+            SettingGroup::new()
+                .title(tr!("Managed Minecraft repository").into_owned())
+                .description(
+                    tr!("All clients share immutable assets and libraries while each versions/<instance> directory remains isolated.").into_owned(),
+                )
+                .item(minecraft_directory_item(app)),
+        )
+        .group(
+            SettingGroup::new()
+                .title(tr!("Downloads and installation").into_owned())
+                .items([
+                    launcher_editor_item(
+                        app,
+                        "network.concurrency",
+                        tr!("Parallel downloads").into_owned(),
+                        tr!("Maximum number of artifacts transferred concurrently").into_owned(),
+                        false,
+                    ),
+                    launcher_editor_item(
+                        app,
+                        "network.connect-timeout-seconds",
+                        tr!("Connection timeout").into_owned(),
+                        tr!("Seconds allowed while establishing an HTTP connection").into_owned(),
+                        false,
+                    ),
+                    launcher_editor_item(
+                        app,
+                        "network.request-timeout-seconds",
+                        tr!("Request timeout").into_owned(),
+                        tr!("Seconds allowed for one metadata or artifact request").into_owned(),
+                        false,
+                    ),
+                    launcher_editor_item(
+                        app,
+                        "installer.timeout-seconds",
+                        tr!("Loader installer timeout").into_owned(),
+                        tr!("Maximum runtime of the official Forge or NeoForge installer").into_owned(),
+                        false,
+                    ),
+                    launcher_editor_item(
+                        app,
+                        "cache.max-size",
+                        tr!("Artifact cache capacity").into_owned(),
+                        tr!("LRU limit such as 8 GiB; cleanup runs after each command").into_owned(),
+                        false,
+                    ),
+                ]),
+        )
+        .group(
+            SettingGroup::new()
+                .title(tr!("Authentication").into_owned())
+                .item(launcher_editor_item(
+                    app,
+                    "microsoft.client-id",
+                    tr!("Microsoft application client ID").into_owned(),
+                    tr!("Optional registered application ID used for Microsoft device authorization")
+                        .into_owned(),
+                    false,
+                )),
+        )
+        .group(
+            SettingGroup::new()
+                .title(tr!("Independent CLI output").into_owned())
+                .description(
+                    tr!("These options affect orbit-launcher when it is used directly in a terminal, not this GUI.").into_owned(),
+                )
+                .items([
+                    launcher_choice_item(
+                        app,
+                        "ui.progress-bar",
+                        tr!("Progress display").into_owned(),
+                        tr!("Terminal progress rendering mode").into_owned(),
+                        "auto",
+                        &[("auto", tr!("Automatic").into_owned()), ("always", tr!("Always").into_owned()), ("never", tr!("Never").into_owned())],
+                    ),
+                    launcher_choice_item(
+                        app,
+                        "ui.color",
+                        tr!("Terminal color").into_owned(),
+                        tr!("ANSI color policy for direct CLI use").into_owned(),
+                        "auto",
+                        &[("auto", tr!("Automatic").into_owned()), ("always", tr!("Always").into_owned()), ("never", tr!("Never").into_owned())],
+                    ),
+                ]),
+        )
+}
+
+fn java_page(app: &Entity<OrbitApp>) -> SettingPage {
+    SettingPage::new("Java")
+        .description(
+            tr!("Default provider and verified managed runtimes shared by Launcher instances")
+                .into_owned(),
+        )
+        .group(
+            SettingGroup::new()
+                .title(tr!("Runtime policy").into_owned())
+                .item(launcher_choice_item(
+                    app,
+                    "java.default-provider",
+                    tr!("Default Java provider").into_owned(),
+                    tr!("Used when an instance selects the automatic or managed Java policy")
+                        .into_owned(),
+                    "mojang",
+                    &[
+                        ("mojang", "Mojang".to_string()),
+                        ("temurin", "Eclipse Temurin".to_string()),
+                    ],
+                )),
+        )
+        .group(
+            SettingGroup::new()
+                .title(tr!("Managed runtimes").into_owned())
+                .description(
+                    tr!("Files are verified against the Launcher inventory before they are used.")
+                        .into_owned(),
+                )
+                .item(java_inventory_item(app)),
+        )
+}
+
+fn orbit_page(app: &Entity<OrbitApp>, available: bool) -> SettingPage {
+    let page = SettingPage::new("Orbit").description(
+        tr!("Package resolution, provider credentials, network policy, and the JAR cache")
+            .into_owned(),
+    );
+    if !available {
+        return page.group(
+            SettingGroup::new()
+                .title(tr!("Orbit is not installed").into_owned())
+                .item(SettingItem::render(|_, _, cx| {
+                    ui::empty_state(
+                        OrbitIcon::Settings,
+                        tr!("Orbit is not installed").into_owned(),
+                        tr!("Install Orbit or select its exact executable on the General page to manage its global configuration.").into_owned(),
+                        None,
+                        cx,
+                    )
                 })),
         );
     }
-    let launcher_selected = app
-        .selected_launcher_config
-        .as_deref()
-        .and_then(|key| app.launcher_config.iter().find(|entry| entry.key == key))
-        .cloned();
+    page
+        .group(
+            SettingGroup::new()
+                .title(tr!("Resolver").into_owned())
+                .items([
+                    orbit_editor_item(
+                        app,
+                        "core.default-instance",
+                        tr!("Default Orbit instance").into_owned(),
+                        tr!("Instance used by standalone Orbit CLI commands when no local project is selected")
+                            .into_owned(),
+                        false,
+                    ),
+                    orbit_editor_item(
+                        app,
+                        "core.max-concurrent-downloads",
+                        tr!("Parallel mod downloads").into_owned(),
+                        tr!("Maximum concurrent provider and JAR transfers").into_owned(),
+                        false,
+                    ),
+                    orbit_choice_item(
+                        app,
+                        "core.language",
+                        tr!("Standalone Orbit language").into_owned(),
+                        tr!("Default locale used when Orbit is called outside this GUI").into_owned(),
+                        "system",
+                        &[("system", tr!("Follow system").into_owned()), ("en", "English".to_string()), ("zh-CN", "简体中文".to_string())],
+                    ),
+                ]),
+        )
+        .group(
+            SettingGroup::new()
+                .title(tr!("Network").into_owned())
+                .items([
+                    orbit_editor_item(
+                        app,
+                        "network.timeout",
+                        tr!("Network timeout").into_owned(),
+                        tr!("Seconds allowed for provider requests and downloads").into_owned(),
+                        false,
+                    ),
+                    orbit_editor_item(
+                        app,
+                        "network.max-retries",
+                        tr!("Retry limit").into_owned(),
+                        tr!("Maximum retries after a retryable network failure").into_owned(),
+                        false,
+                    ),
+                    orbit_editor_item(
+                        app,
+                        "network.proxy",
+                        tr!("Proxy URL").into_owned(),
+                        tr!("Optional explicit network proxy used by providers").into_owned(),
+                        false,
+                    ),
+                ]),
+        )
+        .group(
+            SettingGroup::new()
+                .title(tr!("Provider credentials").into_owned())
+                .description(
+                    tr!("Secrets are never displayed after loading; entering a new value replaces the saved credential.").into_owned(),
+                )
+                .items([
+                    orbit_editor_item(
+                        app,
+                        "auth.curseforge-api-key",
+                        tr!("CurseForge API key").into_owned(),
+                        tr!("Required before the CurseForge provider can be used").into_owned(),
+                        true,
+                    ),
+                    orbit_editor_item(
+                        app,
+                        "auth.modrinth-token",
+                        tr!("Modrinth token").into_owned(),
+                        tr!("Optional token for authenticated Modrinth requests").into_owned(),
+                        true,
+                    ),
+                ]),
+        )
+        .group(
+            SettingGroup::new()
+                .title(tr!("JAR cache").into_owned())
+                .items([
+                    orbit_editor_item(
+                        app,
+                        "cache.dir",
+                        tr!("Cache directory").into_owned(),
+                        tr!("Optional absolute location for downloaded and analyzed JARs")
+                            .into_owned(),
+                        false,
+                    ),
+                    orbit_editor_item(
+                        app,
+                        "cache.capacity-mib",
+                        tr!("Cache capacity").into_owned(),
+                        tr!("LRU capacity in MiB, enforced after every command").into_owned(),
+                        false,
+                    ),
+                ]),
+        )
+        .group(
+            SettingGroup::new()
+                .title(tr!("Independent CLI output").into_owned())
+                .items([
+                    orbit_choice_item(
+                        app,
+                        "ui.progress-bar",
+                        tr!("Progress display").into_owned(),
+                        tr!("Terminal progress rendering mode").into_owned(),
+                        "modern",
+                        &[("modern", tr!("Modern").into_owned()), ("plain", tr!("Plain").into_owned()), ("off", tr!("Off").into_owned())],
+                    ),
+                    orbit_choice_item(
+                        app,
+                        "ui.color",
+                        tr!("Terminal color").into_owned(),
+                        tr!("ANSI color policy for direct CLI use").into_owned(),
+                        "auto",
+                        &[("auto", tr!("Automatic").into_owned()), ("always", tr!("Always").into_owned()), ("never", tr!("Never").into_owned())],
+                    ),
+                ]),
+        )
+}
 
-    let orbit_config_value = app.inputs.orbit_config_value.clone();
-    let orbit_config_read = orbit_config_value.clone();
-    let mut orbit_keys = h_flex().gap_2().flex_wrap();
-    for (index, entry) in app.orbit_config.clone().into_iter().enumerate() {
-        let key = entry.key.clone();
-        orbit_keys = orbit_keys.child(
-            Button::new(("orbit-setting", index))
-                .label(entry.key.clone())
-                .selected(app.selected_orbit_config.as_deref() == Some(entry.key.as_str()))
-                .on_click(cx.listener(move |this, _, window, cx| {
-                    this.select_orbit_config(key.clone(), window, cx);
-                    cx.notify();
-                })),
-        );
-    }
-    let orbit_selected = app
-        .selected_orbit_config
-        .as_deref()
-        .and_then(|key| app.orbit_config.iter().find(|entry| entry.key == key))
-        .cloned();
-
-    let mut content = v_flex()
-        .w_full()
-        .max_w(px(1040.))
-        .gap_4()
-        .child(ui::section_title(
-            tr!("Language").into_owned(),
-            tr!("Shared by GUI and every CLI subprocess").into_owned(),
-            cx,
-        ))
-        .child(
-            ui::compact_card(cx).child(
-                h_flex().gap_2().flex_wrap().children(
-                    orbit_i18n::LanguageMode::ALL.into_iter().enumerate().map(
-                        |(index, language)| {
-                            Button::new(("language", index))
-                                .label(language.label().into_owned())
-                                .selected(app.preferences.language == language)
-                                .on_click(cx.listener(move |this, _, _, cx| {
+fn language_item(app: &Entity<OrbitApp>) -> SettingItem {
+    let app = app.clone();
+    SettingItem::new(
+        tr!("Language").into_owned(),
+        SettingField::render(move |_, _, cx| {
+            let selected = app.read(cx).preferences.language;
+            h_flex()
+                .gap_1()
+                .children(orbit_i18n::LanguageMode::ALL.into_iter().enumerate().map(
+                    |(index, language)| {
+                        let app = app.clone();
+                        Button::new(("setting-language", index))
+                            .label(language.label().into_owned())
+                            .selected(selected == language)
+                            .on_click(move |_, _, cx| {
+                                app.update(cx, |this, cx| {
                                     this.set_language(language);
                                     cx.notify();
-                                }))
-                        },
-                    ),
-                ),
-            ),
-        )
-        .child(ui::section_title(
-            tr!("Appearance").into_owned(),
-            tr!("Theme mode and accent are persisted independently").into_owned(),
-            cx,
-        ))
-        .child(
-            ui::compact_card(cx)
-                .child(h_flex().gap_2().flex_wrap().children(
-                    ThemeMode::ALL.into_iter().enumerate().map(|(index, mode)| {
-                        Button::new(("theme", index))
-                            .label(mode.label().into_owned())
-                            .selected(app.preferences.theme_mode == mode)
-                            .on_click(cx.listener(move |this, _, window, cx| {
+                                });
+                            })
+                    },
+                ))
+        }),
+    )
+    .description(tr!("Used by the GUI and passed explicitly to every CLI subprocess").into_owned())
+}
+
+fn theme_item(app: &Entity<OrbitApp>) -> SettingItem {
+    let app = app.clone();
+    SettingItem::new(
+        tr!("Color mode").into_owned(),
+        SettingField::render(move |_, _, cx| {
+            let selected = app.read(cx).preferences.theme_mode;
+            h_flex()
+                .gap_1()
+                .children(ThemeMode::ALL.into_iter().enumerate().map(|(index, mode)| {
+                    let app = app.clone();
+                    Button::new(("setting-theme", index))
+                        .label(mode.label().into_owned())
+                        .selected(selected == mode)
+                        .on_click(move |_, window, cx| {
+                            app.update(cx, |this, cx| {
                                 this.set_theme(mode, window, cx);
                                 cx.notify();
-                            }))
-                    }),
-                ))
-                .child(ui::divider(cx))
-                .child(
-                    h_flex().gap_2().flex_wrap().children(
-                        AccentTheme::ALL
-                            .into_iter()
-                            .enumerate()
-                            .map(|(index, accent)| {
-                                Button::new(("accent", index))
-                                    .label(accent.label().into_owned())
-                                    .selected(app.preferences.accent_theme == accent)
-                                    .on_click(cx.listener(move |this, _, window, cx| {
+                            });
+                        })
+                }))
+        }),
+    )
+    .description(tr!("Follow the operating system or force a light or dark palette").into_owned())
+}
+
+fn accent_item(app: &Entity<OrbitApp>) -> SettingItem {
+    let app = app.clone();
+    SettingItem::new(
+        tr!("Accent color").into_owned(),
+        SettingField::render(move |_, _, cx| {
+            let selected = app.read(cx).preferences.accent_theme;
+            h_flex()
+                .gap_1()
+                .children(
+                    AccentTheme::ALL
+                        .into_iter()
+                        .enumerate()
+                        .map(|(index, accent)| {
+                            let app = app.clone();
+                            Button::new(("setting-accent", index))
+                                .label(accent.label().into_owned())
+                                .selected(selected == accent)
+                                .on_click(move |_, window, cx| {
+                                    app.update(cx, |this, cx| {
                                         this.set_accent(accent, window, cx);
                                         cx.notify();
-                                    }))
-                            }),
-                    ),
-                ),
-        )
-        .child(ui::section_title(
-            tr!("CLI programs").into_owned(),
-            tr!("Exact paths only; Orbit GUI never scans PATH or reads business files")
-                .into_owned(),
-            cx,
-        ))
-        .child(
-            ui::themed_card(cx)
-                .child(
-                    v_flex()
-                        .gap_1p5()
-                        .child(div().text_sm().font_semibold().child("Orbit"))
-                        .child(
-                            h_flex()
-                                .gap_2()
-                                .child(Input::new(&orbit_input).flex_1())
-                                .child(
-                                    Button::new("orbit-path-browse")
-                                        .label(tr!("Browse").into_owned())
-                                        .on_click(cx.listener(move |_, _, window, cx| {
-                                            if let Some(path) = rfd::FileDialog::new().pick_file() {
-                                                orbit_browse.update(cx, |state, cx| {
-                                                    state.set_value(
-                                                        path.display().to_string(),
-                                                        window,
-                                                        cx,
-                                                    )
-                                                });
-                                            }
-                                        })),
-                                ),
-                        ),
+                                    });
+                                })
+                        }),
                 )
-                .child(
-                    v_flex()
-                        .gap_1p5()
-                        .child(div().text_sm().font_semibold().child("Orbit Launcher"))
-                        .child(
-                            h_flex()
-                                .gap_2()
-                                .child(Input::new(&launcher_input).flex_1())
-                                .child(
-                                    Button::new("launcher-path-browse")
-                                        .label(tr!("Browse").into_owned())
-                                        .on_click(cx.listener(move |_, _, window, cx| {
-                                            if let Some(path) = rfd::FileDialog::new().pick_file() {
-                                                launcher_browse.update(cx, |state, cx| {
-                                                    state.set_value(
-                                                        path.display().to_string(),
-                                                        window,
-                                                        cx,
-                                                    )
-                                                });
-                                            }
-                                        })),
-                                ),
-                        ),
-                )
-                .child(
-                    h_flex().justify_end().child(
-                        Button::new("paths-save")
-                            .icon(OrbitIcon::Check)
-                            .label(tr!("Save and refresh").into_owned())
-                            .primary()
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                let orbit = orbit_read.read(cx).value().trim().to_string();
-                                let launcher = launcher_read.read(cx).value().trim().to_string();
+        }),
+    )
+    .description(tr!("Applied consistently to navigation, selections, and progress").into_owned())
+}
+
+fn binary_paths_item(app: &Entity<OrbitApp>) -> SettingItem {
+    let app = app.clone();
+    SettingItem::render(move |_, _, cx| {
+        let orbit_input = app.read(cx).inputs.orbit_binary.clone();
+        let launcher_input = app.read(cx).inputs.launcher_binary.clone();
+        let orbit_browse = orbit_input.clone();
+        let launcher_browse = launcher_input.clone();
+        let orbit_read = orbit_input.clone();
+        let launcher_read = launcher_input.clone();
+        let save_app = app.clone();
+        v_flex()
+            .gap_3()
+            .child(path_row("Orbit", orbit_input, orbit_browse))
+            .child(path_row("Orbit Launcher", launcher_input, launcher_browse))
+            .child(
+                h_flex().justify_end().child(
+                    Button::new("settings-save-programs")
+                        .icon(OrbitIcon::Check)
+                        .label(tr!("Save and refresh").into_owned())
+                        .primary()
+                        .on_click(move |_, _, cx| {
+                            let orbit = orbit_read.read(cx).value().trim().to_string();
+                            let launcher = launcher_read.read(cx).value().trim().to_string();
+                            save_app.update(cx, |this, cx| {
                                 this.save_binary_paths(orbit, launcher);
                                 cx.notify();
-                            })),
-                    ),
+                            });
+                        }),
                 ),
-        );
-
-    if app.preferences.launcher_binary.is_file() {
-        content = content
-            .child(ui::section_title(
-                tr!("Minecraft directory").into_owned(),
-                tr!("One managed repository; every client has an isolated versions directory")
-                    .into_owned(),
-                cx,
-            ))
-            .child(
-                ui::themed_card(cx)
-                    .child(ui::key_value(
-                        tr!("Current location").into_owned(),
-                        managed_directory,
-                        cx,
-                    ))
-                    .child(ui::key_value(
-                        tr!("Location policy").into_owned(),
-                        managed_directory_mode,
-                        cx,
-                    ))
-                    .child(ui::divider(cx))
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(cx.theme().muted_foreground)
-                            .child(
-                                tr!("Moving relocates the complete repository and updates every registered client atomically. Server directories are not moved.").into_owned(),
-                            ),
-                    )
-                    .child(
-                        h_flex()
-                            .gap_2()
-                            .child(Input::new(&move_input).flex_1().cleanable(true))
-                            .child(
-                                Button::new("minecraft-directory-browse")
-                                    .label(tr!("Browse").into_owned())
-                                    .on_click(cx.listener(move |_, _, window, cx| {
-                                        if let Some(path) = rfd::FileDialog::new().pick_folder() {
-                                            move_browse.update(cx, |state, cx| {
-                                                state.set_value(
-                                                    path.display().to_string(),
-                                                    window,
-                                                    cx,
-                                                )
-                                            });
-                                        }
-                                    })),
-                            )
-                            .child(
-                                Button::new("minecraft-directory-move")
-                                    .label(tr!("Move repository").into_owned())
-                                    .primary()
-                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                        let destination =
-                                            move_read.read(cx).value().trim().to_string();
-                                        this.move_minecraft_directory(destination);
-                                        cx.notify();
-                                    })),
-                            ),
-                    ),
             )
-            .child(ui::section_title(
-                tr!("Launcher configuration").into_owned(),
-                tr!("Read and written through orbit-launcher config").into_owned(),
-                cx,
-            ))
-            .child(
-                ui::themed_card(cx)
-                    .child(launcher_keys)
-                    .child(ui::divider(cx))
-                    .children(launcher_selected.map(|entry| {
-                        v_flex()
-                            .gap_2()
-                            .child(ui::key_value(
-                                tr!("Selected setting").into_owned(),
-                                entry.key,
-                                cx,
-                            ))
-                            .child(Input::new(&launcher_config_value).w_full().cleanable(true))
-                            .child(
-                                h_flex()
-                                    .justify_end()
-                                    .gap_2()
-                                    .child(
-                                        Button::new("launcher-config-reset")
-                                            .label(tr!("Restore default").into_owned())
-                                            .on_click(cx.listener(|this, _, _, cx| {
-                                                this.unset_launcher_config();
-                                                cx.notify();
-                                            })),
-                                    )
-                                    .child(
-                                        Button::new("launcher-config-save")
-                                            .label(tr!("Apply").into_owned())
-                                            .primary()
-                                            .on_click(cx.listener(move |this, _, _, cx| {
-                                                let value = launcher_config_read
-                                                    .read(cx)
-                                                    .value()
-                                                    .trim()
-                                                    .to_string();
-                                                this.set_launcher_config(value);
-                                                cx.notify();
-                                            })),
-                                    ),
-                            )
-                    })),
-            );
-    }
+    })
+}
 
-    content = content.child(ui::section_title(
-        tr!("Orbit configuration").into_owned(),
-        tr!("Available only when the Orbit executable is installed").into_owned(),
-        cx,
-    ));
-    if app.preferences.orbit_binary.is_file() {
-        let path = app
-            .orbit_config_path
+fn path_row(
+    label: &'static str,
+    input: Entity<InputState>,
+    browse_input: Entity<InputState>,
+) -> impl IntoElement {
+    v_flex()
+        .gap_1()
+        .child(div().text_sm().font_medium().child(label))
+        .child(
+            h_flex().gap_2().child(Input::new(&input).flex_1()).child(
+                Button::new(SharedString::from(format!(
+                    "settings-browse-program:{label}"
+                )))
+                .label(tr!("Browse").into_owned())
+                .on_click(move |_, window, cx| {
+                    if let Some(path) = rfd::FileDialog::new().pick_file() {
+                        browse_input.update(cx, |state, cx| {
+                            state.set_value(path.display().to_string(), window, cx)
+                        });
+                    }
+                }),
+            ),
+        )
+}
+
+fn minecraft_directory_item(app: &Entity<OrbitApp>) -> SettingItem {
+    let app = app.clone();
+    SettingItem::render(move |_, _, cx| {
+        let directory = app.read(cx).minecraft_directory.clone();
+        let input = app.read(cx).inputs.minecraft_move_destination.clone();
+        let browse = input.clone();
+        let read = input.clone();
+        let move_app = app.clone();
+        let current = directory
             .as_ref()
-            .map(|path| path.display().to_string())
+            .map(|value| value.directory.display().to_string())
+            .unwrap_or_else(|| tr!("Unavailable").into_owned());
+        let policy = directory
+            .as_ref()
+            .map(|value| {
+                if value.explicit {
+                    tr!("Custom location").into_owned()
+                } else {
+                    tr!("Platform default").into_owned()
+                }
+            })
             .unwrap_or_default();
-        content = content.child(
-            ui::themed_card(cx)
-                .child(ui::key_value(
-                    tr!("Configuration file").into_owned(),
-                    path,
-                    cx,
-                ))
-                .child(orbit_keys)
-                .child(ui::divider(cx))
-                .children(orbit_selected.map(|entry| {
-                    let detail = if entry.sensitive {
-                        tr!("Sensitive value; leave blank until replacing it").into_owned()
-                    } else {
-                        tr!("Value type: %{kind}", kind = entry.value_type)
-                    };
-                    v_flex()
-                        .gap_2()
-                        .child(ui::key_value(
-                            tr!("Selected setting").into_owned(),
-                            entry.key,
-                            cx,
-                        ))
-                        .child(
-                            div()
-                                .text_xs()
-                                .text_color(cx.theme().muted_foreground)
-                                .child(detail),
-                        )
-                        .child(Input::new(&orbit_config_value).w_full().cleanable(true))
-                        .child(
-                            h_flex()
-                                .justify_end()
-                                .gap_2()
-                                .child(
-                                    Button::new("orbit-config-reset")
-                                        .label(tr!("Restore default").into_owned())
-                                        .on_click(cx.listener(|this, _, _, cx| {
-                                            this.unset_orbit_config();
-                                            cx.notify();
-                                        })),
-                                )
-                                .child(
-                                    Button::new("orbit-config-save")
-                                        .label(tr!("Apply").into_owned())
-                                        .primary()
-                                        .on_click(cx.listener(move |this, _, _, cx| {
-                                            let value = orbit_config_read
-                                                .read(cx)
-                                                .value()
-                                                .trim()
-                                                .to_string();
-                                            this.set_orbit_config(value);
-                                            cx.notify();
-                                        })),
-                                ),
-                        )
-                })),
-        );
-    } else {
-        content = content.child(
-            ui::compact_card(cx)
-                .child(div().font_semibold().child(tr!("Orbit is not installed").into_owned()))
-                .child(
-                    div()
-                        .text_sm()
-                        .text_color(cx.theme().muted_foreground)
-                        .child(
-                            tr!("Install Orbit or select its exact executable above to manage its global configuration.").into_owned(),
-                        ),
-                ),
-        );
-    }
-
-    content = content.child(
-        ui::compact_card(cx)
-            .child(
-                div()
-                    .font_semibold()
-                    .child(tr!("Native interface stack").into_owned()),
-            )
+        v_flex()
+            .gap_3()
+            .child(ui::key_value(tr!("Current location").into_owned(), current, cx))
+            .child(ui::key_value(tr!("Location policy").into_owned(), policy, cx))
+            .child(ui::divider(cx))
             .child(
                 div()
                     .text_sm()
                     .text_color(cx.theme().muted_foreground)
+                    .child(tr!("Moving relocates the complete shared repository and rewrites every registered client path atomically. Server directories are unaffected.").into_owned()),
+            )
+            .child(
+                h_flex()
+                    .gap_2()
+                    .child(Input::new(&input).flex_1().cleanable(true))
                     .child(
-                        tr!("GPUI is Apache-2.0 software from Zed Industries. Orbit uses the Apache-2.0 gpui-component control library by Longbridge; it is not a Zed-owned component set.").into_owned(),
+                        Button::new("settings-browse-minecraft")
+                            .label(tr!("Browse").into_owned())
+                            .on_click(move |_, window, cx| {
+                                if let Some(path) = rfd::FileDialog::new().pick_folder() {
+                                    browse.update(cx, |state, cx| {
+                                        state.set_value(path.display().to_string(), window, cx)
+                                    });
+                                }
+                            }),
+                    )
+                    .child(
+                        Button::new("settings-move-minecraft")
+                            .label(tr!("Move repository").into_owned())
+                            .primary()
+                            .on_click(move |_, _, cx| {
+                                let destination = read.read(cx).value().trim().to_string();
+                                move_app.update(cx, |this, cx| {
+                                    this.move_minecraft_directory(destination);
+                                    cx.notify();
+                                });
+                            }),
                     ),
-            ),
-    );
+            )
+    })
+}
 
-    ui::page(
-        tr!("Settings").into_owned(),
-        tr!("Presentation, managed storage, and strict CLI-backed configuration").into_owned(),
-        div(),
-        content,
-        cx,
+fn java_inventory_item(app: &Entity<OrbitApp>) -> SettingItem {
+    let app = app.clone();
+    SettingItem::render(move |_, _, cx| {
+        let runtimes = app.read(cx).java_runtimes.clone();
+        if runtimes.is_empty() {
+            return ui::empty_state(
+                OrbitIcon::Java,
+                tr!("No managed Java runtime").into_owned(),
+                tr!("Launcher installs the required Java runtime when an instance is installed.")
+                    .into_owned(),
+                None,
+                cx,
+            )
+            .into_any_element();
+        }
+        v_flex()
+            .gap_2()
+            .children(runtimes.into_iter().enumerate().map(|(index, runtime)| {
+                let verify_id = runtime.runtime_id.clone();
+                let remove_id = runtime.runtime_id.clone();
+                let verify_app = app.clone();
+                let remove_app = app.clone();
+                ui::compact_card(cx).child(
+                    h_flex()
+                        .gap_3()
+                        .items_center()
+                        .child(ui::icon_tile(OrbitIcon::Java, cx))
+                        .child(
+                            v_flex()
+                                .flex_1()
+                                .child(
+                                    div().font_semibold().child(format!(
+                                        "Java {} · {}",
+                                        runtime.major, runtime.version
+                                    )),
+                                )
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(cx.theme().muted_foreground)
+                                        .child(format!(
+                                            "{} · {} · {} · {} · {}",
+                                            runtime.provider,
+                                            runtime.component,
+                                            runtime.platform,
+                                            tr!("%{count} files", count = runtime.files),
+                                            super::super::controller::human_bytes(runtime.bytes)
+                                        )),
+                                ),
+                        )
+                        .child(ui::pill(
+                            if runtime.verified == Some(true) {
+                                tr!("Verified").into_owned()
+                            } else {
+                                tr!("Not verified").into_owned()
+                            },
+                            if runtime.verified == Some(true) {
+                                cx.theme().success.opacity(0.13)
+                            } else {
+                                cx.theme().warning.opacity(0.13)
+                            },
+                            if runtime.verified == Some(true) {
+                                cx.theme().success
+                            } else {
+                                cx.theme().warning
+                            },
+                        ))
+                        .child(
+                            Button::new(("settings-verify-java", index))
+                                .label(tr!("Verify").into_owned())
+                                .ghost()
+                                .on_click(move |_, _, cx| {
+                                    verify_app.update(cx, |this, cx| {
+                                        this.verify_java_runtime(&verify_id);
+                                        cx.notify();
+                                    });
+                                }),
+                        )
+                        .child(
+                            Button::new(("settings-remove-java", index))
+                                .icon(OrbitIcon::Trash)
+                                .ghost()
+                                .tooltip(tr!("Remove runtime").into_owned())
+                                .on_click(move |_, _, cx| {
+                                    remove_app.update(cx, |this, cx| {
+                                        this.confirmation = Some(Confirmation {
+                                            title: tr!("Remove managed Java runtime?").into_owned(),
+                                            body: tr!("Removal is refused while any installed instance still references this runtime.").into_owned(),
+                                            action: ConfirmationAction::RemoveJavaRuntime(
+                                                remove_id.clone(),
+                                            ),
+                                        });
+                                        cx.notify();
+                                    });
+                                }),
+                        ),
+                )
+            }))
+            .into_any_element()
+    })
+}
+
+fn launcher_editor_item(
+    app: &Entity<OrbitApp>,
+    key: &'static str,
+    title: String,
+    description: String,
+    masked: bool,
+) -> SettingItem {
+    let app = app.clone();
+    SettingItem::new(
+        title,
+        SettingField::render(move |_, window, cx| {
+            let entry = launcher_entry(app.read(cx), key);
+            let value = entry
+                .and_then(|entry| entry.value.clone())
+                .unwrap_or_default();
+            setting_editor(
+                app.clone(),
+                SettingOwner::Launcher,
+                key,
+                value,
+                entry.is_some_and(|entry| entry.explicit),
+                masked,
+                window,
+                cx,
+            )
+        }),
     )
+    .description(description)
+}
+
+fn orbit_editor_item(
+    app: &Entity<OrbitApp>,
+    key: &'static str,
+    title: String,
+    description: String,
+    masked: bool,
+) -> SettingItem {
+    let app = app.clone();
+    SettingItem::new(
+        title,
+        SettingField::render(move |_, window, cx| {
+            let entry = orbit_entry(app.read(cx), key);
+            let value = entry
+                .filter(|entry| !entry.sensitive)
+                .map(OrbitConfigEntry::display_value)
+                .unwrap_or_default();
+            setting_editor(
+                app.clone(),
+                SettingOwner::Orbit,
+                key,
+                value,
+                entry.is_some_and(|entry| entry.value.is_some()),
+                masked,
+                window,
+                cx,
+            )
+        }),
+    )
+    .description(description)
+}
+
+fn launcher_choice_item(
+    app: &Entity<OrbitApp>,
+    key: &'static str,
+    title: String,
+    description: String,
+    default: &'static str,
+    options: &[(&'static str, String)],
+) -> SettingItem {
+    let app_for_value = app.clone();
+    let app_for_set = app.clone();
+    let options = options
+        .iter()
+        .map(|(value, label)| ((*value).into(), label.clone().into()))
+        .collect();
+    SettingItem::new(
+        title,
+        SettingField::dropdown(
+            options,
+            move |cx| {
+                launcher_entry(app_for_value.read(cx), key)
+                    .and_then(|entry| entry.value.clone())
+                    .unwrap_or_else(|| default.to_string())
+                    .into()
+            },
+            move |value: SharedString, cx| {
+                app_for_set.update(cx, |this, cx| {
+                    if value.as_ref() == default {
+                        this.unset_launcher_config(key.to_string());
+                    } else {
+                        this.set_launcher_config(key.to_string(), value.to_string());
+                    }
+                    cx.notify();
+                });
+            },
+        )
+        .default_value(SharedString::from(default)),
+    )
+    .description(description)
+}
+
+fn orbit_choice_item(
+    app: &Entity<OrbitApp>,
+    key: &'static str,
+    title: String,
+    description: String,
+    default: &'static str,
+    options: &[(&'static str, String)],
+) -> SettingItem {
+    let app_for_value = app.clone();
+    let app_for_set = app.clone();
+    let options = options
+        .iter()
+        .map(|(value, label)| ((*value).into(), label.clone().into()))
+        .collect();
+    SettingItem::new(
+        title,
+        SettingField::dropdown(
+            options,
+            move |cx| {
+                orbit_entry(app_for_value.read(cx), key)
+                    .map(OrbitConfigEntry::display_value)
+                    .filter(|value| !value.is_empty())
+                    .unwrap_or_else(|| default.to_string())
+                    .into()
+            },
+            move |value: SharedString, cx| {
+                app_for_set.update(cx, |this, cx| {
+                    if value.as_ref() == default {
+                        this.unset_orbit_config(key.to_string());
+                    } else {
+                        this.set_orbit_config(key.to_string(), value.to_string());
+                    }
+                    cx.notify();
+                });
+            },
+        )
+        .default_value(SharedString::from(default)),
+    )
+    .description(description)
+}
+
+#[derive(Clone, Copy)]
+enum SettingOwner {
+    Launcher,
+    Orbit,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn setting_editor(
+    app: Entity<OrbitApp>,
+    owner: SettingOwner,
+    key: &'static str,
+    value: String,
+    explicit: bool,
+    masked: bool,
+    window: &mut Window,
+    cx: &mut App,
+) -> gpui::AnyElement {
+    let mut hasher = DefaultHasher::new();
+    value.hash(&mut hasher);
+    explicit.hash(&mut hasher);
+    let revision = hasher.finish();
+    let input_state = window.use_keyed_state(
+        SharedString::from(format!("setting:{key}:{revision}")),
+        cx,
+        |window, cx| {
+            cx.new(|cx| {
+                InputState::new(window, cx)
+                    .default_value(value)
+                    .masked(masked)
+            })
+        },
+    );
+    let input = input_state.read(cx).clone();
+    let apply_input = input.clone();
+    let apply_app = app.clone();
+    let reset_app = app.clone();
+    h_flex()
+        .gap_2()
+        .items_center()
+        .child(
+            div()
+                .min_w(px(72.))
+                .text_xs()
+                .text_color(cx.theme().muted_foreground)
+                .child(if explicit {
+                    tr!("Custom").into_owned()
+                } else {
+                    tr!("Default").into_owned()
+                }),
+        )
+        .child(Input::new(&input).w(px(230.)).cleanable(!masked))
+        .child(
+            Button::new(SharedString::from(format!("setting-reset:{key}")))
+                .icon(OrbitIcon::Refresh)
+                .ghost()
+                .tooltip(tr!("Restore default").into_owned())
+                .on_click(move |_, _, cx| {
+                    reset_app.update(cx, |this, cx| {
+                        match owner {
+                            SettingOwner::Launcher => this.unset_launcher_config(key.to_string()),
+                            SettingOwner::Orbit => this.unset_orbit_config(key.to_string()),
+                        };
+                        cx.notify();
+                    });
+                }),
+        )
+        .child(
+            Button::new(SharedString::from(format!("setting-apply:{key}")))
+                .icon(OrbitIcon::Check)
+                .primary()
+                .tooltip(tr!("Apply").into_owned())
+                .on_click(move |_, _, cx| {
+                    let value = apply_input.read(cx).value().trim().to_string();
+                    apply_app.update(cx, |this, cx| {
+                        match owner {
+                            SettingOwner::Launcher => {
+                                this.set_launcher_config(key.to_string(), value)
+                            }
+                            SettingOwner::Orbit => this.set_orbit_config(key.to_string(), value),
+                        };
+                        cx.notify();
+                    });
+                }),
+        )
+        .into_any_element()
+}
+
+fn launcher_entry<'a>(app: &'a OrbitApp, key: &str) -> Option<&'a LauncherConfigEntry> {
+    app.launcher_config.iter().find(|entry| entry.key == key)
+}
+
+fn orbit_entry<'a>(app: &'a OrbitApp, key: &str) -> Option<&'a OrbitConfigEntry> {
+    app.orbit_config.iter().find(|entry| entry.key == key)
 }
