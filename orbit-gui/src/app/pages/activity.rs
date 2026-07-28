@@ -54,11 +54,10 @@ impl OrbitApp {
                                 self.bridge.cancel(task.id);
                             }
                             if let (Some(completed), Some(total)) = (task.completed, task.total) {
-                                let percentage = if total == 0 {
-                                    0
-                                } else {
-                                    completed.saturating_mul(100) / total
-                                };
+                                let percentage = completed
+                                    .saturating_mul(100)
+                                    .checked_div(total)
+                                    .unwrap_or_default();
                                 ui.label(
                                     RichText::new(format!("{completed}/{total} · {percentage}%"))
                                         .size(10.0)
