@@ -1,31 +1,31 @@
-//! Presentation parser for Core's ordered suffix-set rule.
+//! Presentation parser for Core's ordered version-string set rule.
 
 use anyhow::{Result, anyhow, bail};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct SuffixRuleDraft {
+pub(crate) struct StringRuleDraft {
     pub initial_all: bool,
-    pub operations: Vec<SuffixOperationDraft>,
+    pub operations: Vec<StringOperationDraft>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct SuffixOperationDraft {
-    pub operator: SuffixSetOperator,
+pub(crate) struct StringOperationDraft {
+    pub operator: StringSetOperator,
     pub negated: bool,
-    pub predicate: SuffixPredicate,
+    pub predicate: StringPredicate,
     pub value: Option<String>,
     pub case_sensitive: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum SuffixSetOperator {
+pub(crate) enum StringSetOperator {
     Intersect,
     Union,
     Complement,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum SuffixPredicate {
+pub(crate) enum StringPredicate {
     Empty,
     Present,
     Equals,
@@ -34,7 +34,7 @@ pub(crate) enum SuffixPredicate {
     EndsWith,
 }
 
-impl Default for SuffixRuleDraft {
+impl Default for StringRuleDraft {
     fn default() -> Self {
         Self {
             initial_all: true,
@@ -43,25 +43,25 @@ impl Default for SuffixRuleDraft {
     }
 }
 
-impl Default for SuffixOperationDraft {
+impl Default for StringOperationDraft {
     fn default() -> Self {
         Self {
-            operator: SuffixSetOperator::Intersect,
+            operator: StringSetOperator::Intersect,
             negated: false,
-            predicate: SuffixPredicate::Contains,
+            predicate: StringPredicate::Contains,
             value: None,
             case_sensitive: false,
         }
     }
 }
 
-impl SuffixRuleDraft {
+impl StringRuleDraft {
     pub fn parse(source: &str) -> Result<Self> {
         let mut parser = Parser::new(source);
         let initial_all = match parser.identifier()?.as_str() {
             "all" => true,
             "none" => false,
-            value => bail!("suffix rule must start with all or none, found '{value}'"),
+            value => bail!("string rule must start with all or none, found '{value}'"),
         };
         let mut operations = Vec::new();
         loop {
@@ -73,20 +73,20 @@ impl SuffixRuleDraft {
                 bail!("expected ';' at byte {}", parser.offset);
             }
             let operator = match parser.identifier()?.as_str() {
-                "intersect" => SuffixSetOperator::Intersect,
-                "union" => SuffixSetOperator::Union,
+                "intersect" => StringSetOperator::Intersect,
+                "union" => StringSetOperator::Union,
                 "complement" => {
-                    operations.push(SuffixOperationDraft {
-                        operator: SuffixSetOperator::Complement,
-                        ..SuffixOperationDraft::default()
+                    operations.push(StringOperationDraft {
+                        operator: StringSetOperator::Complement,
+                        ..StringOperationDraft::default()
                     });
                     continue;
                 }
-                value => bail!("unsupported suffix operation '{value}'"),
+                value => bail!("unsupported string operation '{value}'"),
             };
             let negated = parser.consume_keyword("not");
             let (predicate, value, case_sensitive) = parser.predicate()?;
-            operations.push(SuffixOperationDraft {
+            operations.push(StringOperationDraft {
                 operator,
                 negated,
                 predicate,
@@ -110,15 +110,15 @@ impl SuffixRuleDraft {
     }
 }
 
-impl SuffixOperationDraft {
+impl StringOperationDraft {
     pub fn expression(&self) -> Option<String> {
-        if self.operator == SuffixSetOperator::Complement {
+        if self.operator == StringSetOperator::Complement {
             return Some("complement".to_string());
         }
         let mut expression = match self.operator {
-            SuffixSetOperator::Intersect => "intersect ".to_string(),
-            SuffixSetOperator::Union => "union ".to_string(),
-            SuffixSetOperator::Complement => unreachable!(),
+            StringSetOperator::Intersect => "intersect ".to_string(),
+            StringSetOperator::Union => "union ".to_string(),
+            StringSetOperator::Complement => unreachable!(),
         };
         if self.negated {
             expression.push_str("not ");
@@ -130,24 +130,24 @@ impl SuffixOperationDraft {
     fn predicate_expression(&self) -> Option<String> {
         let value = self.value.as_deref().filter(|value| !value.is_empty());
         Some(match self.predicate {
-            SuffixPredicate::Empty => "empty".to_string(),
-            SuffixPredicate::Present => "present".to_string(),
-            SuffixPredicate::Equals => format!(
+            StringPredicate::Empty => "empty".to_string(),
+            StringPredicate::Present => "present".to_string(),
+            StringPredicate::Equals => format!(
                 "{}{}",
                 if self.case_sensitive { "" } else { "i" },
                 quoted(value?)
             ),
-            SuffixPredicate::Contains => format!(
+            StringPredicate::Contains => format!(
                 "contains({}{})",
                 if self.case_sensitive { "" } else { "i" },
                 quoted(value?)
             ),
-            SuffixPredicate::StartsWith => format!(
+            StringPredicate::StartsWith => format!(
                 "starts_with({}{})",
                 if self.case_sensitive { "" } else { "i" },
                 quoted(value?)
             ),
-            SuffixPredicate::EndsWith => format!(
+            StringPredicate::EndsWith => format!(
                 "ends_with({}{})",
                 if self.case_sensitive { "" } else { "i" },
                 quoted(value?)
@@ -156,10 +156,10 @@ impl SuffixOperationDraft {
     }
 
     pub fn needs_value(&self) -> bool {
-        self.operator != SuffixSetOperator::Complement
+        self.operator != StringSetOperator::Complement
             && !matches!(
                 self.predicate,
-                SuffixPredicate::Empty | SuffixPredicate::Present
+                StringPredicate::Empty | StringPredicate::Present
             )
     }
 }
@@ -178,18 +178,18 @@ impl<'a> Parser<'a> {
         Self { source, offset: 0 }
     }
 
-    fn predicate(&mut self) -> Result<(SuffixPredicate, Option<String>, bool)> {
+    fn predicate(&mut self) -> Result<(StringPredicate, Option<String>, bool)> {
         self.skip_whitespace();
         if self.peek() == Some('"') {
-            return Ok((SuffixPredicate::Equals, Some(self.string()?), true));
+            return Ok((StringPredicate::Equals, Some(self.string()?), true));
         }
         let identifier = self.identifier()?;
         match identifier.as_str() {
-            "empty" => Ok((SuffixPredicate::Empty, None, false)),
-            "present" => Ok((SuffixPredicate::Present, None, false)),
+            "empty" => Ok((StringPredicate::Empty, None, false)),
+            "present" => Ok((StringPredicate::Present, None, false)),
             "i" if self.peek_after_whitespace() == Some('"') => {
                 self.skip_whitespace();
-                Ok((SuffixPredicate::Equals, Some(self.string()?), false))
+                Ok((StringPredicate::Equals, Some(self.string()?), false))
             }
             "contains" | "starts_with" | "ends_with" => {
                 self.skip_whitespace();
@@ -209,14 +209,14 @@ impl<'a> Parser<'a> {
                     bail!("expected ')' at byte {}", self.offset);
                 }
                 let predicate = match identifier.as_str() {
-                    "contains" => SuffixPredicate::Contains,
-                    "starts_with" => SuffixPredicate::StartsWith,
-                    "ends_with" => SuffixPredicate::EndsWith,
+                    "contains" => StringPredicate::Contains,
+                    "starts_with" => StringPredicate::StartsWith,
+                    "ends_with" => StringPredicate::EndsWith,
                     _ => unreachable!(),
                 };
                 Ok((predicate, Some(value), case_sensitive))
             }
-            value => bail!("unsupported suffix predicate '{value}'"),
+            value => bail!("unsupported string predicate '{value}'"),
         }
     }
 
@@ -318,7 +318,7 @@ mod tests {
     fn ordered_rule_roundtrips_for_visual_editing() {
         let source = "all; intersect not contains(i\"beta\"); union \"allowed\"; complement";
         assert_eq!(
-            SuffixRuleDraft::parse(source)
+            StringRuleDraft::parse(source)
                 .unwrap()
                 .expression()
                 .unwrap(),

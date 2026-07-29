@@ -23,7 +23,7 @@ use crate::assets::OrbitIcon;
 use crate::model::*;
 use crate::process::{ProcessBridge, TaskId};
 use crate::remote_images::RemoteImageBridge;
-use crate::suffix_rule::{SuffixOperationDraft, SuffixRuleDraft};
+use crate::string_rule::{StringOperationDraft, StringRuleDraft};
 
 mod components;
 mod controller;
@@ -175,9 +175,9 @@ pub(super) struct PackagePolicyDraft {
     pub include_lower: bool,
     pub include_upper: bool,
     pub replaced_custom: Option<String>,
-    pub suffix: SuffixRuleDraft,
-    pub suffix_condition: SuffixOperationDraft,
-    pub suffix_edit_index: Option<usize>,
+    pub string: StringRuleDraft,
+    pub string_condition: StringOperationDraft,
+    pub string_edit_index: Option<usize>,
 }
 
 impl Default for PackagePolicyDraft {
@@ -191,15 +191,15 @@ impl Default for PackagePolicyDraft {
             include_lower: true,
             include_upper: true,
             replaced_custom: None,
-            suffix: SuffixRuleDraft::default(),
-            suffix_condition: SuffixOperationDraft::default(),
-            suffix_edit_index: None,
+            string: StringRuleDraft::default(),
+            string_condition: StringOperationDraft::default(),
+            string_edit_index: None,
         }
     }
 }
 
 impl PackagePolicyDraft {
-    fn from_policy(policy: &PackageVersionPolicy, suffix: &str) -> anyhow::Result<Self> {
+    fn from_policy(policy: &PackageVersionPolicy, string: &str) -> anyhow::Result<Self> {
         let mut draft = Self::default();
         match policy {
             PackageVersionPolicy::Any => {}
@@ -230,7 +230,7 @@ impl PackagePolicyDraft {
                 draft.replaced_custom = Some(requirement.clone());
             }
         }
-        draft.suffix = SuffixRuleDraft::parse(suffix)?;
+        draft.string = StringRuleDraft::parse(string)?;
         Ok(draft)
     }
 
@@ -271,8 +271,8 @@ impl PackagePolicyDraft {
                 .to_string(),
             ]),
         }?;
-        arguments.push("--suffix".to_string());
-        arguments.push(self.suffix.expression()?);
+        arguments.push("--string".to_string());
+        arguments.push(self.string.expression()?);
         Some(arguments)
     }
 }
@@ -333,7 +333,7 @@ pub(super) struct Inputs {
     pub orbit_binary: Entity<InputState>,
     pub launcher_binary: Entity<InputState>,
     pub remote_locator: Entity<InputState>,
-    pub suffix_value: Entity<InputState>,
+    pub string_value: Entity<InputState>,
     pub add_version: Entity<InputState>,
     pub runtime_name: Entity<InputState>,
     pub audit_filter: Entity<InputState>,
@@ -377,7 +377,7 @@ impl Inputs {
                     .default_value(preferences.launcher_binary.display().to_string())
             }),
             remote_locator: input(window, cx, tr!("Remote locator").into_owned()),
-            suffix_value: input(window, cx, tr!("Suffix text").into_owned()),
+            string_value: input(window, cx, tr!("Version text").into_owned()),
             add_version: input(window, cx, tr!("Any compatible version").into_owned()),
             runtime_name: input(window, cx, tr!("Installation name").into_owned()),
             audit_filter: input(window, cx, tr!("Filter by mod").into_owned()),
@@ -887,13 +887,13 @@ mod package_policy_tests {
         let draft = PackagePolicyDraft {
             mode: PackagePolicyMode::Comparison,
             operator: PackagePolicyOperator::AtLeast,
-            version: Some("1.2.3-beta".to_string()),
+            version: Some("1.2.3".to_string()),
             ..PackagePolicyDraft::default()
         };
 
         assert_eq!(
             draft.command_args().unwrap(),
-            ["at-least", "1.2.3-beta", "--suffix", "all"]
+            ["at-least", "1.2.3", "--string", "all"]
         );
     }
 
@@ -918,7 +918,7 @@ mod package_policy_tests {
                 "inclusive",
                 "--upper-bound",
                 "exclusive",
-                "--suffix",
+                "--string",
                 "all"
             ]
         );
@@ -953,7 +953,7 @@ mod package_policy_tests {
         assert_eq!(draft.lower.as_deref(), Some("1.2.0"));
         assert_eq!(draft.upper.as_deref(), Some("2.0.0"));
         assert_eq!(
-            draft.suffix.expression().as_deref(),
+            draft.string.expression().as_deref(),
             Some("all; intersect not contains(i\"beta\")")
         );
     }

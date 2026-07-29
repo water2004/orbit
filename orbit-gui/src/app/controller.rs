@@ -581,7 +581,7 @@ impl OrbitApp {
                 {
                     if let Some(editor) = &mut self.package_editor {
                         editor.policy =
-                            PackagePolicyDraft::from_policy(&versions.policy, &versions.suffix)?;
+                            PackagePolicyDraft::from_policy(&versions.policy, &versions.string)?;
                     }
                     self.package_versions = Some(versions);
                 }
