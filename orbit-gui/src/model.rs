@@ -100,6 +100,8 @@ pub struct PackageChange {
     pub current_version: Option<String>,
     pub selected_version: Option<String>,
     pub selected_description: Option<String>,
+    #[serde(default)]
+    pub selected_artifact: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

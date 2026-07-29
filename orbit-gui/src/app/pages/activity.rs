@@ -41,6 +41,7 @@ pub(in crate::app) fn render_strip(app: &OrbitApp, cx: &mut Context<OrbitApp>) -
     let progress = progress_percent(task.completed, task.total);
     let completed = task.completed;
     let total = task.total;
+    let status_line = single_line_summary(&task.status_line);
     v_flex()
         .relative()
         .h(px(54.))
@@ -60,14 +61,28 @@ pub(in crate::app) fn render_strip(app: &OrbitApp, cx: &mut Context<OrbitApp>) -
                         .rounded_full()
                         .bg(task_state_color(task.state, cx)),
                 )
-                .child(div().font_medium().child(task.label.clone()))
                 .child(
-                    div()
-                        .text_sm()
-                        .text_color(cx.theme().muted_foreground)
-                        .overflow_hidden()
+                    h_flex()
+                        .min_w_0()
                         .flex_1()
-                        .child(task.status_line.clone()),
+                        .gap_2()
+                        .child(
+                            div()
+                                .min_w_0()
+                                .max_w(px(360.))
+                                .truncate()
+                                .font_medium()
+                                .child(task.label.clone()),
+                        )
+                        .child(
+                            div()
+                                .min_w_0()
+                                .flex_1()
+                                .truncate()
+                                .text_sm()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(status_line),
+                        ),
                 )
                 .when(completed.is_some() || total.is_some(), |row| {
                     row.child(
@@ -576,12 +591,32 @@ fn render_package_actions(
                                 .child(version),
                         ),
                 )
+                .when_some(change.selected_artifact.clone(), |row, filename| {
+                    row.child(
+                        h_flex()
+                            .w_full()
+                            .min_w_0()
+                            .pl(px(20.))
+                            .gap_2()
+                            .items_center()
+                            .child(ui::neutral_pill("JAR", cx))
+                            .child(
+                                div()
+                                    .min_w_0()
+                                    .flex_1()
+                                    .truncate()
+                                    .text_xs()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child(filename),
+                            ),
+                    )
+                })
                 .when_some(change.selected_description.clone(), |row, description| {
                     row.child(
                         div()
-                            .ml(px(20.))
+                            .w_full()
                             .min_w_0()
-                            .truncate()
+                            .pl(px(20.))
                             .text_xs()
                             .text_color(cx.theme().muted_foreground)
                             .child(description),
@@ -852,84 +887,101 @@ fn render_package_editor(app: &OrbitApp, cx: &mut Context<OrbitApp>) -> impl Int
         ui::modal(
             720.,
             v_flex()
-                .gap_4()
+                .h(px(580.))
+                .max_h_full()
+                .min_h_0()
+                .gap_3()
                 .child(
                     h_flex()
+                        .flex_shrink_0()
                         .justify_between()
                         .child(div().text_xl().font_semibold().child(package_id.clone()))
                         .child(Button::new("package-close").icon(OrbitIcon::Close).ghost().on_click(cx.listener(|this, _, _, cx| { this.package_editor = None; cx.notify(); }))),
                 )
-                .child(render_package_policy(app, &package_id, cx))
-                .child(ui::section_title(tr!("Environment").into_owned(), tr!("Auto follows the JAR declaration; loaders without a declaration default to both").into_owned(), cx))
                 .child(
-                    h_flex().gap_2().children(["auto", "client", "server", "both"].into_iter().enumerate().map(|(index, value)| {
-                        let package = package_id.clone();
-                        Button::new(("package-env", index))
-                            .label(title_environment(value))
-                            .selected(environment == value)
-                            .on_click(cx.listener(move |this, _, _, cx| { this.set_package_environment(&package, value); this.package_editor = None; cx.notify(); }))
-                    })),
-                )
-                .child(ui::section_title(tr!("Remotes").into_owned(), tr!("All sources are hash-deduplicated and analyzed equally").into_owned(), cx))
-                .child(remotes)
-                .child(
-                    h_flex().gap_2().children(providers.into_iter().enumerate().map(|(index, provider)| {
-                        Button::new(("remote-provider", index))
-                            .label(provider)
-                            .selected(editor.remote_provider == index)
-                            .on_click(cx.listener(move |this, _, _, cx| { if let Some(editor) = &mut this.package_editor { editor.remote_provider = index; } cx.notify(); }))
-                    })),
-                )
-                .child(
-                    h_flex()
-                        .gap_2()
-                        .child(Input::new(&remote_input).flex_1())
-                        .child(Button::new("remote-add").icon(OrbitIcon::Plus).label(tr!("Add remote").into_owned()).primary().on_click(cx.listener(move |this, _, window, cx| {
-                            let locator = remote_read.read(cx).value().trim().to_string();
-                            if !locator.is_empty() {
-                                let provider = this.package_editor.as_ref().map(|item| providers[item.remote_provider]).unwrap_or("file");
-                                this.add_package_remote(&remote_package, provider, &locator);
-                                remote_read.update(cx, |state, cx| state.set_value("", window, cx));
-                                this.package_editor = None;
-                            }
-                            cx.notify();
-                        }))),
-                )
-                .child(ui::divider(cx))
-                .child(
-                    h_flex()
-                        .justify_between()
-                        .gap_3()
+                    div()
+                        .id("package-editor-scroll")
+                        .flex_1()
+                        .min_h_0()
+                        .overflow_y_scrollbar()
+                        .pr_2()
                         .child(
                             v_flex()
-                                .gap_1()
+                                .gap_4()
+                                .pb_1()
+                                .child(render_package_policy(app, &package_id, cx))
+                                .child(ui::section_title(tr!("Environment").into_owned(), tr!("Auto follows the JAR declaration; loaders without a declaration default to both").into_owned(), cx))
                                 .child(
-                                    div()
-                                        .text_sm()
-                                        .font_semibold()
-                                        .child(tr!("Remove package data").into_owned()),
+                                    h_flex().gap_2().children(["auto", "client", "server", "both"].into_iter().enumerate().map(|(index, value)| {
+                                        let package = package_id.clone();
+                                        Button::new(("package-env", index))
+                                            .label(title_environment(value))
+                                            .selected(environment == value)
+                                            .on_click(cx.listener(move |this, _, _, cx| { this.set_package_environment(&package, value); this.package_editor = None; cx.notify(); }))
+                                    })),
+                                )
+                                .child(ui::section_title(tr!("Remotes").into_owned(), tr!("All sources are hash-deduplicated and analyzed equally").into_owned(), cx))
+                                .child(remotes)
+                                .child(
+                                    h_flex().gap_2().children(providers.into_iter().enumerate().map(|(index, provider)| {
+                                        Button::new(("remote-provider", index))
+                                            .label(provider)
+                                            .selected(editor.remote_provider == index)
+                                            .on_click(cx.listener(move |this, _, _, cx| { if let Some(editor) = &mut this.package_editor { editor.remote_provider = index; } cx.notify(); }))
+                                    })),
                                 )
                                 .child(
-                                    div()
-                                        .text_xs()
-                                        .text_color(cx.theme().muted_foreground)
-                                        .child(tr!("Purge removes the package and presents matching configuration files before deletion.").into_owned()),
+                                    h_flex()
+                                        .gap_2()
+                                        .child(Input::new(&remote_input).flex_1())
+                                        .child(Button::new("remote-add").icon(OrbitIcon::Plus).label(tr!("Add remote").into_owned()).primary().on_click(cx.listener(move |this, _, window, cx| {
+                                            let locator = remote_read.read(cx).value().trim().to_string();
+                                            if !locator.is_empty() {
+                                                let provider = this.package_editor.as_ref().map(|item| providers[item.remote_provider]).unwrap_or("file");
+                                                this.add_package_remote(&remote_package, provider, &locator);
+                                                remote_read.update(cx, |state, cx| state.set_value("", window, cx));
+                                                this.package_editor = None;
+                                            }
+                                            cx.notify();
+                                        }))),
+                                )
+                                .child(ui::divider(cx))
+                                .child(
+                                    h_flex()
+                                        .justify_between()
+                                        .gap_3()
+                                        .child(
+                                            v_flex()
+                                                .gap_1()
+                                                .child(
+                                                    div()
+                                                        .text_sm()
+                                                        .font_semibold()
+                                                        .child(tr!("Remove package data").into_owned()),
+                                                )
+                                                .child(
+                                                    div()
+                                                        .text_xs()
+                                                        .text_color(cx.theme().muted_foreground)
+                                                        .child(tr!("Purge removes the package and presents matching configuration files before deletion.").into_owned()),
+                                                ),
+                                        )
+                                        .child(
+                                            Button::new("package-purge")
+                                                .icon(OrbitIcon::Trash)
+                                                .label(tr!("Purge…").into_owned())
+                                                .danger()
+                                                .on_click(cx.listener(move |this, _, _, cx| {
+                                                    this.package_editor = None;
+                                                    this.confirmation = Some(super::super::Confirmation {
+                                                        title: tr!("Purge %{package}?", package = purge_package),
+                                                        body: tr!("Orbit will first show the exact package and matching configuration files. Nothing is deleted until you confirm that plan.").into_owned(),
+                                                        action: super::super::ConfirmationAction::PurgePackage(purge_package.clone()),
+                                                    });
+                                                    cx.notify();
+                                                })),
+                                        ),
                                 ),
-                        )
-                        .child(
-                            Button::new("package-purge")
-                                .icon(OrbitIcon::Trash)
-                                .label(tr!("Purge…").into_owned())
-                                .danger()
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    this.package_editor = None;
-                                    this.confirmation = Some(super::super::Confirmation {
-                                        title: tr!("Purge %{package}?", package = purge_package),
-                                        body: tr!("Orbit will first show the exact package and matching configuration files. Nothing is deleted until you confirm that plan.").into_owned(),
-                                        action: super::super::ConfirmationAction::PurgePackage(purge_package.clone()),
-                                    });
-                                    cx.notify();
-                                })),
                         ),
                 ),
             cx,
@@ -1316,6 +1368,10 @@ fn progress_percent(completed: Option<u64>, total: Option<u64>) -> Option<f32> {
     Some((completed.min(total) as f64 * 100. / total as f64) as f32)
 }
 
+fn single_line_summary(value: &str) -> String {
+    value.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 fn task_state_color(state: TaskState, cx: &gpui::App) -> gpui::Hsla {
     match state {
         TaskState::Running => cx.theme().primary,
@@ -1349,7 +1405,8 @@ mod interaction_tests {
                     "kind": "upgrade",
                     "current_version": "0.6.0",
                     "selected_version": "0.7.0",
-                    "selected_description": null
+                    "selected_description": "Modrinth · 3 dependency constraints",
+                    "selected_artifact": "sodium-fabric-0.7.0.jar"
                 }
             }]
         });
@@ -1359,6 +1416,10 @@ mod interaction_tests {
         assert!(actions[0].different);
         assert_eq!(actions[0].change.package, "sodium");
         assert_eq!(actions[0].change.kind, "upgrade");
+        assert_eq!(
+            actions[0].change.selected_artifact.as_deref(),
+            Some("sodium-fabric-0.7.0.jar")
+        );
 
         let leaked_report_fields = serde_json::json!({
             "changes": [],
@@ -1389,5 +1450,13 @@ mod interaction_tests {
         let actions = interaction_package_actions(InteractionKind::Confirmation, &data).unwrap();
         assert_eq!(actions.len(), 1);
         assert_eq!(actions[0].change.package, "sodium");
+    }
+
+    #[test]
+    fn collapsed_activity_status_is_always_one_line() {
+        assert_eq!(
+            single_line_summary("Operation failed:\n dependency conflict\r\n user cancelled"),
+            "Operation failed: dependency conflict user cancelled"
+        );
     }
 }

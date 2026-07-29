@@ -306,6 +306,29 @@ pub fn change_label(kind: PackageChangeKind) -> &'static str {
     }
 }
 
+/// Return only the basename that identifies a selected top-level artifact.
+/// Paths remain execution-layer data and must never enter user-facing output.
+pub fn selected_artifact_basename(change: &PackageChange) -> Option<String> {
+    change.selected_filename.as_deref().and_then(|filename| {
+        filename
+            .rsplit(['/', '\\'])
+            .find(|component| !component.is_empty())
+            .map(str::to_owned)
+    })
+}
+
+fn resolution_candidate_label(change: &PackageChange) -> String {
+    match (
+        selected_artifact_basename(change),
+        change.selected_description.as_deref(),
+    ) {
+        (Some(filename), Some(description)) => format!("{filename} · {description}"),
+        (Some(filename), None) => filename,
+        (None, Some(description)) => description.to_string(),
+        (None, None) => ABSENT.to_string(),
+    }
+}
+
 fn logical_changes(report: &ResolutionReport) -> BTreeMap<String, Vec<LogicalChange>> {
     let mut changes = BTreeMap::<String, Vec<LogicalChange>>::new();
     for change in &report.changes {
@@ -321,10 +344,7 @@ fn logical_changes(report: &ResolutionReport) -> BTreeMap<String, Vec<LogicalCha
                     .selected_version
                     .clone()
                     .unwrap_or_else(|| ABSENT.into()),
-                candidate: change
-                    .selected_description
-                    .clone()
-                    .unwrap_or_else(|| ABSENT.into()),
+                candidate: resolution_candidate_label(change),
                 kind: change.kind,
             });
     }
@@ -811,11 +831,12 @@ mod tests {
 
         let output = resolution_choices(&[first, second]);
 
-        assert_eq!(output.matches("fabric-api").count(), 1);
+        assert_eq!(output.matches("selected-fabric-api.jar").count(), 1);
         assert_eq!(output.matches("Option ").count(), 2);
         assert!(output.matches('◆').count() >= 4, "{output}");
         assert!(output.contains("keep"));
-        assert!(!output.contains(".jar"));
+        assert!(output.contains("selected-sodium.jar"));
+        assert!(output.contains("selected-lithium.jar"));
     }
 
     #[test]
@@ -856,7 +877,7 @@ mod tests {
         assert!(!output.contains("project abc"));
         assert!(!output.contains("file 456"));
         assert!(!output.contains("sha512"));
-        assert!(!output.contains(".jar"));
+        assert!(output.contains("selected-voxy-a.jar"));
     }
 
     #[test]

@@ -383,6 +383,7 @@ fn resolution_interaction_choices(
                             "current_version": current_version,
                             "selected_version": current_version,
                             "selected_description": null,
+                            "selected_artifact": null,
                         },
                     }));
                     continue;
@@ -394,7 +395,7 @@ fn resolution_interaction_choices(
                         .all(|candidate| candidate.iter().any(|item| item == signature));
                     changes.push(serde_json::json!({
                         "different": !common,
-                        "change": crate::cli::output::package_change_view(change),
+                        "change": resolution_package_change_view(change),
                     }));
                 }
             }
@@ -411,6 +412,19 @@ fn resolution_interaction_choices(
             }
         })
         .collect()
+}
+
+fn resolution_package_change_view(change: &orbit_core::PackageChange) -> serde_json::Value {
+    let mut view = serde_json::to_value(crate::cli::output::package_change_view(change))
+        .expect("package change view is serializable");
+    let selected_artifact = crate::cli::output::selected_artifact_basename(change);
+    view.as_object_mut()
+        .expect("package change view is an object")
+        .insert(
+            "selected_artifact".to_string(),
+            serde_json::to_value(selected_artifact).expect("artifact filename is serializable"),
+        );
+    view
 }
 
 fn machine_confirm_install(
@@ -835,7 +849,8 @@ mod tests {
     };
 
     use super::{
-        resolution_interaction_choices, resolve_platform_target, validate_machine_response,
+        resolution_interaction_choices, resolution_package_change_view, resolve_platform_target,
+        validate_machine_response,
     };
 
     #[test]
@@ -923,6 +938,18 @@ mod tests {
             choice.data["changes"][0]["different"] == true
                 && choice.data.to_string().find("sha512").is_none()
         }));
+    }
+
+    #[test]
+    fn machine_resolution_exposes_only_the_selected_jar_basename() {
+        let mut change = package_change("voxy", "1", "2");
+        change.selected_filename = Some(r"C:\private\cache\voxy-fabric-2.jar".to_string());
+
+        let view = resolution_package_change_view(&change);
+
+        assert_eq!(view["selected_artifact"], "voxy-fabric-2.jar");
+        assert!(!view.to_string().contains("private"));
+        assert!(!view.to_string().contains("cache"));
     }
 
     #[test]
