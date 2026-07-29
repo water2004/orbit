@@ -41,11 +41,13 @@ pub async fn handle(command: ConstraintCommands, ctx: &CliContext) -> Result<()>
                 &instance_dir,
                 &package,
                 policy,
-                string,
-                &providers,
-                ctx.runtime.jar_cache(),
-                ctx.dry_run,
-                super::install_interaction(ctx),
+                orbit_core::PackageConstraintApplyOptions {
+                    string,
+                    providers: &providers,
+                    jar_cache: ctx.runtime.jar_cache(),
+                    dry_run: ctx.dry_run,
+                    interaction: super::install_interaction(ctx),
+                },
             )
             .await?;
             let transaction = report.transaction.clone();

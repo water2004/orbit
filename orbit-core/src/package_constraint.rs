@@ -145,6 +145,14 @@ pub struct PackageConstraintApplyReport {
     pub transaction: InstallReport,
 }
 
+pub struct PackageConstraintApplyOptions<'a> {
+    pub string: Option<String>,
+    pub providers: &'a [Box<dyn ModProvider>],
+    pub jar_cache: &'a crate::jar_cache::JarCache,
+    pub dry_run: bool,
+    pub interaction: InstallInteraction,
+}
+
 pub fn package_constraint(
     instance_dir: &Path,
     package: &str,
@@ -178,12 +186,15 @@ pub async fn apply_package_constraint(
     instance_dir: &Path,
     package: &str,
     policy: PackageVersionPolicy,
-    string: Option<String>,
-    providers: &[Box<dyn ModProvider>],
-    jar_cache: &crate::jar_cache::JarCache,
-    dry_run: bool,
-    interaction: InstallInteraction,
+    options: PackageConstraintApplyOptions<'_>,
 ) -> Result<PackageConstraintApplyReport, OrbitError> {
+    let PackageConstraintApplyOptions {
+        string,
+        providers,
+        jar_cache,
+        dry_run,
+        interaction,
+    } = options;
     let mut manifest = ManifestFile::open(instance_dir)?;
     let loader = manifest.inner.project.loader_kind()?;
     let current = policy.requirement(loader)?;
@@ -680,6 +691,20 @@ mod tests {
         }
     }
 
+    fn apply_options(
+        string: Option<String>,
+        cache: &crate::jar_cache::JarCache,
+        interaction: InstallInteraction,
+    ) -> PackageConstraintApplyOptions<'_> {
+        PackageConstraintApplyOptions {
+            string,
+            providers: &[],
+            jar_cache: cache,
+            dry_run: false,
+            interaction,
+        }
+    }
+
     #[tokio::test]
     async fn applying_a_policy_atomically_reselects_the_package() {
         let directory = tempfile::tempdir().unwrap();
@@ -692,11 +717,11 @@ mod tests {
                 operator: VersionComparison::Exact,
                 version: "1.2.3".to_string(),
             },
-            Some("all; intersect contains(\"alpha\")".to_string()),
-            &[],
-            &cache,
-            false,
-            accept_transaction(),
+            apply_options(
+                Some("all; intersect contains(\"alpha\")".to_string()),
+                &cache,
+                accept_transaction(),
+            ),
         )
         .await
         .unwrap();
@@ -735,11 +760,7 @@ mod tests {
                 operator: VersionComparison::Exact,
                 version: "1.2.3".to_string(),
             },
-            Some("all".to_string()),
-            &[],
-            &cache,
-            false,
-            accept_transaction(),
+            apply_options(Some("all".to_string()), &cache, accept_transaction()),
         )
         .await
         .unwrap();
@@ -768,11 +789,11 @@ mod tests {
                 operator: VersionComparison::Exact,
                 version: "1.2.3".to_string(),
             },
-            Some("all; intersect contains(\"alpha\")".to_string()),
-            &[],
-            &cache,
-            false,
-            accept_transaction(),
+            apply_options(
+                Some("all; intersect contains(\"alpha\")".to_string()),
+                &cache,
+                accept_transaction(),
+            ),
         )
         .await
         .unwrap();
@@ -803,11 +824,7 @@ mod tests {
                 operator: VersionComparison::Exact,
                 version: "1.2.3".to_string(),
             },
-            None,
-            &[],
-            &cache,
-            false,
-            accept_transaction(),
+            apply_options(None, &cache, accept_transaction()),
         )
         .await
         .unwrap();
@@ -835,11 +852,7 @@ mod tests {
                 operator: VersionComparison::Exact,
                 version: "9".to_string(),
             },
-            Some("all".to_string()),
-            &[],
-            &cache,
-            false,
-            accept_transaction(),
+            apply_options(Some("all".to_string()), &cache, accept_transaction()),
         )
         .await;
 
@@ -872,14 +885,14 @@ mod tests {
                 operator: VersionComparison::Exact,
                 version: "1.2.3".to_string(),
             },
-            Some("all; intersect contains(\"alpha\")".to_string()),
-            &[],
-            &cache,
-            false,
-            InstallInteraction {
-                confirm_install: Some(Box::new(|_| false)),
-                ..InstallInteraction::default()
-            },
+            apply_options(
+                Some("all; intersect contains(\"alpha\")".to_string()),
+                &cache,
+                InstallInteraction {
+                    confirm_install: Some(Box::new(|_| false)),
+                    ..InstallInteraction::default()
+                },
+            ),
         )
         .await
         .unwrap();
