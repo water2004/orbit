@@ -3,15 +3,12 @@ use std::path::{Path, PathBuf};
 
 fn main() {
     println!("cargo:rerun-if-changed=../assets/orbit.svg");
-    if std::env::var_os("CARGO_CFG_WINDOWS").is_none() {
-        return;
-    }
-    if let Err(error) = embed_windows_icon() {
-        panic!("failed to embed the Orbit GUI icon: {error}");
+    if let Err(error) = generate_brand_assets() {
+        panic!("failed to generate the Orbit GUI brand assets: {error}");
     }
 }
 
-fn embed_windows_icon() -> Result<(), Box<dyn std::error::Error>> {
+fn generate_brand_assets() -> Result<(), Box<dyn std::error::Error>> {
     let manifest_dir = PathBuf::from(
         std::env::var_os("CARGO_MANIFEST_DIR")
             .ok_or("Cargo did not provide CARGO_MANIFEST_DIR to the Orbit GUI build script")?,
@@ -20,6 +17,11 @@ fn embed_windows_icon() -> Result<(), Box<dyn std::error::Error>> {
         PathBuf::from(std::env::var_os("OUT_DIR").ok_or("Cargo did not provide OUT_DIR")?);
     let svg = std::fs::read(manifest_dir.join("../assets/orbit.svg"))?;
     let tree = resvg::usvg::Tree::from_data(&svg, &resvg::usvg::Options::default())?;
+    std::fs::write(output_dir.join("orbit-gui.png"), render_png(&tree, 256)?)?;
+    if std::env::var_os("CARGO_CFG_WINDOWS").is_none() {
+        return Ok(());
+    }
+
     let icon_path = output_dir.join("orbit-gui.ico");
     write_icon(&tree, &icon_path)?;
 
@@ -44,16 +46,7 @@ fn write_icon(
     const SIZES: [u32; 7] = [16, 24, 32, 48, 64, 128, 256];
     let mut images = Vec::with_capacity(SIZES.len());
     for size in SIZES {
-        let mut pixmap =
-            resvg::tiny_skia::Pixmap::new(size, size).ok_or("could not allocate an icon raster")?;
-        let scale_x = size as f32 / tree.size().width();
-        let scale_y = size as f32 / tree.size().height();
-        resvg::render(
-            tree,
-            resvg::tiny_skia::Transform::from_scale(scale_x, scale_y),
-            &mut pixmap.as_mut(),
-        );
-        images.push((size, pixmap.encode_png()?));
+        images.push((size, render_png(tree, size)?));
     }
 
     let directory_bytes = 6 + images.len() * 16;
@@ -87,4 +80,17 @@ fn write_icon(
     }
     file.flush()?;
     Ok(())
+}
+
+fn render_png(tree: &resvg::usvg::Tree, size: u32) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    let mut pixmap =
+        resvg::tiny_skia::Pixmap::new(size, size).ok_or("could not allocate an icon raster")?;
+    let scale_x = size as f32 / tree.size().width();
+    let scale_y = size as f32 / tree.size().height();
+    resvg::render(
+        tree,
+        resvg::tiny_skia::Transform::from_scale(scale_x, scale_y),
+        &mut pixmap.as_mut(),
+    );
+    Ok(pixmap.encode_png()?)
 }

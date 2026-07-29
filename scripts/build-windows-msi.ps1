@@ -20,6 +20,7 @@ $toolManifest = Join-Path $repoRoot ".config\dotnet-tools.json"
 $executable = Join-Path $repoRoot "target\release\orbit.exe"
 $launcherExecutable = Join-Path $repoRoot "target\release\orbit-launcher.exe"
 $guiExecutable = Join-Path $repoRoot "target\release\orbit-gui.exe"
+$guiBuildDirectory = Join-Path $repoRoot "target\release\build"
 $license = Join-Path $repoRoot "LICENSE"
 
 if (-not $OutputDirectory) {
@@ -81,6 +82,14 @@ try {
     if (-not (Test-Path -LiteralPath $guiExecutable -PathType Leaf)) {
         throw "Release executable not found at '$guiExecutable'."
     }
+    $guiIcon = Get-ChildItem -LiteralPath $guiBuildDirectory -Directory -Filter "orbit-gui-*" |
+        ForEach-Object { Join-Path $_.FullName "out\orbit-gui.ico" } |
+        Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } |
+        Sort-Object { (Get-Item -LiteralPath $_).LastWriteTimeUtc } -Descending |
+        Select-Object -First 1
+    if (-not $guiIcon) {
+        throw "Generated GUI icon not found below '$guiBuildDirectory'."
+    }
 
     dotnet tool restore
     if ($LASTEXITCODE -ne 0) {
@@ -114,6 +123,7 @@ try {
         -d "OrbitExecutable=$executable" `
         -d "OrbitLauncherExecutable=$launcherExecutable" `
         -d "OrbitGuiExecutable=$guiExecutable" `
+        -d "OrbitGuiIcon=$guiIcon" `
         -d "OrbitLicense=$license" `
         -d "OrbitLicenseRtf=$licenseRtf" `
         -d "ProductDisplayName=Orbit" `

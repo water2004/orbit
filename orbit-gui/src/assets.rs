@@ -65,6 +65,9 @@ impl AssetSource for OrbitAssets {
             "icons/warning.svg" | "icons/triangle-alert.svg" => {
                 include_bytes!("../assets/icons/warning.svg")
             }
+            "images/orbit.png" => {
+                include_bytes!(concat!(env!("OUT_DIR"), "/orbit-gui.png"))
+            }
             _ => return Ok(None),
         };
         Ok(Some(Cow::Borrowed(bytes)))
@@ -159,5 +162,33 @@ impl IconNamed for OrbitIcon {
             Self::Orbit => "orbit",
         };
         format!("icons/{name}.svg").into()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use gpui::AssetSource as _;
+    use image::GenericImageView as _;
+
+    use super::OrbitAssets;
+
+    #[test]
+    fn brand_image_is_a_visible_build_time_raster_of_the_svg() {
+        let bytes = OrbitAssets
+            .load("images/orbit.png")
+            .expect("brand asset should load")
+            .expect("brand asset should exist");
+        let image = image::load_from_memory_with_format(&bytes, image::ImageFormat::Png)
+            .expect("brand asset should be a PNG");
+        assert_eq!(image.dimensions(), (256, 256));
+        assert!(
+            image
+                .to_rgba8()
+                .pixels()
+                .filter(|pixel| pixel.0[3] > 0)
+                .count()
+                > 4_000,
+            "brand asset should contain visible pixels"
+        );
     }
 }

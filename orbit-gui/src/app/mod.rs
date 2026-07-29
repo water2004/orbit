@@ -7,7 +7,7 @@ use std::{
 use gpui::{
     AnyElement, AppContext, Context, Entity, InteractiveElement, IntoElement, ParentElement,
     Render, SharedString, StatefulInteractiveElement, Styled, Subscription, Task, Timer, Window,
-    div, prelude::FluentBuilder as _, px, svg,
+    div, img, prelude::FluentBuilder as _, px,
 };
 use gpui_component::{
     ActiveTheme, Selectable, Sizable, StyledExt,
@@ -593,7 +593,7 @@ impl OrbitApp {
                     .px_2()
                     .gap_3()
                     .items_center()
-                    .child(svg().path("icons/orbit.svg").size(px(38.)).flex_shrink_0())
+                    .child(img("images/orbit.png").size(px(38.)).flex_shrink_0())
                     .child(
                         v_flex()
                             .gap_0p5()
