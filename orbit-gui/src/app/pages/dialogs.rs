@@ -124,7 +124,7 @@ pub(super) fn render_package_add(app: &OrbitApp, cx: &mut Context<OrbitApp>) -> 
                 ))
                 .child(ui::section_title(
                     tr!("Environment filter").into_owned(),
-                    tr!("This filters the root package; it does not rewrite JAR metadata")
+                    tr!("This filters the managed package; it does not rewrite JAR metadata")
                         .into_owned(),
                     cx,
                 ))
@@ -142,32 +142,17 @@ pub(super) fn render_package_add(app: &OrbitApp, cx: &mut Context<OrbitApp>) -> 
                     }),
                 ))
                 .child(
-                    v_flex()
-                        .gap_2()
-                        .child(
-                            Switch::new("package-add-optional")
-                                .checked(form.optional)
-                                .label(tr!("Optional root dependency").into_owned())
-                                .on_click(cx.listener(|this, checked, _, cx| {
-                                    if let Some(form) = &mut this.package_add {
-                                        form.optional = *checked;
-                                    }
-                                    cx.notify();
-                                })),
-                        )
-                        .child(
-                            Switch::new("package-add-no-dependencies")
-                                .checked(form.no_dependencies)
-                                .label(
-                                    tr!("Do not materialize transitive dependencies").into_owned(),
-                                )
-                                .on_click(cx.listener(|this, checked, _, cx| {
-                                    if let Some(form) = &mut this.package_add {
-                                        form.no_dependencies = *checked;
-                                    }
-                                    cx.notify();
-                                })),
-                        ),
+                    v_flex().gap_2().child(
+                        Switch::new("package-add-optional")
+                            .checked(form.optional)
+                            .label(tr!("Optional package").into_owned())
+                            .on_click(cx.listener(|this, checked, _, cx| {
+                                if let Some(form) = &mut this.package_add {
+                                    form.optional = *checked;
+                                }
+                                cx.notify();
+                            })),
+                    ),
                 )
                 .child(
                     h_flex()
@@ -194,7 +179,6 @@ pub(super) fn render_package_add(app: &OrbitApp, cx: &mut Context<OrbitApp>) -> 
                                             version,
                                             form.environment,
                                             form.optional,
-                                            form.no_dependencies,
                                         );
                                     }
                                     version_read

@@ -155,11 +155,6 @@ pub(super) fn render(
                     let edit = package.clone();
                     let upgrade = package.mod_id.clone();
                     let remove = package.mod_id.clone();
-                    let relationship = if package.root {
-                        tr!("Direct")
-                    } else {
-                        tr!("Dependency")
-                    };
                     list = list.child(
                         h_flex()
                             .min_w_0()
@@ -178,7 +173,6 @@ pub(super) fn render(
                                             .gap_2()
                                             .child(div().font_semibold().child(package.mod_id.clone()))
                                             .child(ui::neutral_pill(package.version.clone(), cx))
-                                            .child(ui::neutral_pill(relationship.into_owned(), cx))
                                             .when(package.optional, |row| {
                                                 row.child(ui::neutral_pill(
                                                     tr!("Optional").into_owned(),
@@ -222,8 +216,13 @@ pub(super) fn render(
                                         Button::new(("package-edit", index))
                                             .label(tr!("Manage").into_owned())
                                             .ghost()
-                                            .on_click(cx.listener(move |this, _, _, cx| {
+                                            .on_click(cx.listener(move |this, _, window, cx| {
+                                                let constraint = edit.version_constraint.clone();
+                                                this.inputs.package_constraint.update(cx, |input, cx| {
+                                                    input.set_value(&constraint, window, cx);
+                                                });
                                                 this.package_editor = Some(PackageEditor::new(edit.clone()));
+                                                this.load_package_versions(&edit.mod_id);
                                                 cx.notify();
                                             })),
                                     )

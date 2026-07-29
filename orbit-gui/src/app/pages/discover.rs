@@ -167,7 +167,6 @@ pub(super) fn render(
                                                 project: add.clone(),
                                                 environment: 0,
                                                 optional: false,
-                                                no_dependencies: false,
                                             });
                                             cx.notify();
                                         })),

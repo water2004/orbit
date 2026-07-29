@@ -571,6 +571,17 @@ impl OrbitApp {
                 self.instance_detail = Some(detail);
             }
             Intent::Packages => self.packages = decode::<PackageList>(result)?.packages,
+            Intent::PackageVersions { package } => {
+                let versions: PackageVersions = decode(result)?;
+                if versions.package == *package
+                    && self
+                        .package_editor
+                        .as_ref()
+                        .is_some_and(|editor| editor.package.mod_id == *package)
+                {
+                    self.package_versions = Some(versions);
+                }
+            }
             Intent::Search => {
                 let response: SearchResults = decode(result)?;
                 self.search_results = response.results;
@@ -997,6 +1008,40 @@ impl OrbitApp {
         );
     }
 
+    pub(super) fn load_package_versions(&mut self, package: &str) {
+        self.package_versions = None;
+        if let Some(root) = self.selected_root() {
+            self.orbit_task_args(
+                &tr!("Loading %{package} versions", package = package),
+                Intent::PackageVersions {
+                    package: package.to_string(),
+                },
+                vec!["versions".into(), package.into()],
+                Some(root),
+                None,
+            );
+        }
+    }
+
+    pub(super) fn set_package_constraint(&mut self, package: &str, requirement: &str) {
+        self.orbit_mutation(
+            &tr!("Updating %{package} version policy", package = package),
+            vec![
+                "constraint".into(),
+                "set".into(),
+                package.into(),
+                requirement.into(),
+            ],
+        );
+    }
+
+    pub(super) fn clear_package_constraint(&mut self, package: &str) {
+        self.orbit_mutation(
+            &tr!("Clearing %{package} version policy", package = package),
+            vec!["constraint".into(), "clear".into(), package.into()],
+        );
+    }
+
     pub(super) fn add_package_remote(&mut self, package: &str, provider: &str, locator: &str) {
         self.orbit_mutation(
             &tr!(
@@ -1053,7 +1098,6 @@ impl OrbitApp {
         version: String,
         environment: usize,
         optional: bool,
-        no_dependencies: bool,
     ) {
         let locator = match result.platform.as_str() {
             "modrinth" => format!("mr:{}", result.project_id),
@@ -1073,9 +1117,6 @@ impl OrbitApp {
         }
         if optional {
             command.push("--optional".into());
-        }
-        if no_dependencies {
-            command.push("--no-deps".into());
         }
         self.orbit_mutation(&tr!("Adding %{name}", name = result.name), command);
     }

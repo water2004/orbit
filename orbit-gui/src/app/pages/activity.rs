@@ -578,6 +578,8 @@ fn render_package_editor(app: &OrbitApp, cx: &mut Context<OrbitApp>) -> impl Int
     let purge_package = package_id.clone();
     let remote_input = app.inputs.remote_locator.clone();
     let remote_read = remote_input.clone();
+    let constraint_input = app.inputs.package_constraint.clone();
+    let constraint_read = constraint_input.clone();
     let providers = ["file", "modrinth", "curseforge"];
     let mut remotes = v_flex().gap_2();
     for (index, remote) in editor.package.remotes.iter().cloned().enumerate() {
@@ -619,6 +621,113 @@ fn render_package_editor(app: &OrbitApp, cx: &mut Context<OrbitApp>) -> impl Int
                         .justify_between()
                         .child(div().text_xl().font_semibold().child(package_id.clone()))
                         .child(Button::new("package-close").icon(OrbitIcon::Close).ghost().on_click(cx.listener(|this, _, _, cx| { this.package_editor = None; cx.notify(); }))),
+                )
+                .child(ui::section_title(
+                    tr!("Version policy").into_owned(),
+                    tr!("Saving changes orbit.toml intent only; Fix applies the policy to installed JARs").into_owned(),
+                    cx,
+                ))
+                .child(
+                    h_flex()
+                        .gap_2()
+                        .child(Input::new(&constraint_input).flex_1())
+                        .child(
+                            Button::new("package-constraint-clear")
+                                .label(tr!("Allow any").into_owned())
+                                .on_click(cx.listener({
+                                    let package = package_id.clone();
+                                    move |this, _, _, cx| {
+                                        this.clear_package_constraint(&package);
+                                        this.package_editor = None;
+                                        cx.notify();
+                                    }
+                                })),
+                        )
+                        .child(
+                            Button::new("package-constraint-save")
+                                .label(tr!("Save policy").into_owned())
+                                .primary()
+                                .on_click(cx.listener({
+                                    let package = package_id.clone();
+                                    move |this, _, _, cx| {
+                                        let requirement = constraint_read.read(cx).value().trim().to_string();
+                                        if !requirement.is_empty() {
+                                            this.set_package_constraint(&package, &requirement);
+                                            this.package_editor = None;
+                                        }
+                                        cx.notify();
+                                    }
+                                })),
+                        ),
+                )
+                .child(ui::section_title(
+                    tr!("Available versions").into_owned(),
+                    app.package_versions
+                        .as_ref()
+                        .map(|versions| {
+                            tr!(
+                                "Remote JAR metadata · policy %{constraint} · selected %{selected}",
+                                constraint = versions.constraint,
+                                selected = versions
+                                    .selected_version
+                                    .clone()
+                                    .unwrap_or_else(|| tr!("none").into_owned())
+                            )
+                        })
+                        .unwrap_or_else(|| tr!("Downloading and inspecting configured remotes…").into_owned()),
+                    cx,
+                ))
+                .child(
+                    div()
+                        .max_h(px(220.))
+                        .overflow_y_scrollbar()
+                        .children(app.package_versions.as_ref().into_iter().flat_map(|versions| {
+                            versions.candidates.iter().enumerate().map(|(index, candidate)| {
+                                let version = candidate.version.clone();
+                                let input = constraint_input.clone();
+                                h_flex()
+                                    .id(("package-version", index))
+                                    .px_3()
+                                    .py_2()
+                                    .gap_2()
+                                    .items_center()
+                                    .border_b_1()
+                                    .border_color(cx.theme().border)
+                                    .child(
+                                        v_flex()
+                                            .min_w_0()
+                                            .flex_1()
+                                            .gap_1()
+                                            .child(
+                                                h_flex()
+                                                    .gap_2()
+                                                    .child(div().font_medium().child(candidate.version.clone()))
+                                                    .when(candidate.selected, |row| row.child(ui::neutral_pill(tr!("Selected").into_owned(), cx)))
+                                                    .when(candidate.matches_constraint, |row| row.child(ui::neutral_pill(tr!("Allowed").into_owned(), cx))),
+                                            )
+                                            .child(
+                                                div()
+                                                    .text_xs()
+                                                    .text_color(cx.theme().muted_foreground)
+                                                    .child(format!("{} · {}", candidate.sources.join(", "), candidate.details)),
+                                            ),
+                                    )
+                                    .child(
+                                        Button::new(("use-package-version", index))
+                                            .label(tr!("Use").into_owned())
+                                            .ghost()
+                                            .on_click(cx.listener(move |_, _, window, cx| {
+                                                input.update(cx, |state, cx| {
+                                                    state.set_value(
+                                                        format!("={version}"),
+                                                        window,
+                                                        cx,
+                                                    );
+                                                });
+                                            })),
+                                    )
+                            })
+                        })),
                 )
                 .child(ui::section_title(tr!("Environment").into_owned(), tr!("Auto follows the JAR declaration; loaders without a declaration default to both").into_owned(), cx))
                 .child(

@@ -129,7 +129,6 @@ pub(super) struct PackageAddForm {
     pub project: SearchResult,
     pub environment: usize,
     pub optional: bool,
-    pub no_dependencies: bool,
 }
 
 impl PackageEditor {
@@ -181,6 +180,7 @@ pub(super) struct Inputs {
     pub launcher_binary: Entity<InputState>,
     pub remote_locator: Entity<InputState>,
     pub add_version: Entity<InputState>,
+    pub package_constraint: Entity<InputState>,
     pub runtime_name: Entity<InputState>,
     pub audit_filter: Entity<InputState>,
     pub minecraft_move_destination: Entity<InputState>,
@@ -224,6 +224,7 @@ impl Inputs {
             }),
             remote_locator: input(window, cx, tr!("Remote locator").into_owned()),
             add_version: input(window, cx, tr!("Any compatible version").into_owned()),
+            package_constraint: input(window, cx, tr!("Version requirement").into_owned()),
             runtime_name: input(window, cx, tr!("Installation name").into_owned()),
             audit_filter: input(window, cx, tr!("Filter by mod").into_owned()),
             minecraft_move_destination: input(
@@ -244,6 +245,7 @@ pub struct OrbitApp {
     pub(super) runtime_instances: Vec<RuntimeInstance>,
     pub(super) instance_detail: Option<RuntimeInstanceDetail>,
     pub(super) packages: Vec<InstalledPackage>,
+    pub(super) package_versions: Option<PackageVersions>,
     pub(super) mod_view: usize,
     pub(super) search_results: Vec<SearchResult>,
     pub(super) search_truncated: bool,
@@ -355,6 +357,7 @@ impl OrbitApp {
             runtime_instances: Vec::new(),
             instance_detail: None,
             packages: Vec::new(),
+            package_versions: None,
             mod_view: 0,
             search_results: Vec::new(),
             search_truncated: false,

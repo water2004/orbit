@@ -224,12 +224,12 @@ pub struct JavaRequirement {
 pub struct InstalledPackage {
     pub mod_id: String,
     pub version: String,
+    pub version_constraint: String,
     pub icon_path: Option<String>,
     #[serde(default)]
     pub remotes: Vec<String>,
     pub configured_environment: Option<String>,
     pub environment: String,
-    pub root: bool,
     pub optional: bool,
     #[serde(default)]
     pub dependencies: Vec<String>,
@@ -246,6 +246,23 @@ pub struct BundledPackage {
 #[derive(Debug, Deserialize)]
 pub struct PackageList {
     pub packages: Vec<InstalledPackage>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct PackageVersions {
+    pub package: String,
+    pub constraint: String,
+    pub selected_version: Option<String>,
+    pub candidates: Vec<PackageVersionCandidate>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct PackageVersionCandidate {
+    pub version: String,
+    pub sources: Vec<String>,
+    pub details: String,
+    pub selected: bool,
+    pub matches_constraint: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -419,6 +436,9 @@ pub enum Intent {
     LauncherInstances,
     LauncherInstanceDetail,
     Packages,
+    PackageVersions {
+        package: String,
+    },
     Search,
     Outdated,
     Audit,
