@@ -321,7 +321,7 @@ pub async fn fix_instance(
             candidates: catalog.candidates.values().map(Vec::len).sum(),
         },
     );
-    let portfolio = crate::resolver::resolve_candidate_portfolio_with_progress(
+    let portfolio = crate::resolver::resolve_minimal_change_portfolio_with_progress(
         &manifest_file.inner,
         &lock.inner,
         &catalog,
@@ -342,19 +342,47 @@ pub async fn fix_instance(
     let candidate_remotes = catalog.package_remotes();
     let mut planned = Vec::new();
     let mut already_satisfied = Vec::new();
-    for (package, candidate_id) in &resolution.selected_candidates {
+    for (package, selected_source) in &resolution.selected_sources {
         let version = &resolution.selected_versions[package];
-        let resolved = resolved_candidate(&catalog.resolved, candidate_id)?;
-        let is_present = match lock.inner.find(package) {
-            Some(entry) if crate::resolver::locked_source(entry) == *candidate_id => {
-                package_is_present(entry, &mods_dir)?
+        if let Some(entry) = lock.inner.packages.iter().find(|entry| {
+            entry.mod_id == *package && crate::resolver::locked_source(entry) == *selected_source
+        }) {
+            if package_is_present(entry, &mods_dir)? {
+                already_satisfied.push(package.clone());
+                continue;
             }
-            _ => false,
-        };
-        if is_present {
-            already_satisfied.push(package.clone());
+            let resolved = crate::resolver::types::ResolvedArtifact {
+                filename: package_filename(entry),
+                sha1: entry.sha1.clone(),
+                sha256: entry.sha256.clone(),
+                sha512: entry.sha512.clone(),
+                sources: entry.artifact_sources.clone(),
+            };
+            catalog
+                .resolved
+                .insert(selected_source.clone(), resolved.clone());
+            let mut remotes = entry.remotes.clone();
+            if let Some(requirement) = manifest_file.inner.packages.get(package) {
+                remotes.extend(requirement.remotes.iter().cloned());
+            }
+            remotes.sort();
+            remotes.dedup();
+            planned.push(plan_from_resolved(
+                package,
+                version,
+                selected_source,
+                &resolved,
+                remotes,
+            ));
             continue;
         }
+
+        let candidate_id = resolution.selected_candidates.get(package).ok_or_else(|| {
+            OrbitError::Other(anyhow::anyhow!(
+                "solver selected an unknown realization for package '{package}'"
+            ))
+        })?;
+        let resolved = resolved_candidate(&catalog.resolved, candidate_id)?;
         let mut remotes = candidate_remotes.get(package).cloned().unwrap_or_default();
         if let Some(requirement) = manifest_file.inner.packages.get(package) {
             remotes.extend(requirement.remotes.iter().cloned());
@@ -1151,7 +1179,7 @@ async fn resolve_requested_package(
         let mut package_requirement = requirement.clone();
         package_requirement.remotes = catalog.remotes_for_package(&package);
         ensure_package_spec(&mut resolution_manifest, &package, package_requirement);
-        match crate::resolver::resolve_candidate_portfolio_with_progress(
+        match crate::resolver::resolve_minimal_change_portfolio_with_progress(
             &resolution_manifest,
             lockfile,
             catalog,
@@ -2003,6 +2031,19 @@ physical_environment = "client"
         }
     }
 
+    fn solver_candidate(
+        mod_id: &str,
+        version: &str,
+        dependencies: &[&str],
+    ) -> crate::resolver::types::CandidateVersion {
+        crate::resolver::types::CandidateVersion::from_jar_metadata(
+            format!("candidate:{mod_id}:{version}"),
+            format!("{mod_id}-{version}.jar"),
+            "test candidate".to_string(),
+            jar_metadata(mod_id, version, dependencies),
+        )
+    }
+
     fn write_fabric_jar(path: &Path, version: &str) {
         let file = std::fs::File::create(path).unwrap();
         let mut archive = zip::ZipWriter::new(file);
@@ -2296,6 +2337,121 @@ physical_environment = "client"
         );
     }
 
+    #[tokio::test]
+    async fn fix_preserves_a_feasible_locked_realization_instead_of_upgrading_it() {
+        let directory = tempfile::tempdir().unwrap();
+        crate::platform_detection::test_support::write_platform(
+            directory.path(),
+            "1",
+            "fabric",
+            "1",
+        );
+        let discovered = crate::platform_detection::discover_platform_for_init(
+            directory.path(),
+            "1",
+            "fabric",
+            "1",
+        )
+        .unwrap();
+        let available = directory.path().join("available");
+        let mods = directory.path().join("mods");
+        std::fs::create_dir_all(&available).unwrap();
+        std::fs::create_dir_all(&mods).unwrap();
+        let version_one = available.join("alpha-1.jar");
+        let version_two = available.join("alpha-2.jar");
+        write_fabric_jar(&version_one, "1");
+        write_fabric_jar(&version_two, "2");
+
+        let version_one_remote = PackageRemote::File {
+            path: "available/alpha-1.jar".to_string(),
+        };
+        let version_two_remote = PackageRemote::File {
+            path: "available/alpha-2.jar".to_string(),
+        };
+        let mut manifest = OrbitManifest {
+            project: crate::manifest::ProjectMeta {
+                name: "test".to_string(),
+                mc_version: "1".to_string(),
+                modloader: "fabric".to_string(),
+                modloader_version: "1".to_string(),
+                description: None,
+                authors: None,
+                version: None,
+            },
+            platform: discovered.snapshot(directory.path()).unwrap(),
+            resolver: crate::manifest::ResolverConfig::default(),
+            packages: Default::default(),
+            groups: Default::default(),
+        };
+        manifest.packages.insert(
+            "alpha".to_string(),
+            PackageSpec::new("*", vec![version_one_remote.clone(), version_two_remote]),
+        );
+        ManifestFile::new(directory.path(), manifest)
+            .save()
+            .unwrap();
+        Lockfile::new(
+            directory.path(),
+            OrbitLockfile {
+                meta: LockMeta {
+                    mc_version: "1".to_string(),
+                    modloader: "fabric".to_string(),
+                    modloader_version: "1".to_string(),
+                },
+                packages: vec![PackageEntry {
+                    mod_id: "alpha".to_string(),
+                    version: "1".to_string(),
+                    sha1: crate::jar::compute_sha1(&version_one).unwrap(),
+                    sha256: crate::jar::compute_sha256(&version_one).unwrap(),
+                    sha512: crate::jar::compute_sha512(&version_one).unwrap(),
+                    filename: "alpha.jar".to_string(),
+                    remotes: vec![version_one_remote],
+                    artifact_sources: vec![ArtifactSource::File {
+                        path: "available/alpha-1.jar".to_string(),
+                    }],
+                    dependencies: Vec::new(),
+                    environment: crate::metadata::Environment::Both,
+                    provides: Vec::new(),
+                    language_loader: None,
+                    embedded_artifacts: Vec::new(),
+                    bundled: Vec::new(),
+                }],
+            },
+        )
+        .save()
+        .unwrap();
+        let cache = crate::jar_cache::JarCache::open(directory.path().join("cache")).unwrap();
+
+        let report = fix_instance(
+            directory.path(),
+            &[],
+            &cache,
+            false,
+            InstallInteraction {
+                confirm_install: Some(Box::new(|_| true)),
+                ..InstallInteraction::default()
+            },
+        )
+        .await
+        .unwrap();
+
+        assert!(report.changes.is_empty(), "{report:?}");
+        assert_eq!(report.installed.len(), 1, "{report:?}");
+        assert_eq!(report.installed[0].mod_id, "alpha");
+        assert_eq!(report.installed[0].version, "1");
+        assert!(report.removed.is_empty(), "{report:?}");
+        assert_eq!(
+            Lockfile::open(directory.path()).unwrap().inner.packages[0].version,
+            "1"
+        );
+        let installed = crate::jar::read_mod_metadata(
+            &mods.join("alpha.jar"),
+            crate::loader::LoaderKind::Fabric,
+        )
+        .unwrap();
+        assert_eq!(installed.version, "1");
+    }
+
     fn empty_lockfile() -> OrbitLockfile {
         OrbitLockfile {
             meta: LockMeta {
@@ -2387,6 +2543,115 @@ physical_environment = "client"
 
         assert_eq!(package, "gca_wrapper");
         assert!(!prompted.load(Ordering::Relaxed));
+    }
+
+    #[tokio::test]
+    async fn add_uses_the_minimal_change_front_before_maximizing_new_versions() {
+        let mut manifest = manifest();
+        manifest.packages.insert(
+            "base".to_string(),
+            PackageSpec::new(
+                "*",
+                vec![PackageRemote::File {
+                    path: "mods/base.jar".to_string(),
+                }],
+            ),
+        );
+        let lockfile = OrbitLockfile {
+            meta: empty_lockfile().meta,
+            packages: vec![locked_package("base", &[])],
+        };
+        let mut catalog = crate::resolver::types::CandidateCatalog::default();
+        catalog
+            .candidates
+            .insert("base".to_string(), vec![solver_candidate("base", "2", &[])]);
+        catalog.candidates.insert(
+            "requested".to_string(),
+            vec![
+                solver_candidate("requested", "1", &[]),
+                solver_candidate("requested", "2", &["new-dependency"]),
+            ],
+        );
+        catalog.candidates.insert(
+            "new-dependency".to_string(),
+            vec![solver_candidate("new-dependency", "1", &[])],
+        );
+        catalog.requested_packages.insert("requested".to_string());
+
+        let (package, portfolio) = resolve_requested_package(RequestedPackageInput {
+            requested_package: None,
+            intent: InstallIntent::Add,
+            manifest: &manifest,
+            lockfile: &lockfile,
+            catalog: &catalog,
+            requirement: PackageSpec::new("*", Vec::new()),
+            selector: None,
+            progress: None,
+        })
+        .await
+        .unwrap();
+
+        assert_eq!(package, "requested");
+        assert_eq!(portfolio.alternatives.len(), 1);
+        let selected = &portfolio.alternatives[0];
+        assert_eq!(selected.selected_versions["base"], "1");
+        assert_eq!(selected.selected_versions["requested"], "1");
+        assert!(!selected.selected_versions.contains_key("new-dependency"));
+        assert_eq!(
+            selected
+                .changes
+                .iter()
+                .map(|change| change.package.as_str())
+                .collect::<Vec<_>>(),
+            vec!["requested"]
+        );
+    }
+
+    #[tokio::test]
+    async fn upgrade_keeps_the_version_maximal_objective() {
+        let mut manifest = manifest();
+        manifest.packages.insert(
+            "base".to_string(),
+            PackageSpec::new(
+                "*",
+                vec![PackageRemote::File {
+                    path: "mods/base.jar".to_string(),
+                }],
+            ),
+        );
+        let lockfile = OrbitLockfile {
+            meta: empty_lockfile().meta,
+            packages: vec![locked_package("base", &[])],
+        };
+        let mut catalog = crate::resolver::types::CandidateCatalog::default();
+        catalog.candidates.insert(
+            "base".to_string(),
+            vec![
+                solver_candidate("base", "1", &[]),
+                solver_candidate("base", "2", &[]),
+            ],
+        );
+
+        let (package, portfolio) = resolve_requested_package(RequestedPackageInput {
+            requested_package: Some("base"),
+            intent: InstallIntent::Upgrade,
+            manifest: &manifest,
+            lockfile: &lockfile,
+            catalog: &catalog,
+            requirement: PackageSpec::new("*", Vec::new()),
+            selector: None,
+            progress: None,
+        })
+        .await
+        .unwrap();
+
+        assert_eq!(package, "base");
+        assert_eq!(portfolio.alternatives.len(), 1);
+        assert_eq!(portfolio.alternatives[0].selected_versions["base"], "2");
+        assert_eq!(
+            portfolio.alternatives[0].changes[0].kind,
+            crate::PackageChangeKind::Upgrade
+        );
     }
 
     #[test]

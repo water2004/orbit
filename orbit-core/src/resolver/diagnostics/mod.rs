@@ -129,6 +129,20 @@ impl ResolutionTrace {
                     },
                 }
             }
+            SolverEvent::PreferenceProbeStarted { package } => {
+                ProgressEvent::ResolutionWorkStarted {
+                    work: ResolutionWork::PreferenceProbe {
+                        package: package.to_string(),
+                    },
+                }
+            }
+            SolverEvent::PreferenceProbeFinished { package, .. } => {
+                ProgressEvent::ResolutionWorkFinished {
+                    work: ResolutionWork::PreferenceProbe {
+                        package: package.to_string(),
+                    },
+                }
+            }
             SolverEvent::Decision { package, .. } => ProgressEvent::ResolutionActivity {
                 activity: ResolutionActivity::Decision {
                     package: package.to_string(),

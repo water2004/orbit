@@ -24,6 +24,7 @@ pub enum ArtifactProgressState {
 pub enum ResolutionWork {
     EnumerationRun { run: usize },
     MaximalityProbe { package: String },
+    PreferenceProbe { package: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

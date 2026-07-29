@@ -267,7 +267,7 @@ impl ProgressRenderer {
                 finish(
                     &mut state,
                     tr!(
-                        "[3/4] Found %{solutions} Pareto-maximal solution(s) · %{counters}",
+                        "[3/4] Found %{solutions} non-dominated solution(s) · %{counters}",
                         solutions = solutions,
                         counters = counters
                     ),
@@ -531,7 +531,7 @@ fn plain_line(event: &ProgressEvent, state: &mut RenderState) -> Option<String> 
         ProgressEvent::ResolutionFinished { solutions } => {
             state.solutions = *solutions;
             Some(tr!(
-                "[3/4] Found %{solutions} Pareto-maximal solution(s) · %{counters}.",
+                "[3/4] Found %{solutions} non-dominated solution(s) · %{counters}.",
                 solutions = solutions,
                 counters = state.resolution_counters()
             ))
@@ -677,6 +677,12 @@ fn work_started_label(work: &ResolutionWork) -> String {
                 package = package
             )
         }
+        ResolutionWork::PreferenceProbe { package } => {
+            tr!(
+                "checking whether %{package} can be preserved",
+                package = package
+            )
+        }
     }
 }
 
@@ -685,6 +691,9 @@ fn work_finished_label(work: &ResolutionWork) -> String {
         ResolutionWork::EnumerationRun { run } => tr!("search run %{run}", run = run),
         ResolutionWork::MaximalityProbe { package } => {
             tr!("checked maximality of %{package}", package = package)
+        }
+        ResolutionWork::PreferenceProbe { package } => {
+            tr!("checked preservation of %{package}", package = package)
         }
     }
 }
@@ -704,7 +713,7 @@ fn activity_label(activity: &ResolutionActivity) -> String {
             to = to_level
         ),
         ResolutionActivity::Conflict => tr!("resolving a conflict").into_owned(),
-        ResolutionActivity::Solution => tr!("retained a Pareto-maximal solution").into_owned(),
+        ResolutionActivity::Solution => tr!("retained a Pareto solution").into_owned(),
     }
 }
 

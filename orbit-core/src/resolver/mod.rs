@@ -431,10 +431,57 @@ pub async fn resolve_candidate_portfolio(
     resolve_candidate_portfolio_with_progress(manifest, lockfile, catalog, None).await
 }
 
+pub async fn resolve_minimal_change_portfolio(
+    manifest: &OrbitManifest,
+    lockfile: &OrbitLockfile,
+    catalog: &CandidateCatalog,
+) -> Result<ResolutionPortfolio, String> {
+    resolve_minimal_change_portfolio_with_progress(manifest, lockfile, catalog, None).await
+}
+
 pub async fn resolve_candidate_portfolio_with_progress(
     manifest: &OrbitManifest,
     lockfile: &OrbitLockfile,
     catalog: &CandidateCatalog,
+    progress: Option<ProgressReporter>,
+) -> Result<ResolutionPortfolio, String> {
+    resolve_portfolio_with_progress(
+        manifest,
+        lockfile,
+        catalog,
+        ResolutionObjective::MaximizeVersions,
+        progress,
+    )
+    .await
+}
+
+pub async fn resolve_minimal_change_portfolio_with_progress(
+    manifest: &OrbitManifest,
+    lockfile: &OrbitLockfile,
+    catalog: &CandidateCatalog,
+    progress: Option<ProgressReporter>,
+) -> Result<ResolutionPortfolio, String> {
+    resolve_portfolio_with_progress(
+        manifest,
+        lockfile,
+        catalog,
+        ResolutionObjective::MinimizeChanges,
+        progress,
+    )
+    .await
+}
+
+#[derive(Clone, Copy)]
+enum ResolutionObjective {
+    MaximizeVersions,
+    MinimizeChanges,
+}
+
+async fn resolve_portfolio_with_progress(
+    manifest: &OrbitManifest,
+    lockfile: &OrbitLockfile,
+    catalog: &CandidateCatalog,
+    objective: ResolutionObjective,
     progress: Option<ProgressReporter>,
 ) -> Result<ResolutionPortfolio, String> {
     let graph = build_solver_graph(
@@ -451,32 +498,37 @@ pub async fn resolve_candidate_portfolio_with_progress(
         .collect();
     maximized_mods.sort();
     maximized_mods.dedup();
-    let maximized_packages = maximized_mods.into_iter().map(SolverPackage::logical);
+    let maximized_packages = maximized_mods
+        .iter()
+        .cloned()
+        .map(SolverPackage::logical)
+        .collect::<Vec<_>>();
     let watched_candidates = highest_candidates(&catalog.candidates, graph.loader);
     let mut trace = diagnostics::ResolutionTrace::with_progress(watched_candidates, progress);
-    let version_ordering = pubgrub::VersionOrdering::new(
-        |version: &SolverVersion| Ranges::singleton(version.clone()),
-        |version: &SolverVersion| {
-            version.domain().map_or_else(
-                || Ranges::singleton(version.clone()),
-                |semantic| solver_range(semantic.precedence_class()),
+    let solved = match objective {
+        ResolutionObjective::MaximizeVersions => pubgrub::resolve_maximal_solutions_with_observer(
+            &graph.provider,
+            graph.root_package.clone(),
+            graph.root_version.clone(),
+            maximized_packages,
+            solver_version_ordering(),
+            &mut trace,
+        ),
+        ResolutionObjective::MinimizeChanges => {
+            let preferences =
+                minimal_change_preferences(manifest, lockfile, &graph.provider, &maximized_mods);
+            pubgrub::resolve_minimal_change_solutions_with_observer(
+                &graph.provider,
+                graph.root_package.clone(),
+                graph.root_version.clone(),
+                preferences,
+                maximized_packages,
+                solver_version_ordering(),
+                &mut trace,
             )
-        },
-        |version: &SolverVersion| {
-            version.domain().map_or_else(
-                || Ranges::strictly_higher_than(version.clone()),
-                |semantic| solver_range(semantic.strictly_higher_precedence()),
-            )
-        },
-    );
-    let solutions = match pubgrub::resolve_maximal_solutions_with_observer(
-        &graph.provider,
-        graph.root_package.clone(),
-        graph.root_version.clone(),
-        maximized_packages,
-        version_ordering,
-        &mut trace,
-    ) {
+        }
+    };
+    let solutions = match solved {
         Ok(solutions) => solutions,
         Err(pubgrub::PubGrubError::NoSolution(derivation_tree)) => {
             return Err(diagnostics::describe_no_solution(&derivation_tree));
@@ -526,6 +578,75 @@ pub async fn resolve_candidate_portfolio_with_progress(
         .map(|(solution, snapshot)| collect_report(&report_context, &solution, &snapshot))
         .collect();
     Ok(ResolutionPortfolio { alternatives })
+}
+
+type SolverVersionOrdering = pubgrub::VersionOrdering<
+    fn(&SolverVersion) -> Ranges<SolverVersion>,
+    fn(&SolverVersion) -> Ranges<SolverVersion>,
+    fn(&SolverVersion) -> Ranges<SolverVersion>,
+>;
+
+fn solver_version_ordering() -> SolverVersionOrdering {
+    pubgrub::VersionOrdering::new(
+        |version: &SolverVersion| Ranges::singleton(version.clone()),
+        |version: &SolverVersion| {
+            version.domain().map_or_else(
+                || Ranges::singleton(version.clone()),
+                |semantic| solver_range(semantic.precedence_class()),
+            )
+        },
+        |version: &SolverVersion| {
+            version.domain().map_or_else(
+                || Ranges::strictly_higher_than(version.clone()),
+                |semantic| solver_range(semantic.strictly_higher_precedence()),
+            )
+        },
+    )
+}
+
+fn minimal_change_preferences(
+    manifest: &OrbitManifest,
+    lockfile: &OrbitLockfile,
+    provider: &provider::OrbitDependencyProvider,
+    packages: &[String],
+) -> Vec<pubgrub::PackagePreference<SolverPackage, Ranges<SolverVersion>>> {
+    let mut preferences = Vec::new();
+    for mod_id in packages {
+        let package = SolverPackage::logical(mod_id.clone());
+        if !manifest.packages.contains_key(mod_id) {
+            preferences.push(pubgrub::PackagePreference::absent(package));
+            continue;
+        }
+        if !lockfile
+            .packages
+            .iter()
+            .any(|entry| entry.mod_id == *mod_id)
+        {
+            continue;
+        }
+        let preferred = provider
+            .versions
+            .get(&package)
+            .into_iter()
+            .flatten()
+            .filter(|version| {
+                version.candidate_identity().is_some_and(|identity| {
+                    identity.installed
+                        && identity.owner == *mod_id
+                        && identity.path.is_empty()
+                        && lockfile.packages.iter().any(|entry| {
+                            entry.mod_id == *mod_id && locked_source(entry) == identity.source
+                        })
+                })
+            })
+            .fold(Ranges::empty(), |range, version| {
+                range.union(&Ranges::singleton(version.clone()))
+            });
+        if preferred != Ranges::empty() {
+            preferences.push(pubgrub::PackagePreference::selected(package, preferred));
+        }
+    }
+    preferences
 }
 
 struct ReportContext<'a> {
@@ -1037,6 +1158,156 @@ b = { version = "*", remotes = [{ type = "file", path = "b.jar" }] }
                 ("a".to_string(), "2".to_string()),
                 ("b".to_string(), "2".to_string()),
             ])
+        );
+    }
+
+    #[tokio::test]
+    async fn minimal_change_keeps_every_feasible_installed_realization() {
+        let current = lockfile();
+        let mut catalog = CandidateCatalog::default();
+        catalog
+            .candidates
+            .insert("a".to_string(), vec![candidate("2", Vec::new())]);
+        catalog
+            .candidates
+            .insert("b".to_string(), vec![candidate("2", Vec::new())]);
+
+        let portfolio = resolve_minimal_change_portfolio(&manifest(), &current, &catalog)
+            .await
+            .unwrap();
+
+        assert_eq!(portfolio.alternatives.len(), 1);
+        assert!(portfolio.alternatives[0].changes.is_empty());
+        assert_eq!(portfolio.alternatives[0].selected_versions["a"], "1");
+        assert_eq!(portfolio.alternatives[0].selected_versions["b"], "1");
+    }
+
+    #[tokio::test]
+    async fn minimal_change_reports_balanced_preference_probe_progress() {
+        let current = lockfile();
+        let mut catalog = CandidateCatalog::default();
+        for package in ["a", "b"] {
+            catalog.candidates.insert(
+                package.to_string(),
+                vec![candidate("1", Vec::new()), candidate("2", Vec::new())],
+            );
+        }
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let captured = Arc::clone(&events);
+        let progress: ProgressReporter = Arc::new(move |event| {
+            captured.lock().unwrap().push(event);
+        });
+
+        resolve_minimal_change_portfolio_with_progress(
+            &manifest(),
+            &current,
+            &catalog,
+            Some(progress),
+        )
+        .await
+        .unwrap();
+
+        let events = events.lock().unwrap();
+        let started = events
+            .iter()
+            .filter(|event| {
+                matches!(
+                    event,
+                    ProgressEvent::ResolutionWorkStarted {
+                        work: crate::progress::ResolutionWork::PreferenceProbe { .. }
+                    }
+                )
+            })
+            .count();
+        let finished = events
+            .iter()
+            .filter(|event| {
+                matches!(
+                    event,
+                    ProgressEvent::ResolutionWorkFinished {
+                        work: crate::progress::ResolutionWork::PreferenceProbe { .. }
+                    }
+                )
+            })
+            .count();
+        assert!(started > 0, "{events:?}");
+        assert_eq!(started, finished, "{events:?}");
+    }
+
+    #[tokio::test]
+    async fn minimal_change_returns_incomparable_package_change_sets() {
+        let mut current = lockfile();
+        current.packages[0].dependencies = vec![ModDependency::required("b", "=2").into()];
+        let mut catalog = CandidateCatalog::default();
+        catalog
+            .candidates
+            .insert("a".to_string(), vec![candidate("2", Vec::new())]);
+        catalog
+            .candidates
+            .insert("b".to_string(), vec![candidate("2", Vec::new())]);
+
+        let portfolio = resolve_minimal_change_portfolio(&manifest(), &current, &catalog)
+            .await
+            .unwrap();
+        let choices = portfolio
+            .alternatives
+            .iter()
+            .map(|alternative| {
+                (
+                    alternative.selected_versions["a"].clone(),
+                    alternative.selected_versions["b"].clone(),
+                )
+            })
+            .collect::<std::collections::BTreeSet<_>>();
+
+        assert_eq!(
+            choices,
+            std::collections::BTreeSet::from([
+                ("1".to_string(), "2".to_string()),
+                ("2".to_string(), "1".to_string()),
+            ])
+        );
+    }
+
+    #[tokio::test]
+    async fn minimal_change_avoids_an_unnecessary_new_dependency_package() {
+        let current = lockfile();
+        let mut requested_manifest = manifest();
+        requested_manifest.packages.insert(
+            "requested".to_string(),
+            crate::manifest::PackageSpec::new(
+                "*",
+                vec![crate::manifest::PackageRemote::File {
+                    path: "requested.jar".to_string(),
+                }],
+            ),
+        );
+        let mut catalog = CandidateCatalog::default();
+        catalog.candidates.insert(
+            "requested".to_string(),
+            vec![
+                candidate("1", Vec::new()),
+                candidate("2", vec![ModDependency::required("new-dependency", "=1")]),
+            ],
+        );
+        catalog.candidates.insert(
+            "new-dependency".to_string(),
+            vec![candidate("1", Vec::new())],
+        );
+
+        let portfolio = resolve_minimal_change_portfolio(&requested_manifest, &current, &catalog)
+            .await
+            .unwrap();
+
+        assert_eq!(portfolio.alternatives.len(), 1);
+        assert_eq!(
+            portfolio.alternatives[0].selected_versions["requested"],
+            "1"
+        );
+        assert!(
+            !portfolio.alternatives[0]
+                .selected_versions
+                .contains_key("new-dependency")
         );
     }
 

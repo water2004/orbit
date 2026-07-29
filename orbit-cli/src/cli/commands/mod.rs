@@ -316,7 +316,7 @@ fn machine_select_resolution(
         sequence,
         "resolution",
         InteractionKind::Resolution,
-        &tr!("Choose one Pareto-maximal dependency solution"),
+        &tr!("Choose one non-dominated dependency solution"),
         choices,
         Some("1".to_string()),
     );

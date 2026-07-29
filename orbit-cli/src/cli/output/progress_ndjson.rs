@@ -181,6 +181,13 @@ mod tests {
         let json = serde_json::to_string(&work).unwrap();
         assert!(json.contains("\"kind\":\"maximality_probe\""));
         assert!(json.contains("\"package\":\"sodium\""));
+
+        let preference = ResolutionWork::PreferenceProbe {
+            package: "iris".to_string(),
+        };
+        let json = serde_json::to_string(&preference).unwrap();
+        assert!(json.contains("\"kind\":\"preference_probe\""));
+        assert!(json.contains("\"package\":\"iris\""));
     }
 
     #[test]
