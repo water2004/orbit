@@ -272,7 +272,7 @@ orbit [--output-format text|json] [--progress-format none|ndjson] <command> ...
         "kind": "upgrade",
         "current_version": "0.5.8",
         "selected_version": "0.6.0",
-        "selected_description": "Modrinth project AANobbMI, release mc1.21"
+        "selected_description": "Modrinth · 3 dependency constraints"
       }
     ],
     "diagnostics": [],
@@ -474,7 +474,7 @@ orbit [--output-format text|json] [--progress-format none|ndjson] <command> ...
         "kind": "upgrade",
         "current_version": "0.5.7",
         "selected_version": "0.5.8",
-        "selected_description": "Modrinth project AANobbMI, release mc1.21"
+        "selected_description": "Modrinth · 3 dependency constraints"
       }
     ],
     "installed": [
@@ -749,7 +749,7 @@ Orbit Launcher 直接使用 `orbit-machine-protocol` 中同一个信封类型，
 `interaction` NDJSON，然后暂停并从同一个子进程的 **stdin** 读取一行响应：
 
 ```json
-{"schema_version":2,"type":"interaction","command":"upgrade","sequence":12,"interaction_id":"resolution-12","interaction":"resolution","prompt":"Choose one non-dominated dependency solution","choices":[{"id":"1","label":"Option 1","description":"2 logical package actions","data":{"changes":[{"different":true,"change":{"package":"sodium","kind":"upgrade","current_version":"0.8.9","selected_version":"0.9.1","selected_description":null}},{"different":true,"change":{"package":"lithium","kind":"keep","current_version":"0.14.0","selected_version":"0.14.0","selected_description":null}}]}}],"default_choice":"1","allow_cancel":true}
+{"schema_version":2,"type":"interaction","command":"upgrade","sequence":12,"interaction_id":"resolution-12","interaction":"resolution","prompt":"Choose one non-dominated dependency solution","choices":[{"id":"1","label":"Option 1","description":"2 logical package actions","data":{"changes":[{"different":true,"change":{"package":"sodium","kind":"upgrade","current_version":"0.8.9","selected_version":"0.9.1","selected_description":"Modrinth · 3 dependency constraints","selected_artifact":"sodium-fabric-0.9.1+mc26.2.jar"}},{"different":true,"change":{"package":"lithium","kind":"keep","current_version":"0.14.0","selected_version":"0.14.0","selected_description":null,"selected_artifact":null}}]}}],"default_choice":"1","allow_cancel":true}
 ```
 
 调用方写回：
@@ -766,12 +766,13 @@ Orbit Launcher 直接使用 `orbit-machine-protocol` 中同一个信封类型，
 | `interaction` | 说明 |
 |---|---|
 | `package` | 在同一 provider locator 返回的多个可行 JAR `mod_id` 中选择 |
-| `resolution` | 在命令对应的完整 Pareto front 中选择（`add`/`fix` 为变更极小，`upgrade`/`outdated` 为版本极大）；`data` 只含包动作，`data.changes[].different=true` 是不依赖颜色的差异标记，`kind=keep` 明确表示该方案不执行另一方案中的动作 |
+| `resolution` | 在命令对应的完整 Pareto front 中选择（`add`/`fix` 为变更极小，`upgrade`/`outdated` 为版本极大）；`data` 只含包动作，`data.changes[].different=true` 是不依赖颜色的差异标记，`kind=keep` 明确表示该方案不执行另一方案中的动作；`selected_artifact` 只含所选顶层 JAR basename，不含目录 |
 | `confirmation` | 查看精确逻辑包事务并决定是否写入；或在 `interaction_id` 以 `migration_removals-` 开头时，查看严格迁移无解原因并决定是否搜索 Pareto 极小删包方案 |
 
 `--yes` 只跳过写入确认，不会跳过 `package`、`resolution` 或迁移删包许可。后者必须由交互
 明确同意，或由调用方传 `migrate ... --allow-removals`。唯一包身份/唯一解不会
-产生选择请求。交互请求与进度一样不含哈希和物理 JAR 文件名；最终成功结果仍只在 stdout
+产生选择请求。交互请求与进度一样不含哈希和物理路径；只有 resolution choice 携带用于
+区分真实候选的顶层 JAR basename，其他结果和进度仍不显示文件名。最终成功结果仍只在 stdout
 出现一次。resolution choice 不携带求解报告的 `warnings`、`diagnostics` 或汇总计数；这些
 属于最终结果/诊断视图，不是供用户选择的方案动作。
 

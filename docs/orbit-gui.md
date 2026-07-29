@@ -127,8 +127,9 @@ Runtime 页也把整合包作为领域动作呈现：安装 Orbit ZIP/TOML 或 M
 
 Mods 页以 lock 中逻辑包为单位显示当前版本、TOML 版本策略、环境、依赖、contained 模块数量和
 多远端。contained 内容仍由 CLI 的结构化 lock 事实提供，但界面只显示总数，不展开内置模块名或
-物理 JAR；方案选择和版本候选也只显示 provider、依赖约束数量与内置模块数量，绝不展示 hash、
-provider project/file id 或一整行内部模块约束。TOML 的 `[packages]` 是完整包集合，界面不制造根/传递两类身份。首次
+物理 JAR 明细；方案选择额外显示将安装的顶层 JAR basename，以区分同版本不同内容候选，
+但不显示路径或 contained JAR 名。版本候选只显示 provider、依赖约束数量与内置模块数量，
+绝不展示 hash、provider project/file id 或一整行内部模块约束。TOML 的 `[packages]` 是完整包集合，界面不制造根/传递两类身份。首次
 接管由已安装 Launcher lock 的精确 Minecraft/Loader 版本调用 `orbit init`，不在 GUI 中
 重复探测；`init` 在文本和 JSON 模式下执行同一个全局实例注册事务。搜索、添加、sync、fix、
 install、outdated、单包/全部 upgrade、环境与远端管理都调用
@@ -143,6 +144,9 @@ GUI 不复制 CLI 的项目详情报告；Discover 只提供搜索所需的名�
 
 Mods 页把三个职责分别呈现：Sync 只重新探测并重建本地事实，Fix 才求解和修复包集合，
 Install 只按 lock 精确恢复缺失文件。GUI 不根据一个命令失败去偷偷调用另一个命令。
+
+包管理等长表单弹窗使用固定标题和独立的正文滚动容器，不能依赖页面滚动或把超出窗口的
+控件直接裁掉。折叠活动条只允许单行截断摘要；完整错误和多行日志只在活动抽屉中显示。
 
 `outdated` 的更新与诊断分开呈现：可升级项显示当前到目标的变化，受阻候选显示 solver
 保留的事实。`upgrade` 的多个 Pareto 极大方案、降级、替换和将删除的包在统一 interaction

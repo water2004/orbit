@@ -33,7 +33,8 @@ add install fix remove purge sync upgrade import migrate-export remote-add remot
 选择）。
 选择之后，安装、升级、降级、同版本替换和删除合并成一个计划。只要计划会替换或删除
 顶层 `mods/*.jar`，即使求解只有唯一方案也必须先展示精确逻辑包版本动作并确认。物理
-JAR 文件名是执行层事实，不进入方案选择、升级预览或删除确认 UI。
+JAR 路径是执行层事实，永不进入 UI；多方案选择额外显示每个候选的顶层 JAR basename，
+用于区分同版本的不同真实候选。普通升级预览、诊断和删除确认仍不显示文件名。
 contained JAR 不是独立删除目标。
 
 全局标志：
