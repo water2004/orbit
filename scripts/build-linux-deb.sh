@@ -28,17 +28,16 @@ fi
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
 
+metadata="$(cargo metadata --format-version 1 --no-deps)"
 version="$(
-	cargo metadata \
-		--format-version 1 \
-		--no-deps \
-		python3 -c 'import json, sys; print(next(package["version"] for package in json.load(sys.stdin)["packages"] if package["name"] == "orbit"))'
+	python3 -c 'import json, sys; print(next(package["version"] for package in json.load(sys.stdin)["packages"] if package["name"] == "orbit"))' \
+		<<<"$metadata"
 )"
 
 for package in orbit-core orbit-launcher orbit-launcher-core orbit-gui; do
 	package_version="$(
-		cargo metadata --format-version 1 --no-deps |
-			python3 -c 'import json, sys; name = sys.argv[1]; print(next(package["version"] for package in json.load(sys.stdin)["packages"] if package["name"] == name))' "$package"
+		python3 -c 'import json, sys; name = sys.argv[1]; print(next(package["version"] for package in json.load(sys.stdin)["packages"] if package["name"] == name))' \
+			"$package" <<<"$metadata"
 	)"
 	if [[ "$package_version" != "$version" ]]; then
 		echo "$package is $package_version, but the Orbit suite is $version" >&2
