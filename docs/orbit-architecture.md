@@ -208,8 +208,9 @@ lock 物化的 `install`。fork 枚举
 project/release 远端，并按磁盘事实重建 lock；它不枚举版本、不下载候选 JAR、不求解，
 也不删除重复实现。发现同一 `mod_id` 的多个本地实现时，sync 保留全部文件和 TOML
 来源并要求运行 `fix`。`install` 只物化现有 lock 的精确内容，既不求解也不修改
-TOML/lock。联网候选闭包发现、可行解选择、未选包删除以及 TOML/lock 同步收敛只由
-`fix` 执行。
+TOML/lock。联网候选闭包发现、可行解选择和未选包删除由 `add`、`fix`、`upgrade` 与
+迁移等明确求解操作执行；这些写操作共享同一个 reconciliation，使 TOML 完整包集合与
+所选 lock 同步收敛。
 
 迁移先通过普通 archive exporter 冻结一个校验通过的便携源实例；该步骤成功后 Launcher
 才创建真实目标实例。随后同一个 `migration::plan_migration()` 从便携源读取包与配置事实、
@@ -219,11 +220,11 @@ TOML/lock。联网候选闭包发现、可行解选择、未选包删除以及 T
 按新 lock 精确物化，因而预检和导出不会走两条推导路径。便携源包不会替代真实目标平台
 探测；它只消除源实例在目标创建期间发生变化的竞态。
 
-根包环境具有两层正交语义：`orbit.toml` 的可选 `env` 是用户 target 过滤覆盖，lock 的
-`environment` 是精确候选从 JAR 解析出的事实。TOML 缺失覆盖时，locked 路径直接使用
+受管包环境具有两层正交语义：`orbit.toml` 的可选 `env` 是用户 target 过滤，lock 的
+`environment` 是精确候选从 JAR 解析出的事实。TOML 缺失设置时，locked 路径直接使用
 选中候选的环境；无 lock 的候选路径使用候选集合的真实 Loader 声明。Loader 没有包级
 声明时 adapter 产生 `both`。init/sync 不把推导结果反写成用户策略，`orbit env` 只修改
-manifest 覆盖。
+manifest 过滤。
 
 ## 5. loader 支持矩阵
 
@@ -275,7 +276,7 @@ Orbit 不能仅凭字节码完整证明：
 | Modrinth | `modrinth-wrapper` + core adapter，可用 |
 | 本地 `file:` | 可用 |
 | CurseForge | `curseforge-wrapper` + core adapter，可用；无 API Key 时 provider 无法创建，Core API 与 CDN 下载均认证 |
-| PubGrub fork | 已发布并固定到 `c334509daecf91611af2729b2db91af7eba6f076` |
+| PubGrub fork | 已发布并固定到 `f013c843f543ae0c160e30a8ef7dd630e080b59e` |
 | 多个 Pareto 极大解 | fork 原生完整枚举；唯一解自动选择，多解交给调用方选择 |
 
 ## 9. 跨平台运行环境

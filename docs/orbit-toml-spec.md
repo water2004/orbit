@@ -1,20 +1,25 @@
 # Orbit manifest 与 lockfile 规格
 
-本文描述当前代码实际接受的格式。旧的字符串依赖、单一 `provider`/`slug`
-锁字段和 `[resolver].platforms` 已删除，不提供兼容解析。
+本文描述当前格式。旧的 `[dependencies]`、`[overrides]`、字符串依赖、单一
+`provider`/`slug` 锁字段和 `[resolver].platforms` 已删除，不提供兼容解析。
 
-## 1. 身份与职责
+## 1. 数据模型与职责
 
-Orbit 严格分开四类事实：
+Orbit 区分四类对象：
 
-- 包：由顶层 JAR 的 loader 元数据实际声明的 `mod_id` 标识。
-- 包版本：由同一 JAR 声明的版本字符串表示，用于版本约束。
-- 候选：由 Orbit 下载后计算的内容哈希标识。同一 `mod_id` 和版本可以有多个不同
-  候选，因为它们的依赖、环境或内嵌内容可能不同。
-- 远端：只说明去哪里发现或恢复 JAR；不能决定 `mod_id`、版本或依赖。
+- 逻辑包：一个由顶层 JAR 的 Loader 元数据声明的 `mod_id`；这是求解和事务的最小单位。
+- 包版本：JAR 声明的版本字符串，用于约束和版本优先级。
+- 候选实现：Orbit 按下载内容的 SHA-512 区分。同一 `mod_id`、同一版本可以有多个候选，
+  因为依赖、环境或内嵌内容可能不同。
+- 远端：只说明去哪里发现或恢复 JAR；不决定 `mod_id`、版本、依赖或环境。
 
-`orbit.toml` 声明根包、约束和全部候选远端。`orbit.lock` 锁定实际选择的内容及其
-JAR 元数据。内容哈希是内部候选主键，不作为交互选项名称显示。
+一个逻辑包可由多个物理 JAR 载体共同提供；一个物理 JAR 也可包含递归 bundled 模块。
+这些载体和模块不自动成为独立逻辑包。只有作为顶层选择参与求解的 `mod_id` 才分别出现在
+`[packages]` 和 lock 的 `[[package]]` 中。
+
+`orbit.toml` 是完整的受管逻辑包集合及其用户策略。每个实际选择的顶层包都必须有一个
+`[packages.<mod_id>]`，不区分“根包”和“传递包”。`orbit.lock` 只记录当前精确选择和从
+JAR 读取到的事实，不表达用户意图。精确恢复优先使用 lock；无 lock 时可按 TOML 重新求解。
 
 ## 2. `orbit.toml`
 
@@ -33,7 +38,6 @@ minecraft_jar = { path = "../../versions/1.20.1/1.20.1.jar", sha256 = "..." }
 loader_jar = { path = "../../libraries/net/fabricmc/fabric-loader/0.16.10/fabric-loader-0.16.10.jar", sha256 = "..." }
 runtime_jars = [
   { path = "../../libraries/org/ow2/asm/asm/9.7/asm-9.7.jar", sha256 = "..." },
-  { path = "../../libraries/net/fabricmc/intermediary/1.20.1/intermediary-1.20.1.jar", sha256 = "..." },
 ]
 physical_environment = "client"
 
@@ -41,81 +45,59 @@ physical_environment = "client"
 catalogs = ["modrinth"]
 prerelease = false
 
-[dependencies]
+[packages]
 sodium = { version = ">=0.5", remotes = [
   { type = "modrinth", project_id = "AANobbMI" },
   { type = "curseforge", project_id = 394468 },
 ] }
 
-zoomify = { version = "*", optional = true, env = "client", remotes = [
-  { type = "modrinth", project_id = "w7ThoJFB" },
+reeses_sodium_options = { version = "*", optional = true, env = "client", remotes = [
+  { type = "modrinth", project_id = "Bh37bMuy" },
 ] }
 
-local_helper = { version = "1.0.0", remotes = [
-  { type = "file", path = "../sources/local-helper.jar" },
+local_helper = { version = "=1.0.0-local", remotes = [
+  { type = "file", path = ".orbit/sources/local-helper.jar" },
 ] }
 
 [groups]
-benchmark = { dependencies = ["sodium"] }
-
-[overrides]
-sodium = { version = ">=0.5.9" }
+benchmark = { packages = ["sodium", "reeses_sodium_options"] }
 ```
 
-未知字段会报错。每个 `[dependencies]` 根包必须至少有一个 `remotes` 项，重复远端、
-空路径、空 Modrinth project ID 和 `0` CurseForge project ID 都无效。
+未知字段直接报错。每个包必须至少有一个非空且不重复的远端；CurseForge project ID
+不能为 `0`。
 
-### 2.2 `[project]`
-
-| 字段 | 必填 | 含义 |
-|---|:---:|---|
-| `name` | 是 | Orbit 实例名称 |
-| `mc_version` | 是 | 当前实例的 Minecraft 版本 |
-| `modloader` | 是 | `fabric`、`quilt`、`forge` 或 `neoforge` |
-| `modloader_version` | 是 | 上次实际探测到的 loader 版本 |
-| `description` | 否 | 描述 |
-| `authors` | 否 | 作者数组 |
-| `version` | 否 | 项目自身版本 |
-
-### 2.3 `[platform]`
-
-`[platform]` 是 `init`/`sync` 写入的完整运行时快照：
+### 2.2 `[project]` 与 `[platform]`
 
 | 字段 | 含义 |
 |---|---|
-| `minecraft_jar` | 精确 Minecraft JAR 路径与 SHA-256 |
-| `loader_jar` | 精确 Loader JAR 路径与 SHA-256 |
-| `runtime_jars` | launcher 为该平台选择的其余运行时 JAR；按内容去重 |
-| `physical_environment` | `client`、`server` 或无法确定时的 `both` |
+| `project.name` | Orbit 实例名称 |
+| `project.mc_version` | 当前实例的 Minecraft 版本 |
+| `project.modloader` | `fabric`、`quilt`、`forge` 或 `neoforge` |
+| `project.modloader_version` | 上次实际探测到的 Loader 版本 |
+| `platform.minecraft_jar` | 精确 Minecraft JAR 路径与 SHA-256 |
+| `platform.loader_jar` | 精确 Loader JAR 路径与 SHA-256 |
+| `platform.runtime_jars` | Launcher 为此实例选择的其余运行时 JAR，按内容去重 |
+| `platform.physical_environment` | `client`、`server` 或无法确定时的 `both` |
 
-源实例只有 `init` 和 `sync` 读取 launcher profile、组件、libraries 或文件名候选。
-迁移 planner 还会读取用户明确指定、已经安装的目标实例，但不会刷新源实例。
-`install`、`add`、`outdated`、`upgrade`、`export`、`audit` 等其它命令只解析这些
-精确路径，并在使用前校验 SHA-256、Minecraft `version.json` 以及可解析的 Loader
-身份/版本。路径不存在、内容变化、字段缺失、元数据矛盾或列表重复时直接报错并要求
-运行 `orbit sync`；不会搜索同目录、按文件名猜替代项、回退到旧路径或静默刷新 TOML。
+只有 `init` 和 `sync` 运行隔离的 launcher/服务端探测模块，并整体写入平台快照。其他命令
+只读取这些精确路径并校验哈希和元数据；不存在、变化或互相矛盾时直接要求 `orbit sync`，
+不搜索邻近文件、不按文件名猜测，也不回退到旧路径。Loader 版本变化本身不会先验报错，
+实际兼容性由后续 JAR 元数据求解与 audit 判断。
 
-`sync` 不受旧快照约束，会从当前 launcher 状态重新探测并整体替换快照。loader 或
-Minecraft 的变化只有经过 `sync` 才进入后续 fix/upgrade 求解与 audit；loader 版本
-变化本身仍不被先验判为不兼容。
-
-共享游戏根与隔离版本目录都支持；每个隔离版本目录是独立 Orbit 实例。
-
-### 2.4 `[resolver]`
+### 2.3 `[resolver]`
 
 | 字段 | 默认值 | 含义 |
 |---|---|---|
-| `catalogs` | `["modrinth"]` | 无限定 `search`/`add` 使用的 provider 目录及展示顺序 |
-| `prerelease` | `false` | 预发布偏好 |
+| `catalogs` | `["modrinth"]` | 无限定 `search`/`add` 使用的 provider 集合 |
+| `prerelease` | `false` | 预发布候选偏好 |
 
-`catalogs` 不是包远端优先级。一个包已经声明的所有 `remotes` 都会进入同一次候选
-发现；不会在第一个 provider 有结果后停止。
+`catalogs` 不是远端优先级。一个包配置的全部 `remotes` 都进入同一次候选发现，并按内容
+哈希去重；不会在首个 provider 返回结果后停止。CurseForge provider 必须配置 API Key。
 
-### 2.5 `[dependencies]`
-
-依赖只能使用完整表形式：
+### 2.4 `[packages]`
 
 ```toml
+[packages]
 package_id = {
   version = "*",
   optional = false,
@@ -131,38 +113,66 @@ package_id = {
 
 | 字段 | 默认值 | 含义 |
 |---|---|---|
-| `version` | `"*"` | 根包版本约束 |
-| `optional` | `false` | 是否可由 `--no-optional` 跳过 |
-| `env` | 无 | 可选的 `client`、`server`、`both` 根包过滤覆盖；无值时跟随 lock 中选中 JAR 的 `environment` |
-| `exclude` | `[]` | 明确排除的依赖边 |
-| `remotes` | 无 | 非空候选来源集合 |
+| `version` | `"*"` | 该包的用户版本策略 |
+| `optional` | `false` | 是否可由 `install --no-optional` 过滤 |
+| `env` | 无 | 可选 `client`、`server`、`both`；缺失时跟随选中 JAR 声明 |
+| `exclude` | `[]` | 用户明确排除的 JAR 依赖边 |
+| `remotes` | 无 | 非空候选发现来源集合 |
 
-表键必须是 JAR 实际 `mod_id`。Modrinth 使用 project ID，CurseForge 使用数值 project
-ID；slug 只允许用于搜索和展示，不能持久化为包身份。显式添加远端时 Orbit 会下载并
-确认目标 project 的 JAR 确实声明该 `mod_id`。
+表键必须是 JAR 实际声明的 `mod_id`。Modrinth 持久化 project ID，CurseForge 持久化
+数值 project ID；slug 只用于搜索和展示。远端新增前会下载 JAR 验证其确实声明目标
+`mod_id`。
 
-`env` 是用户过滤条件，不是 Loader 元数据的副本。缺失时保持自动状态：有 lock 时使用
-精确选中 package 的 `environment`；重新求解时使用候选 JAR 的真实声明。某个 Loader
-没有包级环境声明时，其适配器产生 `both`。`init`、`sync` 和未传 `--env` 的 `add`
-不会把自动结果写回 TOML；因此升级选中不同声明的 JAR 后，自动过滤会随 lock 一起更新。
-使用 `orbit env <package> client|server|both` 设置显式覆盖，使用 `auto` 恢复自动状态。
+所有包条目地位相同。若包 A 的 JAR 依赖包 B，依赖边仍记录在 lock 的 A 元数据中，
+而实际选中的 B 也必须有自己的 `[packages.B]`，通常由操作自动补入、版本策略为 `*`。
+不需要也不存在 override 表；用 `orbit constraint` 直接修改任一包的策略。
 
-### 2.6 本地远端
+`env` 是可选用户过滤，不是 Loader 元数据副本。未配置时，当前展示使用 lock 中选中
+JAR 的声明；下一次求解使用每个候选 JAR 的真实声明。没有包级环境声明的 Loader 适配器
+产生 `both`。`init`、`sync` 和未传 `--env` 的 `add` 不把自动结果写回 TOML。
 
-普通 `file` 远端可以是相对实例目录的路径或绝对路径。若本地源位于 `mods/`，Orbit
-会在写事务前复制到 `.orbit/sources/<content>.jar`，因为 `mods/` 是事务输出，未选
-版本可能被删除。这个内部文件名不会出现在正常 CLI 输出；`orbit remote list` 将它
-显示为 `managed local source`，并允许按列表序号删除。恢复时优先沿用 lock 中原文件名；
-空 lock 重建则使用安全化的 `mod_id-version.jar`，内部内容哈希不会成为 `mods/` 文件名。
+### 2.5 版本约束
 
-### 2.7 `[groups]` 与 `[overrides]`
+版本比较把 `x.y.z` 的数值核心与 `-suffix` 表示分开：
 
-组只列根包 ID。override 用相同表结构解析，但不是新的根包，因此不要求 `remotes`；
-当前使用 `version` 覆盖依赖边约束，并使用 `exclude` 排除指定边。
+| 约束 | 行为 |
+|---|---|
+| `*` | 允许全部版本 |
+| `=1.2.3` | 匹配数值核心 `1.2.3`，忽略是否存在 `-suffix` |
+| `=1.2.3-alpha` | 精确匹配完整后缀表示 |
+| `!=1.2.3` | 排除整个 `1.2.3` 数值核心类 |
+| `!=1.2.3-alpha` | 只排除这个精确后缀表示 |
+| `> >= < <=` | 只按数值核心比较 |
+| Fabric/Quilt 的 `x`、`*`、`~`、`^` | 按相同数值核心边界生成范围 |
+| Maven `[x]` | Loader 原生的精确 Maven 表示 |
+
+因此 `1.2.3-alpha` 与 `1.2.3-beta` 是不同候选、不同可选方案，但具有相同升级/Pareto
+优先级；从一个切换到另一个记为 `replace`，不是 upgrade/downgrade。若二者都可行且处于
+Pareto 前沿，必须交给用户选择。候选身份可由内容哈希区分，但交互只显示版本、远端和 JAR
+依赖差异，不显示哈希。
+
+相关命令：
+
+```text
+orbit versions <package>
+orbit constraint show <package>
+orbit constraint set <package> <requirement>
+orbit constraint clear <package>
+```
+
+`versions` 联网枚举该包全部配置远端，统一下载、缓存、读取 JAR 元数据后按数值核心降序
+列出真实候选。`constraint` 只修改 TOML 策略；使用 `orbit fix` 才会求解并应用。
+
+### 2.6 本地远端与组
+
+普通 `file` 远端可使用相对实例目录路径或绝对路径。若源位于事务输出 `mods/`，Orbit
+先复制到 `.orbit/sources/<content>.jar` 作为实例级持久本地源；它不是全局 LRU JAR cache。
+正常输出把该路径显示为 `managed local source`，不会显示内容哈希。
+
+`[groups]` 的 `packages` 只引用已经存在的受管包 ID，不能重复。组只影响按目标安装时的
+过滤，不创建第二类包身份。
 
 ## 3. `orbit.lock`
-
-### 3.1 示例
 
 ```toml
 [meta]
@@ -177,13 +187,9 @@ sha1 = "..."
 sha256 = "..."
 sha512 = "..."
 filename = "sodium.jar"
-remotes = [
-  { type = "modrinth", project_id = "AANobbMI" },
-  { type = "curseforge", project_id = 394468 },
-]
+remotes = [{ type = "modrinth", project_id = "AANobbMI" }]
 artifact_sources = [
   { type = "modrinth", project_id = "AANobbMI", version_id = "release-id", download_url = "https://..." },
-  { type = "curseforge", project_id = 394468, file_id = 1234567, download_url = "https://..." },
 ]
 dependencies = []
 environment = "both"
@@ -192,41 +198,34 @@ embedded_artifacts = []
 bundled = []
 ```
 
-`remotes` 与 `artifact_sources` 不可混为一谈：
+`remotes` 枚举以后可重新发现候选的逻辑来源；`artifact_sources` 只枚举能恢复当前内容
+哈希的精确工件。同一字节来自多个 provider 时只有一个候选但可有多个恢复来源；不同字节
+即使声明相同版本也保持为不同候选。
 
-- `remotes` 枚举该逻辑包以后可以重新发现哪些候选；
-- `artifact_sources` 只枚举能恢复当前选中内容哈希的精确工件。
+`dependencies`、`environment`、`provides`、`language_loader`、`embedded_artifacts` 与递归
+`bundled` 全部来自下载后的 JAR。稳定 lock 中每个顶层 `mod_id` 恰有一个 `[[package]]`，
+并要求内容身份、非空远端和非空精确恢复来源。lock 不标记根/传递关系，也不保存版本策略。
 
-同一字节内容来自多个 provider 时，lock 仍只有一个包候选，但会保留多个精确
-`artifact_sources`。不同字节即使声明相同版本也保持为不同候选。
+## 4. 命令状态转换
 
-`dependencies`、`environment`、`provides`、`language_loader`、
-`embedded_artifacts` 与递归 `bundled` 均来自已下载 JAR，不采用平台展示数据。
-正常稳定状态下一个 `mod_id` 只有一个顶层 `[[package]]`。持久 lock 中 `sha512`、
-非空 `remotes` 与非空 `artifact_sources` 都是必需项。旧的无内容身份或单 provider
-字段不会被兼容读取。
+- `init`：探测平台、扫描现有顶层 JAR，把每个实际包写入 TOML；无重复实现时创建事实 lock。
+- `sync`：联网做 provider 哈希识别并重新探测平台、扫描 JAR，重建事实 lock、补齐 TOML；
+  不枚举版本候选、不求解依赖、不挑选重复实现。查询失败不能静默降级为 `file`。
+- `add`：递归发现远端 project，统一下载所有候选，按 JAR 元数据求解并将完整选择写入
+  TOML/lock。新发现并选中的依赖包也写入 TOML。
+- `fix`：按 TOML 完整联网求解并修复；未选逻辑包/实现会在确认后同时从 `mods/`、lock、
+  TOML、group 引用和未使用本地源中清理。
+- `upgrade`、`migrate export`：提交选择后同样让 TOML 与所选顶层包集合收敛。
+- `install`：只精确物化现有 lock，不联网求解、不修改 TOML/lock、不修复。
+- `remove`/`purge`：移除逻辑包，同时清理其 TOML 与 lock 条目；仍被其他 JAR 依赖时拒绝。
 
-## 4. 读写与求解约束
+Provider relation 只用于继续发现 project；真实 required/optional 关系只来自 JAR。所有候选
+先加入统一队列，再查询全局 LRU cache 或下载并分析，然后离线交给 PubGrub。缺少某个真实
+required `mod_id` 时按无可行解处理。
 
-1. Provider 先从每个配置远端递归枚举当前 Minecraft/loader 的 project/artifact
-   闭包。
-2. 所有发现的 artifact 先进入统一队列，再批量查缓存或下载。
-3. Orbit 对每个字节流自行计算哈希、读取 loader 元数据，并按哈希去重。
-4. 远端 relation 只用于继续发现 project；真实依赖只来自 JAR。
-5. 下载闭包缺少某个 JAR-declared required `mod_id` 时，离线求解正常返回无解。
-6. 同版本不同哈希候选都交给 PubGrub；哈希只保持候选唯一性，不参与版本高低比较。
-7. 唯一 Pareto 极大解自动采用；多个解必须询问。候选相同版本时，CLI 用 provider
-   project/release 与依赖差异说明选项，绝不显示哈希。
-8. 任何会移除未选包版本的方案都在写盘前列出并确认；提交时同一选择必须同步清理
-   `mods/`、`orbit.lock`、`orbit.toml` 及不再引用的 managed local source。
-
-`sync` 重新探测并对账本地内容，不下载候选 JAR、不求解、不修复缺失依赖；它使用 Modrinth 和已配置
-CurseForge 的批量哈希接口恢复来源。匹配结果只决定 remote/artifact source，包身份、
-版本和依赖仍只取自 JAR。所有 provider 均未匹配时才写入本地持久源；查询错误不得静默
-降级成 `file`。同一 `mod_id` 有多个本地实现时，sync 保留全部文件和 TOML source，拒绝
-替用户选择或重写 lock，并要求 `fix`。`fix` 才执行完整联网候选发现、求解和修复；
-`install` 只按现有 lock 精确恢复内容。两者都只消费 `[platform]` 快照，不承担源实例
-平台探测或快照刷新。
+标准 Pareto 极大解中，所有包的数值核心不能在不降低任何包的前提下再提高至少一个包。
+唯一解自动进入事务确认；凡是实际进入求解的路径，出现多个解时都必须让用户选择。
+`sync` 不求解。任何删除在唯一方案下也必须先明确展示并确认。
 
 ## 5. 远端管理
 
@@ -235,19 +234,12 @@ orbit remote list <package>
 orbit remote add <package> modrinth <project-id>
 orbit remote add <package> curseforge <numeric-project-id>
 orbit remote add <package> file <jar-path>
-orbit remote remove <package> modrinth <project-id>
+orbit remote remove <package> <provider> <locator>
 orbit remote remove <package> --index <number>
 ```
 
-`add` 会下载候选并验证 JAR 实际声明目标包；若用户给 Modrinth slug，持久化前会规范成
-API 返回的 project ID。`remove` 不能删除最后一个远端。列表序号用于引用不应展示其
-内部内容寻址路径的 managed local source。删除候选发现远端不会破坏当前 lock：
-已选内容的精确 `artifact_sources` 会保留到下一次求解选择其它内容，保证当前锁仍可
-恢复；后续候选枚举不再访问已删除的 remote。
+全部远端一视同仁且按内容哈希去重。不能删除最后一个远端。删除发现远端不会立即破坏
+当前 lock：其精确 `artifact_sources` 保留到下一次选择其它内容。
 
-## 6. 版本控制
-
-应同时提交 `orbit.toml` 与 `orbit.lock`。`.orbit/sources/` 是真正本地远端的实例级持久源，
-不是全局 JAR cache，也不受 LRU 淘汰；provider 已识别内容不会复制到这里，失去引用的
-自动副本由 sync/fix 清理。若团队或构建机需要还原这些本地包，也必须随项目分发，或先为包
-增加可访问的网络远端。
+应同时提交 `orbit.toml` 与 `orbit.lock`。若使用真正本地包，还必须分发其 `.orbit/sources/`
+内容或先增加团队可访问的网络远端。

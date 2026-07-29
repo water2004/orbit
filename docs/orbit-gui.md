@@ -110,11 +110,14 @@ Runtime 页也把整合包作为领域动作呈现：安装 Orbit ZIP/TOML 或 M
 
 ### Mods
 
-Mods 页以 lock 中逻辑包为单位显示环境、根/传递关系、依赖、contained 模块和多远端。首次
+Mods 页以 lock 中逻辑包为单位显示当前版本、TOML 版本策略、环境、依赖、contained 模块和
+多远端。TOML 的 `[packages]` 是完整包集合，界面不制造根/传递两类身份。首次
 接管由已安装 Launcher lock 的精确 Minecraft/Loader 版本调用 `orbit init`，不在 GUI 中
 重复探测。搜索、添加、sync、fix、install、outdated、单包/全部 upgrade、环境与远端管理都调用
-现有 Orbit 命令。添加表单暴露版本约束、可选环境过滤、optional 与 no-deps；包管理表单区分
-普通 remove 与会先展示匹配配置文件的 purge。GUI 不复制 CLI 的项目详情报告；Discover 只提供搜索所需的名称、摘要、
+现有 Orbit 命令。添加表单暴露版本约束、可选环境过滤和 optional；包管理面板调用
+`orbit versions` 展示全部远端 JAR 候选，并通过 `orbit constraint set/clear` 管理版本策略；
+策略保存只改 TOML，Fix 才应用。面板同时区分普通 remove 与会先展示匹配配置文件的 purge。
+GUI 不复制 CLI 的项目详情报告；Discover 只提供搜索所需的名称、摘要、
 来源、兼容标签和直接添加动作，需要完整项目数据时使用 `orbit info`。
 
 Mods 页把三个职责分别呈现：Sync 只重新探测并重建本地事实，Fix 才求解和修复包集合，
@@ -156,7 +159,7 @@ GUI 只集成有稳定桌面领域语义的命令，不能按“每个 subcomman
 
 | 领域 | GUI 中的 CLI 能力 | 有意不重复的接口 |
 | --- | --- | --- |
-| 模组 | init、list、search/add（含 version/env/optional/no-deps）、env、remote、remove/purge、sync、fix、install、outdated/upgrade、import/export、migrate check/export、audit、cache 与 config | `info` 的长文本详情由 Discover 摘要替代；Orbit 自身的 instances 注册表不与 Launcher 实例注册表并列；install 的 group/target 策略要等 TOML group 编辑器提供完整模型后再加入 |
+| 模组 | init、list、search/add（含 version/env/optional）、versions、constraint、env、remote、remove/purge、sync、fix、install、outdated/upgrade、import/export、migrate check/export、audit、cache 与 config | `info` 的长文本详情由 Discover 摘要替代；Orbit 自身的 instances 注册表不与 Launcher 实例注册表并列；install 的 group/target 策略要等 TOML group 编辑器提供完整模型后再加入 |
 | 运行时 | install/new、launch、instance list/show/import/rename/remove/default、Loader configure/install、Minecraft/Loader/Java catalogs、Java 管理、Minecraft directory/move | 未安装的 `instance create` 中间态、launch/server dry-run、前台 server run 与隐藏 supervisor 属于 CLI/自动化接口 |
 | 账户与服务端 | login/list/refresh/select/clear/logout、Yggdrasil provider、EULA、start/stop/status/command | account show 已由账户卡片覆盖；秘密、EULA 与 token 不由 GUI 另存 |
 | 配置与审计 | 两套 typed config list/set/unset、audit min-risk/mod/report | config path/get 已包含在设置模型中；audit fail-on-risk 只用于 CI 退出码 |

@@ -155,11 +155,11 @@ orbit [--output-format text|json] [--progress-format none|ndjson] <command> ...
       {
         "mod_id": "sodium",
         "version": "0.5.8",
+        "version_constraint": "=0.5.8",
         "icon_path": "/home/user/.cache/orbit/presentation/mod-icons/content.png",
         "remotes": ["modrinth:AANobbMI"],
         "configured_environment": null,
         "environment": "both",
-        "root": true,
         "optional": false,
         "dependencies": ["fabric-api"],
         "bundled": [{ "mod_id": "sodium-base", "version": "0.5.8" }]
@@ -169,10 +169,10 @@ orbit [--output-format text|json] [--progress-format none|ndjson] <command> ...
 }
 ```
 
-`configured_environment: null` 表示 TOML 使用 `auto`；`environment` 是实际用于根过滤
-的有效值：显式 TOML 覆盖优先，否则来自 lock 中精确候选的 JAR 声明。`root=false`
-表示传递包，不能直接设置根过滤或 discovery remote。`tree: true` 时额外返回 `roots`
-与每个包的 `dependents`，结构见 schema 文档源码。
+`configured_environment: null` 表示 TOML 使用 `auto`；`environment` 是实际用于过滤
+的有效值：显式 TOML 设置优先，否则来自 lock 中精确候选的 JAR 声明。
+`version_constraint` 来自 TOML。所有选中顶层逻辑包都属于同一个完整 `[packages]` 集合，
+没有 `root` 字段；`tree: true` 仍使用每项 `dependencies` 表达 JAR 声明边。
 `icon_path` 是 Orbit CLI 从当前精确 JAR 的 Loader 元数据读取、限制尺寸并规范化为 PNG 后
 写入全局展示缓存的本地路径；缺少或无效图标时省略。GUI 不打开 JAR，也不拿远端项目图标
 冒充已安装内容的图标。
@@ -195,6 +195,51 @@ orbit [--output-format text|json] [--progress-format none|ndjson] <command> ...
 
 `configured: null` 表示持久化状态为 `auto`；`effective` 来自当前 lock。尚无选中 lock
 候选时 `effective` 也为 `null`，将在候选 JAR 解析和选择后确定。
+
+### `constraint` / `versions`
+
+```json
+{
+  "schema_version": 2,
+  "command": "constraint",
+  "ok": true,
+  "result": {
+    "package": "sodium",
+    "previous": "*",
+    "current": "=0.6.13",
+    "selected_version": "0.6.13+mc1.21.1",
+    "selected_satisfies": true,
+    "changed": true,
+    "dry_run": false
+  }
+}
+```
+
+```json
+{
+  "schema_version": 2,
+  "command": "versions",
+  "ok": true,
+  "result": {
+    "package": "sodium",
+    "constraint": "=0.6.13",
+    "selected_version": "0.6.13+mc1.21.1",
+    "candidates": [
+      {
+        "version": "0.6.13+mc1.21.1",
+        "sources": ["Modrinth project AANobbMI, release release-id"],
+        "details": "requires fabricloader >=0.16",
+        "selected": true,
+        "matches_constraint": true
+      }
+    ]
+  }
+}
+```
+
+`constraint` 只改 TOML 策略；`selected_satisfies` 仅报告当前 lock 是否符合。
+`versions` 会联网下载并分析全部配置远端后排序。内容哈希和内部候选身份不会越过展示
+边界；GUI 只显示 `version`、`sources` 和 `details`。
 
 ### `migrate check` / `migrate export`
 

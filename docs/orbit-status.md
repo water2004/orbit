@@ -13,13 +13,15 @@
 | 初始化与检测 | ✅ | 合法游戏目录校验；标准/HMCL/Prism/MultiMC/CurseForge/GDLauncher；Fabric/Quilt/Forge/NeoForge dedicated server 官方 launch spec；Minecraft 与四种 loader/version/JAR |
 | 平台工件同步 | ✅ | init/sync 独占 fresh scan；TOML 固定 Minecraft/loader/runtime JAR 路径、SHA-256、物理端；其它命令严格消费 |
 | JAR 元数据 | ✅ | 四种 loader、多逻辑 mod、嵌套 JAR、JarJar |
-| 版本语义 | ✅ | Fabric predicate；Maven ComparableVersion/range |
+| 版本语义 | ✅ | Fabric predicate；Maven ComparableVersion/range；数值核心与后缀候选分离，精确 `=` 按是否带后缀区分 |
 | 依赖求解 | ✅ | 强类型 occurrence 图、完整 Pareto front、any/all/unless、环境、provides、ordering、Java、JarJar |
 | 原因 | ✅ | 自定义 reason 参与原始推导；成功候选用同次 observer |
 | 本地校验 | ✅ | 转 Fat Lockfile 后复用统一建图 |
 | 安装/修复/升级 | ✅ | install 精确物化 lock；fix/upgrade 由统一求解结果生成包事务计划 |
 | Modrinth / CurseForge / `file:` | ✅ | 查询、下载、识别、锁定；CurseForge 无 API Key 时拒绝创建 |
-| 多远端包模型 | ✅ | 每个根包非空 `remotes`；全部来源共同发现，完全相同字节跨 provider 合并 |
+| 多远端包模型 | ✅ | 每个受管包非空 `remotes`；全部来源共同发现，完全相同字节跨 provider 合并 |
+| 完整 TOML 包集合 | ✅ | 所有选中顶层逻辑包均写入 `[packages]`，无根/传递分类；lock 只记录精确事实 |
+| 包版本管理 | ✅ | `versions` 联网下载并按 JAR 声明版本排序；`constraint show/set/clear` 管理 TOML 策略；GUI 复用同一 CLI |
 | 内容候选身份 | ✅ | 本地 SHA-512 作为内部候选主键；同版本不同内容保持独立，CLI 只显示来源与依赖差异 |
 | PubGrub fork 远端 | ✅ | 功能分支已发布，Orbit 固定到完整 commit SHA |
 | 多解选择 | ✅ | fork 原生枚举 Pareto 极大解；唯一解自动选择，多解经同一进程的终端或 schema 2 机器交互明确选择；`--yes` 不代选 |
@@ -33,7 +35,7 @@
 | 长事务进度 | ✅ | 包操作与 audit 均使用 core 强类型事件；候选/审计工件精确计数，求解工作总量随实际 run/probe 动态增长 |
 | JSON / 自动化输出 | ✅ | 全局 `--output-format text\|json` 与 `--progress-format none\|ndjson`；`export --format zip\|mrpack` 只选择归档类型；JSON 结果 + NDJSON 进度/交互 + stdin 响应 + 结构化错误与稳定错误码共用 schema 2；协议严格 UTF-8，字段/枚举码不随语言变化；view-model 层隔离哈希/文件名/密钥，并在现有 search/info 契约提供官方 icon/link/gallery 展示数据 |
 | 全局配置命令 | ✅ | `config path/list/get/set/unset`；强类型校验、单字段原子更新、注释保留、密钥脱敏、环境覆盖不回写 |
-| 根包环境过滤 | ✅ | TOML `env` 可选；缺失时跟随 lock/JAR 声明；`orbit env ... auto` 可设置覆盖或恢复自动 |
+| 受管包环境过滤 | ✅ | TOML `env` 可选；缺失时跟随 lock/JAR 声明；`orbit env ... auto` 可设置过滤或恢复自动 |
 | Loader JSON 容错 | ✅ | Fabric-compatible 字符串控制字符；仅限 JAR 内 loader/Mixin/refmap，其他 JSON 保持严格 |
 | 字节码运行时符号对齐 | ✅ | Fabric 按 MappingConfiguration、Quilt 按自身 unobfuscated/Tiny 决策选择 official 或投影；Forge/NeoForge 验证 Loader runtime game；未对齐时在 finding 前停止 |
 | i18n | ✅ | `orbit`、`orbit-launcher` 与 GUI 共用 `system`（默认）/`en`/`zh-CN` 语言模型；CLI help、文本结果、进度、询问和结构化错误均在展示边界翻译，机器字段保持稳定 |
@@ -120,7 +122,7 @@
   launcher 选择且版本可验证的 runtime game JAR。mapping/Plugin/类定义证据不完整时
   降为 readiness/coverage/inactive，不生成确定风险。
 - PubGrub fork 已发布到 `water2004/pubgrub` 的 `codex/solver-observer` 分支；
-  Orbit 固定到 `c334509daecf91611af2729b2db91af7eba6f076`。
+  Orbit 固定到 `f013c843f543ae0c160e30a8ef7dd630e080b59e`。
 - 当前 fork 原生支持 `P = mod_id`、不透明复合候选版本、调用方定义
   `same_version` / `strictly_higher` 和完整 Pareto front 枚举；同声明版本的不同内容身份
   会以各自 JAR 约束参与求解，但相同语义投影不会凭空扩成多个用户解。每个保留点会一次

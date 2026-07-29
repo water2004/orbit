@@ -83,7 +83,7 @@ orbit init <name>
    `instances.toml`。
 
 无法识别平台来源的 JAR 以 `file` remote 写入 manifest；有解时也作为所选 package 的
-精确 lock 来源。每个根包都保存至少一个候选远端。同一顶层包 JAR 中的其他模块只进入
+精确 lock 来源。每个受管逻辑包都保存至少一个候选远端。同一顶层包 JAR 中的其他模块只进入
 父 package 的 `bundled`。若依赖图本身无解，init 保留所有文件和全部 manifest remotes，
 写出空 lock 与诊断；没有选中方案时不会把冲突候选伪装成已锁定包。
 
@@ -148,7 +148,6 @@ orbit add <mod>
   [--version <constraint>]
   [--env client|server|both]
   [--optional]
-  [--no-deps]
 ```
 
 输入形式：
@@ -164,9 +163,10 @@ orbit add <mod>
 `cf:` locator 交给 Modrinth 或反向处理。CurseForge 的持久远端只接受数值 project ID。
 
 在线流程先取得并验证候选 JAR，再以 JAR 的真实 `mod_id`、版本和 required dependencies
-求解。确认后写入 `mods/`、manifest 和 lockfile。顶层 constraint、`optional` 和显式
-传入的 `env` 持久化到 manifest；未传 `--env` 时保持自动状态，由选中 JAR 的
-`environment` 决定过滤范围。传递依赖只进入 lockfile。`--no-deps` 禁止传递安装。
+求解。确认后写入 `mods/`、manifest 和 lockfile。请求包的 constraint、`optional` 和显式
+传入的 `env` 持久化到 manifest；未传 `--env` 时保持自动状态。此次选择中的其他顶层
+逻辑包也各自写入 `[packages]`，默认版本策略为 `*`。TOML 不区分根包与传递包，所有实际
+包都能独立配置远端、环境和版本策略。
 
 该流程会分别显示：递归发现 project、候选队列总数、JAR 下载/缓存校验/解析完成数、
 离线求解的动态工作量，以及确认后的包物化进度。求解总量会在发现新的 continuation
@@ -188,10 +188,29 @@ Pareto 或 co-Pareto front 本身仍可能很大。
 orbit env <package> <client|server|both|auto>
 ```
 
-修改 `orbit.toml` 中一个根包的环境过滤覆盖。`client`、`server` 和 `both` 是显式用户
+修改 `orbit.toml` 中一个受管包的环境过滤。`client`、`server` 和 `both` 是显式用户
 策略；`auto` 删除显式覆盖，重新跟随 lock 中精确选中 JAR 的 `environment`。该命令只
 接受 JAR 声明的 `mod_id`，不修改 lock，也不重新求解或下载。支持全局 `--dry-run` 和
 `--output-format json`。
+
+### `orbit versions` 与 `orbit constraint`
+
+```text
+orbit versions <package>
+orbit constraint show <package>
+orbit constraint set <package> <requirement>
+orbit constraint clear <package>
+```
+
+`versions` 从该包在 TOML 中配置的全部远端联网枚举当前 Minecraft/Loader 工件，先进入
+统一下载队列并按全局 cache 去重，再从 JAR 读取真实 `mod_id`、版本和依赖。输出按数值核心
+降序排列；相同数值核心的不同后缀或相同版本的不同内容候选分别列出。文本和 GUI 不显示
+内容哈希；JSON 也只返回可展示的版本、来源和 JAR 详情。
+
+`constraint show` 查询当前策略；`set` 写入明确约束；`clear` 恢复 `*`。这些操作不下载、
+不求解、不修改 lock 或 JAR，并报告当前 lock 选择是否符合策略。使用 `orbit fix` 才应用
+新策略。`=1.2.3` 匹配该数值核心的所有后缀，`=1.2.3-alpha` 精确匹配完整后缀；有序运算符
+只比较数值核心。
 
 ### `orbit remote`
 
@@ -227,9 +246,9 @@ loader JAR 及其 bundled 模块进入 lock 图校验；install 不另行选择�
 
 选择顺序：
 
-1. 根据 target、group 和 optional 过滤 manifest 根依赖；根包未配置 `env` 时使用
-   lock 中选中 JAR 的 `environment`；
-2. 保留已选根的传递依赖闭包；
+1. 根据 target、group 和 optional 过滤 manifest 的完整受管包集合；包未配置 `env` 时
+   使用 lock 中选中 JAR 的 `environment`；
+2. 用 lock 中真实依赖边校验过滤后的选择，并保留其必需闭包；
 3. 要求 lock 已存在、平台 meta 与 manifest 完全一致，并校验精确 lock 图；
 4. 已存在且 SHA-256 正确的 JAR跳过；
 5. 缺失 JAR 从缓存、本地 `file:` 或 provider 来源恢复；
@@ -255,7 +274,7 @@ Minecraft/Loader 对应的所有候选 JAR 加入稳定下载队列，再统一�
 安装、升级、降级、替换或删除都在写入前展示并确认。
 
 提交时以逻辑包为单位：安装入选顶层 JAR，删除所有未入选的本地实现，并在同一事务中让
-`orbit.lock` 只保留入选解、让 `orbit.toml` 删除无效包声明/本地来源和空组。远端没有列出
+`orbit.lock` 只保留入选解、让 `orbit.toml` 的完整包集合与所选解收敛并清理无效来源和空组。远端没有列出
 JAR 中真实 `mod_id` 依赖时，完整图无解并报告 PubGrub 原因，不在下载层伪造 slug 映射。
 
 ### `orbit remove`
@@ -264,7 +283,7 @@ JAR 中真实 `mod_id` 依赖时，完整图无解并报告 PubGrub 原因，不
 orbit remove <mod>
 ```
 
-只按 JAR-declared `mod_id` 查找顶层依赖。若仍有其它 package 依赖它则拒绝删除；
+只按 JAR-declared `mod_id` 查找受管逻辑包。若仍有其它 package 依赖它则拒绝删除；
 否则删除所选包的已校验文件，并从 manifest/lockfile 移除条目。输入不匹配时，交互模式列出
 可选依赖；`--yes` 要求精确标识，不进行猜测。dry-run 只报告计划。
 
@@ -323,8 +342,8 @@ sync 保留全部 JAR 和来源、补充 TOML 后明确要求运行 `orbit fix`�
 ### `orbit upgrade [mod]`
 
 无参数时升级所有允许升级的在线 package；有参数时要求该包已经安装且有在线来源。
-升级复用候选下载、真实 JAR 解析、PubGrub 诊断、确认与原子文件替换。manifest 中的版本
-约束保持不变，只更新 lockfile 的实际版本与来源事实。多解规则与 `outdated` 相同；
+升级复用候选下载、真实 JAR 解析、PubGrub 诊断、确认与原子文件替换。已有包的 manifest
+版本约束保持不变；若新选择引入或删除逻辑包，TOML 的完整包集合与 lock 同步收敛。多解规则与 `outdated` 相同；
 方案选择发生在安装确认之前。批量 upgrade 方案要求至少一个包比当前安装版本更新；
 单包 `upgrade <mod>` 的方案必须让指定逻辑包本身变新，不能用无关包的升级冒充成功。
 允许为满足依赖而让其他包降级、同版本换源或被删除；这些变化全部列入同一个确认计划。
@@ -343,6 +362,7 @@ orbit search <query>
 
 orbit info <mod> [--platform <provider>]
 orbit list [--tree] [--target client|server|both]
+orbit versions <package>
 ```
 
 - `search` 合并已配置 provider 的结果并应用可选的 Minecraft/loader 过滤；结果由统一
@@ -351,8 +371,9 @@ orbit list [--tree] [--target client|server|both]
   provider 官方 icon URL 与 RGB accent，原生界面无需调用另一套查询接口；
 - `info` 按 provider 顺序查询详情；`mr:` / `cf:` 前缀可显式选择来源；字段渲染为自适应
   表格，内嵌 recent versions 子表；JSON 同时返回 provider 官方 project links 与 gallery；
-- `list` 从 lockfile 展示版本、全部 remotes、manifest env/optional；`--tree` 展示依赖，
-  `--target` 过滤根并保留传递闭包。非树形模式输出统一表格，bundled 模块进入 Notes 列。
+- `list` 从 lockfile 展示版本、TOML 版本策略、全部 remotes、env/optional；`--tree` 展示
+  JAR 依赖，`--target` 按完整包集合过滤并校验依赖闭包；非树形输出中 bundled 模块进入 Notes 列；
+- `versions` 下载并分析一个受管包全部配置远端的真实 JAR 候选，按版本排序。
 
 在线查询支持 Modrinth 与 CurseForge。`cf:` 和 `--platform curseforge` 只选择
 CurseForge，不回退到 Modrinth；缺少 API Key 或目标文件没有 API 下载 URL 时返回明确

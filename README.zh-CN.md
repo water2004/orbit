@@ -121,9 +121,14 @@ orbit remote remove sodium --index 2
 # 4. 添加客户端专用模组 (开服时自动跳过)
 orbit add zoomify --env client
 
-# 修改已有根包的过滤策略；auto 恢复跟随 JAR 声明
+# 修改已有包的过滤策略；auto 恢复跟随 JAR 声明
 orbit env sodium client
 orbit env sodium auto
+
+# 从全部配置远端下载并列出 JAR 实际版本，然后设置策略并修复
+orbit versions sodium
+orbit constraint set sodium "=0.6.13"
+orbit fix
 
 # 5. 修复依赖图；如有多个 Pareto 极大解会要求选择
 orbit fix
@@ -179,12 +184,14 @@ schema、字段名、枚举码和错误码不随语言变化。Windows 控制台
 | `orbit search <query>` | 在已配置来源中搜索模组；支持 Modrinth 与 CurseForge。 |
 | `orbit info <mod>` | 查看模组详细信息（描述、作者、版本历史、前置依赖、端侧支持等）。无需安装，直接请求平台 API。 |
 | `orbit add <mod>` | 添加新模组。支持自动查找、`mr:<project-id-or-search>`、`cf:<numeric-project-id>` 或 `file:./my-mod.jar`。可用 `--env client\|server\|both` 覆盖 JAR 声明。 |
-| `orbit env <package> <client\|server\|both\|auto>` | 修改根包环境过滤；`auto` 跟随 lock 中精确 JAR 的声明。 |
+| `orbit env <package> <client\|server\|both\|auto>` | 修改包环境过滤；`auto` 跟随 lock 中精确 JAR 的声明。 |
 | `orbit install` | 严格校验平台快照和 lock，仅物化 lock 已记录的精确 JAR；绝不求解、修复、删包或改写 TOML/lock。 |
 | `orbit remove <mod>` | 按 JAR `mod_id` 卸载包。删除其选中内容并移除 `orbit.toml`/lock 中的记录。 |
 | `orbit purge <mod>` | **深度清理**。在 `remove` 的基础上，启发式搜索并交互式询问以**彻底删除** `config/` 下的配置文件。 |
 | `orbit list` | 列出当前实例记录的所有模组及版本；支持 `--tree` 和 `--target`。 |
 | `orbit remote add/remove/list` | 管理一个逻辑包的多个 `file` / Modrinth / CurseForge 候选远端；不能删除最后一个远端。 |
+| `orbit versions <package>` | 下载并分析全部配置远端，按 JAR 实际声明的版本降序列出候选。 |
+| `orbit constraint show/set/clear` | 管理 TOML 中一个包的版本策略；运行 `fix` 才应用。 |
 
 ### 4. 导入、导出与进阶工具 (IO & Utility)
 
@@ -208,7 +215,8 @@ GUI 在写入目标 Orbit 状态前先展示 `migrate check` 的完整包级方�
 ## ⚙️ 工作原理：`orbit.toml` & `orbit.lock`
 
 每一个被 Orbit 接管的 `.minecraft` 目录下都会生成两个文件。`orbit.toml`
-声明期望状态和每个根包的全部候选远端；`orbit.lock` 锁定实际版本、内容校验值、
+声明完整的受管逻辑包集合和每个包的全部候选远端；所有选中顶层包都有地位相同的
+`[packages.<mod_id>]`，不区分根包与传递包。`orbit.lock` 只锁定实际版本、内容校验值、
 JAR 元数据和能够恢复该精确内容的工件来源。相同字节跨来源按哈希合并，同版本不同
 字节保持为不同候选；哈希不会作为用户界面中的包名或选项名称。两者都应纳入版本控制。
 
@@ -231,7 +239,7 @@ physical_environment = "client"
 catalogs = ["modrinth"]
 prerelease = false
 
-[dependencies]
+[packages]
 # 一个包可同时声明多个远端；包身份和版本始终从下载后的 JAR 读取
 sodium = { version = "^0.5", remotes = [
   { type = "modrinth", project_id = "AANobbMI" },
@@ -251,6 +259,9 @@ lithium = { version = ">=0.11 <0.14", remotes = [
   { type = "file", path = "../sources/my-local-mod.jar" },
 ] }
 ```
+
+`=1.2.3` 匹配数值核心为 `1.2.3` 的全部后缀表示；`=1.2.3-alpha` 只匹配该精确后缀。
+不同后缀仍是不同求解方案，但升级与 Pareto 优先级相同；有序运算符只比较数值核心。
 
 > **提示**：强烈建议将 `orbit.toml` 和 `orbit.lock` 一同纳入 Git 版本控制！结合 `orbit install --target server`，你可以在任何机器上一键还原完整的模组环境。
 

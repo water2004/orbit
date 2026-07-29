@@ -74,9 +74,14 @@ orbit remote add sodium modrinth AANobbMI
 orbit remote add sodium curseforge 394468
 orbit remote list sodium
 
-# Optional root environment filtering; auto follows the selected JAR.
+# Optional package environment filtering; auto follows the selected JAR.
 orbit env sodium client
 orbit env sodium auto
+
+# Inspect JAR-declared versions from every configured remote, then set policy.
+orbit versions sodium
+orbit constraint set sodium '=0.6.13'
+orbit fix
 
 # Repair, restore, update, and audit.
 orbit fix
@@ -107,6 +112,8 @@ Orbit resolves its instance from the current directory first, then an explicit `
 | `orbit upgrade [package]` | Apply a solution in which at least one requested package becomes newer; dependencies may downgrade or be replaced. |
 | `orbit list [--tree]` | Show installed logical packages from the lockfile. |
 | `orbit remote add/remove/list` | Manage local, Modrinth, and CurseForge remotes without removing the last remote. |
+| `orbit versions <package>` | Download and inspect every configured remote candidate, then list JAR-declared versions in descending order. |
+| `orbit constraint show/set/clear` | Manage a package version policy in TOML; run `fix` to apply it. |
 
 ### Portable packs and migration
 
@@ -159,7 +166,7 @@ See the complete [Launcher CLI reference](docs/orbit-launcher-cli.md) and
 
 ## State files
 
-`orbit.toml` is the desired root-package configuration and remote set. `orbit.lock` is the exact selected graph, including content hashes, JAR metadata, environment declarations, dependencies, contained content, and materialization sources. Commit both files when you want an exact reproducible instance.
+`orbit.toml` is the complete managed logical-package set and its policies. Every selected top-level package has an equal `[packages.<mod_id>]` entry; there is no root/transitive distinction. `orbit.lock` records only the exact selected facts, including content hashes, JAR metadata, dependencies, contained content, and materialization sources. Commit both files when you want an exact reproducible instance.
 
 ```toml
 [project]
@@ -174,12 +181,17 @@ loader_jar = { path = "../../libraries/net/fabricmc/fabric-loader/0.15.7/fabric-
 runtime_jars = []
 physical_environment = "client"
 
-[dependencies]
+[packages]
 sodium = { version = "^0.5", remotes = [
   { type = "modrinth", project_id = "AANobbMI" },
   { type = "curseforge", project_id = 394468 },
 ] }
 ```
+
+`=1.2.3` matches every representation with numeric core `1.2.3`, while
+`=1.2.3-alpha` matches that exact suffix. Suffix variants remain distinct
+solver choices but have equal upgrade/Pareto precedence; ordered operators
+compare the numeric core only.
 
 The full schema is in [orbit.toml specification](docs/orbit-toml-spec.md).
 

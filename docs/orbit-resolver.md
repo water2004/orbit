@@ -71,11 +71,12 @@ probe 的 start/finish 事件带有结果。成功 probe 中的决定、传播�
 真实路径；失败 probe 的 observer 状态回滚。因此最终诊断仍来自产生该 Pareto 解的
 实际推导，不是事后反事实重跑。
 
-Orbit 已核对过这项 API 与当前包语义的边界：`P` 可以直接使用 JAR 声明的 `mod_id`，
-`V` 是求解器视为不透明值的复合候选，`same_version(V)` 与 `strictly_higher(V)` 均由
-Orbit 定义。前者覆盖同一 JAR 声明版本的所有来源身份，后者只覆盖更高 JAR 内版本的
-所有来源身份。因此同版本不同来源既不是升级，也不会仅因载体身份制造不同用户方案。
-fork 会验证等价范围包含当前候选且不与严格更高范围重叠；无效回调直接返回
+Orbit 已核对过这项 API 与当前包语义的边界：`P` 直接使用 JAR 声明的 `mod_id`，`V` 是
+求解器视为不透明值的复合候选。Orbit 分别提供 `same_version(V)`、
+`same_precedence(V)` 与 `strictly_higher(V)`：第一项只覆盖同一具体候选身份；第二项覆盖
+数值核心相同的所有后缀与内容候选；第三项只覆盖数值核心更高的候选。因此同一版本或
+同一数值核心的不同实现不是升级，却仍保留为不同用户方案。fork 会验证等价范围包含当前
+候选且不与严格更高范围重叠；无效回调直接返回
 `InvalidVersionOrdering`，不能加入一个未排除当前投影的子句后原地重复。包/候选建模
 与 Pareto 枚举均由 fork 原生抽象覆盖，不需要在 Orbit 中做第二次求解。
 
@@ -172,7 +173,7 @@ Forge-family Jar-in-Jar 的 Maven 坐标是逻辑 artifact 包。每个内嵌 ar
 
 联网编排在调用 `resolve_candidate_portfolio()` 之前完成：
 
-1. 用用户输入、manifest 根包和 lockfile 中的全部确切 `remotes` 作为种子；
+1. 用用户输入、manifest 全部受管包和 lockfile 中的全部确切 `remotes` 作为种子；
 2. 对每个 project 枚举当前 Minecraft/loader 的全部可下载版本；
 3. 只沿 provider project relation 递归，直到远端 project 闭包稳定；
 4. 将完整 artifact 队列统一交给 content-addressed cache/下载器；
@@ -249,8 +250,8 @@ Minecraft/loader 下的全部 JAR 候选。所有 project 先完成版本枚举�
 闭包重建候选并修复缺失或不兼容的包。
 
 `fix` 成功提交时以所选逻辑包集合同时收敛三个状态：删除 `mods/` 中未选顶层实现，
-从 `orbit.lock` 删除未选包/候选，并从 `orbit.toml` 删除不再存在的根包、override、group
-引用和无效 file remote；最后清理不再被 TOML/lock 引用的 `.orbit/sources`。不能出现
+从 `orbit.lock` 删除未选包/候选，并让 `orbit.toml` 的完整包集合、group 引用和有效
+remote 与选择收敛；最后清理不再被 TOML/lock 引用的 `.orbit/sources`。不能出现
 “磁盘删了但 lock/TOML 仍记录”的半套删除语义。
 
 迁移 planner 使用目标实例真实平台和空的目标安装状态构图；`migrate check` 与
@@ -276,5 +277,5 @@ lock，不重新求解，也不会把源实例当前 JAR 当成目标已安装�
 - CurseForge：需要用户 API Key；API 没有可用下载 URL 时返回可恢复的明确错误，不
   猜测 CDN 地址。
 - 远端 fork：功能分支已发布；Orbit 通过完整 commit SHA
-  `c334509daecf91611af2729b2db91af7eba6f076` 固定依赖，不跟随可移动分支头。
+  `f013c843f543ae0c160e30a8ef7dd630e080b59e` 固定依赖，不跟随可移动分支头。
 - 静态字节码判断：只给出必要条件，不宣称能完整证明模组运行时兼容。
