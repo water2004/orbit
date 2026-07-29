@@ -264,10 +264,9 @@ fn jar_contains_minecraft_classes(path: &Path) -> Result<bool, OrbitError> {
 }
 
 fn mod_jars(instance_dir: &Path) -> Result<Vec<PathBuf>, OrbitError> {
-    let mods = instance_dir.join("mods");
-    if !mods.is_dir() {
+    let Some(mods) = crate::init::existing_mods_dir(instance_dir)? else {
         return Ok(Vec::new());
-    }
+    };
     let mut jars = std::fs::read_dir(mods)?
         .filter_map(|entry| match entry {
             Ok(entry) => {

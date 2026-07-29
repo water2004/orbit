@@ -60,10 +60,9 @@ pub(crate) fn scan_mods_dir(
     instance_dir: &Path,
     loader: crate::loader::LoaderKind,
 ) -> Result<Vec<ScannedMod>, OrbitError> {
-    let mods_dir = instance_dir.join("mods");
-    if !mods_dir.is_dir() {
+    let Some(mods_dir) = existing_mods_dir(instance_dir)? else {
         return Ok(vec![]);
-    }
+    };
 
     let mut results = vec![];
 
@@ -132,6 +131,25 @@ pub(crate) fn scan_mods_dir(
     }
 
     Ok(results)
+}
+
+/// Return the factual package directory without manufacturing it.
+///
+/// A missing `mods/` is the canonical empty package set. An existing non-directory
+/// path is corrupt instance state and must not be silently treated as empty.
+pub(crate) fn existing_mods_dir(
+    instance_dir: &Path,
+) -> Result<Option<std::path::PathBuf>, OrbitError> {
+    let mods_dir = instance_dir.join("mods");
+    match std::fs::metadata(&mods_dir) {
+        Ok(metadata) if metadata.is_dir() => Ok(Some(mods_dir)),
+        Ok(_) => Err(OrbitError::Other(anyhow::anyhow!(
+            "mods path is not a directory: {}",
+            mods_dir.display()
+        ))),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(OrbitError::Io(error)),
+    }
 }
 
 /// 执行 init 流程。
@@ -432,6 +450,57 @@ mod tests {
         assert!(error.to_string().contains("top-level package"));
         assert!(error.to_string().contains("fabric"));
         std::fs::remove_dir_all(instance).ok();
+    }
+
+    #[test]
+    fn scan_mods_dir_rejects_an_existing_non_directory_mods_path() {
+        let instance = temp_instance_dir("mods-is-file");
+        std::fs::create_dir_all(&instance).unwrap();
+        std::fs::write(instance.join("mods"), b"not a directory").unwrap();
+
+        let error = scan_mods_dir(&instance, crate::loader::LoaderKind::Fabric).unwrap_err();
+
+        assert!(error.to_string().contains("mods path is not a directory"));
+        std::fs::remove_dir_all(instance).unwrap();
+    }
+
+    #[tokio::test]
+    async fn init_and_sync_keep_a_missing_mods_directory_as_an_empty_package_set() {
+        let directory = temp_instance_dir("missing-mods");
+        crate::platform_detection::test_support::write_platform(
+            &directory, "1.20.1", "fabric", "0.16.10",
+        );
+        assert!(!directory.join("mods").exists());
+
+        let output = run_init(
+            InitInput {
+                name: "empty-instance".to_string(),
+                mc_version: "1.20.1".to_string(),
+                modloader: "fabric".to_string(),
+                modloader_version: "0.16.10".to_string(),
+                instance_dir: directory.clone(),
+                dry_run: false,
+            },
+            &[],
+        )
+        .await
+        .unwrap();
+
+        assert!(output.scanned_mods.is_empty());
+        assert!(output.lock_created);
+        assert_eq!(output.locked_packages, 0);
+        assert!(!directory.join("mods").exists());
+
+        let report = crate::sync::sync_instance(&directory, &[], false)
+            .await
+            .unwrap();
+
+        assert!(report.added.is_empty());
+        assert!(report.changed.is_empty());
+        assert!(report.missing.is_empty());
+        assert!(report.removed.is_empty());
+        assert!(!directory.join("mods").exists());
+        std::fs::remove_dir_all(directory).unwrap();
     }
 
     #[tokio::test]

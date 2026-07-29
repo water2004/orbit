@@ -143,9 +143,6 @@ pub async fn install_to_instance(
     };
 
     let mods_dir = instance_dir.join("mods");
-    if !mods_dir.exists() && !dry_run {
-        std::fs::create_dir_all(&mods_dir).map_err(OrbitError::Io)?;
-    }
 
     let loader_package = platform.loader_package;
     let report = install_mod(InstallModInput {
@@ -201,9 +198,6 @@ pub async fn install_instance(
         skipped,
         ..InstanceInstallReport::default()
     };
-    if !options.dry_run {
-        std::fs::create_dir_all(&mods_dir)?;
-    }
 
     let total = selected.len();
     emit_progress(progress.as_ref(), ProgressEvent::ApplyStarted { total });
@@ -419,7 +413,6 @@ pub async fn fix_instance(
         return Ok(preview);
     }
 
-    std::fs::create_dir_all(&mods_dir)?;
     let installed = materialize_plans(
         planned,
         &catalog.resolved,
@@ -520,9 +513,6 @@ pub async fn upgrade_all_in_instance(
     }
 
     let mods_dir = instance_dir.join("mods");
-    if !mods_dir.exists() && !dry_run {
-        std::fs::create_dir_all(&mods_dir).map_err(OrbitError::Io)?;
-    }
 
     let loader = platform.loader;
     let mut planned = Vec::new();
@@ -1429,6 +1419,9 @@ async fn materialize_resolved(
     {
         return Ok(destination);
     }
+    // A missing mods/ directory is the canonical empty-package state. Create
+    // it only when this operation is about to materialize an actual JAR.
+    std::fs::create_dir_all(mods_dir)?;
     if jar_cache.copy_to(&resolved.sha512, &resolved.sha1, &destination)
         && crate::jar::compute_sha512(&destination)?.eq_ignore_ascii_case(&resolved.sha512)
     {
@@ -2121,6 +2114,86 @@ physical_environment = "client"
             std::fs::read(directory.path().join("orbit.lock")).unwrap(),
             lock_before
         );
+    }
+
+    #[tokio::test]
+    async fn empty_install_and_failed_add_do_not_create_a_mods_directory() {
+        let directory = tempfile::tempdir().unwrap();
+        crate::platform_detection::test_support::write_platform(
+            directory.path(),
+            "1",
+            "fabric",
+            "1",
+        );
+        let discovered = crate::platform_detection::discover_platform_for_init(
+            directory.path(),
+            "1",
+            "fabric",
+            "1",
+        )
+        .unwrap();
+        let manifest = OrbitManifest {
+            project: crate::manifest::ProjectMeta {
+                name: "empty".to_string(),
+                mc_version: "1".to_string(),
+                modloader: "fabric".to_string(),
+                modloader_version: "1".to_string(),
+                description: None,
+                authors: None,
+                version: None,
+            },
+            platform: discovered.snapshot(directory.path()).unwrap(),
+            resolver: crate::manifest::ResolverConfig::default(),
+            dependencies: Default::default(),
+            groups: Default::default(),
+            overrides: Default::default(),
+        };
+        ManifestFile::new(directory.path(), manifest)
+            .save()
+            .unwrap();
+        Lockfile::new(
+            directory.path(),
+            OrbitLockfile {
+                meta: LockMeta {
+                    mc_version: "1".to_string(),
+                    modloader: "fabric".to_string(),
+                    modloader_version: "1".to_string(),
+                },
+                packages: Vec::new(),
+            },
+        )
+        .save()
+        .unwrap();
+        let cache = crate::jar_cache::JarCache::open(directory.path().join("cache")).unwrap();
+
+        let install = install_instance(
+            directory.path(),
+            &[],
+            &cache,
+            InstanceInstallOptions::default(),
+            None,
+        )
+        .await
+        .unwrap();
+
+        assert!(install.installed.is_empty());
+        assert!(!directory.path().join("mods").exists());
+
+        let add = install_to_instance(
+            InstallTarget::Remote(PackageRemote::Modrinth {
+                project_id: "unavailable".to_string(),
+            }),
+            "*",
+            directory.path(),
+            &[],
+            &cache,
+            InstallOptions::default(),
+            InstallInteraction::default(),
+        )
+        .await;
+
+        assert!(add.is_err());
+        assert!(!directory.path().join("mods").exists());
     }
 
     #[tokio::test]
