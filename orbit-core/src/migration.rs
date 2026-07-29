@@ -50,7 +50,14 @@ pub struct MigrationPlan {
     target_dir: PathBuf,
     target_manifest: crate::manifest::OrbitManifest,
     target_lockfile: OrbitLockfile,
+    local_sources: Vec<MigrationLocalSource>,
     _source_owner: Option<std::sync::Arc<tempfile::TempDir>>,
+}
+
+#[derive(Debug, Clone)]
+struct MigrationLocalSource {
+    source: PathBuf,
+    relative: PathBuf,
 }
 
 impl MigrationPlan {
@@ -85,6 +92,27 @@ pub async fn plan_migration(
     options: MigrationOptions,
     interaction: MigrationInteraction,
 ) -> Result<MigrationPlan, OrbitError> {
+    plan_migration_inner(
+        source_dir,
+        target_dir,
+        providers,
+        jar_cache,
+        options,
+        interaction,
+        false,
+    )
+    .await
+}
+
+async fn plan_migration_inner(
+    source_dir: &Path,
+    target_dir: &Path,
+    providers: &[Box<dyn ModProvider>],
+    jar_cache: &crate::jar_cache::JarCache,
+    options: MigrationOptions,
+    interaction: MigrationInteraction,
+    portable_snapshot: bool,
+) -> Result<MigrationPlan, OrbitError> {
     let source_dir = canonical_directory(source_dir, "source instance")?;
     let target_dir = canonical_directory(target_dir, "target instance")?;
     if source_dir == target_dir {
@@ -113,18 +141,17 @@ pub async fn plan_migration(
         target_snapshot,
     );
 
-    let manifest_remotes: Vec<_> = source_manifest
-        .inner
-        .packages
-        .values()
-        .flat_map(|dependency| dependency.remotes.iter().cloned())
-        .collect();
+    let (manifest_remotes, discovery_lock) = migration_discovery_state(
+        &source_manifest.inner,
+        &source_lock.inner,
+        portable_snapshot,
+    );
     let mut catalog = crate::outdated::download_candidate_catalog(
         crate::outdated::CandidateDiscoveryInput {
             instance_dir: &source_dir,
             providers,
             additional_remotes: &manifest_remotes,
-            lockfile: &source_lock.inner,
+            lockfile: &discovery_lock,
             mc_version: &target_meta.mc_version,
             loader: target_platform.loader,
             jar_cache,
@@ -217,13 +244,15 @@ pub async fn plan_migration(
     let resolution = crate::resolver::select_resolution(portfolio, select_resolution)
         .map_err(OrbitError::Conflict)?;
 
-    let target_lockfile = migration_lockfile(
+    let mut target_lockfile = migration_lockfile(
         &resolution,
         &source_manifest.inner,
         &source_lock.inner,
         &target_meta,
         &catalog,
     )?;
+    let local_sources = prepare_migration_local_sources(&source_dir, &mut target_lockfile)?;
+    let diagnostics = migration_diagnostics(&resolution.changes, &resolution.diagnostics);
     crate::installer::reconcile_manifest_to_lock(&mut target_manifest, &target_lockfile);
     target_manifest.validate()?;
     target_lockfile.validate()?;
@@ -234,15 +263,127 @@ pub async fn plan_migration(
         target_loader: target_meta.modloader,
         target_loader_version: target_meta.modloader_version,
         changes: resolution.changes,
-        diagnostics: resolution.diagnostics,
+        diagnostics,
         warnings: resolution.warnings,
         selected_packages: target_lockfile.packages.len(),
         source_dir,
         target_dir,
         target_manifest,
         target_lockfile,
+        local_sources,
         _source_owner: None,
     })
+}
+
+/// Build the target-version discovery projection of the source package state.
+///
+/// A portable Orbit archive adds `file = "mods/<installed>.jar"` so the exact
+/// source runtime can be restored without a network. That restoration carrier
+/// is not another target-version remote. When a package has a real provider
+/// project, migration must enumerate that project for the target Minecraft
+/// version and must not inject the archived source JAR into the target solver
+/// graph. File-only packages keep their sole source and are still checked by
+/// the normal JAR-declared Minecraft constraints in PubGrub.
+fn migration_discovery_state(
+    manifest: &crate::manifest::OrbitManifest,
+    lockfile: &OrbitLockfile,
+    portable_snapshot: bool,
+) -> (Vec<crate::manifest::PackageRemote>, OrbitLockfile) {
+    use crate::manifest::PackageRemote;
+
+    let mut package_remotes = BTreeMap::<String, Vec<PackageRemote>>::new();
+    for (package, specification) in &manifest.packages {
+        package_remotes
+            .entry(package.clone())
+            .or_default()
+            .extend(specification.remotes.iter().cloned());
+    }
+    for entry in &lockfile.packages {
+        let remotes = package_remotes.entry(entry.mod_id.clone()).or_default();
+        remotes.extend(entry.remotes.iter().cloned());
+        remotes.extend(entry.artifact_sources.iter().map(|source| match source {
+            crate::lockfile::ArtifactSource::File { path } => {
+                PackageRemote::File { path: path.clone() }
+            }
+            crate::lockfile::ArtifactSource::Modrinth { project_id, .. } => {
+                PackageRemote::Modrinth {
+                    project_id: project_id.clone(),
+                }
+            }
+            crate::lockfile::ArtifactSource::Curseforge { project_id, .. } => {
+                PackageRemote::Curseforge {
+                    project_id: *project_id,
+                }
+            }
+        }));
+    }
+
+    let portable_carriers: BTreeMap<_, _> = lockfile
+        .packages
+        .iter()
+        .map(|entry| {
+            (
+                entry.mod_id.clone(),
+                format!("mods/{}", entry.filename).replace('\\', "/"),
+            )
+        })
+        .collect();
+    for (package, remotes) in &mut package_remotes {
+        remotes.sort();
+        remotes.dedup();
+        if portable_snapshot && let Some(carrier) = portable_carriers.get(package) {
+            let has_online = remotes
+                .iter()
+                .any(|remote| !matches!(remote, PackageRemote::File { .. }));
+            remotes.retain(|remote| {
+                !matches!(remote, PackageRemote::File { .. })
+                    || (!has_online
+                        && matches!(
+                            remote,
+                            PackageRemote::File { path }
+                                if path.replace('\\', "/").eq_ignore_ascii_case(carrier)
+                        ))
+            });
+        }
+    }
+
+    let mut projected_lock = lockfile.clone();
+    for entry in &mut projected_lock.packages {
+        entry.remotes = package_remotes
+            .get(&entry.mod_id)
+            .cloned()
+            .unwrap_or_default();
+    }
+    let mut remotes: Vec<_> = package_remotes.into_values().flatten().collect();
+    remotes.sort();
+    remotes.dedup();
+    (remotes, projected_lock)
+}
+
+/// Keep only diagnostics that explain an actual package removal in the chosen
+/// migration.
+///
+/// Resolver diagnostics describe why *unselected candidates* lost. During a
+/// cross-version migration that naturally includes source-runtime JARs and
+/// their bundled modules being rejected by the target Minecraft version. A
+/// successful replacement already explains that outcome in `changes`; showing
+/// every rejected dependency as a migration error is both redundant and
+/// misleading. A removed top-level package is different: its rejection is the
+/// user-visible reason the soft migration had to drop it.
+fn migration_diagnostics(
+    changes: &[PackageChange],
+    diagnostics: &[CandidateDiagnostic],
+) -> Vec<CandidateDiagnostic> {
+    let removed: BTreeSet<_> = changes
+        .iter()
+        .filter(|change| change.kind == PackageChangeKind::Remove)
+        .map(|change| change.package.as_str())
+        .collect();
+    diagnostics
+        .iter()
+        .filter(|diagnostic| removed.contains(diagnostic.package.as_str()))
+        .cloned()
+        .collect()
 }
 
 pub async fn plan_migration_from_portable(
@@ -254,13 +395,14 @@ pub async fn plan_migration_from_portable(
     interaction: MigrationInteraction,
 ) -> Result<MigrationPlan, OrbitError> {
     let owner = source.owner();
-    let mut plan = plan_migration(
+    let mut plan = plan_migration_inner(
         source.path(),
         target_dir,
         providers,
         jar_cache,
         options,
         interaction,
+        true,
     )
     .await?;
     plan._source_owner = Some(owner);
@@ -268,8 +410,9 @@ pub async fn plan_migration_from_portable(
 }
 
 /// Export a previously selected plan into the installed target instance.
-/// Package JARs are deliberately not copied; `orbit install` owns exact
-/// materialization from the emitted lockfile.
+/// Runtime JARs are not installed here; selected file-only artifacts are
+/// preserved in the target source store so `orbit install` can materialize the
+/// exact lock after the temporary migration snapshot is gone.
 pub fn export_migration(
     plan: &MigrationPlan,
     dry_run: bool,
@@ -294,6 +437,11 @@ pub fn export_migration(
     ];
     destinations.extend(
         config_sources
+            .iter()
+            .map(|source| plan.target_dir.join(&source.relative)),
+    );
+    destinations.extend(
+        plan.local_sources
             .iter()
             .map(|source| plan.target_dir.join(&source.relative)),
     );
@@ -400,6 +548,85 @@ fn migration_lockfile(
     Ok(lockfile)
 }
 
+fn prepare_migration_local_sources(
+    source_dir: &Path,
+    lockfile: &mut OrbitLockfile,
+) -> Result<Vec<MigrationLocalSource>, OrbitError> {
+    use crate::lockfile::ArtifactSource;
+    use crate::manifest::PackageRemote;
+
+    let mut sources = BTreeMap::<PathBuf, PathBuf>::new();
+    for entry in &mut lockfile.packages {
+        let online = entry
+            .artifact_sources
+            .iter()
+            .any(|source| !matches!(source, ArtifactSource::File { .. }));
+        if online {
+            entry
+                .artifact_sources
+                .retain(|source| !matches!(source, ArtifactSource::File { .. }));
+            entry
+                .remotes
+                .retain(|remote| !matches!(remote, PackageRemote::File { .. }));
+            continue;
+        }
+
+        let file_sources: Vec<_> = entry
+            .artifact_sources
+            .iter()
+            .filter_map(|source| match source {
+                ArtifactSource::File { path } => Some(PathBuf::from(path)),
+                ArtifactSource::Modrinth { .. } | ArtifactSource::Curseforge { .. } => None,
+            })
+            .map(|path| {
+                if path.is_absolute() {
+                    path
+                } else {
+                    source_dir.join(path)
+                }
+            })
+            .collect();
+        if file_sources.is_empty() {
+            continue;
+        }
+        let source = file_sources
+            .into_iter()
+            .find(|path| path.is_file())
+            .ok_or_else(|| {
+                OrbitError::Other(anyhow::anyhow!(
+                    "selected local migration source for '{}' does not exist",
+                    entry.mod_id
+                ))
+            })?;
+        let actual = crate::jar::compute_sha512(&source)?;
+        if !actual.eq_ignore_ascii_case(&entry.sha512) {
+            return Err(OrbitError::Other(anyhow::anyhow!(
+                "local migration source for '{}' no longer matches the selected content",
+                entry.mod_id
+            )));
+        }
+
+        let managed = crate::source_store::managed_remote(&entry.sha512);
+        let PackageRemote::File { path } = &managed else {
+            unreachable!("managed local source is always a file remote")
+        };
+        let relative = PathBuf::from(path);
+        sources.entry(relative).or_insert(source);
+        entry.artifact_sources = vec![crate::source_store::managed_artifact_source(&managed)];
+        entry
+            .remotes
+            .retain(|remote| !matches!(remote, PackageRemote::File { .. }));
+        entry.remotes.push(managed);
+        entry.remotes.sort();
+        entry.remotes.dedup();
+    }
+    crate::installer::normalize_selected_file_remotes(lockfile);
+    Ok(sources
+        .into_iter()
+        .map(|(relative, source)| MigrationLocalSource { source, relative })
+        .collect())
+}
+
 fn migration_changes(
     source: &OrbitLockfile,
     target: &OrbitLockfile,
@@ -485,9 +712,21 @@ fn stage_and_commit(
         }
         std::fs::copy(&source.source, destination)?;
     }
+    for source in &plan.local_sources {
+        let destination = staging.join(&source.relative);
+        if let Some(parent) = destination.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::copy(&source.source, destination)?;
+    }
 
     let mut roots = BTreeSet::new();
     for source in config_sources {
+        if let Some(root) = source.relative.components().next() {
+            roots.insert(PathBuf::from(root.as_os_str()));
+        }
+    }
+    for source in &plan.local_sources {
         if let Some(root) = source.relative.components().next() {
             roots.insert(PathBuf::from(root.as_os_str()));
         }
@@ -595,6 +834,154 @@ mod tests {
         archive.finish().unwrap();
     }
 
+    fn diagnostic(package: &str) -> CandidateDiagnostic {
+        CandidateDiagnostic {
+            package: package.to_string(),
+            selected_version: "target".to_string(),
+            candidate_version: "source".to_string(),
+            kind: crate::resolver::types::CandidateDiagnosticKind::ExcludedByPropagation,
+            facts: vec!["requires minecraft 26.2".to_string()],
+        }
+    }
+
+    #[test]
+    fn successful_migration_does_not_report_rejected_source_candidates_as_errors() {
+        let changes = vec![PackageChange {
+            package: "mod".to_string(),
+            current_version: Some("26.2".to_string()),
+            selected_version: Some("26.1.2".to_string()),
+            filename: None,
+            selected_filename: None,
+            selected_description: None,
+            kind: PackageChangeKind::Replace,
+        }];
+        let diagnostics = vec![diagnostic("mod"), diagnostic("bundled_dependency")];
+
+        assert!(migration_diagnostics(&changes, &diagnostics).is_empty());
+    }
+
+    #[test]
+    fn soft_migration_keeps_only_the_removed_package_explanation() {
+        let changes = vec![PackageChange {
+            package: "removed".to_string(),
+            current_version: Some("1".to_string()),
+            selected_version: None,
+            filename: None,
+            selected_filename: None,
+            selected_description: None,
+            kind: PackageChangeKind::Remove,
+        }];
+        let diagnostics = vec![diagnostic("removed"), diagnostic("bundled_dependency")];
+        let filtered = migration_diagnostics(&changes, &diagnostics);
+
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].package, "removed");
+    }
+
+    #[tokio::test]
+    async fn migration_uses_target_provider_remotes_instead_of_portable_source_jars() {
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("source");
+        std::fs::create_dir_all(source.join("mods")).unwrap();
+        write_empty_orbit_instance(&source, "26.2", "1");
+        write_fabric_package(&source.join("mods/example.jar"), "example", "~26.2");
+        crate::sync_instance(&source, &[], false).await.unwrap();
+
+        let mut manifest = ManifestFile::open(&source).unwrap().inner;
+        let provider = crate::manifest::PackageRemote::Modrinth {
+            project_id: "provider-project".to_string(),
+        };
+        let carrier = crate::manifest::PackageRemote::File {
+            path: "mods/example.jar".to_string(),
+        };
+        manifest.packages["example"].remotes = vec![provider.clone(), carrier.clone()];
+        let mut lockfile = Lockfile::open(&source).unwrap().inner;
+        lockfile.packages[0].remotes = vec![provider.clone(), carrier];
+        lockfile.packages[0].artifact_sources = vec![
+            crate::lockfile::ArtifactSource::Modrinth {
+                project_id: "provider-project".to_string(),
+                version_id: "source-version".to_string(),
+                download_url: "https://example.invalid/source.jar".to_string(),
+            },
+            crate::lockfile::ArtifactSource::File {
+                path: "mods/example.jar".to_string(),
+            },
+        ];
+
+        let (remotes, projected_lock) = migration_discovery_state(&manifest, &lockfile, true);
+
+        assert_eq!(remotes, vec![provider]);
+        assert!(
+            projected_lock.packages[0]
+                .remotes
+                .iter()
+                .all(|remote| !matches!(remote, crate::manifest::PackageRemote::File { .. }))
+        );
+    }
+
+    #[tokio::test]
+    async fn migration_keeps_a_file_only_package_for_solver_compatibility_checking() {
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("source");
+        std::fs::create_dir_all(source.join("mods")).unwrap();
+        write_empty_orbit_instance(&source, "26.2", "1");
+        write_fabric_package(&source.join("mods/local.jar"), "local", ">=26.1");
+        crate::sync_instance(&source, &[], false).await.unwrap();
+
+        let mut manifest = ManifestFile::open(&source).unwrap().inner;
+        manifest.packages["local"].remotes = vec![crate::manifest::PackageRemote::File {
+            path: "mods/local.jar".to_string(),
+        }];
+        let mut lockfile = Lockfile::open(&source).unwrap().inner;
+        lockfile.packages[0].remotes = manifest.packages["local"].remotes.clone();
+        lockfile.packages[0].artifact_sources = vec![crate::lockfile::ArtifactSource::File {
+            path: "mods/local.jar".to_string(),
+        }];
+        let (remotes, projected_lock) = migration_discovery_state(&manifest, &lockfile, true);
+
+        assert!(
+            remotes
+                .iter()
+                .all(|remote| matches!(remote, crate::manifest::PackageRemote::File { .. }))
+        );
+        assert!(
+            projected_lock.packages[0]
+                .remotes
+                .iter()
+                .all(|remote| matches!(remote, crate::manifest::PackageRemote::File { .. }))
+        );
+    }
+
+    #[tokio::test]
+    async fn direct_migration_preserves_an_explicit_file_alongside_a_provider_remote() {
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("source");
+        std::fs::create_dir_all(source.join("mods")).unwrap();
+        write_empty_orbit_instance(&source, "26.2", "1");
+        write_fabric_package(&source.join("mods/example.jar"), "example", ">=26.1");
+        crate::sync_instance(&source, &[], false).await.unwrap();
+
+        let mut manifest = ManifestFile::open(&source).unwrap().inner;
+        manifest.packages["example"]
+            .remotes
+            .push(crate::manifest::PackageRemote::Modrinth {
+                project_id: "provider-project".to_string(),
+            });
+        let lockfile = Lockfile::open(&source).unwrap().inner;
+        let (remotes, _) = migration_discovery_state(&manifest, &lockfile, false);
+
+        assert!(
+            remotes
+                .iter()
+                .any(|remote| matches!(remote, crate::manifest::PackageRemote::Modrinth { .. }))
+        );
+        assert!(
+            remotes
+                .iter()
+                .any(|remote| matches!(remote, crate::manifest::PackageRemote::File { .. }))
+        );
+    }
+
     #[tokio::test]
     async fn unavailable_strict_migration_requires_consent_then_minimizes_removals() {
         let root = tempfile::tempdir().unwrap();
@@ -652,6 +1039,18 @@ mod tests {
         assert!(plan.changes.iter().any(|change| {
             change.package == "removed" && change.kind == PackageChangeKind::Remove
         }));
+        assert!(
+            !plan
+                .target_lockfile
+                .packages
+                .iter()
+                .any(|package| package.mod_id == "removed")
+        );
+        assert!(
+            plan.diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic.package == "removed")
+        );
     }
 
     #[tokio::test]
@@ -700,6 +1099,42 @@ mod tests {
                 .mc_version,
             "2"
         );
+    }
+
+    #[tokio::test]
+    async fn portable_file_only_package_is_preserved_for_target_install() {
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("source");
+        let target = root.path().join("target");
+        std::fs::create_dir_all(source.join("mods")).unwrap();
+        std::fs::create_dir_all(&target).unwrap();
+        write_empty_orbit_instance(&source, "1", "1");
+        write_fabric_package(&source.join("mods/local.jar"), "local", ">=1");
+        crate::sync_instance(&source, &[], false).await.unwrap();
+        crate::platform_detection::test_support::write_platform(&target, "2", "fabric", "1");
+
+        let pack = root.path().join("source.zip");
+        crate::archive::export_instance(&source, &pack, None, "zip", false, None).unwrap();
+        let portable = crate::archive::extract_portable_instance(&pack).unwrap();
+        let cache = crate::jar_cache::JarCache::open(root.path().join("cache")).unwrap();
+        let plan = plan_migration_from_portable(
+            portable,
+            &target,
+            &[],
+            &cache,
+            MigrationOptions::default(),
+            MigrationInteraction::default(),
+        )
+        .await
+        .unwrap();
+
+        let entry = plan.target_lockfile().find("local").unwrap();
+        let managed = format!(".orbit/sources/{}.jar", entry.sha512);
+        assert!(entry.artifact_sources.iter().any(
+            |source| matches!(source, crate::lockfile::ArtifactSource::File { path } if path == &managed)
+        ));
+        export_migration(&plan, false).unwrap();
+        assert!(target.join(managed).is_file());
     }
 
     #[tokio::test]
