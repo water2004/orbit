@@ -205,7 +205,7 @@ impl OrbitApp {
         let mut args = vec![
             "--language".to_string(),
             self.preferences.language.argument().to_string(),
-            "--format".to_string(),
+            "--output-format".to_string(),
             "json".to_string(),
             "--progress-format".to_string(),
             "ndjson".to_string(),
@@ -266,7 +266,7 @@ impl OrbitApp {
         let mut args = vec![
             "--language".to_string(),
             self.preferences.language.argument().to_string(),
-            "--format".to_string(),
+            "--output-format".to_string(),
             "json".to_string(),
             "--progress-format".to_string(),
             "ndjson".to_string(),

@@ -18,7 +18,7 @@ async fn main() {
     let cli = Cli::from_arg_matches(&matches).expect("Clap matches the derived CLI schema");
     orbit_i18n::install(cli.language);
     let command = cli.command.command_name();
-    let format = cli.format;
+    let format = cli.output_format;
     // `--progress-format ndjson` opts into the structured stderr protocol.
     // `--quiet` always silences progress. Text-mode progress (spinner/bar) is
     // driven by `ui.progress_bar` config inside `operation_progress`.

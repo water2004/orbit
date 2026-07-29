@@ -36,7 +36,7 @@ pub struct CliContext {
     pub dry_run: bool,
     pub instance: Option<String>,
     pub runtime: orbit_core::RuntimeContext,
-    /// 输出格式与进度协议，由全局 `--format` / `--progress-format` 决定。
+    /// 输出格式与进度协议，由全局 `--output-format` / `--progress-format` 决定。
     pub output: crate::cli::output::OutputCfg,
 }
 

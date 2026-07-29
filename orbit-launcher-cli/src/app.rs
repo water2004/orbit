@@ -1115,7 +1115,7 @@ async fn start_detached_supervisor(
     command
         .arg("--instance")
         .arg(resolved.entry.id.to_string())
-        .arg("--format")
+        .arg("--output-format")
         .arg("json")
         .arg("--progress-format")
         .arg("ndjson")

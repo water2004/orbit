@@ -1,30 +1,30 @@
 # Orbit 输出格式
 
-> 本文约定 `--format` 全局选项、JSON 结果 schema、NDJSON 进度协议和结构化错误。
+> 本文约定 `--output-format` 全局选项、JSON 结果 schema、NDJSON 进度协议和结构化错误。
 > 命令语义见 [orbit-cli-commands.md](orbit-cli-commands.md)。
 
 ## 1. 全局选项
 
 ```text
-orbit [--format text|json] [--progress-format none|ndjson] <command> ...
+orbit [--output-format text|json] [--progress-format none|ndjson] <command> ...
 ```
 
 | 选项 | 取值 | 默认 | 作用 |
 |------|------|------|------|
-| `--format` | `text` / `json` | `text` | 结果的渲染格式。`text` 走自适应表格/文本；`json` 输出单个 JSON 文档到 stdout |
-| `--progress-format` | `none` / `ndjson` | `none`（当 `--format json`）/ 由 `ui.progress_bar` 决定（当 `--format text`） | 进度的协议。`ndjson` 把进度事件逐行写 stderr，每行一个 JSON 对象 |
+| `--output-format` | `text` / `json` | `text` | 结果的渲染格式。`text` 走自适应表格/文本；`json` 输出单个 JSON 文档到 stdout |
+| `--progress-format` | `none` / `ndjson` | `none`（当 `--output-format json`）/ 由 `ui.progress_bar` 决定（当 `--output-format text`） | 进度的协议。`ndjson` 把进度事件逐行写 stderr，每行一个 JSON 对象 |
 
-`--format json` 隐含 `--progress-format none`，除非显式传 `--progress-format ndjson`。
+`--output-format json` 隐含 `--progress-format none`，除非显式传 `--progress-format ndjson`。
 `--quiet` 始终关闭进度，等价 `--progress-format none`。
 
 ### stdout / stderr 分工
 
-| 流 | `--format text` | `--format json` |
+| 流 | `--output-format text` | `--output-format json` |
 |----|-----------------|-----------------|
 | stdout | 表格/文本结果 | 单个 JSON 文档（结果） |
 | stderr | 进度条/交互提示/警告 | NDJSON 进度（若启用）+ NDJSON 交互请求 + 结构化错误 |
 
-**关键约束**：`--format json` 下 stdout 永远是且只是一个完整 JSON 文档（成功时是结果，失败时为空）；调用方可以安全 `orbit --format json ... | jq`。
+**关键约束**：`--output-format json` 下 stdout 永远是且只是一个完整 JSON 文档（成功时是结果，失败时为空）；调用方可以安全 `orbit --output-format json ... | jq`。
 
 ## 2. JSON 结果 schema 通用约定
 
@@ -671,7 +671,7 @@ Orbit Launcher 直接使用 `orbit-machine-protocol` 中同一个信封类型，
 
 ## 5. 同进程交互协议
 
-`--format json` 的命令遇到多个真实包身份、多个 Pareto 极大解或写入前确认时，不启动
+`--output-format json` 的命令遇到多个真实包身份、多个 Pareto 极大解或写入前确认时，不启动
 第二条命令、不返回待恢复 token，也不静默采用第一个选项。CLI 在 **stderr** 输出一行
 `interaction` NDJSON，然后暂停并从同一个子进程的 **stdin** 读取一行响应：
 
@@ -702,7 +702,7 @@ Orbit Launcher 直接使用 `orbit-machine-protocol` 中同一个信封类型，
 
 ## 6. 错误协议
 
-`--format json` 下命令失败时：
+`--output-format json` 下命令失败时：
 
 - **stdout 不输出任何内容**；
 - **stderr 输出一行结构化错误 JSON**：

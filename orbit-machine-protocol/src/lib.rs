@@ -1,9 +1,10 @@
 //! Canonical machine protocol shared by `orbit`, `orbit-launcher`, and native
 //! process clients.
 //!
-//! This crate describes the existing `--format json` / `--progress-format
-//! ndjson` wire path. It is not a second API: both command-line programs emit
-//! these envelopes directly and clients accept no legacy envelope.
+//! This crate describes the existing `--output-format json` /
+//! `--progress-format ndjson` machine-output path shared by Orbit and Orbit
+//! Launcher. It is not a second API: both command-line programs emit these
+//! envelopes directly and clients accept no legacy envelope.
 
 use serde::{Deserialize, Serialize};
 

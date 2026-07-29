@@ -39,7 +39,7 @@ pub struct Cli {
 
     /// Output format: text / json.
     #[arg(long, global = true, value_enum, default_value_t = OutputFormat::Text)]
-    pub format: OutputFormat,
+    pub output_format: OutputFormat,
 
     /// Progress protocol: none / ndjson (stderr only).
     #[arg(long, global = true, value_enum, default_value_t = ProgressFormat::None)]
@@ -211,8 +211,8 @@ pub enum Commands {
         #[arg(long)]
         target: Option<String>,
         /// Export format: zip / mrpack.
-        #[arg(long, default_value = "zip")]
-        format: String,
+        #[arg(long = "format", default_value = "zip")]
+        archive_format: String,
     },
 
     /// Plan or export a package migration into an installed target runtime.
@@ -378,8 +378,8 @@ impl CommandHandler for Commands {
             Commands::Export {
                 file,
                 target,
-                format,
-            } => handle_export(file, target, format, ctx).await,
+                archive_format,
+            } => handle_export(file, target, archive_format, ctx).await,
             Commands::Migrate { command } => command.execute(ctx).await,
             Commands::Audit {
                 min_risk,
@@ -508,9 +508,14 @@ impl CommandHandler for MigrateCommands {
 
 #[cfg(test)]
 mod tests {
-    use clap::Parser;
+    use clap::{CommandFactory, Parser};
 
     use super::{Cli, Commands, ConfigCommands, MigrateCommands, PathBuf, RemoteCommands};
+
+    #[test]
+    fn clap_schema_has_no_global_subcommand_argument_collisions() {
+        Cli::command().debug_assert();
+    }
 
     #[test]
     fn audit_defaults_do_not_request_a_report_file() {
@@ -555,10 +560,31 @@ mod tests {
             !Commands::Export {
                 file: None,
                 target: None,
-                format: "zip".to_string(),
+                archive_format: "zip".to_string(),
             }
             .mutates_instance()
         );
+    }
+
+    #[test]
+    fn machine_output_and_archive_formats_are_independent_arguments() {
+        let cli = Cli::try_parse_from([
+            "orbit",
+            "--output-format",
+            "json",
+            "--progress-format",
+            "ndjson",
+            "export",
+            "pack.mrpack",
+            "--format",
+            "mrpack",
+        ])
+        .unwrap();
+        assert_eq!(cli.output_format, super::OutputFormat::Json);
+        let Commands::Export { archive_format, .. } = cli.command else {
+            panic!("export command was not parsed");
+        };
+        assert_eq!(archive_format, "mrpack");
     }
 
     #[test]

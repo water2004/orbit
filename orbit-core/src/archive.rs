@@ -582,7 +582,10 @@ struct ExportTracker {
     completed_packages: usize,
     completed_bytes: u64,
     total_bytes: u64,
+    last_emitted_bytes: u64,
 }
+
+const EXPORT_PROGRESS_INTERVAL_BYTES: u64 = 1024 * 1024;
 
 impl ExportTracker {
     fn new(progress: Option<ProgressReporter>, packages: usize, total_bytes: u64) -> Self {
@@ -592,6 +595,7 @@ impl ExportTracker {
             completed_packages: 0,
             completed_bytes: 0,
             total_bytes,
+            last_emitted_bytes: 0,
         }
     }
 
@@ -610,6 +614,21 @@ impl ExportTracker {
             .completed_bytes
             .saturating_add(bytes)
             .min(self.total_bytes);
+        if self.completed_bytes == self.total_bytes
+            || self.completed_bytes.saturating_sub(self.last_emitted_bytes)
+                >= EXPORT_PROGRESS_INTERVAL_BYTES
+        {
+            self.emit_advanced();
+        }
+    }
+
+    fn complete_package(&mut self, completed: usize) {
+        self.completed_packages = completed;
+        self.emit_advanced();
+    }
+
+    fn emit_advanced(&mut self) {
+        self.last_emitted_bytes = self.completed_bytes;
         emit_progress(
             self.progress.as_ref(),
             ProgressEvent::ExportAdvanced {
@@ -619,10 +638,6 @@ impl ExportTracker {
                 packages: self.packages,
             },
         );
-    }
-
-    fn complete_package(&mut self, completed: usize) {
-        self.completed_packages = completed;
     }
 
     fn finished(&self) {

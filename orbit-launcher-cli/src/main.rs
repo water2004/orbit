@@ -35,16 +35,21 @@ async fn main() -> ExitCode {
     let runtime = match runtime {
         Ok(runtime) => runtime,
         Err(error) => {
-            return render_launcher_error(cli.format, command_name, &error);
+            return render_launcher_error(cli.output_format, command_name, &error);
         }
     };
     let current_dir = match std::env::current_dir() {
         Ok(path) => path,
         Err(error) => {
-            return render_launcher_error(cli.format, command_name, &LauncherError::Io(error));
+            return render_launcher_error(
+                cli.output_format,
+                command_name,
+                &LauncherError::Io(error),
+            );
         }
     };
-    let mut frontend = TerminalFrontend::new(cli.format, cli.progress_format, cli.non_interactive);
+    let mut frontend =
+        TerminalFrontend::new(cli.output_format, cli.progress_format, cli.non_interactive);
     match app::execute(
         cli.command,
         cli.instance.as_deref(),
@@ -56,14 +61,14 @@ async fn main() -> ExitCode {
     {
         Ok(output) => {
             let process_succeeded = output.process_succeeded();
-            render_success(cli.format, output);
+            render_success(cli.output_format, output);
             if process_succeeded {
                 ExitCode::SUCCESS
             } else {
                 ExitCode::from(1)
             }
         }
-        Err(error) => render_app_error(cli.format, command_name, &error),
+        Err(error) => render_app_error(cli.output_format, command_name, &error),
     }
 }
 

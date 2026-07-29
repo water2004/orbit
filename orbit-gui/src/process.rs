@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -38,8 +39,8 @@ impl ProcessRequest {
         let mut arguments = self.args.iter();
         while let Some(argument) = arguments.next() {
             match argument.as_str() {
-                "--format" | "--progress-format" | "--instance" | "--config" | "--cache-dir"
-                | "--config-dir" | "--data-dir" | "--language" => {
+                "--output-format" | "--progress-format" | "--instance" | "--config"
+                | "--cache-dir" | "--config-dir" | "--data-dir" | "--language" => {
                     let _ = arguments.next();
                 }
                 value if value.starts_with('-') => {}
@@ -119,10 +120,36 @@ impl ProcessBridge {
         let (control_tx, control_rx) = mpsc::channel();
         self.controls.insert(task_id, control_tx);
         let events = self.events_tx.clone();
-        thread::Builder::new()
+        let recovery_events = events.clone();
+        let worker = thread::Builder::new()
             .name(format!("orbit-command-{task_id}"))
-            .spawn(move || run_process(task_id, request, control_rx, events))
-            .expect("command worker thread can be created");
+            .spawn(move || {
+                if let Err(payload) = catch_unwind(AssertUnwindSafe(|| {
+                    run_process(task_id, request, control_rx, events);
+                })) {
+                    let message = format!(
+                        "{}: {}",
+                        tr!("CLI process worker failed"),
+                        panic_message(payload.as_ref())
+                    );
+                    let _ = recovery_events.send(BridgeEvent::ProtocolError { task_id, message });
+                    let _ = recovery_events.send(BridgeEvent::Finished {
+                        task_id,
+                        status: None,
+                        stdout: String::new(),
+                        cancelled: false,
+                    });
+                }
+            });
+        if let Err(error) = worker {
+            let _ = self.events_tx.send(BridgeEvent::SpawnFailed {
+                task_id,
+                message: tr!(
+                    "Failed to create CLI process worker: %{error}",
+                    error = error
+                ),
+            });
+        }
         task_id
     }
 
@@ -149,6 +176,14 @@ impl ProcessBridge {
         }
         events
     }
+}
+
+fn panic_message(payload: &(dyn std::any::Any + Send)) -> &str {
+    payload
+        .downcast_ref::<&str>()
+        .copied()
+        .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
+        .unwrap_or("unknown panic")
 }
 
 fn run_process(
@@ -396,7 +431,7 @@ mod tests {
             kind: CliKind::Orbit,
             program: PathBuf::from("orbit"),
             args: vec![
-                "--format".into(),
+                "--output-format".into(),
                 "json".into(),
                 "--progress-format".into(),
                 "ndjson".into(),
@@ -416,7 +451,7 @@ mod tests {
             kind: CliKind::Launcher,
             program: PathBuf::from("orbit-launcher"),
             args: vec![
-                "--format".into(),
+                "--output-format".into(),
                 "json".into(),
                 "--instance".into(),
                 "stable-instance-id".into(),
@@ -438,7 +473,7 @@ mod tests {
             args: vec![
                 "--language".into(),
                 "zh-CN".into(),
-                "--format".into(),
+                "--output-format".into(),
                 "json".into(),
                 "instance".into(),
                 "list".into(),

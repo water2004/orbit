@@ -4,7 +4,7 @@
 //! serialized as one JSON object per line on stderr, wrapped in a
 //! `{"type":"progress","phase":...,"event":...,"data":...}` envelope. The
 //! final command result still goes to stdout as a single JSON document, so
-//! callers can `orbit --format json ... | jq` while optionally tailing stderr
+//! callers can `orbit --output-format json ... | jq` while optionally tailing stderr
 //! for progress.
 //!
 //! Content hashes, physical JAR filenames, and provider secrets never appear

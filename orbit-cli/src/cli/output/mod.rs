@@ -65,8 +65,8 @@ pub struct OutputCfg {
 impl OutputCfg {
     /// Whether structured NDJSON progress should be emitted on stderr.
     ///
-    /// `--format json` disables progress unless `--progress-format ndjson` is
-    /// explicit; `--format text` follows the configured `ui.progress_bar`
+    /// `--output-format json` disables progress unless `--progress-format ndjson` is
+    /// explicit; `--output-format text` follows the configured `ui.progress_bar`
     /// style (the caller decides whether to construct a reporter at all).
     pub fn ndjson_progress(self) -> bool {
         self.progress == ProgressFormat::Ndjson

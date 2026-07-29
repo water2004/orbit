@@ -15,8 +15,11 @@ use gpui_component::{
     scroll::ScrollableElement,
     v_flex,
 };
+use orbit_machine_protocol::ProgressPhase;
 
-use super::super::{ACTIVITY_DRAWER_TRANSITION, OrbitApp, TaskState, ToastKind};
+use super::super::{
+    ACTIVITY_DRAWER_TRANSITION, OrbitApp, TaskState, ToastKind, controller::human_bytes,
+};
 use crate::app::components as ui;
 use crate::assets::OrbitIcon;
 
@@ -69,6 +72,11 @@ pub(in crate::app) fn render_strip(app: &OrbitApp, cx: &mut Context<OrbitApp>) -
                             .text_xs()
                             .text_color(cx.theme().muted_foreground)
                             .child(match (completed, total) {
+                                (Some(done), Some(total))
+                                    if task.phase == Some(ProgressPhase::Export) =>
+                                {
+                                    format!("{} / {}", human_bytes(done), human_bytes(total))
+                                }
                                 (Some(done), Some(total)) => format!("{done} / {total}"),
                                 (Some(done), None) => done.to_string(),
                                 _ => String::new(),
@@ -102,7 +110,7 @@ pub(in crate::app) fn render_strip(app: &OrbitApp, cx: &mut Context<OrbitApp>) -
         )
         .child(match progress {
             Some(value) => Progress::new().h(px(6.)).value(value).into_any_element(),
-            None if running => indeterminate(cx).into_any_element(),
+            None if running => indeterminate(cx, 6.).into_any_element(),
             None => Progress::new()
                 .h(px(6.))
                 .value(if task.state == TaskState::Succeeded {
@@ -115,10 +123,10 @@ pub(in crate::app) fn render_strip(app: &OrbitApp, cx: &mut Context<OrbitApp>) -
         .into_any_element()
 }
 
-fn indeterminate(cx: &gpui::App) -> impl IntoElement {
+fn indeterminate(cx: &gpui::App, height: f32) -> impl IntoElement {
     div()
         .relative()
-        .h(px(6.))
+        .h(px(height))
         .w_full()
         .overflow_hidden()
         .bg(cx.theme().primary.opacity(0.18))
@@ -230,6 +238,10 @@ fn render_drawer(app: &OrbitApp, cx: &mut Context<OrbitApp>) -> impl IntoElement
                 .when_some(progress, |card, value| {
                     card.child(Progress::new().h(px(5.)).value(value))
                 })
+                .when(
+                    task.state == TaskState::Running && progress.is_none(),
+                    |card| card.child(indeterminate(cx, 5.)),
+                )
                 .when_some(task.error_message.clone(), |card, error| {
                     card.child(div().text_sm().text_color(cx.theme().danger).child(error))
                 })

@@ -12,7 +12,7 @@ pub fn audit_report(report: &orbit_core::AuditReport, limit: usize) -> String {
             tr!("No bytecode compatibility risks reached the current threshold.").into_owned(),
         );
         sections.push(
-            tr!("Use --format json or --report <path> for the complete structured report.")
+            tr!("Use --output-format json or --report <path> for the complete structured report.")
                 .into_owned(),
         );
     } else {
@@ -22,7 +22,7 @@ pub fn audit_report(report: &orbit_core::AuditReport, limit: usize) -> String {
         ));
         sections.push(risks_table(report, limit));
         sections.push(
-            tr!("Use --format json or --report <path> for all evidence, selectors, warnings, and offsets.").into_owned(),
+            tr!("Use --output-format json or --report <path> for all evidence, selectors, warnings, and offsets.").into_owned(),
         );
     }
 

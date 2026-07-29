@@ -280,7 +280,7 @@ descriptor 已对齐，并确认目标类在当前合并阶段没有直接声明
 重定向输出无法探测宽度时限制为 120 列。`--limit` 可调整展示数；文本不会展开
 `Evidence.detail`、selector 候选、refmap、stable ID 或每条 warning。
 
-`--format json` 在 stdout 输出未截断的结构化细节。`--report <path>` 仅在用户显式
+`--output-format json` 在 stdout 输出未截断的结构化细节。`--report <path>` 仅在用户显式
 指定时额外写完整、未按文本 limit 或 stdout filter 截断的 JSON 报告；默认命令不创建
 文件。当前 schema version 为数字 `5`。schema 5 将原来的
 `environment.declared_loader` / `environment.detected_loader` 收敛为经过 platform snapshot

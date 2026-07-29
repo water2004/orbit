@@ -16,7 +16,7 @@ pub struct Cli {
 
     /// Final output format.
     #[arg(long, value_enum, default_value_t = OutputFormat::Text, global = true)]
-    pub format: OutputFormat,
+    pub output_format: OutputFormat,
 
     /// Progress event protocol written to stderr.
     #[arg(long, value_enum, default_value_t = ProgressFormat::Text, global = true)]
@@ -431,7 +431,14 @@ impl From<LoaderKindArg> for orbit_launcher_core::LoaderKind {
 
 #[cfg(test)]
 mod tests {
+    use clap::CommandFactory;
+
     use super::*;
+
+    #[test]
+    fn clap_schema_has_no_global_subcommand_argument_collisions() {
+        Cli::command().debug_assert();
+    }
 
     #[test]
     fn create_accepts_global_options_after_subcommands_for_gui_callers() {
@@ -449,11 +456,11 @@ mod tests {
             "fabric",
             "--loader-version",
             "stable",
-            "--format",
+            "--output-format",
             "json",
         ])
         .unwrap();
-        assert_eq!(cli.format, OutputFormat::Json);
+        assert_eq!(cli.output_format, OutputFormat::Json);
     }
 
     #[test]
@@ -477,7 +484,7 @@ mod tests {
             "set",
             "cache.max-size",
             "8 GiB",
-            "--format",
+            "--output-format",
             "json",
         ])
         .unwrap();

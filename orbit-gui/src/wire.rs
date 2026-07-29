@@ -77,7 +77,8 @@ pub fn interaction_line(line: &str) -> Option<Result<InteractionEnvelope<Value>>
 }
 
 pub fn progress_numbers(data: &Value) -> (Option<u64>, Option<u64>) {
-    let completed = data
+    let event = data.get("event").and_then(Value::as_str);
+    let mut completed = data
         .get("completed")
         .or_else(|| data.get("downloaded_bytes"))
         .and_then(Value::as_u64);
@@ -85,6 +86,15 @@ pub fn progress_numbers(data: &Value) -> (Option<u64>, Option<u64>) {
         .get("total")
         .or_else(|| data.get("total_bytes"))
         .and_then(Value::as_u64);
+    match event {
+        Some("export_started" | "ExportStarted") if completed.is_none() => {
+            completed = total.map(|_| 0);
+        }
+        Some("export_finished" | "ExportFinished") => {
+            completed = total;
+        }
+        _ => {}
+    }
     (completed, total)
 }
 
@@ -337,6 +347,37 @@ mod tests {
         assert_eq!(
             progress_label(&progress),
             orbit_i18n::text("Assembling managed Java runtime files")
+        );
+    }
+
+    #[test]
+    fn export_lifecycle_has_determinate_progress_from_start_to_finish() {
+        let started = serde_json::json!({
+            "event": "export_started",
+            "packages": 40,
+            "total_bytes": 80_000_000
+        });
+        let advanced = serde_json::json!({
+            "event": "export_advanced",
+            "completed": 20_000_000,
+            "total": 80_000_000,
+            "completed_packages": 10,
+            "packages": 40
+        });
+        let finished = serde_json::json!({
+            "event": "export_finished",
+            "packages": 40,
+            "total_bytes": 80_000_000
+        });
+
+        assert_eq!(progress_numbers(&started), (Some(0), Some(80_000_000)));
+        assert_eq!(
+            progress_numbers(&advanced),
+            (Some(20_000_000), Some(80_000_000))
+        );
+        assert_eq!(
+            progress_numbers(&finished),
+            (Some(80_000_000), Some(80_000_000))
         );
     }
 
