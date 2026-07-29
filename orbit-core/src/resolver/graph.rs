@@ -908,18 +908,19 @@ pub(super) fn manifest_package_versions(
 ) -> Ranges<SolverVersion> {
     let package = logical_package(name);
     let allowed = dependency_constraint(name, specification.version_constraint(), loader);
-    let suffix = crate::VersionSuffixRule::parse(specification.suffix_expression())
-        .expect("manifest suffix expression was validated");
+    let string = crate::VersionStringRule::parse(specification.string_expression())
+        .expect("manifest string expression was validated");
     provider
         .versions
         .get(&package)
         .into_iter()
         .flatten()
-        .filter(|version| allowed.contains(version))
         .filter(|version| {
-            version
-                .domain()
-                .is_some_and(|version| suffix.matches(version.suffix().as_deref()))
+            version.domain().is_some_and(|domain| {
+                let numeric = domain.numeric_analysis();
+                (!numeric.numeric_filterable() || allowed.contains(version))
+                    && string.matches(&domain.to_string())
+            })
         })
         .filter(|version| {
             !top_level_only

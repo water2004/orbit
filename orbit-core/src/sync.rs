@@ -161,7 +161,7 @@ pub async fn sync_instance(
             .entry(entry.mod_id.clone())
             .or_insert_with(|| PackageSpec {
                 version: "*".to_string(),
-                suffix: "all".to_string(),
+                string: "all".to_string(),
                 optional: false,
                 env: None,
                 exclude: Vec::new(),

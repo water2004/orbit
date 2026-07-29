@@ -150,13 +150,13 @@ impl PackageRemote {
 pub struct PackageSpec {
     #[serde(default = "default_version_constraint")]
     pub version: String,
-    /// Ordered set rule over the raw text following the leading numeric
-    /// version core. It is independent from the Loader-native numeric range.
+    /// Ordered set rule over the complete JAR-declared version string. It is
+    /// independent from the numeric-core rule.
     #[serde(
-        default = "default_suffix_expression",
-        skip_serializing_if = "is_all_suffix"
+        default = "default_string_expression",
+        skip_serializing_if = "is_all_string"
     )]
-    pub suffix: String,
+    pub string: String,
     #[serde(default, skip_serializing_if = "is_false")]
     pub optional: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -171,11 +171,11 @@ fn default_version_constraint() -> String {
     "*".to_string()
 }
 
-fn default_suffix_expression() -> String {
+fn default_string_expression() -> String {
     "all".to_string()
 }
 
-fn is_all_suffix(value: &String) -> bool {
+fn is_all_string(value: &String) -> bool {
     value == "all"
 }
 
@@ -187,7 +187,7 @@ impl PackageSpec {
     pub fn new(version: impl Into<String>, remotes: Vec<PackageRemote>) -> Self {
         Self {
             version: version.into(),
-            suffix: default_suffix_expression(),
+            string: default_string_expression(),
             optional: false,
             env: None,
             exclude: Vec::new(),
@@ -199,8 +199,8 @@ impl PackageSpec {
         &self.version
     }
 
-    pub fn suffix_expression(&self) -> &str {
-        &self.suffix
+    pub fn string_expression(&self) -> &str {
+        &self.string
     }
 
     pub fn env(&self) -> Option<crate::metadata::Environment> {
@@ -228,10 +228,10 @@ impl PackageSpec {
     }
 
     pub fn validate(&self, package: &str) -> Result<(), OrbitError> {
-        crate::version_suffix::VersionSuffixRule::parse(&self.suffix).map_err(|error| {
+        crate::version_string::VersionStringRule::parse(&self.string).map_err(|error| {
             OrbitError::Other(anyhow::anyhow!(
-                "package '{package}' has an invalid suffix expression '{}': {error}",
-                self.suffix
+                "package '{package}' has an invalid string expression '{}': {error}",
+                self.string
             ))
         })?;
         if self.remotes.is_empty() {
@@ -285,7 +285,7 @@ impl OrbitManifest {
     }
 
     pub fn validate(&self) -> Result<(), OrbitError> {
-        self.project.loader_kind()?;
+        let loader = self.project.loader_kind()?;
         for (package, specification) in &self.packages {
             if package.trim().is_empty() {
                 return Err(OrbitError::Other(anyhow::anyhow!(
@@ -293,6 +293,15 @@ impl OrbitManifest {
                 )));
             }
             specification.validate(package)?;
+            crate::package_constraint::validate_package_numeric_requirement(
+                &specification.version,
+                loader,
+            )
+            .map_err(|error| {
+                OrbitError::Other(anyhow::anyhow!(
+                    "package '{package}' has an invalid numeric version rule: {error}"
+                ))
+            })?;
         }
         for (group_name, group) in &self.groups {
             let mut unique = std::collections::BTreeSet::new();
@@ -350,25 +359,51 @@ sodium = { version = "*", remotes = [
             "*"
         );
         assert_eq!(manifest.packages["sodium"].remotes.len(), 2);
-        assert_eq!(manifest.packages["sodium"].suffix_expression(), "all");
+        assert_eq!(manifest.packages["sodium"].string_expression(), "all");
     }
 
     #[test]
-    fn suffix_set_rule_is_strictly_validated_and_roundtrips() {
+    fn string_set_rule_is_strictly_validated_and_roundtrips() {
         let mut package = PackageSpec::new(
             "*",
             vec![PackageRemote::Modrinth {
                 project_id: "AANobbMI".to_string(),
             }],
         );
-        package.suffix = "all; intersect not contains(i\"beta\"); complement".to_string();
+        package.string = "all; intersect not contains(i\"beta\"); complement".to_string();
         package.validate("sodium").unwrap();
         let encoded = toml::to_string(&package).unwrap();
         let decoded: PackageSpec = toml::from_str(&encoded).unwrap();
-        assert_eq!(decoded.suffix, package.suffix);
+        assert_eq!(decoded.string, package.string);
 
-        package.suffix = "all; exclude \"beta\"".to_string();
+        package.string = "all; exclude \"beta\"".to_string();
         assert!(package.validate("sodium").is_err());
+    }
+
+    #[test]
+    fn package_numeric_rule_rejects_author_text_without_rejecting_the_string_rule() {
+        let mut manifest: OrbitManifest = toml::from_str(
+            r#"
+[project]
+name = "test"
+mc_version = "1.20.1"
+modloader = "fabric"
+modloader_version = "0.15.7"
+[platform]
+minecraft_jar = { path = "minecraft.jar", sha256 = "test" }
+loader_jar = { path = "loader.jar", sha256 = "test" }
+runtime_jars = []
+physical_environment = "client"
+[packages]
+example = { version = "=1.2.3-beta", remotes = [{ type = "file", path = "example.jar" }] }
+"#,
+        )
+        .unwrap();
+
+        assert!(manifest.validate().is_err());
+        manifest.packages["example"].version = "=1.2.3".to_string();
+        manifest.packages["example"].string = "all; intersect contains(\"beta\")".to_string();
+        assert!(manifest.validate().is_ok());
     }
 
     #[test]

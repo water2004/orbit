@@ -1,4 +1,4 @@
-//! Ordered set operations over version text following its numeric core.
+//! Ordered set operations over a complete JAR-declared version string.
 //!
 //! A rule starts from `all` or `none`, then evaluates each operation from left
 //! to right. Orbit assigns no release-stage meaning to author-chosen text.
@@ -11,39 +11,39 @@ const MAX_OPERATIONS: usize = 128;
 const MAX_VALUE_BYTES: usize = 512;
 
 /// Applied only when `orbit add` creates a brand-new package declaration.
-pub const DEFAULT_NEW_PACKAGE_SUFFIX: &str =
+pub const DEFAULT_NEW_PACKAGE_STRING: &str =
     "all; intersect not contains(i\"beta\"); intersect not contains(i\"snapshot\")";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum VersionSuffixInitialSet {
+pub enum VersionStringInitialSet {
     All,
     None,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct VersionSuffixRule {
-    pub initial: VersionSuffixInitialSet,
-    pub operations: Vec<VersionSuffixOperation>,
+pub struct VersionStringRule {
+    pub initial: VersionStringInitialSet,
+    pub operations: Vec<VersionStringOperation>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
-pub enum VersionSuffixOperation {
+pub enum VersionStringOperation {
     Intersect {
         negated: bool,
-        predicate: VersionSuffixPredicate,
+        predicate: VersionStringPredicate,
     },
     Union {
         negated: bool,
-        predicate: VersionSuffixPredicate,
+        predicate: VersionStringPredicate,
     },
     Complement,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
-pub enum VersionSuffixPredicate {
+pub enum VersionStringPredicate {
     Empty,
     Present,
     Equals { value: String, case_sensitive: bool },
@@ -52,24 +52,24 @@ pub enum VersionSuffixPredicate {
     EndsWith { value: String, case_sensitive: bool },
 }
 
-impl Default for VersionSuffixRule {
+impl Default for VersionStringRule {
     fn default() -> Self {
         Self {
-            initial: VersionSuffixInitialSet::All,
+            initial: VersionStringInitialSet::All,
             operations: Vec::new(),
         }
     }
 }
 
-impl VersionSuffixRule {
+impl VersionStringRule {
     pub fn parse(source: &str) -> Result<Self, OrbitError> {
         let mut parser = Parser::new(source);
         let initial = match parser.identifier()?.as_str() {
-            "all" => VersionSuffixInitialSet::All,
-            "none" => VersionSuffixInitialSet::None,
+            "all" => VersionStringInitialSet::All,
+            "none" => VersionStringInitialSet::None,
             other => {
                 return Err(parser.error(&format!(
-                    "suffix rule must start with 'all' or 'none', found '{other}'"
+                    "string rule must start with 'all' or 'none', found '{other}'"
                 )));
             }
         };
@@ -80,29 +80,29 @@ impl VersionSuffixRule {
                 break;
             }
             if !parser.consume_char(';') {
-                return Err(parser.error("expected ';' between suffix operations"));
+                return Err(parser.error("expected ';' between string operations"));
             }
             parser.skip_whitespace();
             if parser.finished() {
-                return Err(parser.error("suffix rule cannot end with an empty operation"));
+                return Err(parser.error("string rule cannot end with an empty operation"));
             }
             let operation = match parser.identifier()?.as_str() {
-                "intersect" => VersionSuffixOperation::Intersect {
+                "intersect" => VersionStringOperation::Intersect {
                     negated: parser.consume_keyword("not"),
                     predicate: parser.predicate()?,
                 },
-                "union" => VersionSuffixOperation::Union {
+                "union" => VersionStringOperation::Union {
                     negated: parser.consume_keyword("not"),
                     predicate: parser.predicate()?,
                 },
-                "complement" => VersionSuffixOperation::Complement,
+                "complement" => VersionStringOperation::Complement,
                 other => {
-                    return Err(parser.error(&format!("unknown suffix set operation '{other}'")));
+                    return Err(parser.error(&format!("unknown string set operation '{other}'")));
                 }
             };
             operations.push(operation);
             if operations.len() > MAX_OPERATIONS {
-                return Err(parser.error("suffix rule contains too many operations"));
+                return Err(parser.error("string rule contains too many operations"));
             }
         }
         let rule = Self {
@@ -113,24 +113,24 @@ impl VersionSuffixRule {
         Ok(rule)
     }
 
-    pub fn matches(&self, suffix: Option<&str>) -> bool {
+    pub fn matches(&self, value: &str) -> bool {
         self.operations.iter().fold(
-            self.initial == VersionSuffixInitialSet::All,
+            self.initial == VersionStringInitialSet::All,
             |selected, operation| match operation {
-                VersionSuffixOperation::Intersect { negated, predicate } => {
-                    selected && (predicate.matches(suffix) != *negated)
+                VersionStringOperation::Intersect { negated, predicate } => {
+                    selected && (predicate.matches(value) != *negated)
                 }
-                VersionSuffixOperation::Union { negated, predicate } => {
-                    selected || (predicate.matches(suffix) != *negated)
+                VersionStringOperation::Union { negated, predicate } => {
+                    selected || (predicate.matches(value) != *negated)
                 }
-                VersionSuffixOperation::Complement => !selected,
+                VersionStringOperation::Complement => !selected,
             },
         )
     }
 
     pub fn validate(&self) -> Result<(), OrbitError> {
         if self.operations.len() > MAX_OPERATIONS {
-            return Err(invalid("suffix rule contains too many operations"));
+            return Err(invalid("string rule contains too many operations"));
         }
         for operation in &self.operations {
             if let Some(predicate) = operation.predicate() {
@@ -145,8 +145,8 @@ impl VersionSuffixRule {
     }
 }
 
-impl VersionSuffixOperation {
-    fn predicate(&self) -> Option<&VersionSuffixPredicate> {
+impl VersionStringOperation {
+    fn predicate(&self) -> Option<&VersionStringPredicate> {
         match self {
             Self::Intersect { predicate, .. } | Self::Union { predicate, .. } => Some(predicate),
             Self::Complement => None,
@@ -154,11 +154,11 @@ impl VersionSuffixOperation {
     }
 }
 
-impl std::fmt::Display for VersionSuffixRule {
+impl std::fmt::Display for VersionStringRule {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str(match self.initial {
-            VersionSuffixInitialSet::All => "all",
-            VersionSuffixInitialSet::None => "none",
+            VersionStringInitialSet::All => "all",
+            VersionStringInitialSet::None => "none",
         })?;
         for operation in &self.operations {
             write!(formatter, "; {operation}")?;
@@ -167,7 +167,7 @@ impl std::fmt::Display for VersionSuffixRule {
     }
 }
 
-impl std::fmt::Display for VersionSuffixOperation {
+impl std::fmt::Display for VersionStringOperation {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Intersect { negated, predicate } => write!(
@@ -185,38 +185,32 @@ impl std::fmt::Display for VersionSuffixOperation {
     }
 }
 
-impl VersionSuffixPredicate {
-    fn matches(&self, suffix: Option<&str>) -> bool {
+impl VersionStringPredicate {
+    fn matches(&self, text: &str) -> bool {
         match self {
-            Self::Empty => suffix.is_none_or(str::is_empty),
-            Self::Present => suffix.is_some_and(|value| !value.is_empty()),
+            Self::Empty => text.is_empty(),
+            Self::Present => !text.is_empty(),
             Self::Equals {
                 value,
                 case_sensitive,
-            } => suffix.is_some_and(|suffix| compare(suffix, value, *case_sensitive, str::eq)),
+            } => compare(text, value, *case_sensitive, str::eq),
             Self::Contains {
                 value,
                 case_sensitive,
-            } => suffix.is_some_and(|suffix| {
-                compare(suffix, value, *case_sensitive, |left, right| {
-                    left.contains(right)
-                })
+            } => compare(text, value, *case_sensitive, |left, right| {
+                left.contains(right)
             }),
             Self::StartsWith {
                 value,
                 case_sensitive,
-            } => suffix.is_some_and(|suffix| {
-                compare(suffix, value, *case_sensitive, |left, right| {
-                    left.starts_with(right)
-                })
+            } => compare(text, value, *case_sensitive, |left, right| {
+                left.starts_with(right)
             }),
             Self::EndsWith {
                 value,
                 case_sensitive,
-            } => suffix.is_some_and(|suffix| {
-                compare(suffix, value, *case_sensitive, |left, right| {
-                    left.ends_with(right)
-                })
+            } => compare(text, value, *case_sensitive, |left, right| {
+                left.ends_with(right)
             }),
         }
     }
@@ -232,15 +226,15 @@ impl VersionSuffixPredicate {
         if let Some(value) = value {
             if value.is_empty() {
                 return Err(invalid(
-                    "suffix string predicates require a non-empty value",
+                    "version string predicates require a non-empty value",
                 ));
             }
             if value.len() > MAX_VALUE_BYTES {
-                return Err(invalid("suffix predicate value is too long"));
+                return Err(invalid("string predicate value is too long"));
             }
             if value.chars().any(char::is_control) {
                 return Err(invalid(
-                    "suffix predicate values cannot contain control characters",
+                    "string predicate values cannot contain control characters",
                 ));
             }
         }
@@ -248,7 +242,7 @@ impl VersionSuffixPredicate {
     }
 }
 
-impl std::fmt::Display for VersionSuffixPredicate {
+impl std::fmt::Display for VersionStringPredicate {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Empty => formatter.write_str("empty"),
@@ -319,21 +313,21 @@ impl<'a> Parser<'a> {
         Self { source, offset: 0 }
     }
 
-    fn predicate(&mut self) -> Result<VersionSuffixPredicate, OrbitError> {
+    fn predicate(&mut self) -> Result<VersionStringPredicate, OrbitError> {
         self.skip_whitespace();
         if self.peek() == Some('"') {
-            return Ok(VersionSuffixPredicate::Equals {
+            return Ok(VersionStringPredicate::Equals {
                 value: self.string()?,
                 case_sensitive: true,
             });
         }
         let identifier = self.identifier()?;
         match identifier.as_str() {
-            "empty" => Ok(VersionSuffixPredicate::Empty),
-            "present" => Ok(VersionSuffixPredicate::Present),
+            "empty" => Ok(VersionStringPredicate::Empty),
+            "present" => Ok(VersionStringPredicate::Present),
             "i" if self.peek_after_whitespace() == Some('"') => {
                 self.skip_whitespace();
-                Ok(VersionSuffixPredicate::Equals {
+                Ok(VersionStringPredicate::Equals {
                     value: self.string()?,
                     case_sensitive: false,
                 })
@@ -341,7 +335,7 @@ impl<'a> Parser<'a> {
             "contains" | "starts_with" | "ends_with" => {
                 self.skip_whitespace();
                 if !self.consume_char('(') {
-                    return Err(self.error("expected '(' after suffix predicate"));
+                    return Err(self.error("expected '(' after string predicate"));
                 }
                 self.skip_whitespace();
                 let case_sensitive = if self.peek() == Some('i') {
@@ -353,25 +347,25 @@ impl<'a> Parser<'a> {
                 let value = self.string()?;
                 self.skip_whitespace();
                 if !self.consume_char(')') {
-                    return Err(self.error("expected ')' after suffix predicate value"));
+                    return Err(self.error("expected ')' after string predicate value"));
                 }
                 Ok(match identifier.as_str() {
-                    "contains" => VersionSuffixPredicate::Contains {
+                    "contains" => VersionStringPredicate::Contains {
                         value,
                         case_sensitive,
                     },
-                    "starts_with" => VersionSuffixPredicate::StartsWith {
+                    "starts_with" => VersionStringPredicate::StartsWith {
                         value,
                         case_sensitive,
                     },
-                    "ends_with" => VersionSuffixPredicate::EndsWith {
+                    "ends_with" => VersionStringPredicate::EndsWith {
                         value,
                         case_sensitive,
                     },
                     _ => unreachable!(),
                 })
             }
-            _ => Err(self.error(&format!("unknown suffix predicate '{identifier}'"))),
+            _ => Err(self.error(&format!("unknown string predicate '{identifier}'"))),
         }
     }
 
@@ -393,7 +387,7 @@ impl<'a> Parser<'a> {
     fn string(&mut self) -> Result<String, OrbitError> {
         let start = self.offset;
         if self.peek() != Some('"') {
-            return Err(self.error("suffix predicate values must be JSON-quoted strings"));
+            return Err(self.error("string predicate values must be JSON-quoted strings"));
         }
         self.advance();
         let mut escaped = false;
@@ -466,7 +460,7 @@ impl<'a> Parser<'a> {
 
     fn error(&self, message: &str) -> OrbitError {
         invalid(&format!(
-            "invalid suffix rule at byte {}: {message}",
+            "invalid string rule at byte {}: {message}",
             self.offset
         ))
     }
@@ -482,29 +476,29 @@ mod tests {
 
     #[test]
     fn ordered_set_operations_are_evaluated_left_to_right() {
-        let rule = VersionSuffixRule::parse(
+        let rule = VersionStringRule::parse(
             "all; intersect not contains(i\"beta\"); union \"beta-allowed\"",
         )
         .unwrap();
-        assert!(!rule.matches(Some("BETA")));
-        assert!(rule.matches(Some("beta-allowed")));
-        assert!(rule.matches(None));
+        assert!(!rule.matches("BETA"));
+        assert!(rule.matches("beta-allowed"));
+        assert!(rule.matches("release"));
     }
 
     #[test]
     fn quoted_literals_are_exact_and_i_literals_ignore_case() {
-        let exact = VersionSuffixRule::parse("none; union \"Beta\"").unwrap();
-        assert!(exact.matches(Some("Beta")));
-        assert!(!exact.matches(Some("beta")));
-        let insensitive = VersionSuffixRule::parse("none; union i\"Beta\"").unwrap();
-        assert!(insensitive.matches(Some("beta")));
+        let exact = VersionStringRule::parse("none; union \"Beta\"").unwrap();
+        assert!(exact.matches("Beta"));
+        assert!(!exact.matches("beta"));
+        let insensitive = VersionStringRule::parse("none; union i\"Beta\"").unwrap();
+        assert!(insensitive.matches("beta"));
     }
 
     #[test]
     fn canonical_form_preserves_operation_order() {
         let source = "all; intersect present; intersect not ends_with(i\"fabric\"); complement";
         assert_eq!(
-            VersionSuffixRule::parse(source).unwrap().canonical(),
+            VersionStringRule::parse(source).unwrap().canonical(),
             source
         );
     }

@@ -64,8 +64,7 @@ impl PackageVersionPolicy {
             ("<", VersionComparison::LessThan),
         ] {
             if let Some(version) = requirement.strip_prefix(prefix)
-                && !version.trim().is_empty()
-                && !version.chars().any(char::is_whitespace)
+                && is_numeric_boundary(version.trim())
             {
                 return Self::Comparison {
                     operator,
@@ -85,7 +84,7 @@ impl PackageVersionPolicy {
         match self {
             Self::Any => Ok("*".to_string()),
             Self::Comparison { operator, version } => {
-                validate_version(version)?;
+                validate_numeric_boundary(version)?;
                 Ok(format!("{}{}", operator.operator(), version.trim()))
             }
             Self::Range {
@@ -123,7 +122,7 @@ impl PackageVersionPolicy {
 pub struct PackageConstraintState {
     pub package: String,
     pub constraint: String,
-    pub suffix: String,
+    pub string: String,
     pub policy: PackageVersionPolicy,
     pub selected_version: Option<String>,
     pub selected_satisfies: Option<bool>,
@@ -134,8 +133,8 @@ pub struct PackageConstraintApplyReport {
     pub package: String,
     pub previous: String,
     pub current: String,
-    pub previous_suffix: String,
-    pub suffix: String,
+    pub previous_string: String,
+    pub string: String,
     pub policy: PackageVersionPolicy,
     pub previous_selected_version: Option<String>,
     pub selected_version: Option<String>,
@@ -158,17 +157,17 @@ pub fn package_constraint(
         .get(package)
         .ok_or_else(|| OrbitError::ModNotFound(package.to_string()))?;
     let selected_version = selected_version(instance_dir, package)?;
-    let suffix = crate::VersionSuffixRule::parse(&specification.suffix)?.canonical();
+    let string = crate::VersionStringRule::parse(&specification.string)?.canonical();
     let selected_satisfies = selection_satisfies(
         selected_version.as_deref(),
         &specification.version,
-        &suffix,
+        &string,
         loader,
     );
     Ok(PackageConstraintState {
         package: package.to_string(),
         constraint: specification.version.clone(),
-        suffix,
+        string,
         policy: PackageVersionPolicy::from_requirement(&specification.version),
         selected_version,
         selected_satisfies,
@@ -179,7 +178,7 @@ pub async fn apply_package_constraint(
     instance_dir: &Path,
     package: &str,
     policy: PackageVersionPolicy,
-    suffix: Option<String>,
+    string: Option<String>,
     providers: &[Box<dyn ModProvider>],
     jar_cache: &crate::jar_cache::JarCache,
     dry_run: bool,
@@ -193,12 +192,12 @@ pub async fn apply_package_constraint(
         .packages
         .get_mut(package)
         .ok_or_else(|| OrbitError::ModNotFound(package.to_string()))?;
-    let suffix =
-        crate::VersionSuffixRule::parse(suffix.as_deref().unwrap_or(&specification.suffix))?
+    let string =
+        crate::VersionStringRule::parse(string.as_deref().unwrap_or(&specification.string))?
             .canonical();
     let previous = std::mem::replace(&mut specification.version, current.clone());
-    let previous_suffix = std::mem::replace(&mut specification.suffix, suffix.clone());
-    let changed = previous != current || previous_suffix != suffix;
+    let previous_string = std::mem::replace(&mut specification.string, string.clone());
+    let changed = previous != current || previous_string != string;
     let previous_selected_version = selected_version(instance_dir, package)?;
 
     let outcome = crate::installer::repair_manifest_instance(
@@ -218,14 +217,14 @@ pub async fn apply_package_constraint(
             .or_else(|| previous_selected_version.clone())
     };
     let selected_satisfies =
-        selection_satisfies(selected_version.as_deref(), &current, &suffix, loader);
+        selection_satisfies(selected_version.as_deref(), &current, &string, loader);
 
     Ok(PackageConstraintApplyReport {
         package: package.to_string(),
         previous,
         current,
-        previous_suffix,
-        suffix,
+        previous_string,
+        string,
         policy,
         previous_selected_version,
         selected_version,
@@ -265,25 +264,183 @@ fn planned_selected_version(report: &InstallReport, package: &str) -> Option<Str
 fn selection_satisfies(
     selected: Option<&str>,
     constraint: &str,
-    suffix: &str,
+    string: &str,
     loader: LoaderKind,
 ) -> Option<bool> {
     selected.map(|version| {
         let version = Version::parse(version, loader);
-        Version::parse_constraint(constraint, loader).contains(&version)
-            && crate::VersionSuffixRule::parse(suffix)
-                .expect("manifest suffix expression was validated")
-                .matches(version.suffix().as_deref())
+        let numeric = version.numeric_analysis();
+        (!numeric.numeric_filterable()
+            || Version::parse_constraint(constraint, loader).contains(&version))
+            && crate::VersionStringRule::parse(string)
+                .expect("manifest string expression was validated")
+                .matches(&version.to_string())
     })
 }
 
-fn validate_version(version: &str) -> Result<(), OrbitError> {
-    if version.trim().is_empty() || version.chars().any(char::is_whitespace) {
+fn validate_numeric_boundary(version: &str) -> Result<(), OrbitError> {
+    if !is_numeric_boundary(version.trim()) {
         return Err(OrbitError::Other(anyhow::anyhow!(
-            "version policy requires one non-empty JAR-declared version"
+            "numeric version policy requires one or more dot-separated unsigned integers"
         )));
     }
     Ok(())
+}
+
+fn is_numeric_boundary(version: &str) -> bool {
+    !version.is_empty()
+        && version.split('.').all(|component| {
+            !component.is_empty()
+                && component
+                    .chars()
+                    .all(|character| character.is_ascii_digit())
+        })
+}
+
+/// Validate the manifest-facing numeric rule without assigning any meaning to
+/// author-chosen version text. Loader-native dependency requirements continue
+/// to use the complete Loader grammar; this narrower grammar applies only to a
+/// package's user-authored `version` filter.
+pub(crate) fn validate_package_numeric_requirement(
+    requirement: &str,
+    loader: LoaderKind,
+) -> Result<(), OrbitError> {
+    let requirement = requirement.trim();
+    if requirement == "*" {
+        return Ok(());
+    }
+    if requirement.is_empty() {
+        return Err(invalid_numeric_requirement(
+            requirement,
+            "the rule is empty; use '*' for all numeric versions",
+        ));
+    }
+
+    match loader {
+        LoaderKind::Fabric | LoaderKind::Quilt => validate_fabric_numeric_requirement(requirement),
+        LoaderKind::Forge | LoaderKind::NeoForge => validate_maven_numeric_requirement(requirement),
+    }
+}
+
+fn validate_fabric_numeric_requirement(requirement: &str) -> Result<(), OrbitError> {
+    for group in requirement.split("||") {
+        let mut predicates = group.split_whitespace().peekable();
+        if predicates.peek().is_none() {
+            return Err(invalid_numeric_requirement(
+                requirement,
+                "an OR branch is empty",
+            ));
+        }
+        while let Some(predicate) = predicates.next() {
+            if predicate == "*" {
+                continue;
+            }
+            let atom = if matches!(predicate, ">=" | "<=" | "!=" | "~" | "^" | ">" | "<" | "=") {
+                predicates.next().ok_or_else(|| {
+                    invalid_numeric_requirement(requirement, "an operator has no numeric operand")
+                })?
+            } else {
+                strip_fabric_operator(predicate)
+            };
+            validate_fabric_numeric_atom(atom)
+                .map_err(|reason| invalid_numeric_requirement(requirement, &reason))?;
+        }
+    }
+    Ok(())
+}
+
+fn strip_fabric_operator(predicate: &str) -> &str {
+    for operator in [">=", "<=", "!=", "~", "^", ">", "<", "="] {
+        if let Some(atom) = predicate.strip_prefix(operator) {
+            return atom;
+        }
+    }
+    predicate
+}
+
+fn validate_fabric_numeric_atom(atom: &str) -> Result<(), String> {
+    if atom.is_empty() {
+        return Err("an operator has no numeric operand".to_string());
+    }
+    if !atom
+        .chars()
+        .all(|character| character.is_ascii_digit() || matches!(character, '.' | 'x' | 'X' | '*'))
+    {
+        return Err(format!(
+            "'{atom}' contains version text; filter the complete JAR version with `string`"
+        ));
+    }
+    crate::versions::fabric::SemanticVersion::parse(atom, true)
+        .map(|_| ())
+        .map_err(|reason| format!("'{atom}' is not a valid Fabric numeric predicate: {reason}"))
+}
+
+fn validate_maven_numeric_requirement(requirement: &str) -> Result<(), OrbitError> {
+    for operator in [">=", "<=", "!=", "=", ">", "<"] {
+        if let Some(atom) = requirement.strip_prefix(operator) {
+            return validate_maven_numeric_atom(atom.trim())
+                .map_err(|reason| invalid_numeric_requirement(requirement, &reason));
+        }
+    }
+
+    if !matches!(requirement.as_bytes().first(), Some(b'[' | b'(')) {
+        return validate_maven_numeric_atom(requirement)
+            .map_err(|reason| invalid_numeric_requirement(requirement, &reason));
+    }
+
+    let mut remaining = requirement;
+    while !remaining.trim_start().is_empty() {
+        remaining = remaining.trim_start();
+        if !matches!(remaining.as_bytes().first(), Some(b'[' | b'(')) {
+            return Err(invalid_numeric_requirement(
+                requirement,
+                "a Maven range segment must start with '[' or '('",
+            ));
+        }
+        let end = remaining.find([']', ')']).ok_or_else(|| {
+            invalid_numeric_requirement(requirement, "a Maven range segment is not closed")
+        })?;
+        let segment = &remaining[1..end];
+        if let Some((lower, upper)) = segment.split_once(',') {
+            for atom in [lower.trim(), upper.trim()] {
+                if !atom.is_empty() {
+                    validate_maven_numeric_atom(atom)
+                        .map_err(|reason| invalid_numeric_requirement(requirement, &reason))?;
+                }
+            }
+        } else {
+            validate_maven_numeric_atom(segment.trim())
+                .map_err(|reason| invalid_numeric_requirement(requirement, &reason))?;
+        }
+        remaining = &remaining[end + 1..];
+        if remaining.trim_start().is_empty() {
+            break;
+        }
+        let Some(after_comma) = remaining.trim_start().strip_prefix(',') else {
+            return Err(invalid_numeric_requirement(
+                requirement,
+                "Maven range segments must be separated by ','",
+            ));
+        };
+        remaining = after_comma;
+    }
+    Ok(())
+}
+
+fn validate_maven_numeric_atom(atom: &str) -> Result<(), String> {
+    if is_numeric_boundary(atom) {
+        Ok(())
+    } else {
+        Err(format!(
+            "'{atom}' is not a dotted unsigned numeric version; filter the complete JAR version with `string`"
+        ))
+    }
+}
+
+fn invalid_numeric_requirement(requirement: &str, reason: &str) -> OrbitError {
+    OrbitError::Other(anyhow::anyhow!(
+        "invalid package numeric version rule '{requirement}': {reason}"
+    ))
 }
 
 fn validate_range(
@@ -293,8 +450,8 @@ fn validate_range(
     include_upper: bool,
     loader: LoaderKind,
 ) -> Result<(), OrbitError> {
-    validate_version(lower)?;
-    validate_version(upper)?;
+    validate_numeric_boundary(lower)?;
+    validate_numeric_boundary(upper)?;
     match Version::parse(lower, loader).cmp_precedence(&Version::parse(upper, loader)) {
         Ordering::Greater => Err(OrbitError::Other(anyhow::anyhow!(
             "version range lower bound '{lower}' is newer than upper bound '{upper}'"
@@ -315,7 +472,7 @@ fn parse_maven_range(requirement: &str) -> Option<PackageVersionPolicy> {
         return None;
     }
     let (lower, upper) = requirement[1..requirement.len() - 1].split_once(',')?;
-    if lower.trim().is_empty() || upper.trim().is_empty() {
+    if !is_numeric_boundary(lower.trim()) || !is_numeric_boundary(upper.trim()) {
         return None;
     }
     Some(PackageVersionPolicy::Range {
@@ -341,7 +498,7 @@ fn parse_fabric_range(requirement: &str) -> Option<PackageVersionPolicy> {
         .strip_prefix("<=")
         .map(|version| (version, true))
         .or_else(|| upper.strip_prefix('<').map(|version| (version, false)))?;
-    if lower.is_empty() || upper.is_empty() {
+    if !is_numeric_boundary(lower) || !is_numeric_boundary(upper) {
         return None;
     }
     Some(PackageVersionPolicy::Range {
@@ -382,7 +539,7 @@ mod tests {
 
     #[test]
     fn canonical_policies_roundtrip_to_structured_state() {
-        for requirement in ["*", "=1.2.3-alpha", ">=1.2.3", ">=1 <2", "[1,2)"] {
+        for requirement in ["*", "=1.2.3", ">=1.2.3", ">=1 <2", "[1,2)"] {
             let policy = PackageVersionPolicy::from_requirement(requirement);
             assert!(
                 !matches!(policy, PackageVersionPolicy::Custom(_)),
@@ -393,6 +550,22 @@ mod tests {
             PackageVersionPolicy::from_requirement("^1.2"),
             PackageVersionPolicy::Custom(_)
         ));
+        assert!(matches!(
+            PackageVersionPolicy::from_requirement("=1.2.3-alpha"),
+            PackageVersionPolicy::Custom(_)
+        ));
+    }
+
+    #[test]
+    fn package_numeric_rules_keep_author_text_in_the_string_rule() {
+        for loader in [LoaderKind::Fabric, LoaderKind::Quilt] {
+            validate_package_numeric_requirement(">=1.2 ^2.0 || 3.x", loader).unwrap();
+            assert!(validate_package_numeric_requirement("=1.2-beta", loader).is_err());
+        }
+        for loader in [LoaderKind::Forge, LoaderKind::NeoForge] {
+            validate_package_numeric_requirement("[1.2,2.0)", loader).unwrap();
+            assert!(validate_package_numeric_requirement("[1.2-beta,2.0)", loader).is_err());
+        }
     }
 
     #[test]
@@ -517,9 +690,9 @@ mod tests {
             "example",
             PackageVersionPolicy::Comparison {
                 operator: VersionComparison::Exact,
-                version: "1.2.3-alpha".to_string(),
+                version: "1.2.3".to_string(),
             },
-            Some("all".to_string()),
+            Some("all; intersect contains(\"alpha\")".to_string()),
             &[],
             &cache,
             false,
@@ -532,7 +705,11 @@ mod tests {
         assert_eq!(report.selected_version.as_deref(), Some("1.2.3-alpha"));
         assert_eq!(
             ManifestFile::open(directory.path()).unwrap().inner.packages["example"].version,
-            "=1.2.3-alpha"
+            "=1.2.3"
+        );
+        assert_eq!(
+            ManifestFile::open(directory.path()).unwrap().inner.packages["example"].string,
+            "all; intersect contains(\"alpha\")"
         );
         assert_eq!(
             Lockfile::open(directory.path())
@@ -580,7 +757,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn suffix_expression_participates_in_the_same_solver_transaction() {
+    async fn string_expression_participates_in_the_same_solver_transaction() {
         let directory = tempfile::tempdir().unwrap();
         let cache = write_constraint_instance(directory.path());
 
@@ -591,7 +768,7 @@ mod tests {
                 operator: VersionComparison::Exact,
                 version: "1.2.3".to_string(),
             },
-            Some("all; intersect \"alpha\"".to_string()),
+            Some("all; intersect contains(\"alpha\")".to_string()),
             &[],
             &cache,
             false,
@@ -605,17 +782,18 @@ mod tests {
         let manifest = ManifestFile::open(directory.path()).unwrap();
         assert_eq!(manifest.inner.packages["example"].version, "=1.2.3");
         assert_eq!(
-            manifest.inner.packages["example"].suffix,
-            "all; intersect \"alpha\""
+            manifest.inner.packages["example"].string,
+            "all; intersect contains(\"alpha\")"
         );
     }
 
     #[tokio::test]
-    async fn omitted_suffix_preserves_the_existing_rule() {
+    async fn omitted_string_preserves_the_existing_rule() {
         let directory = tempfile::tempdir().unwrap();
         let cache = write_constraint_instance(directory.path());
         let mut manifest = ManifestFile::open(directory.path()).unwrap();
-        manifest.inner.packages["example"].suffix = "all; intersect not \"alpha\"".to_string();
+        manifest.inner.packages["example"].string =
+            "all; intersect not contains(\"alpha\")".to_string();
         manifest.save().unwrap();
 
         let report = apply_package_constraint(
@@ -635,10 +813,10 @@ mod tests {
         .unwrap();
 
         assert!(report.applied);
-        assert_eq!(report.suffix, "all; intersect not \"alpha\"");
+        assert_eq!(report.string, "all; intersect not contains(\"alpha\")");
         assert_eq!(
-            ManifestFile::open(directory.path()).unwrap().inner.packages["example"].suffix,
-            report.suffix
+            ManifestFile::open(directory.path()).unwrap().inner.packages["example"].string,
+            report.string
         );
     }
 
@@ -692,9 +870,9 @@ mod tests {
             "example",
             PackageVersionPolicy::Comparison {
                 operator: VersionComparison::Exact,
-                version: "1.2.3-alpha".to_string(),
+                version: "1.2.3".to_string(),
             },
-            Some("all".to_string()),
+            Some("all; intersect contains(\"alpha\")".to_string()),
             &[],
             &cache,
             false,

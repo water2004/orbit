@@ -14,8 +14,10 @@ pub struct PackageVersionCandidate {
     /// Content identity retained only for deterministic internal ordering.
     pub(crate) identity: String,
     pub version: String,
-    pub suffix: Option<String>,
-    pub suffix_tokens: Vec<String>,
+    pub numeric_core: Option<String>,
+    pub string_tokens: Vec<String>,
+    pub numeric_filterable: bool,
+    pub numeric_error: Option<String>,
     pub sources: Vec<String>,
     pub details: String,
     pub selected: bool,
@@ -26,7 +28,7 @@ pub struct PackageVersionCandidate {
 pub struct PackageVersionsReport {
     pub package: String,
     pub constraint: String,
-    pub suffix: String,
+    pub string: String,
     pub policy: crate::package_constraint::PackageVersionPolicy,
     pub selected_version: Option<String>,
     pub candidates: Vec<PackageVersionCandidate>,
@@ -74,7 +76,7 @@ pub async fn list_package_versions(
     .await?;
     let selected = lockfile.inner.find(package);
     let range = Version::parse_constraint(&specification.version, loader);
-    let suffix_expression = crate::VersionSuffixRule::parse(&specification.suffix)?;
+    let string_expression = crate::VersionStringRule::parse(&specification.string)?;
     let mut candidates = catalog
         .candidates
         .get(package)
@@ -82,10 +84,13 @@ pub async fn list_package_versions(
         .flatten()
         .map(|candidate| {
             let version = Version::parse(&candidate.jar_version, loader);
+            let numeric = version.numeric_analysis();
             PackageVersionCandidate {
                 identity: candidate.id.clone(),
-                suffix: version.suffix(),
-                suffix_tokens: version.suffix_tokens(),
+                numeric_core: numeric.numeric_core().map(|core| core.join(".")),
+                string_tokens: version.string_tokens(),
+                numeric_filterable: numeric.numeric_filterable(),
+                numeric_error: numeric.reason().map(str::to_string),
                 version: candidate.jar_version.clone(),
                 sources: candidate.display_sources.clone(),
                 details: candidate_details(candidate),
@@ -95,8 +100,8 @@ pub async fn list_package_versions(
                         .strip_prefix("sha512:")
                         .is_some_and(|hash| hash.eq_ignore_ascii_case(&entry.sha512))
                 }),
-                matches_constraint: range.contains(&version)
-                    && suffix_expression.matches(version.suffix().as_deref()),
+                matches_constraint: (!numeric.numeric_filterable() || range.contains(&version))
+                    && string_expression.matches(&candidate.jar_version),
             }
         })
         .collect::<Vec<_>>();
@@ -129,7 +134,7 @@ pub async fn list_package_versions(
     Ok(PackageVersionsReport {
         package: package.to_string(),
         constraint: specification.version.clone(),
-        suffix: suffix_expression.canonical(),
+        string: string_expression.canonical(),
         policy: crate::package_constraint::PackageVersionPolicy::from_requirement(
             &specification.version,
         ),
@@ -243,6 +248,61 @@ example = { version = ">=1.2.3", remotes = [
                 .iter()
                 .all(|candidate| candidate.matches_constraint)
         );
+    }
+
+    #[tokio::test]
+    async fn opaque_versions_bypass_only_numeric_filtering() {
+        let directory = tempfile::tempdir().unwrap();
+        write_fabric_jar(&directory.path().join("example.jar"), "release-vNext");
+        std::fs::write(
+            directory.path().join("orbit.toml"),
+            r#"
+[project]
+name = "test"
+mc_version = "1.20.1"
+modloader = "fabric"
+modloader_version = "0.16"
+[platform]
+minecraft_jar = { path = "minecraft.jar", sha256 = "test" }
+loader_jar = { path = "loader.jar", sha256 = "test" }
+runtime_jars = []
+physical_environment = "client"
+[packages]
+example = { version = "=999", string = 'all; intersect not contains(i"release")', remotes = [
+  { type = "file", path = "example.jar" },
+] }
+"#,
+        )
+        .unwrap();
+        let cache = crate::jar_cache::JarCache::open(directory.path().join("cache")).unwrap();
+
+        let report = list_package_versions(directory.path(), "example", &[], &cache, None)
+            .await
+            .unwrap();
+        let candidate = &report.candidates[0];
+        assert!(!candidate.numeric_filterable);
+        assert!(
+            candidate
+                .numeric_error
+                .as_deref()
+                .unwrap()
+                .contains("opaque")
+        );
+        assert_eq!(candidate.numeric_core, None);
+        assert!(
+            candidate
+                .string_tokens
+                .contains(&"release-vNext".to_string())
+        );
+        assert!(!candidate.matches_constraint);
+
+        let mut manifest = ManifestFile::open(directory.path()).unwrap();
+        manifest.inner.packages["example"].string = "all".to_string();
+        manifest.save().unwrap();
+        let report = list_package_versions(directory.path(), "example", &[], &cache, None)
+            .await
+            .unwrap();
+        assert!(report.candidates[0].matches_constraint);
     }
 
     fn write_fabric_jar(path: &Path, version: &str) {

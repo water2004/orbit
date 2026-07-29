@@ -775,7 +775,7 @@ fn collect_report(
     solution: &pubgrub::SelectedDependencies<SolverPackage, SolverVersion>,
     trace: &diagnostics::ResolutionSnapshot,
 ) -> ResolutionReport {
-    let warnings = resolution_warnings(
+    let mut warnings = resolution_warnings(
         context.lockfile,
         context.candidates,
         solution,
@@ -812,6 +812,16 @@ fn collect_report(
             selected_candidates.insert(mod_id.clone(), identity.source.clone());
         }
     }
+    for (package, version) in &selected_versions {
+        let analysis = Version::parse(version, context.loader).numeric_analysis();
+        if let Some(reason) = analysis.reason() {
+            warnings.push(format!(
+                "{package} {version} cannot be numeric-filtered: {reason}; the numeric version constraint was not applied and the string rule used the full raw version text"
+            ));
+        }
+    }
+    warnings.sort();
+    warnings.dedup();
 
     let mut changes = Vec::new();
     let mut retained_lock_entries = std::collections::HashSet::new();
@@ -1112,6 +1122,41 @@ b = { version = "*", remotes = [{ type = "file", path = "b.jar" }] }
                 )
             })
             .collect()
+    }
+
+    #[tokio::test]
+    async fn selected_opaque_version_warns_that_numeric_filtering_was_bypassed() {
+        let mut manifest = manifest();
+        manifest.project.modloader = "fabric".to_string();
+        manifest.project.modloader_version = "0.16.0".to_string();
+        manifest.packages.shift_remove("b");
+        manifest.packages["a"].version = "=999".to_string();
+        manifest.packages["a"].string = "all".to_string();
+        let lockfile = OrbitLockfile {
+            meta: LockMeta {
+                mc_version: "1.20.1".to_string(),
+                modloader: "fabric".to_string(),
+                modloader_version: "0.16.0".to_string(),
+            },
+            packages: Vec::new(),
+        };
+        let mut catalog = CandidateCatalog::default();
+        catalog.candidates.insert(
+            "a".to_string(),
+            vec![candidate("release-vNext", Vec::new())],
+        );
+
+        let portfolio = resolve_candidate_portfolio(&manifest, &lockfile, &catalog)
+            .await
+            .unwrap();
+        let report = &portfolio.alternatives[0];
+        assert_eq!(report.selected_versions["a"], "release-vNext");
+        assert!(
+            report
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("cannot be numeric-filtered"))
+        );
     }
 
     #[tokio::test]

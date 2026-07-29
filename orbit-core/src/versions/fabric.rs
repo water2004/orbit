@@ -83,10 +83,10 @@ impl SemanticVersion {
                 if first_wildcard.is_none() {
                     first_wildcard = Some(i);
                 }
-                if i > 0 && components[i - 1] == WILDCARD {
-                    // already wildcard, keep going
-                }
             } else {
+                if store_x && i > 0 && components[i - 1] == WILDCARD {
+                    return Err("interjacent wildcard (1.x.2) is not allowed".into());
+                }
                 let trimmed = cs.trim();
                 if trimmed.is_empty() {
                     return Err("missing version component".into());
@@ -509,6 +509,11 @@ mod tests {
         let ver = v("0.8.x");
         assert_eq!(ver.components, vec![0, 8, WILDCARD]);
         assert!(ver.has_wildcard);
+        assert!(SemanticVersion::parse("1.x.2", true).is_err());
+        assert_eq!(
+            SemanticVersion::parse("1.x.x", true).unwrap().components,
+            vec![1, WILDCARD]
+        );
     }
 
     #[test]

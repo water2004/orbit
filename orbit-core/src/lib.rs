@@ -18,7 +18,7 @@ pub mod metadata;
 pub mod progress;
 pub mod providers;
 pub mod runtime;
-pub mod version_suffix;
+pub mod version_string;
 pub mod versions;
 
 // 业务逻辑模块
@@ -103,8 +103,8 @@ pub use runtime::{
     RuntimePaths, compiled_default_layout,
 };
 pub use sync::{PlatformChange, SyncReport, sync_instance};
-pub use version_suffix::{
-    DEFAULT_NEW_PACKAGE_SUFFIX, VersionSuffixInitialSet, VersionSuffixOperation,
-    VersionSuffixPredicate, VersionSuffixRule,
+pub use version_string::{
+    DEFAULT_NEW_PACKAGE_STRING, VersionStringInitialSet, VersionStringOperation,
+    VersionStringPredicate, VersionStringRule,
 };
 pub use workspace::{Lockfile, ManifestFile};

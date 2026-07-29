@@ -214,7 +214,7 @@ pub async fn run_init(
         let key = m.package_id();
         let spec = PackageSpec {
             version: "*".to_string(),
-            suffix: "all".to_string(),
+            string: "all".to_string(),
             optional: false,
             env: None,
             exclude: Vec::new(),

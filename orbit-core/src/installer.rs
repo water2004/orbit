@@ -962,6 +962,14 @@ async fn install_mod(input: InstallModInput<'_>) -> Result<InstallReport, OrbitE
 
     let loader = manifest.project.loader_kind()?;
     let mc_version = &manifest.project.mc_version;
+    crate::package_constraint::validate_package_numeric_requirement(
+        if constraint.trim().is_empty() {
+            "*"
+        } else {
+            constraint
+        },
+        loader,
+    )?;
 
     // 1-2. BFS download all JARs
     let requested_remotes: Vec<_> = match &target {
@@ -1966,7 +1974,7 @@ fn requested_requirement(
     };
     Ok(PackageSpec {
         version,
-        suffix: crate::DEFAULT_NEW_PACKAGE_SUFFIX.to_string(),
+        string: crate::DEFAULT_NEW_PACKAGE_STRING.to_string(),
         optional,
         env,
         exclude: Vec::new(),
@@ -2714,8 +2722,8 @@ physical_environment = "client"
             "^1"
         );
         assert_eq!(
-            manifest.packages["actual-mod-id"].suffix_expression(),
-            crate::DEFAULT_NEW_PACKAGE_SUFFIX
+            manifest.packages["actual-mod-id"].string_expression(),
+            crate::DEFAULT_NEW_PACKAGE_STRING
         );
     }
 
@@ -2736,8 +2744,8 @@ physical_environment = "client"
 
         assert_eq!(manifest.packages["example"].version_constraint(), "^1");
         assert_eq!(
-            manifest.packages["example"].suffix_expression(),
-            crate::DEFAULT_NEW_PACKAGE_SUFFIX
+            manifest.packages["example"].string_expression(),
+            crate::DEFAULT_NEW_PACKAGE_STRING
         );
     }
 

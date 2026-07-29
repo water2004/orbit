@@ -61,6 +61,7 @@ fn substitute_file_properties<R: Read + Seek>(
 
     for metadata in &mut file.mods {
         metadata.version = substitute(&metadata.version, &properties)?;
+        validate_mod_version(&metadata.version)?;
         metadata.name = substitute(&metadata.name, &properties)?;
         metadata.description = substitute(&metadata.description, &properties)?;
         for author in &mut metadata.authors {
@@ -77,6 +78,15 @@ fn substitute_file_properties<R: Read + Seek>(
         *license = substitute(license, &properties)?;
     }
     Ok(())
+}
+
+fn validate_mod_version(version: &str) -> Result<(), OrbitError> {
+    if version.as_bytes().first().is_some_and(u8::is_ascii_digit) {
+        return Ok(());
+    }
+    Err(OrbitError::Other(anyhow::anyhow!(
+        "illegal Forge-family mod version '{version}': Loader versions must start with a digit"
+    )))
 }
 
 fn substitute_dependency(
@@ -239,5 +249,12 @@ mod tests {
     fn rejects_unresolved_version_substitutions() {
         let error = substitute("${file.missing}", &HashMap::new()).unwrap_err();
         assert!(error.to_string().contains("unresolved"));
+    }
+
+    #[test]
+    fn enforces_the_forge_family_leading_digit_rule() {
+        validate_mod_version("1.2.3-preview").unwrap();
+        let error = validate_mod_version("v1.2.3").unwrap_err();
+        assert!(error.to_string().contains("must start with a digit"));
     }
 }

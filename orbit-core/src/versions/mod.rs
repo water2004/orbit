@@ -25,6 +25,43 @@ pub enum Version {
     Generic(String),
 }
 
+/// Whether a Loader version has enough structure for Orbit's numeric rules.
+///
+/// Loader-valid opaque versions remain valid package candidates. Orbit does
+/// not invent a numeric core for them; the independent string rule still sees
+/// the complete JAR-declared version.
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub enum NumericVersionAnalysis {
+    Filterable {
+        /// Normalized dotted numeric components.  Loader formats do not limit
+        /// this to major/minor/patch.
+        numeric_core: Vec<String>,
+    },
+    Unfilterable {
+        reason: String,
+    },
+}
+
+impl NumericVersionAnalysis {
+    pub fn numeric_filterable(&self) -> bool {
+        matches!(self, Self::Filterable { .. })
+    }
+
+    pub fn numeric_core(&self) -> Option<&[String]> {
+        match self {
+            Self::Filterable { numeric_core } => Some(numeric_core),
+            Self::Unfilterable { .. } => None,
+        }
+    }
+
+    pub fn reason(&self) -> Option<&str> {
+        match self {
+            Self::Filterable { .. } => None,
+            Self::Unfilterable { reason } => Some(reason),
+        }
+    }
+}
+
 impl Hash for Version {
     fn hash<H: Hasher>(&self, state: &mut H) {
         match self {
@@ -84,7 +121,10 @@ impl Version {
     pub fn parse(raw: &str, loader: LoaderKind) -> Self {
         match loader.semantics().version_scheme {
             VersionScheme::FabricPredicate => {
-                if let Ok(v) = fabric::SemanticVersion::parse(raw, true) {
+                // Fabric and Quilt allow wildcard components in constraints,
+                // not in a mod's declared version.  Their Loader parsers fall
+                // back to an opaque string when semantic parsing fails.
+                if let Ok(v) = fabric::SemanticVersion::parse(raw, false) {
                     Self::Fabric(v)
                 } else {
                     Self::Generic(raw.to_string())
@@ -135,25 +175,25 @@ impl Version {
         }
     }
 
-    /// Raw text following the leading dotted numeric core.
-    ///
-    /// Orbit does not assign release-stage meaning to this text. Separators
-    /// are removed, but `beta`, `mc26`, `fabric`, or any other author-chosen
-    /// value remains ordinary text for the suffix expression engine.
-    pub fn suffix(&self) -> Option<String> {
-        suffix_from_raw(&self.to_string())
+    /// Analyze only the numeric core used by a package's `version` rule.
+    pub fn numeric_analysis(&self) -> NumericVersionAnalysis {
+        match self {
+            Self::Fabric(version) => structured_numeric_core(&version.raw),
+            Self::Maven(version) => structured_numeric_core(&version.to_string()),
+            Self::Generic(raw) => NumericVersionAnalysis::Unfilterable {
+                reason: format!(
+                    "'{raw}' is an opaque Loader version, not a semantic numeric version"
+                ),
+            },
+        }
     }
 
-    /// Stable, deterministic qualifier choices suitable for a structured UI.
-    /// The full qualifier is retained alongside its textual components.
-    pub fn suffix_tokens(&self) -> Vec<String> {
-        let Some(suffix) = self.suffix() else {
-            return Vec::new();
-        };
-        let mut tokens = vec![suffix.clone()];
+    /// Stable, deterministic text choices for the GUI string-rule editor.
+    pub fn string_tokens(&self) -> Vec<String> {
+        let raw = self.to_string();
+        let mut tokens = vec![raw.clone()];
         tokens.extend(
-            suffix
-                .split(|character: char| !character.is_ascii_alphanumeric())
+            raw.split(|character: char| !character.is_ascii_alphanumeric())
                 .filter(|token| {
                     token
                         .chars()
@@ -167,18 +207,46 @@ impl Version {
     }
 }
 
-fn suffix_from_raw(raw: &str) -> Option<String> {
-    if raw.is_empty() {
-        return None;
+fn structured_numeric_core(raw: &str) -> NumericVersionAnalysis {
+    let bytes = raw.as_bytes();
+    if !bytes.first().is_some_and(u8::is_ascii_digit) {
+        return NumericVersionAnalysis::Unfilterable {
+            reason: format!("'{raw}' does not start with a numeric version component"),
+        };
     }
-    let numeric_end = raw
-        .char_indices()
-        .take_while(|(_, character)| character.is_ascii_digit() || *character == '.')
-        .map(|(index, character)| index + character.len_utf8())
-        .last()
-        .unwrap_or(0);
-    let suffix = raw[numeric_end..].trim_start_matches(['-', '_', '.', '+']);
-    (!suffix.is_empty()).then(|| suffix.to_string())
+
+    let mut components = Vec::new();
+    let mut cursor = 0;
+    loop {
+        let start = cursor;
+        while bytes.get(cursor).is_some_and(u8::is_ascii_digit) {
+            cursor += 1;
+        }
+        let component = &raw[start..cursor];
+        let normalized = component.trim_start_matches('0');
+        components.push(if normalized.is_empty() {
+            "0".to_string()
+        } else {
+            normalized.to_string()
+        });
+
+        if bytes.get(cursor) == Some(&b'.') && bytes.get(cursor + 1).is_some_and(u8::is_ascii_digit)
+        {
+            cursor += 1;
+            continue;
+        }
+        break;
+    }
+
+    let remainder = &raw[cursor..];
+    if remainder.starts_with("..") || remainder == "." {
+        return NumericVersionAnalysis::Unfilterable {
+            reason: format!("'{raw}' has an incomplete dotted numeric component"),
+        };
+    }
+    NumericVersionAnalysis::Filterable {
+        numeric_core: components,
+    }
 }
 
 pub(super) fn has_explicit_suffix(raw: &str) -> bool {
@@ -228,34 +296,45 @@ pub(super) fn cmp_numeric_core(left: &[String], right: &[String]) -> Ordering {
 }
 
 #[cfg(test)]
-mod suffix_tests {
+mod numeric_analysis_tests {
     use super::*;
 
     #[test]
-    fn suffix_is_raw_text_after_the_numeric_core() {
+    fn numeric_core_can_have_arbitrarily_many_components() {
+        let analysis = Version::parse("1.2.3.4-beta.1+mc26", LoaderKind::Fabric).numeric_analysis();
         assert_eq!(
-            Version::parse("1.2.3-beta.1+mc26", LoaderKind::Fabric).suffix(),
-            Some("beta.1+mc26".to_string())
-        );
-        assert_eq!(
-            Version::parse("1.2.3+mc26", LoaderKind::Fabric).suffix(),
-            Some("mc26".to_string())
-        );
-        assert_eq!(
-            Version::parse("1.2.3-SNAPSHOT", LoaderKind::Forge).suffix(),
-            Some("SNAPSHOT".to_string())
+            analysis,
+            NumericVersionAnalysis::Filterable {
+                numeric_core: vec!["1".into(), "2".into(), "3".into(), "4".into()],
+            }
         );
     }
 
     #[test]
-    fn suffix_tokens_include_full_and_textual_components() {
+    fn string_tokens_use_the_complete_raw_version() {
         assert_eq!(
-            Version::parse("1.2.3-beta.1", LoaderKind::Fabric).suffix_tokens(),
-            ["beta", "beta.1"]
+            Version::parse("1.2.3-beta.1", LoaderKind::Fabric).string_tokens(),
+            ["1.2.3-beta.1", "beta"]
         );
-        assert_eq!(
-            Version::parse("1.2.3-SNAPSHOT", LoaderKind::Forge).suffix_tokens(),
-            ["SNAPSHOT"]
-        );
+    }
+
+    #[test]
+    fn opaque_loader_versions_have_no_numeric_core() {
+        let version = Version::parse("release-vNext", LoaderKind::Fabric);
+        let analysis = version.numeric_analysis();
+        assert!(matches!(
+            analysis,
+            NumericVersionAnalysis::Unfilterable { .. }
+        ));
+        assert!(analysis.reason().unwrap().contains("opaque"));
+    }
+
+    #[test]
+    fn malformed_numeric_shape_is_not_invented() {
+        let analysis = Version::parse("1..2-beta", LoaderKind::Forge).numeric_analysis();
+        assert!(matches!(
+            analysis,
+            NumericVersionAnalysis::Unfilterable { .. }
+        ));
     }
 }

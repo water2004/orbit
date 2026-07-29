@@ -981,7 +981,7 @@ mod tests {
             "online".to_string(),
             PackageSpec {
                 version: "*".to_string(),
-                suffix: "all".to_string(),
+                string: "all".to_string(),
                 optional: true,
                 env: Some(crate::metadata::Environment::Client),
                 exclude: Vec::new(),
