@@ -125,8 +125,10 @@ Runtime 页也把整合包作为领域动作呈现：安装 Orbit ZIP/TOML 或 M
 
 ### Mods
 
-Mods 页以 lock 中逻辑包为单位显示当前版本、TOML 版本策略、环境、依赖、contained 模块和
-多远端。TOML 的 `[packages]` 是完整包集合，界面不制造根/传递两类身份。首次
+Mods 页以 lock 中逻辑包为单位显示当前版本、TOML 版本策略、环境、依赖、contained 模块数量和
+多远端。contained 内容仍由 CLI 的结构化 lock 事实提供，但界面只显示总数，不展开内置模块名或
+物理 JAR；方案选择和版本候选也只显示 provider、依赖约束数量与内置模块数量，绝不展示 hash、
+provider project/file id 或一整行内部模块约束。TOML 的 `[packages]` 是完整包集合，界面不制造根/传递两类身份。首次
 接管由已安装 Launcher lock 的精确 Minecraft/Loader 版本调用 `orbit init`，不在 GUI 中
 重复探测；`init` 在文本和 JSON 模式下执行同一个全局实例注册事务。搜索、添加、sync、fix、
 install、outdated、单包/全部 upgrade、环境与远端管理都调用

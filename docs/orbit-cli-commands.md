@@ -396,7 +396,8 @@ orbit versions <package>
 - `info` 按 provider 顺序查询详情；`mr:` / `cf:` 前缀可显式选择来源；字段渲染为自适应
   表格，内嵌 recent versions 子表；JSON 同时返回 provider 官方 project links 与 gallery；
 - `list` 从 lockfile 展示版本、TOML 版本策略、全部 remotes、env/optional；`--tree` 展示
-  JAR 依赖，`--target` 按完整包集合过滤并校验依赖闭包；非树形输出中 bundled 模块进入 Notes 列；
+  JAR 依赖，`--target` 按完整包集合过滤并校验依赖闭包；bundled 内容只以模块总数摘要，
+  不逐项打印内置模块或物理 JAR；
 - `versions` 下载并分析一个受管包全部配置远端的真实 JAR 候选，按版本排序。
 
 在线查询支持 Modrinth 与 CurseForge。`cf:` 和 `--platform curseforge` 只选择

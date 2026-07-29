@@ -162,7 +162,7 @@ orbit [--output-format text|json] [--progress-format none|ndjson] <command> ...
         "environment": "both",
         "optional": false,
         "dependencies": ["fabric-api"],
-        "bundled": [{ "mod_id": "sodium-base", "version": "0.5.8" }]
+        "bundled_count": 1
       }
     ]
   }
@@ -173,6 +173,8 @@ orbit [--output-format text|json] [--progress-format none|ndjson] <command> ...
 的有效值：显式 TOML 设置优先，否则来自 lock 中精确候选的 JAR 声明。
 `version_constraint` 来自 TOML。所有选中顶层逻辑包都属于同一个完整 `[packages]` 集合，
 没有 `root` 字段；`tree: true` 仍使用每项 `dependencies` 表达 JAR 声明边。
+`bundled_count` 是当前精确包递归内置模块的总数；模块明细仍属于 lock 中的精确事实，
+`list` 和 GUI 不复制或展开这些包内部实现细节。
 `icon_path` 是 Orbit CLI 从当前精确 JAR 的 Loader 元数据读取、限制尺寸并规范化为 PNG 后
 写入全局展示缓存的本地路径；缺少或无效图标时省略。GUI 不打开 JAR，也不拿远端项目图标
 冒充已安装内容的图标。
