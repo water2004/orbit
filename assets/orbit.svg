@@ -1,11 +1,11 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" fill="none">
   <title>Orbit</title>
   <g transform="rotate(-90 64 64)" stroke-width="12">
-    <circle cx="64" cy="64" r="42" stroke="#596CF2" stroke-linecap="round" stroke-dasharray="164 99.89"/>
-    <circle cx="64" cy="64" r="42" stroke="#F05A67" stroke-linecap="round" stroke-dasharray="5 258.89" stroke-dashoffset="-180"/>
-    <circle cx="64" cy="64" r="42" stroke="#F3AA3D" stroke-linecap="round" stroke-dasharray="5 258.89" stroke-dashoffset="-201"/>
-    <circle cx="64" cy="64" r="42" stroke="#46B981" stroke-linecap="round" stroke-dasharray="5 258.89" stroke-dashoffset="-222"/>
-    <circle cx="64" cy="64" r="42" stroke="#9167D9" stroke-linecap="round" stroke-dasharray="5 258.89" stroke-dashoffset="-243"/>
+    <circle cx="64" cy="64" r="42" stroke="#596CF2" stroke-dasharray="175.93 87.96"/>
+    <circle cx="64" cy="64" r="42" stroke="#F05A67" stroke-dasharray="16 247.89" stroke-dashoffset="-180.5"/>
+    <circle cx="64" cy="64" r="42" stroke="#F3AA3D" stroke-dasharray="16 247.89" stroke-dashoffset="-201.5"/>
+    <circle cx="64" cy="64" r="42" stroke="#46B981" stroke-dasharray="16 247.89" stroke-dashoffset="-222.5"/>
+    <circle cx="64" cy="64" r="42" stroke="#9167D9" stroke-dasharray="16 247.89" stroke-dashoffset="-243.5"/>
   </g>
   <circle cx="64" cy="64" r="10" fill="#596CF2"/>
 </svg>
