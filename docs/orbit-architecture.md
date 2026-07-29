@@ -192,6 +192,14 @@ PubGrub fork 允许 provider 在选择包版本时注入带 reason 的自定义 
 依赖约束参与一次求解；语义投影又保证它们不被误当成版本升级。Orbit 只需为 CLI
 提供 project/release 与依赖差异描述，不需要再次修改 fork 或把哈希显示给用户。
 
+manifest 包策略由 Loader 对应的数字核心范围与完整原始版本字符串规则组成。数字规则的
+操作数只能是任意段点分无符号整数；字符串规则看到 JAR 声明的全部文本，不拆前缀或后缀，
+也不解释 `beta`、`snapshot` 或 Loader 名。规则从 all/none 集合开始，逐项执行交、并、原子
+取反和整体取补；建图时对 provider 已注册的有限候选同时应用两部分规则，并把允许候选的
+singleton 并集作为根约束。它不是求解后的校验路径。Fabric/Quilt 的 Loader-valid 不透明
+版本只旁路无法适用的数字规则，完整字符串规则照常生效；Forge/NeoForge 在 JAR 元数据入口
+按 Loader 的 `^\d+.*` 规则拒绝无效声明。
+
 Jar-in-Jar artifact 使用独立的 Maven 坐标包并精确绑定 owner 候选；`provides` 使用
 同一 mod_id 包下的代理候选。公共 loader `Version` 不包含来源编号，诊断也按强类型
 折叠内部边，不解析名称前缀。

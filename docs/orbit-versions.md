@@ -1,134 +1,150 @@
-# Orbit 版本号与约束
+# Orbit 版本号与包策略
 
-> 实现位置：`orbit-core/src/versions/`。
+> 实现位置：`orbit-core/src/versions/` 与 `orbit-core/src/version_string.rs`。
 
-## 1. 两种相等关系
+## 1. Loader 版本与 Orbit 包策略是两层语义
 
-Orbit 必须同时表达：
+JAR 的版本首先由对应 Loader 解释。Orbit 不把四种 Loader 强行压成一种 semver：
 
-1. **候选表示相等**：完整 JAR 声明版本和内容候选都相同；用于精确选择。
-2. **版本优先级相等**：数值核心相同；用于 upgrade/downgrade 与 Pareto 支配关系。
+- Fabric/Quilt 先尝试各自的 semantic version；合法但无法结构化的非空声明保留为 opaque
+  完整字符串。
+- Forge/NeoForge 在 `${file.*}` 替换后要求声明匹配 `^\d+.*`，随后采用 Maven
+  `DefaultArtifactVersion` / `ComparableVersion` 与 Maven range。
+- JAR 中依赖其它 mod 的约束始终使用 Loader 原生语法和完整语义，Orbit 不把依赖声明改写成
+  用户过滤规则。
 
-例如 `1.2.3-alpha` 与 `1.2.3-beta` 是不同表示，也可以来自不同内容哈希，但二者的数值
-核心都是 `1.2.3`。它们是不同方案，互相不算升级或降级。求解器不得把其中一个当成另一个，
-也不得仅因后缀文本排序而淘汰方案。
+用户对一个受管包配置的策略则明确拆成两个正交字段：
 
-统一入口为：
-
-```rust
-pub enum Version {
-    Fabric(SemanticVersion),
-    Maven(MavenVersion),
-    Generic(String),
-}
+```toml
+[packages.example]
+version = ">=1.2.3 <2.0.0"
+string = 'all; intersect not contains(i"beta")'
 ```
 
-`Version::parse()` 解析候选；`parse_constraint()` 生成 PubGrub range；
-`cmp_precedence()` 只比较数值核心；普通 `Ord` 保持不同具体表示可区分。
+`version` 只过滤数字核心；`string` 只按完整 JAR 声明版本文本过滤。两者在候选进入 PubGrub
+根范围前同时执行，不存在求解后再补一次黑盒检查的路径。
 
-## 2. Orbit 显式约束
+## 2. 数字核心规则 `version`
 
-对 Fabric/Quilt 与 Forge/NeoForge，Orbit TOML 和 CLI 的显式运算符遵循同一规则：
+数字核心是一段或多段点分无符号整数，段数不固定。例如 `1`、`1.2.3` 和
+`26.1.2.4` 都是合法边界。结构化 CLI 支持：
 
-| 表达式 | 行为 |
+| 策略 | 行为 |
 |---|---|
-| `*` | 允许所有版本 |
-| `=1.2.3` | 允许所有数值核心为 `1.2.3` 的表示，包括 `-alpha`、`-beta` |
-| `=1.2.3-alpha` | 只允许这个完整后缀表示 |
-| `!=1.2.3` | 排除整个 `1.2.3` 数值核心类 |
-| `!=1.2.3-alpha` | 只排除这个完整后缀表示 |
-| `>1.2.3` | 数值核心必须高于 `1.2.3` |
-| `>=1.2.3` | 数值核心不低于 `1.2.3` |
-| `<`、`<=` | 对称地按数值核心比较 |
+| `*` / `any` | 不限制可建立数字核心的候选 |
+| `=1.2.3` | 允许数字核心为 `1.2.3` 的全部完整表示 |
+| `!=1.2.3` | 排除整个 `1.2.3` 数字核心类 |
+| `> >= < <=` | 只按数字核心比较 |
+| `range` | 使用明确的上下界及各自开闭状态 |
 
-是否存在显式后缀由数值核心后的 `-suffix` 决定。Fabric build metadata `+...` 仍按其
-Loader 语义保留用于展示，但不构成 `-suffix` 精确条件。
+Fabric/Quilt TOML 仍可保存只含数字、操作符和末端通配符的 Loader-native predicate，例如
+`^1.2`、`~26.1`、`0.8.x`、`>=1 <2 || =3`。Forge/NeoForge TOML 可保存数字端点的 Maven
+range，例如 `[1,2)`、`(,2]`、`[1,2),[3,)`。裸 Maven 版本仍保持 Loader 的 recommendation
+语义，不会被 Orbit 偷改成精确约束。
 
-为了把一个数值核心类表示成 PubGrub range，两个版本实现都提供只供内部使用的
-`Before(core)` 与 `After(core)` 边界。具体后缀表示严格位于这两个边界之间，因此
-`=1.2.3` 可以覆盖整类而 `=1.2.3-alpha` 仍是 singleton。
+作者文本不能进入数字操作数：`=1.2.3-alpha`、`>=v2` 和 `[1-beta,2)` 都是无效的包数字
+规则。要精确筛选 `1.2.3-alpha`，使用 `version = "=1.2.3"` 再配合 `string` 的精确条件。
 
-## 3. Fabric / Quilt
+## 3. 完整字符串规则 `string`
 
-Fabric SemanticVersion 支持任意长度数字组件、prerelease、build metadata、AND/OR、
-`x`/`X`/`*` 通配、`~` 与 `^`。这些范围的开闭边界都使用数值核心边界：
+`string` 的输入始终是完整 JAR 声明文本，不拆 prefix/core/suffix，也不规范化大小写。例如：
 
 ```text
-^1.2.3  → >=1.2.3 <2.0.0
-^0.2.3  → >=0.2.3 <1.0.0
-~26.1   → >=26.1 <26.2
-0.8.x   → >=0.8 <0.9
+v1.2.3-beta+mc26
 ```
 
-Fabric caret 固定首个数值组件，不采用 npm 对 `0.x` 的特殊收窄。无法解析为
-SemanticVersion 的字符串只能参与具体表示的精确匹配，不能假装拥有数值顺序。
+字符串规则看到的就是这一整串文本。规则必须从 `all` 或 `none` 开始，以分号分隔并从左到右
+执行集合操作：
 
-## 4. Forge / NeoForge
+```text
+all; intersect not contains(i"beta"); intersect not contains(i"snapshot")
+none; union "1.2.3"; union starts_with(i"release-"); complement
+```
 
-Maven 版本实现保留 ComparableVersion 的 item-list、任意长度数字、qualifier、别名、
-hyphen 子列表及与比较一致的 `Eq`/`Hash`。Loader 元数据中的 Maven range 仍按原生语法：
+- `intersect [not] <predicate>`：与该谓词集合或其补集取交；
+- `union [not] <predicate>`：与该谓词集合或其补集取并；
+- `complement`：对截至当前步骤的整体集合取补；
+- 谓词：`empty`、`present`、精确字符串、`contains(...)`、`starts_with(...)`、
+  `ends_with(...)`；
+- `"text"` 区分大小写，`i"text"` 不区分大小写，字符串采用 JSON 转义。
 
-| 表达式 | 行为 |
-|---|---|
-| `1.2.3` | Maven recommendation：不形成硬约束 |
-| `[1.2.3]` | Maven 原生精确表示 |
-| `[1,2)` | 数值核心 `>=1` 且 `<2` |
-| `(,2]` | 数值核心 `<=2` |
-| `[1,2),[3,)` | 区间并集 |
+操作顺序就是语义，Core 不做与/或正规化，也不把任何作者词汇解释为稳定版或预发布。
+`orbit add` 只在创建请求包新条目时默认写入：
 
-Orbit 用户策略额外接受上一节的 `= != > >= < <=`。因此 `=x` 是“无后缀则核心类、
-有后缀则精确表示”，而 Maven 原生 `[x]` 始终是具体表示 singleton。
+```text
+all; intersect not contains(i"beta"); intersect not contains(i"snapshot")
+```
 
-## 5. 候选与 Pareto 枚举
+这只是新建项默认值；init、sync、import、依赖补入和已有包都不会被改写。
 
-内容哈希是候选主键，不参与版本高低。同一包可以同时拥有：
+## 4. 无数字核心的候选
 
-- 不同数值核心的候选；
-- 相同数值核心、不同 `-suffix` 的候选；
-- 完全相同版本字符串、不同内容哈希和不同依赖的候选。
+Loader 接受一个版本字符串，不代表 Orbit 可以安全发明数字顺序。每个候选报告：
 
-Orbit 传给 PubGrub fork 三个彼此独立的关系：
+- `numeric_filterable=true` 与 `numeric_core`：数字规则正常执行；
+- `numeric_filterable=false` 与 `numeric_error`：无法由 Loader 语义安全建立数字核心。
 
-- `same_version`：同一个具体候选身份；
-- `same_precedence`：数值核心相同；
-- `strictly_higher`：数值核心严格更高。
+后一种候选仍然有效时，仅旁路数字规则；完整 `string` 规则始终执行。若它进入最终方案，
+事务会明确警告数字策略没有应用。它不会被伪装成 `0`、空文本或猜测出的 `1.2.3`。
 
-fork 原生保留同一 Pareto 优先级上的不同候选实现，并排除已经保留的具体组合，避免把
-同版本候选合并或无限重复。多个可行实现作为不同方案交给用户；界面显示 JAR 版本、远端
-和依赖差异，不显示内容哈希。
+Fabric/Quilt 可以产生 Loader-valid opaque 候选，例如 `release-vNext`。Forge/NeoForge 不走这条
+旁路：不以数字开头的声明在 JAR 元数据入口就是 Loader-invalid，Orbit直接报错。对于以数字
+开头但无法可靠形成完整点分核心的声明，Maven 版本仍可作为 Loader 版本存在，而包数字规则
+旁路，字符串规则继续生效。
 
-只有 `cmp_precedence() == Greater` 才产生 upgrade；小于产生 downgrade；优先级相同而
-候选不同产生 replace。`upgrade` / `outdated` 的标准版本 Pareto 支配以及 `add` / `fix`
-在固定极小变更集合内的次级版本支配，都只使用这个优先级关系。`add` / `fix` 的首要关系
-不是版本高低，而是相对 lock 未能保留的逻辑包状态集合按包含关系 Pareto 极小。
+## 5. 候选身份、相等与 Pareto
 
-## 6. 版本管理命令
+Orbit 同时保留三种关系：
+
+1. **内容候选身份**：内容哈希相同才是同一下载候选；哈希不进入用户界面。
+2. **完整版本表示**：JAR 声明文本及 Loader 版本表示相同；用于区分可选方案。
+3. **数字优先级**：数字核心相同；用于 upgrade/downgrade 与 Pareto 支配。
+
+因此 `1.2.3-alpha` 与 `1.2.3-beta` 是两个方案，但数字优先级相同；切换记为 replace，不是
+upgrade 或 downgrade。完全相同的版本字符串若内容与依赖不同也仍是两个候选。PubGrub fork
+原生保留相同优先级的不同候选，并以 `same_version`、`same_precedence`、
+`strictly_higher` 投影枚举完整 Pareto front；Orbit 不在求解后用哈希或文件名补筛。
+
+Fabric/Maven 实现内部仍有 prerelease、qualifier、build 等 Loader 术语，这是 Loader 自身
+比较规则。它们不会泄漏为包策略中的固定“稳定版/测试版”枚举。
+
+## 6. 命令与机器输出
 
 ```text
 orbit versions <package>
 orbit constraint show <package>
-orbit constraint set <package> any
-orbit constraint set <package> exact <version>
-orbit constraint set <package> <greater-than|at-least|less-than|at-most> <version>
+orbit constraint set <package> any [--string '<ordered-set-rule>']
+orbit constraint set <package> exact <numeric-core> [--string ...]
+orbit constraint set <package> <greater-than|at-least|less-than|at-most> <numeric-core> [--string ...]
 orbit constraint set <package> range <lower> <upper> \
-  [--lower-bound inclusive|exclusive] [--upper-bound inclusive|exclusive]
+  [--lower-bound inclusive|exclusive] [--upper-bound inclusive|exclusive] [--string ...]
 ```
 
-`versions` 从包在 TOML 中配置的全部远端枚举当前 Minecraft/Loader 可用工件，先统一下载
-和读取 JAR 元数据，再按数值核心降序、具体表示稳定排序。provider 的 release name 或
-project ID 不会被当成版本。内容哈希和候选主键不进入文本、JSON 或 GUI 展示模型。
+`versions` 从包的全部远端枚举当前 Minecraft/Loader 工件，统一下载、按哈希缓存并读取真实
+JAR 元数据，然后稳定排序。provider release 名或 project ID 从不充当版本。候选机器字段为：
 
-`constraint show` 只读。`constraint set` 立即联网求解并原子应用；目标是相对当前 lock 的
-标准 Pareto 极小包变更集合，多个互不支配方案必须选择。若当前 JAR 已满足新策略，则只
-持久化策略而不重写 JAR；若无解、取消或失败，TOML、lock 和 JAR 均不变化。解除限制使用
-`constraint set <package> any`，没有第二条 clear 写入路径。
+- `version`：完整 JAR 声明版本；
+- `numeric_core`、`numeric_filterable`、`numeric_error`；
+- `string_tokens`：完整版本与可用于 GUI 快捷选择的文本片段；
+- `sources`、`details`、`selected`、`matches_constraint`。
 
-## 7. 测试契约
+`constraint show` 只读。`constraint set` 立即联网发现候选，并将数字规则与完整字符串规则作为
+同一个标准 Pareto 极小包事务求解、选择、确认和提交。若当前 JAR 已满足策略，只持久化策略；
+无解、取消或失败不会修改 TOML、lock 或 JAR。省略 `--string` 保留已有规则；解除两部分限制
+使用 `constraint set <package> any --string all`，没有第二条兼容写入路径。
 
-- `=1.2.3` 接受该核心的所有后缀，`=1.2.3-alpha` 只接受精确后缀；
-- 有序运算符忽略后缀；
-- 相同核心不同后缀是两个 Pareto 方案，切换属于 replace；
+GUI 只负责把数字边界控件和字符串操作列表序列化为同一条 CLI 命令。解析、候选过滤、求解、
+交互 schema 与原子提交都在 CLI/core 中完成。
+
+## 7. 必须保持的测试契约
+
+- 数字操作数只接受任意段点分无符号整数；作者文本必须使用 `string`；
+- 完整字符串规则按顺序执行交、并、原子取反和整体取补；
+- 精确字符串区分大小写，`i` 字符串不区分大小写；
+- opaque 候选只旁路数字规则，完整字符串规则仍可排除它；
+- Fabric/Quilt 保持 semantic + opaque fallback；Forge/NeoForge 在属性替换后要求数字开头；
+- 相同数字核心的不同完整表示是不同 Pareto 方案，切换属于 replace；
 - 相同完整版本但不同内容身份仍是不同方案；
 - Fabric build metadata 的 `Eq`/`Hash` 一致；
-- Maven qualifier、原生精确范围、开闭范围和并集保持 Loader 语义；
-- Forge/NeoForge、Java 与 Jar-in-Jar 使用同一个版本模型。
+- Maven qualifier、原生精确范围、开闭范围和并集保持 Loader 依赖语义；
+- Forge/NeoForge、Java 与 Jar-in-Jar 依赖仍使用各自 Loader/Maven 原生版本模型。

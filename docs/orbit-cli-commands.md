@@ -177,6 +177,10 @@ orbit add <mod>
 逻辑包也各自写入 `[packages]`，默认版本策略为 `*`。TOML 不区分根包与传递包，所有实际
 包都能独立配置远端、环境和版本策略。
 
+add 为新请求包声明设置完整字符串集合默认值 `all; intersect not contains(i"beta"); intersect
+not contains(i"snapshot")`。它只影响新建条目；已存在的包和此次补入的其它包不会被默认规则
+覆盖。该规则是用户策略，可通过 `constraint set --string` 修改。
+
 `add` 以当前 lock 为基线枚举标准 Pareto 极小变更集合：如果方案 A 改动的已有逻辑包集合
 是方案 B 的真子集，B 不会返回。这不是“改动数最少”；例如只能改 A 或只能改 B 的两个
 方案互不支配，仍都必须交给用户选择。请求添加的包是所有可行方案的强制目标，不计入基线
@@ -218,22 +222,36 @@ orbit constraint set <package> exact <version>
 orbit constraint set <package> <greater-than|at-least|less-than|at-most> <version>
 orbit constraint set <package> range <lower> <upper> \
   [--lower-bound inclusive|exclusive] [--upper-bound inclusive|exclusive]
+  [--string '<ordered-set-rule>']
 ```
 
 `versions` 从该包在 TOML 中配置的全部远端联网枚举当前 Minecraft/Loader 工件，先进入
 统一下载队列并按全局 cache 去重，再从 JAR 读取真实 `mod_id`、版本和依赖。输出按数值核心
-降序排列；相同数值核心的不同后缀或相同版本的不同内容候选分别列出。文本和 GUI 不显示
+降序排列；相同数字核心的不同完整版本或相同版本的不同内容候选分别列出。文本和 GUI 不显示
 内容哈希；JSON 也只返回可展示的版本、来源和 JAR 详情。
 
-`constraint show` 是只读查询。`constraint set` 接受结构化策略，联网建立完整候选闭包，并在
+候选同时报告数字核心是否可过滤。Fabric/Quilt 退化为不透明 Loader 版本的作者字符串，以及
+无法可靠建立点分数字核心的版本，标为 `numeric_filterable=false` 并给出原因；它们旁路
+数字约束但仍由完整原始版本的 `string` 规则过滤。Forge/NeoForge 的 JAR 声明版本若不以
+数字开头，则按 Loader 自身规则在元数据入口报错。
+
+`constraint show` 是只读查询。`constraint set` 接受结构化数字核心策略和一个原始 `--string`
+顺序集合字符串，联网建立完整候选闭包，并在
 新策略下求一个相对当前 lock 的标准 Pareto 极小包变更方案；多个互不支配方案仍要求用户
 选择，随后使用与 add/fix 相同的事务确认和应用路径。求解失败、用户取消或应用失败时，
 TOML、lock 和磁盘 JAR 都保持不变；`--dry-run` 只展示事务。`any` 是解除版本限制的唯一
 写入方式，不保留单独的 clear 路径。
 
-`exact 1.2.3` 匹配该数值核心的所有后缀，`exact 1.2.3-alpha` 精确匹配完整后缀；有序
-运算符只比较数值核心。range 的端点包含关系显式传入，并由 core 转换为对应 Loader 家族的
-原生约束表示，调用方不拼接 Fabric/Maven 约束文本。
+`exact 1.2.3` 匹配该数字核心的所有 Loader 合法完整表示。数字策略的边界只能是任意段
+点分无符号整数；若要精确筛选 `1.2.3-alpha`，使用数字 `exact 1.2.3` 再配置完整字符串规则。
+range 的端点包含关系显式传入，并由 core 转换为对应 Loader 家族的原生约束表示，调用方
+不拼接 Fabric/Maven 约束文本。
+
+完整字符串规则从 `all` 或 `none` 开始，以 `;` 分隔并从左到右执行。每项为
+`intersect [not] <atom>`、`union [not] <atom>` 或对当前结果整体取补的 `complement`。
+原子支持空/存在、精确、包含、开头和结尾字符串事实；`"text"` 区分大小写，`i"text"`
+不区分大小写。匹配输入始终是完整 JAR 声明版本；Orbit 不把任何字符串硬编码为稳定版、
+预发布或 Loader 名。该规则和数字范围在同一求解图中筛选候选。
 
 ### `orbit remote`
 

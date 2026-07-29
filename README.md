@@ -81,6 +81,8 @@ orbit env sodium auto
 # Inspect JAR-declared versions from every configured remote, then apply a policy.
 orbit versions sodium
 orbit constraint set sodium exact 0.6.13
+# Ordered rules inspect the complete JAR-declared version string.
+orbit constraint set sodium any --string 'all; intersect not contains(i"beta")'
 # Other structured forms: any, greater-than, at-least, less-than, at-most,
 # or: range <lower> <upper> [--lower-bound ...] [--upper-bound ...]
 
@@ -114,7 +116,7 @@ Orbit resolves its instance from the current directory first, then an explicit `
 | `orbit list [--tree]` | Show installed logical packages from the lockfile. |
 | `orbit remote add/remove/list` | Manage local, Modrinth, and CurseForge remotes without removing the last remote. |
 | `orbit versions <package>` | Download and inspect every configured remote candidate, then list JAR-declared versions in descending order. |
-| `orbit constraint show/set` | Inspect or atomically apply a structured version policy using a Pareto-minimal package transaction. |
+| `orbit constraint show/set` | Inspect or atomically apply a numeric-core policy plus an ordered complete-string rule using a Pareto-minimal package transaction. |
 
 ### Portable packs and migration
 
@@ -189,16 +191,29 @@ runtime_jars = []
 physical_environment = "client"
 
 [packages]
-sodium = { version = "^0.5", remotes = [
+sodium = { version = "^0.5", string = 'all; intersect not contains(i"beta")', remotes = [
   { type = "modrinth", project_id = "AANobbMI" },
   { type = "curseforge", project_id = 394468 },
 ] }
 ```
 
-`=1.2.3` matches every representation with numeric core `1.2.3`, while
-`=1.2.3-alpha` matches that exact suffix. Suffix variants remain distinct
-solver choices but have equal upgrade/Pareto precedence; ordered operators
-compare the numeric core only.
+`version` is only a numeric-core rule. `=1.2.3` therefore matches every
+Loader-valid representation whose numeric core is `1.2.3`; author text such as
+`-alpha` belongs in `string`, not in a numeric operand. Representations remain
+distinct solver choices but have equal upgrade/Pareto precedence when their
+numeric cores are equal.
+
+The optional `string` rule sees the complete JAR-declared version, including
+any prefix, numeric text, separators, qualifiers, and build text. It starts
+from `all` or `none`, then applies ordered `intersect [not]`, `union [not]`, and
+whole-set `complement` operations. Quoted strings are exact and case-sensitive;
+`i"text"` ignores case. Orbit assigns no release-stage meaning to author text.
+New packages created by `orbit add` default to excluding case-insensitive
+`beta` and `snapshot`; existing entries are never rewritten by that default.
+Numeric cores may have any number of components. A Fabric/Quilt opaque version
+bypasses only `version` and still goes through `string`, with a visible warning;
+Forge/NeoForge retain their Loader rule that declared mod versions must start
+with a digit.
 
 The full schema is in [orbit.toml specification](docs/orbit-toml-spec.md).
 

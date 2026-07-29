@@ -43,7 +43,6 @@ physical_environment = "client"
 
 [resolver]
 catalogs = ["modrinth"]
-prerelease = false
 
 [packages]
 sodium = { version = ">=0.5", remotes = [
@@ -89,7 +88,6 @@ benchmark = { packages = ["sodium", "reeses_sodium_options"] }
 | 字段 | 默认值 | 含义 |
 |---|---|---|
 | `catalogs` | `["modrinth"]` | 无限定 `search`/`add` 使用的 provider 集合 |
-| `prerelease` | `false` | 预发布候选偏好 |
 
 `catalogs` 不是远端优先级。一个包配置的全部 `remotes` 都进入同一次候选发现，并按内容
 哈希去重；不会在首个 provider 返回结果后停止。CurseForge provider 必须配置 API Key。
@@ -100,6 +98,7 @@ benchmark = { packages = ["sodium", "reeses_sodium_options"] }
 [packages]
 package_id = {
   version = "*",
+  string = 'all; intersect not contains(i"beta")',
   optional = false,
   env = "client",
   exclude = ["broken_optional_edge"],
@@ -113,7 +112,8 @@ package_id = {
 
 | 字段 | 默认值 | 含义 |
 |---|---|---|
-| `version` | `"*"` | 该包的用户版本策略 |
+| `version` | `"*"` | 该包的数字核心策略；操作数不能含作者文本 |
+| `string` | `"all"` | 对完整 JAR 声明版本从左到右执行的集合规则 |
 | `optional` | `false` | 是否可由 `install --no-optional` 过滤 |
 | `env` | 无 | 可选 `client`、`server`、`both`；缺失时跟随选中 JAR 声明 |
 | `exclude` | `[]` | 用户明确排除的 JAR 依赖边 |
@@ -133,20 +133,20 @@ JAR 的声明；下一次求解使用每个候选 JAR 的真实声明。没有�
 
 ### 2.5 版本约束
 
-版本比较把 `x.y.z` 的数值核心与 `-suffix` 表示分开：
+包策略把 Loader 可建立的数字核心与完整原始版本字符串分开：
 
 | 约束 | 行为 |
 |---|---|
 | `*` | 允许全部版本 |
-| `=1.2.3` | 匹配数值核心 `1.2.3`，忽略是否存在 `-suffix` |
-| `=1.2.3-alpha` | 精确匹配完整后缀表示 |
+| `=1.2.3` | 匹配数字核心 `1.2.3` 的全部 Loader 合法完整表示 |
 | `!=1.2.3` | 排除整个 `1.2.3` 数值核心类 |
-| `!=1.2.3-alpha` | 只排除这个精确后缀表示 |
 | `> >= < <=` | 只按数值核心比较 |
 | Fabric/Quilt 的 `x`、`*`、`~`、`^` | 按相同数值核心边界生成范围 |
-| Maven `[x]` | Loader 原生的精确 Maven 表示 |
+| Forge/NeoForge 的 Maven range | 只允许数字端点，保持 Loader 的开闭/并集语法 |
 
-因此 `1.2.3-alpha` 与 `1.2.3-beta` 是不同候选、不同可选方案，但具有相同升级/Pareto
+`version` 的边界是任意段点分无符号整数；`=1.2.3-alpha` 属于无效数字规则。若要选择这个
+完整表示，应使用 `version = "=1.2.3"` 和完整字符串规则。`1.2.3-alpha` 与
+`1.2.3-beta` 是不同候选、不同可选方案，但具有相同升级/Pareto
 优先级；从一个切换到另一个记为 `replace`，不是 upgrade/downgrade。若二者都可行且处于
 Pareto 前沿，必须交给用户选择。候选身份可由内容哈希区分，但交互只显示版本、远端和 JAR
 依赖差异，不显示哈希。
@@ -161,12 +161,23 @@ orbit constraint set <package> exact <version>
 orbit constraint set <package> <greater-than|at-least|less-than|at-most> <version>
 orbit constraint set <package> range <lower> <upper> \
   [--lower-bound inclusive|exclusive] [--upper-bound inclusive|exclusive]
+  [--string '<ordered-set-rule>']
 ```
 
-`versions` 联网枚举该包全部配置远端，统一下载、缓存、读取 JAR 元数据后按数值核心降序
-列出真实候选。`constraint show` 只读；`constraint set` 把结构化策略转换为当前 Loader 的
+`versions` 联网枚举该包全部配置远端，统一下载、缓存、读取 JAR 元数据后按数字核心降序
+列出真实候选，并返回数字核心、完整版本字符串的快捷片段和可过滤状态。`constraint show` 只读；
+`constraint set` 把结构化数值策略转换为当前 Loader 的
 原生 TOML 表示，并在内存清单上完成 Pareto 极小求解、选择、确认和文件事务后才一起提交
-TOML、lock 与 JAR。无解或取消不会留下半更新状态；解除限制使用 `any`。
+TOML、lock 与 JAR。无解或取消不会留下半更新状态；解除数值限制使用 `any`。
+
+`string` 不是正则表达式或发布阶段枚举，而是针对完整 JAR 声明版本的顺序集合程序：以 `all`/`none` 初始化候选集，
+随后用 `intersect [not] <atom>`、`union [not] <atom>` 和 `complement` 从左到右更新集合。
+原子为 `empty`、`present`、`"精确字符串"`、`contains(...)`、`starts_with(...)` 或
+`ends_with(...)`；在字符串引号前加 `i` 表示不区分大小写。CLI 对该原始字符串做严格解析，
+保存规范空白但不改变操作顺序。数字约束与 string 规则在进入 PubGrub 时一起筛选真实有限
+候选，不存在求解后补查。add 新请求包默认排除不区分大小写的 `beta` 与 `snapshot`；默认
+只用于新条目，不能修改已有条目。Fabric/Quilt 的 Loader-valid 不透明版本旁路数字规则，
+但仍执行完整字符串规则；Forge/NeoForge 声明在文件属性替换后必须以数字开头。
 
 ### 2.6 本地远端与组
 

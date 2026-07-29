@@ -1,6 +1,6 @@
 # Orbit 实现状态
 
-> 更新日期：2026-07-29。本文区分“正确规范曾未被代码执行”和“文档本身已经过时”。
+> 更新日期：2026-07-30。本文区分“正确规范曾未被代码执行”和“文档本身已经过时”。
 
 ## 1. 当前结论
 
@@ -13,7 +13,7 @@
 | 初始化与检测 | ✅ | 合法游戏目录校验；标准/HMCL/Prism/MultiMC/CurseForge/GDLauncher；Fabric/Quilt/Forge/NeoForge dedicated server 官方 launch spec；Minecraft 与四种 loader/version/JAR |
 | 平台工件同步 | ✅ | init/sync 独占 fresh scan；TOML 固定 Minecraft/loader/runtime JAR 路径、SHA-256、物理端；其它命令严格消费 |
 | JAR 元数据 | ✅ | 四种 loader、多逻辑 mod、嵌套 JAR、JarJar |
-| 版本语义 | ✅ | Fabric predicate；Maven ComparableVersion/range；数值核心与后缀候选分离，精确 `=` 按是否带后缀区分 |
+| 版本语义 | ✅ | Fabric predicate 与 opaque fallback；Maven ComparableVersion/range；包策略分为任意段数字核心规则与完整 JAR 版本字符串的通用有序集合规则；Forge/NeoForge 执行 Loader 的数字开头校验 |
 | 依赖求解 | ✅ | 强类型 occurrence 图、原生变更极小与版本极大 Pareto front、any/all/unless、环境、provides、ordering、Java、JarJar |
 | 原因 | ✅ | 自定义 reason 参与原始推导；成功候选用同次 observer |
 | 本地校验 | ✅ | 转 Fat Lockfile 后复用统一建图 |
@@ -21,7 +21,7 @@
 | Modrinth / CurseForge / `file:` | ✅ | 查询、下载、识别、锁定；CurseForge 无 API Key 时拒绝创建 |
 | 多远端包模型 | ✅ | 每个受管包非空 `remotes`；全部来源共同发现，完全相同字节跨 provider 合并 |
 | 完整 TOML 包集合 | ✅ | 所有选中顶层逻辑包均写入 `[packages]`，无根/传递分类；lock 只记录精确事实 |
-| 包版本管理 | ✅ | `versions` 联网下载并按 JAR 声明版本排序；结构化 `constraint set` 以 Pareto 极小事务立即应用；GUI 通过候选版本与边界控件复用同一 CLI |
+| 包版本管理 | ✅ | `versions` 联网下载并按 JAR 声明版本排序；数字核心范围与完整字符串集合规则由 `constraint set` 以 Pareto 极小事务立即应用；GUI 用边界控件和交/并/单项取反/整体取补操作表复用同一 CLI |
 | 内容候选身份 | ✅ | 本地 SHA-512 作为内部候选主键；同版本不同内容保持独立，CLI 只显示来源与依赖差异 |
 | PubGrub fork 远端 | ✅ | 功能分支已发布，Orbit 固定到完整 commit SHA |
 | 多解选择 | ✅ | fork 原生枚举完整变更极小或版本极大 Pareto front；唯一解自动选择，多解经同一进程的终端或 schema 2 机器交互明确选择；`--yes` 不代选 |

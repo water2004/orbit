@@ -209,6 +209,8 @@ orbit [--output-format text|json] [--progress-format none|ndjson] <command> ...
     "package": "sodium",
     "previous": "*",
     "current": "=0.6.13",
+    "previous_string": "all",
+    "string": "all; intersect not contains(i\"beta\")",
     "selected_version": "0.6.13+mc1.21.1",
     "selected_satisfies": true,
     "changed": true,
@@ -225,11 +227,15 @@ orbit [--output-format text|json] [--progress-format none|ndjson] <command> ...
   "result": {
     "package": "sodium",
     "constraint": "=0.6.13",
+    "string": "all; intersect not contains(i\"beta\")",
     "selected_version": "0.6.13+mc1.21.1",
     "candidates": [
       {
         "version": "0.6.13+mc1.21.1",
-        "sources": ["Modrinth project AANobbMI, release release-id"],
+        "numeric_core": "0.6.13",
+        "string_tokens": ["0.6.13+mc1.21.1", "mc1"],
+        "numeric_filterable": true,
+        "sources": ["Modrinth"],
         "details": "requires fabricloader >=0.16",
         "selected": true,
         "matches_constraint": true
@@ -239,9 +245,14 @@ orbit [--output-format text|json] [--progress-format none|ndjson] <command> ...
 }
 ```
 
-`constraint` 只改 TOML 策略；`selected_satisfies` 仅报告当前 lock 是否符合。
+`constraint show` 只读；`constraint set` 把数字核心策略和 `string` 作为同一个 Pareto 极小事务
+求解并原子应用。`selected_satisfies` 报告当前/计划 lock 是否同时符合两部分规则。
 `versions` 会联网下载并分析全部配置远端后排序。内容哈希和内部候选身份不会越过展示
-边界；GUI 只显示 `version`、`sources` 和 `details`。
+边界；GUI 显示 `version`、`numeric_core`、`string_tokens`、`sources` 和 `details`，并用
+`matches_constraint` 标出组合规则是否允许该候选。`numeric_filterable=false` 表示 Loader
+只建立了不透明版本，或点分数字结构无法可靠建立；此时同时返回 `numeric_error`，只有数字
+规则旁路，`string` 仍对完整原始版本生效。若该候选进入最终解，事务 `warnings` 会明确说明
+数字规则没有应用；该状态不能伪装为数字核心 `0`。
 
 ### `migrate check` / `migrate export`
 

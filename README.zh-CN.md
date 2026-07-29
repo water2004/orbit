@@ -128,6 +128,7 @@ orbit env sodium auto
 # 从全部配置远端下载并列出 JAR 实际版本，然后立即求解并应用策略
 orbit versions sodium
 orbit constraint set sodium exact 0.6.13
+orbit constraint set sodium any --string 'all; intersect not contains(i"beta")'
 # 也可使用 any、greater-than、at-least、less-than、at-most，
 # 或 range <下界> <上界> [--lower-bound ...] [--upper-bound ...]
 
@@ -193,7 +194,7 @@ schema、字段名、枚举码和错误码不随语言变化。Windows 控制台
 | `orbit list` | 列出当前实例记录的所有模组及版本；支持 `--tree` 和 `--target`。 |
 | `orbit remote add/remove/list` | 管理一个逻辑包的多个 `file` / Modrinth / CurseForge 候选远端；不能删除最后一个远端。 |
 | `orbit versions <package>` | 下载并分析全部配置远端，按 JAR 实际声明的版本降序列出候选。 |
-| `orbit constraint show/set` | 查看或原子应用结构化版本策略；应用时按 Pareto 极小包变更求解并提交。 |
+| `orbit constraint show/set` | 查看或原子应用数字核心策略与完整版本字符串规则；应用时按 Pareto 极小包变更求解并提交。 |
 
 ### 4. 导入、导出与进阶工具 (IO & Utility)
 
@@ -243,11 +244,10 @@ physical_environment = "client"
 
 [resolver]
 catalogs = ["modrinth"]
-prerelease = false
 
 [packages]
 # 一个包可同时声明多个远端；包身份和版本始终从下载后的 JAR 读取
-sodium = { version = "^0.5", remotes = [
+sodium = { version = "^0.5", string = 'all; intersect not contains(i"beta")', remotes = [
   { type = "modrinth", project_id = "AANobbMI" },
   { type = "curseforge", project_id = 394468 },
 ] }
@@ -266,8 +266,17 @@ lithium = { version = ">=0.11 <0.14", remotes = [
 ] }
 ```
 
-`=1.2.3` 匹配数值核心为 `1.2.3` 的全部后缀表示；`=1.2.3-alpha` 只匹配该精确后缀。
-不同后缀仍是不同求解方案，但升级与 Pareto 优先级相同；有序运算符只比较数值核心。
+`version` 只描述数字核心，因此 `=1.2.3` 匹配数字核心为 `1.2.3` 的全部 Loader 合法表示；
+`-alpha` 等作者文本必须由 `string` 表达，不能混入数字操作数。完整表示仍是不同求解方案，
+但数字核心相同就具有相同的升级与 Pareto 优先级。
+
+可选 `string` 从 `all` 或 `none` 开始，按顺序对 **完整 JAR 声明版本字符串** 执行
+`intersect [not]`、`union [not]` 和整体 `complement`；前缀、数字、分隔符、限定词和构建文本
+都不会被裁掉。引号字符串精确且区分大小写，`i"text"` 不区分大小写。Orbit 不给作者字符串
+预设稳定版、测试版等含义。`orbit add` 只为新建请求包默认排除不区分大小写的 `beta` 与
+`snapshot`，绝不改写已有项。数字核心允许任意段。Fabric/Quilt 的不透明 Loader 版本只
+旁路 `version`，仍执行 `string` 并给出警告；Forge/NeoForge 则保持声明版本必须以数字开头
+的 Loader 规则。
 
 > **提示**：强烈建议将 `orbit.toml` 和 `orbit.lock` 一同纳入 Git 版本控制！结合 `orbit install --target server`，你可以在任何机器上一键还原完整的模组环境。
 
