@@ -115,8 +115,11 @@ Mods 页以 lock 中逻辑包为单位显示当前版本、TOML 版本策略、�
 接管由已安装 Launcher lock 的精确 Minecraft/Loader 版本调用 `orbit init`，不在 GUI 中
 重复探测。搜索、添加、sync、fix、install、outdated、单包/全部 upgrade、环境与远端管理都调用
 现有 Orbit 命令。添加表单暴露版本约束、可选环境过滤和 optional；包管理面板调用
-`orbit versions` 展示全部远端 JAR 候选，并通过 `orbit constraint set/clear` 管理版本策略；
-策略保存只改 TOML，Fix 才应用。面板同时区分普通 remove 与会先展示匹配配置文件的 purge。
+`orbit versions` 展示全部远端 JAR 候选。版本策略不是命令行文本框：用户先选择“任意版本”、
+“单边界”或“版本区间”，再从真实候选列表选择边界；单边界提供等于、大于、大于等于、
+小于和小于等于，区间分别控制上下界是否包含。GUI 只把这些动作映射为结构化
+`orbit constraint set` 参数，Loader 约束编码、Pareto 极小求解、多方案选择、确认和原子提交
+全部由 CLI/core 完成。面板同时区分普通 remove 与会先展示匹配配置文件的 purge。
 GUI 不复制 CLI 的项目详情报告；Discover 只提供搜索所需的名称、摘要、
 来源、兼容标签和直接添加动作，需要完整项目数据时使用 `orbit info`。
 

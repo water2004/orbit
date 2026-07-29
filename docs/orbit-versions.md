@@ -107,16 +107,21 @@ fork 原生保留同一 Pareto 优先级上的不同候选实现，并排除已�
 ```text
 orbit versions <package>
 orbit constraint show <package>
-orbit constraint set <package> <requirement>
-orbit constraint clear <package>
+orbit constraint set <package> any
+orbit constraint set <package> exact <version>
+orbit constraint set <package> <greater-than|at-least|less-than|at-most> <version>
+orbit constraint set <package> range <lower> <upper> \
+  [--lower-bound inclusive|exclusive] [--upper-bound inclusive|exclusive]
 ```
 
 `versions` 从包在 TOML 中配置的全部远端枚举当前 Minecraft/Loader 可用工件，先统一下载
 和读取 JAR 元数据，再按数值核心降序、具体表示稳定排序。provider 的 release name 或
 project ID 不会被当成版本。内容哈希和候选主键不进入文本、JSON 或 GUI 展示模型。
 
-`constraint set`/`clear` 只更新 TOML，不改 lock 和磁盘 JAR。命令会报告当前 lock 选择
-是否符合新策略；运行 `orbit fix` 才真正求解并应用。
+`constraint show` 只读。`constraint set` 立即联网求解并原子应用；目标是相对当前 lock 的
+标准 Pareto 极小包变更集合，多个互不支配方案必须选择。若当前 JAR 已满足新策略，则只
+持久化策略而不重写 JAR；若无解、取消或失败，TOML、lock 和 JAR 均不变化。解除限制使用
+`constraint set <package> any`，没有第二条 clear 写入路径。
 
 ## 7. 测试契约
 

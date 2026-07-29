@@ -156,12 +156,17 @@ Pareto 前沿，必须交给用户选择。候选身份可由内容哈希区分�
 ```text
 orbit versions <package>
 orbit constraint show <package>
-orbit constraint set <package> <requirement>
-orbit constraint clear <package>
+orbit constraint set <package> any
+orbit constraint set <package> exact <version>
+orbit constraint set <package> <greater-than|at-least|less-than|at-most> <version>
+orbit constraint set <package> range <lower> <upper> \
+  [--lower-bound inclusive|exclusive] [--upper-bound inclusive|exclusive]
 ```
 
 `versions` 联网枚举该包全部配置远端，统一下载、缓存、读取 JAR 元数据后按数值核心降序
-列出真实候选。`constraint` 只修改 TOML 策略；使用 `orbit fix` 才会求解并应用。
+列出真实候选。`constraint show` 只读；`constraint set` 把结构化策略转换为当前 Loader 的
+原生 TOML 表示，并在内存清单上完成 Pareto 极小求解、选择、确认和文件事务后才一起提交
+TOML、lock 与 JAR。无解或取消不会留下半更新状态；解除限制使用 `any`。
 
 ### 2.6 本地远端与组
 

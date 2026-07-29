@@ -78,10 +78,11 @@ orbit remote list sodium
 orbit env sodium client
 orbit env sodium auto
 
-# Inspect JAR-declared versions from every configured remote, then set policy.
+# Inspect JAR-declared versions from every configured remote, then apply a policy.
 orbit versions sodium
-orbit constraint set sodium '=0.6.13'
-orbit fix
+orbit constraint set sodium exact 0.6.13
+# Other structured forms: any, greater-than, at-least, less-than, at-most,
+# or: range <lower> <upper> [--lower-bound ...] [--upper-bound ...]
 
 # Repair, restore, update, and audit.
 orbit fix
@@ -113,7 +114,7 @@ Orbit resolves its instance from the current directory first, then an explicit `
 | `orbit list [--tree]` | Show installed logical packages from the lockfile. |
 | `orbit remote add/remove/list` | Manage local, Modrinth, and CurseForge remotes without removing the last remote. |
 | `orbit versions <package>` | Download and inspect every configured remote candidate, then list JAR-declared versions in descending order. |
-| `orbit constraint show/set/clear` | Manage a package version policy in TOML; run `fix` to apply it. |
+| `orbit constraint show/set` | Inspect or atomically apply a structured version policy using a Pareto-minimal package transaction. |
 
 ### Portable packs and migration
 

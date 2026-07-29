@@ -125,10 +125,11 @@ orbit add zoomify --env client
 orbit env sodium client
 orbit env sodium auto
 
-# 从全部配置远端下载并列出 JAR 实际版本，然后设置策略并修复
+# 从全部配置远端下载并列出 JAR 实际版本，然后立即求解并应用策略
 orbit versions sodium
-orbit constraint set sodium "=0.6.13"
-orbit fix
+orbit constraint set sodium exact 0.6.13
+# 也可使用 any、greater-than、at-least、less-than、at-most，
+# 或 range <下界> <上界> [--lower-bound ...] [--upper-bound ...]
 
 # 5. 按 Pareto 极小变更修复依赖图；多个互不支配方案会要求选择
 orbit fix
@@ -191,7 +192,7 @@ schema、字段名、枚举码和错误码不随语言变化。Windows 控制台
 | `orbit list` | 列出当前实例记录的所有模组及版本；支持 `--tree` 和 `--target`。 |
 | `orbit remote add/remove/list` | 管理一个逻辑包的多个 `file` / Modrinth / CurseForge 候选远端；不能删除最后一个远端。 |
 | `orbit versions <package>` | 下载并分析全部配置远端，按 JAR 实际声明的版本降序列出候选。 |
-| `orbit constraint show/set/clear` | 管理 TOML 中一个包的版本策略；运行 `fix` 才应用。 |
+| `orbit constraint show/set` | 查看或原子应用结构化版本策略；应用时按 Pareto 极小包变更求解并提交。 |
 
 ### 4. 导入、导出与进阶工具 (IO & Utility)
 

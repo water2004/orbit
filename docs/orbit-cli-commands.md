@@ -209,8 +209,11 @@ orbit env <package> <client|server|both|auto>
 ```text
 orbit versions <package>
 orbit constraint show <package>
-orbit constraint set <package> <requirement>
-orbit constraint clear <package>
+orbit constraint set <package> any
+orbit constraint set <package> exact <version>
+orbit constraint set <package> <greater-than|at-least|less-than|at-most> <version>
+orbit constraint set <package> range <lower> <upper> \
+  [--lower-bound inclusive|exclusive] [--upper-bound inclusive|exclusive]
 ```
 
 `versions` 从该包在 TOML 中配置的全部远端联网枚举当前 Minecraft/Loader 工件，先进入
@@ -218,10 +221,15 @@ orbit constraint clear <package>
 降序排列；相同数值核心的不同后缀或相同版本的不同内容候选分别列出。文本和 GUI 不显示
 内容哈希；JSON 也只返回可展示的版本、来源和 JAR 详情。
 
-`constraint show` 查询当前策略；`set` 写入明确约束；`clear` 恢复 `*`。这些操作不下载、
-不求解、不修改 lock 或 JAR，并报告当前 lock 选择是否符合策略。使用 `orbit fix` 才应用
-新策略。`=1.2.3` 匹配该数值核心的所有后缀，`=1.2.3-alpha` 精确匹配完整后缀；有序运算符
-只比较数值核心。
+`constraint show` 是只读查询。`constraint set` 接受结构化策略，联网建立完整候选闭包，并在
+新策略下求一个相对当前 lock 的标准 Pareto 极小包变更方案；多个互不支配方案仍要求用户
+选择，随后使用与 add/fix 相同的事务确认和应用路径。求解失败、用户取消或应用失败时，
+TOML、lock 和磁盘 JAR 都保持不变；`--dry-run` 只展示事务。`any` 是解除版本限制的唯一
+写入方式，不保留单独的 clear 路径。
+
+`exact 1.2.3` 匹配该数值核心的所有后缀，`exact 1.2.3-alpha` 精确匹配完整后缀；有序
+运算符只比较数值核心。range 的端点包含关系显式传入，并由 core 转换为对应 Loader 家族的
+原生约束表示，调用方不拼接 Fabric/Maven 约束文本。
 
 ### `orbit remote`
 

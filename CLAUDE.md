@@ -124,8 +124,8 @@
 47. **loader 加载条件必须进入共享图**。Fabric nested 使用 `if_possible`；Quilt 保留
     `always` / `if_possible` / `if_required`；Forge-family JarJar 按 artifact range
     选择。相同 ID 的多版本嵌套候选选择一个兼容项，不能要求所有候选同时成立。
-48. **所有求解型包集合变更共享 portfolio 与事务报告**。add、本地 add、fix、upgrade、
-    migrate 等不得各写选择规则。唯一 Pareto 极大解自动选择，多解交给交互层；
+48. **所有求解型包集合变更共享 portfolio 与事务报告**。add、本地 add、fix、结构化
+    constraint set、upgrade、migrate 等不得各写选择规则。唯一 Pareto 解自动选择，多解交给交互层；
     降级、替换和未选包删除即使在唯一解中也必须展示精确逻辑包版本动作并在写盘前确认。
     物理 JAR 文件名仅供事务层定位载体，不进入方案选择或包操作 UI。
 49. **upgrade 的定义是至少一个包相对当前安装版本变新**。允许同一方案中的其他包
@@ -207,9 +207,10 @@
     解码，非法字节必须产生 protocol error，不得使用 lossy replacement 或静默丢行。
 69. **安装、对账和修复是三种不同职责**。`install` 只物化现有 lock 的精确内容，禁止发现
     候选、求解、删除包或改写 TOML/lock；`sync` 可以联网做批量哈希来源识别，但只根据当前
-    平台与本地 JAR 重建事实状态和补充 TOML，禁止求解或删包；只有 `fix` 可以递归发现候选、
-    求解、让用户选择并确认、删除未选包，同时一致更新 `mods/`、`orbit.lock` 与 `orbit.toml`。
-    `init` 与 sync 一样不选择重复实现；存在重复时保留文件和来源，交给 fix。
+    平台与本地 JAR 重建事实状态和补充 TOML，禁止求解或删包；`fix` 是完整图修复入口。
+    结构化 `constraint set` 是唯一有界例外：先在内存 manifest 修改一个已有包的版本策略，
+    再复用 fix 的 Pareto 极小 portfolio、选择、确认和同一文件事务；无解、取消或应用失败不得
+    写入策略。`init` 与 sync 一样不选择重复实现；存在重复时保留文件和来源，交给 fix。
 70. **迁移必须针对真实目标运行时规划**。`migrate check` 与 `migrate export` 共用一个联合
     依赖图规划器；目标是 Launcher 已安装的准确实例目录，平台 JAR、路径、哈希和 Loader
     元数据从该目录探测。禁止按目标版本逐包探测、伪造 platform snapshot 或在 export 后

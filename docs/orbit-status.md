@@ -21,7 +21,7 @@
 | Modrinth / CurseForge / `file:` | ✅ | 查询、下载、识别、锁定；CurseForge 无 API Key 时拒绝创建 |
 | 多远端包模型 | ✅ | 每个受管包非空 `remotes`；全部来源共同发现，完全相同字节跨 provider 合并 |
 | 完整 TOML 包集合 | ✅ | 所有选中顶层逻辑包均写入 `[packages]`，无根/传递分类；lock 只记录精确事实 |
-| 包版本管理 | ✅ | `versions` 联网下载并按 JAR 声明版本排序；`constraint show/set/clear` 管理 TOML 策略；GUI 复用同一 CLI |
+| 包版本管理 | ✅ | `versions` 联网下载并按 JAR 声明版本排序；结构化 `constraint set` 以 Pareto 极小事务立即应用；GUI 通过候选版本与边界控件复用同一 CLI |
 | 内容候选身份 | ✅ | 本地 SHA-512 作为内部候选主键；同版本不同内容保持独立，CLI 只显示来源与依赖差异 |
 | PubGrub fork 远端 | ✅ | 功能分支已发布，Orbit 固定到完整 commit SHA |
 | 多解选择 | ✅ | fork 原生枚举完整变更极小或版本极大 Pareto front；唯一解自动选择，多解经同一进程的终端或 schema 2 机器交互明确选择；`--yes` 不代选 |

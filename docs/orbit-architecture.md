@@ -105,7 +105,7 @@ init / sync
   → launcher layout / platform_detection
   → 完整 platform snapshot
 
-联网求解命令（add/fix/upgrade/migrate）
+联网求解命令（add/fix/constraint set/upgrade/migrate）
   → manifest / exact platform snapshot validation
   → package remotes 的 provider project 闭包发现（联网命令）
   → 完整 artifact 队列
@@ -197,9 +197,10 @@ Jar-in-Jar artifact 使用独立的 Maven 坐标包并精确绑定 owner 候选�
 折叠内部边，不解析名称前缀。
 
 所有会形成新包集合的入口先得到同一种 `ResolutionReport`，再形成事务计划。当前包括
-`add`、`fix`、`upgrade` 和迁移规划，不包括只记录事实的 `init`/`sync`，也不包括只按
-lock 物化的 `install`。优化目标由入口显式传入统一 resolver：`add` / `fix` 以当前 lock
-为基线枚举标准 Pareto 极小逻辑包变更集合；`upgrade` / `outdated` 与空目标迁移枚举标准
+`add`、`fix`、结构化 `constraint set`、`upgrade` 和迁移规划，不包括只记录事实的
+`init`/`sync`，也不包括只按 lock 物化的 `install`。优化目标由入口显式传入统一 resolver：
+`add` / `fix` / `constraint set` 以当前 lock 为基线枚举标准 Pareto 极小逻辑包变更集合；
+`upgrade` / `outdated` 与空目标迁移枚举标准
 版本 Pareto 极大 front。极小变更集合固定后仍以版本极大作为次级目标。fork 对每个保留点
 一次排除完整支配区域。唯一解自动选择，多解由调用方选择；任何降级、替换或删除都在写盘
 前展示并确认。upgrade 方案只要求至少一个包相对当前版本变新，允许其他包降级。
@@ -208,7 +209,7 @@ lock 物化的 `install`。优化目标由入口显式传入统一 resolver：`a
 project/release 远端，并按磁盘事实重建 lock；它不枚举版本、不下载候选 JAR、不求解，
 也不删除重复实现。发现同一 `mod_id` 的多个本地实现时，sync 保留全部文件和 TOML
 来源并要求运行 `fix`。`install` 只物化现有 lock 的精确内容，既不求解也不修改
-TOML/lock。联网候选闭包发现、可行解选择和未选包删除由 `add`、`fix`、`upgrade` 与
+TOML/lock。联网候选闭包发现、可行解选择和未选包删除由 `add`、`fix`、`constraint set`、`upgrade` 与
 迁移等明确求解操作执行；这些写操作共享同一个 reconciliation，使 TOML 完整包集合与
 所选 lock 同步收敛。
 

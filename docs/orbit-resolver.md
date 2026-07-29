@@ -214,7 +214,8 @@ lockfile 身份。这个选择发生在下载完成、纯离线求解开始之�
 已选用户包版本等价或更高，并且至少一个严格更高。候选来源不是“更高版本”的第二条坐标。
 这个定义会删除全面落后的方案，但保留“某些包升级、另一些包必须降级”的真实权衡。
 
-`add` / `fix` 使用标准 Pareto 极小变更集合。Orbit 给 fork 的偏好坐标由逻辑包构成：
+`add` / `fix` / 结构化 `constraint set` 使用标准 Pareto 极小变更集合。Orbit 给 fork 的
+偏好坐标由逻辑包构成：
 
 - TOML 与 lock 都有的包偏好保留 lock 中的精确候选身份；
 - TOML 有而 lock 没有的包是必须实现的意图，不设“保持缺失”偏好；
@@ -242,11 +243,18 @@ Pareto front 或 co-Pareto front 本身仍可能很大；动态工作量说明�
 `OrbitLockfile` 结构，再调用 `build_solver_graph()`。它只校验一份已经确定的本地
 选择，不替 `init`/`sync` 选择重复实现。
 
-`add`、`fix`、`upgrade`、`outdated` 与 `migrate` 消费同一种 `ResolutionReport`。
+`add`、`fix`、结构化 `constraint set`、`upgrade`、`outdated` 与 `migrate` 消费同一种
+`ResolutionReport`。
 不论是多个 Pareto 极小变更解还是多个版本 Pareto 极大解，都进入同一选择协议；选择完成
 后统一生成包事务计划。未选中的顶层包版本会列出
 精确 `mod_id`、版本和动作，实际写入或删除前必须确认；文件名只供事务执行层定位载体。
 即使方案唯一也不能跳过破坏性计划确认。嵌套 JAR 从不作为独立删除目标。
+
+`constraint set` 不先写 TOML 再调用另一个修复命令。core 在内存中的 manifest 副本上
+应用 Any、单边界或有界区间策略，建立与 fix 相同的完整候选闭包并选择 Pareto 极小方案；
+确认后由同一事务一起提交 JAR、lock 与 manifest。若当前选中 JAR 已满足策略，则只原子
+持久化 manifest；无解、用户取消、dry-run 或物化失败都不得留下新策略。GUI 只从
+`versions` 的真实 JAR 候选选取边界并生成结构化 CLI 动作，不解析或拼接 Loader 约束文本。
 
 `install` 不进入候选求解：它严格校验现有 lock 并只恢复其中记录的内容哈希。
 `init`/`sync` 也不进入候选求解：它们扫描当前磁盘事实；同一 `mod_id` 出现多个实现时
