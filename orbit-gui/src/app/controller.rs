@@ -406,7 +406,7 @@ impl OrbitApp {
                                     refresh_packages: true,
                                 } => reload_selected = true,
                                 Intent::RuntimeMutated => refresh_registries = true,
-                                Intent::MigrationInstalled { .. } => refresh_registries = true,
+                                Intent::MigrationRegistered { .. } => refresh_registries = true,
                                 Intent::RuntimeInstalledAfterUpdate { .. } => {
                                     refresh_registries = true
                                 }
@@ -704,6 +704,7 @@ impl OrbitApp {
                         source_pack: source_pack.clone(),
                         target: detail.instance.directory.clone(),
                         target_id: target_id.clone(),
+                        target_name: detail.instance.name.clone(),
                     },
                     vec![
                         "migrate".into(),
@@ -720,6 +721,7 @@ impl OrbitApp {
                 source_pack,
                 target,
                 target_id,
+                target_name,
             } => {
                 let plan: MigrationResult = decode(result)?;
                 if plan.subcommand != "check" {
@@ -729,19 +731,30 @@ impl OrbitApp {
                     source_pack: source_pack.clone(),
                     target: target.clone(),
                     target_id: target_id.clone(),
+                    target_name: target_name.clone(),
                     plan,
                 });
             }
-            Intent::MigrationExported { target, target_id } => {
+            Intent::MigrationExported {
+                target,
+                target_id,
+                target_name,
+            } => {
                 let migration: MigrationResult = decode(result)?;
                 if migration.export.is_some_and(|export| export.applied) {
                     self.orbit_task_args(
-                        "Installing migrated mod environment",
-                        Intent::MigrationInstalled {
+                        "Registering migrated Orbit instance",
+                        Intent::MigrationRegistered {
                             target_id: target_id.clone(),
+                            target: target.clone(),
                         },
-                        vec!["install".into()],
-                        Some(target.clone()),
+                        vec![
+                            "instances".into(),
+                            "register".into(),
+                            target_name.clone(),
+                            target.to_string_lossy().into_owned(),
+                        ],
+                        None,
                         None,
                     );
                 } else {
@@ -753,6 +766,19 @@ impl OrbitApp {
                         kind: ToastKind::Warning,
                     });
                 }
+            }
+            Intent::MigrationRegistered { target_id, target } => {
+                self.preferences.selected_instance = Some(target_id.clone());
+                self.save_preferences();
+                self.orbit_task_args(
+                    "Installing migrated mod environment",
+                    Intent::MigrationInstalled {
+                        target_id: target_id.clone(),
+                    },
+                    vec!["install".into()],
+                    Some(target.clone()),
+                    None,
+                );
             }
             Intent::MigrationInstalled { target_id } => {
                 self.preferences.selected_instance = Some(target_id.clone());
@@ -1195,20 +1221,28 @@ impl OrbitApp {
         let Some(review) = self.migration_review.take() else {
             return;
         };
+        let mut command = vec![
+            "migrate".into(),
+            "export".into(),
+            review.target.to_string_lossy().into_owned(),
+            "--source-pack".into(),
+            review.source_pack.to_string_lossy().into_owned(),
+            "--consume-source-pack".into(),
+        ];
+        if review.plan.summary.removals > 0 {
+            // The user already accepted package removal while checking this
+            // exact migration. Replay that consent without exposing a second
+            // GUI-only workflow or asking the same question twice.
+            command.push("--allow-removals".into());
+        }
         self.orbit_task_args(
             "Exporting checked mod migration",
             Intent::MigrationExported {
                 target: review.target.clone(),
                 target_id: review.target_id,
+                target_name: review.target_name,
             },
-            vec![
-                "migrate".into(),
-                "export".into(),
-                review.target.to_string_lossy().into_owned(),
-                "--source-pack".into(),
-                review.source_pack.to_string_lossy().into_owned(),
-                "--consume-source-pack".into(),
-            ],
+            command,
             Some(review.target),
             None,
         );

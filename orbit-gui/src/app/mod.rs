@@ -68,6 +68,7 @@ pub(super) struct MigrationReview {
     pub source_pack: PathBuf,
     pub target: PathBuf,
     pub target_id: String,
+    pub target_name: String,
     pub plan: MigrationResult,
 }
 

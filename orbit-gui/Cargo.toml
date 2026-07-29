@@ -46,6 +46,7 @@ rfd = { version = "0.17.2", features = ["common-controls-v6"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 zeroize = { workspace = true }
+url = { workspace = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 gpui = { version = "0.2.2", default-features = false, features = ["windows-manifest"] }

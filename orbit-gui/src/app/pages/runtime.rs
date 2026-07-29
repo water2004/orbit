@@ -85,6 +85,7 @@ fn render_dashboard(
             },
         );
         let instance_id = instance.id.clone();
+        let instance_directory = instance.directory.clone();
         content = content.child(
             ui::themed_card(cx)
                 .child(
@@ -166,6 +167,36 @@ fn render_dashboard(
                             Button::new("runtime-repair")
                                 .label(tr!("Verify and repair").into_owned())
                                 .on_click(cx.listener(|this, _, _, cx| { this.install_runtime(); cx.notify(); })),
+                        )
+                        .child(
+                            Button::new("runtime-open-directory")
+                                .icon(OrbitIcon::Folder)
+                                .label(tr!("Open instance folder").into_owned())
+                                .ghost()
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    if !instance_directory.is_dir() {
+                                        this.toast = Some(super::super::Toast {
+                                            message: tr!(
+                                                "The instance directory no longer exists: %{path}",
+                                                path = instance_directory.display()
+                                            ),
+                                            kind: super::super::ToastKind::Danger,
+                                        });
+                                    } else if let Ok(uri) =
+                                        url::Url::from_directory_path(&instance_directory)
+                                    {
+                                        cx.open_url(uri.as_str());
+                                    } else {
+                                        this.toast = Some(super::super::Toast {
+                                            message: tr!(
+                                                "The instance directory cannot be opened: %{path}",
+                                                path = instance_directory.display()
+                                            ),
+                                            kind: super::super::ToastKind::Danger,
+                                        });
+                                    }
+                                    cx.notify();
+                                })),
                         )
                         .when(orbit_initialized, |row| {
                             row.child(

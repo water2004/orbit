@@ -507,13 +507,19 @@ pub enum Intent {
         source_pack: PathBuf,
         target: PathBuf,
         target_id: String,
+        target_name: String,
     },
     MigrationExported {
         target: PathBuf,
         target_id: String,
+        target_name: String,
     },
     MigrationInstalled {
         target_id: String,
+    },
+    MigrationRegistered {
+        target_id: String,
+        target: PathBuf,
     },
     RuntimeConfiguredForInstall {
         target_id: String,
