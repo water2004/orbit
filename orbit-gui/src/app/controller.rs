@@ -580,7 +580,8 @@ impl OrbitApp {
                         .is_some_and(|editor| editor.package.mod_id == *package)
                 {
                     if let Some(editor) = &mut self.package_editor {
-                        editor.policy = PackagePolicyDraft::from_policy(&versions.policy);
+                        editor.policy =
+                            PackagePolicyDraft::from_policy(&versions.policy, &versions.suffix)?;
                     }
                     self.package_versions = Some(versions);
                 }

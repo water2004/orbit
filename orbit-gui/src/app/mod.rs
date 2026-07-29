@@ -23,6 +23,7 @@ use crate::assets::OrbitIcon;
 use crate::model::*;
 use crate::process::{ProcessBridge, TaskId};
 use crate::remote_images::RemoteImageBridge;
+use crate::suffix_rule::{SuffixOperationDraft, SuffixRuleDraft};
 
 mod components;
 mod controller;
@@ -174,6 +175,9 @@ pub(super) struct PackagePolicyDraft {
     pub include_lower: bool,
     pub include_upper: bool,
     pub replaced_custom: Option<String>,
+    pub suffix: SuffixRuleDraft,
+    pub suffix_condition: SuffixOperationDraft,
+    pub suffix_edit_index: Option<usize>,
 }
 
 impl Default for PackagePolicyDraft {
@@ -187,12 +191,15 @@ impl Default for PackagePolicyDraft {
             include_lower: true,
             include_upper: true,
             replaced_custom: None,
+            suffix: SuffixRuleDraft::default(),
+            suffix_condition: SuffixOperationDraft::default(),
+            suffix_edit_index: None,
         }
     }
 }
 
 impl PackagePolicyDraft {
-    fn from_policy(policy: &PackageVersionPolicy) -> Self {
+    fn from_policy(policy: &PackageVersionPolicy, suffix: &str) -> anyhow::Result<Self> {
         let mut draft = Self::default();
         match policy {
             PackageVersionPolicy::Any => {}
@@ -223,7 +230,8 @@ impl PackagePolicyDraft {
                 draft.replaced_custom = Some(requirement.clone());
             }
         }
-        draft
+        draft.suffix = SuffixRuleDraft::parse(suffix)?;
+        Ok(draft)
     }
 
     fn select_mode(&mut self, mode: PackagePolicyMode, default_version: Option<&str>) {
@@ -237,7 +245,7 @@ impl PackagePolicyDraft {
     }
 
     fn command_args(&self) -> Option<Vec<String>> {
-        match self.mode {
+        let mut arguments = match self.mode {
             PackagePolicyMode::Any => Some(vec!["any".to_string()]),
             PackagePolicyMode::Comparison => Some(vec![
                 self.operator.command().to_string(),
@@ -262,7 +270,10 @@ impl PackagePolicyDraft {
                 }
                 .to_string(),
             ]),
-        }
+        }?;
+        arguments.push("--suffix".to_string());
+        arguments.push(self.suffix.expression()?);
+        Some(arguments)
     }
 }
 
@@ -322,6 +333,7 @@ pub(super) struct Inputs {
     pub orbit_binary: Entity<InputState>,
     pub launcher_binary: Entity<InputState>,
     pub remote_locator: Entity<InputState>,
+    pub suffix_value: Entity<InputState>,
     pub add_version: Entity<InputState>,
     pub runtime_name: Entity<InputState>,
     pub audit_filter: Entity<InputState>,
@@ -365,6 +377,7 @@ impl Inputs {
                     .default_value(preferences.launcher_binary.display().to_string())
             }),
             remote_locator: input(window, cx, tr!("Remote locator").into_owned()),
+            suffix_value: input(window, cx, tr!("Suffix text").into_owned()),
             add_version: input(window, cx, tr!("Any compatible version").into_owned()),
             runtime_name: input(window, cx, tr!("Installation name").into_owned()),
             audit_filter: input(window, cx, tr!("Filter by mod").into_owned()),
@@ -878,7 +891,10 @@ mod package_policy_tests {
             ..PackagePolicyDraft::default()
         };
 
-        assert_eq!(draft.command_args().unwrap(), ["at-least", "1.2.3-beta"]);
+        assert_eq!(
+            draft.command_args().unwrap(),
+            ["at-least", "1.2.3-beta", "--suffix", "all"]
+        );
     }
 
     #[test]
@@ -901,7 +917,9 @@ mod package_policy_tests {
                 "--lower-bound",
                 "inclusive",
                 "--upper-bound",
-                "exclusive"
+                "exclusive",
+                "--suffix",
+                "all"
             ]
         );
     }
@@ -925,13 +943,19 @@ mod package_policy_tests {
             "include_upper": true
         }))
         .unwrap();
-        let draft = PackagePolicyDraft::from_policy(&policy);
+        let draft =
+            PackagePolicyDraft::from_policy(&policy, "all; intersect not contains(i\"beta\")")
+                .unwrap();
 
         assert_eq!(draft.mode, PackagePolicyMode::Range);
         assert!(!draft.include_lower);
         assert!(draft.include_upper);
         assert_eq!(draft.lower.as_deref(), Some("1.2.0"));
         assert_eq!(draft.upper.as_deref(), Some("2.0.0"));
+        assert_eq!(
+            draft.suffix.expression().as_deref(),
+            Some("all; intersect not contains(i\"beta\")")
+        );
     }
 
     #[test]

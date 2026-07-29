@@ -245,6 +245,7 @@ pub struct PackageList {
 #[derive(Debug, Clone, Deserialize)]
 pub struct PackageVersions {
     pub package: String,
+    pub suffix: String,
     pub policy: PackageVersionPolicy,
     pub selected_version: Option<String>,
     pub candidates: Vec<PackageVersionCandidate>,
@@ -286,9 +287,13 @@ pub enum PackageVersionOperator {
 #[derive(Debug, Clone, Deserialize)]
 pub struct PackageVersionCandidate {
     pub version: String,
+    pub suffix: Option<String>,
+    #[serde(default)]
+    pub suffix_tokens: Vec<String>,
     pub sources: Vec<String>,
     pub details: String,
     pub selected: bool,
+    pub matches_constraint: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]

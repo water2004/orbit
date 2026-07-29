@@ -9,6 +9,7 @@ mod diagnostics;
 mod model;
 mod process;
 mod remote_images;
+mod suffix_rule;
 mod theme;
 mod wire;
 

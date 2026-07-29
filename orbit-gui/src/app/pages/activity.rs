@@ -25,6 +25,7 @@ use super::super::{
 use crate::app::components as ui;
 use crate::assets::OrbitIcon;
 use crate::model::PackageChange;
+use crate::suffix_rule::{SuffixOperationDraft, SuffixPredicate, SuffixSetOperator};
 
 pub(in crate::app) fn render_strip(app: &OrbitApp, cx: &mut Context<OrbitApp>) -> impl IntoElement {
     let task = app
@@ -1150,6 +1151,7 @@ fn render_package_policy(
                     ),
             )
         })
+        .child(render_suffix_policy(app, versions, cx))
         .child(
             h_flex()
                 .justify_between()
@@ -1236,6 +1238,31 @@ fn render_package_policy(
                                 h_flex()
                                     .gap_2()
                                     .child(div().font_medium().child(candidate.version.clone()))
+                                    .child(
+                                        ui::neutral_pill(
+                                            candidate
+                                                .suffix
+                                                .as_ref()
+                                                .map(|suffix| {
+                                                    tr!("suffix %{suffix}", suffix = suffix)
+                                                })
+                                                .unwrap_or_else(|| {
+                                                    tr!("empty suffix").into_owned()
+                                                }),
+                                            cx,
+                                        )
+                                        .max_w(px(220.))
+                                        .truncate(),
+                                    )
+                                    .child(if candidate.matches_constraint {
+                                        ui::pill(
+                                            tr!("Allowed").into_owned(),
+                                            cx.theme().success.opacity(0.13),
+                                            cx.theme().success,
+                                        )
+                                    } else {
+                                        ui::neutral_pill(tr!("Excluded").into_owned(), cx)
+                                    })
                                     .when(candidate.selected, |row| {
                                         row.child(ui::neutral_pill(
                                             tr!("Installed").into_owned(),
@@ -1317,6 +1344,353 @@ fn render_package_policy(
             .child(version_list),
     );
     builder.into_any_element()
+}
+
+fn render_suffix_policy(
+    app: &OrbitApp,
+    versions: Option<&crate::model::PackageVersions>,
+    cx: &mut Context<OrbitApp>,
+) -> AnyElement {
+    let draft = app
+        .package_editor
+        .as_ref()
+        .expect("package editor checked")
+        .policy
+        .clone();
+    let input = app.inputs.suffix_value.clone();
+    let input_read = input.clone();
+    let mut operations = v_flex().gap_2();
+    for (index, operation) in draft.suffix.operations.iter().cloned().enumerate() {
+        let edit_operation = operation.clone();
+        let edit_value = edit_operation.value.clone().unwrap_or_default();
+        let edit_input = input.clone();
+        let expression = operation
+            .expression()
+            .unwrap_or_else(|| tr!("Incomplete condition").into_owned());
+        operations = operations.child(
+            h_flex()
+                .id(("suffix-operation", index))
+                .gap_2()
+                .items_center()
+                .px_3()
+                .py_2()
+                .rounded_lg()
+                .border_1()
+                .border_color(cx.theme().border)
+                .child(
+                    div()
+                        .w(px(24.))
+                        .text_xs()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(format!("{}", index + 1)),
+                )
+                .child(
+                    div()
+                        .min_w_0()
+                        .flex_1()
+                        .text_sm()
+                        .font_medium()
+                        .child(expression),
+                )
+                .child(
+                    Button::new(("suffix-up", index))
+                        .label("↑")
+                        .ghost()
+                        .disabled(index == 0)
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            if index > 0
+                                && let Some(editor) = &mut this.package_editor
+                            {
+                                editor.policy.suffix.operations.swap(index, index - 1);
+                            }
+                            cx.notify();
+                        })),
+                )
+                .child(
+                    Button::new(("suffix-down", index))
+                        .label("↓")
+                        .ghost()
+                        .disabled(index + 1 == draft.suffix.operations.len())
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            if let Some(editor) = &mut this.package_editor
+                                && index + 1 < editor.policy.suffix.operations.len()
+                            {
+                                editor.policy.suffix.operations.swap(index, index + 1);
+                            }
+                            cx.notify();
+                        })),
+                )
+                .when(operation.operator != SuffixSetOperator::Complement, |row| {
+                    row.child(
+                        Button::new(("suffix-edit", index))
+                            .label(tr!("Edit").into_owned())
+                            .ghost()
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                if let Some(editor) = &mut this.package_editor {
+                                    editor.policy.suffix_condition = edit_operation.clone();
+                                    editor.policy.suffix_edit_index = Some(index);
+                                }
+                                edit_input.update(cx, |state, cx| {
+                                    state.set_value(edit_value.clone(), window, cx)
+                                });
+                                cx.notify();
+                            })),
+                    )
+                })
+                .child(
+                    Button::new(("suffix-remove", index))
+                        .icon(OrbitIcon::Trash)
+                        .ghost()
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            if let Some(editor) = &mut this.package_editor
+                                && index < editor.policy.suffix.operations.len()
+                            {
+                                editor.policy.suffix.operations.remove(index);
+                                editor.policy.suffix_edit_index = None;
+                            }
+                            cx.notify();
+                        })),
+                ),
+        );
+    }
+
+    let condition = draft.suffix_condition.clone();
+    let condition_value_missing =
+        condition.needs_value() && input.read(cx).value().trim().is_empty();
+    let set_operators = [
+        (SuffixSetOperator::Intersect, tr!("Intersect").into_owned()),
+        (SuffixSetOperator::Union, tr!("Union").into_owned()),
+    ];
+    let predicates = [
+        (SuffixPredicate::Empty, tr!("Empty").into_owned()),
+        (SuffixPredicate::Present, tr!("Present").into_owned()),
+        (SuffixPredicate::Equals, tr!("Equals").into_owned()),
+        (SuffixPredicate::Contains, tr!("Contains").into_owned()),
+        (SuffixPredicate::StartsWith, tr!("Starts with").into_owned()),
+        (SuffixPredicate::EndsWith, tr!("Ends with").into_owned()),
+    ];
+    let mut tokens = versions
+        .into_iter()
+        .flat_map(|versions| versions.candidates.iter())
+        .flat_map(|candidate| candidate.suffix_tokens.iter().cloned())
+        .collect::<Vec<_>>();
+    tokens.sort();
+    tokens.dedup();
+    tokens.truncate(12);
+    let editing = draft.suffix_edit_index;
+
+    v_flex()
+        .gap_3()
+        .child(ui::section_title(
+            tr!("Suffix set operations").into_owned(),
+            tr!("Start from a set, then apply every operation from top to bottom").into_owned(),
+            cx,
+        ))
+        .child(
+            h_flex()
+                .gap_2()
+                .child(
+                    Button::new("suffix-initial-all")
+                        .label(tr!("Start with all").into_owned())
+                        .selected(draft.suffix.initial_all)
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            if let Some(editor) = &mut this.package_editor {
+                                editor.policy.suffix.initial_all = true;
+                            }
+                            cx.notify();
+                        })),
+                )
+                .child(
+                    Button::new("suffix-initial-none")
+                        .label(tr!("Start with none").into_owned())
+                        .selected(!draft.suffix.initial_all)
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            if let Some(editor) = &mut this.package_editor {
+                                editor.policy.suffix.initial_all = false;
+                            }
+                            cx.notify();
+                        })),
+                )
+                .child(
+                    Button::new("suffix-add-complement")
+                        .label(tr!("Complement current set").into_owned())
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            if let Some(editor) = &mut this.package_editor {
+                                editor.policy.suffix.operations.push(SuffixOperationDraft {
+                                    operator: SuffixSetOperator::Complement,
+                                    ..SuffixOperationDraft::default()
+                                });
+                            }
+                            cx.notify();
+                        })),
+                ),
+        )
+        .when(draft.suffix.operations.is_empty(), |content| {
+            content.child(
+                div()
+                    .px_3()
+                    .py_2()
+                    .rounded_lg()
+                    .bg(cx.theme().secondary)
+                    .text_sm()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(tr!("No operations; the initial set is used unchanged").into_owned()),
+            )
+        })
+        .child(operations)
+        .child(
+            v_flex()
+                .gap_2()
+                .p_3()
+                .rounded_lg()
+                .bg(cx.theme().secondary)
+                .child(
+                    h_flex().gap_2().flex_wrap().children(
+                        set_operators
+                            .into_iter()
+                            .enumerate()
+                            .map(|(index, (operator, label))| {
+                                Button::new(("suffix-set-operator", index))
+                                    .label(label)
+                                    .selected(condition.operator == operator)
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        if let Some(editor) = &mut this.package_editor {
+                                            editor.policy.suffix_condition.operator = operator;
+                                        }
+                                        cx.notify();
+                                    }))
+                            }),
+                    ),
+                )
+                .child(
+                    h_flex()
+                        .gap_2()
+                        .flex_wrap()
+                        .child(
+                            Button::new("suffix-negated")
+                                .label(tr!("Negate condition").into_owned())
+                                .selected(condition.negated)
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    if let Some(editor) = &mut this.package_editor {
+                                        editor.policy.suffix_condition.negated =
+                                            !editor.policy.suffix_condition.negated;
+                                    }
+                                    cx.notify();
+                                })),
+                        )
+                        .children(predicates.into_iter().enumerate().map(
+                            |(index, (predicate, label))| {
+                                Button::new(("suffix-predicate", index))
+                                    .label(label)
+                                    .selected(condition.predicate == predicate)
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        if let Some(editor) = &mut this.package_editor {
+                                            editor.policy.suffix_condition.predicate = predicate;
+                                        }
+                                        cx.notify();
+                                    }))
+                            },
+                        )),
+                )
+                .when(condition.needs_value(), |content| {
+                    let token_input = input.clone();
+                    content
+                        .child(
+                            h_flex().gap_2().child(Input::new(&input).flex_1()).child(
+                                Button::new("suffix-case-sensitive")
+                                    .label(if condition.case_sensitive {
+                                        tr!("Case-sensitive").into_owned()
+                                    } else {
+                                        tr!("Ignore case").into_owned()
+                                    })
+                                    .selected(condition.case_sensitive)
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        if let Some(editor) = &mut this.package_editor {
+                                            editor.policy.suffix_condition.case_sensitive =
+                                                !editor.policy.suffix_condition.case_sensitive;
+                                        }
+                                        cx.notify();
+                                    })),
+                            ),
+                        )
+                        .when(!tokens.is_empty(), |content| {
+                            content.child(h_flex().gap_1().flex_wrap().children(
+                                tokens.into_iter().enumerate().map(|(index, token)| {
+                                    let value = token.clone();
+                                    let input = token_input.clone();
+                                    Button::new(("suffix-token", index)).label(token).on_click(
+                                        cx.listener(move |_, _, window, cx| {
+                                            input.update(cx, |state, cx| {
+                                                state.set_value(&value, window, cx)
+                                            });
+                                        }),
+                                    )
+                                }),
+                            ))
+                        })
+                })
+                .child(
+                    h_flex()
+                        .justify_end()
+                        .gap_2()
+                        .when(editing.is_some(), |row| {
+                            row.child(
+                                Button::new("suffix-edit-cancel")
+                                    .label(tr!("Cancel edit").into_owned())
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        if let Some(editor) = &mut this.package_editor {
+                                            editor.policy.suffix_edit_index = None;
+                                            editor.policy.suffix_condition =
+                                                SuffixOperationDraft::default();
+                                        }
+                                        this.inputs.suffix_value.update(cx, |state, cx| {
+                                            state.set_value("", window, cx)
+                                        });
+                                        cx.notify();
+                                    })),
+                            )
+                        })
+                        .child(
+                            Button::new("suffix-operation-apply")
+                                .label(if editing.is_some() {
+                                    tr!("Update operation").into_owned()
+                                } else {
+                                    tr!("Add operation").into_owned()
+                                })
+                                .primary()
+                                .disabled(condition_value_missing)
+                                .on_click(cx.listener(move |this, _, window, cx| {
+                                    let value = input_read.read(cx).value().trim().to_string();
+                                    if let Some(editor) = &mut this.package_editor {
+                                        let mut operation = editor.policy.suffix_condition.clone();
+                                        operation.value = operation
+                                            .needs_value()
+                                            .then_some(value)
+                                            .filter(|value| !value.is_empty());
+                                        if operation.expression().is_some() {
+                                            if let Some(index) =
+                                                editor.policy.suffix_edit_index.take()
+                                            {
+                                                if index < editor.policy.suffix.operations.len() {
+                                                    editor.policy.suffix.operations[index] =
+                                                        operation;
+                                                }
+                                            } else {
+                                                editor.policy.suffix.operations.push(operation);
+                                            }
+                                            editor.policy.suffix_condition =
+                                                SuffixOperationDraft::default();
+                                            input_read.update(cx, |state, cx| {
+                                                state.set_value("", window, cx)
+                                            });
+                                        }
+                                    }
+                                    cx.notify();
+                                })),
+                        ),
+                ),
+        )
+        .into_any_element()
 }
 
 fn render_toast(app: &OrbitApp, cx: &mut Context<OrbitApp>) -> impl IntoElement {
