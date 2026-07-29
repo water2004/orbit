@@ -160,16 +160,7 @@ fn fabric_wildcard(versions: &pubgrub::Ranges<SolverVersion>) -> Option<String> 
     else {
         return None;
     };
-    let wildcard = lower.raw.strip_suffix('-')?;
-    if upper.raw != format!("{wildcard}-upper")
-        || !wildcard
-            .rsplit('.')
-            .next()
-            .is_some_and(|component| matches!(component, "x" | "X" | "*"))
-    {
-        return None;
-    }
-    Some(wildcard.to_string())
+    crate::versions::fabric::wildcard_for_core_bounds(lower, upper)
 }
 
 fn is_excluded_semantic_singleton(versions: &pubgrub::Ranges<SolverVersion>) -> bool {

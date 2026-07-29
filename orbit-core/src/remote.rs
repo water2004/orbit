@@ -26,7 +26,7 @@ pub async fn add_package_remote(
     progress: Option<ProgressReporter>,
 ) -> Result<RemoteReport, OrbitError> {
     let mut manifest = ManifestFile::open(instance_dir)?;
-    if !manifest.inner.dependencies.contains_key(package) {
+    if !manifest.inner.packages.contains_key(package) {
         return Err(OrbitError::ModNotFound(package.to_string()));
     }
     let remote = match remote {
@@ -59,7 +59,7 @@ pub async fn add_package_remote(
     };
     let requirement = manifest
         .inner
-        .dependencies
+        .packages
         .get(package)
         .expect("package existence was checked above");
     if requirement.remotes.contains(&remote) {
@@ -117,7 +117,7 @@ pub async fn add_package_remote(
 
     let requirement = manifest
         .inner
-        .dependencies
+        .packages
         .get_mut(package)
         .expect("package was checked above");
     if requirement.remotes.contains(&remote) {
@@ -189,7 +189,7 @@ pub fn remove_package_remote(
     let mut manifest = ManifestFile::open(instance_dir)?;
     let requirement = manifest
         .inner
-        .dependencies
+        .packages
         .get_mut(package)
         .ok_or_else(|| OrbitError::ModNotFound(package.to_string()))?;
     let Some(index) = requirement
@@ -248,7 +248,7 @@ pub fn list_package_remotes(
     let manifest = ManifestFile::open(instance_dir)?;
     let requirement = manifest
         .inner
-        .dependencies
+        .packages
         .get(package)
         .ok_or_else(|| OrbitError::ModNotFound(package.to_string()))?;
     Ok(RemoteReport {
@@ -262,8 +262,7 @@ pub fn list_package_remotes(
 mod tests {
     use super::*;
     use crate::manifest::{
-        DependencySpec, OrbitManifest, PlatformArtifact, PlatformSnapshot, ProjectMeta,
-        ResolverConfig,
+        OrbitManifest, PackageSpec, PlatformArtifact, PlatformSnapshot, ProjectMeta, ResolverConfig,
     };
 
     fn manifest(remote: PackageRemote) -> OrbitManifest {
@@ -290,12 +289,11 @@ mod tests {
                 physical_environment: crate::metadata::Environment::Client,
             },
             resolver: ResolverConfig::default(),
-            dependencies: indexmap::IndexMap::from([(
+            packages: indexmap::IndexMap::from([(
                 "sodium".to_string(),
-                DependencySpec::new("*", vec![remote]),
+                PackageSpec::new("*", vec![remote]),
             )]),
             groups: indexmap::IndexMap::new(),
-            overrides: indexmap::IndexMap::new(),
         }
     }
 
@@ -328,9 +326,7 @@ mod tests {
         };
         let curseforge = PackageRemote::Curseforge { project_id: 394468 };
         let mut manifest = manifest(modrinth.clone());
-        manifest.dependencies["sodium"]
-            .remotes
-            .push(curseforge.clone());
+        manifest.packages["sodium"].remotes.push(curseforge.clone());
         ManifestFile::new(directory.path(), manifest)
             .save()
             .unwrap();
@@ -371,7 +367,7 @@ mod tests {
 
         let manifest = ManifestFile::open(directory.path()).unwrap();
         assert_eq!(
-            manifest.inner.dependencies["sodium"].remotes,
+            manifest.inner.packages["sodium"].remotes,
             vec![curseforge.clone()]
         );
         let lock = Lockfile::open(directory.path()).unwrap();

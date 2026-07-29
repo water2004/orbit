@@ -22,13 +22,11 @@ use super::constraints::compile_dependency_constraints;
 use super::ordering::register_ordering_cycles;
 
 pub(crate) type ExclusionMap = HashMap<String, HashSet<String>>;
-pub(crate) type OverrideMap = HashMap<String, String>;
 
 #[derive(Clone, Copy)]
 struct GraphContext<'a> {
     loader: LoaderKind,
     exclusions: &'a ExclusionMap,
-    overrides: &'a OverrideMap,
     target: Environment,
 }
 
@@ -74,7 +72,6 @@ pub(crate) struct SolverGraph {
     pub(crate) root_version: SolverVersion,
     pub(crate) loader: LoaderKind,
     pub(crate) exclusions: ExclusionMap,
-    pub(crate) overrides: OverrideMap,
     pub(crate) target: Environment,
 }
 
@@ -105,12 +102,10 @@ pub(crate) fn build_solver_graph_for_target(
         .loader_kind()
         .map_err(|error| error.to_string())?;
     let exclusions = manifest_exclusions(manifest);
-    let overrides = manifest_overrides(manifest);
     let mut provider = OrbitDependencyProvider::new();
     let context = GraphContext {
         loader,
         exclusions: &exclusions,
-        overrides: &overrides,
         target,
     };
 
@@ -123,7 +118,6 @@ pub(crate) fn build_solver_graph_for_target(
         candidates,
         loader,
         &exclusions,
-        &overrides,
         target,
     );
 
@@ -133,7 +127,7 @@ pub(crate) fn build_solver_graph_for_target(
     provider.add_package_deps(
         root_package.clone(),
         root_version.clone(),
-        root_dependencies(manifest, lockfile, candidates, loader, &overrides, target),
+        root_dependencies(manifest, lockfile, candidates, loader, target),
     );
     provider.add_package_incompatibilities(root_package.clone(), root_version.clone(), Vec::new());
     ensure_referenced_packages(&mut provider);
@@ -144,7 +138,6 @@ pub(crate) fn build_solver_graph_for_target(
         root_version,
         loader,
         exclusions,
-        overrides,
         target,
     })
 }
@@ -646,7 +639,6 @@ fn register_module(
     let GraphContext {
         loader,
         exclusions,
-        overrides,
         target,
     } = *context;
     add_version(provider, package.clone(), solver_version.clone());
@@ -660,7 +652,7 @@ fn register_module(
     );
     let mut dependencies = Vec::new();
     let mut incompatibilities =
-        compile_dependency_constraints(expressions, mod_id, loader, exclusions, overrides, target);
+        compile_dependency_constraints(expressions, mod_id, loader, exclusions, target);
     if target != Environment::Both && !environment.applies_to(target) {
         incompatibilities.push(IncompatibilityConstraint {
             terms: Vec::new(),
@@ -675,12 +667,7 @@ fn register_module(
     if let Some(language_loader) = language_loader {
         dependencies.push((
             logical_package(&language_loader.id),
-            dependency_constraint(
-                &language_loader.id,
-                &language_loader.requirement,
-                loader,
-                overrides,
-            ),
+            dependency_constraint(&language_loader.id, &language_loader.requirement, loader),
         ));
     }
     for provided in provides {
@@ -829,11 +816,10 @@ fn root_dependencies(
     lockfile: &OrbitLockfile,
     candidates: &HashMap<String, Vec<CandidateVersion>>,
     loader: LoaderKind,
-    overrides: &OverrideMap,
     target: Environment,
 ) -> Vec<(SolverPackage, Ranges<SolverVersion>)> {
     let mut dependencies = manifest
-        .dependencies
+        .packages
         .iter()
         .filter(|(package, spec)| {
             effective_root_environment(package, spec, lockfile, candidates).applies_to(target)
@@ -841,12 +827,7 @@ fn root_dependencies(
         .map(|(name, spec)| {
             (
                 logical_package(name),
-                dependency_constraint(
-                    name,
-                    spec.version_constraint().unwrap_or("*"),
-                    loader,
-                    overrides,
-                ),
+                dependency_constraint(name, spec.version_constraint(), loader),
             )
         })
         .collect::<Vec<_>>();
@@ -874,7 +855,7 @@ fn root_dependencies(
 
 fn effective_root_environment(
     package: &str,
-    spec: &crate::manifest::DependencySpec,
+    spec: &crate::manifest::PackageSpec,
     lockfile: &OrbitLockfile,
     candidates: &HashMap<String, Vec<CandidateVersion>>,
 ) -> Environment {
@@ -897,11 +878,7 @@ fn effective_root_environment(
 
 pub(crate) fn manifest_exclusions(manifest: &OrbitManifest) -> ExclusionMap {
     let mut exclusions = ExclusionMap::new();
-    for (package, spec) in manifest
-        .dependencies
-        .iter()
-        .chain(manifest.overrides.iter())
-    {
+    for (package, spec) in manifest.packages.iter() {
         exclusions
             .entry(package.clone())
             .or_default()
@@ -911,32 +888,12 @@ pub(crate) fn manifest_exclusions(manifest: &OrbitManifest) -> ExclusionMap {
     exclusions
 }
 
-pub(crate) fn manifest_overrides(manifest: &OrbitManifest) -> OverrideMap {
-    manifest
-        .overrides
-        .iter()
-        .map(|(package, spec)| {
-            (
-                package.clone(),
-                spec.version_constraint().unwrap_or("*").to_string(),
-            )
-        })
-        .collect()
-}
-
 pub(crate) fn dependency_constraint(
-    package: &str,
+    _package: &str,
     constraint: &str,
     loader: LoaderKind,
-    overrides: &OverrideMap,
 ) -> Ranges<SolverVersion> {
-    solver_range(Version::parse_constraint(
-        overrides
-            .get(package)
-            .map(String::as_str)
-            .unwrap_or(constraint),
-        loader,
-    ))
+    solver_range(Version::parse_constraint(constraint, loader))
 }
 
 pub(super) fn is_excluded(exclusions: &ExclusionMap, package: &str, dependency: &str) -> bool {
@@ -1070,7 +1027,7 @@ minecraft_jar = { path = "minecraft.jar", sha256 = "test" }
 loader_jar = { path = "loader.jar", sha256 = "test" }
 runtime_jars = []
 physical_environment = "client"
-[dependencies]
+[packages]
 a = { version = "*", remotes = [{ type = "file", path = "a.jar" }] }
 b = { version = "*", remotes = [{ type = "file", path = "b.jar" }] }
 "#,
@@ -1130,7 +1087,7 @@ minecraft_jar = { path = "minecraft.jar", sha256 = "test" }
 loader_jar = { path = "loader.jar", sha256 = "test" }
 runtime_jars = []
 physical_environment = "client"
-[dependencies]
+[packages]
 carpet_tis = { version = "*", remotes = [{ type = "file", path = "carpet_tis.jar" }] }
 "#,
         )
@@ -1192,10 +1149,10 @@ carpet_tis = { version = "*", remotes = [{ type = "file", path = "carpet_tis.jar
     #[test]
     fn provided_capability_selects_one_of_multiple_providers() {
         let mut manifest = manifest();
-        manifest.dependencies.clear();
-        manifest.dependencies.insert(
+        manifest.packages.clear();
+        manifest.packages.insert(
             "virtual_api".to_string(),
-            crate::manifest::DependencySpec::new("*", Vec::new()),
+            crate::manifest::PackageSpec::new("*", Vec::new()),
         );
         let mut first = package("provider_one", "1", Vec::new());
         first.provides.push(ProvidedMod {
@@ -1284,7 +1241,7 @@ carpet_tis = { version = "*", remotes = [{ type = "file", path = "carpet_tis.jar
     #[test]
     fn any_group_accepts_one_compatible_dependency() {
         let mut manifest = manifest();
-        manifest.dependencies.shift_remove("b");
+        manifest.packages.shift_remove("b");
         let lockfile = OrbitLockfile {
             meta: LockMeta {
                 mc_version: "1.20.1".to_string(),
@@ -1307,9 +1264,9 @@ carpet_tis = { version = "*", remotes = [{ type = "file", path = "carpet_tis.jar
     #[test]
     fn all_group_conflict_requires_every_member() {
         let mut manifest = manifest();
-        manifest.dependencies.insert(
+        manifest.packages.insert(
             "c".to_string(),
-            crate::manifest::DependencySpec::new("*", Vec::new()),
+            crate::manifest::PackageSpec::new("*", Vec::new()),
         );
         let conflict = DependencyExpression::All(vec![
             dependency("b", "*", DependencyKind::Incompatible),
@@ -1330,7 +1287,7 @@ carpet_tis = { version = "*", remotes = [{ type = "file", path = "carpet_tis.jar
         let graph = build_solver_graph(&manifest, &lockfile, &HashMap::new(), None);
         assert!(pubgrub::resolve(&graph.provider, graph.root_package, graph.root_version).is_err());
 
-        manifest.dependencies.shift_remove("c");
+        manifest.packages.shift_remove("c");
         let graph = build_solver_graph(&manifest, &lockfile, &HashMap::new(), None);
         assert!(pubgrub::resolve(&graph.provider, graph.root_package, graph.root_version).is_ok());
     }
@@ -1338,7 +1295,7 @@ carpet_tis = { version = "*", remotes = [{ type = "file", path = "carpet_tis.jar
     #[test]
     fn dependency_sides_are_evaluated_for_the_selected_target() {
         let mut manifest = manifest();
-        manifest.dependencies.shift_remove("b");
+        manifest.packages.shift_remove("b");
         let client_dependency = ModDependency {
             environment: Environment::Client,
             ..ModDependency::required("b", "*")
@@ -1377,7 +1334,7 @@ carpet_tis = { version = "*", remotes = [{ type = "file", path = "carpet_tis.jar
     #[test]
     fn automatic_root_environment_uses_the_locked_candidate() {
         let mut manifest = manifest();
-        manifest.dependencies.shift_remove("b");
+        manifest.packages.shift_remove("b");
         let mut client_package = package("a", "1", Vec::new());
         client_package.environment = Environment::Client;
         let lockfile = OrbitLockfile {
@@ -1423,7 +1380,7 @@ carpet_tis = { version = "*", remotes = [{ type = "file", path = "carpet_tis.jar
     #[test]
     fn automatic_root_environment_uses_downloaded_candidates_without_a_lock() {
         let mut manifest = manifest();
-        manifest.dependencies.shift_remove("b");
+        manifest.packages.shift_remove("b");
         let lockfile = OrbitLockfile {
             meta: LockMeta {
                 mc_version: "1.20.1".to_string(),
@@ -1517,10 +1474,10 @@ carpet_tis = { version = "*", remotes = [{ type = "file", path = "carpet_tis.jar
     #[test]
     fn jarjar_artifact_cannot_come_from_an_unselected_candidate() {
         let mut manifest = manifest();
-        manifest.dependencies.shift_remove("b");
-        manifest.dependencies.insert(
+        manifest.packages.shift_remove("b");
+        manifest.packages.insert(
             "a".to_string(),
-            crate::manifest::DependencySpec::new("[1]", Vec::new()),
+            crate::manifest::PackageSpec::new("[1]", Vec::new()),
         );
         let artifact = |version: &str, requirement: &str| EmbeddedArtifact {
             id: "org.example:shared".to_string(),
@@ -1555,10 +1512,10 @@ carpet_tis = { version = "*", remotes = [{ type = "file", path = "carpet_tis.jar
     #[test]
     fn equal_bundled_mods_keep_distinct_owner_occurrences() {
         let mut manifest = manifest();
-        manifest.dependencies.clear();
-        manifest.dependencies.insert(
+        manifest.packages.clear();
+        manifest.packages.insert(
             "shared".to_string(),
-            crate::manifest::DependencySpec::new("*", Vec::new()),
+            crate::manifest::PackageSpec::new("*", Vec::new()),
         );
         let bundled = || BundledMod {
             mod_id: "shared".to_string(),
@@ -1610,10 +1567,10 @@ carpet_tis = { version = "*", remotes = [{ type = "file", path = "carpet_tis.jar
     #[test]
     fn duplicate_package_versions_select_the_candidate_whose_metadata_is_compatible() {
         let mut manifest = manifest();
-        manifest.dependencies.clear();
-        manifest.dependencies.insert(
+        manifest.packages.clear();
+        manifest.packages.insert(
             "a".to_string(),
-            crate::manifest::DependencySpec::new("*", Vec::new()),
+            crate::manifest::PackageSpec::new("*", Vec::new()),
         );
         let mut incompatible = candidate("1", Vec::new());
         incompatible.id = "incompatible".to_string();
@@ -1669,7 +1626,7 @@ minecraft_jar = { path = "minecraft.jar", sha256 = "test" }
 loader_jar = { path = "loader.jar", sha256 = "test" }
 runtime_jars = []
 physical_environment = "client"
-[dependencies]
+[packages]
 wrapper = { version = "*", remotes = [{ type = "file", path = "wrapper.jar" }] }
 "#,
         )
@@ -1739,7 +1696,7 @@ minecraft_jar = { path = "minecraft.jar", sha256 = "test" }
 loader_jar = { path = "loader.jar", sha256 = "test" }
 runtime_jars = []
 physical_environment = "client"
-[dependencies]
+[packages]
 wrapper = { version = "*", remotes = [{ type = "file", path = "wrapper.jar" }] }
 "#,
         )
@@ -1804,7 +1761,7 @@ minecraft_jar = { path = "minecraft.jar", sha256 = "test" }
 loader_jar = { path = "loader.jar", sha256 = "test" }
 runtime_jars = []
 physical_environment = "client"
-[dependencies]
+[packages]
 a_parent = { version = "*", remotes = [{ type = "file", path = "a_parent.jar" }] }
 z_parent = { version = "*", remotes = [{ type = "file", path = "z_parent.jar" }] }
 "#,
@@ -1892,7 +1849,6 @@ z_parent = { version = "*", remotes = [{ type = "file", path = "z_parent.jar" }]
             &solution,
             manifest.project.loader_kind().unwrap(),
             &graph.exclusions,
-            &graph.overrides,
             graph.target,
         );
 

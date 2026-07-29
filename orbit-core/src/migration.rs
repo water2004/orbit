@@ -98,7 +98,7 @@ pub async fn plan_migration(
 
     let manifest_remotes: Vec<_> = source_manifest
         .inner
-        .dependencies
+        .packages
         .values()
         .flat_map(|dependency| dependency.remotes.iter().cloned())
         .collect();
@@ -309,12 +309,10 @@ fn migration_changes(
             (Some(current), Some(selected)) => {
                 let current_version = crate::versions::Version::parse(&current.version, loader);
                 let selected_version = crate::versions::Version::parse(&selected.version, loader);
-                if selected_version > current_version {
-                    PackageChangeKind::Upgrade
-                } else if selected_version < current_version {
-                    PackageChangeKind::Downgrade
-                } else {
-                    PackageChangeKind::Replace
+                match selected_version.cmp_precedence(&current_version) {
+                    std::cmp::Ordering::Greater => PackageChangeKind::Upgrade,
+                    std::cmp::Ordering::Less => PackageChangeKind::Downgrade,
+                    std::cmp::Ordering::Equal => PackageChangeKind::Replace,
                 }
             }
             (None, None) => continue,
@@ -447,9 +445,8 @@ mod tests {
             },
             platform: discovered.snapshot(directory).unwrap(),
             resolver: ResolverConfig::default(),
-            dependencies: Default::default(),
+            packages: Default::default(),
             groups: Default::default(),
-            overrides: Default::default(),
         };
         ManifestFile::new(directory, manifest).save().unwrap();
         Lockfile::new(

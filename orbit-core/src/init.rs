@@ -5,7 +5,7 @@
 use std::path::Path;
 
 use crate::error::OrbitError;
-use crate::manifest::{DependencySpec, OrbitManifest, ProjectMeta, ResolverConfig};
+use crate::manifest::{OrbitManifest, PackageSpec, ProjectMeta, ResolverConfig};
 
 pub use crate::platform_detection::{
     InitLoaderCandidate, detect_loader_candidates, detect_mc_version, detect_mc_versions,
@@ -185,7 +185,7 @@ pub async fn run_init(
         crate::identification::preserve_local_sources(&input.instance_dir, &mut identified)?;
     }
 
-    // 3. Build root declarations and concrete top-level package candidates.
+    // 3. Build complete managed-package declarations and concrete top-level candidates.
     let mut package_remotes =
         std::collections::HashMap::<String, Vec<crate::manifest::PackageRemote>>::new();
     for package in &identified {
@@ -209,19 +209,19 @@ pub async fn run_init(
     let mc_ver = platform.minecraft_version.id.clone();
     let loader_name = platform.loader;
     let loader_ver = platform.loader_version.clone();
-    let mut dependencies = indexmap::IndexMap::new();
+    let mut packages = indexmap::IndexMap::new();
     for m in &identified {
         let key = m.package_id();
-        let spec = DependencySpec {
+        let spec = PackageSpec {
             version: "*".to_string(),
             optional: false,
             env: None,
             exclude: Vec::new(),
             remotes: m.remotes.clone(),
         };
-        dependencies
+        packages
             .entry(key)
-            .and_modify(|existing: &mut DependencySpec| {
+            .and_modify(|existing: &mut PackageSpec| {
                 existing.remotes.extend(spec.remotes.iter().cloned());
                 existing.remotes.sort();
                 existing.remotes.dedup();
@@ -242,9 +242,8 @@ pub async fn run_init(
         },
         platform: platform_snapshot,
         resolver: ResolverConfig::default(),
-        dependencies,
+        packages,
         groups: Default::default(),
-        overrides: Default::default(),
     };
 
     // 4. Initialization records factual local state. It never chooses among
@@ -573,14 +572,11 @@ mod tests {
             crate::workspace::Lockfile::open(&directory),
             Err(OrbitError::LockfileNotFound)
         ));
-        assert_eq!(
-            output.manifest.dependencies["alpha"].version_constraint(),
-            Some("*")
-        );
-        assert_eq!(output.manifest.dependencies["alpha"].env(), None);
-        assert_eq!(output.manifest.dependencies["alpha"].remotes.len(), 2);
+        assert_eq!(output.manifest.packages["alpha"].version_constraint(), "*");
+        assert_eq!(output.manifest.packages["alpha"].env(), None);
+        assert_eq!(output.manifest.packages["alpha"].remotes.len(), 2);
         assert!(
-            output.manifest.dependencies["alpha"]
+            output.manifest.packages["alpha"]
                 .remotes
                 .iter()
                 .all(|remote| remote.display_locator() == "file:managed local source")

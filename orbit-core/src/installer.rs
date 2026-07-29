@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use crate::error::OrbitError;
 use crate::lockfile::{ArtifactSource, LockMeta, OrbitLockfile, PackageEntry};
-use crate::manifest::{DependencySpec, OrbitManifest, PackageRemote};
+use crate::manifest::{OrbitManifest, PackageRemote, PackageSpec};
 use crate::progress::{
     ArtifactProgressState, ProgressEvent, ProgressReporter, emit as emit_progress,
 };
@@ -34,7 +34,6 @@ pub struct InstallInteraction {
 
 #[derive(Debug, Clone, Default)]
 pub struct InstallOptions {
-    pub no_deps: bool,
     pub dry_run: bool,
     pub intent: InstallIntent,
     pub optional: bool,
@@ -114,7 +113,7 @@ pub enum InstallTarget {
 /// 顶层 API：在指定实例目录安装模组。
 ///
 /// 接收 `instance_dir`，内部完成 orbit.toml / orbit.lock 的读写和 mods/ 目录管理。
-/// `constraint` 会绑定到候选 JAR 自声明的 `mod_id`，并作为 manifest 根约束保留。
+/// `constraint` 会绑定到候选 JAR 自声明的 `mod_id`，并作为该逻辑包的策略保留。
 /// `dry_run` 为 true 时仅解析不下载不写文件。
 pub async fn install_to_instance(
     target: InstallTarget,
@@ -295,7 +294,7 @@ pub async fn fix_instance(
     let mut lock = Lockfile::open_or_default(instance_dir, target_meta.clone())?;
     let manifest_remotes: Vec<_> = manifest_file
         .inner
-        .dependencies
+        .packages
         .values()
         .flat_map(|dependency| dependency.remotes.iter().cloned())
         .collect();
@@ -357,7 +356,7 @@ pub async fn fix_instance(
             continue;
         }
         let mut remotes = candidate_remotes.get(package).cloned().unwrap_or_default();
-        if let Some(requirement) = manifest_file.inner.dependencies.get(package) {
+        if let Some(requirement) = manifest_file.inner.packages.get(package) {
             remotes.extend(requirement.remotes.iter().cloned());
         }
         if let Some(entry) = lock.inner.find(package) {
@@ -465,7 +464,7 @@ pub async fn upgrade_all_in_instance(
         confirm_install,
         progress,
     } = interaction;
-    let manifest_file = ManifestFile::open(instance_dir)?;
+    let mut manifest_file = ManifestFile::open(instance_dir)?;
     let platform = crate::platform::Platform::load(instance_dir, &manifest_file.inner)?;
     let mut lock = Lockfile::open_or_default(
         instance_dir,
@@ -520,7 +519,7 @@ pub async fn upgrade_all_in_instance(
         let version = &resolution.selected_versions[package];
         let resolved = resolved_candidate(&resolved_candidates, candidate_id)?;
         let mut remotes = candidate_remotes.get(package).cloned().unwrap_or_default();
-        if let Some(requirement) = manifest_file.inner.dependencies.get(package) {
+        if let Some(requirement) = manifest_file.inner.packages.get(package) {
             remotes.extend(requirement.remotes.iter().cloned());
         }
         if let Some(entry) = lock.inner.find(package) {
@@ -582,6 +581,9 @@ pub async fn upgrade_all_in_instance(
     apply_to_lockfile(&mut lock.inner, &installed, &mods_dir);
 
     if !installed.is_empty() || !removals.is_empty() {
+        normalize_selected_file_remotes(&mut lock.inner);
+        reconcile_manifest_to_lock(&mut manifest_file.inner, &lock.inner);
+        manifest_file.save()?;
         lock.save()?;
     }
 
@@ -612,14 +614,14 @@ pub fn remove_from_instance(
         .ok_or_else(|| OrbitError::ModNotFound(package.to_string()))?;
     let key = entry.mod_id.clone();
 
-    if !manifest_file.inner.dependencies.contains_key(&key) {
+    if !manifest_file.inner.packages.contains_key(&key) {
         return Err(OrbitError::ModNotFound(package.to_string()));
     }
     manifest_file
         .inner
-        .dependencies
+        .packages
         .swap_remove(&key)
-        .expect("dependency entry should exist");
+        .expect("managed package entry should exist");
 
     let dependents = crate::resolver::dependents(&key, &lock.inner.packages);
     if !dependents.is_empty() {
@@ -632,6 +634,7 @@ pub fn remove_from_instance(
     let mods_dir = instance_dir.join("mods");
     let jar_deleted = !dry_run && lock.remove_jar(&key, &mods_dir).is_ok();
     lock.inner.packages.retain(|e| e.mod_id != key);
+    reconcile_manifest_to_lock(&mut manifest_file.inner, &lock.inner);
 
     if !dry_run {
         manifest_file.save()?;
@@ -650,28 +653,27 @@ pub struct RemoveReport {
 }
 
 /// 列出实例中的所有顶层包身份，供 remove 找不到时交互选择。
-pub fn list_dependencies(instance_dir: &Path) -> Result<Vec<String>, OrbitError> {
+pub fn list_packages(instance_dir: &Path) -> Result<Vec<String>, OrbitError> {
     let manifest_file = ManifestFile::open(instance_dir)?;
-    Ok(manifest_file.inner.dependencies.keys().cloned().collect())
+    Ok(manifest_file.inner.packages.keys().cloned().collect())
 }
 
 /// `orbit list` 输出结构
 #[derive(Debug, Clone)]
 pub struct ListOutput {
     pub packages: Vec<ListedPackage>,
-    pub roots: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
 pub struct ListedPackage {
     pub mod_id: String,
     pub version: String,
+    pub version_constraint: String,
     pub remotes: Vec<String>,
-    /// Explicit root-package override; `None` means follow the selected JAR.
+    /// Explicit package filter; `None` means follow the selected JAR.
     pub configured_environment: Option<String>,
     /// Effective environment after applying the optional override.
     pub environment: String,
-    pub root: bool,
     pub optional: bool,
     /// 依赖的 mod_id 列表
     pub dependencies: Vec<String>,
@@ -707,7 +709,6 @@ pub fn materialize_listed_package_icon(
 pub fn list_installed(instance_dir: &Path) -> Result<ListOutput, OrbitError> {
     let manifest = ManifestFile::open(instance_dir)?;
     let lock = Lockfile::open(instance_dir)?;
-    let roots = manifest.inner.dependencies.keys().cloned().collect();
     let loader = manifest.inner.project.loader_kind()?;
     Ok(list_output(
         instance_dir,
@@ -715,14 +716,13 @@ pub fn list_installed(instance_dir: &Path) -> Result<ListOutput, OrbitError> {
         &lock.inner,
         loader,
         None,
-        roots,
     ))
 }
 
 /// Read installed packages selected for a client/server target.
 ///
-/// Environment filters apply to manifest roots; their transitive dependencies
-/// remain visible so the result describes an installable closure.
+/// Environment filters apply to every managed package. Loader-declared edges
+/// still determine whether the resulting package subset is installable.
 pub fn list_installed_for_target(
     instance_dir: &Path,
     target: &str,
@@ -736,27 +736,19 @@ pub fn list_installed_for_target(
     validate_package_selection(&options)?;
     let platform = crate::platform::Platform::load(instance_dir, &manifest.inner)?;
     let loader_package = platform.loader_package;
-    let (selected, skipped) = selected_packages(
+    let (selected, _) = selected_packages(
         &manifest.inner,
         &lock.inner,
         &options,
         loader_package.as_ref(),
     )?;
     let selected: std::collections::HashSet<_> = selected.into_iter().collect();
-    let roots = manifest
-        .inner
-        .dependencies
-        .keys()
-        .filter(|package| !skipped.contains(package))
-        .cloned()
-        .collect();
     Ok(list_output(
         instance_dir,
         &manifest.inner,
         &lock.inner,
         platform.loader,
         Some(&selected),
-        roots,
     ))
 }
 
@@ -766,14 +758,13 @@ fn list_output(
     lockfile: &OrbitLockfile,
     loader: crate::loader::LoaderKind,
     selected: Option<&std::collections::HashSet<String>>,
-    roots: Vec<String>,
 ) -> ListOutput {
     let packages: Vec<ListedPackage> = lockfile
         .packages
         .iter()
         .filter(|entry| selected.is_none_or(|selected| selected.contains(&entry.mod_id)))
         .map(|entry| {
-            let requirement = manifest.dependencies.get(&entry.mod_id);
+            let requirement = manifest.packages.get(&entry.mod_id);
             let jar_path = instance_dir.join("mods").join(&entry.filename);
             let icon = jar_path
                 .is_file()
@@ -791,21 +782,23 @@ fn list_output(
             ListedPackage {
                 mod_id: entry.mod_id.clone(),
                 version: entry.version.clone(),
+                version_constraint: requirement
+                    .map(|specification| specification.version.clone())
+                    .unwrap_or_else(|| "*".to_string()),
                 remotes: entry
                     .remotes
                     .iter()
                     .map(PackageRemote::display_locator)
                     .collect(),
                 configured_environment: requirement
-                    .and_then(DependencySpec::env)
+                    .and_then(PackageSpec::env)
                     .map(|environment| environment.as_str().to_string()),
                 environment: requirement
                     .map(|requirement| requirement.effective_environment(entry.environment))
                     .unwrap_or(entry.environment)
                     .as_str()
                     .to_string(),
-                root: requirement.is_some(),
-                optional: requirement.is_some_and(DependencySpec::optional),
+                optional: requirement.is_some_and(PackageSpec::optional),
                 dependencies: declared_dependency_ids(&entry.dependencies)
                     .into_iter()
                     .map(str::to_string)
@@ -815,7 +808,7 @@ fn list_output(
             }
         })
         .collect();
-    ListOutput { packages, roots }
+    ListOutput { packages }
 }
 
 fn declared_dependency_ids(dependencies: &[crate::metadata::DependencyExpression]) -> Vec<&str> {
@@ -904,7 +897,7 @@ async fn install_mod(input: InstallModInput<'_>) -> Result<InstallReport, OrbitE
         InstallTarget::Package(_) => Vec::new(),
     };
     let manifest_remotes: Vec<_> = manifest
-        .dependencies
+        .packages
         .values()
         .flat_map(|dependency| dependency.remotes.iter().cloned())
         .collect();
@@ -993,10 +986,6 @@ async fn install_mod(input: InstallModInput<'_>) -> Result<InstallReport, OrbitE
     for (mod_id, candidate_id) in &selected_candidates {
         let new_ver = &selected_versions[mod_id];
         let resolved = resolved_candidate(&catalog.resolved, candidate_id)?;
-        if options.no_deps && mod_id != &requested_package {
-            continue;
-        }
-
         planned.push(plan_from_resolved(
             mod_id,
             new_ver,
@@ -1047,16 +1036,27 @@ async fn install_mod(input: InstallModInput<'_>) -> Result<InstallReport, OrbitE
     remove_packages(mods_dir, &removals, &installed)?;
     retain_selected_lock_entries(lockfile, &selected_sources);
 
-    if installed
-        .iter()
-        .any(|installed| installed.mod_id == requested_package)
-    {
-        let mut requested_requirement = requested_requirement;
-        requested_requirement.remotes =
-            package_remotes(&requested_package, manifest, lockfile, &catalog);
-        ensure_root_requirement(manifest, &requested_package, requested_requirement);
+    if options.intent == InstallIntent::Add {
+        for package in selected_candidates.keys() {
+            let remotes = package_remotes(package, manifest, lockfile, &catalog);
+            if package == &requested_package {
+                let mut specification = requested_requirement.clone();
+                specification.remotes = remotes;
+                manifest.packages.insert(package.clone(), specification);
+            } else {
+                let specification = manifest
+                    .packages
+                    .entry(package.clone())
+                    .or_insert_with(|| PackageSpec::new("*", remotes.clone()));
+                specification.remotes.extend(remotes);
+                specification.remotes.sort();
+                specification.remotes.dedup();
+            }
+        }
     }
     apply_to_lockfile(lockfile, &installed, mods_dir);
+    normalize_selected_file_remotes(lockfile);
+    reconcile_manifest_to_lock(manifest, lockfile);
 
     Ok(InstallReport {
         installed,
@@ -1075,7 +1075,7 @@ struct RequestedPackageInput<'a> {
     manifest: &'a OrbitManifest,
     lockfile: &'a OrbitLockfile,
     catalog: &'a crate::resolver::types::CandidateCatalog,
-    requirement: DependencySpec,
+    requirement: PackageSpec,
     selector: Option<PackageSelector>,
     progress: Option<ProgressReporter>,
 }
@@ -1105,7 +1105,7 @@ async fn resolve_requested_package(
             )));
         }
         let mut resolution_manifest = manifest.clone();
-        ensure_root_requirement(&mut resolution_manifest, &package, requirement);
+        ensure_package_spec(&mut resolution_manifest, &package, requirement);
         let portfolio = crate::resolver::resolve_candidate_portfolio_with_progress(
             &resolution_manifest,
             lockfile,
@@ -1133,21 +1133,24 @@ async fn resolve_requested_package(
     let mut feasible = Vec::new();
     let mut failures = Vec::new();
     for package in packages {
-        if lockfile
-            .packages
-            .iter()
-            .any(|entry| entry.mod_id == package)
+        if manifest.packages.contains_key(&package)
+            || lockfile
+                .packages
+                .iter()
+                .any(|entry| entry.mod_id == package)
         {
             failures.push((
                 package.clone(),
-                format!("package '{package}' is already installed; use 'orbit upgrade {package}'"),
+                format!(
+                    "package '{package}' is already managed; use 'orbit constraint set {package} <requirement>' to change its version policy"
+                ),
             ));
             continue;
         }
         let mut resolution_manifest = manifest.clone();
         let mut package_requirement = requirement.clone();
         package_requirement.remotes = catalog.remotes_for_package(&package);
-        ensure_root_requirement(&mut resolution_manifest, &package, package_requirement);
+        ensure_package_spec(&mut resolution_manifest, &package, package_requirement);
         match crate::resolver::resolve_candidate_portfolio_with_progress(
             &resolution_manifest,
             lockfile,
@@ -1238,7 +1241,7 @@ pub(crate) fn package_remotes(
     catalog: &crate::resolver::types::CandidateCatalog,
 ) -> Vec<PackageRemote> {
     let mut remotes = catalog.remotes_for_package(package);
-    if let Some(requirement) = manifest.dependencies.get(package) {
+    if let Some(requirement) = manifest.packages.get(package) {
         remotes.extend(requirement.remotes.iter().cloned());
     }
     if let Some(entry) = lockfile.find(package) {
@@ -1310,12 +1313,12 @@ pub(crate) fn selected_packages(
         })
         .transpose()?;
     let target = options.target.as_deref().unwrap_or("both");
-    let mut roots = Vec::new();
+    let mut requirements = Vec::new();
     let mut skipped = Vec::new();
-    for (package, spec) in &manifest.dependencies {
+    for (package, spec) in &manifest.packages {
         let in_group = group.is_none_or(|group| {
             group
-                .dependencies
+                .packages
                 .iter()
                 .any(|dependency| dependency == package)
         });
@@ -1330,7 +1333,7 @@ pub(crate) fn selected_packages(
             _ => true,
         };
         if in_group && environment_matches && !(options.no_optional && spec.optional()) {
-            roots.push(package.clone());
+            requirements.push(package.clone());
         } else {
             skipped.push(package.clone());
         }
@@ -1341,11 +1344,11 @@ pub(crate) fn selected_packages(
         "server" => crate::metadata::Environment::Server,
         _ => crate::metadata::Environment::Both,
     };
-    let roots: std::collections::HashSet<_> = roots.into_iter().collect();
+    let requirements: std::collections::HashSet<_> = requirements.into_iter().collect();
     let mut selected_manifest = manifest.clone();
     selected_manifest
-        .dependencies
-        .retain(|package, _| roots.contains(package));
+        .packages
+        .retain(|package, _| requirements.contains(package));
     let solution = crate::resolver::resolve_lockfile_for_target(
         &selected_manifest,
         lockfile,
@@ -1360,6 +1363,8 @@ pub(crate) fn selected_packages(
         .map(str::to_string)
         .collect();
     selected.sort();
+    selected.dedup();
+    skipped.retain(|package| selected.binary_search(package).is_err());
     skipped.sort();
     Ok((selected, skipped))
 }
@@ -1760,31 +1765,37 @@ pub(crate) fn normalize_selected_file_remotes(lockfile: &mut OrbitLockfile) {
 }
 
 pub(crate) fn reconcile_manifest_to_lock(manifest: &mut OrbitManifest, lockfile: &OrbitLockfile) {
+    for entry in &lockfile.packages {
+        let specification = manifest
+            .packages
+            .entry(entry.mod_id.clone())
+            .or_insert_with(|| PackageSpec::new("*", entry.remotes.clone()));
+        specification.remotes.extend(entry.remotes.iter().cloned());
+        specification.remotes.sort();
+        specification.remotes.dedup();
+    }
     let selected: std::collections::BTreeSet<_> = lockfile
         .packages
         .iter()
         .map(|entry| entry.mod_id.as_str())
         .collect();
     manifest
-        .dependencies
-        .retain(|package, _| selected.contains(package.as_str()));
-    manifest
-        .overrides
+        .packages
         .retain(|package, _| selected.contains(package.as_str()));
     for group in manifest.groups.values_mut() {
         group
-            .dependencies
+            .packages
             .retain(|package| selected.contains(package.as_str()));
-        group.dependencies.sort();
-        group.dependencies.dedup();
+        group.packages.sort();
+        group.packages.dedup();
     }
     manifest
         .groups
-        .retain(|_, group| !group.dependencies.is_empty());
+        .retain(|_, group| !group.packages.is_empty());
 
-    for (package, dependency) in &mut manifest.dependencies {
+    for (package, specification) in &mut manifest.packages {
         if let Some(entry) = lockfile.find(package) {
-            dependency.remotes = entry.remotes.clone();
+            specification.remotes = entry.remotes.clone();
         }
     }
 }
@@ -1871,7 +1882,7 @@ fn requested_requirement(
     constraint: &str,
     optional: bool,
     env: Option<&str>,
-) -> Result<DependencySpec, OrbitError> {
+) -> Result<PackageSpec, OrbitError> {
     let env = env
         .map(str::parse)
         .transpose()
@@ -1881,7 +1892,7 @@ fn requested_requirement(
     } else {
         constraint.to_string()
     };
-    Ok(DependencySpec {
+    Ok(PackageSpec {
         version,
         optional,
         env,
@@ -1890,13 +1901,9 @@ fn requested_requirement(
     })
 }
 
-fn ensure_root_requirement(
-    manifest: &mut OrbitManifest,
-    package: &str,
-    requirement: DependencySpec,
-) {
+fn ensure_package_spec(manifest: &mut OrbitManifest, package: &str, requirement: PackageSpec) {
     manifest
-        .dependencies
+        .packages
         .entry(package.to_string())
         .or_insert(requirement);
 }
@@ -2042,16 +2049,15 @@ physical_environment = "client"
             },
             platform: discovered.snapshot(directory.path()).unwrap(),
             resolver: crate::manifest::ResolverConfig::default(),
-            dependencies: Default::default(),
+            packages: Default::default(),
             groups: Default::default(),
-            overrides: Default::default(),
         };
         let remote = PackageRemote::File {
             path: ".orbit/sources/alpha-source.jar".to_string(),
         };
-        manifest.dependencies.insert(
+        manifest.packages.insert(
             "alpha".to_string(),
-            DependencySpec::new("*", vec![remote.clone()]),
+            PackageSpec::new("*", vec![remote.clone()]),
         );
         ManifestFile::new(directory.path(), manifest)
             .save()
@@ -2144,9 +2150,8 @@ physical_environment = "client"
             },
             platform: discovered.snapshot(directory.path()).unwrap(),
             resolver: crate::manifest::ResolverConfig::default(),
-            dependencies: Default::default(),
+            packages: Default::default(),
             groups: Default::default(),
-            overrides: Default::default(),
         };
         ManifestFile::new(directory.path(), manifest)
             .save()
@@ -2228,13 +2233,12 @@ physical_environment = "client"
             },
             platform: discovered.snapshot(directory.path()).unwrap(),
             resolver: crate::manifest::ResolverConfig::default(),
-            dependencies: Default::default(),
+            packages: Default::default(),
             groups: Default::default(),
-            overrides: Default::default(),
         };
-        manifest.dependencies.insert(
+        manifest.packages.insert(
             "alpha".to_string(),
-            DependencySpec::new(
+            PackageSpec::new(
                 "*",
                 vec![PackageRemote::File {
                     path: "mods/alpha-1.jar".to_string(),
@@ -2281,11 +2285,8 @@ physical_environment = "client"
         assert_eq!(selected.version, "2");
         assert_eq!(selected.remotes.len(), 1);
         let manifest = ManifestFile::open(directory.path()).unwrap();
-        assert_eq!(manifest.inner.dependencies.len(), 1);
-        assert_eq!(
-            manifest.inner.dependencies["alpha"].remotes,
-            selected.remotes
-        );
+        assert_eq!(manifest.inner.packages.len(), 1);
+        assert_eq!(manifest.inner.packages["alpha"].remotes, selected.remotes);
         assert_eq!(
             std::fs::read_dir(directory.path().join(".orbit/sources"))
                 .unwrap()
@@ -2328,7 +2329,7 @@ physical_environment = "client"
             manifest: &manifest(),
             lockfile: &empty_lockfile(),
             catalog: &catalog,
-            requirement: DependencySpec::new("*", Vec::new()),
+            requirement: PackageSpec::new("*", Vec::new()),
             selector: Some(Box::new(|packages| {
                 Ok(packages
                     .iter()
@@ -2374,7 +2375,7 @@ physical_environment = "client"
             manifest: &manifest(),
             lockfile: &empty_lockfile(),
             catalog: &catalog,
-            requirement: DependencySpec::new("*", Vec::new()),
+            requirement: PackageSpec::new("*", Vec::new()),
             selector: Some(Box::new(move |_| {
                 captured.store(true, Ordering::Relaxed);
                 Ok(0)
@@ -2392,37 +2393,34 @@ physical_environment = "client"
     fn requested_constraint_is_bound_to_the_actual_package_id() {
         let mut manifest = manifest();
 
-        ensure_root_requirement(
+        ensure_package_spec(
             &mut manifest,
             "actual-mod-id",
             requested_requirement("^1", false, None).unwrap(),
         );
 
         assert_eq!(
-            manifest.dependencies["actual-mod-id"].version_constraint(),
-            Some("^1")
+            manifest.packages["actual-mod-id"].version_constraint(),
+            "^1"
         );
     }
 
     #[test]
     fn installed_version_does_not_replace_an_existing_requirement() {
         let mut manifest = manifest();
-        ensure_root_requirement(
+        ensure_package_spec(
             &mut manifest,
             "example",
             requested_requirement("^1", false, None).unwrap(),
         );
 
-        ensure_root_requirement(
+        ensure_package_spec(
             &mut manifest,
             "example",
             requested_requirement("1.5", false, None).unwrap(),
         );
 
-        assert_eq!(
-            manifest.dependencies["example"].version_constraint(),
-            Some("^1")
-        );
+        assert_eq!(manifest.packages["example"].version_constraint(), "^1");
     }
 
     #[test]
@@ -2436,7 +2434,7 @@ physical_environment = "client"
     }
 
     #[test]
-    fn invalid_dependency_environment_is_rejected() {
+    fn invalid_package_environment_is_rejected() {
         let error = requested_requirement("*", false, Some("desktop")).unwrap_err();
 
         assert!(
@@ -2447,7 +2445,7 @@ physical_environment = "client"
     }
 
     #[test]
-    fn restore_selection_filters_roots_but_keeps_transitive_dependencies() {
+    fn restore_selection_filters_group_requirements_but_keeps_dependency_closure() {
         let manifest: OrbitManifest = toml::from_str(
             r#"
 [project]
@@ -2462,13 +2460,14 @@ loader_jar = { path = "loader.jar", sha256 = "test" }
 runtime_jars = []
 physical_environment = "client"
 
-[dependencies]
+[packages]
 client-mod = { version = "*", env = "client", remotes = [{ type = "file", path = "client.jar" }] }
 server-mod = { version = "*", env = "server", remotes = [{ type = "file", path = "server.jar" }] }
 optional-mod = { version = "*", optional = true, remotes = [{ type = "file", path = "optional.jar" }] }
+library = { version = "*", remotes = [{ type = "file", path = "library.jar" }] }
 
 [groups.small]
-dependencies = ["client-mod", "optional-mod"]
+packages = ["client-mod", "optional-mod"]
 "#,
         )
         .unwrap();
@@ -2511,7 +2510,7 @@ minecraft_jar = { path = "minecraft.jar", sha256 = "test" }
 loader_jar = { path = "loader.jar", sha256 = "test" }
 runtime_jars = []
 physical_environment = "client"
-[dependencies]
+[packages]
 example = { version = "*", remotes = [{ type = "file", path = "example.jar" }] }
 "#,
         )
@@ -2560,12 +2559,12 @@ minecraft_jar = { path = "minecraft.jar", sha256 = "test" }
 loader_jar = { path = "loader.jar", sha256 = "test" }
 runtime_jars = []
 physical_environment = "client"
-[dependencies]
+[packages]
 example = { version = "*", remotes = [{ type = "file", path = "example.jar" }] }
 "#,
         )
         .unwrap();
-        manifest.dependencies["example"].env = Some(crate::metadata::Environment::Both);
+        manifest.packages["example"].env = Some(crate::metadata::Environment::Both);
         let mut package = locked_package("example", &[]);
         package.environment = crate::metadata::Environment::Client;
         let lockfile = OrbitLockfile {
@@ -2598,7 +2597,7 @@ minecraft_jar = { path = "minecraft.jar", sha256 = "test" }
 loader_jar = { path = "loader.jar", sha256 = "test" }
 runtime_jars = []
 physical_environment = "client"
-[dependencies]
+[packages]
 example = { version = "*", remotes = [{ type = "file", path = "example.jar" }] }
 "#,
         )
@@ -2635,5 +2634,51 @@ example = { version = "*", remotes = [{ type = "file", path = "example.jar" }] }
         assert!(error.to_string().contains("orbit.lock target"));
         assert_eq!(lockfile.meta.mc_version, "old");
         assert_eq!(lockfile.packages.len(), 1);
+    }
+
+    #[test]
+    fn reconciliation_makes_the_manifest_package_set_match_the_selected_lock() {
+        let mut manifest = manifest();
+        manifest.packages.insert(
+            "removed".to_string(),
+            PackageSpec::new(
+                "=9",
+                vec![PackageRemote::File {
+                    path: "mods/removed.jar".to_string(),
+                }],
+            ),
+        );
+        manifest.groups.insert(
+            "client".to_string(),
+            crate::manifest::GroupSpec {
+                packages: vec!["removed".to_string(), "library".to_string()],
+            },
+        );
+        let lockfile = OrbitLockfile {
+            meta: LockMeta {
+                mc_version: "1".to_string(),
+                modloader: "forge".to_string(),
+                modloader_version: "1".to_string(),
+            },
+            packages: vec![
+                locked_package("application", &["library"]),
+                locked_package("library", &[]),
+            ],
+        };
+
+        reconcile_manifest_to_lock(&mut manifest, &lockfile);
+
+        assert_eq!(
+            manifest
+                .packages
+                .keys()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            ["application", "library"]
+        );
+        assert_eq!(manifest.packages["application"].version, "*");
+        assert_eq!(manifest.packages["library"].version, "*");
+        assert_eq!(manifest.groups["client"].packages, ["library"]);
+        assert!(!manifest.packages.contains_key("removed"));
     }
 }

@@ -17,9 +17,7 @@ use crate::resolver::types::{
 use crate::versions::Version;
 
 use super::constraints::relation_reason;
-use super::graph::{
-    ExclusionMap, OverrideMap, dependency_constraint, is_excluded, logical_package,
-};
+use super::graph::{ExclusionMap, dependency_constraint, is_excluded, logical_package};
 
 #[derive(Clone)]
 struct ModuleRecord {
@@ -38,7 +36,6 @@ pub(crate) fn register_ordering_cycles(
     candidates: &HashMap<String, Vec<CandidateVersion>>,
     loader: LoaderKind,
     exclusions: &ExclusionMap,
-    overrides: &OverrideMap,
     target: Environment,
 ) {
     let records = module_records(lockfile, candidates, loader);
@@ -55,8 +52,7 @@ pub(crate) fn register_ordering_cycles(
             {
                 continue;
             }
-            let range =
-                dependency_constraint(&relation.id, &relation.requirement, loader, overrides);
+            let range = dependency_constraint(&relation.id, &relation.requirement, loader);
             for (target_index, dependency) in records.iter().enumerate() {
                 if !provides_matching_version(dependency, &relation.id, &range, loader) {
                     continue;
@@ -269,7 +265,6 @@ pub(crate) fn resolution_warnings(
     solution: &pubgrub::SelectedDependencies<SolverPackage, SolverVersion>,
     loader: LoaderKind,
     exclusions: &ExclusionMap,
-    overrides: &OverrideMap,
     target: Environment,
 ) -> Vec<String> {
     let records = module_records(lockfile, candidates, loader);
@@ -288,8 +283,7 @@ pub(crate) fn resolution_warnings(
             {
                 continue;
             }
-            let range =
-                dependency_constraint(&relation.id, &relation.requirement, loader, overrides);
+            let range = dependency_constraint(&relation.id, &relation.requirement, loader);
             let selected = solution.get(&logical_package(&relation.id));
             let warn = match relation.kind {
                 DependencyKind::Recommended => {

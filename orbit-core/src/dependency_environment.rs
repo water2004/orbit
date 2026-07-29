@@ -1,4 +1,4 @@
-//! Explicit root-package environment overrides in `orbit.toml`.
+//! Explicit managed-package environment filters in `orbit.toml`.
 
 use std::path::Path;
 
@@ -7,7 +7,7 @@ use crate::metadata::Environment;
 use crate::workspace::{Lockfile, ManifestFile};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DependencyEnvironmentReport {
+pub struct PackageEnvironmentReport {
     pub package: String,
     /// `None` means the selected JAR declaration remains authoritative.
     pub configured: Option<Environment>,
@@ -16,26 +16,26 @@ pub struct DependencyEnvironmentReport {
     pub dry_run: bool,
 }
 
-/// Set an explicit root filter, or pass `auto` to follow the selected JAR.
-pub fn set_dependency_environment(
+/// Set an explicit package filter, or pass `auto` to follow the selected JAR.
+pub fn set_package_environment(
     instance_dir: &Path,
     package: &str,
     value: &str,
     dry_run: bool,
-) -> Result<DependencyEnvironmentReport, OrbitError> {
+) -> Result<PackageEnvironmentReport, OrbitError> {
     let configured = if value == "auto" {
         None
     } else {
         Some(value.parse().map_err(|_| {
             OrbitError::Other(anyhow::anyhow!(
-                "invalid dependency environment '{value}'; expected client, server, both, or auto"
+                "invalid package environment '{value}'; expected client, server, both, or auto"
             ))
         })?)
     };
     let mut manifest = ManifestFile::open(instance_dir)?;
     let requirement = manifest
         .inner
-        .dependencies
+        .packages
         .get_mut(package)
         .ok_or_else(|| OrbitError::ModNotFound(package.to_string()))?;
     requirement.env = configured;
@@ -52,7 +52,7 @@ pub fn set_dependency_environment(
     if !dry_run {
         manifest.save()?;
     }
-    Ok(DependencyEnvironmentReport {
+    Ok(PackageEnvironmentReport {
         package: package.to_string(),
         configured,
         effective,
@@ -65,8 +65,7 @@ mod tests {
     use super::*;
     use crate::lockfile::{ArtifactSource, LockMeta, OrbitLockfile, PackageEntry};
     use crate::manifest::{
-        DependencySpec, OrbitManifest, PackageRemote, PlatformArtifact, PlatformSnapshot,
-        ProjectMeta,
+        OrbitManifest, PackageRemote, PackageSpec, PlatformArtifact, PlatformSnapshot, ProjectMeta,
     };
     use indexmap::IndexMap;
 
@@ -103,9 +102,9 @@ mod tests {
                 physical_environment: Environment::Client,
             },
             resolver: Default::default(),
-            dependencies: IndexMap::from([(
+            packages: IndexMap::from([(
                 "example".to_string(),
-                DependencySpec::new(
+                PackageSpec::new(
                     "*",
                     vec![PackageRemote::File {
                         path: "example.jar".to_string(),
@@ -113,7 +112,6 @@ mod tests {
                 ),
             )]),
             groups: Default::default(),
-            overrides: Default::default(),
         };
         ManifestFile::new(path, manifest).save().unwrap();
         Lockfile::new(
@@ -155,19 +153,19 @@ mod tests {
         let path = instance("roundtrip");
         write_instance(&path);
 
-        let explicit = set_dependency_environment(&path, "example", "server", false).unwrap();
+        let explicit = set_package_environment(&path, "example", "server", false).unwrap();
         assert_eq!(explicit.configured, Some(Environment::Server));
         assert_eq!(explicit.effective, Some(Environment::Server));
         assert_eq!(
-            ManifestFile::open(&path).unwrap().inner.dependencies["example"].env(),
+            ManifestFile::open(&path).unwrap().inner.packages["example"].env(),
             Some(Environment::Server)
         );
 
-        let automatic = set_dependency_environment(&path, "example", "auto", false).unwrap();
+        let automatic = set_package_environment(&path, "example", "auto", false).unwrap();
         assert_eq!(automatic.configured, None);
         assert_eq!(automatic.effective, Some(Environment::Client));
         assert_eq!(
-            ManifestFile::open(&path).unwrap().inner.dependencies["example"].env(),
+            ManifestFile::open(&path).unwrap().inner.packages["example"].env(),
             None
         );
         assert_eq!(

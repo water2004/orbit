@@ -93,7 +93,7 @@ loader_jar = { path = "loader.jar", sha256 = "test" }
 runtime_jars = []
 physical_environment = "client"
 
-[dependencies]
+[packages]
 missing-mod = { version = "*", remotes = [{ type = "file", path = "missing.jar" }] }
 "#,
         )
@@ -106,7 +106,7 @@ missing-mod = { version = "*", remotes = [{ type = "file", path = "missing.jar" 
     }
 
     #[test]
-    fn local_graph_uses_the_same_override_rules_as_candidate_resolution() {
+    fn package_constraint_intersects_loader_declared_dependency_constraint() {
         let manifest: OrbitManifest = toml::from_str(
             r#"
 [project]
@@ -121,11 +121,9 @@ loader_jar = { path = "loader.jar", sha256 = "test" }
 runtime_jars = []
 physical_environment = "client"
 
-[dependencies]
+[packages]
 a = { version = "*", remotes = [{ type = "file", path = "a.jar" }] }
-
-[overrides]
-b = { version = "=1" }
+b = { version = "=1", remotes = [{ type = "file", path = "b.jar" }] }
 "#,
         )
         .unwrap();
@@ -134,7 +132,9 @@ b = { version = "=1" }
             local_mod("b", "1", Vec::new()),
         ];
 
-        check_local_graph(&manifest, &mods).unwrap();
+        let error = check_local_graph(&manifest, &mods).unwrap_err();
+        assert!(error.starts_with("dependency resolution failed"));
+        assert!(error.contains('b'));
     }
 
     #[test]
@@ -153,7 +153,7 @@ loader_jar = { path = "loader.jar", sha256 = "test" }
 runtime_jars = []
 physical_environment = "client"
 
-[dependencies]
+[packages]
 a = { version = "*", exclude = ["b"], remotes = [{ type = "file", path = "a.jar" }] }
 "#,
         )
@@ -179,7 +179,7 @@ loader_jar = { path = "loader.jar", sha256 = "test" }
 runtime_jars = []
 physical_environment = "client"
 
-[dependencies]
+[packages]
 a = { version = ">=2", remotes = [{ type = "file", path = "a.jar" }] }
 "#,
         )

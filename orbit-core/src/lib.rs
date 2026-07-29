@@ -29,6 +29,8 @@ mod launcher;
 pub mod loader;
 pub mod migration;
 pub mod outdated;
+pub mod package_constraint;
+pub mod package_versions;
 mod platform;
 mod platform_detection;
 pub mod purge;
@@ -47,22 +49,20 @@ pub use config::{
     ConfigKey, ConfigValue, GlobalConfig, InstanceEntry, InstancesRegistry, clear_default_instance,
     persist_config_field, register_instance, remove_instance, set_default_instance,
 };
-pub use dependency_environment::{DependencyEnvironmentReport, set_dependency_environment};
+pub use dependency_environment::{PackageEnvironmentReport, set_package_environment};
 pub use error::OrbitError;
 pub use installer::{
     InstallIntent, InstallInteraction, InstallOptions, InstallPrompt, InstallReport, InstallTarget,
     InstalledMod, InstanceInstallOptions, InstanceInstallReport, ListOutput, ListedPackage,
     PackageSelection, PackageSelector, RemoveReport, RemovedPackage, fix_instance,
-    install_instance, install_local_file_to_instance, install_to_instance, list_dependencies,
-    list_installed, list_installed_for_target, materialize_listed_package_icon,
+    install_instance, install_local_file_to_instance, install_to_instance, list_installed,
+    list_installed_for_target, list_packages, materialize_listed_package_icon,
     remove_from_instance, upgrade_all_in_instance,
 };
 pub use jar_cache::{CachePruneSummary, CacheSummary, JarCache, clean_cache, inspect_cache};
 pub use loader::LoaderKind;
 pub use lockfile::{ArtifactSource, BundledMod, LockMeta, OrbitLockfile, PackageEntry};
-pub use manifest::{
-    DependencySpec, OrbitManifest, PackageRemote, PlatformArtifact, PlatformSnapshot,
-};
+pub use manifest::{OrbitManifest, PackageRemote, PackageSpec, PlatformArtifact, PlatformSnapshot};
 pub use metadata::mojang::McVersion;
 pub use migration::{
     MigrationExportReport, MigrationInteraction, MigrationPlan, export_migration, plan_migration,
@@ -83,6 +83,8 @@ pub use outdated::{
     OutdatedInteraction, OutdatedMod, check_all_outdated, check_all_outdated_with_progress,
     check_outdated_with_interaction,
 };
+pub use package_constraint::{PackageConstraintReport, package_constraint, set_package_constraint};
+pub use package_versions::{PackageVersionCandidate, PackageVersionsReport, list_package_versions};
 pub use progress::{
     ArtifactProgressState, ProgressEvent, ProgressReporter, ResolutionActivity, ResolutionWork,
 };

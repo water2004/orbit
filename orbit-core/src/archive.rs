@@ -7,7 +7,7 @@ use zip::write::SimpleFileOptions;
 
 use crate::error::OrbitError;
 use crate::installer::PackageSelection;
-use crate::manifest::DependencySpec;
+use crate::manifest::PackageSpec;
 use crate::progress::{ProgressEvent, ProgressReporter, emit as emit_progress};
 use crate::workspace::{Lockfile, ManifestFile};
 
@@ -60,7 +60,7 @@ pub fn import_manifest<F>(
     mut resolve_conflict: F,
 ) -> Result<ImportReport, OrbitError>
 where
-    F: FnMut(&str, &DependencySpec, &DependencySpec) -> Result<bool, OrbitError>,
+    F: FnMut(&str, &PackageSpec, &PackageSpec) -> Result<bool, OrbitError>,
 {
     if !source.is_file() {
         return Err(OrbitError::Other(anyhow::anyhow!(
@@ -71,11 +71,11 @@ where
     let incoming = crate::manifest::OrbitManifest::from_path(source)?;
     let mut current = ManifestFile::open(instance_dir)?;
     let mut report = ImportReport::default();
-    for (package, requirement) in incoming.dependencies {
-        match current.inner.dependencies.get(&package) {
+    for (package, requirement) in incoming.packages {
+        match current.inner.packages.get(&package) {
             None => {
                 report.added.push(package.clone());
-                current.inner.dependencies.insert(package, requirement);
+                current.inner.packages.insert(package, requirement);
             }
             Some(existing) => {
                 let mut remotes = existing.remotes.clone();
@@ -87,7 +87,7 @@ where
                     if remotes_changed {
                         current
                             .inner
-                            .dependencies
+                            .packages
                             .get_mut(&package)
                             .expect("package exists")
                             .remotes = remotes;
@@ -109,11 +109,11 @@ where
                     let mut requirement = requirement;
                     requirement.remotes = remotes;
                     report.replaced.push(package.clone());
-                    current.inner.dependencies.insert(package, requirement);
+                    current.inner.packages.insert(package, requirement);
                 } else if remotes_changed {
                     current
                         .inner
-                        .dependencies
+                        .packages
                         .get_mut(&package)
                         .expect("package exists")
                         .remotes = remotes;
@@ -136,7 +136,7 @@ where
     Ok(report)
 }
 
-fn same_requirement_semantics(left: &DependencySpec, right: &DependencySpec) -> bool {
+fn same_requirement_semantics(left: &PackageSpec, right: &PackageSpec) -> bool {
     left.version == right.version
         && left.optional == right.optional
         && left.env == right.env
@@ -528,7 +528,7 @@ fn portable_state(
     let selected: std::collections::BTreeSet<_> = selected.iter().map(String::as_str).collect();
     let mut portable_manifest = manifest.clone();
     portable_manifest
-        .dependencies
+        .packages
         .retain(|package, _| selected.contains(package.as_str()));
 
     let mut portable_lock = lockfile.clone();
@@ -546,11 +546,11 @@ fn portable_state(
         if !entry.artifact_sources.contains(&source) {
             entry.artifact_sources.push(source);
         }
-        if let Some(dependency) = portable_manifest.dependencies.get_mut(&entry.mod_id)
-            && !dependency.remotes.contains(&remote)
+        if let Some(package) = portable_manifest.packages.get_mut(&entry.mod_id)
+            && !package.remotes.contains(&remote)
         {
-            dependency.remotes.push(remote);
-            dependency.remotes.sort();
+            package.remotes.push(remote);
+            package.remotes.sort();
         }
     }
     (portable_manifest, portable_lock)
@@ -780,9 +780,9 @@ mod tests {
                 physical_environment: crate::metadata::Environment::Client,
             },
             resolver: ResolverConfig::default(),
-            dependencies: indexmap::IndexMap::from([(
+            packages: indexmap::IndexMap::from([(
                 dependency.to_string(),
-                DependencySpec::new(
+                PackageSpec::new(
                     "*",
                     vec![PackageRemote::File {
                         path: format!("sources/{dependency}.jar"),
@@ -790,7 +790,6 @@ mod tests {
                 ),
             )]),
             groups: indexmap::IndexMap::new(),
-            overrides: indexmap::IndexMap::new(),
         }
     }
 
@@ -813,9 +812,9 @@ mod tests {
             .unwrap();
         let source = directory.join("incoming.toml");
         let mut incoming = manifest("added");
-        incoming.dependencies.insert(
+        incoming.packages.insert(
             "existing".to_string(),
-            DependencySpec::new(
+            PackageSpec::new(
                 "2",
                 vec![PackageRemote::File {
                     path: "sources/existing-v2.jar".to_string(),
@@ -837,10 +836,10 @@ mod tests {
         assert_eq!(report.merged, vec!["existing"]);
         let imported = ManifestFile::open(&directory).unwrap();
         assert_eq!(
-            imported.inner.dependencies["existing"].version_constraint(),
-            Some("*")
+            imported.inner.packages["existing"].version_constraint(),
+            "*"
         );
-        assert_eq!(imported.inner.dependencies["existing"].remotes.len(), 2);
+        assert_eq!(imported.inner.packages["existing"].remotes.len(), 2);
         std::fs::remove_dir_all(directory).unwrap();
     }
 
@@ -948,7 +947,7 @@ mod tests {
         drop(archive);
         let portable = extract_portable_instance(&output).unwrap();
         let portable_manifest = ManifestFile::open(portable.path()).unwrap();
-        assert!(portable_manifest.inner.dependencies["example"]
+        assert!(portable_manifest.inner.packages["example"]
             .remotes
             .iter()
             .any(|remote| matches!(remote, PackageRemote::File { path } if path == "mods/example.jar")));
@@ -969,18 +968,18 @@ mod tests {
         crate::platform_detection::test_support::write_platform(&directory, "1", "fabric", "1");
         std::fs::create_dir_all(directory.join("mods")).unwrap();
         let mut project = detected_manifest(&directory, "online");
-        project.dependencies.insert(
+        project.packages.insert(
             "local".to_string(),
-            DependencySpec::new(
+            PackageSpec::new(
                 "*",
                 vec![PackageRemote::File {
                     path: "mods/local.jar".to_string(),
                 }],
             ),
         );
-        project.dependencies.insert(
+        project.packages.insert(
             "online".to_string(),
-            DependencySpec {
+            PackageSpec {
                 version: "*".to_string(),
                 optional: true,
                 env: Some(crate::metadata::Environment::Client),

@@ -5,12 +5,13 @@ use std::hash::{Hash, Hasher};
 
 use pubgrub::Ranges;
 
-use super::Version;
+use super::{CorePosition, Version};
 
 #[derive(Debug, Clone)]
 pub struct MavenVersion {
     raw: String,
     items: Vec<Item>,
+    position: CorePosition,
 }
 
 #[derive(Debug, Clone, Hash)]
@@ -26,6 +27,35 @@ impl MavenVersion {
         Self {
             raw: raw.to_string(),
             items: parse_items(raw),
+            position: CorePosition::Concrete,
+        }
+    }
+
+    fn before_core(&self) -> Option<Self> {
+        self.boundary(CorePosition::Before)
+    }
+
+    fn after_core(&self) -> Option<Self> {
+        self.boundary(CorePosition::After)
+    }
+
+    fn boundary(&self, position: CorePosition) -> Option<Self> {
+        let core = super::numeric_core(&self.raw)?;
+        let raw = core.join(".");
+        Some(Self {
+            items: parse_items(&raw),
+            raw,
+            position,
+        })
+    }
+
+    pub(super) fn cmp_precedence(&self, other: &Self) -> Ordering {
+        match (
+            super::numeric_core(&self.raw),
+            super::numeric_core(&other.raw),
+        ) {
+            (Some(left), Some(right)) => super::cmp_numeric_core(&left, &right),
+            _ => compare_lists(&self.items, &other.items),
         }
     }
 }
@@ -38,7 +68,7 @@ impl std::fmt::Display for MavenVersion {
 
 impl PartialEq for MavenVersion {
     fn eq(&self, other: &Self) -> bool {
-        compare_lists(&self.items, &other.items) == Ordering::Equal
+        self.cmp(other) == Ordering::Equal
     }
 }
 
@@ -46,7 +76,12 @@ impl Eq for MavenVersion {}
 
 impl Hash for MavenVersion {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.items.hash(state);
+        self.position.hash(state);
+        if self.position == CorePosition::Concrete {
+            self.items.hash(state);
+        } else {
+            super::numeric_core(&self.raw).hash(state);
+        }
     }
 }
 
@@ -58,7 +93,19 @@ impl PartialOrd for MavenVersion {
 
 impl Ord for MavenVersion {
     fn cmp(&self, other: &Self) -> Ordering {
-        compare_lists(&self.items, &other.items)
+        let core = self.cmp_precedence(other);
+        if core != Ordering::Equal {
+            return core;
+        }
+        match (self.position, other.position) {
+            (CorePosition::Before, CorePosition::Before)
+            | (CorePosition::After, CorePosition::After) => Ordering::Equal,
+            (CorePosition::Before, _) | (_, CorePosition::After) => Ordering::Less,
+            (CorePosition::After, _) | (_, CorePosition::Before) => Ordering::Greater,
+            (CorePosition::Concrete, CorePosition::Concrete) => {
+                compare_lists(&self.items, &other.items)
+            }
+        }
     }
 }
 
@@ -394,8 +441,25 @@ pub fn parse_constraint(raw: &str) -> Ranges<Version> {
     if raw.is_empty() || raw == "*" {
         return Ranges::full();
     }
+    if let Some(exact) = raw.strip_prefix("!=") {
+        let exact = exact.trim();
+        return exact_range(&MavenVersion::parse(exact), exact).complement();
+    }
     if let Some(exact) = raw.strip_prefix('=') {
-        return Ranges::singleton(maven_version(exact.trim()));
+        let exact = exact.trim();
+        return exact_range(&MavenVersion::parse(exact), exact);
+    }
+    for operator in [">=", "<=", ">", "<"] {
+        if let Some(bound) = raw.strip_prefix(operator) {
+            let version = MavenVersion::parse(bound.trim());
+            return match operator {
+                ">=" => lower_bound(&version, true),
+                ">" => lower_bound(&version, false),
+                "<=" => upper_bound(&version, true),
+                "<" => upper_bound(&version, false),
+                _ => unreachable!(),
+            };
+        }
     }
     if !matches!(raw.as_bytes().first(), Some(b'[' | b'(')) {
         // Maven treats a bare version as a recommendation, not a hard
@@ -434,19 +498,57 @@ fn parse_segment(segment: &str) -> Ranges<Version> {
     let upper = upper.trim();
     let lower_range = if lower.is_empty() {
         Ranges::full()
-    } else if lower_inclusive {
-        Ranges::higher_than(maven_version(lower))
     } else {
-        Ranges::strictly_higher_than(maven_version(lower))
+        lower_bound(&MavenVersion::parse(lower), lower_inclusive)
     };
     let upper_range = if upper.is_empty() {
         Ranges::full()
-    } else if upper_inclusive {
-        Ranges::lower_than(maven_version(upper))
     } else {
-        Ranges::strictly_lower_than(maven_version(upper))
+        upper_bound(&MavenVersion::parse(upper), upper_inclusive)
     };
     lower_range.intersection(&upper_range)
+}
+
+fn exact_range(version: &MavenVersion, raw: &str) -> Ranges<Version> {
+    if super::has_explicit_suffix(raw) {
+        Ranges::singleton(Version::Maven(version.clone()))
+    } else {
+        precedence_class(version)
+    }
+}
+
+fn lower_bound(version: &MavenVersion, inclusive: bool) -> Ranges<Version> {
+    match (inclusive, version.before_core(), version.after_core()) {
+        (true, Some(before), _) => Ranges::higher_than(Version::Maven(before)),
+        (false, _, Some(after)) => Ranges::strictly_higher_than(Version::Maven(after)),
+        (true, None, _) => Ranges::higher_than(Version::Maven(version.clone())),
+        (false, _, None) => Ranges::strictly_higher_than(Version::Maven(version.clone())),
+    }
+}
+
+fn upper_bound(version: &MavenVersion, inclusive: bool) -> Ranges<Version> {
+    match (inclusive, version.before_core(), version.after_core()) {
+        (true, _, Some(after)) => Ranges::lower_than(Version::Maven(after)),
+        (false, Some(before), _) => Ranges::strictly_lower_than(Version::Maven(before)),
+        (true, _, None) => Ranges::lower_than(Version::Maven(version.clone())),
+        (false, None, _) => Ranges::strictly_lower_than(Version::Maven(version.clone())),
+    }
+}
+
+pub(super) fn precedence_class(version: &MavenVersion) -> Ranges<Version> {
+    match (version.before_core(), version.after_core()) {
+        (Some(before), Some(after)) => {
+            Ranges::between(Version::Maven(before), Version::Maven(after))
+        }
+        _ => Ranges::singleton(Version::Maven(version.clone())),
+    }
+}
+
+pub(super) fn strictly_higher_precedence(version: &MavenVersion) -> Ranges<Version> {
+    match version.after_core() {
+        Some(after) => Ranges::strictly_higher_than(Version::Maven(after)),
+        None => Ranges::strictly_higher_than(Version::Maven(version.clone())),
+    }
 }
 
 fn maven_version(raw: &str) -> Version {
@@ -530,5 +632,31 @@ mod tests {
         let orbit_exact = parse_constraint("=47.2.0");
         assert!(orbit_exact.contains(&version("47.2")));
         assert!(!orbit_exact.contains(&version("47.3")));
+    }
+
+    #[test]
+    fn orbit_exact_operator_distinguishes_explicit_suffixes() {
+        let core = parse_constraint("=1.2.3");
+        assert!(core.contains(&version("1.2.3-alpha")));
+        assert!(core.contains(&version("1.2.3-beta")));
+        assert!(core.contains(&version("1.2.3")));
+        assert!(!core.contains(&version("1.2.4-alpha")));
+
+        let suffixed = parse_constraint("=1.2.3-alpha");
+        assert!(suffixed.contains(&version("1.2.3-alpha")));
+        assert!(!suffixed.contains(&version("1.2.3-beta")));
+        assert!(!suffixed.contains(&version("1.2.3")));
+    }
+
+    #[test]
+    fn orbit_ordered_operators_ignore_suffix_precedence() {
+        let inclusive = parse_constraint(">=1.2.3-alpha");
+        assert!(inclusive.contains(&version("1.2.3-beta")));
+        assert!(inclusive.contains(&version("1.2.3")));
+
+        let strict = parse_constraint(">1.2.3-alpha");
+        assert!(!strict.contains(&version("1.2.3-beta")));
+        assert!(!strict.contains(&version("1.2.3")));
+        assert!(strict.contains(&version("1.2.4-alpha")));
     }
 }

@@ -534,7 +534,7 @@ async fn check_outdated_with_progress(
     let mc_version = &manifest.project.mc_version;
 
     let manifest_remotes: Vec<_> = manifest
-        .dependencies
+        .packages
         .values()
         .flat_map(|dependency| dependency.remotes.iter().cloned())
         .collect();

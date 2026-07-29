@@ -194,7 +194,7 @@ fn compare_versions(
             let right_direct = right_identity.location != CandidateLocation::Nested;
             left_direct
                 .cmp(&right_direct)
-                .then_with(|| left_semantic.cmp(right_semantic))
+                .then_with(|| left_semantic.cmp_precedence(right_semantic))
                 .then_with(|| right_identity.path.len().cmp(&left_identity.path.len()))
                 .then_with(|| {
                     compare_parent_priorities(
@@ -216,7 +216,7 @@ fn compare_versions(
                 identity: VersionIdentity::Candidate(right_identity),
             },
         ) => left_semantic
-            .cmp(right_semantic)
+            .cmp_precedence(right_semantic)
             .then_with(|| left_identity.installed.cmp(&right_identity.installed))
             .then_with(|| left_identity.cmp(right_identity)),
         _ => left.cmp(right),

@@ -361,7 +361,7 @@ fn environment(
     manifest: &crate::manifest::OrbitManifest,
     entry: &crate::lockfile::PackageEntry,
 ) -> (&'static str, &'static str) {
-    let Some(requirement) = manifest.dependencies.get(&entry.mod_id) else {
+    let Some(requirement) = manifest.packages.get(&entry.mod_id) else {
         return ("required", "required");
     };
     let supported = if requirement.optional() {

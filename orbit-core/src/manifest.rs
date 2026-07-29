@@ -16,11 +16,9 @@ pub struct OrbitManifest {
     #[serde(default)]
     pub resolver: ResolverConfig,
     #[serde(default)]
-    pub dependencies: IndexMap<String, DependencySpec>,
+    pub packages: IndexMap<String, PackageSpec>,
     #[serde(default)]
     pub groups: IndexMap<String, GroupSpec>,
-    #[serde(default)]
-    pub overrides: IndexMap<String, DependencySpec>,
 }
 
 /// Exact platform runtime snapshot produced by `init` or `sync`.
@@ -145,14 +143,14 @@ impl PackageRemote {
     }
 }
 
-/// One root package declaration.
+/// One managed logical-package declaration.
 ///
-/// The schema deliberately has no short string form: every root package must
+/// The schema deliberately has no short string form: every package must
 /// name at least one candidate source, which keeps all commands on the same
 /// discovery path.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-pub struct DependencySpec {
+pub struct PackageSpec {
     #[serde(default = "default_version_constraint")]
     pub version: String,
     #[serde(default, skip_serializing_if = "is_false")]
@@ -173,7 +171,7 @@ fn is_false(value: &bool) -> bool {
     !*value
 }
 
-impl DependencySpec {
+impl PackageSpec {
     pub fn new(version: impl Into<String>, remotes: Vec<PackageRemote>) -> Self {
         Self {
             version: version.into(),
@@ -184,15 +182,15 @@ impl DependencySpec {
         }
     }
 
-    pub fn version_constraint(&self) -> Option<&str> {
-        Some(&self.version)
+    pub fn version_constraint(&self) -> &str {
+        &self.version
     }
 
     pub fn env(&self) -> Option<crate::metadata::Environment> {
         self.env
     }
 
-    /// Resolve the user override against the selected JAR's declaration.
+    /// Resolve the optional user filter against the selected JAR's declaration.
     pub fn effective_environment(
         &self,
         declared: crate::metadata::Environment,
@@ -234,7 +232,7 @@ impl DependencySpec {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct GroupSpec {
-    pub dependencies: Vec<String>,
+    pub packages: Vec<String>,
 }
 
 impl OrbitManifest {
@@ -265,8 +263,28 @@ impl OrbitManifest {
 
     pub fn validate(&self) -> Result<(), OrbitError> {
         self.project.loader_kind()?;
-        for (package, dependency) in &self.dependencies {
-            dependency.validate(package)?;
+        for (package, specification) in &self.packages {
+            if package.trim().is_empty() {
+                return Err(OrbitError::Other(anyhow::anyhow!(
+                    "orbit.toml contains an empty package id"
+                )));
+            }
+            specification.validate(package)?;
+        }
+        for (group_name, group) in &self.groups {
+            let mut unique = std::collections::BTreeSet::new();
+            for package in &group.packages {
+                if !self.packages.contains_key(package) {
+                    return Err(OrbitError::Other(anyhow::anyhow!(
+                        "group '{group_name}' references unmanaged package '{package}'"
+                    )));
+                }
+                if !unique.insert(package) {
+                    return Err(OrbitError::Other(anyhow::anyhow!(
+                        "group '{group_name}' lists package '{package}' more than once"
+                    )));
+                }
+            }
         }
         Ok(())
     }
@@ -277,7 +295,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parse_dependency_with_multiple_remotes() {
+    fn parse_package_with_multiple_remotes() {
         let toml_str = r#"
 [project]
 name = "test"
@@ -291,7 +309,7 @@ loader_jar = { path = "loader.jar", sha256 = "test" }
 runtime_jars = []
 physical_environment = "client"
 
-[dependencies]
+[packages]
 sodium = { version = "*", remotes = [
   { type = "modrinth", project_id = "AANobbMI" },
   { type = "curseforge", project_id = 394468 },
@@ -299,20 +317,20 @@ sodium = { version = "*", remotes = [
 "#;
         let manifest: OrbitManifest = toml::from_str(toml_str).unwrap();
         assert_eq!(manifest.project.name, "test");
-        assert_eq!(manifest.dependencies.len(), 1);
+        assert_eq!(manifest.packages.len(), 1);
         assert_eq!(
             manifest
-                .dependencies
+                .packages
                 .get("sodium")
                 .unwrap()
                 .version_constraint(),
-            Some("*")
+            "*"
         );
-        assert_eq!(manifest.dependencies["sodium"].remotes.len(), 2);
+        assert_eq!(manifest.packages["sodium"].remotes.len(), 2);
     }
 
     #[test]
-    fn parse_full_form_dependency() {
+    fn parse_full_package_form() {
         let toml_str = r#"
 [project]
 name = "test"
@@ -326,22 +344,22 @@ loader_jar = { path = "loader.jar", sha256 = "test" }
 runtime_jars = []
 physical_environment = "client"
 
-[dependencies]
+[packages]
 jei = { version = "^12", remotes = [{ type = "curseforge", project_id = 238222 }] }
 zoomify = { version = "*", optional = true, env = "client", remotes = [{ type = "modrinth", project_id = "w7ThoJFB" }] }
 "#;
         let manifest: OrbitManifest = toml::from_str(toml_str).unwrap();
-        assert_eq!(manifest.dependencies.len(), 2);
+        assert_eq!(manifest.packages.len(), 2);
 
-        let jei = &manifest.dependencies["jei"];
-        assert_eq!(jei.version_constraint(), Some("^12"));
+        let jei = &manifest.packages["jei"];
+        assert_eq!(jei.version_constraint(), "^12");
 
-        let zoomify = &manifest.dependencies["zoomify"];
+        let zoomify = &manifest.packages["zoomify"];
         assert_eq!(zoomify.env(), Some(crate::metadata::Environment::Client));
     }
 
     #[test]
-    fn rejects_invalid_dependency_environment() {
+    fn rejects_invalid_package_environment() {
         let toml_str = r#"
 [project]
 name = "test"
@@ -353,7 +371,7 @@ minecraft_jar = { path = "minecraft.jar", sha256 = "test" }
 loader_jar = { path = "loader.jar", sha256 = "test" }
 runtime_jars = []
 physical_environment = "client"
-[dependencies]
+[packages]
 example = { version = "*", env = "desktop", remotes = [{ type = "file", path = "example.jar" }] }
 "#;
 
@@ -424,7 +442,7 @@ platforms = ["modrinth"]
     }
 
     #[test]
-    fn persisted_root_dependency_requires_a_remote() {
+    fn persisted_package_requires_a_remote() {
         let mut manifest: OrbitManifest = toml::from_str(
             r#"
 [project]
@@ -437,7 +455,7 @@ minecraft_jar = { path = "minecraft.jar", sha256 = "test" }
 loader_jar = { path = "loader.jar", sha256 = "test" }
 runtime_jars = []
 physical_environment = "client"
-[dependencies]
+[packages]
 sodium = { version = "*" }
 "#,
         )
@@ -450,11 +468,38 @@ sodium = { version = "*" }
                 .to_string()
                 .contains("at least one remote")
         );
-        manifest.dependencies["sodium"]
+        manifest.packages["sodium"]
             .remotes
             .push(PackageRemote::Modrinth {
                 project_id: "AANobbMI".to_string(),
             });
         assert!(manifest.to_toml_string().is_ok());
+    }
+
+    #[test]
+    fn obsolete_dependency_and_override_tables_are_rejected() {
+        let base = r#"
+[project]
+name = "test"
+mc_version = "1.20.1"
+modloader = "fabric"
+modloader_version = "0.16.10"
+[platform]
+minecraft_jar = { path = "minecraft.jar", sha256 = "test" }
+loader_jar = { path = "loader.jar", sha256 = "test" }
+runtime_jars = []
+physical_environment = "client"
+"#;
+
+        let dependency_error = toml::from_str::<OrbitManifest>(&format!(
+            "{base}\n[dependencies]\nsodium = {{ version = \"*\", remotes = [{{ type = \"file\", path = \"sodium.jar\" }}] }}\n"
+        ))
+        .unwrap_err();
+        let override_error =
+            toml::from_str::<OrbitManifest>(&format!("{base}\n[overrides]\nsodium = \"=1\"\n"))
+                .unwrap_err();
+
+        assert!(dependency_error.to_string().contains("unknown field"));
+        assert!(override_error.to_string().contains("unknown field"));
     }
 }

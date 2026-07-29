@@ -10,7 +10,7 @@ use std::path::Path;
 use crate::error::OrbitError;
 use crate::identification::{IdentifiedMod, identify_mods};
 use crate::lockfile::LockMeta;
-use crate::manifest::DependencySpec;
+use crate::manifest::PackageSpec;
 use crate::workspace::{Lockfile, ManifestFile};
 
 #[derive(Debug, Clone, Default)]
@@ -98,7 +98,7 @@ pub async fn sync_instance(
     }
     for entry in &mut local_entries {
         entry.remotes = discovered_remotes[&entry.mod_id].clone();
-        if let Some(requirement) = manifest.inner.dependencies.get(&entry.mod_id) {
+        if let Some(requirement) = manifest.inner.packages.get(&entry.mod_id) {
             let superseded = superseded_managed_remotes.get(&entry.mod_id);
             entry.remotes.extend(
                 requirement
@@ -117,7 +117,7 @@ pub async fn sync_instance(
         ..SyncReport::default()
     };
     for entry in &local_entries {
-        if !manifest.inner.dependencies.contains_key(&entry.mod_id) {
+        if !manifest.inner.packages.contains_key(&entry.mod_id) {
             report.added.push(entry.mod_id.clone());
         }
         match previous_lock.inner.find(&entry.mod_id) {
@@ -139,7 +139,7 @@ pub async fn sync_instance(
         .iter()
         .map(|entry| entry.mod_id.as_str())
         .collect();
-    for package in manifest.inner.dependencies.keys() {
+    for package in manifest.inner.packages.keys() {
         if !discovered.contains(package.as_str()) {
             report.missing.push(package.clone());
         }
@@ -157,9 +157,9 @@ pub async fn sync_instance(
     for entry in &local_entries {
         let requirement = manifest
             .inner
-            .dependencies
+            .packages
             .entry(entry.mod_id.clone())
-            .or_insert_with(|| DependencySpec {
+            .or_insert_with(|| PackageSpec {
                 version: "*".to_string(),
                 optional: false,
                 env: None,
@@ -442,7 +442,7 @@ minecraft_jar = { path = "minecraft.jar", sha256 = "test" }
 loader_jar = { path = "loader.jar", sha256 = "test" }
 runtime_jars = []
 physical_environment = "client"
-[dependencies]
+[packages]
 "#,
         )
         .unwrap();
@@ -481,14 +481,14 @@ physical_environment = "client"
 
         let manifest = ManifestFile::open(&directory).unwrap();
         assert_eq!(
-            manifest.inner.dependencies["alpha"].remotes,
+            manifest.inner.packages["alpha"].remotes,
             vec![PackageRemote::Modrinth {
                 project_id: "alpha-project".to_string()
             }]
         );
         let lock = Lockfile::open(&directory).unwrap();
         let alpha = lock.inner.find("alpha").unwrap();
-        assert_eq!(alpha.remotes, manifest.inner.dependencies["alpha"].remotes);
+        assert_eq!(alpha.remotes, manifest.inner.packages["alpha"].remotes);
         assert!(matches!(
             alpha.artifact_sources.as_slice(),
             [ArtifactSource::Modrinth { project_id, version_id, .. }]
@@ -526,10 +526,10 @@ physical_environment = "client"
                 physical_environment: crate::metadata::Environment::Client,
             },
             resolver: ResolverConfig::default(),
-            dependencies: indexmap::IndexMap::from([
+            packages: indexmap::IndexMap::from([
                 (
                     "missing".to_string(),
-                    DependencySpec::new(
+                    PackageSpec::new(
                         "*",
                         vec![crate::manifest::PackageRemote::File {
                             path: "sources/missing.jar".to_string(),
@@ -538,7 +538,7 @@ physical_environment = "client"
                 ),
                 (
                     "unlocked".to_string(),
-                    DependencySpec::new(
+                    PackageSpec::new(
                         "*",
                         vec![crate::manifest::PackageRemote::File {
                             path: "sources/unlocked.jar".to_string(),
@@ -547,7 +547,6 @@ physical_environment = "client"
                 ),
             ]),
             groups: indexmap::IndexMap::new(),
-            overrides: indexmap::IndexMap::new(),
         };
         ManifestFile::new(&directory, manifest).save().unwrap();
         Lockfile::new(
@@ -595,11 +594,7 @@ physical_environment = "client"
                 .is_empty()
         );
         assert_eq!(
-            ManifestFile::open(&directory)
-                .unwrap()
-                .inner
-                .dependencies
-                .len(),
+            ManifestFile::open(&directory).unwrap().inner.packages.len(),
             2
         );
         std::fs::remove_dir_all(directory).unwrap();
@@ -636,7 +631,7 @@ minecraft_jar = { path = "minecraft.jar", sha256 = "test" }
 loader_jar = { path = "loader.jar", sha256 = "test" }
 runtime_jars = []
 physical_environment = "client"
-[dependencies]
+[packages]
 alpha = { version = "*", remotes = [{ type = "file", path = "alpha.jar" }] }
 "#,
         )
@@ -663,7 +658,7 @@ alpha = { version = "*", remotes = [{ type = "file", path = "alpha.jar" }] }
             Err(OrbitError::LockfileNotFound)
         ));
         let refreshed = ManifestFile::open(&directory).unwrap();
-        let alpha = &refreshed.inner.dependencies["alpha"];
+        let alpha = &refreshed.inner.packages["alpha"];
         assert_eq!(
             alpha
                 .remotes
@@ -704,9 +699,8 @@ alpha = { version = "*", remotes = [{ type = "file", path = "alpha.jar" }] }
                 physical_environment: crate::metadata::Environment::Client,
             },
             resolver: ResolverConfig::default(),
-            dependencies: indexmap::IndexMap::new(),
+            packages: indexmap::IndexMap::new(),
             groups: indexmap::IndexMap::new(),
-            overrides: indexmap::IndexMap::new(),
         };
         ManifestFile::new(&directory, manifest).save().unwrap();
 
@@ -774,9 +768,8 @@ alpha = { version = "*", remotes = [{ type = "file", path = "alpha.jar" }] }
                 physical_environment: crate::metadata::Environment::Client,
             },
             resolver: ResolverConfig::default(),
-            dependencies: indexmap::IndexMap::new(),
+            packages: indexmap::IndexMap::new(),
             groups: indexmap::IndexMap::new(),
-            overrides: indexmap::IndexMap::new(),
         };
         ManifestFile::new(&directory, manifest).save().unwrap();
 

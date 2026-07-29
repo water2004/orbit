@@ -77,7 +77,7 @@ pub(crate) fn prune_unreferenced(
 
     let mut referenced = std::collections::HashSet::new();
     for remote in manifest
-        .dependencies
+        .packages
         .values()
         .flat_map(|dependency| dependency.remotes.iter())
         .chain(
@@ -249,7 +249,7 @@ minecraft_jar = {{ path = "minecraft.jar", sha256 = "test" }}
 loader_jar = {{ path = "loader.jar", sha256 = "test" }}
 runtime_jars = []
 physical_environment = "client"
-[dependencies]
+[packages]
 alpha = {{ version = "*", remotes = [{{ type = "file", path = ".orbit/sources/{kept_hash}.jar" }}] }}
 "#
         ))

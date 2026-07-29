@@ -7,23 +7,18 @@ use crate::metadata::{DependencyExpression, DependencyKind, Environment, ModDepe
 use crate::resolver::provider::PackageIncompatibilities;
 use crate::resolver::types::{SolverPackage, SolverVersion};
 
-use super::graph::{
-    ExclusionMap, OverrideMap, dependency_constraint, is_excluded, logical_package,
-};
+use super::graph::{ExclusionMap, dependency_constraint, is_excluded, logical_package};
 
 pub(super) fn compile_dependency_constraints(
     expressions: &[DependencyExpression],
     package: &str,
     loader: LoaderKind,
     exclusions: &ExclusionMap,
-    overrides: &OverrideMap,
     target: Environment,
 ) -> PackageIncompatibilities {
     let mut output = Vec::new();
     for expression in expressions {
-        if let Some(required) =
-            required_formula(expression, package, loader, exclusions, overrides, target)
-        {
+        if let Some(required) = required_formula(expression, package, loader, exclusions, target) {
             for clause in to_cnf(required) {
                 output.push(IncompatibilityConstraint {
                     terms: clause.into_iter().map(Literal::negated_term).collect(),
@@ -40,7 +35,6 @@ pub(super) fn compile_dependency_constraints(
             package,
             loader,
             exclusions,
-            overrides,
             target,
         ) {
             append_forbidden_formula(
@@ -60,12 +54,8 @@ pub(super) fn compile_dependency_constraints(
             }
             match relation.kind {
                 DependencyKind::Optional => {
-                    let allowed = dependency_constraint(
-                        &relation.id,
-                        &relation.requirement,
-                        loader,
-                        overrides,
-                    );
+                    let allowed =
+                        dependency_constraint(&relation.id, &relation.requirement, loader);
                     let mut bad = Formula::Atom {
                         package: logical_package(&relation.id),
                         versions: Box::new(allowed.complement()),
@@ -73,7 +63,7 @@ pub(super) fn compile_dependency_constraints(
                     if let Some(unless) = &relation.unless {
                         bad = Formula::And(vec![
                             bad,
-                            Formula::Not(Box::new(presence_formula(unless, loader, overrides))),
+                            Formula::Not(Box::new(presence_formula(unless, loader))),
                         ]);
                     }
                     append_forbidden_formula(
@@ -100,7 +90,6 @@ fn kind_formula(
     package: &str,
     loader: LoaderKind,
     exclusions: &ExclusionMap,
-    overrides: &OverrideMap,
     target: Environment,
 ) -> Option<Formula> {
     match expression {
@@ -115,13 +104,12 @@ fn kind_formula(
                     &relation.id,
                     &relation.requirement,
                     loader,
-                    overrides,
                 )),
             };
             Some(match &relation.unless {
                 Some(unless) => Formula::And(vec![
                     atom,
-                    Formula::Not(Box::new(presence_formula(unless, loader, overrides))),
+                    Formula::Not(Box::new(presence_formula(unless, loader))),
                 ]),
                 None => atom,
             })
@@ -131,9 +119,7 @@ fn kind_formula(
             let expressions: Vec<_> = expressions
                 .iter()
                 .filter_map(|expression| {
-                    kind_formula(
-                        expression, kind, package, loader, exclusions, overrides, target,
-                    )
+                    kind_formula(expression, kind, package, loader, exclusions, target)
                 })
                 .collect();
             (!expressions.is_empty()).then_some(Formula::Or(expressions))
@@ -142,9 +128,7 @@ fn kind_formula(
             let expressions: Vec<_> = expressions
                 .iter()
                 .filter_map(|expression| {
-                    kind_formula(
-                        expression, kind, package, loader, exclusions, overrides, target,
-                    )
+                    kind_formula(expression, kind, package, loader, exclusions, target)
                 })
                 .collect();
             (!expressions.is_empty()).then_some(Formula::And(expressions))
@@ -170,7 +154,6 @@ fn required_formula(
     package: &str,
     loader: LoaderKind,
     exclusions: &ExclusionMap,
-    overrides: &OverrideMap,
     target: Environment,
 ) -> Option<Formula> {
     match expression {
@@ -185,13 +168,10 @@ fn required_formula(
                     &relation.id,
                     &relation.requirement,
                     loader,
-                    overrides,
                 )),
             };
             Some(match &relation.unless {
-                Some(unless) => {
-                    Formula::Or(vec![atom, presence_formula(unless, loader, overrides)])
-                }
+                Some(unless) => Formula::Or(vec![atom, presence_formula(unless, loader)]),
                 None => atom,
             })
         }
@@ -200,7 +180,7 @@ fn required_formula(
             let expressions: Vec<_> = expressions
                 .iter()
                 .filter_map(|expression| {
-                    required_formula(expression, package, loader, exclusions, overrides, target)
+                    required_formula(expression, package, loader, exclusions, target)
                 })
                 .collect();
             (!expressions.is_empty()).then_some(Formula::Or(expressions))
@@ -209,7 +189,7 @@ fn required_formula(
             let expressions: Vec<_> = expressions
                 .iter()
                 .filter_map(|expression| {
-                    required_formula(expression, package, loader, exclusions, overrides, target)
+                    required_formula(expression, package, loader, exclusions, target)
                 })
                 .collect();
             (!expressions.is_empty()).then_some(Formula::And(expressions))
@@ -217,11 +197,7 @@ fn required_formula(
     }
 }
 
-fn presence_formula(
-    expression: &DependencyExpression,
-    loader: LoaderKind,
-    overrides: &OverrideMap,
-) -> Formula {
+fn presence_formula(expression: &DependencyExpression, loader: LoaderKind) -> Formula {
     match expression {
         DependencyExpression::Only(relation) => {
             let atom = Formula::Atom {
@@ -230,26 +206,23 @@ fn presence_formula(
                     &relation.id,
                     &relation.requirement,
                     loader,
-                    overrides,
                 )),
             };
             match &relation.unless {
-                Some(unless) => {
-                    Formula::Or(vec![atom, presence_formula(unless, loader, overrides)])
-                }
+                Some(unless) => Formula::Or(vec![atom, presence_formula(unless, loader)]),
                 None => atom,
             }
         }
         DependencyExpression::Any(expressions) => Formula::Or(
             expressions
                 .iter()
-                .map(|expression| presence_formula(expression, loader, overrides))
+                .map(|expression| presence_formula(expression, loader))
                 .collect(),
         ),
         DependencyExpression::All(expressions) => Formula::And(
             expressions
                 .iter()
-                .map(|expression| presence_formula(expression, loader, overrides))
+                .map(|expression| presence_formula(expression, loader))
                 .collect(),
         ),
     }

@@ -248,9 +248,8 @@ mod tests {
             },
             platform: discovered.snapshot(instance_dir).unwrap(),
             resolver: ResolverConfig::default(),
-            dependencies: Default::default(),
+            packages: Default::default(),
             groups: Default::default(),
-            overrides: Default::default(),
         }
     }
 

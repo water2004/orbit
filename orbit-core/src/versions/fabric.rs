@@ -12,6 +12,8 @@
 use std::cmp::Ordering;
 use std::hash::{Hash, Hasher};
 
+use super::CorePosition;
+
 // ═══════════════════════════════════════════════════════════════
 // SemanticVersion — 对应 Fabric 的 SemanticVersionImpl
 // ═══════════════════════════════════════════════════════════════
@@ -30,6 +32,7 @@ pub struct SemanticVersion {
     pub build: Option<String>,
     /// 是否有通配符
     pub has_wildcard: bool,
+    position: CorePosition,
 }
 
 impl SemanticVersion {
@@ -114,6 +117,7 @@ impl SemanticVersion {
             prerelease,
             build,
             has_wildcard,
+            position: CorePosition::Concrete,
         })
     }
 
@@ -138,22 +142,71 @@ impl SemanticVersion {
             new_v.components.push(1);
         }
         new_v.prerelease = None;
+        new_v.position = CorePosition::Concrete;
         new_v.raw = format!("{}.bump", new_v.raw);
         new_v
     }
+
+    fn before_core(&self) -> Self {
+        let mut boundary = self.clone();
+        boundary.raw = format!("{}-core-lower", self.core_display());
+        boundary.prerelease = None;
+        boundary.build = None;
+        boundary.has_wildcard = false;
+        boundary.position = CorePosition::Before;
+        boundary
+    }
+
+    fn after_core(&self) -> Self {
+        let mut boundary = self.before_core();
+        boundary.raw = format!("{}-core-upper", self.core_display());
+        boundary.position = CorePosition::After;
+        boundary
+    }
+
+    fn core_display(&self) -> String {
+        self.components
+            .iter()
+            .map(i32::to_string)
+            .collect::<Vec<_>>()
+            .join(".")
+    }
+
+    pub(super) fn cmp_precedence(&self, other: &Self) -> Ordering {
+        compare_components(self, other)
+    }
+}
+
+pub(crate) fn wildcard_for_core_bounds(
+    lower: &SemanticVersion,
+    upper: &SemanticVersion,
+) -> Option<String> {
+    if lower.position != CorePosition::Before || upper.position != CorePosition::Before {
+        return None;
+    }
+    let mut expected_upper = lower.components.clone();
+    let last = expected_upper.last_mut()?;
+    *last = last.saturating_add(1);
+    if expected_upper != upper.components {
+        return None;
+    }
+    Some(format!("{}.x", lower.core_display()))
 }
 
 impl PartialEq for SemanticVersion {
     fn eq(&self, other: &Self) -> bool {
-        self.components == other.components && self.prerelease == other.prerelease
+        self.cmp(other) == Ordering::Equal
     }
 }
 impl Eq for SemanticVersion {}
 
 impl Hash for SemanticVersion {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.components.hash(state);
-        self.prerelease.hash(state);
+        canonical_components(self).hash(state);
+        self.position.hash(state);
+        if self.position == CorePosition::Concrete {
+            self.prerelease.hash(state);
+        }
     }
 }
 
@@ -165,20 +218,17 @@ impl PartialOrd for SemanticVersion {
 
 impl Ord for SemanticVersion {
     fn cmp(&self, other: &Self) -> Ordering {
-        // 1. 比较核心组件
-        let max = self.components.len().max(other.components.len());
-        for i in 0..max {
-            let a = self.component(i);
-            let b = other.component(i);
-            if a == WILDCARD || b == WILDCARD {
-                continue;
-            }
-            match a.cmp(&b) {
-                Ordering::Equal => continue,
-                o => return o,
-            }
+        let core = compare_components(self, other);
+        if core != Ordering::Equal {
+            return core;
         }
-        // 2. prerelease
+        match (self.position, other.position) {
+            (CorePosition::Before, CorePosition::Before)
+            | (CorePosition::After, CorePosition::After) => return Ordering::Equal,
+            (CorePosition::Before, _) | (_, CorePosition::After) => return Ordering::Less,
+            (CorePosition::After, _) | (_, CorePosition::Before) => return Ordering::Greater,
+            (CorePosition::Concrete, CorePosition::Concrete) => {}
+        }
         match (&self.prerelease, &other.prerelease) {
             (Some(pa), Some(pb)) => compare_prerelease(pa, pb),
             (Some(_), None) => {
@@ -198,6 +248,30 @@ impl Ord for SemanticVersion {
             (None, None) => Ordering::Equal,
         }
     }
+}
+
+fn compare_components(left: &SemanticVersion, right: &SemanticVersion) -> Ordering {
+    let max = left.components.len().max(right.components.len());
+    for index in 0..max {
+        let left = left.component(index);
+        let right = right.component(index);
+        if left == WILDCARD || right == WILDCARD {
+            continue;
+        }
+        let ordering = left.cmp(&right);
+        if ordering != Ordering::Equal {
+            return ordering;
+        }
+    }
+    Ordering::Equal
+}
+
+fn canonical_components(version: &SemanticVersion) -> Vec<i32> {
+    let mut components = version.components.clone();
+    while components.len() > 1 && components.last() == Some(&0) {
+        components.pop();
+    }
+    components
 }
 
 fn compare_prerelease(a: &str, b: &str) -> Ordering {
@@ -251,72 +325,11 @@ fn is_dot_separated_id(s: &str) -> bool {
 /// 检查版本是否满足约束。
 /// 空格分隔 = AND，`||` 分隔 = OR（OR 优先级低于 AND）。
 pub fn satisfies(version: &SemanticVersion, raw_constraint: &str) -> bool {
-    let constraint = raw_constraint.trim();
-    if constraint == "*" || constraint.is_empty() {
-        return true;
-    }
-    // 先按 OR 拆分，每组内按 AND 处理
-    constraint.split("||").any(|or_group| {
-        or_group.split_whitespace().all(|part| {
-            let part = part.trim();
-            part.is_empty() || part == "*" || satisfies_single(version, part)
-        })
-    })
-}
-
-fn satisfies_single(version: &SemanticVersion, predicate: &str) -> bool {
-    let (op, ver_str) = parse_operator(predicate);
-    let mut ref_ver = match SemanticVersion::parse(ver_str, true) {
-        Ok(v) => v,
-        Err(_) => return false,
-    };
-
-    // 通配符处理: 1.0.x → 替换为 >=1.0 <1.1
-    if ref_ver.has_wildcard {
-        if op != "=" {
-            return false;
-        }
-        let comp_count = ref_ver.components.len();
-        let new_components = (0..comp_count - 1).map(|i| ref_ver.component(i)).collect();
-        ref_ver = SemanticVersion {
-            raw: String::new(),
-            components: new_components,
-            prerelease: None,
-            build: None,
-            has_wildcard: false,
-        };
-        // 检查下界: >= lower
-        if version.cmp(&ref_ver) == Ordering::Less {
-            return false;
-        }
-        // 检查上界: < upper (bump last component)
-        let mut upper = ref_ver.clone();
-        if let Some(last) = upper.components.last_mut() {
-            *last += 1;
-        }
-        return version.cmp(&upper) == Ordering::Less;
-    }
-
-    // Fabric: ~ → comp(0)==v.comp(0) && comp(1)==v.comp(1) && >=v
-    // Fabric: ^ → comp(0)==v.comp(0) && >=v
-    match op {
-        "~" => {
-            version >= &ref_ver
-                && version.component(0) == ref_ver.component(0)
-                && version.component(1) == ref_ver.component(1)
-        }
-        "^" => version >= &ref_ver && version.component(0) == ref_ver.component(0),
-        ">=" => version >= &ref_ver,
-        ">" => version > &ref_ver,
-        "<=" => version <= &ref_ver,
-        "<" => version < &ref_ver,
-        "=" => version == &ref_ver,
-        _ => version == &ref_ver,
-    }
+    parse_constraint(raw_constraint).contains(&Version::Fabric(version.clone()))
 }
 
 fn parse_operator(predicate: &str) -> (&str, &str) {
-    for op in &[">=", "<=", "~", "^", ">", "<", "="] {
+    for op in &[">=", "<=", "!=", "~", "^", ">", "<", "="] {
         if let Some(stripped) = predicate.strip_prefix(op) {
             return (op, stripped.trim());
         }
@@ -344,7 +357,7 @@ pub fn parse_constraint(constraint: &str) -> Ranges<Version> {
             }
 
             let mut combined = part.to_string();
-            if ["<", ">", "<=", ">=", "~", "^", "="].contains(&part)
+            if ["<", ">", "<=", ">=", "!=", "~", "^", "="].contains(&part)
                 && let Some(next_part) = parts.next()
             {
                 combined.push_str(next_part);
@@ -365,20 +378,14 @@ pub fn parse_constraint(constraint: &str) -> Ranges<Version> {
                     let mut upper_components = lower_components.clone();
                     let last = upper_components.len() - 1;
                     upper_components[last] = upper_components[last].saturating_add(1);
-                    let lower = Version::Fabric(SemanticVersion {
-                        raw: format!("{ver_str}-"),
-                        components: std::mem::take(&mut lower_components),
-                        prerelease: Some(String::new()),
-                        build: None,
-                        has_wildcard: false,
-                    });
-                    let upper = Version::Fabric(SemanticVersion {
-                        raw: format!("{ver_str}-upper"),
-                        components: upper_components,
-                        prerelease: Some(String::new()),
-                        build: None,
-                        has_wildcard: false,
-                    });
+                    let mut lower_version = ref_ver.clone();
+                    lower_version.components = std::mem::take(&mut lower_components);
+                    lower_version.position = CorePosition::Concrete;
+                    let lower = Version::Fabric(lower_version.before_core());
+                    let mut upper_version = ref_ver.clone();
+                    upper_version.components = upper_components;
+                    upper_version.position = CorePosition::Concrete;
+                    let upper = Version::Fabric(upper_version.before_core());
                     let range = if op == "=" {
                         Ranges::between(lower, upper)
                     } else {
@@ -388,13 +395,14 @@ pub fn parse_constraint(constraint: &str) -> Ranges<Version> {
                     continue;
                 }
                 let r = match op {
-                    ">=" => Ranges::higher_than(Version::Fabric(ref_ver)),
-                    "<=" => Ranges::lower_than(Version::Fabric(ref_ver)),
-                    ">" => Ranges::strictly_higher_than(Version::Fabric(ref_ver)),
-                    "<" => Ranges::strictly_lower_than(Version::Fabric(ref_ver)),
-                    "=" => Ranges::singleton(Version::Fabric(ref_ver)),
+                    ">=" => Ranges::higher_than(Version::Fabric(ref_ver.before_core())),
+                    "<=" => Ranges::lower_than(Version::Fabric(ref_ver.after_core())),
+                    ">" => Ranges::strictly_higher_than(Version::Fabric(ref_ver.after_core())),
+                    "<" => Ranges::strictly_lower_than(Version::Fabric(ref_ver.before_core())),
+                    "=" => exact_range(&ref_ver, ver_str),
+                    "!=" => exact_range(&ref_ver, ver_str).complement(),
                     "~" => {
-                        let lower = Version::Fabric(ref_ver.clone());
+                        let lower = Version::Fabric(ref_ver.before_core());
                         let mut upper_comp = ref_ver.components.clone();
                         if upper_comp.len() >= 2 {
                             if upper_comp[1] == WILDCARD {
@@ -409,13 +417,11 @@ pub fn parse_constraint(constraint: &str) -> Ranges<Version> {
                         }
                         let mut upper_ver = ref_ver.clone();
                         upper_ver.components = upper_comp;
-                        upper_ver.prerelease = Some(String::new());
                         upper_ver.has_wildcard = false;
-                        upper_ver.raw = format!("{}~upper", ref_ver.raw);
-                        Ranges::between(lower, Version::Fabric(upper_ver))
+                        Ranges::between(lower, Version::Fabric(upper_ver.before_core()))
                     }
                     "^" => {
-                        let lower = Version::Fabric(ref_ver.clone());
+                        let lower = Version::Fabric(ref_ver.before_core());
                         let mut upper_comp = ref_ver.components.clone();
                         if !upper_comp.is_empty() {
                             upper_comp[0] = upper_comp[0].saturating_add(1);
@@ -425,12 +431,10 @@ pub fn parse_constraint(constraint: &str) -> Ranges<Version> {
                         }
                         let mut upper_ver = ref_ver.clone();
                         upper_ver.components = upper_comp;
-                        upper_ver.prerelease = Some(String::new());
                         upper_ver.has_wildcard = false;
-                        upper_ver.raw = format!("{}^upper", ref_ver.raw);
-                        Ranges::between(lower, Version::Fabric(upper_ver))
+                        Ranges::between(lower, Version::Fabric(upper_ver.before_core()))
                     }
-                    _ => Ranges::singleton(Version::Fabric(ref_ver)),
+                    _ => exact_range(&ref_ver, ver_str),
                 };
                 group_range = group_range.intersection(&r);
             } else {
@@ -451,6 +455,25 @@ pub fn parse_constraint(constraint: &str) -> Ranges<Version> {
     }
 
     final_range.unwrap_or_else(Ranges::full)
+}
+
+fn exact_range(version: &SemanticVersion, raw: &str) -> Ranges<Version> {
+    if super::has_explicit_suffix(raw) {
+        Ranges::singleton(Version::Fabric(version.clone()))
+    } else {
+        precedence_class(version)
+    }
+}
+
+pub(super) fn precedence_class(version: &SemanticVersion) -> Ranges<Version> {
+    Ranges::between(
+        Version::Fabric(version.before_core()),
+        Version::Fabric(version.after_core()),
+    )
+}
+
+pub(super) fn strictly_higher_precedence(version: &SemanticVersion) -> Ranges<Version> {
+    Ranges::strictly_higher_than(Version::Fabric(version.after_core()))
 }
 
 #[cfg(test)]
@@ -589,5 +612,36 @@ mod tests {
         let caret = parse_constraint("^0.5");
         assert!(caret.contains(&Version::Fabric(v("0.99"))));
         assert!(!caret.contains(&Version::Fabric(v("1.0-alpha"))));
+    }
+
+    #[test]
+    fn suffix_free_exact_constraint_matches_the_whole_precedence_class() {
+        let range = parse_constraint("=1.2.3");
+
+        assert!(range.contains(&Version::Fabric(v("1.2.3-alpha"))));
+        assert!(range.contains(&Version::Fabric(v("1.2.3-beta"))));
+        assert!(range.contains(&Version::Fabric(v("1.2.3"))));
+        assert!(!range.contains(&Version::Fabric(v("1.2.4-alpha"))));
+    }
+
+    #[test]
+    fn suffixed_exact_constraint_matches_the_complete_representation() {
+        let range = parse_constraint("=1.2.3-alpha");
+
+        assert!(range.contains(&Version::Fabric(v("1.2.3-alpha"))));
+        assert!(!range.contains(&Version::Fabric(v("1.2.3-beta"))));
+        assert!(!range.contains(&Version::Fabric(v("1.2.3"))));
+    }
+
+    #[test]
+    fn ordered_constraints_compare_numeric_cores_only() {
+        let inclusive = parse_constraint(">=1.2.3-alpha");
+        assert!(inclusive.contains(&Version::Fabric(v("1.2.3-anything"))));
+        assert!(inclusive.contains(&Version::Fabric(v("1.2.3"))));
+
+        let strict = parse_constraint(">1.2.3-alpha");
+        assert!(!strict.contains(&Version::Fabric(v("1.2.3-beta"))));
+        assert!(!strict.contains(&Version::Fabric(v("1.2.3"))));
+        assert!(strict.contains(&Version::Fabric(v("1.2.4-alpha"))));
     }
 }

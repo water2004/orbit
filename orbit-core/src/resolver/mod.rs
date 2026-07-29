@@ -454,23 +454,27 @@ pub async fn resolve_candidate_portfolio_with_progress(
     let maximized_packages = maximized_mods.into_iter().map(SolverPackage::logical);
     let watched_candidates = highest_candidates(&catalog.candidates, graph.loader);
     let mut trace = diagnostics::ResolutionTrace::with_progress(watched_candidates, progress);
+    let version_ordering = pubgrub::VersionOrdering::new(
+        |version: &SolverVersion| Ranges::singleton(version.clone()),
+        |version: &SolverVersion| {
+            version.domain().map_or_else(
+                || Ranges::singleton(version.clone()),
+                |semantic| solver_range(semantic.precedence_class()),
+            )
+        },
+        |version: &SolverVersion| {
+            version.domain().map_or_else(
+                || Ranges::strictly_higher_than(version.clone()),
+                |semantic| solver_range(semantic.strictly_higher_precedence()),
+            )
+        },
+    );
     let solutions = match pubgrub::resolve_maximal_solutions_with_observer(
         &graph.provider,
         graph.root_package.clone(),
         graph.root_version.clone(),
         maximized_packages,
-        |version| {
-            version.domain().map_or_else(
-                || Ranges::singleton(version.clone()),
-                |semantic| solver_range(Ranges::singleton(semantic.clone())),
-            )
-        },
-        |version| {
-            version.domain().map_or_else(
-                || Ranges::strictly_higher_than(version.clone()),
-                |semantic| solver_range(Ranges::strictly_higher_than(semantic.clone())),
-            )
-        },
+        version_ordering,
         &mut trace,
     ) {
         Ok(solutions) => solutions,
@@ -514,7 +518,6 @@ pub async fn resolve_candidate_portfolio_with_progress(
         candidates: &catalog.candidates,
         loader: graph.loader,
         exclusions: &graph.exclusions,
-        overrides: &graph.overrides,
         target: graph.target,
     };
     let alternatives = solutions
@@ -530,7 +533,6 @@ struct ReportContext<'a> {
     candidates: &'a HashMap<String, Vec<CandidateVersion>>,
     loader: LoaderKind,
     exclusions: &'a graph::ExclusionMap,
-    overrides: &'a graph::OverrideMap,
     target: Environment,
 }
 
@@ -545,7 +547,6 @@ fn collect_report(
         solution,
         context.loader,
         context.exclusions,
-        context.overrides,
         context.target,
     );
 
@@ -628,11 +629,15 @@ fn collect_report(
         let (active_index, active) = installed
             .iter()
             .copied()
-            .max_by_key(|(_, entry)| Version::parse(&entry.version, context.loader))
+            .max_by(|(_, left), (_, right)| {
+                let left = Version::parse(&left.version, context.loader);
+                let right = Version::parse(&right.version, context.loader);
+                left.cmp_precedence(&right).then_with(|| left.cmp(&right))
+            })
             .expect("installed is not empty");
         let current = Version::parse(&active.version, context.loader);
         let selected = Version::parse(selected_version, context.loader);
-        let kind = match selected.cmp(&current) {
+        let kind = match selected.cmp_precedence(&current) {
             std::cmp::Ordering::Greater => PackageChangeKind::Upgrade,
             std::cmp::Ordering::Less => PackageChangeKind::Downgrade,
             std::cmp::Ordering::Equal => PackageChangeKind::Replace,
@@ -688,7 +693,8 @@ fn collect_report(
             continue;
         };
         if selected_semantic.is_some_and(|selected| {
-            Version::parse(&candidate.jar_version, context.loader) > *selected
+            Version::parse(&candidate.jar_version, context.loader).cmp_precedence(selected)
+                == std::cmp::Ordering::Greater
         }) {
             diagnostics.push(trace.diagnose_skipped(package, selected));
         }
@@ -774,9 +780,11 @@ fn highest_candidate(
     candidates: Option<&[CandidateVersion]>,
     loader: LoaderKind,
 ) -> Option<&CandidateVersion> {
-    candidates?
-        .iter()
-        .max_by_key(|candidate| Version::parse(&candidate.jar_version, loader))
+    candidates?.iter().max_by(|left, right| {
+        let left = Version::parse(&left.jar_version, loader);
+        let right = Version::parse(&right.jar_version, loader);
+        left.cmp_precedence(&right).then_with(|| left.cmp(&right))
+    })
 }
 
 #[cfg(test)]
@@ -801,7 +809,7 @@ minecraft_jar = { path = "minecraft.jar", sha256 = "test" }
 loader_jar = { path = "loader.jar", sha256 = "test" }
 runtime_jars = []
 physical_environment = "client"
-[dependencies]
+[packages]
 a = { version = "*", remotes = [{ type = "file", path = "a.jar" }] }
 b = { version = "*", remotes = [{ type = "file", path = "b.jar" }] }
 "#,
@@ -1033,6 +1041,139 @@ b = { version = "*", remotes = [{ type = "file", path = "b.jar" }] }
     }
 
     #[tokio::test]
+    async fn equal_precedence_suffixes_remain_distinct_pareto_solutions() {
+        let mut manifest = manifest();
+        manifest.packages.shift_remove("b");
+        manifest.packages["a"].version = "=1.2.3".to_string();
+        let mut lockfile = lockfile();
+        lockfile.packages.retain(|entry| entry.mod_id == "a");
+        let mut catalog = CandidateCatalog::default();
+        catalog.candidates.insert(
+            "a".to_string(),
+            vec![
+                candidate("1.2.3-alpha", Vec::new()),
+                candidate("1.2.3-beta", Vec::new()),
+            ],
+        );
+
+        let portfolio = resolve_candidate_portfolio(&manifest, &lockfile, &catalog)
+            .await
+            .unwrap();
+        let selected: std::collections::BTreeSet<_> = portfolio
+            .alternatives
+            .iter()
+            .map(|alternative| alternative.selected_versions["a"].clone())
+            .collect();
+
+        assert_eq!(
+            selected,
+            std::collections::BTreeSet::from(
+                ["1.2.3-alpha".to_string(), "1.2.3-beta".to_string(),]
+            )
+        );
+        assert!(portfolio.alternatives.iter().all(|alternative| {
+            alternative
+                .changes
+                .iter()
+                .any(|change| change.kind == PackageChangeKind::Upgrade)
+        }));
+    }
+
+    #[tokio::test]
+    async fn explicit_suffix_constraint_selects_one_candidate_without_a_prompt() {
+        let mut manifest = manifest();
+        manifest.packages.shift_remove("b");
+        manifest.packages["a"].version = "=1.2.3-alpha".to_string();
+        let mut lockfile = lockfile();
+        lockfile.packages.retain(|entry| entry.mod_id == "a");
+        let mut catalog = CandidateCatalog::default();
+        catalog.candidates.insert(
+            "a".to_string(),
+            vec![
+                candidate("1.2.3-alpha", Vec::new()),
+                candidate("1.2.3-beta", Vec::new()),
+            ],
+        );
+
+        let portfolio = resolve_candidate_portfolio(&manifest, &lockfile, &catalog)
+            .await
+            .unwrap();
+
+        assert_eq!(portfolio.alternatives.len(), 1);
+        assert_eq!(
+            portfolio.alternatives[0].selected_versions["a"],
+            "1.2.3-alpha"
+        );
+    }
+
+    #[tokio::test]
+    async fn equal_declared_versions_with_distinct_files_remain_distinct_solutions() {
+        let mut manifest = manifest();
+        manifest.packages.shift_remove("b");
+        manifest.packages["a"].version = "=1.2.3-alpha".to_string();
+        let mut lockfile = lockfile();
+        lockfile.packages.retain(|entry| entry.mod_id == "a");
+        let mut first = candidate("1.2.3-alpha", Vec::new());
+        first.id = "first-file".to_string();
+        first.filename = "first.jar".to_string();
+        let mut second = candidate("1.2.3-alpha", Vec::new());
+        second.id = "second-file".to_string();
+        second.filename = "second.jar".to_string();
+        let mut catalog = CandidateCatalog::default();
+        catalog
+            .candidates
+            .insert("a".to_string(), vec![first, second]);
+
+        let portfolio = resolve_candidate_portfolio(&manifest, &lockfile, &catalog)
+            .await
+            .unwrap();
+        let selected: std::collections::BTreeSet<_> = portfolio
+            .alternatives
+            .iter()
+            .map(|alternative| alternative.selected_candidates["a"].clone())
+            .collect();
+
+        assert_eq!(
+            selected,
+            std::collections::BTreeSet::from(
+                ["first-file".to_string(), "second-file".to_string(),]
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn changing_only_the_suffix_is_a_replacement_not_an_upgrade() {
+        let mut manifest = manifest();
+        manifest.packages.shift_remove("b");
+        manifest.packages["a"].version = "=1.2.3".to_string();
+        let mut lockfile = lockfile();
+        lockfile.packages.retain(|entry| entry.mod_id == "a");
+        lockfile.packages[0].version = "1.2.3-alpha".to_string();
+        let mut catalog = CandidateCatalog::default();
+        catalog
+            .candidates
+            .insert("a".to_string(), vec![candidate("1.2.3-beta", Vec::new())]);
+
+        let portfolio = resolve_candidate_portfolio(&manifest, &lockfile, &catalog)
+            .await
+            .unwrap();
+        let replacement = portfolio
+            .alternatives
+            .iter()
+            .flat_map(|alternative| &alternative.changes)
+            .find(|change| change.package == "a")
+            .unwrap();
+
+        assert_eq!(replacement.kind, PackageChangeKind::Replace);
+        assert!(
+            portfolio
+                .alternatives
+                .iter()
+                .all(|alternative| !alternative.has_upgrade())
+        );
+    }
+
+    #[tokio::test]
     async fn coordinated_upgrade_dominates_the_lower_disconnected_solution() {
         let mut catalog = CandidateCatalog::default();
         catalog.candidates.insert(
@@ -1117,7 +1258,7 @@ minecraft_jar = { path = "minecraft.jar", sha256 = "test" }
 loader_jar = { path = "loader.jar", sha256 = "test" }
 runtime_jars = []
 physical_environment = "client"
-[dependencies]
+[packages]
 reeses-sodium-options = { version = "*", remotes = [{ type = "file", path = "reeses.jar" }] }
 voxy = { version = "*", remotes = [{ type = "file", path = "voxy.jar" }] }
 "#,
@@ -1171,11 +1312,11 @@ voxy = { version = "*", remotes = [{ type = "file", path = "voxy.jar" }] }
     }
 
     #[tokio::test]
-    async fn equivalent_candidates_keep_the_feasible_installed_realization() {
+    async fn equal_version_candidates_include_the_feasible_installed_realization() {
         let mut current = lockfile();
         current.packages.retain(|entry| entry.mod_id == "a");
         let mut only_a = manifest();
-        only_a.dependencies.shift_remove("b");
+        only_a.packages.shift_remove("b");
         let mut catalog = CandidateCatalog::default();
         catalog
             .candidates
@@ -1191,8 +1332,19 @@ voxy = { version = "*", remotes = [{ type = "file", path = "voxy.jar" }] }
                 .iter()
                 .all(|alternative| !alternative.has_upgrade())
         );
-        assert_eq!(portfolio.alternatives.len(), 1);
-        assert!(portfolio.alternatives[0].changes.is_empty());
+        assert_eq!(portfolio.alternatives.len(), 2);
+        assert!(
+            portfolio
+                .alternatives
+                .iter()
+                .any(|alternative| alternative.changes.is_empty())
+        );
+        assert!(portfolio.alternatives.iter().any(|alternative| {
+            alternative
+                .changes
+                .iter()
+                .any(|change| change.package == "a" && change.kind == PackageChangeKind::Replace)
+        }));
     }
 
     #[tokio::test]
@@ -1207,7 +1359,7 @@ voxy = { version = "*", remotes = [{ type = "file", path = "voxy.jar" }] }
             packages: vec![older, newer],
         };
         let mut only_a = manifest();
-        only_a.dependencies.shift_remove("b");
+        only_a.packages.shift_remove("b");
 
         let portfolio =
             resolve_candidate_portfolio(&only_a, &current, &CandidateCatalog::default())
@@ -1227,7 +1379,7 @@ voxy = { version = "*", remotes = [{ type = "file", path = "voxy.jar" }] }
     #[tokio::test]
     async fn jar_dependency_without_a_downloaded_project_is_no_solution() {
         let mut manifest = manifest();
-        manifest.dependencies.shift_remove("b");
+        manifest.packages.shift_remove("b");
         let lockfile = OrbitLockfile {
             meta: lockfile().meta,
             packages: Vec::new(),
@@ -1264,7 +1416,7 @@ loader_jar = { path = "loader.jar", sha256 = "test" }
 runtime_jars = []
 physical_environment = "client"
 
-[dependencies]
+[packages]
 iris = { version = "*", remotes = [{ type = "file", path = "iris.jar" }] }
 "#,
         )
