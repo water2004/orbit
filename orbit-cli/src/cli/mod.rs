@@ -340,6 +340,9 @@ pub enum ConstraintCommands {
     /// Apply a structured version policy and immediately converge the instance.
     Set {
         package: String,
+        /// Ordered set rule over text following the leading numeric core.
+        #[arg(long, default_value = "all", global = true)]
+        suffix: String,
         #[command(subcommand)]
         policy: ConstraintPolicyCommands,
     },
@@ -736,6 +739,7 @@ mod tests {
             command:
                 ConstraintCommands::Set {
                     package,
+                    suffix: _,
                     policy: ConstraintPolicyCommands::Exact { version },
                 },
         } = constraint.command
@@ -744,6 +748,27 @@ mod tests {
         };
         assert_eq!(package, "sodium");
         assert_eq!(version, "0.6.13-alpha");
+
+        let suffix = Cli::try_parse_from([
+            "orbit",
+            "constraint",
+            "set",
+            "sodium",
+            "any",
+            "--suffix",
+            "all; intersect not contains(i\"beta\"); union ends_with(\"fabric\")",
+        ])
+        .unwrap();
+        let Commands::Constraint {
+            command: ConstraintCommands::Set { suffix, .. },
+        } = suffix.command
+        else {
+            panic!("suffix expression was not parsed");
+        };
+        assert_eq!(
+            suffix,
+            "all; intersect not contains(i\"beta\"); union ends_with(\"fabric\")"
+        );
 
         let range = Cli::try_parse_from([
             "orbit",

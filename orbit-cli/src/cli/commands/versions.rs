@@ -19,6 +19,7 @@ pub async fn handle(package: String, ctx: &CliContext) -> Result<()> {
     let output = PackageVersionsOutput {
         package: report.package,
         constraint: report.constraint,
+        suffix: report.suffix,
         policy: crate::cli::output::package_version_policy_view(&report.policy),
         selected_version: report.selected_version,
         candidates: report
@@ -26,6 +27,8 @@ pub async fn handle(package: String, ctx: &CliContext) -> Result<()> {
             .into_iter()
             .map(|candidate| PackageVersionCandidateView {
                 version: candidate.version,
+                suffix: candidate.suffix,
+                suffix_tokens: candidate.suffix_tokens,
                 sources: candidate.sources,
                 details: candidate.details,
                 selected: candidate.selected,

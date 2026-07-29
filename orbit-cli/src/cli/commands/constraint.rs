@@ -16,6 +16,8 @@ pub async fn handle(command: ConstraintCommands, ctx: &CliContext) -> Result<()>
                     package: report.package,
                     previous: None,
                     current: report.constraint,
+                    previous_suffix: None,
+                    suffix: report.suffix,
                     policy: package_version_policy_view(&report.policy),
                     previous_selected_version: None,
                     selected_version: report.selected_version,
@@ -28,13 +30,18 @@ pub async fn handle(command: ConstraintCommands, ctx: &CliContext) -> Result<()>
                 None,
             )
         }
-        ConstraintCommands::Set { package, policy } => {
+        ConstraintCommands::Set {
+            package,
+            suffix,
+            policy,
+        } => {
             let policy = core_policy(policy);
             let providers = super::create_instance_providers(&instance_dir, None, &ctx.runtime)?;
             let report = orbit_core::apply_package_constraint(
                 &instance_dir,
                 &package,
                 policy,
+                suffix,
                 &providers,
                 ctx.runtime.jar_cache(),
                 ctx.dry_run,
@@ -47,6 +54,8 @@ pub async fn handle(command: ConstraintCommands, ctx: &CliContext) -> Result<()>
                     package: report.package,
                     previous: Some(report.previous),
                     current: report.current,
+                    previous_suffix: Some(report.previous_suffix),
+                    suffix: report.suffix,
                     policy: package_version_policy_view(&report.policy),
                     previous_selected_version: report.previous_selected_version,
                     selected_version: report.selected_version,
@@ -120,9 +129,10 @@ fn print_text(output: &PackageConstraintOutput, transaction: Option<&orbit_core:
     println!(
         "{}",
         tr!(
-            "%{package}: %{constraint} (selected: %{selected}; %{status})",
+            "%{package}: %{constraint}; suffix: %{suffix} (selected: %{selected}; %{status})",
             package = output.package,
             constraint = output.current,
+            suffix = output.suffix,
             selected = selected,
             status = status
         )

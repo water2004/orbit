@@ -568,11 +568,12 @@ pub fn installed_packages_table(packages: &[ListedPackage]) -> String {
 }
 
 pub fn package_versions_table(output: &PackageVersionsOutput) -> String {
-    let mut table = output_table(["", "Version", "Policy", "Sources", "Details"]);
+    let mut table = output_table(["", "Version", "Suffix", "Policy", "Sources", "Details"]);
     for candidate in &output.candidates {
         table.add_row([
             Cell::new(if candidate.selected { "●" } else { "" }),
             Cell::new(&candidate.version),
+            Cell::new(candidate.suffix.as_deref().unwrap_or("—")),
             Cell::new(if candidate.matches_constraint {
                 tr!("allowed")
             } else {
@@ -585,9 +586,10 @@ pub fn package_versions_table(output: &PackageVersionsOutput) -> String {
     format!(
         "{}\n{}",
         tr!(
-            "%{package} versions (constraint: %{constraint})",
+            "%{package} versions (constraint: %{constraint}; suffix: %{suffix})",
             package = output.package,
-            constraint = output.constraint
+            constraint = output.constraint,
+            suffix = output.suffix
         ),
         table
     )
