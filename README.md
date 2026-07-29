@@ -25,7 +25,7 @@ The detailed boundaries are documented in [Orbit architecture](docs/orbit-archit
 - **Explicit repair.** `orbit fix` is the command that discovers the full recursive candidate closure, resolves it, presents every package-level action, and applies a confirmed repair.
 - **Multiple remotes per package.** A logical package can use local files, Modrinth projects, and CurseForge projects together. Content is deduplicated by hash; identity, version, dependencies, environment, `provides`, and bundled content come only from downloaded JAR metadata.
 - **Loader-faithful metadata and audit backends.** Fabric, Quilt, Forge, and NeoForge keep their real registration, nesting, namespace, and Mixin activation rules before entering shared normalized models.
-- **Explainable complete solving.** Dependency causes are emitted by the actual PubGrub propagation and backtracking path. Orbit enumerates the standard Pareto-maximal solution front and asks whenever more than one meaningful solution exists.
+- **Explainable objective-aware solving.** Dependency causes come from the actual PubGrub propagation and backtracking path. `add` and `fix` enumerate standard Pareto-minimal package-change sets; `upgrade` and `outdated` enumerate the standard Pareto-maximal version front. Every incomparable alternative remains an explicit choice.
 - **Package-level transactions.** `mod_id` is the solver package key. A selected package may own multiple contained JARs, while unselected top-level package versions are removed only after the exact plan is shown and confirmed.
 - **Observable and cancellable work.** Discovery, downloads, solving, application, audit, and portable export emit typed progress. Orbit ZIP export stores already-compressed JARs directly, reports real byte progress, and cleans failed temporary output.
 - **Portable migration snapshots.** The GUI exports a verified Orbit source pack before it creates a target runtime. The target migration then resolves from that frozen pack against the actually installed target Minecraft and Loader runtime.
@@ -103,9 +103,9 @@ Orbit resolves its instance from the current directory first, then an explicit `
 | --- | --- |
 | `orbit init <name>` | Initialize a valid game directory from redetected local facts. |
 | `orbit sync` | Redetect the runtime, scan JARs, recover known remotes online, and rebuild TOML/lock facts without dependency solving. |
-| `orbit fix` | Find and confirm a feasible package repair; this is the repair command. |
+| `orbit fix` | Find and confirm a standard Pareto-minimal package repair; this is the repair command. |
 | `orbit install [--target client\|server]` | Materialize the exact existing lockfile. It does not solve, repair, remove packages, or rewrite state. |
-| `orbit add <locator>` | Add a provider project or local file and solve the complete candidate closure. |
+| `orbit add <locator>` | Add a provider project or local file while Pareto-minimizing changes to the existing instance. |
 | `orbit remove <package>` | Remove the logical package and its TOML/lock state. |
 | `orbit purge <package>` | Remove the package and interactively select related configuration candidates. |
 | `orbit outdated [package]` | Explain feasible updates and why newer candidates are blocked. |

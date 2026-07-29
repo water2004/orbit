@@ -703,7 +703,11 @@ Orbit Launcher 直接使用 `orbit-machine-protocol` 中同一个信封类型，
 | `apply` | `ApplyArtifact` | `{completed, total, state}` |
 | `apply` | `ApplyFinished` | `{total}` |
 
-`work` 对象：`{"kind":"enumeration_run","run":1}` 或 `{"kind":"maximality_probe","package":"sodium"}`。
+`work` 对象：`{"kind":"enumeration_run","run":1}`、
+`{"kind":"preference_probe","package":"sodium"}` 或
+`{"kind":"maximality_probe","package":"sodium"}`。preference probe 用于 `add` / `fix`
+的 Pareto 极小变更枚举；maximality probe 用于固定变更集合后的版本极大化以及
+`upgrade` / `outdated`。
 `activity` 对象：`{"kind":"decision","package":"sodium"}` / `{"kind":"propagation",...}` / `{"kind":"backtrack","from_level":3,"to_level":1}` / `{"kind":"conflict"}` / `{"kind":"solution"}`。
 
 ### audit 进度事件
@@ -716,12 +720,12 @@ Orbit Launcher 直接使用 `orbit-machine-protocol` 中同一个信封类型，
 
 ## 5. 同进程交互协议
 
-`--output-format json` 的命令遇到多个真实包身份、多个 Pareto 极大解或写入前确认时，不启动
+`--output-format json` 的命令遇到多个真实包身份、多个互不支配 Pareto 解或写入前确认时，不启动
 第二条命令、不返回待恢复 token，也不静默采用第一个选项。CLI 在 **stderr** 输出一行
 `interaction` NDJSON，然后暂停并从同一个子进程的 **stdin** 读取一行响应：
 
 ```json
-{"schema_version":2,"type":"interaction","command":"upgrade","sequence":12,"interaction_id":"resolution-12","interaction":"resolution","prompt":"Choose one Pareto-maximal dependency solution","choices":[{"id":"1","label":"Option 1","description":"2 logical package actions","data":{"changes":[{"different":true,"change":{"package":"sodium","action":"upgrade","current_version":"0.8.9","selected_version":"0.9.1"}}],"warnings":[],"diagnostics":[]}}],"default_choice":"1","allow_cancel":true}
+{"schema_version":2,"type":"interaction","command":"upgrade","sequence":12,"interaction_id":"resolution-12","interaction":"resolution","prompt":"Choose one non-dominated dependency solution","choices":[{"id":"1","label":"Option 1","description":"2 logical package actions","data":{"changes":[{"different":true,"change":{"package":"sodium","action":"upgrade","current_version":"0.8.9","selected_version":"0.9.1"}}],"warnings":[],"diagnostics":[]}}],"default_choice":"1","allow_cancel":true}
 ```
 
 调用方写回：
@@ -738,7 +742,7 @@ Orbit Launcher 直接使用 `orbit-machine-protocol` 中同一个信封类型，
 | `interaction` | 说明 |
 |---|---|
 | `package` | 在同一 provider locator 返回的多个可行 JAR `mod_id` 中选择 |
-| `resolution` | 在完整 Pareto 极大解集合中选择；`data.changes[].different=true` 是不依赖颜色的差异标记 |
+| `resolution` | 在命令对应的完整 Pareto front 中选择（`add`/`fix` 为变更极小，`upgrade`/`outdated` 为版本极大）；`data.changes[].different=true` 是不依赖颜色的差异标记 |
 | `confirmation` | 查看精确逻辑包事务并决定是否写入 |
 
 `--yes` 只跳过 `confirmation`，不会跳过 `package` 或 `resolution`。唯一包身份/唯一解不会

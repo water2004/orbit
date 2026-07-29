@@ -98,7 +98,9 @@ fork 原生保留同一 Pareto 优先级上的不同候选实现，并排除已�
 和依赖差异，不显示内容哈希。
 
 只有 `cmp_precedence() == Greater` 才产生 upgrade；小于产生 downgrade；优先级相同而
-候选不同产生 replace。标准 Pareto 支配也只使用这个优先级关系。
+候选不同产生 replace。`upgrade` / `outdated` 的标准版本 Pareto 支配以及 `add` / `fix`
+在固定极小变更集合内的次级版本支配，都只使用这个优先级关系。`add` / `fix` 的首要关系
+不是版本高低，而是相对 lock 未能保留的逻辑包状态集合按包含关系 Pareto 极小。
 
 ## 6. 版本管理命令
 

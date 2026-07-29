@@ -14,17 +14,17 @@
 | 平台工件同步 | ✅ | init/sync 独占 fresh scan；TOML 固定 Minecraft/loader/runtime JAR 路径、SHA-256、物理端；其它命令严格消费 |
 | JAR 元数据 | ✅ | 四种 loader、多逻辑 mod、嵌套 JAR、JarJar |
 | 版本语义 | ✅ | Fabric predicate；Maven ComparableVersion/range；数值核心与后缀候选分离，精确 `=` 按是否带后缀区分 |
-| 依赖求解 | ✅ | 强类型 occurrence 图、完整 Pareto front、any/all/unless、环境、provides、ordering、Java、JarJar |
+| 依赖求解 | ✅ | 强类型 occurrence 图、原生变更极小与版本极大 Pareto front、any/all/unless、环境、provides、ordering、Java、JarJar |
 | 原因 | ✅ | 自定义 reason 参与原始推导；成功候选用同次 observer |
 | 本地校验 | ✅ | 转 Fat Lockfile 后复用统一建图 |
-| 安装/修复/升级 | ✅ | install 精确物化 lock；fix/upgrade 由统一求解结果生成包事务计划 |
+| 安装/修复/升级 | ✅ | install 精确物化 lock；add/fix 使用 Pareto 极小变更；upgrade/outdated 使用版本 Pareto 极大；统一生成包事务计划 |
 | Modrinth / CurseForge / `file:` | ✅ | 查询、下载、识别、锁定；CurseForge 无 API Key 时拒绝创建 |
 | 多远端包模型 | ✅ | 每个受管包非空 `remotes`；全部来源共同发现，完全相同字节跨 provider 合并 |
 | 完整 TOML 包集合 | ✅ | 所有选中顶层逻辑包均写入 `[packages]`，无根/传递分类；lock 只记录精确事实 |
 | 包版本管理 | ✅ | `versions` 联网下载并按 JAR 声明版本排序；`constraint show/set/clear` 管理 TOML 策略；GUI 复用同一 CLI |
 | 内容候选身份 | ✅ | 本地 SHA-512 作为内部候选主键；同版本不同内容保持独立，CLI 只显示来源与依赖差异 |
 | PubGrub fork 远端 | ✅ | 功能分支已发布，Orbit 固定到完整 commit SHA |
-| 多解选择 | ✅ | fork 原生枚举 Pareto 极大解；唯一解自动选择，多解经同一进程的终端或 schema 2 机器交互明确选择；`--yes` 不代选 |
+| 多解选择 | ✅ | fork 原生枚举完整变更极小或版本极大 Pareto front；唯一解自动选择，多解经同一进程的终端或 schema 2 机器交互明确选择；`--yes` 不代选 |
 | 本地重复包 | ✅ | init/sync 保留全部事实并要求 fix；fix 确认后删除未选顶层实现并同步清理 lock/TOML/source |
 | 版本迁移 | ✅ | 先由普通 export 冻结源包，成功后才创建目标；`migrate check/export --source-pack` 对 Launcher 已安装目标运行时共用同一精确规划，目标 install 物化 JAR |
 | 远端身份边界 | ✅ | provider 只给下载 locator；一个 locator 的多种真实 mod_id 按 JAR 身份分区并选择 |
@@ -122,12 +122,13 @@
   launcher 选择且版本可验证的 runtime game JAR。mapping/Plugin/类定义证据不完整时
   降为 readiness/coverage/inactive，不生成确定风险。
 - PubGrub fork 已发布到 `water2004/pubgrub` 的 `codex/solver-observer` 分支；
-  Orbit 固定到 `f013c843f543ae0c160e30a8ef7dd630e080b59e`。
+  Orbit 固定到 `914cf645982ba790090652bf3a09d934de857408`。
 - 当前 fork 原生支持 `P = mod_id`、不透明复合候选版本、调用方定义
-  `same_version` / `strictly_higher` 和完整 Pareto front 枚举；同声明版本的不同内容身份
+  `same_version` / `strictly_higher`、包状态偏好以及完整 Pareto front 枚举；同声明版本的不同内容身份
   会以各自 JAR 约束参与求解，但相同语义投影不会凭空扩成多个用户解。每个保留点会一次
-  排除完整支配区域，无效版本序回调会在产生错误排除前失败。upgrade 的“至少一个包
-  变新、其他包可降级”是对同批 Pareto 解的操作分类。
+  排除完整支配区域，无效版本序回调会在产生错误排除前失败。add/fix 对未满足基线偏好的
+  逻辑包集合做标准 Pareto 极小，再在固定集合内做版本极大；upgrade 的“至少一个包变新、
+  其他包可降级”则是对版本 Pareto 极大解的操作分类。
 - 远端 project relation 会递归构造下载闭包；JAR `mod_id` 从不作为 slug/project
   查询。闭包缺少实际 required identity 时由 resolver 正常证明无解。
 - `sync` 不下载候选或修复 JAR，但必须调用可用 provider 的批量哈希接口恢复来源；识别
@@ -141,7 +142,7 @@
   `remote list` 不显示哈希。相同版本的不同候选用 provider project/release 与实际
   JAR 依赖差异解释。
 - project 闭包的总工作量事前未知，因此显示当前 locator、已发现 artifact 与耗时。
-  Pareto 枚举的总量随 continuation run/maximality probe 的实际发现而增长，完成数同步
+  Pareto 枚举的总量随 continuation run、preference probe、maximality probe 的实际发现而增长，完成数同步
   推进；它不构成剩余耗时上界，Pareto 或 co-Pareto front 本身仍可能很大。候选 JAR
   下载/校验/解析及最终物化使用预先稳定的精确总数。
 

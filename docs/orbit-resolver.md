@@ -67,6 +67,13 @@ Pareto 点后，fork 一次排除它支配的整个区域，而不是逐个阻�
 内部包允许变化，也不会制造重复的用户解。这些 API 仍然只理解通用
 package/version/constraint，不包含 Jar-in-Jar、loader 或 Orbit 类型。
 
+`resolve_minimal_change_solutions_with_observer()` 则接受一组独立的包状态偏好，并枚举
+未满足偏好集合按包含关系 Pareto 极小的全部解。若一个解未满足的偏好集合是另一解的真
+超集，它会被排除；互不包含的集合都会保留。因此这是标准集合 Pareto 极小，不是最小基数、
+加权打分或按枚举顺序挑一个。偏好集合固定后，fork 再用上述版本序枚举该变更集合内的
+版本 Pareto 极大 front。偏好 probe 与 maximality probe 都是 fork 的原生求解阶段，
+Orbit 不循环调用黑盒可行性测试。
+
 probe 的 start/finish 事件带有结果。成功 probe 中的决定、传播和回溯成为当前候选的
 真实路径；失败 probe 的 observer 状态回滚。因此最终诊断仍来自产生该 Pareto 解的
 实际推导，不是事后反事实重跑。
@@ -181,12 +188,12 @@ Forge-family Jar-in-Jar 的 Maven 坐标是逻辑 artifact 包。每个内嵌 ar
 6. 对实际字节自行计算 SHA-512：相同内容跨 provider 合并来源，不同内容即使
    `mod_id + version` 相同也保持独立；
 7. 把完整 `CandidateCatalog` 交给纯离线 resolver；
-8. 建一次最终图并调用 fork 的 maximal-solution API；
+8. 建一次最终图，并按命令调用 fork 的 minimal-change 或 maximal-solution API；
 9. 唯一解直接选择；多解才交给 CLI 选择。
 
 这些边界同时是进度事件边界。project 递归发现报告当前 provider locator 和已发现
 artifact 数；队列稳定后报告每个候选 JAR 的完成数；纯离线求解报告包/候选规模和
-动态工作量。fork 对每个 enumeration continuation run 和 maximality probe 发出成对
+动态工作量。fork 对每个 enumeration continuation run、preference probe 和 maximality probe 发出成对
 start/finish 事件；UI 在 start 时扩大总量，在 finish 时推进，并额外显示 decision、
 propagation、backtrack、conflict 与 retained solution 计数。probe 内部决策仍使用
 noop observer，不能污染用于解释候选淘汰原因的成功路径。
@@ -203,9 +210,21 @@ provider 的 dependency relation 仅用于定位下一批 project，不携带可
 分区；`add` 对每个真实身份独立求可行 portfolio 后选择身份，upgrade 则固定现有
 lockfile 身份。这个选择发生在下载完成、纯离线求解开始之后，不把 slug 当包名。
 
-多解的定义是标准 Pareto 极大：不存在另一个可行方案，使全部已选用户包版本等价或更高，
-并且至少一个严格更高。候选来源不是“更高版本”的第二条坐标。这个定义会删除全面落后的
-方案，但保留“某些包升级、另一些包必须降级”的真实权衡。交互界面列出每个方案的安装、
+`upgrade` / `outdated` 多解的定义是标准版本 Pareto 极大：不存在另一个可行方案，使全部
+已选用户包版本等价或更高，并且至少一个严格更高。候选来源不是“更高版本”的第二条坐标。
+这个定义会删除全面落后的方案，但保留“某些包升级、另一些包必须降级”的真实权衡。
+
+`add` / `fix` 使用标准 Pareto 极小变更集合。Orbit 给 fork 的偏好坐标由逻辑包构成：
+
+- TOML 与 lock 都有的包偏好保留 lock 中的精确候选身份；
+- TOML 有而 lock 没有的包是必须实现的意图，不设“保持缺失”偏好；
+- 不在 TOML 中的候选包偏好保持不存在。
+
+方案的变更坐标就是未满足的这些偏好。如果 A 的变更集合是 B 的真子集，B 被支配；
+`{change A}` 与 `{change B}` 则都保留。固定一个极小集合后，再以版本 Pareto 极大作为
+次级目标，所以不可避免的新包或已确定要变化的包不会留下全面更旧的组合。
+
+交互界面列出每个方案的安装、
 升级、降级、同版本替换和删除。共同动作只列一次，每个选项用 `◆` 标记与其他选项不同
 的逻辑包动作。同版本不同内容的选项用 provider project/release 与 JAR-declared
 依赖差异描述；物理文件名和哈希不属于用户决策，不进入这张表。只有一个方案时不读取 stdin。
@@ -224,7 +243,8 @@ Pareto front 或 co-Pareto front 本身仍可能很大；动态工作量说明�
 选择，不替 `init`/`sync` 选择重复实现。
 
 `add`、`fix`、`upgrade`、`outdated` 与 `migrate` 消费同一种 `ResolutionReport`。
-多个 Pareto 极大解统一选择；选择完成后统一生成包事务计划。未选中的顶层包版本会列出
+不论是多个 Pareto 极小变更解还是多个版本 Pareto 极大解，都进入同一选择协议；选择完成
+后统一生成包事务计划。未选中的顶层包版本会列出
 精确 `mod_id`、版本和动作，实际写入或删除前必须确认；文件名只供事务执行层定位载体。
 即使方案唯一也不能跳过破坏性计划确认。嵌套 JAR 从不作为独立删除目标。
 
@@ -277,5 +297,5 @@ lock，不重新求解，也不会把源实例当前 JAR 当成目标已安装�
 - CurseForge：需要用户 API Key；API 没有可用下载 URL 时返回可恢复的明确错误，不
   猜测 CDN 地址。
 - 远端 fork：功能分支已发布；Orbit 通过完整 commit SHA
-  `f013c843f543ae0c160e30a8ef7dd630e080b59e` 固定依赖，不跟随可移动分支头。
+  `914cf645982ba790090652bf3a09d934de857408` 固定依赖，不跟随可移动分支头。
 - 静态字节码判断：只给出必要条件，不宣称能完整证明模组运行时兼容。

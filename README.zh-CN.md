@@ -36,7 +36,7 @@ Launcher 已完整支持 Vanilla、Fabric、Quilt、Forge、NeoForge 的客户�
 - **🌐 多来源**：支持 Modrinth、CurseForge 与本地 `file:` JAR；不同平台只负责候选发现，最终统一验证 JAR 并求解依赖。
 - **🧩 完整 Loader 语义**：Fabric、Quilt、Forge、NeoForge 先由各自适配器保真解析，再进入同一个规范化求解模型；支持端侧、软/硬依赖、`provides`、加载顺序、内嵌模组与 Jar-in-Jar。
 - **🔎 可解释求解**：依赖原因直接参与 PubGrub 的真实传播和回溯；不会用第二次反事实求解或日志解析猜原因。
-- **🧭 完整方案选择**：枚举完整 Pareto front；被全面更新方案支配的组合不会出现，真正的升降级权衡才请求选择。
+- **🧭 目标明确的完整方案选择**：`add` / `fix` 枚举标准 Pareto 极小包变更集合，`upgrade` / `outdated` 枚举标准版本 Pareto 极大 front；互不支配的方案全部请求选择。
 - **📦 包级事务**：JAR 自声明的 `mod_id` 是包；同 ID 文件是版本候选。方案会同时展示升级、允许的依赖降级与未选包版本移除，确认后一次应用。
 - **⏱️ 可观察长事务**：在线候选发现、JAR 下载/缓存校验/解析、离线求解、最终物化、audit 和便携包导出均提供强类型进度；Orbit ZIP 对已经压缩的 JAR 使用 Stored，并按真实字节显示与取消导出。
 - **☕ 字节码下限检查**：根据目标 Minecraft 与 JAR class major 校验最低 Java；该检查不宣称能证明 API、Mixin 或运行时行为完全兼容。
@@ -130,7 +130,7 @@ orbit versions sodium
 orbit constraint set sodium "=0.6.13"
 orbit fix
 
-# 5. 修复依赖图；如有多个 Pareto 极大解会要求选择
+# 5. 按 Pareto 极小变更修复依赖图；多个互不支配方案会要求选择
 orbit fix
 
 # 6. 按 orbit.lock 一键还原精确环境 (新电脑 clone 后)
@@ -173,7 +173,7 @@ schema、字段名、枚举码和错误码不随语言变化。Windows 控制台
 | 命令 | 描述 |
 | :--- | :--- |
 | `orbit sync` | **事实对账**。重新探测平台、扫描 `mods/`，并联网调用可用 provider 的批量哈希 API 恢复来源；重建 lock、补充 TOML，但不发现依赖候选、不求解、不删除 JAR。 |
-| `orbit fix` | **依赖修复**。递归下载所有远端候选的 JAR 元数据、联合求解并展示方案；确认后安装入选包、删除未选包，并同步清理 TOML 与 lock。 |
+| `orbit fix` | **依赖修复**。递归下载所有远端候选的 JAR 元数据，枚举相对当前 lock 的 Pareto 极小包变更方案；确认后安装入选包、删除未选包，并同步清理 TOML 与 lock。 |
 | `orbit outdated [mod]` | **检查过时模组（只读）**。显示可行更新；更高候选受阻或没有适用 JAR 时同时给出原因。 |
 | `orbit upgrade [mod]` | **执行更新**。单包模式必须让该包变新；方案也可包含依赖降级/替换/删除，确认后更新文件与 lock。 |
 
@@ -183,7 +183,7 @@ schema、字段名、枚举码和错误码不随语言变化。Windows 控制台
 | :--- | :--- |
 | `orbit search <query>` | 在已配置来源中搜索模组；支持 Modrinth 与 CurseForge。 |
 | `orbit info <mod>` | 查看模组详细信息（描述、作者、版本历史、前置依赖、端侧支持等）。无需安装，直接请求平台 API。 |
-| `orbit add <mod>` | 添加新模组。支持自动查找、`mr:<project-id-or-search>`、`cf:<numeric-project-id>` 或 `file:./my-mod.jar`。可用 `--env client\|server\|both` 覆盖 JAR 声明。 |
+| `orbit add <mod>` | 添加新模组，并 Pareto 极小化对现有逻辑包的变更。支持自动查找、`mr:<project-id-or-search>`、`cf:<numeric-project-id>` 或 `file:./my-mod.jar`。可用 `--env client\|server\|both` 覆盖 JAR 声明。 |
 | `orbit env <package> <client\|server\|both\|auto>` | 修改包环境过滤；`auto` 跟随 lock 中精确 JAR 的声明。 |
 | `orbit install` | 严格校验平台快照和 lock，仅物化 lock 已记录的精确 JAR；绝不求解、修复、删包或改写 TOML/lock。 |
 | `orbit remove <mod>` | 按 JAR `mod_id` 卸载包。删除其选中内容并移除 `orbit.toml`/lock 中的记录。 |

@@ -198,11 +198,11 @@ Jar-in-Jar artifact 使用独立的 Maven 坐标包并精确绑定 owner 候选�
 
 所有会形成新包集合的入口先得到同一种 `ResolutionReport`，再形成事务计划。当前包括
 `add`、`fix`、`upgrade` 和迁移规划，不包括只记录事实的 `init`/`sync`，也不包括只按
-lock 物化的 `install`。fork 枚举
-完整 Pareto front：被另一个方案在全部已选包上等价或升级、且至少一项严格升级的方案
-不会返回；每个保留点一次排除完整支配区域。唯一解自动选择，多解由调用方选择；任何
-降级、替换或删除都在写盘前展示并确认。upgrade 方案只要求至少一个包相对当前版本变新，
-允许其他包降级。
+lock 物化的 `install`。优化目标由入口显式传入统一 resolver：`add` / `fix` 以当前 lock
+为基线枚举标准 Pareto 极小逻辑包变更集合；`upgrade` / `outdated` 与空目标迁移枚举标准
+版本 Pareto 极大 front。极小变更集合固定后仍以版本极大作为次级目标。fork 对每个保留点
+一次排除完整支配区域。唯一解自动选择，多解由调用方选择；任何降级、替换或删除都在写盘
+前展示并确认。upgrade 方案只要求至少一个包相对当前版本变新，允许其他包降级。
 
 `sync` 只调用可用 provider 的批量哈希识别接口，把本地精确内容恢复为
 project/release 远端，并按磁盘事实重建 lock；它不枚举版本、不下载候选 JAR、不求解，
@@ -276,8 +276,8 @@ Orbit 不能仅凭字节码完整证明：
 | Modrinth | `modrinth-wrapper` + core adapter，可用 |
 | 本地 `file:` | 可用 |
 | CurseForge | `curseforge-wrapper` + core adapter，可用；无 API Key 时 provider 无法创建，Core API 与 CDN 下载均认证 |
-| PubGrub fork | 已发布并固定到 `f013c843f543ae0c160e30a8ef7dd630e080b59e` |
-| 多个 Pareto 极大解 | fork 原生完整枚举；唯一解自动选择，多解交给调用方选择 |
+| PubGrub fork | 已发布并固定到 `914cf645982ba790090652bf3a09d934de857408` |
+| 多个 Pareto 解 | fork 原生完整枚举变更极小或版本极大 front；唯一解自动选择，多解交给调用方选择 |
 
 ## 9. 跨平台运行环境
 
