@@ -341,8 +341,8 @@ pub enum ConstraintCommands {
     Set {
         package: String,
         /// Ordered set rule over text following the leading numeric core.
-        #[arg(long, default_value = "all", global = true)]
-        suffix: String,
+        #[arg(long, global = true)]
+        suffix: Option<String>,
         #[command(subcommand)]
         policy: ConstraintPolicyCommands,
     },
@@ -766,8 +766,8 @@ mod tests {
             panic!("suffix expression was not parsed");
         };
         assert_eq!(
-            suffix,
-            "all; intersect not contains(i\"beta\"); union ends_with(\"fabric\")"
+            suffix.as_deref(),
+            Some("all; intersect not contains(i\"beta\"); union ends_with(\"fabric\")")
         );
 
         let range = Cli::try_parse_from([

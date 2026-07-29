@@ -179,7 +179,7 @@ pub async fn apply_package_constraint(
     instance_dir: &Path,
     package: &str,
     policy: PackageVersionPolicy,
-    suffix: String,
+    suffix: Option<String>,
     providers: &[Box<dyn ModProvider>],
     jar_cache: &crate::jar_cache::JarCache,
     dry_run: bool,
@@ -188,12 +188,14 @@ pub async fn apply_package_constraint(
     let mut manifest = ManifestFile::open(instance_dir)?;
     let loader = manifest.inner.project.loader_kind()?;
     let current = policy.requirement(loader)?;
-    let suffix = crate::VersionSuffixRule::parse(&suffix)?.canonical();
     let specification = manifest
         .inner
         .packages
         .get_mut(package)
         .ok_or_else(|| OrbitError::ModNotFound(package.to_string()))?;
+    let suffix =
+        crate::VersionSuffixRule::parse(suffix.as_deref().unwrap_or(&specification.suffix))?
+            .canonical();
     let previous = std::mem::replace(&mut specification.version, current.clone());
     let previous_suffix = std::mem::replace(&mut specification.suffix, suffix.clone());
     let changed = previous != current || previous_suffix != suffix;
@@ -517,7 +519,7 @@ mod tests {
                 operator: VersionComparison::Exact,
                 version: "1.2.3-alpha".to_string(),
             },
-            "all".to_string(),
+            Some("all".to_string()),
             &[],
             &cache,
             false,
@@ -556,7 +558,7 @@ mod tests {
                 operator: VersionComparison::Exact,
                 version: "1.2.3".to_string(),
             },
-            "all".to_string(),
+            Some("all".to_string()),
             &[],
             &cache,
             false,
@@ -589,7 +591,7 @@ mod tests {
                 operator: VersionComparison::Exact,
                 version: "1.2.3".to_string(),
             },
-            "all; intersect \"alpha\"".to_string(),
+            Some("all; intersect \"alpha\"".to_string()),
             &[],
             &cache,
             false,
@@ -609,6 +611,38 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn omitted_suffix_preserves_the_existing_rule() {
+        let directory = tempfile::tempdir().unwrap();
+        let cache = write_constraint_instance(directory.path());
+        let mut manifest = ManifestFile::open(directory.path()).unwrap();
+        manifest.inner.packages["example"].suffix = "all; intersect not \"alpha\"".to_string();
+        manifest.save().unwrap();
+
+        let report = apply_package_constraint(
+            directory.path(),
+            "example",
+            PackageVersionPolicy::Comparison {
+                operator: VersionComparison::Exact,
+                version: "1.2.3".to_string(),
+            },
+            None,
+            &[],
+            &cache,
+            false,
+            accept_transaction(),
+        )
+        .await
+        .unwrap();
+
+        assert!(report.applied);
+        assert_eq!(report.suffix, "all; intersect not \"alpha\"");
+        assert_eq!(
+            ManifestFile::open(directory.path()).unwrap().inner.packages["example"].suffix,
+            report.suffix
+        );
+    }
+
+    #[tokio::test]
     async fn an_unsatisfiable_policy_leaves_manifest_lock_and_jar_unchanged() {
         let directory = tempfile::tempdir().unwrap();
         let cache = write_constraint_instance(directory.path());
@@ -623,7 +657,7 @@ mod tests {
                 operator: VersionComparison::Exact,
                 version: "9".to_string(),
             },
-            "all".to_string(),
+            Some("all".to_string()),
             &[],
             &cache,
             false,
@@ -660,7 +694,7 @@ mod tests {
                 operator: VersionComparison::Exact,
                 version: "1.2.3-alpha".to_string(),
             },
-            "all".to_string(),
+            Some("all".to_string()),
             &[],
             &cache,
             false,
