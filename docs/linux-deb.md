@@ -44,7 +44,8 @@ sudo apt remove orbit-gui orbit-launcher orbit
 
 ```bash
 sudo apt-get install libclang-dev libgtk-3-dev libssl-dev \
-  libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev
+  libxcb1-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
+  libxkbcommon-dev libxkbcommon-x11-dev
 cargo install cargo-deb --version 3.7.0 --locked
 bash ./scripts/build-linux-deb.sh
 ```
