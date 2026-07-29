@@ -1,15 +1,16 @@
 use std::{
     collections::{BTreeMap, HashMap},
     path::PathBuf,
+    time::Duration,
 };
 
 use gpui::{
     AnyElement, AppContext, Context, Entity, InteractiveElement, IntoElement, ParentElement,
     Render, SharedString, StatefulInteractiveElement, Styled, Subscription, Task, Timer, Window,
-    div, prelude::FluentBuilder as _, px,
+    div, prelude::FluentBuilder as _, px, svg,
 };
 use gpui_component::{
-    ActiveTheme, Icon, Selectable, StyledExt,
+    ActiveTheme, Selectable, Sizable, StyledExt,
     button::{Button, ButtonVariants},
     h_flex,
     input::InputState,
@@ -26,6 +27,8 @@ use crate::remote_images::RemoteImageBridge;
 mod components;
 mod controller;
 mod pages;
+
+pub(super) const ACTIVITY_DRAWER_TRANSITION: Duration = Duration::from_millis(180);
 
 #[derive(Debug, Clone)]
 pub(super) enum ConfirmationAction {
@@ -243,6 +246,7 @@ pub struct OrbitApp {
     pub(super) server_status: Option<ServerStatus>,
     pub(super) audit: Option<AuditSummary>,
     pub(super) activity_open: bool,
+    pub(super) activity_closing: bool,
     pub(super) confirmation: Option<Confirmation>,
     pub(super) interaction: Option<PendingInteraction>,
     pub(super) toast: Option<Toast>,
@@ -349,6 +353,7 @@ impl OrbitApp {
             server_status: None,
             audit: None,
             activity_open: false,
+            activity_closing: false,
             confirmation: None,
             interaction: None,
             toast: None,
@@ -386,13 +391,43 @@ impl OrbitApp {
         input.read(cx).value().trim().to_string()
     }
 
+    pub(super) fn toggle_activity(&mut self, cx: &mut Context<Self>) {
+        if self.activity_open {
+            self.close_activity(cx);
+        } else {
+            self.activity_open = true;
+            self.activity_closing = false;
+            cx.notify();
+        }
+    }
+
+    pub(super) fn close_activity(&mut self, cx: &mut Context<Self>) {
+        if !self.activity_open {
+            return;
+        }
+
+        self.activity_open = false;
+        self.activity_closing = true;
+        cx.notify();
+        cx.spawn(async move |weak, cx| {
+            Timer::after(ACTIVITY_DRAWER_TRANSITION).await;
+            let _ = weak.update(cx, |this, cx| {
+                if !this.activity_open {
+                    this.activity_closing = false;
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
     fn page_icon(page: Page) -> OrbitIcon {
         match page {
             Page::Home => OrbitIcon::Home,
             Page::Library => OrbitIcon::Mods,
             Page::Discover => OrbitIcon::Browse,
             Page::Audit => OrbitIcon::Audit,
-            Page::Runtime => OrbitIcon::Runtime,
+            Page::Runtime => OrbitIcon::Download,
             Page::Accounts => OrbitIcon::Account,
             Page::Server => OrbitIcon::Server,
             Page::Settings => OrbitIcon::Settings,
@@ -431,6 +466,7 @@ impl OrbitApp {
                 Button::new(("nav", Self::page_id(page)))
                     .icon(Self::page_icon(page))
                     .label(page.label().into_owned())
+                    .large()
                     .ghost()
                     .selected(selected)
                     .w_full()
@@ -557,11 +593,7 @@ impl OrbitApp {
                     .px_2()
                     .gap_3()
                     .items_center()
-                    .child(
-                        Icon::new(OrbitIcon::Orbit)
-                            .size(px(34.))
-                            .text_color(cx.theme().primary),
-                    )
+                    .child(svg().path("icons/orbit.svg").size(px(38.)).flex_shrink_0())
                     .child(
                         v_flex()
                             .gap_0p5()
@@ -622,8 +654,7 @@ impl OrbitApp {
                             .label(tr!("Activity").into_owned())
                             .ghost()
                             .on_click(cx.listener(|this, _, _, cx| {
-                                this.activity_open = !this.activity_open;
-                                cx.notify();
+                                this.toggle_activity(cx);
                             })),
                     ),
             )

@@ -1,8 +1,9 @@
 use std::time::Duration;
 
 use gpui::{
-    Animation, AnimationExt, AnyElement, Context, IntoElement, ParentElement, Styled, Window, div,
-    ease_in_out, prelude::FluentBuilder as _, px, relative,
+    Animation, AnimationExt, AnyElement, Context, InteractiveElement, IntoElement, ParentElement,
+    StatefulInteractiveElement, Styled, Window, div, ease_in_out, prelude::FluentBuilder as _, px,
+    relative,
 };
 use gpui_component::{
     ActiveTheme, Disableable, Icon, Selectable, StyledExt,
@@ -15,7 +16,7 @@ use gpui_component::{
     v_flex,
 };
 
-use super::super::{OrbitApp, TaskState, ToastKind};
+use super::super::{ACTIVITY_DRAWER_TRANSITION, OrbitApp, TaskState, ToastKind};
 use crate::app::components as ui;
 use crate::assets::OrbitIcon;
 
@@ -95,8 +96,7 @@ pub(in crate::app) fn render_strip(app: &OrbitApp, cx: &mut Context<OrbitApp>) -
                         .label(tr!("Activity").into_owned())
                         .ghost()
                         .on_click(cx.listener(|this, _, _, cx| {
-                            this.activity_open = !this.activity_open;
-                            cx.notify();
+                            this.toggle_activity(cx);
                         })),
                 ),
         )
@@ -147,7 +147,8 @@ pub(in crate::app) fn render_overlays(
     cx: &mut Context<OrbitApp>,
 ) -> Vec<AnyElement> {
     let mut overlays = Vec::new();
-    if app.activity_open {
+    if app.activity_open || app.activity_closing {
+        overlays.push(render_drawer_backdrop(app, cx).into_any_element());
         overlays.push(render_drawer(app, cx).into_any_element());
     }
 
@@ -168,7 +169,28 @@ pub(in crate::app) fn render_overlays(
     overlays
 }
 
+fn render_drawer_backdrop(app: &OrbitApp, cx: &mut Context<OrbitApp>) -> impl IntoElement {
+    let opening = app.activity_open;
+    div()
+        .id("activity-drawer-dismiss")
+        .absolute()
+        .inset_0()
+        .bg(cx.theme().overlay.opacity(0.35))
+        .on_click(cx.listener(|this, _, _, cx| {
+            this.close_activity(cx);
+        }))
+        .with_animation(
+            ("activity-drawer-backdrop", usize::from(opening)),
+            Animation::new(ACTIVITY_DRAWER_TRANSITION).with_easing(cubic_bezier(0.2, 0.8, 0.2, 1.)),
+            move |backdrop, delta| {
+                let visibility = if opening { delta } else { 1. - delta };
+                backdrop.opacity(visibility)
+            },
+        )
+}
+
 fn render_drawer(app: &OrbitApp, cx: &mut Context<OrbitApp>) -> impl IntoElement {
+    let opening = app.activity_open;
     let mut history = v_flex().gap_2();
     for task in app.tasks.values().rev() {
         let task_id = task.id;
@@ -257,8 +279,7 @@ fn render_drawer(app: &OrbitApp, cx: &mut Context<OrbitApp>) -> impl IntoElement
                         .icon(OrbitIcon::Close)
                         .ghost()
                         .on_click(cx.listener(|this, _, _, cx| {
-                            this.activity_open = false;
-                            cx.notify();
+                            this.close_activity(cx);
                         })),
                 ),
         )
@@ -271,12 +292,13 @@ fn render_drawer(app: &OrbitApp, cx: &mut Context<OrbitApp>) -> impl IntoElement
                 .child(history),
         )
         .with_animation(
-            "activity-drawer-open",
-            Animation::new(Duration::from_millis(180)).with_easing(cubic_bezier(0.2, 0.8, 0.2, 1.)),
-            |drawer, delta| {
+            ("activity-drawer", usize::from(opening)),
+            Animation::new(ACTIVITY_DRAWER_TRANSITION).with_easing(cubic_bezier(0.2, 0.8, 0.2, 1.)),
+            move |drawer, delta| {
+                let visibility = if opening { delta } else { 1. - delta };
                 drawer
-                    .right(px(-32.) + delta * px(32.))
-                    .opacity(0.7 + delta * 0.3)
+                    .right(px(-32.) + visibility * px(32.))
+                    .opacity(0.7 + visibility * 0.3)
             },
         )
 }
