@@ -150,7 +150,6 @@ impl Version {
         let Some(suffix) = self.suffix() else {
             return Vec::new();
         };
-        let suffix = suffix.to_ascii_lowercase();
         let mut tokens = vec![suffix.clone()];
         tokens.extend(
             suffix
@@ -253,6 +252,10 @@ mod suffix_tests {
         assert_eq!(
             Version::parse("1.2.3-beta.1", LoaderKind::Fabric).suffix_tokens(),
             ["beta", "beta.1"]
+        );
+        assert_eq!(
+            Version::parse("1.2.3-SNAPSHOT", LoaderKind::Forge).suffix_tokens(),
+            ["SNAPSHOT"]
         );
     }
 }
