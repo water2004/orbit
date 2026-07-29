@@ -681,7 +681,7 @@ type SolverVersionOrdering = pubgrub::VersionOrdering<
 
 fn solver_version_ordering() -> SolverVersionOrdering {
     pubgrub::VersionOrdering::new(
-        |version: &SolverVersion| Ranges::singleton(version.clone()),
+        SolverVersion::same_realization,
         |version: &SolverVersion| {
             version.domain().map_or_else(
                 || Ranges::singleton(version.clone()),
@@ -1878,6 +1878,55 @@ voxy = { version = "*", remotes = [{ type = "file", path = "voxy.jar" }] }
                 .iter()
                 .any(|change| change.package == "a" && change.kind == PackageChangeKind::Replace)
         }));
+    }
+
+    #[tokio::test]
+    async fn downloaded_copy_of_locked_content_is_one_pareto_realization() {
+        let mut current = lockfile();
+        current.packages.retain(|entry| entry.mod_id == "a");
+        current.packages[0].sha512 = "abc123".to_string();
+        let mut only_a = manifest();
+        only_a.packages.shift_remove("b");
+        let mut duplicate = candidate("1", Vec::new());
+        duplicate.id = "sha512:abc123".to_string();
+        duplicate.filename = current.packages[0].filename.clone();
+        let mut catalog = CandidateCatalog::default();
+        catalog.candidates.insert("a".to_string(), vec![duplicate]);
+
+        let portfolio = resolve_candidate_portfolio(&only_a, &current, &catalog)
+            .await
+            .unwrap();
+
+        assert_eq!(portfolio.alternatives.len(), 1);
+        assert!(portfolio.alternatives[0].changes.is_empty());
+        assert_eq!(portfolio.alternatives[0].selected_versions["a"], "1");
+    }
+
+    #[tokio::test]
+    async fn downloaded_copies_do_not_form_a_cartesian_pareto_front() {
+        let mut current = lockfile();
+        current.packages[0].sha512 = "content-a".to_string();
+        current.packages[1].sha512 = "content-b".to_string();
+        let mut duplicate_a = candidate("1", Vec::new());
+        duplicate_a.id = "sha512:content-a".to_string();
+        duplicate_a.filename = current.packages[0].filename.clone();
+        let mut duplicate_b = candidate("1", Vec::new());
+        duplicate_b.id = "sha512:content-b".to_string();
+        duplicate_b.filename = current.packages[1].filename.clone();
+        let mut catalog = CandidateCatalog::default();
+        catalog
+            .candidates
+            .insert("a".to_string(), vec![duplicate_a]);
+        catalog
+            .candidates
+            .insert("b".to_string(), vec![duplicate_b]);
+
+        let portfolio = resolve_candidate_portfolio(&manifest(), &current, &catalog)
+            .await
+            .unwrap();
+
+        assert_eq!(portfolio.alternatives.len(), 1);
+        assert!(portfolio.alternatives[0].changes.is_empty());
     }
 
     #[tokio::test]

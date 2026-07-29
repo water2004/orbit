@@ -89,6 +89,56 @@ impl SolverVersion {
             _ => None,
         }
     }
+
+    /// Return every solver representation of the same physical realization.
+    ///
+    /// The lock graph prefixes content identities with `lock:` so it can keep
+    /// installed candidates preferentially ordered. A freshly downloaded
+    /// candidate uses the bare content identity. Those are two representations
+    /// of one JAR, not two choices for the user, and Pareto enumeration must
+    /// exclude them as one equivalence class.
+    pub(crate) fn same_realization(&self) -> Ranges<Self> {
+        let Self::Version {
+            semantic,
+            identity: VersionIdentity::Candidate(identity),
+        } = self
+        else {
+            return Ranges::singleton(self.clone());
+        };
+
+        let mut sources = vec![identity.source.clone()];
+        if let Some(content) = identity
+            .source
+            .strip_prefix("lock:sha512:")
+            .map(|digest| format!("sha512:{digest}"))
+            .or_else(|| {
+                identity
+                    .source
+                    .strip_prefix("lock:sha256:")
+                    .map(|digest| format!("sha256:{digest}"))
+            })
+        {
+            sources.push(content);
+        } else if identity.source.starts_with("sha512:") || identity.source.starts_with("sha256:") {
+            sources.push(format!("lock:{}", identity.source));
+        }
+        sources.sort();
+        sources.dedup();
+
+        sources
+            .into_iter()
+            .flat_map(|source| {
+                [false, true].map(move |installed| {
+                    let mut identity = identity.clone();
+                    identity.source = source.clone();
+                    identity.installed = installed;
+                    SolverVersion::candidate(semantic.clone(), identity)
+                })
+            })
+            .fold(Ranges::empty(), |range, version| {
+                range.union(&Ranges::singleton(version))
+            })
+    }
 }
 
 impl From<Version> for SolverVersion {
