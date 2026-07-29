@@ -3,7 +3,7 @@ pub mod output;
 mod progress;
 use crate::cli::commands::CommandHandler;
 use anyhow::Result;
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 
 use orbit_i18n::LanguageMode;
@@ -335,13 +335,43 @@ pub enum RemoteCommands {
 pub enum ConstraintCommands {
     /// Show the configured policy and current selected version.
     Show { package: String },
-    /// Set a version requirement without resolving or changing JARs.
+    /// Apply a structured version policy and immediately converge the instance.
     Set {
         package: String,
-        requirement: String,
+        #[command(subcommand)]
+        policy: ConstraintPolicyCommands,
     },
-    /// Restore the unconstrained `*` policy.
-    Clear { package: String },
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub enum ConstraintPolicyCommands {
+    /// Allow every compatible version.
+    Any,
+    /// Match a numeric core, or one full representation when a suffix is supplied.
+    Exact { version: String },
+    /// Require a numeric core strictly newer than the selected boundary.
+    GreaterThan { version: String },
+    /// Require the boundary numeric core or anything newer.
+    AtLeast { version: String },
+    /// Require a numeric core strictly older than the selected boundary.
+    LessThan { version: String },
+    /// Require the boundary numeric core or anything older.
+    AtMost { version: String },
+    /// Restrict the package to a bounded interval.
+    Range {
+        lower: String,
+        upper: String,
+        #[arg(long, value_enum, default_value_t = BoundInclusion::Inclusive)]
+        lower_bound: BoundInclusion,
+        #[arg(long, value_enum, default_value_t = BoundInclusion::Inclusive)]
+        upper_bound: BoundInclusion,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum BoundInclusion {
+    Inclusive,
+    Exclusive,
 }
 
 impl CommandHandler for Commands {
@@ -375,7 +405,7 @@ impl CommandHandler for Commands {
                 package,
                 environment,
             } => handle_env(package, environment, ctx),
-            Commands::Constraint { command } => handle_constraint(command, ctx),
+            Commands::Constraint { command } => handle_constraint(command, ctx).await,
             Commands::Versions { package } => handle_versions(package, ctx).await,
             Commands::Remove { mod_name } => handle_remove(mod_name, ctx).await,
             Commands::Purge { mod_name } => handle_purge(mod_name, ctx).await,
@@ -452,7 +482,7 @@ impl Commands {
                 | Self::Add { .. }
                 | Self::Env { .. }
                 | Self::Constraint {
-                    command: ConstraintCommands::Set { .. } | ConstraintCommands::Clear { .. },
+                    command: ConstraintCommands::Set { .. },
                 }
                 | Self::Remove { .. }
                 | Self::Purge { .. }
@@ -536,7 +566,8 @@ mod tests {
     use clap::{CommandFactory, Parser};
 
     use super::{
-        Cli, Commands, ConfigCommands, ConstraintCommands, MigrateCommands, PathBuf, RemoteCommands,
+        BoundInclusion, Cli, Commands, ConfigCommands, ConstraintCommands,
+        ConstraintPolicyCommands, MigrateCommands, PathBuf, RemoteCommands,
     };
 
     #[test]
@@ -675,20 +706,53 @@ mod tests {
         };
         assert_eq!(package, "sodium");
 
-        let constraint =
-            Cli::try_parse_from(["orbit", "constraint", "set", "sodium", "=0.6.13-alpha"]).unwrap();
+        let constraint = Cli::try_parse_from([
+            "orbit",
+            "constraint",
+            "set",
+            "sodium",
+            "exact",
+            "0.6.13-alpha",
+        ])
+        .unwrap();
         let Commands::Constraint {
             command:
                 ConstraintCommands::Set {
                     package,
-                    requirement,
+                    policy: ConstraintPolicyCommands::Exact { version },
                 },
         } = constraint.command
         else {
             panic!("constraint set command was not parsed");
         };
         assert_eq!(package, "sodium");
-        assert_eq!(requirement, "=0.6.13-alpha");
+        assert_eq!(version, "0.6.13-alpha");
+
+        let range = Cli::try_parse_from([
+            "orbit",
+            "constraint",
+            "set",
+            "sodium",
+            "range",
+            "0.6.0",
+            "0.7.0",
+            "--upper-bound",
+            "exclusive",
+        ])
+        .unwrap();
+        assert!(matches!(
+            range.command,
+            Commands::Constraint {
+                command: ConstraintCommands::Set {
+                    policy: ConstraintPolicyCommands::Range {
+                        lower_bound: BoundInclusion::Inclusive,
+                        upper_bound: BoundInclusion::Exclusive,
+                        ..
+                    },
+                    ..
+                }
+            }
+        ));
     }
 
     #[test]

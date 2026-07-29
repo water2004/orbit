@@ -19,6 +19,7 @@ pub async fn handle(package: String, ctx: &CliContext) -> Result<()> {
     let output = PackageVersionsOutput {
         package: report.package,
         constraint: report.constraint,
+        policy: crate::cli::output::package_version_policy_view(&report.policy),
         selected_version: report.selected_version,
         candidates: report
             .candidates

@@ -122,18 +122,45 @@ pub struct PackageEnvironmentOutput {
 #[derive(Debug, Clone, Serialize)]
 pub struct PackageConstraintOutput {
     pub package: String,
-    pub previous: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub previous: Option<String>,
     pub current: String,
+    pub policy: PackageVersionPolicyOutput,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub previous_selected_version: Option<String>,
     pub selected_version: Option<String>,
     pub selected_satisfies: Option<bool>,
     pub changed: bool,
+    pub applied: bool,
     pub dry_run: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub transaction: Option<TransactionOutput>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PackageVersionPolicyOutput {
+    pub kind: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub operator: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lower: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub upper: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub include_lower: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub include_upper: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub requirement: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct PackageVersionsOutput {
     pub package: String,
     pub constraint: String,
+    pub policy: PackageVersionPolicyOutput,
     pub selected_version: Option<String>,
     pub candidates: Vec<PackageVersionCandidateView>,
 }
@@ -777,6 +804,60 @@ pub fn list_view(
 // ---------------------------------------------------------------------------
 
 use orbit_core::{InstallReport, InstanceInstallReport};
+
+pub fn package_version_policy_view(
+    policy: &orbit_core::PackageVersionPolicy,
+) -> PackageVersionPolicyOutput {
+    use orbit_core::PackageVersionPolicy;
+
+    match policy {
+        PackageVersionPolicy::Any => PackageVersionPolicyOutput {
+            kind: "any".to_string(),
+            operator: None,
+            version: None,
+            lower: None,
+            upper: None,
+            include_lower: None,
+            include_upper: None,
+            requirement: None,
+        },
+        PackageVersionPolicy::Comparison { operator, version } => PackageVersionPolicyOutput {
+            kind: "comparison".to_string(),
+            operator: Some(operator.operator().to_string()),
+            version: Some(version.clone()),
+            lower: None,
+            upper: None,
+            include_lower: None,
+            include_upper: None,
+            requirement: None,
+        },
+        PackageVersionPolicy::Range {
+            lower,
+            upper,
+            include_lower,
+            include_upper,
+        } => PackageVersionPolicyOutput {
+            kind: "range".to_string(),
+            operator: None,
+            version: None,
+            lower: Some(lower.clone()),
+            upper: Some(upper.clone()),
+            include_lower: Some(*include_lower),
+            include_upper: Some(*include_upper),
+            requirement: None,
+        },
+        PackageVersionPolicy::Custom(requirement) => PackageVersionPolicyOutput {
+            kind: "custom".to_string(),
+            operator: None,
+            version: None,
+            lower: None,
+            upper: None,
+            include_lower: None,
+            include_upper: None,
+            requirement: Some(requirement.clone()),
+        },
+    }
+}
 
 pub fn install_instance_view(
     report: &InstanceInstallReport,

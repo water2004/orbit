@@ -1,87 +1,332 @@
-//! Explicit version policy for managed logical packages.
+//! Version policy inspection and transactional application for managed packages.
 
+use std::cmp::Ordering;
 use std::path::Path;
 
 use crate::error::OrbitError;
+use crate::installer::{InstallInteraction, InstallReport};
+use crate::loader::LoaderKind;
+use crate::providers::ModProvider;
 use crate::versions::Version;
 use crate::workspace::{Lockfile, ManifestFile};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VersionComparison {
+    Exact,
+    GreaterThan,
+    AtLeast,
+    LessThan,
+    AtMost,
+}
+
+impl VersionComparison {
+    pub fn operator(self) -> &'static str {
+        match self {
+            Self::Exact => "=",
+            Self::GreaterThan => ">",
+            Self::AtLeast => ">=",
+            Self::LessThan => "<",
+            Self::AtMost => "<=",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PackageConstraintReport {
+pub enum PackageVersionPolicy {
+    Any,
+    Comparison {
+        operator: VersionComparison,
+        version: String,
+    },
+    Range {
+        lower: String,
+        upper: String,
+        include_lower: bool,
+        include_upper: bool,
+    },
+    /// A valid loader expression written outside Orbit's structured policy UI.
+    /// It can be displayed but must be replaced by a structured policy before
+    /// the transactional CLI can apply it.
+    Custom(String),
+}
+
+impl PackageVersionPolicy {
+    pub fn from_requirement(requirement: &str) -> Self {
+        let requirement = requirement.trim();
+        if requirement.is_empty() || requirement == "*" {
+            return Self::Any;
+        }
+        for (prefix, operator) in [
+            (">=", VersionComparison::AtLeast),
+            ("<=", VersionComparison::AtMost),
+            ("=", VersionComparison::Exact),
+            (">", VersionComparison::GreaterThan),
+            ("<", VersionComparison::LessThan),
+        ] {
+            if let Some(version) = requirement.strip_prefix(prefix)
+                && !version.trim().is_empty()
+                && !version.chars().any(char::is_whitespace)
+            {
+                return Self::Comparison {
+                    operator,
+                    version: version.trim().to_string(),
+                };
+            }
+        }
+        if let Some(policy) =
+            parse_maven_range(requirement).or_else(|| parse_fabric_range(requirement))
+        {
+            return policy;
+        }
+        Self::Custom(requirement.to_string())
+    }
+
+    pub fn requirement(&self, loader: LoaderKind) -> Result<String, OrbitError> {
+        match self {
+            Self::Any => Ok("*".to_string()),
+            Self::Comparison { operator, version } => {
+                validate_version(version)?;
+                Ok(format!("{}{}", operator.operator(), version.trim()))
+            }
+            Self::Range {
+                lower,
+                upper,
+                include_lower,
+                include_upper,
+            } => {
+                validate_range(lower, upper, *include_lower, *include_upper, loader)?;
+                match loader {
+                    LoaderKind::Fabric | LoaderKind::Quilt => Ok(format!(
+                        "{}{} {}{}",
+                        if *include_lower { ">=" } else { ">" },
+                        lower.trim(),
+                        if *include_upper { "<=" } else { "<" },
+                        upper.trim()
+                    )),
+                    LoaderKind::Forge | LoaderKind::NeoForge => Ok(format!(
+                        "{}{},{}{}",
+                        if *include_lower { '[' } else { '(' },
+                        lower.trim(),
+                        upper.trim(),
+                        if *include_upper { ']' } else { ')' }
+                    )),
+                }
+            }
+            Self::Custom(requirement) => Err(OrbitError::Other(anyhow::anyhow!(
+                "custom version requirement '{requirement}' is display-only; choose a structured policy"
+            ))),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PackageConstraintState {
+    pub package: String,
+    pub constraint: String,
+    pub policy: PackageVersionPolicy,
+    pub selected_version: Option<String>,
+    pub selected_satisfies: Option<bool>,
+}
+
+#[derive(Debug, Clone)]
+pub struct PackageConstraintApplyReport {
     pub package: String,
     pub previous: String,
     pub current: String,
+    pub policy: PackageVersionPolicy,
+    pub previous_selected_version: Option<String>,
     pub selected_version: Option<String>,
     pub selected_satisfies: Option<bool>,
     pub changed: bool,
+    pub applied: bool,
     pub dry_run: bool,
+    pub transaction: InstallReport,
 }
 
 pub fn package_constraint(
     instance_dir: &Path,
     package: &str,
-) -> Result<PackageConstraintReport, OrbitError> {
-    change_package_constraint(instance_dir, package, None, false)
+) -> Result<PackageConstraintState, OrbitError> {
+    let manifest = ManifestFile::open(instance_dir)?;
+    let loader = manifest.inner.project.loader_kind()?;
+    let specification = manifest
+        .inner
+        .packages
+        .get(package)
+        .ok_or_else(|| OrbitError::ModNotFound(package.to_string()))?;
+    let selected_version = selected_version(instance_dir, package)?;
+    let selected_satisfies =
+        selection_satisfies(selected_version.as_deref(), &specification.version, loader);
+    Ok(PackageConstraintState {
+        package: package.to_string(),
+        constraint: specification.version.clone(),
+        policy: PackageVersionPolicy::from_requirement(&specification.version),
+        selected_version,
+        selected_satisfies,
+    })
 }
 
-pub fn set_package_constraint(
+pub async fn apply_package_constraint(
     instance_dir: &Path,
     package: &str,
-    constraint: &str,
+    policy: PackageVersionPolicy,
+    providers: &[Box<dyn ModProvider>],
+    jar_cache: &crate::jar_cache::JarCache,
     dry_run: bool,
-) -> Result<PackageConstraintReport, OrbitError> {
-    let constraint = constraint.trim();
-    if constraint.is_empty() {
-        return Err(OrbitError::Other(anyhow::anyhow!(
-            "package version constraint cannot be empty; use '*' to allow every version"
-        )));
-    }
-    change_package_constraint(instance_dir, package, Some(constraint), dry_run)
-}
-
-fn change_package_constraint(
-    instance_dir: &Path,
-    package: &str,
-    constraint: Option<&str>,
-    dry_run: bool,
-) -> Result<PackageConstraintReport, OrbitError> {
+    interaction: InstallInteraction,
+) -> Result<PackageConstraintApplyReport, OrbitError> {
     let mut manifest = ManifestFile::open(instance_dir)?;
     let loader = manifest.inner.project.loader_kind()?;
+    let current = policy.requirement(loader)?;
     let specification = manifest
         .inner
         .packages
         .get_mut(package)
         .ok_or_else(|| OrbitError::ModNotFound(package.to_string()))?;
-    let previous = specification.version.clone();
-    let current = constraint.unwrap_or(&previous).to_string();
+    let previous = std::mem::replace(&mut specification.version, current.clone());
     let changed = previous != current;
-    if constraint.is_some() {
-        specification.version.clone_from(&current);
-    }
+    let previous_selected_version = selected_version(instance_dir, package)?;
 
-    let selected_version = if instance_dir.join("orbit.lock").is_file() {
-        Lockfile::open(instance_dir)?
-            .inner
-            .find(package)
-            .map(|entry| entry.version.clone())
+    let outcome = crate::installer::repair_manifest_instance(
+        instance_dir,
+        providers,
+        jar_cache,
+        dry_run,
+        interaction,
+        manifest,
+        changed,
+    )
+    .await?;
+    let selected_version = if outcome.committed {
+        selected_version(instance_dir, package)?
     } else {
-        None
+        planned_selected_version(&outcome.report, package)
+            .or_else(|| previous_selected_version.clone())
     };
-    let selected_satisfies = selected_version.as_ref().map(|version| {
-        Version::parse_constraint(&current, loader).contains(&Version::parse(version, loader))
-    });
-    if constraint.is_some() && changed && !dry_run {
-        manifest.save()?;
-    }
+    let selected_satisfies = selection_satisfies(selected_version.as_deref(), &current, loader);
 
-    Ok(PackageConstraintReport {
+    Ok(PackageConstraintApplyReport {
         package: package.to_string(),
         previous,
         current,
+        policy,
+        previous_selected_version,
         selected_version,
         selected_satisfies,
         changed,
+        applied: outcome.committed,
         dry_run,
+        transaction: outcome.report,
+    })
+}
+
+fn selected_version(instance_dir: &Path, package: &str) -> Result<Option<String>, OrbitError> {
+    if !instance_dir.join("orbit.lock").is_file() {
+        return Ok(None);
+    }
+    Ok(Lockfile::open(instance_dir)?
+        .inner
+        .find(package)
+        .map(|entry| entry.version.clone()))
+}
+
+fn planned_selected_version(report: &InstallReport, package: &str) -> Option<String> {
+    report
+        .installed
+        .iter()
+        .find(|installed| installed.mod_id == package)
+        .map(|installed| installed.version.clone())
+        .or_else(|| {
+            report
+                .changes
+                .iter()
+                .find(|change| change.package == package)
+                .and_then(|change| change.selected_version.clone())
+        })
+}
+
+fn selection_satisfies(
+    selected: Option<&str>,
+    constraint: &str,
+    loader: LoaderKind,
+) -> Option<bool> {
+    selected.map(|version| {
+        Version::parse_constraint(constraint, loader).contains(&Version::parse(version, loader))
+    })
+}
+
+fn validate_version(version: &str) -> Result<(), OrbitError> {
+    if version.trim().is_empty() || version.chars().any(char::is_whitespace) {
+        return Err(OrbitError::Other(anyhow::anyhow!(
+            "version policy requires one non-empty JAR-declared version"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_range(
+    lower: &str,
+    upper: &str,
+    include_lower: bool,
+    include_upper: bool,
+    loader: LoaderKind,
+) -> Result<(), OrbitError> {
+    validate_version(lower)?;
+    validate_version(upper)?;
+    match Version::parse(lower, loader).cmp_precedence(&Version::parse(upper, loader)) {
+        Ordering::Greater => Err(OrbitError::Other(anyhow::anyhow!(
+            "version range lower bound '{lower}' is newer than upper bound '{upper}'"
+        ))),
+        Ordering::Equal if !include_lower || !include_upper => Err(OrbitError::Other(
+            anyhow::anyhow!("an equal-bound version range must include both bounds"),
+        )),
+        _ => Ok(()),
+    }
+}
+
+fn parse_maven_range(requirement: &str) -> Option<PackageVersionPolicy> {
+    let include_lower = requirement.starts_with('[');
+    let include_upper = requirement.ends_with(']');
+    if !matches!(requirement.chars().next(), Some('[' | '('))
+        || !matches!(requirement.chars().last(), Some(']' | ')'))
+    {
+        return None;
+    }
+    let (lower, upper) = requirement[1..requirement.len() - 1].split_once(',')?;
+    if lower.trim().is_empty() || upper.trim().is_empty() {
+        return None;
+    }
+    Some(PackageVersionPolicy::Range {
+        lower: lower.trim().to_string(),
+        upper: upper.trim().to_string(),
+        include_lower,
+        include_upper,
+    })
+}
+
+fn parse_fabric_range(requirement: &str) -> Option<PackageVersionPolicy> {
+    let mut parts = requirement.split_whitespace();
+    let lower = parts.next()?;
+    let upper = parts.next()?;
+    if parts.next().is_some() {
+        return None;
+    }
+    let (lower, include_lower) = lower
+        .strip_prefix(">=")
+        .map(|version| (version, true))
+        .or_else(|| lower.strip_prefix('>').map(|version| (version, false)))?;
+    let (upper, include_upper) = upper
+        .strip_prefix("<=")
+        .map(|version| (version, true))
+        .or_else(|| upper.strip_prefix('<').map(|version| (version, false)))?;
+    if lower.is_empty() || upper.is_empty() {
+        return None;
+    }
+    Some(PackageVersionPolicy::Range {
+        lower: lower.to_string(),
+        upper: upper.to_string(),
+        include_lower,
+        include_upper,
     })
 }
 
@@ -89,72 +334,135 @@ fn change_package_constraint(
 mod tests {
     use super::*;
     use crate::lockfile::{ArtifactSource, LockMeta, OrbitLockfile, PackageEntry};
-    use crate::manifest::{
-        OrbitManifest, PackageRemote, PackageSpec, PlatformArtifact, PlatformSnapshot, ProjectMeta,
-    };
+    use crate::manifest::{OrbitManifest, PackageRemote, PackageSpec, ProjectMeta};
     use crate::metadata::Environment;
-    use crate::workspace::{Lockfile, ManifestFile};
     use indexmap::IndexMap;
+    use std::io::Write;
 
-    fn instance() -> tempfile::TempDir {
-        let directory = tempfile::tempdir().unwrap();
+    #[test]
+    fn structured_ranges_use_each_loader_family_native_syntax() {
+        let policy = PackageVersionPolicy::Range {
+            lower: "1.2.3".to_string(),
+            upper: "2.0.0".to_string(),
+            include_lower: true,
+            include_upper: false,
+        };
+
+        assert_eq!(
+            policy.requirement(LoaderKind::Fabric).unwrap(),
+            ">=1.2.3 <2.0.0"
+        );
+        assert_eq!(
+            policy.requirement(LoaderKind::Forge).unwrap(),
+            "[1.2.3,2.0.0)"
+        );
+    }
+
+    #[test]
+    fn canonical_policies_roundtrip_to_structured_state() {
+        for requirement in ["*", "=1.2.3-alpha", ">=1.2.3", ">=1 <2", "[1,2)"] {
+            let policy = PackageVersionPolicy::from_requirement(requirement);
+            assert!(
+                !matches!(policy, PackageVersionPolicy::Custom(_)),
+                "{requirement}"
+            );
+        }
+        assert!(matches!(
+            PackageVersionPolicy::from_requirement("^1.2"),
+            PackageVersionPolicy::Custom(_)
+        ));
+    }
+
+    #[test]
+    fn invalid_ranges_are_rejected_before_discovery() {
+        let reversed = PackageVersionPolicy::Range {
+            lower: "2".to_string(),
+            upper: "1".to_string(),
+            include_lower: true,
+            include_upper: true,
+        };
+        assert!(reversed.requirement(LoaderKind::Fabric).is_err());
+
+        let empty = PackageVersionPolicy::Range {
+            lower: "1".to_string(),
+            upper: "1".to_string(),
+            include_lower: false,
+            include_upper: true,
+        };
+        assert!(empty.requirement(LoaderKind::Forge).is_err());
+    }
+
+    fn write_fabric_jar(path: &Path, version: &str) {
+        let file = std::fs::File::create(path).unwrap();
+        let mut archive = zip::ZipWriter::new(file);
+        archive
+            .start_file("fabric.mod.json", zip::write::SimpleFileOptions::default())
+            .unwrap();
+        write!(
+            archive,
+            r#"{{"schemaVersion":1,"id":"example","version":"{version}","name":"Example"}}"#
+        )
+        .unwrap();
+        archive.finish().unwrap();
+    }
+
+    fn write_constraint_instance(directory: &Path) -> crate::jar_cache::JarCache {
+        crate::platform_detection::test_support::write_platform(directory, "1", "fabric", "1");
+        let discovered =
+            crate::platform_detection::discover_platform_for_init(directory, "1", "fabric", "1")
+                .unwrap();
+        let sources = directory.join(".orbit/sources");
+        std::fs::create_dir_all(&sources).unwrap();
+        let alpha = sources.join("example-alpha.jar");
+        let beta = sources.join("example-beta.jar");
+        write_fabric_jar(&alpha, "1.2.3-alpha");
+        write_fabric_jar(&beta, "1.2.3-beta");
+        let alpha_remote = PackageRemote::File {
+            path: ".orbit/sources/example-alpha.jar".to_string(),
+        };
+        let beta_remote = PackageRemote::File {
+            path: ".orbit/sources/example-beta.jar".to_string(),
+        };
         let manifest = OrbitManifest {
             project: ProjectMeta {
-                name: "test".to_string(),
-                mc_version: "1.20.1".to_string(),
+                name: "constraint-test".to_string(),
+                mc_version: "1".to_string(),
                 modloader: "fabric".to_string(),
-                modloader_version: "0.16".to_string(),
+                modloader_version: "1".to_string(),
                 description: None,
                 authors: None,
                 version: None,
             },
-            platform: PlatformSnapshot {
-                minecraft_jar: PlatformArtifact {
-                    path: "minecraft.jar".to_string(),
-                    sha256: "minecraft".to_string(),
-                },
-                loader_jar: PlatformArtifact {
-                    path: "loader.jar".to_string(),
-                    sha256: "loader".to_string(),
-                },
-                runtime_jars: Vec::new(),
-                physical_environment: Environment::Client,
-            },
+            platform: discovered.snapshot(directory).unwrap(),
             resolver: Default::default(),
             packages: IndexMap::from([(
                 "example".to_string(),
-                PackageSpec::new(
-                    "*",
-                    vec![PackageRemote::File {
-                        path: "example.jar".to_string(),
-                    }],
-                ),
+                PackageSpec::new("*", vec![alpha_remote, beta_remote.clone()]),
             )]),
-            groups: IndexMap::new(),
+            groups: Default::default(),
         };
-        ManifestFile::new(directory.path(), manifest)
-            .save()
-            .unwrap();
+        ManifestFile::new(directory, manifest).save().unwrap();
+        let mods = directory.join("mods");
+        std::fs::create_dir_all(&mods).unwrap();
+        std::fs::copy(&beta, mods.join("example.jar")).unwrap();
         Lockfile::new(
-            directory.path(),
+            directory,
             OrbitLockfile {
                 meta: LockMeta {
-                    mc_version: "1.20.1".to_string(),
+                    mc_version: "1".to_string(),
                     modloader: "fabric".to_string(),
-                    modloader_version: "0.16".to_string(),
+                    modloader_version: "1".to_string(),
                 },
                 packages: vec![PackageEntry {
                     mod_id: "example".to_string(),
                     version: "1.2.3-beta".to_string(),
-                    sha1: String::new(),
-                    sha256: String::new(),
-                    sha512: "example-content".to_string(),
+                    sha1: crate::jar::compute_sha1(&beta).unwrap(),
+                    sha256: crate::jar::compute_sha256(&beta).unwrap(),
+                    sha512: crate::jar::compute_sha512(&beta).unwrap(),
                     filename: "example.jar".to_string(),
-                    remotes: vec![PackageRemote::File {
-                        path: "example.jar".to_string(),
-                    }],
+                    remotes: vec![beta_remote],
                     artifact_sources: vec![ArtifactSource::File {
-                        path: "example.jar".to_string(),
+                        path: ".orbit/sources/example-beta.jar".to_string(),
                     }],
                     dependencies: Vec::new(),
                     environment: Environment::Both,
@@ -167,38 +475,156 @@ mod tests {
         )
         .save()
         .unwrap();
-        directory
+        crate::jar_cache::JarCache::open(directory.join("cache")).unwrap()
     }
 
-    #[test]
-    fn setting_a_constraint_only_changes_manifest_intent() {
-        let directory = instance();
+    fn accept_transaction() -> InstallInteraction {
+        InstallInteraction {
+            confirm_install: Some(Box::new(|_| true)),
+            ..InstallInteraction::default()
+        }
+    }
 
-        let report = set_package_constraint(directory.path(), "example", "=1.2.3", false).unwrap();
+    #[tokio::test]
+    async fn applying_a_policy_atomically_reselects_the_package() {
+        let directory = tempfile::tempdir().unwrap();
+        let cache = write_constraint_instance(directory.path());
 
-        assert!(report.changed);
-        assert_eq!(report.selected_satisfies, Some(true));
+        let report = apply_package_constraint(
+            directory.path(),
+            "example",
+            PackageVersionPolicy::Comparison {
+                operator: VersionComparison::Exact,
+                version: "1.2.3-alpha".to_string(),
+            },
+            &[],
+            &cache,
+            false,
+            accept_transaction(),
+        )
+        .await
+        .unwrap();
+
+        assert!(report.applied);
+        assert_eq!(report.selected_version.as_deref(), Some("1.2.3-alpha"));
+        assert_eq!(
+            ManifestFile::open(directory.path()).unwrap().inner.packages["example"].version,
+            "=1.2.3-alpha"
+        );
+        assert_eq!(
+            Lockfile::open(directory.path())
+                .unwrap()
+                .inner
+                .find("example")
+                .unwrap()
+                .version,
+            "1.2.3-alpha"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_satisfied_policy_is_persisted_without_rewriting_the_package() {
+        let directory = tempfile::tempdir().unwrap();
+        let cache = write_constraint_instance(directory.path());
+        let jar_before = std::fs::read(directory.path().join("mods/example.jar")).unwrap();
+
+        let report = apply_package_constraint(
+            directory.path(),
+            "example",
+            PackageVersionPolicy::Comparison {
+                operator: VersionComparison::Exact,
+                version: "1.2.3".to_string(),
+            },
+            &[],
+            &cache,
+            false,
+            accept_transaction(),
+        )
+        .await
+        .unwrap();
+
+        assert!(report.applied);
+        assert!(report.transaction.installed.is_empty());
         assert_eq!(
             ManifestFile::open(directory.path()).unwrap().inner.packages["example"].version,
             "=1.2.3"
         );
         assert_eq!(
-            Lockfile::open(directory.path()).unwrap().inner.packages[0].version,
-            "1.2.3-beta"
+            std::fs::read(directory.path().join("mods/example.jar")).unwrap(),
+            jar_before
         );
     }
 
-    #[test]
-    fn explicit_suffix_reports_current_selection_as_outside_policy() {
-        let directory = instance();
+    #[tokio::test]
+    async fn an_unsatisfiable_policy_leaves_manifest_lock_and_jar_unchanged() {
+        let directory = tempfile::tempdir().unwrap();
+        let cache = write_constraint_instance(directory.path());
+        let manifest_before = std::fs::read(directory.path().join("orbit.toml")).unwrap();
+        let lock_before = std::fs::read(directory.path().join("orbit.lock")).unwrap();
+        let jar_before = std::fs::read(directory.path().join("mods/example.jar")).unwrap();
 
-        let report =
-            set_package_constraint(directory.path(), "example", "=1.2.3-alpha", true).unwrap();
+        let result = apply_package_constraint(
+            directory.path(),
+            "example",
+            PackageVersionPolicy::Comparison {
+                operator: VersionComparison::Exact,
+                version: "9".to_string(),
+            },
+            &[],
+            &cache,
+            false,
+            accept_transaction(),
+        )
+        .await;
 
-        assert_eq!(report.selected_satisfies, Some(false));
+        assert!(result.is_err());
         assert_eq!(
-            ManifestFile::open(directory.path()).unwrap().inner.packages["example"].version,
-            "*"
+            std::fs::read(directory.path().join("orbit.toml")).unwrap(),
+            manifest_before
+        );
+        assert_eq!(
+            std::fs::read(directory.path().join("orbit.lock")).unwrap(),
+            lock_before
+        );
+        assert_eq!(
+            std::fs::read(directory.path().join("mods/example.jar")).unwrap(),
+            jar_before
+        );
+    }
+
+    #[tokio::test]
+    async fn rejecting_the_transaction_does_not_persist_the_policy() {
+        let directory = tempfile::tempdir().unwrap();
+        let cache = write_constraint_instance(directory.path());
+        let manifest_before = std::fs::read(directory.path().join("orbit.toml")).unwrap();
+        let lock_before = std::fs::read(directory.path().join("orbit.lock")).unwrap();
+
+        let report = apply_package_constraint(
+            directory.path(),
+            "example",
+            PackageVersionPolicy::Comparison {
+                operator: VersionComparison::Exact,
+                version: "1.2.3-alpha".to_string(),
+            },
+            &[],
+            &cache,
+            false,
+            InstallInteraction {
+                confirm_install: Some(Box::new(|_| false)),
+                ..InstallInteraction::default()
+            },
+        )
+        .await
+        .unwrap();
+
+        assert!(!report.applied);
+        assert_eq!(
+            std::fs::read(directory.path().join("orbit.toml")).unwrap(),
+            manifest_before
+        );
+        assert_eq!(
+            std::fs::read(directory.path().join("orbit.lock")).unwrap(),
+            lock_before
         );
     }
 }

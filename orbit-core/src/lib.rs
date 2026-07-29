@@ -83,7 +83,10 @@ pub use outdated::{
     OutdatedInteraction, OutdatedMod, check_all_outdated, check_all_outdated_with_progress,
     check_outdated_with_interaction,
 };
-pub use package_constraint::{PackageConstraintReport, package_constraint, set_package_constraint};
+pub use package_constraint::{
+    PackageConstraintApplyReport, PackageConstraintState, PackageVersionPolicy, VersionComparison,
+    apply_package_constraint, package_constraint,
+};
 pub use package_versions::{PackageVersionCandidate, PackageVersionsReport, list_package_versions};
 pub use progress::{
     ArtifactProgressState, ProgressEvent, ProgressReporter, ResolutionActivity, ResolutionWork,

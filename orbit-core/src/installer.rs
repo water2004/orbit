@@ -277,13 +277,43 @@ pub async fn fix_instance(
     dry_run: bool,
     interaction: InstallInteraction,
 ) -> Result<InstallReport, OrbitError> {
+    let manifest_file = ManifestFile::open(instance_dir)?;
+    Ok(repair_manifest_instance(
+        instance_dir,
+        providers,
+        jar_cache,
+        dry_run,
+        interaction,
+        manifest_file,
+        false,
+    )
+    .await?
+    .report)
+}
+
+pub(crate) struct ManifestRepairOutcome {
+    pub(crate) report: InstallReport,
+    /// True only when the user accepted the plan and the non-dry-run state was
+    /// persisted. Discovery, solving, dry runs, and cancelled confirmation do
+    /// not count as a commit.
+    pub(crate) committed: bool,
+}
+
+pub(crate) async fn repair_manifest_instance(
+    instance_dir: &Path,
+    providers: &[Box<dyn ModProvider>],
+    jar_cache: &crate::jar_cache::JarCache,
+    dry_run: bool,
+    interaction: InstallInteraction,
+    mut manifest_file: ManifestFile,
+    persist_manifest_without_package_actions: bool,
+) -> Result<ManifestRepairOutcome, OrbitError> {
     let InstallInteraction {
         select_package: _,
         select_resolution,
         confirm_install,
         progress,
     } = interaction;
-    let mut manifest_file = ManifestFile::open(instance_dir)?;
     let platform = crate::platform::Platform::load(instance_dir, &manifest_file.inner)?;
     let local_realizations = crate::init::scan_mods_dir(instance_dir, platform.loader)?;
     let target_meta = LockMeta {
@@ -419,13 +449,20 @@ pub async fn fix_instance(
         diagnostics: resolution.diagnostics.clone(),
         warnings: resolution.warnings.clone(),
     };
-    if (planned.is_empty() && removals.is_empty() && resolution.changes.is_empty())
-        || confirm_install.is_some_and(|confirm| !confirm(&preview))
-    {
-        return Ok(if planned.is_empty() && removals.is_empty() {
-            preview
-        } else {
-            InstallReport {
+    let has_package_actions =
+        !planned.is_empty() || !removals.is_empty() || !resolution.changes.is_empty();
+    if !has_package_actions {
+        if persist_manifest_without_package_actions && !dry_run {
+            manifest_file.save()?;
+        }
+        return Ok(ManifestRepairOutcome {
+            report: preview,
+            committed: !dry_run,
+        });
+    }
+    if confirm_install.is_some_and(|confirm| !confirm(&preview)) {
+        return Ok(ManifestRepairOutcome {
+            report: InstallReport {
                 installed: Vec::new(),
                 removed: Vec::new(),
                 changes: Vec::new(),
@@ -433,11 +470,15 @@ pub async fn fix_instance(
                 skipped_optional: Vec::new(),
                 diagnostics: resolution.diagnostics,
                 warnings: resolution.warnings,
-            }
+            },
+            committed: false,
         });
     }
     if dry_run {
-        return Ok(preview);
+        return Ok(ManifestRepairOutcome {
+            report: preview,
+            committed: false,
+        });
     }
 
     let installed = materialize_plans(
@@ -467,14 +508,17 @@ pub async fn fix_instance(
         ));
     }
 
-    Ok(InstallReport {
-        installed,
-        removed: removals,
-        changes: resolution.changes,
-        already_satisfied,
-        skipped_optional: Vec::new(),
-        diagnostics: resolution.diagnostics,
-        warnings,
+    Ok(ManifestRepairOutcome {
+        report: InstallReport {
+            installed,
+            removed: removals,
+            changes: resolution.changes,
+            already_satisfied,
+            skipped_optional: Vec::new(),
+            diagnostics: resolution.diagnostics,
+            warnings,
+        },
+        committed: true,
     })
 }
 
@@ -1170,7 +1214,7 @@ async fn resolve_requested_package(
             failures.push((
                 package.clone(),
                 format!(
-                    "package '{package}' is already managed; use 'orbit constraint set {package} <requirement>' to change its version policy"
+                    "package '{package}' is already managed; use 'orbit versions {package}' and structured 'orbit constraint set {package} ...' commands to change its version policy"
                 ),
             ));
             continue;

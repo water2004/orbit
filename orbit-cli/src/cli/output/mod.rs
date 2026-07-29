@@ -30,7 +30,8 @@ pub use view::{
 };
 pub use view::{
     diagnostic_view, info_view, install_instance_view, instance_view, list_view, outdated_mod_view,
-    package_change_view, remote_view, search_result_view, sync_view, transaction_view,
+    package_change_view, package_version_policy_view, remote_view, search_result_view, sync_view,
+    transaction_view,
 };
 
 /// Render format for command results.

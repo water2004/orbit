@@ -24,6 +24,7 @@ pub struct PackageVersionCandidate {
 pub struct PackageVersionsReport {
     pub package: String,
     pub constraint: String,
+    pub policy: crate::package_constraint::PackageVersionPolicy,
     pub selected_version: Option<String>,
     pub candidates: Vec<PackageVersionCandidate>,
 }
@@ -118,6 +119,9 @@ pub async fn list_package_versions(
     Ok(PackageVersionsReport {
         package: package.to_string(),
         constraint: specification.version.clone(),
+        policy: crate::package_constraint::PackageVersionPolicy::from_requirement(
+            &specification.version,
+        ),
         selected_version: selected.map(|entry| entry.version.clone()),
         candidates,
     })
