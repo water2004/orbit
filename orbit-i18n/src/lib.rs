@@ -495,6 +495,32 @@ mod tests {
     }
 
     #[test]
+    fn package_policy_workspaces_are_localized() {
+        for key in [
+            "Numeric versions",
+            "String filter",
+            "Package settings",
+            "Numeric version constraint",
+            "Combined version policy",
+            "Initial candidate set",
+            "Ordered operations",
+            "Set operation",
+            "Text test",
+            "Case-sensitive",
+            "Ignore case",
+            "Environment",
+            "Remotes",
+            "Manage",
+        ] {
+            assert_ne!(
+                text_for(LanguageMode::SimplifiedChinese, key),
+                key,
+                "missing Simplified Chinese package-management text for {key}"
+            );
+        }
+    }
+
+    #[test]
     fn named_template_values_survive_reordering() {
         let template = text_for(
             LanguageMode::SimplifiedChinese,
