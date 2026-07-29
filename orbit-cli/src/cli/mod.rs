@@ -117,18 +117,24 @@ pub enum Commands {
         /// Mark as an optional dependency.
         #[arg(long)]
         optional: bool,
-        /// Do not install transitive dependencies.
-        #[arg(long)]
-        no_deps: bool,
     },
 
-    /// Set a root package environment filter; auto follows the selected JAR declaration.
+    /// Set a managed package environment filter; auto follows the selected JAR declaration.
     Env {
         /// mod_id declared by JAR metadata.
         package: String,
         /// client / server / both / auto.
         environment: String,
     },
+
+    /// Inspect or change a managed package's version policy.
+    Constraint {
+        #[command(subcommand)]
+        command: ConstraintCommands,
+    },
+
+    /// Download, inspect, and list every remote candidate for a managed package.
+    Versions { package: String },
 
     /// Remove a mod.
     Remove {
@@ -325,6 +331,19 @@ pub enum RemoteCommands {
     List { package: String },
 }
 
+#[derive(Subcommand)]
+pub enum ConstraintCommands {
+    /// Show the configured policy and current selected version.
+    Show { package: String },
+    /// Set a version requirement without resolving or changing JARs.
+    Set {
+        package: String,
+        requirement: String,
+    },
+    /// Restore the unconstrained `*` policy.
+    Clear { package: String },
+}
+
 impl CommandHandler for Commands {
     async fn execute(self, ctx: &commands::CliContext) -> Result<()> {
         use crate::cli::commands::*;
@@ -351,12 +370,13 @@ impl CommandHandler for Commands {
                 version,
                 env,
                 optional,
-                no_deps,
-            } => handle_add(mod_name, platform, version, env, optional, no_deps, ctx).await,
+            } => handle_add(mod_name, platform, version, env, optional, ctx).await,
             Commands::Env {
                 package,
                 environment,
             } => handle_env(package, environment, ctx),
+            Commands::Constraint { command } => handle_constraint(command, ctx),
+            Commands::Versions { package } => handle_versions(package, ctx).await,
             Commands::Remove { mod_name } => handle_remove(mod_name, ctx).await,
             Commands::Purge { mod_name } => handle_purge(mod_name, ctx).await,
             Commands::Sync => handle_sync(ctx).await,
@@ -404,6 +424,8 @@ impl Commands {
             Self::Fix => "fix",
             Self::Add { .. } => "add",
             Self::Env { .. } => "env",
+            Self::Constraint { .. } => "constraint",
+            Self::Versions { .. } => "versions",
             Self::Remove { .. } => "remove",
             Self::Purge { .. } => "purge",
             Self::Sync => "sync",
@@ -429,6 +451,9 @@ impl Commands {
                 | Self::Fix
                 | Self::Add { .. }
                 | Self::Env { .. }
+                | Self::Constraint {
+                    command: ConstraintCommands::Set { .. } | ConstraintCommands::Clear { .. },
+                }
                 | Self::Remove { .. }
                 | Self::Purge { .. }
                 | Self::Sync
@@ -510,7 +535,9 @@ impl CommandHandler for MigrateCommands {
 mod tests {
     use clap::{CommandFactory, Parser};
 
-    use super::{Cli, Commands, ConfigCommands, MigrateCommands, PathBuf, RemoteCommands};
+    use super::{
+        Cli, Commands, ConfigCommands, ConstraintCommands, MigrateCommands, PathBuf, RemoteCommands,
+    };
 
     #[test]
     fn clap_schema_has_no_global_subcommand_argument_collisions() {
@@ -638,6 +665,30 @@ mod tests {
 
         assert_eq!(key, "cache.capacity-mib");
         assert_eq!(value, "2048");
+    }
+
+    #[test]
+    fn package_version_inventory_and_policy_commands_are_unambiguous() {
+        let versions = Cli::try_parse_from(["orbit", "versions", "sodium"]).unwrap();
+        let Commands::Versions { package } = versions.command else {
+            panic!("versions command was not parsed");
+        };
+        assert_eq!(package, "sodium");
+
+        let constraint =
+            Cli::try_parse_from(["orbit", "constraint", "set", "sodium", "=0.6.13-alpha"]).unwrap();
+        let Commands::Constraint {
+            command:
+                ConstraintCommands::Set {
+                    package,
+                    requirement,
+                },
+        } = constraint.command
+        else {
+            panic!("constraint set command was not parsed");
+        };
+        assert_eq!(package, "sodium");
+        assert_eq!(requirement, "=0.6.13-alpha");
     }
 
     #[test]

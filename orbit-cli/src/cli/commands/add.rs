@@ -13,7 +13,6 @@ pub async fn handle(
     version: Option<String>,
     env: Option<String>,
     optional: bool,
-    no_deps: bool,
     ctx: &CliContext,
 ) -> Result<()> {
     let local_path = mod_name
@@ -30,11 +29,7 @@ pub async fn handle(
             );
         }
         let instance_dir = ctx.instance_dir()?;
-        let providers = if no_deps {
-            Vec::new()
-        } else {
-            super::create_instance_providers(&instance_dir, None, &ctx.runtime)?
-        };
+        let providers = super::create_instance_providers(&instance_dir, None, &ctx.runtime)?;
         let report = install_local_file_to_instance(
             std::path::Path::new(path),
             version.as_deref(),
@@ -42,7 +37,6 @@ pub async fn handle(
             &providers,
             ctx.runtime.jar_cache(),
             InstallOptions {
-                no_deps,
                 dry_run: ctx.dry_run,
                 intent: InstallIntent::Add,
                 optional,
@@ -77,7 +71,6 @@ pub async fn handle(
         &providers,
         ctx.runtime.jar_cache(),
         InstallOptions {
-            no_deps,
             dry_run: ctx.dry_run,
             intent: InstallIntent::Add,
             optional,
@@ -163,7 +156,6 @@ pub async fn handle(
                 Some(constraint),
                 env,
                 optional,
-                no_deps,
                 ctx,
             ))
             .await

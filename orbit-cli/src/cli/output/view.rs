@@ -110,13 +110,41 @@ pub struct DependencyView {
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Serialize)]
-pub struct DependencyEnvironmentOutput {
+pub struct PackageEnvironmentOutput {
     pub package: String,
     /// `None` is the persisted `auto` state.
     pub configured: Option<String>,
     /// Missing only when auto has no selected lock entry yet.
     pub effective: Option<String>,
     pub dry_run: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PackageConstraintOutput {
+    pub package: String,
+    pub previous: String,
+    pub current: String,
+    pub selected_version: Option<String>,
+    pub selected_satisfies: Option<bool>,
+    pub changed: bool,
+    pub dry_run: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PackageVersionsOutput {
+    pub package: String,
+    pub constraint: String,
+    pub selected_version: Option<String>,
+    pub candidates: Vec<PackageVersionCandidateView>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PackageVersionCandidateView {
+    pub version: String,
+    pub sources: Vec<String>,
+    pub details: String,
+    pub selected: bool,
+    pub matches_constraint: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -128,21 +156,18 @@ pub struct ListOutput {
     pub target: Option<String>,
     pub tree: bool,
     pub packages: Vec<ListedPackageView>,
-    /// Only populated when `tree` is true.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub roots: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ListedPackageView {
     pub mod_id: String,
     pub version: String,
+    pub version_constraint: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub icon_path: Option<String>,
     pub remotes: Vec<String>,
     pub configured_environment: Option<String>,
     pub environment: String,
-    pub root: bool,
     pub optional: bool,
     pub dependencies: Vec<String>,
     pub bundled: Vec<BundledView>,
@@ -614,6 +639,7 @@ pub fn listed_package_view(
     ListedPackageView {
         mod_id: pkg.mod_id.clone(),
         version: pkg.version.clone(),
+        version_constraint: pkg.version_constraint.clone(),
         icon_path: presentation_cache
             .and_then(|cache| orbit_core::materialize_listed_package_icon(pkg, cache).ok())
             .flatten()
@@ -621,7 +647,6 @@ pub fn listed_package_view(
         remotes: pkg.remotes.clone(),
         configured_environment: pkg.configured_environment.clone(),
         environment: pkg.environment.clone(),
-        root: pkg.root,
         optional: pkg.optional,
         dependencies: pkg.dependencies.clone(),
         bundled: pkg
@@ -735,7 +760,6 @@ pub fn list_view(
     packages: &[ListedPackage],
     target: Option<&str>,
     tree: bool,
-    roots: Option<Vec<String>>,
     presentation_cache: Option<&std::path::Path>,
 ) -> ListOutput {
     ListOutput {
@@ -745,7 +769,6 @@ pub fn list_view(
             .iter()
             .map(|package| listed_package_view(package, presentation_cache))
             .collect(),
-        roots,
     }
 }
 
@@ -831,8 +854,8 @@ mod tests {
     }
 
     #[test]
-    fn dependency_environment_json_distinguishes_auto_from_effective_value() {
-        let view = DependencyEnvironmentOutput {
+    fn package_environment_json_distinguishes_auto_from_effective_value() {
+        let view = PackageEnvironmentOutput {
             package: "sodium".into(),
             configured: None,
             effective: Some("client".into()),
@@ -846,14 +869,14 @@ mod tests {
     }
 
     #[test]
-    fn package_list_exposes_root_and_configured_environment_for_management() {
+    fn package_list_exposes_constraint_and_configured_environment_for_management() {
         let package = ListedPackage {
             mod_id: "sodium".into(),
             version: "0.9.1".into(),
+            version_constraint: "*".into(),
             remotes: vec!["modrinth:AANobbMI".into()],
             configured_environment: None,
             environment: "client".into(),
-            root: true,
             optional: false,
             dependencies: Vec::new(),
             bundled: Vec::new(),
@@ -861,7 +884,8 @@ mod tests {
         };
 
         let value = serde_json::to_value(listed_package_view(&package, None)).unwrap();
-        assert_eq!(value["root"], true);
+        assert_eq!(value["version_constraint"], "*");
+        assert!(value.get("root").is_none());
         assert!(value["configured_environment"].is_null());
         assert_eq!(value["environment"], "client");
     }

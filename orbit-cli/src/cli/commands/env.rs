@@ -1,13 +1,13 @@
 use anyhow::Result;
 
 use super::CliContext;
-use crate::cli::output::{DependencyEnvironmentOutput, OutputFormat};
+use crate::cli::output::{OutputFormat, PackageEnvironmentOutput};
 
 pub fn handle(package: String, environment: String, ctx: &CliContext) -> Result<()> {
     let instance_dir = ctx.instance_dir()?;
     let report =
-        orbit_core::set_dependency_environment(&instance_dir, &package, &environment, ctx.dry_run)?;
-    let output = DependencyEnvironmentOutput {
+        orbit_core::set_package_environment(&instance_dir, &package, &environment, ctx.dry_run)?;
+    let output = PackageEnvironmentOutput {
         package: report.package,
         configured: report
             .configured

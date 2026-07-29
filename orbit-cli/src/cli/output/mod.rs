@@ -21,10 +21,12 @@ pub(crate) use progress_ndjson::write_machine_line;
 pub use progress_ndjson::{ndjson_audit_reporter, ndjson_progress_reporter};
 pub use view::{
     CacheOutput, ConfigEntryOutput, ConfigEntryView, ConfigListOutput, ConfigPathOutput,
-    ConfigValueView, DependencyEnvironmentOutput, DiagnosticView, ErrorJson, ExportOutput,
-    ImportOutput, InitOutput, InstanceDefaultOutput, InstanceRemoveOutput, InstancesOutput,
-    JsonEnvelope, MigrationExportView, MigrationOutput, MigrationSummary, OutdatedOutput,
-    OutdatedSummary, PurgeOutput, RemoveOutput, SearchFilters, SearchOutput, SearchResultView,
+    ConfigValueView, DiagnosticView, ErrorJson, ExportOutput, ImportOutput, InitOutput,
+    InstanceDefaultOutput, InstanceRemoveOutput, InstancesOutput, JsonEnvelope,
+    MigrationExportView, MigrationOutput, MigrationSummary, OutdatedOutput, OutdatedSummary,
+    PackageConstraintOutput, PackageEnvironmentOutput, PackageVersionCandidateView,
+    PackageVersionsOutput, PurgeOutput, RemoveOutput, SearchFilters, SearchOutput,
+    SearchResultView,
 };
 pub use view::{
     diagnostic_view, info_view, install_instance_view, instance_view, list_view, outdated_mod_view,
@@ -526,7 +528,7 @@ pub fn remote_list_table(report: &orbit_core::RemoteReport, header: Option<&str>
 
 /// Render the flat `orbit list` output as an adaptive table.
 pub fn installed_packages_table(packages: &[ListedPackage]) -> String {
-    let mut table = output_table(["Package", "Version", "Remotes", "Env", "Notes"]);
+    let mut table = output_table(["Package", "Version", "Policy", "Remotes", "Env", "Notes"]);
     for package in packages {
         let mut notes = Vec::new();
         if package.optional {
@@ -542,12 +544,39 @@ pub fn installed_packages_table(packages: &[ListedPackage]) -> String {
         table.add_row([
             Cell::new(&package.mod_id),
             Cell::new(&package.version),
+            Cell::new(&package.version_constraint),
             Cell::new(package.remotes.join(", ")),
             Cell::new(&package.environment),
             Cell::new(notes.join("\n")),
         ]);
     }
     table.to_string()
+}
+
+pub fn package_versions_table(output: &PackageVersionsOutput) -> String {
+    let mut table = output_table(["", "Version", "Policy", "Sources", "Details"]);
+    for candidate in &output.candidates {
+        table.add_row([
+            Cell::new(if candidate.selected { "●" } else { "" }),
+            Cell::new(&candidate.version),
+            Cell::new(if candidate.matches_constraint {
+                tr!("allowed")
+            } else {
+                tr!("excluded")
+            }),
+            Cell::new(candidate.sources.join(", ")),
+            Cell::new(&candidate.details),
+        ]);
+    }
+    format!(
+        "{}\n{}",
+        tr!(
+            "%{package} versions (constraint: %{constraint})",
+            package = output.package,
+            constraint = output.constraint
+        ),
+        table
+    )
 }
 
 /// Render `orbit sync` platform and package deltas as an adaptive table.
@@ -937,10 +966,10 @@ mod tests {
         let package = ListedPackage {
             mod_id: "fabric-api".to_string(),
             version: "0.100".to_string(),
+            version_constraint: "*".to_string(),
             remotes: vec!["modrinth:project".to_string()],
             configured_environment: None,
             environment: "both".to_string(),
-            root: true,
             optional: false,
             dependencies: Vec::new(),
             bundled: vec![("fabric-api-base".to_string(), "0.100".to_string())],

@@ -2,6 +2,7 @@ pub mod add;
 pub mod audit;
 pub mod cache;
 pub mod config;
+pub mod constraint;
 pub mod env;
 pub mod export;
 pub mod fix;
@@ -19,8 +20,11 @@ pub mod remove;
 pub mod search;
 pub mod sync;
 pub mod upgrade;
+pub mod versions;
 
+pub use constraint::handle as handle_constraint;
 pub use env::handle as handle_env;
+pub use versions::handle as handle_versions;
 
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
@@ -706,9 +710,9 @@ pub fn create_instance_providers(
     {
         for remote in manifest
             .inner
-            .dependencies
+            .packages
             .values()
-            .flat_map(|dependency| dependency.remotes.iter())
+            .flat_map(|package| package.remotes.iter())
         {
             let provider = remote.provider();
             if provider != "file" && !catalogs.iter().any(|item| item == provider) {

@@ -30,7 +30,6 @@ pub async fn handle(mod_name: Option<String>, ctx: &CliContext) -> Result<()> {
             &providers,
             ctx.runtime.jar_cache(),
             InstallOptions {
-                no_deps: false,
                 dry_run: ctx.dry_run,
                 intent: InstallIntent::Upgrade,
                 optional: false,

@@ -25,8 +25,8 @@ pub async fn handle(file: String, merge_strategy: Option<String>, ctx: &CliConte
                         tr!(
                             "'%{package}' differs (existing %{existing}, imported %{imported}). Use imported value? [y/N] ",
                             package = package,
-                            existing = existing.version_constraint().unwrap_or("*"),
-                            imported = incoming.version_constraint().unwrap_or("*")
+                            existing = existing.version_constraint(),
+                            imported = incoming.version_constraint()
                         )
                     );
                     use std::io::Write;

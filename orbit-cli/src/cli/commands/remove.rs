@@ -1,6 +1,6 @@
 use super::CliContext;
 use anyhow::{Context, Result};
-use orbit_core::{OrbitError, list_dependencies, remove_from_instance};
+use orbit_core::{OrbitError, list_packages, remove_from_instance};
 
 use crate::cli::output::{OutputFormat, RemoveOutput};
 
@@ -50,7 +50,7 @@ pub async fn handle(input: String, ctx: &CliContext) -> Result<()> {
             if ctx.output.format == OutputFormat::Json {
                 anyhow::bail!(OrbitError::ModNotFound(input));
             }
-            let deps = list_dependencies(&instance_dir)
+            let deps = list_packages(&instance_dir)
                 .with_context(|| tr!("Failed to list dependencies").into_owned())?;
             if deps.is_empty() {
                 anyhow::bail!("{}", tr!("No dependencies in orbit.toml."));
