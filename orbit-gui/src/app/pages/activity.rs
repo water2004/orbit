@@ -383,15 +383,16 @@ fn render_interaction(app: &OrbitApp, cx: &mut Context<OrbitApp>) -> impl IntoEl
         } else {
             choice.description
         };
-        let mut content = v_flex().w_full().gap_2().items_start().child(
+        let mut content = v_flex().w_full().min_w_0().gap_2().items_start().child(
             h_flex()
                 .w_full()
+                .min_w_0()
                 .gap_2()
-                .child(div().font_semibold().child(choice.label))
+                .child(div().min_w_0().flex_1().font_semibold().child(choice.label))
                 .when_some(description, |row, description| {
                     row.child(
                         div()
-                            .ml_auto()
+                            .flex_shrink_0()
                             .text_xs()
                             .text_color(cx.theme().muted_foreground)
                             .child(description),
@@ -415,19 +416,31 @@ fn render_interaction(app: &OrbitApp, cx: &mut Context<OrbitApp>) -> impl IntoEl
                     .child(tr!("No package action differs in this option.").into_owned()),
             );
         }
-        choices = choices.child(
-            Button::new(("interaction-choice", index))
-                .w_full()
-                .h_auto()
-                .px_3()
-                .py_3()
-                .disabled(invalid)
-                .child(content)
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    this.answer_interaction(Some(choice_id.clone()));
-                    cx.notify();
-                })),
-        );
+        let card = div()
+            .id(("interaction-choice", index))
+            .w_full()
+            .min_w_0()
+            .p_3()
+            .rounded_lg()
+            .border_1()
+            .border_color(cx.theme().border)
+            .bg(cx.theme().group_box)
+            .shadow_xs()
+            .child(content)
+            .when(!invalid, |card| {
+                card.cursor_pointer()
+                    .hover(|style| {
+                        style
+                            .bg(cx.theme().secondary)
+                            .border_color(cx.theme().primary.opacity(0.45))
+                    })
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.answer_interaction(Some(choice_id.clone()));
+                        cx.notify();
+                    }))
+            })
+            .when(invalid, |card| card.opacity(0.72));
+        choices = choices.child(card);
     }
     ui::modal_backdrop(
         ui::modal(
@@ -531,10 +544,12 @@ fn render_package_actions(
             let version = package_action_version(change);
             v_flex()
                 .w_full()
+                .min_w_0()
                 .gap_1()
                 .child(
                     h_flex()
                         .w_full()
+                        .min_w_0()
                         .gap_2()
                         .items_center()
                         .child(div().w(px(12.)).text_color(cx.theme().primary).child(
@@ -545,10 +560,17 @@ fn render_package_actions(
                             },
                         ))
                         .child(package_action_pill(&change.kind, cx))
-                        .child(div().font_semibold().child(change.package.clone()))
                         .child(
                             div()
-                                .ml_auto()
+                                .min_w_0()
+                                .flex_1()
+                                .truncate()
+                                .font_semibold()
+                                .child(change.package.clone()),
+                        )
+                        .child(
+                            div()
+                                .flex_shrink_0()
                                 .text_sm()
                                 .text_color(cx.theme().muted_foreground)
                                 .child(version),
@@ -558,6 +580,8 @@ fn render_package_actions(
                     row.child(
                         div()
                             .ml(px(20.))
+                            .min_w_0()
+                            .truncate()
                             .text_xs()
                             .text_color(cx.theme().muted_foreground)
                             .child(description),
