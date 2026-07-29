@@ -2,7 +2,6 @@
 set -euo pipefail
 
 target="x86_64-unknown-linux-gnu"
-package="orbit"
 skip_cargo_build=false
 
 if [[ "${1:-}" == "--skip-cargo-build" ]]; then
@@ -33,9 +32,19 @@ version="$(
 	cargo metadata \
 		--format-version 1 \
 		--no-deps \
-		--manifest-path orbit-cli/Cargo.toml |
 		python3 -c 'import json, sys; print(next(package["version"] for package in json.load(sys.stdin)["packages"] if package["name"] == "orbit"))'
 )"
+
+for package in orbit-core orbit-launcher orbit-launcher-core orbit-gui; do
+	package_version="$(
+		cargo metadata --format-version 1 --no-deps |
+			python3 -c 'import json, sys; name = sys.argv[1]; print(next(package["version"] for package in json.load(sys.stdin)["packages"] if package["name"] == name))' "$package"
+	)"
+	if [[ "$package_version" != "$version" ]]; then
+		echo "$package is $package_version, but the Orbit suite is $version" >&2
+		exit 1
+	fi
+done
 rustup target add "$target"
 
 if [[ "$skip_cargo_build" != true ]]; then
@@ -59,17 +68,39 @@ done
 "target/$target/release/orbit" --help >/dev/null
 "target/$target/release/orbit-launcher" --help >/dev/null
 
-cargo deb \
-	--package "$package" \
-	--target "$target" \
-	--no-build
+packages=(orbit orbit-launcher orbit-gui)
+for package in "${packages[@]}"; do
+	cargo deb \
+		--package "$package" \
+		--target "$target" \
+		--no-build
 
-deb="target/debian/orbit_${version}-1_amd64.deb"
-if [[ ! -f "$deb" ]]; then
-	echo "cargo-deb did not produce an amd64 Orbit package" >&2
-	exit 1
-fi
+	deb="target/debian/${package}_${version}-1_amd64.deb"
+	if [[ ! -f "$deb" ]]; then
+		echo "cargo-deb did not produce the expected $package amd64 package" >&2
+		exit 1
+	fi
+	if [[ "$(dpkg-deb --field "$deb" Package)" != "$package" ]]; then
+		echo "$deb has an unexpected Debian package name" >&2
+		exit 1
+	fi
+	if [[ "$(dpkg-deb --field "$deb" Version)" != "$version-1" ]]; then
+		echo "$deb has an unexpected Debian version" >&2
+		exit 1
+	fi
+	if [[ "$package" == "orbit-gui" ]]; then
+		depends="$(dpkg-deb --field "$deb" Depends)"
+		grep -Fq "orbit (= $version-1)" <<<"$depends" || {
+			echo "orbit-gui must depend on the matching orbit package" >&2
+			exit 1
+		}
+		grep -Fq "orbit-launcher (= $version-1)" <<<"$depends" || {
+			echo "orbit-gui must depend on the matching orbit-launcher package" >&2
+			exit 1
+		}
+	fi
 
-dpkg-deb --info "$deb"
-dpkg-deb --contents "$deb"
-printf '%s\n' "$(realpath "$deb")"
+	dpkg-deb --info "$deb"
+	dpkg-deb --contents "$deb"
+	printf '%s\n' "$(realpath "$deb")"
+done

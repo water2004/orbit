@@ -34,22 +34,29 @@ jobs:
             exit 1
           fi
 
-      - name: Require the tag to match the Cargo version
+      - name: Require the tag to match the suite version
         id: version
         shell: bash
         run: |
           set -euo pipefail
-          version="$(
-            cargo metadata \
-              --format-version 1 \
-              --no-deps \
-              --manifest-path orbit-cli/Cargo.toml |
-              jq -r '.packages[] | select(.name == "orbit") | .version'
-          )"
-          if [[ -z "$version" || "$version" == "null" ]]; then
-            echo "Unable to read the Orbit package version." >&2
-            exit 1
-          fi
+          metadata="$(cargo metadata --format-version 1 --no-deps)"
+          version=""
+          for package in orbit orbit-core orbit-launcher orbit-launcher-core orbit-gui; do
+            package_version="$(
+              jq -r --arg package "$package" \
+                '.packages[] | select(.name == $package) | .version' <<<"$metadata"
+            )"
+            if [[ -z "$package_version" || "$package_version" == "null" ]]; then
+              echo "Unable to read the $package package version." >&2
+              exit 1
+            fi
+            if [[ -z "$version" ]]; then
+              version="$package_version"
+            elif [[ "$package_version" != "$version" ]]; then
+              echo "$package is $package_version, but the Orbit suite is $version." >&2
+              exit 1
+            fi
+          done
           if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "Release versions must contain exactly three numeric fields; found $version." >&2
             exit 1
@@ -94,7 +101,7 @@ jobs:
           if-no-files-found: error
 
   linux-deb:
-    name: Build Debian package
+    name: Build Debian packages
     needs: validate
     runs-on: ubuntu-22.04
     steps:
@@ -122,14 +129,17 @@ jobs:
       - name: Install the pinned Debian packager
         run: cargo install cargo-deb --version 3.7.0 --locked
 
-      - name: Build and validate deb
+      - name: Build and validate debs
         run: bash ./scripts/build-linux-deb.sh
 
-      - name: Upload deb
+      - name: Upload debs
         uses: actions/upload-artifact@v7
         with:
-          name: orbit-${{ needs.validate.outputs.version }}-linux-deb
-          path: target/debian/orbit_${{ needs.validate.outputs.version }}-1_amd64.deb
+          name: orbit-${{ needs.validate.outputs.version }}-linux-debs
+          path: |
+            target/debian/orbit_${{ needs.validate.outputs.version }}-1_amd64.deb
+            target/debian/orbit-launcher_${{ needs.validate.outputs.version }}-1_amd64.deb
+            target/debian/orbit-gui_${{ needs.validate.outputs.version }}-1_amd64.deb
           if-no-files-found: error
 
   publish:

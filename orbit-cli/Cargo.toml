@@ -1,6 +1,6 @@
 [package]
 name = "orbit"
-version = "0.1.2"
+version = "0.2.0"
 edition = "2024"
 authors = ["Yuan Shui"]
 description = "A non-intrusive package manager for Minecraft mods"
@@ -13,20 +13,16 @@ copyright = "2026, Yuan Shui"
 license-file = ["../LICENSE", "0"]
 extended-description = """\
 Orbit manages Minecraft mod instances from JAR-declared metadata, resolves \
-dependencies across supported providers, keeps reproducible manifests and \
-lockfiles, and includes the native Orbit desktop application and runtime \
-launcher."""
+dependencies across supported providers, and keeps reproducible manifests and \
+lockfiles. Minecraft runtime installation and launching remain separate \
+responsibilities of Orbit Launcher."""
 depends = "$auto"
 section = "utils"
 priority = "optional"
 assets = [
     ["target/release/orbit", "usr/bin/", "755"],
-    ["target/release/orbit-launcher", "usr/bin/", "755"],
-    ["target/release/orbit-gui", "usr/bin/", "755"],
-    ["../assets/orbit.desktop", "usr/share/applications/orbit.desktop", "644"],
-    ["../assets/orbit.svg", "usr/share/icons/hicolor/scalable/apps/orbit.svg", "644"],
     ["../README.md", "usr/share/doc/orbit/README.md", "644"],
-    ["../docs/orbit-gui.md", "usr/share/doc/orbit/orbit-gui.md", "644"],
+    ["../docs/orbit-cli.md", "usr/share/doc/orbit/orbit-cli.md", "644"],
 ]
 
 [features]

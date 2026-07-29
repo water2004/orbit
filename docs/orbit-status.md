@@ -29,7 +29,7 @@
 | Provider 分层 | ✅ | Modrinth / CurseForge HTTP 与 DTO 各在独立 wrapper，core 只做领域适配 |
 | 跨平台全局路径 | ✅ | RuntimeEnvironment + 显式路径；system/executable 布局 |
 | Windows MSI | ✅ | x64 per-machine 完整套件；三个相邻程序、开始菜单入口、可选系统 PATH、同版本重建升级、维护模式、可选清理默认 AppData；发布产物仍需项目证书签名 |
-| Linux deb / Release | ✅ | amd64 完整套件安装到 `/usr/bin`，含 desktop/icon；仅 main 中版本匹配的 `v*` tag 触发 MSI+deb、SHA256SUMS、分类 release notes 与 GitHub Release |
+| Linux deb / Release | ✅ | amd64 拆为可独立安装的 `orbit`、`orbit-launcher`、`orbit-gui`；GUI 精确依赖同版本两 CLI 并独占 desktop/icon；统一 `v*` tag 发布 MSI、三个 deb、SHA256SUMS 与 release notes |
 | 长事务进度 | ✅ | 包操作与 audit 均使用 core 强类型事件；候选/审计工件精确计数，求解工作总量随实际 run/probe 动态增长 |
 | JSON / 自动化输出 | ✅ | 全局 `--format text\|json` 与 `--progress-format none\|ndjson`；JSON 结果 + NDJSON 进度/交互 + stdin 响应 + 结构化错误与稳定错误码共用 schema 2；协议严格 UTF-8，字段/枚举码不随语言变化；view-model 层隔离哈希/文件名/密钥，并在现有 search/info 契约提供官方 icon/link/gallery 展示数据 |
 | 全局配置命令 | ✅ | `config path/list/get/set/unset`；强类型校验、单字段原子更新、注释保留、密钥脱敏、环境覆盖不回写 |

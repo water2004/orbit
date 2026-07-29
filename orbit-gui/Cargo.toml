@@ -1,11 +1,30 @@
 [package]
 name = "orbit-gui"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 license = "MIT"
 description = "Native desktop shell for Orbit and Orbit Launcher"
 repository = "https://github.com/water2004/orbit"
 build = "build.rs"
+
+[package.metadata.deb]
+name = "orbit-gui"
+maintainer = "Yuan Shui <water2004@users.noreply.github.com>"
+copyright = "2026, Yuan Shui"
+license-file = ["../LICENSE", "0"]
+extended-description = """\
+Orbit GUI is the native desktop shell for the Orbit mod package manager and \
+Orbit Launcher. It delegates all domain operations to the two command-line \
+programs through their machine-readable protocols."""
+depends = "orbit (= 0.2.0-1), orbit-launcher (= 0.2.0-1), $auto"
+section = "games"
+priority = "optional"
+assets = [
+    ["target/release/orbit-gui", "usr/bin/", "755"],
+    ["../assets/orbit.desktop", "usr/share/applications/orbit.desktop", "644"],
+    ["../assets/orbit.svg", "usr/share/icons/hicolor/scalable/apps/orbit.svg", "644"],
+    ["../docs/orbit-gui.md", "usr/share/doc/orbit-gui/README.md", "644"],
+]
 
 [[bin]]
 name = "orbit-gui"

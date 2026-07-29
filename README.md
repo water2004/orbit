@@ -34,11 +34,26 @@ The detailed boundaries are documented in [Orbit architecture](docs/orbit-archit
 
 Windows x64 users can install the complete suite from `orbit-<version>-x86_64.msi` on the GitHub Releases page. The installer provides three feature profiles: Orbit only, Orbit + Launcher, or the complete suite with the native GUI. It can add the CLI directory to system `PATH`, supports same-version maintenance, and asks whether default AppData configuration and caches should be removed during uninstall.
 
-Debian and Ubuntu amd64 packages are published as `orbit_<version>-1_amd64.deb`:
+Debian and Ubuntu amd64 releases contain three independently installable packages. A headless
+server needs only Launcher, and can add Orbit when it also wants managed mods:
 
 ```bash
-sudo apt install ./orbit_0.1.2-1_amd64.deb
+# Headless Minecraft runtime management.
+sudo apt install ./orbit-launcher_0.2.0-1_amd64.deb
+
+# Optional mod package management on that server.
+sudo apt install ./orbit_0.2.0-1_amd64.deb
+
+# Desktop installation: apt resolves the GUI's exact-version CLI dependencies
+# when all three downloaded files are supplied together.
+sudo apt install ./orbit_0.2.0-1_amd64.deb \
+  ./orbit-launcher_0.2.0-1_amd64.deb \
+  ./orbit-gui_0.2.0-1_amd64.deb
 ```
+
+Installing the GUI on a headless host is technically harmless, but it pulls graphical runtime
+libraries and cannot display without a graphical session, so the separate Launcher package is the
+intended server installation.
 
 Tagged releases are built only from `main` when the tag matches the Cargo version. See [release process](docs/release-process.md), [Windows MSI](docs/windows-msi.md), and [Linux deb](docs/linux-deb.md).
 
@@ -114,7 +129,27 @@ The migration GUI sequence is intentionally transactional:
 
 ### Launcher
 
-`orbit-launcher` provides global and local instance context, official Minecraft metadata, Fabric/Quilt/Forge/NeoForge installation, managed Java, Microsoft/offline/standard Yggdrasil accounts, authlib-injector server support, EULA acceptance, client launch, and cancellable server supervision. See the complete [Launcher CLI reference](docs/orbit-launcher-cli.md).
+`orbit-launcher` is the runtime half of the suite. It creates isolated client instances and explicit
+server directories from official Minecraft and Loader metadata; installs Vanilla, Fabric, Quilt,
+Forge, and NeoForge; manages Mojang Java runtimes; handles Microsoft, offline, and standard
+Yggdrasil accounts; and launches clients or supervises cancellable, restartable servers. It owns no
+mod logic and never calls Orbit. The project Microsoft public-client registration is built in, while
+tokens remain in the operating system's secret store.
+
+```bash
+# Install a complete isolated client in the default managed repository.
+orbit-launcher install --new fabric-1.21.1 \
+  --kind client --minecraft 1.21.1 --loader fabric
+
+# Install a headless server into an explicit directory. The complete EULA must
+# be shown and accepted through the dedicated command before it can run.
+orbit-launcher install --new survival-server \
+  --kind server --server-directory /srv/minecraft/survival \
+  --minecraft latest-release --loader fabric
+```
+
+See the complete [Launcher CLI reference](docs/orbit-launcher-cli.md) and
+[Launcher architecture](docs/orbit-launcher-architecture.md).
 
 ## State files
 

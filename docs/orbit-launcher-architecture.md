@@ -519,8 +519,10 @@ Microsoft 在线账户至少实现：
 - 用户撤销授权、儿童账户和无游戏许可证的明确错误。
 
 Orbit Launcher 必须使用自己的 Microsoft Entra application/client ID。client ID 不是秘密，
-但必须来自本项目的应用注册；禁止复用 HMCL 或其他 Launcher 的 client ID。发布构建可以
-通过编译参数注入 client ID，开发构建允许从显式配置读取。
+但必须来自本项目的应用注册；禁止复用 HMCL 或其他 Launcher 的 client ID。官方公开客户端
+ID `a1b083c0-2c7f-47c8-a351-451279131fc7` 固定在 core 中，开发与发布构建使用同一路径；
+不得增加运行时配置、构建环境变量或缺失时的兼容兜底。它只标识公开应用，账户 token 仍由
+系统秘密存储管理。品牌 fork 必须修改源码并使用自己的应用注册。
 
 Offline account 只生成离线身份，不得把它描述为已经通过 Microsoft 验证。
 
@@ -844,10 +846,6 @@ directory = "/srv/orbit-client-repository"
 [java]
 default_provider = "mojang"
 
-[microsoft]
-# 发布构建通常由编译参数提供；开发构建可显式配置。
-client_id = "..."
-
 [[yggdrasil.providers]]
 id = "private-auth"
 api_root = "https://auth.example.com/api/yggdrasil"
@@ -1027,9 +1025,9 @@ LaunchPlan golden test。没有测试覆盖的组合不得笼统宣称“支持�
 1. **账户范围**：实现 Microsoft、Offline 和标准 External Yggdrasil；不实现 LittleSkin
    等站点专属 OAuth。External Yggdrasil 的 client/server 启动都必须支持受管
    Authlib Injector。
-2. **Microsoft 应用注册**：需要项目自有的 Entra client ID。源码和开发构建允许显式配置，
-   官方 release 通过 CI secret/variable 注入并记录应用所有权；没有 client ID 时相关命令
-   明确报错，不阻塞其他模块实现。
+2. **Microsoft 应用注册**：项目自有的 Entra public-client ID 固定在 core 中；它不是秘密，
+   不进入用户配置或 CI secret。开发与 release 使用完全相同的认证路径，token 仍只进入
+   操作系统秘密存储。
 3. **Java provider**：当前安装事务只支持 Mojang 受管 runtime。Temurin 和 system Java 是
    规划能力；在完整下载、校验和平台测试落地前不得宣称支持，也不得作为异常后的静默回退。
 4. **服务端后台模式**：`server start` 与 supervisor、IPC、stop、自动重启一起交付；不实现
@@ -1038,8 +1036,9 @@ LaunchPlan golden test。没有测试覆盖的组合不得笼统宣称“支持�
    best-effort 宣称支持，遇到未知历史格式返回结构化 unsupported 错误。
 6. **实例删除策略**：默认只注销实例并保留目录；删除文件需要第二次明确选择，并默认保留
    world/save/截图。服务端世界同样处理。
-7. **发布形态**：`orbit-launcher` 使用自己的 MSI、deb 发布物及 `launcher-v*` 版本生命周期，
-   不要求其他程序存在，也不把其他程序打进自己的安装包。
+7. **发布形态**：三个程序共用一个 `v*` 套件版本和 GitHub Release。Windows 使用带三个
+   安装档位的套件 MSI；Linux 使用三个独立 deb，`orbit-launcher` 不依赖其它程序，适合无
+   图形服务端，GUI 包精确依赖同版本两个 CLI。统一交付不改变进程和业务边界。
 
 ## 22. 参考实现与官方资料
 

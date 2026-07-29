@@ -6,23 +6,25 @@
   <img src="assets/orbit.svg" width="112" height="112" alt="Orbit 图标">
 </p>
 
-**The Modern, Non-intrusive Package Manager for Minecraft Mods.**
+**面向 Minecraft Java Edition 的现代、非侵入式模组包管理器与原生工作区。**
 
-Orbit 是一个专为 Minecraft 打造的现代化命令行模组包管理器。它不试图替代启动器（如 HMCL, Prism Launcher 或 CurseForge），而是作为一个强大的“智能管家”完美融入你的现有工作流。
+Orbit 本体的目标没有改变：`orbit` 只管理模组包、真实 JAR 元数据、依赖图、可复现清单与
+lock，不替代用户已有的启动器。它可以接管一个合法的现有实例，也可以管理 Launcher 新建的
+隔离实例，并提供接近 `cargo` / `npm` 的明确同步、修复、升级和恢复语义。
 
-无论你是跨目录管理数十个整合包的硬核玩家，还是需要严格进行版本控制的模组开发者，Orbit 都能为你带来类似 `npm` 或 `cargo` 般优雅的模组管理体验。
+同一仓库现在包含三个职责严格分离的程序：
 
-独立的 Minecraft 运行时工具 `orbit-launcher` 已提供首个可运行基线。它不依赖、不调用
-Orbit，支持全局实例、Minecraft/Java/主流 Loader 安装、持久账户、客户端启动以及带 IPC
-和异常重启的独立服务端 supervisor；支持范围与命令见
-[Orbit Launcher CLI](docs/orbit-launcher-cli.md) 和
-[架构约束](docs/orbit-launcher-architecture.md)。独立 MSI/deb 与 tag 规则见
-[Orbit Launcher 发布](docs/orbit-launcher-packaging.md)。
+- `orbit`：模组包管理器；只管理模组及依赖图。
+- `orbit-launcher`：Minecraft 运行时管理器；负责官方 Minecraft/Loader 元数据、隔离实例、
+  Mojang Java、Microsoft/离线/标准 Yggdrasil 账户、客户端启动、EULA 与服务端监督运行；
+  不链接、不调用 Orbit，也不管理模组。
+- `orbit-gui`：GPUI 原生桌面薄壳；不实现包管理或启动业务，只通过两个 CLI 的
+  JSON/NDJSON/stdin 协议提供完整图形交互。
 
-原生桌面前端 `orbit-gui` 以同目录的 `orbit` 与 `orbit-launcher` 为唯一业务入口，提供版本
-浏览、新实例迁移、Orbit ZIP/Modrinth mrpack 导入导出、运行时/Java 管理、模组更新与方案
-选择、audit、账户和服务端界面。它使用 GPUI 原生控件与短过渡动画，不含 WebView；边界与交互约束见
-[Orbit GUI](docs/orbit-gui.md)。
+Launcher 已完整支持 Vanilla、Fabric、Quilt、Forge、NeoForge 的客户端与独立服务端安装，
+不再是“首个基线”。项目自己的 Microsoft public-client ID 已内置，token 仍只进入操作系统
+秘密存储。详细边界见 [Orbit 架构](docs/orbit-architecture.md)、
+[Launcher 架构](docs/orbit-launcher-architecture.md) 和 [GUI 架构](docs/orbit-gui.md)。
 
 ---
 
@@ -56,17 +58,45 @@ Windows x64 用户可以从 release 页面下载
 从源码构建 MSI 的方法见
 [Windows MSI](docs/windows-msi.md)。
 
-Debian/Ubuntu amd64 可从同一个 GitHub Release 下载
-`orbit_<version>-1_amd64.deb`。该包同样安装完整套件、桌面入口和图标：
+Debian/Ubuntu amd64 使用三个独立 deb，不提供 MSI 式的交互式功能选择：
 
 ```bash
-sudo apt install ./orbit_0.1.2-1_amd64.deb
+# 无图形服务端：只安装 Launcher
+sudo apt install ./orbit-launcher_0.2.0-1_amd64.deb
+
+# 服务端还需要管理模组时再安装 Orbit
+sudo apt install ./orbit_0.2.0-1_amd64.deb
+
+# 桌面完整套件：GUI 精确依赖同版本的两个 CLI
+sudo apt install ./orbit_0.2.0-1_amd64.deb \
+  ./orbit-launcher_0.2.0-1_amd64.deb \
+  ./orbit-gui_0.2.0-1_amd64.deb
 ```
 
-tag 必须指向 `main` 且与 Cargo 版本一致，GitHub Actions 才会同时发布 MSI、deb、
+在无图形环境中安装 GUI 并不会阻止服务端工作，但会额外引入图形运行库，而且没有图形会话
+也无法使用，因此服务端应安装 `orbit-launcher`，需要模组管理时再加 `orbit`。
+
+三个程序使用同一个套件版本。tag 必须指向 `main` 且与全部公开 crate 版本一致，GitHub
+Actions 才会同时发布 Windows MSI、三个 deb、
 `SHA256SUMS` 和自动分类的 Release notes。构建与发布规则见
 [Release 流程](docs/release-process.md)，deb 细节见
 [Linux deb](docs/linux-deb.md)。
+
+### Launcher 快速开始
+
+```bash
+# 一条命令创建并安装隔离客户端
+orbit-launcher install --new fabric-1.21.1 \
+  --kind client --minecraft 1.21.1 --loader fabric
+
+# 在明确目录安装服务端
+orbit-launcher install --new survival-server \
+  --kind server --server-directory /srv/minecraft/survival \
+  --minecraft latest-release --loader fabric
+```
+
+服务端启动前必须通过专用命令完整展示并接受 Minecraft EULA；Launcher 不会代替用户默认
+同意。完整命令见 [Orbit Launcher CLI](docs/orbit-launcher-cli.md)。
 
 ### 体验丝滑工作流
 

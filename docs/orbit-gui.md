@@ -15,9 +15,10 @@ CLI 返回的展示 URL；已安装模组与账户头像只读取 CLI 返回的�
 
 GUI 默认只接受与自身相邻的 `orbit(.exe)` 和 `orbit-launcher(.exe)`，也允许用户在设置页
 明确选择准确路径。它不扫描 `PATH`，不链接 core，不在 CLI 失败后改走文件直读或兼容 API。
-Windows MSI 的完整安装档位与 Linux deb 将三个程序安装在同一目录；Windows 的完整档位
-同时创建开始菜单入口，Linux 安装 desktop entry 与 scalable 图标。Windows MSI 也允许只
-安装 Orbit，或安装 Orbit + Launcher；没有 GUI 时不会创建桌面入口。
+Windows MSI 的完整安装档位把三个程序安装在同一目录；Linux 的三个独立 deb 都把各自程序
+安装到 `/usr/bin`，其中 GUI 包精确依赖同版本的两个 CLI，并独占 desktop entry 与 scalable
+图标。Windows MSI 也允许只安装 Orbit，或安装 Orbit + Launcher；没有 GUI 时不会创建桌面
+入口。无图形 Linux 服务器只需安装 Launcher，需要模组管理时再安装 Orbit。
 
 界面语言、主题和强调色都是独立的展示策略。语言可选跟随系统（默认）、English 或简体中文；
 GUI 将同一个显式 `--language system|en|zh-CN` 传给每次 CLI 调用，因此窗口文本、CLI 提示、

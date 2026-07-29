@@ -99,8 +99,8 @@ orbit-launcher java verify <runtime-id>
 orbit-launcher java remove <runtime-id>
 ```
 
-配置键是稳定协议，目前包括网络并发数与超时、installer 超时、缓存上限、Java 默认来源、
-Microsoft client ID，以及进度条和颜色偏好。`list`/`get` 会区分显式值与默认值；`unset` 删除显式值并恢复
+配置键是稳定协议，目前包括网络并发数与超时、installer 超时、缓存上限、Java 默认来源，
+以及进度条和颜色偏好。`list`/`get` 会区分显式值与默认值；`unset` 删除显式值并恢复
 默认值。修改经过强类型解析和完整配置校验后原子写入，同时保留已有 TOML 注释。External
 Yggdrasil provider 属于复合对象，由 `config yggdrasil` 的强类型命令管理，不接受任意 TOML
 路径写入。`add` 接受站点地址或精确 API root：缺少协议时只补全 HTTPS，随后执行
@@ -126,7 +126,9 @@ Freedesktop Secret Service。Secret Service 不存在或被锁定时命令直接
 Microsoft 登录拆为 `begin`/`complete`，便于 CLI/GUI 跨进程恢复；`complete` 会轮询授权，
 随后完成 Xbox Live、Minecraft ownership 与 profile 校验并保存可续期会话。External
 Yggdrasil 密码只从安全 TTY 或显式 `--password-stdin` 读取，永不保存；保存的是 access/client
-token，启动前按 `validate -> refresh -> interaction_required` 处理。一个账号有多个角色时
+token，启动前按 `validate -> refresh -> interaction_required` 处理。Orbit 项目注册的 Microsoft
+public-client ID 固定在 Launcher 中，不属于用户配置或秘密；refresh/access token 仍只进入上述
+系统秘密存储。一个账号有多个角色时
 必须显式传 `--profile`。Offline 账号不产生秘密记录，也不会显示成已通过 Microsoft 验证。
 `account refresh` 显式执行同一会话续期路径，并更新公开角色名和皮肤 URL；GUI 的账户卡片
 只调用该命令，不自行请求 Microsoft 或 Yggdrasil API。
