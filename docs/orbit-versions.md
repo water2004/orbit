@@ -103,7 +103,11 @@ Orbit 同时保留三种关系：
 因此 `1.2.3-alpha` 与 `1.2.3-beta` 是两个方案，但数字优先级相同；切换记为 replace，不是
 upgrade 或 downgrade。完全相同的版本字符串若内容与依赖不同也仍是两个候选。PubGrub fork
 原生保留相同优先级的不同候选，并以 `same_version`、`same_precedence`、
-`strictly_higher` 投影枚举完整 Pareto front；Orbit 不在求解后用哈希或文件名补筛。
+`strictly_higher` 投影枚举完整 Pareto front；Orbit 不在求解后用哈希或文件名补筛。同一内容
+哈希在 lock 与下载目录中的两种内部表示属于一个 `same_version` 实现，不会形成重复方案。
+
+provider 发现的原始 JAR 数量不是解的数量。依赖元数据尚未解析时，不能按版本号预先支配或
+删除候选；只有完整候选图中的可行方案才能比较 Pareto 支配关系。
 
 Fabric/Maven 实现内部仍有 prerelease、qualifier、build 等 Loader 术语，这是 Loader 自身
 比较规则。它们不会泄漏为包策略中的固定“稳定版/测试版”枚举。
@@ -145,6 +149,7 @@ GUI 只负责把数字边界控件和字符串操作列表序列化为同一条 
 - Fabric/Quilt 保持 semantic + opaque fallback；Forge/NeoForge 在属性替换后要求数字开头；
 - 相同数字核心的不同完整表示是不同 Pareto 方案，切换属于 replace；
 - 相同完整版本但不同内容身份仍是不同方案；
+- 相同内容哈希的 lock 与下载表示是同一实现，不得产生笛卡尔积方案；
 - Fabric build metadata 的 `Eq`/`Hash` 一致；
 - Maven qualifier、原生精确范围、开闭范围和并集保持 Loader 依赖语义；
 - Forge/NeoForge、Java 与 Jar-in-Jar 依赖仍使用各自 Loader/Maven 原生版本模型。

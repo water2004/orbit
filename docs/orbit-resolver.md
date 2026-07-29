@@ -80,12 +80,17 @@ probe 的 start/finish 事件带有结果。成功 probe 中的决定、传播�
 
 Orbit 已核对过这项 API 与当前包语义的边界：`P` 直接使用 JAR 声明的 `mod_id`，`V` 是
 求解器视为不透明值的复合候选。Orbit 分别提供 `same_version(V)`、
-`same_precedence(V)` 与 `strictly_higher(V)`：第一项只覆盖同一具体候选身份；第二项覆盖
+`same_precedence(V)` 与 `strictly_higher(V)`：第一项覆盖同一物理内容实现；第二项覆盖
 数字核心相同的所有完整版本表示与内容候选；第三项只覆盖数字核心更高的候选。因此同一版本或
 同一数值核心的不同实现不是升级，却仍保留为不同用户方案。fork 会验证等价范围包含当前
 候选且不与严格更高范围重叠；无效回调直接返回
 `InvalidVersionOrdering`，不能加入一个未排除当前投影的子句后原地重复。包/候选建模
 与 Pareto 枚举均由 fork 原生抽象覆盖，不需要在 Orbit 中做第二次求解。
+
+已安装内容在建图时用 `lock:sha512:<digest>`（或 SHA-256）保持选择优先级，下载目录中的
+同一字节内容使用不带 `lock:` 的身份。两者必须落入同一个 `same_version` 等价类；它们只是
+同一 JAR 的两个图内表示，不能产生“保留/重新安装同一内容”的用户方案。只有内容哈希不同的
+JAR 才是不同实现，即使它们声明了相同版本。
 
 `upgrade` 另有一个操作层条件：相对当前安装集合，方案中至少存在一个
 `PackageChangeKind::Upgrade`。这只是对 fork 一次性返回的 Pareto 解做分类；方案中的其他包
@@ -190,6 +195,11 @@ Forge-family Jar-in-Jar 的 Maven 坐标是逻辑 artifact 包。每个内嵌 ar
 7. 把完整 `CandidateCatalog` 交给纯离线 resolver；
 8. 建一次最终图，并按命令调用 fork 的 minimal-change 或 maximal-solution API；
 9. 唯一解直接选择；多解才交给 CLI 选择。
+
+发现阶段报告的 artifact/JAR 数量是尚未建立依赖图的原始候选数，不是 Pareto 方案数。
+不能只按版本号提前删除看似更旧或相等的候选：同版本不同内容可能声明不同依赖，较新版本也
+可能因约束不可行。完成 JAR 解析和统一建图以后，求解器才按完整方案的支配关系裁剪；同一内容
+在 lock 与下载目录中的重复表示则由 `same_version` 等价类在枚举阶段一次排除。
 
 这些边界同时是进度事件边界。project 递归发现报告当前 provider locator 和已发现
 artifact 数；队列稳定后报告每个候选 JAR 的完成数；纯离线求解报告包/候选规模和
