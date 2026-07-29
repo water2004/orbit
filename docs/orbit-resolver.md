@@ -303,7 +303,13 @@ Pareto 极小枚举，再在同一保留集合内做版本 Pareto 极大化。�
 `migrate check` 与 `migrate export` 直接复用这个严格优先规划器。GUI 首次 check 若接受软解，
 会根据已审阅计划中的删除动作给 export 传入 `--allow-removals`，避免重复确认；export 仍重建
 同一完整候选闭包并执行同一目标函数，不存在 GUI 专用求解。export 产生可在目标由 `install`
-精确物化的 lock，不会把源实例当前 JAR 当成目标已安装候选。
+精确物化的 lock。便携源快照为离线恢复添加的 `file` 载体不属于目标版本候选：只要同一包
+存在 Modrinth/CurseForge project，迁移发现层就丢弃该恢复载体并按目标 Minecraft/Loader
+重新枚举 project；真正没有在线 project 的本地包才保留其文件来源。无论候选来自哪一层，
+其 JAR 声明的 Minecraft/Loader 约束仍作为 PubGrub 图中的硬边，目标不兼容候选只能被求解
+排除，不能进入方案。成功方案只报告实际被软迁移删除的包诊断，不把被排除的源版本或内置
+依赖候选渲染成迁移失败。入选的 file-only 内容在 export 时转存到目标的内容寻址 source
+store；`mods/` 仍只由后续 `install` 从最终 lock 物化。
 
 ## 8. 可读错误的约束
 

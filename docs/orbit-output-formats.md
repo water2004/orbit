@@ -294,7 +294,9 @@ orbit [--output-format text|json] [--progress-format none|ndjson] <command> ...
 
 `migrate export` 使用相同结果体并令 `subcommand` 为 `"export"`，另外包含
 `export: { "applied": true, "config_files": 14, "config_bytes": 8192 }`。两个子命令
-使用同一个目标运行时联合规划器；导出不会逐包重新检查。
+使用同一个目标运行时联合规划器；导出不会逐包重新检查。迁移成功时 `diagnostics` 只解释
+所选软迁移方案实际删除的顶层包；被目标平台硬约束排除、但不影响所选方案的源版本和内置
+候选不会出现在结果中。
 
 ### `outdated`
 

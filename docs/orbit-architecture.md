@@ -226,14 +226,18 @@ TOML/lock。联网候选闭包发现、可行解选择和未选包删除由 `add
 才创建真实目标实例。随后同一个 `migration::plan_migration()` 从便携源读取包与配置事实、
 从目标读取 Minecraft/Loader JAR，枚举目标版本候选并选择 Pareto 解。`migrate check` 只
 展示这份计划；`migrate export` 复用同一计划写入目标 `orbit.toml`、`orbit.lock` 和
-配置文件，拒绝覆盖已有目标状态。导出不复制模组 JAR，随后在目标运行 `orbit install`
-按新 lock 精确物化，因而预检和导出不会走两条推导路径。便携源包不会替代真实目标平台
-探测；它只消除源实例在目标创建期间发生变化的竞态。
+配置文件，拒绝覆盖已有目标状态。导出不把模组 JAR 安装到 `mods/`；入选的 file-only 内容
+会按哈希保存到目标 `.orbit/sources`，在线内容仍由随后执行的 `orbit install` 按新 lock 精确
+物化，因而预检和导出不会走两条推导路径。便携源包不会替代真实目标平台
+探测；它只消除源实例在目标创建期间发生变化的竞态。便携包为精确恢复注入的源实例
+`file` 载体也不会污染迁移候选：有 Provider project 的逻辑包只枚举目标版本远端，只有
+file-only 包保留本地 JAR 并由同一个求解图检查其真实 Loader/Minecraft 依赖。
 
 严格迁移和允许删包迁移不是两个下载/解析管线。候选闭包只构建一次；软解只改变求解图中
 manifest 包的 root 角色，并把每个包的可选中状态交给 fork 的原生偏好 front。平台包与
 manifest 版本范围始终是硬约束。默认 CLI 在严格无解后通过同一进程的结构化交互请求许可，
-GUI 不持有策略状态或调用 core。
+GUI 不持有策略状态或调用 core。求解器对未选候选产生的传播诊断是内部决策依据；迁移成功
+结果只保留实际删除顶层包的解释，不把已被排除的源版本或 bundled 候选展示成错误。
 
 受管包环境具有两层正交语义：`orbit.toml` 的可选 `env` 是用户 target 过滤，lock 的
 `environment` 是精确候选从 JAR 解析出的事实。TOML 缺失设置时，locked 路径直接使用
