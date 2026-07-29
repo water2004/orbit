@@ -155,11 +155,22 @@ pub(super) fn render(
                     let edit = package.clone();
                     let upgrade = package.mod_id.clone();
                     let remove = package.mod_id.clone();
+                    let mut facts = vec![
+                        package_environment_label(&package.environment),
+                        tr!("%{count} remotes", count = package.remotes.len()),
+                        tr!("%{count} dependencies", count = package.dependencies.len()),
+                    ];
+                    if package.bundled_count > 0 {
+                        facts.push(tr!(
+                            "%{count} bundled module(s)",
+                            count = package.bundled_count
+                        ));
+                    }
                     list = list.child(
                         h_flex()
                             .min_w_0()
                             .px_4()
-                            .py_3()
+                            .py_2()
                             .gap_3()
                             .items_center()
                             .child(ui::package_icon(package.icon_path.as_deref(), cx))
@@ -184,28 +195,16 @@ pub(super) fn render(
                                         div()
                                             .text_xs()
                                             .text_color(cx.theme().muted_foreground)
-                                            .child(format!(
-                                                "{} · {} · {}",
-                                                package.environment,
-                                                tr!("%{count} remotes", count = package.remotes.len()),
-                                                tr!("%{count} dependencies", count = package.dependencies.len())
-                                            )),
+                                            .child(facts.join(" · ")),
                                     )
-                                    .children((package.bundled_count > 0).then(|| {
-                                        div()
-                                            .text_xs()
-                                            .text_color(cx.theme().muted_foreground)
-                                            .child(tr!(
-                                                "%{count} bundled module(s)",
-                                                count = package.bundled_count
-                                            ))
-                                    })),
+                                    ,
                             )
                             .child(
                                 h_flex()
                                     .gap_1()
                                     .child(
                                         Button::new(("package-edit", index))
+                                            .icon(OrbitIcon::Settings)
                                             .label(tr!("Manage").into_owned())
                                             .ghost()
                                             .on_click(cx.listener(move |this, _, _, cx| {
@@ -216,8 +215,9 @@ pub(super) fn render(
                                     )
                                     .child(
                                         Button::new(("package-upgrade", index))
-                                            .label(tr!("Upgrade").into_owned())
+                                            .icon(OrbitIcon::Refresh)
                                             .ghost()
+                                            .tooltip(tr!("Upgrade").into_owned())
                                             .on_click(cx.listener(move |this, _, _, cx| {
                                                 this.upgrade_package(&upgrade);
                                                 cx.notify();
@@ -255,6 +255,16 @@ pub(super) fn render(
         content,
         cx,
     )
+}
+
+fn package_environment_label(value: &str) -> String {
+    match value {
+        "client" => tr!("Client").into_owned(),
+        "server" => tr!("Server").into_owned(),
+        "both" => tr!("Both").into_owned(),
+        "auto" => tr!("Automatic").into_owned(),
+        other => other.to_string(),
+    }
 }
 
 fn render_updates(app: &OrbitApp, cx: &mut Context<OrbitApp>) -> impl IntoElement {

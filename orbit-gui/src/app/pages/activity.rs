@@ -19,8 +19,8 @@ use orbit_machine_protocol::{InteractionKind, ProgressPhase};
 use serde::Deserialize;
 
 use super::super::{
-    ACTIVITY_DRAWER_TRANSITION, OrbitApp, PackagePolicyMode, PackagePolicyOperator, TaskState,
-    ToastKind, controller::human_bytes,
+    ACTIVITY_DRAWER_TRANSITION, OrbitApp, PackageEditorSection, PackagePolicyDraft,
+    PackagePolicyMode, PackagePolicyOperator, TaskState, ToastKind, controller::human_bytes,
 };
 use crate::app::components as ui;
 use crate::assets::OrbitIcon;
@@ -849,6 +849,96 @@ fn render_eula(app: &OrbitApp, cx: &mut Context<OrbitApp>) -> impl IntoElement {
 fn render_package_editor(app: &OrbitApp, cx: &mut Context<OrbitApp>) -> impl IntoElement {
     let editor = app.package_editor.as_ref().expect("checked").clone();
     let package_id = editor.package.mod_id.clone();
+    let policy_package = package_id.clone();
+    let body = match editor.section {
+        PackageEditorSection::Numeric => render_numeric_policy(app, cx),
+        PackageEditorSection::String => {
+            render_string_policy(app, app.package_versions.as_ref(), cx)
+        }
+        PackageEditorSection::Settings => render_package_settings(app, cx),
+    };
+    let tabs = [
+        (
+            PackageEditorSection::Numeric,
+            tr!("Numeric versions").into_owned(),
+        ),
+        (
+            PackageEditorSection::String,
+            tr!("String filter").into_owned(),
+        ),
+        (
+            PackageEditorSection::Settings,
+            tr!("Package settings").into_owned(),
+        ),
+    ];
+    let mut navigation = h_flex().gap_1().p_1().rounded_lg().bg(cx.theme().secondary);
+    for (index, (section, label)) in tabs.into_iter().enumerate() {
+        navigation = navigation.child(
+            Button::new(("package-editor-section", index))
+                .label(label)
+                .ghost()
+                .selected(editor.section == section)
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    if let Some(editor) = &mut this.package_editor {
+                        editor.section = section;
+                    }
+                    cx.notify();
+                })),
+        );
+    }
+    let policy_footer = (editor.section != PackageEditorSection::Settings)
+        .then(|| render_package_policy_footer(app, &policy_package, cx));
+
+    ui::modal_backdrop(
+        ui::modal(
+            780.,
+            v_flex()
+                .h(px(640.))
+                .max_h_full()
+                .min_h_0()
+                .gap_3()
+                .child(
+                    h_flex()
+                        .flex_shrink_0()
+                        .justify_between()
+                        .items_center()
+                        .child(
+                            h_flex()
+                                .gap_2()
+                                .items_center()
+                                .child(div().text_xl().font_semibold().child(package_id))
+                                .child(ui::neutral_pill(editor.package.version.clone(), cx)),
+                        )
+                        .child(
+                            Button::new("package-close")
+                                .icon(OrbitIcon::Close)
+                                .ghost()
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.package_editor = None;
+                                    cx.notify();
+                                })),
+                        ),
+                )
+                .child(navigation)
+                .child(
+                    div()
+                        .id("package-editor-scroll")
+                        .flex_1()
+                        .min_h_0()
+                        .overflow_y_scrollbar()
+                        .pr_2()
+                        .child(body),
+                )
+                .children(policy_footer),
+            cx,
+        ),
+        cx,
+    )
+}
+
+fn render_package_settings(app: &OrbitApp, cx: &mut Context<OrbitApp>) -> AnyElement {
+    let editor = app.package_editor.as_ref().expect("checked").clone();
+    let package_id = editor.package.mod_id.clone();
     let remote_package = package_id.clone();
     let purge_package = package_id.clone();
     let remote_input = app.inputs.remote_locator.clone();
@@ -884,118 +974,75 @@ fn render_package_editor(app: &OrbitApp, cx: &mut Context<OrbitApp>) -> impl Int
         );
     }
     let environment = editor.environment.clone();
-    ui::modal_backdrop(
-        ui::modal(
-            720.,
-            v_flex()
-                .h(px(580.))
-                .max_h_full()
-                .min_h_0()
+    v_flex()
+        .gap_5()
+        .pb_1()
+        .child(ui::section_title(tr!("Environment").into_owned(), tr!("Auto follows the JAR declaration; loaders without a declaration default to both").into_owned(), cx))
+        .child(
+            h_flex().gap_2().children(["auto", "client", "server", "both"].into_iter().enumerate().map(|(index, value)| {
+                let package = package_id.clone();
+                Button::new(("package-env", index))
+                    .label(title_environment(value))
+                    .selected(environment == value)
+                    .on_click(cx.listener(move |this, _, _, cx| { this.set_package_environment(&package, value); this.package_editor = None; cx.notify(); }))
+            })),
+        )
+        .child(ui::section_title(tr!("Remotes").into_owned(), tr!("All sources are hash-deduplicated and analyzed equally").into_owned(), cx))
+        .child(remotes)
+        .child(
+            h_flex().gap_2().children(providers.into_iter().enumerate().map(|(index, provider)| {
+                Button::new(("remote-provider", index))
+                    .label(provider)
+                    .selected(editor.remote_provider == index)
+                    .on_click(cx.listener(move |this, _, _, cx| { if let Some(editor) = &mut this.package_editor { editor.remote_provider = index; } cx.notify(); }))
+            })),
+        )
+        .child(
+            h_flex()
+                .gap_2()
+                .child(Input::new(&remote_input).flex_1())
+                .child(Button::new("remote-add").icon(OrbitIcon::Plus).label(tr!("Add remote").into_owned()).primary().on_click(cx.listener(move |this, _, window, cx| {
+                    let locator = remote_read.read(cx).value().trim().to_string();
+                    if !locator.is_empty() {
+                        let provider = this.package_editor.as_ref().map(|item| providers[item.remote_provider]).unwrap_or("file");
+                        this.add_package_remote(&remote_package, provider, &locator);
+                        remote_read.update(cx, |state, cx| state.set_value("", window, cx));
+                        this.package_editor = None;
+                    }
+                    cx.notify();
+                }))),
+        )
+        .child(ui::divider(cx))
+        .child(
+            h_flex()
+                .justify_between()
                 .gap_3()
                 .child(
-                    h_flex()
-                        .flex_shrink_0()
-                        .justify_between()
-                        .child(div().text_xl().font_semibold().child(package_id.clone()))
-                        .child(Button::new("package-close").icon(OrbitIcon::Close).ghost().on_click(cx.listener(|this, _, _, cx| { this.package_editor = None; cx.notify(); }))),
+                    v_flex()
+                        .gap_1()
+                        .child(div().text_sm().font_semibold().child(tr!("Remove package data").into_owned()))
+                        .child(div().text_xs().text_color(cx.theme().muted_foreground).child(tr!("Purge removes the package and presents matching configuration files before deletion.").into_owned())),
                 )
                 .child(
-                    div()
-                        .id("package-editor-scroll")
-                        .flex_1()
-                        .min_h_0()
-                        .overflow_y_scrollbar()
-                        .pr_2()
-                        .child(
-                            v_flex()
-                                .gap_4()
-                                .pb_1()
-                                .child(render_package_policy(app, &package_id, cx))
-                                .child(ui::section_title(tr!("Environment").into_owned(), tr!("Auto follows the JAR declaration; loaders without a declaration default to both").into_owned(), cx))
-                                .child(
-                                    h_flex().gap_2().children(["auto", "client", "server", "both"].into_iter().enumerate().map(|(index, value)| {
-                                        let package = package_id.clone();
-                                        Button::new(("package-env", index))
-                                            .label(title_environment(value))
-                                            .selected(environment == value)
-                                            .on_click(cx.listener(move |this, _, _, cx| { this.set_package_environment(&package, value); this.package_editor = None; cx.notify(); }))
-                                    })),
-                                )
-                                .child(ui::section_title(tr!("Remotes").into_owned(), tr!("All sources are hash-deduplicated and analyzed equally").into_owned(), cx))
-                                .child(remotes)
-                                .child(
-                                    h_flex().gap_2().children(providers.into_iter().enumerate().map(|(index, provider)| {
-                                        Button::new(("remote-provider", index))
-                                            .label(provider)
-                                            .selected(editor.remote_provider == index)
-                                            .on_click(cx.listener(move |this, _, _, cx| { if let Some(editor) = &mut this.package_editor { editor.remote_provider = index; } cx.notify(); }))
-                                    })),
-                                )
-                                .child(
-                                    h_flex()
-                                        .gap_2()
-                                        .child(Input::new(&remote_input).flex_1())
-                                        .child(Button::new("remote-add").icon(OrbitIcon::Plus).label(tr!("Add remote").into_owned()).primary().on_click(cx.listener(move |this, _, window, cx| {
-                                            let locator = remote_read.read(cx).value().trim().to_string();
-                                            if !locator.is_empty() {
-                                                let provider = this.package_editor.as_ref().map(|item| providers[item.remote_provider]).unwrap_or("file");
-                                                this.add_package_remote(&remote_package, provider, &locator);
-                                                remote_read.update(cx, |state, cx| state.set_value("", window, cx));
-                                                this.package_editor = None;
-                                            }
-                                            cx.notify();
-                                        }))),
-                                )
-                                .child(ui::divider(cx))
-                                .child(
-                                    h_flex()
-                                        .justify_between()
-                                        .gap_3()
-                                        .child(
-                                            v_flex()
-                                                .gap_1()
-                                                .child(
-                                                    div()
-                                                        .text_sm()
-                                                        .font_semibold()
-                                                        .child(tr!("Remove package data").into_owned()),
-                                                )
-                                                .child(
-                                                    div()
-                                                        .text_xs()
-                                                        .text_color(cx.theme().muted_foreground)
-                                                        .child(tr!("Purge removes the package and presents matching configuration files before deletion.").into_owned()),
-                                                ),
-                                        )
-                                        .child(
-                                            Button::new("package-purge")
-                                                .icon(OrbitIcon::Trash)
-                                                .label(tr!("Purge…").into_owned())
-                                                .danger()
-                                                .on_click(cx.listener(move |this, _, _, cx| {
-                                                    this.package_editor = None;
-                                                    this.confirmation = Some(super::super::Confirmation {
-                                                        title: tr!("Purge %{package}?", package = purge_package),
-                                                        body: tr!("Orbit will first show the exact package and matching configuration files. Nothing is deleted until you confirm that plan.").into_owned(),
-                                                        action: super::super::ConfirmationAction::PurgePackage(purge_package.clone()),
-                                                    });
-                                                    cx.notify();
-                                                })),
-                                        ),
-                                ),
-                        ),
+                    Button::new("package-purge")
+                        .icon(OrbitIcon::Trash)
+                        .label(tr!("Purge…").into_owned())
+                        .danger()
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.package_editor = None;
+                            this.confirmation = Some(super::super::Confirmation {
+                                title: tr!("Purge %{package}?", package = purge_package),
+                                body: tr!("Orbit will first show the exact package and matching configuration files. Nothing is deleted until you confirm that plan.").into_owned(),
+                                action: super::super::ConfirmationAction::PurgePackage(purge_package.clone()),
+                            });
+                            cx.notify();
+                        })),
                 ),
-            cx,
-        ),
-        cx,
-    )
+        )
+        .into_any_element()
 }
 
-fn render_package_policy(
-    app: &OrbitApp,
-    package_id: &str,
-    cx: &mut Context<OrbitApp>,
-) -> AnyElement {
+fn render_numeric_policy(app: &OrbitApp, cx: &mut Context<OrbitApp>) -> AnyElement {
     let draft = app
         .package_editor
         .as_ref()
@@ -1059,28 +1106,11 @@ fn render_package_policy(
         );
     }
 
-    let summary = match draft.mode {
-        PackagePolicyMode::Any => tr!("Every loader-compatible version is eligible").into_owned(),
-        PackagePolicyMode::Comparison => draft
-            .version
-            .as_ref()
-            .map(|version| format!("{} {version}", draft.operator.symbol()))
-            .unwrap_or_else(|| tr!("Choose a boundary version below").into_owned()),
-        PackagePolicyMode::Range => match (&draft.lower, &draft.upper) {
-            (Some(lower), Some(upper)) => format!(
-                "{}{lower}, {upper}{}",
-                if draft.include_lower { '[' } else { '(' },
-                if draft.include_upper { ']' } else { ')' }
-            ),
-            _ => tr!("Choose lower and upper versions below").into_owned(),
-        },
-    };
-
     let mut builder = v_flex()
         .gap_3()
         .child(ui::section_title(
-            tr!("Version policy").into_owned(),
-            tr!("Applying a policy solves and commits one Pareto-minimal package transaction")
+            tr!("Numeric version constraint").into_owned(),
+            tr!("Choose a numeric core boundary without mixing in full-string filtering")
                 .into_owned(),
             cx,
         ))
@@ -1160,48 +1190,6 @@ fn render_package_policy(
                     ),
             )
         })
-        .child(render_string_policy(app, versions, cx))
-        .child(
-            h_flex()
-                .justify_between()
-                .gap_3()
-                .px_3()
-                .py_2()
-                .rounded_lg()
-                .bg(cx.theme().secondary)
-                .child(
-                    v_flex()
-                        .min_w_0()
-                        .gap_1()
-                        .child(div().text_sm().font_semibold().child(summary))
-                        .when_some(draft.replaced_custom.clone(), |column, requirement| {
-                            column.child(div().text_xs().text_color(cx.theme().warning).child(tr!(
-                                "The existing custom policy '%{policy}' will be replaced",
-                                policy = requirement
-                            )))
-                        }),
-                )
-                .child(
-                    Button::new("package-policy-apply")
-                        .label(tr!("Apply policy").into_owned())
-                        .primary()
-                        .disabled(versions.is_none() || draft.command_args().is_none())
-                        .on_click(cx.listener({
-                            let package = package_id.to_string();
-                            move |this, _, _, cx| {
-                                if let Some(arguments) = this
-                                    .package_editor
-                                    .as_ref()
-                                    .and_then(|editor| editor.policy.command_args())
-                                {
-                                    this.apply_package_policy(&package, arguments);
-                                    this.package_editor = None;
-                                }
-                                cx.notify();
-                            }
-                        })),
-                ),
-        )
         .child(ui::section_title(
             tr!("Available versions").into_owned(),
             versions
@@ -1369,13 +1357,130 @@ fn render_package_policy(
             );
         }
     }
-    builder = builder.child(
-        div()
-            .max_h(px(260.))
-            .overflow_y_scrollbar()
-            .child(version_list),
-    );
+    builder = builder.child(ui::themed_card(cx).p_0().gap_0().child(version_list));
     builder.into_any_element()
+}
+
+fn numeric_policy_summary(draft: &PackagePolicyDraft) -> String {
+    match draft.mode {
+        PackagePolicyMode::Any => tr!("Every loader-compatible version is eligible").into_owned(),
+        PackagePolicyMode::Comparison => draft
+            .version
+            .as_ref()
+            .map(|version| format!("{} {version}", draft.operator.symbol()))
+            .unwrap_or_else(|| tr!("Choose a boundary version").into_owned()),
+        PackagePolicyMode::Range => match (&draft.lower, &draft.upper) {
+            (Some(lower), Some(upper)) => format!(
+                "{}{lower}, {upper}{}",
+                if draft.include_lower { '[' } else { '(' },
+                if draft.include_upper { ']' } else { ')' }
+            ),
+            _ => tr!("Choose lower and upper versions").into_owned(),
+        },
+    }
+}
+
+fn render_package_policy_footer(
+    app: &OrbitApp,
+    package_id: &str,
+    cx: &mut Context<OrbitApp>,
+) -> AnyElement {
+    let draft = app
+        .package_editor
+        .as_ref()
+        .expect("package editor checked")
+        .policy
+        .clone();
+    let numeric = numeric_policy_summary(&draft);
+    let string = if draft.string.operations.is_empty() {
+        tr!("No string operations").into_owned()
+    } else {
+        tr!(
+            "%{count} string operation(s)",
+            count = draft.string.operations.len()
+        )
+    };
+    let package = package_id.to_string();
+    h_flex()
+        .flex_shrink_0()
+        .justify_between()
+        .gap_3()
+        .pt_3()
+        .border_t_1()
+        .border_color(cx.theme().border)
+        .child(
+            v_flex()
+                .min_w_0()
+                .gap_1()
+                .child(
+                    div()
+                        .text_sm()
+                        .font_semibold()
+                        .child(tr!("Combined version policy").into_owned()),
+                )
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(tr!(
+                            "Numeric: %{numeric} · String: %{string}",
+                            numeric = numeric,
+                            string = string
+                        )),
+                )
+                .when_some(draft.replaced_custom.clone(), |column, requirement| {
+                    column.child(div().text_xs().text_color(cx.theme().warning).child(tr!(
+                        "The existing custom policy '%{policy}' will be replaced",
+                        policy = requirement
+                    )))
+                }),
+        )
+        .child(
+            Button::new("package-policy-apply")
+                .label(tr!("Apply policy").into_owned())
+                .primary()
+                .disabled(app.package_versions.is_none() || draft.command_args().is_none())
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    if let Some(arguments) = this
+                        .package_editor
+                        .as_ref()
+                        .and_then(|editor| editor.policy.command_args())
+                    {
+                        this.apply_package_policy(&package, arguments);
+                        this.package_editor = None;
+                    }
+                    cx.notify();
+                })),
+        )
+        .into_any_element()
+}
+
+fn string_set_operator_label(operator: StringSetOperator) -> String {
+    match operator {
+        StringSetOperator::Intersect => tr!("Intersect").into_owned(),
+        StringSetOperator::Union => tr!("Union").into_owned(),
+        StringSetOperator::Complement => tr!("Complement").into_owned(),
+    }
+}
+
+fn string_condition_label(operation: &StringOperationDraft) -> String {
+    if operation.operator == StringSetOperator::Complement {
+        return tr!("Invert the current result set").into_owned();
+    }
+    let value = operation.value.clone().unwrap_or_default();
+    let condition = match operation.predicate {
+        StringPredicate::Empty => tr!("Version string is empty").into_owned(),
+        StringPredicate::Present => tr!("Version string is present").into_owned(),
+        StringPredicate::Equals => tr!("Equals '%{value}'", value = value),
+        StringPredicate::Contains => tr!("Contains '%{value}'", value = value),
+        StringPredicate::StartsWith => tr!("Starts with '%{value}'", value = value),
+        StringPredicate::EndsWith => tr!("Ends with '%{value}'", value = value),
+    };
+    if operation.negated {
+        tr!("Not: %{condition}", condition = condition)
+    } else {
+        condition
+    }
 }
 
 fn render_string_policy(
@@ -1396,9 +1501,8 @@ fn render_string_policy(
         let edit_operation = operation.clone();
         let edit_value = edit_operation.value.clone().unwrap_or_default();
         let edit_input = input.clone();
-        let expression = operation
-            .expression()
-            .unwrap_or_else(|| tr!("Incomplete condition").into_owned());
+        let operator_label = string_set_operator_label(operation.operator);
+        let condition_label = string_condition_label(&operation);
         operations = operations.child(
             h_flex()
                 .id(("string-operation", index))
@@ -1416,14 +1520,25 @@ fn render_string_policy(
                         .text_color(cx.theme().muted_foreground)
                         .child(format!("{}", index + 1)),
                 )
+                .child(ui::neutral_pill(operator_label, cx))
                 .child(
                     div()
                         .min_w_0()
                         .flex_1()
                         .text_sm()
                         .font_medium()
-                        .child(expression),
+                        .child(condition_label),
                 )
+                .when(operation.needs_value(), |row| {
+                    row.child(ui::neutral_pill(
+                        if operation.case_sensitive {
+                            tr!("Case-sensitive").into_owned()
+                        } else {
+                            tr!("Ignore case").into_owned()
+                        },
+                        cx,
+                    ))
+                })
                 .child(
                     Button::new(("string-up", index))
                         .label("↑")
@@ -1515,37 +1630,58 @@ fn render_string_policy(
         .gap_3()
         .child(ui::section_title(
             tr!("Version string operations").into_owned(),
-            tr!("Filter the complete JAR-declared version from top to bottom").into_owned(),
+            tr!("Build a readable ordered filter over the complete JAR-declared version")
+                .into_owned(),
             cx,
         ))
         .child(
+            ui::compact_card(cx)
+                .child(
+                    div()
+                        .text_sm()
+                        .font_semibold()
+                        .child(tr!("Initial candidate set").into_owned()),
+                )
+                .child(
+                    h_flex()
+                        .gap_2()
+                        .child(
+                            Button::new("string-initial-all")
+                                .label(tr!("Start with all").into_owned())
+                                .selected(draft.string.initial_all)
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    if let Some(editor) = &mut this.package_editor {
+                                        editor.policy.string.initial_all = true;
+                                    }
+                                    cx.notify();
+                                })),
+                        )
+                        .child(
+                            Button::new("string-initial-none")
+                                .label(tr!("Start with none").into_owned())
+                                .selected(!draft.string.initial_all)
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    if let Some(editor) = &mut this.package_editor {
+                                        editor.policy.string.initial_all = false;
+                                    }
+                                    cx.notify();
+                                })),
+                        ),
+                ),
+        )
+        .child(
             h_flex()
-                .gap_2()
-                .child(
-                    Button::new("string-initial-all")
-                        .label(tr!("Start with all").into_owned())
-                        .selected(draft.string.initial_all)
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            if let Some(editor) = &mut this.package_editor {
-                                editor.policy.string.initial_all = true;
-                            }
-                            cx.notify();
-                        })),
-                )
-                .child(
-                    Button::new("string-initial-none")
-                        .label(tr!("Start with none").into_owned())
-                        .selected(!draft.string.initial_all)
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            if let Some(editor) = &mut this.package_editor {
-                                editor.policy.string.initial_all = false;
-                            }
-                            cx.notify();
-                        })),
-                )
+                .justify_between()
+                .items_center()
+                .child(ui::section_title(
+                    tr!("Ordered operations").into_owned(),
+                    tr!("Each row transforms the result produced by the rows above it")
+                        .into_owned(),
+                    cx,
+                ))
                 .child(
                     Button::new("string-add-complement")
-                        .label(tr!("Complement current set").into_owned())
+                        .label(tr!("Invert result").into_owned())
                         .on_click(cx.listener(|this, _, _, cx| {
                             if let Some(editor) = &mut this.package_editor {
                                 editor.policy.string.operations.push(StringOperationDraft {
@@ -1570,59 +1706,82 @@ fn render_string_policy(
             )
         })
         .child(operations)
+        .child(ui::section_title(
+            if editing.is_some() {
+                tr!("Edit operation").into_owned()
+            } else {
+                tr!("Add operation").into_owned()
+            },
+            tr!("Choose a set operation, a text test, and optional case handling").into_owned(),
+            cx,
+        ))
         .child(
-            v_flex()
-                .gap_2()
-                .p_3()
-                .rounded_lg()
-                .bg(cx.theme().secondary)
+            ui::compact_card(cx)
                 .child(
-                    h_flex().gap_2().flex_wrap().children(
-                        set_operators
-                            .into_iter()
-                            .enumerate()
-                            .map(|(index, (operator, label))| {
-                                Button::new(("string-set-operator", index))
-                                    .label(label)
-                                    .selected(condition.operator == operator)
-                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                        if let Some(editor) = &mut this.package_editor {
-                                            editor.policy.string_condition.operator = operator;
-                                        }
-                                        cx.notify();
-                                    }))
-                            }),
-                    ),
+                    v_flex()
+                        .gap_1()
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(tr!("Set operation").into_owned()),
+                        )
+                        .child(h_flex().gap_2().flex_wrap().children(
+                            set_operators.into_iter().enumerate().map(
+                                |(index, (operator, label))| {
+                                    Button::new(("string-set-operator", index))
+                                        .label(label)
+                                        .selected(condition.operator == operator)
+                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                            if let Some(editor) = &mut this.package_editor {
+                                                editor.policy.string_condition.operator = operator;
+                                            }
+                                            cx.notify();
+                                        }))
+                                },
+                            ),
+                        )),
                 )
                 .child(
-                    h_flex()
-                        .gap_2()
-                        .flex_wrap()
+                    v_flex()
+                        .gap_1()
                         .child(
-                            Button::new("string-negated")
-                                .label(tr!("Negate condition").into_owned())
-                                .selected(condition.negated)
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    if let Some(editor) = &mut this.package_editor {
-                                        editor.policy.string_condition.negated =
-                                            !editor.policy.string_condition.negated;
-                                    }
-                                    cx.notify();
-                                })),
+                            div()
+                                .text_xs()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(tr!("Text test").into_owned()),
                         )
-                        .children(predicates.into_iter().enumerate().map(
-                            |(index, (predicate, label))| {
-                                Button::new(("string-predicate", index))
-                                    .label(label)
-                                    .selected(condition.predicate == predicate)
-                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                        if let Some(editor) = &mut this.package_editor {
-                                            editor.policy.string_condition.predicate = predicate;
-                                        }
-                                        cx.notify();
-                                    }))
-                            },
-                        )),
+                        .child(
+                            h_flex()
+                                .gap_2()
+                                .flex_wrap()
+                                .child(
+                                    Button::new("string-negated")
+                                        .label(tr!("Negate condition").into_owned())
+                                        .selected(condition.negated)
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            if let Some(editor) = &mut this.package_editor {
+                                                editor.policy.string_condition.negated =
+                                                    !editor.policy.string_condition.negated;
+                                            }
+                                            cx.notify();
+                                        })),
+                                )
+                                .children(predicates.into_iter().enumerate().map(
+                                    |(index, (predicate, label))| {
+                                        Button::new(("string-predicate", index))
+                                            .label(label)
+                                            .selected(condition.predicate == predicate)
+                                            .on_click(cx.listener(move |this, _, _, cx| {
+                                                if let Some(editor) = &mut this.package_editor {
+                                                    editor.policy.string_condition.predicate =
+                                                        predicate;
+                                                }
+                                                cx.notify();
+                                            }))
+                                    },
+                                )),
+                        ),
                 )
                 .when(condition.needs_value(), |content| {
                     let token_input = input.clone();

@@ -124,7 +124,15 @@ pub(super) struct PackageEditor {
     pub package: InstalledPackage,
     pub environment: String,
     pub remote_provider: usize,
+    pub section: PackageEditorSection,
     pub policy: PackagePolicyDraft,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum PackageEditorSection {
+    Numeric,
+    String,
+    Settings,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -293,6 +301,7 @@ impl PackageEditor {
                 .unwrap_or_else(|| "auto".to_string()),
             package,
             remote_provider: 0,
+            section: PackageEditorSection::Numeric,
             policy: PackagePolicyDraft::default(),
         }
     }
