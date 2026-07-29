@@ -191,21 +191,13 @@ pub(super) fn render(
                                                 tr!("%{count} dependencies", count = package.dependencies.len())
                                             )),
                                     )
-                                    .children((!package.bundled.is_empty()).then(|| {
+                                    .children((package.bundled_count > 0).then(|| {
                                         div()
                                             .text_xs()
                                             .text_color(cx.theme().muted_foreground)
                                             .child(tr!(
-                                                "Contains: %{packages}",
-                                                packages = package
-                                                    .bundled
-                                                    .iter()
-                                                    .map(|bundled| format!(
-                                                        "{} {}",
-                                                        bundled.mod_id, bundled.version
-                                                    ))
-                                                    .collect::<Vec<_>>()
-                                                    .join(", ")
+                                                "%{count} bundled module(s)",
+                                                count = package.bundled_count
                                             ))
                                     })),
                             )

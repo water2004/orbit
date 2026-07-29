@@ -232,14 +232,7 @@ pub struct InstalledPackage {
     pub optional: bool,
     #[serde(default)]
     pub dependencies: Vec<String>,
-    #[serde(default)]
-    pub bundled: Vec<BundledPackage>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct BundledPackage {
-    pub mod_id: String,
-    pub version: String,
+    pub bundled_count: usize,
 }
 
 #[derive(Debug, Deserialize)]

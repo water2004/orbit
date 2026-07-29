@@ -197,13 +197,7 @@ pub struct ListedPackageView {
     pub environment: String,
     pub optional: bool,
     pub dependencies: Vec<String>,
-    pub bundled: Vec<BundledView>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct BundledView {
-    pub mod_id: String,
-    pub version: String,
+    pub bundled_count: usize,
 }
 
 // ---------------------------------------------------------------------------
@@ -682,14 +676,7 @@ pub fn listed_package_view(
         environment: pkg.environment.clone(),
         optional: pkg.optional,
         dependencies: pkg.dependencies.clone(),
-        bundled: pkg
-            .bundled
-            .iter()
-            .map(|(id, ver)| BundledView {
-                mod_id: id.clone(),
-                version: ver.clone(),
-            })
-            .collect(),
+        bundled_count: pkg.bundled.len(),
     }
 }
 

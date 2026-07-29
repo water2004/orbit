@@ -348,8 +348,11 @@ fn resolution_interaction_choices(
                 .changes
                 .iter()
                 .map(|change| {
-                    serde_json::to_string(&crate::cli::output::package_change_view(change))
-                        .expect("package change view is serializable")
+                    serde_json::to_string(&serde_json::json!({
+                        "change": crate::cli::output::package_change_view(change),
+                        "candidate_identity": alternative.selected_candidates.get(&change.package),
+                    }))
+                    .expect("package change signature is serializable")
                 })
                 .collect()
         })
@@ -581,16 +584,23 @@ pub fn prompt_install_report(report: &orbit_core::InstallReport, yes: bool) -> b
         eprintln!("\n{}", tr!("Selected package contents:"));
         for m in &report.installed {
             eprintln!("  {} v{}", m.mod_id, m.version);
-            for expression in &m.dependencies {
-                for dependency in expression.relations() {
-                    eprintln!(
-                        "      ↳ {} {} ({:?})",
-                        dependency.id, dependency.requirement, dependency.kind
-                    );
-                }
+            let dependency_count = m
+                .dependencies
+                .iter()
+                .flat_map(orbit_core::metadata::DependencyExpression::relations)
+                .count();
+            if dependency_count > 0 {
+                eprintln!(
+                    "      ↳ {}",
+                    tr!("%{count} dependencies", count = dependency_count)
+                );
             }
-            for bundled in &m.bundled {
-                print_bundled_mod(bundled, 1);
+            let bundled_count = count_bundled_mods(&m.bundled);
+            if bundled_count > 0 {
+                eprintln!(
+                    "      ↳ {}",
+                    tr!("%{count} bundled module(s)", count = bundled_count)
+                );
             }
         }
     }
@@ -625,17 +635,11 @@ pub fn prompt_install_report(report: &orbit_core::InstallReport, yes: bool) -> b
     input.is_empty() || input == "y" || input == "yes"
 }
 
-fn print_bundled_mod(bundled: &orbit_core::BundledMod, depth: usize) {
-    let indent = "    ".repeat(depth);
-    eprintln!(
-        "      ↳ {indent}[{}] {} {}",
-        tr!("bundled"),
-        bundled.mod_id,
-        bundled.version
-    );
-    for child in &bundled.bundled {
-        print_bundled_mod(child, depth + 1);
-    }
+fn count_bundled_mods(bundled: &[orbit_core::BundledMod]) -> usize {
+    bundled
+        .iter()
+        .map(|module| 1 + count_bundled_mods(&module.bundled))
+        .sum()
 }
 
 pub fn print_resolution_diagnostics(
@@ -891,6 +895,34 @@ mod tests {
             assert!(choice.data.get("warnings").is_none());
             assert!(choice.data.get("diagnostics").is_none());
         }
+    }
+
+    #[test]
+    fn machine_resolution_keeps_equal_version_candidate_variants_distinct() {
+        let change = package_change("voxy", "1", "2");
+        let choices = resolution_interaction_choices(&[
+            ResolutionReport {
+                selected_candidates: std::collections::BTreeMap::from([(
+                    "voxy".to_string(),
+                    "sha512:first".to_string(),
+                )]),
+                changes: vec![change.clone()],
+                ..ResolutionReport::default()
+            },
+            ResolutionReport {
+                selected_candidates: std::collections::BTreeMap::from([(
+                    "voxy".to_string(),
+                    "sha512:second".to_string(),
+                )]),
+                changes: vec![change],
+                ..ResolutionReport::default()
+            },
+        ]);
+
+        assert!(choices.iter().all(|choice| {
+            choice.data["changes"][0]["different"] == true
+                && choice.data.to_string().find("sha512").is_none()
+        }));
     }
 
     #[test]

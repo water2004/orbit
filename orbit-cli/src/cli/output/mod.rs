@@ -529,11 +529,10 @@ pub fn installed_packages_table(packages: &[ListedPackage]) -> String {
         if package.optional {
             notes.push(tr!("optional").into_owned());
         }
-        for (name, ver) in &package.bundled {
+        if !package.bundled.is_empty() {
             notes.push(tr!(
-                "+ bundled: %{name} v%{version}",
-                name = name,
-                version = ver
+                "%{count} bundled module(s)",
+                count = package.bundled.len()
             ));
         }
         table.add_row([
@@ -828,11 +827,10 @@ mod tests {
             PackageChangeKind::Upgrade,
             "voxy-a.jar",
         );
-        first_change.selected_description =
-            Some("Modrinth project abc, release one; requires sodium =0.8.9".to_string());
+        first_change.selected_description = Some("Modrinth · 1 dependency constraints".to_string());
         let mut second_change = first_change.clone();
         second_change.selected_description =
-            Some("CurseForge project 123, file 456; requires sodium >=0.9".to_string());
+            Some("CurseForge · 1 dependency constraints".to_string());
         let first = ResolutionReport {
             selected_candidates: BTreeMap::from([(
                 "voxy".to_string(),
@@ -853,8 +851,10 @@ mod tests {
         let output = resolution_choices(&[first, second]);
 
         assert_eq!(output.matches("Option ").count(), 2);
-        assert!(output.contains("Modrinth project abc"));
-        assert!(output.contains("CurseForge project 123"));
+        assert!(output.contains("Modrinth"));
+        assert!(output.contains("CurseForge"));
+        assert!(!output.contains("project abc"));
+        assert!(!output.contains("file 456"));
         assert!(!output.contains("sha512"));
         assert!(!output.contains(".jar"));
     }
@@ -957,7 +957,7 @@ mod tests {
     }
 
     #[test]
-    fn installed_table_lists_bundled_mods_without_jar_filenames() {
+    fn installed_table_summarizes_bundled_mods_without_names_or_jar_filenames() {
         let package = ListedPackage {
             mod_id: "fabric-api".to_string(),
             version: "0.100".to_string(),
@@ -973,7 +973,8 @@ mod tests {
         let output = installed_packages_table(&[package]);
 
         assert!(output.contains("fabric-api"));
-        assert!(output.contains("bundled: fabric-api-base"));
+        assert!(output.contains("1 bundled module(s)"));
+        assert!(!output.contains("fabric-api-base"));
         assert!(!output.contains(".jar"));
     }
 

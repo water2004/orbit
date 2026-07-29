@@ -194,7 +194,7 @@ pub struct CandidateVersion {
     pub id: String,
     /// Download filename used only to materialize the selected artifact.
     pub filename: String,
-    /// Human-readable exact artifact provenance, without content hashes.
+    /// Human-readable provider labels, without provider ids or content hashes.
     pub display_sources: Vec<String>,
     pub jar_version: String,
     pub dependencies: Vec<DependencyExpression>,
@@ -303,24 +303,53 @@ impl CandidateVersion {
     }
 
     pub fn display_description(&self) -> String {
-        let mut description = if self.display_sources.is_empty() {
+        let source = if self.display_sources.is_empty() {
             "downloaded artifact".to_string()
         } else {
             self.display_sources.join(", ")
         };
-        let requirements: Vec<_> = self
+        let dependency_count = self
             .dependencies
             .iter()
             .flat_map(DependencyExpression::relations)
             .filter(|dependency| dependency.kind.installs_target())
-            .map(|dependency| format!("{} {}", dependency.id, dependency.requirement))
-            .collect();
-        if !requirements.is_empty() {
-            description.push_str("; requires ");
-            description.push_str(&requirements.join(", "));
+            .count();
+        let bundled_count = bundled_module_count(&self.bundled);
+        let mut details = Vec::new();
+        if dependency_count > 0 {
+            details.push(counted_label(
+                dependency_count,
+                "dependency constraint",
+                "dependency constraints",
+            ));
         }
-        description
+        if bundled_count > 0 {
+            details.push(counted_label(
+                bundled_count,
+                "bundled module",
+                "bundled modules",
+            ));
+        }
+        if self.environment != Environment::Both {
+            details.push(format!("{} environment", self.environment.as_str()));
+        }
+        if details.is_empty() {
+            source
+        } else {
+            format!("{source} · {}", details.join(" · "))
+        }
     }
+}
+
+fn counted_label(count: usize, singular: &str, plural: &str) -> String {
+    format!("{count} {}", if count == 1 { singular } else { plural })
+}
+
+fn bundled_module_count(bundled: &[BundledCandidate]) -> usize {
+    bundled
+        .iter()
+        .map(|module| 1 + bundled_module_count(&module.bundled))
+        .sum()
 }
 
 impl PlatformCandidate {

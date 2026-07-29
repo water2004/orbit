@@ -102,10 +102,10 @@ fn print_node(
 
     print_package_line(prefix, pkg);
 
-    for (name, ver) in &pkg.bundled {
+    if !pkg.bundled.is_empty() {
         println!(
             "{prefix}  + {}",
-            tr!("bundled: %{name} v%{version}", name = name, version = ver)
+            tr!("%{count} bundled module(s)", count = pkg.bundled.len())
         );
     }
 

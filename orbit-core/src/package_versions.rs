@@ -128,22 +128,32 @@ pub async fn list_package_versions(
 }
 
 fn candidate_details(candidate: &crate::resolver::types::CandidateVersion) -> String {
-    let requirements = candidate
+    let dependency_count = candidate
         .dependencies
         .iter()
         .flat_map(crate::metadata::DependencyExpression::relations)
         .filter(|dependency| dependency.kind.installs_target())
-        .map(|dependency| format!("{} {}", dependency.id, dependency.requirement))
-        .collect::<Vec<_>>();
+        .count();
     let mut details = Vec::new();
-    if !requirements.is_empty() {
-        details.push(format!("requires {}", requirements.join(", ")));
+    if dependency_count > 0 {
+        details.push(format!(
+            "{dependency_count} dependency constraint{}",
+            if dependency_count == 1 { "" } else { "s" }
+        ));
     }
     if candidate.environment != crate::metadata::Environment::Both {
         details.push(format!("environment {}", candidate.environment.as_str()));
     }
     if !candidate.bundled.is_empty() {
-        details.push(format!("contains {} module(s)", candidate.bundled.len()));
+        details.push(format!(
+            "{} bundled module{}",
+            candidate.bundled.len(),
+            if candidate.bundled.len() == 1 {
+                ""
+            } else {
+                "s"
+            }
+        ));
     }
     if details.is_empty() {
         "no additional JAR requirements".to_string()

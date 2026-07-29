@@ -180,20 +180,14 @@ impl RemoteArtifact {
         )))
     }
 
-    /// Human-readable provenance for a concrete artifact. This is deliberately
-    /// separate from the content-hash candidate identity used by the solver.
+    /// Human-readable provider label for a concrete artifact. Provider ids and
+    /// the content-hash candidate identity stay outside presentation output.
     pub fn display_source(&self) -> String {
-        if let Some(metadata) = &self.modrinth {
-            return format!(
-                "Modrinth project {}, release {}",
-                metadata.project_id, metadata.version_id
-            );
+        if self.modrinth.is_some() {
+            return "Modrinth".to_string();
         }
-        if let Some(metadata) = &self.curseforge {
-            return format!(
-                "CurseForge project {}, file {}",
-                metadata.project_id, metadata.file_id
-            );
+        if self.curseforge.is_some() {
+            return "CurseForge".to_string();
         }
         self.provider.clone()
     }

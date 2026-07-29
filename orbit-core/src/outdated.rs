@@ -1342,11 +1342,14 @@ mod tests {
         assert_eq!(catalog.resolved.len(), 1);
         let candidate = &catalog.candidates["actual"][0];
         assert_eq!(candidate.display_sources.len(), 2);
+        assert_eq!(candidate.display_sources, ["CurseForge", "Modrinth"]);
         assert!(
             candidate
                 .display_description()
-                .contains("requires sodium >=0.9")
+                .contains("1 dependency constraint")
         );
+        assert!(!candidate.display_description().contains("project-a"));
+        assert!(!candidate.display_description().contains("release-a"));
         assert!(!candidate.display_description().contains("same-sha"));
         assert_eq!(catalog.resolved[&candidate.id].sources.len(), 2);
     }
