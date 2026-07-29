@@ -340,9 +340,9 @@ pub enum ConstraintCommands {
     /// Apply a structured version policy and immediately converge the instance.
     Set {
         package: String,
-        /// Ordered set rule over text following the leading numeric core.
+        /// Ordered set rule over the complete JAR-declared version string.
         #[arg(long, global = true)]
-        suffix: Option<String>,
+        string: Option<String>,
         #[command(subcommand)]
         policy: ConstraintPolicyCommands,
     },
@@ -352,7 +352,7 @@ pub enum ConstraintCommands {
 pub enum ConstraintPolicyCommands {
     /// Allow every compatible version.
     Any,
-    /// Match a numeric core, or one full representation when a suffix is supplied.
+    /// Match one dotted numeric core.
     Exact { version: String },
     /// Require a numeric core strictly newer than the selected boundary.
     GreaterThan { version: String },
@@ -726,20 +726,14 @@ mod tests {
         };
         assert_eq!(package, "sodium");
 
-        let constraint = Cli::try_parse_from([
-            "orbit",
-            "constraint",
-            "set",
-            "sodium",
-            "exact",
-            "0.6.13-alpha",
-        ])
-        .unwrap();
+        let constraint =
+            Cli::try_parse_from(["orbit", "constraint", "set", "sodium", "exact", "0.6.13"])
+                .unwrap();
         let Commands::Constraint {
             command:
                 ConstraintCommands::Set {
                     package,
-                    suffix: _,
+                    string: _,
                     policy: ConstraintPolicyCommands::Exact { version },
                 },
         } = constraint.command
@@ -747,26 +741,26 @@ mod tests {
             panic!("constraint set command was not parsed");
         };
         assert_eq!(package, "sodium");
-        assert_eq!(version, "0.6.13-alpha");
+        assert_eq!(version, "0.6.13");
 
-        let suffix = Cli::try_parse_from([
+        let string = Cli::try_parse_from([
             "orbit",
             "constraint",
             "set",
             "sodium",
             "any",
-            "--suffix",
+            "--string",
             "all; intersect not contains(i\"beta\"); union ends_with(\"fabric\")",
         ])
         .unwrap();
         let Commands::Constraint {
-            command: ConstraintCommands::Set { suffix, .. },
-        } = suffix.command
+            command: ConstraintCommands::Set { string, .. },
+        } = string.command
         else {
-            panic!("suffix expression was not parsed");
+            panic!("string expression was not parsed");
         };
         assert_eq!(
-            suffix.as_deref(),
+            string.as_deref(),
             Some("all; intersect not contains(i\"beta\"); union ends_with(\"fabric\")")
         );
 

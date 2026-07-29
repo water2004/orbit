@@ -568,28 +568,33 @@ pub fn installed_packages_table(packages: &[ListedPackage]) -> String {
 }
 
 pub fn package_versions_table(output: &PackageVersionsOutput) -> String {
-    let mut table = output_table(["", "Version", "Suffix", "Policy", "Sources", "Details"]);
+    let mut table = output_table(["", "Version", "Numeric", "Policy", "Sources", "Details"]);
     for candidate in &output.candidates {
+        let numeric = candidate.numeric_core.as_deref().unwrap_or("—").to_string();
+        let details = match &candidate.numeric_error {
+            Some(error) => format!("{}; {}", candidate.details, error),
+            None => candidate.details.clone(),
+        };
         table.add_row([
             Cell::new(if candidate.selected { "●" } else { "" }),
             Cell::new(&candidate.version),
-            Cell::new(candidate.suffix.as_deref().unwrap_or("—")),
+            Cell::new(numeric),
             Cell::new(if candidate.matches_constraint {
                 tr!("allowed")
             } else {
                 tr!("excluded")
             }),
             Cell::new(candidate.sources.join(", ")),
-            Cell::new(&candidate.details),
+            Cell::new(details),
         ]);
     }
     format!(
         "{}\n{}",
         tr!(
-            "%{package} versions (constraint: %{constraint}; suffix: %{suffix})",
+            "%{package} versions (numeric: %{constraint}; string: %{string})",
             package = output.package,
             constraint = output.constraint,
-            suffix = output.suffix
+            string = output.string
         ),
         table
     )

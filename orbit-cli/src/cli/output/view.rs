@@ -126,8 +126,8 @@ pub struct PackageConstraintOutput {
     pub previous: Option<String>,
     pub current: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub previous_suffix: Option<String>,
-    pub suffix: String,
+    pub previous_string: Option<String>,
+    pub string: String,
     pub policy: PackageVersionPolicyOutput,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub previous_selected_version: Option<String>,
@@ -163,7 +163,7 @@ pub struct PackageVersionPolicyOutput {
 pub struct PackageVersionsOutput {
     pub package: String,
     pub constraint: String,
-    pub suffix: String,
+    pub string: String,
     pub policy: PackageVersionPolicyOutput,
     pub selected_version: Option<String>,
     pub candidates: Vec<PackageVersionCandidateView>,
@@ -172,8 +172,11 @@ pub struct PackageVersionsOutput {
 #[derive(Debug, Clone, Serialize)]
 pub struct PackageVersionCandidateView {
     pub version: String,
-    pub suffix: Option<String>,
-    pub suffix_tokens: Vec<String>,
+    pub numeric_core: Option<String>,
+    pub string_tokens: Vec<String>,
+    pub numeric_filterable: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub numeric_error: Option<String>,
     pub sources: Vec<String>,
     pub details: String,
     pub selected: bool,
