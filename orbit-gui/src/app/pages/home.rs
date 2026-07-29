@@ -232,7 +232,7 @@ pub(super) fn render(
                         tr!("Inspect bytecode and active Mixin risk").into_owned(),
                         cx.listener(|this, _, _, cx| {
                             this.preferences.page = Page::Audit;
-                            this.run_audit();
+                            this.run_audit(None, String::new());
                             cx.notify();
                         }),
                         cx,

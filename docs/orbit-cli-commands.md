@@ -93,6 +93,9 @@ Fabric、Quilt、现代 Forge/NeoForge 安装器生成的 dedicated server 根�
 隔离布局只扫描当前实例，不读取 sibling profile；共享根目录出现多个 Minecraft 或
 loader 候选时必须显式选择，不能按目录顺序猜测。
 
+`mods/` 不存在表示空模组集合，不是损坏，也不会由 init 补建。只有 `mods` 这个路径已经存在
+但不是目录时才报错。这个语义对 init、sync、list、outdated、audit 和迁移检查一致。
+
 Dedicated server 的 `eula.txt` / `server.properties` 优先于通用 `versions/` 布局。
 Orbit 读取 Fabric/Quilt launch JAR、Forge bootstrap shim 或当前平台
 `unix_args.txt` / `win_args.txt`，但不执行启动脚本。缺少实际运行时文件、清单 hash
@@ -236,6 +239,9 @@ loader JAR 及其 bundled 模块进入 lock 图校验；install 不另行选择�
 命中时仍可使用 lock 已记录的下载 URL。每个 package 必须有 SHA-512、非空 remotes 和
 可恢复所选字节的精确来源，缺项直接拒绝。该命令绝不发现候选、选择版本、修复依赖、
 删除未选包或改写 `orbit.toml` / `orbit.lock`。
+
+空 lock 且缺失 `mods/` 时 install 成功返回空操作；add/install/fix/upgrade 只有在某个选中
+JAR 即将真正物化时才创建 `mods/`。失败、取消、dry-run 与纯删除计划都不补空目录。
 
 ### `orbit fix`
 

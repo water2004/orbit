@@ -1,6 +1,6 @@
 use gpui::{Context, IntoElement, ParentElement, Styled, Window, div};
 use gpui_component::{
-    ActiveTheme, StyledExt,
+    ActiveTheme, Selectable, StyledExt,
     button::{Button, ButtonVariants},
     h_flex, v_flex,
 };
@@ -26,11 +26,49 @@ pub(super) fn render(
         )
         .primary()
         .on_click(cx.listener(|this, _, _, cx| {
-            this.run_audit();
+            let filter = this.inputs.audit_filter.read(cx).value().trim().to_string();
+            this.run_audit(None, filter);
             cx.notify();
         }));
 
-    let content = if app.selected_instance().is_none() {
+    let filter_input = app.inputs.audit_filter.clone();
+    let filter_read = filter_input.clone();
+    let controls = ui::compact_card(cx).child(
+        h_flex()
+            .gap_2()
+            .items_center()
+            .child(ui::search_input(&filter_input).flex_1())
+            .children(
+                [(0, tr!("All risks")), (1, tr!("35+")), (2, tr!("70+"))]
+                    .into_iter()
+                    .map(|(index, label)| {
+                        Button::new(("audit-risk", index))
+                            .label(label.into_owned())
+                            .selected(app.audit_min_risk == index)
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.audit_min_risk = index;
+                                cx.notify();
+                            }))
+                    }),
+            )
+            .child(
+                Button::new("audit-export")
+                    .label(tr!("Export full report…").into_owned())
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        if let Some(path) = rfd::FileDialog::new()
+                            .add_filter("JSON", &["json"])
+                            .set_file_name("orbit-audit.json")
+                            .save_file()
+                        {
+                            let filter = filter_read.read(cx).value().trim().to_string();
+                            this.run_audit(Some(path), filter);
+                        }
+                        cx.notify();
+                    })),
+            ),
+    );
+
+    let report = if app.selected_instance().is_none() {
         ui::themed_card(cx)
             .child(ui::empty_state(
                 OrbitIcon::Runtime,
@@ -125,6 +163,8 @@ pub(super) fn render(
             cx,
         )).into_any_element()
     };
+
+    let content = v_flex().gap_3().child(controls).child(report);
 
     ui::page(
         tr!("Compatibility audit").into_owned(),

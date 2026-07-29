@@ -163,7 +163,12 @@ pub(super) fn render(
                                         .label(tr!("Add").into_owned())
                                         .primary()
                                         .on_click(cx.listener(move |this, _, _, cx| {
-                                            this.add_search_result(&add);
+                                            this.package_add = Some(super::super::PackageAddForm {
+                                                project: add.clone(),
+                                                environment: 0,
+                                                optional: false,
+                                                no_dependencies: false,
+                                            });
                                             cx.notify();
                                         })),
                                 ),

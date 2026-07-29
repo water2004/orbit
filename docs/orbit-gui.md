@@ -69,14 +69,17 @@ Runtime 页使用 Launcher 的官方只读目录，而不是自由输入后试�
 3. `versions java` 返回官方 version JSON 要求的 Java component/major；
 4. `instance show` 同时给出 desired intent 与 installed lock 摘要，界面突出当前/目标差异；
 5. 新建实例直接调用 Launcher 的 `install --new` 事务；跨版本升级不改写源实例，而是进入下述
-   新实例迁移流程。
+   新实例迁移流程；同 Minecraft、同 Loader 类型的 Loader 版本更新调用
+   `instance configure --loader-version` 后执行 Launcher `install`，若实例已由 Orbit 接管，
+   最后调用 `orbit sync` 记录更新后的真实 Loader 工件。
 
 版本清单默认显示正式版，并将 `release`、`snapshot`、`old_alpha/old_beta` 分成正式版、
 快照、历史版本三个互斥频道；“全部”是显式选择，不能再用“非正式版”冒充快照。
 
 客户端只使用 Launcher 托管的 Minecraft 仓库，并把完整实例目录固定为
-`<minecraft-directory>/instances/<instance-name>`；该目录拥有精确 `minecraft.jar` 及
-`mods`、`config`、`saves` 等可变数据，共享仓库根只保留 assets/libraries 等不可变内容。
+`<minecraft-directory>/instances/<instance-name>`；该目录拥有精确 `minecraft.jar`，并在实际
+使用时按需产生 `mods`、`config`、`saves` 等可变数据，共享仓库根只保留 assets/libraries
+等不可变内容。
 该布局是 Launcher 的实例隔离策略，不是自称 Mojang 标准实例格式，也不
 生成 `<instance-name>.json`。服务端仍选择一个明确目录。设置页通过 `orbit-launcher minecraft directory`
 显示仓库，并通过 `orbit-launcher minecraft move` 迁移整个仓库；GUI 不自行移动文件。
@@ -86,7 +89,9 @@ Java 设置页列出、完整校验和清理未使用 Java；任一注册实例 
 Runtime 页只负责创建、导入、更新和启动实例，避免同一管理动作出现两个入口。
 
 跨版本迁移也由 Runtime 页编排领域流程：先从源实例调用同一个 `orbit export` 管线生成并
-校验便携源包；只有该步骤成功后才用 Launcher 官方目录创建并安装真实目标实例，再调用
+校验便携源包；只有该步骤成功后才用 Launcher 官方目录创建并安装真实目标实例。GUI 随后先
+调用 `orbit migrate check <目标目录> --source-pack <源包>`，把目标 Minecraft/Loader 上的
+联合求解结果、升级/降级/替换/删除与诊断呈现为专用审阅页；用户接受后才调用
 `orbit migrate export <目标目录> --source-pack <源包> --consume-source-pack`，最后在目标调用
 `orbit install`。GUI
 不自己拼目标 TOML、不逐包检查兼容性，也不链接 Orbit core；迁移联合求解完全属于
@@ -108,7 +113,8 @@ Runtime 页也把整合包作为领域动作呈现：安装 Orbit ZIP/TOML 或 M
 Mods 页以 lock 中逻辑包为单位显示环境、根/传递关系、依赖、contained 模块和多远端。首次
 接管由已安装 Launcher lock 的精确 Minecraft/Loader 版本调用 `orbit init`，不在 GUI 中
 重复探测。搜索、添加、sync、fix、install、outdated、单包/全部 upgrade、环境与远端管理都调用
-现有 Orbit 命令。GUI 不复制 CLI 的项目详情报告；Discover 只提供搜索所需的名称、摘要、
+现有 Orbit 命令。添加表单暴露版本约束、可选环境过滤、optional 与 no-deps；包管理表单区分
+普通 remove 与会先展示匹配配置文件的 purge。GUI 不复制 CLI 的项目详情报告；Discover 只提供搜索所需的名称、摘要、
 来源、兼容标签和直接添加动作，需要完整项目数据时使用 `orbit info`。
 
 Mods 页把三个职责分别呈现：Sync 只重新探测并重建本地事实，Fix 才求解和修复包集合，
@@ -124,7 +130,9 @@ Install 只按 lock 精确恢复缺失文件。GUI 不根据一个命令失败�
   尚未搜索、查询中、零结果和失败，失败不得伪装为空目录；
   provider 图标 URL 由 GUI 的原生 HTTP client 加载并保留本地图标占位；版本标签只显示 CLI
   返回的人类版本号，不解释 provider 的 opaque ID；
-- Compatibility：schema 5 readiness、coverage、warning 和按风险排序的证据摘要；
+- Compatibility：schema 5 readiness、coverage、warning 和按风险排序的证据摘要；可按模组与
+  风险阈值筛选，并通过 `audit --report` 导出完整 JSON；`fail-on-risk` 是 CI 退出码策略，
+  不在桌面界面伪装为风险筛选；
 - Accounts：侧边栏底部始终显示当前实例账户或全局默认账户，主账户页显示 Launcher 从皮肤
   脸部底层与帽子层合成后由 CLI 提供的 `avatar_path`（无皮肤时使用本地首字母占位）；GUI
   不把完整皮肤材质裁剪成头像；先选择 Microsoft、Offline 或标准 External Yggdrasil，再进入对应登录任务；
@@ -139,7 +147,22 @@ Install 只按 lock 精确恢复缺失文件。GUI 不根据一个命令失败�
 - Settings：使用原生设置分组、字段说明、枚举选择、路径选择和秘密输入，不把配置 key/value
   表格直接暴露成“带窗口的 CLI”。GUI 偏好只由 GUI 保存；Launcher 与 Orbit 的业务配置分别通过
   `orbit-launcher config ...` / `orbit config ...` 读取、设置和恢复默认值。没有安装 Orbit 时
-  明确禁用 Orbit 配置区，不读取其 TOML 猜值。
+  明确禁用 Orbit 配置区，不读取其 TOML 猜值。JAR cache 清理由明确危险确认后调用
+  `orbit cache clean`，不由 GUI 删除缓存文件。
+
+## CLI 能力映射约束
+
+GUI 只集成有稳定桌面领域语义的命令，不能按“每个 subcommand 一个按钮”机械展开：
+
+| 领域 | GUI 中的 CLI 能力 | 有意不重复的接口 |
+| --- | --- | --- |
+| 模组 | init、list、search/add（含 version/env/optional/no-deps）、env、remote、remove/purge、sync、fix、install、outdated/upgrade、import/export、migrate check/export、audit、cache 与 config | `info` 的长文本详情由 Discover 摘要替代；Orbit 自身的 instances 注册表不与 Launcher 实例注册表并列；install 的 group/target 策略要等 TOML group 编辑器提供完整模型后再加入 |
+| 运行时 | install/new、launch、instance list/show/import/rename/remove/default、Loader configure/install、Minecraft/Loader/Java catalogs、Java 管理、Minecraft directory/move | 未安装的 `instance create` 中间态、launch/server dry-run、前台 server run 与隐藏 supervisor 属于 CLI/自动化接口 |
+| 账户与服务端 | login/list/refresh/select/clear/logout、Yggdrasil provider、EULA、start/stop/status/command | account show 已由账户卡片覆盖；秘密、EULA 与 token 不由 GUI 另存 |
+| 配置与审计 | 两套 typed config list/set/unset、audit min-risk/mod/report | config path/get 已包含在设置模型中；audit fail-on-risk 只用于 CI 退出码 |
+
+这张表是边界约束：新增 CLI 能力时必须决定其桌面领域交互、复用现有入口或明确保持 CLI-only，
+不得悄悄形成第二条业务实现。
 
 安装进度区分“下载/组装 Mojang Java 逐文件清单”和真正的归档解压：普通 assets、libraries
 和 Java 文件不显示为解压；只有启动时重建 native 目录以及 Forge/NeoForge 官方 installer

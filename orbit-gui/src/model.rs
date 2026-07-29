@@ -67,7 +67,39 @@ pub struct LauncherInstallResult {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct MigrationResult {
+    pub subcommand: String,
+    pub target_directory: PathBuf,
+    pub source_mc_version: String,
+    pub target_mc_version: String,
+    pub target_loader: String,
+    pub target_loader_version: String,
+    pub summary: MigrationSummary,
+    #[serde(default)]
+    pub changes: Vec<PackageChange>,
+    #[serde(default)]
+    pub diagnostics: Vec<ResolutionDiagnostic>,
+    #[serde(default)]
+    pub warnings: Vec<String>,
     pub export: Option<MigrationExportResult>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct MigrationSummary {
+    pub selected_packages: usize,
+    pub installs: usize,
+    pub upgrades: usize,
+    pub downgrades: usize,
+    pub replacements: usize,
+    pub removals: usize,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct PackageChange {
+    pub package: String,
+    pub kind: String,
+    pub current_version: Option<String>,
+    pub selected_version: Option<String>,
+    pub selected_description: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -420,12 +452,27 @@ pub enum Intent {
         source_pack: PathBuf,
         target_id: String,
     },
+    MigrationChecked {
+        source_pack: PathBuf,
+        target: PathBuf,
+        target_id: String,
+    },
     MigrationExported {
         target: PathBuf,
         target_id: String,
     },
     MigrationInstalled {
         target_id: String,
+    },
+    RuntimeConfiguredForInstall {
+        target_id: String,
+        target: PathBuf,
+        sync_orbit: bool,
+    },
+    RuntimeInstalledAfterUpdate {
+        target_id: String,
+        target: PathBuf,
+        sync_orbit: bool,
     },
     ModpackImported {
         target: PathBuf,

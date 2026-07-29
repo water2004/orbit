@@ -37,6 +37,8 @@ pub(super) enum ConfirmationAction {
     UnregisterInstance(String),
     RemoveJavaRuntime(String),
     RemovePackage(String),
+    PurgePackage(String),
+    CleanOrbitCache,
     InstallModpack(PathBuf),
     AcceptEula(String),
 }
@@ -45,6 +47,7 @@ pub(super) enum ConfirmationAction {
 pub(super) enum RuntimeFlowMode {
     Create,
     Migrate,
+    UpdateLoader,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -58,6 +61,14 @@ pub(super) enum RuntimeFlowStep {
 pub(super) struct RuntimeFlow {
     pub mode: RuntimeFlowMode,
     pub step: RuntimeFlowStep,
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct MigrationReview {
+    pub source_pack: PathBuf,
+    pub target: PathBuf,
+    pub target_id: String,
+    pub plan: MigrationResult,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -113,6 +124,14 @@ pub(super) struct PackageEditor {
     pub remote_provider: usize,
 }
 
+#[derive(Debug, Clone)]
+pub(super) struct PackageAddForm {
+    pub project: SearchResult,
+    pub environment: usize,
+    pub optional: bool,
+    pub no_dependencies: bool,
+}
+
 impl PackageEditor {
     fn new(package: InstalledPackage) -> Self {
         Self {
@@ -161,6 +180,9 @@ pub(super) struct Inputs {
     pub orbit_binary: Entity<InputState>,
     pub launcher_binary: Entity<InputState>,
     pub remote_locator: Entity<InputState>,
+    pub add_version: Entity<InputState>,
+    pub runtime_name: Entity<InputState>,
+    pub audit_filter: Entity<InputState>,
     pub minecraft_move_destination: Entity<InputState>,
 }
 
@@ -201,6 +223,9 @@ impl Inputs {
                     .default_value(preferences.launcher_binary.display().to_string())
             }),
             remote_locator: input(window, cx, tr!("Remote locator").into_owned()),
+            add_version: input(window, cx, tr!("Any compatible version").into_owned()),
+            runtime_name: input(window, cx, tr!("Installation name").into_owned()),
+            audit_filter: input(window, cx, tr!("Filter by mod").into_owned()),
             minecraft_move_destination: input(
                 window,
                 cx,
@@ -224,6 +249,7 @@ pub struct OrbitApp {
     pub(super) search_truncated: bool,
     pub(super) search_state: SearchState,
     pub(super) package_editor: Option<PackageEditor>,
+    pub(super) package_add: Option<PackageAddForm>,
     pub(super) outdated: Vec<OutdatedPackage>,
     pub(super) outdated_checked: bool,
     pub(super) outdated_diagnostics: Vec<ResolutionDiagnostic>,
@@ -245,6 +271,7 @@ pub struct OrbitApp {
     pub(super) java_requirements: HashMap<String, JavaRequirement>,
     pub(super) server_status: Option<ServerStatus>,
     pub(super) audit: Option<AuditSummary>,
+    pub(super) audit_min_risk: usize,
     pub(super) activity_open: bool,
     pub(super) activity_closing: bool,
     pub(super) confirmation: Option<Confirmation>,
@@ -257,6 +284,8 @@ pub struct OrbitApp {
     pub(super) eula_document: Option<Value>,
     pub(super) runtime_flow: Option<RuntimeFlow>,
     pub(super) migration_source: Option<PathBuf>,
+    pub(super) migration_review: Option<MigrationReview>,
+    pub(super) runtime_rename_open: bool,
     pub(super) account_flow: Option<AccountFlow>,
     pub(super) ygg_endpoint_editor_open: bool,
     pub(super) inputs: Inputs,
@@ -331,6 +360,7 @@ impl OrbitApp {
             search_truncated: false,
             search_state: SearchState::Idle,
             package_editor: None,
+            package_add: None,
             outdated: Vec::new(),
             outdated_checked: false,
             outdated_diagnostics: Vec::new(),
@@ -352,6 +382,7 @@ impl OrbitApp {
             java_requirements: HashMap::new(),
             server_status: None,
             audit: None,
+            audit_min_risk: 0,
             activity_open: false,
             activity_closing: false,
             confirmation: None,
@@ -364,6 +395,8 @@ impl OrbitApp {
             eula_document: None,
             runtime_flow: None,
             migration_source: None,
+            migration_review: None,
+            runtime_rename_open: false,
             account_flow: None,
             ygg_endpoint_editor_open: false,
             inputs,

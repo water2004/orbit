@@ -123,11 +123,29 @@ fn dashboard(app: &OrbitApp, cx: &mut Context<OrbitApp>) -> impl IntoElement {
                             .ghost()
                             .on_click(cx.listener(move |this, _, _, cx| { this.select_account(use_id.clone(), false); cx.notify(); })),
                     ))
+                    .when(used_here, |row| row.child(
+                        Button::new(("account-use-default", index))
+                            .label(tr!("Use global default").into_owned())
+                            .ghost()
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.clear_account_selection(false);
+                                cx.notify();
+                            })),
+                    ))
                     .when(!account.is_default, |row| row.child(
                         Button::new(("account-default", index))
                             .label(tr!("Make default").into_owned())
                             .ghost()
                             .on_click(cx.listener(move |this, _, _, cx| { this.select_account(default_id.clone(), true); cx.notify(); })),
+                    ))
+                    .when(account.is_default, |row| row.child(
+                        Button::new(("account-clear-default", index))
+                            .label(tr!("Clear default").into_owned())
+                            .ghost()
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.clear_account_selection(true);
+                                cx.notify();
+                            })),
                     ))
                     .when(reauthenticate, |row| row.child(
                         Button::new(("account-reauthenticate", index))

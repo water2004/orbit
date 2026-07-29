@@ -196,6 +196,11 @@ schema、字段名、枚举码和错误码不随语言变化。Windows 控制台
 | `orbit migrate export <目标实例目录>` | 复用同一迁移规划器，将目标 `orbit.toml`、`orbit.lock` 和模组配置写入空白目标实例；随后在目标运行 `orbit install`。 |
 | `orbit migrate export <目标实例目录> --source-pack source.zip --consume-source-pack` | 从新建目标前冻结的源包求解；确认写入成功后删除临时源包。GUI 的升级/迁移流程使用此模式。 |
 | `orbit audit` | **字节码兼容风险分析（只读）**。复用 Loader 实际选择的顶层/嵌套运行时内容，由 Fabric/Quilt/Forge/NeoForge 后端确定注册与运行时规则，再进入共享 ClassFile/效果/冲突流水线；默认输出分类摘要，`--output-format json` 或显式 `--report <path>` 保留完整 schema 5 证据。不下载 mapping，也不把依赖声明本身当作风险证据。 |
+
+`mods/` 缺失是合法的空模组集合。init、sync、检查、失败或取消的操作以及空 lock 的 install
+都不会补建该目录；只有选中的 JAR 真正物化时才创建。Loader 版本更新始终由 Launcher 执行
+`instance configure --loader-version` 后再 `install`；跨 Minecraft/Loader 类型迁移则创建新实例，
+GUI 在写入目标 Orbit 状态前先展示 `migrate check` 的完整包级方案。
 | `orbit cache clean` | 清理 Orbit 在后台全局保存的 `.jar` 下载缓存，释放磁盘空间。 |
 
 ---

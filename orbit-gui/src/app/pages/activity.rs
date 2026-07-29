@@ -162,12 +162,18 @@ pub(in crate::app) fn render_overlays(
 
     if app.interaction.is_some() {
         overlays.push(render_interaction(app, cx).into_any_element());
+    } else if app.migration_review.is_some() {
+        overlays.push(super::dialogs::render_migration_review(app, cx).into_any_element());
     } else if app.confirmation.is_some() {
         overlays.push(render_confirmation(app, cx).into_any_element());
     } else if app.microsoft_session.is_some() {
         overlays.push(render_microsoft(app, cx).into_any_element());
     } else if app.eula_document.is_some() {
         overlays.push(render_eula(app, cx).into_any_element());
+    } else if app.package_add.is_some() {
+        overlays.push(super::dialogs::render_package_add(app, cx).into_any_element());
+    } else if app.runtime_rename_open {
+        overlays.push(super::dialogs::render_runtime_rename(app, cx).into_any_element());
     } else if app.package_editor.is_some() {
         overlays.push(render_package_editor(app, cx).into_any_element());
     }
@@ -568,6 +574,8 @@ fn render_eula(app: &OrbitApp, cx: &mut Context<OrbitApp>) -> impl IntoElement {
 fn render_package_editor(app: &OrbitApp, cx: &mut Context<OrbitApp>) -> impl IntoElement {
     let editor = app.package_editor.as_ref().expect("checked").clone();
     let package_id = editor.package.mod_id.clone();
+    let remote_package = package_id.clone();
+    let purge_package = package_id.clone();
     let remote_input = app.inputs.remote_locator.clone();
     let remote_read = remote_input.clone();
     let providers = ["file", "modrinth", "curseforge"];
@@ -640,12 +648,49 @@ fn render_package_editor(app: &OrbitApp, cx: &mut Context<OrbitApp>) -> impl Int
                             let locator = remote_read.read(cx).value().trim().to_string();
                             if !locator.is_empty() {
                                 let provider = this.package_editor.as_ref().map(|item| providers[item.remote_provider]).unwrap_or("file");
-                                this.add_package_remote(&package_id, provider, &locator);
+                                this.add_package_remote(&remote_package, provider, &locator);
                                 remote_read.update(cx, |state, cx| state.set_value("", window, cx));
                                 this.package_editor = None;
                             }
                             cx.notify();
                         }))),
+                )
+                .child(ui::divider(cx))
+                .child(
+                    h_flex()
+                        .justify_between()
+                        .gap_3()
+                        .child(
+                            v_flex()
+                                .gap_1()
+                                .child(
+                                    div()
+                                        .text_sm()
+                                        .font_semibold()
+                                        .child(tr!("Remove package data").into_owned()),
+                                )
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(cx.theme().muted_foreground)
+                                        .child(tr!("Purge removes the package and presents matching configuration files before deletion.").into_owned()),
+                                ),
+                        )
+                        .child(
+                            Button::new("package-purge")
+                                .icon(OrbitIcon::Trash)
+                                .label(tr!("Purge…").into_owned())
+                                .danger()
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.package_editor = None;
+                                    this.confirmation = Some(super::super::Confirmation {
+                                        title: tr!("Purge %{package}?", package = purge_package),
+                                        body: tr!("Orbit will first show the exact package and matching configuration files. Nothing is deleted until you confirm that plan.").into_owned(),
+                                        action: super::super::ConfirmationAction::PurgePackage(purge_package.clone()),
+                                    });
+                                    cx.notify();
+                                })),
+                        ),
                 ),
             cx,
         ),

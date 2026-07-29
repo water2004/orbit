@@ -123,7 +123,7 @@ The migration GUI sequence is intentionally transactional:
 
 1. Export and validate the source Orbit pack.
 2. Create and install the isolated target Minecraft/Loader runtime.
-3. Resolve the target graph from the frozen source pack.
+3. Run `orbit migrate check` and review the complete target package plan.
 4. Confirm and export target Orbit state.
 5. Run `orbit install` in the target; this creates `mods/` only when packages are actually materialized.
 
@@ -135,6 +135,12 @@ Forge, and NeoForge; manages Mojang Java runtimes; handles Microsoft, offline, a
 Yggdrasil accounts; and launches clients or supervises cancellable, restartable servers. It owns no
 mod logic and never calls Orbit. The project Microsoft public-client registration is built in, while
 tokens remain in the operating system's secret store.
+
+An absent `mods/` directory is a valid empty mod set. Orbit does not manufacture it during init,
+sync, checks, failed operations, or empty installs; it is created only when a selected JAR is
+actually materialized. Loader-version updates remain a Launcher responsibility (`instance
+configure --loader-version` followed by `install`), while cross-version migration creates a new
+instance and lets Orbit check and migrate only the mod state.
 
 ```bash
 # Install a complete isolated client in the default managed repository.

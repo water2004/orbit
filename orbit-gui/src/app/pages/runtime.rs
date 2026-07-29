@@ -1,6 +1,6 @@
 use gpui::{Context, IntoElement, ParentElement, Styled, Window, div, prelude::FluentBuilder as _};
 use gpui_component::{
-    ActiveTheme, Selectable, StyledExt,
+    ActiveTheme, Disableable, Selectable, StyledExt,
     button::{Button, ButtonVariants},
     h_flex,
     input::Input,
@@ -61,6 +61,7 @@ fn render_dashboard(
         let detail = app.instance_detail.clone();
         let installed = detail.as_ref().and_then(|item| item.installed.as_ref());
         let desired = detail.as_ref().map(|item| &item.desired);
+        let can_update_loader = desired.is_some_and(|item| item.loader != "vanilla");
         let current = installed.map_or_else(
             || tr!("Not installed").into_owned(),
             |item| {
@@ -148,9 +149,19 @@ fn render_dashboard(
                         .flex_wrap()
                         .child(
                             Button::new("runtime-migrate")
-                                .label(tr!("Upgrade or migrate").into_owned())
+                                .label(tr!("Migrate to new installation").into_owned())
                                 .on_click(cx.listener(|this, _, _, cx| { this.begin_runtime_flow(RuntimeFlowMode::Migrate); cx.notify(); })),
                         )
+                        .when(can_update_loader, |row| {
+                            row.child(
+                                Button::new("runtime-update-loader")
+                                    .label(tr!("Update Loader").into_owned())
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.begin_runtime_flow(RuntimeFlowMode::UpdateLoader);
+                                        cx.notify();
+                                    })),
+                            )
+                        })
                         .child(
                             Button::new("runtime-repair")
                                 .label(tr!("Verify and repair").into_owned())
@@ -215,6 +226,19 @@ fn render_dashboard(
                                 .ghost()
                                 .on_click(cx.listener(|this, _, _, cx| { this.set_default_runtime(); cx.notify(); })),
                         ))
+                        .child(
+                            Button::new("runtime-rename")
+                                .label(tr!("Rename").into_owned())
+                                .ghost()
+                                .on_click(cx.listener(move |this, _, window, cx| {
+                                    let name = instance.name.clone();
+                                    this.inputs.runtime_name.update(cx, |input, cx| {
+                                        input.set_value(name, window, cx)
+                                    });
+                                    this.runtime_rename_open = true;
+                                    cx.notify();
+                                })),
+                        )
                         .child(
                             Button::new("runtime-unregister")
                                 .label(tr!("Unregister").into_owned())
@@ -313,7 +337,7 @@ fn render_flow(
         }));
     let content = v_flex()
         .gap_4()
-        .child(render_steps(flow.step, cx))
+        .child(render_steps(flow, cx))
         .child(match flow.step {
             RuntimeFlowStep::Minecraft => {
                 render_minecraft_step(app, window, cx, flow).into_any_element()
@@ -325,6 +349,7 @@ fn render_flow(
         match flow.mode {
             RuntimeFlowMode::Create => tr!("Create installation"),
             RuntimeFlowMode::Migrate => tr!("Migrate installation"),
+            RuntimeFlowMode::UpdateLoader => tr!("Update Loader"),
         }
         .into_owned(),
         tr!("Choose exact catalog entries; installation uses one transactional path").into_owned(),
@@ -334,12 +359,22 @@ fn render_flow(
     )
 }
 
-fn render_steps(active: RuntimeFlowStep, cx: &gpui::App) -> impl IntoElement {
-    let steps = [
-        (RuntimeFlowStep::Minecraft, tr!("Minecraft").into_owned()),
-        (RuntimeFlowStep::Components, tr!("Components").into_owned()),
-        (RuntimeFlowStep::Review, tr!("Review").into_owned()),
-    ];
+fn render_steps(flow: RuntimeFlow, cx: &gpui::App) -> impl IntoElement {
+    let steps = if flow.mode == RuntimeFlowMode::UpdateLoader {
+        vec![
+            (
+                RuntimeFlowStep::Components,
+                tr!("Loader version").into_owned(),
+            ),
+            (RuntimeFlowStep::Review, tr!("Review").into_owned()),
+        ]
+    } else {
+        vec![
+            (RuntimeFlowStep::Minecraft, tr!("Minecraft").into_owned()),
+            (RuntimeFlowStep::Components, tr!("Components").into_owned()),
+            (RuntimeFlowStep::Review, tr!("Review").into_owned()),
+        ]
+    };
     h_flex()
         .gap_2()
         .children(steps.into_iter().enumerate().map(|(index, (step, label))| {
@@ -348,12 +383,12 @@ fn render_steps(active: RuntimeFlowStep, cx: &gpui::App) -> impl IntoElement {
                 .items_center()
                 .child(ui::pill(
                     (index + 1).to_string(),
-                    if step == active {
+                    if step == flow.step {
                         cx.theme().primary
                     } else {
                         cx.theme().secondary
                     },
-                    if step == active {
+                    if step == flow.step {
                         cx.theme().primary_foreground
                     } else {
                         cx.theme().secondary_foreground
@@ -363,7 +398,7 @@ fn render_steps(active: RuntimeFlowStep, cx: &gpui::App) -> impl IntoElement {
                     div()
                         .text_sm()
                         .font_medium()
-                        .text_color(if step == active {
+                        .text_color(if step == flow.step {
                             cx.theme().foreground
                         } else {
                             cx.theme().muted_foreground
@@ -545,41 +580,47 @@ fn render_components_step(
         app.new_instance.loader,
         app.new_instance.loader_version.clone(),
     );
-    let mut body = v_flex()
-        .gap_4()
-        .child(ui::section_title(
+    let mut body = v_flex().gap_4().child(ui::section_title(
+        if flow.mode == RuntimeFlowMode::UpdateLoader {
+            tr!("Choose Loader version").into_owned()
+        } else {
+            tr!("Loader").into_owned()
+        },
+        minecraft.clone(),
+        cx,
+    ));
+    if flow.mode == RuntimeFlowMode::UpdateLoader {
+        body = body.child(ui::compact_card(cx).child(ui::key_value(
             tr!("Loader").into_owned(),
-            minecraft.clone(),
+            title_case(loaders()[loader_index]),
             cx,
-        ))
-        .child(
-            h_flex()
-                .gap_2()
-                .flex_wrap()
-                .children(loaders().into_iter().enumerate().map(|(index, loader)| {
-                    let minecraft = minecraft.clone();
-                    let name_input = app.inputs.new_name.clone();
-                    Button::new(("loader", index))
-                        .label(title_case(loader))
-                        .selected(loader_index == index)
-                        .on_click(cx.listener(move |this, _, window, cx| {
-                            let current = name_input.read(cx).value().to_string();
-                            let replace_name =
-                                current.trim().is_empty() || current == this.new_instance.name;
-                            this.new_instance.loader = index;
-                            this.new_instance.loader_version.clear();
-                            if replace_name {
-                                let suggestion = suggested_instance_name(&minecraft, loader);
-                                this.new_instance.name = suggestion.clone();
-                                name_input.update(cx, |input, cx| {
-                                    input.set_value(suggestion, window, cx)
-                                });
-                            }
-                            this.request_runtime_metadata(&minecraft, index);
-                            cx.notify();
-                        }))
-                })),
-        );
+        )));
+    } else {
+        body = body.child(h_flex().gap_2().flex_wrap().children(
+            loaders().into_iter().enumerate().map(|(index, loader)| {
+                let minecraft = minecraft.clone();
+                let name_input = app.inputs.new_name.clone();
+                Button::new(("loader", index))
+                    .label(title_case(loader))
+                    .selected(loader_index == index)
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        let current = name_input.read(cx).value().to_string();
+                        let replace_name =
+                            current.trim().is_empty() || current == this.new_instance.name;
+                        this.new_instance.loader = index;
+                        this.new_instance.loader_version.clear();
+                        if replace_name {
+                            let suggestion = suggested_instance_name(&minecraft, loader);
+                            this.new_instance.name = suggestion.clone();
+                            name_input
+                                .update(cx, |input, cx| input.set_value(suggestion, window, cx));
+                        }
+                        this.request_runtime_metadata(&minecraft, index);
+                        cx.notify();
+                    }))
+            }),
+        ));
+    }
     if loader_index == 0 {
         let java = app
             .java_requirements
@@ -729,6 +770,13 @@ fn render_review_step(
             || tr!("Automatic").into_owned(),
             |major| format!("Java {major}"),
         );
+    let loader_unchanged = flow.mode == RuntimeFlowMode::UpdateLoader
+        && app
+            .instance_detail
+            .as_ref()
+            .and_then(|detail| detail.installed.as_ref())
+            .and_then(|installed| installed.loader_version.as_deref())
+            == Some(loader_version.as_str());
     let mut summary = ui::themed_card(cx);
     if flow.mode == RuntimeFlowMode::Migrate
         && let Some(source) = &app.migration_source
@@ -756,13 +804,35 @@ fn render_review_step(
     let name = app.inputs.new_name.clone();
     let server_directory = app.inputs.new_server_directory.clone();
     let directory_browse = server_directory.clone();
-    body = body.child(ui::field(
-        tr!("Installation name").into_owned(),
-        tr!("Used by global Launcher instance selection").into_owned(),
-        &name,
-        cx,
-    ));
-    if app.new_instance.kind == 0 {
+    if flow.mode == RuntimeFlowMode::UpdateLoader {
+        let current = app
+            .instance_detail
+            .as_ref()
+            .and_then(|detail| detail.installed.as_ref())
+            .and_then(|installed| installed.loader_version.clone())
+            .unwrap_or_else(|| tr!("Not installed").into_owned());
+        body = body.child(
+            ui::compact_card(cx)
+                .child(ui::key_value(
+                    tr!("Current Loader").into_owned(),
+                    current,
+                    cx,
+                ))
+                .child(ui::key_value(
+                    tr!("Target Loader").into_owned(),
+                    loader_version.clone(),
+                    cx,
+                )),
+        );
+    } else {
+        body = body.child(ui::field(
+            tr!("Installation name").into_owned(),
+            tr!("Used by global Launcher instance selection").into_owned(),
+            &name,
+            cx,
+        ));
+    }
+    if flow.mode != RuntimeFlowMode::UpdateLoader && app.new_instance.kind == 0 {
         body = body.child(
                 ui::themed_card(cx).child(
                     div()
@@ -771,7 +841,7 @@ fn render_review_step(
                         .child(tr!("This client will use the managed Minecraft directory and an isolated instances/<instance> game directory containing its Minecraft JAR.").into_owned()),
                 ),
             );
-    } else {
+    } else if flow.mode != RuntimeFlowMode::UpdateLoader {
         body = body.child(
             v_flex()
                 .gap_1p5()
@@ -817,22 +887,30 @@ fn render_review_step(
             .child(
                 Button::new("review-create")
                     .icon(OrbitIcon::Download)
-                    .label(if flow.mode == RuntimeFlowMode::Migrate {
-                        tr!("Create, migrate and install").into_owned()
-                    } else {
-                        tr!("Create and install").into_owned()
+                    .label(match flow.mode {
+                        RuntimeFlowMode::Create => tr!("Create and install").into_owned(),
+                        RuntimeFlowMode::Migrate => {
+                            tr!("Create target and check migration").into_owned()
+                        }
+                        RuntimeFlowMode::UpdateLoader => tr!("Update Loader").into_owned(),
                     })
                     .primary()
+                    .disabled(loader_unchanged)
                     .on_click(cx.listener(move |this, _, _, cx| {
-                        this.new_instance.name = name.read(cx).value().trim().to_string();
-                        this.new_instance.server_directory =
-                            server_directory.read(cx).value().trim().to_string();
-                        if !this.new_instance.name.is_empty()
-                            && (this.new_instance.kind == 0
-                                || !this.new_instance.server_directory.is_empty())
-                        {
+                        if flow.mode == RuntimeFlowMode::UpdateLoader {
                             this.create_runtime(flow.mode);
                             this.runtime_flow = None;
+                        } else {
+                            this.new_instance.name = name.read(cx).value().trim().to_string();
+                            this.new_instance.server_directory =
+                                server_directory.read(cx).value().trim().to_string();
+                            if !this.new_instance.name.is_empty()
+                                && (this.new_instance.kind == 0
+                                    || !this.new_instance.server_directory.is_empty())
+                            {
+                                this.create_runtime(flow.mode);
+                                this.runtime_flow = None;
+                            }
                         }
                         cx.notify();
                     })),

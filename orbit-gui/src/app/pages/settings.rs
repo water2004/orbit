@@ -298,7 +298,8 @@ fn orbit_page(app: &Entity<OrbitApp>, available: bool) -> SettingPage {
                         tr!("LRU capacity in MiB, enforced after every command").into_owned(),
                         false,
                     ),
-                ]),
+                ])
+                .item(orbit_cache_clean_item(app)),
         )
         .group(
             SettingGroup::new()
@@ -322,6 +323,31 @@ fn orbit_page(app: &Entity<OrbitApp>, available: bool) -> SettingPage {
                     ),
                 ]),
         )
+}
+
+fn orbit_cache_clean_item(app: &Entity<OrbitApp>) -> SettingItem {
+    let app = app.clone();
+    SettingItem::new(
+        tr!("Cache maintenance").into_owned(),
+        SettingField::render(move |_, _, _cx| {
+            let app = app.clone();
+            Button::new("orbit-cache-clean")
+                .icon(OrbitIcon::Trash)
+                .label(tr!("Clean cache…").into_owned())
+                .danger()
+                .on_click(move |_, _, cx| {
+                    app.update(cx, |this, cx| {
+                        this.confirmation = Some(Confirmation {
+                            title: tr!("Clean the Orbit JAR cache?").into_owned(),
+                            body: tr!("Downloaded and analyzed JAR cache entries will be removed. Installed instance files and configuration are not touched.").into_owned(),
+                            action: ConfirmationAction::CleanOrbitCache,
+                        });
+                        cx.notify();
+                    });
+                })
+        }),
+    )
+    .description(tr!("LRU cleanup also runs automatically after every Orbit command").into_owned())
 }
 
 fn language_item(app: &Entity<OrbitApp>) -> SettingItem {

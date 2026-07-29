@@ -407,6 +407,9 @@ impl OrbitApp {
                                 } => reload_selected = true,
                                 Intent::RuntimeMutated => refresh_registries = true,
                                 Intent::MigrationInstalled { .. } => refresh_registries = true,
+                                Intent::RuntimeInstalledAfterUpdate { .. } => {
+                                    refresh_registries = true
+                                }
                                 Intent::AccountMutated => {
                                     refresh_accounts = true;
                                     reload_selected = true;
@@ -682,22 +685,38 @@ impl OrbitApp {
             } => {
                 let detail: RuntimeInstanceDetail = decode(result)?;
                 self.orbit_task_args(
-                    "Exporting mod migration",
-                    Intent::MigrationExported {
+                    "Checking mod migration",
+                    Intent::MigrationChecked {
+                        source_pack: source_pack.clone(),
                         target: detail.instance.directory.clone(),
                         target_id: target_id.clone(),
                     },
                     vec![
                         "migrate".into(),
-                        "export".into(),
+                        "check".into(),
                         detail.instance.directory.to_string_lossy().into_owned(),
                         "--source-pack".into(),
                         source_pack.to_string_lossy().into_owned(),
-                        "--consume-source-pack".into(),
                     ],
                     Some(detail.instance.directory.clone()),
                     None,
                 );
+            }
+            Intent::MigrationChecked {
+                source_pack,
+                target,
+                target_id,
+            } => {
+                let plan: MigrationResult = decode(result)?;
+                if plan.subcommand != "check" {
+                    anyhow::bail!("migrate check returned an unexpected result");
+                }
+                self.migration_review = Some(MigrationReview {
+                    source_pack: source_pack.clone(),
+                    target: target.clone(),
+                    target_id: target_id.clone(),
+                    plan,
+                });
             }
             Intent::MigrationExported { target, target_id } => {
                 let migration: MigrationResult = decode(result)?;
@@ -724,6 +743,43 @@ impl OrbitApp {
             Intent::MigrationInstalled { target_id } => {
                 self.preferences.selected_instance = Some(target_id.clone());
                 self.save_preferences();
+            }
+            Intent::RuntimeConfiguredForInstall {
+                target_id,
+                target,
+                sync_orbit,
+            } => {
+                let _: RuntimeInstanceDetail = decode(result)?;
+                self.launcher_task(
+                    "Installing Loader update",
+                    Intent::RuntimeInstalledAfterUpdate {
+                        target_id: target_id.clone(),
+                        target: target.clone(),
+                        sync_orbit: *sync_orbit,
+                    },
+                    Some(target_id.clone()),
+                    ["install"],
+                    None,
+                );
+            }
+            Intent::RuntimeInstalledAfterUpdate {
+                target_id,
+                target,
+                sync_orbit,
+            } => {
+                let _: LauncherInstallResult = decode(result)?;
+                if *sync_orbit {
+                    self.orbit_task_args(
+                        "Synchronizing updated Loader metadata",
+                        Intent::RuntimeMutated,
+                        vec!["sync".into()],
+                        Some(target.clone()),
+                        None,
+                    );
+                } else {
+                    self.preferences.selected_instance = Some(target_id.clone());
+                    self.save_preferences();
+                }
             }
             Intent::ModpackImported { target } => {
                 self.orbit_task_args(
@@ -816,12 +872,23 @@ impl OrbitApp {
         }
     }
 
-    pub(super) fn run_audit(&mut self) {
+    pub(super) fn run_audit(&mut self, report: Option<PathBuf>, mod_filter: String) {
         if let Some(root) = self.selected_root() {
-            self.orbit_task_at(
+            let threshold = [0_u8, 35, 70]
+                .get(self.audit_min_risk)
+                .copied()
+                .unwrap_or_default();
+            let mut command = vec!["audit".into(), "--min-risk".into(), threshold.to_string()];
+            if !mod_filter.is_empty() {
+                command.extend(["--mod".into(), mod_filter]);
+            }
+            if let Some(report) = report {
+                command.extend(["--report".into(), report.to_string_lossy().into_owned()]);
+            }
+            self.orbit_task_args(
                 "Auditing bytecode compatibility",
                 Intent::Audit,
-                ["audit"],
+                command,
                 Some(root),
                 None,
             );
@@ -980,16 +1047,37 @@ impl OrbitApp {
         );
     }
 
-    pub(super) fn add_search_result(&mut self, result: &SearchResult) {
+    pub(super) fn add_search_result(
+        &mut self,
+        result: &SearchResult,
+        version: String,
+        environment: usize,
+        optional: bool,
+        no_dependencies: bool,
+    ) {
         let locator = match result.platform.as_str() {
             "modrinth" => format!("mr:{}", result.project_id),
             "curseforge" => format!("cf:{}", result.project_id),
             _ => result.project_id.clone(),
         };
-        self.orbit_mutation(
-            &tr!("Adding %{name}", name = result.name),
-            vec!["add".into(), locator],
-        );
+        let mut command = vec!["add".into(), locator];
+        if !version.is_empty() && version != "*" {
+            command.extend(["--version".into(), version]);
+        }
+        if let Some(environment) = [None, Some("client"), Some("server"), Some("both")]
+            .get(environment)
+            .copied()
+            .flatten()
+        {
+            command.extend(["--env".into(), environment.into()]);
+        }
+        if optional {
+            command.push("--optional".into());
+        }
+        if no_dependencies {
+            command.push("--no-deps".into());
+        }
+        self.orbit_mutation(&tr!("Adding %{name}", name = result.name), command);
     }
 
     pub(super) fn install_runtime(&mut self) {
@@ -1005,6 +1093,10 @@ impl OrbitApp {
     }
 
     pub(super) fn create_runtime(&mut self, mode: RuntimeFlowMode) {
+        if mode == RuntimeFlowMode::UpdateLoader {
+            self.update_loader_runtime();
+            return;
+        }
         let mut command = vec![
             "install".into(),
             "--new".into(),
@@ -1065,6 +1157,55 @@ impl OrbitApp {
         self.migration_source = None;
     }
 
+    pub(super) fn apply_migration_review(&mut self) {
+        let Some(review) = self.migration_review.take() else {
+            return;
+        };
+        self.orbit_task_args(
+            "Exporting checked mod migration",
+            Intent::MigrationExported {
+                target: review.target.clone(),
+                target_id: review.target_id,
+            },
+            vec![
+                "migrate".into(),
+                "export".into(),
+                review.target.to_string_lossy().into_owned(),
+                "--source-pack".into(),
+                review.source_pack.to_string_lossy().into_owned(),
+                "--consume-source-pack".into(),
+            ],
+            Some(review.target),
+            None,
+        );
+    }
+
+    fn update_loader_runtime(&mut self) {
+        let Some(instance) = self.selected_instance().cloned() else {
+            return;
+        };
+        if self.new_instance.loader == 0 || self.new_instance.loader_version.is_empty() {
+            return;
+        }
+        let sync_orbit = instance.directory.join("orbit.toml").is_file();
+        self.launcher_task_args(
+            "Configuring Loader update",
+            Intent::RuntimeConfiguredForInstall {
+                target_id: instance.id.clone(),
+                target: instance.directory,
+                sync_orbit,
+            },
+            Some(instance.id),
+            vec![
+                "instance".into(),
+                "configure".into(),
+                "--loader-version".into(),
+                self.new_instance.loader_version.clone(),
+            ],
+            None,
+        );
+    }
+
     pub(super) fn set_default_runtime(&mut self) {
         if let Some(instance) = self.selected_instance().cloned() {
             self.launcher_task_args(
@@ -1077,6 +1218,21 @@ impl OrbitApp {
                     "set".into(),
                     instance.id,
                 ],
+                None,
+            );
+        }
+    }
+
+    pub(super) fn rename_runtime(&mut self, name: String) {
+        if name.is_empty() {
+            return;
+        }
+        if let Some(instance) = self.selected_instance().cloned() {
+            self.launcher_task_args(
+                "Renaming runtime instance",
+                Intent::RuntimeMutated,
+                Some(instance.id),
+                vec!["instance".into(), "rename".into(), name],
                 None,
             );
         }
@@ -1334,6 +1490,27 @@ impl OrbitApp {
         );
     }
 
+    pub(super) fn clear_account_selection(&mut self, global: bool) {
+        let mut command = vec!["account".into(), "clear".into()];
+        let instance = if global {
+            command.push("--global".into());
+            None
+        } else {
+            self.selected_instance().map(|item| item.id.clone())
+        };
+        self.launcher_task_args(
+            if global {
+                "Clearing default account"
+            } else {
+                "Using the default account for this installation"
+            },
+            Intent::AccountMutated,
+            instance,
+            command,
+            None,
+        );
+    }
+
     pub(super) fn execute_confirmation(&mut self, action: ConfirmationAction) {
         match action {
             ConfirmationAction::LogoutAccount(id) => self.launcher_task_args(
@@ -1368,6 +1545,18 @@ impl OrbitApp {
                 self.remove_package(&id);
                 0
             }
+            ConfirmationAction::PurgePackage(id) => {
+                self.orbit_mutation(
+                    &tr!("Purging %{package}", package = id),
+                    vec!["purge".into(), id],
+                );
+                0
+            }
+            ConfirmationAction::CleanOrbitCache => self.orbit_task(
+                "Cleaning Orbit JAR cache",
+                Intent::Generic,
+                ["cache", "clean"],
+            ),
             ConfirmationAction::InstallModpack(path) => {
                 self.install_modpack(path);
                 0
@@ -1512,12 +1701,50 @@ impl OrbitApp {
             }
             self.new_instance.kind = usize::from(source.kind == "server");
             self.migration_source = Some(source.directory.clone());
+        } else if mode == RuntimeFlowMode::UpdateLoader {
+            let Some(detail) = self.instance_detail.clone() else {
+                return;
+            };
+            let Some(loader) = loaders()
+                .iter()
+                .position(|loader| *loader == detail.desired.loader)
+            else {
+                self.toast = Some(Toast {
+                    message: tr!("The selected installation uses an unsupported Loader.")
+                        .into_owned(),
+                    kind: ToastKind::Warning,
+                });
+                return;
+            };
+            if loader == 0 {
+                self.toast = Some(Toast {
+                    message: tr!("Vanilla installations do not have a Loader version to update.")
+                        .into_owned(),
+                    kind: ToastKind::Warning,
+                });
+                return;
+            }
+            self.new_instance.kind = usize::from(detail.instance.kind == "server");
+            self.new_instance.minecraft = detail.desired.minecraft.clone();
+            self.new_instance.loader = loader;
+            self.new_instance.loader_version = detail
+                .installed
+                .and_then(|installed| installed.loader_version)
+                .or(detail.desired.loader_version)
+                .unwrap_or_default();
+            self.migration_source = None;
+            let minecraft = self.new_instance.minecraft.clone();
+            self.request_runtime_metadata(&minecraft, loader);
         } else {
             self.migration_source = None;
         }
         self.runtime_flow = Some(RuntimeFlow {
             mode,
-            step: RuntimeFlowStep::Minecraft,
+            step: if mode == RuntimeFlowMode::UpdateLoader {
+                RuntimeFlowStep::Components
+            } else {
+                RuntimeFlowStep::Minecraft
+            },
         });
     }
 

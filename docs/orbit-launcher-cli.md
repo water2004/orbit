@@ -141,8 +141,9 @@ public-client ID 固定在 Launcher 中，不属于用户配置或秘密；refre
 数据；若实例仍引用该 account ID，之后启动会明确报错，不会静默选择另一个账号。
 
 客户端 `create/install --new` 不接受任意 root：它们始终使用唯一托管 Minecraft 仓库，并把
-game directory 建为 `<minecraft-directory>/instances/<name>`。该目录同时保存实例自己的
-`minecraft.jar`、manifest/lock、`mods`、`config`、`saves`；共享 `libraries`、`assets` 和
+game directory 建为 `<minecraft-directory>/instances/<name>`。该目录保存实例自己的
+`minecraft.jar` 与 manifest/lock；`mods`、`config`、`saves` 在对应领域第一次真正写入时
+按需产生。共享 `libraries`、`assets` 和
 Loader 库留在仓库根。HMCL 同样把解析后的主游戏 JAR 定位到版本根内；Orbit Launcher 不生成
 Mojang/HMCL profile，而由自己的 lock 直接记录实例 JAR 与共享 classpath。这是 Launcher 的
 实例隔离策略，不是 Mojang 规定的实例描述格式。服务端使用 `--server-directory`；省略时使用
@@ -152,6 +153,10 @@ Mojang/HMCL profile，而由自己的 lock 直接记录实例 JAR 与共享 clas
 `instance configure` 原子修改现有 `orbit-launcher.toml` 的期望运行时，不下载、不修改 lock；
 随后运行同一个 `install` 事务完成 Minecraft、loader 与 Java 更新。切换到非 Vanilla loader
 时必须同时给出 loader requirement；切换到 Vanilla 会删除 loader requirement。
+GUI 的 Loader 版本更新只允许在同一 Minecraft 与同一 Loader 类型内选择官方目录返回的精确
+版本，并严格编排 `configure --loader-version -> install`。Minecraft/Loader 类型变化属于新实例
+迁移，不原地改写实例；若实例已有 Orbit 状态，Launcher 成功后由 GUI 调用 `orbit sync` 重新
+探测和记录平台，但 Launcher 本身仍不知道 Orbit。
 
 GUI 与其他前端不得用自由文本或安装失败重试来猜版本。`versions minecraft` 直接返回 Mojang
 version manifest v2 的完整有序目录、类型、发布时间及 latest 标记；选定精确 Minecraft 后，
