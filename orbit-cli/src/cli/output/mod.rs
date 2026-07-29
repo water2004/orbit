@@ -260,7 +260,7 @@ pub fn resolution_choices(alternatives: &[ResolutionReport]) -> String {
         output.push('\n');
     }
 
-    for (index, alternative) in alternatives.iter().enumerate() {
+    for (index, _) in alternatives.iter().enumerate() {
         if index > 0 || !output.is_empty() {
             output.push('\n');
         }
@@ -291,12 +291,6 @@ pub fn resolution_choices(alternatives: &[ResolutionReport]) -> String {
         } else {
             output.push_str(&changes_table(rows, true));
             output.push('\n');
-        }
-        if !alternative.warnings.is_empty() {
-            output.push_str(&tr!(
-                "  %{count} dependency ordering warning(s)\n",
-                count = alternative.warnings.len()
-            ));
         }
     }
     output.trim_end().to_string()

@@ -15,7 +15,8 @@ use gpui_component::{
     scroll::ScrollableElement,
     v_flex,
 };
-use orbit_machine_protocol::ProgressPhase;
+use orbit_machine_protocol::{InteractionKind, ProgressPhase};
+use serde::Deserialize;
 
 use super::super::{
     ACTIVITY_DRAWER_TRANSITION, OrbitApp, PackagePolicyMode, PackagePolicyOperator, TaskState,
@@ -23,6 +24,7 @@ use super::super::{
 };
 use crate::app::components as ui;
 use crate::assets::OrbitIcon;
+use crate::model::PackageChange;
 
 pub(in crate::app) fn render_strip(app: &OrbitApp, cx: &mut Context<OrbitApp>) -> impl IntoElement {
     let task = app
@@ -324,41 +326,103 @@ fn render_drawer(app: &OrbitApp, cx: &mut Context<OrbitApp>) -> impl IntoElement
 
 fn render_interaction(app: &OrbitApp, cx: &mut Context<OrbitApp>) -> impl IntoElement {
     let pending = app.interaction.as_ref().expect("checked").clone();
+    let interaction_kind = pending.envelope.interaction;
+    let parsed = pending
+        .envelope
+        .choices
+        .iter()
+        .map(|choice| interaction_package_actions(interaction_kind, &choice.data))
+        .collect::<Vec<_>>();
+    let common_actions = if interaction_kind == InteractionKind::Resolution {
+        parsed
+            .first()
+            .and_then(|actions| actions.as_ref().ok())
+            .map(|actions| {
+                actions
+                    .iter()
+                    .filter(|action| !action.different)
+                    .cloned()
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
     let mut choices = v_flex().gap_2();
-    for (index, choice) in pending.envelope.choices.iter().cloned().enumerate() {
+    if !common_actions.is_empty() {
+        choices = choices
+            .child(
+                div()
+                    .text_sm()
+                    .font_semibold()
+                    .child(tr!("Common package actions").into_owned()),
+            )
+            .child(ui::compact_card(cx).child(render_package_actions(&common_actions, false, cx)));
+    }
+    for (index, (choice, actions)) in pending
+        .envelope
+        .choices
+        .iter()
+        .cloned()
+        .zip(parsed)
+        .enumerate()
+    {
         let choice_id = choice.id.clone();
-        let different = has_difference(&choice.data);
+        let invalid = actions.is_err();
+        let actions = actions.unwrap_or_default();
+        let visible_actions = if interaction_kind == InteractionKind::Resolution {
+            actions
+                .into_iter()
+                .filter(|action| action.different)
+                .collect::<Vec<_>>()
+        } else {
+            actions
+        };
+        let description = if interaction_kind == InteractionKind::Resolution {
+            None
+        } else {
+            choice.description
+        };
+        let mut content = v_flex().w_full().gap_2().items_start().child(
+            h_flex()
+                .w_full()
+                .gap_2()
+                .child(div().font_semibold().child(choice.label))
+                .when_some(description, |row, description| {
+                    row.child(
+                        div()
+                            .ml_auto()
+                            .text_xs()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(description),
+                    )
+                }),
+        );
+        if invalid {
+            content = content.child(
+                div()
+                    .text_sm()
+                    .text_color(cx.theme().danger)
+                    .child(tr!("The CLI returned invalid package-action data.").into_owned()),
+            );
+        } else if !visible_actions.is_empty() {
+            content = content.child(render_package_actions(&visible_actions, true, cx));
+        } else if interaction_kind == InteractionKind::Resolution {
+            content = content.child(
+                div()
+                    .text_sm()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(tr!("No package action differs in this option.").into_owned()),
+            );
+        }
         choices = choices.child(
             Button::new(("interaction-choice", index))
-                .ghost()
                 .w_full()
                 .h_auto()
                 .px_3()
                 .py_3()
-                .selected(different)
-                .child(
-                    v_flex()
-                        .w_full()
-                        .gap_2()
-                        .items_start()
-                        .child(
-                            h_flex()
-                                .w_full()
-                                .gap_2()
-                                .child(if different { "◆" } else { "◇" })
-                                .child(div().font_semibold().child(choice.label))
-                                .when_some(choice.description, |row, description| {
-                                    row.child(
-                                        div()
-                                            .ml_auto()
-                                            .text_xs()
-                                            .text_color(cx.theme().muted_foreground)
-                                            .child(description),
-                                    )
-                                }),
-                        )
-                        .child(ui::render_json_summary(&choice.data, cx)),
-                )
+                .disabled(invalid)
+                .child(content)
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.answer_interaction(Some(choice_id.clone()));
                     cx.notify();
@@ -367,9 +431,11 @@ fn render_interaction(app: &OrbitApp, cx: &mut Context<OrbitApp>) -> impl IntoEl
     }
     ui::modal_backdrop(
         ui::modal(
-            700.,
+            760.,
             v_flex()
-                .gap_4()
+                .h(px(540.))
+                .max_h_full()
+                .gap_3()
                 .child(
                     div()
                         .text_xl()
@@ -378,21 +444,23 @@ fn render_interaction(app: &OrbitApp, cx: &mut Context<OrbitApp>) -> impl IntoEl
                 )
                 .child(
                     div()
+                        .flex_shrink_0()
                         .text_xs()
                         .text_color(cx.theme().muted_foreground)
                         .child(tr!("◆ marks actions that differ between choices.").into_owned()),
                 )
                 .child(
                     div()
+                        .id("interaction-choice-scroll")
+                        .flex_1()
                         .min_h_0()
-                        .max_h(px(430.))
                         .overflow_y_scrollbar()
                         .pr_1()
                         .child(choices),
                 )
                 .when(pending.envelope.allow_cancel, |modal| {
                     modal.child(
-                        h_flex().justify_end().child(
+                        h_flex().flex_shrink_0().justify_end().child(
                             Button::new("interaction-cancel")
                                 .label(tr!("Cancel operation").into_owned())
                                 .on_click(cx.listener(|this, _, _, cx| {
@@ -405,6 +473,152 @@ fn render_interaction(app: &OrbitApp, cx: &mut Context<OrbitApp>) -> impl IntoEl
             cx,
         ),
         cx,
+    )
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ResolutionChoiceData {
+    changes: Vec<ResolutionChoiceAction>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ResolutionChoiceAction {
+    different: bool,
+    change: PackageChange,
+}
+
+#[derive(Debug, Deserialize)]
+struct ConfirmationChoiceData {
+    #[serde(default)]
+    changes: Vec<PackageChange>,
+}
+
+fn interaction_package_actions(
+    kind: InteractionKind,
+    data: &serde_json::Value,
+) -> Result<Vec<ResolutionChoiceAction>, serde_json::Error> {
+    match kind {
+        InteractionKind::Resolution => {
+            serde_json::from_value::<ResolutionChoiceData>(data.clone()).map(|data| data.changes)
+        }
+        InteractionKind::Confirmation => {
+            serde_json::from_value::<ConfirmationChoiceData>(data.clone()).map(|data| {
+                data.changes
+                    .into_iter()
+                    .map(|change| ResolutionChoiceAction {
+                        different: false,
+                        change,
+                    })
+                    .collect()
+            })
+        }
+        InteractionKind::Package => Ok(Vec::new()),
+    }
+}
+
+fn render_package_actions(
+    actions: &[ResolutionChoiceAction],
+    show_differences: bool,
+    cx: &gpui::App,
+) -> impl IntoElement {
+    v_flex()
+        .w_full()
+        .gap_1p5()
+        .children(actions.iter().map(|action| {
+            let change = &action.change;
+            let version = package_action_version(change);
+            v_flex()
+                .w_full()
+                .gap_1()
+                .child(
+                    h_flex()
+                        .w_full()
+                        .gap_2()
+                        .items_center()
+                        .child(div().w(px(12.)).text_color(cx.theme().primary).child(
+                            if show_differences && action.different {
+                                "◆"
+                            } else {
+                                ""
+                            },
+                        ))
+                        .child(package_action_pill(&change.kind, cx))
+                        .child(div().font_semibold().child(change.package.clone()))
+                        .child(
+                            div()
+                                .ml_auto()
+                                .text_sm()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(version),
+                        ),
+                )
+                .when_some(change.selected_description.clone(), |row, description| {
+                    row.child(
+                        div()
+                            .ml(px(20.))
+                            .text_xs()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(description),
+                    )
+                })
+        }))
+}
+
+fn package_action_pill(kind: &str, cx: &gpui::App) -> impl IntoElement {
+    let (label, background, foreground) = match kind {
+        "install" => (
+            tr!("Install").into_owned(),
+            cx.theme().success.opacity(0.14),
+            cx.theme().success,
+        ),
+        "upgrade" => (
+            tr!("Upgrade").into_owned(),
+            cx.theme().primary.opacity(0.14),
+            cx.theme().primary,
+        ),
+        "downgrade" => (
+            tr!("Downgrade").into_owned(),
+            cx.theme().warning.opacity(0.14),
+            cx.theme().warning,
+        ),
+        "replace" => (
+            tr!("Replace").into_owned(),
+            cx.theme().warning.opacity(0.14),
+            cx.theme().warning,
+        ),
+        "remove" => (
+            tr!("Remove").into_owned(),
+            cx.theme().danger.opacity(0.14),
+            cx.theme().danger,
+        ),
+        "keep" => (
+            tr!("Keep").into_owned(),
+            cx.theme().secondary,
+            cx.theme().secondary_foreground,
+        ),
+        other => (
+            other.to_string(),
+            cx.theme().secondary,
+            cx.theme().secondary_foreground,
+        ),
+    };
+    ui::pill(label, background, foreground)
+}
+
+fn package_action_version(change: &PackageChange) -> String {
+    let absent = tr!("Not installed").into_owned();
+    if change.kind == "keep" {
+        return change.current_version.clone().unwrap_or(absent);
+    }
+    format!(
+        "{}  →  {}",
+        change
+            .current_version
+            .clone()
+            .unwrap_or_else(|| absent.clone()),
+        change.selected_version.clone().unwrap_or(absent)
     )
 }
 
@@ -1087,17 +1301,6 @@ fn task_state_color(state: TaskState, cx: &gpui::App) -> gpui::Hsla {
     }
 }
 
-fn has_difference(value: &serde_json::Value) -> bool {
-    match value {
-        serde_json::Value::Object(object) => {
-            object.get("different").and_then(serde_json::Value::as_bool) == Some(true)
-                || object.values().any(has_difference)
-        }
-        serde_json::Value::Array(values) => values.iter().any(has_difference),
-        _ => false,
-    }
-}
-
 fn title_environment(value: &str) -> String {
     match value {
         "auto" => tr!("Automatic").into_owned(),
@@ -1105,5 +1308,62 @@ fn title_environment(value: &str) -> String {
         "server" => tr!("Server").into_owned(),
         "both" => tr!("Both").into_owned(),
         _ => value.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod interaction_tests {
+    use super::*;
+
+    #[test]
+    fn resolution_choice_contains_only_typed_package_actions() {
+        let data = serde_json::json!({
+            "changes": [{
+                "different": true,
+                "change": {
+                    "package": "sodium",
+                    "kind": "upgrade",
+                    "current_version": "0.6.0",
+                    "selected_version": "0.7.0",
+                    "selected_description": null
+                }
+            }]
+        });
+
+        let actions = interaction_package_actions(InteractionKind::Resolution, &data).unwrap();
+        assert_eq!(actions.len(), 1);
+        assert!(actions[0].different);
+        assert_eq!(actions[0].change.package, "sodium");
+        assert_eq!(actions[0].change.kind, "upgrade");
+
+        let leaked_report_fields = serde_json::json!({
+            "changes": [],
+            "warnings": [],
+            "diagnostics": []
+        });
+        assert!(
+            interaction_package_actions(InteractionKind::Resolution, &leaked_report_fields)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn confirmation_uses_actions_without_rendering_report_counters() {
+        let data = serde_json::json!({
+            "summary": { "installed": 1 },
+            "changes": [{
+                "package": "sodium",
+                "kind": "install",
+                "current_version": null,
+                "selected_version": "0.7.0",
+                "selected_description": null
+            }],
+            "warnings": [],
+            "diagnostics": []
+        });
+
+        let actions = interaction_package_actions(InteractionKind::Confirmation, &data).unwrap();
+        assert_eq!(actions.len(), 1);
+        assert_eq!(actions[0].change.package, "sodium");
     }
 }

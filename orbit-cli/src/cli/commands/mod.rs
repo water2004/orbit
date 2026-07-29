@@ -332,6 +332,15 @@ fn resolution_interaction_choices(
     alternatives: &[orbit_core::ResolutionReport],
 ) -> Vec<orbit_machine_protocol::InteractionChoice<serde_json::Value>> {
     use orbit_machine_protocol::InteractionChoice;
+    let packages = alternatives
+        .iter()
+        .flat_map(|alternative| {
+            alternative
+                .changes
+                .iter()
+                .map(|change| change.package.clone())
+        })
+        .collect::<std::collections::BTreeSet<_>>();
     let signatures: Vec<Vec<String>> = alternatives
         .iter()
         .map(|alternative| {
@@ -349,21 +358,43 @@ fn resolution_interaction_choices(
         .iter()
         .enumerate()
         .map(|(index, alternative)| {
-            let changes = alternative
-                .changes
-                .iter()
-                .enumerate()
-                .map(|(change_index, change)| {
+            let mut changes = Vec::new();
+            for package in &packages {
+                let package_changes = alternative
+                    .changes
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, change)| &change.package == package)
+                    .collect::<Vec<_>>();
+                if package_changes.is_empty() {
+                    let current_version = alternatives
+                        .iter()
+                        .flat_map(|candidate| &candidate.changes)
+                        .find(|change| &change.package == package)
+                        .and_then(|change| change.current_version.clone());
+                    changes.push(serde_json::json!({
+                        "different": true,
+                        "change": {
+                            "package": package,
+                            "kind": "keep",
+                            "current_version": current_version,
+                            "selected_version": current_version,
+                            "selected_description": null,
+                        },
+                    }));
+                    continue;
+                }
+                for (change_index, change) in package_changes {
                     let signature = &signatures[index][change_index];
                     let common = signatures
                         .iter()
                         .all(|candidate| candidate.iter().any(|item| item == signature));
-                    serde_json::json!({
+                    changes.push(serde_json::json!({
                         "different": !common,
                         "change": crate::cli::output::package_change_view(change),
-                    })
-                })
-                .collect::<Vec<_>>();
+                    }));
+                }
+            }
             InteractionChoice {
                 id: (index + 1).to_string(),
                 label: tr!("Option %{number}", number = index + 1),
@@ -373,12 +404,6 @@ fn resolution_interaction_choices(
                 )),
                 data: serde_json::json!({
                     "changes": changes,
-                    "warnings": alternative.warnings,
-                    "diagnostics": alternative
-                        .diagnostics
-                        .iter()
-                        .map(crate::cli::output::diagnostic_view)
-                        .collect::<Vec<_>>(),
                 }),
             }
         })
@@ -854,8 +879,17 @@ mod tests {
                     .iter()
                     .filter(|change| change["different"] == true)
                     .count(),
+                2
+            );
+            assert_eq!(
+                changes
+                    .iter()
+                    .filter(|change| change["change"]["kind"] == "keep")
+                    .count(),
                 1
             );
+            assert!(choice.data.get("warnings").is_none());
+            assert!(choice.data.get("diagnostics").is_none());
         }
     }
 

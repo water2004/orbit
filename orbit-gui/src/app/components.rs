@@ -308,6 +308,7 @@ pub(super) fn divider(cx: &App) -> Div {
 
 pub(super) fn modal_backdrop(content: impl IntoElement, cx: &App) -> impl IntoElement {
     div()
+        .id("modal-backdrop")
         .absolute()
         .inset_0()
         .flex()
@@ -315,6 +316,8 @@ pub(super) fn modal_backdrop(content: impl IntoElement, cx: &App) -> impl IntoEl
         .justify_center()
         .p_6()
         .bg(cx.theme().overlay)
+        .occlude()
+        .on_scroll_wheel(|_, _, cx| cx.stop_propagation())
         .child(content)
         .with_animation(
             "modal-backdrop",
