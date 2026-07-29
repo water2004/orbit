@@ -200,8 +200,9 @@ Jar-in-Jar artifact 使用独立的 Maven 坐标包并精确绑定 owner 候选�
 `add`、`fix`、结构化 `constraint set`、`upgrade` 和迁移规划，不包括只记录事实的
 `init`/`sync`，也不包括只按 lock 物化的 `install`。优化目标由入口显式传入统一 resolver：
 `add` / `fix` / `constraint set` 以当前 lock 为基线枚举标准 Pareto 极小逻辑包变更集合；
-`upgrade` / `outdated` 与空目标迁移枚举标准
-版本 Pareto 极大 front。极小变更集合固定后仍以版本极大作为次级目标。fork 对每个保留点
+`upgrade` / `outdated` 枚举标准版本 Pareto 极大 front。迁移先要求全部源包；严格无解且
+用户许可后，以源 manifest 包的保留状态枚举标准 Pareto 极小删除集合。极小变更或删除集合
+固定后仍以版本极大作为次级目标。fork 对每个保留点
 一次排除完整支配区域。唯一解自动选择，多解由调用方选择；任何降级、替换或删除都在写盘
 前展示并确认。upgrade 方案只要求至少一个包相对当前版本变新，允许其他包降级。
 
@@ -220,6 +221,11 @@ TOML/lock。联网候选闭包发现、可行解选择和未选包删除由 `add
 配置文件，拒绝覆盖已有目标状态。导出不复制模组 JAR，随后在目标运行 `orbit install`
 按新 lock 精确物化，因而预检和导出不会走两条推导路径。便携源包不会替代真实目标平台
 探测；它只消除源实例在目标创建期间发生变化的竞态。
+
+严格迁移和允许删包迁移不是两个下载/解析管线。候选闭包只构建一次；软解只改变求解图中
+manifest 包的 root 角色，并把每个包的可选中状态交给 fork 的原生偏好 front。平台包与
+manifest 版本范围始终是硬约束。默认 CLI 在严格无解后通过同一进程的结构化交互请求许可，
+GUI 不持有策略状态或调用 core。
 
 受管包环境具有两层正交语义：`orbit.toml` 的可选 `env` 是用户 target 过滤，lock 的
 `environment` 是精确候选从 JAR 解析出的事实。TOML 缺失设置时，locked 路径直接使用

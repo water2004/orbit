@@ -282,9 +282,18 @@ Minecraft/loader 下的全部 JAR 候选。所有 project 先完成版本枚举�
 remote 与选择收敛；最后清理不再被 TOML/lock 引用的 `.orbit/sources`。不能出现
 “磁盘删了但 lock/TOML 仍记录”的半套删除语义。
 
-迁移 planner 使用目标实例真实平台和空的目标安装状态构图；`migrate check` 与
-`migrate export` 直接复用同一个已选计划。export 产生可在目标由 `install` 精确物化的
-lock，不重新求解，也不会把源实例当前 JAR 当成目标已安装候选。
+迁移 planner 使用目标实例真实平台和空的目标安装状态构图。默认首先把全部源 manifest 包
+作为 root 硬要求；严格图无解时，先把真实推导原因交给调用方，只有用户同意才进入软解。
+软解仍使用同一候选图：Minecraft、Loader 和包自身 TOML 版本范围保持硬约束，源包是否被
+选中改为 fork 的 `PackagePreference::selected` 坐标。fork 对未满足的包状态集合做标准
+Pareto 极小枚举，再在同一保留集合内做版本 Pareto 极大化。因此它求的是“没有任何一个被
+移除包能在不牺牲其他已保留包时恢复”的完整 front，不是最小数量启发式，也不是逐包删除后
+重试。约束不允许的候选在建图时已经从该逻辑包定义域移除，不能经传递依赖绕过 manifest。
+
+`migrate check` 与 `migrate export` 直接复用这个严格优先规划器。GUI 首次 check 若接受软解，
+会根据已审阅计划中的删除动作给 export 传入 `--allow-removals`，避免重复确认；export 仍重建
+同一完整候选闭包并执行同一目标函数，不存在 GUI 专用求解。export 产生可在目标由 `install`
+精确物化的 lock，不会把源实例当前 JAR 当成目标已安装候选。
 
 ## 8. 可读错误的约束
 

@@ -113,11 +113,14 @@ Orbit 读取 Fabric/Quilt launch JAR、Forge bootstrap shim 或当前平台
 
 ```text
 orbit instances list
+orbit instances register <name> <path>
 orbit instances default <name>
 orbit instances remove <name>
 ```
 
 - `list` 展示名称、路径、Minecraft、loader 以及当前/默认标记，输出为统一自适应表格；
+- `register` 只接管一个已经同时具有有效 `orbit.toml` 与 `orbit.lock` 的工作区；名称和路径必须
+  显式提供，两份文件的平台元数据必须完全一致。它不执行探测、补全、sync 或任何兜底；
 - `default` 保证只有一个默认实例，并同步 `config.toml` 的 `default_instance`；
 - `remove` 只移除全局追踪，绝不删除实例目录；若移除默认实例，同时清除默认值。
 
@@ -437,22 +440,35 @@ orbit export [output] [--target client|server|both] [--format zip|mrpack]
 orbit migrate check <target-instance-directory>
 orbit migrate export <target-instance-directory>
 orbit migrate export <target-instance-directory> --source-pack <source.zip> --consume-source-pack
+orbit migrate check <target-instance-directory> --allow-removals
 ```
 
 目标必须是 Launcher 已安装完成的真实游戏实例目录。两个子命令调用同一个迁移规划器：
 从目标目录准确探测 Minecraft、Loader、runtime JAR、路径和哈希；按目标版本/Loader 下载
 所有远端候选 JAR 元数据；然后对完整依赖图联合求解，而不是逐包查询“有没有文件”。
 
+默认流程不展示预先选择的保留策略。规划器先把 TOML 中每个源逻辑包都作为硬要求；若该
+完整集合无解，CLI 先显示严格求解的冲突原因，再询问是否搜索软解。用户同意后，每个仍满足
+自身 TOML 版本约束的源包成为一个 PubGrub 包状态偏好，fork 原生枚举未保留包集合的标准
+Pareto 极小 front，并在每个固定保留集合内继续做版本 Pareto 极大化。不存在按包逐个删除、
+反复重跑或按删除数量加权的路径。多个互不支配软解仍进入统一方案选择。
+
+`--allow-removals` 表示调用方已经作出同一许可，适用于自动化以及 GUI 将已检查方案交给
+`migrate export` 时避免重复询问；它不会代替多个 Pareto 方案的选择。没有该参数且 stdin
+关闭、机器交互取消或用户拒绝时，迁移以严格无解失败，目标不发生写入。
+
 `check` 只展示将发生的安装、升级、降级、替换和删除。`export` 复用同一规划路径，将目标
 平台快照、入选 lock 和源实例的 `config/`、`defaultconfigs/`、`serverconfig/`、
 `options.txt` 写入目标；拒绝覆盖已有 Orbit 状态或配置。它不复制/安装模组 JAR，随后必须
 在目标目录运行 `orbit install`。GUI 的迁移向导只编排源 export、Launcher 创建目标、
-migrate export 与目标 install 四个 CLI 操作。
+migrate export、`instances register` 与目标 install；GUI 不直接写 Orbit 全局注册表。
 
 `--source-pack` 接受同一 `orbit export --format zip` 生成的便携源快照。规划器先在受限临时
 目录安全解包并验证 TOML/lock，再将该冻结源状态和真实目标运行时联合求解；它不会从 GUI
 状态或文件名猜源包。`--consume-source-pack` 只在用户确认且目标状态写入成功后删除源包。
-GUI 因而先导出源快照，成功后才新建目标实例，再执行上述目标规划与 install。
+GUI 因而先导出源快照，成功后才新建目标实例，再执行上述目标规划与 install。GUI 不显示
+常驻的严格/软策略控件；严格无解时由同一 CLI 子进程的 schema 2 interaction 弹出确认，
+GUI 只把选择写回该进程 stdin。
 
 ### `orbit audit`
 

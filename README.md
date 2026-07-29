@@ -123,8 +123,8 @@ Orbit resolves its instance from the current directory first, then an explicit `
 | `orbit export [pack.zip]` | Export verified TOML, lock state, selected JARs, and portable configuration. JARs use ZIP Stored mode. |
 | `orbit export pack.mrpack --format mrpack` | Export a Modrinth pack; remotely recoverable files stay indexed and local files become overrides. |
 | `orbit import <file>` | Import TOML, safe ZIP content, or a Modrinth pack according to an explicit merge strategy. |
-| `orbit migrate check <target>` | Resolve the complete graph against an already installed real target runtime. |
-| `orbit migrate export <target>` | Reuse the same planner and write target TOML, lock, and configuration before `orbit install`. |
+| `orbit migrate check <target>` | Resolve the complete source package set against an installed target runtime; if that set is impossible, offer a Pareto-minimal package-removal search. |
+| `orbit migrate export <target>` | Reuse the same strict-first planner and write target TOML, lock, and configuration before `orbit install`. |
 | `orbit migrate export <target> --source-pack source.zip --consume-source-pack` | Resolve from a source snapshot exported before target creation, then remove the snapshot after a confirmed export. |
 
 The migration GUI sequence is intentionally transactional:
@@ -133,7 +133,13 @@ The migration GUI sequence is intentionally transactional:
 2. Create and install the isolated target Minecraft/Loader runtime.
 3. Run `orbit migrate check` and review the complete target package plan.
 4. Confirm and export target Orbit state.
-5. Run `orbit install` in the target; this creates `mods/` only when packages are actually materialized.
+5. Register the validated target state in Orbit's global instance list.
+6. Run `orbit install` in the target; this creates `mods/` only when packages are actually materialized.
+
+Migration has no up-front retention strategy selector. Orbit first requires every source package.
+Only when that graph is unsatisfiable does the same CLI process show the incompatibility and ask
+whether to search the standard Pareto-minimal package-removal front. Automation may provide the same
+consent with `--allow-removals`; incomparable soft solutions still require an explicit choice.
 
 ### Launcher
 

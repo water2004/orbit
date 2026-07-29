@@ -220,7 +220,8 @@ bundled = []
   TOML/lock。新发现并选中的依赖包也写入 TOML。
 - `fix`：按 TOML 完整联网求解并修复；未选逻辑包/实现会在确认后同时从 `mods/`、lock、
   TOML、group 引用和未使用本地源中清理。
-- `upgrade`、`migrate export`：提交选择后同样让 TOML 与所选顶层包集合收敛。
+- `upgrade`、`migrate export`：提交选择后同样让 TOML 与所选顶层包集合收敛；迁移默认
+  严格保留全部源包，严格无解且用户许可软解时才允许从目标 TOML/lock 同时移除未选包。
 - `install`：只精确物化现有 lock，不联网求解、不修改 TOML/lock、不修复。
 - `remove`/`purge`：移除逻辑包，同时清理其 TOML 与 lock 条目；仍被其他 JAR 依赖时拒绝。
 
@@ -234,6 +235,11 @@ required `mod_id` 时按无可行解处理。
 保留。在同一极小变更集合内，再保留版本 Pareto 极大候选。唯一方案自动进入事务确认；
 凡是实际进入求解的路径，出现多个互不支配方案时都必须让用户选择。
 `sync` 不求解。任何删除在唯一方案下也必须先明确展示并确认。
+
+迁移软解以“保留每个源 manifest 包”为独立偏好，未满足偏好集合按包含关系做标准 Pareto
+极小，而不是按删除个数排序。每个包的 `version`、`env`、`exclude` 仍约束它被选中时的
+候选定义域；软解只允许包缺席，不能放宽版本策略。所选集合经统一 reconciliation 写入目标
+TOML 与 lock，所以被移除包及其无效 group 引用不会残留。
 
 ## 5. 远端管理
 

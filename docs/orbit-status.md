@@ -26,7 +26,7 @@
 | PubGrub fork 远端 | ✅ | 功能分支已发布，Orbit 固定到完整 commit SHA |
 | 多解选择 | ✅ | fork 原生枚举完整变更极小或版本极大 Pareto front；唯一解自动选择，多解经同一进程的终端或 schema 2 机器交互明确选择；`--yes` 不代选 |
 | 本地重复包 | ✅ | init/sync 保留全部事实并要求 fix；fix 确认后删除未选顶层实现并同步清理 lock/TOML/source |
-| 版本迁移 | ✅ | 先由普通 export 冻结源包，成功后才创建目标；`migrate check/export --source-pack` 对 Launcher 已安装目标运行时共用同一精确规划，目标 install 物化 JAR |
+| 版本迁移 | ✅ | 先冻结源包再创建目标；check/export 共享严格优先规划，严格无解后经明确许可原生枚举 Pareto 极小删包 front，目标 install 物化 JAR |
 | 远端身份边界 | ✅ | provider 只给下载 locator；一个 locator 的多种真实 mod_id 按 JAR 身份分区并选择 |
 | Provider 分层 | ✅ | Modrinth / CurseForge HTTP 与 DTO 各在独立 wrapper，core 只做领域适配 |
 | 跨平台全局路径 | ✅ | RuntimeEnvironment + 显式路径；system/executable 布局 |
@@ -100,7 +100,7 @@
 | `fix` | 递归发现远端候选、统一求解并修复；包删除同时收敛 mods、lock、TOML 和 managed source |
 | `remove` / `upgrade` / `outdated` | 使用 Fat Lockfile、保留受阻候选原因、自适应表格与多解差异高亮 |
 | `sync` | 重新探测平台并扫描 mods；批量哈希识别 provider 来源，按磁盘事实重建 lock/补充 TOML；不求解、不下载候选、不删包 |
-| `migrate check/export` | 对真实目标实例规划完整包集合；check 预览，export 复用同一解写目标 Orbit 状态和配置 |
+| `migrate check/export` | 对真实目标先严格保留全部包；无解才询问软解并枚举 Pareto 极小删除集合；check 预览，export 复用同一规划语义写目标状态和配置 |
 | `audit` | 四个 Loader backend 复用 Loader-selected runtime，先对齐 namespace，再进入共享 Mixin/Transformer 效果与冲突流水线；unary/pairwise 分离 + schema 5 JSON/显式完整 report |
 | `list` / `info` | 展示包信息、逻辑依赖和 bundled；非树形 list 与 info 均使用自适应表格 |
 | `export` / `import` | Orbit archive 与 Modrinth pack |

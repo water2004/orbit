@@ -427,6 +427,28 @@ orbit [--output-format text|json] [--progress-format none|ndjson] <command> ...
 }
 ```
 
+`instances register <name> <path>` 返回经过 `orbit.toml` / `orbit.lock` 一致性校验后写入全局
+注册表的完整 `instance` 视图：
+
+```json
+{
+  "schema_version": 2,
+  "command": "instances",
+  "ok": true,
+  "result": {
+    "subcommand": "register",
+    "instance": {
+      "name": "alpha",
+      "path": "/home/u/alpha",
+      "mc_version": "1.21",
+      "modloader": "fabric",
+      "is_default": false,
+      "is_current": false
+    }
+  }
+}
+```
+
 ### `add` / `fix` / `upgrade`
 
 共用事务报告 schema：
@@ -743,9 +765,10 @@ Orbit Launcher 直接使用 `orbit-machine-protocol` 中同一个信封类型，
 |---|---|
 | `package` | 在同一 provider locator 返回的多个可行 JAR `mod_id` 中选择 |
 | `resolution` | 在命令对应的完整 Pareto front 中选择（`add`/`fix` 为变更极小，`upgrade`/`outdated` 为版本极大）；`data.changes[].different=true` 是不依赖颜色的差异标记 |
-| `confirmation` | 查看精确逻辑包事务并决定是否写入 |
+| `confirmation` | 查看精确逻辑包事务并决定是否写入；或在 `interaction_id` 以 `migration_removals-` 开头时，查看严格迁移无解原因并决定是否搜索 Pareto 极小删包方案 |
 
-`--yes` 只跳过 `confirmation`，不会跳过 `package` 或 `resolution`。唯一包身份/唯一解不会
+`--yes` 只跳过写入确认，不会跳过 `package`、`resolution` 或迁移删包许可。后者必须由交互
+明确同意，或由调用方传 `migrate ... --allow-removals`。唯一包身份/唯一解不会
 产生选择请求。交互请求与进度一样不含哈希和物理 JAR 文件名；最终成功结果仍只在 stdout
 出现一次。
 

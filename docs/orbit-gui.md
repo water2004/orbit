@@ -96,8 +96,21 @@ Runtime 页只负责创建、导入、更新和启动实例，避免同一管理
 `orbit install`。GUI
 不自己拼目标 TOML、不逐包检查兼容性，也不链接 Orbit core；迁移联合求解完全属于
 Orbit CLI/core。用户取消迁移方案或写盘确认时，GUI 不会继续调用目标 `install`，源实例始终
-保持不变。目标的 `mods/`、`config/` 等可变目录不由 Launcher 预先制造；和 HMCL 的隔离
+保持不变。目标状态成功写入后 GUI 调用 `orbit instances register <name> <path>`，由 Orbit CLI
+校验两份状态文件并写入自己的全局实例注册表，再执行精确 `install`；因此即使下载中断，已经
+成立的 Orbit 工作区仍可从全局列表继续恢复。GUI 不直接改注册表。目标的 `mods/`、`config/`
+等可变目录不由 Launcher 预先制造；和 HMCL 的隔离
 运行目录语义一样，领域命令在第一次真正物化对应内容时创建它们。
+
+已选择实例的 Runtime 操作区提供“打开实例目录”，只使用 Launcher `instance show/list` 返回的
+精确目录并交给系统文件管理器；目录不存在时明确报错，不扫描共享仓库或猜测旧布局。
+
+迁移页不提供常驻的“严格/软”策略控件。`migrate check` 总是先要求保留全部源包；严格图
+无解时，CLI 在 stderr 发出 schema 2 confirmation interaction 并暂停读取 stdin，GUI 将
+冲突和“搜索 Pareto 极小删包方案”动作渲染为模态确认，再把 choice id 写回同一子进程。
+软解完成后仍用通用 resolution interaction 选择互不支配方案。审阅结果确有删除时，GUI
+给随后的 export 增加 `--allow-removals`，表示复用用户刚刚作出的许可，避免重复询问；GUI
+不自行计算删除集合或选择方案。
 
 Runtime 页也把整合包作为领域动作呈现：安装 Orbit ZIP/TOML 或 Modrinth mrpack 时调用
 `orbit import`，用户明确确认覆盖后再调用 `orbit fix` 求解并展示准确方案；导出分别调用
@@ -113,7 +126,8 @@ Runtime 页也把整合包作为领域动作呈现：安装 Orbit ZIP/TOML 或 M
 Mods 页以 lock 中逻辑包为单位显示当前版本、TOML 版本策略、环境、依赖、contained 模块和
 多远端。TOML 的 `[packages]` 是完整包集合，界面不制造根/传递两类身份。首次
 接管由已安装 Launcher lock 的精确 Minecraft/Loader 版本调用 `orbit init`，不在 GUI 中
-重复探测。搜索、添加、sync、fix、install、outdated、单包/全部 upgrade、环境与远端管理都调用
+重复探测；`init` 在文本和 JSON 模式下执行同一个全局实例注册事务。搜索、添加、sync、fix、
+install、outdated、单包/全部 upgrade、环境与远端管理都调用
 现有 Orbit 命令。添加表单暴露版本约束、可选环境过滤和 optional；包管理面板调用
 `orbit versions` 展示全部远端 JAR 候选。版本策略不是命令行文本框：用户先选择“任意版本”、
 “单边界”或“版本区间”，再从真实候选列表选择边界；单边界提供等于、大于、大于等于、
@@ -162,7 +176,7 @@ GUI 只集成有稳定桌面领域语义的命令，不能按“每个 subcomman
 
 | 领域 | GUI 中的 CLI 能力 | 有意不重复的接口 |
 | --- | --- | --- |
-| 模组 | init、list、search/add（含 version/env/optional）、versions、constraint、env、remote、remove/purge、sync、fix、install、outdated/upgrade、import/export、migrate check/export、audit、cache 与 config | `info` 的长文本详情由 Discover 摘要替代；Orbit 自身的 instances 注册表不与 Launcher 实例注册表并列；install 的 group/target 策略要等 TOML group 编辑器提供完整模型后再加入 |
+| 模组 | init、list、search/add（含 version/env/optional）、versions、constraint、env、remote、remove/purge、sync、fix、install、outdated/upgrade、import/export、migrate check/export、audit、cache、instances register 与 config | `info` 的长文本详情由 Discover 摘要替代；Orbit 的实例注册由 init/迁移自动同步，不再提供一套与 Launcher 并列的注册表页面；install 的 group/target 策略要等 TOML group 编辑器提供完整模型后再加入 |
 | 运行时 | install/new、launch、instance list/show/import/rename/remove/default、Loader configure/install、Minecraft/Loader/Java catalogs、Java 管理、Minecraft directory/move | 未安装的 `instance create` 中间态、launch/server dry-run、前台 server run 与隐藏 supervisor 属于 CLI/自动化接口 |
 | 账户与服务端 | login/list/refresh/select/clear/logout、Yggdrasil provider、EULA、start/stop/status/command | account show 已由账户卡片覆盖；秘密、EULA 与 token 不由 GUI 另存 |
 | 配置与审计 | 两套 typed config list/set/unset、audit min-risk/mod/report | config path/get 已包含在设置模型中；audit fail-on-risk 只用于 CI 退出码 |

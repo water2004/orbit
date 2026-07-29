@@ -164,6 +164,7 @@ schema、字段名、枚举码和错误码不随语言变化。Windows 控制台
 | :--- | :--- |
 | `orbit init <name>` | 在合法游戏目录中初始化实例并记录本地事实；同 ID 存在多个实现时保留全部文件和远端，要求随后运行 `fix`。 |
 | `orbit instances list` | 列出所有被 Orbit 托管的 MC 实例及其路径（当前/默认实例会有 `*` 标记）。 |
+| `orbit instances register <name> <path>` | 注册已经具有一致 `orbit.toml` 与 `orbit.lock` 的实例；不探测、不补全状态。 |
 | `orbit instances default <name>`| 将指定实例设为全局默认。在任意目录下执行命令都将默认作用于它。 |
 | `orbit instances remove <name>` | 从 Orbit 全局列表中移除对该实例的追踪（**绝不会**删除硬盘上的文件）。 |
 
@@ -200,8 +201,8 @@ schema、字段名、枚举码和错误码不随语言变化。Windows 控制台
 | :--- | :--- |
 | `orbit import <file>` | 合并 TOML、导入安全 ZIP，或按 index/overrides 导入 mrpack，随后触发 `sync`。 |
 | `orbit export [file.zip]` | 将清单、锁文件、校验通过的 JAR 与可移植配置打包为 ZIP；JAR 不重复压缩并报告真实字节进度，也可输出 mrpack。 |
-| `orbit migrate check <目标实例目录>` | 对 Launcher 已安装的目标 Minecraft/Loader 运行时执行完整联合求解；不是逐包“是否有文件”的浅检查。 |
-| `orbit migrate export <目标实例目录>` | 复用同一迁移规划器，将目标 `orbit.toml`、`orbit.lock` 和模组配置写入空白目标实例；随后在目标运行 `orbit install`。 |
+| `orbit migrate check <目标实例目录>` | 先要求保留全部源包并对真实目标运行时联合求解；严格解不存在时才询问是否搜索标准 Pareto 极小删包方案。 |
+| `orbit migrate export <目标实例目录>` | 复用同一严格优先迁移规划器，将目标 `orbit.toml`、`orbit.lock` 和模组配置写入空白目标实例；随后在目标运行 `orbit install`。 |
 | `orbit migrate export <目标实例目录> --source-pack source.zip --consume-source-pack` | 从新建目标前冻结的源包求解；确认写入成功后删除临时源包。GUI 的升级/迁移流程使用此模式。 |
 | `orbit audit` | **字节码兼容风险分析（只读）**。复用 Loader 实际选择的顶层/嵌套运行时内容，由 Fabric/Quilt/Forge/NeoForge 后端确定注册与运行时规则，再进入共享 ClassFile/效果/冲突流水线；默认输出分类摘要，`--output-format json` 或显式 `--report <path>` 保留完整 schema 5 证据。不下载 mapping，也不把依赖声明本身当作风险证据。 |
 
@@ -209,6 +210,10 @@ schema、字段名、枚举码和错误码不随语言变化。Windows 控制台
 都不会补建该目录；只有选中的 JAR 真正物化时才创建。Loader 版本更新始终由 Launcher 执行
 `instance configure --loader-version` 后再 `install`；跨 Minecraft/Loader 类型迁移则创建新实例，
 GUI 在写入目标 Orbit 状态前先展示 `migrate check` 的完整包级方案。
+
+迁移界面不预先展示“严格/软”策略。Orbit 总是先求保留全部源包的严格解；只有严格图无解时，
+才在同一个 CLI 进程中显示原因并询问是否搜索标准 Pareto 极小删包 front。自动化可用
+`--allow-removals` 表达同一许可；若软解仍有多个互不支配方案，仍必须明确选择。
 | `orbit cache clean` | 清理 Orbit 在后台全局保存的 `.jar` 下载缓存，释放磁盘空间。 |
 
 ---
