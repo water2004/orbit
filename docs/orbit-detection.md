@@ -49,7 +49,9 @@ Minecraft、Loader、classpath、工件路径与 SHA-256，并验证实际 JAR �
 一个文件、schema 不匹配、路径/hash/身份不一致都会直接报错，不回退到 profile、文件名或
 相邻目录猜测。正常的 add/install/audit 等命令仍只消费 `orbit.toml` 中的平台快照。
 
-Orbit Launcher 的 `<minecraft-directory>/versions/<实例>` 是它选择的隔离 game directory；
+Orbit Launcher 的 `<minecraft-directory>/instances/<实例>` 是它选择的隔离 game directory；
+实例自己的 `minecraft.jar` 与 launcher manifest/lock 位于该目录，共享 classpath 仍可引用
+仓库根的 `libraries/`；
 它不是 Mojang 规定的实例 manifest 格式，也不包含派生 `<实例>.json`。通用 HMCL/官方
 Launcher 探测规则仅适用于没有 Orbit Launcher 标记的外部实例。
 

@@ -8,7 +8,7 @@ use crate::error::LauncherError;
 use crate::instance::{InstanceManifest, validate_instance_name};
 use crate::layout::InstanceLocation;
 
-pub const REGISTRY_SCHEMA: u32 = 2;
+pub const REGISTRY_SCHEMA: u32 = 3;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

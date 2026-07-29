@@ -30,7 +30,7 @@ Launcher 已完整支持 Vanilla、Fabric、Quilt、Forge、NeoForge 的客户�
 
 ## ✨ 核心特性
 
-- **📂 非侵入式与多实例/服务器管理**：无需改变原有启动器结构。直接进入启动器实例或 Fabric、Quilt、Forge、NeoForge dedicated server 根目录即可初始化管理。
+- **📂 非侵入式与多实例/服务器管理**：无需改变外部启动器结构。直接进入启动器实例或 Fabric、Quilt、Forge、NeoForge dedicated server 根目录即可初始化管理；Launcher 托管客户端位于 `instances/<实例>`，精确 `minecraft.jar` 属于实例，共享仓库只承载不可变 assets/libraries。
 - **🔄 事实同步与显式修复**：`orbit sync` 联网识别本地 JAR 来源并如实重建 TOML/lock，但不选择版本或删包；需要改变包集合时由 `orbit fix` 展示完整方案并确认。
 - **🧹 彻底的深度清理 (`purge`)**：卸载模组时一并清理 `config/` 目录下残留的配置文件，保持环境绝对纯净。
 - **🌐 多来源**：支持 Modrinth、CurseForge 与本地 `file:` JAR；不同平台只负责候选发现，最终统一验证 JAR 并求解依赖。
@@ -195,7 +195,7 @@ schema、字段名、枚举码和错误码不随语言变化。Windows 控制台
 | `orbit migrate check <目标实例目录>` | 对 Launcher 已安装的目标 Minecraft/Loader 运行时执行完整联合求解；不是逐包“是否有文件”的浅检查。 |
 | `orbit migrate export <目标实例目录>` | 复用同一迁移规划器，将目标 `orbit.toml`、`orbit.lock` 和模组配置写入空白目标实例；随后在目标运行 `orbit install`。 |
 | `orbit migrate export <目标实例目录> --source-pack source.zip --consume-source-pack` | 从新建目标前冻结的源包求解；确认写入成功后删除临时源包。GUI 的升级/迁移流程使用此模式。 |
-| `orbit audit` | **字节码兼容风险分析（只读）**。复用 Loader 实际选择的顶层/嵌套运行时内容，由 Fabric/Quilt/Forge/NeoForge 后端确定注册与运行时规则，再进入共享 ClassFile/效果/冲突流水线；默认输出分类摘要，`--format json` 或显式 `--report <path>` 保留完整 schema 5 证据。不下载 mapping，也不把依赖声明本身当作风险证据。 |
+| `orbit audit` | **字节码兼容风险分析（只读）**。复用 Loader 实际选择的顶层/嵌套运行时内容，由 Fabric/Quilt/Forge/NeoForge 后端确定注册与运行时规则，再进入共享 ClassFile/效果/冲突流水线；默认输出分类摘要，`--output-format json` 或显式 `--report <path>` 保留完整 schema 5 证据。不下载 mapping，也不把依赖声明本身当作风险证据。 |
 | `orbit cache clean` | 清理 Orbit 在后台全局保存的 `.jar` 下载缓存，释放磁盘空间。 |
 
 ---

@@ -32,7 +32,7 @@ use crate::instance::{
 use crate::java::{
     JavaProgressEvent, JavaTarget, MojangJavaPlan, install_mojang_java, plan_mojang_java,
 };
-use crate::layout::InstanceLocation;
+use crate::layout::{INSTANCE_MINECRAFT_JAR, InstanceLocation};
 use crate::loader::{LoaderSide, ResolvedLoaderProfile, resolve_loader_profile};
 use crate::lockfile::{
     ArtifactOwner, INSTANCE_LOCK_FILE, LOCK_SCHEMA, LauncherLock, LockFile, LockedArguments,
@@ -622,7 +622,7 @@ where
             "registered instance layout kind disagrees with orbit-launcher.toml".to_string(),
         ));
     }
-    match manifest.loader.kind {
+    let mut plan = match manifest.loader.kind {
         LoaderKind::Vanilla => match manifest.kind {
             InstanceKind::Client => prepare_vanilla_client_install(
                 instance_root,
@@ -649,7 +649,13 @@ where
             prepare_installer_loader_install(instance_root, client, default_java_provider, progress)
                 .await
         }
+    }?;
+    if let InstallPlan::Client(client) = &mut plan {
+        client
+            .resolved
+            .relocate_minecraft_jar(location.instance_relative_path(INSTANCE_MINECRAFT_JAR)?)?;
     }
+    Ok(plan)
 }
 
 async fn plan_selected_java<F>(

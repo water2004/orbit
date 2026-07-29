@@ -126,7 +126,7 @@ mod tests {
     use uuid::Uuid;
 
     fn registered_instance(root: &Path, name: &str) -> (InstanceRegistry, RegistryEntry) {
-        let game_directory = root.join("versions").join(name);
+        let game_directory = root.join("instances").join(name);
         std::fs::create_dir_all(&game_directory).unwrap();
         let manifest = InstanceManifest::new(
             Uuid::new_v4(),

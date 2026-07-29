@@ -141,12 +141,13 @@ public-client ID 固定在 Launcher 中，不属于用户配置或秘密；refre
 数据；若实例仍引用该 account ID，之后启动会明确报错，不会静默选择另一个账号。
 
 客户端 `create/install --new` 不接受任意 root：它们始终使用唯一托管 Minecraft 仓库，并把
-game directory 建为 `<minecraft-directory>/versions/<name>`。该目录是实例的可变运行目录，
-所以 `mods`、`config`、`saves` 都在版本目录内；共享 `libraries`、`assets` 和原版/Loader
-工件留在仓库根。这是 Launcher 采用的版本隔离策略，不是 Mojang 规定的实例描述格式；目录
-中不会生成派生 `<name>.json`。服务端使用 `--server-directory`；省略时使用当前目录，方便 headless
-部署。`instance import --directory` 必须指向现有实例的精确目录；客户端目录必须是某个
-`versions/` 的直接子目录，不接受扁平单版本目录兜底。注册表持久化规范化绝对路径，但路径
+game directory 建为 `<minecraft-directory>/instances/<name>`。该目录同时保存实例自己的
+`minecraft.jar`、manifest/lock、`mods`、`config`、`saves`；共享 `libraries`、`assets` 和
+Loader 库留在仓库根。HMCL 同样把解析后的主游戏 JAR 定位到版本根内；Orbit Launcher 不生成
+Mojang/HMCL profile，而由自己的 lock 直接记录实例 JAR 与共享 classpath。这是 Launcher 的
+实例隔离策略，不是 Mojang 规定的实例描述格式。服务端使用 `--server-directory`；省略时使用
+当前目录，方便 headless 部署。`instance import --directory` 必须指向现有实例的精确目录；
+客户端目录必须是某个 `instances/` 的直接子目录，不接受扁平单版本目录兜底。注册表持久化规范化绝对路径，但路径
 不是实例身份。`remove` 只注销实例并保留全部文件。
 `instance configure` 原子修改现有 `orbit-launcher.toml` 的期望运行时，不下载、不修改 lock；
 随后运行同一个 `install` 事务完成 Minecraft、loader 与 Java 更新。切换到非 Vanilla loader
@@ -261,7 +262,7 @@ rename，跨卷逐文件复制并用 SHA-256 验证后才切换注册表与配�
 
 ## JSON
 
-所有当前命令支持 `--format json`。成功结果只写 stdout：
+所有当前命令支持 `--output-format json`。成功结果只写 stdout：
 
 ```json
 {

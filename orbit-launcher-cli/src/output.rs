@@ -1078,7 +1078,7 @@ mod tests {
             name: "client".to_string(),
             location: InstanceLocation::client(
                 absolute("games/minecraft"),
-                absolute("games/minecraft/versions/client"),
+                absolute("games/minecraft/instances/client"),
             )
             .unwrap(),
         };

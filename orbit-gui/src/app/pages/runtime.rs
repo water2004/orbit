@@ -768,7 +768,7 @@ fn render_review_step(
                     div()
                         .text_sm()
                         .text_color(cx.theme().muted_foreground)
-                        .child(tr!("This client will use the managed Minecraft directory and an isolated versions/<instance> game directory.").into_owned()),
+                        .child(tr!("This client will use the managed Minecraft directory and an isolated instances/<instance> game directory containing its Minecraft JAR.").into_owned()),
                 ),
             );
     } else {

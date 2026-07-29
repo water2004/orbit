@@ -76,7 +76,7 @@ pub fn create_instance(
     let instance_directory_created;
     let location = match manifest.kind {
         InstanceKind::Client => {
-            let game_directory = directory.join("versions").join(&manifest.name);
+            let game_directory = directory.join("instances").join(&manifest.name);
             instance_directory_created = !game_directory.exists();
             std::fs::create_dir_all(&game_directory)?;
             let game_directory = dunce::canonicalize(game_directory)?;
@@ -148,7 +148,7 @@ fn cleanup_created_directories(base: &Path, root: &Path, base_created: bool, roo
         let _ = std::fs::remove_dir(root);
     }
     if base_created && base != root {
-        let _ = std::fs::remove_dir(base.join("versions"));
+        let _ = std::fs::remove_dir(base.join("instances"));
         let _ = std::fs::remove_dir(base);
     }
 }
@@ -486,7 +486,7 @@ mod tests {
     }
 
     #[test]
-    fn client_creation_uses_one_repository_and_an_isolated_version_directory() {
+    fn client_creation_uses_one_repository_and_an_isolated_instance_directory() {
         let directory = tempfile::tempdir().unwrap();
         let paths = paths(directory.path());
         let repository = directory.path().join("minecraft");
@@ -504,7 +504,7 @@ mod tests {
         .unwrap();
 
         let repository = dunce::canonicalize(repository).unwrap();
-        let game_directory = repository.join("versions/fabric-1.21.1");
+        let game_directory = repository.join("instances/fabric-1.21.1");
         assert_eq!(created.entry.instance_directory(), game_directory);
         assert_eq!(
             created.entry.location.minecraft_directory(),

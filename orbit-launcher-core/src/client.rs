@@ -30,6 +30,7 @@ pub struct ResolvedVanillaClient {
     pub downloads: Vec<ClientDownload>,
     pub asset_mappings: Vec<AssetMapping>,
     pub classpath: Vec<String>,
+    pub minecraft_jar: String,
     pub asset_index_id: String,
     pub legacy_virtual_assets: bool,
     pub map_assets_to_resources: bool,
@@ -52,6 +53,55 @@ pub struct AssetMapping {
 #[derive(Debug, Clone)]
 pub struct NativeExtract {
     pub excludes: Vec<String>,
+}
+
+impl ResolvedVanillaClient {
+    /// Move the primary Minecraft client JAR to the caller's exact runtime
+    /// layout without changing any other shared Mojang artifact path.
+    pub(crate) fn relocate_minecraft_jar(&mut self, target: String) -> Result<(), LauncherError> {
+        validate_portable_target(&target)?;
+        if target == self.minecraft_jar {
+            return Ok(());
+        }
+        if self
+            .downloads
+            .iter()
+            .any(|download| download.target == target)
+        {
+            return Err(LauncherError::InvalidRemoteData(format!(
+                "isolated Minecraft JAR path '{target}' conflicts with another artifact"
+            )));
+        }
+
+        let download_matches = self
+            .downloads
+            .iter()
+            .filter(|download| download.target == self.minecraft_jar)
+            .count();
+        let classpath_matches = self
+            .classpath
+            .iter()
+            .filter(|entry| *entry == &self.minecraft_jar)
+            .count();
+        if download_matches != 1 || classpath_matches != 1 {
+            return Err(LauncherError::InvalidRemoteData(format!(
+                "Minecraft metadata must identify exactly one primary client JAR download and classpath entry (found {download_matches} download(s), {classpath_matches} classpath entry/entries)"
+            )));
+        }
+        self.downloads
+            .iter_mut()
+            .find(|download| download.target == self.minecraft_jar)
+            .expect("primary Minecraft download count was validated")
+            .target
+            .clone_from(&target);
+        self.classpath
+            .iter_mut()
+            .find(|entry| *entry == &self.minecraft_jar)
+            .expect("primary Minecraft classpath count was validated")
+            .clone_from(&target);
+        self.minecraft_jar = target;
+        Ok(())
+    }
 }
 
 pub async fn resolve_vanilla_client(
@@ -142,7 +192,7 @@ pub async fn resolve_vanilla_client(
     classpath.push(client_target.clone());
     downloads.push(ClientDownload {
         request: client.request(format!("Minecraft {} client", document.id))?,
-        target: client_target,
+        target: client_target.clone(),
         owner: ArtifactOwner::Minecraft,
         native_extract: None,
     });
@@ -283,6 +333,7 @@ pub async fn resolve_vanilla_client(
         downloads,
         asset_mappings,
         classpath,
+        minecraft_jar: client_target,
         asset_index_id: asset_index.id,
         legacy_virtual_assets: assets.virtual_assets,
         map_assets_to_resources: assets.map_to_resources,
@@ -740,6 +791,47 @@ mod tests {
             flatten_arguments(&arguments, &platform(), &default_features()).unwrap(),
             ["--plain", "--pair", "value"]
         );
+    }
+
+    #[test]
+    fn primary_minecraft_jar_can_be_relocated_into_the_instance() {
+        let original = "versions/1.21.1/1.21.1.jar".to_string();
+        let isolated = "instances/fabric-1.21.1/minecraft.jar".to_string();
+        let mut resolved = ResolvedVanillaClient {
+            minecraft_version: "1.21.1".to_string(),
+            version_type: "release".to_string(),
+            version_manifest_sha256: "0".repeat(64),
+            version_json_url: "https://example.invalid/version.json".to_string(),
+            version_json_sha1: "0".repeat(40),
+            version_json_bytes: Vec::new(),
+            main_class: "net.minecraft.client.main.Main".to_string(),
+            java: None,
+            game_arguments: Vec::new(),
+            jvm_arguments: Vec::new(),
+            downloads: vec![ClientDownload {
+                request: ArtifactRequest {
+                    logical_name: "Minecraft client".to_string(),
+                    url: "https://example.invalid/client.jar".to_string(),
+                    expected_hash: ExpectedHash::Sha1("0".repeat(40)),
+                    expected_size: Some(1),
+                },
+                target: original.clone(),
+                owner: ArtifactOwner::Minecraft,
+                native_extract: None,
+            }],
+            asset_mappings: Vec::new(),
+            classpath: vec![original],
+            minecraft_jar: "versions/1.21.1/1.21.1.jar".to_string(),
+            asset_index_id: "1.21".to_string(),
+            legacy_virtual_assets: false,
+            map_assets_to_resources: false,
+        };
+
+        resolved.relocate_minecraft_jar(isolated.clone()).unwrap();
+
+        assert_eq!(resolved.minecraft_jar, isolated);
+        assert_eq!(resolved.downloads[0].target, resolved.minecraft_jar);
+        assert_eq!(resolved.classpath, [resolved.minecraft_jar.clone()]);
     }
 
     #[tokio::test]

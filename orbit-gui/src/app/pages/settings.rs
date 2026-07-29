@@ -74,7 +74,7 @@ fn launcher_page(app: &Entity<OrbitApp>) -> SettingPage {
             SettingGroup::new()
                 .title(tr!("Managed Minecraft repository").into_owned())
                 .description(
-                    tr!("All clients share immutable assets and libraries while each versions/<instance> directory remains isolated.").into_owned(),
+                    tr!("All clients share immutable assets and libraries while each instances/<instance> directory owns its Minecraft JAR and mutable game data.").into_owned(),
                 )
                 .item(minecraft_directory_item(app)),
         )

@@ -74,9 +74,10 @@ Runtime 页使用 Launcher 的官方只读目录，而不是自由输入后试�
 版本清单默认显示正式版，并将 `release`、`snapshot`、`old_alpha/old_beta` 分成正式版、
 快照、历史版本三个互斥频道；“全部”是显式选择，不能再用“非正式版”冒充快照。
 
-客户端只使用 Launcher 托管的 Minecraft 仓库，并把可变游戏目录固定为
-`<minecraft-directory>/versions/<instance-name>`；因此 `mods`、`config`、`saves` 等不会落在
-共享仓库根目录。该布局是 Launcher 的版本隔离策略，不是自称 Mojang 标准实例格式，也不
+客户端只使用 Launcher 托管的 Minecraft 仓库，并把完整实例目录固定为
+`<minecraft-directory>/instances/<instance-name>`；该目录拥有精确 `minecraft.jar` 及
+`mods`、`config`、`saves` 等可变数据，共享仓库根只保留 assets/libraries 等不可变内容。
+该布局是 Launcher 的实例隔离策略，不是自称 Mojang 标准实例格式，也不
 生成 `<instance-name>.json`。服务端仍选择一个明确目录。设置页通过 `orbit-launcher minecraft directory`
 显示仓库，并通过 `orbit-launcher minecraft move` 迁移整个仓库；GUI 不自行移动文件。
 

@@ -20,7 +20,7 @@ The detailed boundaries are documented in [Orbit architecture](docs/orbit-archit
 
 ## Highlights
 
-- **Existing instances and isolated managed instances.** Orbit works in valid Fabric, Quilt, Forge, and NeoForge client or dedicated-server game directories. Launcher-managed clients use isolated `versions/<instance>` game directories and shared immutable Minecraft artifacts.
+- **Existing instances and isolated managed instances.** Orbit works in valid Fabric, Quilt, Forge, and NeoForge client or dedicated-server game directories. Launcher-managed clients use isolated `instances/<instance>` game directories; each owns its exact `minecraft.jar`, while immutable assets and libraries remain shared.
 - **Truthful synchronization.** `orbit sync` redetects the runtime, scans local JARs, and uses provider hash APIs to recover sources. It rebuilds TOML and lock state without solving dependencies or deleting packages.
 - **Explicit repair.** `orbit fix` is the command that discovers the full recursive candidate closure, resolves it, presents every package-level action, and applies a confirmed repair.
 - **Multiple remotes per package.** A logical package can use local files, Modrinth projects, and CurseForge projects together. Content is deduplicated by hash; identity, version, dependencies, environment, `provides`, and bundled content come only from downloaded JAR metadata.

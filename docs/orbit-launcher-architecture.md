@@ -107,19 +107,20 @@ Instance
 ```
 
 客户端不是扁平单版本目录。所有客户端共享一个由 Launcher 托管的 Minecraft 仓库，
-`minecraft_directory` 保存 `assets`、`libraries` 和版本工件；每个实例的 `game_directory`
-严格为 `<minecraft_directory>/versions/<name>`，保存该实例的 manifest/lock、`mods`、`config`、
-`saves` 和启动工作目录。Dedicated server 仍使用一个明确的 `server_directory`，因为服务端
+`minecraft_directory` 保存共享 `assets` 与 `libraries`；每个实例的 `game_directory`
+严格为 `<minecraft_directory>/instances/<name>`，保存该实例的 `minecraft.jar`、manifest/lock、
+`mods`、`config`、`saves` 和启动工作目录。Dedicated server 仍使用一个明确的 `server_directory`，因为服务端
 分发本身就是单根模型。
 
-`versions/<name>` 沿用 Minecraft 启动器生态的版本隔离目录习惯，但“把整个目录作为独立
-game directory”是 Orbit Launcher 的实例策略，不是 Mojang 规定的实例注册格式。Launcher
-不会为了伪装成官方版本而生成 `<name>.json`；第三方启动器也不应被假定能直接管理该实例。
+HMCL 的 `getVersionJar` 同样把解析后的主游戏 JAR 放在对应 version root。Orbit Launcher
+采用更明确的 `instances/<name>/minecraft.jar`，不生成没有消费方的 Mojang/HMCL version
+profile；精确主 JAR 和共享 Loader/library classpath 全部由 lock 记录。该目录策略不是 Mojang
+规定的实例注册格式，第三方启动器也不应被假定能直接管理该实例。
 
 `id` 是不可变 UUID；`name` 是全局唯一但可修改的人类名称。GUI 和 supervisor 必须始终
 使用 `id`，不能把名称或绝对路径当作进程身份。客户端仓库只通过
 `minecraft move <absolute-destination>` 整体迁移；该事务同时更新全部客户端 location，
-不能逐实例产生多个隐式仓库。导入客户端时目录必须是 `versions/` 的直接子目录，不猜测
+不能逐实例产生多个隐式仓库。导入客户端时目录必须是 `instances/` 的直接子目录，不猜测
 扁平布局。服务端路径只在 create/import/bootstrap 边界出现。
 
 命令实例上下文按固定优先级解析：
@@ -223,8 +224,9 @@ cache/
 <minecraft-directory>/
   assets/                    客户端共享官方资源
   libraries/                 客户端共享 Minecraft/Loader 库
-  versions/
+  instances/
     <instance-name>/         客户端隔离 game directory
+      minecraft.jar         该实例锁定的精确原版客户端 JAR
       orbit-launcher.toml    用户意图与启动设置
       orbit-launcher.lock    精确运行时、classpath 与工件清单
       mods/ config/ saves/
@@ -242,7 +244,7 @@ cache/
 ```
 
 客户端 lock 的 artifact path 相对 `minecraft_directory`，因此可以同时锁定共享库和
-`versions/<instance-name>/...` 中的实例文件；服务端 lock path 相对 server directory。所有路径
+`instances/<instance-name>/...` 中的实例文件；服务端 lock path 相对 server directory。所有路径
 必须是规范便携相对路径并记录 schema version。秘密、access token、refresh token、密码和
 device code 不得进入配置、lock、日志或错误 detail。
 
@@ -701,7 +703,7 @@ version JSON 解析所需 Java component，把 Mojang runtime 与游戏/Loader �
 全局选项：
 
 ```text
---format text|json
+--output-format text|json
 --progress-format none|ndjson
 --quiet
 --non-interactive
@@ -713,7 +715,7 @@ version JSON 解析所需 Java component，把 Mojang runtime 与游戏/Loader �
 
 text + TTY 可以选择版本、账户和更新方案。以下情况禁止 prompt：
 
-- `--format json`；
+- `--output-format json`；
 - `--non-interactive`；
 - stdin 不是 TTY；
 - 服务或 supervisor 调用。
@@ -728,7 +730,7 @@ text + TTY 可以选择版本、账户和更新方案。以下情况禁止 promp
 orbit-launcher install --new main-server --kind server \
   --minecraft 1.21.1 --loader fabric --loader-version stable --java auto
 
-# 客户端始终进入托管仓库的 versions/<name>，不接受自由 root
+# 客户端始终进入托管仓库的 instances/<name>，不接受自由 root
 orbit-launcher install --new main-client --kind client \
   --minecraft latest-release --loader fabric --loader-version stable --java auto
 
@@ -742,7 +744,8 @@ orbit-launcher --instance <id> install
 ```
 
 客户端 `--new` 固定使用平台 data 目录中的唯一托管 Minecraft 仓库，game directory 为
-`versions/<name>`；共享 assets/libraries 与实例可变内容在领域模型中是两个明确根。服务端
+`instances/<name>`；主 `minecraft.jar` 属于实例，共享 assets/libraries 与实例内容在领域模型中
+是两个明确根。服务端
 `--new` 默认把当前目录作为 server directory，也可传 `--server-directory`。bootstrap 必须
 在一个事务内完成实例文件、artifact 和全局注册：安装失败不得留下一个宣称可用的注册表
 条目；成功结果返回稳定 `instance_id`。客户端安装不要求账户，账户只在 launch 时使用。

@@ -5,14 +5,15 @@ use serde::{Deserialize, Serialize};
 use crate::error::LauncherError;
 use crate::instance::InstanceKind;
 
-const VERSIONS_DIRECTORY: &str = "versions";
+const INSTANCES_DIRECTORY: &str = "instances";
+pub(crate) const INSTANCE_MINECRAFT_JAR: &str = "minecraft.jar";
 
 /// Exact filesystem layout of a registered runtime.
 ///
-/// Client instances use the standard multi-version Minecraft repository:
-/// shared assets, libraries and version metadata live under
-/// `minecraft_directory`, while mutable game data lives in the isolated
-/// `game_directory` below `versions/`. Dedicated servers remain single-root
+/// Client instances use an explicit instance repository: shared immutable
+/// assets and libraries live under `minecraft_directory`, while every
+/// instance-owned runtime file and all mutable game data live in the isolated
+/// `game_directory` below `instances/`. Dedicated servers remain single-root
 /// runtimes because that is their native distribution model.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "kebab-case", deny_unknown_fields)]
@@ -53,23 +54,24 @@ impl InstanceLocation {
         match kind {
             InstanceKind::Client => {
                 let game_directory = dunce::canonicalize(instance_directory)?;
-                let versions = game_directory.parent().ok_or_else(|| {
+                let instances = game_directory.parent().ok_or_else(|| {
                     LauncherError::InvalidRegistry(format!(
-                        "client game directory '{}' has no versions parent",
+                        "client game directory '{}' has no instances parent",
                         game_directory.display()
                     ))
                 })?;
-                if versions.file_name().and_then(|value| value.to_str()) != Some(VERSIONS_DIRECTORY)
+                if instances.file_name().and_then(|value| value.to_str())
+                    != Some(INSTANCES_DIRECTORY)
                 {
                     return Err(LauncherError::InvalidRegistry(format!(
-                        "client game directory '{}' must be an immediate child of a 'versions' directory",
+                        "client game directory '{}' must be an immediate child of an 'instances' directory",
                         game_directory.display()
                     )));
                 }
-                let minecraft_directory = versions.parent().ok_or_else(|| {
+                let minecraft_directory = instances.parent().ok_or_else(|| {
                     LauncherError::InvalidRegistry(format!(
-                        "client versions directory '{}' has no Minecraft repository parent",
-                        versions.display()
+                        "client instances directory '{}' has no Minecraft repository parent",
+                        instances.display()
                     ))
                 })?;
                 Self::client(minecraft_directory.to_path_buf(), game_directory)
@@ -149,7 +151,7 @@ impl InstanceLocation {
             } => {
                 validate_absolute_directory(minecraft_directory, "Minecraft directory")?;
                 validate_absolute_directory(game_directory, "client game directory")?;
-                let expected_parent = minecraft_directory.join(VERSIONS_DIRECTORY);
+                let expected_parent = minecraft_directory.join(INSTANCES_DIRECTORY);
                 if game_directory.parent() != Some(expected_parent.as_path()) {
                     return Err(format!(
                         "client game directory '{}' must be an immediate child of '{}'",
@@ -219,18 +221,18 @@ mod tests {
         } else {
             PathBuf::from("/games/.minecraft")
         };
-        let game = base.join("versions").join("fabric-1.21.1");
+        let game = base.join("instances").join("fabric-1.21.1");
         let location = InstanceLocation::client(base.clone(), game.clone()).unwrap();
         assert_eq!(location.artifact_directory(), base);
         assert_eq!(location.instance_directory(), game);
         assert_eq!(
             location.instance_relative_path("natives/x.dll").unwrap(),
-            "versions/fabric-1.21.1/natives/x.dll"
+            "instances/fabric-1.21.1/natives/x.dll"
         );
     }
 
     #[test]
-    fn client_layout_rejects_a_flat_single_version_root() {
+    fn client_layout_rejects_a_flat_single_instance_root() {
         let base = if cfg!(windows) {
             PathBuf::from(r"C:\Games\.minecraft")
         } else {

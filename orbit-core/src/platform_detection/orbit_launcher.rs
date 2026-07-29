@@ -155,22 +155,22 @@ fn read(instance_dir: &Path) -> Result<Option<ManagedRuntime>, OrbitError> {
     validate_text(&lock.minecraft.version, "Minecraft version")?;
     validate_text(&loader_version, "Loader version")?;
 
-    let versions = instance_dir.parent().ok_or_else(|| {
+    let instances = instance_dir.parent().ok_or_else(|| {
         invalid(format!(
-            "managed client directory '{}' has no versions parent",
+            "managed client directory '{}' has no instances parent",
             instance_dir.display()
         ))
     })?;
-    if !file_name_eq(versions, "versions") {
+    if !file_name_eq(instances, "instances") {
         return Err(invalid(format!(
-            "managed client directory '{}' is not an immediate child of a versions directory",
+            "managed client directory '{}' is not an immediate child of an instances directory",
             instance_dir.display()
         )));
     }
-    let repository = versions.parent().ok_or_else(|| {
+    let repository = instances.parent().ok_or_else(|| {
         invalid(format!(
-            "versions directory '{}' has no Minecraft repository parent",
-            versions.display()
+            "instances directory '{}' has no Minecraft repository parent",
+            instances.display()
         ))
     })?;
     let repository = repository.canonicalize().map_err(|error| {
@@ -490,8 +490,8 @@ mod tests {
     fn reads_exact_runtime_from_lock_without_a_derived_version_profile() {
         let directory = tempfile::tempdir().unwrap();
         let repository = directory.path().join("minecraft");
-        let instance = repository.join("versions/26.2");
-        let minecraft_relative = "versions/26.2/26.2.jar";
+        let instance = repository.join("instances/26.2");
+        let minecraft_relative = "instances/26.2/minecraft.jar";
         let loader_relative =
             "libraries/net/fabricmc/fabric-loader/0.19.3/fabric-loader-0.19.3.jar";
         let minecraft_jar = repository.join(minecraft_relative);
