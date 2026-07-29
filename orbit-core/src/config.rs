@@ -632,6 +632,55 @@ pub fn register_instance(
     registry.save(paths.instances_file())
 }
 
+/// Register a pre-existing Orbit workspace without discovering or rewriting it.
+///
+/// This is used when another transactional command (for example migration
+/// export) created the workspace. Both state files must already exist and
+/// describe the same platform; registration never guesses missing metadata.
+pub fn register_existing_instance(
+    paths: &crate::runtime::RuntimePaths,
+    name: &str,
+    instance_dir: &Path,
+) -> Result<InstanceEntry, OrbitError> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err(OrbitError::Other(anyhow::anyhow!(
+            "instance name must not be empty"
+        )));
+    }
+    let instance_dir = instance_dir.canonicalize().map_err(|error| {
+        OrbitError::Other(anyhow::anyhow!(
+            "cannot resolve Orbit instance '{}': {error}",
+            instance_dir.display()
+        ))
+    })?;
+    if !instance_dir.is_dir() {
+        return Err(OrbitError::Other(anyhow::anyhow!(
+            "Orbit instance is not a directory: {}",
+            instance_dir.display()
+        )));
+    }
+    let manifest = crate::workspace::ManifestFile::open(&instance_dir)?;
+    let lockfile = crate::workspace::Lockfile::open(&instance_dir)?;
+    if lockfile.inner.meta.mc_version != manifest.inner.project.mc_version
+        || lockfile.inner.meta.modloader != manifest.inner.project.modloader
+        || lockfile.inner.meta.modloader_version != manifest.inner.project.modloader_version
+    {
+        return Err(OrbitError::Other(anyhow::anyhow!(
+            "orbit.toml and orbit.lock describe different Minecraft or Loader platforms"
+        )));
+    }
+    let entry = InstanceEntry {
+        name: name.to_string(),
+        path: instance_dir.to_string_lossy().into_owned(),
+        mc_version: manifest.inner.project.mc_version,
+        modloader: manifest.inner.project.modloader,
+        is_default: false,
+    };
+    register_instance(paths, entry.clone())?;
+    Ok(entry)
+}
+
 pub fn set_default_instance(
     paths: &crate::runtime::RuntimePaths,
     name: &str,
@@ -687,6 +736,60 @@ pub fn remove_instance(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn runtime_paths(root: &Path) -> crate::runtime::RuntimePaths {
+        crate::runtime::RuntimePaths::resolve(&crate::runtime::RuntimePathOptions {
+            config_file: Some(root.join("global").join("config.toml")),
+            cache_dir: Some(root.join("cache")),
+            ..Default::default()
+        })
+        .unwrap()
+    }
+
+    fn write_workspace(root: &Path, lock_loader_version: &str) {
+        let manifest = crate::manifest::OrbitManifest {
+            project: crate::manifest::ProjectMeta {
+                name: "managed".to_string(),
+                mc_version: "1.21.1".to_string(),
+                modloader: "fabric".to_string(),
+                modloader_version: "0.16.10".to_string(),
+                description: None,
+                authors: None,
+                version: None,
+            },
+            platform: crate::manifest::PlatformSnapshot {
+                minecraft_jar: crate::manifest::PlatformArtifact {
+                    path: "minecraft.jar".to_string(),
+                    sha256: "minecraft-hash".to_string(),
+                },
+                loader_jar: crate::manifest::PlatformArtifact {
+                    path: "fabric-loader.jar".to_string(),
+                    sha256: "loader-hash".to_string(),
+                },
+                runtime_jars: Vec::new(),
+                physical_environment: crate::metadata::Environment::Client,
+            },
+            resolver: crate::manifest::ResolverConfig::default(),
+            packages: Default::default(),
+            groups: Default::default(),
+        };
+        crate::workspace::ManifestFile::new(root, manifest)
+            .save()
+            .unwrap();
+        crate::workspace::Lockfile::new(
+            root,
+            crate::lockfile::OrbitLockfile {
+                meta: crate::lockfile::LockMeta {
+                    mc_version: "1.21.1".to_string(),
+                    modloader: "fabric".to_string(),
+                    modloader_version: lock_loader_version.to_string(),
+                },
+                packages: Vec::new(),
+            },
+        )
+        .save()
+        .unwrap();
+    }
 
     #[test]
     fn default_config_has_sensible_values() {
@@ -898,5 +1001,45 @@ dir = "D:/Games/OrbitCache"
         assert!(registry.find("beta").unwrap().is_default);
         assert_eq!(registry.remove("beta").unwrap().name, "beta");
         assert!(registry.default_instance().is_none());
+    }
+
+    #[test]
+    fn existing_workspace_registration_requires_matching_state_files() {
+        let directory = tempfile::tempdir().unwrap();
+        let workspace = directory.path().join("instance");
+        std::fs::create_dir_all(&workspace).unwrap();
+        let paths = runtime_paths(directory.path());
+
+        write_workspace(&workspace, "0.16.10");
+        let registered = register_existing_instance(&paths, "fabric-1.21.1", &workspace).unwrap();
+
+        assert_eq!(registered.name, "fabric-1.21.1");
+        assert_eq!(registered.mc_version, "1.21.1");
+        assert_eq!(registered.modloader, "fabric");
+        assert_eq!(
+            Path::new(&registered.path).canonicalize().unwrap(),
+            workspace.canonicalize().unwrap()
+        );
+        assert_eq!(
+            InstancesRegistry::load(paths.instances_file())
+                .unwrap()
+                .instances
+                .len(),
+            1
+        );
+
+        write_workspace(&workspace, "0.16.11");
+        let error = register_existing_instance(&paths, "invalid", &workspace).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("describe different Minecraft or Loader platforms")
+        );
+        assert!(
+            InstancesRegistry::load(paths.instances_file())
+                .unwrap()
+                .find("invalid")
+                .is_none()
+        );
     }
 }

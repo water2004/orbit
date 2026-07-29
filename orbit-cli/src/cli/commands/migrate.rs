@@ -8,9 +8,10 @@ use crate::cli::output::{MigrationExportView, MigrationOutput, MigrationSummary,
 pub async fn handle_check(
     target: PathBuf,
     source_pack: Option<PathBuf>,
+    allow_removals: bool,
     ctx: &CliContext,
 ) -> Result<()> {
-    let plan = build_plan(target, source_pack.as_deref(), ctx).await?;
+    let plan = build_plan(target, source_pack.as_deref(), allow_removals, ctx).await?;
     render_plan(&plan, "check", None, ctx);
     Ok(())
 }
@@ -19,9 +20,10 @@ pub async fn handle_export(
     target: PathBuf,
     source_pack: Option<PathBuf>,
     consume_source_pack: bool,
+    allow_removals: bool,
     ctx: &CliContext,
 ) -> Result<()> {
-    let plan = build_plan(target, source_pack.as_deref(), ctx).await?;
+    let plan = build_plan(target, source_pack.as_deref(), allow_removals, ctx).await?;
     let preview = orbit_core::export_migration(&plan, true)?;
     let confirmed = ctx.dry_run || confirm_export(&plan, &preview, ctx);
     let report = if confirmed {
@@ -76,11 +78,16 @@ pub async fn handle_export(
 async fn build_plan(
     target: PathBuf,
     source_pack: Option<&std::path::Path>,
+    allow_removals: bool,
     ctx: &CliContext,
 ) -> Result<orbit_core::MigrationPlan> {
     let interaction = orbit_core::MigrationInteraction {
         select_resolution: super::resolution_selector(ctx),
+        confirm_soft_fallback: (!allow_removals).then(|| soft_fallback_confirmation(ctx)),
         progress: super::operation_progress(ctx),
+    };
+    let options = orbit_core::MigrationOptions {
+        allow_package_removals: allow_removals,
     };
     if let Some(source_pack) = source_pack {
         let source = orbit_core::extract_portable_instance(source_pack)?;
@@ -90,6 +97,7 @@ async fn build_plan(
             &target,
             &providers,
             ctx.runtime.jar_cache(),
+            options,
             interaction,
         )
         .await?);
@@ -101,9 +109,75 @@ async fn build_plan(
         &target,
         &providers,
         ctx.runtime.jar_cache(),
+        options,
         interaction,
     )
     .await?)
+}
+
+fn soft_fallback_confirmation(ctx: &CliContext) -> orbit_core::MigrationFallbackConfirmation {
+    if ctx.output.format == OutputFormat::Json {
+        let command = ctx.command;
+        let sequence = ctx.machine_sequence.clone();
+        return Box::new(move |preview| {
+            use orbit_machine_protocol::{InteractionChoice, InteractionKind};
+            let prompt = format!(
+                "{}\n\n{}",
+                tr!("The complete source package set is unavailable for the target runtime:"),
+                preview.strict_failure
+            );
+            let envelope = super::machine_interaction(
+                command,
+                &sequence,
+                "migration_removals",
+                InteractionKind::Confirmation,
+                &prompt,
+                vec![
+                    InteractionChoice {
+                        id: "proceed".to_string(),
+                        label: tr!("Search removable-package solutions").into_owned(),
+                        description: Some(
+                            tr!("Find the Pareto-minimal package-removal solutions").into_owned(),
+                        ),
+                        data: serde_json::json!({}),
+                    },
+                    InteractionChoice {
+                        id: "cancel".to_string(),
+                        label: tr!("Cancel migration").into_owned(),
+                        description: Some(tr!("Keep every source package required").into_owned()),
+                        data: serde_json::json!({}),
+                    },
+                ],
+                Some("cancel".to_string()),
+            );
+            super::read_machine_response(&envelope).map(|choice| choice == "proceed")
+        });
+    }
+
+    Box::new(|preview| {
+        eprintln!("\n{}", tr!("Strict migration is unavailable:"));
+        eprintln!("{}", preview.strict_failure);
+        eprint!(
+            "\n{}",
+            tr!("Search for Pareto-minimal package-removal solutions? [y/N] ")
+        );
+        use std::io::Write;
+        std::io::stderr().flush().ok();
+        let mut input = String::new();
+        let bytes = std::io::stdin().read_line(&mut input).map_err(|error| {
+            tr!(
+                "Migration confirmation could not read stdin: %{error}",
+                error = error
+            )
+        })?;
+        if bytes == 0 {
+            return Ok(false);
+        }
+        Ok(matches!(
+            input.trim().to_ascii_lowercase().as_str(),
+            "y" | "yes"
+        ))
+    })
 }
 
 fn render_plan(

@@ -14,10 +14,26 @@ use crate::providers::ModProvider;
 use crate::resolver::types::{CandidateDiagnostic, PackageChange, PackageChangeKind};
 use crate::workspace::{Lockfile, ManifestFile};
 
+pub type MigrationFallbackConfirmation =
+    Box<dyn FnOnce(&MigrationFallbackPrompt) -> Result<bool, String> + Send>;
+
 #[derive(Default)]
 pub struct MigrationInteraction {
     pub select_resolution: Option<crate::resolver::types::ResolutionSelector>,
+    pub confirm_soft_fallback: Option<MigrationFallbackConfirmation>,
     pub progress: Option<ProgressReporter>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct MigrationOptions {
+    /// The caller has already consented to package removal, so the package-
+    /// preserving Pareto search may run without an additional interaction.
+    pub allow_package_removals: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct MigrationFallbackPrompt {
+    pub strict_failure: String,
 }
 
 #[derive(Debug, Clone)]
@@ -66,6 +82,7 @@ pub async fn plan_migration(
     target_dir: &Path,
     providers: &[Box<dyn ModProvider>],
     jar_cache: &crate::jar_cache::JarCache,
+    options: MigrationOptions,
     interaction: MigrationInteraction,
 ) -> Result<MigrationPlan, OrbitError> {
     let source_dir = canonical_directory(source_dir, "source instance")?;
@@ -118,92 +135,105 @@ pub async fn plan_migration(
     .await?;
     catalog.loader_package = target_platform.loader_package;
 
+    let MigrationInteraction {
+        select_resolution,
+        confirm_soft_fallback,
+        progress,
+    } = interaction;
+
     emit_progress(
-        interaction.progress.as_ref(),
+        progress.as_ref(),
         ProgressEvent::ResolutionStarted {
             packages: catalog.candidates.len(),
             candidates: catalog.candidates.values().map(Vec::len).sum(),
         },
     );
-    let portfolio = crate::resolver::resolve_candidate_portfolio_with_progress(
-        &target_manifest,
-        &empty_target_lock,
+    let mut portfolio = if options.allow_package_removals {
+        crate::resolver::resolve_package_preserving_portfolio_with_progress(
+            &target_manifest,
+            &empty_target_lock,
+            &catalog,
+            progress.clone(),
+        )
+        .await
+        .map_err(|error| OrbitError::Conflict(error.to_string()))?
+    } else {
+        match crate::resolver::resolve_required_package_portfolio_with_progress(
+            &target_manifest,
+            &empty_target_lock,
+            &catalog,
+            progress.clone(),
+        )
+        .await
+        {
+            Ok(portfolio) => portfolio,
+            Err(crate::resolver::ResolutionFailure::Internal(error)) => {
+                return Err(OrbitError::Conflict(error));
+            }
+            Err(crate::resolver::ResolutionFailure::NoSolution(strict_failure)) => {
+                let prompt = MigrationFallbackPrompt {
+                    strict_failure: strict_failure.clone(),
+                };
+                let accepted = match confirm_soft_fallback {
+                    Some(confirm) => confirm(&prompt).map_err(OrbitError::Conflict)?,
+                    None => false,
+                };
+                if !accepted {
+                    return Err(OrbitError::Conflict(format!(
+                        "strict migration is unavailable:\n{strict_failure}\n\nSearching for a package-removing migration was declined"
+                    )));
+                }
+                crate::resolver::resolve_package_preserving_portfolio_with_progress(
+                    &target_manifest,
+                    &empty_target_lock,
+                    &catalog,
+                    progress.clone(),
+                )
+                .await
+                .map_err(|soft_failure| {
+                    OrbitError::Conflict(format!(
+                        "strict migration is unavailable:\n{strict_failure}\n\nNo migration is possible even after allowing package removal:\n{soft_failure}"
+                    ))
+                })?
+            }
+        }
+    };
+
+    attach_migration_changes(
+        &mut portfolio,
+        &source_manifest.inner,
+        &source_lock.inner,
+        &target_meta,
+        target_platform.loader,
         &catalog,
-        interaction.progress.clone(),
-    )
-    .await
-    .map_err(|error| OrbitError::Conflict(error.to_string()))?;
+    )?;
+
     emit_progress(
-        interaction.progress.as_ref(),
+        progress.as_ref(),
         ProgressEvent::ResolutionFinished {
             solutions: portfolio.alternatives.len(),
         },
     );
-    let resolution = crate::resolver::select_resolution(portfolio, interaction.select_resolution)
+    let resolution = crate::resolver::select_resolution(portfolio, select_resolution)
         .map_err(OrbitError::Conflict)?;
 
-    let mut packages = Vec::with_capacity(resolution.selected_candidates.len());
-    for (package, candidate_id) in &resolution.selected_candidates {
-        let version = resolution.selected_versions.get(package).ok_or_else(|| {
-            OrbitError::Other(anyhow::anyhow!(
-                "migration solution omitted the selected version for '{package}'"
-            ))
-        })?;
-        let artifact = catalog.resolved.get(candidate_id).ok_or_else(|| {
-            OrbitError::Other(anyhow::anyhow!(
-                "migration solution selected '{package}' without a materializable artifact"
-            ))
-        })?;
-        let candidate = catalog
-            .candidates
-            .get(package)
-            .and_then(|candidates| {
-                candidates
-                    .iter()
-                    .find(|candidate| candidate.id == *candidate_id)
-            })
-            .ok_or_else(|| {
-                OrbitError::Other(anyhow::anyhow!(
-                    "migration solution selected unknown candidate metadata for '{package}'"
-                ))
-            })?;
-        let remotes = crate::installer::package_remotes(
-            package,
-            &source_manifest.inner,
-            &source_lock.inner,
-            &catalog,
-        );
-        packages.push(crate::installer::lock_entry_from_candidate(
-            package,
-            version,
-            artifact,
-            remotes,
-            Some(candidate),
-        ));
-    }
-    packages.sort_by(|left, right| left.mod_id.cmp(&right.mod_id));
-    let mut target_lockfile = OrbitLockfile {
-        meta: target_meta.clone(),
-        packages,
-    };
-    crate::installer::normalize_selected_file_remotes(&mut target_lockfile);
+    let target_lockfile = migration_lockfile(
+        &resolution,
+        &source_manifest.inner,
+        &source_lock.inner,
+        &target_meta,
+        &catalog,
+    )?;
     crate::installer::reconcile_manifest_to_lock(&mut target_manifest, &target_lockfile);
     target_manifest.validate()?;
     target_lockfile.validate()?;
 
-    let changes = migration_changes(
-        &source_lock.inner,
-        &target_lockfile,
-        target_platform.loader,
-        &catalog,
-        &resolution.selected_candidates,
-    );
     Ok(MigrationPlan {
         source_mc_version: source_manifest.inner.project.mc_version,
         target_mc_version: target_meta.mc_version,
         target_loader: target_meta.modloader,
         target_loader_version: target_meta.modloader_version,
-        changes,
+        changes: resolution.changes,
         diagnostics: resolution.diagnostics,
         warnings: resolution.warnings,
         selected_packages: target_lockfile.packages.len(),
@@ -220,11 +250,19 @@ pub async fn plan_migration_from_portable(
     target_dir: &Path,
     providers: &[Box<dyn ModProvider>],
     jar_cache: &crate::jar_cache::JarCache,
+    options: MigrationOptions,
     interaction: MigrationInteraction,
 ) -> Result<MigrationPlan, OrbitError> {
     let owner = source.owner();
-    let mut plan =
-        plan_migration(source.path(), target_dir, providers, jar_cache, interaction).await?;
+    let mut plan = plan_migration(
+        source.path(),
+        target_dir,
+        providers,
+        jar_cache,
+        options,
+        interaction,
+    )
+    .await?;
     plan._source_owner = Some(owner);
     Ok(plan)
 }
@@ -282,6 +320,84 @@ pub fn export_migration(
     }
     result?;
     Ok(report)
+}
+
+fn attach_migration_changes(
+    portfolio: &mut crate::resolver::types::ResolutionPortfolio,
+    source_manifest: &crate::manifest::OrbitManifest,
+    source_lock: &OrbitLockfile,
+    target_meta: &LockMeta,
+    loader: crate::loader::LoaderKind,
+    catalog: &crate::resolver::types::CandidateCatalog,
+) -> Result<(), OrbitError> {
+    for resolution in &mut portfolio.alternatives {
+        let target_lock = migration_lockfile(
+            resolution,
+            source_manifest,
+            source_lock,
+            target_meta,
+            catalog,
+        )?;
+        resolution.changes = migration_changes(
+            source_lock,
+            &target_lock,
+            loader,
+            catalog,
+            &resolution.selected_candidates,
+        );
+    }
+    Ok(())
+}
+
+fn migration_lockfile(
+    resolution: &crate::resolver::types::ResolutionReport,
+    source_manifest: &crate::manifest::OrbitManifest,
+    source_lock: &OrbitLockfile,
+    target_meta: &LockMeta,
+    catalog: &crate::resolver::types::CandidateCatalog,
+) -> Result<OrbitLockfile, OrbitError> {
+    let mut packages = Vec::with_capacity(resolution.selected_candidates.len());
+    for (package, candidate_id) in &resolution.selected_candidates {
+        let version = resolution.selected_versions.get(package).ok_or_else(|| {
+            OrbitError::Other(anyhow::anyhow!(
+                "migration solution omitted the selected version for '{package}'"
+            ))
+        })?;
+        let artifact = catalog.resolved.get(candidate_id).ok_or_else(|| {
+            OrbitError::Other(anyhow::anyhow!(
+                "migration solution selected '{package}' without a materializable artifact"
+            ))
+        })?;
+        let candidate = catalog
+            .candidates
+            .get(package)
+            .and_then(|candidates| {
+                candidates
+                    .iter()
+                    .find(|candidate| candidate.id == *candidate_id)
+            })
+            .ok_or_else(|| {
+                OrbitError::Other(anyhow::anyhow!(
+                    "migration solution selected unknown candidate metadata for '{package}'"
+                ))
+            })?;
+        let remotes =
+            crate::installer::package_remotes(package, source_manifest, source_lock, catalog);
+        packages.push(crate::installer::lock_entry_from_candidate(
+            package,
+            version,
+            artifact,
+            remotes,
+            Some(candidate),
+        ));
+    }
+    packages.sort_by(|left, right| left.mod_id.cmp(&right.mod_id));
+    let mut lockfile = OrbitLockfile {
+        meta: target_meta.clone(),
+        packages,
+    };
+    crate::installer::normalize_selected_file_remotes(&mut lockfile);
+    Ok(lockfile)
 }
 
 fn migration_changes(
@@ -418,6 +534,7 @@ fn canonical_directory(path: &Path, label: &str) -> Result<PathBuf, OrbitError> 
 mod tests {
     use super::*;
     use crate::manifest::{OrbitManifest, ProjectMeta, ResolverConfig};
+    use std::io::Write;
 
     fn write_empty_orbit_instance(directory: &Path, minecraft: &str, loader_version: &str) {
         crate::platform_detection::test_support::write_platform(
@@ -464,6 +581,79 @@ mod tests {
         .unwrap();
     }
 
+    fn write_fabric_package(path: &Path, mod_id: &str, minecraft: &str) {
+        let file = std::fs::File::create(path).unwrap();
+        let mut archive = zip::ZipWriter::new(file);
+        archive
+            .start_file("fabric.mod.json", zip::write::SimpleFileOptions::default())
+            .unwrap();
+        write!(
+            archive,
+            r#"{{"schemaVersion":1,"id":"{mod_id}","version":"1","name":"{mod_id}","depends":{{"minecraft":"{minecraft}"}}}}"#
+        )
+        .unwrap();
+        archive.finish().unwrap();
+    }
+
+    #[tokio::test]
+    async fn unavailable_strict_migration_requires_consent_then_minimizes_removals() {
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("source");
+        let target = root.path().join("target");
+        std::fs::create_dir_all(source.join("mods")).unwrap();
+        std::fs::create_dir_all(&target).unwrap();
+        write_empty_orbit_instance(&source, "1", "1");
+        write_fabric_package(&source.join("mods/kept.jar"), "kept", ">=1");
+        write_fabric_package(&source.join("mods/removed.jar"), "removed", "<2");
+        crate::sync_instance(&source, &[], false).await.unwrap();
+        crate::platform_detection::test_support::write_platform(&target, "2", "fabric", "1");
+        let cache = crate::jar_cache::JarCache::open(root.path().join("cache")).unwrap();
+
+        let error = plan_migration(
+            &source,
+            &target,
+            &[],
+            &cache,
+            MigrationOptions::default(),
+            MigrationInteraction::default(),
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("package-removing migration was declined")
+        );
+
+        let confirmed = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let observed = confirmed.clone();
+        let plan = plan_migration(
+            &source,
+            &target,
+            &[],
+            &cache,
+            MigrationOptions::default(),
+            MigrationInteraction {
+                confirm_soft_fallback: Some(Box::new(move |preview| {
+                    assert!(preview.strict_failure.contains("removed"));
+                    observed.store(true, std::sync::atomic::Ordering::SeqCst);
+                    Ok(true)
+                })),
+                ..MigrationInteraction::default()
+            },
+        )
+        .await
+        .unwrap();
+
+        assert!(confirmed.load(std::sync::atomic::Ordering::SeqCst));
+        assert_eq!(plan.selected_packages, 1);
+        assert!(plan.target_manifest.packages.contains_key("kept"));
+        assert!(!plan.target_manifest.packages.contains_key("removed"));
+        assert!(plan.changes.iter().any(|change| {
+            change.package == "removed" && change.kind == PackageChangeKind::Remove
+        }));
+    }
+
     #[tokio::test]
     async fn check_and_export_share_an_exact_target_runtime_plan() {
         let root = tempfile::tempdir().unwrap();
@@ -485,6 +675,7 @@ mod tests {
             &target,
             &[],
             &cache,
+            MigrationOptions::default(),
             MigrationInteraction::default(),
         )
         .await
@@ -531,6 +722,7 @@ mod tests {
             &target,
             &[],
             &cache,
+            MigrationOptions::default(),
             MigrationInteraction::default(),
         )
         .await

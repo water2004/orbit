@@ -17,7 +17,10 @@ use crate::lockfile::{OrbitLockfile, PackageEntry};
 use crate::manifest::OrbitManifest;
 use crate::metadata::Environment;
 use crate::progress::ProgressReporter;
-use crate::resolver::graph::{build_solver_graph, build_solver_graph_for_target};
+use crate::resolver::graph::{
+    ManifestPackageRoots, build_solver_graph, build_solver_graph_for_target,
+    build_solver_graph_with_package_roots, manifest_top_level_versions,
+};
 use crate::resolver::ordering::resolution_warnings;
 use crate::resolver::types::{
     CandidateCatalog, CandidateIdentity, CandidateLocation, CandidateVersion, PackageChange,
@@ -445,7 +448,7 @@ pub async fn resolve_candidate_portfolio_with_progress(
     catalog: &CandidateCatalog,
     progress: Option<ProgressReporter>,
 ) -> Result<ResolutionPortfolio, String> {
-    resolve_portfolio_with_progress(
+    resolve_portfolio_with_progress_detailed(
         manifest,
         lockfile,
         catalog,
@@ -453,6 +456,7 @@ pub async fn resolve_candidate_portfolio_with_progress(
         progress,
     )
     .await
+    .map_err(|error| error.to_string())
 }
 
 pub async fn resolve_minimal_change_portfolio_with_progress(
@@ -461,11 +465,58 @@ pub async fn resolve_minimal_change_portfolio_with_progress(
     catalog: &CandidateCatalog,
     progress: Option<ProgressReporter>,
 ) -> Result<ResolutionPortfolio, String> {
-    resolve_portfolio_with_progress(
+    resolve_portfolio_with_progress_detailed(
         manifest,
         lockfile,
         catalog,
         ResolutionObjective::MinimizeChanges,
+        progress,
+    )
+    .await
+    .map_err(|error| error.to_string())
+}
+
+#[derive(Debug)]
+pub(crate) enum ResolutionFailure {
+    NoSolution(String),
+    Internal(String),
+}
+
+impl std::fmt::Display for ResolutionFailure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NoSolution(message) | Self::Internal(message) => formatter.write_str(message),
+        }
+    }
+}
+
+pub(crate) async fn resolve_required_package_portfolio_with_progress(
+    manifest: &OrbitManifest,
+    lockfile: &OrbitLockfile,
+    catalog: &CandidateCatalog,
+    progress: Option<ProgressReporter>,
+) -> Result<ResolutionPortfolio, ResolutionFailure> {
+    resolve_portfolio_with_progress_detailed(
+        manifest,
+        lockfile,
+        catalog,
+        ResolutionObjective::RequireManifestPackages,
+        progress,
+    )
+    .await
+}
+
+pub(crate) async fn resolve_package_preserving_portfolio_with_progress(
+    manifest: &OrbitManifest,
+    lockfile: &OrbitLockfile,
+    catalog: &CandidateCatalog,
+    progress: Option<ProgressReporter>,
+) -> Result<ResolutionPortfolio, ResolutionFailure> {
+    resolve_portfolio_with_progress_detailed(
+        manifest,
+        lockfile,
+        catalog,
+        ResolutionObjective::PreserveManifestPackages,
         progress,
     )
     .await
@@ -475,24 +526,48 @@ pub async fn resolve_minimal_change_portfolio_with_progress(
 enum ResolutionObjective {
     MaximizeVersions,
     MinimizeChanges,
+    RequireManifestPackages,
+    PreserveManifestPackages,
 }
 
-async fn resolve_portfolio_with_progress(
+async fn resolve_portfolio_with_progress_detailed(
     manifest: &OrbitManifest,
     lockfile: &OrbitLockfile,
     catalog: &CandidateCatalog,
     objective: ResolutionObjective,
     progress: Option<ProgressReporter>,
-) -> Result<ResolutionPortfolio, String> {
-    let graph = build_solver_graph(
-        manifest,
-        lockfile,
-        &catalog.candidates,
-        catalog.loader_package.as_ref(),
-    )?;
+) -> Result<ResolutionPortfolio, ResolutionFailure> {
+    let graph = match objective {
+        ResolutionObjective::RequireManifestPackages => build_solver_graph_with_package_roots(
+            manifest,
+            lockfile,
+            &catalog.candidates,
+            catalog.loader_package.as_ref(),
+            Environment::Both,
+            ManifestPackageRoots::RequiredTopLevel,
+        ),
+        ResolutionObjective::PreserveManifestPackages => build_solver_graph_with_package_roots(
+            manifest,
+            lockfile,
+            &catalog.candidates,
+            catalog.loader_package.as_ref(),
+            Environment::Both,
+            ManifestPackageRoots::Preferred,
+        ),
+        ResolutionObjective::MaximizeVersions | ResolutionObjective::MinimizeChanges => {
+            build_solver_graph(
+                manifest,
+                lockfile,
+                &catalog.candidates,
+                catalog.loader_package.as_ref(),
+            )
+        }
+    }
+    .map_err(ResolutionFailure::Internal)?;
     let mut maximized_mods: Vec<_> = catalog
         .candidates
         .keys()
+        .chain(manifest.packages.keys())
         .chain(lockfile.packages.iter().map(|entry| &entry.mod_id))
         .cloned()
         .collect();
@@ -506,17 +581,31 @@ async fn resolve_portfolio_with_progress(
     let watched_candidates = highest_candidates(&catalog.candidates, graph.loader);
     let mut trace = diagnostics::ResolutionTrace::with_progress(watched_candidates, progress);
     let solved = match objective {
-        ResolutionObjective::MaximizeVersions => pubgrub::resolve_maximal_solutions_with_observer(
-            &graph.provider,
-            graph.root_package.clone(),
-            graph.root_version.clone(),
-            maximized_packages,
-            solver_version_ordering(),
-            &mut trace,
-        ),
+        ResolutionObjective::MaximizeVersions | ResolutionObjective::RequireManifestPackages => {
+            pubgrub::resolve_maximal_solutions_with_observer(
+                &graph.provider,
+                graph.root_package.clone(),
+                graph.root_version.clone(),
+                maximized_packages,
+                solver_version_ordering(),
+                &mut trace,
+            )
+        }
         ResolutionObjective::MinimizeChanges => {
             let preferences =
                 minimal_change_preferences(manifest, lockfile, &graph.provider, &maximized_mods);
+            pubgrub::resolve_minimal_change_solutions_with_observer(
+                &graph.provider,
+                graph.root_package.clone(),
+                graph.root_version.clone(),
+                preferences,
+                maximized_packages,
+                solver_version_ordering(),
+                &mut trace,
+            )
+        }
+        ResolutionObjective::PreserveManifestPackages => {
+            let preferences = manifest_package_preferences(manifest, &graph.provider);
             pubgrub::resolve_minimal_change_solutions_with_observer(
                 &graph.provider,
                 graph.root_package.clone(),
@@ -531,38 +620,42 @@ async fn resolve_portfolio_with_progress(
     let solutions = match solved {
         Ok(solutions) => solutions,
         Err(pubgrub::PubGrubError::NoSolution(derivation_tree)) => {
-            return Err(diagnostics::describe_no_solution(&derivation_tree));
+            return Err(ResolutionFailure::NoSolution(
+                diagnostics::describe_no_solution(&derivation_tree),
+            ));
         }
         Err(pubgrub::PubGrubError::ErrorChoosingVersion { package, source: _ }) => {
-            return Err(format!(
+            return Err(ResolutionFailure::Internal(format!(
                 "internal error: no version of '{package}' matches constraint"
-            ));
+            )));
         }
         Err(pubgrub::PubGrubError::ErrorRetrievingDependencies {
             package,
             version,
             source,
         }) => {
-            return Err(format!(
+            return Err(ResolutionFailure::Internal(format!(
                 "internal error: deps of '{package}' v{version}: {source}"
-            ));
+            )));
         }
         Err(pubgrub::PubGrubError::ErrorInShouldCancel(error)) => {
-            return Err(error.to_string());
+            return Err(ResolutionFailure::Internal(error.to_string()));
         }
         Err(pubgrub::PubGrubError::InvalidVersionOrdering {
             package,
             version,
             reason,
         }) => {
-            return Err(format!(
+            return Err(ResolutionFailure::Internal(format!(
                 "internal error: invalid version ordering for '{package}' v{version}: {reason}"
-            ));
+            )));
         }
     };
     let snapshots = trace.into_solutions();
     if snapshots.len() != solutions.len() {
-        return Err("internal error: solver trace count does not match solution count".to_string());
+        return Err(ResolutionFailure::Internal(
+            "internal error: solver trace count does not match solution count".to_string(),
+        ));
     }
 
     let report_context = ReportContext {
@@ -647,6 +740,27 @@ fn minimal_change_preferences(
         }
     }
     preferences
+}
+
+fn manifest_package_preferences(
+    manifest: &OrbitManifest,
+    provider: &provider::OrbitDependencyProvider,
+) -> Vec<pubgrub::PackagePreference<SolverPackage, Ranges<SolverVersion>>> {
+    let loader = manifest
+        .project
+        .loader_kind()
+        .expect("solver graph already validated the manifest Loader");
+    manifest
+        .packages
+        .iter()
+        .filter_map(|(mod_id, spec)| {
+            let package = SolverPackage::logical(mod_id.clone());
+            let preferred =
+                manifest_top_level_versions(provider, mod_id, spec.version_constraint(), loader);
+            (preferred != Ranges::empty())
+                .then(|| pubgrub::PackagePreference::selected(package, preferred))
+        })
+        .collect()
 }
 
 struct ReportContext<'a> {
@@ -999,6 +1113,110 @@ b = { version = "*", remotes = [{ type = "file", path = "b.jar" }] }
                 )
             })
             .collect()
+    }
+
+    #[tokio::test]
+    async fn package_preserving_portfolio_drops_only_unavailable_manifest_packages() {
+        let mut catalog = CandidateCatalog::default();
+        catalog
+            .candidates
+            .insert("a".to_string(), vec![candidate("2", Vec::new())]);
+        let empty_lock = OrbitLockfile {
+            meta: lockfile().meta,
+            packages: Vec::new(),
+        };
+
+        let strict = resolve_candidate_portfolio(&manifest(), &empty_lock, &catalog).await;
+        assert!(strict.is_err());
+
+        let portfolio = resolve_package_preserving_portfolio_with_progress(
+            &manifest(),
+            &empty_lock,
+            &catalog,
+            None,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(portfolio.alternatives.len(), 1);
+        assert_eq!(portfolio.alternatives[0].selected_versions["a"], "2");
+        assert!(
+            !portfolio.alternatives[0]
+                .selected_versions
+                .contains_key("b")
+        );
+    }
+
+    #[tokio::test]
+    async fn package_preserving_portfolio_returns_incomparable_minimal_removal_sets() {
+        let mut catalog = CandidateCatalog::default();
+        catalog.candidates.insert(
+            "a".to_string(),
+            vec![candidate("1", vec![ModDependency::required("c", "[1]")])],
+        );
+        catalog.candidates.insert(
+            "b".to_string(),
+            vec![candidate("1", vec![ModDependency::required("c", "[2]")])],
+        );
+        catalog.candidates.insert(
+            "c".to_string(),
+            vec![candidate("1", Vec::new()), candidate("2", Vec::new())],
+        );
+        let empty_lock = OrbitLockfile {
+            meta: lockfile().meta,
+            packages: Vec::new(),
+        };
+
+        let portfolio = resolve_package_preserving_portfolio_with_progress(
+            &manifest(),
+            &empty_lock,
+            &catalog,
+            None,
+        )
+        .await
+        .unwrap();
+        let retained = portfolio
+            .alternatives
+            .iter()
+            .map(|alternative| {
+                ["a", "b"]
+                    .into_iter()
+                    .filter(|package| alternative.selected_versions.contains_key(*package))
+                    .collect::<Vec<_>>()
+            })
+            .collect::<std::collections::BTreeSet<_>>();
+
+        assert_eq!(
+            retained,
+            std::collections::BTreeSet::from([vec!["a"], vec!["b"]])
+        );
+    }
+
+    #[tokio::test]
+    async fn package_preserving_portfolio_never_relaxes_manifest_version_constraints() {
+        let mut constrained = manifest();
+        constrained.packages["a"].version = "[3]".to_string();
+        constrained.packages.shift_remove("b");
+        let mut catalog = CandidateCatalog::default();
+        catalog
+            .candidates
+            .insert("a".to_string(), vec![candidate("2", Vec::new())]);
+        let empty_lock = OrbitLockfile {
+            meta: lockfile().meta,
+            packages: Vec::new(),
+        };
+
+        let portfolio = resolve_package_preserving_portfolio_with_progress(
+            &constrained,
+            &empty_lock,
+            &catalog,
+            None,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(portfolio.alternatives.len(), 1);
+        assert!(portfolio.alternatives[0].selected_versions.is_empty());
     }
 
     #[tokio::test]

@@ -22,11 +22,11 @@ pub use progress_ndjson::{ndjson_audit_reporter, ndjson_progress_reporter};
 pub use view::{
     CacheOutput, ConfigEntryOutput, ConfigEntryView, ConfigListOutput, ConfigPathOutput,
     ConfigValueView, DiagnosticView, ErrorJson, ExportOutput, ImportOutput, InitOutput,
-    InstanceDefaultOutput, InstanceRemoveOutput, InstancesOutput, JsonEnvelope,
-    MigrationExportView, MigrationOutput, MigrationSummary, OutdatedOutput, OutdatedSummary,
-    PackageConstraintOutput, PackageEnvironmentOutput, PackageVersionCandidateView,
-    PackageVersionsOutput, PurgeOutput, RemoveOutput, SearchFilters, SearchOutput,
-    SearchResultView,
+    InstanceDefaultOutput, InstanceRegisterOutput, InstanceRemoveOutput, InstancesOutput,
+    JsonEnvelope, MigrationExportView, MigrationOutput, MigrationSummary, OutdatedOutput,
+    OutdatedSummary, PackageConstraintOutput, PackageEnvironmentOutput,
+    PackageVersionCandidateView, PackageVersionsOutput, PurgeOutput, RemoveOutput, SearchFilters,
+    SearchOutput, SearchResultView,
 };
 pub use view::{
     diagnostic_view, info_view, install_instance_view, instance_view, list_view, outdated_mod_view,

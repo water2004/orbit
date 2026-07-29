@@ -176,6 +176,22 @@ pub async fn handle(
         .count();
     let unknown = output.scanned_mods.len() - identified;
 
+    // Registration is part of a successful init transaction, not a text
+    // rendering side effect. Machine clients such as orbit-gui must observe
+    // exactly the same state transition as an interactive terminal.
+    if !ctx.dry_run {
+        orbit_core::register_instance(
+            ctx.runtime.paths(),
+            orbit_core::InstanceEntry {
+                name: name.clone(),
+                path: registered_path.to_string_lossy().into_owned(),
+                mc_version: output.manifest.project.mc_version.clone(),
+                modloader: loader.clone(),
+                is_default: false,
+            },
+        )?;
+    }
+
     if ctx.output.format == crate::cli::output::OutputFormat::Json {
         let view = crate::cli::output::InitOutput {
             dry_run: ctx.dry_run,
@@ -264,23 +280,11 @@ pub async fn handle(
         );
         eprintln!("{}", tr!("Run 'orbit fix' to resolve the package graph."));
     }
-    if !ctx.dry_run {
-        orbit_core::register_instance(
-            ctx.runtime.paths(),
-            orbit_core::InstanceEntry {
-                name: name.clone(),
-                path: registered_path.to_string_lossy().into_owned(),
-                mc_version: output.manifest.project.mc_version.clone(),
-                modloader: loader.clone(),
-                is_default: false,
-            },
-        )?;
-        if output.dependency_error.is_some() || !output.lock_created {
-            println!(
-                "  {}",
-                tr!("Run 'orbit fix' to create a feasible exact lock.")
-            );
-        }
+    if !ctx.dry_run && (output.dependency_error.is_some() || !output.lock_created) {
+        println!(
+            "  {}",
+            tr!("Run 'orbit fix' to create a feasible exact lock.")
+        );
     }
 
     Ok(())

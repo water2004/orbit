@@ -75,18 +75,26 @@ pub(crate) struct SolverGraph {
     pub(crate) target: Environment,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ManifestPackageRoots {
+    Required,
+    RequiredTopLevel,
+    Preferred,
+}
+
 pub(crate) fn build_solver_graph(
     manifest: &OrbitManifest,
     lockfile: &OrbitLockfile,
     candidates: &HashMap<String, Vec<CandidateVersion>>,
     loader_package: Option<&PlatformCandidate>,
 ) -> Result<SolverGraph, String> {
-    build_solver_graph_for_target(
+    build_solver_graph_with_package_roots(
         manifest,
         lockfile,
         candidates,
         loader_package,
         Environment::Both,
+        ManifestPackageRoots::Required,
     )
 }
 
@@ -96,6 +104,24 @@ pub(crate) fn build_solver_graph_for_target(
     candidates: &HashMap<String, Vec<CandidateVersion>>,
     loader_package: Option<&PlatformCandidate>,
     target: Environment,
+) -> Result<SolverGraph, String> {
+    build_solver_graph_with_package_roots(
+        manifest,
+        lockfile,
+        candidates,
+        loader_package,
+        target,
+        ManifestPackageRoots::Required,
+    )
+}
+
+pub(crate) fn build_solver_graph_with_package_roots(
+    manifest: &OrbitManifest,
+    lockfile: &OrbitLockfile,
+    candidates: &HashMap<String, Vec<CandidateVersion>>,
+    loader_package: Option<&PlatformCandidate>,
+    target: Environment,
+    package_roots: ManifestPackageRoots,
 ) -> Result<SolverGraph, String> {
     let loader = manifest
         .project
@@ -120,14 +146,22 @@ pub(crate) fn build_solver_graph_for_target(
         &exclusions,
         target,
     );
-
     let root_package = SolverPackage::Root;
     let root_version = SolverVersion::platform(Version::zero());
     provider.add_package_versions(root_package.clone(), vec![root_version.clone()]);
+    let root_dependencies = root_dependencies(
+        manifest,
+        lockfile,
+        candidates,
+        loader,
+        target,
+        package_roots,
+        &provider,
+    );
     provider.add_package_deps(
         root_package.clone(),
         root_version.clone(),
-        root_dependencies(manifest, lockfile, candidates, loader, target),
+        root_dependencies,
     );
     provider.add_package_incompatibilities(root_package.clone(), root_version.clone(), Vec::new());
     ensure_referenced_packages(&mut provider);
@@ -817,20 +851,35 @@ fn root_dependencies(
     candidates: &HashMap<String, Vec<CandidateVersion>>,
     loader: LoaderKind,
     target: Environment,
+    package_roots: ManifestPackageRoots,
+    provider: &OrbitDependencyProvider,
 ) -> Vec<(SolverPackage, Ranges<SolverVersion>)> {
-    let mut dependencies = manifest
-        .packages
-        .iter()
-        .filter(|(package, spec)| {
-            effective_root_environment(package, spec, lockfile, candidates).applies_to(target)
-        })
-        .map(|(name, spec)| {
-            (
-                logical_package(name),
-                dependency_constraint(name, spec.version_constraint(), loader),
-            )
-        })
-        .collect::<Vec<_>>();
+    let mut dependencies = if package_roots != ManifestPackageRoots::Preferred {
+        manifest
+            .packages
+            .iter()
+            .filter(|(package, spec)| {
+                effective_root_environment(package, spec, lockfile, candidates).applies_to(target)
+            })
+            .map(|(name, spec)| {
+                (
+                    logical_package(name),
+                    if package_roots == ManifestPackageRoots::RequiredTopLevel {
+                        manifest_top_level_versions(
+                            provider,
+                            name,
+                            spec.version_constraint(),
+                            loader,
+                        )
+                    } else {
+                        dependency_constraint(name, spec.version_constraint(), loader)
+                    },
+                )
+            })
+            .collect::<Vec<_>>()
+    } else {
+        Vec::new()
+    };
     // Minecraft and the selected Loader are not optional leaves: their actual
     // JARs are part of every launch. Keeping them at the root also makes the
     // Loader's own dependencies and contained-module load conditions use the
@@ -851,6 +900,32 @@ fn root_dependencies(
         ))),
     ));
     dependencies
+}
+
+pub(super) fn manifest_top_level_versions(
+    provider: &OrbitDependencyProvider,
+    name: &str,
+    constraint: &str,
+    loader: LoaderKind,
+) -> Ranges<SolverVersion> {
+    let package = logical_package(name);
+    let allowed = dependency_constraint(name, constraint, loader);
+    provider
+        .versions
+        .get(&package)
+        .into_iter()
+        .flatten()
+        .filter(|version| allowed.contains(version))
+        .filter(|version| {
+            version.candidate_identity().is_some_and(|identity| {
+                identity.owner == name
+                    && identity.path.is_empty()
+                    && identity.location == CandidateLocation::Root
+            })
+        })
+        .fold(Ranges::empty(), |range, version| {
+            range.union(&Ranges::singleton(version.clone()))
+        })
 }
 
 fn effective_root_environment(

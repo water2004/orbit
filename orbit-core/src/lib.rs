@@ -47,7 +47,8 @@ pub use archive::{
 pub use audit::{audit_instance, audit_instance_with_progress};
 pub use config::{
     ConfigKey, ConfigValue, GlobalConfig, InstanceEntry, InstancesRegistry, clear_default_instance,
-    persist_config_field, register_instance, remove_instance, set_default_instance,
+    persist_config_field, register_existing_instance, register_instance, remove_instance,
+    set_default_instance,
 };
 pub use dependency_environment::{PackageEnvironmentReport, set_package_environment};
 pub use error::OrbitError;
@@ -65,7 +66,8 @@ pub use lockfile::{ArtifactSource, BundledMod, LockMeta, OrbitLockfile, PackageE
 pub use manifest::{OrbitManifest, PackageRemote, PackageSpec, PlatformArtifact, PlatformSnapshot};
 pub use metadata::mojang::McVersion;
 pub use migration::{
-    MigrationExportReport, MigrationInteraction, MigrationPlan, export_migration, plan_migration,
+    MigrationExportReport, MigrationFallbackConfirmation, MigrationFallbackPrompt,
+    MigrationInteraction, MigrationOptions, MigrationPlan, export_migration, plan_migration,
     plan_migration_from_portable,
 };
 pub use orbit_bytecode_audit as audit_model;

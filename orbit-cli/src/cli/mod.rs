@@ -269,6 +269,8 @@ pub enum Commands {
 pub enum InstanceCommands {
     /// List all managed Minecraft instances.
     List,
+    /// Register an existing, complete Orbit workspace.
+    Register { name: String, path: PathBuf },
     /// Set an instance as the global default.
     Default { name: String },
     /// Stop tracking an instance.
@@ -508,6 +510,9 @@ pub enum MigrateCommands {
         /// Portable Orbit ZIP captured before the target instance was created.
         #[arg(long)]
         source_pack: Option<PathBuf>,
+        /// Permit a Pareto-minimal package-removing plan without prompting.
+        #[arg(long)]
+        allow_removals: bool,
     },
     /// Write target orbit.toml, orbit.lock, and configuration into that runtime.
     Export {
@@ -519,6 +524,9 @@ pub enum MigrateCommands {
         /// Remove --source-pack after a successful, confirmed export.
         #[arg(long, requires = "source_pack")]
         consume_source_pack: bool,
+        /// Permit a Pareto-minimal package-removing plan without prompting.
+        #[arg(long)]
+        allow_removals: bool,
     },
 }
 
@@ -527,6 +535,7 @@ impl CommandHandler for InstanceCommands {
         use crate::cli::commands::instances::*;
         match self {
             InstanceCommands::List => handle_list(ctx).await,
+            InstanceCommands::Register { name, path } => handle_register(name, path, ctx).await,
             InstanceCommands::Default { name } => handle_default(name, ctx).await,
             InstanceCommands::Remove { name } => handle_remove(name, ctx).await,
         }
@@ -548,14 +557,22 @@ impl CommandHandler for MigrateCommands {
             Self::Check {
                 target,
                 source_pack,
-            } => commands::migrate::handle_check(target, source_pack, ctx).await,
+                allow_removals,
+            } => commands::migrate::handle_check(target, source_pack, allow_removals, ctx).await,
             Self::Export {
                 target,
                 source_pack,
                 consume_source_pack,
+                allow_removals,
             } => {
-                commands::migrate::handle_export(target, source_pack, consume_source_pack, ctx)
-                    .await
+                commands::migrate::handle_export(
+                    target,
+                    source_pack,
+                    consume_source_pack,
+                    allow_removals,
+                    ctx,
+                )
+                .await
             }
         }
     }
@@ -567,7 +584,7 @@ mod tests {
 
     use super::{
         BoundInclusion, Cli, Commands, ConfigCommands, ConstraintCommands,
-        ConstraintPolicyCommands, MigrateCommands, PathBuf, RemoteCommands,
+        ConstraintPolicyCommands, InstanceCommands, MigrateCommands, PathBuf, RemoteCommands,
     };
 
     #[test]
@@ -763,6 +780,7 @@ mod tests {
                 MigrateCommands::Check {
                     target,
                     source_pack,
+                    allow_removals,
                 },
         } = check.command
         else {
@@ -770,6 +788,7 @@ mod tests {
         };
         assert_eq!(target, PathBuf::from("target"));
         assert!(source_pack.is_none());
+        assert!(!allow_removals);
 
         let export = Cli::try_parse_from([
             "orbit",
@@ -783,5 +802,27 @@ mod tests {
         .unwrap();
         assert!(export.command.mutates_instance());
         assert!(Cli::try_parse_from(["orbit", "check", "1.21"]).is_err());
+    }
+
+    #[test]
+    fn existing_instance_registration_requires_an_explicit_name_and_path() {
+        let cli = Cli::try_parse_from([
+            "orbit",
+            "instances",
+            "register",
+            "fabric-1.21.1",
+            "D:/Minecraft/instances/fabric-1.21.1",
+        ])
+        .unwrap();
+        let Commands::Instances {
+            command: InstanceCommands::Register { name, path },
+        } = cli.command
+        else {
+            panic!("instances register was not parsed");
+        };
+
+        assert_eq!(name, "fabric-1.21.1");
+        assert_eq!(path, PathBuf::from("D:/Minecraft/instances/fabric-1.21.1"));
+        assert!(Cli::try_parse_from(["orbit", "instances", "register", "name"]).is_err());
     }
 }
