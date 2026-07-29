@@ -430,7 +430,7 @@ pub async fn resolve_launch_identity(
             yggdrasil_prefetched_metadata: None,
         }),
         AccountProvider::Microsoft => {
-            microsoft::resolve_microsoft_identity(paths, config, client, secrets, account).await
+            microsoft::resolve_microsoft_identity(paths, client, secrets, account).await
         }
         AccountProvider::ExternalYggdrasil { provider_id } => {
             let provider = find_yggdrasil_provider(config, provider_id)?;

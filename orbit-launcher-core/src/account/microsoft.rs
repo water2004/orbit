@@ -10,13 +10,13 @@ use super::{
     parse_profile_id, persist_authenticated_account,
 };
 use crate::atomic_io::write_atomic;
-use crate::config::GlobalConfig;
 use crate::error::LauncherError;
 use crate::runtime::RuntimePaths;
 use crate::secret_store::SecretStore;
 
 const DEVICE_CODE_URL: &str = "https://login.microsoftonline.com/consumers/oauth2/v2.0/devicecode";
 const TOKEN_URL: &str = "https://login.microsoftonline.com/consumers/oauth2/v2.0/token";
+const MICROSOFT_CLIENT_ID: &str = "a1b083c0-2c7f-47c8-a351-451279131fc7";
 const XBOX_USER_AUTH_URL: &str = "https://user.auth.xboxlive.com/user/authenticate";
 const XSTS_AUTH_URL: &str = "https://xsts.auth.xboxlive.com/xsts/authorize";
 const MINECRAFT_LOGIN_URL: &str =
@@ -56,11 +56,10 @@ pub enum MicrosoftLoginProgressEvent {
 
 pub async fn begin_microsoft_device_login(
     paths: &RuntimePaths,
-    config: &GlobalConfig,
     client: &reqwest::Client,
     secrets: &dyn SecretStore,
 ) -> Result<MicrosoftDeviceSession, LauncherError> {
-    let client_id = microsoft_client_id(config)?;
+    let client_id = MICROSOFT_CLIENT_ID;
     let response = client
         .post(DEVICE_CODE_URL)
         .form(&[("client_id", client_id), ("scope", MICROSOFT_SCOPE)])
@@ -254,7 +253,6 @@ where
 
 pub(super) async fn resolve_microsoft_identity(
     paths: &RuntimePaths,
-    config: &GlobalConfig,
     client: &reqwest::Client,
     secrets: &dyn SecretStore,
     account: AccountMetadata,
@@ -289,7 +287,7 @@ pub(super) async fn resolve_microsoft_identity(
         }
     }
 
-    let client_id = microsoft_client_id(config)?;
+    let client_id = MICROSOFT_CLIENT_ID;
     let response = client
         .post(TOKEN_URL)
         .form(&[
@@ -560,20 +558,6 @@ async fn read_bounded_response(
         )));
     }
     Ok(bytes.to_vec())
-}
-
-fn microsoft_client_id(config: &GlobalConfig) -> Result<&str, LauncherError> {
-    config
-        .microsoft
-        .client_id
-        .as_deref()
-        .or(option_env!("ORBIT_MICROSOFT_CLIENT_ID"))
-        .ok_or_else(|| {
-            LauncherError::Authentication(
-                "Microsoft login requires microsoft.client-id or a release build with ORBIT_MICROSOFT_CLIENT_ID"
-                    .to_string(),
-            )
-        })
 }
 
 fn device_session_path(paths: &RuntimePaths, id: Uuid) -> PathBuf {
@@ -851,47 +835,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn microsoft_client_id_is_never_invented() {
-        let config = GlobalConfig::default();
-        if option_env!("ORBIT_MICROSOFT_CLIENT_ID").is_none() {
-            assert!(microsoft_client_id(&config).is_err());
-        }
-    }
-
-    #[tokio::test]
-    async fn missing_client_id_does_not_mutate_existing_accounts() {
-        if option_env!("ORBIT_MICROSOFT_CLIENT_ID").is_some() {
-            return;
-        }
-        let directory = tempfile::tempdir().unwrap();
-        let paths = RuntimePaths::resolve(&crate::runtime::RuntimePathOptions {
-            config_dir: Some(directory.path().join("config")),
-            data_dir: Some(directory.path().join("data")),
-            cache_dir: Some(directory.path().join("cache")),
-        })
-        .unwrap();
-        super::super::create_offline_account(&paths, "ExistingPlayer").unwrap();
-        let before = std::fs::read(paths.accounts_file()).unwrap();
-        let store = crate::secret_store::test_support::MemorySecretStore::default();
-
-        let error = begin_microsoft_device_login(
-            &paths,
-            &GlobalConfig::default(),
-            &reqwest::Client::new(),
-            &store,
-        )
-        .await
-        .unwrap_err();
-
-        assert_eq!(error.code(), "authentication");
-        assert_eq!(std::fs::read(paths.accounts_file()).unwrap(), before);
-        assert_eq!(
-            super::super::AccountRepository::load(&paths)
-                .unwrap()
-                .accounts()
-                .len(),
-            1
-        );
+    fn microsoft_client_id_is_the_registered_public_application() {
+        assert_eq!(MICROSOFT_CLIENT_ID, "a1b083c0-2c7f-47c8-a351-451279131fc7");
     }
 
     #[test]

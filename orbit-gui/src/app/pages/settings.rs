@@ -67,7 +67,7 @@ fn appearance_page(app: &Entity<OrbitApp>) -> SettingPage {
 fn launcher_page(app: &Entity<OrbitApp>) -> SettingPage {
     SettingPage::new(tr!("Launcher").into_owned())
         .description(
-            tr!("Minecraft storage, download behavior, installer limits, and authentication")
+            tr!("Minecraft storage, download behavior, and installer limits")
                 .into_owned(),
         )
         .group(
@@ -118,18 +118,6 @@ fn launcher_page(app: &Entity<OrbitApp>) -> SettingPage {
                         false,
                     ),
                 ]),
-        )
-        .group(
-            SettingGroup::new()
-                .title(tr!("Authentication").into_owned())
-                .item(launcher_editor_item(
-                    app,
-                    "microsoft.client-id",
-                    tr!("Microsoft application client ID").into_owned(),
-                    tr!("Optional registered application ID used for Microsoft device authorization")
-                        .into_owned(),
-                    false,
-                )),
         )
         .group(
             SettingGroup::new()

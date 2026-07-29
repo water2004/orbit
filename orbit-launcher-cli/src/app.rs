@@ -468,7 +468,6 @@ async fn execute_account(
                         let client = runtime.config().http_client()?;
                         let session = begin_microsoft_device_login(
                             runtime.paths(),
-                            runtime.config(),
                             &client,
                             secrets.as_ref(),
                         )

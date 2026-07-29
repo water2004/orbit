@@ -26,8 +26,6 @@ pub struct GlobalConfig {
     #[serde(default)]
     pub java: JavaGlobalConfig,
     #[serde(default)]
-    pub microsoft: MicrosoftConfig,
-    #[serde(default)]
     pub yggdrasil: YggdrasilConfig,
     #[serde(default)]
     pub ui: UiConfig,
@@ -42,7 +40,6 @@ impl Default for GlobalConfig {
             cache: CacheConfig::default(),
             minecraft: MinecraftGlobalConfig::default(),
             java: JavaGlobalConfig::default(),
-            microsoft: MicrosoftConfig::default(),
             yggdrasil: YggdrasilConfig::default(),
             ui: UiConfig::default(),
         }
@@ -106,15 +103,6 @@ impl GlobalConfig {
                 directory.display()
             )));
         }
-        if let Some(client_id) = &self.microsoft.client_id
-            && (client_id.trim() != client_id
-                || client_id.is_empty()
-                || client_id.chars().any(char::is_control))
-        {
-            return Err(LauncherError::InvalidConfig(
-                "microsoft.client_id is invalid".to_string(),
-            ));
-        }
         let mut ids = HashSet::new();
         for provider in &self.yggdrasil.providers {
             validate_identifier(&provider.id, "Yggdrasil provider")?;
@@ -166,20 +154,18 @@ pub enum ConfigKey {
     InstallerTimeoutSeconds,
     CacheMaxSize,
     JavaDefaultProvider,
-    MicrosoftClientId,
     UiProgressBar,
     UiColor,
 }
 
 impl ConfigKey {
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 8] = [
         Self::NetworkConcurrency,
         Self::NetworkConnectTimeoutSeconds,
         Self::NetworkRequestTimeoutSeconds,
         Self::InstallerTimeoutSeconds,
         Self::CacheMaxSize,
         Self::JavaDefaultProvider,
-        Self::MicrosoftClientId,
         Self::UiProgressBar,
         Self::UiColor,
     ];
@@ -192,7 +178,6 @@ impl ConfigKey {
             Self::InstallerTimeoutSeconds => "installer.timeout-seconds",
             Self::CacheMaxSize => "cache.max-size",
             Self::JavaDefaultProvider => "java.default-provider",
-            Self::MicrosoftClientId => "microsoft.client-id",
             Self::UiProgressBar => "ui.progress-bar",
             Self::UiColor => "ui.color",
         }
@@ -206,7 +191,6 @@ impl ConfigKey {
             Self::InstallerTimeoutSeconds => ("installer", "timeout_seconds"),
             Self::CacheMaxSize => ("cache", "max_size"),
             Self::JavaDefaultProvider => ("java", "default_provider"),
-            Self::MicrosoftClientId => ("microsoft", "client_id"),
             Self::UiProgressBar => ("ui", "progress_bar"),
             Self::UiColor => ("ui", "color"),
         }
@@ -224,7 +208,6 @@ impl ConfigKey {
             Self::InstallerTimeoutSeconds => Some(config.installer.timeout_seconds.to_string()),
             Self::CacheMaxSize => Some(config.cache.max_size.clone()),
             Self::JavaDefaultProvider => Some(config.java.default_provider.as_str().to_string()),
-            Self::MicrosoftClientId => config.microsoft.client_id.clone(),
             Self::UiProgressBar => Some(config.ui.progress_bar.as_str().to_string()),
             Self::UiColor => Some(config.ui.color.as_str().to_string()),
         }
@@ -251,7 +234,7 @@ impl ConfigKey {
                 )
                 .map_err(|_| invalid("a positive integer no greater than 9223372036854775807"))?,
             ),
-            Self::CacheMaxSize | Self::MicrosoftClientId => value(raw),
+            Self::CacheMaxSize => value(raw),
             Self::JavaDefaultProvider => value(
                 JavaProvider::from_str(raw)
                     .map_err(|()| invalid("mojang or temurin"))?
@@ -588,13 +571,6 @@ impl FromStr for JavaProvider {
             _ => Err(()),
         }
     }
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-pub struct MicrosoftConfig {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub client_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
