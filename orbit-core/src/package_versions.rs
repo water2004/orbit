@@ -14,6 +14,8 @@ pub struct PackageVersionCandidate {
     /// Content identity retained only for deterministic internal ordering.
     pub(crate) identity: String,
     pub version: String,
+    pub suffix: Option<String>,
+    pub suffix_tokens: Vec<String>,
     pub sources: Vec<String>,
     pub details: String,
     pub selected: bool,
@@ -24,6 +26,7 @@ pub struct PackageVersionCandidate {
 pub struct PackageVersionsReport {
     pub package: String,
     pub constraint: String,
+    pub suffix: String,
     pub policy: crate::package_constraint::PackageVersionPolicy,
     pub selected_version: Option<String>,
     pub candidates: Vec<PackageVersionCandidate>,
@@ -71,23 +74,30 @@ pub async fn list_package_versions(
     .await?;
     let selected = lockfile.inner.find(package);
     let range = Version::parse_constraint(&specification.version, loader);
+    let suffix_expression = crate::VersionSuffixRule::parse(&specification.suffix)?;
     let mut candidates = catalog
         .candidates
         .get(package)
         .into_iter()
         .flatten()
-        .map(|candidate| PackageVersionCandidate {
-            identity: candidate.id.clone(),
-            version: candidate.jar_version.clone(),
-            sources: candidate.display_sources.clone(),
-            details: candidate_details(candidate),
-            selected: selected.is_some_and(|entry| {
-                candidate
-                    .id
-                    .strip_prefix("sha512:")
-                    .is_some_and(|hash| hash.eq_ignore_ascii_case(&entry.sha512))
-            }),
-            matches_constraint: range.contains(&Version::parse(&candidate.jar_version, loader)),
+        .map(|candidate| {
+            let version = Version::parse(&candidate.jar_version, loader);
+            PackageVersionCandidate {
+                identity: candidate.id.clone(),
+                suffix: version.suffix(),
+                suffix_tokens: version.suffix_tokens(),
+                version: candidate.jar_version.clone(),
+                sources: candidate.display_sources.clone(),
+                details: candidate_details(candidate),
+                selected: selected.is_some_and(|entry| {
+                    candidate
+                        .id
+                        .strip_prefix("sha512:")
+                        .is_some_and(|hash| hash.eq_ignore_ascii_case(&entry.sha512))
+                }),
+                matches_constraint: range.contains(&version)
+                    && suffix_expression.matches(version.suffix().as_deref()),
+            }
         })
         .collect::<Vec<_>>();
     candidates.sort_by(|left, right| {
@@ -119,6 +129,7 @@ pub async fn list_package_versions(
     Ok(PackageVersionsReport {
         package: package.to_string(),
         constraint: specification.version.clone(),
+        suffix: suffix_expression.canonical(),
         policy: crate::package_constraint::PackageVersionPolicy::from_requirement(
             &specification.version,
         ),

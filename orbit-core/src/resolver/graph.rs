@@ -6,7 +6,7 @@ use pubgrub::{IncompatibilityConstraint, IncompatibilityConstraintTerm, Ranges};
 
 use crate::loader::{LoaderKind, NestedPriorityPolicy};
 use crate::lockfile::{BundledMod, OrbitLockfile};
-use crate::manifest::OrbitManifest;
+use crate::manifest::{OrbitManifest, PackageSpec};
 use crate::metadata::{
     DependencyExpression, EmbeddedArtifact, Environment, LanguageLoaderRequirement,
     ModLoadCondition, ProvidedMod,
@@ -864,16 +864,13 @@ fn root_dependencies(
             .map(|(name, spec)| {
                 (
                     logical_package(name),
-                    if package_roots == ManifestPackageRoots::RequiredTopLevel {
-                        manifest_top_level_versions(
-                            provider,
-                            name,
-                            spec.version_constraint(),
-                            loader,
-                        )
-                    } else {
-                        dependency_constraint(name, spec.version_constraint(), loader)
-                    },
+                    manifest_package_versions(
+                        provider,
+                        name,
+                        spec,
+                        loader,
+                        package_roots == ManifestPackageRoots::RequiredTopLevel,
+                    ),
                 )
             })
             .collect::<Vec<_>>()
@@ -902,14 +899,17 @@ fn root_dependencies(
     dependencies
 }
 
-pub(super) fn manifest_top_level_versions(
+pub(super) fn manifest_package_versions(
     provider: &OrbitDependencyProvider,
     name: &str,
-    constraint: &str,
+    specification: &PackageSpec,
     loader: LoaderKind,
+    top_level_only: bool,
 ) -> Ranges<SolverVersion> {
     let package = logical_package(name);
-    let allowed = dependency_constraint(name, constraint, loader);
+    let allowed = dependency_constraint(name, specification.version_constraint(), loader);
+    let suffix = crate::VersionSuffixRule::parse(specification.suffix_expression())
+        .expect("manifest suffix expression was validated");
     provider
         .versions
         .get(&package)
@@ -917,11 +917,17 @@ pub(super) fn manifest_top_level_versions(
         .flatten()
         .filter(|version| allowed.contains(version))
         .filter(|version| {
-            version.candidate_identity().is_some_and(|identity| {
-                identity.owner == name
-                    && identity.path.is_empty()
-                    && identity.location == CandidateLocation::Root
-            })
+            version
+                .domain()
+                .is_some_and(|version| suffix.matches(version.suffix().as_deref()))
+        })
+        .filter(|version| {
+            !top_level_only
+                || version.candidate_identity().is_some_and(|identity| {
+                    identity.owner == name
+                        && identity.path.is_empty()
+                        && identity.location == CandidateLocation::Root
+                })
         })
         .fold(Ranges::empty(), |range, version| {
             range.union(&Ranges::singleton(version.clone()))

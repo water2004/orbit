@@ -19,7 +19,7 @@ use crate::metadata::Environment;
 use crate::progress::ProgressReporter;
 use crate::resolver::graph::{
     ManifestPackageRoots, build_solver_graph, build_solver_graph_for_target,
-    build_solver_graph_with_package_roots, manifest_top_level_versions,
+    build_solver_graph_with_package_roots, manifest_package_versions,
 };
 use crate::resolver::ordering::resolution_warnings;
 use crate::resolver::types::{
@@ -755,8 +755,7 @@ fn manifest_package_preferences(
         .iter()
         .filter_map(|(mod_id, spec)| {
             let package = SolverPackage::logical(mod_id.clone());
-            let preferred =
-                manifest_top_level_versions(provider, mod_id, spec.version_constraint(), loader);
+            let preferred = manifest_package_versions(provider, mod_id, spec, loader, true);
             (preferred != Ranges::empty())
                 .then(|| pubgrub::PackagePreference::selected(package, preferred))
         })

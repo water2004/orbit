@@ -123,6 +123,7 @@ impl PackageVersionPolicy {
 pub struct PackageConstraintState {
     pub package: String,
     pub constraint: String,
+    pub suffix: String,
     pub policy: PackageVersionPolicy,
     pub selected_version: Option<String>,
     pub selected_satisfies: Option<bool>,
@@ -133,6 +134,8 @@ pub struct PackageConstraintApplyReport {
     pub package: String,
     pub previous: String,
     pub current: String,
+    pub previous_suffix: String,
+    pub suffix: String,
     pub policy: PackageVersionPolicy,
     pub previous_selected_version: Option<String>,
     pub selected_version: Option<String>,
@@ -155,11 +158,17 @@ pub fn package_constraint(
         .get(package)
         .ok_or_else(|| OrbitError::ModNotFound(package.to_string()))?;
     let selected_version = selected_version(instance_dir, package)?;
-    let selected_satisfies =
-        selection_satisfies(selected_version.as_deref(), &specification.version, loader);
+    let suffix = crate::VersionSuffixRule::parse(&specification.suffix)?.canonical();
+    let selected_satisfies = selection_satisfies(
+        selected_version.as_deref(),
+        &specification.version,
+        &suffix,
+        loader,
+    );
     Ok(PackageConstraintState {
         package: package.to_string(),
         constraint: specification.version.clone(),
+        suffix,
         policy: PackageVersionPolicy::from_requirement(&specification.version),
         selected_version,
         selected_satisfies,
@@ -170,6 +179,7 @@ pub async fn apply_package_constraint(
     instance_dir: &Path,
     package: &str,
     policy: PackageVersionPolicy,
+    suffix: String,
     providers: &[Box<dyn ModProvider>],
     jar_cache: &crate::jar_cache::JarCache,
     dry_run: bool,
@@ -178,13 +188,15 @@ pub async fn apply_package_constraint(
     let mut manifest = ManifestFile::open(instance_dir)?;
     let loader = manifest.inner.project.loader_kind()?;
     let current = policy.requirement(loader)?;
+    let suffix = crate::VersionSuffixRule::parse(&suffix)?.canonical();
     let specification = manifest
         .inner
         .packages
         .get_mut(package)
         .ok_or_else(|| OrbitError::ModNotFound(package.to_string()))?;
     let previous = std::mem::replace(&mut specification.version, current.clone());
-    let changed = previous != current;
+    let previous_suffix = std::mem::replace(&mut specification.suffix, suffix.clone());
+    let changed = previous != current || previous_suffix != suffix;
     let previous_selected_version = selected_version(instance_dir, package)?;
 
     let outcome = crate::installer::repair_manifest_instance(
@@ -203,12 +215,15 @@ pub async fn apply_package_constraint(
         planned_selected_version(&outcome.report, package)
             .or_else(|| previous_selected_version.clone())
     };
-    let selected_satisfies = selection_satisfies(selected_version.as_deref(), &current, loader);
+    let selected_satisfies =
+        selection_satisfies(selected_version.as_deref(), &current, &suffix, loader);
 
     Ok(PackageConstraintApplyReport {
         package: package.to_string(),
         previous,
         current,
+        previous_suffix,
+        suffix,
         policy,
         previous_selected_version,
         selected_version,
@@ -248,10 +263,15 @@ fn planned_selected_version(report: &InstallReport, package: &str) -> Option<Str
 fn selection_satisfies(
     selected: Option<&str>,
     constraint: &str,
+    suffix: &str,
     loader: LoaderKind,
 ) -> Option<bool> {
     selected.map(|version| {
-        Version::parse_constraint(constraint, loader).contains(&Version::parse(version, loader))
+        let version = Version::parse(version, loader);
+        Version::parse_constraint(constraint, loader).contains(&version)
+            && crate::VersionSuffixRule::parse(suffix)
+                .expect("manifest suffix expression was validated")
+                .matches(version.suffix().as_deref())
     })
 }
 
@@ -497,6 +517,7 @@ mod tests {
                 operator: VersionComparison::Exact,
                 version: "1.2.3-alpha".to_string(),
             },
+            "all".to_string(),
             &[],
             &cache,
             false,
@@ -535,6 +556,7 @@ mod tests {
                 operator: VersionComparison::Exact,
                 version: "1.2.3".to_string(),
             },
+            "all".to_string(),
             &[],
             &cache,
             false,
@@ -556,6 +578,37 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn suffix_expression_participates_in_the_same_solver_transaction() {
+        let directory = tempfile::tempdir().unwrap();
+        let cache = write_constraint_instance(directory.path());
+
+        let report = apply_package_constraint(
+            directory.path(),
+            "example",
+            PackageVersionPolicy::Comparison {
+                operator: VersionComparison::Exact,
+                version: "1.2.3".to_string(),
+            },
+            "all; intersect \"alpha\"".to_string(),
+            &[],
+            &cache,
+            false,
+            accept_transaction(),
+        )
+        .await
+        .unwrap();
+
+        assert!(report.applied);
+        assert_eq!(report.selected_version.as_deref(), Some("1.2.3-alpha"));
+        let manifest = ManifestFile::open(directory.path()).unwrap();
+        assert_eq!(manifest.inner.packages["example"].version, "=1.2.3");
+        assert_eq!(
+            manifest.inner.packages["example"].suffix,
+            "all; intersect \"alpha\""
+        );
+    }
+
+    #[tokio::test]
     async fn an_unsatisfiable_policy_leaves_manifest_lock_and_jar_unchanged() {
         let directory = tempfile::tempdir().unwrap();
         let cache = write_constraint_instance(directory.path());
@@ -570,6 +623,7 @@ mod tests {
                 operator: VersionComparison::Exact,
                 version: "9".to_string(),
             },
+            "all".to_string(),
             &[],
             &cache,
             false,
@@ -606,6 +660,7 @@ mod tests {
                 operator: VersionComparison::Exact,
                 version: "1.2.3-alpha".to_string(),
             },
+            "all".to_string(),
             &[],
             &cache,
             false,

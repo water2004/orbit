@@ -134,6 +134,52 @@ impl Version {
             Self::Generic(_) => Ranges::strictly_higher_than(self.clone()),
         }
     }
+
+    /// Raw text following the leading dotted numeric core.
+    ///
+    /// Orbit does not assign release-stage meaning to this text. Separators
+    /// are removed, but `beta`, `mc26`, `fabric`, or any other author-chosen
+    /// value remains ordinary text for the suffix expression engine.
+    pub fn suffix(&self) -> Option<String> {
+        suffix_from_raw(&self.to_string())
+    }
+
+    /// Stable, deterministic qualifier choices suitable for a structured UI.
+    /// The full qualifier is retained alongside its textual components.
+    pub fn suffix_tokens(&self) -> Vec<String> {
+        let Some(suffix) = self.suffix() else {
+            return Vec::new();
+        };
+        let suffix = suffix.to_ascii_lowercase();
+        let mut tokens = vec![suffix.clone()];
+        tokens.extend(
+            suffix
+                .split(|character: char| !character.is_ascii_alphanumeric())
+                .filter(|token| {
+                    token
+                        .chars()
+                        .any(|character| character.is_ascii_alphabetic())
+                })
+                .map(str::to_string),
+        );
+        tokens.sort();
+        tokens.dedup();
+        tokens
+    }
+}
+
+fn suffix_from_raw(raw: &str) -> Option<String> {
+    if raw.is_empty() {
+        return None;
+    }
+    let numeric_end = raw
+        .char_indices()
+        .take_while(|(_, character)| character.is_ascii_digit() || *character == '.')
+        .map(|(index, character)| index + character.len_utf8())
+        .last()
+        .unwrap_or(0);
+    let suffix = raw[numeric_end..].trim_start_matches(['-', '_', '.', '+']);
+    (!suffix.is_empty()).then(|| suffix.to_string())
 }
 
 pub(super) fn has_explicit_suffix(raw: &str) -> bool {
@@ -180,4 +226,33 @@ pub(super) fn cmp_numeric_core(left: &[String], right: &[String]) -> Ordering {
         }
     }
     Ordering::Equal
+}
+
+#[cfg(test)]
+mod suffix_tests {
+    use super::*;
+
+    #[test]
+    fn suffix_is_raw_text_after_the_numeric_core() {
+        assert_eq!(
+            Version::parse("1.2.3-beta.1+mc26", LoaderKind::Fabric).suffix(),
+            Some("beta.1+mc26".to_string())
+        );
+        assert_eq!(
+            Version::parse("1.2.3+mc26", LoaderKind::Fabric).suffix(),
+            Some("mc26".to_string())
+        );
+        assert_eq!(
+            Version::parse("1.2.3-SNAPSHOT", LoaderKind::Forge).suffix(),
+            Some("SNAPSHOT".to_string())
+        );
+    }
+
+    #[test]
+    fn suffix_tokens_include_full_and_textual_components() {
+        assert_eq!(
+            Version::parse("1.2.3-beta.1", LoaderKind::Fabric).suffix_tokens(),
+            ["beta", "beta.1"]
+        );
+    }
 }

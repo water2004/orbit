@@ -153,6 +153,13 @@ impl PackageRemote {
 pub struct PackageSpec {
     #[serde(default = "default_version_constraint")]
     pub version: String,
+    /// Ordered set rule over the raw text following the leading numeric
+    /// version core. It is independent from the Loader-native numeric range.
+    #[serde(
+        default = "default_suffix_expression",
+        skip_serializing_if = "is_all_suffix"
+    )]
+    pub suffix: String,
     #[serde(default, skip_serializing_if = "is_false")]
     pub optional: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -167,6 +174,14 @@ fn default_version_constraint() -> String {
     "*".to_string()
 }
 
+fn default_suffix_expression() -> String {
+    "all".to_string()
+}
+
+fn is_all_suffix(value: &String) -> bool {
+    value == "all"
+}
+
 fn is_false(value: &bool) -> bool {
     !*value
 }
@@ -175,6 +190,7 @@ impl PackageSpec {
     pub fn new(version: impl Into<String>, remotes: Vec<PackageRemote>) -> Self {
         Self {
             version: version.into(),
+            suffix: default_suffix_expression(),
             optional: false,
             env: None,
             exclude: Vec::new(),
@@ -184,6 +200,10 @@ impl PackageSpec {
 
     pub fn version_constraint(&self) -> &str {
         &self.version
+    }
+
+    pub fn suffix_expression(&self) -> &str {
+        &self.suffix
     }
 
     pub fn env(&self) -> Option<crate::metadata::Environment> {
@@ -211,6 +231,12 @@ impl PackageSpec {
     }
 
     pub fn validate(&self, package: &str) -> Result<(), OrbitError> {
+        crate::version_suffix::VersionSuffixRule::parse(&self.suffix).map_err(|error| {
+            OrbitError::Other(anyhow::anyhow!(
+                "package '{package}' has an invalid suffix expression '{}': {error}",
+                self.suffix
+            ))
+        })?;
         if self.remotes.is_empty() {
             return Err(OrbitError::Other(anyhow::anyhow!(
                 "package '{package}' must declare at least one remote"
@@ -327,6 +353,25 @@ sodium = { version = "*", remotes = [
             "*"
         );
         assert_eq!(manifest.packages["sodium"].remotes.len(), 2);
+        assert_eq!(manifest.packages["sodium"].suffix_expression(), "all");
+    }
+
+    #[test]
+    fn suffix_set_rule_is_strictly_validated_and_roundtrips() {
+        let mut package = PackageSpec::new(
+            "*",
+            vec![PackageRemote::Modrinth {
+                project_id: "AANobbMI".to_string(),
+            }],
+        );
+        package.suffix = "all; intersect not contains(i\"beta\"); complement".to_string();
+        package.validate("sodium").unwrap();
+        let encoded = toml::to_string(&package).unwrap();
+        let decoded: PackageSpec = toml::from_str(&encoded).unwrap();
+        assert_eq!(decoded.suffix, package.suffix);
+
+        package.suffix = "all; exclude \"beta\"".to_string();
+        assert!(package.validate("sodium").is_err());
     }
 
     #[test]

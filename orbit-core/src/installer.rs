@@ -1966,6 +1966,7 @@ fn requested_requirement(
     };
     Ok(PackageSpec {
         version,
+        suffix: crate::DEFAULT_NEW_PACKAGE_SUFFIX.to_string(),
         optional,
         env,
         exclude: Vec::new(),
@@ -2712,6 +2713,10 @@ physical_environment = "client"
             manifest.packages["actual-mod-id"].version_constraint(),
             "^1"
         );
+        assert_eq!(
+            manifest.packages["actual-mod-id"].suffix_expression(),
+            crate::DEFAULT_NEW_PACKAGE_SUFFIX
+        );
     }
 
     #[test]
@@ -2730,6 +2735,10 @@ physical_environment = "client"
         );
 
         assert_eq!(manifest.packages["example"].version_constraint(), "^1");
+        assert_eq!(
+            manifest.packages["example"].suffix_expression(),
+            crate::DEFAULT_NEW_PACKAGE_SUFFIX
+        );
     }
 
     #[test]
