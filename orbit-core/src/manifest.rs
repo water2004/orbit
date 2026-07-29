@@ -73,8 +73,6 @@ pub struct ResolverConfig {
     /// Exact package remotes are not prioritized and always participate.
     #[serde(default = "default_catalogs")]
     pub catalogs: Vec<String>,
-    #[serde(default)]
-    pub prerelease: bool,
 }
 
 fn default_catalogs() -> Vec<String> {
@@ -85,7 +83,6 @@ impl Default for ResolverConfig {
     fn default() -> Self {
         Self {
             catalogs: default_catalogs(),
-            prerelease: false,
         }
     }
 }
@@ -440,7 +437,6 @@ physical_environment = "client"
 "#;
         let manifest: OrbitManifest = toml::from_str(toml_str).unwrap();
         assert_eq!(manifest.resolver.catalogs, vec!["modrinth"]);
-        assert!(!manifest.resolver.prerelease);
     }
 
     #[test]
