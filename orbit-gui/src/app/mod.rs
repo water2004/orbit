@@ -122,6 +122,147 @@ pub(super) struct PackageEditor {
     pub package: InstalledPackage,
     pub environment: String,
     pub remote_provider: usize,
+    pub policy: PackagePolicyDraft,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum PackagePolicyMode {
+    Any,
+    Comparison,
+    Range,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum PackagePolicyOperator {
+    Exact,
+    GreaterThan,
+    AtLeast,
+    LessThan,
+    AtMost,
+}
+
+impl PackagePolicyOperator {
+    pub fn symbol(self) -> &'static str {
+        match self {
+            Self::Exact => "=",
+            Self::GreaterThan => ">",
+            Self::AtLeast => "≥",
+            Self::LessThan => "<",
+            Self::AtMost => "≤",
+        }
+    }
+
+    fn command(self) -> &'static str {
+        match self {
+            Self::Exact => "exact",
+            Self::GreaterThan => "greater-than",
+            Self::AtLeast => "at-least",
+            Self::LessThan => "less-than",
+            Self::AtMost => "at-most",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct PackagePolicyDraft {
+    pub mode: PackagePolicyMode,
+    pub operator: PackagePolicyOperator,
+    pub version: Option<String>,
+    pub lower: Option<String>,
+    pub upper: Option<String>,
+    pub include_lower: bool,
+    pub include_upper: bool,
+    pub replaced_custom: Option<String>,
+}
+
+impl Default for PackagePolicyDraft {
+    fn default() -> Self {
+        Self {
+            mode: PackagePolicyMode::Any,
+            operator: PackagePolicyOperator::Exact,
+            version: None,
+            lower: None,
+            upper: None,
+            include_lower: true,
+            include_upper: true,
+            replaced_custom: None,
+        }
+    }
+}
+
+impl PackagePolicyDraft {
+    fn from_policy(policy: &PackageVersionPolicy) -> Self {
+        let mut draft = Self::default();
+        match policy {
+            PackageVersionPolicy::Any => {}
+            PackageVersionPolicy::Comparison { operator, version } => {
+                draft.mode = PackagePolicyMode::Comparison;
+                draft.operator = match operator {
+                    PackageVersionOperator::Exact => PackagePolicyOperator::Exact,
+                    PackageVersionOperator::GreaterThan => PackagePolicyOperator::GreaterThan,
+                    PackageVersionOperator::AtLeast => PackagePolicyOperator::AtLeast,
+                    PackageVersionOperator::LessThan => PackagePolicyOperator::LessThan,
+                    PackageVersionOperator::AtMost => PackagePolicyOperator::AtMost,
+                };
+                draft.version = Some(version.clone());
+            }
+            PackageVersionPolicy::Range {
+                lower,
+                upper,
+                include_lower,
+                include_upper,
+            } => {
+                draft.mode = PackagePolicyMode::Range;
+                draft.lower = Some(lower.clone());
+                draft.upper = Some(upper.clone());
+                draft.include_lower = *include_lower;
+                draft.include_upper = *include_upper;
+            }
+            PackageVersionPolicy::Custom { requirement } => {
+                draft.replaced_custom = Some(requirement.clone());
+            }
+        }
+        draft
+    }
+
+    fn select_mode(&mut self, mode: PackagePolicyMode, default_version: Option<&str>) {
+        self.mode = mode;
+        if mode == PackagePolicyMode::Comparison
+            && self.version.is_none()
+            && let Some(version) = default_version
+        {
+            self.version = Some(version.to_string());
+        }
+    }
+
+    fn command_args(&self) -> Option<Vec<String>> {
+        match self.mode {
+            PackagePolicyMode::Any => Some(vec!["any".to_string()]),
+            PackagePolicyMode::Comparison => Some(vec![
+                self.operator.command().to_string(),
+                self.version.clone()?,
+            ]),
+            PackagePolicyMode::Range => Some(vec![
+                "range".to_string(),
+                self.lower.clone()?,
+                self.upper.clone()?,
+                "--lower-bound".to_string(),
+                if self.include_lower {
+                    "inclusive"
+                } else {
+                    "exclusive"
+                }
+                .to_string(),
+                "--upper-bound".to_string(),
+                if self.include_upper {
+                    "inclusive"
+                } else {
+                    "exclusive"
+                }
+                .to_string(),
+            ]),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -140,6 +281,7 @@ impl PackageEditor {
                 .unwrap_or_else(|| "auto".to_string()),
             package,
             remote_provider: 0,
+            policy: PackagePolicyDraft::default(),
         }
     }
 }
@@ -180,7 +322,6 @@ pub(super) struct Inputs {
     pub launcher_binary: Entity<InputState>,
     pub remote_locator: Entity<InputState>,
     pub add_version: Entity<InputState>,
-    pub package_constraint: Entity<InputState>,
     pub runtime_name: Entity<InputState>,
     pub audit_filter: Entity<InputState>,
     pub minecraft_move_destination: Entity<InputState>,
@@ -224,7 +365,6 @@ impl Inputs {
             }),
             remote_locator: input(window, cx, tr!("Remote locator").into_owned()),
             add_version: input(window, cx, tr!("Any compatible version").into_owned()),
-            package_constraint: input(window, cx, tr!("Version requirement").into_owned()),
             runtime_name: input(window, cx, tr!("Installation name").into_owned()),
             audit_filter: input(window, cx, tr!("Filter by mod").into_owned()),
             minecraft_move_destination: input(
@@ -721,5 +861,86 @@ impl Render for OrbitApp {
             .text_color(cx.theme().foreground)
             .child(shell)
             .children(pages::activity::render_overlays(self, window, cx))
+    }
+}
+
+#[cfg(test)]
+mod package_policy_tests {
+    use super::*;
+
+    #[test]
+    fn comparison_policy_maps_to_a_structured_cli_command() {
+        let draft = PackagePolicyDraft {
+            mode: PackagePolicyMode::Comparison,
+            operator: PackagePolicyOperator::AtLeast,
+            version: Some("1.2.3-beta".to_string()),
+            ..PackagePolicyDraft::default()
+        };
+
+        assert_eq!(draft.command_args().unwrap(), ["at-least", "1.2.3-beta"]);
+    }
+
+    #[test]
+    fn range_policy_keeps_each_bound_inclusion_explicit() {
+        let draft = PackagePolicyDraft {
+            mode: PackagePolicyMode::Range,
+            lower: Some("1.2.0".to_string()),
+            upper: Some("2.0.0".to_string()),
+            include_lower: true,
+            include_upper: false,
+            ..PackagePolicyDraft::default()
+        };
+
+        assert_eq!(
+            draft.command_args().unwrap(),
+            [
+                "range",
+                "1.2.0",
+                "2.0.0",
+                "--lower-bound",
+                "inclusive",
+                "--upper-bound",
+                "exclusive"
+            ]
+        );
+    }
+
+    #[test]
+    fn incomplete_policy_cannot_be_applied() {
+        let draft = PackagePolicyDraft {
+            mode: PackagePolicyMode::Comparison,
+            ..PackagePolicyDraft::default()
+        };
+        assert!(draft.command_args().is_none());
+    }
+
+    #[test]
+    fn machine_policy_is_decoded_without_parsing_constraint_text() {
+        let policy: PackageVersionPolicy = serde_json::from_value(serde_json::json!({
+            "kind": "range",
+            "lower": "1.2.0",
+            "upper": "2.0.0",
+            "include_lower": false,
+            "include_upper": true
+        }))
+        .unwrap();
+        let draft = PackagePolicyDraft::from_policy(&policy);
+
+        assert_eq!(draft.mode, PackagePolicyMode::Range);
+        assert!(!draft.include_lower);
+        assert!(draft.include_upper);
+        assert_eq!(draft.lower.as_deref(), Some("1.2.0"));
+        assert_eq!(draft.upper.as_deref(), Some("2.0.0"));
+    }
+
+    #[test]
+    fn unknown_machine_policy_is_rejected_instead_of_guessed() {
+        assert!(
+            serde_json::from_value::<PackageVersionPolicy>(serde_json::json!({
+                "kind": "legacy_text",
+                "requirement": "^1.2"
+            }))
+            .is_err()
+        );
     }
 }

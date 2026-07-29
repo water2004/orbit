@@ -216,11 +216,7 @@ pub(super) fn render(
                                         Button::new(("package-edit", index))
                                             .label(tr!("Manage").into_owned())
                                             .ghost()
-                                            .on_click(cx.listener(move |this, _, window, cx| {
-                                                let constraint = edit.version_constraint.clone();
-                                                this.inputs.package_constraint.update(cx, |input, cx| {
-                                                    input.set_value(&constraint, window, cx);
-                                                });
+                                            .on_click(cx.listener(move |this, _, _, cx| {
                                                 this.package_editor = Some(PackageEditor::new(edit.clone()));
                                                 this.load_package_versions(&edit.mod_id);
                                                 cx.notify();

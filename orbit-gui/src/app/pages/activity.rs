@@ -18,7 +18,8 @@ use gpui_component::{
 use orbit_machine_protocol::ProgressPhase;
 
 use super::super::{
-    ACTIVITY_DRAWER_TRANSITION, OrbitApp, TaskState, ToastKind, controller::human_bytes,
+    ACTIVITY_DRAWER_TRANSITION, OrbitApp, PackagePolicyMode, PackagePolicyOperator, TaskState,
+    ToastKind, controller::human_bytes,
 };
 use crate::app::components as ui;
 use crate::assets::OrbitIcon;
@@ -578,8 +579,6 @@ fn render_package_editor(app: &OrbitApp, cx: &mut Context<OrbitApp>) -> impl Int
     let purge_package = package_id.clone();
     let remote_input = app.inputs.remote_locator.clone();
     let remote_read = remote_input.clone();
-    let constraint_input = app.inputs.package_constraint.clone();
-    let constraint_read = constraint_input.clone();
     let providers = ["file", "modrinth", "curseforge"];
     let mut remotes = v_flex().gap_2();
     for (index, remote) in editor.package.remotes.iter().cloned().enumerate() {
@@ -613,7 +612,7 @@ fn render_package_editor(app: &OrbitApp, cx: &mut Context<OrbitApp>) -> impl Int
     let environment = editor.environment.clone();
     ui::modal_backdrop(
         ui::modal(
-            620.,
+            720.,
             v_flex()
                 .gap_4()
                 .child(
@@ -622,113 +621,7 @@ fn render_package_editor(app: &OrbitApp, cx: &mut Context<OrbitApp>) -> impl Int
                         .child(div().text_xl().font_semibold().child(package_id.clone()))
                         .child(Button::new("package-close").icon(OrbitIcon::Close).ghost().on_click(cx.listener(|this, _, _, cx| { this.package_editor = None; cx.notify(); }))),
                 )
-                .child(ui::section_title(
-                    tr!("Version policy").into_owned(),
-                    tr!("Saving changes orbit.toml intent only; Fix applies the policy to installed JARs").into_owned(),
-                    cx,
-                ))
-                .child(
-                    h_flex()
-                        .gap_2()
-                        .child(Input::new(&constraint_input).flex_1())
-                        .child(
-                            Button::new("package-constraint-clear")
-                                .label(tr!("Allow any").into_owned())
-                                .on_click(cx.listener({
-                                    let package = package_id.clone();
-                                    move |this, _, _, cx| {
-                                        this.clear_package_constraint(&package);
-                                        this.package_editor = None;
-                                        cx.notify();
-                                    }
-                                })),
-                        )
-                        .child(
-                            Button::new("package-constraint-save")
-                                .label(tr!("Save policy").into_owned())
-                                .primary()
-                                .on_click(cx.listener({
-                                    let package = package_id.clone();
-                                    move |this, _, _, cx| {
-                                        let requirement = constraint_read.read(cx).value().trim().to_string();
-                                        if !requirement.is_empty() {
-                                            this.set_package_constraint(&package, &requirement);
-                                            this.package_editor = None;
-                                        }
-                                        cx.notify();
-                                    }
-                                })),
-                        ),
-                )
-                .child(ui::section_title(
-                    tr!("Available versions").into_owned(),
-                    app.package_versions
-                        .as_ref()
-                        .map(|versions| {
-                            tr!(
-                                "Remote JAR metadata · policy %{constraint} · selected %{selected}",
-                                constraint = versions.constraint,
-                                selected = versions
-                                    .selected_version
-                                    .clone()
-                                    .unwrap_or_else(|| tr!("none").into_owned())
-                            )
-                        })
-                        .unwrap_or_else(|| tr!("Downloading and inspecting configured remotes…").into_owned()),
-                    cx,
-                ))
-                .child(
-                    div()
-                        .max_h(px(220.))
-                        .overflow_y_scrollbar()
-                        .children(app.package_versions.as_ref().into_iter().flat_map(|versions| {
-                            versions.candidates.iter().enumerate().map(|(index, candidate)| {
-                                let version = candidate.version.clone();
-                                let input = constraint_input.clone();
-                                h_flex()
-                                    .id(("package-version", index))
-                                    .px_3()
-                                    .py_2()
-                                    .gap_2()
-                                    .items_center()
-                                    .border_b_1()
-                                    .border_color(cx.theme().border)
-                                    .child(
-                                        v_flex()
-                                            .min_w_0()
-                                            .flex_1()
-                                            .gap_1()
-                                            .child(
-                                                h_flex()
-                                                    .gap_2()
-                                                    .child(div().font_medium().child(candidate.version.clone()))
-                                                    .when(candidate.selected, |row| row.child(ui::neutral_pill(tr!("Selected").into_owned(), cx)))
-                                                    .when(candidate.matches_constraint, |row| row.child(ui::neutral_pill(tr!("Allowed").into_owned(), cx))),
-                                            )
-                                            .child(
-                                                div()
-                                                    .text_xs()
-                                                    .text_color(cx.theme().muted_foreground)
-                                                    .child(format!("{} · {}", candidate.sources.join(", "), candidate.details)),
-                                            ),
-                                    )
-                                    .child(
-                                        Button::new(("use-package-version", index))
-                                            .label(tr!("Use").into_owned())
-                                            .ghost()
-                                            .on_click(cx.listener(move |_, _, window, cx| {
-                                                input.update(cx, |state, cx| {
-                                                    state.set_value(
-                                                        format!("={version}"),
-                                                        window,
-                                                        cx,
-                                                    );
-                                                });
-                                            })),
-                                    )
-                            })
-                        })),
-                )
+                .child(render_package_policy(app, &package_id, cx))
                 .child(ui::section_title(tr!("Environment").into_owned(), tr!("Auto follows the JAR declaration; loaders without a declaration default to both").into_owned(), cx))
                 .child(
                     h_flex().gap_2().children(["auto", "client", "server", "both"].into_iter().enumerate().map(|(index, value)| {
@@ -805,6 +698,335 @@ fn render_package_editor(app: &OrbitApp, cx: &mut Context<OrbitApp>) -> impl Int
         ),
         cx,
     )
+}
+
+fn render_package_policy(
+    app: &OrbitApp,
+    package_id: &str,
+    cx: &mut Context<OrbitApp>,
+) -> AnyElement {
+    let draft = app
+        .package_editor
+        .as_ref()
+        .expect("package editor checked")
+        .policy
+        .clone();
+    let versions = app.package_versions.as_ref();
+    let default_version = versions.and_then(|versions| {
+        versions
+            .selected_version
+            .clone()
+            .or_else(|| versions.candidates.first().map(|item| item.version.clone()))
+    });
+    let range_lower = versions
+        .and_then(|versions| versions.candidates.last())
+        .map(|item| item.version.clone());
+    let range_upper = versions
+        .and_then(|versions| versions.candidates.first())
+        .map(|item| item.version.clone());
+    let modes = [
+        (PackagePolicyMode::Any, tr!("Any compatible").into_owned()),
+        (
+            PackagePolicyMode::Comparison,
+            tr!("One boundary").into_owned(),
+        ),
+        (PackagePolicyMode::Range, tr!("Version range").into_owned()),
+    ];
+    let mut mode_controls = h_flex().gap_2();
+    for (index, (mode, label)) in modes.into_iter().enumerate() {
+        let default_version = default_version.clone();
+        let lower = range_lower.clone();
+        let upper = range_upper.clone();
+        mode_controls = mode_controls.child(
+            Button::new(("package-policy-mode", index))
+                .label(label)
+                .selected(draft.mode == mode)
+                .disabled(versions.is_none())
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    if let Some(editor) = &mut this.package_editor {
+                        editor.policy.select_mode(mode, default_version.as_deref());
+                        if mode == PackagePolicyMode::Range {
+                            if editor.policy.lower.is_none() {
+                                editor.policy.lower.clone_from(&lower);
+                            }
+                            if editor.policy.upper.is_none() {
+                                editor.policy.upper.clone_from(&upper);
+                            }
+                        }
+                    }
+                    cx.notify();
+                })),
+        );
+    }
+
+    let summary = match draft.mode {
+        PackagePolicyMode::Any => tr!("Every loader-compatible version is eligible").into_owned(),
+        PackagePolicyMode::Comparison => draft
+            .version
+            .as_ref()
+            .map(|version| format!("{} {version}", draft.operator.symbol()))
+            .unwrap_or_else(|| tr!("Choose a boundary version below").into_owned()),
+        PackagePolicyMode::Range => match (&draft.lower, &draft.upper) {
+            (Some(lower), Some(upper)) => format!(
+                "{}{lower}, {upper}{}",
+                if draft.include_lower { '[' } else { '(' },
+                if draft.include_upper { ']' } else { ')' }
+            ),
+            _ => tr!("Choose lower and upper versions below").into_owned(),
+        },
+    };
+
+    let mut builder = v_flex()
+        .gap_3()
+        .child(ui::section_title(
+            tr!("Version policy").into_owned(),
+            tr!("Applying a policy solves and commits one Pareto-minimal package transaction")
+                .into_owned(),
+            cx,
+        ))
+        .child(mode_controls)
+        .when(draft.mode == PackagePolicyMode::Comparison, |content| {
+            let operators = [
+                (PackagePolicyOperator::Exact, tr!("Exactly =").into_owned()),
+                (
+                    PackagePolicyOperator::GreaterThan,
+                    tr!("Newer than >").into_owned(),
+                ),
+                (
+                    PackagePolicyOperator::AtLeast,
+                    tr!("At least ≥").into_owned(),
+                ),
+                (
+                    PackagePolicyOperator::LessThan,
+                    tr!("Older than <").into_owned(),
+                ),
+                (PackagePolicyOperator::AtMost, tr!("At most ≤").into_owned()),
+            ];
+            content.child(
+                h_flex()
+                    .gap_2()
+                    .flex_wrap()
+                    .children(operators.into_iter().enumerate().map(
+                        |(index, (operator, label))| {
+                            Button::new(("package-policy-operator", index))
+                                .label(label)
+                                .selected(draft.operator == operator)
+                                .disabled(versions.is_none())
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    if let Some(editor) = &mut this.package_editor {
+                                        editor.policy.operator = operator;
+                                    }
+                                    cx.notify();
+                                }))
+                        },
+                    )),
+            )
+        })
+        .when(draft.mode == PackagePolicyMode::Range, |content| {
+            content.child(
+                h_flex()
+                    .gap_2()
+                    .child(
+                        Button::new("package-range-lower-inclusion")
+                            .label(if draft.include_lower {
+                                tr!("Include lower").into_owned()
+                            } else {
+                                tr!("Exclude lower").into_owned()
+                            })
+                            .selected(draft.include_lower)
+                            .disabled(versions.is_none())
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                if let Some(editor) = &mut this.package_editor {
+                                    editor.policy.include_lower = !editor.policy.include_lower;
+                                }
+                                cx.notify();
+                            })),
+                    )
+                    .child(
+                        Button::new("package-range-upper-inclusion")
+                            .label(if draft.include_upper {
+                                tr!("Include upper").into_owned()
+                            } else {
+                                tr!("Exclude upper").into_owned()
+                            })
+                            .selected(draft.include_upper)
+                            .disabled(versions.is_none())
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                if let Some(editor) = &mut this.package_editor {
+                                    editor.policy.include_upper = !editor.policy.include_upper;
+                                }
+                                cx.notify();
+                            })),
+                    ),
+            )
+        })
+        .child(
+            h_flex()
+                .justify_between()
+                .gap_3()
+                .px_3()
+                .py_2()
+                .rounded_lg()
+                .bg(cx.theme().secondary)
+                .child(
+                    v_flex()
+                        .min_w_0()
+                        .gap_1()
+                        .child(div().text_sm().font_semibold().child(summary))
+                        .when_some(draft.replaced_custom.clone(), |column, requirement| {
+                            column.child(div().text_xs().text_color(cx.theme().warning).child(tr!(
+                                "The existing custom policy '%{policy}' will be replaced",
+                                policy = requirement
+                            )))
+                        }),
+                )
+                .child(
+                    Button::new("package-policy-apply")
+                        .label(tr!("Apply policy").into_owned())
+                        .primary()
+                        .disabled(versions.is_none() || draft.command_args().is_none())
+                        .on_click(cx.listener({
+                            let package = package_id.to_string();
+                            move |this, _, _, cx| {
+                                if let Some(arguments) = this
+                                    .package_editor
+                                    .as_ref()
+                                    .and_then(|editor| editor.policy.command_args())
+                                {
+                                    this.apply_package_policy(&package, arguments);
+                                    this.package_editor = None;
+                                }
+                                cx.notify();
+                            }
+                        })),
+                ),
+        )
+        .child(ui::section_title(
+            tr!("Available versions").into_owned(),
+            versions
+                .map(|versions| {
+                    tr!(
+                        "JAR-declared versions from all remotes · selected %{selected}",
+                        selected = versions
+                            .selected_version
+                            .clone()
+                            .unwrap_or_else(|| tr!("none").into_owned())
+                    )
+                })
+                .unwrap_or_else(|| {
+                    tr!("Downloading and inspecting configured remotes…").into_owned()
+                }),
+            cx,
+        ));
+
+    let mut version_list = v_flex();
+    if let Some(versions) = versions {
+        for (index, candidate) in versions.candidates.iter().enumerate() {
+            let comparison_version = candidate.version.clone();
+            let lower_version = candidate.version.clone();
+            let upper_version = candidate.version.clone();
+            let is_comparison = draft.version.as_deref() == Some(candidate.version.as_str());
+            let is_lower = draft.lower.as_deref() == Some(candidate.version.as_str());
+            let is_upper = draft.upper.as_deref() == Some(candidate.version.as_str());
+            version_list = version_list.child(
+                h_flex()
+                    .id(("package-version", index))
+                    .px_3()
+                    .py_2()
+                    .gap_2()
+                    .items_center()
+                    .border_b_1()
+                    .border_color(cx.theme().border)
+                    .child(
+                        v_flex()
+                            .min_w_0()
+                            .flex_1()
+                            .gap_1()
+                            .child(
+                                h_flex()
+                                    .gap_2()
+                                    .child(div().font_medium().child(candidate.version.clone()))
+                                    .when(candidate.selected, |row| {
+                                        row.child(ui::neutral_pill(
+                                            tr!("Installed").into_owned(),
+                                            cx,
+                                        ))
+                                    })
+                                    .when(is_comparison, |row| {
+                                        row.child(ui::neutral_pill(
+                                            tr!("Boundary").into_owned(),
+                                            cx,
+                                        ))
+                                    })
+                                    .when(is_lower, |row| {
+                                        row.child(ui::neutral_pill(tr!("Lower").into_owned(), cx))
+                                    })
+                                    .when(is_upper, |row| {
+                                        row.child(ui::neutral_pill(tr!("Upper").into_owned(), cx))
+                                    }),
+                            )
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child(format!(
+                                        "{} · {}",
+                                        candidate.sources.join(", "),
+                                        candidate.details
+                                    )),
+                            ),
+                    )
+                    .when(draft.mode == PackagePolicyMode::Comparison, |row| {
+                        row.child(
+                            Button::new(("choose-version-boundary", index))
+                                .label(tr!("Boundary").into_owned())
+                                .selected(is_comparison)
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    if let Some(editor) = &mut this.package_editor {
+                                        editor.policy.version = Some(comparison_version.clone());
+                                    }
+                                    cx.notify();
+                                })),
+                        )
+                    })
+                    .when(draft.mode == PackagePolicyMode::Range, |row| {
+                        row.child(
+                            h_flex()
+                                .gap_1()
+                                .child(
+                                    Button::new(("choose-version-lower", index))
+                                        .label(tr!("Lower").into_owned())
+                                        .selected(is_lower)
+                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                            if let Some(editor) = &mut this.package_editor {
+                                                editor.policy.lower = Some(lower_version.clone());
+                                            }
+                                            cx.notify();
+                                        })),
+                                )
+                                .child(
+                                    Button::new(("choose-version-upper", index))
+                                        .label(tr!("Upper").into_owned())
+                                        .selected(is_upper)
+                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                            if let Some(editor) = &mut this.package_editor {
+                                                editor.policy.upper = Some(upper_version.clone());
+                                            }
+                                            cx.notify();
+                                        })),
+                                ),
+                        )
+                    }),
+            );
+        }
+    }
+    builder = builder.child(
+        div()
+            .max_h(px(260.))
+            .overflow_y_scrollbar()
+            .child(version_list),
+    );
+    builder.into_any_element()
 }
 
 fn render_toast(app: &OrbitApp, cx: &mut Context<OrbitApp>) -> impl IntoElement {

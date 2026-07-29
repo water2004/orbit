@@ -579,6 +579,9 @@ impl OrbitApp {
                         .as_ref()
                         .is_some_and(|editor| editor.package.mod_id == *package)
                 {
+                    if let Some(editor) = &mut self.package_editor {
+                        editor.policy = PackagePolicyDraft::from_policy(&versions.policy);
+                    }
                     self.package_versions = Some(versions);
                 }
             }
@@ -1023,22 +1026,12 @@ impl OrbitApp {
         }
     }
 
-    pub(super) fn set_package_constraint(&mut self, package: &str, requirement: &str) {
+    pub(super) fn apply_package_policy(&mut self, package: &str, policy: Vec<String>) {
+        let mut arguments = vec!["constraint".into(), "set".into(), package.into()];
+        arguments.extend(policy);
         self.orbit_mutation(
             &tr!("Updating %{package} version policy", package = package),
-            vec![
-                "constraint".into(),
-                "set".into(),
-                package.into(),
-                requirement.into(),
-            ],
-        );
-    }
-
-    pub(super) fn clear_package_constraint(&mut self, package: &str) {
-        self.orbit_mutation(
-            &tr!("Clearing %{package} version policy", package = package),
-            vec!["constraint".into(), "clear".into(), package.into()],
+            arguments,
         );
     }
 

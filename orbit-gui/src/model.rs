@@ -224,7 +224,6 @@ pub struct JavaRequirement {
 pub struct InstalledPackage {
     pub mod_id: String,
     pub version: String,
-    pub version_constraint: String,
     pub icon_path: Option<String>,
     #[serde(default)]
     pub remotes: Vec<String>,
@@ -251,9 +250,42 @@ pub struct PackageList {
 #[derive(Debug, Clone, Deserialize)]
 pub struct PackageVersions {
     pub package: String,
-    pub constraint: String,
+    pub policy: PackageVersionPolicy,
     pub selected_version: Option<String>,
     pub candidates: Vec<PackageVersionCandidate>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum PackageVersionPolicy {
+    Any,
+    Comparison {
+        operator: PackageVersionOperator,
+        version: String,
+    },
+    Range {
+        lower: String,
+        upper: String,
+        include_lower: bool,
+        include_upper: bool,
+    },
+    Custom {
+        requirement: String,
+    },
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+pub enum PackageVersionOperator {
+    #[serde(rename = "=")]
+    Exact,
+    #[serde(rename = ">")]
+    GreaterThan,
+    #[serde(rename = ">=")]
+    AtLeast,
+    #[serde(rename = "<")]
+    LessThan,
+    #[serde(rename = "<=")]
+    AtMost,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -262,7 +294,6 @@ pub struct PackageVersionCandidate {
     pub sources: Vec<String>,
     pub details: String,
     pub selected: bool,
-    pub matches_constraint: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
