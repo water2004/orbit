@@ -11,7 +11,7 @@
 - `[platform]` 精确记录且通过校验的 Loader 和运行时依赖 JAR；
 - 当前精确 lock 与 Loader 图为物理端选择的顶层包和活动嵌套 JAR；
 - 上述活动内容中的 `.class`、Loader 模组元数据、Mixin config、refmap、manifest、
-  NeoForge TOML 和 `META-INF/services`。
+  NeoForge TOML、`META-INF/services` 和 `module-info.class` 的 Java 服务声明。
 
 manifest、lockfile 和 JAR 内的 Loader 依赖用于恢复本次运行时内容，但依赖声明本身
 不构成字节码风险证据。JAR 内的 Mixin/Transformer 注册资源用于判断代码是否实际进入
@@ -53,25 +53,27 @@ ClassFile 前端使用 `ristretto_classfile`，由自有 facade 隔离第三方�
 probe 比较 Orbit 声明、已校验的 Loader JAR 和快照 classpath：
 
 - `Ready`：Minecraft、Loader、至少一个 Mod 可解析，实际 Loader marker 与 ABI 完整；
-- `Incomplete`：基础 JAR、类空间、Mixin 或现代 Forge/NeoForge 运行库不完整；
+- `Incomplete`：基础 JAR、类空间、Mixin 或 FML 转换 SPI 不完整；
 - `Ambiguous`：Loader 声明互相冲突，或 classpath 同时出现冲突 Loader；
-- `Unsupported`：Loader 不支持，或实际 ModLauncher ABI 无法识别。
+- `Unsupported`：Loader 不支持，或实际转换 SPI 无法识别。
 
-Fabric/Quilt 要求实际 Loader marker 与 Mixin annotation ABI。Forge/NeoForge 还验证
-`ITransformer` 的 `targets/transform/getTargetType/castVote`、`Target` factory、
-`TargetType` 和 `ITransformationService.transformers()` 签名。判断不依赖固定版本号。
+Fabric/Quilt 要求实际 Loader marker 与 Mixin annotation ABI。FML family 按运行时能力
+二选一验证：ModLauncher 路径验证 `ITransformer`、`Target` 与
+`ITransformationService.transformers()`；当前 NeoForge 路径验证
+`ClassProcessor.handlesClass/processClass`。判断不依赖固定版本号。Quilt JAR 自带的
+Fabric 兼容实现不构成第二个 Loader。
 
 ABI readiness 之后、任何 Mixin/Transformer finding 之前，audit 必须完成 runtime
 namespace alignment：
 
-- Fabric 从当前 classpath 的 Tiny v1/v2 资源读取 namespace 和类/成员映射；存在可用
+- Fabric/Quilt 从当前 classpath 的 Tiny v1/v2 资源读取 namespace 和类/成员映射；存在可用
   类记录时，以 Minecraft JAR 对各 namespace 的精确类名覆盖确定输入 namespace，再把
-  整个基础游戏 Class Universe 投影到 `intermediary`；没有有效类 mapping 时严格按照
-  Fabric Loader 的 `MappingConfiguration` 保持 `official` 恒等命名空间；
-- Quilt 保留自己的命名空间决策：Minecraft 26.1 及以后无混淆运行时由 Loader 选择
-  `EmptyMappingConfiguration`，保持 `official`，不会要求并不存在的 intermediary JAR；
-  旧的混淆运行时仍必须提供可用的 intermediary mapping；
-- Loader 规则要求 mapping 时，mapping 缺失、多个来源冲突或输入 JAR 无法唯一匹配会
+  整个基础游戏 Class Universe 投影到 `intermediary`；没有有效类 mapping 时使用
+  Loader 实际形成的 identity 符号空间；
+- identity 不由 Minecraft 版本号决定。若活动 Mod 引用 `net/minecraft`，但实际基础游戏
+  完全处在另一类名空间且没有有效 mapping，则结构校验返回 `Incomplete`；无混淆游戏
+  的基础类与 Mod 引用天然同域，直接继续；
+- mapping 多个来源冲突或输入 JAR 无法唯一匹配会
   返回 `Incomplete`/`Ambiguous`，在生成具体风险和 warning 前停止；
 - Forge/NeoForge 优先采用 platform snapshot classpath 中版本可验证、实际包含
   `net/minecraft` 类的 Loader runtime game JAR；否则只有基础游戏与已注册转换共享
@@ -95,7 +97,7 @@ Tiny 只在方法的声明 owner 上记录映射时，Orbit 按实际类/接口�
 
 ```text
 当前实例使用 Legacy Forge/LaunchWrapper。
-字节码风险分析仅支持 ModLauncher 体系的现代 Forge 和 NeoForge。
+字节码风险分析仅支持现代 FML 的 ModLauncher ITransformer 或 NeoForge ClassProcessor。
 ```
 
 ## 4. 统一效果
@@ -115,7 +117,11 @@ Mixin 与 Transformer 都转换为：
 
 每个效果还分别保留 config priority、Mixin priority 和 injector order；三者不会
 压成一个不可解释的总优先级。只有由当前 Loader 注册、通过物理端和 required-mod
-条件的 Mixin 才进入相应层次。plugin 明确接受时为 definite；plugin 结果为
+条件的 Mixin 才进入相应层次。Fabric metadata、Forge manifest、NeoForge metadata 与
+静态 `Mixins.addConfiguration` 的 config 名称按 Mixin 的全局注册空间去重；跨 artifact
+重复会记录 `duplicate_mixin_config`，第二份不参与效果分析。Quilt 原生 metadata 使用
+Loader 的 `#modid:config` 注册名，因此相同 config 路径按所属 Mod 隔离；Quilt 中的
+Fabric 兼容 metadata 仍使用全局名称。plugin 明确接受时为 definite；plugin 结果为
 conditional/unknown 时可以恢复条件效果用于交互分析，但不会产生 definite unary risk
 或 unresolved warning。
 
@@ -131,8 +137,9 @@ conditional/unknown 时可以恢复条件效果用于交互分析，但不会产
 每个 config 独立解析 required、minVersion、compatibilityLevel、package、plugin、
 refmap、priority、mixinPriority、mixins/client/server、defaultRequire、
 defaultGroup 和 overwrite.requireAnnotations。physical side、当前实际活动的 mod
-ID/provides 和 config 自身作用域共同决定激活；同名 refmap/config 不会跨顶层或嵌套
-artifact 串用。未注册的 `@Mixin`、端侧不匹配和 requiredMods 不满足项只进入
+ID/provides 和 Loader 的 config 注册作用域共同决定激活；config 内容和 refmap 始终
+从声明所属 Loader artifact unit 解析，不能因 classpath 上的同名资源串用。未注册的
+`@Mixin`、端侧不匹配和 requiredMods 不满足项只进入
 `inactive_candidates`，不参与风险比较。
 
 `IMixinConfigPlugin` 使用保守四态结果：
@@ -202,14 +209,23 @@ WrapOperation 之间可以链式组合。只有 Redirect×Redirect、Redirect×�
 [WrapMethod](https://github.com/LlamaLad7/MixinExtras/wiki/WrapMethod) 和
 [WrapWithCondition](https://github.com/LlamaLad7/MixinExtras/wiki/WrapWithCondition) 语义。
 
-## 6. ModLauncher Transformer
+## 6. FML 转换 SPI
 
-先从 `META-INF/services/cpw.mods.modlauncher.api.ITransformationService` 找到实际
-服务，再跟踪其 `transformers()`、helper/lambda、匿名内部类和间接实现。仅仅实现
+旧式路径从 Java ServiceLoader 注册图找到实际 `ITransformationService`，再跟踪其
+`transformers()`、helper/lambda、匿名内部类和间接实现。ServiceLoader 注册同时读取
+`META-INF/services` 与 `module-info.class` 的 `provides`，不把模块化 JAR 漏判为未注册。
+仅仅实现
 `ITransformer` 但没有沿这条注册链返回的类是 inactive candidate，不进入效果管线。
 静态 `targets()` 中的 Target factory 恢复类、方法或字段目标。
 
-有界解释器跟踪 transform 输入节点的局部变量、字段访问、helper/lambda 路径、
+当前 NeoForge/FML 路径按同一个 Java ServiceLoader 图发现直接 `ClassProcessor` 和
+`ClassProcessorProvider`；provider 的 `createProcessors`、helper 与 lambda 构成实际
+激活链。官方 SimpleClass/Method/FieldProcessor 的 `targets()` 构造器可精确恢复类、
+方法和字段目标；自定义 `handlesClass` 无法静态证明目标时记录 coverage gap，不生成
+全局假冲突。`transform` 与 `processClass` 进入同一个有界 ASM mutation 解释器，输出
+mechanism 为 `neoforge_class_processor`。
+
+有界解释器跟踪 transformation 输入节点的局部变量、字段访问、helper/lambda 路径、
 字符串/整数/opcode 和常见 ASM tree/visitor 修改，包括 InsnList
 add/insert/insertBefore/remove/set/clear、iterator remove、成员列表与结构字段写入。
 只有接收者能追溯到 transform 输入时才生成 Mutation；内部临时 ASM 对象的写入会忽略并

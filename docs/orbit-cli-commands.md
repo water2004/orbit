@@ -532,16 +532,16 @@ JSON 结果直接嵌入 audit 的 `AuditReport`（schema 5），顶层固定包�
 core 严格读取 `[platform]` 中由 init/sync 固定的 Minecraft、Loader、runtime JAR
 与物理端，并按当前精确 lock 通过共享 Loader 图选择实际顶层和嵌套 JAR；audit 不读取
 launcher profile，也不另写 Loader classpath 发现规则。随后根据这些输入进行 capability
-probe。Fabric/Quilt 需要 Loader 与 Mixin
-ABI；现代 Forge/NeoForge 还必须具有可识别的 ModLauncher `ITransformer`、
-`Target` 和 `ITransformationService` ABI。Legacy LaunchWrapper 明确拒绝，不提供
+probe。Fabric/Quilt 需要 Loader 与 Mixin ABI；FML family 还必须具有可识别的
+ModLauncher `ITransformer/ITransformationService`，或 NeoForge
+`ClassProcessor/ClassProcessorProvider` SPI。Legacy LaunchWrapper 明确拒绝，不提供
 `--force`。单个坏 Mod、真正 unresolved/ambiguous 的软引用、已知未支持或自定义
 InjectionPoint 和解释预算耗尽进入 warning/coverage；缺失基础游戏或运行库则停止。
 “JAR 没有 refmap”本身不是 warning。
 
-ABI probe 后先建立 Loader runtime namespace。Fabric 有实际 Tiny 类 mapping 时投影
-Class Universe，否则按 Loader 原生规则使用 official identity。Quilt 26.1+ 的无混淆
-游戏同样使用 official identity；旧 Quilt 运行时才要求 intermediary mapping。
+ABI probe 后先建立 Loader runtime namespace。Fabric/Quilt 有实际 Tiny 类 mapping 时
+投影 Class Universe，否则使用实际 identity 符号空间；若 Mod 与基础游戏符号空间结构
+不一致则停止。该判断不读取 Minecraft 版本边界。
 Forge/NeoForge 使用 launcher 选择且内嵌版本匹配的 runtime game JAR。Loader 规则要求的
 mapping 缺失、冲突或无法唯一识别时直接返回高层 readiness 错误，不继续输出具体 Mod 风险。
 

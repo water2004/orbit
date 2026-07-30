@@ -699,7 +699,11 @@ orbit [--output-format text|json] [--progress-format none|ndjson] <command> ...
 
 信封 `schema_version` 是命令信封版本；`result.schema_version`（当前 5）是 audit 自身子
 schema 版本。schema 5 的 `environment.loader` 是唯一、已验证的 loader 枚举，不再输出
-`declared_loader` / `detected_loader` 双字段。
+`declared_loader` / `detected_loader` 双字段。`evidence.mechanism` 可为
+`mixin`、`mixin_extras`、`mod_launcher_transformer`、
+`neo_forge_class_processor`、`java_coremod` 或 `binary_shape`；重复的全局 Mixin config
+使用 warning kind `duplicate_mixin_config`，Quilt 原生按 Mod 隔离的同名 config 不属于
+该 warning。
 
 ## 4. NDJSON 进度协议
 

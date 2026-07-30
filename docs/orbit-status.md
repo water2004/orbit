@@ -38,7 +38,7 @@
 | 全局配置命令 | ✅ | `config path/list/get/set/unset`；强类型校验、单字段原子更新、注释保留、密钥脱敏、环境覆盖不回写 |
 | 受管包环境过滤 | ✅ | TOML `env` 可选；缺失时跟随 lock/JAR 声明；`orbit env ... auto` 可设置过滤或恢复自动 |
 | Loader JSON 容错 | ✅ | Fabric-compatible 字符串控制字符；仅限 JAR 内 loader/Mixin/refmap，其他 JSON 保持严格 |
-| 字节码运行时符号对齐 | ✅ | Fabric 按 MappingConfiguration、Quilt 按自身 unobfuscated/Tiny 决策选择 official 或投影；Forge/NeoForge 验证 Loader runtime game；未对齐时在 finding 前停止 |
+| 字节码运行时符号对齐 | ✅ | Fabric/Quilt 按实际 Tiny/identity 能力选择 official 或投影，不复制版本边界；Forge/NeoForge 验证 Loader runtime game；未对齐时在 finding 前停止 |
 | i18n | ✅ | `orbit`、`orbit-launcher` 与 GUI 共用 `system`（默认）/`en`/`zh-CN` 语言模型；CLI help、文本结果、进度、询问和结构化错误均在展示边界翻译，机器字段保持稳定 |
 | 原生 GUI | ✅ | GPUI + gpui-component 原生进程薄壳；统一 SVG/EXE 品牌标志、领域化侧栏图标、紧凑任务条、可点击外部关闭且双向过渡的 Activity 抽屉、连续触控板滚动、语言/主题/强调色；Runtime 先导出再创建的新实例迁移、可取消且有字节进度的 Orbit ZIP/Modrinth mrpack 导入导出、Java、Mods、audit、account/server；设置页只经两套 schema 2 CLI 管理 Launcher/Orbit 配置和客户端仓库，不链接 core 或直读业务 TOML |
 
@@ -102,7 +102,7 @@
 | `remove` / `upgrade` / `outdated` | 使用 Fat Lockfile、保留受阻候选原因、自适应表格与多解差异高亮 |
 | `sync` | 重新探测平台并扫描 mods；批量哈希识别 provider 来源，按磁盘事实重建 lock/补充 TOML；不求解、不下载候选、不删包 |
 | `migrate check/export` | 对真实目标先严格保留全部包；无解才询问软解并枚举 Pareto 极小删除集合；check 预览，export 复用同一规划语义写目标状态和配置 |
-| `audit` | 四个 Loader backend 复用 Loader-selected runtime，先对齐 namespace，再进入共享 Mixin/Transformer 效果与冲突流水线；unary/pairwise 分离 + schema 5 JSON/显式完整 report |
+| `audit` | 四个 Loader backend 复用 Loader-selected runtime，先对齐 namespace，再按实际 SPI 分派 ModLauncher ITransformer 或 NeoForge ClassProcessor，进入共享 Mixin/转换效果与冲突流水线；unary/pairwise 分离 + schema 5 JSON/显式完整 report |
 | `list` / `info` | 展示包信息、逻辑依赖和 bundled；非树形 list 与 info 均使用自适应表格 |
 | `export` / `import` | Orbit archive 与 Modrinth pack |
 | `cache` / `instances` / `purge` | cache 使用跨命令持久化 LRU 并在每次命令结束执行容量淘汰；instances list 输出自适应表格 |

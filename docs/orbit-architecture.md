@@ -73,7 +73,7 @@ orbit-bytecode-audit
   namespace   backend 调用的共享 runtime symbol alignment、Tiny 投影/readiness
   mixin_config Loader 注册、端侧/requiredMods/plugin 激活、config/refmap 作用域
   mixin       候选类合并；selector/slice → InjectionQuery；injector → Mutation
-  transformer ModLauncher/Java transformer → 带 heuristic precision 的统一效果
+  transformer FML ServiceLoader 图 → ModLauncher ITransformer / NeoForge ClassProcessor → 统一效果
   conflict    独立风险原因、行为交互、query 重算、遮蔽后的硬引用风险
 ```
 
@@ -252,7 +252,7 @@ manifest 过滤。
 | Fabric | `fabric.mod.json` | Fabric predicate | `jars` + parent priority | Fabric | 统一 graph |
 | Quilt | `quilt.mod.json` / Fabric fallback | Fabric predicate | Quilt `jars` 条件 | Quilt | 统一 graph |
 | Forge | `META-INF/mods.toml` | Maven | JarJar | Forge/ModLauncher | 统一 graph |
-| NeoForge | `META-INF/neoforge.mods.toml` / legacy name | Maven | JarJar | NeoForge/ModLauncher | 统一 graph |
+| NeoForge | `META-INF/neoforge.mods.toml` / legacy name | Maven | JarJar | NeoForge/ClassProcessor（旧运行时按实际 ABI 走 ModLauncher） | 统一 graph |
 
 “支持”意味着 identity、依赖类别、环境、版本、provides、内嵌和求解都进入真实路径，
 不是只识别文件名。
