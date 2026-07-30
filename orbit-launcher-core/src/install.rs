@@ -17,7 +17,6 @@ use crate::authlib_injector::{
     ResolvedAuthlibInjector, resolve_authlib_injector, verify_authlib_injector,
 };
 use crate::client::{ClientDownload, ResolvedVanillaClient, resolve_vanilla_client};
-use crate::config::JavaProvider;
 use crate::error::LauncherError;
 use crate::eula::{EulaAcceptance, EulaDocument, require_current_acceptance, show_current_eula};
 use crate::installer::{
@@ -26,8 +25,7 @@ use crate::installer::{
     resolve_loader_installer, run_loader_installer,
 };
 use crate::instance::{
-    InstanceKind, InstanceManifest, JavaPolicy, LoaderKind, ManifestFile,
-    ServerAuthenticationProvider,
+    InstanceKind, InstanceManifest, LoaderKind, ManifestFile, ServerAuthenticationProvider,
 };
 use crate::java::{
     JavaProgressEvent, JavaTarget, MojangJavaPlan, install_mojang_java, plan_mojang_java,
@@ -229,7 +227,6 @@ fn lock_authlib_injector(
 async fn prepare_vanilla_client_install<F>(
     instance_root: &Path,
     client: &reqwest::Client,
-    default_java_provider: JavaProvider,
     mut progress: F,
 ) -> Result<ClientInstallPlan, LauncherError>
 where
@@ -255,13 +252,6 @@ where
             resolved.minecraft_version
         ))
     })?;
-    let provider = selected_java_provider(&manifest, default_java_provider)?;
-    if provider != JavaProvider::Mojang {
-        return Err(LauncherError::UnsupportedRequirement(format!(
-            "Java provider '{}' is not yet implemented",
-            provider.as_str()
-        )));
-    }
     let java = plan_mojang_java(client, java_requirement, JavaTarget::native()?, |event| {
         progress(InstallProgressEvent::Java(event));
     })
@@ -280,7 +270,6 @@ where
 async fn prepare_vanilla_server_install<F>(
     instance_root: &Path,
     client: &reqwest::Client,
-    default_java_provider: JavaProvider,
     mut progress: F,
 ) -> Result<ServerInstallPlan, LauncherError>
 where
@@ -303,13 +292,6 @@ where
             resolved.minecraft_version
         ))
     })?;
-    let provider = selected_java_provider(&manifest, default_java_provider)?;
-    if provider != JavaProvider::Mojang {
-        return Err(LauncherError::UnsupportedRequirement(format!(
-            "Java provider '{}' is not yet implemented",
-            provider.as_str()
-        )));
-    }
     let java = plan_mojang_java(client, java_requirement, JavaTarget::native()?, |event| {
         progress(InstallProgressEvent::Java(event));
     })
@@ -340,7 +322,6 @@ where
 async fn prepare_profile_loader_install<F>(
     instance_root: &Path,
     client: &reqwest::Client,
-    default_java_provider: JavaProvider,
     mut progress: F,
 ) -> Result<InstallPlan, LauncherError>
 where
@@ -394,14 +375,7 @@ where
                     resolved.minecraft_version
                 ))
             })?;
-            let java = plan_selected_java(
-                client,
-                &manifest,
-                default_java_provider,
-                java_requirement,
-                &mut progress,
-            )
-            .await?;
+            let java = plan_selected_java(client, java_requirement, &mut progress).await?;
             Ok(InstallPlan::Client(ClientInstallPlan {
                 instance_id: manifest.id,
                 minecraft_requirement: manifest.minecraft.requirement,
@@ -443,14 +417,7 @@ where
                     resolved.minecraft_version
                 ))
             })?;
-            let java = plan_selected_java(
-                client,
-                &manifest,
-                default_java_provider,
-                java_requirement,
-                &mut progress,
-            )
-            .await?;
+            let java = plan_selected_java(client, java_requirement, &mut progress).await?;
             let eula = show_current_eula(instance_root, client).await?;
             let acceptance = match require_current_acceptance(instance_root, &eula) {
                 Ok(acceptance) => Some(acceptance),
@@ -479,7 +446,6 @@ where
 async fn prepare_installer_loader_install<F>(
     instance_root: &Path,
     client: &reqwest::Client,
-    default_java_provider: JavaProvider,
     mut progress: F,
 ) -> Result<InstallPlan, LauncherError>
 where
@@ -530,14 +496,7 @@ where
                     resolved.minecraft_version
                 ))
             })?;
-            let java = plan_selected_java(
-                client,
-                &manifest,
-                default_java_provider,
-                java_requirement,
-                &mut progress,
-            )
-            .await?;
+            let java = plan_selected_java(client, java_requirement, &mut progress).await?;
             Ok(InstallPlan::Client(ClientInstallPlan {
                 instance_id: manifest.id,
                 minecraft_requirement: manifest.minecraft.requirement,
@@ -570,14 +529,7 @@ where
                     resolved.minecraft_version
                 ))
             })?;
-            let java = plan_selected_java(
-                client,
-                &manifest,
-                default_java_provider,
-                java_requirement,
-                &mut progress,
-            )
-            .await?;
+            let java = plan_selected_java(client, java_requirement, &mut progress).await?;
             let eula = show_current_eula(instance_root, client).await?;
             let acceptance = match require_current_acceptance(instance_root, &eula) {
                 Ok(acceptance) => Some(acceptance),
@@ -606,7 +558,6 @@ where
 pub async fn prepare_install<F>(
     location: &InstanceLocation,
     client: &reqwest::Client,
-    default_java_provider: JavaProvider,
     progress: F,
 ) -> Result<InstallPlan, LauncherError>
 where
@@ -624,30 +575,18 @@ where
     }
     let mut plan = match manifest.loader.kind {
         LoaderKind::Vanilla => match manifest.kind {
-            InstanceKind::Client => prepare_vanilla_client_install(
-                instance_root,
-                client,
-                default_java_provider,
-                progress,
-            )
-            .await
-            .map(InstallPlan::Client),
-            InstanceKind::Server => prepare_vanilla_server_install(
-                instance_root,
-                client,
-                default_java_provider,
-                progress,
-            )
-            .await
-            .map(InstallPlan::Server),
+            InstanceKind::Client => prepare_vanilla_client_install(instance_root, client, progress)
+                .await
+                .map(InstallPlan::Client),
+            InstanceKind::Server => prepare_vanilla_server_install(instance_root, client, progress)
+                .await
+                .map(InstallPlan::Server),
         },
         LoaderKind::Fabric | LoaderKind::Quilt => {
-            prepare_profile_loader_install(instance_root, client, default_java_provider, progress)
-                .await
+            prepare_profile_loader_install(instance_root, client, progress).await
         }
         LoaderKind::Forge | LoaderKind::Neoforge => {
-            prepare_installer_loader_install(instance_root, client, default_java_provider, progress)
-                .await
+            prepare_installer_loader_install(instance_root, client, progress).await
         }
     }?;
     if let InstallPlan::Client(client) = &mut plan {
@@ -660,21 +599,12 @@ where
 
 async fn plan_selected_java<F>(
     client: &reqwest::Client,
-    manifest: &InstanceManifest,
-    default_java_provider: JavaProvider,
     requirement: &crate::mojang::MojangJavaRequirement,
     progress: &mut F,
 ) -> Result<MojangJavaPlan, LauncherError>
 where
     F: FnMut(InstallProgressEvent) + Send,
 {
-    let provider = selected_java_provider(manifest, default_java_provider)?;
-    if provider != JavaProvider::Mojang {
-        return Err(LauncherError::UnsupportedRequirement(format!(
-            "Java provider '{}' is not yet implemented",
-            provider.as_str()
-        )));
-    }
     plan_mojang_java(client, requirement, JavaTarget::native()?, |event| {
         progress(InstallProgressEvent::Java(event));
     })
@@ -1326,20 +1256,6 @@ fn merge_client_installer_profile(
     resolved.jvm_arguments.extend(profile.jvm_arguments);
     resolved.game_arguments.extend(profile.game_arguments);
     Ok(resolved)
-}
-
-fn selected_java_provider(
-    manifest: &InstanceManifest,
-    default: JavaProvider,
-) -> Result<JavaProvider, LauncherError> {
-    match manifest.java.policy {
-        JavaPolicy::Auto => Ok(default),
-        JavaPolicy::Managed => Ok(manifest.java.provider.unwrap_or(default)),
-        JavaPolicy::System => Err(LauncherError::UnsupportedRequirement(
-            "system Java selection is not yet supported by the managed install transaction"
-                .to_string(),
-        )),
-    }
 }
 
 fn locked_artifact(download: &ClientDownload, artifact: &CachedArtifact) -> LockedArtifact {

@@ -51,10 +51,9 @@ pub use client::{
     AssetMapping, ClientDownload, NativeExtract, ResolvedVanillaClient, resolve_vanilla_client,
 };
 pub use config::{
-    ConfigEntry, ConfigKey, ConfigMutation, GlobalConfig, InstallerConfig, JavaProvider,
-    MinecraftGlobalConfig, UiPreference, YggdrasilProviderConfig, add_yggdrasil_provider,
-    get_config, list_config, remove_yggdrasil_provider, set_config, set_minecraft_directory,
-    unset_config,
+    ConfigEntry, ConfigKey, ConfigMutation, GlobalConfig, InstallerConfig, MinecraftGlobalConfig,
+    UiPreference, YggdrasilProviderConfig, add_yggdrasil_provider, get_config, list_config,
+    remove_yggdrasil_provider, set_config, set_minecraft_directory, unset_config,
 };
 pub use context::{ContextIntent, ContextSource, ResolvedInstance, resolve_instance};
 pub use error::LauncherError;
@@ -73,8 +72,8 @@ pub use installer::{
     resolve_loader_installer, run_loader_installer,
 };
 pub use instance::{
-    INSTANCE_MANIFEST_FILE, InstanceKind, InstanceManifest, JavaPolicy, LoaderKind, ManifestFile,
-    RestartPolicy,
+    INSTANCE_MANIFEST_FILE, InstanceKind, InstanceManifest, JavaPolicy, JavaProvider, LoaderKind,
+    ManifestFile, RestartPolicy,
 };
 pub use java::{
     InstalledJavaRuntime, JavaProgressEvent, JavaTarget, MOJANG_RUNTIME_MANIFEST_URL,

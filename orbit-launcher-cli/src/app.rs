@@ -807,12 +807,9 @@ async fn execute_existing_install(
     let registry = InstanceRegistry::load(&runtime.paths().instances_file())?;
     let resolved = resolve_instance(&registry, selector, current_dir, ContextIntent::Sensitive)?;
     let client = runtime.config().http_client()?;
-    let plan = prepare_install(
-        &resolved.entry.location,
-        &client,
-        runtime.config().java.default_provider,
-        |event| frontend.progress(event),
-    )
+    let plan = prepare_install(&resolved.entry.location, &client, |event| {
+        frontend.progress(event)
+    })
     .await?;
     if let Some(server) = plan.server() {
         ensure_server_eula_accepted(resolved.entry.instance_directory(), server, frontend)?;

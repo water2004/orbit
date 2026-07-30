@@ -313,14 +313,7 @@ pub fn configure_instance(
         manifest_file.inner.loader.requirement = Some(requirement);
     }
     if let Some(policy) = request.java_policy {
-        if policy == JavaPolicy::System {
-            return Err(LauncherError::UnsupportedRequirement(
-                "system Java is not supported by the managed install and launch pipeline"
-                    .to_string(),
-            ));
-        }
         manifest_file.inner.java.policy = policy;
-        manifest_file.inner.java.path = None;
         if policy == JavaPolicy::Auto {
             manifest_file.inner.java.provider = None;
         }

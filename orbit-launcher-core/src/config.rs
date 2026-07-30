@@ -24,8 +24,6 @@ pub struct GlobalConfig {
     #[serde(default)]
     pub minecraft: MinecraftGlobalConfig,
     #[serde(default)]
-    pub java: JavaGlobalConfig,
-    #[serde(default)]
     pub yggdrasil: YggdrasilConfig,
     #[serde(default)]
     pub ui: UiConfig,
@@ -39,7 +37,6 @@ impl Default for GlobalConfig {
             installer: InstallerConfig::default(),
             cache: CacheConfig::default(),
             minecraft: MinecraftGlobalConfig::default(),
-            java: JavaGlobalConfig::default(),
             yggdrasil: YggdrasilConfig::default(),
             ui: UiConfig::default(),
         }
@@ -153,19 +150,17 @@ pub enum ConfigKey {
     NetworkRequestTimeoutSeconds,
     InstallerTimeoutSeconds,
     CacheMaxSize,
-    JavaDefaultProvider,
     UiProgressBar,
     UiColor,
 }
 
 impl ConfigKey {
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 7] = [
         Self::NetworkConcurrency,
         Self::NetworkConnectTimeoutSeconds,
         Self::NetworkRequestTimeoutSeconds,
         Self::InstallerTimeoutSeconds,
         Self::CacheMaxSize,
-        Self::JavaDefaultProvider,
         Self::UiProgressBar,
         Self::UiColor,
     ];
@@ -177,7 +172,6 @@ impl ConfigKey {
             Self::NetworkRequestTimeoutSeconds => "network.request-timeout-seconds",
             Self::InstallerTimeoutSeconds => "installer.timeout-seconds",
             Self::CacheMaxSize => "cache.max-size",
-            Self::JavaDefaultProvider => "java.default-provider",
             Self::UiProgressBar => "ui.progress-bar",
             Self::UiColor => "ui.color",
         }
@@ -190,7 +184,6 @@ impl ConfigKey {
             Self::NetworkRequestTimeoutSeconds => ("network", "request_timeout_seconds"),
             Self::InstallerTimeoutSeconds => ("installer", "timeout_seconds"),
             Self::CacheMaxSize => ("cache", "max_size"),
-            Self::JavaDefaultProvider => ("java", "default_provider"),
             Self::UiProgressBar => ("ui", "progress_bar"),
             Self::UiColor => ("ui", "color"),
         }
@@ -207,7 +200,6 @@ impl ConfigKey {
             }
             Self::InstallerTimeoutSeconds => Some(config.installer.timeout_seconds.to_string()),
             Self::CacheMaxSize => Some(config.cache.max_size.clone()),
-            Self::JavaDefaultProvider => Some(config.java.default_provider.as_str().to_string()),
             Self::UiProgressBar => Some(config.ui.progress_bar.as_str().to_string()),
             Self::UiColor => Some(config.ui.color.as_str().to_string()),
         }
@@ -235,11 +227,6 @@ impl ConfigKey {
                 .map_err(|_| invalid("a positive integer no greater than 9223372036854775807"))?,
             ),
             Self::CacheMaxSize => value(raw),
-            Self::JavaDefaultProvider => value(
-                JavaProvider::from_str(raw)
-                    .map_err(|()| invalid("mojang or temurin"))?
-                    .as_str(),
-            ),
             Self::UiProgressBar | Self::UiColor => value(
                 UiPreference::from_str(raw)
                     .map_err(|()| invalid("auto, always, or never"))?
@@ -531,48 +518,6 @@ impl Default for CacheConfig {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-pub struct JavaGlobalConfig {
-    pub default_provider: JavaProvider,
-}
-
-impl Default for JavaGlobalConfig {
-    fn default() -> Self {
-        Self {
-            default_provider: JavaProvider::Mojang,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum JavaProvider {
-    Mojang,
-    Temurin,
-}
-
-impl JavaProvider {
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Mojang => "mojang",
-            Self::Temurin => "temurin",
-        }
-    }
-}
-
-impl FromStr for JavaProvider {
-    type Err = ();
-
-    fn from_str(value: &str) -> Result<Self, Self::Err> {
-        match value {
-            "mojang" => Ok(Self::Mojang),
-            "temurin" => Ok(Self::Temurin),
-            _ => Err(()),
-        }
-    }
-}
-
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct YggdrasilConfig {
@@ -800,5 +745,14 @@ api_root = "http://auth.example.com/api/yggdrasil"
                 .explicit
         );
         assert!(set_config(&path, ConfigKey::NetworkConcurrency, "0").is_err());
+    }
+
+    #[test]
+    fn unsupported_java_providers_are_not_exposed_as_configuration() {
+        assert!(ConfigKey::from_str("java.default-provider").is_err());
+        assert!(
+            toml::from_str::<GlobalConfig>("schema = 2\n[java]\ndefault_provider = \"temurin\"\n")
+                .is_err()
+        );
     }
 }

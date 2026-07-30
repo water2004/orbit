@@ -148,26 +148,7 @@ fn launcher_page(app: &Entity<OrbitApp>) -> SettingPage {
 
 fn java_page(app: &Entity<OrbitApp>) -> SettingPage {
     SettingPage::new("Java")
-        .description(
-            tr!("Default provider and verified managed runtimes shared by Launcher instances")
-                .into_owned(),
-        )
-        .group(
-            SettingGroup::new()
-                .title(tr!("Runtime policy").into_owned())
-                .item(launcher_choice_item(
-                    app,
-                    "java.default-provider",
-                    tr!("Default Java provider").into_owned(),
-                    tr!("Used when an instance selects the automatic or managed Java policy")
-                        .into_owned(),
-                    "mojang",
-                    &[
-                        ("mojang", "Mojang".to_string()),
-                        ("temurin", "Eclipse Temurin".to_string()),
-                    ],
-                )),
-        )
+        .description(tr!("Verified Mojang runtimes shared by Launcher instances").into_owned())
         .group(
             SettingGroup::new()
                 .title(tr!("Managed runtimes").into_owned())

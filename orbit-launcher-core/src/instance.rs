@@ -5,7 +5,6 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::atomic_io::write_atomic;
-use crate::config::JavaProvider;
 use crate::error::LauncherError;
 
 pub const INSTANCE_MANIFEST_FILE: &str = "orbit-launcher.toml";
@@ -86,7 +85,12 @@ pub enum JavaPolicy {
     #[default]
     Auto,
     Managed,
-    System,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum JavaProvider {
+    Mojang,
 }
 
 impl JavaPolicy {
@@ -94,7 +98,6 @@ impl JavaPolicy {
         match self {
             Self::Auto => "auto",
             Self::Managed => "managed",
-            Self::System => "system",
         }
     }
 }
@@ -257,31 +260,14 @@ pub struct JavaConfig {
     pub policy: JavaPolicy,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub provider: Option<JavaProvider>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub path: Option<PathBuf>,
 }
 
 impl JavaConfig {
     fn validate(&self) -> Result<(), LauncherError> {
         match self.policy {
-            JavaPolicy::Auto if self.provider.is_some() || self.path.is_some() => {
-                Err(LauncherError::InvalidManifest(
-                    "java policy auto cannot specify provider or path".to_string(),
-                ))
-            }
-            JavaPolicy::Managed if self.path.is_some() => Err(LauncherError::InvalidManifest(
-                "managed Java cannot specify a system path".to_string(),
+            JavaPolicy::Auto if self.provider.is_some() => Err(LauncherError::InvalidManifest(
+                "java policy auto cannot specify a provider".to_string(),
             )),
-            JavaPolicy::System if self.path.is_none() || self.provider.is_some() => {
-                Err(LauncherError::InvalidManifest(
-                    "system Java requires path and cannot specify provider".to_string(),
-                ))
-            }
-            JavaPolicy::System if self.path.as_ref().is_some_and(|path| !path.is_absolute()) => {
-                Err(LauncherError::InvalidManifest(
-                    "system Java path must be absolute".to_string(),
-                ))
-            }
             _ => Ok(()),
         }
     }
@@ -292,7 +278,6 @@ impl Default for JavaConfig {
         Self {
             policy: JavaPolicy::Auto,
             provider: None,
-            path: None,
         }
     }
 }
@@ -531,5 +516,30 @@ mod tests {
     fn rejects_uuid_shaped_names_to_keep_selector_unambiguous() {
         let name = Uuid::new_v4().to_string();
         assert!(validate_instance_name(&name).is_err());
+    }
+
+    #[test]
+    fn unsupported_java_branches_are_not_in_the_manifest_schema() {
+        let manifest = InstanceManifest::new(
+            Uuid::new_v4(),
+            "client",
+            InstanceKind::Client,
+            "1.21.1",
+            LoaderKind::Vanilla,
+            None,
+        )
+        .unwrap();
+        let document = toml::to_string(&manifest).unwrap().replace(
+            "policy = \"auto\"",
+            "policy = \"system\"\npath = \"C:/java/bin/java.exe\"",
+        );
+
+        assert!(toml::from_str::<InstanceManifest>(&document).is_err());
+
+        let unsupported_provider = toml::to_string(&manifest).unwrap().replace(
+            "policy = \"auto\"",
+            "policy = \"managed\"\nprovider = \"temurin\"",
+        );
+        assert!(toml::from_str::<InstanceManifest>(&unsupported_provider).is_err());
     }
 }
