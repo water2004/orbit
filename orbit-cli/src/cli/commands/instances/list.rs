@@ -7,12 +7,12 @@ pub async fn handle(ctx: &CliContext) -> Result<()> {
     let registry = orbit_core::InstancesRegistry::load(ctx.runtime.paths().instances_file())?;
     if registry.instances.is_empty() {
         if ctx.output.format == OutputFormat::Text {
-            println!(
+            ctx.print_result_line(format_args!(
                 "{}",
                 tr!("No instances registered. Use 'orbit init' to get started.")
-            );
+            ));
         } else {
-            crate::cli::output::print_json(
+            ctx.print_json(
                 "instances",
                 &InstancesOutput {
                     subcommand: "list".to_string(),
@@ -43,7 +43,7 @@ pub async fn handle(ctx: &CliContext) -> Result<()> {
 
     match ctx.output.format {
         OutputFormat::Text => {
-            println!(
+            ctx.print_result_line(format_args!(
                 "{}",
                 crate::cli::output::instances_table(
                     &registry.instances,
@@ -52,10 +52,10 @@ pub async fn handle(ctx: &CliContext) -> Result<()> {
                         .map(|p| p.to_string_lossy().into_owned())
                         .as_deref(),
                 )
-            );
+            ));
         }
         OutputFormat::Json => {
-            crate::cli::output::print_json(
+            ctx.print_json(
                 "instances",
                 &InstancesOutput {
                     subcommand: "list".to_string(),

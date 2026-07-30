@@ -32,7 +32,7 @@ pub async fn handle(
     )?;
     match ctx.output.format {
         OutputFormat::Text => {
-            println!(
+            ctx.print_result_line(format_args!(
                 "{}",
                 tr!(
                     "Export %{state}: %{packages} package(s), %{bytes}, output %{path}.",
@@ -41,10 +41,10 @@ pub async fn handle(
                     bytes = format_bytes(report.bytes),
                     path = report.path.display()
                 )
-            );
+            ));
         }
         OutputFormat::Json => {
-            crate::cli::output::print_json(
+            ctx.print_json(
                 "export",
                 &ExportOutput {
                     dry_run: ctx.dry_run,

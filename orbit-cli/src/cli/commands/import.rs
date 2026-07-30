@@ -41,7 +41,7 @@ pub async fn handle(file: String, merge_strategy: Option<String>, ctx: &CliConte
             )?;
             match ctx.output.format {
                 OutputFormat::Text => {
-                    println!(
+                    ctx.print_result_line(format_args!(
                         "{}",
                         tr!(
                             "Import %{state}: %{added} added, %{merged} remote sets merged, %{replaced} replaced, %{kept} kept.",
@@ -51,10 +51,10 @@ pub async fn handle(file: String, merge_strategy: Option<String>, ctx: &CliConte
                             replaced = report.replaced.len(),
                             kept = report.kept.len()
                         )
-                    );
+                    ));
                 }
                 OutputFormat::Json => {
-                    crate::cli::output::print_json(
+                    ctx.print_json(
                         "import",
                         &ImportOutput {
                             dry_run: ctx.dry_run,
@@ -81,7 +81,7 @@ pub async fn handle(file: String, merge_strategy: Option<String>, ctx: &CliConte
                 let sync = orbit_core::sync_instance(&instance_dir, &providers, false).await?;
                 match ctx.output.format {
                     OutputFormat::Text => {
-                        println!(
+                        ctx.print_result_line(format_args!(
                             "{}",
                             tr!(
                                 "Imported %{archives} archive file(s); sync added %{added}, changed %{changed}, and removed %{removed} stale lock entry(s).",
@@ -90,10 +90,10 @@ pub async fn handle(file: String, merge_strategy: Option<String>, ctx: &CliConte
                                 changed = sync.changed.len(),
                                 removed = sync.removed.len()
                             )
-                        );
+                        ));
                     }
                     OutputFormat::Json => {
-                        crate::cli::output::print_json(
+                        ctx.print_json(
                             "import",
                             &ImportOutput {
                                 dry_run: false,
@@ -109,7 +109,7 @@ pub async fn handle(file: String, merge_strategy: Option<String>, ctx: &CliConte
             } else {
                 match ctx.output.format {
                     OutputFormat::Text => {
-                        println!(
+                        ctx.print_result_line(format_args!(
                             "{}",
                             tr!(
                                 "Import %{state}: %{archives} archive file(s) to extract, %{kept} existing file(s) kept.",
@@ -117,10 +117,10 @@ pub async fn handle(file: String, merge_strategy: Option<String>, ctx: &CliConte
                                 archives = report.extracted.len(),
                                 kept = report.kept.len()
                             )
-                        );
+                        ));
                     }
                     OutputFormat::Json => {
-                        crate::cli::output::print_json(
+                        ctx.print_json(
                             "import",
                             &ImportOutput {
                                 dry_run: ctx.dry_run,

@@ -59,16 +59,19 @@ pub async fn handle(
 
     match ctx.output.format {
         crate::cli::output::OutputFormat::Text => {
-            print!("{}", crate::cli::output::audit_report(&report, limit));
+            ctx.print_result(format_args!(
+                "{}",
+                crate::cli::output::audit_report(&report, limit)
+            ));
             if let Some(path) = &report_path {
-                println!(
+                ctx.print_result_line(format_args!(
                     "{}",
                     tr!("Detailed report written to: %{path}", path = path.display())
-                );
+                ));
             }
         }
         crate::cli::output::OutputFormat::Json => {
-            crate::cli::output::print_json("audit", &report);
+            ctx.print_json("audit", &report);
         }
     }
     if threshold_exceeded {

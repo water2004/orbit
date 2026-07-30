@@ -43,13 +43,13 @@ pub async fn handle(mod_name: Option<String>, ctx: &CliContext) -> Result<()> {
                 if report.installed.is_empty() && report.removed.is_empty() {
                     match ctx.output.format {
                         OutputFormat::Text => {
-                            println!(
+                            ctx.print_result_line(format_args!(
                                 "{}",
                                 no_upgrade_message(
                                     Some(&entry.mod_id),
                                     !report.diagnostics.is_empty(),
                                 )
-                            );
+                            ));
                         }
                         OutputFormat::Json => {
                             super::print_transaction_result("upgrade", &report, ctx);
@@ -90,10 +90,10 @@ pub async fn handle(mod_name: Option<String>, ctx: &CliContext) -> Result<()> {
                 if report.installed.is_empty() && report.removed.is_empty() {
                     match ctx.output.format {
                         OutputFormat::Text => {
-                            println!(
+                            ctx.print_result_line(format_args!(
                                 "{}",
                                 no_upgrade_message(None, !report.diagnostics.is_empty())
-                            );
+                            ));
                         }
                         OutputFormat::Json => {
                             super::print_transaction_result("upgrade", &report, ctx);

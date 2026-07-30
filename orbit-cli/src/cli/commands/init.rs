@@ -21,14 +21,14 @@ pub async fn handle(
         None => match detect_mc_versions(&instance_dir) {
             Ok(versions) if versions.len() == 1 => {
                 let ver = &versions[0];
-                println!(
+                ctx.print_result_line(format_args!(
                     "{}",
                     tr!(
                         "✓ Detected Minecraft version: %{version} (%{channel})",
                         version = ver.id,
                         channel = tr!(if ver.stable { "stable" } else { "snapshot" })
                     )
-                );
+                ));
                 ver.id.clone()
             }
             Ok(versions) if versions.len() > 1 && ctx.yes => {
@@ -106,7 +106,7 @@ pub async fn handle(
                     &loader,
                     ctx.yes,
                 )?;
-                println!(
+                ctx.print_result_line(format_args!(
                     "{}",
                     tr!(
                         "✓ Detected %{loader} loader %{version} (%{evidence})",
@@ -114,7 +114,7 @@ pub async fn handle(
                         version = ver,
                         evidence = info.evidence.join(", ")
                     )
-                );
+                ));
                 (loader, ver)
             }
             infos if infos.len() > 1 => {
@@ -206,7 +206,10 @@ pub async fn handle(
             lock_created: output.lock_created,
             dependency_error: output.dependency_error.clone(),
         };
-        crate::cli::output::print_json("init", &view);
+        ctx.print_json("init", &view);
+        return Ok(());
+    }
+    if ctx.quiet {
         return Ok(());
     }
 

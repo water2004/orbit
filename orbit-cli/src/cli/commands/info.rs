@@ -18,13 +18,13 @@ pub async fn handle(mod_name: String, platform: Option<String>, ctx: &CliContext
                 let view = info_view(provider.name(), &info);
                 match ctx.output.format {
                     OutputFormat::Text => {
-                        print!(
+                        ctx.print_result(format_args!(
                             "{}",
                             crate::cli::output::mod_info_table(provider.name(), &info)
-                        );
+                        ));
                     }
                     OutputFormat::Json => {
-                        crate::cli::output::print_json("info", &view);
+                        ctx.print_json("info", &view);
                     }
                 }
                 return Ok(());

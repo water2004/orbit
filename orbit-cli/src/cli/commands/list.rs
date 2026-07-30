@@ -15,9 +15,9 @@ pub async fn handle(tree: bool, target: Option<String>, ctx: &CliContext) -> Res
 
     if output.packages.is_empty() {
         if ctx.output.format == OutputFormat::Text {
-            println!("{}", tr!("No mods installed."));
+            ctx.print_result_line(format_args!("{}", tr!("No mods installed.")));
         } else {
-            crate::cli::output::print_json(
+            ctx.print_json(
                 "list",
                 &list_view(
                     &output.packages,
@@ -35,10 +35,10 @@ pub async fn handle(tree: bool, target: Option<String>, ctx: &CliContext) -> Res
     } else {
         match ctx.output.format {
             OutputFormat::Text => {
-                println!(
+                ctx.print_result_line(format_args!(
                     "{}",
                     crate::cli::output::installed_packages_table(&output.packages)
-                );
+                ));
             }
             OutputFormat::Json => {
                 let view = list_view(
@@ -47,7 +47,7 @@ pub async fn handle(tree: bool, target: Option<String>, ctx: &CliContext) -> Res
                     false,
                     Some(ctx.runtime.paths().cache_dir()),
                 );
-                crate::cli::output::print_json("list", &view);
+                ctx.print_json("list", &view);
             }
         }
     }
@@ -75,7 +75,10 @@ fn print_tree(
             true,
             Some(ctx.runtime.paths().cache_dir()),
         );
-        crate::cli::output::print_json("list", &view);
+        ctx.print_json("list", &view);
+        return Ok(());
+    }
+    if ctx.quiet {
         return Ok(());
     }
 

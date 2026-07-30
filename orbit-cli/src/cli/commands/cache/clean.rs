@@ -11,9 +11,11 @@ pub async fn handle(ctx: &CliContext) -> Result<()> {
     let summary = orbit_core::inspect_cache(ctx.runtime.paths().cache_dir(), &protected_paths)?;
     if summary.files == 0 {
         match ctx.output.format {
-            OutputFormat::Text => println!("{}", tr!("Cache is already empty.")),
+            OutputFormat::Text => {
+                ctx.print_result_line(format_args!("{}", tr!("Cache is already empty.")))
+            }
             OutputFormat::Json => {
-                crate::cli::output::print_json(
+                ctx.print_json(
                     "cache",
                     &CacheOutput {
                         subcommand: "clean".to_string(),
@@ -31,7 +33,7 @@ pub async fn handle(ctx: &CliContext) -> Result<()> {
     }
 
     if ctx.output.format == OutputFormat::Text {
-        println!(
+        ctx.print_result_line(format_args!(
             "{}",
             tr!(
                 "Cache contains %{files} file(s), %{bytes} at %{path}.",
@@ -39,13 +41,15 @@ pub async fn handle(ctx: &CliContext) -> Result<()> {
                 bytes = format_bytes(summary.bytes),
                 path = summary.path.display()
             )
-        );
+        ));
     }
     if ctx.dry_run {
         match ctx.output.format {
-            OutputFormat::Text => println!("{}", tr!("[dry-run] Cache was not modified.")),
+            OutputFormat::Text => {
+                ctx.print_result_line(format_args!("{}", tr!("[dry-run] Cache was not modified.")))
+            }
             OutputFormat::Json => {
-                crate::cli::output::print_json(
+                ctx.print_json(
                     "cache",
                     &CacheOutput {
                         subcommand: "clean".to_string(),
@@ -62,23 +66,23 @@ pub async fn handle(ctx: &CliContext) -> Result<()> {
         return Ok(());
     }
     if !ctx.yes && ctx.output.format == OutputFormat::Text && !confirm()? {
-        println!("{}", tr!("Cache clean cancelled."));
+        ctx.print_result_line(format_args!("{}", tr!("Cache clean cancelled.")));
         return Ok(());
     }
 
     let cleaned = orbit_core::clean_cache(ctx.runtime.paths().cache_dir(), &protected_paths)?;
     match ctx.output.format {
         OutputFormat::Text => {
-            println!(
+            ctx.print_result_line(format_args!(
                 "{}",
                 tr!(
                     "Cleaned cache: freed %{bytes}.",
                     bytes = format_bytes(cleaned.bytes)
                 )
-            );
+            ));
         }
         OutputFormat::Json => {
-            crate::cli::output::print_json(
+            ctx.print_json(
                 "cache",
                 &CacheOutput {
                     subcommand: "clean".to_string(),

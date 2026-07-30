@@ -8,15 +8,15 @@ use crate::cli::output::{InstanceRegisterOutput, OutputFormat, instance_view};
 pub async fn handle(name: String, path: PathBuf, ctx: &CliContext) -> Result<()> {
     let entry = orbit_core::register_existing_instance(ctx.runtime.paths(), &name, &path)?;
     match ctx.output.format {
-        OutputFormat::Text => println!(
+        OutputFormat::Text => ctx.print_result_line(format_args!(
             "{}",
             tr!(
                 "Registered Orbit instance '%{name}' at %{path}.",
                 name = entry.name,
                 path = entry.path
             )
-        ),
-        OutputFormat::Json => crate::cli::output::print_json(
+        )),
+        OutputFormat::Json => ctx.print_json(
             "instances",
             &InstanceRegisterOutput {
                 subcommand: "register".to_string(),

@@ -73,8 +73,8 @@ pub async fn handle(command: ConstraintCommands, ctx: &CliContext) -> Result<()>
     };
 
     match ctx.output.format {
-        OutputFormat::Text => print_text(&output, text_transaction.as_ref()),
-        OutputFormat::Json => crate::cli::output::print_json("constraint", &output),
+        OutputFormat::Text => print_text(&output, text_transaction.as_ref(), ctx),
+        OutputFormat::Json => ctx.print_json("constraint", &output),
     }
     Ok(())
 }
@@ -118,7 +118,14 @@ fn core_policy(policy: ConstraintPolicyCommands) -> orbit_core::PackageVersionPo
     }
 }
 
-fn print_text(output: &PackageConstraintOutput, transaction: Option<&orbit_core::InstallReport>) {
+fn print_text(
+    output: &PackageConstraintOutput,
+    transaction: Option<&orbit_core::InstallReport>,
+    ctx: &CliContext,
+) {
+    if ctx.quiet {
+        return;
+    }
     let selected = output
         .selected_version
         .clone()

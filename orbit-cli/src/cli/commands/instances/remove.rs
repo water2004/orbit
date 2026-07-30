@@ -10,22 +10,22 @@ pub async fn handle(name: String, ctx: &CliContext) -> Result<()> {
         .and_then(|path| path.canonicalize().ok());
     let removed_path = std::path::PathBuf::from(&removed.path).canonicalize().ok();
     if current.is_some() && current == removed_path {
-        eprintln!(
+        ctx.print_information_line(format_args!(
             "{}",
             tr!("Warning: removed instance is the current working directory.")
-        );
+        ));
     }
     match ctx.output.format {
         OutputFormat::Text => {
-            println!(
+            ctx.print_result_line(format_args!(
                 "{}",
                 tr!(
                     "Removed '%{name}' from Orbit tracking. Files on disk were NOT deleted.",
                     name = name
                 )
-            );
+            ));
         }
-        OutputFormat::Json => crate::cli::output::print_json(
+        OutputFormat::Json => ctx.print_json(
             "instances",
             &InstanceRemoveOutput {
                 subcommand: "remove".to_string(),

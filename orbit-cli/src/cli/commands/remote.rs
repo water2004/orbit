@@ -97,14 +97,14 @@ fn print_report(report: &orbit_core::RemoteReport, subcommand: &str, ctx: &CliCo
                     count = report.remotes.len()
                 )
             };
-            println!(
+            ctx.print_result_line(format_args!(
                 "{}",
                 crate::cli::output::remote_list_table(report, Some(&header))
-            );
+            ));
         }
         OutputFormat::Json => {
             let view = remote_view(report, subcommand);
-            crate::cli::output::print_json("remote", &view);
+            ctx.print_json("remote", &view);
         }
     }
 }

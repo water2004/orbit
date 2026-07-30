@@ -45,6 +45,48 @@ pub struct CliContext {
 }
 
 impl CliContext {
+    pub fn print_result(&self, arguments: std::fmt::Arguments<'_>) {
+        if !self.quiet {
+            print!("{arguments}");
+        }
+    }
+
+    pub fn print_result_line(&self, arguments: std::fmt::Arguments<'_>) {
+        if !self.quiet {
+            println!("{arguments}");
+        }
+    }
+
+    pub fn print_information_line(&self, arguments: std::fmt::Arguments<'_>) {
+        if !self.quiet {
+            eprintln!("{arguments}");
+        }
+    }
+
+    pub fn print_json<T: serde::Serialize>(&self, command: &'static str, view: &T) {
+        if !self.quiet {
+            crate::cli::output::print_json(command, view);
+        }
+    }
+
+    pub fn print_verbose_runtime(&self) {
+        if !self.verbose || self.quiet {
+            return;
+        }
+        let config = self.runtime.config();
+        eprintln!(
+            "{}",
+            tr!(
+                "Runtime context: config %{config}; cache %{cache}; network timeout %{timeout}s, %{retries} retries; %{downloads} shared downloads",
+                config = self.runtime.paths().config_file().display(),
+                cache = self.runtime.paths().cache_dir().display(),
+                timeout = config.network.timeout,
+                retries = config.network.max_retries,
+                downloads = config.core.max_concurrent_downloads
+            )
+        );
+    }
+
     pub fn instance_dir(&self) -> Result<PathBuf> {
         if let Some(name) = &self.instance {
             let registry =
@@ -257,7 +299,8 @@ pub fn resolution_selector(ctx: &CliContext) -> Option<orbit_core::ResolutionSel
 
 fn install_prompt(ctx: &CliContext) -> orbit_core::InstallPrompt {
     if ctx.yes {
-        return Box::new(|report| prompt_install_report(report, true));
+        let quiet = ctx.quiet;
+        return Box::new(move |report| quiet || prompt_install_report(report, true));
     }
     if ctx.output.format == crate::cli::output::OutputFormat::Json {
         let command = ctx.command;
@@ -681,6 +724,9 @@ pub fn print_transaction_result(
     report: &orbit_core::InstallReport,
     ctx: &CliContext,
 ) {
+    if ctx.quiet {
+        return;
+    }
     use crate::cli::output::OutputFormat;
     match ctx.output.format {
         OutputFormat::Text => {
@@ -709,7 +755,7 @@ pub fn print_transaction_result(
         }
         OutputFormat::Json => {
             let view = crate::cli::output::transaction_view(report, ctx.dry_run);
-            crate::cli::output::print_json(command, &view);
+            ctx.print_json(command, &view);
         }
     }
 }

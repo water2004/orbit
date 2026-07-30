@@ -110,6 +110,15 @@ pub async fn handle(
                     )
                 );
             };
+            if ctx.yes {
+                anyhow::bail!(
+                    "{}",
+                    tr!(
+                        "'%{slug}' requires choosing a search result; rerun without --yes or use an exact provider project ID.",
+                        slug = slug
+                    )
+                );
+            }
             eprintln!(
                 "{}",
                 tr!("Could not find '%{slug}'. Did you mean:", slug = slug)
@@ -131,25 +140,21 @@ pub async fn handle(
                         .join(", ")
                 );
             }
-            let project_id = if ctx.yes {
-                results[0].project_id.clone()
-            } else {
-                eprint!("\n{}", tr!("Choose a number (or press Enter to cancel): "));
-                let mut input = String::new();
-                std::io::stdin().read_line(&mut input).ok();
-                let trimmed = input.trim();
-                if trimmed.is_empty() {
-                    anyhow::bail!("{}", tr!("Add cancelled."));
-                }
-                match trimmed.parse::<usize>() {
-                    Ok(idx) if idx < results.len() => results[idx].project_id.clone(),
-                    _ => anyhow::bail!("{}", tr!("Invalid choice.")),
-                }
+            eprint!("\n{}", tr!("Choose a number (or press Enter to cancel): "));
+            let mut input = String::new();
+            std::io::stdin().read_line(&mut input).ok();
+            let trimmed = input.trim();
+            if trimmed.is_empty() {
+                anyhow::bail!("{}", tr!("Add cancelled."));
+            }
+            let project_id = match trimmed.parse::<usize>() {
+                Ok(idx) if idx < results.len() => results[idx].project_id.clone(),
+                _ => anyhow::bail!("{}", tr!("Invalid choice.")),
             };
-            eprintln!(
+            ctx.print_information_line(format_args!(
                 "{}",
                 tr!("Installing project %{project}…", project = project_id)
-            );
+            ));
             Box::pin(handle(
                 project_id,
                 Some(suggestion_platform),

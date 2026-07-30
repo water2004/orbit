@@ -17,8 +17,8 @@ pub async fn handle(command: ConfigCommands, ctx: &CliContext) -> Result<()> {
 
     match command {
         ConfigCommands::Path => match ctx.output.format {
-            OutputFormat::Text => println!("{}", display_path.display()),
-            OutputFormat::Json => crate::cli::output::print_json(
+            OutputFormat::Text => ctx.print_result_line(format_args!("{}", display_path.display())),
+            OutputFormat::Json => ctx.print_json(
                 "config",
                 &ConfigPathOutput {
                     subcommand: "path".to_string(),
@@ -34,9 +34,12 @@ pub async fn handle(command: ConfigCommands, ctx: &CliContext) -> Result<()> {
                 .collect::<Vec<_>>();
             match ctx.output.format {
                 OutputFormat::Text => {
-                    println!("{}", crate::cli::output::config_entries_table(&entries));
+                    ctx.print_result_line(format_args!(
+                        "{}",
+                        crate::cli::output::config_entries_table(&entries)
+                    ));
                 }
-                OutputFormat::Json => crate::cli::output::print_json(
+                OutputFormat::Json => ctx.print_json(
                     "config",
                     &ConfigListOutput {
                         subcommand: "list".to_string(),
@@ -149,9 +152,9 @@ fn render_entry(
                 Some(ConfigValueView::Integer(value)) => value.to_string(),
                 None => "—".to_string(),
             };
-            println!("{prefix}{} = {value}", entry.key);
+            ctx.print_result_line(format_args!("{prefix}{} = {value}", entry.key));
         }
-        OutputFormat::Json => crate::cli::output::print_json(
+        OutputFormat::Json => ctx.print_json(
             "config",
             &ConfigEntryOutput {
                 subcommand: subcommand.to_string(),

@@ -39,8 +39,10 @@ pub async fn handle(package: String, ctx: &CliContext) -> Result<()> {
             .collect(),
     };
     match ctx.output.format {
-        OutputFormat::Text => println!("{}", package_versions_table(&output)),
-        OutputFormat::Json => crate::cli::output::print_json("versions", &output),
+        OutputFormat::Text => {
+            ctx.print_result_line(format_args!("{}", package_versions_table(&output)))
+        }
+        OutputFormat::Json => ctx.print_json("versions", &output),
     }
     Ok(())
 }

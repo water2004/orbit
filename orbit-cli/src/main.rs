@@ -26,7 +26,11 @@ async fn main() {
     } else {
         ProgressFormat::None
     };
-    let output = OutputCfg { format, progress };
+    let output = OutputCfg {
+        format,
+        progress,
+        quiet: cli.quiet,
+    };
 
     let runtime = match orbit_core::RuntimeContext::load(orbit_core::RuntimePathOptions {
         layout: cli.data_layout,
@@ -58,6 +62,7 @@ async fn main() {
         runtime,
         output,
     };
+    ctx.print_verbose_runtime();
     let command_result = cli.command.execute(&ctx).await;
     let cache_result = ctx.runtime.prune_jar_cache().map_err(anyhow::Error::from);
     match (command_result, cache_result) {

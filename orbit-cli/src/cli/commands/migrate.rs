@@ -51,25 +51,25 @@ pub async fn handle_export(
     );
     if ctx.output.format == OutputFormat::Text {
         if applied {
-            println!(
+            ctx.print_result_line(format_args!(
                 "{}",
                 tr!(
                     "Migration exported to %{target}. Run 'orbit install' in the target instance to materialize %{packages} exact package(s).",
                     target = report.target_dir.display(),
                     packages = report.packages
                 )
-            );
+            ));
         } else if ctx.dry_run {
-            println!(
+            ctx.print_result_line(format_args!(
                 "{}",
                 tr!(
                     "Migration export preview: %{packages} package(s) and %{configs} configuration file(s).",
                     packages = report.packages,
                     configs = report.config_files
                 )
-            );
+            ));
         } else {
-            println!("{}", tr!("Migration export cancelled."));
+            ctx.print_result_line(format_args!("{}", tr!("Migration export cancelled.")));
         }
     }
     Ok(())
@@ -186,6 +186,9 @@ fn render_plan(
     export: Option<MigrationExportView>,
     ctx: &CliContext,
 ) {
+    if ctx.quiet {
+        return;
+    }
     match ctx.output.format {
         OutputFormat::Text => {
             super::print_resolution_diagnostics(&plan.diagnostics);
@@ -211,7 +214,7 @@ fn render_plan(
             );
         }
         OutputFormat::Json => {
-            crate::cli::output::print_json(
+            ctx.print_json(
                 "migrate",
                 &migration_view(plan, subcommand, export, ctx.dry_run),
             );

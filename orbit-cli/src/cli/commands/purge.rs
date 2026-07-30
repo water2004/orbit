@@ -22,17 +22,17 @@ pub async fn handle(mod_name: String, ctx: &CliContext) -> Result<()> {
     if ctx.dry_run {
         match ctx.output.format {
             OutputFormat::Text => {
-                println!(
+                ctx.print_result_line(format_args!(
                     "{}",
                     tr!(
                         "[dry-run] would purge '%{package}' and %{configs} config file(s).",
                         package = removed.mod_id,
                         configs = selected.len()
                     )
-                );
+                ));
             }
             OutputFormat::Json => {
-                crate::cli::output::print_json(
+                ctx.print_json(
                     "purge",
                     &PurgeOutput {
                         mod_id: removed.mod_id,
@@ -47,7 +47,7 @@ pub async fn handle(mod_name: String, ctx: &CliContext) -> Result<()> {
     let removed_configs = orbit_core::remove_config_candidates(&config_dir, &selected)?;
     match ctx.output.format {
         OutputFormat::Text => {
-            println!(
+            ctx.print_result_line(format_args!(
                 "{}",
                 tr!(
                     "Purged %{package}: removed %{files} package file set(s) and %{configs} config file(s).",
@@ -55,10 +55,10 @@ pub async fn handle(mod_name: String, ctx: &CliContext) -> Result<()> {
                     files = usize::from(removed.jar_deleted),
                     configs = removed_configs.len()
                 )
-            );
+            ));
         }
         OutputFormat::Json => {
-            crate::cli::output::print_json(
+            ctx.print_json(
                 "purge",
                 &PurgeOutput {
                     mod_id: removed.mod_id,
@@ -78,17 +78,21 @@ fn select_candidates(
     if candidates.is_empty() {
         return Ok(Vec::new());
     }
-    eprintln!(
-        "{}",
-        tr!(
-            "Found %{count} candidate config file(s):",
-            count = candidates.len()
-        )
-    );
+    if !ctx.quiet || (!ctx.yes && !ctx.dry_run) {
+        eprintln!(
+            "{}",
+            tr!(
+                "Found %{count} candidate config file(s):",
+                count = candidates.len()
+            )
+        );
+    }
     let mut selected = Vec::new();
     for candidate in candidates {
         if ctx.yes || ctx.dry_run {
-            eprintln!("  {} ({})", candidate.path, candidate.reason);
+            if !ctx.quiet {
+                eprintln!("  {} ({})", candidate.path, candidate.reason);
+            }
             selected.push(candidate.clone());
             continue;
         }

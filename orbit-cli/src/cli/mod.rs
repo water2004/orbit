@@ -45,7 +45,7 @@ pub struct Cli {
     #[arg(long, global = true, value_enum, default_value_t = ProgressFormat::None)]
     pub progress_format: ProgressFormat,
 
-    /// Show detailed logs.
+    /// Show resolved runtime and instance context.
     #[arg(short, long, global = true)]
     pub verbose: bool,
 
@@ -593,6 +593,19 @@ mod tests {
     #[test]
     fn clap_schema_has_no_global_subcommand_argument_collisions() {
         Cli::command().debug_assert();
+    }
+
+    #[test]
+    fn language_flag_is_an_optional_override_of_global_config() {
+        let configured = Cli::try_parse_from(["orbit", "config", "path"]).unwrap();
+        assert!(configured.language.is_none());
+
+        let explicit =
+            Cli::try_parse_from(["orbit", "--language", "zh-CN", "config", "path"]).unwrap();
+        assert_eq!(
+            explicit.language,
+            Some(orbit_i18n::LanguageMode::SimplifiedChinese)
+        );
     }
 
     #[test]

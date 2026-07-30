@@ -67,7 +67,7 @@ pub async fn handle(mod_name: Option<String>, ctx: &CliContext) -> Result<()> {
         })
         .map(diagnostic_view)
         .collect();
-    if ctx.output.format == OutputFormat::Text {
+    if ctx.output.format == OutputFormat::Text && !ctx.quiet {
         super::print_resolution_diagnostics(&report.diagnostics);
         super::print_resolution_warnings(&report.warnings);
     }
@@ -101,13 +101,13 @@ pub async fn handle(mod_name: Option<String>, ctx: &CliContext) -> Result<()> {
     if results.is_empty() {
         match ctx.output.format {
             OutputFormat::Text => {
-                println!(
+                ctx.print_result_line(format_args!(
                     "{}",
                     no_upgrade_message(requested_package.as_deref(), !diagnostics.is_empty())
-                );
+                ));
             }
             OutputFormat::Json => {
-                crate::cli::output::print_json("outdated", &view);
+                ctx.print_json("outdated", &view);
             }
         }
         return Ok(());
@@ -115,11 +115,14 @@ pub async fn handle(mod_name: Option<String>, ctx: &CliContext) -> Result<()> {
 
     match ctx.output.format {
         OutputFormat::Text => {
-            println!("\n{}", tr!("Updates available:"));
-            println!("{}", crate::cli::output::outdated_table(&results));
+            ctx.print_result_line(format_args!("\n{}", tr!("Updates available:")));
+            ctx.print_result_line(format_args!(
+                "{}",
+                crate::cli::output::outdated_table(&results)
+            ));
         }
         OutputFormat::Json => {
-            crate::cli::output::print_json("outdated", &view);
+            ctx.print_json("outdated", &view);
         }
     }
     Ok(())

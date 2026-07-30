@@ -12,16 +12,16 @@ pub async fn handle(input: String, ctx: &CliContext) -> Result<()> {
             match ctx.output.format {
                 OutputFormat::Text => {
                     if ctx.dry_run {
-                        println!(
+                        ctx.print_result_line(format_args!(
                             "{}",
                             tr!(
                                 "[dry-run] would remove '%{package}'.",
                                 package = report.mod_id
                             )
-                        );
+                        ));
                         return Ok(());
                     }
-                    println!(
+                    ctx.print_result_line(format_args!(
                         "{}",
                         tr!(
                             "Removed '%{package}'%{files}.",
@@ -32,10 +32,10 @@ pub async fn handle(input: String, ctx: &CliContext) -> Result<()> {
                                 String::new()
                             }
                         )
-                    );
+                    ));
                 }
                 OutputFormat::Json => {
-                    crate::cli::output::print_json(
+                    ctx.print_json(
                         "remove",
                         &RemoveOutput {
                             mod_id: report.mod_id,
@@ -55,6 +55,15 @@ pub async fn handle(input: String, ctx: &CliContext) -> Result<()> {
             if deps.is_empty() {
                 anyhow::bail!("{}", tr!("No dependencies in orbit.toml."));
             }
+            if ctx.yes {
+                anyhow::bail!(
+                    "{}",
+                    tr!(
+                        "'%{input}' was not found. Use an exact JAR-declared mod_id.",
+                        input = input
+                    )
+                );
+            }
             eprintln!(
                 "{}",
                 tr!(
@@ -65,26 +74,16 @@ pub async fn handle(input: String, ctx: &CliContext) -> Result<()> {
             for (i, package) in deps.iter().enumerate() {
                 eprintln!("  [{i}] {package}");
             }
-            let key = if ctx.yes {
-                anyhow::bail!(
-                    "{}",
-                    tr!(
-                        "'%{input}' was not found. Use an exact JAR-declared mod_id.",
-                        input = input
-                    )
-                );
-            } else {
-                eprint!("\n{}", tr!("Choose a number (or press Enter to cancel): "));
-                let mut choice = String::new();
-                std::io::stdin().read_line(&mut choice).ok();
-                let trimmed = choice.trim();
-                if trimmed.is_empty() {
-                    anyhow::bail!("{}", tr!("Remove cancelled."));
-                }
-                match trimmed.parse::<usize>() {
-                    Ok(i) if i < deps.len() => deps[i].clone(),
-                    _ => anyhow::bail!("{}", tr!("Invalid choice.")),
-                }
+            eprint!("\n{}", tr!("Choose a number (or press Enter to cancel): "));
+            let mut choice = String::new();
+            std::io::stdin().read_line(&mut choice).ok();
+            let trimmed = choice.trim();
+            if trimmed.is_empty() {
+                anyhow::bail!("{}", tr!("Remove cancelled."));
+            }
+            let key = match trimmed.parse::<usize>() {
+                Ok(i) if i < deps.len() => deps[i].clone(),
+                _ => anyhow::bail!("{}", tr!("Invalid choice.")),
             };
             Box::pin(handle(key, ctx)).await
         }

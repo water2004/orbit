@@ -30,7 +30,7 @@ pub async fn handle(
 
     match ctx.output.format {
         OutputFormat::Text => {
-            println!(
+            ctx.print_result_line(format_args!(
                 "{}",
                 tr!(
                     "Install %{state}: %{installed} exact package(s) materialized, %{present} already present, %{skipped} excluded by policy.",
@@ -39,11 +39,11 @@ pub async fn handle(
                     present = report.already_present.len(),
                     skipped = report.skipped.len()
                 )
-            );
+            ));
         }
         OutputFormat::Json => {
             let view = install_instance_view(&report, ctx.dry_run);
-            crate::cli::output::print_json("install", &view);
+            ctx.print_json("install", &view);
         }
     }
     Ok(())

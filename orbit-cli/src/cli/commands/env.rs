@@ -32,7 +32,7 @@ pub fn handle(package: String, environment: String, ctx: &CliContext) -> Result<
                 .effective
                 .clone()
                 .unwrap_or_else(|| tr!("pending JAR selection").into_owned());
-            println!(
+            ctx.print_result_line(format_args!(
                 "{}",
                 tr!(
                     "%{prefix}%{package} env = %{configured} (effective: %{effective})",
@@ -41,9 +41,9 @@ pub fn handle(package: String, environment: String, ctx: &CliContext) -> Result<
                     configured = tr!(&configured),
                     effective = tr!(&effective)
                 )
-            );
+            ));
         }
-        OutputFormat::Json => crate::cli::output::print_json("env", &output),
+        OutputFormat::Json => ctx.print_json("env", &output),
     }
     Ok(())
 }

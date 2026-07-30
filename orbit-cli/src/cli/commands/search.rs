@@ -23,7 +23,7 @@ pub async fn handle(
         super::create_instance_providers(&instance_dir, platform.as_deref(), &ctx.runtime)?;
 
     if ctx.output.format == OutputFormat::Text {
-        eprintln!(
+        ctx.print_information_line(format_args!(
             "{}",
             tr!(
                 "Searching for \"%{query}\" on %{providers}%{filters}…",
@@ -47,7 +47,7 @@ pub async fn handle(
                     String::new()
                 }
             )
-        );
+        ));
     }
 
     let mut results: Vec<(&str, orbit_core::providers::SearchResultItem)> = Vec::new();
@@ -68,9 +68,12 @@ pub async fn handle(
 
     if results.is_empty() {
         if ctx.output.format == OutputFormat::Text {
-            eprintln!("{}", tr!("No results found for '%{query}'.", query = query));
+            ctx.print_information_line(format_args!(
+                "{}",
+                tr!("No results found for '%{query}'.", query = query)
+            ));
         } else {
-            crate::cli::output::print_json(
+            ctx.print_json(
                 "search",
                 &SearchOutput {
                     query: query.clone(),

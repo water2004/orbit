@@ -85,6 +85,7 @@ pub enum ProgressFormat {
 pub struct OutputCfg {
     pub format: OutputFormat,
     pub progress: ProgressFormat,
+    pub quiet: bool,
 }
 
 impl OutputCfg {
@@ -108,6 +109,9 @@ pub fn render<T: serde::Serialize>(
     view: &T,
     text: impl FnOnce(&T) -> String,
 ) {
+    if cfg.quiet {
+        return;
+    }
     match cfg.format {
         OutputFormat::Text => print!("{}", text(view)),
         OutputFormat::Json => println!(

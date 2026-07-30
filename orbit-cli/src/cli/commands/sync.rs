@@ -13,9 +13,9 @@ pub async fn handle(ctx: &CliContext) -> Result<()> {
 
         let deltas = crate::cli::output::sync_report_table(&report);
         if deltas != tr!("No local changes.") {
-            println!("{deltas}");
+            ctx.print_result_line(format_args!("{deltas}"));
         }
-        println!(
+        ctx.print_result_line(format_args!(
             "{}",
             tr!(
                 "Sync %{state}: %{platform} platform change(s), %{added} added, %{changed} changed, %{removed} removed from lock, %{missing} missing on disk.",
@@ -26,14 +26,17 @@ pub async fn handle(ctx: &CliContext) -> Result<()> {
                 removed = report.removed.len(),
                 missing = report.missing.len()
             )
-        );
+        ));
         if !report.missing.is_empty() {
-            println!("{}", tr!("Run 'orbit fix' to resolve missing packages."));
+            ctx.print_result_line(format_args!(
+                "{}",
+                tr!("Run 'orbit fix' to resolve missing packages.")
+            ));
         }
         return Ok(());
     }
 
     let view = sync_view(&report, ctx.dry_run);
-    crate::cli::output::print_json("sync", &view);
+    ctx.print_json("sync", &view);
     Ok(())
 }
