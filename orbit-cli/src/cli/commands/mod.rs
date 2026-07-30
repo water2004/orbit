@@ -181,7 +181,7 @@ pub fn operation_progress(ctx: &CliContext) -> Option<orbit_core::ProgressReport
             ctx.machine_sequence.clone(),
         ));
     }
-    crate::cli::progress::reporter(ctx.quiet, &ctx.runtime.config().ui.progress_bar)
+    crate::cli::progress::reporter(ctx.quiet, ctx.runtime.config().ui.progress_bar)
 }
 
 fn package_selector(ctx: &CliContext) -> Option<orbit_core::PackageSelector> {

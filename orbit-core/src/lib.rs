@@ -47,9 +47,9 @@ pub use archive::{
 };
 pub use audit::{audit_instance, audit_instance_with_progress};
 pub use config::{
-    ConfigKey, ConfigValue, GlobalConfig, InstanceEntry, InstancesRegistry, clear_default_instance,
-    persist_config_field, register_existing_instance, register_instance, remove_instance,
-    set_default_instance,
+    ColorMode, ConfigKey, ConfigValue, GlobalConfig, InstanceEntry, InstancesRegistry,
+    LanguagePreference, ProgressBarMode, clear_default_instance, persist_config_field,
+    register_existing_instance, register_instance, remove_instance, set_default_instance,
 };
 pub use dependency_environment::{PackageEnvironmentReport, set_package_environment};
 pub use error::OrbitError;

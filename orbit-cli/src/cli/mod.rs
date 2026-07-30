@@ -17,9 +17,9 @@ pub struct Cli {
     #[command(subcommand)]
     pub command: Commands,
 
-    /// Presentation language: system / en / zh-CN (system by default).
-    #[arg(long, global = true, default_value_t = LanguageMode::System)]
-    pub language: LanguageMode,
+    /// Override the configured presentation language: system / en / zh-CN.
+    #[arg(long, global = true)]
+    pub language: Option<LanguageMode>,
 
     /// Select an instance by name.
     #[arg(short = 'i', long, global = true)]

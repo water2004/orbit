@@ -23,7 +23,7 @@ pub async fn handle(
             ctx.machine_sequence.clone(),
         ))
     } else {
-        crate::cli::progress::audit_reporter(ctx.quiet, &ctx.runtime.config().ui.progress_bar)
+        crate::cli::progress::audit_reporter(ctx.quiet, ctx.runtime.config().ui.progress_bar)
     };
     let full_report = orbit_core::audit_instance_with_progress(&instance_dir, audit_progress)?;
     let selected_artifacts = selected_artifacts(&full_report, mod_filter.as_deref());

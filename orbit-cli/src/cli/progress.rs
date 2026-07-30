@@ -5,21 +5,15 @@ use std::time::Duration;
 use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
 use orbit_core::{
     ArtifactProgressState, AuditProgressEvent, AuditProgressReporter, AuditProgressStage,
-    ProgressEvent, ProgressReporter, ResolutionActivity, ResolutionWork,
+    ProgressBarMode, ProgressEvent, ProgressReporter, ResolutionActivity, ResolutionWork,
 };
 
-pub fn reporter(quiet: bool, configured_style: &str) -> Option<ProgressReporter> {
-    if quiet
-        || matches!(
-            configured_style.trim().to_ascii_lowercase().as_str(),
-            "off" | "none" | "false"
-        )
-    {
+pub fn reporter(quiet: bool, configured_style: ProgressBarMode) -> Option<ProgressReporter> {
+    if quiet || configured_style == ProgressBarMode::Off {
         return None;
     }
 
-    let modern =
-        configured_style.trim().eq_ignore_ascii_case("modern") && std::io::stderr().is_terminal();
+    let modern = configured_style == ProgressBarMode::Modern && std::io::stderr().is_terminal();
     let renderer = Arc::new(ProgressRenderer {
         modern,
         state: Mutex::new(RenderState::default()),
@@ -27,18 +21,15 @@ pub fn reporter(quiet: bool, configured_style: &str) -> Option<ProgressReporter>
     Some(Arc::new(move |event| renderer.render(event)))
 }
 
-pub fn audit_reporter(quiet: bool, configured_style: &str) -> Option<AuditProgressReporter> {
-    if quiet
-        || matches!(
-            configured_style.trim().to_ascii_lowercase().as_str(),
-            "off" | "none" | "false"
-        )
-    {
+pub fn audit_reporter(
+    quiet: bool,
+    configured_style: ProgressBarMode,
+) -> Option<AuditProgressReporter> {
+    if quiet || configured_style == ProgressBarMode::Off {
         return None;
     }
 
-    let modern =
-        configured_style.trim().eq_ignore_ascii_case("modern") && std::io::stderr().is_terminal();
+    let modern = configured_style == ProgressBarMode::Modern && std::io::stderr().is_terminal();
     let renderer = Arc::new(AuditProgressRenderer {
         modern,
         state: Mutex::new(RenderState::default()),

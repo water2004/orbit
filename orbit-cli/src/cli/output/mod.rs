@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::atomic::{AtomicU8, Ordering};
 
 use clap::ValueEnum;
 use comfy_table::{
@@ -28,6 +29,27 @@ pub use view::{
     PackageVersionCandidateView, PackageVersionsOutput, PurgeOutput, RemoveOutput, SearchFilters,
     SearchOutput, SearchResultView,
 };
+
+static COLOR_MODE: AtomicU8 = AtomicU8::new(0);
+
+/// Install the process-wide table styling policy resolved from global config.
+/// JSON output is unaffected because it never renders a table.
+pub fn install_color_mode(mode: orbit_core::ColorMode) {
+    let value = match mode {
+        orbit_core::ColorMode::Auto => 0,
+        orbit_core::ColorMode::Always => 1,
+        orbit_core::ColorMode::Never => 2,
+    };
+    COLOR_MODE.store(value, Ordering::Relaxed);
+}
+
+fn color_mode() -> orbit_core::ColorMode {
+    match COLOR_MODE.load(Ordering::Relaxed) {
+        1 => orbit_core::ColorMode::Always,
+        2 => orbit_core::ColorMode::Never,
+        _ => orbit_core::ColorMode::Auto,
+    }
+}
 pub use view::{
     diagnostic_view, info_view, install_instance_view, instance_view, list_view, outdated_mod_view,
     package_change_view, package_version_policy_view, remote_view, search_result_view, sync_view,
@@ -414,10 +436,23 @@ fn configured_table<const N: usize>(headers: [&str; N], stderr: bool) -> Table {
     if stderr {
         table.use_stderr();
     }
+    apply_color_mode(&mut table, color_mode());
     if table.width().is_none() {
         table.set_width(120);
     }
     table
+}
+
+fn apply_color_mode(table: &mut Table, mode: orbit_core::ColorMode) {
+    match mode {
+        orbit_core::ColorMode::Auto => {}
+        orbit_core::ColorMode::Always => {
+            table.enforce_styling();
+        }
+        orbit_core::ColorMode::Never => {
+            table.force_no_tty();
+        }
+    }
 }
 
 /// Format a download count the way search/info tables render it.
@@ -751,6 +786,17 @@ fn side_label(side: Option<&SideSupport>) -> std::borrow::Cow<'static, str> {
 mod tests {
     use super::*;
     use orbit_core::{PackageRemote, PlatformChange};
+
+    #[test]
+    fn color_policy_controls_table_styling_without_affecting_layout() {
+        let mut always = Table::new();
+        apply_color_mode(&mut always, orbit_core::ColorMode::Always);
+        assert!(always.should_style());
+
+        let mut never = Table::new();
+        apply_color_mode(&mut never, orbit_core::ColorMode::Never);
+        assert!(!never.should_style());
+    }
 
     fn change(
         package: &str,

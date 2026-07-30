@@ -35,8 +35,8 @@ pub struct CoreConfig {
     pub default_instance: Option<String>,
     #[serde(default = "default_max_downloads")]
     pub max_concurrent_downloads: usize,
-    #[serde(default = "default_language")]
-    pub language: String,
+    #[serde(default)]
+    pub language: LanguagePreference,
 }
 
 impl Default for CoreConfig {
@@ -44,7 +44,37 @@ impl Default for CoreConfig {
         Self {
             default_instance: None,
             max_concurrent_downloads: 8,
-            language: "en".into(),
+            language: LanguagePreference::System,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum LanguagePreference {
+    #[default]
+    #[serde(rename = "system")]
+    System,
+    #[serde(rename = "en")]
+    English,
+    #[serde(rename = "zh-CN")]
+    SimplifiedChinese,
+}
+
+impl LanguagePreference {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::System => "system",
+            Self::English => "en",
+            Self::SimplifiedChinese => "zh-CN",
+        }
+    }
+
+    fn parse(raw: &str, key: ConfigKey) -> Result<Self, OrbitError> {
+        match raw.trim() {
+            "system" => Ok(Self::System),
+            "en" => Ok(Self::English),
+            "zh-CN" => Ok(Self::SimplifiedChinese),
+            _ => Err(invalid_value(key, "expected system, en, or zh-CN")),
         }
     }
 }
@@ -104,17 +134,73 @@ impl CacheConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UiConfig {
-    #[serde(default = "default_color")]
-    pub color: String,
-    #[serde(default = "default_progress_bar")]
-    pub progress_bar: String,
+    #[serde(default)]
+    pub color: ColorMode,
+    #[serde(default)]
+    pub progress_bar: ProgressBarMode,
 }
 
 impl Default for UiConfig {
     fn default() -> Self {
         Self {
-            color: "auto".into(),
-            progress_bar: "modern".into(),
+            color: ColorMode::Auto,
+            progress_bar: ProgressBarMode::Modern,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ColorMode {
+    #[default]
+    Auto,
+    Always,
+    Never,
+}
+
+impl ColorMode {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Always => "always",
+            Self::Never => "never",
+        }
+    }
+
+    fn parse(raw: &str, key: ConfigKey) -> Result<Self, OrbitError> {
+        match raw.trim() {
+            "auto" => Ok(Self::Auto),
+            "always" => Ok(Self::Always),
+            "never" => Ok(Self::Never),
+            _ => Err(invalid_value(key, "expected auto, always, or never")),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ProgressBarMode {
+    #[default]
+    Modern,
+    Plain,
+    Off,
+}
+
+impl ProgressBarMode {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Modern => "modern",
+            Self::Plain => "plain",
+            Self::Off => "off",
+        }
+    }
+
+    fn parse(raw: &str, key: ConfigKey) -> Result<Self, OrbitError> {
+        match raw.trim() {
+            "modern" => Ok(Self::Modern),
+            "plain" => Ok(Self::Plain),
+            "off" => Ok(Self::Off),
+            _ => Err(invalid_value(key, "expected modern, plain, or off")),
         }
     }
 }
@@ -215,7 +301,7 @@ impl ConfigKey {
             Self::CoreMaxConcurrentDownloads => {
                 ConfigValue::Integer(config.core.max_concurrent_downloads as u64)
             }
-            Self::CoreLanguage => ConfigValue::Text(config.core.language.clone()),
+            Self::CoreLanguage => ConfigValue::Text(config.core.language.as_str().to_string()),
             Self::NetworkTimeout => ConfigValue::Integer(config.network.timeout),
             Self::NetworkMaxRetries => ConfigValue::Integer(u64::from(config.network.max_retries)),
             Self::NetworkProxy => optional_text(&config.network.proxy),
@@ -223,8 +309,8 @@ impl ConfigKey {
             Self::AuthModrinthToken => optional_text(&config.auth.modrinth_token),
             Self::CacheDir => optional_text(&config.cache.dir),
             Self::CacheCapacityMib => ConfigValue::Integer(config.cache.capacity_mib),
-            Self::UiColor => ConfigValue::Text(config.ui.color.clone()),
-            Self::UiProgressBar => ConfigValue::Text(config.ui.progress_bar.clone()),
+            Self::UiColor => ConfigValue::Text(config.ui.color.as_str().to_string()),
+            Self::UiProgressBar => ConfigValue::Text(config.ui.progress_bar.as_str().to_string()),
         }
     }
 
@@ -241,7 +327,7 @@ impl ConfigKey {
                 config.core.max_concurrent_downloads = usize::try_from(value)
                     .map_err(|_| invalid_value(self, "does not fit this platform's usize"))?;
             }
-            Self::CoreLanguage => config.core.language = nonempty(raw, self)?,
+            Self::CoreLanguage => config.core.language = LanguagePreference::parse(raw, self)?,
             Self::NetworkTimeout => {
                 let value = parse_toml_u64(raw, self)?;
                 if value == 0 {
@@ -267,18 +353,8 @@ impl ConfigKey {
                 config.cache.capacity_mib = capacity_mib;
                 config.cache.capacity_bytes()?;
             }
-            Self::UiColor => {
-                if !matches!(raw, "auto" | "always" | "never") {
-                    return Err(invalid_value(self, "expected auto, always, or never"));
-                }
-                config.ui.color = raw.to_string();
-            }
-            Self::UiProgressBar => {
-                if !matches!(raw, "modern" | "plain" | "off") {
-                    return Err(invalid_value(self, "expected modern, plain, or off"));
-                }
-                config.ui.progress_bar = raw.to_string();
-            }
+            Self::UiColor => config.ui.color = ColorMode::parse(raw, self)?,
+            Self::UiProgressBar => config.ui.progress_bar = ProgressBarMode::parse(raw, self)?,
         }
         Ok(())
     }
@@ -380,20 +456,11 @@ fn invalid_value(key: ConfigKey, reason: &str) -> OrbitError {
 fn default_max_downloads() -> usize {
     8
 }
-fn default_language() -> String {
-    "en".into()
-}
 fn default_timeout() -> u64 {
     30
 }
 fn default_max_retries() -> u32 {
     3
-}
-fn default_color() -> String {
-    "auto".into()
-}
-fn default_progress_bar() -> String {
-    "modern".into()
 }
 
 impl GlobalConfig {
@@ -448,7 +515,7 @@ impl GlobalConfig {
             })?;
         }
         if let Ok(v) = std::env::var("ORBIT_LANGUAGE") {
-            self.core.language = v;
+            self.core.language = LanguagePreference::parse(&v, ConfigKey::CoreLanguage)?;
         }
         if let Ok(v) = std::env::var("ORBIT_CURSEFORGE_API_KEY") {
             self.auth.curseforge_api_key = Some(v);
@@ -849,7 +916,7 @@ mod tests {
     fn default_config_has_sensible_values() {
         let config = GlobalConfig::default();
         assert_eq!(config.core.max_concurrent_downloads, 8);
-        assert_eq!(config.core.language, "en");
+        assert_eq!(config.core.language, LanguagePreference::System);
         assert_eq!(config.network.timeout, 30);
         assert_eq!(config.network.max_retries, 3);
         assert!(config.cache.dir.is_none());
@@ -858,8 +925,8 @@ mod tests {
             config.cache.capacity_bytes().unwrap(),
             5 * 1024 * 1024 * 1024
         );
-        assert_eq!(config.ui.color, "auto");
-        assert_eq!(config.ui.progress_bar, "modern");
+        assert_eq!(config.ui.color, ColorMode::Auto);
+        assert_eq!(config.ui.progress_bar, ProgressBarMode::Modern);
     }
 
     #[test]
@@ -872,7 +939,7 @@ language = "zh-CN"
 proxy = "http://127.0.0.1:7890"
 "#;
         let config: GlobalConfig = toml::from_str(toml_str).unwrap();
-        assert_eq!(config.core.language, "zh-CN");
+        assert_eq!(config.core.language, LanguagePreference::SimplifiedChinese);
         assert_eq!(
             config.network.proxy.as_deref(),
             Some("http://127.0.0.1:7890")
@@ -928,6 +995,9 @@ dir = "D:/Games/OrbitCache"
     fn config_roundtrip() {
         let config = GlobalConfig::default();
         let serialized = toml::to_string_pretty(&config).unwrap();
+        assert!(serialized.contains("language = \"system\""));
+        assert!(serialized.contains("color = \"auto\""));
+        assert!(serialized.contains("progress_bar = \"modern\""));
         let deserialized: GlobalConfig = toml::from_str(&serialized).unwrap();
         assert_eq!(deserialized.core.max_concurrent_downloads, 8);
         assert_eq!(deserialized.cache.capacity_mib, 5 * 1024);
@@ -959,6 +1029,8 @@ dir = "D:/Games/OrbitCache"
                 .is_err()
         );
         assert!(ConfigKey::UiProgressBar.set(&mut config, "fast").is_err());
+        assert!(ConfigKey::UiColor.set(&mut config, "sometimes").is_err());
+        assert!(ConfigKey::CoreLanguage.set(&mut config, "fr").is_err());
         assert!(
             ConfigKey::CacheCapacityMib
                 .set(&mut config, "9223372036854775808")
@@ -969,6 +1041,20 @@ dir = "D:/Games/OrbitCache"
         ConfigKey::NetworkProxy.unset(&mut config);
         assert_eq!(config.cache.capacity_mib, 5 * 1024);
         assert_eq!(ConfigKey::NetworkProxy.get(&config), ConfigValue::Absent);
+    }
+
+    #[test]
+    fn stored_presentation_values_are_schema_checked() {
+        for invalid in [
+            "[core]\nlanguage = \"fr\"\n",
+            "[ui]\ncolor = \"sometimes\"\n",
+            "[ui]\nprogress_bar = \"fast\"\n",
+        ] {
+            assert!(
+                toml::from_str::<GlobalConfig>(invalid).is_err(),
+                "{invalid}"
+            );
+        }
     }
 
     #[test]

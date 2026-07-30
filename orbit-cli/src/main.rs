@@ -16,7 +16,6 @@ async fn main() {
     orbit_i18n::install(requested_language);
     let matches = orbit_i18n::get_matches(Cli::command());
     let cli = Cli::from_arg_matches(&matches).expect("Clap matches the derived CLI schema");
-    orbit_i18n::install(cli.language);
     let command = cli.command.command_name();
     let format = cli.output_format;
     // `--progress-format ndjson` opts into the structured stderr protocol.
@@ -39,6 +38,15 @@ async fn main() {
             exit_with_error(&error.into(), output, command);
         }
     };
+    let configured_language = match runtime.config().core.language {
+        orbit_core::LanguagePreference::System => orbit_i18n::LanguageMode::System,
+        orbit_core::LanguagePreference::English => orbit_i18n::LanguageMode::English,
+        orbit_core::LanguagePreference::SimplifiedChinese => {
+            orbit_i18n::LanguageMode::SimplifiedChinese
+        }
+    };
+    orbit_i18n::install(cli.language.unwrap_or(configured_language));
+    cli::output::install_color_mode(runtime.config().ui.color);
     let ctx = CliContext {
         command,
         machine_sequence: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
