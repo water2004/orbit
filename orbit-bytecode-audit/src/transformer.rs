@@ -10,6 +10,15 @@ use crate::model::{
 
 const ITRANSFORMER: &str = "cpw/mods/modlauncher/api/ITransformer";
 const TRANSFORMATION_SERVICE: &str = "cpw/mods/modlauncher/api/ITransformationService";
+const CLASS_PROCESSOR: &str = "net/neoforged/neoforgespi/transformation/ClassProcessor";
+const CLASS_PROCESSOR_PROVIDER: &str =
+    "net/neoforged/neoforgespi/transformation/ClassProcessorProvider";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TransformationSpi {
+    ModLauncher,
+    NeoForgeClassProcessor,
+}
 
 #[derive(Debug, Clone)]
 struct RecoveredTarget {
@@ -72,9 +81,28 @@ pub(crate) fn skip_with_progress(
     TransformerAnalysis::default()
 }
 
-pub(crate) fn analyze_modlauncher_with_progress(
+pub(crate) fn analyze_fml_with_progress(
     scanned: &mut ScannedArtifacts,
     progress: Option<&crate::progress::AuditProgressReporter>,
+) -> TransformerAnalysis {
+    let spi = if scanned
+        .artifacts
+        .iter()
+        .filter(|artifact| artifact.kind != crate::model::ArtifactKind::Mod)
+        .flat_map(|artifact| &artifact.classes)
+        .any(|class| class.name == CLASS_PROCESSOR)
+    {
+        TransformationSpi::NeoForgeClassProcessor
+    } else {
+        TransformationSpi::ModLauncher
+    };
+    analyze_transformations_with_progress(scanned, progress, spi)
+}
+
+fn analyze_transformations_with_progress(
+    scanned: &mut ScannedArtifacts,
+    progress: Option<&crate::progress::AuditProgressReporter>,
+    spi: TransformationSpi,
 ) -> TransformerAnalysis {
     use crate::progress::{AuditProgressEvent, AuditProgressStage, emit};
 
@@ -92,7 +120,8 @@ pub(crate) fn analyze_modlauncher_with_progress(
     let total = mod_indexes
         .iter()
         .map(|index| {
-            discover_registered_transformer_classes(scanned, &scanned.artifacts[*index]).len()
+            discover_registered_transformation_classes(scanned, &scanned.artifacts[*index], spi)
+                .len()
         })
         .sum();
     emit(
@@ -121,17 +150,16 @@ pub(crate) fn analyze_modlauncher_with_progress(
 
     for artifact_index in mod_indexes {
         let artifact = &scanned.artifacts[artifact_index];
-        let transformer_classes = discover_registered_transformer_classes(scanned, artifact);
-        for class_name in
-            discover_transformer_candidates(scanned, artifact).difference(&transformer_classes)
-        {
+        let transformer_classes =
+            discover_registered_transformation_classes(scanned, artifact, spi);
+        let candidates = discover_transformation_candidates(scanned, artifact, spi);
+        for class_name in candidates.difference(&transformer_classes) {
             inactive_candidates.push(InactiveCandidate {
                 artifact_id: artifact.id.clone(),
                 class: Some(class_name.clone()),
                 config_path: None,
                 kind: InactiveCandidateKind::UnregisteredTransformer,
-                reason: "ITransformer implementation is not reachable from ITransformationService.transformers()"
-                    .to_string(),
+                reason: inactive_transformation_reason(spi).to_string(),
             });
         }
         for class_name in transformer_classes {
@@ -143,25 +171,33 @@ pub(crate) fn analyze_modlauncher_with_progress(
                 complete_and_continue!();
             };
             scanned.coverage.transformers_discovered += 1;
-            let mechanism = transformer_mechanism(scanned, class);
-            let targets = recover_targets(class);
+            let mechanism = transformer_mechanism(scanned, class, spi);
+            let targets = match spi {
+                TransformationSpi::ModLauncher => recover_targets(class),
+                TransformationSpi::NeoForgeClassProcessor => recover_class_processor_targets(class),
+            };
             if targets.is_empty() {
                 scanned.coverage.transformer_effects_unknown += 1;
                 coverage_gaps.push(CoverageGap {
                     artifact_id: Some(artifact.id.clone()),
                     scope: class.name.clone(),
                     kind: crate::model::CoverageGapKind::TransformerUnknown,
-                    detail: "ITransformer target set is dynamic or could not be recovered; \
-                             no global pairwise conflicts were fabricated"
-                        .to_string(),
+                    detail: format!(
+                        "{} target selection is dynamic or could not be recovered; no global pairwise conflicts were fabricated",
+                        transformation_name(spi)
+                    ),
                     count: 1,
                 });
                 complete_and_continue!();
             }
             scanned.coverage.transformer_targets_recovered += targets.len();
 
+            let roots = match spi {
+                TransformationSpi::ModLauncher => &["transform"][..],
+                TransformationSpi::NeoForgeClassProcessor => &["transform", "processClass"][..],
+            };
             let (signals, exhausted, ignored_untainted) =
-                recover_mutations(scanned, artifact, class, &mut coverage_gaps);
+                recover_mutations(scanned, artifact, class, roots, &mut coverage_gaps);
             if ignored_untainted > 0 {
                 scanned.coverage.transformer_effects_partial += 1;
                 coverage_gaps.push(CoverageGap {
@@ -194,8 +230,10 @@ pub(crate) fn analyze_modlauncher_with_progress(
                     artifact_id: Some(artifact.id.clone()),
                     scope: class.name.clone(),
                     kind: crate::model::CoverageGapKind::TransformerUnknown,
-                    detail: "transform() was found, but no supported ASM mutation was recovered"
-                        .to_string(),
+                    detail: format!(
+                        "{} transformation entry point was found, but no supported ASM mutation was recovered",
+                        transformation_name(spi)
+                    ),
                     count: targets.len(),
                 });
                 for target in targets {
@@ -205,7 +243,7 @@ pub(crate) fn analyze_modlauncher_with_progress(
                         class,
                         target,
                         mechanism,
-                        "transform() was found, but no supported ASM mutation was recovered",
+                        "a transformation entry point was found, but no supported ASM mutation was recovered",
                     ));
                 }
                 complete_and_continue!();
@@ -276,6 +314,55 @@ pub(crate) fn analyze_modlauncher_with_progress(
     }
 }
 
+fn transformation_name(spi: TransformationSpi) -> &'static str {
+    match spi {
+        TransformationSpi::ModLauncher => "ITransformer",
+        TransformationSpi::NeoForgeClassProcessor => "ClassProcessor",
+    }
+}
+
+fn inactive_transformation_reason(spi: TransformationSpi) -> &'static str {
+    match spi {
+        TransformationSpi::ModLauncher => {
+            "ITransformer implementation is not reachable from ITransformationService.transformers()"
+        }
+        TransformationSpi::NeoForgeClassProcessor => {
+            "ClassProcessor implementation is not reachable from the runtime ServiceLoader graph"
+        }
+    }
+}
+
+fn discover_transformation_candidates(
+    scanned: &ScannedArtifacts,
+    artifact: &ParsedArtifact,
+    spi: TransformationSpi,
+) -> BTreeSet<String> {
+    match spi {
+        TransformationSpi::ModLauncher => discover_transformer_candidates(scanned, artifact),
+        TransformationSpi::NeoForgeClassProcessor => artifact
+            .classes
+            .iter()
+            .filter(|class| inherits(scanned, &class.name, CLASS_PROCESSOR, &mut HashSet::new()))
+            .map(|class| class.name.clone())
+            .collect(),
+    }
+}
+
+fn discover_registered_transformation_classes(
+    scanned: &ScannedArtifacts,
+    artifact: &ParsedArtifact,
+    spi: TransformationSpi,
+) -> BTreeSet<String> {
+    match spi {
+        TransformationSpi::ModLauncher => {
+            discover_registered_transformer_classes(scanned, artifact)
+        }
+        TransformationSpi::NeoForgeClassProcessor => {
+            discover_registered_class_processors(scanned, artifact)
+        }
+    }
+}
+
 fn discover_transformer_candidates(
     scanned: &ScannedArtifacts,
     artifact: &ParsedArtifact,
@@ -292,27 +379,68 @@ fn discover_registered_transformer_classes(
     scanned: &ScannedArtifacts,
     artifact: &ParsedArtifact,
 ) -> BTreeSet<String> {
-    let mut result = BTreeSet::new();
     let registered_services = registered_transformation_services(artifact);
+    discover_factory_products(
+        scanned,
+        artifact,
+        &registered_services,
+        TRANSFORMATION_SERVICE,
+        "transformers",
+        ITRANSFORMER,
+    )
+}
 
-    // ITransformationService#transformers commonly constructs anonymous or
-    // nested transformer classes. Inspecting those factories also catches
-    // implementations reached through a static helper or invokedynamic.
-    for service in artifact.classes.iter().filter(|class| {
-        registered_services.contains(&class.name)
+fn registered_transformation_services(artifact: &ParsedArtifact) -> BTreeSet<String> {
+    registered_service_implementations(artifact, TRANSFORMATION_SERVICE)
+}
+
+fn discover_registered_class_processors(
+    scanned: &ScannedArtifacts,
+    artifact: &ParsedArtifact,
+) -> BTreeSet<String> {
+    let mut result = registered_service_implementations(artifact, CLASS_PROCESSOR)
+        .into_iter()
+        .filter(|class| inherits(scanned, class, CLASS_PROCESSOR, &mut HashSet::new()))
+        .collect::<BTreeSet<_>>();
+    let providers = registered_service_implementations(artifact, CLASS_PROCESSOR_PROVIDER);
+    result.extend(discover_factory_products(
+        scanned,
+        artifact,
+        &providers,
+        CLASS_PROCESSOR_PROVIDER,
+        "createProcessors",
+        CLASS_PROCESSOR,
+    ));
+    result
+}
+
+/// Follows a loader SPI factory through local helpers, lambdas, and static
+/// fields. Both ModLauncher services and NeoForge processor providers use this
+/// shape even though their public interfaces differ.
+fn discover_factory_products(
+    scanned: &ScannedArtifacts,
+    artifact: &ParsedArtifact,
+    registered_providers: &BTreeSet<String>,
+    provider_interface: &str,
+    factory_method: &str,
+    product_interface: &str,
+) -> BTreeSet<String> {
+    let mut result = BTreeSet::new();
+    for provider in artifact.classes.iter().filter(|class| {
+        registered_providers.contains(&class.name)
             && inherits(
                 scanned,
                 &class.name,
-                TRANSFORMATION_SERVICE,
+                provider_interface,
                 &mut HashSet::new(),
             )
     }) {
-        let mut queue = service
+        let mut queue = provider
             .methods
             .iter()
-            .filter(|method| method.name == "transformers")
+            .filter(|method| method.name == factory_method)
             .map(|method| MethodKey {
-                owner: service.name.clone(),
+                owner: provider.name.clone(),
                 name: method.name.clone(),
                 descriptor: method.descriptor.clone(),
             })
@@ -328,7 +456,7 @@ fn discover_registered_transformer_classes(
             for instruction in &method.instructions {
                 match &instruction.kind {
                     InstructionKind::Type(candidate)
-                        if inherits(scanned, candidate, ITRANSFORMER, &mut HashSet::new()) =>
+                        if inherits(scanned, candidate, product_interface, &mut HashSet::new()) =>
                     {
                         result.insert(candidate.clone());
                     }
@@ -343,6 +471,25 @@ fn discover_registered_transformer_classes(
                             name: member.name.clone(),
                             descriptor: member.descriptor.clone(),
                         });
+                    }
+                    InstructionKind::FieldRead(member) => {
+                        if let Some(owner) = artifact
+                            .classes
+                            .iter()
+                            .find(|class| class.name == member.owner)
+                        {
+                            queue.extend(
+                                owner
+                                    .methods
+                                    .iter()
+                                    .filter(|method| method.name == "<clinit>")
+                                    .map(|method| MethodKey {
+                                        owner: owner.name.clone(),
+                                        name: method.name.clone(),
+                                        descriptor: method.descriptor.clone(),
+                                    }),
+                            );
+                        }
                     }
                     InstructionKind::InvokeDynamic {
                         implementation: Some(member),
@@ -361,7 +508,7 @@ fn discover_registered_transformer_classes(
                     _ => {}
                 }
             }
-            if inherits(scanned, &owner.name, ITRANSFORMER, &mut HashSet::new()) {
+            if inherits(scanned, &owner.name, product_interface, &mut HashSet::new()) {
                 result.insert(owner.name.clone());
             }
         }
@@ -369,15 +516,21 @@ fn discover_registered_transformer_classes(
     result
 }
 
-fn registered_transformation_services(artifact: &ParsedArtifact) -> BTreeSet<String> {
-    const SERVICE_PATH: &str = "meta-inf/services/cpw.mods.modlauncher.api.itransformationservice";
+fn registered_service_implementations(
+    artifact: &ParsedArtifact,
+    service_class: &str,
+) -> BTreeSet<String> {
+    let service_path = format!(
+        "meta-inf/services/{}",
+        service_class.replace('/', ".").to_ascii_lowercase()
+    );
     let mut services = BTreeSet::new();
     for resource in artifact.resources.iter().filter(|resource| {
         resource
             .path
             .rsplit("!/")
             .next()
-            .is_some_and(|path| path.to_ascii_lowercase() == SERVICE_PATH)
+            .is_some_and(|path| path.to_ascii_lowercase() == service_path)
     }) {
         for line in String::from_utf8_lossy(&resource.bytes).lines() {
             let service = line.split('#').next().unwrap_or_default().trim();
@@ -386,6 +539,13 @@ fn registered_transformation_services(artifact: &ParsedArtifact) -> BTreeSet<Str
             }
         }
     }
+    services.extend(
+        artifact
+            .service_providers
+            .iter()
+            .filter(|declaration| declaration.service == service_class)
+            .map(|declaration| declaration.provider.clone()),
+    );
     services
 }
 
@@ -414,7 +574,14 @@ fn inherits(
         })
 }
 
-fn transformer_mechanism(scanned: &ScannedArtifacts, class: &ParsedClass) -> Mechanism {
+fn transformer_mechanism(
+    scanned: &ScannedArtifacts,
+    class: &ParsedClass,
+    spi: TransformationSpi,
+) -> Mechanism {
+    if spi == TransformationSpi::NeoForgeClassProcessor {
+        return Mechanism::NeoForgeClassProcessor;
+    }
     let coremod_name = class.name.to_ascii_lowercase().contains("coremod")
         || class
             .interfaces
@@ -439,6 +606,17 @@ fn transformer_mechanism(scanned: &ScannedArtifacts, class: &ParsedClass) -> Mec
 }
 
 fn recover_targets(class: &ParsedClass) -> Vec<RecoveredTarget> {
+    recover_declared_targets(class, modlauncher_target_from_call)
+}
+
+fn recover_class_processor_targets(class: &ParsedClass) -> Vec<RecoveredTarget> {
+    recover_declared_targets(class, class_processor_target_from_call)
+}
+
+fn recover_declared_targets(
+    class: &ParsedClass,
+    decode: fn(&MemberReference, &[Option<String>]) -> Option<Target>,
+) -> Vec<RecoveredTarget> {
     let mut targets = Vec::new();
     for method in class
         .methods
@@ -460,10 +638,8 @@ fn recover_targets(class: &ParsedClass) -> Vec<RecoveredTarget> {
                 }
                 InstructionKind::MethodCall(member) => {
                     let arguments = pop_call_arguments(&mut stack, member);
-                    if (member.owner.ends_with("/ITransformer$Target")
-                        || member.owner == "cpw/mods/modlauncher/api/ITransformer$Target")
-                        && let Some(arguments) = arguments.as_deref()
-                        && let Some(target) = target_from_factory_arguments(&member.name, arguments)
+                    if let Some(arguments) = arguments.as_deref()
+                        && let Some(target) = decode(member, arguments)
                     {
                         targets.push(RecoveredTarget {
                             detail: format!(
@@ -495,6 +671,50 @@ fn recover_targets(class: &ParsedClass) -> Vec<RecoveredTarget> {
     targets.sort_by_key(|target| target_key(&target.target));
     targets.dedup_by(|left, right| left.target == right.target);
     targets
+}
+
+fn modlauncher_target_from_call(
+    member: &MemberReference,
+    values: &[Option<String>],
+) -> Option<Target> {
+    (member.owner.ends_with("/ITransformer$Target")
+        || member.owner == "cpw/mods/modlauncher/api/ITransformer$Target")
+        .then(|| target_from_factory_arguments(&member.name, values))
+        .flatten()
+}
+
+fn class_processor_target_from_call(
+    member: &MemberReference,
+    values: &[Option<String>],
+) -> Option<Target> {
+    if member.name != "<init>" {
+        return None;
+    }
+    let string = |index: usize| values.get(index)?.as_deref();
+    if member.owner.ends_with("/SimpleClassProcessor$Target") {
+        Some(Target::class(normalize_class(string(0)?)?))
+    } else if member.owner.ends_with("/SimpleMethodProcessor$Target") {
+        Some(Target::method(
+            normalize_class(string(0)?)?,
+            string(1)?,
+            string(2)?,
+        ))
+    } else if member.owner.ends_with("/SimpleFieldProcessor$Target") {
+        let owner = normalize_class(string(0)?)?;
+        Some(Target {
+            class: owner.clone(),
+            member: Some(MemberReference {
+                owner,
+                name: string(1)?.to_string(),
+                descriptor: String::new(),
+                kind: MemberKind::Field,
+                is_static: None,
+            }),
+            instruction: None,
+        })
+    } else {
+        None
+    }
 }
 
 fn pop_call_arguments(
@@ -583,12 +803,13 @@ fn recover_mutations(
     scanned: &ScannedArtifacts,
     artifact: &ParsedArtifact,
     transformer: &ParsedClass,
+    root_methods: &[&str],
     coverage_gaps: &mut Vec<CoverageGap>,
 ) -> (Vec<MutationSignal>, bool, usize) {
     let mut queue = transformer
         .methods
         .iter()
-        .filter(|method| method.name == "transform")
+        .filter(|method| root_methods.contains(&method.name.as_str()))
         .map(|method| {
             (
                 MethodKey {
@@ -1267,7 +1488,9 @@ fn push_bounded<T>(values: &mut VecDeque<T>, value: T, limit: usize) {
 
 #[cfg(test)]
 mod tests {
-    use crate::classfile::{ParsedClass, ParsedInstruction, ParsedMethod};
+    use crate::classfile::{
+        ParsedClass, ParsedInstruction, ParsedMethod, ServiceProviderDeclaration,
+    };
     use crate::jar::{ClassDefinition, ClassUniverse, ParsedArtifact, ResourceEntry};
     use crate::model::{AnalysisLimits, ArtifactKind, Coverage, InstructionReference};
 
@@ -1390,6 +1613,7 @@ mod tests {
             classes: Vec::new(),
             refmaps: Vec::new(),
             resources: Vec::new(),
+            service_providers: Vec::new(),
         };
         let transformer = empty_class("example/Transformer", Vec::new(), Vec::new());
         let target = RecoveredTarget {
@@ -1466,6 +1690,7 @@ mod tests {
             classes: vec![target_class],
             refmaps: Vec::new(),
             resources: Vec::new(),
+            service_providers: Vec::new(),
         };
         let artifact = ParsedArtifact {
             id: "mod".to_string(),
@@ -1474,6 +1699,7 @@ mod tests {
             classes: Vec::new(),
             refmaps: Vec::new(),
             resources: Vec::new(),
+            service_providers: Vec::new(),
         };
         let scanned = scanned(vec![runtime, artifact], ClassUniverse::default());
         let recovered_target = RecoveredTarget {
@@ -1564,6 +1790,7 @@ mod tests {
             )],
             refmaps: Vec::new(),
             resources: Vec::new(),
+            service_providers: Vec::new(),
         };
         let mut universe = ClassUniverse::default();
         universe.classes.insert(
@@ -1614,6 +1841,7 @@ mod tests {
                     .to_string(),
                 bytes: b"# registered by ServiceLoader\nexample.Service\n".to_vec(),
             }],
+            service_providers: Vec::new(),
         };
         let mut universe = ClassUniverse::default();
         universe.classes.insert(
@@ -1636,6 +1864,240 @@ mod tests {
             discover_registered_transformer_classes(&scanned, &scanned.artifacts[0]),
             BTreeSet::from(["example/Transformer".to_string()])
         );
+    }
+
+    #[test]
+    fn module_descriptor_registers_transformation_service() {
+        let service = empty_class(
+            "example/Service",
+            vec![TRANSFORMATION_SERVICE.to_string()],
+            vec![method(
+                "transformers",
+                vec![instruction(
+                    0,
+                    InstructionKind::Type("example/Transformer".to_string()),
+                )],
+            )],
+        );
+        let transformer = empty_class(
+            "example/Transformer",
+            vec![ITRANSFORMER.to_string()],
+            Vec::new(),
+        );
+        let artifact = ParsedArtifact {
+            id: "mod".to_string(),
+            display_name: "mod".to_string(),
+            kind: ArtifactKind::Mod,
+            classes: vec![service, transformer],
+            refmaps: Vec::new(),
+            resources: Vec::new(),
+            service_providers: vec![ServiceProviderDeclaration {
+                service: TRANSFORMATION_SERVICE.to_string(),
+                provider: "example/Service".to_string(),
+            }],
+        };
+        let mut universe = ClassUniverse::default();
+        universe.classes.insert(
+            "example/Service".to_string(),
+            vec![definition(
+                "example/Service",
+                vec![TRANSFORMATION_SERVICE.to_string()],
+            )],
+        );
+        universe.classes.insert(
+            "example/Transformer".to_string(),
+            vec![definition(
+                "example/Transformer",
+                vec![ITRANSFORMER.to_string()],
+            )],
+        );
+        let scanned = scanned(vec![artifact], universe);
+
+        assert_eq!(
+            discover_registered_transformer_classes(&scanned, &scanned.artifacts[0]),
+            BTreeSet::from(["example/Transformer".to_string()])
+        );
+    }
+
+    #[test]
+    fn module_descriptor_registers_neoforge_class_processor() {
+        let processor = empty_class(
+            "example/Processor",
+            vec![CLASS_PROCESSOR.to_string()],
+            Vec::new(),
+        );
+        let artifact = ParsedArtifact {
+            id: "mod".to_string(),
+            display_name: "mod".to_string(),
+            kind: ArtifactKind::Mod,
+            classes: vec![processor],
+            refmaps: Vec::new(),
+            resources: Vec::new(),
+            service_providers: vec![ServiceProviderDeclaration {
+                service: CLASS_PROCESSOR.to_string(),
+                provider: "example/Processor".to_string(),
+            }],
+        };
+        let mut universe = ClassUniverse::default();
+        universe.classes.insert(
+            "example/Processor".to_string(),
+            vec![definition(
+                "example/Processor",
+                vec![CLASS_PROCESSOR.to_string()],
+            )],
+        );
+        let scanned = scanned(vec![artifact], universe);
+
+        assert_eq!(
+            discover_registered_class_processors(&scanned, &scanned.artifacts[0]),
+            BTreeSet::from(["example/Processor".to_string()])
+        );
+    }
+
+    #[test]
+    fn class_processor_provider_registers_collected_processor() {
+        let provider = empty_class(
+            "example/Provider",
+            vec![CLASS_PROCESSOR_PROVIDER.to_string()],
+            vec![method(
+                "createProcessors",
+                vec![instruction(
+                    0,
+                    InstructionKind::Type("example/Processor".to_string()),
+                )],
+            )],
+        );
+        let processor = empty_class(
+            "example/Processor",
+            vec![CLASS_PROCESSOR.to_string()],
+            Vec::new(),
+        );
+        let artifact = ParsedArtifact {
+            id: "mod".to_string(),
+            display_name: "mod".to_string(),
+            kind: ArtifactKind::Mod,
+            classes: vec![provider, processor],
+            refmaps: Vec::new(),
+            resources: Vec::new(),
+            service_providers: vec![ServiceProviderDeclaration {
+                service: CLASS_PROCESSOR_PROVIDER.to_string(),
+                provider: "example/Provider".to_string(),
+            }],
+        };
+        let mut universe = ClassUniverse::default();
+        universe.classes.insert(
+            "example/Provider".to_string(),
+            vec![definition(
+                "example/Provider",
+                vec![CLASS_PROCESSOR_PROVIDER.to_string()],
+            )],
+        );
+        universe.classes.insert(
+            "example/Processor".to_string(),
+            vec![definition(
+                "example/Processor",
+                vec![CLASS_PROCESSOR.to_string()],
+            )],
+        );
+        let scanned = scanned(vec![artifact], universe);
+
+        assert_eq!(
+            discover_registered_class_processors(&scanned, &scanned.artifacts[0]),
+            BTreeSet::from(["example/Processor".to_string()])
+        );
+    }
+
+    #[test]
+    fn class_processor_provider_follows_static_processor_fields() {
+        let provider = empty_class(
+            "example/Provider",
+            vec![CLASS_PROCESSOR_PROVIDER.to_string()],
+            vec![method(
+                "createProcessors",
+                vec![instruction(
+                    0,
+                    InstructionKind::FieldRead(MemberReference {
+                        owner: "example/Holder".to_string(),
+                        name: "PROCESSOR".to_string(),
+                        descriptor: format!("L{CLASS_PROCESSOR};"),
+                        kind: MemberKind::Field,
+                        is_static: Some(true),
+                    }),
+                )],
+            )],
+        );
+        let holder = empty_class(
+            "example/Holder",
+            Vec::new(),
+            vec![method(
+                "<clinit>",
+                vec![instruction(
+                    0,
+                    InstructionKind::Type("example/Processor".to_string()),
+                )],
+            )],
+        );
+        let processor = empty_class(
+            "example/Processor",
+            vec![CLASS_PROCESSOR.to_string()],
+            Vec::new(),
+        );
+        let artifact = ParsedArtifact {
+            id: "mod".to_string(),
+            display_name: "mod".to_string(),
+            kind: ArtifactKind::Mod,
+            classes: vec![provider, holder, processor],
+            refmaps: Vec::new(),
+            resources: Vec::new(),
+            service_providers: vec![ServiceProviderDeclaration {
+                service: CLASS_PROCESSOR_PROVIDER.to_string(),
+                provider: "example/Provider".to_string(),
+            }],
+        };
+        let mut universe = ClassUniverse::default();
+        universe.classes.insert(
+            "example/Provider".to_string(),
+            vec![definition(
+                "example/Provider",
+                vec![CLASS_PROCESSOR_PROVIDER.to_string()],
+            )],
+        );
+        universe.classes.insert(
+            "example/Processor".to_string(),
+            vec![definition(
+                "example/Processor",
+                vec![CLASS_PROCESSOR.to_string()],
+            )],
+        );
+        let scanned = scanned(vec![artifact], universe);
+
+        assert_eq!(
+            discover_registered_class_processors(&scanned, &scanned.artifacts[0]),
+            BTreeSet::from(["example/Processor".to_string()])
+        );
+    }
+
+    #[test]
+    fn simple_method_processor_target_constructor_is_recovered() {
+        let target = class_processor_target_from_call(
+            &MemberReference {
+                owner: "net/neoforged/neoforgespi/transformation/SimpleMethodProcessor$Target"
+                    .to_string(),
+                name: "<init>".to_string(),
+                descriptor: "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V".to_string(),
+                kind: MemberKind::Method,
+                is_static: Some(false),
+            },
+            &[
+                Some("net.minecraft.client.Minecraft".to_string()),
+                Some("runTick".to_string()),
+                Some("()V".to_string()),
+            ],
+        )
+        .unwrap();
+
+        assert_eq!(target.class, "net/minecraft/client/Minecraft");
+        assert_eq!(target.member.unwrap().name, "runTick");
     }
 
     #[test]
@@ -1700,6 +2162,7 @@ mod tests {
                     .to_string(),
                 bytes: b"example.Service\n".to_vec(),
             }],
+            service_providers: Vec::new(),
         };
         let mut universe = ClassUniverse::default();
         universe.classes.insert(
@@ -1717,7 +2180,7 @@ mod tests {
             )],
         );
         let mut scanned = scanned(vec![artifact], universe);
-        let analysis = analyze_modlauncher_with_progress(&mut scanned, None);
+        let analysis = analyze_fml_with_progress(&mut scanned, None);
 
         assert_eq!(analysis.effects.len(), 2);
         assert!(analysis.effects.iter().all(|effect| {
@@ -1784,12 +2247,14 @@ mod tests {
             classes: vec![transformer.clone()],
             refmaps: Vec::new(),
             resources: Vec::new(),
+            service_providers: Vec::new(),
         };
         let scanned = scanned(vec![artifact], ClassUniverse::default());
         let (signals, exhausted, ignored) = recover_mutations(
             &scanned,
             &scanned.artifacts[0],
             &transformer,
+            &["transform"],
             &mut Vec::new(),
         );
 
@@ -1819,6 +2284,7 @@ mod tests {
             super_name: Some("java/lang/Object".to_string()),
             interfaces,
             annotations: Vec::new(),
+            service_providers: Vec::new(),
             fields: Vec::new(),
             methods,
         }

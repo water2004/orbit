@@ -3752,6 +3752,7 @@ mod tests {
                 },
             ],
             resources: Vec::new(),
+            service_providers: Vec::new(),
         };
         assert_eq!(
             refmap_candidates(&artifact, "example/Mixin", "tick()V", "game/Target", None),
@@ -4530,6 +4531,7 @@ mod tests {
             super_name: Some("java/lang/Object".to_string()),
             interfaces: Vec::new(),
             annotations: Vec::new(),
+            service_providers: Vec::new(),
             fields: vec![
                 ParsedField {
                     name: "privateUnique".to_string(),
@@ -4560,6 +4562,7 @@ mod tests {
             classes: vec![mixin.clone()],
             refmaps: Vec::new(),
             resources: Vec::new(),
+            service_providers: Vec::new(),
         };
         let mut effects = Vec::new();
         let candidates = CandidateUniverse::default();
@@ -4651,6 +4654,7 @@ mod tests {
             super_name: Some("java/lang/Object".to_string()),
             interfaces: Vec::new(),
             annotations: Vec::new(),
+            service_providers: Vec::new(),
             fields: Vec::new(),
             methods: vec![ParsedMethod {
                 name: "tick".to_string(),
@@ -4727,6 +4731,7 @@ mod tests {
             super_name: Some("java/lang/Object".to_string()),
             interfaces: Vec::new(),
             annotations: Vec::new(),
+            service_providers: Vec::new(),
             fields: Vec::new(),
             methods: vec![ParsedMethod {
                 name: "tick".to_string(),
@@ -5176,6 +5181,7 @@ mod tests {
                          METHOD\ta\t()V\tx\tmethod_1\n"
                     .to_vec(),
             }],
+            service_providers: Vec::new(),
         });
 
         crate::namespace::align_fabric_runtime(&mut scanned).unwrap();
@@ -5328,6 +5334,7 @@ mod tests {
                         ("priority".to_string(), AnnotationValue::Integer(priority)),
                     ]),
                 }],
+                service_providers: Vec::new(),
                 fields: Vec::new(),
                 methods: vec![ParsedMethod {
                     name: "tick".to_string(),
@@ -5345,6 +5352,7 @@ mod tests {
             }],
             refmaps: Vec::new(),
             resources: Vec::new(),
+            service_providers: Vec::new(),
         }
     }
 
@@ -5524,6 +5532,7 @@ mod tests {
             super_name: Some("java/lang/Object".to_string()),
             interfaces: Vec::new(),
             annotations: Vec::new(),
+            service_providers: Vec::new(),
             fields: Vec::new(),
             methods: vec![ParsedMethod {
                 name: "tick".to_string(),
@@ -5570,6 +5579,7 @@ mod tests {
             super_name: Some("java/lang/Object".to_string()),
             interfaces: Vec::new(),
             annotations: vec![mixin_annotation],
+            service_providers: Vec::new(),
             fields: Vec::new(),
             methods: vec![ParsedMethod {
                 name: "handler".to_string(),
@@ -5592,6 +5602,7 @@ mod tests {
                     classes: vec![target],
                     refmaps: Vec::new(),
                     resources: Vec::new(),
+                    service_providers: Vec::new(),
                 },
                 ParsedArtifact {
                     id: "mod".to_string(),
@@ -5600,6 +5611,7 @@ mod tests {
                     classes: vec![mixin],
                     refmaps: Vec::new(),
                     resources: Vec::new(),
+                    service_providers: Vec::new(),
                 },
             ],
             universe: ClassUniverse::default(),

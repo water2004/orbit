@@ -15,7 +15,11 @@ impl AuditBackend for ForgeBackend {
     }
 
     fn probe_readiness(&self, scanned: &ScannedArtifacts) -> Readiness {
-        crate::jar::probe_runtime_abi(scanned, LoaderFamily::Forge, RuntimeAbiProfile::ModLauncher)
+        crate::jar::probe_runtime_abi(
+            scanned,
+            LoaderFamily::Forge,
+            RuntimeAbiProfile::FmlTransformation,
+        )
     }
 
     fn align_namespace(
@@ -39,6 +43,6 @@ impl AuditBackend for ForgeBackend {
         scanned: &mut ScannedArtifacts,
         progress: Option<&AuditProgressReporter>,
     ) -> TransformerAnalysis {
-        crate::transformer::analyze_modlauncher_with_progress(scanned, progress)
+        crate::transformer::analyze_fml_with_progress(scanned, progress)
     }
 }

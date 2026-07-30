@@ -352,6 +352,7 @@ pub enum ConfigActivation {
     Dynamic,
     MissingConfig,
     MalformedConfig,
+    DuplicateConfig { registered_by: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -429,6 +430,7 @@ pub struct RegisteredMixin {
 #[serde(rename_all = "snake_case")]
 pub enum InactiveCandidateKind {
     UnregisteredConfig,
+    DuplicateConfig,
     SideMismatch,
     MissingRequiredMods,
     PluginRejected,
@@ -554,6 +556,7 @@ pub enum WarningKind {
     DamagedArtifact,
     DamagedClass,
     MalformedConfig,
+    DuplicateMixinConfig,
     TransformerPartial,
     UnsupportedMechanism,
     BudgetExhaustion,
@@ -628,6 +631,7 @@ pub enum Mechanism {
     Mixin,
     MixinExtras,
     ModLauncherTransformer,
+    NeoForgeClassProcessor,
     JavaCoremod,
     BinaryShape,
 }

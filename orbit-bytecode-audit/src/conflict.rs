@@ -150,7 +150,7 @@ pub(crate) fn build_report_with_progress(
     if coverage.transformer_effects_unknown > 0 {
         coverage_gaps.push(CoverageGap {
             artifact_id: None,
-            scope: "ModLauncher transformers".to_string(),
+            scope: "FML transformations".to_string(),
             kind: CoverageGapKind::TransformerUnknown,
             detail: "registered transformer targets or mutations could not be recovered"
                 .to_string(),
@@ -585,7 +585,9 @@ fn risk_from_match(left: &Effect, right: &Effect, matched: ConflictMatch) -> Ris
     let heuristic_transformer = [left, right].iter().any(|effect| {
         matches!(
             effect.mechanism,
-            crate::model::Mechanism::ModLauncherTransformer | crate::model::Mechanism::JavaCoremod
+            crate::model::Mechanism::ModLauncherTransformer
+                | crate::model::Mechanism::NeoForgeClassProcessor
+                | crate::model::Mechanism::JavaCoremod
         ) && effect.confidence < Confidence::Exact
     });
     let severity = if heuristic_transformer {
@@ -842,7 +844,9 @@ fn write_shape(
         && requirement.ordinal.is_some()
         && matches!(
             writer.mechanism,
-            crate::model::Mechanism::ModLauncherTransformer | crate::model::Mechanism::JavaCoremod
+            crate::model::Mechanism::ModLauncherTransformer
+                | crate::model::Mechanism::NeoForgeClassProcessor
+                | crate::model::Mechanism::JavaCoremod
         )
         && requirements_overlap_instruction(mutation, requirement)
     {
@@ -966,7 +970,9 @@ fn write_query(
     let pattern_insertion = mutation.kind == MutationKind::InsertInstructions
         && matches!(
             writer.mechanism,
-            crate::model::Mechanism::ModLauncherTransformer | crate::model::Mechanism::JavaCoremod
+            crate::model::Mechanism::ModLauncherTransformer
+                | crate::model::Mechanism::NeoForgeClassProcessor
+                | crate::model::Mechanism::JavaCoremod
         )
         && query
             .candidates

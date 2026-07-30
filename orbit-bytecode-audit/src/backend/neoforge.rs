@@ -18,7 +18,7 @@ impl AuditBackend for NeoForgeBackend {
         crate::jar::probe_runtime_abi(
             scanned,
             LoaderFamily::NeoForge,
-            RuntimeAbiProfile::ModLauncher,
+            RuntimeAbiProfile::FmlTransformation,
         )
     }
 
@@ -43,6 +43,6 @@ impl AuditBackend for NeoForgeBackend {
         scanned: &mut ScannedArtifacts,
         progress: Option<&AuditProgressReporter>,
     ) -> TransformerAnalysis {
-        crate::transformer::analyze_modlauncher_with_progress(scanned, progress)
+        crate::transformer::analyze_fml_with_progress(scanned, progress)
     }
 }

@@ -121,7 +121,7 @@ mod tests {
         assert_eq!(
             readiness.message,
             "当前实例使用 Legacy Forge/LaunchWrapper。\n\
-             字节码风险分析仅支持 ModLauncher 体系的现代 Forge 和 NeoForge。"
+             字节码风险分析仅支持现代 FML 的 ModLauncher ITransformer 或 NeoForge ClassProcessor。"
         );
     }
 
@@ -267,6 +267,63 @@ mod tests {
             readiness
                 .capabilities
                 .contains(&"modlauncher_itransformer".to_string())
+        );
+    }
+
+    #[test]
+    fn actual_neoforge_class_processor_spi_is_selected_by_shape() {
+        let directory = tempfile::tempdir().unwrap();
+        let minecraft = directory.path().join("minecraft.jar");
+        let loader = directory.path().join("loader.jar");
+        let mod_jar = directory.path().join("mod.jar");
+        write_jar(&minecraft, &["net/minecraft/client/Minecraft"]);
+        write_jar(&mod_jar, &["example/Mod"]);
+        write_class_entries(
+            &loader,
+            vec![
+                (
+                    "net/neoforged/fml/loading/FMLLoader.class".to_string(),
+                    minimal_class("net/neoforged/fml/loading/FMLLoader"),
+                ),
+                (
+                    "org/spongepowered/asm/mixin/Mixin.class".to_string(),
+                    minimal_class("org/spongepowered/asm/mixin/Mixin"),
+                ),
+                (
+                    "net/neoforged/neoforgespi/transformation/ClassProcessor.class".to_string(),
+                    class_with_abstract_methods(
+                        "net/neoforged/neoforgespi/transformation/ClassProcessor",
+                        true,
+                        &[
+                            (
+                                "handlesClass",
+                                "(Lnet/neoforged/neoforgespi/transformation/ClassProcessor$SelectionContext;)Z",
+                            ),
+                            (
+                                "processClass",
+                                "(Lnet/neoforged/neoforgespi/transformation/ClassProcessor$TransformationContext;)Lnet/neoforged/neoforgespi/transformation/ClassProcessor$ComputeFlags;",
+                            ),
+                        ],
+                    ),
+                ),
+            ],
+        );
+
+        let readiness = probe_readiness(&request(
+            "neoforge",
+            vec![
+                input("minecraft", minecraft, ArtifactKind::Minecraft),
+                input("loader", loader, ArtifactKind::Loader),
+                input("mod", mod_jar, ArtifactKind::Mod),
+            ],
+        ))
+        .unwrap();
+
+        assert_eq!(readiness.status, ReadinessStatus::Ready);
+        assert!(
+            readiness
+                .capabilities
+                .contains(&"neoforge_class_processor".to_string())
         );
     }
 

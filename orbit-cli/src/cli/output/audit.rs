@@ -261,6 +261,7 @@ fn mechanism_label(mechanism: orbit_core::AuditMechanism) -> std::borrow::Cow<'s
         orbit_core::AuditMechanism::Mixin => tr!("Mixin"),
         orbit_core::AuditMechanism::MixinExtras => tr!("MixinExtras"),
         orbit_core::AuditMechanism::ModLauncherTransformer => tr!("ModLauncher transformer"),
+        orbit_core::AuditMechanism::NeoForgeClassProcessor => tr!("NeoForge class processor"),
         orbit_core::AuditMechanism::JavaCoremod => tr!("Java coremod"),
         orbit_core::AuditMechanism::BinaryShape => tr!("binary shape"),
     }

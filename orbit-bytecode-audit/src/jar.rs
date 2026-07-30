@@ -6,7 +6,7 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 use crate::AuditError;
-use crate::classfile::{InstructionKind, ParsedClass};
+use crate::classfile::{InstructionKind, ParsedClass, ServiceProviderDeclaration};
 use crate::model::{
     ArtifactKind, ArtifactReport, AuditRequest, ClassDefinitionId, Coverage, InstructionIdentity,
     LoaderFamily, MemberKind, MemberReference, Readiness, ReadinessStatus, SymbolMappingEvidence,
@@ -32,6 +32,7 @@ pub(crate) struct ParsedArtifact {
     pub classes: Vec<ParsedClass>,
     pub refmaps: Vec<RefmapEntry>,
     pub resources: Vec<ResourceEntry>,
+    pub service_providers: Vec<ServiceProviderDeclaration>,
 }
 
 #[derive(Debug, Clone)]
@@ -146,7 +147,7 @@ fn same_member_signature(left: &MemberReference, right: &MemberReference) -> boo
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RuntimeAbiProfile {
     MixinOnly,
-    ModLauncher,
+    FmlTransformation,
 }
 
 pub(crate) fn probe_runtime_abi(
@@ -162,7 +163,7 @@ pub(crate) fn probe_runtime_abi(
     let mut classes = BTreeMap::<String, Vec<&ParsedClass>>::new();
     let mut minecraft_classes = 0_usize;
     let mut loader_classes = 0_usize;
-    for artifact in runtime_artifacts {
+    for artifact in &runtime_artifacts {
         if artifact.kind == ArtifactKind::Minecraft {
             minecraft_classes += artifact.classes.len();
         }
@@ -192,19 +193,7 @@ pub(crate) fn probe_runtime_abi(
         return incomplete(loader, "the instance contains no parseable Mod classes");
     }
 
-    let fabric = classes.contains_key("net/fabricmc/loader/impl/FabricLoaderImpl");
-    let quilt = classes.contains_key("org/quiltmc/loader/impl/QuiltLoaderImpl");
-    let forge = classes.contains_key("net/minecraftforge/fml/loading/FMLLoader");
-    let neoforge = classes.contains_key("net/neoforged/fml/loading/FMLLoader");
-    let actual_families = [
-        (fabric, LoaderFamily::Fabric),
-        (quilt, LoaderFamily::Quilt),
-        (forge, LoaderFamily::Forge),
-        (neoforge, LoaderFamily::NeoForge),
-    ]
-    .into_iter()
-    .filter_map(|(present, family)| present.then_some(family))
-    .collect::<Vec<_>>();
+    let actual_families = detected_loader_families(&classes);
     if actual_families.len() > 1 {
         return Readiness {
             status: ReadinessStatus::Ambiguous,
@@ -255,7 +244,76 @@ pub(crate) fn probe_runtime_abi(
             message: "runtime loader and Mixin ABI are available".to_string(),
             capabilities: vec!["mixin".to_string()],
         },
-        RuntimeAbiProfile::ModLauncher => probe_modlauncher(loader, &classes),
+        RuntimeAbiProfile::FmlTransformation => probe_fml_transformations(loader, &classes),
+    }
+}
+
+fn detected_loader_families(classes: &BTreeMap<String, Vec<&ParsedClass>>) -> Vec<LoaderFamily> {
+    let quilt = classes.contains_key("org/quiltmc/loader/impl/QuiltLoaderImpl");
+    // Quilt deliberately ships Fabric Loader compatibility classes. Once the
+    // native Quilt implementation is present, those classes are capabilities
+    // of Quilt rather than evidence for a second active loader.
+    let fabric = !quilt && classes.contains_key("net/fabricmc/loader/impl/FabricLoaderImpl");
+    let forge = classes.contains_key("net/minecraftforge/fml/loading/FMLLoader");
+    let neoforge = classes.contains_key("net/neoforged/fml/loading/FMLLoader");
+    [
+        (fabric, LoaderFamily::Fabric),
+        (quilt, LoaderFamily::Quilt),
+        (forge, LoaderFamily::Forge),
+        (neoforge, LoaderFamily::NeoForge),
+    ]
+    .into_iter()
+    .filter_map(|(present, family)| present.then_some(family))
+    .collect()
+}
+
+fn probe_fml_transformations(
+    loader: LoaderFamily,
+    classes: &BTreeMap<String, Vec<&ParsedClass>>,
+) -> Readiness {
+    if classes.contains_key("net/neoforged/neoforgespi/transformation/ClassProcessor") {
+        probe_neoforge_class_processor(loader, classes)
+    } else {
+        probe_modlauncher(loader, classes)
+    }
+}
+
+fn probe_neoforge_class_processor(
+    loader: LoaderFamily,
+    classes: &BTreeMap<String, Vec<&ParsedClass>>,
+) -> Readiness {
+    const PROCESSOR: &str = "net/neoforged/neoforgespi/transformation/ClassProcessor";
+    let Some(processor) = classes.get(PROCESSOR).and_then(|values| values.first()) else {
+        return incomplete(loader, "the NeoForge ClassProcessor SPI is missing");
+    };
+    let has_handles_class = processor.methods.iter().any(|method| {
+        method.name == "handlesClass"
+            && method
+                .descriptor
+                .contains("ClassProcessor$SelectionContext;")
+            && method.descriptor.ends_with(")Z")
+    });
+    let has_process_class = processor.methods.iter().any(|method| {
+        method.name == "processClass"
+            && method
+                .descriptor
+                .contains("ClassProcessor$TransformationContext;")
+            && method.descriptor.ends_with("ClassProcessor$ComputeFlags;")
+    });
+    if !has_handles_class || !has_process_class {
+        return Readiness {
+            status: ReadinessStatus::Unsupported,
+            loader: Some(loader),
+            message: "the runtime contains NeoForge ClassProcessor, but its selection/transformation SPI is not recognized"
+                .to_string(),
+            capabilities: Vec::new(),
+        };
+    }
+    Readiness {
+        status: ReadinessStatus::Ready,
+        loader: Some(loader),
+        message: "runtime Mixin, FML, and NeoForge ClassProcessor SPIs are available".to_string(),
+        capabilities: vec!["mixin".to_string(), "neoforge_class_processor".to_string()],
     }
 }
 
@@ -272,7 +330,7 @@ fn probe_modlauncher(
         return Readiness {
             status: ReadinessStatus::Unsupported,
             loader: Some(loader),
-            message: "当前实例使用 Legacy Forge/LaunchWrapper。\n字节码风险分析仅支持 ModLauncher 体系的现代 Forge 和 NeoForge。"
+            message: "当前实例使用 Legacy Forge/LaunchWrapper。\n字节码风险分析仅支持现代 FML 的 ModLauncher ITransformer 或 NeoForge ClassProcessor。"
                 .to_string(),
             capabilities: Vec::new(),
         };
@@ -280,7 +338,7 @@ fn probe_modlauncher(
     let Some(transformer) = transformer else {
         return incomplete(
             loader,
-            "Forge/NeoForge runtime classpath is missing ModLauncher ITransformer",
+            "the FML runtime classpath contains neither a supported ModLauncher ITransformer nor NeoForge ClassProcessor SPI",
         );
     };
     let method = |name: &str, predicate: fn(&str) -> bool| {
@@ -555,6 +613,7 @@ fn scan_artifact(
     let mut classes = Vec::new();
     let mut refmaps = Vec::new();
     let mut resources = Vec::new();
+    let mut service_providers = Vec::new();
     let mut budget = ArchiveBudget::default();
     scan_archive(
         &mut archive,
@@ -568,6 +627,7 @@ fn scan_artifact(
         &mut classes,
         &mut refmaps,
         &mut resources,
+        &mut service_providers,
     )?;
     Ok((
         ArtifactReport {
@@ -585,6 +645,7 @@ fn scan_artifact(
             classes,
             refmaps,
             resources,
+            service_providers,
         },
     ))
 }
@@ -619,6 +680,7 @@ fn scan_archive<R: Read + Seek>(
     classes: &mut Vec<ParsedClass>,
     refmaps: &mut Vec<RefmapEntry>,
     resources: &mut Vec<ResourceEntry>,
+    service_providers: &mut Vec<ServiceProviderDeclaration>,
 ) -> Result<(), String> {
     let selected_class_entries =
         selected_class_entry_indexes(archive, request.environment.java_feature)?;
@@ -654,7 +716,15 @@ fn scan_archive<R: Read + Seek>(
             }
             let entry_size = entry.size();
             scan_class_entry(
-                &mut entry, entry_size, &name, input, request, coverage, warnings, classes,
+                &mut entry,
+                entry_size,
+                &name,
+                input,
+                request,
+                coverage,
+                warnings,
+                classes,
+                service_providers,
             )?;
         } else if name.ends_with(".json")
             && entry.size() <= request.limits.max_entry_bytes.min(8 * 1024 * 1024)
@@ -738,6 +808,7 @@ fn scan_archive<R: Read + Seek>(
                         classes,
                         refmaps,
                         resources,
+                        service_providers,
                     ) {
                         coverage.jars_failed += 1;
                         coverage
@@ -911,6 +982,7 @@ fn scan_class_entry(
     coverage: &mut Coverage,
     warnings: &mut Vec<Warning>,
     classes: &mut Vec<ParsedClass>,
+    service_providers: &mut Vec<ServiceProviderDeclaration>,
 ) -> Result<(), String> {
     coverage.classes_discovered += 1;
     if entry_size > u64::try_from(request.limits.max_class_bytes).unwrap_or(u64::MAX) {
@@ -944,6 +1016,14 @@ fn scan_class_entry(
     }
     match crate::classfile::parse(&bytes, request.limits.max_annotation_depth) {
         Ok(mut class) => {
+            if class.future_version_best_effort {
+                coverage.future_classfiles += 1;
+            }
+            if class.name == "module-info" {
+                service_providers.append(&mut class.service_providers);
+                coverage.classes_parsed += 1;
+                return Ok(());
+            }
             let definition_id = ClassDefinitionId {
                 loader_unit_id: input.id.clone(),
                 artifact_id: input.id.clone(),
@@ -963,9 +1043,6 @@ fn scan_class_entry(
                 }
             }
             class.definition_id = Some(definition_id);
-            if class.future_version_best_effort {
-                coverage.future_classfiles += 1;
-            }
             if class.methods.len() > request.limits.max_methods_per_class {
                 coverage.classes_failed += 1;
                 warnings.push(Warning {
@@ -1168,6 +1245,21 @@ mod tests {
 
     use super::test_support::{jar_bytes, minimal_class, write_jar};
     use super::*;
+
+    #[test]
+    fn quilt_compatibility_classes_do_not_form_a_second_loader() {
+        let fabric = parsed_class("net/fabricmc/loader/impl/FabricLoaderImpl");
+        let quilt = parsed_class("org/quiltmc/loader/impl/QuiltLoaderImpl");
+        let classes = BTreeMap::from([
+            (fabric.name.clone(), vec![&fabric]),
+            (quilt.name.clone(), vec![&quilt]),
+        ]);
+
+        assert_eq!(
+            detected_loader_families(&classes),
+            vec![LoaderFamily::Quilt]
+        );
+    }
 
     #[test]
     fn nested_jar_classes_belong_to_the_outer_artifact() {
@@ -1407,6 +1499,20 @@ mod tests {
             path,
             kind,
             nested_jars: NestedJarPolicy::All,
+        }
+    }
+
+    fn parsed_class(name: &str) -> ParsedClass {
+        ParsedClass {
+            definition_id: None,
+            future_version_best_effort: false,
+            name: name.to_string(),
+            super_name: Some("java/lang/Object".to_string()),
+            interfaces: Vec::new(),
+            annotations: Vec::new(),
+            service_providers: Vec::new(),
+            fields: Vec::new(),
+            methods: Vec::new(),
         }
     }
 }

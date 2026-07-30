@@ -23,8 +23,17 @@ pub(crate) struct ParsedClass {
     pub super_name: Option<String>,
     pub interfaces: Vec<String>,
     pub annotations: Vec<ParsedAnnotation>,
+    pub service_providers: Vec<ServiceProviderDeclaration>,
     pub fields: Vec<ParsedField>,
     pub methods: Vec<ParsedMethod>,
+}
+
+/// A Java module `provides Service with Implementation` declaration.
+/// Names use JVM internal slash notation, matching the rest of the audit IR.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ServiceProviderDeclaration {
+    pub service: String,
+    pub provider: String,
 }
 
 #[derive(Debug, Clone)]
@@ -239,6 +248,30 @@ fn convert(
             annotations: parse_annotations(pool, &field.attributes, 0, max_annotation_depth)?,
         });
     }
+    let mut service_providers = Vec::new();
+    for provided in class_file
+        .attributes
+        .iter()
+        .filter_map(|attribute| match attribute {
+            Attribute::Module { provides, .. } => Some(provides.as_slice()),
+            _ => None,
+        })
+        .flatten()
+    {
+        let service = pool
+            .try_get_class(provided.index)
+            .map(java_string)
+            .map_err(|error| error.to_string())?;
+        for provider in &provided.with_index {
+            service_providers.push(ServiceProviderDeclaration {
+                service: service.clone(),
+                provider: pool
+                    .try_get_class(*provider)
+                    .map(java_string)
+                    .map_err(|error| error.to_string())?,
+            });
+        }
+    }
     let mut methods = Vec::with_capacity(class_file.methods.len());
     for method in &class_file.methods {
         let mut max_locals = None;
@@ -279,6 +312,7 @@ fn convert(
         super_name,
         interfaces,
         annotations,
+        service_providers,
         fields,
         methods,
     })
@@ -718,4 +752,54 @@ fn instruction_length(instruction: &Instruction, offset: u32) -> u32 {
 
 fn java_string(value: &ristretto_classfile::JavaStr) -> String {
     value.to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use ristretto_classfile::attributes::{Attribute, ModuleAccessFlags, Provides};
+
+    use super::*;
+
+    #[test]
+    fn reads_service_providers_from_module_descriptor() {
+        let mut class_file = ClassFile::default();
+        class_file.this_class = class_file.constant_pool.add_class("module-info").unwrap();
+        let attribute_name = class_file.constant_pool.add_utf8("Module").unwrap();
+        let module_name = class_file
+            .constant_pool
+            .add_module("example.module")
+            .unwrap();
+        let service = class_file
+            .constant_pool
+            .add_class("example/api/Service")
+            .unwrap();
+        let provider = class_file
+            .constant_pool
+            .add_class("example/impl/ServiceImpl")
+            .unwrap();
+        class_file.attributes.push(Attribute::Module {
+            name_index: attribute_name,
+            module_name_index: module_name,
+            flags: ModuleAccessFlags::empty(),
+            version_index: 0,
+            requires: Vec::new(),
+            exports: Vec::new(),
+            opens: Vec::new(),
+            uses: Vec::new(),
+            provides: vec![Provides {
+                index: service,
+                with_index: vec![provider],
+            }],
+        });
+
+        let parsed = convert(class_file.into_owned(), false, 8).unwrap();
+
+        assert_eq!(
+            parsed.service_providers,
+            vec![ServiceProviderDeclaration {
+                service: "example/api/Service".to_string(),
+                provider: "example/impl/ServiceImpl".to_string(),
+            }]
+        );
+    }
 }

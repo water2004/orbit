@@ -132,72 +132,37 @@ impl MappingTree {
 pub(crate) fn align_fabric_runtime(
     scanned: &mut ScannedArtifacts,
 ) -> Result<NamespaceReport, Readiness> {
-    let mapping_trees = discover_tiny_mappings(&scanned.artifacts);
-    let mapping_sources = mapping_trees.iter().map(MappingTree::report).collect();
-    align_tiny_runtime(
+    align_mapping_runtime(
         scanned,
         LoaderFamily::Fabric,
-        mapping_trees,
-        mapping_sources,
-        Some(
-            "the Fabric classpath contains no effective class mappings; Fabric Loader therefore retains the official runtime namespace",
-        ),
+        "the Fabric mapping configuration contains no effective class mappings; the runtime therefore retains the supplied game symbol space",
     )
 }
 
 pub(crate) fn align_quilt_runtime(
     scanned: &mut ScannedArtifacts,
-    minecraft_version: &str,
 ) -> Result<NamespaceReport, Readiness> {
-    let mapping_trees = discover_tiny_mappings(&scanned.artifacts);
-    let mapping_sources = mapping_trees.iter().map(MappingTree::report).collect();
-    if quilt_uses_unobfuscated_game(minecraft_version) {
-        scanned.coverage.nested_artifact_units = scanned.artifacts.len();
-        return Ok(identity_report(
-            scanned,
-            SymbolNamespace::Official,
-            mapping_sources,
-            "Quilt Loader selects its unobfuscated-game mapping configuration and retains the official runtime namespace",
-        ));
-    }
-    align_tiny_runtime(
+    align_mapping_runtime(
         scanned,
         LoaderFamily::Quilt,
-        mapping_trees,
-        mapping_sources,
-        None,
+        "the Quilt mapping configuration contains no effective class mappings; the runtime therefore retains the supplied game symbol space",
     )
 }
 
-/// Mirrors Quilt's Minecraft provider rule: normalized versions newer than
-/// 25.0, or versions explicitly identified as unobfuscated, use
-/// `EmptyMappingConfiguration` and remain in the official namespace.
-fn quilt_uses_unobfuscated_game(minecraft_version: &str) -> bool {
-    if minecraft_version
-        .to_ascii_lowercase()
-        .contains("unobfuscated")
-    {
-        return true;
-    }
-
-    let numeric_prefix = minecraft_version
-        .trim()
-        .chars()
-        .take_while(|character| character.is_ascii_digit() || *character == '.')
-        .collect::<String>();
-    let mut components = numeric_prefix
-        .split('.')
-        .filter(|component| !component.is_empty())
-        .map(str::parse::<u32>);
-    let Some(Ok(major)) = components.next() else {
-        return false;
-    };
-    let minor = match components.next() {
-        Some(Ok(value)) => value,
-        Some(Err(_)) => return false,
-        None => 0,
-    };
-    major > 25 || major == 25 && minor > 0
+fn align_mapping_runtime(
+    scanned: &mut ScannedArtifacts,
+    loader: LoaderFamily,
+    identity_detail: &str,
+) -> Result<NamespaceReport, Readiness> {
+    let mapping_trees = discover_tiny_mappings(&scanned.artifacts);
+    let mapping_sources = mapping_trees.iter().map(MappingTree::report).collect();
+    align_tiny_runtime(
+        scanned,
+        loader,
+        mapping_trees,
+        mapping_sources,
+        identity_detail,
+    )
 }
 
 pub(crate) fn align_modlauncher_runtime(
@@ -216,7 +181,7 @@ fn align_tiny_runtime(
     loader: LoaderFamily,
     trees: Vec<MappingTree>,
     mapping_sources: Vec<MappingSource>,
-    identity_without_mappings: Option<&str>,
+    identity_without_mappings: &str,
 ) -> Result<NamespaceReport, Readiness> {
     let usable = trees
         .iter()
@@ -225,20 +190,15 @@ fn align_tiny_runtime(
         })
         .collect::<Vec<_>>();
     if usable.is_empty() {
-        if let Some(detail) = identity_without_mappings {
-            let report =
-                identity_report(scanned, SymbolNamespace::Official, mapping_sources, detail);
-            scanned.coverage.nested_artifact_units = scanned.artifacts.len();
-            return Ok(report);
-        }
-        scanned.coverage.namespace_alignment_failures += 1;
-        return Err(namespace_not_ready(
-            loader,
-            ReadinessStatus::Incomplete,
-            "Bytecode audit could not establish the Quilt runtime namespace. This Minecraft version requires an intermediary class mapping, but none was present in the supplied runtime classpath."
-                .to_string(),
-            Vec::new(),
-        ));
+        ensure_identity_symbol_space(scanned, loader)?;
+        let report = identity_report(
+            scanned,
+            SymbolNamespace::Official,
+            mapping_sources,
+            identity_without_mappings,
+        );
+        scanned.coverage.nested_artifact_units = scanned.artifacts.len();
+        return Ok(report);
     }
 
     let minecraft_names = minecraft_class_names(scanned);
@@ -527,26 +487,7 @@ fn align_modlauncher_family(
     loader: LoaderFamily,
     mapping_sources: Vec<MappingSource>,
 ) -> Result<NamespaceReport, Readiness> {
-    let minecraft_names = minecraft_class_names(scanned);
-    let targets = annotated_mixin_targets(scanned);
-    let minecraft_targets = targets
-        .iter()
-        .filter(|target| target.starts_with("net/minecraft/"))
-        .collect::<Vec<_>>();
-    if !minecraft_targets.is_empty()
-        && minecraft_names
-            .iter()
-            .all(|name| !name.starts_with("net/minecraft/"))
-    {
-        scanned.coverage.namespace_alignment_failures += 1;
-        return Err(namespace_not_ready(
-            loader,
-            ReadinessStatus::Incomplete,
-            "Bytecode audit could not establish the loader runtime namespace. Registered transformations use net/minecraft symbols, but the supplied base-game classes use a different symbol space and no supported runtime mapping was discovered."
-                .to_string(),
-            vec![SymbolNamespace::Identity, SymbolNamespace::Srg],
-        ));
-    }
+    ensure_identity_symbol_space(scanned, loader)?;
     scanned.coverage.nested_artifact_units = scanned.artifacts.len();
     Ok(identity_report(
         scanned,
@@ -554,6 +495,85 @@ fn align_modlauncher_family(
         mapping_sources,
         "the supplied ModLauncher runtime and transformation targets share the same observed class symbol space",
     ))
+}
+
+fn ensure_identity_symbol_space(
+    scanned: &mut ScannedArtifacts,
+    loader: LoaderFamily,
+) -> Result<(), Readiness> {
+    let game_uses_minecraft_names = minecraft_class_names(scanned)
+        .iter()
+        .any(|name| name.starts_with("net/minecraft/"));
+    if mod_references_minecraft_names(scanned) && !game_uses_minecraft_names {
+        scanned.coverage.namespace_alignment_failures += 1;
+        return Err(namespace_not_ready(
+            loader,
+            ReadinessStatus::Incomplete,
+            "Bytecode audit could not establish the loader runtime namespace. Active mod bytecode uses net/minecraft symbols, but the supplied base-game classes use a different symbol space and no effective runtime mapping was discovered."
+                .to_string(),
+            vec![SymbolNamespace::Official, SymbolNamespace::Intermediary],
+        ));
+    }
+    Ok(())
+}
+
+fn mod_references_minecraft_names(scanned: &ScannedArtifacts) -> bool {
+    if annotated_mixin_targets(scanned)
+        .iter()
+        .any(|target| target.starts_with("net/minecraft/"))
+    {
+        return true;
+    }
+
+    scanned
+        .artifacts
+        .iter()
+        .filter(|artifact| artifact.kind == ArtifactKind::Mod)
+        .flat_map(|artifact| &artifact.classes)
+        .any(|class| {
+            class
+                .super_name
+                .iter()
+                .chain(&class.interfaces)
+                .any(|name| name.starts_with("net/minecraft/"))
+                || class
+                    .fields
+                    .iter()
+                    .any(|field| descriptor_references_minecraft(&field.descriptor))
+                || class.methods.iter().any(|method| {
+                    descriptor_references_minecraft(&method.descriptor)
+                        || method
+                            .instructions
+                            .iter()
+                            .any(|instruction| match &instruction.kind {
+                                InstructionKind::MethodCall(member)
+                                | InstructionKind::FieldRead(member)
+                                | InstructionKind::FieldWrite(member) => {
+                                    member.owner.starts_with("net/minecraft/")
+                                        || descriptor_references_minecraft(&member.descriptor)
+                                }
+                                InstructionKind::Type(name) => name.starts_with("net/minecraft/"),
+                                InstructionKind::InvokeDynamic {
+                                    descriptor,
+                                    implementation,
+                                    ..
+                                } => {
+                                    descriptor_references_minecraft(descriptor)
+                                        || implementation.as_ref().is_some_and(|member| {
+                                            member.owner.starts_with("net/minecraft/")
+                                                || descriptor_references_minecraft(
+                                                    &member.descriptor,
+                                                )
+                                        })
+                                }
+                                _ => false,
+                            })
+                })
+        })
+}
+
+fn descriptor_references_minecraft(descriptor: &str) -> bool {
+    descriptor.contains("Lnet/minecraft/")
 }
 
 fn identity_report(
@@ -1471,7 +1491,7 @@ mod tests {
     }
 
     #[test]
-    fn quilt_unobfuscated_game_uses_official_identity_without_mappings() {
+    fn quilt_empty_mapping_configuration_uses_identity_namespace() {
         let mut scanned = scanned(vec![artifact(
             "minecraft",
             ArtifactKind::Minecraft,
@@ -1479,34 +1499,31 @@ mod tests {
             Vec::new(),
         )]);
 
-        let report = align_quilt_runtime(&mut scanned, "26.1").unwrap();
+        let report = align_quilt_runtime(&mut scanned).unwrap();
 
         assert_eq!(report.runtime_namespace, Some(SymbolNamespace::Official));
         assert_eq!(scanned.coverage.namespace_alignment_failures, 0);
     }
 
     #[test]
-    fn quilt_obfuscated_game_still_requires_intermediary_mappings() {
-        let mut scanned = scanned(vec![artifact(
-            "minecraft",
-            ArtifactKind::Minecraft,
-            vec![class("a")],
-            Vec::new(),
-        )]);
+    fn mapping_loader_rejects_identity_when_mod_and_game_symbol_spaces_differ() {
+        let mut mod_class = class("example/ModClass");
+        mod_class.super_name = Some("net/minecraft/Game".to_string());
+        let mut scanned = scanned(vec![
+            artifact(
+                "minecraft",
+                ArtifactKind::Minecraft,
+                vec![class("a")],
+                Vec::new(),
+            ),
+            artifact("mod", ArtifactKind::Mod, vec![mod_class], Vec::new()),
+        ]);
 
-        let readiness = align_quilt_runtime(&mut scanned, "1.21.11").unwrap_err();
+        let readiness = align_quilt_runtime(&mut scanned).unwrap_err();
 
         assert_eq!(readiness.status, ReadinessStatus::Incomplete);
         assert_eq!(scanned.coverage.namespace_alignment_failures, 1);
-    }
-
-    #[test]
-    fn quilt_unobfuscated_rule_matches_current_loader_boundary() {
-        assert!(!quilt_uses_unobfuscated_game("25.0"));
-        assert!(quilt_uses_unobfuscated_game("26.1"));
-        assert!(quilt_uses_unobfuscated_game("26.1-pre1"));
-        assert!(quilt_uses_unobfuscated_game("custom-unobfuscated"));
-        assert!(!quilt_uses_unobfuscated_game("1.21.11"));
+        assert!(readiness.message.contains("different symbol space"));
     }
 
     #[test]
@@ -1621,6 +1638,7 @@ mod tests {
             classes,
             refmaps: Vec::new(),
             resources,
+            service_providers: Vec::new(),
         }
     }
 
@@ -1632,6 +1650,7 @@ mod tests {
             super_name: Some("java/lang/Object".to_string()),
             interfaces: Vec::new(),
             annotations: Vec::new(),
+            service_providers: Vec::new(),
             fields: Vec::new(),
             methods: Vec::new(),
         }

@@ -129,6 +129,12 @@ struct ConfigDeclaration {
     activation: ConfigActivation,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum ConfigRegistrationIdentity {
+    Global(String),
+    QuiltScoped { artifact_id: String, config: String },
+}
+
 #[derive(Debug)]
 struct PluginEvaluation {
     class_found: bool,
@@ -160,15 +166,14 @@ pub(crate) fn discover(
     }
 
     let mut registry = MixinRegistry::default();
-    let mut seen_configs = HashSet::new();
+    let mut seen_configs = HashMap::<ConfigRegistrationIdentity, String>::new();
     for declaration in declarations {
-        let key = (
-            declaration.artifact_id.clone(),
-            scoped_resource_path(&declaration.metadata_path, &declaration.config_path),
-        );
-        if !seen_configs.insert(key) {
+        let identity = config_registration_identity(&declaration);
+        if let Some(registered_by) = seen_configs.get(&identity) {
+            register_duplicate_config(declaration, registered_by, scanned, &mut registry);
             continue;
         }
+        seen_configs.insert(identity, declaration.artifact_id.clone());
         register_config(scanned, request, declaration, &mut registry);
     }
     record_unregistered_mixins(scanned, &mut registry);
@@ -185,6 +190,57 @@ pub(crate) fn discover(
         .filter(|mixin| mixin.activation == MixinActivation::PluginControlled)
         .count();
     registry
+}
+
+fn config_registration_identity(declaration: &ConfigDeclaration) -> ConfigRegistrationIdentity {
+    let config = declaration.config_path.replace('\\', "/");
+    if declaration.source == RegistrationSource::QuiltMetadata {
+        ConfigRegistrationIdentity::QuiltScoped {
+            artifact_id: declaration.artifact_id.clone(),
+            config,
+        }
+    } else {
+        ConfigRegistrationIdentity::Global(config)
+    }
+}
+
+fn register_duplicate_config(
+    declaration: ConfigDeclaration,
+    registered_by: &str,
+    scanned: &mut ScannedArtifacts,
+    registry: &mut MixinRegistry,
+) {
+    let resource_path = scoped_resource_path(&declaration.metadata_path, &declaration.config_path);
+    let reason = format!(
+        "Mixin config name '{}' is already registered by artifact '{}'; this declaration is not an independent active config",
+        declaration.config_path, registered_by
+    );
+    let activation = ConfigActivation::DuplicateConfig {
+        registered_by: registered_by.to_string(),
+    };
+    scanned.warnings.push(Warning::new(
+        Some(declaration.artifact_id.clone()),
+        resource_path.clone(),
+        WarningKind::DuplicateMixinConfig,
+        reason.clone(),
+    ));
+    registry.inactive_candidates.push(InactiveCandidate {
+        artifact_id: declaration.artifact_id.clone(),
+        class: None,
+        config_path: Some(resource_path.clone()),
+        kind: InactiveCandidateKind::DuplicateConfig,
+        reason,
+    });
+    registry.configs.push(RegisteredMixinConfig {
+        artifact_id: declaration.artifact_id,
+        config_path: resource_path,
+        side: declaration.side,
+        registration: declaration.source,
+        activation,
+        required_mods: declaration.required_mods,
+        behavior_version: declaration.behavior_version,
+        parsed: None,
+    });
 }
 
 fn discover_fabric(artifact: &ParsedArtifact, output: &mut Vec<ConfigDeclaration>) {
@@ -1519,6 +1575,98 @@ mod tests {
     }
 
     #[test]
+    fn fabric_config_names_are_global_across_artifacts() {
+        let mut scanned = scanned(
+            vec![
+                resource(
+                    "fabric.mod.json",
+                    br#"{"schemaVersion":1,"mixins":["shared.json"]}"#,
+                ),
+                resource("shared.json", br#"{"mixins":[]}"#),
+            ],
+            Vec::new(),
+        );
+        scanned.artifacts.push(ParsedArtifact {
+            id: "other".to_string(),
+            display_name: "other".to_string(),
+            kind: ArtifactKind::Mod,
+            classes: Vec::new(),
+            refmaps: Vec::new(),
+            resources: vec![
+                resource(
+                    "fabric.mod.json",
+                    br#"{"schemaVersion":1,"mixins":["shared.json"]}"#,
+                ),
+                resource("shared.json", br#"{"mixins":[]}"#),
+            ],
+            service_providers: Vec::new(),
+        });
+
+        let registry = discover(
+            &mut scanned,
+            &request("fabric", PhysicalSide::Client, BTreeSet::new()),
+        );
+
+        assert_eq!(registry.configs.len(), 2);
+        assert!(matches!(
+            registry.configs[1].activation,
+            ConfigActivation::DuplicateConfig { .. }
+        ));
+        assert!(
+            scanned
+                .warnings
+                .iter()
+                .any(|warning| warning.kind == WarningKind::DuplicateMixinConfig)
+        );
+        assert!(registry.inactive_candidates.iter().any(|candidate| {
+            candidate.artifact_id == "other"
+                && candidate.kind == InactiveCandidateKind::DuplicateConfig
+        }));
+    }
+
+    #[test]
+    fn quilt_native_config_names_are_scoped_to_the_owning_mod() {
+        let mut scanned = scanned(
+            vec![
+                resource("quilt.mod.json", br#"{"mixin":["shared.json"]}"#),
+                resource("shared.json", br#"{"mixins":[]}"#),
+            ],
+            Vec::new(),
+        );
+        scanned.artifacts.push(ParsedArtifact {
+            id: "other".to_string(),
+            display_name: "other".to_string(),
+            kind: ArtifactKind::Mod,
+            classes: Vec::new(),
+            refmaps: Vec::new(),
+            resources: vec![
+                resource("quilt.mod.json", br#"{"mixin":["shared.json"]}"#),
+                resource("shared.json", br#"{"mixins":[]}"#),
+            ],
+            service_providers: Vec::new(),
+        });
+
+        let registry = discover(
+            &mut scanned,
+            &request("quilt", PhysicalSide::Client, BTreeSet::new()),
+        );
+
+        assert_eq!(registry.configs.len(), 2);
+        assert!(
+            registry
+                .configs
+                .iter()
+                .all(|config| config.activation == ConfigActivation::Active)
+        );
+        assert!(
+            scanned
+                .warnings
+                .iter()
+                .all(|warning| warning.kind != WarningKind::DuplicateMixinConfig)
+        );
+    }
+
+    #[test]
     fn neoforge_required_mods_control_registration_without_becoming_risk_evidence() {
         let mut missing_scanned = scanned(
             vec![
@@ -2041,6 +2189,7 @@ requiredMods = ["dependency"]
                 classes,
                 refmaps: Vec::new(),
                 resources,
+                service_providers: Vec::new(),
             }],
             universe: ClassUniverse::default(),
             limits: AnalysisLimits::default(),
@@ -2077,6 +2226,7 @@ requiredMods = ["dependency"]
             super_name: Some("java/lang/Object".to_string()),
             interfaces: Vec::new(),
             annotations: Vec::new(),
+            service_providers: Vec::new(),
             fields: Vec::new(),
             methods: Vec::new(),
         }

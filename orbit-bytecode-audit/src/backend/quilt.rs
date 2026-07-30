@@ -21,9 +21,9 @@ impl AuditBackend for QuiltBackend {
     fn align_namespace(
         &self,
         scanned: &mut ScannedArtifacts,
-        request: &AuditRequest,
+        _request: &AuditRequest,
     ) -> Result<NamespaceReport, Readiness> {
-        crate::namespace::align_quilt_runtime(scanned, &request.environment.minecraft_version)
+        crate::namespace::align_quilt_runtime(scanned)
     }
 
     fn discover_mixins(
