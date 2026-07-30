@@ -87,7 +87,7 @@ cargo build -p orbit --features portable
 [core]
 default_instance = "survival" # 可省略
 max_concurrent_downloads = 8
-language = "en"
+language = "system"
 
 [network]
 timeout = 30
@@ -150,6 +150,15 @@ orbit config unset network.proxy
 - `plain`：始终输出稳定的文本阶段和完成计数；
 - `off`：关闭进度事件展示；全局 `--quiet` 也会关闭。
 
+`core.language` 接受 `system`、`en`、`zh-CN`。CLI 没有显式传
+`--language` 时使用该值；显式参数优先于环境变量和文件。`ui.color` 接受：
+
+- `auto`：只在对应 stdout/stderr 是交互终端时输出 ANSI 样式；
+- `always`：即使重定向也保留 ANSI 样式；
+- `never`：始终输出无样式文本。
+
+颜色策略只作用于人类可读的 text 表格，不改变 JSON、NDJSON 或交互协议。
+
 在线 add/fix/migrate/outdated/upgrade 会分别呈现 project 闭包发现、候选 JAR
 下载/缓存校验/解析、离线求解和最终物化。候选 JAR 阶段有精确的 `已完成/总数`；
 发现闭包无法预知远端递归总量，因此使用带已用时间的 spinner。多解枚举则把实际开始的
@@ -181,8 +190,9 @@ artifact 下载许可数，不会因同时启用 Modrinth 和 CurseForge 而分�
 | `ORBIT_CURSEFORGE_API_KEY` | `auth.curseforge_api_key` |
 | `ORBIT_MODRINTH_TOKEN` | `auth.modrinth_token` |
 
-因此配置值优先级是：环境变量 > 文件 > schema 默认值。路径参数在加载文件之前解析，不
-属于这个字段覆盖层。
+因此一般配置值优先级是：环境变量 > 文件 > schema 默认值。语言额外允许显式
+`--language` 覆盖有效配置，所以它的完整优先级是：命令行 > `ORBIT_LANGUAGE` > 文件 >
+`system`。路径参数在加载文件之前解析，不属于这个字段覆盖层。
 
 ## 5. JAR cache
 
@@ -238,11 +248,7 @@ Windows、Linux、macOS 只实现目录发现。`RuntimePaths` 负责公共 `orb
 layout 组装；配置、缓存、installer 和 resolver 不包含平台分支。测试通过 fake
 environment 验证布局，不修改真实用户目录。
 
-## 7. 当前尚未接入的正确规范
+## 7. 生效范围
 
-以下字段已正确加载和保存，但运行路径尚未完整消费；这是实现差距，不是废弃 schema：
-
-- `language` 与 `ui.color`：CLI 本地化和颜色策略尚未接入；`ui.progress_bar` 已接入。
-
-下载并发、统一 proxy/timeout/retry、Modrinth token 与 CurseForge API Key 均已真实
-接入。凭据不进入 lockfile、日志或错误正文。
+本 schema 中的字段均由运行路径消费：语言、颜色和进度只控制展示；网络、认证、下载
+并发与缓存字段控制共享运行时服务。凭据不进入 lockfile、日志或错误正文。

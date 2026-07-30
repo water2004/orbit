@@ -94,7 +94,7 @@ orbit upgrade
 orbit audit
 ```
 
-Both CLIs accept `--language system|en|zh-CN`; the default is `system`. Human-readable help, output, progress, prompts, and errors follow that setting. JSON, NDJSON, stdin responses, schema fields, enum codes, and error codes remain strict UTF-8 and language-neutral.
+Both CLIs accept `--language system|en|zh-CN`. Orbit's persisted `core.language` defaults to `system`, and an explicit flag overrides it. Human-readable help, output, progress, prompts, and errors follow the selected language. JSON, NDJSON, stdin responses, schema fields, enum codes, and error codes remain strict UTF-8 and language-neutral.
 
 ## Command model
 

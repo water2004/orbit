@@ -154,8 +154,9 @@ orbit purge voxelmap
 
 Orbit 采用**目录优先**的上下文逻辑。命令会默认作用于当前所在目录的 `orbit.toml`，如果你在非项目目录执行命令，它将作用于你设置的**全局默认实例**（或通过 `-i <实例名>` 显式指定）。
 
-`orbit` 与 `orbit-launcher` 均提供全局 `--language system|en|zh-CN`，缺省为 `system`；help、
-文本结果、进度、询问和错误会使用同一语言。JSON/NDJSON/stdin 机器协议固定为严格 UTF-8，
+`orbit` 与 `orbit-launcher` 均提供全局 `--language system|en|zh-CN`。Orbit 持久化的
+`core.language` 默认为 `system`，显式参数优先；help、文本结果、进度、询问和错误会使用
+所选语言。JSON/NDJSON/stdin 机器协议固定为严格 UTF-8，
 schema、字段名、枚举码和错误码不随语言变化。Windows 控制台不要求切换 code page；管道中的
 非法 UTF-8 会明确报协议错误，而不会被替换或静默忽略。
 
