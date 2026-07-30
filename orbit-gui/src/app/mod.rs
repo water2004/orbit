@@ -343,7 +343,6 @@ pub(super) struct Inputs {
     pub launcher_binary: Entity<InputState>,
     pub remote_locator: Entity<InputState>,
     pub string_value: Entity<InputState>,
-    pub add_version: Entity<InputState>,
     pub runtime_name: Entity<InputState>,
     pub audit_filter: Entity<InputState>,
     pub minecraft_move_destination: Entity<InputState>,
@@ -385,9 +384,8 @@ impl Inputs {
                 InputState::new(window, cx)
                     .default_value(preferences.launcher_binary.display().to_string())
             }),
-            remote_locator: input(window, cx, tr!("Remote locator").into_owned()),
+            remote_locator: input(window, cx, tr!("Project ID or JAR path").into_owned()),
             string_value: input(window, cx, tr!("Version text").into_owned()),
-            add_version: input(window, cx, tr!("Any compatible version").into_owned()),
             runtime_name: input(window, cx, tr!("Installation name").into_owned()),
             audit_filter: input(window, cx, tr!("Filter by mod").into_owned()),
             minecraft_move_destination: input(

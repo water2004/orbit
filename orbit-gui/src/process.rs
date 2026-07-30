@@ -30,33 +30,12 @@ pub struct ProcessRequest {
     pub label: String,
     /// Optional first stdin line. This is used only for protocols that
     /// explicitly require stdin (for example Yggdrasil passwords) and is
-    /// never copied into task logs or errors.
+    /// never copied into errors or persistent GUI state.
     pub initial_stdin: Option<Zeroizing<String>>,
-}
-
-impl ProcessRequest {
-    pub fn command_name(&self) -> String {
-        let mut arguments = self.args.iter();
-        while let Some(argument) = arguments.next() {
-            match argument.as_str() {
-                "--output-format" | "--progress-format" | "--instance" | "--config"
-                | "--cache-dir" | "--config-dir" | "--data-dir" | "--language" => {
-                    let _ = arguments.next();
-                }
-                value if value.starts_with('-') => {}
-                command => return command.to_string(),
-            }
-        }
-        "unknown".to_string()
-    }
 }
 
 #[derive(Debug)]
 pub enum BridgeEvent {
-    Started {
-        task_id: TaskId,
-        process_id: u32,
-    },
     Progress {
         task_id: TaskId,
         envelope: ProgressEnvelope<Value>,
@@ -72,10 +51,6 @@ pub enum BridgeEvent {
     ProtocolError {
         task_id: TaskId,
         message: String,
-    },
-    Log {
-        task_id: TaskId,
-        line: String,
     },
     Finished {
         task_id: TaskId,
@@ -221,11 +196,6 @@ fn run_process(
             return;
         }
     };
-    let _ = events.send(BridgeEvent::Started {
-        task_id,
-        process_id: child.id(),
-    });
-
     let mut stdin = child.inner().stdin.take();
     if let Some(secret) = request.initial_stdin
         && let Some(handle) = stdin.as_mut()
@@ -324,11 +294,6 @@ fn run_process(
                         let _ = stderr_failure_tx.send(());
                     }
                 }
-            } else if !line.trim().is_empty() {
-                let _ = stderr_events.send(BridgeEvent::Log {
-                    task_id,
-                    line: line.to_string(),
-                });
             }
         }
     });
@@ -424,66 +389,6 @@ fn read_utf8_stream(mut reader: impl Read, stream: &str) -> Result<String, Strin
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn command_name_ignores_machine_format_values() {
-        let request = ProcessRequest {
-            kind: CliKind::Orbit,
-            program: PathBuf::from("orbit"),
-            args: vec![
-                "--output-format".into(),
-                "json".into(),
-                "--progress-format".into(),
-                "ndjson".into(),
-                "search".into(),
-                "sodium".into(),
-            ],
-            working_directory: None,
-            label: "Search".into(),
-            initial_stdin: None,
-        };
-        assert_eq!(request.command_name(), "search");
-    }
-
-    #[test]
-    fn command_name_skips_an_explicit_instance_value() {
-        let request = ProcessRequest {
-            kind: CliKind::Launcher,
-            program: PathBuf::from("orbit-launcher"),
-            args: vec![
-                "--output-format".into(),
-                "json".into(),
-                "--instance".into(),
-                "stable-instance-id".into(),
-                "server".into(),
-                "status".into(),
-            ],
-            working_directory: None,
-            label: "Status".into(),
-            initial_stdin: None,
-        };
-        assert_eq!(request.command_name(), "server");
-    }
-
-    #[test]
-    fn command_name_skips_the_language_override() {
-        let request = ProcessRequest {
-            kind: CliKind::Launcher,
-            program: PathBuf::from("orbit-launcher"),
-            args: vec![
-                "--language".into(),
-                "zh-CN".into(),
-                "--output-format".into(),
-                "json".into(),
-                "instance".into(),
-                "list".into(),
-            ],
-            working_directory: None,
-            label: "Instances".into(),
-            initial_stdin: None,
-        };
-        assert_eq!(request.command_name(), "instance");
-    }
 
     #[test]
     fn protocol_streams_require_utf8_instead_of_silently_replacing_bytes() {

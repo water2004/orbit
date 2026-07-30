@@ -150,7 +150,10 @@ pub(super) fn render(
                                     color,
                                 ))
                                 .child(div().font_semibold().child(finding.packages.clone()))
-                                .child(ui::neutral_pill(finding.confidence.clone(), cx)),
+                                .child(ui::neutral_pill(
+                                    presentation_label(&finding.confidence),
+                                    cx,
+                                )),
                         )
                         .child(div().text_sm().font_medium().child(finding.rule.clone()))
                         .child(

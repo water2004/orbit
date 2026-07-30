@@ -577,9 +577,9 @@ fn java_inventory_item(app: &Entity<OrbitApp>) -> SettingItem {
                                         .text_color(cx.theme().muted_foreground)
                                         .child(format!(
                                             "{} · {} · {} · {} · {}",
-                                            runtime.provider,
-                                            runtime.component,
-                                            runtime.platform,
+                                            super::super::controller::title_case(&runtime.provider),
+                                            presentation_token(&runtime.component),
+                                            presentation_token(&runtime.platform),
                                             tr!("%{count} files", count = runtime.files),
                                             super::super::controller::human_bytes(runtime.bytes)
                                         )),
@@ -872,4 +872,13 @@ fn launcher_entry<'a>(app: &'a OrbitApp, key: &str) -> Option<&'a LauncherConfig
 
 fn orbit_entry<'a>(app: &'a OrbitApp, key: &str) -> Option<&'a OrbitConfigEntry> {
     app.orbit_config.iter().find(|entry| entry.key == key)
+}
+
+fn presentation_token(value: &str) -> String {
+    value
+        .split(['-', '_'])
+        .filter(|part| !part.is_empty())
+        .map(super::super::controller::title_case)
+        .collect::<Vec<_>>()
+        .join(" ")
 }

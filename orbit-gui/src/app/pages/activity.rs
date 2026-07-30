@@ -241,7 +241,6 @@ fn render_drawer(app: &OrbitApp, cx: &mut Context<OrbitApp>) -> impl IntoElement
                                 .bg(task_state_color(task.state, cx)),
                         )
                         .child(div().font_semibold().flex_1().child(task.label.clone()))
-                        .child(ui::neutral_pill(task.command.clone(), cx))
                         .when(task.state == TaskState::Running, |row| {
                             row.child(
                                 Button::new(("drawer-cancel", task_id as usize))
@@ -269,17 +268,6 @@ fn render_drawer(app: &OrbitApp, cx: &mut Context<OrbitApp>) -> impl IntoElement
                 )
                 .when_some(task.error_message.clone(), |card, error| {
                     card.child(div().text_sm().text_color(cx.theme().danger).child(error))
-                })
-                .when(!task.log.is_empty(), |card| {
-                    card.child(v_flex().gap_1().children(
-                        task.log.iter().rev().take(4).rev().cloned().map(|line| {
-                            div()
-                                .font_family("monospace")
-                                .text_xs()
-                                .text_color(cx.theme().muted_foreground)
-                                .child(line)
-                        }),
-                    ))
                 }),
         );
     }
@@ -417,10 +405,10 @@ fn render_interaction(app: &OrbitApp, cx: &mut Context<OrbitApp>) -> impl IntoEl
         );
         if invalid {
             content = content.child(
-                div()
-                    .text_sm()
-                    .text_color(cx.theme().danger)
-                    .child(tr!("The CLI returned invalid package-action data.").into_owned()),
+                div().text_sm().text_color(cx.theme().danger).child(
+                    tr!("This option contains invalid package actions and cannot be applied.")
+                        .into_owned(),
+                ),
             );
         } else if !visible_actions.is_empty() {
             content = content.child(render_package_actions(&visible_actions, true, cx));
@@ -626,7 +614,7 @@ fn render_package_actions(
         }))
 }
 
-fn package_action_pill(kind: &str, cx: &gpui::App) -> impl IntoElement {
+pub(super) fn package_action_pill(kind: &str, cx: &gpui::App) -> impl IntoElement {
     let (label, background, foreground) = match kind {
         "install" => (
             tr!("Install").into_owned(),
@@ -944,14 +932,31 @@ fn render_package_settings(app: &OrbitApp, cx: &mut Context<OrbitApp>) -> AnyEle
     let remote_input = app.inputs.remote_locator.clone();
     let remote_read = remote_input.clone();
     let providers = ["file", "modrinth", "curseforge"];
+    let selected_provider = providers
+        .get(editor.remote_provider)
+        .copied()
+        .unwrap_or("file");
     let mut remotes = v_flex().gap_2();
     for (index, remote) in editor.package.remotes.iter().cloned().enumerate() {
         let package = package_id.clone();
+        let (provider, locator) = remote
+            .split_once(':')
+            .map_or(("file", remote.as_str()), |(provider, locator)| {
+                (provider, locator)
+            });
         remotes = remotes.child(
             h_flex()
                 .gap_2()
                 .items_center()
-                .child(div().flex_1().text_sm().child(remote))
+                .child(ui::neutral_pill(remote_provider_label(provider), cx))
+                .child(
+                    div()
+                        .min_w_0()
+                        .flex_1()
+                        .truncate()
+                        .text_sm()
+                        .child(locator.to_string()),
+                )
                 .child(
                     Button::new(("remote-remove", index))
                         .icon(OrbitIcon::Trash)
@@ -992,15 +997,38 @@ fn render_package_settings(app: &OrbitApp, cx: &mut Context<OrbitApp>) -> AnyEle
         .child(
             h_flex().gap_2().children(providers.into_iter().enumerate().map(|(index, provider)| {
                 Button::new(("remote-provider", index))
-                    .label(provider)
+                    .label(remote_provider_label(provider))
                     .selected(editor.remote_provider == index)
                     .on_click(cx.listener(move |this, _, _, cx| { if let Some(editor) = &mut this.package_editor { editor.remote_provider = index; } cx.notify(); }))
             })),
         )
         .child(
+            div()
+                .text_xs()
+                .text_color(cx.theme().muted_foreground)
+                .child(remote_locator_help(selected_provider)),
+        )
+        .child(
             h_flex()
                 .gap_2()
                 .child(Input::new(&remote_input).flex_1())
+                .when(selected_provider == "file", |row| {
+                    let remote_input = remote_input.clone();
+                    row.child(
+                        Button::new("remote-file-browse")
+                            .label(tr!("Choose JAR").into_owned())
+                            .on_click(move |_, window, cx| {
+                                if let Some(path) = rfd::FileDialog::new()
+                                    .add_filter("JAR", &["jar"])
+                                    .pick_file()
+                                {
+                                    remote_input.update(cx, |state, cx| {
+                                        state.set_value(path.display().to_string(), window, cx)
+                                    });
+                                }
+                            }),
+                    )
+                })
                 .child(Button::new("remote-add").icon(OrbitIcon::Plus).label(tr!("Add remote").into_owned()).primary().on_click(cx.listener(move |this, _, window, cx| {
                     let locator = remote_read.read(cx).value().trim().to_string();
                     if !locator.is_empty() {
@@ -1040,6 +1068,34 @@ fn render_package_settings(app: &OrbitApp, cx: &mut Context<OrbitApp>) -> AnyEle
                 ),
         )
         .into_any_element()
+}
+
+fn remote_provider_label(provider: &str) -> String {
+    match provider {
+        "file" => tr!("Local JAR").into_owned(),
+        "modrinth" => "Modrinth".to_string(),
+        "curseforge" => "CurseForge".to_string(),
+        other => other.to_string(),
+    }
+}
+
+fn remote_locator_help(provider: &str) -> String {
+    match provider {
+        "file" => tr!("Choose a local JAR file.").into_owned(),
+        "modrinth" => tr!("Enter the Modrinth project ID.").into_owned(),
+        "curseforge" => tr!("Enter the numeric CurseForge project ID.").into_owned(),
+        _ => String::new(),
+    }
+}
+
+pub(super) fn diagnostic_kind_label(kind: &str) -> String {
+    match kind {
+        "no_compatible_candidate" => tr!("No compatible candidate").into_owned(),
+        "excluded_by_propagation" => tr!("Excluded by dependencies").into_owned(),
+        "backtracked" => tr!("Dependency conflict").into_owned(),
+        "unexplained" => tr!("No recorded reason").into_owned(),
+        other => other.replace('_', " "),
+    }
 }
 
 fn render_numeric_policy(app: &OrbitApp, cx: &mut Context<OrbitApp>) -> AnyElement {

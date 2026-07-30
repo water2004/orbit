@@ -589,7 +589,7 @@ pub(crate) fn provider_label(provider: &str) -> String {
     match provider {
         "microsoft" => "Microsoft".to_string(),
         "offline" => tr!("Offline").into_owned(),
-        "yggdrasil" => "Yggdrasil".to_string(),
+        "yggdrasil" | "external-yggdrasil" => "Yggdrasil".to_string(),
         value => value.to_string(),
     }
 }

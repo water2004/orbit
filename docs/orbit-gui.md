@@ -133,7 +133,8 @@ Mods 页以 lock 中逻辑包为单位显示当前版本、TOML 版本策略、�
 接管由已安装 Launcher lock 的精确 Minecraft/Loader 版本调用 `orbit init`，不在 GUI 中
 重复探测；`init` 在文本和 JSON 模式下执行同一个全局实例注册事务。搜索、添加、sync、fix、
 install、outdated、单包/全部 upgrade、环境与远端管理都调用
-现有 Orbit 命令。添加表单暴露版本约束、可选环境过滤和 optional；包管理面板调用
+现有 Orbit 命令。添加表单只暴露可选环境过滤和 optional，默认使用 `add` 的通用候选策略并
+让同一进程展示互不支配方案；它不提供原始 `--version` 文本框。需要进一步限定版本时，包管理面板调用
 `orbit versions` 展示全部远端 JAR 候选。版本策略不是命令行文本框：用户先选择“任意版本”、
 “单边界”或“版本区间”，再从真实候选列表选择边界；单边界提供等于、大于、大于等于、
 小于和小于等于，区间分别控制上下界是否包含。包管理面板必须把数字版本、完整字符串过滤和
@@ -179,7 +180,8 @@ Install 只按 lock 精确恢复缺失文件。GUI 不根据一个命令失败�
   账户列表加载失败保留上一次成功数据，并显示可重试错误，不能渲染成“没有账户”；会话被
   明确撤销时显示“登录已失效”，Microsoft 重新进入设备授权，Yggdrasil 回到原端点登录页；
 - Server：EULA 完整正文及 digest 接受、启动/停止/状态/控制台命令；
-- Activity：真实阶段、动态完成量、日志、结构化错误和取消。
+- Activity：真实阶段、动态完成量、结构化错误和取消；底层 subcommand、PID 与未结构化 stderr
+  不渲染成终端日志，协议错误作为产品错误明确呈现。
 - Settings：使用原生设置分组、字段说明、枚举选择、路径选择和秘密输入，不把配置 key/value
   表格直接暴露成“带窗口的 CLI”。GUI 偏好只由 GUI 保存；Launcher 与 Orbit 的业务配置分别通过
   `orbit-launcher config ...` / `orbit config ...` 读取、设置和恢复默认值。没有安装 Orbit 时
@@ -192,7 +194,7 @@ GUI 只集成有稳定桌面领域语义的命令，不能按“每个 subcomman
 
 | 领域 | GUI 中的 CLI 能力 | 有意不重复的接口 |
 | --- | --- | --- |
-| 模组 | init、list、search/add（含 version/env/optional）、versions、constraint、env、remote、remove/purge、sync、fix、install、outdated/upgrade、import/export、migrate check/export、audit、cache、instances register 与 config | `info` 的长文本详情由 Discover 摘要替代；Orbit 的实例注册由 init/迁移自动同步，不再提供一套与 Launcher 并列的注册表页面；install 的 group/target 策略要等 TOML group 编辑器提供完整模型后再加入 |
+| 模组 | init、list、search/add（GUI 使用 add 默认版本策略，并提供 env/optional）、versions、constraint、env、remote、remove/purge、sync、fix、install、outdated/upgrade、import/export、migrate check/export、audit、cache、instances register 与 config | CLI 的原始 add version 字符串由安装后的可视化版本策略编辑器替代；`info` 的长文本详情由 Discover 摘要替代；Orbit 的实例注册由 init/迁移自动同步，不再提供一套与 Launcher 并列的注册表页面；install 的 group/target 策略要等 TOML group 编辑器提供完整模型后再加入 |
 | 运行时 | install/new、launch、instance list/show/import/rename/remove/default、Loader configure/install、Minecraft/Loader/Java catalogs、Java 管理、Minecraft directory/move | 未安装的 `instance create` 中间态、launch/server dry-run、前台 server run 与隐藏 supervisor 属于 CLI/自动化接口 |
 | 账户与服务端 | login/list/refresh/select/clear/logout、Yggdrasil provider、EULA、start/stop/status/command | account show 已由账户卡片覆盖；秘密、EULA 与 token 不由 GUI 另存 |
 | 配置与审计 | 两套 typed config list/set/unset、audit min-risk/mod/report | config path/get 已包含在设置模型中；audit fail-on-risk 只用于 CI 退出码 |
@@ -204,7 +206,8 @@ GUI 只集成有稳定桌面领域语义的命令，不能按“每个 subcomman
 和 Java 文件不显示为解压；只有启动时重建 native 目录以及 Forge/NeoForge 官方 installer
 内部处理属于必要的提取步骤。
 
-Activity 折叠条始终保留当前任务、当前阶段、完成量和紧凑进度条；展开态只增加历史任务，
+Activity 折叠条始终保留当前任务、当前阶段、完成量和紧凑进度条；展开态只增加领域任务历史，
+不显示底层 CLI 命令名、PID 或把 stderr 复制成终端；
 不把同一进度信息重复成高大的纵向卡片。展开抽屉后，点击抽屉外区域或关闭按钮都会先播放
 对称的退出过渡，再卸载抽屉；遮罩只负责界面层级和关闭交互，不伪造任何任务状态。
 

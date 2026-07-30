@@ -287,9 +287,8 @@ impl OrbitApp {
 
     fn spawn(&mut self, request: ProcessRequest, intent: Intent) -> TaskId {
         let label = orbit_i18n::text(&request.label).into_owned();
-        let command = request.command_name();
         let id = self.bridge.spawn(request);
-        self.tasks.insert(id, TaskView::running(id, label, command));
+        self.tasks.insert(id, TaskView::running(id, label));
         self.intents.insert(id, intent);
         id
     }
@@ -312,14 +311,6 @@ impl OrbitApp {
 
         for event in events {
             match event {
-                BridgeEvent::Started {
-                    task_id,
-                    process_id,
-                } => {
-                    if let Some(task) = self.tasks.get_mut(&task_id) {
-                        task.log.push(tr!("Process %{id} started", id = process_id));
-                    }
-                }
                 BridgeEvent::Progress { task_id, envelope } => {
                     if let Some(task) = self.tasks.get_mut(&task_id) {
                         let (completed, total) = wire::progress_numbers(&envelope.data);
@@ -327,14 +318,6 @@ impl OrbitApp {
                         task.completed = completed;
                         task.total = total;
                         task.status_line = wire::progress_label(&envelope.data);
-                        if let Some(line) = envelope
-                            .data
-                            .get("line")
-                            .and_then(Value::as_str)
-                            .filter(|line| !line.is_empty())
-                        {
-                            push_bounded(&mut task.log, line.to_string());
-                        }
                     }
                 }
                 BridgeEvent::MachineError { task_id, envelope } => {
@@ -355,11 +338,6 @@ impl OrbitApp {
                         task.error_code = Some("protocol".to_string());
                         task.error_message = Some(message.clone());
                         task.status_line = message;
-                    }
-                }
-                BridgeEvent::Log { task_id, line } => {
-                    if let Some(task) = self.tasks.get_mut(&task_id) {
-                        push_bounded(&mut task.log, line);
                     }
                 }
                 BridgeEvent::SpawnFailed { task_id, message } => {
@@ -1116,7 +1094,6 @@ impl OrbitApp {
     pub(super) fn add_search_result(
         &mut self,
         result: &SearchResult,
-        version: String,
         environment: usize,
         optional: bool,
     ) {
@@ -1126,9 +1103,6 @@ impl OrbitApp {
             _ => result.project_id.clone(),
         };
         let mut command = vec!["add".into(), locator];
-        if !version.is_empty() && version != "*" {
-            command.extend(["--version".into(), version]);
-        }
         if let Some(environment) = [None, Some("client"), Some("server"), Some("both")]
             .get(environment)
             .copied()
@@ -1896,14 +1870,6 @@ fn migration_source_pack_path() -> PathBuf {
 
 fn decode<T: DeserializeOwned>(value: Value) -> anyhow::Result<T> {
     serde_json::from_value(value).map_err(Into::into)
-}
-
-fn push_bounded(log: &mut Vec<String>, line: String) {
-    const LIMIT: usize = 500;
-    if log.len() == LIMIT {
-        log.remove(0);
-    }
-    log.push(line);
 }
 
 fn completion_failure_state(

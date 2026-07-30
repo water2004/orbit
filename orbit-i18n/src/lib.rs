@@ -511,6 +511,11 @@ mod tests {
             "Environment",
             "Remotes",
             "Manage",
+            "Compatible version selected automatically",
+            "Local JAR",
+            "Choose JAR",
+            "No compatible candidate",
+            "Excluded by dependencies",
         ] {
             assert_ne!(
                 text_for(LanguageMode::SimplifiedChinese, key),

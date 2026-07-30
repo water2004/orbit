@@ -442,13 +442,11 @@ pub enum TaskState {
 pub struct TaskView {
     pub id: u64,
     pub label: String,
-    pub command: String,
     pub state: TaskState,
     pub phase: Option<ProgressPhase>,
     pub completed: Option<u64>,
     pub total: Option<u64>,
     pub status_line: String,
-    pub log: Vec<String>,
     pub error_code: Option<String>,
     pub error_message: Option<String>,
 }
@@ -460,17 +458,15 @@ pub struct PendingInteraction {
 }
 
 impl TaskView {
-    pub fn running(id: u64, label: String, command: String) -> Self {
+    pub fn running(id: u64, label: String) -> Self {
         Self {
             id,
             label,
-            command,
             state: TaskState::Running,
             phase: None,
             completed: None,
             total: None,
             status_line: tr!("Starting…").into_owned(),
-            log: Vec::new(),
             error_code: None,
             error_message: None,
         }

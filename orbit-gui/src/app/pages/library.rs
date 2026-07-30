@@ -358,7 +358,7 @@ fn render_updates(app: &OrbitApp, cx: &mut Context<OrbitApp>) -> impl IntoElemen
                         h_flex()
                             .gap_2()
                             .child(ui::pill(
-                                diagnostic.kind.clone(),
+                                super::activity::diagnostic_kind_label(&diagnostic.kind),
                                 cx.theme().warning.opacity(0.13),
                                 cx.theme().warning,
                             ))

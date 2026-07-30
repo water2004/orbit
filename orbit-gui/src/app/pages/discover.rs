@@ -134,7 +134,7 @@ pub(super) fn render(
                                                 .gap_2()
                                                 .items_center()
                                                 .child(div().text_lg().font_semibold().child(result.name.clone()))
-                                                .child(ui::neutral_pill(result.platform.clone(), cx))
+                                                .child(ui::neutral_pill(provider_label(&result.platform), cx))
                                                 .child(ui::pill(
                                                     compatibility,
                                                     if result.compatible == Some(false) { cx.theme().danger } else { cx.theme().success }.opacity(0.13),
@@ -186,6 +186,14 @@ pub(super) fn render(
         content,
         cx,
     )
+}
+
+fn provider_label(provider: &str) -> String {
+    match provider {
+        "modrinth" => "Modrinth".to_string(),
+        "curseforge" => "CurseForge".to_string(),
+        other => other.to_string(),
+    }
 }
 
 fn compact_number(value: u64) -> String {

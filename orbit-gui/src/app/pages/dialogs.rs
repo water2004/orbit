@@ -69,8 +69,6 @@ pub(super) fn render_runtime_rename(
 
 pub(super) fn render_package_add(app: &OrbitApp, cx: &mut Context<OrbitApp>) -> impl IntoElement {
     let form = app.package_add.as_ref().expect("checked").clone();
-    let version_input = app.inputs.add_version.clone();
-    let version_read = version_input.clone();
     let project = form.project.clone();
     let environment = form.environment;
     let environments = [
@@ -116,12 +114,20 @@ pub(super) fn render_package_add(app: &OrbitApp, cx: &mut Context<OrbitApp>) -> 
                                 })),
                         ),
                 )
-                .child(ui::field(
-                    tr!("Version requirement").into_owned(),
-                    tr!("Leave empty to accept any compatible JAR-declared version").into_owned(),
-                    &version_input,
-                    cx,
-                ))
+                .child(
+                    ui::compact_card(cx)
+                        .child(
+                            div()
+                                .font_semibold()
+                                .child(tr!("Compatible version selected automatically").into_owned()),
+                        )
+                        .child(
+                            div()
+                                .text_sm()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(tr!("Orbit analyzes every JAR candidate and presents incomparable dependency plans before applying one. You can refine the version policy visually after adding the package.").into_owned()),
+                        ),
+                )
                 .child(ui::section_title(
                     tr!("Environment filter").into_owned(),
                     tr!("This filters the managed package; it does not rewrite JAR metadata")
@@ -171,18 +177,14 @@ pub(super) fn render_package_add(app: &OrbitApp, cx: &mut Context<OrbitApp>) -> 
                                 .icon(OrbitIcon::Plus)
                                 .label(tr!("Resolve and add").into_owned())
                                 .primary()
-                                .on_click(cx.listener(move |this, _, window, cx| {
-                                    let version = version_read.read(cx).value().trim().to_string();
+                                .on_click(cx.listener(move |this, _, _, cx| {
                                     if let Some(form) = this.package_add.take() {
                                         this.add_search_result(
                                             &form.project,
-                                            version,
                                             form.environment,
                                             form.optional,
                                         );
                                     }
-                                    version_read
-                                        .update(cx, |input, cx| input.set_value("", window, cx));
                                     cx.notify();
                                 })),
                         ),
@@ -217,7 +219,7 @@ pub(super) fn render_migration_review(
                 h_flex()
                     .gap_2()
                     .items_center()
-                    .child(ui::neutral_pill(change.kind, cx))
+                    .child(super::activity::package_action_pill(&change.kind, cx))
                     .child(div().font_semibold().child(change.package))
                     .child(
                         div()
@@ -245,7 +247,10 @@ pub(super) fn render_migration_review(
                 .child(
                     h_flex()
                         .gap_2()
-                        .child(ui::neutral_pill(diagnostic.kind, cx))
+                        .child(ui::neutral_pill(
+                            super::activity::diagnostic_kind_label(&diagnostic.kind),
+                            cx,
+                        ))
                         .child(div().font_semibold().child(diagnostic.package)),
                 )
                 .children(diagnostic.facts.into_iter().map(|fact| {

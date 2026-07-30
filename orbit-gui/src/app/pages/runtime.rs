@@ -126,7 +126,7 @@ fn render_dashboard(
                 .children(detail.as_ref().map(|detail| {
                     ui::key_value(
                         tr!("Context").into_owned(),
-                        detail.context.clone(),
+                        title_case(&detail.context),
                         cx,
                     )
                 }))
@@ -138,8 +138,8 @@ fn render_dashboard(
                             "Java {} · {} · {} · {}",
                             java.major,
                             java.version,
-                            java.provider,
-                            java.platform
+                            title_case(&java.provider),
+                            presentation_token(&java.platform)
                         ),
                     ),
                     cx,
@@ -555,7 +555,10 @@ fn render_minecraft_step(
                             h_flex()
                                 .gap_2()
                                 .child(div().font_semibold().child(version.id))
-                                .child(ui::neutral_pill(title_case(&version.version_type), cx))
+                                .child(ui::neutral_pill(
+                                    minecraft_version_type_label(&version.version_type),
+                                    cx,
+                                ))
                                 .when(version.latest_release || version.latest_snapshot, |row| {
                                     row.child(ui::pill(
                                         tr!("Latest").into_owned(),
@@ -599,6 +602,25 @@ fn minecraft_version_matches_filter(version_type: &str, filter: usize) -> bool {
         3 => true,
         _ => false,
     }
+}
+
+fn minecraft_version_type_label(version_type: &str) -> String {
+    match version_type {
+        "release" => tr!("Release").into_owned(),
+        "snapshot" => tr!("Snapshot").into_owned(),
+        "old_alpha" => tr!("Historical alpha").into_owned(),
+        "old_beta" => tr!("Historical beta").into_owned(),
+        other => presentation_token(other),
+    }
+}
+
+fn presentation_token(value: &str) -> String {
+    value
+        .split(['-', '_'])
+        .filter(|part| !part.is_empty())
+        .map(title_case)
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn render_components_step(
@@ -991,7 +1013,9 @@ fn with_extension(mut path: std::path::PathBuf, extension: &str) -> std::path::P
 
 #[cfg(test)]
 mod tests {
-    use super::{archive_name, minecraft_version_matches_filter, with_extension};
+    use super::{
+        archive_name, minecraft_version_matches_filter, presentation_token, with_extension,
+    };
 
     #[test]
     fn minecraft_channels_are_not_conflated() {
@@ -1002,6 +1026,11 @@ mod tests {
         assert!(minecraft_version_matches_filter("old_alpha", 2));
         assert!(minecraft_version_matches_filter("release", 3));
         assert!(!minecraft_version_matches_filter("release", 99));
+    }
+
+    #[test]
+    fn protocol_tokens_are_presented_as_words() {
+        assert_eq!(presentation_token("windows-x64"), "Windows X64");
     }
 
     #[test]
