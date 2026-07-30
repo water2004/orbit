@@ -514,11 +514,15 @@ provider 兼容声明，也不修改 manifest、lockfile、下载缓存或实例
 `--min-risk` 只控制 stdout 展示；`--fail-on-risk` 在完整分析后按 `risk_index`
 阈值决定是否返回非零退出码。`risk_index` 是 0–100 的排序值，不是不兼容概率。
 `--mod` 只匹配已安装 Mod 的 ID、展示名或文件名并过滤文本/JSON stdout；没有匹配项
-会明确报错，但有匹配项时分析仍加载完整实例。默认文本把环境、覆盖率、warning、风险
+会明确报错，但有匹配项时分析仍加载完整实例。默认文本把环境、runtime namespace、
+实际选中的 Mixin/FML 审计能力、覆盖率、warning、风险
 及 behavioral interaction 分类和风险详情渲染为自适应表格，只展示排序最高的 20 条
 风险且不展开 coverage/inactive/warning/evidence 明细；每条风险使用两列详情布局，
 非 TTY 输出最大 120 列。
 `--limit` 调整展示数量。
+
+GUI 通过同一个 `audit --output-format json` 路径渲染 Loader 能力、namespace、风险以及
+warning/coverage gap 的结构化预览；GUI 不自行解析 JAR，也不维护第二套兼容性判断。
 
 `--output-format json` 保留完整 evidence（audit 子 schema 5）。显式 `--report <path>` 额外写入
 未按文本 limit、risk threshold 或 mod 过滤截断的完整结构化报告；默认模式不创建报告文件。

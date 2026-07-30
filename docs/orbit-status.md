@@ -40,7 +40,7 @@
 | Loader JSON 容错 | ✅ | Fabric-compatible 字符串控制字符；仅限 JAR 内 loader/Mixin/refmap，其他 JSON 保持严格 |
 | 字节码运行时符号对齐 | ✅ | Fabric/Quilt 按实际 Tiny/identity 能力选择 official 或投影，不复制版本边界；Forge/NeoForge 验证 Loader runtime game；未对齐时在 finding 前停止 |
 | i18n | ✅ | `orbit`、`orbit-launcher` 与 GUI 共用 `system`（默认）/`en`/`zh-CN` 语言模型；CLI help、文本结果、进度、询问和结构化错误均在展示边界翻译，机器字段保持稳定 |
-| 原生 GUI | ✅ | GPUI + gpui-component 原生进程薄壳；统一 SVG/EXE 品牌标志、领域化侧栏图标、紧凑任务条、可点击外部关闭且双向过渡的 Activity 抽屉、连续触控板滚动、语言/主题/强调色；Runtime 先导出再创建的新实例迁移、可取消且有字节进度的 Orbit ZIP/Modrinth mrpack 导入导出、Java、Mods、audit、account/server；设置页只经两套 schema 2 CLI 管理 Launcher/Orbit 配置和客户端仓库，不链接 core 或直读业务 TOML |
+| 原生 GUI | ✅ | GPUI + gpui-component 原生进程薄壳；统一 SVG/EXE 品牌标志、领域化侧栏图标、紧凑任务条、可点击外部关闭且双向过渡的 Activity 抽屉、连续触控板滚动、语言/主题/强调色；Runtime 先导出再创建的新实例迁移、可取消且有字节进度的 Orbit ZIP/Modrinth mrpack 导入导出、Java、Mods、audit（Loader/namespace/实际能力与结构化 warning/coverage 预览）、account/server；设置页只经两套 schema 2 CLI 管理 Launcher/Orbit 配置和客户端仓库，不链接 core 或直读业务 TOML |
 
 ## 2. 保留的正确规范
 

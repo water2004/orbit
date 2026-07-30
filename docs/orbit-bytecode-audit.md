@@ -288,7 +288,8 @@ descriptor 已对齐，并确认目标类在当前合并阶段没有直接声明
 
 ## 8. 文本与详细报告
 
-默认文本以自适应表格显示 runtime namespace/mapping/alignment、四类摘要计数、风险
+默认文本以自适应表格显示 runtime namespace/mapping/alignment、实际选中的 Mixin/FML
+审计能力、四类摘要计数、风险
 总数和排序最高的前 20 项。coverage、inactive、Plugin 路径、warning/selector 明细只
 进入 JSON，避免在正常终端中制造数百行诊断噪声。
 每条风险使用“编号/详情”两列，
@@ -309,6 +310,11 @@ interactions、inactive_candidates、coverage_gaps、coverage 和 warnings。
 路径/哈希/namespaces、Loader artifact units、alignment、类/方法/字段 mapping
 覆盖率与探测证据。涉及投影的 transformation/risk evidence 同时记录 original symbol、
 runtime symbol、mapping source 和 confidence。
+
+GUI 只消费同一个 CLI JSON 报告，不链接 audit/core。页面把 Loader、runtime namespace
+和实际能力单独呈现，并结构化预览 warning 与 coverage gap；每类最多显示前 8 项，剩余
+数量明确提示用户导出完整报告。它不会把原始 JSON、内部哈希或 ClassFile 偏移直接铺到
+界面，也不会把 coverage gap 当成兼容性风险。
 
 ## 9. Coverage 与安全预算
 
