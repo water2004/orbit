@@ -4,7 +4,7 @@ use uuid::Uuid;
 
 use crate::error::LauncherError;
 use crate::instance::{
-    INSTANCE_MANIFEST_FILE, InstanceKind, InstanceManifest, JavaPolicy, LoaderKind, ManifestFile,
+    INSTANCE_MANIFEST_FILE, InstanceKind, InstanceManifest, LoaderKind, ManifestFile,
     validate_instance_name,
 };
 use crate::layout::{InstanceLocation, validate_directory_name};
@@ -257,7 +257,6 @@ pub struct ConfigureInstanceRequest {
     pub minecraft_requirement: Option<String>,
     pub loader_kind: Option<LoaderKind>,
     pub loader_requirement: Option<String>,
-    pub java_policy: Option<JavaPolicy>,
 }
 
 #[derive(Debug, Clone)]
@@ -311,12 +310,6 @@ pub fn configure_instance(
             ));
         }
         manifest_file.inner.loader.requirement = Some(requirement);
-    }
-    if let Some(policy) = request.java_policy {
-        manifest_file.inner.java.policy = policy;
-        if policy == JavaPolicy::Auto {
-            manifest_file.inner.java.provider = None;
-        }
     }
     manifest_file.inner.validate()?;
     manifest_file.save()?;
@@ -522,7 +515,6 @@ mod tests {
                 minecraft_requirement: Some("1.22".to_string()),
                 loader_kind: Some(LoaderKind::Neoforge),
                 loader_requirement: Some("latest".to_string()),
-                java_policy: Some(JavaPolicy::Managed),
             },
         )
         .unwrap();
@@ -534,7 +526,6 @@ mod tests {
             configured.manifest.loader.requirement.as_deref(),
             Some("latest")
         );
-        assert_eq!(configured.manifest.java.policy, JavaPolicy::Managed);
         assert_eq!(
             InstanceRegistry::load(&paths.instances_file())
                 .unwrap()

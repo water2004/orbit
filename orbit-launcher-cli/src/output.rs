@@ -95,7 +95,6 @@ impl InstanceDetailView {
                 minecraft: manifest.minecraft.requirement.clone(),
                 loader: manifest.loader.kind.as_str().to_string(),
                 loader_version: manifest.loader.requirement.clone(),
-                java_policy: manifest.java.policy.as_str().to_string(),
             },
             installed: installed.map(InstalledRuntimeView::from),
             selected_account_id: manifest.launch.account.map(|account| account.to_string()),
@@ -146,7 +145,6 @@ pub struct DesiredRuntimeView {
     pub minecraft: String,
     pub loader: String,
     pub loader_version: Option<String>,
-    pub java_policy: String,
 }
 
 #[derive(Debug, Serialize)]

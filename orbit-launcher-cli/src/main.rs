@@ -444,10 +444,6 @@ fn render_text(output: app::CommandOutput) {
                     version = loader_version
                 )
             );
-            println!(
-                "  {}",
-                tr!("Java: %{policy}", policy = tr!(&view.desired.java_policy))
-            );
         }
         app::CommandOutput::InstanceMutation(view) => {
             println!(
@@ -496,13 +492,6 @@ fn render_text(output: app::CommandOutput) {
                         .desired
                         .loader_version
                         .unwrap_or_else(|| tr!("managed").into_owned())
-                )
-            );
-            println!(
-                "  {}",
-                tr!(
-                    "Java policy: %{policy}",
-                    policy = tr!(&view.desired.java_policy)
                 )
             );
         }

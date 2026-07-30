@@ -81,29 +81,6 @@ impl FromStr for LoaderKind {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "kebab-case")]
-pub enum JavaPolicy {
-    #[default]
-    Auto,
-    Managed,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum JavaProvider {
-    Mojang,
-}
-
-impl JavaPolicy {
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Auto => "auto",
-            Self::Managed => "managed",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "kebab-case")]
 pub enum RestartPolicy {
     Never,
     #[default]
@@ -120,8 +97,6 @@ pub struct InstanceManifest {
     pub kind: InstanceKind,
     pub minecraft: MinecraftConfig,
     pub loader: LoaderConfig,
-    #[serde(default)]
-    pub java: JavaConfig,
     #[serde(default)]
     pub launch: LaunchConfig,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -149,7 +124,6 @@ impl InstanceManifest {
                 kind: loader_kind,
                 requirement: loader_requirement,
             },
-            java: JavaConfig::default(),
             launch: LaunchConfig::default(),
             server: (kind == InstanceKind::Server).then(ServerConfig::default),
         };
@@ -207,7 +181,6 @@ impl InstanceManifest {
         if let Some(server) = &self.server {
             server.validate()?;
         }
-        self.java.validate()?;
         Ok(())
     }
 }
@@ -252,34 +225,6 @@ pub struct LoaderConfig {
     pub kind: LoaderKind,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub requirement: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-pub struct JavaConfig {
-    pub policy: JavaPolicy,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub provider: Option<JavaProvider>,
-}
-
-impl JavaConfig {
-    fn validate(&self) -> Result<(), LauncherError> {
-        match self.policy {
-            JavaPolicy::Auto if self.provider.is_some() => Err(LauncherError::InvalidManifest(
-                "java policy auto cannot specify a provider".to_string(),
-            )),
-            _ => Ok(()),
-        }
-    }
-}
-
-impl Default for JavaConfig {
-    fn default() -> Self {
-        Self {
-            policy: JavaPolicy::Auto,
-            provider: None,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -529,16 +474,16 @@ mod tests {
             None,
         )
         .unwrap();
-        let document = toml::to_string(&manifest).unwrap().replace(
-            "policy = \"auto\"",
-            "policy = \"system\"\npath = \"C:/java/bin/java.exe\"",
+        let document = format!(
+            "{}\n[java]\npolicy = \"system\"\npath = \"C:/java/bin/java.exe\"\n",
+            toml::to_string(&manifest).unwrap()
         );
 
         assert!(toml::from_str::<InstanceManifest>(&document).is_err());
 
-        let unsupported_provider = toml::to_string(&manifest).unwrap().replace(
-            "policy = \"auto\"",
-            "policy = \"managed\"\nprovider = \"temurin\"",
+        let unsupported_provider = format!(
+            "{}\n[java]\npolicy = \"managed\"\nprovider = \"temurin\"\n",
+            toml::to_string(&manifest).unwrap()
         );
         assert!(toml::from_str::<InstanceManifest>(&unsupported_provider).is_err());
     }

@@ -72,8 +72,7 @@ pub use installer::{
     resolve_loader_installer, run_loader_installer,
 };
 pub use instance::{
-    INSTANCE_MANIFEST_FILE, InstanceKind, InstanceManifest, JavaPolicy, JavaProvider, LoaderKind,
-    ManifestFile, RestartPolicy,
+    INSTANCE_MANIFEST_FILE, InstanceKind, InstanceManifest, LoaderKind, ManifestFile, RestartPolicy,
 };
 pub use java::{
     InstalledJavaRuntime, JavaProgressEvent, JavaTarget, MOJANG_RUNTIME_MANIFEST_URL,

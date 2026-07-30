@@ -337,7 +337,7 @@ pub enum InstanceCommands {
     /// Rename the explicit or local instance.
     Rename { new_name: String },
 
-    /// Change desired Minecraft, loader, or Java policy before installing.
+    /// Change desired Minecraft or Loader before installing.
     Configure {
         #[arg(long)]
         minecraft: Option<String>,
@@ -345,8 +345,6 @@ pub enum InstanceCommands {
         loader: Option<LoaderKindArg>,
         #[arg(long)]
         loader_version: Option<String>,
-        #[arg(long, value_enum)]
-        java_policy: Option<JavaPolicyArg>,
     },
 
     /// Unregister the explicit or local instance without deleting its files.
@@ -400,21 +398,6 @@ pub enum LoaderKindArg {
     Quilt,
     Forge,
     Neoforge,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
-pub enum JavaPolicyArg {
-    Auto,
-    Managed,
-}
-
-impl From<JavaPolicyArg> for orbit_launcher_core::JavaPolicy {
-    fn from(value: JavaPolicyArg) -> Self {
-        match value {
-            JavaPolicyArg::Auto => Self::Auto,
-            JavaPolicyArg::Managed => Self::Managed,
-        }
-    }
 }
 
 impl From<LoaderKindArg> for orbit_launcher_core::LoaderKind {
@@ -596,8 +579,6 @@ mod tests {
             "fabric",
             "--loader-version",
             "stable",
-            "--java-policy",
-            "managed",
         ])
         .unwrap();
         assert!(matches!(
@@ -605,7 +586,6 @@ mod tests {
             Commands::Instance {
                 command: InstanceCommands::Configure {
                     loader: Some(LoaderKindArg::Fabric),
-                    java_policy: Some(JavaPolicyArg::Managed),
                     ..
                 }
             }

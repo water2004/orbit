@@ -1387,13 +1387,8 @@ fn execute_instance(
             minecraft,
             loader,
             loader_version,
-            java_policy,
         } => {
-            if minecraft.is_none()
-                && loader.is_none()
-                && loader_version.is_none()
-                && java_policy.is_none()
-            {
+            if minecraft.is_none() && loader.is_none() && loader_version.is_none() {
                 return Err(AppError::Argument(
                     "instance configure requires at least one desired runtime option".to_string(),
                 ));
@@ -1408,7 +1403,6 @@ fn execute_instance(
                     minecraft_requirement: minecraft,
                     loader_kind: loader.map(Into::into),
                     loader_requirement: loader_version,
-                    java_policy: java_policy.map(Into::into),
                 },
             )?;
             let installed = orbit_launcher_core::LockFile::open_optional(
