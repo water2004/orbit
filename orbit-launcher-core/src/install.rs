@@ -1,10 +1,11 @@
 use std::collections::{BTreeMap, HashSet};
-use std::fs::OpenOptions;
+use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use fs2::FileExt;
 use futures_util::{StreamExt, stream};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -35,7 +36,7 @@ use crate::loader::{LoaderSide, ResolvedLoaderProfile, resolve_loader_profile};
 use crate::lockfile::{
     ArtifactOwner, INSTANCE_LOCK_FILE, LOCK_SCHEMA, LauncherLock, LockFile, LockedArguments,
     LockedArtifact, LockedArtifactSource, LockedAuthlibInjector, LockedEntrypoint, LockedLoader,
-    LockedMinecraft,
+    LockedMinecraft, portable_relative_path,
 };
 use crate::mojang::{MojangClient, ResolvedVanillaServer, VERSION_MANIFEST_V2_URL};
 use crate::platform::HostPlatform;
@@ -1528,6 +1529,7 @@ struct TransactionJournal {
     phase: String,
     write_files: Vec<String>,
     remove_files: Vec<String>,
+    reused_files: Vec<String>,
 }
 
 struct InstallTransaction {
@@ -1538,6 +1540,7 @@ struct InstallTransaction {
     lock_relative: String,
     owned_prefix: Option<String>,
     id: Uuid,
+    _lock: File,
 }
 
 impl InstallTransaction {
@@ -1546,6 +1549,27 @@ impl InstallTransaction {
         let instance_root = location.instance_directory();
         let state = instance_root.join(STATE_DIRECTORY);
         std::fs::create_dir_all(&state)?;
+        let lock_path = state.join(TRANSACTION_LOCK);
+        let mut lock = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&lock_path)
+            .map_err(|error| {
+                LauncherError::Transaction(format!(
+                    "cannot open instance transaction lock '{}': {error}",
+                    lock_path.display()
+                ))
+            })?;
+        FileExt::try_lock_exclusive(&lock).map_err(|error| {
+            LauncherError::Transaction(format!(
+                "another install transaction holds '{}': {error}",
+                lock_path.display()
+            ))
+        })?;
+        recover_abandoned_transaction(root, &state)?;
+
         let id = Uuid::new_v4();
         let identity = TransactionIdentity {
             schema: 1,
@@ -1555,20 +1579,10 @@ impl InstallTransaction {
             executable: std::env::current_exe()?,
             command: command.to_string(),
         };
-        let lock_path = state.join(TRANSACTION_LOCK);
-        let mut lock = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&lock_path)
-            .map_err(|error| {
-                LauncherError::Transaction(format!(
-                    "cannot acquire instance transaction lock '{}': {error}; run repair instead of deleting it blindly",
-                    lock_path.display()
-                ))
-            })?;
         let identity_bytes = serde_json::to_vec_pretty(&identity).map_err(|error| {
             LauncherError::Transaction(format!("cannot serialize transaction identity: {error}"))
         })?;
+        lock.set_len(0)?;
         lock.write_all(&identity_bytes)?;
         lock.flush()?;
         lock.sync_all()?;
@@ -1595,6 +1609,7 @@ impl InstallTransaction {
                 InstanceLocation::Server { .. } => None,
             },
             id,
+            _lock: lock,
         })
     }
 
@@ -1644,12 +1659,15 @@ impl InstallTransaction {
                 reused.insert(relative.clone());
             }
         }
+        let mut reused_files: Vec<_> = reused.iter().cloned().collect();
+        reused_files.sort();
         let journal = TransactionJournal {
             schema: 1,
             id: self.id,
             phase: "committing".to_string(),
             write_files: relative_files.to_vec(),
             remove_files: stale.clone(),
+            reused_files,
         };
         write_json_atomic(&self.state.join(TRANSACTION_JOURNAL), &journal)?;
 
@@ -1706,7 +1724,6 @@ impl InstallTransaction {
         }
 
         std::fs::remove_file(self.state.join(TRANSACTION_JOURNAL))?;
-        std::fs::remove_file(self.state.join(TRANSACTION_LOCK))?;
         std::fs::remove_dir_all(&self.staging)?;
         Ok(())
     }
@@ -1715,10 +1732,6 @@ impl InstallTransaction {
         let journal = self.state.join(TRANSACTION_JOURNAL);
         if journal.exists() {
             std::fs::remove_file(journal)?;
-        }
-        let lock = self.state.join(TRANSACTION_LOCK);
-        if lock.exists() {
-            std::fs::remove_file(lock)?;
         }
         if self.staging.exists() {
             std::fs::remove_dir_all(&self.staging)?;
@@ -1731,9 +1744,113 @@ impl Drop for InstallTransaction {
     fn drop(&mut self) {
         if !self.state.join(TRANSACTION_JOURNAL).exists() {
             let _ = std::fs::remove_dir_all(&self.staging);
-            let _ = std::fs::remove_file(self.state.join(TRANSACTION_LOCK));
         }
     }
+}
+
+fn recover_abandoned_transaction(root: &Path, state: &Path) -> Result<(), LauncherError> {
+    let staging_root = state.join("staging");
+    let journal_path = state.join(TRANSACTION_JOURNAL);
+    if !journal_path.exists() {
+        if staging_root.exists() {
+            std::fs::remove_dir_all(staging_root)?;
+        }
+        return Ok(());
+    }
+
+    let journal: TransactionJournal = serde_json::from_slice(&std::fs::read(&journal_path)?)
+        .map_err(|error| {
+            LauncherError::Transaction(format!(
+                "cannot parse abandoned transaction journal '{}': {error}",
+                journal_path.display()
+            ))
+        })?;
+    if journal.schema != 1 || journal.phase != "committing" {
+        return Err(LauncherError::Transaction(format!(
+            "abandoned transaction journal '{}' has unsupported schema {} or phase '{}'",
+            journal_path.display(),
+            journal.schema,
+            journal.phase
+        )));
+    }
+    validate_transaction_journal(&journal)?;
+
+    let staging = staging_root.join(journal.id.to_string());
+    if !staging.is_dir() {
+        return Err(LauncherError::Transaction(format!(
+            "abandoned transaction staging directory '{}' is missing",
+            staging.display()
+        )));
+    }
+    let reused: HashSet<_> = journal.reused_files.iter().map(String::as_str).collect();
+    let backup_root = staging.join("backup");
+    for relative in &journal.write_files {
+        let target = transaction_path(root, relative)?;
+        let source = transaction_path(&staging, relative)?;
+        let backup = transaction_path(&backup_root, relative)?;
+        if backup.is_file() {
+            replace_with_backup(&target, &backup)?;
+        } else if !source.exists() && !reused.contains(relative.as_str()) && target.exists() {
+            std::fs::remove_file(&target)?;
+        }
+    }
+    for relative in &journal.remove_files {
+        let target = transaction_path(root, relative)?;
+        let backup = transaction_path(&backup_root, relative)?;
+        if backup.is_file() {
+            replace_with_backup(&target, &backup)?;
+        }
+    }
+
+    std::fs::remove_file(journal_path)?;
+    std::fs::remove_dir_all(staging_root)?;
+    Ok(())
+}
+
+fn validate_transaction_journal(journal: &TransactionJournal) -> Result<(), LauncherError> {
+    let writes: HashSet<_> = journal.write_files.iter().collect();
+    let removals: HashSet<_> = journal.remove_files.iter().collect();
+    let reused: HashSet<_> = journal.reused_files.iter().collect();
+    if writes.len() != journal.write_files.len()
+        || removals.len() != journal.remove_files.len()
+        || reused.len() != journal.reused_files.len()
+        || !writes.is_disjoint(&removals)
+        || !reused.is_subset(&writes)
+    {
+        return Err(LauncherError::Transaction(
+            "abandoned transaction journal contains inconsistent file sets".to_string(),
+        ));
+    }
+    for relative in journal
+        .write_files
+        .iter()
+        .chain(&journal.remove_files)
+        .chain(&journal.reused_files)
+    {
+        transaction_path(Path::new("."), relative)?;
+    }
+    Ok(())
+}
+
+fn transaction_path(root: &Path, relative: &str) -> Result<PathBuf, LauncherError> {
+    let normalized = portable_relative_path(Path::new(relative))?;
+    if normalized != relative {
+        return Err(LauncherError::Transaction(format!(
+            "transaction path '{relative}' is not normalized"
+        )));
+    }
+    Ok(root.join(relative))
+}
+
+fn replace_with_backup(target: &Path, backup: &Path) -> Result<(), LauncherError> {
+    if target.exists() {
+        std::fs::remove_file(target)?;
+    }
+    if let Some(parent) = target.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::rename(backup, target)?;
+    Ok(())
 }
 
 fn load_previous_owned_paths(root: &Path) -> Result<HashSet<String>, LauncherError> {
@@ -1903,6 +2020,77 @@ mod tests {
         assert!(InstallTransaction::begin(&location, "second").is_err());
         drop(first);
         assert!(InstallTransaction::begin(&location, "third").is_ok());
+    }
+
+    #[test]
+    fn next_transaction_rolls_back_an_abandoned_commit_journal() {
+        let directory = tempfile::tempdir().unwrap();
+        let state = directory.path().join(STATE_DIRECTORY);
+        let id = Uuid::new_v4();
+        let staging = state.join("staging").join(id.to_string());
+        write_staged_file(&staging.join("backup"), "replaced.jar", b"old").unwrap();
+        write_staged_file(&staging.join("backup"), "removed.jar", b"removed").unwrap();
+        std::fs::write(directory.path().join("replaced.jar"), b"new").unwrap();
+        std::fs::write(directory.path().join("created.jar"), b"created").unwrap();
+        std::fs::write(directory.path().join("shared.jar"), b"shared").unwrap();
+        write_json_atomic(
+            &state.join(TRANSACTION_JOURNAL),
+            &TransactionJournal {
+                schema: 1,
+                id,
+                phase: "committing".to_string(),
+                write_files: vec![
+                    "replaced.jar".to_string(),
+                    "created.jar".to_string(),
+                    "shared.jar".to_string(),
+                ],
+                remove_files: vec!["removed.jar".to_string()],
+                reused_files: vec!["shared.jar".to_string()],
+            },
+        )
+        .unwrap();
+
+        let transaction =
+            InstallTransaction::begin(&server_location(directory.path()), "recover").unwrap();
+
+        assert_eq!(
+            std::fs::read(directory.path().join("replaced.jar")).unwrap(),
+            b"old"
+        );
+        assert_eq!(
+            std::fs::read(directory.path().join("removed.jar")).unwrap(),
+            b"removed"
+        );
+        assert_eq!(
+            std::fs::read(directory.path().join("shared.jar")).unwrap(),
+            b"shared"
+        );
+        assert!(!directory.path().join("created.jar").exists());
+        assert!(!state.join(TRANSACTION_JOURNAL).exists());
+        drop(transaction);
+    }
+
+    #[test]
+    fn abandoned_transaction_paths_are_validated_before_recovery() {
+        let directory = tempfile::tempdir().unwrap();
+        let state = directory.path().join(STATE_DIRECTORY);
+        let id = Uuid::new_v4();
+        std::fs::create_dir_all(state.join("staging").join(id.to_string())).unwrap();
+        write_json_atomic(
+            &state.join(TRANSACTION_JOURNAL),
+            &TransactionJournal {
+                schema: 1,
+                id,
+                phase: "committing".to_string(),
+                write_files: vec!["../outside.jar".to_string()],
+                remove_files: Vec::new(),
+                reused_files: Vec::new(),
+            },
+        )
+        .unwrap();
+
+        assert!(InstallTransaction::begin(&server_location(directory.path()), "recover").is_err());
+        assert!(state.join(TRANSACTION_JOURNAL).exists());
     }
 
     #[test]
