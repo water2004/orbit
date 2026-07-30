@@ -45,6 +45,7 @@ use crate::runtime::RuntimePaths;
 const STATE_DIRECTORY: &str = ".orbit-launcher";
 const TRANSACTION_LOCK: &str = "transaction.lock";
 const TRANSACTION_JOURNAL: &str = "transaction.json";
+const SERVER_SETTINGS_JAR: &str = ".orbit-launcher-server-settings.jar";
 
 #[derive(Debug, Clone)]
 pub struct ServerInstallPlan {
@@ -160,6 +161,9 @@ pub enum InstallProgressEvent {
     Artifact(ArtifactTransferEvent),
     Java(JavaProgressEvent),
     LoaderInstaller(LoaderInstallerEvent),
+    ServerSettingsInitialized {
+        properties: usize,
+    },
     StagingVerified,
     Committed,
 }
@@ -871,6 +875,7 @@ where
     let mut cached = java.cached_artifacts;
     let mut installer_producer = None;
     let installer_loader = matches!(&plan.loader, PlannedLoader::Installer(_));
+    let server_settings_request = plan.resolved.server.clone();
     let (loader, entrypoint, arguments, mut downloads) = match plan.loader {
         PlannedLoader::Vanilla => server_profile_parts(&plan.resolved, None)?,
         PlannedLoader::Profile(profile) => server_profile_parts(&plan.resolved, Some(profile))?,
@@ -927,8 +932,15 @@ where
     };
     if !installer_loader {
         downloads.push(ClientDownload {
-            request: plan.resolved.server.clone(),
+            request: server_settings_request,
             target: "server.jar".to_string(),
+            owner: ArtifactOwner::Minecraft,
+            native_extract: None,
+        });
+    } else {
+        downloads.push(ClientDownload {
+            request: server_settings_request,
+            target: SERVER_SETTINGS_JAR.to_string(),
             owner: ArtifactOwner::Minecraft,
             native_extract: None,
         });
@@ -971,19 +983,55 @@ where
     let mut locked_artifacts = Vec::new();
     for (target, (download, artifact)) in &artifacts {
         cache.materialize(artifact, &transaction.staging.join(target))?;
-        locked_artifacts.push(locked_artifact(download, artifact));
+        if target != SERVER_SETTINGS_JAR {
+            locked_artifacts.push(locked_artifact(download, artifact));
+        }
     }
-    if let Some((installer_sha256, logical_name)) = installer_producer {
-        let excluded: HashSet<_> = locked_artifacts
+    if let Some((installer_sha256, logical_name)) = installer_producer.as_ref() {
+        let mut excluded: HashSet<_> = locked_artifacts
             .iter()
             .map(|artifact| artifact.path.clone())
             .collect();
+        excluded.insert(SERVER_SETTINGS_JAR.to_string());
         locked_artifacts.extend(collect_installer_outputs(
             &transaction.staging,
             &excluded,
-            &installer_sha256,
-            &logical_name,
+            installer_sha256,
+            logical_name,
         )?);
+    }
+    let settings_jar = if installer_loader {
+        SERVER_SETTINGS_JAR
+    } else {
+        "server.jar"
+    };
+    let properties = initialize_server_settings(
+        &java.root.join(&java.locked.executable),
+        &transaction.staging,
+        settings_jar,
+        std::time::Duration::from_secs(installer_timeout_seconds),
+    )
+    .await?;
+    emit_install(
+        &progress,
+        InstallProgressEvent::ServerSettingsInitialized { properties },
+    )?;
+    if installer_loader {
+        std::fs::remove_file(transaction.staging.join(SERVER_SETTINGS_JAR))?;
+    }
+    let existing_properties = instance_root.join("server.properties");
+    if existing_properties.exists() {
+        let metadata = std::fs::symlink_metadata(&existing_properties)?;
+        if metadata.file_type().is_symlink() || !metadata.is_file() {
+            return Err(LauncherError::Transaction(format!(
+                "existing server.properties '{}' is not a regular file",
+                existing_properties.display()
+            )));
+        }
+        std::fs::copy(
+            existing_properties,
+            transaction.staging.join("server.properties"),
+        )?;
     }
     locked_artifacts.sort_by(|left, right| left.path.cmp(&right.path));
     std::fs::write(transaction.staging.join("eula.txt"), b"eula=true\n")?;
@@ -1007,7 +1055,7 @@ where
         entrypoint,
         arguments,
         artifacts: locked_artifacts,
-        generated_files: vec!["eula.txt".to_string()],
+        generated_files: vec!["eula.txt".to_string(), "server.properties".to_string()],
         eula: Some(acceptance),
     };
     lock.validate()?;
@@ -1506,8 +1554,84 @@ fn verify_staged_server(
             "staged eula.txt is invalid".to_string(),
         ));
     }
+    let properties_path = staging.join("server.properties");
+    let properties = java_properties::read(std::io::BufReader::new(std::fs::File::open(
+        &properties_path,
+    )?))
+    .map_err(|error| {
+        LauncherError::Transaction(format!(
+            "staged server.properties '{}' is invalid: {error}",
+            properties_path.display()
+        ))
+    })?;
+    if properties.is_empty() {
+        return Err(LauncherError::Transaction(
+            "staged server.properties contains no properties".to_string(),
+        ));
+    }
     LockFile::open(staged_instance)?;
     Ok(())
+}
+
+async fn initialize_server_settings(
+    java: &Path,
+    staging: &Path,
+    server_jar: &str,
+    timeout: std::time::Duration,
+) -> Result<usize, LauncherError> {
+    let output = tokio::time::timeout(
+        timeout,
+        tokio::process::Command::new(java)
+            .arg("-jar")
+            .arg(server_jar)
+            .arg("--initSettings")
+            .current_dir(staging)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .output(),
+    )
+    .await
+    .map_err(|_| {
+        LauncherError::Transaction(format!(
+            "Minecraft server settings initialization exceeded {} seconds",
+            timeout.as_secs()
+        ))
+    })??;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let detail = stderr.lines().take(8).collect::<Vec<_>>().join(" | ");
+        return Err(LauncherError::UnsupportedRequirement(format!(
+            "the selected Minecraft server could not initialize its own settings with --initSettings (exit {}): {}",
+            output.status,
+            if detail.is_empty() {
+                "no diagnostic output".to_string()
+            } else {
+                detail
+            }
+        )));
+    }
+    let properties_path = staging.join("server.properties");
+    if !properties_path.is_file() {
+        return Err(LauncherError::UnsupportedRequirement(
+            "the selected Minecraft server does not provide server.properties through --initSettings"
+                .to_string(),
+        ));
+    }
+    let properties = java_properties::read(std::io::BufReader::new(std::fs::File::open(
+        &properties_path,
+    )?))
+    .map_err(|error| {
+        LauncherError::InvalidRemoteData(format!(
+            "Minecraft generated an invalid server.properties: {error}"
+        ))
+    })?;
+    if properties.is_empty() {
+        return Err(LauncherError::InvalidRemoteData(
+            "Minecraft generated an empty server.properties".to_string(),
+        ));
+    }
+    Ok(properties.len())
 }
 
 #[derive(Debug, Serialize, Deserialize)]

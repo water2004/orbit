@@ -5,8 +5,8 @@ use orbit_launcher_core::{
     ContextSource, InstallProgressEvent, InstallerOutputStream, InstallerSide, InstanceManifest,
     JavaProgressEvent, LaunchOutputStream, LaunchPlanSummary, LaunchPreparationEvent,
     LaunchProcessEvent, LaunchResult, LoaderInstallerEvent, MicrosoftDeviceSession,
-    MicrosoftLoginProgressEvent, RegistryEntry, RepositoryMoveEvent, SupervisorEvent,
-    SupervisorResult,
+    MicrosoftLoginProgressEvent, RegistryEntry, RepositoryMoveEvent, StateArchiveProgressEvent,
+    SupervisorEvent, SupervisorResult,
 };
 use serde::Serialize;
 
@@ -273,6 +273,56 @@ pub struct InstanceMutationView {
     pub files_deleted: bool,
 }
 
+#[derive(Debug, Serialize)]
+pub struct LauncherStateExportView {
+    pub path: PathBuf,
+    pub kind: String,
+    pub minecraft_version: String,
+    pub files: usize,
+    pub bytes: u64,
+    pub world_files: usize,
+}
+
+impl From<orbit_launcher_core::LauncherStateExportReport> for LauncherStateExportView {
+    fn from(report: orbit_launcher_core::LauncherStateExportReport) -> Self {
+        Self {
+            path: report.path,
+            kind: report.kind.as_str().to_string(),
+            minecraft_version: report.minecraft_version,
+            files: report.files,
+            bytes: report.bytes,
+            world_files: report.world_files,
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct LauncherStateRestoreView {
+    pub kind: String,
+    pub source_minecraft_version: String,
+    pub target_minecraft_version: String,
+    pub files: usize,
+    pub bytes: u64,
+    pub world_files: usize,
+    pub restored_properties: usize,
+    pub skipped_properties: Vec<String>,
+}
+
+impl From<orbit_launcher_core::LauncherStateRestoreReport> for LauncherStateRestoreView {
+    fn from(report: orbit_launcher_core::LauncherStateRestoreReport) -> Self {
+        Self {
+            kind: report.kind.as_str().to_string(),
+            source_minecraft_version: report.source_minecraft_version,
+            target_minecraft_version: report.target_minecraft_version,
+            files: report.files,
+            bytes: report.bytes,
+            world_files: report.world_files,
+            restored_properties: report.restored_properties,
+            skipped_properties: report.skipped_properties,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum InstanceMutationAction {
@@ -405,6 +455,8 @@ pub struct InstallView {
     pub eula_digest_sha256: Option<String>,
     pub downloaded_artifacts: usize,
     pub cached_artifacts: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub state: Option<LauncherStateRestoreView>,
 }
 
 #[derive(Debug, Serialize)]
@@ -662,6 +714,23 @@ pub enum ProgressData {
         loader: String,
         version: String,
     },
+    ServerSettingsInitialized {
+        properties: usize,
+    },
+    StateArchiveStarted {
+        files: usize,
+        completed: u64,
+        total: u64,
+    },
+    StateArchiveAdvanced {
+        completed: u64,
+        total: u64,
+    },
+    StateArchiveFinished {
+        files: usize,
+        completed: u64,
+        total: u64,
+    },
     StagingVerified,
     Committed,
     MicrosoftAuthorizationPolling {
@@ -756,6 +825,9 @@ impl From<InstallProgressEvent> for ProgressData {
             InstallProgressEvent::Artifact(event) => Self::from_artifact(event),
             InstallProgressEvent::Java(event) => Self::from_java(event),
             InstallProgressEvent::LoaderInstaller(event) => Self::from_installer(event),
+            InstallProgressEvent::ServerSettingsInitialized { properties } => {
+                Self::ServerSettingsInitialized { properties }
+            }
             InstallProgressEvent::StagingVerified => Self::StagingVerified,
             InstallProgressEvent::Committed => Self::Committed,
         }
@@ -763,6 +835,32 @@ impl From<InstallProgressEvent> for ProgressData {
 }
 
 impl ProgressData {
+    pub fn from_state_archive(event: StateArchiveProgressEvent) -> Self {
+        match event {
+            StateArchiveProgressEvent::Started { files, total_bytes } => {
+                Self::StateArchiveStarted {
+                    files,
+                    completed: 0,
+                    total: total_bytes,
+                }
+            }
+            StateArchiveProgressEvent::Advanced {
+                completed_bytes,
+                total_bytes,
+            } => Self::StateArchiveAdvanced {
+                completed: completed_bytes,
+                total: total_bytes,
+            },
+            StateArchiveProgressEvent::Finished { files, total_bytes } => {
+                Self::StateArchiveFinished {
+                    files,
+                    completed: total_bytes,
+                    total: total_bytes,
+                }
+            }
+        }
+    }
+
     pub const fn phase(&self) -> ProgressPhase {
         match self {
             Self::MetadataStarted | Self::MinecraftResolved { .. } => ProgressPhase::Metadata,
@@ -780,6 +878,10 @@ impl ProgressData {
             | Self::LoaderInstallerOutput { .. }
             | Self::LoaderInstallerOutputSuppressed { .. }
             | Self::LoaderInstallerFinished { .. } => ProgressPhase::Loader,
+            Self::ServerSettingsInitialized { .. } => ProgressPhase::Metadata,
+            Self::StateArchiveStarted { .. }
+            | Self::StateArchiveAdvanced { .. }
+            | Self::StateArchiveFinished { .. } => ProgressPhase::Export,
             Self::StagingVerified | Self::Committed => ProgressPhase::Apply,
             Self::MicrosoftAuthorizationPolling { .. }
             | Self::MicrosoftAuthorizationReceived

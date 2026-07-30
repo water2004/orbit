@@ -288,7 +288,7 @@ fn portable_entry_path(path: &Path) -> Option<PathBuf> {
     if components.len() == 1
         && matches!(
             components[0].as_os_str().to_str(),
-            Some("orbit.toml" | "orbit.lock" | "options.txt")
+            Some("orbit.toml" | "orbit.lock")
         )
     {
         return Some(path.to_path_buf());
@@ -695,7 +695,7 @@ pub(crate) struct PortableFile {
 pub(crate) fn portable_config_sources(
     instance_dir: &Path,
 ) -> Result<Vec<PortableFile>, OrbitError> {
-    const ROOTS: [&str; 4] = ["config", "defaultconfigs", "serverconfig", "options.txt"];
+    const ROOTS: [&str; 3] = ["config", "defaultconfigs", "serverconfig"];
     let mut sources = Vec::new();
     for root in ROOTS {
         let path = instance_dir.join(root);

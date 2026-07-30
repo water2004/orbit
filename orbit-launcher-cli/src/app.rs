@@ -1,6 +1,6 @@
 use std::fs::OpenOptions;
 use std::io::BufRead;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
@@ -10,14 +10,16 @@ use orbit_launcher_core::{
     EulaAcceptanceMethod, EulaDocument, ExternalYggdrasilLoginRequest, InstallProgressEvent,
     InstanceKind, InstanceRegistry, LaunchPreparationEvent, LaunchProcessEvent, LauncherError,
     ManifestFile, MicrosoftLoginProgressEvent, RepositoryMoveEvent, ResolvedInstance,
-    RuntimeContext, ServerInstallPlan, SupervisorControl, SupervisorEvent, YggdrasilProviderConfig,
-    accept_shown_eula, add_yggdrasil_provider, apply_install_plan, begin_microsoft_device_login,
-    complete_microsoft_device_login, configure_instance, create_instance, create_offline_account,
-    get_config, import_instance, list_config, login_external_yggdrasil, move_minecraft_directory,
-    native_secret_store, prepare_install, prepare_launch, remove_instance,
-    remove_yggdrasil_provider, rename_instance, resolve_directory, resolve_instance,
-    resolve_launch_identity, rollback_created_instance, run_launch, set_config,
-    set_default_instance, show_current_eula, supervise_server, unset_config,
+    RuntimeContext, ServerInstallPlan, StateArchiveProgressEvent, SupervisorControl,
+    SupervisorEvent, YggdrasilProviderConfig, accept_shown_eula, add_yggdrasil_provider,
+    apply_install_plan, begin_microsoft_device_login, complete_microsoft_device_login,
+    configure_instance, create_instance, create_offline_account, export_launcher_state, get_config,
+    import_instance, inspect_launcher_state, list_config, login_external_yggdrasil,
+    move_minecraft_directory, native_secret_store, prepare_install, prepare_launch,
+    remove_instance, remove_yggdrasil_provider, rename_instance, resolve_directory,
+    resolve_instance, resolve_launch_identity, restore_launcher_state, rollback_created_instance,
+    run_launch, set_config, set_default_instance, show_current_eula, supervise_server,
+    unset_config,
 };
 use tokio::sync::{mpsc, watch};
 use zeroize::Zeroizing;
@@ -33,10 +35,11 @@ use crate::output::{
     DefaultView, EulaAcceptanceView, EulaDocumentView, InstallView, InstanceDetailView,
     InstanceListView, InstanceMutationAction, InstanceMutationView, InstanceView,
     JavaRequirementView, JavaRuntimeListView, JavaRuntimeMutationView, LaunchPlanView,
-    LaunchResultView, LoaderVersionCatalogView, MicrosoftDeviceSessionView,
-    MinecraftDirectoryMoveView, MinecraftDirectoryView, MinecraftVersionCatalogView, RenameView,
-    ServerControlView, ServerStartView, ServerStatusView, SupervisorResultView,
-    YggdrasilProviderListView, YggdrasilProviderMutationView, YggdrasilProviderView,
+    LaunchResultView, LauncherStateExportView, LoaderVersionCatalogView,
+    MicrosoftDeviceSessionView, MinecraftDirectoryMoveView, MinecraftDirectoryView,
+    MinecraftVersionCatalogView, RenameView, ServerControlView, ServerStartView, ServerStatusView,
+    SupervisorResultView, YggdrasilProviderListView, YggdrasilProviderMutationView,
+    YggdrasilProviderView,
 };
 use crate::supervisor_ipc::{
     IpcRequest, IpcServer, SupervisorLock, SupervisorState, request as supervisor_request,
@@ -62,6 +65,7 @@ pub enum CommandOutput {
     InstanceMutation(InstanceMutationView),
     Rename(RenameView),
     InstanceConfigured(InstanceDetailView),
+    LauncherStateExport(LauncherStateExportView),
     Default(DefaultView),
     AccountList(AccountListView),
     AccountDetail(AccountView),
@@ -117,6 +121,7 @@ impl CommandOutput {
             Self::InstanceMutation(view) => view.action.command_name(),
             Self::Rename(_) => "instance.rename",
             Self::InstanceConfigured(_) => "instance.configure",
+            Self::LauncherStateExport(_) => "export",
             Self::Default(_) => "instance.default",
             Self::AccountList(_) => "account.list",
             Self::AccountDetail(_) => "account.show",
@@ -178,6 +183,8 @@ pub trait Frontend: Send {
     fn supervisor_event(&mut self, command: &'static str, event: SupervisorEvent);
 
     fn repository_move(&mut self, event: RepositoryMoveEvent);
+
+    fn state_archive_progress(&mut self, command: &'static str, event: StateArchiveProgressEvent);
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -212,6 +219,8 @@ pub async fn execute(
             minecraft,
             loader,
             loader_version,
+            from,
+            consume_from,
         } => {
             execute_install(
                 instance_selector,
@@ -225,6 +234,8 @@ pub async fn execute(
                     minecraft,
                     loader,
                     loader_version,
+                    from,
+                    consume_from,
                 },
             )
             .await
@@ -239,6 +250,20 @@ pub async fn execute(
                 dry_run,
             )
             .await
+        }
+        Commands::Export { output } => {
+            let registry = InstanceRegistry::load(&runtime.paths().instances_file())?;
+            let resolved = resolve_instance(
+                &registry,
+                instance_selector,
+                current_dir,
+                ContextIntent::ReadOnly,
+            )?;
+            let report =
+                export_launcher_state(resolved.entry.instance_directory(), &output, |event| {
+                    frontend.state_archive_progress("export", event)
+                })?;
+            Ok(CommandOutput::LauncherStateExport(report.into()))
         }
         Commands::Config { command } => {
             if instance_selector.is_some() {
@@ -717,6 +742,8 @@ struct InstallCommandRequest {
     minecraft: Option<String>,
     loader: Option<crate::cli::LoaderKindArg>,
     loader_version: Option<String>,
+    from: Option<PathBuf>,
+    consume_from: bool,
 }
 
 async fn execute_install(
@@ -726,6 +753,13 @@ async fn execute_install(
     frontend: &mut dyn Frontend,
     request: InstallCommandRequest,
 ) -> Result<CommandOutput, AppError> {
+    if request.from.is_some() && request.new_name.is_none() {
+        return Err(AppError::Argument(
+            "install --from requires install --new and cannot restore into an existing instance"
+                .to_string(),
+        ));
+    }
+    let fresh_state_install = request.from.is_some();
     let created = if let Some(name) = request.new_name {
         if selector.is_some() {
             return Err(AppError::Argument(
@@ -739,6 +773,16 @@ async fn execute_install(
         let minecraft = request
             .minecraft
             .ok_or_else(|| AppError::Argument("install --new requires --minecraft".to_string()))?;
+        if let Some(source) = request.from.as_deref() {
+            let summary = inspect_launcher_state(source)?;
+            if summary.kind != kind {
+                return Err(AppError::Argument(format!(
+                    "cannot install {} state into a new {} instance",
+                    summary.kind.as_str(),
+                    kind.as_str()
+                )));
+            }
+        }
         let directory = match kind {
             InstanceKind::Client => {
                 if request.server_directory.is_some() {
@@ -753,6 +797,18 @@ async fn execute_install(
                 resolve_directory(current_dir, request.server_directory.as_deref())?
             }
         };
+        if fresh_state_install {
+            let target = match kind {
+                InstanceKind::Client => directory.join("instances").join(&name),
+                InstanceKind::Server => directory.clone(),
+            };
+            if target.exists() {
+                return Err(AppError::Argument(format!(
+                    "install --from requires a new instance directory; '{}' already exists",
+                    target.display()
+                )));
+            }
+        }
         Some(create_instance(
             runtime.paths(),
             CreateInstanceRequest {
@@ -783,10 +839,19 @@ async fn execute_install(
     };
     let created_selector = created.as_ref().map(|created| created.entry.id.to_string());
     let selector = created_selector.as_deref().or(selector);
-    let result = execute_existing_install(selector, current_dir, runtime, frontend).await;
+    let result = execute_existing_install(
+        selector,
+        current_dir,
+        runtime,
+        frontend,
+        request.from.as_deref(),
+        request.consume_from,
+    )
+    .await;
     if result.is_err()
         && let Some(created) = created
     {
+        let instance_directory = created.entry.instance_directory().to_path_buf();
         rollback_created_instance(runtime.paths(), &created.entry.id.to_string()).map_err(
             |rollback| {
                 AppError::Core(LauncherError::Transaction(format!(
@@ -794,6 +859,14 @@ async fn execute_install(
                 )))
             },
         )?;
+        if fresh_state_install && instance_directory.exists() {
+            std::fs::remove_dir_all(&instance_directory).map_err(|error| {
+                AppError::Core(LauncherError::Transaction(format!(
+                    "failed to remove the fresh bootstrap directory '{}': {error}",
+                    instance_directory.display()
+                )))
+            })?;
+        }
     }
     result
 }
@@ -803,9 +876,21 @@ async fn execute_existing_install(
     current_dir: &Path,
     runtime: &RuntimeContext,
     frontend: &mut dyn Frontend,
+    state_archive: Option<&Path>,
+    consume_state_archive: bool,
 ) -> Result<CommandOutput, AppError> {
     let registry = InstanceRegistry::load(&runtime.paths().instances_file())?;
     let resolved = resolve_instance(&registry, selector, current_dir, ContextIntent::Sensitive)?;
+    if let Some(source) = state_archive {
+        let summary = inspect_launcher_state(source)?;
+        if summary.kind != resolved.manifest.kind {
+            return Err(AppError::Argument(format!(
+                "cannot install {} state into a {} instance",
+                summary.kind.as_str(),
+                resolved.manifest.kind.as_str()
+            )));
+        }
+    }
     let client = runtime.config().http_client()?;
     let plan = prepare_install(&resolved.entry.location, &client, |event| {
         frontend.progress(event)
@@ -827,6 +912,17 @@ async fn execute_existing_install(
     let java = result.lock.java.as_ref().ok_or_else(|| {
         LauncherError::InvalidLock("completed install did not lock a Java runtime".to_string())
     })?;
+    let state = state_archive
+        .map(|source| {
+            restore_launcher_state(resolved.entry.instance_directory(), source, |event| {
+                frontend.state_archive_progress("install", event)
+            })
+            .map(Into::into)
+        })
+        .transpose()?;
+    if consume_state_archive && let Some(source) = state_archive {
+        std::fs::remove_file(source).map_err(LauncherError::from)?;
+    }
     Ok(CommandOutput::Install(InstallView {
         instance_id: resolved.entry.id.to_string(),
         kind: resolved.manifest.kind.as_str().to_string(),
@@ -841,6 +937,7 @@ async fn execute_existing_install(
             .map(|acceptance| acceptance.digest_sha256.clone()),
         downloaded_artifacts: result.downloaded_artifacts,
         cached_artifacts: result.cached_artifacts,
+        state,
     }))
 }
 
@@ -1482,6 +1579,13 @@ mod tests {
         fn supervisor_event(&mut self, _command: &'static str, _event: SupervisorEvent) {}
 
         fn repository_move(&mut self, _event: RepositoryMoveEvent) {}
+
+        fn state_archive_progress(
+            &mut self,
+            _command: &'static str,
+            _event: StateArchiveProgressEvent,
+        ) {
+        }
     }
 
     fn runtime(directory: &Path) -> RuntimeContext {

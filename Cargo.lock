@@ -4787,6 +4787,7 @@ dependencies = [
  "hex",
  "html2text",
  "image",
+ "java-properties",
  "md-5",
  "os_info",
  "regex",

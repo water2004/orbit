@@ -30,6 +30,7 @@ pub mod registry;
 pub mod repository;
 pub mod runtime;
 pub mod secret_store;
+pub mod state_archive;
 pub mod versions;
 pub mod yggdrasil;
 
@@ -110,5 +111,10 @@ pub use runtime::{
     NativeRuntimeEnvironment, RuntimeContext, RuntimeEnvironment, RuntimePathOptions, RuntimePaths,
 };
 pub use secret_store::{SecretStore, native_secret_store};
+pub use state_archive::{
+    LauncherStateArchiveSummary, LauncherStateExportReport, LauncherStateRestoreReport,
+    StateArchiveProgressEvent, export_launcher_state, inspect_launcher_state,
+    restore_launcher_state,
+};
 pub use versions::{LoaderVersion, list_loader_versions};
 pub use yggdrasil::discover_yggdrasil_api_root;

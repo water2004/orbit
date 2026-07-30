@@ -55,6 +55,7 @@ md-5 = "0.10"
 base64 = "0.22"
 image = { version = "0.25.9", default-features = false, features = ["png", "jpeg", "webp", "gif", "bmp"] }
 fs2 = "0.4"
+java-properties = "2.0.0"
 dunce = "1.0.5"
 orbit-loader-json = { path = "orbit-loader-json" }
 orbit-machine-protocol = { path = "orbit-machine-protocol" }

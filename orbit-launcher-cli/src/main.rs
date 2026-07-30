@@ -13,7 +13,7 @@ use orbit_i18n::tr;
 use orbit_launcher_core::{
     EulaDocument, InstallProgressEvent, LaunchOutputStream, LaunchPreparationEvent,
     LaunchProcessEvent, LauncherError, MicrosoftLoginProgressEvent, RepositoryMoveEvent,
-    SupervisorEvent,
+    StateArchiveProgressEvent, SupervisorEvent,
 };
 use output::{ErrorEnvelope, ProgressData, ProgressEnvelope, SuccessEnvelope};
 use zeroize::Zeroizing;
@@ -76,6 +76,7 @@ fn command_name(command: &cli::Commands) -> &'static str {
     match command {
         cli::Commands::Install { .. } => "install",
         cli::Commands::Launch { .. } => "launch",
+        cli::Commands::Export { .. } => "export",
         cli::Commands::Config { command } => match command {
             cli::ConfigCommands::Path => "config.path",
             cli::ConfigCommands::List => "config.list",
@@ -167,6 +168,7 @@ fn render_success(format: OutputFormat, output: app::CommandOutput) {
             app::CommandOutput::InstanceMutation(value) => print_json(command, value),
             app::CommandOutput::Rename(value) => print_json(command, value),
             app::CommandOutput::InstanceConfigured(value) => print_json(command, value),
+            app::CommandOutput::LauncherStateExport(value) => print_json(command, value),
             app::CommandOutput::Default(value) => print_json(command, value),
             app::CommandOutput::AccountList(value) => print_json(command, value),
             app::CommandOutput::AccountDetail(value) => print_json(command, value),
@@ -255,6 +257,28 @@ fn render_text(output: app::CommandOutput) {
                     id = view.instance_id
                 )
             );
+            if let Some(state) = view.state {
+                println!(
+                    "{}",
+                    tr!(
+                        "Applied %{kind} state from Minecraft %{source}: %{files} file(s), %{world_files} world file(s), %{properties} server property value(s).",
+                        kind = tr!(&state.kind),
+                        source = state.source_minecraft_version,
+                        files = state.files,
+                        world_files = state.world_files,
+                        properties = state.restored_properties
+                    )
+                );
+                if !state.skipped_properties.is_empty() {
+                    println!(
+                        "{}",
+                        tr!(
+                            "Skipped server properties absent from the target version: %{properties}",
+                            properties = state.skipped_properties.join(", ")
+                        )
+                    );
+                }
+            }
             println!(
                 "  {}",
                 tr!("Minecraft: %{version}", version = view.minecraft_version)
@@ -495,6 +519,18 @@ fn render_text(output: app::CommandOutput) {
                 )
             );
         }
+        app::CommandOutput::LauncherStateExport(view) => println!(
+            "{}",
+            tr!(
+                "Exported %{kind} state for Minecraft %{version} to %{path}: %{files} file(s), %{world_files} world file(s), %{bytes}.",
+                kind = tr!(&view.kind),
+                version = view.minecraft_version,
+                path = view.path.display(),
+                files = view.files,
+                world_files = view.world_files,
+                bytes = human_bytes(view.bytes)
+            )
+        ),
         app::CommandOutput::Default(view) => match view.instance {
             Some(instance) => println!(
                 "{}",
@@ -1107,6 +1143,43 @@ impl TerminalFrontend {
                     )
                 )
             }
+            ProgressData::ServerSettingsInitialized { properties } => eprintln!(
+                "{}",
+                tr!(
+                    "Minecraft initialized %{properties} server setting(s).",
+                    properties = properties
+                )
+            ),
+            ProgressData::StateArchiveStarted { files, total, .. } => eprintln!(
+                "{}",
+                tr!(
+                    "Preparing %{files} Launcher state file(s), %{bytes} total.",
+                    files = files,
+                    bytes = human_bytes(total)
+                )
+            ),
+            ProgressData::StateArchiveAdvanced { completed, total }
+                if self.last_text_progress.elapsed() >= Duration::from_secs(1) =>
+            {
+                self.last_text_progress = Instant::now();
+                eprintln!(
+                    "{}",
+                    tr!(
+                        "Processing Launcher state: %{completed} / %{total}.",
+                        completed = human_bytes(completed),
+                        total = human_bytes(total)
+                    )
+                );
+            }
+            ProgressData::StateArchiveAdvanced { .. } => {}
+            ProgressData::StateArchiveFinished { files, total, .. } => eprintln!(
+                "{}",
+                tr!(
+                    "Finished %{files} Launcher state file(s), %{bytes}.",
+                    files = files,
+                    bytes = human_bytes(total)
+                )
+            ),
             ProgressData::StagingVerified => {
                 eprintln!("{}", tr!("Verified staged instance runtime."))
             }
@@ -1419,6 +1492,28 @@ impl app::Frontend for TerminalFrontend {
 
     fn repository_move(&mut self, event: RepositoryMoveEvent) {
         self.render_launch_event("minecraft.move", ProgressData::from_repository(event));
+    }
+
+    fn state_archive_progress(&mut self, command: &'static str, event: StateArchiveProgressEvent) {
+        let data = ProgressData::from_state_archive(event);
+        match self.progress_format {
+            ProgressFormat::None => {}
+            ProgressFormat::Text => self.render_text_progress(data),
+            ProgressFormat::Ndjson => {
+                self.sequence += 1;
+                let phase = if command == "export" {
+                    orbit_machine_protocol::ProgressPhase::Export
+                } else {
+                    orbit_machine_protocol::ProgressPhase::Apply
+                };
+                let envelope = ProgressEnvelope::new(command, self.sequence, phase, data);
+                eprintln!(
+                    "{}",
+                    serde_json::to_string(&envelope)
+                        .expect("launcher state progress views are serializable")
+                );
+            }
+        }
     }
 }
 

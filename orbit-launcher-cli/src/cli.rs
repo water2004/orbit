@@ -77,6 +77,12 @@ pub enum Commands {
         /// Loader requirement for a new non-Vanilla instance.
         #[arg(long)]
         loader_version: Option<String>,
+        /// Apply mutable game state exported by `orbit-launcher export` after installing runtime artifacts.
+        #[arg(long, requires = "new")]
+        from: Option<PathBuf>,
+        /// Remove the state archive after it has been applied successfully.
+        #[arg(long, requires = "from")]
+        consume_from: bool,
     },
 
     /// Verify and launch a client instance with its selected account.
@@ -84,6 +90,12 @@ pub enum Commands {
         /// Verify and print a token-redacted command without starting Java.
         #[arg(long)]
         dry_run: bool,
+    },
+
+    /// Export mutable game state (including worlds) to a portable Launcher archive.
+    Export {
+        /// New Launcher state ZIP; existing files are never overwritten.
+        output: PathBuf,
     },
 
     /// Inspect and change launcher-wide configuration.
@@ -514,6 +526,48 @@ mod tests {
         assert_eq!(kind, Some(InstanceKindArg::Server));
         assert_eq!(minecraft.as_deref(), Some("latest-release"));
         assert_eq!(cli.progress_format, ProgressFormat::Text);
+    }
+
+    #[test]
+    fn launcher_state_export_is_applied_only_through_install() {
+        let export = Cli::try_parse_from([
+            "orbit-launcher",
+            "--instance",
+            "source",
+            "export",
+            "state.zip",
+        ])
+        .unwrap();
+        assert!(matches!(
+            export.command,
+            Commands::Export { output } if output == std::path::Path::new("state.zip")
+        ));
+
+        let install = Cli::try_parse_from([
+            "orbit-launcher",
+            "install",
+            "--new",
+            "target",
+            "--kind",
+            "client",
+            "--minecraft",
+            "1.21.1",
+            "--from",
+            "state.zip",
+            "--consume-from",
+        ])
+        .unwrap();
+        assert!(matches!(
+            install.command,
+            Commands::Install {
+                from: Some(path),
+                consume_from: true,
+                ..
+            } if path == std::path::Path::new("state.zip")
+        ));
+
+        assert!(Cli::try_parse_from(["orbit-launcher", "install", "--from", "state.zip"]).is_err());
+        assert!(Cli::try_parse_from(["orbit-launcher", "install", "--consume-from"]).is_err());
     }
 
     #[test]
