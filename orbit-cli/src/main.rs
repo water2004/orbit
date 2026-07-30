@@ -114,6 +114,7 @@ fn orbit_error_code(error: &orbit_core::OrbitError) -> &'static str {
         ModNotFound(_) => "mod_not_found",
         VersionMismatch { .. } => "version_mismatch",
         Conflict(_) => "dependency_conflict",
+        Cancelled(_) => "cancelled",
         ChecksumMismatch { .. } => "checksum_mismatch",
         ProviderApiKeyRequired { .. } => "provider_api_key_required",
         Io(_) => "io",
@@ -160,6 +161,7 @@ fn localized_orbit_error(error: &orbit_core::OrbitError) -> String {
             constraint = constraint
         ),
         Conflict(detail) => tr!("Dependency conflict: %{detail}", detail = detail),
+        Cancelled(detail) => tr!("Operation cancelled: %{detail}", detail = detail),
         ChecksumMismatch { name, .. } => tr!(
             "Content verification failed for '%{name}'; downloaded bytes differ from the trusted source",
             name = name
@@ -187,5 +189,21 @@ fn exit_code_for(code: &str) -> i32 {
         "argument" => 2,
         "cancelled" => 3,
         _ => 1,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn typed_cancellation_has_a_stable_code_and_exit_status() {
+        let error = anyhow::Error::from(orbit_core::OrbitError::Cancelled(
+            "user declined the transaction".to_string(),
+        ));
+
+        assert_eq!(error_code(&error), "cancelled");
+        assert_eq!(exit_code_for(error_code(&error)), 3);
+        assert!(localized_error(&error).contains("user declined the transaction"));
     }
 }

@@ -28,6 +28,9 @@ pub enum OrbitError {
     #[error("dependency conflict: {0}")]
     Conflict(String),
 
+    #[error("operation cancelled: {0}")]
+    Cancelled(String),
+
     #[error(
         "content verification failed for '{name}'; downloaded bytes differ from the trusted source"
     )]

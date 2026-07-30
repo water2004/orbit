@@ -595,8 +595,7 @@ async fn check_outdated_with_progress(
         },
     );
     let mut resolution =
-        crate::resolver::select_upgrade_resolution(portfolio, requested_package, selector)
-            .map_err(|e| OrbitError::Other(anyhow::anyhow!("{e}")))?;
+        crate::resolver::select_upgrade_resolution(portfolio, requested_package, selector)?;
     resolution.diagnostics.extend(discovery_diagnostics);
     resolution.diagnostics =
         crate::resolver::normalize_candidate_diagnostics(resolution.diagnostics);

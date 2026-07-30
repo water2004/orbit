@@ -240,7 +240,7 @@ fn package_selector(ctx: &CliContext) -> Option<orbit_core::PackageSelector> {
     }
 }
 
-fn prompt_package(packages: &[String]) -> Result<usize, String> {
+fn prompt_package(packages: &[String]) -> Result<usize, orbit_core::OrbitError> {
     eprintln!(
         "\n{}",
         tr!("The provider project contains multiple feasible JAR-declared packages:")
@@ -260,10 +260,14 @@ fn prompt_package(packages: &[String]) -> Result<usize, String> {
         std::io::stderr().flush().ok();
         let mut input = String::new();
         let Ok(bytes_read) = std::io::stdin().read_line(&mut input) else {
-            return Err(tr!("Package selection could not read stdin").into_owned());
+            return Err(interaction_failure(tr!(
+                "Package selection could not read stdin"
+            )));
         };
         if bytes_read == 0 {
-            return Err(tr!("Package selection was cancelled because stdin closed").into_owned());
+            return Err(orbit_core::OrbitError::Cancelled(
+                tr!("Package selection was cancelled because stdin closed").into_owned(),
+            ));
         }
         if input.trim().is_empty() {
             return Ok(0);
@@ -300,7 +304,13 @@ pub fn resolution_selector(ctx: &CliContext) -> Option<orbit_core::ResolutionSel
 fn install_prompt(ctx: &CliContext) -> orbit_core::InstallPrompt {
     if ctx.yes {
         let quiet = ctx.quiet;
-        return Box::new(move |report| quiet || prompt_install_report(report, true));
+        return Box::new(move |report| {
+            if quiet {
+                Ok(())
+            } else {
+                prompt_install_report(report, true)
+            }
+        });
     }
     if ctx.output.format == crate::cli::output::OutputFormat::Json {
         let command = ctx.command;
@@ -315,7 +325,7 @@ fn machine_select_package(
     command: &'static str,
     sequence: &std::sync::atomic::AtomicU64,
     packages: &[String],
-) -> Result<usize, String> {
+) -> Result<usize, orbit_core::OrbitError> {
     use orbit_machine_protocol::{InteractionChoice, InteractionKind};
     let choices = packages
         .iter()
@@ -340,10 +350,10 @@ fn machine_select_package(
         .iter()
         .position(|package| package == &selected)
         .ok_or_else(|| {
-            tr!(
+            interaction_failure(tr!(
                 "Package interaction selected unknown choice '%{choice}'",
                 choice = selected
-            )
+            ))
         })
 }
 
@@ -351,7 +361,7 @@ fn machine_select_resolution(
     command: &'static str,
     sequence: &std::sync::atomic::AtomicU64,
     alternatives: &[orbit_core::ResolutionReport],
-) -> Result<usize, String> {
+) -> Result<usize, orbit_core::OrbitError> {
     use orbit_machine_protocol::{InteractionEnvelope, InteractionKind};
     let choices = resolution_interaction_choices(alternatives);
     let envelope: InteractionEnvelope<serde_json::Value> = machine_interaction(
@@ -368,7 +378,9 @@ fn machine_select_resolution(
         .ok()
         .and_then(|selected| selected.checked_sub(1))
         .filter(|selected| *selected < alternatives.len())
-        .ok_or_else(|| tr!("Resolution interaction selected an unknown choice").into_owned())
+        .ok_or_else(|| {
+            interaction_failure(tr!("Resolution interaction selected an unknown choice"))
+        })
 }
 
 fn resolution_interaction_choices(
@@ -474,10 +486,10 @@ fn machine_confirm_install(
     command: &'static str,
     sequence: &std::sync::atomic::AtomicU64,
     report: &orbit_core::InstallReport,
-) -> bool {
+) -> Result<(), orbit_core::OrbitError> {
     use orbit_machine_protocol::{InteractionChoice, InteractionKind};
     if report.installed.is_empty() && report.removed.is_empty() && report.changes.is_empty() {
-        return true;
+        return Ok(());
     }
     let plan = crate::cli::output::transaction_view(report, false);
     let envelope = machine_interaction(
@@ -502,7 +514,12 @@ fn machine_confirm_install(
         ],
         Some("cancel".to_string()),
     );
-    read_machine_response(&envelope).is_ok_and(|choice| choice == "proceed")
+    match read_machine_response(&envelope)? {
+        choice if choice == "proceed" => Ok(()),
+        _ => Err(orbit_core::OrbitError::Cancelled(
+            tr!("Interaction cancelled by user").into_owned(),
+        )),
+    }
 }
 
 fn machine_interaction(
@@ -532,16 +549,18 @@ fn machine_interaction(
 
 fn read_machine_response(
     request: &orbit_machine_protocol::InteractionEnvelope<serde_json::Value>,
-) -> Result<String, String> {
+) -> Result<String, orbit_core::OrbitError> {
     let mut input = String::new();
     let bytes_read = std::io::stdin().read_line(&mut input).map_err(|error| {
-        tr!(
+        interaction_failure(tr!(
             "Interaction response could not read stdin: %{error}",
             error = error
-        )
+        ))
     })?;
     if bytes_read == 0 {
-        return Err(tr!("Interaction was cancelled because stdin closed").into_owned());
+        return Err(orbit_core::OrbitError::Cancelled(
+            tr!("Interaction was cancelled because stdin closed").into_owned(),
+        ));
     }
     validate_machine_response(request, input.trim())
 }
@@ -549,42 +568,52 @@ fn read_machine_response(
 fn validate_machine_response(
     request: &orbit_machine_protocol::InteractionEnvelope<serde_json::Value>,
     input: &str,
-) -> Result<String, String> {
+) -> Result<String, orbit_core::OrbitError> {
     let response: orbit_machine_protocol::InteractionResponse = serde_json::from_str(input)
-        .map_err(|error| tr!("Invalid interaction response: %{error}", error = error))?;
+        .map_err(|error| {
+            interaction_failure(tr!("Invalid interaction response: %{error}", error = error))
+        })?;
     if response.schema_version != orbit_machine_protocol::SCHEMA_VERSION {
-        return Err(tr!(
+        return Err(interaction_failure(tr!(
             "Interaction response schema %{actual} does not match %{expected}",
             actual = response.schema_version,
             expected = orbit_machine_protocol::SCHEMA_VERSION
-        ));
+        )));
     }
     if response.kind != "interaction_response" {
-        return Err(tr!("Interaction response has an invalid type").into_owned());
+        return Err(interaction_failure(tr!(
+            "Interaction response has an invalid type"
+        )));
     }
     if response.interaction_id != request.interaction_id {
-        return Err(tr!("Interaction response does not match the pending request").into_owned());
+        return Err(interaction_failure(tr!(
+            "Interaction response does not match the pending request"
+        )));
     }
     if response.cancelled {
-        return Err(tr!("Interaction cancelled by user").into_owned());
+        return Err(orbit_core::OrbitError::Cancelled(
+            tr!("Interaction cancelled by user").into_owned(),
+        ));
     }
     let selected = response
         .selected_choice
-        .ok_or_else(|| tr!("Interaction response did not select a choice").into_owned())?;
+        .ok_or_else(|| interaction_failure(tr!("Interaction response did not select a choice")))?;
     request
         .choices
         .iter()
         .any(|choice| choice.id == selected)
         .then_some(selected.clone())
         .ok_or_else(|| {
-            tr!(
+            interaction_failure(tr!(
                 "Interaction selected unknown choice '%{choice}'",
                 choice = selected
-            )
+            ))
         })
 }
 
-fn prompt_resolution(alternatives: &[orbit_core::ResolutionReport]) -> Result<usize, String> {
+fn prompt_resolution(
+    alternatives: &[orbit_core::ResolutionReport],
+) -> Result<usize, orbit_core::OrbitError> {
     eprintln!("\n{}", tr!("Multiple dependency solutions are available:"));
     eprintln!("{}", crate::cli::output::resolution_choices(alternatives));
 
@@ -600,13 +629,15 @@ fn prompt_resolution(alternatives: &[orbit_core::ResolutionReport]) -> Result<us
         std::io::stderr().flush().ok();
         let mut input = String::new();
         let Ok(bytes_read) = std::io::stdin().read_line(&mut input) else {
-            return Err(tr!("Dependency solution selection could not read stdin").into_owned());
+            return Err(interaction_failure(tr!(
+                "Dependency solution selection could not read stdin"
+            )));
         };
         if bytes_read == 0 {
-            return Err(
+            return Err(orbit_core::OrbitError::Cancelled(
                 tr!("Dependency solution selection was cancelled because stdin closed")
                     .into_owned(),
-            );
+            ));
         }
         if input.trim().is_empty() {
             return Ok(0);
@@ -626,9 +657,12 @@ fn prompt_resolution(alternatives: &[orbit_core::ResolutionReport]) -> Result<us
     }
 }
 
-pub fn prompt_install_report(report: &orbit_core::InstallReport, yes: bool) -> bool {
+pub fn prompt_install_report(
+    report: &orbit_core::InstallReport,
+    yes: bool,
+) -> Result<(), orbit_core::OrbitError> {
     if report.installed.is_empty() && report.removed.is_empty() && report.changes.is_empty() {
-        return true;
+        return Ok(());
     }
     if !report.changes.is_empty() {
         eprintln!("\n{}", tr!("Planned package transaction:"));
@@ -681,15 +715,27 @@ pub fn prompt_install_report(report: &orbit_core::InstallReport, yes: bool) -> b
         );
     }
     if yes {
-        return true;
+        return Ok(());
     }
     eprint!("\n{}", tr!("Do you want to continue? [Y/n] "));
     use std::io::Write;
     std::io::stdout().flush().ok();
     let mut input = String::new();
-    std::io::stdin().read_line(&mut input).ok();
+    std::io::stdin()
+        .read_line(&mut input)
+        .map_err(orbit_core::OrbitError::Io)?;
     let input = input.trim().to_lowercase();
-    input.is_empty() || input == "y" || input == "yes"
+    if input.is_empty() || input == "y" || input == "yes" {
+        Ok(())
+    } else {
+        Err(orbit_core::OrbitError::Cancelled(
+            tr!("Package transaction cancelled by user").into_owned(),
+        ))
+    }
+}
+
+fn interaction_failure(message: impl std::fmt::Display) -> orbit_core::OrbitError {
+    orbit_core::OrbitError::Other(anyhow::anyhow!(message.to_string()))
 }
 
 fn count_bundled_mods(bundled: &[orbit_core::BundledMod]) -> usize {

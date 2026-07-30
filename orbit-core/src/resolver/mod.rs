@@ -34,9 +34,11 @@ pub(crate) use graph::locked_source;
 pub(crate) fn select_resolution(
     mut portfolio: ResolutionPortfolio,
     selector: Option<ResolutionSelector>,
-) -> Result<ResolutionReport, String> {
+) -> Result<ResolutionReport, crate::OrbitError> {
     if portfolio.alternatives.is_empty() {
-        return Err("internal error: dependency solver returned no alternatives".to_string());
+        return Err(crate::OrbitError::Other(anyhow::anyhow!(
+            "internal error: dependency solver returned no alternatives"
+        )));
     }
     let index = if portfolio.alternatives.len() == 1 {
         0
@@ -47,11 +49,11 @@ pub(crate) fn select_resolution(
         }
     };
     if index >= portfolio.alternatives.len() {
-        return Err(format!(
+        return Err(crate::OrbitError::Other(anyhow::anyhow!(
             "dependency solution selector returned invalid choice {} for {} alternatives",
             index + 1,
             portfolio.alternatives.len()
-        ));
+        )));
     }
     Ok(portfolio.alternatives.remove(index))
 }
@@ -66,7 +68,7 @@ pub(crate) fn select_upgrade_resolution(
     mut portfolio: ResolutionPortfolio,
     package: Option<&str>,
     selector: Option<ResolutionSelector>,
-) -> Result<ResolutionReport, String> {
+) -> Result<ResolutionReport, crate::OrbitError> {
     let diagnostics = aggregate_candidate_diagnostics(&portfolio.alternatives, package);
     portfolio.alternatives.retain(|alternative| {
         alternative.changes.iter().any(|change| {
@@ -1034,6 +1036,7 @@ fn highest_candidate(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::OrbitError;
     use crate::jar::JarModOrigin;
     use crate::lockfile::{BundledMod, LockMeta, PackageEntry};
     use crate::metadata::{Environment, ModDependency, ModLoadCondition};
@@ -2059,7 +2062,7 @@ iris = { version = "*", remotes = [{ type = "file", path = "iris.jar" }] }
         let error = select_resolution(portfolio, Some(Box::new(|_| Ok(2)))).unwrap_err();
 
         assert_eq!(
-            error,
+            error.to_string(),
             "dependency solution selector returned invalid choice 3 for 2 alternatives"
         );
     }
@@ -2073,12 +2076,18 @@ iris = { version = "*", remotes = [{ type = "file", path = "iris.jar" }] }
         let error = select_resolution(
             portfolio,
             Some(Box::new(|_| {
-                Err("interaction cancelled by user".to_string())
+                Err(OrbitError::Cancelled(
+                    "interaction cancelled by user".to_string(),
+                ))
             })),
         )
         .unwrap_err();
 
-        assert_eq!(error, "interaction cancelled by user");
+        assert!(matches!(error, OrbitError::Cancelled(_)));
+        assert_eq!(
+            error.to_string(),
+            "operation cancelled: interaction cancelled by user"
+        );
     }
 
     #[test]

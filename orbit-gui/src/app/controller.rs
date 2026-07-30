@@ -438,6 +438,7 @@ impl OrbitApp {
                                 .tasks
                                 .get(&task_id)
                                 .and_then(|task| task.error_code.as_deref());
+                            let command_cancelled = error_code == Some("cancelled");
                             if matches!(intent, Intent::Search) {
                                 self.search_state = SearchState::Failed(message.clone());
                             }
@@ -448,11 +449,11 @@ impl OrbitApp {
                                 refresh_accounts = true;
                             }
                             if let Some(task) = self.tasks.get_mut(&task_id) {
-                                task.state = if cancelled || task.state == TaskState::Cancelled {
-                                    TaskState::Cancelled
-                                } else {
-                                    TaskState::Failed
-                                };
+                                task.state = completion_failure_state(
+                                    cancelled,
+                                    command_cancelled,
+                                    task.state,
+                                );
                                 task.status_line = message.clone();
                                 task.error_message = Some(message);
                             }
@@ -1905,6 +1906,18 @@ fn push_bounded(log: &mut Vec<String>, line: String) {
     log.push(line);
 }
 
+fn completion_failure_state(
+    process_cancelled: bool,
+    command_cancelled: bool,
+    current: TaskState,
+) -> TaskState {
+    if process_cancelled || command_cancelled || current == TaskState::Cancelled {
+        TaskState::Cancelled
+    } else {
+        TaskState::Failed
+    }
+}
+
 #[allow(dead_code)]
 fn set_select_index<D: gpui_component::select::SelectDelegate + 'static>(
     state: &Entity<SelectState<D>>,
@@ -1915,4 +1928,25 @@ fn set_select_index<D: gpui_component::select::SelectDelegate + 'static>(
     state.update(cx, |state, cx| {
         state.set_selected_index(Some(IndexPath::default().row(index)), window, cx)
     });
+}
+
+#[cfg(test)]
+mod completion_tests {
+    use super::{TaskState, completion_failure_state};
+
+    #[test]
+    fn structured_cli_cancellation_is_not_presented_as_a_failure() {
+        assert_eq!(
+            completion_failure_state(false, true, TaskState::Running),
+            TaskState::Cancelled
+        );
+    }
+
+    #[test]
+    fn ordinary_nonzero_completion_remains_a_failure() {
+        assert_eq!(
+            completion_failure_state(false, false, TaskState::Running),
+            TaskState::Failed
+        );
+    }
 }

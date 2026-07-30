@@ -79,7 +79,10 @@ pub async fn handle(input: String, ctx: &CliContext) -> Result<()> {
             std::io::stdin().read_line(&mut choice).ok();
             let trimmed = choice.trim();
             if trimmed.is_empty() {
-                anyhow::bail!("{}", tr!("Remove cancelled."));
+                return Err(orbit_core::OrbitError::Cancelled(
+                    tr!("Remove cancelled.").into_owned(),
+                )
+                .into());
             }
             let key = match trimmed.parse::<usize>() {
                 Ok(i) if i < deps.len() => deps[i].clone(),

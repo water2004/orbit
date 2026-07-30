@@ -25,13 +25,11 @@ pub async fn handle_export(
 ) -> Result<()> {
     let plan = build_plan(target, source_pack.as_deref(), allow_removals, ctx).await?;
     let preview = orbit_core::export_migration(&plan, true)?;
-    let confirmed = ctx.dry_run || confirm_export(&plan, &preview, ctx);
-    let report = if confirmed {
-        orbit_core::export_migration(&plan, ctx.dry_run)?
-    } else {
-        preview
-    };
-    let applied = confirmed && !ctx.dry_run;
+    if !ctx.dry_run {
+        confirm_export(&plan, &preview, ctx)?;
+    }
+    let report = orbit_core::export_migration(&plan, ctx.dry_run)?;
+    let applied = !ctx.dry_run;
     if applied
         && consume_source_pack
         && let Some(source_pack) = source_pack.as_deref()
@@ -68,8 +66,6 @@ pub async fn handle_export(
                     configs = report.config_files
                 )
             ));
-        } else {
-            ctx.print_result_line(format_args!("{}", tr!("Migration export cancelled.")));
         }
     }
     Ok(())
@@ -150,7 +146,12 @@ fn soft_fallback_confirmation(ctx: &CliContext) -> orbit_core::MigrationFallback
                 ],
                 Some("cancel".to_string()),
             );
-            super::read_machine_response(&envelope).map(|choice| choice == "proceed")
+            match super::read_machine_response(&envelope)? {
+                choice if choice == "proceed" => Ok(()),
+                _ => Err(orbit_core::OrbitError::Cancelled(
+                    tr!("Migration cancelled by user").into_owned(),
+                )),
+            }
         });
     }
 
@@ -164,19 +165,21 @@ fn soft_fallback_confirmation(ctx: &CliContext) -> orbit_core::MigrationFallback
         use std::io::Write;
         std::io::stderr().flush().ok();
         let mut input = String::new();
-        let bytes = std::io::stdin().read_line(&mut input).map_err(|error| {
-            tr!(
-                "Migration confirmation could not read stdin: %{error}",
-                error = error
-            )
-        })?;
+        let bytes = std::io::stdin()
+            .read_line(&mut input)
+            .map_err(orbit_core::OrbitError::Io)?;
         if bytes == 0 {
-            return Ok(false);
+            return Err(orbit_core::OrbitError::Cancelled(
+                tr!("Migration cancelled because stdin closed").into_owned(),
+            ));
         }
-        Ok(matches!(
-            input.trim().to_ascii_lowercase().as_str(),
-            "y" | "yes"
-        ))
+        if matches!(input.trim().to_ascii_lowercase().as_str(), "y" | "yes") {
+            Ok(())
+        } else {
+            Err(orbit_core::OrbitError::Cancelled(
+                tr!("Migration cancelled by user").into_owned(),
+            ))
+        }
     })
 }
 
@@ -273,9 +276,9 @@ fn confirm_export(
     plan: &orbit_core::MigrationPlan,
     preview: &orbit_core::MigrationExportReport,
     ctx: &CliContext,
-) -> bool {
+) -> Result<(), orbit_core::OrbitError> {
     if ctx.yes {
-        return true;
+        return Ok(());
     }
     if ctx.output.format == OutputFormat::Json {
         use orbit_machine_protocol::{InteractionChoice, InteractionKind};
@@ -305,7 +308,12 @@ fn confirm_export(
             ],
             Some("cancel".to_string()),
         );
-        return super::read_machine_response(&envelope).is_ok_and(|choice| choice == "proceed");
+        return match super::read_machine_response(&envelope)? {
+            choice if choice == "proceed" => Ok(()),
+            _ => Err(orbit_core::OrbitError::Cancelled(
+                tr!("Migration export cancelled by user").into_owned(),
+            )),
+        };
     }
 
     eprintln!(
@@ -323,8 +331,14 @@ fn confirm_export(
     use std::io::Write;
     std::io::stderr().flush().ok();
     let mut input = String::new();
-    if std::io::stdin().read_line(&mut input).is_err() {
-        return false;
+    std::io::stdin()
+        .read_line(&mut input)
+        .map_err(orbit_core::OrbitError::Io)?;
+    if matches!(input.trim().to_ascii_lowercase().as_str(), "y" | "yes") {
+        Ok(())
+    } else {
+        Err(orbit_core::OrbitError::Cancelled(
+            tr!("Migration export cancelled by user").into_owned(),
+        ))
     }
-    matches!(input.trim().to_ascii_lowercase().as_str(), "y" | "yes")
 }

@@ -18,8 +18,8 @@ mod local;
 
 pub use local::install_local_file_to_instance;
 
-pub type InstallPrompt = Box<dyn FnOnce(&InstallReport) -> bool + Send>;
-pub type PackageSelector = Box<dyn FnOnce(&[String]) -> Result<usize, String> + Send>;
+pub type InstallPrompt = Box<dyn FnOnce(&InstallReport) -> Result<(), OrbitError> + Send>;
+pub type PackageSelector = Box<dyn FnOnce(&[String]) -> Result<usize, OrbitError> + Send>;
 
 #[derive(Default)]
 pub struct InstallInteraction {
@@ -365,8 +365,7 @@ pub(crate) async fn repair_manifest_instance(
             solutions: portfolio.alternatives.len(),
         },
     );
-    let resolution = crate::resolver::select_resolution(portfolio, select_resolution)
-        .map_err(OrbitError::Conflict)?;
+    let resolution = crate::resolver::select_resolution(portfolio, select_resolution)?;
 
     let mods_dir = instance_dir.join("mods");
     let candidate_remotes = catalog.package_remotes();
@@ -460,19 +459,8 @@ pub(crate) async fn repair_manifest_instance(
             committed: !dry_run,
         });
     }
-    if confirm_install.is_some_and(|confirm| !confirm(&preview)) {
-        return Ok(ManifestRepairOutcome {
-            report: InstallReport {
-                installed: Vec::new(),
-                removed: Vec::new(),
-                changes: Vec::new(),
-                already_satisfied,
-                skipped_optional: Vec::new(),
-                diagnostics: resolution.diagnostics,
-                warnings: resolution.warnings,
-            },
-            committed: false,
-        });
+    if let Some(confirm) = confirm_install {
+        confirm(&preview)?;
     }
     if dry_run {
         return Ok(ManifestRepairOutcome {
@@ -619,18 +607,8 @@ pub async fn upgrade_all_in_instance(
         warnings: warnings.clone(),
     };
 
-    if let Some(prompt) = confirm_install
-        && !prompt(&report)
-    {
-        return Ok(InstallReport {
-            installed: vec![],
-            removed: vec![],
-            changes: vec![],
-            already_satisfied: vec![],
-            skipped_optional: vec![],
-            diagnostics,
-            warnings,
-        }); // aborted
+    if let Some(prompt) = confirm_install {
+        prompt(&report)?;
     }
 
     if dry_run {
@@ -1038,8 +1016,7 @@ async fn install_mod(input: InstallModInput<'_>) -> Result<InstallReport, OrbitE
         )
     } else {
         crate::resolver::select_resolution(portfolio, select_resolution)
-    }
-    .map_err(OrbitError::Conflict)?;
+    }?;
     if options.intent == InstallIntent::Upgrade && !resolution.has_upgrade() {
         return Ok(InstallReport {
             installed: Vec::new(),
@@ -1085,18 +1062,8 @@ async fn install_mod(input: InstallModInput<'_>) -> Result<InstallReport, OrbitE
         warnings: warnings.clone(),
     };
 
-    if let Some(prompt) = confirm_install
-        && !prompt(&report)
-    {
-        return Ok(InstallReport {
-            installed: vec![],
-            removed: vec![],
-            changes: vec![],
-            already_satisfied,
-            skipped_optional: vec![],
-            diagnostics,
-            warnings,
-        }); // aborted
+    if let Some(prompt) = confirm_install {
+        prompt(&report)?;
     }
 
     if options.dry_run {
@@ -1272,7 +1239,7 @@ async fn resolve_requested_package(
             .map(|(package, _)| package.clone())
             .collect();
         match selector {
-            Some(select) => select(&package_names).map_err(OrbitError::Conflict)?,
+            Some(select) => select(&package_names)?,
             None => 0,
         }
     };
@@ -2354,7 +2321,7 @@ physical_environment = "client"
             &cache,
             false,
             InstallInteraction {
-                confirm_install: Some(Box::new(|_| true)),
+                confirm_install: Some(Box::new(|_| Ok(()))),
                 ..InstallInteraction::default()
             },
         )
@@ -2481,7 +2448,7 @@ physical_environment = "client"
             &cache,
             false,
             InstallInteraction {
-                confirm_install: Some(Box::new(|_| true)),
+                confirm_install: Some(Box::new(|_| Ok(()))),
                 ..InstallInteraction::default()
             },
         )

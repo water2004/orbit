@@ -686,7 +686,7 @@ mod tests {
 
     fn accept_transaction() -> InstallInteraction {
         InstallInteraction {
-            confirm_install: Some(Box::new(|_| true)),
+            confirm_install: Some(Box::new(|_| Ok(()))),
             ..InstallInteraction::default()
         }
     }
@@ -878,7 +878,7 @@ mod tests {
         let manifest_before = std::fs::read(directory.path().join("orbit.toml")).unwrap();
         let lock_before = std::fs::read(directory.path().join("orbit.lock")).unwrap();
 
-        let report = apply_package_constraint(
+        let error = apply_package_constraint(
             directory.path(),
             "example",
             PackageVersionPolicy::Comparison {
@@ -889,15 +889,17 @@ mod tests {
                 Some("all; intersect contains(\"alpha\")".to_string()),
                 &cache,
                 InstallInteraction {
-                    confirm_install: Some(Box::new(|_| false)),
+                    confirm_install: Some(Box::new(|_| {
+                        Err(OrbitError::Cancelled("test rejection".to_string()))
+                    })),
                     ..InstallInteraction::default()
                 },
             ),
         )
         .await
-        .unwrap();
+        .unwrap_err();
 
-        assert!(!report.applied);
+        assert!(matches!(error, OrbitError::Cancelled(_)));
         assert_eq!(
             std::fs::read(directory.path().join("orbit.toml")).unwrap(),
             manifest_before

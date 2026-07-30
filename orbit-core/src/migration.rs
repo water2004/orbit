@@ -15,7 +15,7 @@ use crate::resolver::types::{CandidateDiagnostic, PackageChange, PackageChangeKi
 use crate::workspace::{Lockfile, ManifestFile};
 
 pub type MigrationFallbackConfirmation =
-    Box<dyn FnOnce(&MigrationFallbackPrompt) -> Result<bool, String> + Send>;
+    Box<dyn FnOnce(&MigrationFallbackPrompt) -> Result<(), OrbitError> + Send>;
 
 #[derive(Default)]
 pub struct MigrationInteraction {
@@ -201,15 +201,12 @@ async fn plan_migration_inner(
                 let prompt = MigrationFallbackPrompt {
                     strict_failure: strict_failure.clone(),
                 };
-                let accepted = match confirm_soft_fallback {
-                    Some(confirm) => confirm(&prompt).map_err(OrbitError::Conflict)?,
-                    None => false,
-                };
-                if !accepted {
+                let Some(confirm) = confirm_soft_fallback else {
                     return Err(OrbitError::Conflict(format!(
-                        "strict migration is unavailable:\n{strict_failure}\n\nSearching for a package-removing migration was declined"
+                        "strict migration is unavailable:\n{strict_failure}\n\nSearching for a package-removing migration requires explicit consent"
                     )));
-                }
+                };
+                confirm(&prompt)?;
                 crate::resolver::resolve_package_preserving_portfolio_with_progress(
                     &target_manifest,
                     &empty_target_lock,
@@ -241,8 +238,7 @@ async fn plan_migration_inner(
             solutions: portfolio.alternatives.len(),
         },
     );
-    let resolution = crate::resolver::select_resolution(portfolio, select_resolution)
-        .map_err(OrbitError::Conflict)?;
+    let resolution = crate::resolver::select_resolution(portfolio, select_resolution)?;
 
     let mut target_lockfile = migration_lockfile(
         &resolution,
@@ -1009,7 +1005,7 @@ mod tests {
         assert!(
             error
                 .to_string()
-                .contains("package-removing migration was declined")
+                .contains("package-removing migration requires explicit consent")
         );
 
         let confirmed = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -1024,7 +1020,7 @@ mod tests {
                 confirm_soft_fallback: Some(Box::new(move |preview| {
                     assert!(preview.strict_failure.contains("removed"));
                     observed.store(true, std::sync::atomic::Ordering::SeqCst);
-                    Ok(true)
+                    Ok(())
                 })),
                 ..MigrationInteraction::default()
             },

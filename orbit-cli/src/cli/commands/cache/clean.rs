@@ -66,8 +66,9 @@ pub async fn handle(ctx: &CliContext) -> Result<()> {
         return Ok(());
     }
     if !ctx.yes && ctx.output.format == OutputFormat::Text && !confirm()? {
-        ctx.print_result_line(format_args!("{}", tr!("Cache clean cancelled.")));
-        return Ok(());
+        return Err(
+            orbit_core::OrbitError::Cancelled(tr!("Cache clean cancelled.").into_owned()).into(),
+        );
     }
 
     let cleaned = orbit_core::clean_cache(ctx.runtime.paths().cache_dir(), &protected_paths)?;

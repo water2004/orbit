@@ -205,7 +205,7 @@ pub fn audit_summary(result: &Value) -> Result<AuditSummary> {
             .as_slice(),
     };
     let capabilities = capability_values
-        .into_iter()
+        .iter()
         .enumerate()
         .map(|(index, capability)| {
             capability

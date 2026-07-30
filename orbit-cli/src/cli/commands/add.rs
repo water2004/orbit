@@ -145,7 +145,9 @@ pub async fn handle(
             std::io::stdin().read_line(&mut input).ok();
             let trimmed = input.trim();
             if trimmed.is_empty() {
-                anyhow::bail!("{}", tr!("Add cancelled."));
+                return Err(
+                    orbit_core::OrbitError::Cancelled(tr!("Add cancelled.").into_owned()).into(),
+                );
             }
             let project_id = match trimmed.parse::<usize>() {
                 Ok(idx) if idx < results.len() => results[idx].project_id.clone(),
