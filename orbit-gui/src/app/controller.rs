@@ -648,15 +648,40 @@ impl OrbitApp {
             }
             Intent::MigrationSourceExported {
                 source_pack,
+                state_pack,
+                source_id,
                 launcher_args,
             } => {
+                self.launcher_task_args(
+                    "Exporting game state",
+                    Intent::MigrationStateExported {
+                        source_pack: source_pack.clone(),
+                        state_pack: state_pack.clone(),
+                        launcher_args: launcher_args.clone(),
+                    },
+                    Some(source_id.clone()),
+                    vec!["export".into(), state_pack.to_string_lossy().into_owned()],
+                    None,
+                );
+            }
+            Intent::MigrationStateExported {
+                source_pack,
+                state_pack,
+                launcher_args,
+            } => {
+                let mut launcher_args = launcher_args.clone();
+                launcher_args.extend([
+                    "--from".into(),
+                    state_pack.to_string_lossy().into_owned(),
+                    "--consume-from".into(),
+                ]);
                 self.launcher_task_args(
                     "Creating migration target",
                     Intent::RuntimeCreatedForMigration {
                         source_pack: source_pack.clone(),
                     },
                     None,
-                    launcher_args.clone(),
+                    launcher_args,
                     None,
                 );
             }
@@ -1165,11 +1190,26 @@ impl OrbitApp {
             let Some(source) = self.migration_source.clone() else {
                 return;
             };
+            let Some(source_id) = self
+                .runtime_instances
+                .iter()
+                .find(|instance| instance.directory == source)
+                .map(|instance| instance.id.clone())
+            else {
+                self.toast = Some(Toast {
+                    message: tr!("The migration source is no longer registered.").into_owned(),
+                    kind: ToastKind::Warning,
+                });
+                return;
+            };
             let source_pack = migration_source_pack_path();
+            let state_pack = migration_state_pack_path();
             self.orbit_task_args(
                 "Exporting migration source",
                 Intent::MigrationSourceExported {
                     source_pack: source_pack.clone(),
+                    state_pack,
+                    source_id,
                     launcher_args: command,
                 },
                 vec![
@@ -1864,6 +1904,16 @@ fn migration_source_pack_path() -> PathBuf {
         .map_or(0, |duration| duration.as_nanos());
     std::env::temp_dir().join(format!(
         "orbit-migration-source-{}-{nonce}.zip",
+        std::process::id()
+    ))
+}
+
+fn migration_state_pack_path() -> PathBuf {
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_nanos());
+    std::env::temp_dir().join(format!(
+        "orbit-launcher-migration-state-{}-{nonce}.zip",
         std::process::id()
     ))
 }

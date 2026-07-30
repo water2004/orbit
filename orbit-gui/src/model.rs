@@ -505,6 +505,13 @@ pub enum Intent {
     RuntimeMutated,
     MigrationSourceExported {
         source_pack: PathBuf,
+        state_pack: PathBuf,
+        source_id: String,
+        launcher_args: Vec<String>,
+    },
+    MigrationStateExported {
+        source_pack: PathBuf,
+        state_pack: PathBuf,
         launcher_args: Vec<String>,
     },
     RuntimeCreatedForMigration {
