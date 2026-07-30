@@ -5,8 +5,7 @@ use crate::cli::output::{OutputFormat, sync_view};
 
 pub async fn handle(ctx: &CliContext) -> Result<()> {
     let instance_dir = ctx.instance_dir()?;
-    let providers =
-        orbit_core::providers::create_identification_providers(&ctx.runtime.config().auth)?;
+    let providers = orbit_core::providers::create_identification_providers(ctx.runtime.config())?;
     let report = orbit_core::sync_instance(&instance_dir, &providers, ctx.dry_run).await?;
 
     if ctx.output.format == OutputFormat::Text {

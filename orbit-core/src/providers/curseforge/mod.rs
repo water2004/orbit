@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use async_trait::async_trait;
 use curseforge_wrapper::models::{File, GetFilesParams, Mod, ModLoaderType, SearchModsParams};
-use curseforge_wrapper::{ApiError, Client, MAX_RESULTS};
+use curseforge_wrapper::{ApiError, Client, ClientConfig, MAX_RESULTS};
 use reqwest::StatusCode;
 use tokio::sync::OnceCell;
 
@@ -31,43 +31,51 @@ pub struct CurseForgeProvider {
 }
 
 impl CurseForgeProvider {
-    pub fn new(
+    pub(crate) fn new(
         api_key: &str,
         user_agent: &str,
-        max_concurrency: usize,
+        http: &super::ProviderHttpConfig,
     ) -> Result<Self, OrbitError> {
         let api_key = required_api_key(api_key)?;
+        let client_config = ClientConfig {
+            timeout: http.timeout,
+            max_retries: http.max_retries,
+            proxy: http.proxy.clone(),
+        };
         Ok(Self {
-            client: Client::new(api_key, user_agent).map_err(map_client_error)?,
+            client: Client::new(api_key, user_agent, &client_config).map_err(map_client_error)?,
             downloader: ArtifactDownloadClient::authenticated_for_domain(
                 user_agent,
                 "x-api-key",
                 api_key,
                 "forgecdn.net",
+                http,
             )?,
-            rate_limiter: RateLimiter::new(max_concurrency),
+            rate_limiter: RateLimiter::new(http.max_concurrency),
             minecraft: OnceCell::new(),
         })
     }
 
     #[cfg(test)]
-    fn with_base_url(
-        api_key: &str,
-        user_agent: &str,
-        max_concurrency: usize,
-        base_url: &str,
-    ) -> Result<Self, OrbitError> {
+    fn with_base_url(api_key: &str, user_agent: &str, base_url: &str) -> Result<Self, OrbitError> {
         let api_key = required_api_key(api_key)?;
+        let http = super::ProviderHttpConfig::test_default();
+        let client_config = ClientConfig {
+            timeout: http.timeout,
+            max_retries: http.max_retries,
+            proxy: http.proxy.clone(),
+        };
         Ok(Self {
-            client: Client::with_base_url(api_key, user_agent, base_url)
+            client: Client::with_base_url(api_key, user_agent, base_url, &client_config)
                 .map_err(map_client_error)?,
             downloader: ArtifactDownloadClient::authenticated_for_domain(
                 user_agent,
                 "x-api-key",
                 api_key,
                 "forgecdn.net",
+                &http,
             )?,
-            rate_limiter: RateLimiter::new(max_concurrency),
+            rate_limiter: RateLimiter::new(http.max_concurrency),
             minecraft: OnceCell::new(),
         })
     }
@@ -681,9 +689,13 @@ mod tests {
 
     #[test]
     fn direct_construction_requires_an_api_key() {
-        let error = CurseForgeProvider::new(" \t ", "orbit-test", 1)
-            .err()
-            .expect("blank key should fail");
+        let error = CurseForgeProvider::new(
+            " \t ",
+            "orbit-test",
+            &super::super::ProviderHttpConfig::test_default(),
+        )
+        .err()
+        .expect("blank key should fail");
         assert!(matches!(
             error,
             OrbitError::ProviderApiKeyRequired {
@@ -695,7 +707,12 @@ mod tests {
 
     #[tokio::test]
     async fn provider_downloads_reject_untrusted_hosts_before_network_access() {
-        let provider = CurseForgeProvider::new("test-key", "orbit-test", 1).unwrap();
+        let provider = CurseForgeProvider::new(
+            "test-key",
+            "orbit-test",
+            &super::super::ProviderHttpConfig::test_default(),
+        )
+        .unwrap();
         let error = provider
             .artifact_downloader()
             .download("https://example.invalid/example.jar", "example.jar")
@@ -725,7 +742,7 @@ mod tests {
         ])
         .await;
         let provider =
-            CurseForgeProvider::with_base_url("test-key", "orbit-test", 1, &base_url).unwrap();
+            CurseForgeProvider::with_base_url("test-key", "orbit-test", &base_url).unwrap();
 
         let results = provider
             .search("sodium", Some("1.21.1"), Some("fabric"), 5)
@@ -769,7 +786,7 @@ mod tests {
         ])
         .await;
         let provider =
-            CurseForgeProvider::with_base_url("test-key", "orbit-test", 1, &base_url).unwrap();
+            CurseForgeProvider::with_base_url("test-key", "orbit-test", &base_url).unwrap();
 
         let versions = provider
             .get_versions("123", Some("1.21.1"), Some("neoforge"))
@@ -818,7 +835,7 @@ mod tests {
         ])
         .await;
         let provider =
-            CurseForgeProvider::with_base_url("test-key", "orbit-test", 1, &base_url).unwrap();
+            CurseForgeProvider::with_base_url("test-key", "orbit-test", &base_url).unwrap();
 
         let error = provider
             .get_versions("123", Some("1.21.1"), Some("fabric"))
@@ -849,7 +866,7 @@ mod tests {
         ])
         .await;
         let provider =
-            CurseForgeProvider::with_base_url("test-key", "orbit-test", 1, &base_url).unwrap();
+            CurseForgeProvider::with_base_url("test-key", "orbit-test", &base_url).unwrap();
 
         let versions = provider
             .get_versions("123", Some("1.21.1"), Some("fabric"))
@@ -886,7 +903,7 @@ mod tests {
         ])
         .await;
         let provider =
-            CurseForgeProvider::with_base_url("test-key", "orbit-test", 1, &base_url).unwrap();
+            CurseForgeProvider::with_base_url("test-key", "orbit-test", &base_url).unwrap();
 
         let identified = provider
             .identify_artifacts(&[ArtifactFingerprint {

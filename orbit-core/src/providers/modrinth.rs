@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 use modrinth_wrapper::api::SearchParams;
-use modrinth_wrapper::{Client as MRClient, models as mr_models};
+use modrinth_wrapper::{Client as MRClient, ClientConfig, models as mr_models};
 use std::collections::HashMap;
 
 use super::rate_limiter::RateLimiter;
@@ -18,12 +18,25 @@ pub struct ModrinthProvider {
 }
 
 impl ModrinthProvider {
-    pub fn new(user_agent: &str, max_concurrency: usize) -> Result<Self, OrbitError> {
-        let client = MRClient::new(user_agent).map_err(|e| OrbitError::Other(e.into()))?;
+    pub(crate) fn new(
+        user_agent: &str,
+        authorization: Option<&str>,
+        http: &super::ProviderHttpConfig,
+    ) -> Result<Self, OrbitError> {
+        let client = MRClient::new(
+            user_agent,
+            &ClientConfig {
+                timeout: http.timeout,
+                max_retries: http.max_retries,
+                proxy: http.proxy.clone(),
+                authorization: authorization.map(str::to_string),
+            },
+        )
+        .map_err(|e| OrbitError::Other(e.into()))?;
         Ok(Self {
             client,
-            downloader: ArtifactDownloadClient::anonymous(user_agent)?,
-            rate_limiter: RateLimiter::new(max_concurrency),
+            downloader: ArtifactDownloadClient::anonymous(user_agent, http)?,
+            rate_limiter: RateLimiter::new(http.max_concurrency),
         })
     }
 

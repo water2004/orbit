@@ -763,7 +763,7 @@ pub fn create_instance_providers(
             }
         }
     }
-    orbit_core::providers::create_providers(&catalogs, &runtime.config().auth)
+    orbit_core::providers::create_providers(&catalogs, runtime.config())
         .with_context(|| tr!("Failed to create providers").into_owned())
 }
 

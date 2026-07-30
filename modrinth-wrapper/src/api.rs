@@ -11,7 +11,7 @@ use std::collections::HashMap;
 /// ```no_run
 /// # async fn demo() -> modrinth_wrapper::Result<()> {
 /// use modrinth_wrapper::api::SearchParams;
-/// let client = modrinth_wrapper::Client::new("my-app")?;
+/// let client = modrinth_wrapper::Client::new("my-app", &Default::default())?;
 /// let result = client
 ///     .search(SearchParams::new("fabric api")
 ///         .index("downloads")
@@ -77,7 +77,7 @@ impl SearchParams {
 /// ```no_run
 /// # async fn demo() -> modrinth_wrapper::Result<()> {
 /// use modrinth_wrapper::api::ListVersionsParams;
-/// let client = modrinth_wrapper::Client::new("my-app")?;
+/// let client = modrinth_wrapper::Client::new("my-app", &Default::default())?;
 /// let versions = client
 ///     .list_versions_with_params("fabric-api",
 ///         ListVersionsParams::new()

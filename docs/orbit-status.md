@@ -29,6 +29,7 @@
 | 版本迁移 | ✅ | 先冻结源包再创建目标；check/export 共享严格优先规划，严格无解后经明确许可原生枚举 Pareto 极小删包 front，目标 install 物化 JAR |
 | 远端身份边界 | ✅ | provider 只给下载 locator；一个 locator 的多种真实 mod_id 按 JAR 身份分区并选择 |
 | Provider 分层 | ✅ | Modrinth / CurseForge HTTP 与 DTO 各在独立 wrapper，core 只做领域适配 |
+| Provider 网络配置 | ✅ | metadata 与 artifact 客户端统一消费 proxy/timeout/retry；全部 provider 共享下载并发上限；Modrinth token 与 CurseForge Key 仅停留在运行时客户端 |
 | 跨平台全局路径 | ✅ | RuntimeEnvironment + 显式路径；system/executable 布局 |
 | Windows MSI | ✅ | x64 per-machine 完整套件；三个相邻程序、开始菜单入口、可选系统 PATH、同版本重建升级、维护模式、可选清理默认 AppData；发布产物仍需项目证书签名 |
 | Linux deb / Release | ✅ | amd64 拆为可独立安装的 `orbit`、`orbit-launcher`、`orbit-gui`；GUI 精确依赖同版本两 CLI 并独占 desktop/icon；统一 `v*` tag 发布 MSI、三个 deb、SHA256SUMS 与 release notes |

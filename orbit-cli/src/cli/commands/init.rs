@@ -166,7 +166,7 @@ pub async fn handle(
         dry_run: ctx.dry_run,
     };
 
-    let providers = create_identification_providers(&ctx.runtime.config().auth)?;
+    let providers = create_identification_providers(ctx.runtime.config())?;
     let output = run_init(input, &providers).await?;
 
     let identified = output

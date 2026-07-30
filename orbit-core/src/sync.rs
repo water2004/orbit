@@ -460,7 +460,7 @@ physical_environment = "client"
         assert!(managed.is_file());
 
         let provider: Box<dyn ModProvider> = Box::new(IdentificationProvider {
-            downloader: ArtifactDownloadClient::anonymous("orbit-sync-test").unwrap(),
+            downloader: ArtifactDownloadClient::test_anonymous("orbit-sync-test").unwrap(),
             artifacts: vec![RemoteArtifact {
                 sha1: local.sha1.clone(),
                 sha512,

@@ -10,6 +10,23 @@ const DEFAULT_BASE_URL: &str = "https://api.curseforge.com/v1/";
 const PAGE_SIZE: u32 = 50;
 pub const MAX_RESULTS: u32 = 10_000;
 
+#[derive(Debug, Clone)]
+pub struct ClientConfig {
+    pub timeout: std::time::Duration,
+    pub max_retries: u32,
+    pub proxy: Option<String>,
+}
+
+impl Default for ClientConfig {
+    fn default() -> Self {
+        Self {
+            timeout: std::time::Duration::from_secs(30),
+            max_retries: 3,
+            proxy: None,
+        }
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum ApiError {
     #[error("CurseForge API key is required")]
@@ -46,8 +63,8 @@ pub struct Client {
 }
 
 impl Client {
-    pub fn new(api_key: &str, user_agent: &str) -> Result<Self, ApiError> {
-        Self::build(api_key, user_agent, DEFAULT_BASE_URL)
+    pub fn new(api_key: &str, user_agent: &str, config: &ClientConfig) -> Result<Self, ApiError> {
+        Self::build(api_key, user_agent, DEFAULT_BASE_URL, config)
     }
 
     /// Creates a client for a compatible API endpoint.
@@ -57,11 +74,17 @@ impl Client {
         api_key: &str,
         user_agent: &str,
         base_url: &str,
+        config: &ClientConfig,
     ) -> Result<Self, ApiError> {
-        Self::build(api_key, user_agent, base_url)
+        Self::build(api_key, user_agent, base_url, config)
     }
 
-    fn build(api_key: &str, user_agent: &str, base_url: &str) -> Result<Self, ApiError> {
+    fn build(
+        api_key: &str,
+        user_agent: &str,
+        base_url: &str,
+        config: &ClientConfig,
+    ) -> Result<Self, ApiError> {
         let api_key = api_key.trim();
         if api_key.is_empty() {
             return Err(ApiError::MissingApiKey);
@@ -82,24 +105,32 @@ impl Client {
             .to_string();
         let retry_policy = reqwest::retry::for_host(retry_host)
             .no_budget()
-            .max_retries_per_request(5)
+            .max_retries_per_request(config.max_retries)
             .classify_fn(|request| {
-                if request.error().is_some() {
+                if request.error().is_some()
+                    || request.status().is_some_and(|status| {
+                        status == StatusCode::REQUEST_TIMEOUT
+                            || status == StatusCode::TOO_MANY_REQUESTS
+                            || status.is_server_error()
+                    })
+                {
                     request.retryable()
                 } else {
                     request.success()
                 }
             });
-        let http = reqwest::Client::builder()
+        let mut builder = reqwest::Client::builder()
             .user_agent(user_agent)
             .default_headers(headers)
-            .timeout(std::time::Duration::from_secs(30))
+            .timeout(config.timeout)
             // Never forward x-api-key through an unvalidated redirect.
             .redirect(reqwest::redirect::Policy::none())
             // CurseForge operations are read-only, including its POST lookup endpoints.
-            .retry(retry_policy)
-            .build()
-            .map_err(ApiError::Client)?;
+            .retry(retry_policy);
+        if let Some(proxy) = config.proxy.as_deref() {
+            builder = builder.proxy(reqwest::Proxy::all(proxy).map_err(ApiError::Client)?);
+        }
+        let http = builder.build().map_err(ApiError::Client)?;
         Ok(Self { http, base_url })
     }
 

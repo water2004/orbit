@@ -14,22 +14,60 @@ use crate::error::OrbitError;
 use async_trait::async_trait;
 pub use download::ArtifactDownloadClient;
 
+#[derive(Clone)]
+pub(crate) struct ProviderHttpConfig {
+    pub timeout: std::time::Duration,
+    pub max_retries: u32,
+    pub proxy: Option<String>,
+    pub max_concurrency: usize,
+    pub download_limiter: std::sync::Arc<tokio::sync::Semaphore>,
+}
+
+impl ProviderHttpConfig {
+    fn from_global(config: &crate::config::GlobalConfig) -> Self {
+        let max_concurrency = config.core.max_concurrent_downloads;
+        Self {
+            timeout: std::time::Duration::from_secs(config.network.timeout),
+            max_retries: config.network.max_retries,
+            proxy: config.network.proxy.clone(),
+            max_concurrency,
+            download_limiter: std::sync::Arc::new(tokio::sync::Semaphore::new(max_concurrency)),
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_default() -> Self {
+        Self::from_global(&crate::config::GlobalConfig::default())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_with_max_concurrency(max_concurrency: usize) -> Self {
+        let mut config = crate::config::GlobalConfig::default();
+        config.core.max_concurrent_downloads = max_concurrency;
+        Self::from_global(&config)
+    }
+}
+
 /// 根据配置创建 provider 列表。顺序只影响无限定搜索的展示顺序。
 pub fn create_providers(
     catalogs: &[String],
-    auth: &crate::config::AuthConfig,
+    config: &crate::config::GlobalConfig,
 ) -> Result<Vec<Box<dyn ModProvider>>, crate::error::OrbitError> {
     let ua = format!("orbit/{}", env!("CARGO_PKG_VERSION"));
+    let http = ProviderHttpConfig::from_global(config);
     let mut providers: Vec<Box<dyn ModProvider>> = Vec::new();
     for name in catalogs {
         match name.as_str() {
             "modrinth" => {
-                providers.push(
-                    Box::new(modrinth::ModrinthProvider::new(&ua, 3)?) as Box<dyn ModProvider>
-                );
+                providers.push(Box::new(modrinth::ModrinthProvider::new(
+                    &ua,
+                    config.auth.modrinth_token.as_deref(),
+                    &http,
+                )?) as Box<dyn ModProvider>);
             }
             "curseforge" => {
-                let api_key = auth
+                let api_key = config
+                    .auth
                     .curseforge_api_key
                     .as_deref()
                     .filter(|key| !key.trim().is_empty())
@@ -39,7 +77,7 @@ pub fn create_providers(
                         config_key: "auth.curseforge_api_key",
                     })?;
                 providers.push(
-                    Box::new(curseforge::CurseForgeProvider::new(api_key, &ua, 3)?)
+                    Box::new(curseforge::CurseForgeProvider::new(api_key, &ua, &http)?)
                         as Box<dyn ModProvider>,
                 );
             }
@@ -62,17 +100,18 @@ pub fn create_providers(
 /// before a manifest exists. Modrinth is always available; authenticated
 /// providers are added only when their credentials are configured.
 pub fn create_identification_providers(
-    auth: &crate::config::AuthConfig,
+    config: &crate::config::GlobalConfig,
 ) -> Result<Vec<Box<dyn ModProvider>>, crate::error::OrbitError> {
     let mut catalogs = vec!["modrinth".to_string()];
-    if auth
+    if config
+        .auth
         .curseforge_api_key
         .as_deref()
         .is_some_and(|key| !key.trim().is_empty())
     {
         catalogs.push("curseforge".to_string());
     }
-    create_providers(&catalogs, auth)
+    create_providers(&catalogs, config)
 }
 
 pub fn find_provider<'a>(
@@ -369,11 +408,11 @@ pub trait ModProvider: Send + Sync {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::AuthConfig;
+    use crate::config::GlobalConfig;
 
     #[test]
     fn curseforge_requires_an_explicit_api_key() {
-        let error = create_providers(&["curseforge".to_string()], &AuthConfig::default())
+        let error = create_providers(&["curseforge".to_string()], &GlobalConfig::default())
             .err()
             .expect("missing key should fail");
         assert!(matches!(
@@ -387,15 +426,11 @@ mod tests {
 
     #[test]
     fn curseforge_rejects_a_whitespace_only_api_key() {
-        let error = create_providers(
-            &["curseforge".to_string()],
-            &AuthConfig {
-                curseforge_api_key: Some("   ".to_string()),
-                modrinth_token: None,
-            },
-        )
-        .err()
-        .expect("blank key should fail");
+        let mut config = GlobalConfig::default();
+        config.auth.curseforge_api_key = Some("   ".to_string());
+        let error = create_providers(&["curseforge".to_string()], &config)
+            .err()
+            .expect("blank key should fail");
         assert!(matches!(
             error,
             OrbitError::ProviderApiKeyRequired {
@@ -407,14 +442,10 @@ mod tests {
 
     #[test]
     fn provider_order_is_preserved_when_curseforge_is_enabled() {
-        let providers = create_providers(
-            &["modrinth".to_string(), "curseforge".to_string()],
-            &AuthConfig {
-                curseforge_api_key: Some("test-key".to_string()),
-                modrinth_token: None,
-            },
-        )
-        .unwrap();
+        let mut config = GlobalConfig::default();
+        config.auth.curseforge_api_key = Some("test-key".to_string());
+        let providers =
+            create_providers(&["modrinth".to_string(), "curseforge".to_string()], &config).unwrap();
         assert_eq!(
             providers
                 .iter()

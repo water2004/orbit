@@ -147,22 +147,15 @@ async fn download_artifact_queue(
         progress.as_ref(),
         ProgressEvent::CandidateDownloadStarted { total },
     );
-    let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(10));
     let completed = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let mut handles = Vec::with_capacity(jobs.len());
     for (downloader, discovered) in jobs {
         let artifact = discovered.artifact;
         let requested = discovered.requested;
         let cache = jar_cache.clone();
-        let semaphore = semaphore.clone();
         let completed = completed.clone();
         let progress = progress.clone();
         handles.push(tokio::spawn(async move {
-            let _permit = semaphore.acquire_owned().await.map_err(|error| {
-                OrbitError::Other(anyhow::anyhow!(
-                    "candidate download queue was closed: {error}"
-                ))
-            })?;
             let filename = artifact.filename.clone();
             emit_progress(
                 progress.as_ref(),
@@ -810,7 +803,7 @@ mod tests {
     async fn discovery_recurses_projects_and_queues_every_matching_version_before_download() {
         let calls = Arc::new(Mutex::new(Vec::new()));
         let provider = DiscoveryProvider {
-            downloader: ArtifactDownloadClient::anonymous("orbit-test").unwrap(),
+            downloader: ArtifactDownloadClient::test_anonymous("orbit-test").unwrap(),
             projects: HashMap::from([
                 (
                     "root".to_string(),
@@ -866,7 +859,7 @@ mod tests {
         let calls = Arc::new(Mutex::new(Vec::new()));
         let shared = related_artifact("shared", "shared", "1", None);
         let provider = DiscoveryProvider {
-            downloader: ArtifactDownloadClient::anonymous("orbit-test").unwrap(),
+            downloader: ArtifactDownloadClient::test_anonymous("orbit-test").unwrap(),
             projects: HashMap::from([("shared".to_string(), vec![shared])]),
             calls: calls.clone(),
         };
@@ -919,7 +912,7 @@ mod tests {
 
         let parsed = download_artifact_queue(
             vec![(
-                ArtifactDownloadClient::anonymous("orbit-test").unwrap(),
+                ArtifactDownloadClient::test_anonymous("orbit-test").unwrap(),
                 DiscoveredRemoteArtifact {
                     artifact: candidate,
                     requested: true,
@@ -960,7 +953,7 @@ mod tests {
     async fn add_discovery_includes_every_version_of_existing_online_packages() {
         let calls = Arc::new(Mutex::new(Vec::new()));
         let provider = DiscoveryProvider {
-            downloader: ArtifactDownloadClient::anonymous("orbit-test").unwrap(),
+            downloader: ArtifactDownloadClient::test_anonymous("orbit-test").unwrap(),
             projects: HashMap::from([
                 (
                     "requested".to_string(),
@@ -1055,7 +1048,7 @@ mod tests {
     #[tokio::test]
     async fn discovery_rejects_a_missing_related_project() {
         let provider = DiscoveryProvider {
-            downloader: ArtifactDownloadClient::anonymous("orbit-test").unwrap(),
+            downloader: ArtifactDownloadClient::test_anonymous("orbit-test").unwrap(),
             projects: HashMap::from([(
                 "root".to_string(),
                 vec![related_artifact("root", "root", "1", Some("missing"))],

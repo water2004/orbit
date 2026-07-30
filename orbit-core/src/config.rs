@@ -402,7 +402,8 @@ impl GlobalConfig {
     /// 优先级：环境变量 > config.toml > 代码默认值
     pub fn load(path: &Path) -> Result<Self, OrbitError> {
         let mut config = Self::load_stored(path)?;
-        config.apply_environment();
+        config.apply_environment()?;
+        config.validate()?;
         Ok(config)
     }
 
@@ -423,22 +424,28 @@ impl GlobalConfig {
             cfg.save(path)?;
             cfg
         };
+        config.validate()?;
         Ok(config)
     }
 
-    fn apply_environment(&mut self) {
+    fn apply_environment(&mut self) -> Result<(), OrbitError> {
         if let Ok(v) = std::env::var("ORBIT_PROXY") {
             self.network.proxy = Some(v);
         }
-        if let Ok(v) = std::env::var("ORBIT_TIMEOUT")
-            && let Ok(n) = v.parse()
-        {
-            self.network.timeout = n;
+        if let Ok(value) = std::env::var("ORBIT_TIMEOUT") {
+            self.network.timeout = value.parse().map_err(|_| {
+                OrbitError::Other(anyhow::anyhow!(
+                    "invalid ORBIT_TIMEOUT value '{value}': expected a positive integer"
+                ))
+            })?;
         }
-        if let Ok(v) = std::env::var("ORBIT_RETRIES")
-            && let Ok(n) = v.parse()
-        {
-            self.network.max_retries = n;
+        if let Ok(value) = std::env::var("ORBIT_RETRIES") {
+            self.network.max_retries = value.parse().map_err(|_| {
+                OrbitError::Other(anyhow::anyhow!(
+                    "invalid ORBIT_RETRIES value '{value}': expected an integer from 0 to {}",
+                    u32::MAX
+                ))
+            })?;
         }
         if let Ok(v) = std::env::var("ORBIT_LANGUAGE") {
             self.core.language = v;
@@ -449,10 +456,57 @@ impl GlobalConfig {
         if let Ok(v) = std::env::var("ORBIT_MODRINTH_TOKEN") {
             self.auth.modrinth_token = Some(v);
         }
+        Ok(())
+    }
+
+    /// Validate values that can otherwise create a stalled or ambiguous
+    /// runtime. Deserialization alone cannot express these numeric and URL
+    /// invariants.
+    pub fn validate(&self) -> Result<(), OrbitError> {
+        if self.core.max_concurrent_downloads == 0 {
+            return Err(invalid_value(
+                ConfigKey::CoreMaxConcurrentDownloads,
+                "must be greater than zero",
+            ));
+        }
+        if self.network.timeout == 0 {
+            return Err(invalid_value(
+                ConfigKey::NetworkTimeout,
+                "must be greater than zero",
+            ));
+        }
+        if let Some(proxy) = self.network.proxy.as_deref() {
+            if proxy.trim().is_empty() {
+                return Err(invalid_value(ConfigKey::NetworkProxy, "must not be empty"));
+            }
+            reqwest::Proxy::all(proxy).map_err(|error| {
+                invalid_value(
+                    ConfigKey::NetworkProxy,
+                    &format!("expected a valid proxy URL: {error}"),
+                )
+            })?;
+        }
+        for (key, value) in [
+            (
+                ConfigKey::AuthCurseforgeApiKey,
+                self.auth.curseforge_api_key.as_deref(),
+            ),
+            (
+                ConfigKey::AuthModrinthToken,
+                self.auth.modrinth_token.as_deref(),
+            ),
+        ] {
+            if value.is_some_and(|value| value.trim().is_empty()) {
+                return Err(invalid_value(key, "must not be empty when configured"));
+            }
+        }
+        self.cache.capacity_bytes()?;
+        Ok(())
     }
 
     /// 保存到 config.toml
     pub fn save(&self, path: &Path) -> Result<(), OrbitError> {
+        self.validate()?;
         if let Some(parent) = path
             .parent()
             .filter(|parent| !parent.as_os_str().is_empty())
@@ -518,7 +572,7 @@ pub fn persist_config_field(
             "updated config.toml failed schema validation: {error}"
         ))
     })?;
-    validated.cache.capacity_bytes()?;
+    validated.validate()?;
     write_atomic(path, rendered.as_bytes())
 }
 
@@ -915,6 +969,33 @@ dir = "D:/Games/OrbitCache"
         ConfigKey::NetworkProxy.unset(&mut config);
         assert_eq!(config.cache.capacity_mib, 5 * 1024);
         assert_eq!(ConfigKey::NetworkProxy.get(&config), ConfigValue::Absent);
+    }
+
+    #[test]
+    fn runtime_validation_rejects_values_that_would_stall_network_work() {
+        let mut config = GlobalConfig::default();
+        config.core.max_concurrent_downloads = 0;
+        assert!(config.validate().is_err());
+
+        let mut config = GlobalConfig::default();
+        config.network.timeout = 0;
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn runtime_validation_rejects_an_invalid_proxy() {
+        let mut config = GlobalConfig::default();
+        config.network.proxy = Some("://invalid".to_string());
+        let error = config.validate().unwrap_err().to_string();
+        assert!(error.contains("network.proxy"));
+    }
+
+    #[test]
+    fn runtime_validation_rejects_blank_credentials() {
+        let mut config = GlobalConfig::default();
+        config.auth.modrinth_token = Some("  ".to_string());
+        let error = config.validate().unwrap_err().to_string();
+        assert!(error.contains("auth.modrinth-token"));
     }
 
     #[test]

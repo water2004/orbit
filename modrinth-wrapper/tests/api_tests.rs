@@ -2,7 +2,11 @@ use modrinth_wrapper::Client;
 use modrinth_wrapper::api::{ListVersionsParams, SearchParams};
 
 fn create_client() -> Client {
-    Client::new("test-user-agent-fabric-api (https://github.com/test/test)").unwrap()
+    Client::new(
+        "test-user-agent-fabric-api (https://github.com/test/test)",
+        &modrinth_wrapper::ClientConfig::default(),
+    )
+    .unwrap()
 }
 
 macro_rules! require_live_modrinth {

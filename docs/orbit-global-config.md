@@ -162,6 +162,13 @@ continuation run 和 maximality probe 作为工作单元：新分支出现时总
 classpath 准备、artifact、Mixin、Transformer 与冲突分析。plain 模式按比例节流，
 不会逐个打印 artifact 文件名。
 
+所有 provider 元数据请求和 artifact 下载统一消费 `network.timeout`、
+`network.max_retries` 与 `network.proxy`。可重试范围是连接错误、HTTP 408、429 与 5xx；
+非瞬态 4xx 不重试。`core.max_concurrent_downloads` 是同一次命令中所有 provider 共享的
+artifact 下载许可数，不会因同时启用 Modrinth 和 CurseForge 而分别放大。
+`auth.modrinth_token` 作为 Modrinth `Authorization` 请求头使用；CurseForge Key 则只
+进入官方 API 和限定 HTTPS 域名的 CDN 下载请求。两种凭据都不会进入 lockfile。
+
 首次加载不存在的配置文件时，Orbit 在解析出的路径创建默认文件。环境变量随后覆盖内存
 值：
 
@@ -235,10 +242,7 @@ environment 验证布局，不修改真实用户目录。
 
 以下字段已正确加载和保存，但运行路径尚未完整消费；这是实现差距，不是废弃 schema：
 
-- `core.max_concurrent_downloads`：统一候选下载当前使用固定有界并发；
-- `network.proxy`、timeout、retry：各 HTTP client 尚未统一由配置构造；
-- `auth.modrinth_token`：尚未传入 Modrinth client；
 - `language` 与 `ui.color`：CLI 本地化和颜色策略尚未接入；`ui.progress_bar` 已接入。
 
-CurseForge API Key 已真实接入 provider 创建、Core API 与受限 CDN 下载。Key 不进入
-lockfile、日志或错误正文。
+下载并发、统一 proxy/timeout/retry、Modrinth token 与 CurseForge API Key 均已真实
+接入。凭据不进入 lockfile、日志或错误正文。

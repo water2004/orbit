@@ -659,7 +659,8 @@ mod tests {
         let cache = crate::jar_cache::JarCache::open(cache_dir.clone()).unwrap();
         cache.store_bytes(&bytes).unwrap();
         let sha512 = sha512_digest(&bytes);
-        let downloader = crate::providers::ArtifactDownloadClient::anonymous("orbit-test").unwrap();
+        let downloader =
+            crate::providers::ArtifactDownloadClient::test_anonymous("orbit-test").unwrap();
 
         let metadata = download_and_parse(
             &cache,
