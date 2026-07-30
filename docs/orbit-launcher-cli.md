@@ -61,8 +61,7 @@ orbit-launcher [--instance <id|name>] instance rename <new-name>
 orbit-launcher [--instance <id|name>] instance configure \
   [--minecraft <requirement>] \
   [--loader <vanilla|fabric|quilt|forge|neoforge>] \
-  [--loader-version <requirement>] \
-  [--java-policy <auto|managed>]
+  [--loader-version <requirement>]
 orbit-launcher [--instance <id|name>] instance remove
 orbit-launcher instance default set <id|name>
 orbit-launcher instance default clear
@@ -99,8 +98,9 @@ orbit-launcher java verify <runtime-id>
 orbit-launcher java remove <runtime-id>
 ```
 
-配置键是稳定协议，目前包括网络并发数与超时、installer 超时、缓存上限、Java 默认来源，
-以及进度条和颜色偏好。`list`/`get` 会区分显式值与默认值；`unset` 删除显式值并恢复
+配置键是稳定协议，目前包括网络并发数与超时、installer 超时、缓存上限，以及进度条和
+颜色偏好。Java 只使用 Minecraft 官方元数据指定的 Mojang 受管 runtime，不暴露最终必然
+失败的 provider 选择。`list`/`get` 会区分显式值与默认值；`unset` 删除显式值并恢复
 默认值。修改经过强类型解析和完整配置校验后原子写入，同时保留已有 TOML 注释。External
 Yggdrasil provider 属于复合对象，由 `config yggdrasil` 的强类型命令管理，不接受任意 TOML
 路径写入。`add` 接受站点地址或精确 API root：缺少协议时只补全 HTTPS，随后执行
@@ -165,8 +165,8 @@ version manifest v2 的完整有序目录、类型、发布时间及 latest 标�
 component/major。新建、更新和修复复用这些只读目录与同一个 `configure -> install` 事务。
 
 非 Vanilla Loader 必须提供 `--loader-version`；Vanilla 禁止提供该参数。当前 `create` 只
-建立用户意图和全局注册，不下载任何内容。一次命令创建并安装将由真实安装事务入口
-`install --new` 提供，不会复用 `instance create` 伪装安装成功。bootstrap 失败时会注销临时
+建立用户意图和全局注册，不下载任何内容。一次命令创建并安装由真实安装事务入口
+`install --new` 提供，不复用 `instance create` 伪装安装成功。bootstrap 失败时会注销临时
 实例并删除 provisional manifest，不删除用户文件。
 
 当前 `install` 接受 Vanilla/Fabric/Quilt/Forge/NeoForge client/server 实例。它先解析 Mojang version manifest v2、
@@ -177,7 +177,9 @@ component/major。新建、更新和修复复用这些只读目录与同一个 `
 全部 legacy virtual/resources 逻辑映射。
 文件按上游 SHA-1 校验后进入本地 SHA-256 CAS；下载可并发，runtime 和实例分别在 staging
 中验证后原子提交。旧 lock 拥有但新精确状态不再需要的文件会在同一事务中移除；目标位置
-已有但不属于旧 lock 的文件时拒绝覆盖。
+已有但不属于旧 lock 的文件时拒绝覆盖。实例写事务使用跨进程独占文件锁；进程崩溃留下的
+有效 journal 会在下一次 `install` 取得锁后自动回滚，损坏或包含非规范化路径的 journal
+会明确拒绝，不依赖不存在的手动 repair 命令。
 
 Java 下载不是 GUI 或独立脚本的第二条实现：`install` 根据目标 Minecraft 官方 version JSON
 中的 component/major 解析 Mojang Java runtime manifest，将全部文件加入统一下载队列，逐项
@@ -285,8 +287,7 @@ rename，跨卷逐文件复制并用 SHA-256 验证后才切换注册表与配�
     "desired": {
       "minecraft": "1.21.1",
       "loader": "fabric",
-      "loader_version": "stable",
-      "java_policy": "auto"
+      "loader_version": "stable"
     },
     "installed": {
       "minecraft": "1.21.1",

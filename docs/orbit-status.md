@@ -33,6 +33,8 @@
 | 跨平台全局路径 | ✅ | RuntimeEnvironment + 显式路径；system/executable 布局 |
 | Windows MSI | ✅ | x64 per-machine 完整套件；三个相邻程序、开始菜单入口、可选系统 PATH、同版本重建升级、维护模式、可选清理默认 AppData；发布产物仍需项目证书签名 |
 | Linux deb / Release | ✅ | amd64 拆为可独立安装的 `orbit`、`orbit-launcher`、`orbit-gui`；GUI 精确依赖同版本两 CLI 并独占 desktop/icon；统一 `v*` tag 发布 MSI、三个 deb、SHA256SUMS 与 release notes |
+| Launcher Java | ✅ | Minecraft 官方 metadata 选择 Mojang 受管 runtime；下载、逐文件校验、共享、启动前复核与安全删除闭环；不受支持的 Temurin/system 分支不进入 config、实例 schema 或 GUI |
+| Launcher 安装事务 | ✅ | OS 独占文件锁串行化实例写入；journal 支持崩溃后自动安全回滚，并验证路径、文件集合与复用工件 |
 | 长事务进度 | ✅ | 包操作与 audit 均使用 core 强类型事件；候选/审计工件精确计数，求解工作总量随实际 run/probe 动态增长 |
 | JSON / 自动化输出 | ✅ | 全局 `--output-format text\|json` 与 `--progress-format none\|ndjson`；`export --format zip\|mrpack` 只选择归档类型；JSON 结果 + NDJSON 进度/交互 + stdin 响应 + 结构化错误与稳定错误码共用 schema 2；`--quiet` 统一抑制成功结果/信息/进度但保留必需交互；协议严格 UTF-8，字段/枚举码不随语言变化；view-model 层隔离哈希/文件名/密钥，并在现有 search/info 契约提供官方 icon/link/gallery 展示数据 |
 | 全局配置命令 | ✅ | `config path/list/get/set/unset`；强类型校验、单字段原子更新、注释保留、密钥脱敏、环境覆盖不回写；网络/并发/认证/cache 进入共享服务，语言/颜色/进度进入 CLI 展示边界 |
@@ -145,7 +147,8 @@
 - project 闭包的总工作量事前未知，因此显示当前 locator、已发现 artifact 与耗时。
   Pareto 枚举的总量随 continuation run、preference probe、maximality probe 的实际发现而增长，完成数同步
   推进；它不构成剩余耗时上界，Pareto 或 co-Pareto front 本身仍可能很大。候选 JAR
-  下载/校验/解析及最终物化使用预先稳定的精确总数。
+  下载/校验/解析及最终物化使用预先稳定的精确总数。远端准备受全局并发上限约束；最终
+  实例写入按确定顺序发布，避免把并发下载优化错误扩展成并发修改同一实例。
 
 ## 6. 文档索引
 

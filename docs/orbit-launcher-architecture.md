@@ -1,8 +1,8 @@
-# Orbit Launcher 架构草案
+# Orbit Launcher 架构
 
-> 状态：首个可运行基线已实现（2026-07-28）。当前可用命令以
-> [`orbit-launcher-cli.md`](orbit-launcher-cli.md) 为准；本文同时保留明确标为“规划”的后续能力，
-> 规划内容不等于当前 CLI 已宣称支持。
+> 状态：当前实现（2026-07-30）。可用命令以
+> [`orbit-launcher-cli.md`](orbit-launcher-cli.md) 为准。早期方案中没有落实且已由更小组合
+> 取代的命令不再保留为“规划”，避免把历史设计草案误读成产品承诺。
 >
 > 本文定义 `orbit-launcher` 的产品边界、领域模型、CLI 协议、平台策略与实现顺序。
 > 文中的“必须”“不得”是实现约束；“建议”“待定”用于标出需要在评审后固化的决策。
@@ -10,7 +10,7 @@
 ## 1. 目标
 
 `orbit-launcher` 是独立的 Minecraft Java Edition CLI Launcher。它负责构造、更新并启动
-一个完整的 Minecraft 客户端或独立服务端运行时，同时为未来 GUI 提供稳定的 JSON 与
+一个完整的 Minecraft 客户端或独立服务端运行时，同时为原生 GUI 提供稳定的 JSON 与
 NDJSON 进程协议。
 
 Launcher 负责：
@@ -18,7 +18,7 @@ Launcher 负责：
 - Minecraft 客户端、服务端及其官方元数据；
 - Fabric、Quilt、Forge、NeoForge Loader 的下载、安装与更新；
 - libraries、assets、natives、logging 配置与启动参数；
-- Java 运行时的发现、下载、校验、选择、固定与更新；
+- Mojang 官方 Java 运行时的解析、下载、校验、固定与共享；
 - 客户端账户登录、令牌刷新和安全存储；
 - 客户端与独立服务端进程的启动、监视和停止；
 - 全局实例注册、当前目录实例上下文和一次命令创建并安装实例；
@@ -73,7 +73,7 @@ orbit-launcher-core
   metadata/mojang         版本清单、version JSON、规则与继承
   loader/{fabric,quilt,forge,neoforge}
                           Loader 特有的版本发现和安装 adapter
-  java                    Java requirement、provider、runtime 和校验
+  java                    Mojang Java requirement、受管 runtime 和校验
   account                 Microsoft / Offline / External Yggdrasil
   authlib_injector        外置认证 agent 下载、校验与 client/server 启动参数
   artifact                下载计划、内容缓存、哈希和物化
@@ -130,7 +130,7 @@ profile；精确主 JAR 和共享 Loader/library classpath 全部由 lock 记录
 3. 全局默认实例（仅只读命令）；
 4. 否则返回 `instance_context_required`。
 
-不得向父目录递归猜测实例。`install`、`update`、`repair`、`launch`、`server start/stop/command`
+不得向父目录递归猜测实例。`install`、`instance configure`、`launch`、`server start/stop/command`
 等写入、启动或控制进程的命令，不得从无关目录静默使用全局默认实例；GUI 应始终传稳定
 `id`。当前目录已有实例或显式传入 `--instance` 时不受此限制。
 
@@ -154,7 +154,7 @@ TargetPlatform
 | Client | 必须 | 必须 | 条件支持 | 必须 | 必须 |
 | DedicatedServer | 必须 | 必须 | 必须 | 支持 | 支持 |
 
-“条件支持”表示 Minecraft、Loader 和 Java provider 都能提供该平台所需 artifact；缺少
+“条件支持”表示 Minecraft、Loader 和 Mojang Java runtime 都能提供该平台所需 artifact；缺少
 官方 artifact 时必须报 `unsupported_target_artifact`，不得下载另一架构后尝试启动。
 
 ### 4.3 版本意图与锁定状态
@@ -164,7 +164,6 @@ TargetPlatform
 ```text
 MinecraftRequirement = Exact(version) | LatestRelease | LatestSnapshot
 LoaderRequirement    = None | Exact(kind, version) | LatestStable(kind) | Latest(kind)
-JavaPolicy           = Managed(provider) | System(path) | ExactManaged(runtime_id)
 ```
 
 锁定状态记录一次解析后的精确事实：
@@ -181,7 +180,8 @@ LockedRuntime
   generated runtime files
 ```
 
-`Latest*` 只在 `install` 或 `update` 的计划阶段解析。`launch` 永远使用 lock 中的精确
+`Latest*` 只在 `install` 的计划阶段解析。`instance configure` 只修改期望值，随后由
+`install` 解析并提交。`launch` 永远使用 lock 中的精确
 状态，不在启动时隐式检查更新。
 
 ## 5. 文件与目录
@@ -271,7 +271,7 @@ orbit-launcher.lock           artifact 来源、hash、路径和事务事实
 | 持久层 | 内容 | 可否由用户编辑 |
 | --- | --- | --- |
 | 官方 JSON/profile | Mojang 与 Loader 发布的版本、库、参数和 hash 事实；按原文缓存 | 否 |
-| `orbit-launcher.toml` | Minecraft/Loader 版本要求、Java policy、内存/JVM 参数、账户引用、服务端重启与认证策略 | 是 |
+| `orbit-launcher.toml` | Minecraft/Loader 版本要求、内存/JVM 参数、账户引用、服务端重启与认证策略 | 是 |
 | `orbit-launcher.lock` | 精确解析版本、artifact inventory、相对路径、hash、main class 和已生成运行时事实 | 否 |
 
 TOML 可以引用非秘密账户 ID 和 External Yggdrasil provider ID，但 access/refresh token、
@@ -352,7 +352,7 @@ SHA-256 digest 明确询问用户是否同意。终端文本模式完整写出�
 JSON、GUI 和其他非交互调用使用两步协议：`server eula show` 返回完整正文、官方 URL、
 获取时间与 digest；随后 `server eula accept <digest>` 或 bootstrap 的等价参数只接受刚刚
 展示的 digest。Launcher 在实例 lock 中记录 URL、digest、接受时间和交互方式，不记录用户
-身份信息。官方正文 digest 变化后，下一次 server install/update 必须重新展示并确认；launch
+身份信息。官方正文 digest 变化后，下一次 server install 必须重新展示并确认；launch
 不隐式联网检查 EULA。无法取得完整正文时停止安装，不能用缓存摘要或旧链接伪造确认。
 
 后台服务由一个持续拥有子进程 stdin 的 supervisor 管理。`server start` 同时提供本地 IPC、
@@ -398,26 +398,21 @@ Loader 更新只替换 lock 中由 Launcher 拥有的运行时文件。其他实
 
 ### 8.1 Java requirement
 
-Java 要求按来源合并：
+Java 要求只读取目标 Minecraft version JSON 的 `javaVersion.component` 和
+`majorVersion`。Launcher 不按版本号推测 Java、不允许 Loader adapter 或用户配置静默改写
+官方 component。字段存在但为空或 major 为零时属于无效远端数据；字段缺失时当前安装明确
+返回不支持，不用散落的 `if minecraft >= ...` compatibility 表猜测。
 
-1. Minecraft version JSON 的 `javaVersion.component` 和 `majorVersion`；
-2. Loader 官方 metadata/installer 明确给出的更严格要求；
-3. 对缺失 `javaVersion` 的旧版本，使用有来源、版本化且可测试的 compatibility policy；
-4. 用户显式的 Java 选择只能比最低要求更严格，不能绕过不兼容检查。
+### 8.2 受管来源
 
-规则必须产出 `JavaRequirementReason`，错误中说明要求来自 Minecraft、Loader 还是用户
-配置。禁止散落硬编码 `if minecraft >= ...`。
+Launcher 的 Java 事实来源只有 Minecraft version JSON 指向的 Mojang Java Runtime
+manifest。实例没有 Java policy 或 provider 选择；目标 Minecraft 声明的 component 始终
+进入唯一一条逐文件校验路径。没有 Temurin 分支或 system-Java 兜底。Mojang 没有为当前
+平台发布所需 component 时明确返回 `unsupported_requirement`。
 
-### 8.2 Provider
-
-建议首版支持：
-
-- `mojang`：Mojang Java Runtime manifest；
-- `temurin`：Eclipse Temurin，用于 Mojang 未覆盖的平台；
-- `system`：用户显式指定或选择的本机 Java，不由 Launcher 更新。
-
-`auto` 若存在，必须是文档化的确定性 provider 顺序，而不是异常后的静默兜底。解析结果
-要在计划中显示最终 provider、版本、架构和下载大小，用户确认后才能执行。
+早期草案曾列出 Temurin 与 system Java，但代码只暴露设置而没有实现安装/lock/启动闭环，
+属于错误的产品入口，现已从 config schema、GUI 和实例枚举中删除。以后若引入另一来源，
+必须同时完成下载、校验、lock、启动和平台矩阵，不能先增加一个最终必然失败的选项。
 
 ### 8.3 校验和更新
 
@@ -431,8 +426,7 @@ Java 要求按来源合并：
 - 允许多个实例共享同一 runtime；
 - 更新时保留仍被 lock 引用的旧 runtime。
 
-系统 Java 不因路径存在就视为有效；每次选择和必要的 launch preflight 都要验证可执行文件
-及其报告的平台。Launcher 不修改系统 `PATH`。
+Launcher 不修改系统 `PATH`，也不把当前 shell 恰好能找到的 Java 当作可复现实例事实。
 
 ## 9. 下载、缓存与事务
 
@@ -481,19 +475,23 @@ Launcher 缓存采用内容寻址和命令结束后的 LRU 清理：
 - 容量可由 `config get/set cache.max-size` 管理；
 - 访问时间通过单命令 journal 合并，避免每个下载 worker 竞争写索引；
 - 清理失败不回滚已经成功的实例事务，但必须返回 warning；
-- `cache clean`、`cache gc` 和 `cache verify` 提供 JSON 报告。
+- cache 是安装事务的内部 CAS，不暴露另一套手动 clean/gc/verify 命令；安装结束按容量执行
+  校验与淘汰，避免用户绕过受保护引用。
 
 ### 9.4 事务
 
-实例内一次只能有一个写事务。锁必须包含进程 ID、开始时间、命令和可验证的进程身份，
-不能仅凭旧 PID 判断锁仍存活。
+实例内一次只能有一个写事务。并发所有权由操作系统独占文件锁判定；锁文件中的进程 ID、
+开始时间、命令和可执行文件只用于诊断，绝不能用旧 PID 猜测锁是否仍存活。进程退出时内核
+释放锁，因此遗留的锁文件本身不会阻止下一次安装。
 
 事务规则：
 
 - 下载和 installer 只写 staging；
 - 旧运行时在新运行时验证完成前不删除；
 - lock 最后写入并使用临时文件 + atomic replace；
-- 崩溃后 `repair` 根据 transaction journal 完成回滚或提交；
+- 进程内提交失败根据 transaction journal 回滚；进程崩溃后，下一次安装先取得同一独占锁，
+  校验 journal 的 schema、规范化路径和文件集合，再恢复备份、移除已提交的新文件并保留
+  明确标记为复用的共享文件；journal 损坏或状态不足以安全恢复时明确拒绝；
 - 跨卷无法原子 rename 时，计划阶段必须显示降级策略；
 - 未记录为 Launcher 所有的文件永远不进入 Launcher 删除集合。
 
@@ -560,7 +558,7 @@ Windows backend 使用当前用户作用域 DPAPI 保护任意长度的版本化
 Service。两者都应在同一操作系统登录会话中静默读取，不要求用户重复登录游戏账户。
 
 无 Secret Service 的 headless Linux 当前明确返回 `secret_store`，不静默降级到明文或内置
-应用密钥混淆。加密 vault 与 credential agent 属于后续规划，当前不能写进可用能力列表。
+应用密钥混淆。内置加密 vault 与 credential agent 不在当前安全边界，不能写进可用能力列表。
 纯服务端 External Yggdrasil/Authlib Injector 配置不含用户 token，因此不依赖桌面 keyring。
 
 HMCL 只作为“公开账户 metadata 与私有可续期 session 分离、启动时静默 validate/refresh”
@@ -662,24 +660,20 @@ Domain Socket 只存在于平台 IPC 模块，不进入安装或账户领域。
 
 ## 13. CLI 设计
 
-目标命令树如下；其中尚未出现在当前 CLI 的节点仍是规划，不是空壳命令：
+当前命令树如下：
 
 ```text
 orbit-launcher
-  instance create|import|list|show|rename|remove|default
+  instance create|import|list|show|rename|configure|remove|default
   versions minecraft|loader|java
   minecraft directory|move
   install [--new <name>] [--server-directory <path>] [--kind <client|server>]
-  update [--minecraft] [--loader] [--java]
-  verify
-  repair
   launch
   server eula show|accept
   server run|start|stop|status|command
-  java list|discover|install|select|update|remove
-  account login|list|show|refresh|select|logout
-  cache info|verify|gc|clean
-  config path|get|set|unset|list
+  java list|verify|remove
+  account login|list|show|refresh|select|clear|logout
+  config path|get|set|unset|list|yggdrasil
 ```
 
 Fabric/Quilt 的官方 profile 与 Forge/NeoForge installer profile 都是远端或安装过程输入，
@@ -692,8 +686,13 @@ Forge/NeoForge installer 临时生成的客户端 profile 在提取运行时事�
 当前 Java 管理已实现 `java list [--verify]`、`java verify <runtime-id>` 和
 `java remove <runtime-id>`。下载与更新不另设一条旁路：实例 `install` 根据官方 Minecraft
 version JSON 解析所需 Java component，把 Mojang runtime 与游戏/Loader 一起纳入同一个安装
-事务。删除前扫描全部已注册实例 lock；仍被引用的 runtime 必须拒绝删除。`discover`、手动
-`install/select/update` 仍是规划节点，不得由 GUI 猜测或模拟。
+事务。删除前扫描全部已注册实例 lock；仍被引用的 runtime 必须拒绝删除。Java 不另设
+discover/install/select/update 旁路，GUI 也不得模拟这些不存在的命令。
+
+早期草案中的顶层 `update`、`verify`、`repair` 和 `cache` 命令已经被更清晰的组合取代，
+不是待实现功能：运行时期望由 `instance configure` 修改，再由同一个 `install` 事务重新
+解析、校验和提交；`launch` 总会做完整 preflight；受管 Java 有独立 verify；CAS 校验与容量
+淘汰属于安装事务收尾。这样不会维护第二套更新或修复语义。
 
 版本选择的只读面已经实现为 `versions minecraft`、`versions loader` 和 `versions java`。
 它们与安装器复用同一 Mojang/Loader 官方 metadata adapter；前端只展示并提交精确 choice，
@@ -728,15 +727,15 @@ text + TTY 可以选择版本、账户和更新方案。以下情况禁止 promp
 ```text
 # 当前目录尚无实例：创建、注册并完整安装
 orbit-launcher install --new main-server --kind server \
-  --minecraft 1.21.1 --loader fabric --loader-version stable --java auto
+  --minecraft 1.21.1 --loader fabric --loader-version stable
 
 # 客户端始终进入托管仓库的 instances/<name>，不接受自由 root
 orbit-launcher install --new main-client --kind client \
-  --minecraft latest-release --loader fabric --loader-version stable --java auto
+  --minecraft latest-release --loader fabric --loader-version stable
 
 # 服务端可明确选目录；缺省仍为当前目录
 orbit-launcher install --new main-server --server-directory <path> --kind server \
-  --minecraft 1.21.1 --loader fabric --loader-version stable --java auto
+  --minecraft 1.21.1 --loader fabric --loader-version stable
 
 # 已有局部或显式全局实例
 orbit-launcher install
@@ -812,22 +811,15 @@ JSON 错误写入 stderr，使用稳定 code：
 
 ### 14.3 退出码
 
-建议：
-
 | code | 含义 |
 | --- | --- |
 | 0 | 成功 |
-| 1 | 一般运行错误 |
+| 1 | 运行错误，或启动的游戏/服务端进程返回非成功状态 |
 | 2 | CLI 参数错误 |
-| 3 | 网络或远端服务暂时失败 |
-| 4 | 非交互模式需要用户选择/确认 |
-| 5 | 安装或 lock 损坏，需要 repair |
-| 6 | 账户或授权失败 |
-| 7 | 子进程（Loader installer、Java、Minecraft）失败 |
 
 稳定的 JSON `code` 比数值退出码更精细。
 
-## 15. 配置草案
+## 15. 配置
 
 全局 `config.toml`：
 
@@ -845,9 +837,6 @@ max_size = "20 GiB"
 [minecraft]
 # 缺省为平台 data 目录下的 minecraft；必须是绝对路径。
 directory = "/srv/orbit-client-repository"
-
-[java]
-default_provider = "mojang"
 
 [[yggdrasil.providers]]
 id = "private-auth"
@@ -872,10 +861,6 @@ requirement = "1.21.1"
 [loader]
 kind = "fabric"
 requirement = "stable"
-
-[java]
-policy = "managed"
-provider = "mojang"
 
 [launch]
 min_memory_mib = 512
@@ -902,36 +887,16 @@ provider = "mojang" # mojang / external-yggdrasil
 所有字段都必须可由 `config` 或相应领域命令修改。用户不应为了普通操作被迫手改 TOML。
 直接编辑仍受支持，但下次读取时必须进行 schema 和语义校验。
 
-## 16. 更新语义
+## 16. 运行时变更语义
 
-`update` 先生成方案，不直接写磁盘：
+Launcher 不维护独立 `update` 求解器。`versions minecraft|loader|java` 返回与安装器共用的
+权威目录，`instance configure` 只原子修改期望 Minecraft/Loader，随后同一个 `install`
+事务重新解析完整运行时、下载、校验并替换 Launcher 拥有的 artifact。Java component
+始终由目标 Minecraft/Loader 要求推导，不是用户自由选择的更新轴。
 
-```text
-Current
-  Minecraft 1.21.1
-  Fabric 0.16.10
-  Java 21.0.5
-
-Candidate A
-  Minecraft unchanged
-  Fabric 0.16.14
-  Java unchanged
-
-Candidate B
-  Minecraft 1.21.4
-  Fabric 0.16.14
-  Java 21.0.6
-```
-
-规则：
-
-- `--minecraft`、`--loader`、`--java` 限定允许变化的轴；
-- 至少一个被允许轴严格更新才称为 update；
-- 依赖关系要求时，另一个轴可以随方案变化，但必须高亮；
-- 多个有效方案在 text 模式中询问，JSON 模式返回 choices；
-- 唯一方案若会删除或替换 runtime 文件，仍在执行前报告；
-- `--yes` 只确认当前完整 plan digest，plan 变化后必须重新确认；
-- update 只处理 Launcher lock 中的 runtime artifact，不触碰其他实例文件。
+GUI 的 Loader 小版本更新可在原实例执行 `configure --loader-version <exact>` 后安装；
+Minecraft 或 Loader 类型迁移创建新实例，避免破坏源运行时。无论哪种路径，Launcher 都
+不触碰 mod、配置、存档等不透明实例内容，也不存在另一套“repair 后再 install”的状态机。
 
 ## 17. 安全约束
 
@@ -978,7 +943,7 @@ artifact/实例的逻辑名称和可操作的 recovery。不得直接把 reqwest
 
 - Mojang version inheritance 和 rule evaluation；
 - 每个 Loader adapter 的 metadata/installer schema；
-- Java requirement 合并和平台映射；
+- Mojang Java requirement 解析和平台映射；
 - placeholder、classpath、native classifier 和 argument 生成；
 - JSON envelope、NDJSON sequence、脱敏和错误 code；
 - archive 路径安全；
@@ -992,7 +957,7 @@ artifact/实例的逻辑名称和可操作的 recovery。不得直接把 reqwest
 ### 19.3 集成测试
 
 - 本地 mock HTTP server：超时、断点、ETag、hash mismatch、动态 plan total；
-- 临时实例：install、update、失败回滚、repair；
+- 临时实例：install、configure 后重装与进程内失败回滚；
 - 伪 Java 可执行文件：版本/架构不匹配；
 - Windows、Linux、macOS CI 的路径、权限、参数和进程行为；
 - 真实网络 smoke test 独立于普通 CI，不能成为确定性测试的前提。
@@ -1031,8 +996,9 @@ LaunchPlan golden test。没有测试覆盖的组合不得笼统宣称“支持�
 2. **Microsoft 应用注册**：项目自有的 Entra public-client ID 固定在 core 中；它不是秘密，
    不进入用户配置或 CI secret。开发与 release 使用完全相同的认证路径，token 仍只进入
    操作系统秘密存储。
-3. **Java provider**：当前安装事务只支持 Mojang 受管 runtime。Temurin 和 system Java 是
-   规划能力；在完整下载、校验和平台测试落地前不得宣称支持，也不得作为异常后的静默回退。
+3. **Java runtime**：安装事务只使用 Minecraft 官方元数据选择 Mojang 受管 runtime。
+   Temurin 与 system Java 不在当前产品模型中，config、实例 schema 和 GUI 均不暴露；
+   不能作为异常后的静默回退。
 4. **服务端后台模式**：`server start` 与 supervisor、IPC、stop、自动重启一起交付；不实现
    Windows Service、systemd/launchd service、开机启动或退出登录后继续运行。
 5. **旧版本范围**：支持声明按 fixture 和 LaunchPlan golden test 逐步扩大；未覆盖组合不得
