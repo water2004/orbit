@@ -4,7 +4,7 @@ use orbit_machine_protocol::{
 };
 use serde_json::Value;
 
-use crate::model::{AuditFinding, AuditSummary};
+use crate::model::{AuditFinding, AuditNotice, AuditSummary};
 
 pub fn success_document(document: &str) -> Result<SuccessEnvelope<Value>> {
     let envelope: SuccessEnvelope<Value> =
@@ -168,7 +168,7 @@ fn progress_event_label(event: &str) -> String {
     orbit_i18n::text(key).into_owned()
 }
 
-fn humanize(value: &str) -> String {
+pub(crate) fn humanize(value: &str) -> String {
     let mut output = String::with_capacity(value.len());
     let mut previous_lowercase = false;
     for character in value.chars() {
@@ -190,86 +190,129 @@ fn humanize(value: &str) -> String {
     output
 }
 
-pub fn audit_summary(result: &Value) -> AuditSummary {
-    let readiness = result
-        .pointer("/readiness/status")
-        .and_then(Value::as_str)
-        .unwrap_or("unknown")
-        .to_string();
-    let artifacts = result
-        .get("artifacts")
-        .and_then(Value::as_array)
-        .map_or(0, Vec::len);
-    let warnings = result
-        .get("warnings")
-        .and_then(Value::as_array)
-        .map_or(0, Vec::len);
-    let coverage_gaps = result
-        .get("coverage_gaps")
-        .and_then(Value::as_array)
-        .map_or(0, Vec::len);
+pub fn audit_summary(result: &Value) -> Result<AuditSummary> {
+    let readiness_value = result
+        .get("readiness")
+        .context("audit result is missing readiness")?;
+    let readiness = required_string_field(readiness_value, "status")?;
+    let readiness_message = required_string_field(readiness_value, "message")?;
+    let loader = optional_string_field(readiness_value, "loader")?;
+    let capability_values = match readiness_value.get("capabilities") {
+        None => &[][..],
+        Some(value) => value
+            .as_array()
+            .context("audit readiness capabilities must be an array")?
+            .as_slice(),
+    };
+    let capabilities = capability_values
+        .into_iter()
+        .enumerate()
+        .map(|(index, capability)| {
+            capability
+                .as_str()
+                .map(str::to_string)
+                .with_context(|| format!("audit capability {index} must be a string"))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let namespace = result
+        .get("namespace")
+        .context("audit result is missing namespace")?;
+    let runtime_namespace = optional_string_field(namespace, "runtime_namespace")?;
+    let artifacts = required_array(result, "artifacts")?.len();
+    let warnings = required_array(result, "warnings")?
+        .iter()
+        .map(|warning| {
+            Ok(AuditNotice {
+                artifact: optional_string_field(warning, "artifact_id")?,
+                scope: required_string_field(warning, "scope")?,
+                kind: required_string_field(warning, "kind")?,
+                detail: required_string_field(warning, "message")?,
+                count: 1,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let coverage_gaps = required_array(result, "coverage_gaps")?
+        .iter()
+        .map(|gap| {
+            Ok(AuditNotice {
+                artifact: optional_string_field(gap, "artifact_id")?,
+                scope: required_string_field(gap, "scope")?,
+                kind: required_string_field(gap, "kind")?,
+                detail: required_string_field(gap, "detail")?,
+                count: required_usize_field(gap, "count")?,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
     let mut findings = Vec::new();
 
-    for risk in result
-        .get("risks")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-    {
-        let left = risk
-            .get("left_artifact")
-            .and_then(Value::as_str)
-            .unwrap_or("unknown");
-        let right = risk
-            .get("right_artifact")
-            .and_then(Value::as_str)
-            .unwrap_or("unknown");
-        findings.push(finding(risk, format!("{left} ↔ {right}")));
+    for risk in required_array(result, "risks")? {
+        let left = required_string_field(risk, "left_artifact")?;
+        let right = required_string_field(risk, "right_artifact")?;
+        findings.push(finding(risk, format!("{left} ↔ {right}"))?);
     }
-    for risk in result
-        .get("unary_risks")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-    {
-        let package = risk
-            .get("artifact_id")
-            .and_then(Value::as_str)
-            .unwrap_or("unknown");
-        findings.push(finding(risk, package.to_string()));
+    for risk in required_array(result, "unary_risks")? {
+        let package = required_string_field(risk, "artifact_id")?;
+        findings.push(finding(risk, package)?);
     }
     findings.sort_by_key(|risk| std::cmp::Reverse(risk.risk));
 
-    AuditSummary {
+    Ok(AuditSummary {
         readiness,
+        readiness_message,
+        loader,
+        runtime_namespace,
+        capabilities,
         artifacts,
         warnings,
         coverage_gaps,
         findings,
+    })
+}
+
+fn required_array<'a>(value: &'a Value, field: &str) -> Result<&'a Vec<Value>> {
+    value
+        .get(field)
+        .and_then(Value::as_array)
+        .with_context(|| format!("audit field '{field}' must be an array"))
+}
+
+fn optional_string_field(value: &Value, field: &str) -> Result<Option<String>> {
+    match value.get(field) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(value)) => Ok(Some(value.clone())),
+        Some(_) => bail!("audit field '{field}' must be a string or null"),
     }
 }
 
-fn finding(value: &Value, packages: String) -> AuditFinding {
-    AuditFinding {
+fn required_usize_field(value: &Value, field: &str) -> Result<usize> {
+    value
+        .get(field)
+        .and_then(Value::as_u64)
+        .and_then(|value| usize::try_from(value).ok())
+        .with_context(|| format!("audit field '{field}' must be a non-negative integer"))
+}
+
+fn finding(value: &Value, packages: String) -> Result<AuditFinding> {
+    Ok(AuditFinding {
         packages,
-        rule: string_field(value, "rule"),
-        reason: string_field(value, "reason"),
+        rule: required_string_field(value, "rule")?,
+        reason: required_string_field(value, "reason")?,
         risk: value
             .get("risk_index")
             .and_then(Value::as_u64)
             .and_then(|value| u8::try_from(value).ok())
-            .unwrap_or_default(),
-        severity: string_field(value, "severity"),
-        confidence: string_field(value, "confidence"),
-    }
+            .context("audit risk_index must be an integer between 0 and 255")?,
+        severity: required_string_field(value, "severity")?,
+        confidence: required_string_field(value, "confidence")?,
+    })
 }
 
-fn string_field(value: &Value, field: &str) -> String {
+fn required_string_field(value: &Value, field: &str) -> Result<String> {
     value
         .get(field)
         .and_then(Value::as_str)
-        .unwrap_or("unknown")
-        .to_string()
+        .map(str::to_string)
+        .with_context(|| format!("audit field '{field}' must be a string"))
 }
 
 #[cfg(test)]
@@ -287,10 +330,22 @@ mod tests {
     #[test]
     fn reads_both_pairwise_and_unary_audit_findings() {
         let report = serde_json::json!({
-            "readiness": {"status": "ready"},
+            "readiness": {
+                "status": "ready",
+                "loader": "neoforge",
+                "message": "runtime ABI is available",
+                "capabilities": ["mixin", "neoforge_class_processor"]
+            },
+            "namespace": {"runtime_namespace": "official"},
             "artifacts": [{}, {}],
-            "warnings": [{}],
-            "coverage_gaps": [],
+            "warnings": [{
+                "artifact_id": "a", "scope": "mixins.json",
+                "kind": "duplicate_mixin_config", "message": "duplicate config"
+            }],
+            "coverage_gaps": [{
+                "artifact_id": "b", "scope": "example/Processor",
+                "kind": "transformer_unknown", "detail": "dynamic selector", "count": 3
+            }],
             "risks": [{
                 "left_artifact": "a", "right_artifact": "b", "rule": "overlap",
                 "reason": "same target", "risk_index": 80, "severity": "high",
@@ -301,10 +356,32 @@ mod tests {
                 "risk_index": 40, "severity": "medium", "confidence": "medium"
             }]
         });
-        let summary = audit_summary(&report);
+        let summary = audit_summary(&report).unwrap();
         assert_eq!(summary.artifacts, 2);
         assert_eq!(summary.findings.len(), 2);
         assert_eq!(summary.findings[0].packages, "a ↔ b");
+        assert_eq!(summary.loader.as_deref(), Some("neoforge"));
+        assert_eq!(summary.runtime_namespace.as_deref(), Some("official"));
+        assert_eq!(summary.capabilities.len(), 2);
+        assert_eq!(summary.warnings[0].kind, "duplicate_mixin_config");
+        assert_eq!(summary.coverage_gaps[0].count, 3);
+    }
+
+    #[test]
+    fn rejects_incomplete_audit_results_instead_of_rendering_unknown_fields() {
+        let report = serde_json::json!({
+            "readiness": {"status": "ready", "message": "ready"},
+            "namespace": {"runtime_namespace": "identity"},
+            "artifacts": [],
+            "warnings": [],
+            "coverage_gaps": [],
+            "risks": [{"left_artifact": "a"}],
+            "unary_risks": []
+        });
+
+        let error = audit_summary(&report).unwrap_err();
+
+        assert!(error.to_string().contains("right_artifact"));
     }
 
     #[test]

@@ -140,6 +140,19 @@ mod tests {
     }
 
     #[test]
+    fn text_report_names_the_selected_runtime_capabilities() {
+        let mut report = empty_report();
+        report.readiness.capabilities =
+            vec!["mixin".to_string(), "neoforge_class_processor".to_string()];
+
+        let text = crate::cli::output::audit_report(&report, 20);
+
+        assert!(text.contains("Audit capabilities"));
+        assert!(text.contains("Mixin"));
+        assert!(text.contains("NeoForge class processor"));
+    }
+
+    #[test]
     fn default_text_is_bounded_and_omits_full_evidence_and_warning_details() {
         let mut report = empty_report();
         report.risks.push(sample_risk("secret evidence detail"));

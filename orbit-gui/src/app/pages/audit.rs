@@ -8,6 +8,9 @@ use gpui_component::{
 use super::super::OrbitApp;
 use crate::app::components as ui;
 use crate::assets::OrbitIcon;
+use crate::model::AuditNotice;
+
+const NOTICE_PREVIEW_LIMIT: usize = 8;
 
 pub(super) fn render(
     app: &mut OrbitApp,
@@ -99,17 +102,23 @@ pub(super) fn render(
                     ))
                     .child(ui::metric(
                         tr!("Warnings").into_owned(),
-                        audit.warnings.to_string(),
+                        audit.warnings.len().to_string(),
                         tr!("Coverage warnings").into_owned(),
                         cx,
                     ))
                     .child(ui::metric(
                         tr!("Coverage gaps").into_owned(),
-                        audit.coverage_gaps.to_string(),
+                        audit
+                            .coverage_gaps
+                            .iter()
+                            .map(|gap| gap.count)
+                            .sum::<usize>()
+                            .to_string(),
                         tr!("Unresolved analysis scope").into_owned(),
                         cx,
                     )),
             )
+            .child(runtime_profile(audit, cx))
             .child(ui::section_title(
                 tr!("Ranked risks").into_owned(),
                 tr!("Loader-aware bytecode and Mixin evidence").into_owned(),
@@ -153,6 +162,50 @@ pub(super) fn render(
                 );
             }
         }
+        if !audit.warnings.is_empty() || !audit.coverage_gaps.is_empty() {
+            body = body.child(ui::section_title(
+                tr!("Analysis limitations").into_owned(),
+                tr!("Warnings describe damaged or ambiguous inputs; coverage gaps mark behavior the static analysis could not prove.").into_owned(),
+                cx,
+            ));
+            for warning in audit.warnings.iter().take(NOTICE_PREVIEW_LIMIT) {
+                body = body.child(notice_card(
+                    warning,
+                    tr!("Warning").as_ref(),
+                    cx.theme().warning,
+                    cx,
+                ));
+            }
+            for gap in audit.coverage_gaps.iter().take(NOTICE_PREVIEW_LIMIT) {
+                body = body.child(notice_card(
+                    gap,
+                    tr!("Coverage gap").as_ref(),
+                    cx.theme().info,
+                    cx,
+                ));
+            }
+            let hidden = audit
+                .warnings
+                .len()
+                .saturating_sub(NOTICE_PREVIEW_LIMIT)
+                .saturating_add(
+                    audit
+                        .coverage_gaps
+                        .len()
+                        .saturating_sub(NOTICE_PREVIEW_LIMIT),
+                );
+            if hidden > 0 {
+                body = body.child(
+                    div()
+                        .text_sm()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(tr!(
+                            "%{count} more analysis limitation(s) are available in the full report.",
+                            count = hidden
+                        )),
+                );
+            }
+        }
         body.into_any_element()
     } else {
         ui::themed_card(cx).child(ui::empty_state(
@@ -173,6 +226,102 @@ pub(super) fn render(
         content,
         cx,
     )
+}
+
+fn runtime_profile(audit: &crate::model::AuditSummary, cx: &gpui::App) -> gpui::Div {
+    let loader = audit
+        .loader
+        .as_deref()
+        .map(presentation_label)
+        .unwrap_or_else(|| tr!("Unknown").into_owned());
+    let namespace = audit
+        .runtime_namespace
+        .as_deref()
+        .map(presentation_label)
+        .unwrap_or_else(|| tr!("Unknown").into_owned());
+    let readiness = presentation_label(&audit.readiness);
+    let mut capabilities = h_flex().gap_2().flex_wrap();
+    if audit.capabilities.is_empty() {
+        capabilities = capabilities.child(ui::neutral_pill(tr!("None").into_owned(), cx));
+    } else {
+        for capability in &audit.capabilities {
+            capabilities = capabilities.child(ui::neutral_pill(presentation_label(capability), cx));
+        }
+    }
+
+    let mut profile = ui::compact_card(cx)
+        .child(
+            h_flex()
+                .gap_2()
+                .items_center()
+                .flex_wrap()
+                .child(ui::pill(
+                    readiness,
+                    cx.theme().success.opacity(0.14),
+                    cx.theme().success,
+                ))
+                .child(div().font_semibold().child(loader))
+                .child(ui::neutral_pill(
+                    tr!("Namespace: %{namespace}", namespace = namespace),
+                    cx,
+                )),
+        )
+        .child(
+            h_flex()
+                .gap_3()
+                .items_center()
+                .child(
+                    div()
+                        .text_sm()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(tr!("Loader capabilities").into_owned()),
+                )
+                .child(capabilities),
+        );
+    if !audit.readiness_message.is_empty() {
+        profile = profile.child(
+            div()
+                .text_sm()
+                .text_color(cx.theme().muted_foreground)
+                .child(audit.readiness_message.clone()),
+        );
+    }
+    profile
+}
+
+fn notice_card(
+    notice: &AuditNotice,
+    category: &str,
+    color: gpui::Hsla,
+    cx: &gpui::App,
+) -> gpui::Div {
+    let scope = notice.artifact.as_ref().map_or_else(
+        || notice.scope.clone(),
+        |artifact| format!("{artifact} · {}", notice.scope),
+    );
+    let mut header = h_flex()
+        .gap_2()
+        .items_center()
+        .flex_wrap()
+        .child(ui::pill(category.to_string(), color.opacity(0.14), color))
+        .child(div().font_medium().child(presentation_label(&notice.kind)))
+        .child(ui::neutral_pill(scope, cx));
+    if notice.count > 1 {
+        header = header.child(ui::neutral_pill(
+            tr!("%{count} occurrence(s)", count = notice.count),
+            cx,
+        ));
+    }
+    ui::compact_card(cx).child(header).child(
+        div()
+            .text_sm()
+            .text_color(cx.theme().muted_foreground)
+            .child(notice.detail.clone()),
+    )
+}
+
+fn presentation_label(code: &str) -> String {
+    orbit_i18n::text(&crate::wire::humanize(code)).into_owned()
 }
 
 fn risk_color(risk: u8, cx: &gpui::App) -> gpui::Hsla {

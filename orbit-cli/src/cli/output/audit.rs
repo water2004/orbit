@@ -32,7 +32,12 @@ pub fn audit_report(report: &orbit_core::AuditReport, limit: usize) -> String {
 }
 
 fn environment_table(report: &orbit_core::AuditReport) -> String {
-    let mut table = output_table(["Minecraft", "Loader", "Runtime symbols"]);
+    let mut table = output_table([
+        "Minecraft",
+        "Loader",
+        "Runtime symbols",
+        "Audit capabilities",
+    ]);
     let namespace = report
         .namespace
         .runtime_namespace
@@ -44,6 +49,17 @@ fn environment_table(report: &orbit_core::AuditReport) -> String {
         .first()
         .map(|source| source.resource_path.as_str())
         .unwrap_or("identity");
+    let capabilities = if report.readiness.capabilities.is_empty() {
+        tr!("none").into_owned()
+    } else {
+        report
+            .readiness
+            .capabilities
+            .iter()
+            .map(|capability| capability_label(capability))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
     table.add_row([
         Cell::new(&report.environment.minecraft_version),
         Cell::new(format!(
@@ -54,8 +70,18 @@ fn environment_table(report: &orbit_core::AuditReport) -> String {
             "{namespace}\n{mapping}\n{}",
             tr!("alignment complete")
         )),
+        Cell::new(capabilities),
     ]);
     format!("{}\n{table}", tr!("Bytecode audit"))
+}
+
+fn capability_label(capability: &str) -> String {
+    match capability {
+        "mixin" => tr!("Mixin").into_owned(),
+        "modlauncher_transformer" => tr!("ModLauncher transformer").into_owned(),
+        "neoforge_class_processor" => tr!("NeoForge class processor").into_owned(),
+        other => other.to_string(),
+    }
 }
 
 fn summary_table(report: &orbit_core::AuditReport) -> String {

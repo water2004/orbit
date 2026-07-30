@@ -607,7 +607,7 @@ impl OrbitApp {
                 self.outdated_checked = true;
                 self.mod_view = 1;
             }
-            Intent::Audit => self.audit = Some(wire::audit_summary(&result)),
+            Intent::Audit => self.audit = Some(wire::audit_summary(&result)?),
             Intent::Accounts => {
                 self.accounts = decode::<AccountList>(result)?.accounts;
                 self.accounts_error = None;
