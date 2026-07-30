@@ -48,8 +48,8 @@ contained JAR 不是独立删除目标。
 | `--language system\|en\|zh-CN` | 覆盖 `core.language`；省略时使用有效全局配置，schema 默认跟随系统 |
 | `--output-format text\|json` | 输出格式；`json` 输出单个 JSON 文档到 stdout，供自动化工具集成；与 `export --format zip\|mrpack` 无歧义 |
 | `--progress-format none\|ndjson` | 进度协议；`ndjson` 把进度事件逐行写 stderr，每行一个 JSON 对象 |
-| `-v, --verbose` | 显示实例选择等额外上下文 |
-| `-q, --quiet` | 规范要求仅输出错误；当前只有部分上下文输出遵守，见 §8 |
+| `-v, --verbose` | 显示已解析的配置/cache/网络策略和实例选择上下文；不倾倒 Provider/JAR 内部日志 |
+| `-q, --quiet` | 关闭成功结果、信息提示和进度；错误仍输出，完成命令所必需的选择与写入确认仍会显示 |
 | `-y, --yes` | 只跳过写入前确认；不会替用户选择多个包身份、搜索结果或 Pareto 解，也不会猜测缺失的可复现元数据 |
 | `--dry-run` | 返回操作预览，不写目标状态 |
 
@@ -583,8 +583,6 @@ orbit cache clean
 
 | 规范 | 当前差距 |
 |------|----------|
-| `--quiet` 只输出错误 | 多数 handler 仍直接 `println!`（text 模式），只有实例上下文日志检查 quiet |
-| `--verbose` 展示网络/解析细节 | 当前主要展示实例选择，没有统一结构化日志层 |
 | 用户取消使用独立退出码 3 | clap 参数错误为 2、普通错误为 1；部分取消当前为成功或普通错误 |
 | 大规模物化有界并发 | 候选验证并发，最终 JAR 物化仍按确定顺序执行 |
 
@@ -601,6 +599,9 @@ orbit cache clean
   `export --format zip|mrpack` 只选择归档格式，输出协议与之完全分离。
 - proxy/timeout/retry、跨 provider 下载并发、认证、持久化语言、颜色和进度样式均由
   同一份强类型全局配置驱动；不存在“配置能保存但运行时忽略”的字段。
+- `--quiet` 在统一结果边界抑制 text/JSON 成功结果、信息日志和全部进度；交互协议、方案选择
+  与破坏性确认不受影响。`--verbose` 只展示稳定的运行时与实例解析上下文，不把网络响应、
+  物理 JAR 文件名或解析器内部状态伪装成公共日志接口。
 
 CurseForge 已接入 search/info/add/fix/migrate/outdated/upgrade 和 lock 精确恢复的共享
 路径。它仍受 Core API Key 和项目第三方下载许可约束；这些是外部服务边界，不会用

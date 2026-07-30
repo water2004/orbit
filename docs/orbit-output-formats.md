@@ -15,7 +15,9 @@ orbit [--output-format text|json] [--progress-format none|ndjson] <command> ...
 | `--progress-format` | `none` / `ndjson` | `none`（当 `--output-format json`）/ 由 `ui.progress_bar` 决定（当 `--output-format text`） | 进度的协议。`ndjson` 把进度事件逐行写 stderr，每行一个 JSON 对象 |
 
 `--output-format json` 隐含 `--progress-format none`，除非显式传 `--progress-format ndjson`。
-`--quiet` 始终关闭进度，等价 `--progress-format none`。
+`--quiet` 关闭成功结果、信息提示和进度，因此成功时 stdout 为空；错误仍写 stderr。
+完成命令所必需的 schema 2 interaction 和终端选择/写入确认不会被静默，否则调用方无法
+安全提供决定。
 
 ### stdout / stderr 分工
 
