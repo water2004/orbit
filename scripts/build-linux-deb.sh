@@ -69,12 +69,14 @@ done
 
 packages=(orbit orbit-launcher orbit-gui)
 for package in "${packages[@]}"; do
+	deb="target/debian/${package}_${version}-1_amd64.deb"
+	mkdir -p "$(dirname "$deb")"
 	cargo deb \
 		--package "$package" \
 		--target "$target" \
-		--no-build
+		--no-build \
+		--output "$deb"
 
-	deb="target/debian/${package}_${version}-1_amd64.deb"
 	if [[ ! -f "$deb" ]]; then
 		echo "cargo-deb did not produce the expected $package amd64 package" >&2
 		exit 1

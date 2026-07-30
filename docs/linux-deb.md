@@ -53,6 +53,8 @@ bash ./scripts/build-linux-deb.sh
 脚本使用 `x86_64-unknown-linux-gnu` release target，先执行三个程序的锁定 Cargo 构建，
 再运行两个 CLI 产物的 `--help`，最后分别读取三个 crate 的强类型 cargo-deb 元数据生成
 三个包。`dpkg-deb` 会验证包名、版本、安装树，以及 GUI 对同版本两个 CLI 的精确依赖。
+构建脚本向 `cargo deb --output` 传入每个产物的确定路径，避免指定 Rust target 后 cargo-deb
+把默认输出放到 target triple 子目录而令工作流误判产物缺失。
 
 已经存在当前三个 Linux release binary 时可执行：
 
