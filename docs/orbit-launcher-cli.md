@@ -41,10 +41,14 @@ orbit-launcher minecraft move <absolute-destination>
 # 已有实例
 orbit-launcher [--instance <id|name>] install
 
+# 导出当前实例的可变游戏状态；导出包与任何目标版本无关
+orbit-launcher [--instance <id|name>] export <state.zip>
+
 # 一条命令创建并安装客户端或服务端
 orbit-launcher install --new <name> [--server-directory <path>] \
   --kind <client|server> --minecraft <exact|latest-release|latest-snapshot> \
-  [--loader <vanilla|fabric|quilt|forge|neoforge>] [--loader-version <requirement>]
+  [--loader <vanilla|fabric|quilt|forge|neoforge>] [--loader-version <requirement>] \
+  [--from <state.zip>] [--consume-from]
 
 orbit-launcher instance create \
   --name <name> \
@@ -197,6 +201,28 @@ Loader libraries、main class 和参数合并到同一个精确运行时模型�
 profile 只作为经校验的解析输入，完整 runtime classpath、入口和参数进入
 `orbit-launcher.lock`；实例目录不再复制 profile 或维护第二套可启动描述。需要审计来源时，
 lock 保留 profile URL 与 SHA-256，原始响应由元数据缓存负责。
+
+## 实例状态导出与恢复
+
+`orbit-launcher export <state.zip>` 只快照所选实例的当前可变游戏状态，不接收 Minecraft、
+Loader 或目标实例参数，也不做兼容性推断。客户端包含 `options.txt`、`servers.dat` 和隔离
+game directory 下的 `saves/`；独立服务端包含 `server.properties`、白名单/管理员/封禁列表、
+服务端图标，以及 `server.properties` 的 `level-name` 指向的世界目录（缺省 `world`）。凭据、
+EULA 接受、日志、缓存、Minecraft/Loader/Java artifact 和模组内容都不进入该包。包内每个
+文件有独立 SHA-256，路径、符号链接和实例目录边界在写入前验证。
+
+状态包只能由 `install --new ... --from <state.zip>` 消费，不能恢复到已有实例；目标实例目录
+必须尚不存在。对服务端恢复因此必须用 `--server-directory` 指向一个新路径，不能把当前已有
+目录当作目标。安装器先按目标实例 TOML 和官方元数据完成目标 Minecraft、Loader、Java 与
+默认服务端设置，再校验并应用状态包；同版本恢复和跨版本迁移没有第二条路径。任一步失败都
+注销 provisional 实例并删除该新目录。`--consume-from` 只在状态完整提交后删除源包。
+client/server 类型不一致直接报错。
+
+服务端的 `server.properties` 不会跨版本整文件覆盖。目标 Minecraft 在正常目标安装事务中
+通过自己的 `--initSettings` 生成目标版本字段集合；运行时安装完成后，仅把源包中同名字段的值合并
+进去，保留目标新增字段及其默认值，并在结果中结构化列出目标已不存在而被跳过的源字段。
+世界内容恢复到合并后的目标 `level-name`。Launcher 不硬编码字段表，也不会迁移 `eula.txt`；
+目标实例仍必须单独展示并接受当前 Minecraft EULA。
 
 Forge 与 NeoForge 从各自官方版本索引和 Maven 仓库解析精确 installer。Forge 的 `stable`
 对应官方 `recommended` promotion，`latest` 对应官方 `latest` promotion；NeoForge 的

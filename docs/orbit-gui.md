@@ -91,7 +91,12 @@ Java 设置页列出、完整校验和清理未使用 Java；任一注册实例 
 Runtime 页只负责创建、导入、更新和启动实例，避免同一管理动作出现两个入口。
 
 跨版本迁移也由 Runtime 页编排领域流程：先从源实例调用同一个 `orbit export` 管线生成并
-校验便携源包；只有该步骤成功后才用 Launcher 官方目录创建并安装真实目标实例。GUI 随后先
+校验便携模组源包，再调用 `orbit-launcher export` 生成与目标无关、包含世界的游戏状态包；
+两个导出都成功后才用 `orbit-launcher install --new ... --from <状态包> --consume-from`
+创建并安装真实目标实例。客户端世界来自隔离 game directory 的 `saves/`；服务端世界来自
+工作目录下 `server.properties` 的 `level-name`（缺省 `world`）。服务端属性先由目标
+Minecraft 生成字段集合，再只迁移目标仍支持的同名值，跳过字段作为结构化结果显示；EULA
+不迁移。GUI 随后先
 调用 `orbit migrate check <目标目录> --source-pack <源包>`，把目标 Minecraft/Loader 上的
 联合求解结果、升级/降级/替换/删除与诊断呈现为专用审阅页；用户接受后才调用
 `orbit migrate export <目标目录> --source-pack <源包> --consume-source-pack`，最后在目标调用
@@ -119,7 +124,7 @@ Runtime 页也把整合包作为领域动作呈现：安装 Orbit ZIP/TOML 或 M
 `orbit export --format zip` 与 `orbit export --format mrpack`。GUI 不解析归档、不改写清单，
 也不根据扩展名实现第二套导入规则。
 
-普通 Orbit 导出与迁移源快照都显示 CLI 的真实字节进度并可取消。JAR 已是压缩容器，core
+普通 Orbit 导出、迁移源快照与 Launcher 状态包都显示 CLI 的真实字节进度并可取消。JAR 已是压缩容器，core
 以 ZIP Stored 写入；配置和小型元数据才使用 Deflate。被取消或失败的导出不会被当作可用包，
 下一次对同一路径导出会先清理精确的事务临时文件。
 

@@ -450,7 +450,7 @@ orbit export [output] [--target client|server|both] [--format zip|mrpack]
 ```
 
 导出 manifest、lockfile、目标选择中校验通过的 JAR，以及 `config/`、`defaultconfigs/`、
-`serverconfig/`、`options.txt` 中不存在符号链接的可移植配置。未指定文件名时使用安全化的
+`serverconfig/` 中不存在符号链接的模组配置。未指定文件名时使用安全化的
 项目名称和版本。JAR 使用 ZIP Stored，避免对压缩容器二次 Deflate；校验和归档写入发出真实
 字节进度。`mrpack` 生成 Modrinth index；在线文件可成为 downloads，必须内嵌的本地文件和
 配置放入 overrides。dry-run 校验并统计计划，但不创建输出。
@@ -479,8 +479,8 @@ Pareto 极小 front，并在每个固定保留集合内继续做版本 Pareto �
 关闭、机器交互取消或用户拒绝时，迁移以严格无解失败，目标不发生写入。
 
 `check` 只展示将发生的安装、升级、降级、替换和删除。`export` 复用同一规划路径，将目标
-平台快照、入选 lock 和源实例的 `config/`、`defaultconfigs/`、`serverconfig/`、
-`options.txt` 写入目标；拒绝覆盖已有 Orbit 状态或配置。它不把模组 JAR 安装到 `mods/`；
+平台快照、入选 lock 和源实例的 `config/`、`defaultconfigs/`、`serverconfig/`
+写入目标；拒绝覆盖已有 Orbit 状态或配置。它不把模组 JAR 安装到 `mods/`；
 入选的 file-only 内容会进入目标按哈希寻址的 `.orbit/sources`，随后仍必须在目标目录运行
 `orbit install` 统一物化。GUI 的迁移向导只编排源 export、Launcher 创建目标、
 migrate export、`instances register` 与目标 install；GUI 不直接写 Orbit 全局注册表。
@@ -492,7 +492,10 @@ migrate export、`instances register` 与目标 install；GUI 不直接写 Orbit
 候选。真正 file-only 的包仍进入同一 PubGrub 图，其 JAR 声明不兼容目标时会被严格排除或在
 用户许可的软迁移中成为删除项。成功计划不会把已排除的 26.2 候选诊断误报成 26.1.2 迁移
 失败。`--consume-source-pack` 只在用户确认且目标状态写入成功后删除源包。
-GUI 因而先导出源快照，成功后才新建目标实例，再执行上述目标规划与 install。GUI 不显示
+Orbit 归档只负责模组状态，不包含 `options.txt`、世界、`server.properties` 或 Launcher
+运行状态。GUI 因而先分别导出 Orbit 源快照与目标无关的 Launcher 状态包，成功后才用
+`orbit-launcher install --new ... --from <状态包>` 新建目标实例，再执行上述目标规划与
+Orbit install。GUI 不显示
 常驻的严格/软策略控件；严格无解时由同一 CLI 子进程的 schema 2 interaction 弹出确认，
 GUI 只把选择写回该进程 stdin。
 

@@ -28,7 +28,7 @@ The detailed boundaries are documented in [Orbit architecture](docs/orbit-archit
 - **Explainable objective-aware solving.** Dependency causes come from the actual PubGrub propagation and backtracking path. `add` and `fix` enumerate standard Pareto-minimal package-change sets; `upgrade` and `outdated` enumerate the standard Pareto-maximal version front. Every incomparable alternative remains an explicit choice.
 - **Package-level transactions.** `mod_id` is the solver package key. A selected package may own multiple contained JARs, while unselected top-level package versions are removed only after the exact plan is shown and confirmed.
 - **Observable and cancellable work.** Discovery, downloads, solving, application, audit, and portable export emit typed progress. Orbit ZIP export stores already-compressed JARs directly, reports real byte progress, and cleans failed temporary output.
-- **Portable migration snapshots.** The GUI exports a verified Orbit source pack before it creates a target runtime. The target migration then resolves from that frozen pack against the actually installed target Minecraft and Loader runtime.
+- **Portable migration snapshots.** The GUI first exports two target-independent snapshots: Orbit owns the mod graph/configuration pack, while Launcher owns game state and worlds. `orbit-launcher install --from` creates the target runtime and restores Launcher state; Orbit then resolves the frozen mod pack against the actually installed target Minecraft and Loader runtime.
 
 ## Installation
 
@@ -169,6 +169,20 @@ orbit-launcher install --new survival-server \
   --kind server --server-directory /srv/minecraft/survival \
   --minecraft latest-release --loader fabric
 ```
+
+Launcher state is exported without a target version and restored only through installation:
+
+```text
+orbit-launcher --instance old-client export state.zip
+orbit-launcher install --new new-client --kind client \
+  --minecraft 1.21.1 --loader fabric --loader-version stable \
+  --from state.zip --consume-from
+```
+
+Client saves come from the isolated instance `saves/` directory. Dedicated-server worlds follow
+`server.properties` `level-name` (default `world`); target Minecraft generates its own property
+schema and Launcher migrates only values for fields that still exist. EULA acceptance is never
+migrated.
 
 See the complete [Launcher CLI reference](docs/orbit-launcher-cli.md) and
 [Launcher architecture](docs/orbit-launcher-architecture.md).

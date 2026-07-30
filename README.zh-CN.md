@@ -40,7 +40,7 @@ Launcher 已完整支持 Vanilla、Fabric、Quilt、Forge、NeoForge 的客户�
 - **📦 包级事务**：JAR 自声明的 `mod_id` 是包；同 ID 文件是版本候选。方案会同时展示升级、允许的依赖降级与未选包版本移除，确认后一次应用。
 - **⏱️ 可观察长事务**：在线候选发现、JAR 下载/缓存校验/解析、离线求解、最终物化、audit 和便携包导出均提供强类型进度；Orbit ZIP 对已经压缩的 JAR 使用 Stored，并按真实字节显示与取消导出。
 - **☕ 字节码下限检查**：根据目标 Minecraft 与 JAR class major 校验最低 Java；该检查不宣称能证明 API、Mixin 或运行时行为完全兼容。
-- **🚀 联合跨版本迁移**：GUI 先用与普通导出相同的管线冻结源 Orbit 包，成功后才创建目标运行时；`migrate export --source-pack` 再针对 Launcher 已安装的真实目标运行时求完整依赖解，最后由 `orbit install` 精确物化。
+- **🚀 联合跨版本迁移**：GUI 先分别冻结目标无关的 Orbit 模组包与 Launcher 游戏状态包；`orbit-launcher install --from` 创建目标运行时并恢复世界/设置，`migrate export --source-pack` 再针对真实目标运行时求完整依赖解，最后由 `orbit install` 精确物化模组。
 
 ---
 
@@ -97,6 +97,19 @@ orbit-launcher install --new survival-server \
 
 服务端启动前必须通过专用命令完整展示并接受 Minecraft EULA；Launcher 不会代替用户默认
 同意。完整命令见 [Orbit Launcher CLI](docs/orbit-launcher-cli.md)。
+
+Launcher 状态导出不绑定目标版本，只能由安装命令恢复：
+
+```text
+orbit-launcher --instance old-client export state.zip
+orbit-launcher install --new new-client --kind client \
+  --minecraft 1.21.1 --loader fabric --loader-version stable \
+  --from state.zip --consume-from
+```
+
+客户端世界取自隔离实例的 `saves/`。独立服务端世界按 `server.properties` 的 `level-name`
+定位（缺省 `world`）；目标 Minecraft 先生成自己的属性字段，Launcher 只迁移目标仍存在的
+同名值。EULA 接受永不迁移。
 
 ### 体验丝滑工作流
 

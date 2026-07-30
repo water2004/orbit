@@ -707,6 +707,51 @@ schema 版本。schema 5 的 `environment.loader` 是唯一、已验证的 loade
 使用 warning kind `duplicate_mixin_config`，Quilt 原生按 Mod 隔离的同名 config 不属于
 该 warning。
 
+### Orbit Launcher `export` / `install --from`
+
+Launcher 使用同一 schema 2 成功信封。`orbit-launcher export state.zip --output-format json`
+的 `command` 为 `export`，结果只描述当前状态包，不含目标版本：
+
+```json
+{
+  "path": "state.zip",
+  "kind": "server",
+  "minecraft_version": "1.21.1",
+  "files": 143,
+  "bytes": 987654321,
+  "world_files": 137
+}
+```
+
+`orbit-launcher install --new ... --from state.zip --output-format json` 仍返回唯一的 `install` 结果；
+成功应用时追加 `state`，没有第二个迁移结果或 Launcher `migrate` 命令：
+
+```json
+{
+  "instance_id": "55de73b8-65dd-42ac-91be-d250ab56358b",
+  "kind": "server",
+  "minecraft_version": "1.21.1",
+  "loader": "fabric",
+  "java_runtime_id": "java-runtime-delta-windows-x64",
+  "java_version": "21.0.3",
+  "downloaded_artifacts": 8,
+  "cached_artifacts": 17,
+  "state": {
+    "kind": "server",
+    "source_minecraft_version": "1.20.1",
+    "target_minecraft_version": "1.21.1",
+    "files": 143,
+    "bytes": 987654000,
+    "world_files": 137,
+    "restored_properties": 42,
+    "skipped_properties": ["announce-player-achievements"]
+  }
+}
+```
+
+`skipped_properties` 是目标 Minecraft 生成的 `server.properties` 中已经不存在的源字段，
+不是非结构化 warning。客户端该列表为空且 `restored_properties` 为 0。
+
 ## 4. NDJSON 进度协议
 
 `--progress-format ndjson` 时，每个进度事件输出一行 JSON 到 **stderr**。Orbit 与
@@ -722,7 +767,7 @@ Orbit Launcher 直接使用 `orbit-machine-protocol` 中同一个信封类型，
 | `schema_version` | number | 与成功/错误信封相同的机器协议版本，当前为 2 |
 | `command` | string | 产生事件的现有 CLI 命令 |
 | `sequence` | number | 单进程内从 1 开始严格递增 |
-| `phase` | string | `discovery` / `download` / `resolution` / `apply` / `audit`；Launcher 另有 `metadata` / `eula` / `java` / `loader` / `authentication` / `launch` / `process` / `supervisor` |
+| `phase` | string | `discovery` / `download` / `resolution` / `apply` / `audit` / `export`；Launcher 另有 `metadata` / `eula` / `java` / `loader` / `authentication` / `launch` / `process` / `supervisor` |
 | `data` | object | 内含 `event` 与事件特定字段（计数、阶段、包名等） |
 
 进度事件不包含内容哈希、物理 JAR 文件名或 provider 密钥。调用方按 `phase`/`event` 分流，无需解析自然语言。
@@ -760,6 +805,19 @@ Orbit Launcher 直接使用 `orbit-machine-protocol` 中同一个信封类型，
 | `audit` | `StageStarted` | `{stage, total}`，`stage` ∈ `prepare_inputs`/`scan_artifacts`/`readiness`/`analyze_mixins`/`analyze_transformers`/`detect_conflicts` |
 | `audit` | `Advanced` | `{stage, completed, total}` |
 | `audit` | `StageFinished` | `{stage, completed}` |
+
+### Launcher 状态进度事件
+
+| phase | event | data |
+|-------|-------|------|
+| `export` | `StateArchiveStarted` | `{files, completed: 0, total}` |
+| `export` | `StateArchiveAdvanced` | `{completed, total}` |
+| `export` | `StateArchiveFinished` | `{files, completed, total}` |
+| `apply` | `StateArchiveStarted` / `StateArchiveAdvanced` / `StateArchiveFinished` | 字段同上；仅出现在 `install --from` |
+
+服务端安装还会在 `metadata` 阶段发出
+`ServerSettingsInitialized {properties}`，表示目标 Minecraft 已生成自己的属性字段集。世界
+复制按实际字节报告，已知总量在命令开始时给出。
 
 ## 5. 同进程交互协议
 

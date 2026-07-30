@@ -134,7 +134,34 @@ profile；精确主 JAR 和共享 Loader/library classpath 全部由 lock 记录
 等写入、启动或控制进程的命令，不得从无关目录静默使用全局默认实例；GUI 应始终传稳定
 `id`。当前目录已有实例或显式传入 `--instance` 时不受此限制。
 
-### 4.2 目标平台
+### 4.2 可移植实例状态
+
+Launcher 对可变游戏状态定义一份独立、目标无关的 ZIP 快照：
+
+```text
+LauncherStateArchive
+  schema
+  source Minecraft version
+  instance kind
+  file inventory + byte size + SHA-256
+  client: options.txt, servers.dat, saves/**
+  server: server.properties, access lists, server icon, logical world/**
+```
+
+`export` 只读取当前状态，不接收目标 Minecraft/Loader，也不做迁移规划。只有
+`install --new ... --from` 能消费快照，且目标实例目录必须尚不存在；已有实例的 install
+不接受状态包。它先安装目标运行时，再应用同一份快照；因此同版本恢复与跨版本迁移共享一条实现路径。客户端
+世界根固定为 Launcher 隔离 game directory 的 `saves/`。Dedicated server 世界根由实例
+工作目录和 `server.properties` 的 `level-name` 组合，缺失时使用 Minecraft 默认的 `world`；
+绝对路径、父目录、符号链接和实例边界逃逸均拒绝。Loader adapter 不改写 game/working
+directory，所以 Fabric、Quilt、Forge、NeoForge 在这个层次不需要分支。
+
+服务端属性由目标 Minecraft 自己的 `--initSettings` 在正常安装事务中生成。恢复以目标字段集
+为基准，仅迁移源文件中目标仍存在的同名值；目标新增字段保留默认值，源端已删除字段进入
+结构化 skipped 列表。Launcher 不维护跨版本属性名表，不迁移 EULA 接受，也不把模组配置或
+JAR 纳入此状态包。
+
+### 4.3 目标平台
 
 ```text
 TargetPlatform
@@ -157,7 +184,7 @@ TargetPlatform
 “条件支持”表示 Minecraft、Loader 和 Mojang Java runtime 都能提供该平台所需 artifact；缺少
 官方 artifact 时必须报 `unsupported_target_artifact`，不得下载另一架构后尝试启动。
 
-### 4.3 版本意图与锁定状态
+### 4.4 版本意图与锁定状态
 
 用户配置表达意图：
 
@@ -740,6 +767,14 @@ orbit-launcher install --new main-server --server-directory <path> --kind server
 # 已有局部或显式全局实例
 orbit-launcher install
 orbit-launcher --instance <id> install
+
+# 导出当前状态；包本身不绑定目标版本
+orbit-launcher --instance <source-id> export state.zip
+
+# 创建目标运行时后恢复同一状态包
+orbit-launcher install --new migrated-client --kind client \
+  --minecraft 1.21.1 --loader fabric --loader-version stable \
+  --from state.zip --consume-from
 ```
 
 客户端 `--new` 固定使用平台 data 目录中的唯一托管 Minecraft 仓库，game directory 为
@@ -895,8 +930,10 @@ Launcher 不维护独立 `update` 求解器。`versions minecraft|loader|java` �
 始终由目标 Minecraft/Loader 要求推导，不是用户自由选择的更新轴。
 
 GUI 的 Loader 小版本更新可在原实例执行 `configure --loader-version <exact>` 后安装；
-Minecraft 或 Loader 类型迁移创建新实例，避免破坏源运行时。无论哪种路径，Launcher 都
-不触碰 mod、配置、存档等不透明实例内容，也不存在另一套“repair 后再 install”的状态机。
+Minecraft 或 Loader 类型迁移创建新实例，避免破坏源运行时。普通运行时安装事务不触碰
+mod、配置或存档；只有全新实例的 `install --new ... --from` 才在运行时提交后应用已经校验的
+Launcher 状态包。恢复失败会删除整个 provisional 新实例。不存在另一套
+`migrate`/`repair` 状态机。
 
 ## 17. 安全约束
 

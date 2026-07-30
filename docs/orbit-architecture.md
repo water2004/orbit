@@ -222,8 +222,11 @@ TOML/lock。联网候选闭包发现、可行解选择和未选包删除由 `add
 迁移等明确求解操作执行；这些写操作共享同一个 reconciliation，使 TOML 完整包集合与
 所选 lock 同步收敛。
 
-迁移先通过普通 archive exporter 冻结一个校验通过的便携源实例；该步骤成功后 Launcher
-才创建真实目标实例。随后同一个 `migration::plan_migration()` 从便携源读取包与配置事实、
+迁移先通过普通 archive exporter 冻结一个校验通过的便携 Orbit 源实例；Orbit 包只包含
+包管理器状态与模组配置，不包含世界、`options.txt` 或 `server.properties`。GUI 同时调用
+`orbit-launcher export` 生成与目标无关的游戏状态包；两个导出均成功后，才由
+`orbit-launcher install --new ... --from <状态包>` 创建真实目标实例。随后同一个
+`migration::plan_migration()` 从便携 Orbit 源读取包与配置事实、
 从目标读取 Minecraft/Loader JAR，枚举目标版本候选并选择 Pareto 解。`migrate check` 只
 展示这份计划；`migrate export` 复用同一计划写入目标 `orbit.toml`、`orbit.lock` 和
 配置文件，拒绝覆盖已有目标状态。导出不把模组 JAR 安装到 `mods/`；入选的 file-only 内容
