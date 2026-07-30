@@ -44,6 +44,22 @@ for package in orbit-core orbit-launcher orbit-launcher-core orbit-gui; do
 		exit 1
 	fi
 done
+
+package_assets=(
+	"README.md"
+	"docs/orbit-cli-commands.md"
+	"docs/orbit-launcher-cli.md"
+	"docs/orbit-gui.md"
+	"assets/orbit.desktop"
+	"assets/orbit.svg"
+)
+for asset in "${package_assets[@]}"; do
+	if [[ ! -f "$asset" ]]; then
+		echo "Debian package asset does not exist: $asset" >&2
+		exit 1
+	fi
+done
+
 rustup target add "$target"
 
 if [[ "$skip_cargo_build" != true ]]; then

@@ -22,7 +22,7 @@ priority = "optional"
 assets = [
     ["target/release/orbit", "usr/bin/", "755"],
     ["../README.md", "usr/share/doc/orbit/README.md", "644"],
-    ["../docs/orbit-cli.md", "usr/share/doc/orbit/orbit-cli.md", "644"],
+    ["../docs/orbit-cli-commands.md", "usr/share/doc/orbit/orbit-cli.md", "644"],
 ]
 
 [features]
