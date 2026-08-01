@@ -12,7 +12,7 @@ pub async fn handle(package: String, ctx: &CliContext) -> Result<()> {
         &instance_dir,
         &package,
         &providers,
-        ctx.runtime.jar_cache(),
+        ctx.runtime.candidate_storage(),
         super::operation_progress(ctx),
     )
     .await?;

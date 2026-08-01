@@ -3,6 +3,21 @@ Follow system: 跟随系统
 English: 英语
 Simplified Chinese: 简体中文
 Settings: 设置
+"Local package data": "本地包数据"
+"Version repository directory": "版本库目录"
+"Optional absolute location for per-Minecraft-version provider and JAR metadata databases": "按 Minecraft 版本隔离的 Provider 与 JAR 元数据数据库的可选绝对路径"
+"Runtime context: config %{config}; JAR cache %{cache}; version repository %{repository}; network timeout %{timeout}s, %{retries} retries; %{downloads} shared downloads": "运行环境：配置 %{config}；JAR 缓存 %{cache}；版本库 %{repository}；网络超时 %{timeout} 秒，重试 %{retries} 次；共享下载并发 %{downloads}"
+"Checking local version repository": "正在检查本地版本库"
+"Checking package versions": "正在检查模组版本"
+"Local version repository is ready": "本地版本库已就绪"
+"refreshed": "已刷新"
+"reused": "已复用"
+"[1/4] Checking the local version repository for Minecraft %{minecraft} / %{loader}": "[1/4] 正在检查 Minecraft %{minecraft} / %{loader} 的本地版本库"
+"[1/4] %{provider}:%{project} · %{state} · %{artifacts} candidate JAR(s)": "[1/4] %{provider}:%{project} · %{state} · %{artifacts} 个候选 JAR"
+"[1/4] Indexed %{total} projects (%{refreshed} refreshed, %{reused} reused) and %{artifacts} candidate JARs": "[1/4] 已索引 %{total} 个项目（刷新 %{refreshed} 个，复用 %{reused} 个）及 %{artifacts} 个候选 JAR"
+"[1/4] Checking %{total} project(s) in the local version repository for Minecraft %{minecraft} / %{loader}...": "[1/4] 正在检查 Minecraft %{minecraft} / %{loader} 本地版本库中的 %{total} 个项目……"
+"  [%{completed}/%{total}] %{provider}:%{project} · %{state} · %{artifacts} candidate JAR(s)": "  [%{completed}/%{total}] %{provider}:%{project} · %{state} · %{artifacts} 个候选 JAR"
+"[1/4] Indexed %{total} projects (%{refreshed} refreshed, %{reused} reused) and %{artifacts} candidate JARs.": "[1/4] 已索引 %{total} 个项目（刷新 %{refreshed} 个，复用 %{reused} 个）及 %{artifacts} 个候选 JAR。"
 "Installed %{kind} instance %{id}.": "已安装 %{kind} 实例 %{id}。"
 "The Modern, Non-intrusive Package Manager for Minecraft Mods.": "现代、非侵入式 Minecraft 模组包管理器。"
 "Minecraft runtime launcher": "Minecraft 运行时启动器"

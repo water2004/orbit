@@ -37,7 +37,7 @@ pub enum JarModOrigin {
 }
 
 /// 从 JAR 中提取的模组元数据（与 loader 无关的公共结构）
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct JarModMetadata {
     pub mod_id: String,
     pub name: String,
@@ -268,7 +268,7 @@ pub async fn download_and_parse(
     .metadata)
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct InspectedJar {
     pub metadata: JarModMetadata,
     pub sha1: String,

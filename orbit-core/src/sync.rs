@@ -352,7 +352,7 @@ mod tests {
     use crate::manifest::{OrbitManifest, PackageRemote, ProjectMeta, ResolverConfig};
     use crate::providers::{
         ArtifactDownloadClient, ArtifactFingerprint, ModInfo, ModProvider, ModrinthResolvedInfo,
-        RemoteArtifact, SearchResultItem,
+        RemoteArtifact, RemoteProjectState, SearchResultItem,
     };
     use async_trait::async_trait;
     use std::io::Write;
@@ -410,6 +410,19 @@ mod tests {
             _artifacts: &[ArtifactFingerprint],
         ) -> Result<Vec<RemoteArtifact>, OrbitError> {
             Ok(self.artifacts.clone())
+        }
+
+        async fn project_states(
+            &self,
+            project_ids: &[String],
+        ) -> Result<Vec<RemoteProjectState>, OrbitError> {
+            Ok(project_ids
+                .iter()
+                .map(|project_id| RemoteProjectState {
+                    project_id: project_id.clone(),
+                    marker: format!("marker-{project_id}"),
+                })
+                .collect())
         }
 
         async fn get_versions(

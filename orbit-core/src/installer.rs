@@ -120,7 +120,7 @@ pub async fn install_to_instance(
     constraint: &str,
     instance_dir: &Path,
     providers: &[Box<dyn ModProvider>],
-    jar_cache: &crate::jar_cache::JarCache,
+    storage: crate::version_repository::CandidateStorage<'_>,
     options: InstallOptions,
     interaction: InstallInteraction,
 ) -> Result<InstallReport, OrbitError> {
@@ -149,7 +149,7 @@ pub async fn install_to_instance(
         instance_dir,
         constraint,
         providers,
-        jar_cache,
+        storage,
         manifest: &mut manifest_file.inner,
         lockfile: &mut lock.inner,
         mods_dir: &mods_dir,
@@ -273,7 +273,7 @@ pub async fn install_instance(
 pub async fn fix_instance(
     instance_dir: &Path,
     providers: &[Box<dyn ModProvider>],
-    jar_cache: &crate::jar_cache::JarCache,
+    storage: crate::version_repository::CandidateStorage<'_>,
     dry_run: bool,
     interaction: InstallInteraction,
 ) -> Result<InstallReport, OrbitError> {
@@ -281,7 +281,7 @@ pub async fn fix_instance(
     Ok(repair_manifest_instance(
         instance_dir,
         providers,
-        jar_cache,
+        storage,
         dry_run,
         interaction,
         manifest_file,
@@ -302,7 +302,7 @@ pub(crate) struct ManifestRepairOutcome {
 pub(crate) async fn repair_manifest_instance(
     instance_dir: &Path,
     providers: &[Box<dyn ModProvider>],
-    jar_cache: &crate::jar_cache::JarCache,
+    storage: crate::version_repository::CandidateStorage<'_>,
     dry_run: bool,
     interaction: InstallInteraction,
     mut manifest_file: ManifestFile,
@@ -336,7 +336,7 @@ pub(crate) async fn repair_manifest_instance(
             lockfile: &lock.inner,
             mc_version: &manifest_file.inner.project.mc_version,
             loader: platform.loader,
-            jar_cache,
+            storage,
             progress: progress.clone(),
         },
         &[],
@@ -475,7 +475,7 @@ pub(crate) async fn repair_manifest_instance(
         &mods_dir,
         platform.loader,
         providers,
-        jar_cache,
+        storage.jar_cache(),
         progress,
     )
     .await?;
@@ -514,7 +514,7 @@ pub(crate) async fn repair_manifest_instance(
 pub async fn upgrade_all_in_instance(
     instance_dir: &Path,
     providers: &[Box<dyn ModProvider>],
-    jar_cache: &crate::jar_cache::JarCache,
+    storage: crate::version_repository::CandidateStorage<'_>,
     dry_run: bool,
     interaction: InstallInteraction,
 ) -> Result<InstallReport, OrbitError> {
@@ -554,7 +554,7 @@ pub async fn upgrade_all_in_instance(
         &lock.inner,
         providers,
         select_resolution,
-        jar_cache,
+        storage,
         progress.clone(),
     )
     .await?;
@@ -621,7 +621,7 @@ pub async fn upgrade_all_in_instance(
         &mods_dir,
         loader,
         providers,
-        jar_cache,
+        storage.jar_cache(),
         progress,
     )
     .await?;
@@ -893,7 +893,7 @@ struct InstallModInput<'a> {
     instance_dir: &'a Path,
     constraint: &'a str,
     providers: &'a [Box<dyn ModProvider>],
-    jar_cache: &'a crate::jar_cache::JarCache,
+    storage: crate::version_repository::CandidateStorage<'a>,
     manifest: &'a mut OrbitManifest,
     lockfile: &'a mut OrbitLockfile,
     mods_dir: &'a Path,
@@ -908,7 +908,7 @@ async fn install_mod(input: InstallModInput<'_>) -> Result<InstallReport, OrbitE
         instance_dir,
         constraint,
         providers,
-        jar_cache,
+        storage,
         manifest,
         lockfile,
         mods_dir,
@@ -967,7 +967,7 @@ async fn install_mod(input: InstallModInput<'_>) -> Result<InstallReport, OrbitE
             lockfile,
             mc_version,
             loader,
-            jar_cache,
+            storage,
             progress: progress.clone(),
         },
         &requested_remotes,
@@ -1076,7 +1076,7 @@ async fn install_mod(input: InstallModInput<'_>) -> Result<InstallReport, OrbitE
         mods_dir,
         loader,
         providers,
-        jar_cache,
+        storage.jar_cache(),
         progress,
     )
     .await?;
@@ -1966,6 +1966,10 @@ mod tests {
         atomic::{AtomicBool, Ordering},
     };
 
+    fn version_repository(root: &Path) -> crate::version_repository::VersionRepository {
+        crate::version_repository::VersionRepository::open(root.join("repository")).unwrap()
+    }
+
     fn manifest() -> OrbitManifest {
         toml::from_str(
             r#"
@@ -2159,7 +2163,6 @@ physical_environment = "client"
         let manifest_before = std::fs::read(directory.path().join("orbit.toml")).unwrap();
         let lock_before = std::fs::read(directory.path().join("orbit.lock")).unwrap();
         let cache = crate::jar_cache::JarCache::open(directory.path().join("cache")).unwrap();
-
         let report = install_instance(
             directory.path(),
             &[],
@@ -2231,6 +2234,7 @@ physical_environment = "client"
         .save()
         .unwrap();
         let cache = crate::jar_cache::JarCache::open(directory.path().join("cache")).unwrap();
+        let repository = version_repository(directory.path());
 
         let install = install_instance(
             directory.path(),
@@ -2252,7 +2256,7 @@ physical_environment = "client"
             "*",
             directory.path(),
             &[],
-            &cache,
+            crate::version_repository::CandidateStorage::new(&cache, &repository),
             InstallOptions::default(),
             InstallInteraction::default(),
         )
@@ -2315,10 +2319,11 @@ physical_environment = "client"
             .unwrap_err();
         assert!(sync_error.to_string().contains("orbit fix"));
         let cache = crate::jar_cache::JarCache::open(directory.path().join("cache")).unwrap();
+        let repository = version_repository(directory.path());
         let report = fix_instance(
             directory.path(),
             &[],
-            &cache,
+            crate::version_repository::CandidateStorage::new(&cache, &repository),
             false,
             InstallInteraction {
                 confirm_install: Some(Box::new(|_| Ok(()))),
@@ -2441,11 +2446,12 @@ physical_environment = "client"
         .save()
         .unwrap();
         let cache = crate::jar_cache::JarCache::open(directory.path().join("cache")).unwrap();
+        let repository = version_repository(directory.path());
 
         let report = fix_instance(
             directory.path(),
             &[],
-            &cache,
+            crate::version_repository::CandidateStorage::new(&cache, &repository),
             false,
             InstallInteraction {
                 confirm_install: Some(Box::new(|_| Ok(()))),

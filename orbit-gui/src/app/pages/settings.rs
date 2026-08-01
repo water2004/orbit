@@ -262,7 +262,7 @@ fn orbit_page(app: &Entity<OrbitApp>, available: bool) -> SettingPage {
         )
         .group(
             SettingGroup::new()
-                .title(tr!("JAR cache").into_owned())
+                .title(tr!("Local package data").into_owned())
                 .items([
                     orbit_editor_item(
                         app,
@@ -270,6 +270,13 @@ fn orbit_page(app: &Entity<OrbitApp>, available: bool) -> SettingPage {
                         tr!("Cache directory").into_owned(),
                         tr!("Optional absolute location for downloaded and analyzed JARs")
                             .into_owned(),
+                        false,
+                    ),
+                    orbit_editor_item(
+                        app,
+                        "repository.dir",
+                        tr!("Version repository directory").into_owned(),
+                        tr!("Optional absolute location for per-Minecraft-version provider and JAR metadata databases").into_owned(),
                         false,
                     ),
                     orbit_editor_item(

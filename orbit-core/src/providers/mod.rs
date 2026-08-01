@@ -129,14 +129,14 @@ pub fn find_provider<'a>(
 // ---------------------------------------------------------------------------
 
 /// Modrinth 平台专属字段
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ModrinthResolvedInfo {
     pub project_id: String,
     pub version_id: String,
 }
 
 /// CurseForge 平台专属字段
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct CurseForgeResolvedInfo {
     pub project_id: u32,
     pub file_id: u32,
@@ -156,7 +156,7 @@ pub struct ArtifactFingerprint {
 ///
 /// 这里故意不包含 mod ID、模组版本、依赖、运行环境或 provides。这些
 /// package metadata 只能在下载后从 JAR loader metadata 中取得。
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct RemoteArtifact {
     /// 来源提供的 SHA-1；缺失时为空。
     pub sha1: String,
@@ -264,7 +264,7 @@ impl RemoteArtifact {
 
 /// Provider 给出的远端项目定位提示。其身份和依赖语义都不可信；
 /// 下载后的 JAR metadata 决定该 artifact 实际提供什么。
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct RemoteProjectLocator {
     pub slug: Option<String>,
     pub project_id: Option<String>,
@@ -358,6 +358,14 @@ pub struct ModVersionInfo {
     pub released_at: String,
 }
 
+/// Cheap provider-owned project freshness cursor. It is used only by the
+/// remote repository and never enters package identity or dependency solving.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemoteProjectState {
+    pub project_id: String,
+    pub marker: String,
+}
+
 // ---------------------------------------------------------------------------
 // 平台提供者特质
 // ---------------------------------------------------------------------------
@@ -395,6 +403,14 @@ pub trait ModProvider: Send + Sync {
     ) -> Result<Vec<RemoteArtifact>, OrbitError> {
         Ok(Vec::new())
     }
+
+    /// Read project-level change markers in batches. Provider implementations
+    /// must use their official bulk endpoint and return one non-empty marker
+    /// for every requested stable project ID.
+    async fn project_states(
+        &self,
+        project_ids: &[String],
+    ) -> Result<Vec<RemoteProjectState>, OrbitError>;
 
     /// 获取模组的所有版本列表
     async fn get_versions(

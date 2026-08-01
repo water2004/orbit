@@ -57,6 +57,7 @@ image = { version = "0.25.9", default-features = false, features = ["png", "jpeg
 fs2 = "0.4"
 java-properties = "2.0.0"
 dunce = "1.0.5"
+rusqlite = { version = "0.40.1", features = ["bundled"] }
 orbit-loader-json = { path = "orbit-loader-json" }
 orbit-machine-protocol = { path = "orbit-machine-protocol" }
 orbit-i18n = { path = "orbit-i18n" }

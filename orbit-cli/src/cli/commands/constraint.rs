@@ -44,7 +44,7 @@ pub async fn handle(command: ConstraintCommands, ctx: &CliContext) -> Result<()>
                 orbit_core::PackageConstraintApplyOptions {
                     string,
                     providers: &providers,
-                    jar_cache: ctx.runtime.jar_cache(),
+                    storage: ctx.runtime.candidate_storage(),
                     dry_run: ctx.dry_run,
                     interaction: super::install_interaction(ctx),
                 },

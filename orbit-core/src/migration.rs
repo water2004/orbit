@@ -88,7 +88,7 @@ pub async fn plan_migration(
     source_dir: &Path,
     target_dir: &Path,
     providers: &[Box<dyn ModProvider>],
-    jar_cache: &crate::jar_cache::JarCache,
+    storage: crate::version_repository::CandidateStorage<'_>,
     options: MigrationOptions,
     interaction: MigrationInteraction,
 ) -> Result<MigrationPlan, OrbitError> {
@@ -96,7 +96,7 @@ pub async fn plan_migration(
         source_dir,
         target_dir,
         providers,
-        jar_cache,
+        storage,
         options,
         interaction,
         false,
@@ -108,7 +108,7 @@ async fn plan_migration_inner(
     source_dir: &Path,
     target_dir: &Path,
     providers: &[Box<dyn ModProvider>],
-    jar_cache: &crate::jar_cache::JarCache,
+    storage: crate::version_repository::CandidateStorage<'_>,
     options: MigrationOptions,
     interaction: MigrationInteraction,
     portable_snapshot: bool,
@@ -154,7 +154,7 @@ async fn plan_migration_inner(
             lockfile: &discovery_lock,
             mc_version: &target_meta.mc_version,
             loader: target_platform.loader,
-            jar_cache,
+            storage,
             progress: interaction.progress.clone(),
         },
         &[],
@@ -386,7 +386,7 @@ pub async fn plan_migration_from_portable(
     source: crate::archive::PortableInstance,
     target_dir: &Path,
     providers: &[Box<dyn ModProvider>],
-    jar_cache: &crate::jar_cache::JarCache,
+    storage: crate::version_repository::CandidateStorage<'_>,
     options: MigrationOptions,
     interaction: MigrationInteraction,
 ) -> Result<MigrationPlan, OrbitError> {
@@ -395,7 +395,7 @@ pub async fn plan_migration_from_portable(
         source.path(),
         target_dir,
         providers,
-        jar_cache,
+        storage,
         options,
         interaction,
         true,
@@ -771,6 +771,10 @@ mod tests {
     use crate::manifest::{OrbitManifest, ProjectMeta, ResolverConfig};
     use std::io::Write;
 
+    fn version_repository(root: &Path) -> crate::version_repository::VersionRepository {
+        crate::version_repository::VersionRepository::open(root.join("repository")).unwrap()
+    }
+
     fn write_empty_orbit_instance(directory: &Path, minecraft: &str, loader_version: &str) {
         crate::platform_detection::test_support::write_platform(
             directory,
@@ -991,12 +995,13 @@ mod tests {
         crate::sync_instance(&source, &[], false).await.unwrap();
         crate::platform_detection::test_support::write_platform(&target, "2", "fabric", "1");
         let cache = crate::jar_cache::JarCache::open(root.path().join("cache")).unwrap();
+        let repository = version_repository(root.path());
 
         let error = plan_migration(
             &source,
             &target,
             &[],
-            &cache,
+            crate::version_repository::CandidateStorage::new(&cache, &repository),
             MigrationOptions::default(),
             MigrationInteraction::default(),
         )
@@ -1014,7 +1019,7 @@ mod tests {
             &source,
             &target,
             &[],
-            &cache,
+            crate::version_repository::CandidateStorage::new(&cache, &repository),
             MigrationOptions::default(),
             MigrationInteraction {
                 confirm_soft_fallback: Some(Box::new(move |preview| {
@@ -1062,6 +1067,7 @@ mod tests {
         std::fs::write(source.join("config/example.toml"), "enabled = true\n").unwrap();
 
         let cache = crate::jar_cache::JarCache::open(root.path().join("cache")).unwrap();
+        let repository = version_repository(root.path());
         let pack = root.path().join("source.zip");
         crate::archive::export_instance(&source, &pack, None, "zip", false, None).unwrap();
         let portable = crate::archive::extract_portable_instance(&pack).unwrap();
@@ -1069,7 +1075,7 @@ mod tests {
             portable,
             &target,
             &[],
-            &cache,
+            crate::version_repository::CandidateStorage::new(&cache, &repository),
             MigrationOptions::default(),
             MigrationInteraction::default(),
         )
@@ -1113,11 +1119,12 @@ mod tests {
         crate::archive::export_instance(&source, &pack, None, "zip", false, None).unwrap();
         let portable = crate::archive::extract_portable_instance(&pack).unwrap();
         let cache = crate::jar_cache::JarCache::open(root.path().join("cache")).unwrap();
+        let repository = version_repository(root.path());
         let plan = plan_migration_from_portable(
             portable,
             &target,
             &[],
-            &cache,
+            crate::version_repository::CandidateStorage::new(&cache, &repository),
             MigrationOptions::default(),
             MigrationInteraction::default(),
         )
@@ -1148,11 +1155,12 @@ mod tests {
         std::fs::write(target.join("config/example.toml"), "target").unwrap();
 
         let cache = crate::jar_cache::JarCache::open(root.path().join("cache")).unwrap();
+        let repository = version_repository(root.path());
         let plan = plan_migration(
             &source,
             &target,
             &[],
-            &cache,
+            crate::version_repository::CandidateStorage::new(&cache, &repository),
             MigrationOptions::default(),
             MigrationInteraction::default(),
         )

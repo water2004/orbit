@@ -36,7 +36,7 @@ pub async fn handle(mod_name: Option<String>, ctx: &CliContext) -> Result<()> {
             &manifest_file.inner,
             &lock.inner,
             &providers,
-            ctx.runtime.jar_cache(),
+            ctx.runtime.candidate_storage(),
             orbit_core::outdated::OutdatedInteraction {
                 package: requested_package.clone(),
                 select_resolution: selector,
@@ -51,7 +51,7 @@ pub async fn handle(mod_name: Option<String>, ctx: &CliContext) -> Result<()> {
             &lock.inner,
             &providers,
             selector,
-            ctx.runtime.jar_cache(),
+            ctx.runtime.candidate_storage(),
             progress,
         )
         .await

@@ -33,6 +33,10 @@ pub struct Cli {
     #[arg(long, global = true)]
     pub cache_dir: Option<PathBuf>,
 
+    /// Exact global version repository directory.
+    #[arg(long, global = true)]
+    pub repository_dir: Option<PathBuf>,
+
     /// Default path layout: system / executable.
     #[arg(long, global = true)]
     pub data_layout: Option<orbit_core::PathLayout>,

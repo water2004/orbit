@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use crate::config::GlobalConfig;
 use crate::error::OrbitError;
 use crate::jar_cache::JarCache;
+use crate::version_repository::{CandidateStorage, VersionRepository};
 
 const APPLICATION_DIRECTORY: &str = "orbit";
 
@@ -89,6 +90,8 @@ pub struct RuntimePathOptions {
     pub config_file: Option<PathBuf>,
     /// Exact directory of the global JAR cache.
     pub cache_dir: Option<PathBuf>,
+    /// Exact root of the version repository.
+    pub repository_dir: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -96,6 +99,7 @@ pub struct RuntimePaths {
     config_file: PathBuf,
     instances_file: PathBuf,
     cache_dir: PathBuf,
+    repository_dir: PathBuf,
 }
 
 impl RuntimePaths {
@@ -116,14 +120,34 @@ impl RuntimePaths {
         let cache_dir = match &options.cache_dir {
             Some(path) => path.clone(),
             None => match layout {
-                PathLayout::Executable => environment.executable_dir()?.join("cache"),
-                PathLayout::System => environment.cache_root()?.join(APPLICATION_DIRECTORY),
+                PathLayout::Executable => environment
+                    .executable_dir()?
+                    .join("cache")
+                    .join("jar-cache"),
+                PathLayout::System => environment
+                    .cache_root()?
+                    .join(APPLICATION_DIRECTORY)
+                    .join("jar-cache"),
+            },
+        };
+        let repository_dir = match &options.repository_dir {
+            Some(path) => path.clone(),
+            None => match layout {
+                PathLayout::Executable => environment
+                    .executable_dir()?
+                    .join("cache")
+                    .join("repository"),
+                PathLayout::System => environment
+                    .cache_root()?
+                    .join(APPLICATION_DIRECTORY)
+                    .join("repository"),
             },
         };
         Ok(Self {
             config_file,
             instances_file,
             cache_dir,
+            repository_dir,
         })
     }
 
@@ -138,6 +162,10 @@ impl RuntimePaths {
     pub fn cache_dir(&self) -> &Path {
         &self.cache_dir
     }
+
+    pub fn repository_dir(&self) -> &Path {
+        &self.repository_dir
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -145,6 +173,7 @@ pub struct RuntimeContext {
     paths: RuntimePaths,
     config: GlobalConfig,
     jar_cache: JarCache,
+    version_repository: VersionRepository,
 }
 
 impl RuntimeContext {
@@ -162,13 +191,18 @@ impl RuntimeContext {
         if options.cache_dir.is_none() {
             options.cache_dir = config.cache.dir.as_deref().map(PathBuf::from);
         }
+        if options.repository_dir.is_none() {
+            options.repository_dir = config.repository.dir.as_deref().map(PathBuf::from);
+        }
         config.cache.capacity_bytes()?;
         let paths = RuntimePaths::resolve_with(environment, &options)?;
         let jar_cache = JarCache::open(paths.cache_dir().to_path_buf())?;
+        let version_repository = VersionRepository::open(paths.repository_dir().to_path_buf())?;
         Ok(Self {
             paths,
             config,
             jar_cache,
+            version_repository,
         })
     }
 
@@ -182,6 +216,14 @@ impl RuntimeContext {
 
     pub fn jar_cache(&self) -> &JarCache {
         &self.jar_cache
+    }
+
+    pub fn version_repository(&self) -> &VersionRepository {
+        &self.version_repository
+    }
+
+    pub fn candidate_storage(&self) -> CandidateStorage<'_> {
+        CandidateStorage::new(&self.jar_cache, &self.version_repository)
     }
 
     /// Persist this command's cache access order and enforce the configured
@@ -367,7 +409,14 @@ mod tests {
             paths.instances_file(),
             Path::new("/platform/config/orbit/instances.toml")
         );
-        assert_eq!(paths.cache_dir(), Path::new("/platform/cache/orbit"));
+        assert_eq!(
+            paths.cache_dir(),
+            Path::new("/platform/cache/orbit/jar-cache")
+        );
+        assert_eq!(
+            paths.repository_dir(),
+            Path::new("/platform/cache/orbit/repository")
+        );
     }
 
     #[test]
@@ -378,6 +427,7 @@ mod tests {
                 layout: Some(PathLayout::Executable),
                 config_file: Some(PathBuf::from("/custom/global.toml")),
                 cache_dir: Some(PathBuf::from("/custom/jars")),
+                repository_dir: Some(PathBuf::from("/custom/repository")),
             },
         )
         .unwrap();
@@ -385,20 +435,23 @@ mod tests {
         assert_eq!(paths.config_file(), Path::new("/custom/global.toml"));
         assert_eq!(paths.instances_file(), Path::new("/custom/instances.toml"));
         assert_eq!(paths.cache_dir(), Path::new("/custom/jars"));
+        assert_eq!(paths.repository_dir(), Path::new("/custom/repository"));
     }
 
     #[test]
-    fn configured_cache_path_does_not_require_platform_discovery() {
+    fn configured_data_paths_do_not_require_platform_discovery() {
         let directory =
             std::env::temp_dir().join(format!("orbit-runtime-config-test-{}", std::process::id()));
         std::fs::create_dir_all(&directory).unwrap();
         let config_file = directory.join("global.toml");
         let cache_dir = directory.join("configured-cache");
+        let repository_dir = directory.join("configured-repository");
         std::fs::write(
             &config_file,
             format!(
-                "[cache]\ndir = {:?}\ncapacity_mib = 5120\n",
-                cache_dir.to_string_lossy()
+                "[cache]\ndir = {:?}\ncapacity_mib = 5120\n\n[repository]\ndir = {:?}\n",
+                cache_dir.to_string_lossy(),
+                repository_dir.to_string_lossy()
             ),
         )
         .unwrap();
@@ -413,6 +466,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(runtime.paths().cache_dir(), cache_dir);
+        assert_eq!(runtime.paths().repository_dir(), repository_dir);
         std::fs::remove_dir_all(directory).unwrap();
     }
 }

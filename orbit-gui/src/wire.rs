@@ -119,6 +119,9 @@ pub fn progress_label(data: &Value) -> String {
 
 fn progress_event_label(event: &str) -> String {
     let key = match event {
+        "RepositoryIndexStarted" => "Checking local version repository",
+        "RepositoryProjectChecked" => "Checking package versions",
+        "RepositoryIndexFinished" => "Local version repository is ready",
         "metadata_started" => "Resolving official metadata",
         "minecraft_resolved" => "Minecraft metadata resolved",
         "eula_checked" => "Checking Minecraft EULA",

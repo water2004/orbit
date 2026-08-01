@@ -21,7 +21,7 @@ pub async fn add_package_remote(
     package: &str,
     remote: PackageRemote,
     providers: &[Box<dyn ModProvider>],
-    jar_cache: &crate::jar_cache::JarCache,
+    storage: crate::version_repository::CandidateStorage<'_>,
     dry_run: bool,
     progress: Option<ProgressReporter>,
 ) -> Result<RemoteReport, OrbitError> {
@@ -86,7 +86,7 @@ pub async fn add_package_remote(
             lockfile: &empty_lock,
             mc_version: &manifest.inner.project.mc_version,
             loader: manifest.inner.project.loader_kind()?,
-            jar_cache,
+            storage,
             progress,
         },
         std::slice::from_ref(&remote),

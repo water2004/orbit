@@ -45,15 +45,24 @@ pub enum ResolutionActivity {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "event", rename_all = "PascalCase")]
 pub enum ProgressEvent {
-    DiscoveryStarted,
-    DiscoveringProject {
-        provider: String,
-        locator: String,
-        pending_projects: usize,
-        artifacts_found: usize,
+    RepositoryIndexStarted {
+        minecraft: String,
+        loader: String,
+        total: usize,
     },
-    DiscoveryFinished {
-        projects: usize,
+    RepositoryProjectChecked {
+        completed: usize,
+        total: usize,
+        provider: String,
+        project_id: String,
+        refreshed: bool,
+        artifacts: usize,
+    },
+    RepositoryIndexFinished {
+        completed: usize,
+        total: usize,
+        refreshed: usize,
+        reused: usize,
         artifacts: usize,
     },
     CandidateDownloadStarted {

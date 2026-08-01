@@ -18,6 +18,7 @@ pub mod metadata;
 pub mod progress;
 pub mod providers;
 pub mod runtime;
+pub mod version_repository;
 pub mod version_string;
 pub mod versions;
 
@@ -103,6 +104,7 @@ pub use runtime::{
     RuntimePaths, compiled_default_layout,
 };
 pub use sync::{PlatformChange, SyncReport, sync_instance};
+pub use version_repository::{CandidateStorage, VersionRepository};
 pub use version_string::{
     DEFAULT_NEW_PACKAGE_STRING, VersionStringInitialSet, VersionStringOperation,
     VersionStringPredicate, VersionStringRule,

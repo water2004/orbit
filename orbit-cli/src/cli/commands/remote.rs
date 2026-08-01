@@ -27,7 +27,7 @@ pub async fn handle(command: RemoteCommands, ctx: &CliContext) -> Result<()> {
                 &package,
                 remote,
                 &providers,
-                ctx.runtime.jar_cache(),
+                ctx.runtime.candidate_storage(),
                 ctx.dry_run,
                 super::operation_progress(ctx),
             )

@@ -10,7 +10,7 @@ use super::rate_limiter::RateLimiter;
 use super::{
     ArtifactDownloadClient, ArtifactFingerprint, CatalogDependency, CurseForgeResolvedInfo,
     ModInfo, ModProvider, ModVersionInfo, ProjectImage, RemoteArtifact, RemoteProjectLocator,
-    SearchResultItem,
+    RemoteProjectState, SearchResultItem,
 };
 use crate::error::OrbitError;
 
@@ -345,6 +345,36 @@ impl ModProvider for CurseForgeProvider {
 
     fn artifact_downloader(&self) -> &ArtifactDownloadClient {
         &self.downloader
+    }
+
+    async fn project_states(
+        &self,
+        project_ids: &[String],
+    ) -> Result<Vec<RemoteProjectState>, OrbitError> {
+        let mut parsed = Vec::with_capacity(project_ids.len());
+        for project_id in project_ids {
+            parsed.push(project_id.parse::<u32>().map_err(|_| {
+                OrbitError::Other(anyhow::anyhow!(
+                    "CurseForge project ID '{project_id}' is not an unsigned integer"
+                ))
+            })?);
+        }
+        let mut states = Vec::with_capacity(parsed.len());
+        for chunk in parsed.chunks(50) {
+            let _permit = self.rate_limiter.acquire().await?;
+            states.extend(
+                self.client
+                    .get_mods(chunk)
+                    .await
+                    .map_err(map_client_error)?
+                    .into_iter()
+                    .map(|project| RemoteProjectState {
+                        project_id: project.id.to_string(),
+                        marker: project.date_modified,
+                    }),
+            );
+        }
+        Ok(states)
     }
 
     async fn search(
@@ -923,6 +953,38 @@ mod tests {
                 .as_ref()
                 .map(|metadata| metadata.fingerprint),
             Some(987)
+        );
+        stop_mock_server(server).await;
+    }
+
+    #[tokio::test]
+    async fn reads_project_change_markers_with_the_bulk_mods_endpoint() {
+        let (base_url, server) = mock_server(vec![MockResponse {
+            request_contains: "POST /v1/mods ",
+            status: "200 OK",
+            body: r#"{"data":[{"id":123,"name":"A","slug":"a","summary":"A","downloadCount":1,"categories":[],"authors":[],"latestFiles":[],"latestFilesIndexes":[],"isAvailable":true,"dateModified":"2026-08-01T01:02:03Z"},{"id":456,"name":"B","slug":"b","summary":"B","downloadCount":1,"categories":[],"authors":[],"latestFiles":[],"latestFilesIndexes":[],"isAvailable":true,"dateModified":"2026-08-01T04:05:06Z"}]}"#,
+        }])
+        .await;
+        let provider =
+            CurseForgeProvider::with_base_url("test-key", "orbit-test", &base_url).unwrap();
+
+        let states = provider
+            .project_states(&["123".to_string(), "456".to_string()])
+            .await
+            .unwrap();
+
+        assert_eq!(
+            states,
+            vec![
+                RemoteProjectState {
+                    project_id: "123".to_string(),
+                    marker: "2026-08-01T01:02:03Z".to_string(),
+                },
+                RemoteProjectState {
+                    project_id: "456".to_string(),
+                    marker: "2026-08-01T04:05:06Z".to_string(),
+                },
+            ]
         );
         stop_mock_server(server).await;
     }

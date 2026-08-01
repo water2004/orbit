@@ -136,34 +136,57 @@ impl ProgressRenderer {
         }
 
         match event {
-            ProgressEvent::DiscoveryStarted => start_spinner(
+            ProgressEvent::RepositoryIndexStarted {
+                minecraft,
+                loader,
+                total,
+            } => start_bar(
                 &mut state,
-                tr!("[1/4] Discovering provider projects and candidate versions"),
-            ),
-            ProgressEvent::DiscoveringProject {
-                provider,
-                locator,
-                pending_projects,
-                artifacts_found,
-            } => set_message(
-                &state,
+                total,
                 tr!(
-                    "[1/4] %{provider}: %{locator} (%{pending} pending, %{artifacts} JARs found)",
-                    provider = provider,
-                    locator = locator,
-                    pending = pending_projects,
-                    artifacts = artifacts_found
+                    "[1/4] Checking the local version repository for Minecraft %{minecraft} / %{loader}",
+                    minecraft = minecraft,
+                    loader = loader
                 ),
             ),
-            ProgressEvent::DiscoveryFinished {
-                projects,
+            ProgressEvent::RepositoryProjectChecked {
+                completed,
+                total,
+                provider,
+                project_id,
+                refreshed,
+                artifacts,
+            } => {
+                if let Some(bar) = &state.bar {
+                    bar.set_length(total as u64);
+                    bar.set_position(completed as u64);
+                    bar.set_message(tr!(
+                        "[1/4] %{provider}:%{project} · %{state} · %{artifacts} candidate JAR(s)",
+                        provider = provider,
+                        project = project_id,
+                        state = if refreshed {
+                            tr!("refreshed")
+                        } else {
+                            tr!("reused")
+                        },
+                        artifacts = artifacts
+                    ));
+                }
+            }
+            ProgressEvent::RepositoryIndexFinished {
+                completed: _,
+                total,
+                refreshed,
+                reused,
                 artifacts,
             } => finish(
                 &mut state,
                 tr!(
-                    "[1/4] Found %{artifacts} candidate JARs in %{projects} projects",
-                    artifacts = artifacts,
-                    projects = projects
+                    "[1/4] Indexed %{total} projects (%{refreshed} refreshed, %{reused} reused) and %{artifacts} candidate JARs",
+                    total = total,
+                    refreshed = refreshed,
+                    reused = reused,
+                    artifacts = artifacts
                 ),
             ),
             ProgressEvent::CandidateDownloadStarted { total } => start_bar(
@@ -431,28 +454,48 @@ fn clear(state: &mut RenderState) {
 
 fn plain_line(event: &ProgressEvent, state: &mut RenderState) -> Option<String> {
     match event {
-        ProgressEvent::DiscoveryStarted => {
-            Some(tr!("[1/4] Discovering provider projects and candidate versions...").into_owned())
-        }
-        ProgressEvent::DiscoveringProject {
-            provider,
-            locator,
-            pending_projects,
-            artifacts_found,
+        ProgressEvent::RepositoryIndexStarted {
+            minecraft,
+            loader,
+            total,
         } => Some(tr!(
-            "  %{provider}: checking %{locator} (%{pending} pending, %{artifacts} JARs found)",
-            provider = provider,
-            locator = locator,
-            pending = pending_projects,
-            artifacts = artifacts_found
+            "[1/4] Checking %{total} project(s) in the local version repository for Minecraft %{minecraft} / %{loader}...",
+            total = total,
+            minecraft = minecraft,
+            loader = loader
         )),
-        ProgressEvent::DiscoveryFinished {
-            projects,
+        ProgressEvent::RepositoryProjectChecked {
+            completed,
+            total,
+            provider,
+            project_id,
+            refreshed,
             artifacts,
         } => Some(tr!(
-            "[1/4] Found %{artifacts} candidate JARs in %{projects} projects.",
-            artifacts = artifacts,
-            projects = projects
+            "  [%{completed}/%{total}] %{provider}:%{project} · %{state} · %{artifacts} candidate JAR(s)",
+            completed = completed,
+            total = total,
+            provider = provider,
+            project = project_id,
+            state = if *refreshed {
+                tr!("refreshed")
+            } else {
+                tr!("reused")
+            },
+            artifacts = artifacts
+        )),
+        ProgressEvent::RepositoryIndexFinished {
+            total,
+            refreshed,
+            reused,
+            artifacts,
+            ..
+        } => Some(tr!(
+            "[1/4] Indexed %{total} projects (%{refreshed} refreshed, %{reused} reused) and %{artifacts} candidate JARs.",
+            total = total,
+            refreshed = refreshed,
+            reused = reused,
+            artifacts = artifacts
         )),
         ProgressEvent::CandidateDownloadStarted { total } => Some(tr!(
             "[2/4] Downloading, verifying, and parsing %{total} candidate JARs...",

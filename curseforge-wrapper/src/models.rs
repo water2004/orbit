@@ -59,6 +59,8 @@ pub struct Mod {
     #[serde(default)]
     pub latest_files_indexes: Vec<FileIndex>,
     pub is_available: bool,
+    #[serde(default)]
+    pub date_modified: String,
 }
 
 /// Relevant project links exposed by the CurseForge Core API.

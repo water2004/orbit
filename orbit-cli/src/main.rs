@@ -36,6 +36,7 @@ async fn main() {
         layout: cli.data_layout,
         config_file: cli.config.clone(),
         cache_dir: cli.cache_dir.clone(),
+        repository_dir: cli.repository_dir.clone(),
     }) {
         Ok(runtime) => runtime,
         Err(error) => {

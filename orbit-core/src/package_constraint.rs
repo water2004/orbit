@@ -148,7 +148,7 @@ pub struct PackageConstraintApplyReport {
 pub struct PackageConstraintApplyOptions<'a> {
     pub string: Option<String>,
     pub providers: &'a [Box<dyn ModProvider>],
-    pub jar_cache: &'a crate::jar_cache::JarCache,
+    pub storage: crate::version_repository::CandidateStorage<'a>,
     pub dry_run: bool,
     pub interaction: InstallInteraction,
 }
@@ -191,7 +191,7 @@ pub async fn apply_package_constraint(
     let PackageConstraintApplyOptions {
         string,
         providers,
-        jar_cache,
+        storage,
         dry_run,
         interaction,
     } = options;
@@ -214,7 +214,7 @@ pub async fn apply_package_constraint(
     let outcome = crate::installer::repair_manifest_instance(
         instance_dir,
         providers,
-        jar_cache,
+        storage,
         dry_run,
         interaction,
         manifest,
@@ -691,15 +691,16 @@ mod tests {
         }
     }
 
-    fn apply_options(
+    fn apply_options<'a>(
         string: Option<String>,
-        cache: &crate::jar_cache::JarCache,
+        cache: &'a crate::jar_cache::JarCache,
+        version_repository: &'a crate::version_repository::VersionRepository,
         interaction: InstallInteraction,
-    ) -> PackageConstraintApplyOptions<'_> {
+    ) -> PackageConstraintApplyOptions<'a> {
         PackageConstraintApplyOptions {
             string,
             providers: &[],
-            jar_cache: cache,
+            storage: crate::version_repository::CandidateStorage::new(cache, version_repository),
             dry_run: false,
             interaction,
         }
@@ -709,6 +710,9 @@ mod tests {
     async fn applying_a_policy_atomically_reselects_the_package() {
         let directory = tempfile::tempdir().unwrap();
         let cache = write_constraint_instance(directory.path());
+        let repository =
+            crate::version_repository::VersionRepository::open(directory.path().join("repository"))
+                .unwrap();
 
         let report = apply_package_constraint(
             directory.path(),
@@ -720,6 +724,7 @@ mod tests {
             apply_options(
                 Some("all; intersect contains(\"alpha\")".to_string()),
                 &cache,
+                &repository,
                 accept_transaction(),
             ),
         )
@@ -751,6 +756,9 @@ mod tests {
     async fn a_satisfied_policy_is_persisted_without_rewriting_the_package() {
         let directory = tempfile::tempdir().unwrap();
         let cache = write_constraint_instance(directory.path());
+        let repository =
+            crate::version_repository::VersionRepository::open(directory.path().join("repository"))
+                .unwrap();
         let jar_before = std::fs::read(directory.path().join("mods/example.jar")).unwrap();
 
         let report = apply_package_constraint(
@@ -760,7 +768,12 @@ mod tests {
                 operator: VersionComparison::Exact,
                 version: "1.2.3".to_string(),
             },
-            apply_options(Some("all".to_string()), &cache, accept_transaction()),
+            apply_options(
+                Some("all".to_string()),
+                &cache,
+                &repository,
+                accept_transaction(),
+            ),
         )
         .await
         .unwrap();
@@ -781,6 +794,9 @@ mod tests {
     async fn string_expression_participates_in_the_same_solver_transaction() {
         let directory = tempfile::tempdir().unwrap();
         let cache = write_constraint_instance(directory.path());
+        let repository =
+            crate::version_repository::VersionRepository::open(directory.path().join("repository"))
+                .unwrap();
 
         let report = apply_package_constraint(
             directory.path(),
@@ -792,6 +808,7 @@ mod tests {
             apply_options(
                 Some("all; intersect contains(\"alpha\")".to_string()),
                 &cache,
+                &repository,
                 accept_transaction(),
             ),
         )
@@ -812,6 +829,9 @@ mod tests {
     async fn omitted_string_preserves_the_existing_rule() {
         let directory = tempfile::tempdir().unwrap();
         let cache = write_constraint_instance(directory.path());
+        let repository =
+            crate::version_repository::VersionRepository::open(directory.path().join("repository"))
+                .unwrap();
         let mut manifest = ManifestFile::open(directory.path()).unwrap();
         manifest.inner.packages["example"].string =
             "all; intersect not contains(\"alpha\")".to_string();
@@ -824,7 +844,7 @@ mod tests {
                 operator: VersionComparison::Exact,
                 version: "1.2.3".to_string(),
             },
-            apply_options(None, &cache, accept_transaction()),
+            apply_options(None, &cache, &repository, accept_transaction()),
         )
         .await
         .unwrap();
@@ -841,6 +861,9 @@ mod tests {
     async fn an_unsatisfiable_policy_leaves_manifest_lock_and_jar_unchanged() {
         let directory = tempfile::tempdir().unwrap();
         let cache = write_constraint_instance(directory.path());
+        let repository =
+            crate::version_repository::VersionRepository::open(directory.path().join("repository"))
+                .unwrap();
         let manifest_before = std::fs::read(directory.path().join("orbit.toml")).unwrap();
         let lock_before = std::fs::read(directory.path().join("orbit.lock")).unwrap();
         let jar_before = std::fs::read(directory.path().join("mods/example.jar")).unwrap();
@@ -852,7 +875,12 @@ mod tests {
                 operator: VersionComparison::Exact,
                 version: "9".to_string(),
             },
-            apply_options(Some("all".to_string()), &cache, accept_transaction()),
+            apply_options(
+                Some("all".to_string()),
+                &cache,
+                &repository,
+                accept_transaction(),
+            ),
         )
         .await;
 
@@ -875,6 +903,9 @@ mod tests {
     async fn rejecting_the_transaction_does_not_persist_the_policy() {
         let directory = tempfile::tempdir().unwrap();
         let cache = write_constraint_instance(directory.path());
+        let repository =
+            crate::version_repository::VersionRepository::open(directory.path().join("repository"))
+                .unwrap();
         let manifest_before = std::fs::read(directory.path().join("orbit.toml")).unwrap();
         let lock_before = std::fs::read(directory.path().join("orbit.lock")).unwrap();
 
@@ -888,6 +919,7 @@ mod tests {
             apply_options(
                 Some("all; intersect contains(\"alpha\")".to_string()),
                 &cache,
+                &repository,
                 InstallInteraction {
                     confirm_install: Some(Box::new(|_| {
                         Err(OrbitError::Cancelled("test rejection".to_string()))

@@ -18,7 +18,7 @@ pub async fn install_local_file_to_instance(
     constraint: Option<&str>,
     instance_dir: &Path,
     providers: &[Box<dyn ModProvider>],
-    jar_cache: &crate::jar_cache::JarCache,
+    storage: crate::version_repository::CandidateStorage<'_>,
     options: InstallOptions,
     interaction: InstallInteraction,
 ) -> Result<InstallReport, OrbitError> {
@@ -50,7 +50,7 @@ pub async fn install_local_file_to_instance(
         constraint.unwrap_or("*"),
         instance_dir,
         providers,
-        jar_cache,
+        storage,
         options,
         interaction,
     )

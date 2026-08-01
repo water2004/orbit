@@ -6,8 +6,8 @@ use std::collections::HashMap;
 use super::rate_limiter::RateLimiter;
 use super::{
     ArtifactDownloadClient, ArtifactFingerprint, CatalogDependency, ModInfo, ModProvider,
-    ModrinthResolvedInfo, ProjectImage, RemoteArtifact, RemoteProjectLocator, SearchResultItem,
-    SideSupport,
+    ModrinthResolvedInfo, ProjectImage, RemoteArtifact, RemoteProjectLocator, RemoteProjectState,
+    SearchResultItem, SideSupport,
 };
 use crate::error::OrbitError;
 
@@ -181,6 +181,33 @@ impl ModProvider for ModrinthProvider {
 
     fn artifact_downloader(&self) -> &ArtifactDownloadClient {
         &self.downloader
+    }
+
+    async fn project_states(
+        &self,
+        project_ids: &[String],
+    ) -> Result<Vec<RemoteProjectState>, OrbitError> {
+        let mut states = Vec::with_capacity(project_ids.len());
+        for chunk in project_ids.chunks(100) {
+            let _permit = self.rate_limiter.acquire().await?;
+            let ids = chunk.iter().map(String::as_str).collect::<Vec<_>>();
+            let projects = self
+                .client
+                .get_projects(&ids)
+                .await
+                .map_err(|error| OrbitError::Other(error.into()))?;
+            for requested in chunk {
+                if let Some(project) = projects.iter().find(|project| {
+                    project.id == *requested || project.slug.eq_ignore_ascii_case(requested)
+                }) {
+                    states.push(RemoteProjectState {
+                        project_id: requested.clone(),
+                        marker: project.updated.clone(),
+                    });
+                }
+            }
+        }
+        Ok(states)
     }
 
     async fn search(

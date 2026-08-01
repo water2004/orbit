@@ -30,12 +30,14 @@ hex.workspace = true
 url.workspace = true
 zip.workspace = true
 async-trait.workspace = true
+futures-util.workspace = true
 anyhow.workspace = true
 thiserror.workspace = true
 indexmap.workspace = true
 tempfile.workspace = true
 image.workspace = true
 java-properties = "2.0"
+rusqlite.workspace = true
 pubgrub = { git = "https://github.com/water2004/pubgrub.git", rev = "914cf645982ba790090652bf3a09d934de857408" }
 
 [dev-dependencies]

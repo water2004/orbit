@@ -119,9 +119,9 @@ pub fn ndjson_audit_reporter(
 
 fn phase_for(event: &ProgressEvent) -> ProgressPhase {
     match event {
-        ProgressEvent::DiscoveryStarted
-        | ProgressEvent::DiscoveringProject { .. }
-        | ProgressEvent::DiscoveryFinished { .. } => ProgressPhase::Discovery,
+        ProgressEvent::RepositoryIndexStarted { .. }
+        | ProgressEvent::RepositoryProjectChecked { .. }
+        | ProgressEvent::RepositoryIndexFinished { .. } => ProgressPhase::Repository,
         ProgressEvent::CandidateDownloadStarted { .. }
         | ProgressEvent::CandidateArtifact { .. }
         | ProgressEvent::CandidateDownloadFinished { .. } => ProgressPhase::Download,

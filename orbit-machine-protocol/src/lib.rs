@@ -69,7 +69,7 @@ impl ErrorEnvelope {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ProgressPhase {
-    Discovery,
+    Repository,
     Download,
     Resolution,
     Apply,
@@ -215,7 +215,7 @@ mod tests {
         let progress = ProgressEnvelope::new(
             "search",
             1,
-            ProgressPhase::Discovery,
+            ProgressPhase::Repository,
             serde_json::json!({ "event": "started" }),
         );
 

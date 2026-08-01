@@ -10,7 +10,7 @@ pub async fn handle(ctx: &CliContext) -> Result<()> {
     let report = orbit_core::fix_instance(
         &instance_dir,
         &providers,
-        ctx.runtime.jar_cache(),
+        ctx.runtime.candidate_storage(),
         ctx.dry_run,
         super::install_interaction(ctx),
     )

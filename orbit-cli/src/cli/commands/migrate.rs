@@ -92,7 +92,7 @@ async fn build_plan(
             source,
             &target,
             &providers,
-            ctx.runtime.jar_cache(),
+            ctx.runtime.candidate_storage(),
             options,
             interaction,
         )
@@ -104,7 +104,7 @@ async fn build_plan(
         &source,
         &target,
         &providers,
-        ctx.runtime.jar_cache(),
+        ctx.runtime.candidate_storage(),
         options,
         interaction,
     )

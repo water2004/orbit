@@ -35,7 +35,7 @@ pub async fn handle(
             version.as_deref(),
             &instance_dir,
             &providers,
-            ctx.runtime.jar_cache(),
+            ctx.runtime.candidate_storage(),
             InstallOptions {
                 dry_run: ctx.dry_run,
                 intent: InstallIntent::Add,
@@ -69,7 +69,7 @@ pub async fn handle(
         &constraint,
         &instance_dir,
         &providers,
-        ctx.runtime.jar_cache(),
+        ctx.runtime.candidate_storage(),
         InstallOptions {
             dry_run: ctx.dry_run,
             intent: InstallIntent::Add,

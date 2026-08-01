@@ -38,7 +38,7 @@ pub async fn list_package_versions(
     instance_dir: &Path,
     package: &str,
     providers: &[Box<dyn ModProvider>],
-    jar_cache: &crate::jar_cache::JarCache,
+    storage: crate::version_repository::CandidateStorage<'_>,
     progress: Option<ProgressReporter>,
 ) -> Result<PackageVersionsReport, OrbitError> {
     let manifest = ManifestFile::open(instance_dir)?;
@@ -68,7 +68,7 @@ pub async fn list_package_versions(
             lockfile: &discovery_lock,
             mc_version: &manifest.inner.project.mc_version,
             loader,
-            jar_cache,
+            storage,
             progress,
         },
         &specification.remotes,
@@ -228,10 +228,19 @@ example = { version = ">=1.2.3", remotes = [
         )
         .unwrap();
         let cache = crate::jar_cache::JarCache::open(directory.path().join("cache")).unwrap();
+        let repository =
+            crate::version_repository::VersionRepository::open(directory.path().join("repository"))
+                .unwrap();
 
-        let report = list_package_versions(directory.path(), "example", &[], &cache, None)
-            .await
-            .unwrap();
+        let report = list_package_versions(
+            directory.path(),
+            "example",
+            &[],
+            crate::version_repository::CandidateStorage::new(&cache, &repository),
+            None,
+        )
+        .await
+        .unwrap();
 
         assert_eq!(report.selected_version, None);
         assert_eq!(
@@ -275,10 +284,19 @@ example = { version = "=999", string = 'all; intersect not contains(i"release")'
         )
         .unwrap();
         let cache = crate::jar_cache::JarCache::open(directory.path().join("cache")).unwrap();
+        let repository =
+            crate::version_repository::VersionRepository::open(directory.path().join("repository"))
+                .unwrap();
 
-        let report = list_package_versions(directory.path(), "example", &[], &cache, None)
-            .await
-            .unwrap();
+        let report = list_package_versions(
+            directory.path(),
+            "example",
+            &[],
+            crate::version_repository::CandidateStorage::new(&cache, &repository),
+            None,
+        )
+        .await
+        .unwrap();
         let candidate = &report.candidates[0];
         assert!(!candidate.numeric_filterable);
         assert!(
@@ -299,9 +317,15 @@ example = { version = "=999", string = 'all; intersect not contains(i"release")'
         let mut manifest = ManifestFile::open(directory.path()).unwrap();
         manifest.inner.packages["example"].string = "all".to_string();
         manifest.save().unwrap();
-        let report = list_package_versions(directory.path(), "example", &[], &cache, None)
-            .await
-            .unwrap();
+        let report = list_package_versions(
+            directory.path(),
+            "example",
+            &[],
+            crate::version_repository::CandidateStorage::new(&cache, &repository),
+            None,
+        )
+        .await
+        .unwrap();
         assert!(report.candidates[0].matches_constraint);
     }
 

@@ -27,7 +27,17 @@ pub struct GlobalConfig {
     #[serde(default)]
     pub cache: CacheConfig,
     #[serde(default)]
+    pub repository: RepositoryConfig,
+    #[serde(default)]
     pub ui: UiConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct RepositoryConfig {
+    /// Exact root of the version repository. Each Minecraft/Loader scope owns
+    /// independent remote and JAR-analysis databases below this directory.
+    pub dir: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -221,12 +231,13 @@ pub enum ConfigKey {
     AuthModrinthToken,
     CacheDir,
     CacheCapacityMib,
+    RepositoryDir,
     UiColor,
     UiProgressBar,
 }
 
 impl ConfigKey {
-    pub const ALL: [Self; 12] = [
+    pub const ALL: [Self; 13] = [
         Self::CoreDefaultInstance,
         Self::CoreMaxConcurrentDownloads,
         Self::CoreLanguage,
@@ -237,6 +248,7 @@ impl ConfigKey {
         Self::AuthModrinthToken,
         Self::CacheDir,
         Self::CacheCapacityMib,
+        Self::RepositoryDir,
         Self::UiColor,
         Self::UiProgressBar,
     ];
@@ -253,6 +265,7 @@ impl ConfigKey {
             "auth.modrinth-token" => Self::AuthModrinthToken,
             "cache.dir" => Self::CacheDir,
             "cache.capacity-mib" => Self::CacheCapacityMib,
+            "repository.dir" => Self::RepositoryDir,
             "ui.color" => Self::UiColor,
             "ui.progress-bar" => Self::UiProgressBar,
             _ => {
@@ -276,6 +289,7 @@ impl ConfigKey {
             Self::AuthModrinthToken => "auth.modrinth-token",
             Self::CacheDir => "cache.dir",
             Self::CacheCapacityMib => "cache.capacity-mib",
+            Self::RepositoryDir => "repository.dir",
             Self::UiColor => "ui.color",
             Self::UiProgressBar => "ui.progress-bar",
         }
@@ -309,6 +323,7 @@ impl ConfigKey {
             Self::AuthModrinthToken => optional_text(&config.auth.modrinth_token),
             Self::CacheDir => optional_text(&config.cache.dir),
             Self::CacheCapacityMib => ConfigValue::Integer(config.cache.capacity_mib),
+            Self::RepositoryDir => optional_text(&config.repository.dir),
             Self::UiColor => ConfigValue::Text(config.ui.color.as_str().to_string()),
             Self::UiProgressBar => ConfigValue::Text(config.ui.progress_bar.as_str().to_string()),
         }
@@ -353,6 +368,7 @@ impl ConfigKey {
                 config.cache.capacity_mib = capacity_mib;
                 config.cache.capacity_bytes()?;
             }
+            Self::RepositoryDir => config.repository.dir = Some(nonempty(raw, self)?),
             Self::UiColor => config.ui.color = ColorMode::parse(raw, self)?,
             Self::UiProgressBar => config.ui.progress_bar = ProgressBarMode::parse(raw, self)?,
         }
@@ -380,6 +396,7 @@ impl ConfigKey {
             Self::CacheCapacityMib => {
                 config.cache.capacity_mib = defaults.cache.capacity_mib;
             }
+            Self::RepositoryDir => config.repository.dir = None,
             Self::UiColor => config.ui.color = defaults.ui.color,
             Self::UiProgressBar => config.ui.progress_bar = defaults.ui.progress_bar,
         }
@@ -397,6 +414,7 @@ impl ConfigKey {
             Self::AuthModrinthToken => ("auth", "modrinth_token"),
             Self::CacheDir => ("cache", "dir"),
             Self::CacheCapacityMib => ("cache", "capacity_mib"),
+            Self::RepositoryDir => ("repository", "dir"),
             Self::UiColor => ("ui", "color"),
             Self::UiProgressBar => ("ui", "progress_bar"),
         }
@@ -920,6 +938,7 @@ mod tests {
         assert_eq!(config.network.timeout, 30);
         assert_eq!(config.network.max_retries, 3);
         assert!(config.cache.dir.is_none());
+        assert!(config.repository.dir.is_none());
         assert_eq!(config.cache.capacity_mib, 5 * 1024);
         assert_eq!(
             config.cache.capacity_bytes().unwrap(),
@@ -958,6 +977,21 @@ capacity_mib = 2048
         let config: GlobalConfig = toml::from_str(toml_str).unwrap();
         assert_eq!(config.cache.dir.as_deref(), Some("D:/Games/OrbitCache"));
         assert_eq!(config.cache.capacity_mib, 2048);
+    }
+
+    #[test]
+    fn custom_version_repository_dir() {
+        let config: GlobalConfig = toml::from_str(
+            r#"
+[repository]
+dir = "D:/Games/OrbitRepository"
+"#,
+        )
+        .unwrap();
+        assert_eq!(
+            config.repository.dir.as_deref(),
+            Some("D:/Games/OrbitRepository")
+        );
     }
 
     #[test]

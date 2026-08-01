@@ -77,9 +77,10 @@ impl CliContext {
         eprintln!(
             "{}",
             tr!(
-                "Runtime context: config %{config}; cache %{cache}; network timeout %{timeout}s, %{retries} retries; %{downloads} shared downloads",
+                "Runtime context: config %{config}; JAR cache %{cache}; version repository %{repository}; network timeout %{timeout}s, %{retries} retries; %{downloads} shared downloads",
                 config = self.runtime.paths().config_file().display(),
                 cache = self.runtime.paths().cache_dir().display(),
+                repository = self.runtime.paths().repository_dir().display(),
                 timeout = config.network.timeout,
                 retries = config.network.max_retries,
                 downloads = config.core.max_concurrent_downloads

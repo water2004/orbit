@@ -28,7 +28,7 @@ pub async fn handle(mod_name: Option<String>, ctx: &CliContext) -> Result<()> {
             "*",
             &instance_dir,
             &providers,
-            ctx.runtime.jar_cache(),
+            ctx.runtime.candidate_storage(),
             InstallOptions {
                 dry_run: ctx.dry_run,
                 intent: InstallIntent::Upgrade,
@@ -80,7 +80,7 @@ pub async fn handle(mod_name: Option<String>, ctx: &CliContext) -> Result<()> {
         match upgrade_all_in_instance(
             &instance_dir,
             &providers,
-            ctx.runtime.jar_cache(),
+            ctx.runtime.candidate_storage(),
             ctx.dry_run,
             super::install_interaction(ctx),
         )
