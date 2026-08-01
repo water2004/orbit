@@ -46,6 +46,10 @@ pub trait ModProvider: Send + Sync {
         &self,
         artifacts: &[ArtifactFingerprint],
     ) -> Result<Vec<RemoteArtifact>, OrbitError>;
+    async fn project_states(
+        &self,
+        project_ids: &[String],
+    ) -> Result<Vec<RemoteProjectState>, OrbitError>;
     async fn get_versions(...) -> Result<Vec<RemoteArtifact>, OrbitError>;
 }
 ```
@@ -70,7 +74,10 @@ add/fix/upgrade/outdated/migrate 逻辑。
 lockfile 的 `remotes` / `artifact_sources` 不保存或信任远端展示版本。平台 slug、
 project ID 和查询结果里的版本名都不能代替 JAR 身份。Orbit 先沿
 `RemoteProjectLocator` 递归枚举当前 Minecraft/loader 的完整 project/artifact 闭包，
-所有 provider 的发现阶段都结束后，再用一个有界批次统一查 cache 或下载。之后才读取
+编排器先通过 `project_states` 的官方批量接口比较当前精确 Minecraft/loader 作用域中的
+project 标记。未变化时复用 `remote.sqlite` 快照；变化时只查询该精确游戏版本和 loader，
+不会拉取项目的全部游戏版本。所有 provider 的发现阶段都结束后，按强哈希去重并先查
+独立的 `jars.sqlite` 分析库，未命中才统一查全局 LRU JAR cache 或下载。之后才读取
 loader 元数据，用真实 `mod_id`、版本、
 `DependencyExpression` 与递归 `bundled` 构建求解图。
 
@@ -124,6 +131,7 @@ CurseForge 使用 `x-api-key`，配置项为 `auth.curseforge_api_key`，环境�
 - 通过 `/games` 和 `/categories` 查找 Minecraft game ID 与 Mods class ID，不硬编码
   社区常见数字；
 - 搜索使用 `/mods/search`，slug 与 class ID 联合定位项目；
+- project 变更标记使用批量 `POST /mods` 返回的 `dateModified`；
 - 文件使用 `/mods/{modId}/files`，loader 枚举为 Forge=1、Fabric=4、Quilt=5、
   NeoForge=6；
 - 文件没有内联 URL 时调用
@@ -178,6 +186,7 @@ API 状态错误保留 HTTP 状态和最多 500 字符响应正文；API Key 不
 - loader/game version 搜索；
 - download-url 回退；
 - fingerprint 批量识别；
+- project ID 批量变更标记；
 - CurseForge `remotes` / `artifact_sources` roundtrip；
 - catalog 顺序和缺 Key 错误；
 - 同一字节跨 provider 合并、同版本不同字节保持独立。

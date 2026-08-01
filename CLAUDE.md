@@ -109,11 +109,16 @@
     dependency relation 都不能成为包身份或版本约束；`mod_id`、版本、依赖、环境、
     provides 和 bundled 只接受下载后 JAR loader metadata。
 43. **下载与求解严格分层**。下载层先按 provider project relation 递归枚举目标
-    Minecraft/loader 的完整 artifact 闭包，再统一从缓存/网络取得并解析；resolver
-    纯离线消费候选。禁止从 JAR `mod_id` 反查 slug，禁止 resolver 动态联网补抓。
-44. **全局路径必须注入**。配置、实例注册表和 JAR 缓存通过 `RuntimeContext` /
+    Minecraft/loader 的完整 artifact 闭包，再统一从缓存/网络取得并解析；枚举前必须
+    通过 provider 官方批量 project 接口比较变更标记，且变化时只请求当前精确游戏版本
+    与 loader，禁止拉取全部游戏版本。resolver 纯离线消费候选。禁止从 JAR `mod_id`
+    反查 slug，禁止 resolver 动态联网补抓。
+44. **全局路径必须注入**。配置、实例注册表、JAR 缓存和本地版本库通过 `RuntimeContext` /
     `RuntimePaths` 传递；业务模块禁止读取 `APPDATA`、`HOME`、XDG 或
-    `current_exe()`。平台目录发现只存在于 `RuntimeEnvironment` 实现。
+    `current_exe()`。平台目录发现只存在于 `RuntimeEnvironment` 实现。版本库必须按
+    精确 Minecraft/loader 物理隔离 `remote.sqlite` 和 `jars.sqlite`；前者才可保存
+    provider project ID，后者只按内容哈希与真实 JAR `mod_id` 建模。JAR cache 仍是
+    独立的全局 LRU 字节存储，不得新增手工 `fetch` 或 `--fetch` 兼容路径。
 45. **求解包恒为 JAR 声明的 `mod_id`**。文件名、provider slug/project ID、下载
     URL、owner/path 都只能区分候选，禁止重新引入“一个物理 JAR 一个求解包”的轴。
     同一 `mod_id` 的多个顶层 JAR 是同一个包的候选版本；同声明版本不同来源仍是不同

@@ -24,6 +24,7 @@ The detailed boundaries are documented in [Orbit architecture](docs/orbit-archit
 - **Truthful synchronization.** `orbit sync` redetects the runtime, scans local JARs, and uses provider hash APIs to recover sources. It rebuilds TOML and lock state without solving dependencies or deleting packages.
 - **Explicit repair.** `orbit fix` is the command that discovers the full recursive candidate closure, resolves it, presents every package-level action, and applies a confirmed repair.
 - **Multiple remotes per package.** A logical package can use local files, Modrinth projects, and CurseForge projects together. Content is deduplicated by hash; identity, version, dependencies, environment, `provides`, and bundled content come only from downloaded JAR metadata.
+- **Scoped local version repository.** Each exact Minecraft/Loader pair has separate provider-snapshot and JAR-analysis databases. Provider project markers are checked in batches; unchanged projects reuse local versions, while changed projects refresh only the active game version. The global LRU JAR cache remains a separate content store.
 - **Loader-faithful metadata and audit backends.** Fabric, Quilt, Forge, and NeoForge keep their real registration, nesting, namespace, and Mixin activation rules before entering shared normalized models.
 - **Explainable objective-aware solving.** Dependency causes come from the actual PubGrub propagation and backtracking path. `add` and `fix` enumerate standard Pareto-minimal package-change sets; `upgrade` and `outdated` enumerate the standard Pareto-maximal version front. Every incomparable alternative remains an explicit choice.
 - **Package-level transactions.** `mod_id` is the solver package key. A selected package may own multiple contained JARs, while unselected top-level package versions are removed only after the exact plan is shown and confirmed.
@@ -115,7 +116,7 @@ Orbit resolves its instance from the current directory first, then an explicit `
 | `orbit upgrade [package]` | Apply a solution in which at least one requested package becomes newer; dependencies may downgrade or be replaced. |
 | `orbit list [--tree]` | Show installed logical packages from the lockfile. |
 | `orbit remote add/remove/list` | Manage local, Modrinth, and CurseForge remotes without removing the last remote. |
-| `orbit versions <package>` | Download and inspect every configured remote candidate, then list JAR-declared versions in descending order. |
+| `orbit versions <package>` | Refresh changed projects for the current Minecraft/Loader scope, reuse locally analyzed content, then list JAR-declared versions in descending order. |
 | `orbit constraint show/set` | Inspect or atomically apply a numeric-core policy plus an ordered complete-string rule using a Pareto-minimal package transaction. |
 
 ### Portable packs and migration

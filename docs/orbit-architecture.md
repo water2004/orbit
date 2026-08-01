@@ -49,6 +49,8 @@ metadata/     loader 文件 → 规范化逻辑元数据
 jar/          ZIP、manifest、嵌套 JAR、Jar-in-Jar、class major
 identification/
 providers/    来源查询、统一下载与受限运行时认证
+version_repository
+              按精确 Minecraft/Loader 隔离的远端快照与 JAR 分析数据库
 runtime       跨平台目录发现、显式路径覆盖与运行时服务注入
 launcher      标准/HMCL/Prism/MultiMC/CurseForge/GDLauncher 游戏目录归一化
 platform_detection
@@ -107,10 +109,12 @@ init / sync
 
 联网求解命令（add/fix/constraint set/upgrade/migrate）
   → manifest / exact platform snapshot validation
-  → package remotes 的 provider project 闭包发现（联网命令）
+  → 批量读取 provider project 变更标记
+  → 当前 Minecraft/Loader 的 remote.sqlite（未变直接复用；变化才精确刷新）
   → 完整 artifact 队列
-  → content-addressed cache（命中即 touch）/ 网络
-  → jar reader
+  → 当前 Minecraft/Loader 的 jars.sqlite（按内容哈希复用真实 JAR 分析）
+  → 全局 content-addressed JAR cache（命中即 touch）/ 网络
+  → jar reader（仅分析数据库未命中的内容）
   → loader adapter
   → normalized metadata
   → lock/candidate model
@@ -122,10 +126,23 @@ init / sync
 
 联网求解分为三个不可反向调用的阶段：
 
-1. manifest、lock 与本次输入中的全部 package remotes 同时作为种子，provider 只按
-   project relation 递归枚举当前 Minecraft/loader 的 artifact；
-2. 队列稳定后统一查缓存或下载，并把每个 JAR 解析为候选；
+1. manifest、lock 与本次输入中的全部 package remotes 同时作为种子；每一轮先用
+   provider 官方批量 project 接口读取变更标记。标记未变时复用本作用域的远端快照，
+   标记变化时才请求该 project 在当前精确 Minecraft/loader 下的 artifact；
+2. 只按 project relation 递归，队列稳定后按强哈希去重整个 artifact 队列；优先复用
+   `jars.sqlite` 中的真实 Loader 元数据，未命中才统一查全局 JAR cache 或下载并解析；
 3. resolver 纯离线消费 JAR 候选，缺少实际依赖时产生正常的无解证明。
+
+版本库不是一个跨游戏版本的大表。每个精确作用域都物理分离：
+
+```text
+repository/<hex-encoded-exact-minecraft-version>/<loader>/
+  remote.sqlite   # provider project ID、变更标记与当前作用域 artifact locator
+  jars.sqlite     # SHA-512 主键、真实 mod_id/version 与 Loader 元数据；无 project ID
+```
+
+远端数据库和 JAR 分析数据库职责独立；全局 LRU JAR cache 只保存字节。不存在 `fetch`
+命令或命令级 `--fetch` 分支，需要候选的命令通过同一 core 路径自动维护当前作用域。
 
 JAR `mod_id` 不会被拿去猜 provider slug，resolver 也没有联网补抓入口。
 一个远端 locator 可以跨版本映射到多个真实 `mod_id`；下载后按 JAR 身份分区。新包
@@ -134,7 +151,7 @@ JAR `mod_id` 不会被拿去猜 provider slug，resolver 也没有联网补抓�
 
 长事务通过 core 的强类型 `ProgressEvent` 暴露进度，core 不写 stdout/stderr。CLI
 把同一事件流渲染为交互式 spinner/进度条，非终端环境退化为逐项文本。事件边界与上述
-数据流一致：project 闭包发现、候选 JAR 下载/校验/解析、离线求解、选中包物化。
+数据流一致：版本库变更检查、project 闭包发现、候选 JAR 下载/校验/解析、离线求解、选中包物化。
 并发下载任务只上报结构化完成计数，不各自操作终端。求解进度直接来自 fork observer：
 enumeration continuation 与 maximality probe 的 start/finish 动态扩展并完成工作总量；
 probe 内部路径不进入成功解原因轨迹。
@@ -305,8 +322,8 @@ Orbit 不能仅凭字节码完整证明：
 
 `RuntimeEnvironment` 是唯一允许读取宿主平台目录的 trait。Windows、Linux 和 macOS
 实现分别使用 AppData、XDG/HOME 和 Library 目录；公共层只接收 `RuntimePaths`。
-`RuntimeContext` 加载显式 `config.toml`、实例注册表路径和 content-addressed JAR
-缓存，随后注入 CLI 调用的 core API。
+`RuntimeContext` 加载显式 `config.toml`、实例注册表路径、content-addressed JAR
+缓存和按 Minecraft/Loader 隔离的版本库，随后注入 CLI 调用的 core API。
 
-调用方可传精确配置/缓存路径，也可选择 `system` 或 `executable` 布局。Cargo
+调用方可传精确配置、缓存和版本库路径，也可选择 `system` 或 `executable` 布局。Cargo
 `portable` feature 只把编译默认值改成 executable 布局，不取消运行时显式覆盖。

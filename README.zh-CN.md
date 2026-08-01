@@ -34,6 +34,7 @@ Launcher 已完整支持 Vanilla、Fabric、Quilt、Forge、NeoForge 的客户�
 - **🔄 事实同步与显式修复**：`orbit sync` 联网识别本地 JAR 来源并如实重建 TOML/lock，但不选择版本或删包；需要改变包集合时由 `orbit fix` 展示完整方案并确认。
 - **🧹 彻底的深度清理 (`purge`)**：卸载模组时一并清理 `config/` 目录下残留的配置文件，保持环境绝对纯净。
 - **🌐 多来源**：支持 Modrinth、CurseForge 与本地 `file:` JAR；不同平台只负责候选发现，最终统一验证 JAR 并求解依赖。
+- **🗃️ 按游戏版本隔离的本地版本库**：每个精确 Minecraft/Loader 分别保存远端快照与 JAR 分析数据库；批量检查 project 变更标记，未变化不重拉版本，变化时也只刷新当前游戏版本。全局 LRU JAR 缓存仍是独立的内容存储。
 - **🧩 完整 Loader 语义**：Fabric、Quilt、Forge、NeoForge 先由各自适配器保真解析，再进入同一个规范化求解模型；支持端侧、软/硬依赖、`provides`、加载顺序、内嵌模组与 Jar-in-Jar。
 - **🔎 可解释求解**：依赖原因直接参与 PubGrub 的真实传播和回溯；不会用第二次反事实求解或日志解析猜原因。
 - **🧭 目标明确的完整方案选择**：`add` / `fix` 枚举标准 Pareto 极小包变更集合，`upgrade` / `outdated` 枚举标准版本 Pareto 极大 front；互不支配的方案全部请求选择。
@@ -207,7 +208,7 @@ schema、字段名、枚举码和错误码不随语言变化。Windows 控制台
 | `orbit purge <mod>` | **深度清理**。在 `remove` 的基础上，启发式搜索并交互式询问以**彻底删除** `config/` 下的配置文件。 |
 | `orbit list` | 列出当前实例记录的所有模组及版本；支持 `--tree` 和 `--target`。 |
 | `orbit remote add/remove/list` | 管理一个逻辑包的多个 `file` / Modrinth / CurseForge 候选远端；不能删除最后一个远端。 |
-| `orbit versions <package>` | 下载并分析全部配置远端，按 JAR 实际声明的版本降序列出候选。 |
+| `orbit versions <package>` | 刷新当前 Minecraft/Loader 作用域内发生变化的 project，复用已分析内容，并按 JAR 实际声明版本降序列出候选。 |
 | `orbit constraint show/set` | 查看或原子应用数字核心策略与完整版本字符串规则；应用时按 Pareto 极小包变更求解并提交。 |
 
 ### 4. 导入、导出与进阶工具 (IO & Utility)
@@ -314,6 +315,7 @@ curseforge_api_key = "YOUR_API_KEY"
 ```powershell
 orbit config set auth.curseforge-api-key YOUR_API_KEY
 orbit config set cache.capacity-mib 2048
+orbit config set repository.dir D:/OrbitRepository
 orbit config list
 ```
 
@@ -325,7 +327,8 @@ orbit config list
 申请；Orbit 不内置共享 Key。Key 同时用于 Core API 与 CurseForge CDN 下载，只在
 运行时保存，不写入 `orbit.toml` 或 `orbit.lock`。
 
-也可以用全局 `--config <file>` 与 `--cache-dir <directory>` 传入精确路径，或用
+也可以用全局 `--config <file>`、`--cache-dir <directory>` 与
+`--repository-dir <directory>` 传入精确路径，或用
 `--data-layout executable` 将 `config.toml`、`instances.toml` 和 `cache/` 放在
 可执行文件旁。完整跨平台规则见
 [全局配置与运行路径](docs/orbit-global-config.md)。

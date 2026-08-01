@@ -186,10 +186,13 @@ Forge-family Jar-in-Jar 的 Maven 坐标是逻辑 artifact 包。每个内嵌 ar
 联网编排在调用 `resolve_candidate_portfolio()` 之前完成：
 
 1. 用用户输入、manifest 全部受管包和 lockfile 中的全部确切 `remotes` 作为种子；
-2. 对每个 project 枚举当前 Minecraft/loader 的全部可下载版本；
+2. 按 provider 批量读取 project 级变更标记；每个精确 Minecraft/loader 作用域拥有独立
+   `remote.sqlite`，未变化的 project 直接复用快照，变化的 project 才用精确游戏版本和
+   loader 过滤枚举可下载版本，绝不请求全部游戏版本；
 3. 只沿 provider project relation 递归，直到远端 project 闭包稳定；
-4. 将完整 artifact 队列统一交给 content-addressed cache/下载器；
-5. 每个 artifact 校验来源强哈希并解析真实 JAR metadata；
+4. 按 SHA-512/SHA-1 对完整 artifact 队列去重后统一处理；当前作用域独立的
+   `jars.sqlite` 先按内容哈希复用 Loader 分析，未命中才访问全局 LRU JAR cache 或下载；
+5. 每个新内容校验来源强哈希并解析真实 JAR metadata，再以真实 `mod_id` 建候选；
 6. 对实际字节自行计算 SHA-512：相同内容跨 provider 合并来源，不同内容即使
    `mod_id + version` 相同也保持独立；
 7. 把完整 `CandidateCatalog` 交给纯离线 resolver；
@@ -201,8 +204,8 @@ Forge-family Jar-in-Jar 的 Maven 坐标是逻辑 artifact 包。每个内嵌 ar
 可能因约束不可行。完成 JAR 解析和统一建图以后，求解器才按完整方案的支配关系裁剪；同一内容
 在 lock 与下载目录中的重复表示则由 `same_version` 等价类在枚举阶段一次排除。
 
-这些边界同时是进度事件边界。project 递归发现报告当前 provider locator 和已发现
-artifact 数；队列稳定后报告每个候选 JAR 的完成数；纯离线求解报告包/候选规模和
+这些边界同时是进度事件边界。版本库先报告批量检查、刷新/复用 project 与动态增长的
+project 总量；队列稳定后按去重内容报告候选 JAR 完成数；纯离线求解报告包/候选规模和
 动态工作量。fork 对每个 enumeration continuation run、preference probe 和 maximality probe 发出成对
 start/finish 事件；UI 在 start 时扩大总量，在 finish 时推进，并额外显示 decision、
 propagation、backtrack、conflict 与 retained solution 计数。probe 内部决策仍使用
@@ -215,6 +218,10 @@ provider 的 dependency relation 仅用于定位下一批 project，不携带可
 
 `resolve_candidate_portfolio()` 不持有 provider、下载器或缓存，也不会动态联网。
 这保证下载失败、JAR 解析和依赖求解是三个清楚的错误边界。
+
+JAR 分析库没有 provider project ID，远端库也不产生 solver package。project ID 只用于
+刷新下载定位快照；从数据库进入 `CandidateCatalog` 时仍必须读取 JAR 分析中的真实
+`mod_id`、版本和依赖。版本库由所有候选命令内部维护，不提供另一条 `fetch` 工作流。
 
 同一 provider locator 可能跨 artifact 声明多个 `mod_id`。catalog 对它们按包身份
 分区；`add` 对每个真实身份独立求可行 portfolio 后选择身份，upgrade 则固定现有

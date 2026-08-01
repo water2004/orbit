@@ -13,15 +13,16 @@ RuntimeContext::load(RuntimePathOptions {
     layout,
     config_file,
     cache_dir,
+    repository_dir,
 })
 ```
 
-`RuntimeContext` 持有解析后的 `RuntimePaths`、`GlobalConfig` 和 `JarCache`，再显式传给
-实例注册、provider factory、下载和 cache 命令。
+`RuntimeContext` 持有解析后的 `RuntimePaths`、`GlobalConfig`、`JarCache` 和
+`VersionRepository`，再显式传给实例注册、provider factory、候选版本编排和 cache 命令。
 
 调用方有三种选择：
 
-- 直接传入 `config.toml` 的精确路径和 JAR cache 目录；
+- 直接传入 `config.toml`、JAR cache 与版本库的精确路径；
 - 使用 `system` 布局；
 - 使用 `executable` 布局。
 
@@ -30,21 +31,25 @@ CLI 对应全局参数：
 ```text
 --config <file>
 --cache-dir <directory>
+--repository-dir <directory>
 --data-layout system|executable
 ```
 
-精确路径不依赖宿主目录发现。若只显式传配置文件，`[cache].dir` 也可以提供缓存目录。
+精确路径不依赖宿主目录发现。若只显式传配置文件，`[cache].dir` 与 `[repository].dir`
+也可以分别提供两个目录。
 `instances.toml` 始终与实际使用的 `config.toml` 同目录。
 
 ## 2. 内置布局
 
 ### `system`
 
-| 平台 | 配置与实例注册表 | JAR cache |
+| 平台 | 配置与实例注册表 | JAR cache / 版本库父目录 |
 |---|---|---|
 | Windows | `%APPDATA%\orbit\` | `%LOCALAPPDATA%\orbit\`，缺失时回退 `%APPDATA%\orbit\` |
 | Linux | `$XDG_CONFIG_HOME/orbit/`，否则 `$HOME/.config/orbit/` | `$XDG_CACHE_HOME/orbit/`，否则 `$HOME/.cache/orbit/` |
 | macOS | `$HOME/Library/Application Support/orbit/` | `$HOME/Library/Caches/orbit/` |
+
+父目录下固定分为 `jar-cache/` 与 `repository/`，两者不互相包含。
 
 无法取得所需宿主目录时返回错误，并提示传显式路径或选择 executable 布局；不会静默写
 当前工作目录。
@@ -56,6 +61,8 @@ CLI 对应全局参数：
   config.toml
   instances.toml
   cache/
+    jar-cache/
+    repository/
 ```
 
 构建 `orbit` 或 `orbit-core` 时启用 Cargo feature `portable`，只会把编译出的默认布局
@@ -79,7 +86,13 @@ cargo build -p orbit --features portable
 
 1. `--cache-dir` / `RuntimePathOptions.cache_dir`
 2. 已加载配置的 `[cache].dir`
-3. 所选 layout 的默认 cache
+3. 所选 layout 的默认 `jar-cache/`
+
+版本库目录：
+
+1. `--repository-dir` / `RuntimePathOptions.repository_dir`
+2. 已加载配置的 `[repository].dir`
+3. 所选 layout 的默认 `repository/`
 
 ## 4. `config.toml` schema
 
@@ -101,6 +114,9 @@ max_retries = 3
 [cache]
 # dir = "D:/OrbitCache"
 capacity_mib = 5120
+
+[repository]
+# dir = "D:/OrbitRepository"
 
 [ui]
 color = "auto"
@@ -232,7 +248,32 @@ Orbit 不会静默猜测旧字段的含义。
 `orbit cache clean` 使用同一个注入目录。core 拒绝递归删除文件系统根或当前工作
 目录/其祖先，也拒绝删除包含 `config.toml` 或 `instances.toml` 的目录。
 
-## 6. 平台抽象
+## 6. 本地版本库
+
+版本库与 JAR cache 是两个服务。JAR cache 按内容保存全局共享字节并在命令结束执行
+LRU；版本库保存远端快照和已经验证过的 Loader 元数据，不参与 LRU。物理结构为：
+
+```text
+{repository_dir}/
+  <hex-encoded-exact-minecraft-version>/
+    <loader>/
+      remote.sqlite
+      jars.sqlite
+```
+
+不同 Minecraft 版本和不同 Loader 不共享数据库文件。`remote.sqlite` 保存 provider
+project ID、project 级变更标记及当前作用域的 artifact locator；`jars.sqlite` 以
+SHA-512 为主键保存真实 `mod_id`、版本与完整 JAR 元数据，不保存 provider project ID。
+
+需要候选的命令先用 provider 官方批量 project 接口检查变更标记。未变化时不请求版本、
+不下载也不重新解析；变化时只请求当前精确 Minecraft 版本和 Loader 的文件。依赖 project
+递归完成后，全部新内容按哈希去重并统一下载/解析。该维护完全是 core 内部行为，没有
+`fetch` 命令、`--fetch` 开关或抓取全部游戏版本的路径。
+
+`orbit config set repository.dir <absolute-path>` 可以修改后续命令使用的位置；GUI 的
+Orbit 设置页调用同一个配置命令。
+
+## 7. 平台抽象
 
 `RuntimeEnvironment` 只暴露：
 
@@ -248,7 +289,7 @@ Windows、Linux、macOS 只实现目录发现。`RuntimePaths` 负责公共 `orb
 layout 组装；配置、缓存、installer 和 resolver 不包含平台分支。测试通过 fake
 environment 验证布局，不修改真实用户目录。
 
-## 7. 生效范围
+## 8. 生效范围
 
 本 schema 中的字段均由运行路径消费：语言、颜色和进度只控制展示；网络、认证、下载
 并发与缓存字段控制共享运行时服务。凭据不进入 lockfile、日志或错误正文。
