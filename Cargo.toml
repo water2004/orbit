@@ -15,6 +15,23 @@ members = [
 ]
 exclude = ["pubgrub-fork"]
 
+# Keep local build artifacts bounded. Full debug information and incremental
+# state multiply quickly across this workspace's CLI, GUI, tests, and lint
+# targets, especially on Windows where each variant also produces PDB data.
+[profile.dev]
+debug = 1
+incremental = false
+
+[profile.dev.package."*"]
+debug = 0
+
+[profile.test]
+debug = 1
+incremental = false
+
+[profile.test.package."*"]
+debug = 0
+
 [workspace.dependencies]
 # 序列化
 serde = { version = "1.0", features = ["derive"] }
