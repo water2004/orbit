@@ -666,18 +666,10 @@ pub fn sync_report_table(report: &SyncReport) -> String {
             Cell::new(package),
         ]);
     }
-    for package in &report.missing {
-        table.add_row([
-            Cell::new("-").fg(Color::Red),
-            Cell::new(tr!("missing")),
-            Cell::new(package),
-            Cell::new(ABSENT),
-        ]);
-    }
     for package in &report.removed {
         table.add_row([
-            Cell::new("?").fg(Color::Magenta),
-            Cell::new(tr!("removed from lock")),
+            Cell::new("-").fg(Color::Red),
+            Cell::new(tr!("removed")),
             Cell::new(package),
             Cell::new(ABSENT),
         ]);
@@ -1066,16 +1058,14 @@ mod tests {
             }],
             added: vec!["sodium".to_string()],
             changed: vec!["lithium".to_string()],
-            missing: vec!["fabric-api".to_string()],
-            removed: vec!["voxy".to_string()],
+            removed: vec!["fabric-api".to_string(), "voxy".to_string()],
             warnings: Vec::new(),
         };
         let output = sync_report_table(&report);
 
         assert!(output.contains("platform:mc_version"));
         assert!(output.contains("added"));
-        assert!(output.contains("missing"));
-        assert!(output.contains("removed from lock"));
+        assert!(output.contains("removed"));
     }
 
     #[test]

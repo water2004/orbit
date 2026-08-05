@@ -18,21 +18,14 @@ pub async fn handle(ctx: &CliContext) -> Result<()> {
         ctx.print_result_line(format_args!(
             "{}",
             tr!(
-                "Sync %{state}: %{platform} platform change(s), %{added} added, %{changed} changed, %{removed} removed from lock, %{missing} missing on disk.",
+                "Sync %{state}: %{platform} platform change(s), %{added} added, %{changed} changed, %{removed} removed.",
                 state = tr!(if ctx.dry_run { "preview" } else { "complete" }),
                 platform = report.platform_changes.len(),
                 added = report.added.len(),
                 changed = report.changed.len(),
-                removed = report.removed.len(),
-                missing = report.missing.len()
+                removed = report.removed.len()
             )
         ));
-        if !report.missing.is_empty() {
-            ctx.print_result_line(format_args!(
-                "{}",
-                tr!("Run 'orbit fix' to resolve missing packages.")
-            ));
-        }
         return Ok(());
     }
 

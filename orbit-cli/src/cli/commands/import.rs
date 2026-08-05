@@ -84,7 +84,7 @@ pub async fn handle(file: String, merge_strategy: Option<String>, ctx: &CliConte
                         ctx.print_result_line(format_args!(
                             "{}",
                             tr!(
-                                "Imported %{archives} archive file(s); sync added %{added}, changed %{changed}, and removed %{removed} stale lock entry(s).",
+                                "Imported %{archives} archive file(s); sync added %{added}, changed %{changed}, and removed %{removed} stale package(s).",
                                 archives = report.extracted.len(),
                                 added = sync.added.len(),
                                 changed = sync.changed.len(),

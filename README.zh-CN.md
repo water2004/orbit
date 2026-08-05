@@ -31,7 +31,7 @@ Launcher 已完整支持 Vanilla、Fabric、Quilt、Forge、NeoForge 的客户�
 ## ✨ 核心特性
 
 - **📂 非侵入式与多实例/服务器管理**：无需改变外部启动器结构。直接进入启动器实例或 Fabric、Quilt、Forge、NeoForge dedicated server 根目录即可初始化管理；Launcher 托管客户端位于 `instances/<实例>`，精确 `minecraft.jar` 属于实例，共享仓库只承载不可变 assets/libraries。
-- **🔄 事实同步与显式修复**：`orbit sync` 联网识别本地 JAR 来源并如实重建 TOML/lock，但不选择版本或删包；需要改变包集合时由 `orbit fix` 展示完整方案并确认。
+- **🔄 事实同步与显式修复**：`orbit sync` 联网识别本地 JAR 来源，并让 TOML、lock 和分组精确收敛到实际本地 JAR 集合；它不求解依赖，也不删除任何 JAR 文件。需要选择其他包版本时由 `orbit fix` 展示完整方案并确认。
 - **🧹 彻底的深度清理 (`purge`)**：卸载模组时一并清理 `config/` 目录下残留的配置文件，保持环境绝对纯净。
 - **🌐 多来源**：支持 Modrinth、CurseForge 与本地 `file:` JAR；不同平台只负责候选发现，最终统一验证 JAR 并求解依赖。
 - **🗃️ 按游戏版本隔离的本地版本库**：每个精确 Minecraft/Loader 分别保存远端快照与 JAR 分析数据库；批量检查 project 变更标记，未变化不重拉版本，变化时也只刷新当前游戏版本。全局 LRU JAR 缓存仍是独立的内容存储。
@@ -190,7 +190,7 @@ schema、字段名、枚举码和错误码不随语言变化。Windows 控制台
 
 | 命令 | 描述 |
 | :--- | :--- |
-| `orbit sync` | **事实对账**。重新探测平台、扫描 `mods/`，并联网调用可用 provider 的批量哈希 API 恢复来源；重建 lock、补充 TOML，但不发现依赖候选、不求解、不删除 JAR。 |
+| `orbit sync` | **事实对账**。重新探测平台、扫描 `mods/`，并联网调用可用 provider 的批量哈希 API 恢复来源；按磁盘包集合重建 TOML/lock，清除已不存在包的声明和分组引用，但不发现依赖候选、不求解、不删除 JAR 文件。 |
 | `orbit fix` | **依赖修复**。递归下载所有远端候选的 JAR 元数据，枚举相对当前 lock 的 Pareto 极小包变更方案；确认后安装入选包、删除未选包，并同步清理 TOML 与 lock。 |
 | `orbit outdated [mod]` | **检查过时模组（只读）**。显示可行更新；更高候选受阻或没有适用 JAR 时同时给出原因。 |
 | `orbit upgrade [mod]` | **执行更新**。单包模式必须让该包变新；方案也可包含依赖降级/替换/删除，确认后更新文件与 lock。 |

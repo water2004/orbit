@@ -1824,21 +1824,9 @@ pub(crate) fn reconcile_manifest_to_lock(manifest: &mut OrbitManifest, lockfile:
     let selected: std::collections::BTreeSet<_> = lockfile
         .packages
         .iter()
-        .map(|entry| entry.mod_id.as_str())
+        .map(|entry| entry.mod_id.clone())
         .collect();
-    manifest
-        .packages
-        .retain(|package, _| selected.contains(package.as_str()));
-    for group in manifest.groups.values_mut() {
-        group
-            .packages
-            .retain(|package| selected.contains(package.as_str()));
-        group.packages.sort();
-        group.packages.dedup();
-    }
-    manifest
-        .groups
-        .retain(|_, group| !group.packages.is_empty());
+    manifest.retain_packages(&selected);
 
     for (package, specification) in &mut manifest.packages {
         if let Some(entry) = lockfile.find(package) {

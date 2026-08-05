@@ -351,8 +351,7 @@ pub struct SyncOutput {
     pub platform_changes: Vec<PlatformChangeView>,
     pub added: Vec<String>,
     pub changed: Vec<String>,
-    pub missing: Vec<String>,
-    /// Packages removed from the rebuilt lock because no local JAR exists.
+    /// Packages removed from TOML, lock, and groups because no local JAR exists.
     pub removed: Vec<String>,
     pub warnings: Vec<String>,
 }
@@ -363,7 +362,6 @@ pub struct SyncSummary {
     pub added: usize,
     pub changed: usize,
     pub removed: usize,
-    pub missing: usize,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -769,7 +767,6 @@ pub fn sync_view(report: &SyncReport, dry_run: bool) -> SyncOutput {
             added: report.added.len(),
             changed: report.changed.len(),
             removed: report.removed.len(),
-            missing: report.missing.len(),
         },
         platform_changes: report
             .platform_changes
@@ -778,7 +775,6 @@ pub fn sync_view(report: &SyncReport, dry_run: bool) -> SyncOutput {
             .collect(),
         added: report.added.clone(),
         changed: report.changed.clone(),
-        missing: report.missing.clone(),
         removed: report.removed.clone(),
         warnings: report.warnings.clone(),
     }

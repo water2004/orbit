@@ -284,6 +284,20 @@ impl OrbitManifest {
         Self::from_dir(dir).ok().map(|m| m.project.mc_version)
     }
 
+    /// Retain exactly the selected logical packages and keep groups valid.
+    /// Package-set writers share this path so TOML cannot retain stale
+    /// declarations after the factual lock or selected solution changes.
+    pub(crate) fn retain_packages(&mut self, selected: &std::collections::BTreeSet<String>) {
+        self.packages
+            .retain(|package, _| selected.contains(package));
+        for group in self.groups.values_mut() {
+            group.packages.retain(|package| selected.contains(package));
+            group.packages.sort();
+            group.packages.dedup();
+        }
+        self.groups.retain(|_, group| !group.packages.is_empty());
+    }
+
     pub fn validate(&self) -> Result<(), OrbitError> {
         let loader = self.project.loader_kind()?;
         for (package, specification) in &self.packages {

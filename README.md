@@ -21,7 +21,7 @@ The detailed boundaries are documented in [Orbit architecture](docs/orbit-archit
 ## Highlights
 
 - **Existing instances and isolated managed instances.** Orbit works in valid Fabric, Quilt, Forge, and NeoForge client or dedicated-server game directories. Launcher-managed clients use isolated `instances/<instance>` game directories; each owns its exact `minecraft.jar`, while immutable assets and libraries remain shared.
-- **Truthful synchronization.** `orbit sync` redetects the runtime, scans local JARs, and uses provider hash APIs to recover sources. It rebuilds TOML and lock state without solving dependencies or deleting packages.
+- **Truthful synchronization.** `orbit sync` redetects the runtime, scans local JARs, and uses provider hash APIs to recover sources. It makes TOML, lock, and package-group state exactly match the local JAR set without solving dependencies or deleting JAR files.
 - **Explicit repair.** `orbit fix` is the command that discovers the full recursive candidate closure, resolves it, presents every package-level action, and applies a confirmed repair.
 - **Multiple remotes per package.** A logical package can use local files, Modrinth projects, and CurseForge projects together. Content is deduplicated by hash; identity, version, dependencies, environment, `provides`, and bundled content come only from downloaded JAR metadata.
 - **Scoped local version repository.** Each exact Minecraft/Loader pair has separate provider-snapshot and JAR-analysis databases. Provider project markers are checked in batches; unchanged projects reuse local versions, while changed projects refresh only the active game version. The global LRU JAR cache remains a separate content store.
@@ -106,7 +106,7 @@ Orbit resolves its instance from the current directory first, then an explicit `
 | Command | Responsibility |
 | --- | --- |
 | `orbit init <name>` | Initialize a valid game directory from redetected local facts. |
-| `orbit sync` | Redetect the runtime, scan JARs, recover known remotes online, and rebuild TOML/lock facts without dependency solving. |
+| `orbit sync` | Redetect the runtime, scan JARs, recover known remotes online, and make TOML/lock/group facts exactly match local JARs without dependency solving or deleting JAR files. |
 | `orbit fix` | Find and confirm a standard Pareto-minimal package repair; this is the repair command. |
 | `orbit install [--target client\|server]` | Materialize the exact existing lockfile. It does not solve, repair, remove packages, or rewrite state. |
 | `orbit add <locator>` | Add a provider project or local file while Pareto-minimizing changes to the existing instance. |

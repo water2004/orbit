@@ -18,8 +18,7 @@ pub struct SyncReport {
     pub platform_changes: Vec<PlatformChange>,
     pub added: Vec<String>,
     pub changed: Vec<String>,
-    pub missing: Vec<String>,
-    /// Packages that disappeared from the factual lock because no matching JAR exists.
+    /// Packages removed from TOML, lock, and groups because no matching JAR exists.
     pub removed: Vec<String>,
     pub warnings: Vec<String>,
 }
@@ -135,13 +134,13 @@ pub async fn sync_instance(
     report.added.dedup();
     report.changed.sort();
     report.changed.dedup();
-    let discovered: HashSet<_> = local_entries
+    let discovered: std::collections::BTreeSet<_> = local_entries
         .iter()
-        .map(|entry| entry.mod_id.as_str())
+        .map(|entry| entry.mod_id.clone())
         .collect();
     for package in manifest.inner.packages.keys() {
         if !discovered.contains(package.as_str()) {
-            report.missing.push(package.clone());
+            report.removed.push(package.clone());
         }
     }
     for entry in &previous_lock.inner.packages {
@@ -149,10 +148,10 @@ pub async fn sync_instance(
             report.removed.push(entry.mod_id.clone());
         }
     }
-    report.missing.sort();
-    report.missing.dedup();
     report.removed.sort();
     report.removed.dedup();
+
+    manifest.inner.retain_packages(&discovered);
 
     for entry in &local_entries {
         let requirement = manifest
@@ -349,7 +348,7 @@ fn push_platform_change(
 mod tests {
     use super::*;
     use crate::lockfile::{ArtifactSource, OrbitLockfile, PackageEntry};
-    use crate::manifest::{OrbitManifest, PackageRemote, ProjectMeta, ResolverConfig};
+    use crate::manifest::{GroupSpec, OrbitManifest, PackageRemote, ProjectMeta, ResolverConfig};
     use crate::providers::{
         ArtifactDownloadClient, ArtifactFingerprint, ModInfo, ModProvider, ModrinthResolvedInfo,
         RemoteArtifact, RemoteProjectState, SearchResultItem,
@@ -513,7 +512,7 @@ physical_environment = "client"
     }
 
     #[tokio::test]
-    async fn reports_manifest_dependencies_missing_from_disk_and_stale_lock_entries() {
+    async fn removes_manifest_packages_groups_and_lock_entries_missing_from_disk() {
         let directory = test_dir("states");
         std::fs::create_dir_all(&directory).unwrap();
         crate::platform_detection::test_support::write_platform(&directory, "1", "fabric", "1");
@@ -560,7 +559,12 @@ physical_environment = "client"
                     ),
                 ),
             ]),
-            groups: indexmap::IndexMap::new(),
+            groups: indexmap::IndexMap::from([(
+                "profile".to_string(),
+                GroupSpec {
+                    packages: vec!["missing".to_string(), "unlocked".to_string()],
+                },
+            )]),
         };
         ManifestFile::new(&directory, manifest).save().unwrap();
         Lockfile::new(
@@ -598,8 +602,7 @@ physical_environment = "client"
 
         let report = sync_instance(&directory, &[], false).await.unwrap();
 
-        assert_eq!(report.missing, vec!["missing", "unlocked"]);
-        assert_eq!(report.removed, vec!["missing"]);
+        assert_eq!(report.removed, vec!["missing", "unlocked"]);
         assert!(
             Lockfile::open(&directory)
                 .unwrap()
@@ -607,10 +610,9 @@ physical_environment = "client"
                 .packages
                 .is_empty()
         );
-        assert_eq!(
-            ManifestFile::open(&directory).unwrap().inner.packages.len(),
-            2
-        );
+        let manifest = ManifestFile::open(&directory).unwrap();
+        assert!(manifest.inner.packages.is_empty());
+        assert!(manifest.inner.groups.is_empty());
         std::fs::remove_dir_all(directory).unwrap();
     }
 

@@ -354,8 +354,7 @@ manifest/lockfile。旧 `[project]` 版本和 `[platform]` 路径都只是用于
 | `platform` | Minecraft/loader 版本、JAR 路径或内容哈希发生变化 |
 | `added` | 磁盘新增 JAR，已识别并写入声明/锁 |
 | `changed` | 已锁文件内容或元数据变化，锁记录已更新 |
-| `missing` | manifest/lockfile 期望的 JAR 不在磁盘 |
-| `removed` | 旧 lock 中的包已没有对应本地 JAR，因此不进入重建后的 lock |
+| `removed` | 包已没有对应本地 JAR，因此从 TOML、lock 和所有分组引用中清除 |
 
 sync 不做包求解。loader 版本变化会被如实写入平台快照和 lock meta；兼容性与依赖修复
 留给后续 `fix`，loader 版本本身不被先验判为不兼容。
@@ -364,9 +363,10 @@ sync 不做包求解。loader 版本变化会被如实写入平台快照和 lock
 Modrinth 以及已配置的 CurseForge 批量哈希识别接口。匹配成功
 时以 provider project/release 替换同一内容的自动 managed-file 回退；只有所有 provider
 均未匹配的内容才成为本地精确恢复来源。provider 查询失败会报错，不能静默把所有 JAR
-降级成 `file`。dry-run 不保存对账结果。sync 只用实际 JAR 重建事实 lock 并补充 TOML；
-缺失依赖也照实记录而不修复。同一 ID 有多个本地实现时，lock 无法无损表达选择，因此
-sync 保留全部 JAR 和来源、补充 TOML 后明确要求运行 `orbit fix`，绝不按扫描顺序覆盖或删除。
+降级成 `file`。dry-run 不保存对账结果。sync 只用实际 JAR 让 TOML、lock 和分组精确
+收敛：磁盘上已不存在的包声明与分组引用会删除，但物理 JAR 永远不会由 sync 删除；依赖图
+即使不可行也照实记录而不修复。同一 ID 有多个本地实现时，lock 无法无损表达选择，因此
+sync 保留全部 JAR 和来源后明确要求运行 `orbit fix`，绝不按扫描顺序覆盖或删除。
 
 ### `orbit outdated [mod]`
 

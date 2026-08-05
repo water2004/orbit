@@ -233,7 +233,8 @@ Jar-in-Jar artifact 使用独立的 Maven 坐标包并精确绑定 owner 候选�
 
 `sync` 只调用可用 provider 的批量哈希识别接口，把本地精确内容恢复为
 project/release 远端，并按磁盘事实重建 lock；它不枚举版本、不下载候选 JAR、不求解，
-也不删除重复实现。发现同一 `mod_id` 的多个本地实现时，sync 保留全部文件和 TOML
+也不删除任何物理 JAR。普通对账会让 TOML、lock 与分组引用精确收敛到磁盘包集合，清除
+已从磁盘消失的包声明。发现同一 `mod_id` 的多个本地实现时，sync 保留全部文件和 TOML
 来源并要求运行 `fix`。`install` 只物化现有 lock 的精确内容，既不求解也不修改
 TOML/lock。联网候选闭包发现、可行解选择和未选包删除由 `add`、`fix`、`constraint set`、`upgrade` 与
 迁移等明确求解操作执行；这些写操作共享同一个 reconciliation，使 TOML 完整包集合与

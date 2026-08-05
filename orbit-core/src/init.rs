@@ -497,7 +497,6 @@ mod tests {
 
         assert!(report.added.is_empty());
         assert!(report.changed.is_empty());
-        assert!(report.missing.is_empty());
         assert!(report.removed.is_empty());
         assert!(!directory.join("mods").exists());
         std::fs::remove_dir_all(directory).unwrap();
