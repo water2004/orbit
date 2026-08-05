@@ -30,13 +30,13 @@ Minecraft 实例不属于 MSI 管理范围，始终不会删除。
 传递 `ADD_TO_PATH=0` 可以关闭 PATH 集成：
 
 ```powershell
-msiexec.exe /i orbit-0.2.0-x86_64.msi /quiet INSTALL_PROFILE=launcher ADD_TO_PATH=0
+msiexec.exe /i orbit-0.2.1-x86_64.msi /quiet INSTALL_PROFILE=launcher ADD_TO_PATH=0
 ```
 
 静默卸载默认保留 AppData。只有显式传递 `REMOVE_APPDATA=1` 才删除上述两个默认目录：
 
 ```powershell
-msiexec.exe /x orbit-0.2.0-x86_64.msi /quiet REMOVE_APPDATA=1
+msiexec.exe /x orbit-0.2.1-x86_64.msi /quiet REMOVE_APPDATA=1
 ```
 
 ## 构建
