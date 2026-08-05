@@ -24,8 +24,8 @@ use crate::resolver::graph::{
 use crate::resolver::ordering::resolution_warnings;
 use crate::resolver::types::{
     CandidateCatalog, CandidateIdentity, CandidateLocation, CandidateVersion, PackageChange,
-    PackageChangeKind, ResolutionPortfolio, ResolutionReport, ResolutionSelector, SolverPackage,
-    SolverVersion, solver_range,
+    PackageChangeKind, ResolutionPortfolio, ResolutionReport, ResolutionSelectionContext,
+    ResolutionSelector, SolverPackage, SolverVersion, solver_range,
 };
 use crate::versions::Version;
 
@@ -33,29 +33,42 @@ pub(crate) use graph::locked_source;
 
 pub(crate) fn select_resolution(
     mut portfolio: ResolutionPortfolio,
-    selector: Option<ResolutionSelector>,
+    mut selector: Option<ResolutionSelector>,
 ) -> Result<ResolutionReport, crate::OrbitError> {
-    if portfolio.alternatives.is_empty() {
+    let index = select_resolution_index(
+        &portfolio.alternatives,
+        ResolutionSelectionContext::CompleteSolution,
+        selector.as_mut(),
+    )?;
+    Ok(portfolio.alternatives.remove(index))
+}
+
+fn select_resolution_index(
+    alternatives: &[ResolutionReport],
+    context: ResolutionSelectionContext,
+    selector: Option<&mut ResolutionSelector>,
+) -> Result<usize, crate::OrbitError> {
+    if alternatives.is_empty() {
         return Err(crate::OrbitError::Other(anyhow::anyhow!(
             "internal error: dependency solver returned no alternatives"
         )));
     }
-    let index = if portfolio.alternatives.len() == 1 {
+    let index = if alternatives.len() == 1 {
         0
     } else {
         match selector {
-            Some(select) => select(&portfolio.alternatives)?,
+            Some(select) => select(context, alternatives)?,
             None => 0,
         }
     };
-    if index >= portfolio.alternatives.len() {
+    if index >= alternatives.len() {
         return Err(crate::OrbitError::Other(anyhow::anyhow!(
             "dependency solution selector returned invalid choice {} for {} alternatives",
             index + 1,
-            portfolio.alternatives.len()
+            alternatives.len()
         )));
     }
-    Ok(portfolio.alternatives.remove(index))
+    Ok(index)
 }
 
 /// Select a Pareto-maximal solution that performs an upgrade.
@@ -513,15 +526,95 @@ pub(crate) async fn resolve_package_preserving_portfolio_with_progress(
     lockfile: &OrbitLockfile,
     catalog: &CandidateCatalog,
     progress: Option<ProgressReporter>,
-) -> Result<ResolutionPortfolio, ResolutionFailure> {
-    resolve_portfolio_with_progress_detailed(
+    selector: &mut Option<ResolutionSelector>,
+) -> Result<ResolutionPortfolio, crate::OrbitError> {
+    let graph = build_solver_graph_with_package_roots(
         manifest,
         lockfile,
-        catalog,
-        ResolutionObjective::PreserveManifestPackages,
-        progress,
+        &catalog.candidates,
+        catalog.loader_package.as_ref(),
+        Environment::Both,
+        ManifestPackageRoots::Preferred,
     )
-    .await
+    .map_err(crate::OrbitError::Conflict)?;
+    let mut maximized_mods: Vec<_> = catalog
+        .candidates
+        .keys()
+        .chain(manifest.packages.keys())
+        .chain(lockfile.packages.iter().map(|entry| &entry.mod_id))
+        .cloned()
+        .collect();
+    maximized_mods.sort();
+    maximized_mods.dedup();
+    let maximized_packages = maximized_mods
+        .iter()
+        .cloned()
+        .map(SolverPackage::logical)
+        .collect::<Vec<_>>();
+    let watched_candidates = highest_candidates(&catalog.candidates, graph.loader);
+    let mut trace = diagnostics::ResolutionTrace::with_progress(watched_candidates, progress);
+    let preferences = manifest_package_preferences(manifest, &graph.provider);
+    let components = graph.preference_components(preferences);
+    let factored = pubgrub::resolve_factored_preference_solutions_with_observer(
+        &graph.provider,
+        graph.root_package.clone(),
+        graph.root_version.clone(),
+        components,
+        &mut trace,
+    )
+    .map_err(solver_failure)
+    .map_err(|failure| crate::OrbitError::Conflict(failure.to_string()))?;
+    trace.flush_progress();
+    let mut selected_factors = Vec::with_capacity(factored.factors().len());
+    let factor_total = factored.factors().len();
+    let complete_assignments = factored.complete_assignment_count();
+    for (factor_index, factor) in factored.factors().iter().enumerate() {
+        let alternatives = preference_factor_reports(manifest, factor);
+        selected_factors.push(select_resolution_index(
+            &alternatives,
+            ResolutionSelectionContext::PreferenceFactor {
+                index: factor_index + 1,
+                total: factor_total,
+                complete_assignments,
+            },
+            selector.as_mut(),
+        )?);
+    }
+    let decisions = factored.decisions_for(&selected_factors).ok_or_else(|| {
+        crate::OrbitError::Other(anyhow::anyhow!(
+            "internal error: invalid factored preference selection"
+        ))
+    })?;
+    let solutions = pubgrub::resolve_maximal_solutions_for_preference_decisions_with_observer(
+        &graph.provider,
+        graph.root_package.clone(),
+        graph.root_version.clone(),
+        decisions,
+        maximized_packages,
+        solver_version_ordering(),
+        &mut trace,
+    )
+    .map_err(solver_failure)
+    .map_err(|failure| crate::OrbitError::Conflict(failure.to_string()))?;
+    let snapshots = trace.into_solutions();
+    if snapshots.len() != solutions.len() {
+        return Err(crate::OrbitError::Other(anyhow::anyhow!(
+            "internal error: solver trace count does not match solution count"
+        )));
+    }
+    let report_context = ReportContext {
+        lockfile,
+        candidates: &catalog.candidates,
+        loader: graph.loader,
+        exclusions: &graph.exclusions,
+        target: graph.target,
+    };
+    let alternatives = solutions
+        .into_iter()
+        .zip(snapshots)
+        .map(|(solution, snapshot)| collect_report(&report_context, &solution, &snapshot))
+        .collect();
+    Ok(ResolutionPortfolio { alternatives })
 }
 
 #[derive(Clone, Copy)]
@@ -529,7 +622,6 @@ enum ResolutionObjective {
     MaximizeVersions,
     MinimizeChanges,
     RequireManifestPackages,
-    PreserveManifestPackages,
 }
 
 async fn resolve_portfolio_with_progress_detailed(
@@ -547,14 +639,6 @@ async fn resolve_portfolio_with_progress_detailed(
             catalog.loader_package.as_ref(),
             Environment::Both,
             ManifestPackageRoots::RequiredTopLevel,
-        ),
-        ResolutionObjective::PreserveManifestPackages => build_solver_graph_with_package_roots(
-            manifest,
-            lockfile,
-            &catalog.candidates,
-            catalog.loader_package.as_ref(),
-            Environment::Both,
-            ManifestPackageRoots::Preferred,
         ),
         ResolutionObjective::MaximizeVersions | ResolutionObjective::MinimizeChanges => {
             build_solver_graph(
@@ -596,18 +680,6 @@ async fn resolve_portfolio_with_progress_detailed(
         ResolutionObjective::MinimizeChanges => {
             let preferences =
                 minimal_change_preferences(manifest, lockfile, &graph.provider, &maximized_mods);
-            pubgrub::resolve_minimal_change_solutions_with_observer(
-                &graph.provider,
-                graph.root_package.clone(),
-                graph.root_version.clone(),
-                preferences,
-                maximized_packages,
-                solver_version_ordering(),
-                &mut trace,
-            )
-        }
-        ResolutionObjective::PreserveManifestPackages => {
-            let preferences = manifest_package_preferences(manifest, &graph.provider);
             pubgrub::resolve_minimal_change_solutions_with_observer(
                 &graph.provider,
                 graph.root_package.clone(),
@@ -762,6 +834,75 @@ fn manifest_package_preferences(
                 .then(|| pubgrub::PackagePreference::selected(package, preferred))
         })
         .collect()
+}
+
+fn preference_factor_reports(
+    manifest: &OrbitManifest,
+    factor: &pubgrub::PreferenceFactor<SolverPackage, Ranges<SolverVersion>>,
+) -> Vec<ResolutionReport> {
+    factor
+        .alternatives()
+        .iter()
+        .map(|alternative| {
+            let mut changes = alternative
+                .decisions()
+                .iter()
+                .filter(|decision| !decision.is_satisfied())
+                .filter_map(|decision| {
+                    let mod_id = decision.preference().package().top_level_mod_id()?;
+                    Some(PackageChange {
+                        package: mod_id.to_string(),
+                        current_version: manifest
+                            .packages
+                            .get(mod_id)
+                            .map(|spec| spec.version.clone()),
+                        selected_version: None,
+                        filename: None,
+                        selected_filename: None,
+                        selected_description: None,
+                        kind: PackageChangeKind::Remove,
+                    })
+                })
+                .collect::<Vec<_>>();
+            changes.sort_by(|left, right| left.package.cmp(&right.package));
+            ResolutionReport {
+                changes,
+                ..ResolutionReport::default()
+            }
+        })
+        .collect()
+}
+
+fn solver_failure(
+    error: pubgrub::PubGrubError<provider::OrbitDependencyProvider>,
+) -> ResolutionFailure {
+    match error {
+        pubgrub::PubGrubError::NoSolution(derivation_tree) => {
+            ResolutionFailure::NoSolution(diagnostics::describe_no_solution(&derivation_tree))
+        }
+        pubgrub::PubGrubError::ErrorChoosingVersion { package, source: _ } => {
+            ResolutionFailure::Internal(format!(
+                "internal error: no version of '{package}' matches constraint"
+            ))
+        }
+        pubgrub::PubGrubError::ErrorRetrievingDependencies {
+            package,
+            version,
+            source,
+        } => ResolutionFailure::Internal(format!(
+            "internal error: deps of '{package}' v{version}: {source}"
+        )),
+        pubgrub::PubGrubError::ErrorInShouldCancel(error) => {
+            ResolutionFailure::Internal(error.to_string())
+        }
+        pubgrub::PubGrubError::InvalidVersionOrdering {
+            package,
+            version,
+            reason,
+        } => ResolutionFailure::Internal(format!(
+            "internal error: invalid version ordering for '{package}' v{version}: {reason}"
+        )),
+    }
 }
 
 struct ReportContext<'a> {
@@ -1040,7 +1181,7 @@ mod tests {
     use crate::jar::JarModOrigin;
     use crate::lockfile::{BundledMod, LockMeta, PackageEntry};
     use crate::metadata::{Environment, ModDependency, ModLoadCondition};
-    use crate::progress::{ProgressEvent, ProgressReporter, ResolutionActivity};
+    use crate::progress::{ProgressEvent, ProgressReporter};
     use std::sync::{Arc, Mutex};
 
     fn manifest() -> OrbitManifest {
@@ -1181,6 +1322,7 @@ b = { version = "*", remotes = [{ type = "file", path = "b.jar" }] }
             &empty_lock,
             &catalog,
             None,
+            &mut None,
         )
         .await
         .unwrap();
@@ -1195,7 +1337,7 @@ b = { version = "*", remotes = [{ type = "file", path = "b.jar" }] }
     }
 
     #[tokio::test]
-    async fn package_preserving_portfolio_returns_incomparable_minimal_removal_sets() {
+    async fn package_preserving_portfolio_asks_once_for_an_incomparable_removal_factor() {
         let mut catalog = CandidateCatalog::default();
         catalog.candidates.insert(
             "a".to_string(),
@@ -1214,11 +1356,28 @@ b = { version = "*", remotes = [{ type = "file", path = "b.jar" }] }
             packages: Vec::new(),
         };
 
+        let mut selector: Option<ResolutionSelector> = Some(Box::new(|context, alternatives| {
+            assert!(matches!(
+                context,
+                ResolutionSelectionContext::PreferenceFactor { .. }
+            ));
+            assert_eq!(alternatives.len(), 2);
+            alternatives
+                .iter()
+                .position(|alternative| {
+                    alternative
+                        .changes
+                        .iter()
+                        .any(|change| change.package == "a")
+                })
+                .ok_or_else(|| crate::OrbitError::Other(anyhow::anyhow!("missing remove-a choice")))
+        }));
         let portfolio = resolve_package_preserving_portfolio_with_progress(
             &manifest(),
             &empty_lock,
             &catalog,
             None,
+            &mut selector,
         )
         .await
         .unwrap();
@@ -1233,9 +1392,90 @@ b = { version = "*", remotes = [{ type = "file", path = "b.jar" }] }
             })
             .collect::<std::collections::BTreeSet<_>>();
 
+        assert_eq!(retained, std::collections::BTreeSet::from([vec!["b"]]));
+    }
+
+    #[tokio::test]
+    async fn independent_removal_tradeoffs_are_selected_as_separate_factors() {
+        let mut manifest = manifest();
+        manifest.packages.insert(
+            "x".to_string(),
+            crate::manifest::PackageSpec::new("*", Vec::new()),
+        );
+        manifest.packages.insert(
+            "y".to_string(),
+            crate::manifest::PackageSpec::new("*", Vec::new()),
+        );
+        let mut catalog = CandidateCatalog::default();
+        catalog.candidates.insert(
+            "a".to_string(),
+            vec![candidate("1", vec![ModDependency::required("c", "[1]")])],
+        );
+        catalog.candidates.insert(
+            "b".to_string(),
+            vec![candidate("1", vec![ModDependency::required("c", "[2]")])],
+        );
+        catalog.candidates.insert(
+            "x".to_string(),
+            vec![candidate("1", vec![ModDependency::required("d", "[1]")])],
+        );
+        catalog.candidates.insert(
+            "y".to_string(),
+            vec![candidate("1", vec![ModDependency::required("d", "[2]")])],
+        );
+        for dependency in ["c", "d"] {
+            catalog.candidates.insert(
+                dependency.to_string(),
+                vec![candidate("1", Vec::new()), candidate("2", Vec::new())],
+            );
+        }
+        let empty_lock = OrbitLockfile {
+            meta: lockfile().meta,
+            packages: Vec::new(),
+        };
+        let mut calls = 0;
+        let mut selector: Option<ResolutionSelector> = Some(Box::new(move |context, choices| {
+            let ResolutionSelectionContext::PreferenceFactor {
+                index,
+                total,
+                complete_assignments,
+            } = context
+            else {
+                panic!("version solution is unique in this fixture")
+            };
+            calls += 1;
+            assert_eq!(index, calls);
+            assert_eq!(total, 2);
+            assert_eq!(complete_assignments, Some(4));
+            assert_eq!(choices.len(), 2);
+            Ok(0)
+        }));
+
+        let portfolio = resolve_package_preserving_portfolio_with_progress(
+            &manifest,
+            &empty_lock,
+            &catalog,
+            None,
+            &mut selector,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(portfolio.alternatives.len(), 1);
+        let selected = &portfolio.alternatives[0].selected_versions;
         assert_eq!(
-            retained,
-            std::collections::BTreeSet::from([vec!["a"], vec!["b"]])
+            ["a", "b"]
+                .into_iter()
+                .filter(|package| selected.contains_key(*package))
+                .count(),
+            1
+        );
+        assert_eq!(
+            ["x", "y"]
+                .into_iter()
+                .filter(|package| selected.contains_key(*package))
+                .count(),
+            1
         );
     }
 
@@ -1258,6 +1498,7 @@ b = { version = "*", remotes = [{ type = "file", path = "b.jar" }] }
             &empty_lock,
             &catalog,
             None,
+            &mut None,
         )
         .await
         .unwrap();
@@ -1372,28 +1613,24 @@ b = { version = "*", remotes = [{ type = "file", path = "b.jar" }] }
 
         assert_eq!(portfolio.alternatives.len(), 1);
         let events = events.lock().unwrap();
-        let started = events
+        let advanced = events
             .iter()
-            .filter(|event| matches!(event, ProgressEvent::ResolutionWorkStarted { .. }))
-            .count();
-        let finished = events
-            .iter()
-            .filter(|event| matches!(event, ProgressEvent::ResolutionWorkFinished { .. }))
-            .count();
-        assert!(started > 1, "{events:?}");
-        assert_eq!(started, finished);
-        assert!(events.iter().any(|event| matches!(
-            event,
-            ProgressEvent::ResolutionActivity {
-                activity: ResolutionActivity::Decision { .. }
-            }
-        )));
-        assert!(events.iter().any(|event| matches!(
-            event,
-            ProgressEvent::ResolutionActivity {
-                activity: ResolutionActivity::Solution
-            }
-        )));
+            .filter_map(|event| match event {
+                ProgressEvent::ResolutionAdvanced {
+                    work_discovered,
+                    work_completed,
+                    decisions,
+                    solutions,
+                    ..
+                } => Some((*work_discovered, *work_completed, *decisions, *solutions)),
+                _ => None,
+            })
+            .next_back()
+            .expect("resolution must publish a cumulative progress snapshot");
+        assert!(advanced.0 > 1, "{events:?}");
+        assert_eq!(advanced.0, advanced.1);
+        assert!(advanced.2 > 0);
+        assert!(advanced.3 > 0);
     }
 
     #[tokio::test]
@@ -1412,7 +1649,7 @@ b = { version = "*", remotes = [{ type = "file", path = "b.jar" }] }
 
         let selected = select_resolution(
             portfolio,
-            Some(Box::new(|_| {
+            Some(Box::new(|_, _| {
                 panic!("unique solution must not invoke selector")
             })),
         )
@@ -1473,30 +1710,24 @@ b = { version = "*", remotes = [{ type = "file", path = "b.jar" }] }
         .unwrap();
 
         let events = events.lock().unwrap();
-        let started = events
+        let progress = events
             .iter()
-            .filter(|event| {
-                matches!(
-                    event,
-                    ProgressEvent::ResolutionWorkStarted {
-                        work: crate::progress::ResolutionWork::PreferenceProbe { .. }
-                    }
-                )
+            .filter_map(|event| {
+                if let ProgressEvent::ResolutionAdvanced {
+                    work_discovered,
+                    work_completed,
+                    ..
+                } = event
+                {
+                    Some((*work_discovered, *work_completed))
+                } else {
+                    None
+                }
             })
-            .count();
-        let finished = events
-            .iter()
-            .filter(|event| {
-                matches!(
-                    event,
-                    ProgressEvent::ResolutionWorkFinished {
-                        work: crate::progress::ResolutionWork::PreferenceProbe { .. }
-                    }
-                )
-            })
-            .count();
-        assert!(started > 0, "{events:?}");
-        assert_eq!(started, finished, "{events:?}");
+            .next_back()
+            .expect("minimal-change resolution must report cumulative work");
+        assert!(progress.0 > 0, "{events:?}");
+        assert_eq!(progress.0, progress.1, "{events:?}");
     }
 
     #[tokio::test]
@@ -2043,7 +2274,8 @@ iris = { version = "*", remotes = [{ type = "file", path = "iris.jar" }] }
 
         let selected = select_resolution(
             portfolio,
-            Some(Box::new(|alternatives| {
+            Some(Box::new(|context, alternatives| {
+                assert_eq!(context, ResolutionSelectionContext::CompleteSolution);
                 assert_eq!(alternatives.len(), 2);
                 Ok(1)
             })),
@@ -2059,7 +2291,7 @@ iris = { version = "*", remotes = [{ type = "file", path = "iris.jar" }] }
             alternatives: vec![ResolutionReport::default(), ResolutionReport::default()],
         };
 
-        let error = select_resolution(portfolio, Some(Box::new(|_| Ok(2)))).unwrap_err();
+        let error = select_resolution(portfolio, Some(Box::new(|_, _| Ok(2)))).unwrap_err();
 
         assert_eq!(
             error.to_string(),
@@ -2075,7 +2307,7 @@ iris = { version = "*", remotes = [{ type = "file", path = "iris.jar" }] }
 
         let error = select_resolution(
             portfolio,
-            Some(Box::new(|_| {
+            Some(Box::new(|_, _| {
                 Err(OrbitError::Cancelled(
                     "interaction cancelled by user".to_string(),
                 ))

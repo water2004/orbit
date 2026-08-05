@@ -761,5 +761,17 @@ pub struct ResolutionPortfolio {
     pub alternatives: Vec<ResolutionReport>,
 }
 
-pub type ResolutionSelector =
-    Box<dyn FnOnce(&[ResolutionReport]) -> Result<usize, crate::OrbitError> + Send>;
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResolutionSelectionContext {
+    CompleteSolution,
+    PreferenceFactor {
+        index: usize,
+        total: usize,
+        complete_assignments: Option<u128>,
+    },
+}
+
+pub type ResolutionSelector = Box<
+    dyn FnMut(ResolutionSelectionContext, &[ResolutionReport]) -> Result<usize, crate::OrbitError>
+        + Send,
+>;

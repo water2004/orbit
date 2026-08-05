@@ -163,7 +163,7 @@ async fn plan_migration_inner(
     catalog.loader_package = target_platform.loader_package;
 
     let MigrationInteraction {
-        select_resolution,
+        mut select_resolution,
         confirm_soft_fallback,
         progress,
     } = interaction;
@@ -181,9 +181,9 @@ async fn plan_migration_inner(
             &empty_target_lock,
             &catalog,
             progress.clone(),
+            &mut select_resolution,
         )
-        .await
-        .map_err(|error| OrbitError::Conflict(error.to_string()))?
+        .await?
     } else {
         match crate::resolver::resolve_required_package_portfolio_with_progress(
             &target_manifest,
@@ -212,12 +212,14 @@ async fn plan_migration_inner(
                     &empty_target_lock,
                     &catalog,
                     progress.clone(),
+                    &mut select_resolution,
                 )
                 .await
-                .map_err(|soft_failure| {
-                    OrbitError::Conflict(format!(
+                .map_err(|soft_failure| match soft_failure {
+                    OrbitError::Cancelled(_) => soft_failure,
+                    _ => OrbitError::Conflict(format!(
                         "strict migration is unavailable:\n{strict_failure}\n\nNo migration is possible even after allowing package removal:\n{soft_failure}"
-                    ))
+                    )),
                 })?
             }
         }

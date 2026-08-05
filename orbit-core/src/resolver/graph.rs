@@ -1,6 +1,6 @@
 //! Builds the loader-independent constraint graph consumed by PubGrub.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use pubgrub::{IncompatibilityConstraint, IncompatibilityConstraintTerm, Ranges};
 
@@ -73,6 +73,91 @@ pub(crate) struct SolverGraph {
     pub(crate) loader: LoaderKind,
     pub(crate) exclusions: ExclusionMap,
     pub(crate) target: Environment,
+}
+
+impl SolverGraph {
+    /// Partition soft package preferences by the constraint graph that can couple them.
+    ///
+    /// Root and platform packages are fixed inputs, so dependencies on them constrain a component
+    /// without joining otherwise independent components. Provider incompatibilities are
+    /// hyperedges: every non-fixed package mentioned by one clause belongs to the same component.
+    pub(crate) fn preference_components(
+        &self,
+        preferences: Vec<pubgrub::PackagePreference<SolverPackage, Ranges<SolverVersion>>>,
+    ) -> Vec<Vec<pubgrub::PackagePreference<SolverPackage, Ranges<SolverVersion>>>> {
+        let mut adjacency: HashMap<SolverPackage, HashSet<SolverPackage>> = HashMap::new();
+        for ((owner, _), dependencies) in &self.provider.dependencies {
+            for (dependency, _) in dependencies {
+                connect_variable_packages(&mut adjacency, [owner, dependency]);
+            }
+        }
+        for ((owner, _), incompatibilities) in &self.provider.incompatibilities {
+            for incompatibility in incompatibilities {
+                let packages = std::iter::once(owner).chain(incompatibility.terms.iter().map(
+                    |term| match term {
+                        pubgrub::IncompatibilityConstraintTerm::Positive(package, _)
+                        | pubgrub::IncompatibilityConstraintTerm::Negative(package, _) => package,
+                    },
+                ));
+                connect_variable_packages(&mut adjacency, packages);
+            }
+        }
+
+        let mut remaining = preferences
+            .into_iter()
+            .map(|preference| (preference.package().clone(), preference))
+            .collect::<BTreeMap<_, _>>();
+        let mut components = Vec::new();
+        while let Some(start) = remaining.keys().next().cloned() {
+            let mut stack = vec![start];
+            let mut visited = HashSet::new();
+            let mut component = Vec::new();
+            while let Some(package) = stack.pop() {
+                if !visited.insert(package.clone()) {
+                    continue;
+                }
+                if let Some(preference) = remaining.remove(&package) {
+                    component.push(preference);
+                }
+                stack.extend(
+                    adjacency
+                        .get(&package)
+                        .into_iter()
+                        .flatten()
+                        .filter(|neighbor| !visited.contains(*neighbor))
+                        .cloned(),
+                );
+            }
+            component.sort_by(|left, right| left.package().cmp(right.package()));
+            components.push(component);
+        }
+        components
+    }
+}
+
+fn connect_variable_packages<'a>(
+    adjacency: &mut HashMap<SolverPackage, HashSet<SolverPackage>>,
+    packages: impl IntoIterator<Item = &'a SolverPackage>,
+) {
+    let packages = packages
+        .into_iter()
+        .filter(|package| !matches!(package, SolverPackage::Root | SolverPackage::Platform(_)))
+        .cloned()
+        .collect::<Vec<_>>();
+    let Some(first) = packages.first() else {
+        return;
+    };
+    adjacency.entry(first.clone()).or_default();
+    for package in packages.iter().skip(1) {
+        adjacency
+            .entry(first.clone())
+            .or_default()
+            .insert(package.clone());
+        adjacency
+            .entry(package.clone())
+            .or_default()
+            .insert(first.clone());
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]

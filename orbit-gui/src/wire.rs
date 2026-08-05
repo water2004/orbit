@@ -82,11 +82,15 @@ pub fn progress_numbers(data: &Value) -> (Option<u64>, Option<u64>) {
         .get("completed")
         .or_else(|| data.get("downloaded_bytes"))
         .and_then(Value::as_u64);
-    let total = data
+    let mut total = data
         .get("total")
         .or_else(|| data.get("total_bytes"))
         .and_then(Value::as_u64);
     match event {
+        Some("resolution_advanced" | "ResolutionAdvanced") => {
+            completed = data.get("work_completed").and_then(Value::as_u64);
+            total = data.get("work_discovered").and_then(Value::as_u64);
+        }
         Some("export_started" | "ExportStarted") if completed.is_none() => {
             completed = total.map(|_| 0);
         }
@@ -110,10 +114,39 @@ pub fn progress_label(data: &Value) -> String {
         .or_else(|| data.get("loader"))
         .or_else(|| data.get("provider"))
         .and_then(Value::as_str);
+    if matches!(event, "resolution_advanced" | "ResolutionAdvanced")
+        && let Some(current) = resolution_current_label(data)
+    {
+        return current;
+    }
     let label = progress_event_label(event);
     match subject {
         Some(subject) => format!("{} · {}", label, subject),
         None => label,
+    }
+}
+
+fn resolution_current_label(data: &Value) -> Option<String> {
+    let current = data.get("current")?;
+    let kind = current.get("kind")?.as_str()?;
+    match kind {
+        "enumeration" => Some(tr!(
+            "Searching solution space (run %{run})",
+            run = current.get("run")?.as_u64()?
+        )),
+        "version_maximization" => Some(tr!(
+            "Checking whether %{package} can be upgraded",
+            package = current.get("package")?.as_str()?
+        )),
+        "preference_preservation" => Some(tr!(
+            "Checking whether %{package} can be preserved",
+            package = current.get("package")?.as_str()?
+        )),
+        "decision" => Some(tr!(
+            "Deciding %{package}",
+            package = current.get("package")?.as_str()?
+        )),
+        _ => None,
     }
 }
 
@@ -419,6 +452,27 @@ mod tests {
         .unwrap()
         .unwrap();
         assert_eq!(error.code, "network");
+    }
+
+    #[test]
+    fn cumulative_resolution_progress_uses_dynamic_work_and_localized_current_stage() {
+        let data = serde_json::json!({
+            "event": "ResolutionAdvanced",
+            "work_discovered": 27,
+            "work_completed": 19,
+            "decisions": 8,
+            "propagations": 120,
+            "backtracks": 2,
+            "conflicts": 1,
+            "solutions": 0,
+            "current": {
+                "kind": "preference_preservation",
+                "package": "sodium"
+            }
+        });
+
+        assert_eq!(progress_numbers(&data), (Some(19), Some(27)));
+        assert!(progress_label(&data).contains("sodium"));
     }
 
     #[test]

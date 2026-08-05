@@ -21,20 +21,11 @@ pub enum ArtifactProgressState {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
-pub enum ResolutionWork {
-    EnumerationRun { run: usize },
-    MaximalityProbe { package: String },
-    PreferenceProbe { package: String },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum ResolutionActivity {
+pub enum ResolutionCurrent {
+    Enumeration { run: usize },
+    VersionMaximization { package: String },
+    PreferencePreservation { package: String },
     Decision { package: String },
-    Propagation { package: String },
-    Backtrack { from_level: u32, to_level: u32 },
-    Conflict,
-    Solution,
 }
 
 /// Solver/package-operation progress event.
@@ -82,14 +73,15 @@ pub enum ProgressEvent {
         packages: usize,
         candidates: usize,
     },
-    ResolutionWorkStarted {
-        work: ResolutionWork,
-    },
-    ResolutionWorkFinished {
-        work: ResolutionWork,
-    },
-    ResolutionActivity {
-        activity: ResolutionActivity,
+    ResolutionAdvanced {
+        work_discovered: u64,
+        work_completed: u64,
+        decisions: u64,
+        propagations: u64,
+        backtracks: u64,
+        conflicts: u64,
+        solutions: usize,
+        current: Option<ResolutionCurrent>,
     },
     ResolutionFinished {
         solutions: usize,

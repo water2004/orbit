@@ -94,13 +94,14 @@ pub use package_constraint::{
     PackageVersionPolicy, VersionComparison, apply_package_constraint, package_constraint,
 };
 pub use package_versions::{PackageVersionCandidate, PackageVersionsReport, list_package_versions};
-pub use progress::{
-    ArtifactProgressState, ProgressEvent, ProgressReporter, ResolutionActivity, ResolutionWork,
-};
+pub use progress::{ArtifactProgressState, ProgressEvent, ProgressReporter, ResolutionCurrent};
 pub use providers::ModProvider;
 pub use purge::{CandidateConfig, find_config_candidates, remove_config_candidates};
 pub use remote::{RemoteReport, add_package_remote, list_package_remotes, remove_package_remote};
-pub use resolver::types::{PackageChange, PackageChangeKind, ResolutionReport, ResolutionSelector};
+pub use resolver::types::{
+    PackageChange, PackageChangeKind, ResolutionReport, ResolutionSelectionContext,
+    ResolutionSelector,
+};
 pub use runtime::{
     NativeRuntimeEnvironment, PathLayout, RuntimeContext, RuntimeEnvironment, RuntimePathOptions,
     RuntimePaths, compiled_default_layout,

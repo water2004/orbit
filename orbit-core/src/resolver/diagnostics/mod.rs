@@ -5,12 +5,11 @@ mod render;
 mod tests;
 
 use std::collections::HashMap;
+use std::time::{Duration, Instant};
 
 use pubgrub::{DerivationTree, MaximalityProbeResult, Ranges, SolverEvent, SolverObserver};
 
-use crate::progress::{
-    ProgressEvent, ProgressReporter, ResolutionActivity, ResolutionWork, emit as emit_progress,
-};
+use crate::progress::{ProgressEvent, ProgressReporter, ResolutionCurrent, emit as emit_progress};
 use crate::resolver::types::{CandidateDiagnostic, SolverPackage, SolverVersion};
 
 pub(super) type Cause = DerivationTree<SolverPackage, Ranges<SolverVersion>, String>;
@@ -67,7 +66,22 @@ pub(crate) struct ResolutionTrace {
     watched: HashMap<SolverPackage, WatchedVersion>,
     solutions: Vec<ResolutionSnapshot>,
     progress: Option<ProgressReporter>,
+    progress_state: ResolutionProgress,
+    pending_progress_events: u64,
+    last_progress_emit: Instant,
     probe_checkpoint: Option<HashMap<SolverPackage, WatchedVersion>>,
+}
+
+#[derive(Default)]
+struct ResolutionProgress {
+    work_discovered: u64,
+    work_completed: u64,
+    decisions: u64,
+    propagations: u64,
+    backtracks: u64,
+    conflicts: u64,
+    solutions: usize,
+    current: Option<ResolutionCurrent>,
 }
 
 #[derive(Debug, Clone)]
@@ -96,82 +110,88 @@ impl ResolutionTrace {
                 .collect(),
             solutions: Vec::new(),
             progress,
+            progress_state: ResolutionProgress::default(),
+            pending_progress_events: 0,
+            last_progress_emit: Instant::now(),
             probe_checkpoint: None,
         }
     }
 
-    pub(crate) fn into_solutions(self) -> Vec<ResolutionSnapshot> {
+    pub(crate) fn into_solutions(mut self) -> Vec<ResolutionSnapshot> {
+        self.flush_progress();
         self.solutions
     }
 
+    pub(crate) fn flush_progress(&mut self) {
+        if self.pending_progress_events == 0 {
+            return;
+        }
+        emit_progress(
+            self.progress.as_ref(),
+            ProgressEvent::ResolutionAdvanced {
+                work_discovered: self.progress_state.work_discovered,
+                work_completed: self.progress_state.work_completed,
+                decisions: self.progress_state.decisions,
+                propagations: self.progress_state.propagations,
+                backtracks: self.progress_state.backtracks,
+                conflicts: self.progress_state.conflicts,
+                solutions: self.progress_state.solutions,
+                current: self.progress_state.current.clone(),
+            },
+        );
+        self.pending_progress_events = 0;
+        self.last_progress_emit = Instant::now();
+    }
+
     fn report_progress(
-        &self,
+        &mut self,
         event: &SolverEvent<'_, SolverPackage, Ranges<SolverVersion>, String>,
     ) {
-        let event = match event {
-            SolverEvent::EnumerationRunStarted { run } => ProgressEvent::ResolutionWorkStarted {
-                work: ResolutionWork::EnumerationRun { run: *run },
-            },
-            SolverEvent::EnumerationRunFinished { run } => ProgressEvent::ResolutionWorkFinished {
-                work: ResolutionWork::EnumerationRun { run: *run },
-            },
-            SolverEvent::MaximalityProbeStarted { package } => {
-                ProgressEvent::ResolutionWorkStarted {
-                    work: ResolutionWork::MaximalityProbe {
-                        package: package.to_string(),
-                    },
-                }
+        match event {
+            SolverEvent::EnumerationRunStarted { run } => {
+                self.progress_state.work_discovered += 1;
+                self.progress_state.current = Some(ResolutionCurrent::Enumeration { run: *run });
             }
-            SolverEvent::MaximalityProbeFinished { package, .. } => {
-                ProgressEvent::ResolutionWorkFinished {
-                    work: ResolutionWork::MaximalityProbe {
-                        package: package.to_string(),
-                    },
-                }
+            SolverEvent::EnumerationRunFinished { .. } => {
+                self.progress_state.work_completed += 1;
+            }
+            SolverEvent::MaximalityProbeStarted { package } => {
+                self.progress_state.work_discovered += 1;
+                self.progress_state.current = Some(ResolutionCurrent::VersionMaximization {
+                    package: package.to_string(),
+                });
+            }
+            SolverEvent::MaximalityProbeFinished { .. } => {
+                self.progress_state.work_completed += 1;
             }
             SolverEvent::PreferenceProbeStarted { package } => {
-                ProgressEvent::ResolutionWorkStarted {
-                    work: ResolutionWork::PreferenceProbe {
-                        package: package.to_string(),
-                    },
-                }
-            }
-            SolverEvent::PreferenceProbeFinished { package, .. } => {
-                ProgressEvent::ResolutionWorkFinished {
-                    work: ResolutionWork::PreferenceProbe {
-                        package: package.to_string(),
-                    },
-                }
-            }
-            SolverEvent::Decision { package, .. } => ProgressEvent::ResolutionActivity {
-                activity: ResolutionActivity::Decision {
+                self.progress_state.work_discovered += 1;
+                self.progress_state.current = Some(ResolutionCurrent::PreferencePreservation {
                     package: package.to_string(),
-                },
-            },
-            SolverEvent::Derivation { package, .. } => ProgressEvent::ResolutionActivity {
-                activity: ResolutionActivity::Propagation {
+                });
+            }
+            SolverEvent::PreferenceProbeFinished { .. } => {
+                self.progress_state.work_completed += 1;
+            }
+            SolverEvent::Decision { package, .. } => {
+                self.progress_state.decisions += 1;
+                self.progress_state.current = Some(ResolutionCurrent::Decision {
                     package: package.to_string(),
-                },
-            },
-            SolverEvent::Backtrack {
-                from_level,
-                to_level,
-                ..
-            } => ProgressEvent::ResolutionActivity {
-                activity: ResolutionActivity::Backtrack {
-                    from_level: *from_level,
-                    to_level: *to_level,
-                },
-            },
-            SolverEvent::Conflict { .. } => ProgressEvent::ResolutionActivity {
-                activity: ResolutionActivity::Conflict,
-            },
-            SolverEvent::Solution => ProgressEvent::ResolutionActivity {
-                activity: ResolutionActivity::Solution,
-            },
+                });
+            }
+            SolverEvent::Derivation { .. } => self.progress_state.propagations += 1,
+            SolverEvent::Backtrack { .. } => self.progress_state.backtracks += 1,
+            SolverEvent::Conflict { .. } => self.progress_state.conflicts += 1,
+            SolverEvent::Solution => self.progress_state.solutions += 1,
             _ => return,
-        };
-        emit_progress(self.progress.as_ref(), event);
+        }
+        self.pending_progress_events += 1;
+        if self.pending_progress_events >= 512
+            || self.last_progress_emit.elapsed() >= Duration::from_millis(100)
+            || matches!(event, SolverEvent::Solution)
+        {
+            self.flush_progress();
+        }
     }
 }
 

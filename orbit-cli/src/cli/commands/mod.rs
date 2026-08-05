@@ -294,8 +294,8 @@ pub fn resolution_selector(ctx: &CliContext) -> Option<orbit_core::ResolutionSel
     if ctx.output.format == crate::cli::output::OutputFormat::Json {
         let command = ctx.command;
         let sequence = ctx.machine_sequence.clone();
-        Some(Box::new(move |alternatives| {
-            machine_select_resolution(command, &sequence, alternatives)
+        Some(Box::new(move |context, alternatives| {
+            machine_select_resolution(command, &sequence, context, alternatives)
         }))
     } else {
         // Every Pareto alternative remains an explicit decision even with
@@ -363,16 +363,18 @@ fn machine_select_package(
 fn machine_select_resolution(
     command: &'static str,
     sequence: &std::sync::atomic::AtomicU64,
+    context: orbit_core::ResolutionSelectionContext,
     alternatives: &[orbit_core::ResolutionReport],
 ) -> Result<usize, orbit_core::OrbitError> {
     use orbit_machine_protocol::{InteractionEnvelope, InteractionKind};
     let choices = resolution_interaction_choices(alternatives);
+    let prompt = resolution_selection_prompt(context);
     let envelope: InteractionEnvelope<serde_json::Value> = machine_interaction(
         command,
         sequence,
         "resolution",
         InteractionKind::Resolution,
-        &tr!("Choose one non-dominated dependency solution"),
+        &prompt,
         choices,
         Some("1".to_string()),
     );
@@ -615,9 +617,10 @@ fn validate_machine_response(
 }
 
 fn prompt_resolution(
+    context: orbit_core::ResolutionSelectionContext,
     alternatives: &[orbit_core::ResolutionReport],
 ) -> Result<usize, orbit_core::OrbitError> {
-    eprintln!("\n{}", tr!("Multiple dependency solutions are available:"));
+    eprintln!("\n{}", resolution_selection_prompt(context));
     eprintln!("{}", crate::cli::output::resolution_choices(alternatives));
 
     loop {
@@ -657,6 +660,31 @@ fn prompt_resolution(
                 count = alternatives.len()
             )
         );
+    }
+}
+
+fn resolution_selection_prompt(context: orbit_core::ResolutionSelectionContext) -> String {
+    match context {
+        orbit_core::ResolutionSelectionContext::CompleteSolution => {
+            tr!("Choose one non-dominated dependency solution").into_owned()
+        }
+        orbit_core::ResolutionSelectionContext::PreferenceFactor {
+            index,
+            total,
+            complete_assignments,
+        } => match complete_assignments {
+            Some(assignments) => tr!(
+                "Choose removal plan group %{index} of %{total}; independent groups represent %{assignments} complete plan combinations",
+                index = index,
+                total = total,
+                assignments = assignments
+            ),
+            None => tr!(
+                "Choose removal plan group %{index} of %{total}; the complete plan count exceeds the supported display range",
+                index = index,
+                total = total
+            ),
+        },
     }
 }
 

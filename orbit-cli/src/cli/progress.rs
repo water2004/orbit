@@ -5,7 +5,7 @@ use std::time::Duration;
 use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
 use orbit_core::{
     ArtifactProgressState, AuditProgressEvent, AuditProgressReporter, AuditProgressStage,
-    ProgressBarMode, ProgressEvent, ProgressReporter, ResolutionActivity, ResolutionWork,
+    ProgressBarMode, ProgressEvent, ProgressReporter, ResolutionCurrent,
 };
 
 pub fn reporter(quiet: bool, configured_style: ProgressBarMode) -> Option<ProgressReporter> {
@@ -114,12 +114,12 @@ struct ProgressRenderer {
 #[derive(Default)]
 struct RenderState {
     bar: Option<ProgressBar>,
-    resolution_total: usize,
-    resolution_completed: usize,
-    decisions: usize,
-    propagations: usize,
-    backtracks: usize,
-    conflicts: usize,
+    resolution_total: u64,
+    resolution_completed: u64,
+    decisions: u64,
+    propagations: u64,
+    backtracks: u64,
+    conflicts: u64,
     solutions: usize,
 }
 
@@ -242,35 +242,31 @@ impl ProgressRenderer {
                     ),
                 );
             }
-            ProgressEvent::ResolutionWorkStarted { work } => {
-                state.resolution_total += 1;
+            ProgressEvent::ResolutionAdvanced {
+                work_discovered,
+                work_completed,
+                decisions,
+                propagations,
+                backtracks,
+                conflicts,
+                solutions,
+                current,
+            } => {
+                state.resolution_total = work_discovered;
+                state.resolution_completed = work_completed;
+                state.decisions = decisions;
+                state.propagations = propagations;
+                state.backtracks = backtracks;
+                state.conflicts = conflicts;
+                state.solutions = solutions;
                 update_resolution_bar(
                     &state,
                     format!(
                         "[3/4] {} · {}",
-                        work_started_label(&work),
-                        state.resolution_counters()
-                    ),
-                );
-            }
-            ProgressEvent::ResolutionWorkFinished { work } => {
-                state.resolution_completed += 1;
-                update_resolution_bar(
-                    &state,
-                    format!(
-                        "[3/4] {} · {}",
-                        work_finished_label(&work),
-                        state.resolution_counters()
-                    ),
-                );
-            }
-            ProgressEvent::ResolutionActivity { activity } => {
-                state.record_activity(&activity);
-                set_message(
-                    &state,
-                    format!(
-                        "[3/4] {} · {}",
-                        activity_label(&activity),
+                        current
+                            .as_ref()
+                            .map(resolution_current_label)
+                            .unwrap_or_else(|| tr!("resolving dependencies").into_owned()),
                         state.resolution_counters()
                     ),
                 );
@@ -375,16 +371,6 @@ impl RenderState {
         self.solutions = 0;
     }
 
-    fn record_activity(&mut self, activity: &ResolutionActivity) {
-        match activity {
-            ResolutionActivity::Decision { .. } => self.decisions += 1,
-            ResolutionActivity::Propagation { .. } => self.propagations += 1,
-            ResolutionActivity::Backtrack { .. } => self.backtracks += 1,
-            ResolutionActivity::Conflict => self.conflicts += 1,
-            ResolutionActivity::Solution => self.solutions += 1,
-        }
-    }
-
     fn resolution_counters(&self) -> String {
         tr!(
             "work %{completed}/%{total}, %{decisions} decisions, %{propagations} propagations, %{backtracks} backtracks, %{conflicts} conflicts, %{solutions} solutions",
@@ -426,16 +412,10 @@ fn start_bar(state: &mut RenderState, total: usize, message: impl Into<String>) 
     state.bar = Some(bar);
 }
 
-fn set_message(state: &RenderState, message: String) {
-    if let Some(bar) = &state.bar {
-        bar.set_message(message);
-    }
-}
-
 fn update_resolution_bar(state: &RenderState, message: String) {
     if let Some(bar) = &state.bar {
-        bar.set_length(state.resolution_total as u64);
-        bar.set_position(state.resolution_completed as u64);
+        bar.set_length(state.resolution_total);
+        bar.set_position(state.resolution_completed);
         bar.set_message(message);
     }
 }
@@ -535,32 +515,34 @@ fn plain_line(event: &ProgressEvent, state: &mut RenderState) -> Option<String> 
                 candidates = candidates
             ))
         }
-        ProgressEvent::ResolutionWorkStarted { work } => {
-            state.resolution_total += 1;
+        ProgressEvent::ResolutionAdvanced {
+            work_discovered,
+            work_completed,
+            decisions,
+            propagations,
+            backtracks,
+            conflicts,
+            solutions,
+            current,
+        } => {
+            state.resolution_total = *work_discovered;
+            state.resolution_completed = *work_completed;
+            state.decisions = *decisions;
+            state.propagations = *propagations;
+            state.backtracks = *backtracks;
+            state.conflicts = *conflicts;
+            state.solutions = *solutions;
+            let current = current
+                .as_ref()
+                .map(resolution_current_label)
+                .unwrap_or_else(|| tr!("resolving dependencies").into_owned());
             Some(tr!(
-                "  [%{completed}/%{total}] solver discovered: %{work}",
-                completed = state.resolution_completed,
-                total = state.resolution_total,
-                work = work_started_label(work)
+                "  [%{completed}/%{total}] %{current} · %{counters}",
+                completed = work_completed,
+                total = work_discovered,
+                current = current,
+                counters = state.resolution_counters()
             ))
-        }
-        ProgressEvent::ResolutionWorkFinished { work } => {
-            state.resolution_completed += 1;
-            Some(tr!(
-                "  [%{completed}/%{total}] solver completed: %{work}",
-                completed = state.resolution_completed,
-                total = state.resolution_total,
-                work = work_finished_label(work)
-            ))
-        }
-        ProgressEvent::ResolutionActivity { activity } => {
-            state.record_activity(activity);
-            matches!(activity, ResolutionActivity::Solution).then(|| {
-                tr!(
-                    "  solver found solution %{solutions}",
-                    solutions = state.solutions
-                )
-            })
         }
         ProgressEvent::ResolutionFinished { solutions } => {
             state.solutions = *solutions;
@@ -702,52 +684,26 @@ fn audit_stage_finished(stage: AuditProgressStage, completed: usize) -> String {
     }
 }
 
-fn work_started_label(work: &ResolutionWork) -> String {
-    match work {
-        ResolutionWork::EnumerationRun { run } => tr!("search run %{run}", run = run),
-        ResolutionWork::MaximalityProbe { package } => {
+fn resolution_current_label(current: &ResolutionCurrent) -> String {
+    match current {
+        ResolutionCurrent::Enumeration { run } => {
+            tr!("Searching solution space (run %{run})", run = run)
+        }
+        ResolutionCurrent::VersionMaximization { package } => {
             tr!(
-                "checking whether %{package} can be upgraded",
+                "Checking whether %{package} can be upgraded",
                 package = package
             )
         }
-        ResolutionWork::PreferenceProbe { package } => {
+        ResolutionCurrent::PreferencePreservation { package } => {
             tr!(
-                "checking whether %{package} can be preserved",
+                "Checking whether %{package} can be preserved",
                 package = package
             )
         }
-    }
-}
-
-fn work_finished_label(work: &ResolutionWork) -> String {
-    match work {
-        ResolutionWork::EnumerationRun { run } => tr!("search run %{run}", run = run),
-        ResolutionWork::MaximalityProbe { package } => {
-            tr!("checked maximality of %{package}", package = package)
+        ResolutionCurrent::Decision { package } => {
+            tr!("Deciding %{package}", package = package)
         }
-        ResolutionWork::PreferenceProbe { package } => {
-            tr!("checked preservation of %{package}", package = package)
-        }
-    }
-}
-
-fn activity_label(activity: &ResolutionActivity) -> String {
-    match activity {
-        ResolutionActivity::Decision { package } => tr!("deciding %{package}", package = package),
-        ResolutionActivity::Propagation { package } => {
-            tr!("propagating %{package}", package = package)
-        }
-        ResolutionActivity::Backtrack {
-            from_level,
-            to_level,
-        } => tr!(
-            "backtracking %{from} → %{to}",
-            from = from_level,
-            to = to_level
-        ),
-        ResolutionActivity::Conflict => tr!("resolving a conflict").into_owned(),
-        ResolutionActivity::Solution => tr!("retained a Pareto solution").into_owned(),
     }
 }
 
@@ -818,33 +774,43 @@ mod tests {
             &mut state,
         );
         let first = plain_line(
-            &ProgressEvent::ResolutionWorkStarted {
-                work: ResolutionWork::EnumerationRun { run: 1 },
-            },
-            &mut state,
-        );
-        plain_line(
-            &ProgressEvent::ResolutionWorkFinished {
-                work: ResolutionWork::EnumerationRun { run: 1 },
+            &ProgressEvent::ResolutionAdvanced {
+                work_discovered: 1,
+                work_completed: 0,
+                decisions: 3,
+                propagations: 8,
+                backtracks: 0,
+                conflicts: 0,
+                solutions: 0,
+                current: Some(ResolutionCurrent::Enumeration { run: 1 }),
             },
             &mut state,
         );
         let second = plain_line(
-            &ProgressEvent::ResolutionWorkStarted {
-                work: ResolutionWork::MaximalityProbe {
+            &ProgressEvent::ResolutionAdvanced {
+                work_discovered: 2,
+                work_completed: 1,
+                decisions: 7,
+                propagations: 20,
+                backtracks: 1,
+                conflicts: 1,
+                solutions: 0,
+                current: Some(ResolutionCurrent::VersionMaximization {
                     package: "sodium".to_string(),
-                },
+                }),
             },
             &mut state,
         );
 
-        assert_eq!(
-            first.as_deref(),
-            Some("  [0/1] solver discovered: search run 1")
+        assert!(
+            first
+                .unwrap()
+                .contains("[0/1] Searching solution space (run 1)")
         );
-        assert_eq!(
-            second.as_deref(),
-            Some("  [1/2] solver discovered: checking whether sodium can be upgraded")
+        assert!(
+            second
+                .unwrap()
+                .contains("[1/2] Checking whether sodium can be upgraded")
         );
         assert_eq!(state.resolution_completed, 1);
         assert_eq!(state.resolution_total, 2);

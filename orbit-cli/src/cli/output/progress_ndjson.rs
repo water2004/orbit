@@ -126,9 +126,7 @@ fn phase_for(event: &ProgressEvent) -> ProgressPhase {
         | ProgressEvent::CandidateArtifact { .. }
         | ProgressEvent::CandidateDownloadFinished { .. } => ProgressPhase::Download,
         ProgressEvent::ResolutionStarted { .. }
-        | ProgressEvent::ResolutionWorkStarted { .. }
-        | ProgressEvent::ResolutionWorkFinished { .. }
-        | ProgressEvent::ResolutionActivity { .. }
+        | ProgressEvent::ResolutionAdvanced { .. }
         | ProgressEvent::ResolutionFinished { .. } => ProgressPhase::Resolution,
         ProgressEvent::ApplyStarted { .. }
         | ProgressEvent::ApplyArtifact { .. }
@@ -142,7 +140,7 @@ fn phase_for(event: &ProgressEvent) -> ProgressPhase {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use orbit_core::{ArtifactProgressState, ResolutionActivity, ResolutionWork};
+    use orbit_core::{ArtifactProgressState, ResolutionCurrent};
 
     #[test]
     fn progress_event_serializes_with_event_tag_and_skipped_filename() {
@@ -174,27 +172,31 @@ mod tests {
     }
 
     #[test]
-    fn resolution_work_uses_kind_tag() {
-        let work = ResolutionWork::MaximalityProbe {
-            package: "sodium".to_string(),
+    fn resolution_progress_serializes_as_a_cumulative_snapshot() {
+        let event = ProgressEvent::ResolutionAdvanced {
+            work_discovered: 12,
+            work_completed: 11,
+            decisions: 30,
+            propagations: 200,
+            backtracks: 4,
+            conflicts: 3,
+            solutions: 2,
+            current: Some(ResolutionCurrent::VersionMaximization {
+                package: "sodium".to_string(),
+            }),
         };
-        let json = serde_json::to_string(&work).unwrap();
-        assert!(json.contains("\"kind\":\"maximality_probe\""));
-        assert!(json.contains("\"package\":\"sodium\""));
-
-        let preference = ResolutionWork::PreferenceProbe {
-            package: "iris".to_string(),
-        };
-        let json = serde_json::to_string(&preference).unwrap();
-        assert!(json.contains("\"kind\":\"preference_probe\""));
-        assert!(json.contains("\"package\":\"iris\""));
-    }
-
-    #[test]
-    fn resolution_activity_conflict_has_no_payload_fields() {
-        let activity = ResolutionActivity::Conflict;
-        let json = serde_json::to_string(&activity).unwrap();
-        assert_eq!(json, "{\"kind\":\"conflict\"}");
+        let envelope = ProgressEnvelope::new(
+            "migrate",
+            4,
+            ProgressPhase::Resolution,
+            ProgressData { event: &event },
+        );
+        let json = serde_json::to_string(&envelope).unwrap();
+        assert!(json.contains("\"event\":\"ResolutionAdvanced\""));
+        assert!(json.contains("\"work_discovered\":12"));
+        assert!(json.contains("\"work_completed\":11"));
+        assert!(json.contains("\"propagations\":200"));
+        assert!(json.contains("\"solutions\":2"));
     }
 
     #[test]

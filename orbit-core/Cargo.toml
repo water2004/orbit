@@ -38,7 +38,7 @@ tempfile.workspace = true
 image.workspace = true
 java-properties = "2.0"
 rusqlite.workspace = true
-pubgrub = { git = "https://github.com/water2004/pubgrub.git", rev = "914cf645982ba790090652bf3a09d934de857408" }
+pubgrub = { git = "https://github.com/water2004/pubgrub.git", rev = "19e9622e48fe37f62abd9e270e356aab5ec2e2f6" }
 
 [dev-dependencies]
 bytes = "1.11"
