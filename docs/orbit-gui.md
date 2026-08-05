@@ -177,7 +177,7 @@ Install 只按 lock 精确恢复缺失文件。GUI 不根据一个命令失败�
   不在桌面界面伪装为风险筛选；
 - Accounts：侧边栏底部始终显示当前实例账户或全局默认账户，主账户页显示 Launcher 从皮肤
   脸部底层与帽子层合成后由 CLI 提供的 `avatar_path`（无皮肤时使用本地首字母占位）；GUI
-  不把完整皮肤材质裁剪成头像；先选择 Microsoft、Offline 或标准 External Yggdrasil，再进入对应登录任务；
+  不把完整皮肤材质裁剪成头像；先选择 Microsoft、Offline 或标准 External Yggdrasil，再进入对应登录任务；Microsoft 设备授权返回后立即通过系统默认浏览器打开经过校验的 HTTPS 登录页，弹窗同时明确显示可点击链接、验证码、复制操作和上游说明，自动打开失败也不丢失继续登录所需信息；
   主页面只展示身份卡、全局默认和当前实例选择；External Yggdrasil 在添加账户时选择端点，
   端点的选择/新增/移除是独立步骤，确认端点后才进入单独的凭据表单；Settings 不承载账户
   认证端点；新增端点接受站点地址或精确 API root，由 CLI 完成 ALI 服务发现和 metadata

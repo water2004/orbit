@@ -632,7 +632,12 @@ impl OrbitApp {
                     .insert(response.minecraft.clone(), response);
             }
             Intent::ServerStatus => self.server_status = Some(decode(result)?),
-            Intent::MicrosoftBegin => self.microsoft_session = Some(result),
+            Intent::MicrosoftBegin => {
+                let session: MicrosoftDeviceSession = decode(result)?;
+                let verification_uri = microsoft_verification_uri(&session)?;
+                cx.open_url(verification_uri.as_str());
+                self.microsoft_session = Some(session);
+            }
             Intent::EulaShow => self.eula_document = Some(result),
             Intent::LauncherConfig => {
                 let response: LauncherConfigList = decode(result)?;
@@ -1943,6 +1948,19 @@ fn decode<T: DeserializeOwned>(value: Value) -> anyhow::Result<T> {
     serde_json::from_value(value).map_err(Into::into)
 }
 
+fn microsoft_verification_uri(session: &MicrosoftDeviceSession) -> anyhow::Result<url::Url> {
+    let verification_uri = url::Url::parse(&session.verification_uri)
+        .map_err(|error| anyhow::anyhow!("invalid Microsoft verification URI: {error}"))?;
+    anyhow::ensure!(
+        verification_uri.scheme() == "https"
+            && verification_uri.host_str().is_some()
+            && verification_uri.username().is_empty()
+            && verification_uri.password().is_none(),
+        "Microsoft verification URI must be an HTTPS web address without embedded credentials"
+    );
+    Ok(verification_uri)
+}
+
 fn completion_failure_state(
     process_cancelled: bool,
     command_cancelled: bool,
@@ -1969,7 +1987,9 @@ fn set_select_index<D: gpui_component::select::SelectDelegate + 'static>(
 
 #[cfg(test)]
 mod completion_tests {
-    use super::{TaskState, completion_failure_state};
+    use super::{
+        MicrosoftDeviceSession, TaskState, completion_failure_state, microsoft_verification_uri,
+    };
 
     #[test]
     fn structured_cli_cancellation_is_not_presented_as_a_failure() {
@@ -1985,5 +2005,35 @@ mod completion_tests {
             completion_failure_state(false, false, TaskState::Running),
             TaskState::Failed
         );
+    }
+
+    #[test]
+    fn microsoft_device_session_exposes_a_safe_browser_target() {
+        let session: MicrosoftDeviceSession = serde_json::from_value(serde_json::json!({
+            "login_session_id": "113d22fb-8c5f-45a9-85bd-78282b78a7a9",
+            "verification_uri": "https://microsoft.com/devicelogin",
+            "user_code": "ABCD-EFGH",
+            "expires_at_unix_seconds": 1,
+            "polling_interval_seconds": 5,
+            "message": "Use a browser"
+        }))
+        .unwrap();
+
+        assert_eq!(
+            microsoft_verification_uri(&session).unwrap().as_str(),
+            "https://microsoft.com/devicelogin"
+        );
+    }
+
+    #[test]
+    fn microsoft_device_session_rejects_a_non_https_browser_target() {
+        let session = MicrosoftDeviceSession {
+            login_session_id: "session".into(),
+            verification_uri: "http://microsoft.com/devicelogin".into(),
+            user_code: "ABCD-EFGH".into(),
+            message: None,
+        };
+
+        assert!(microsoft_verification_uri(&session).is_err());
     }
 }

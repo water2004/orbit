@@ -1,9 +1,9 @@
 use std::time::Duration;
 
 use gpui::{
-    Animation, AnimationExt, AnyElement, Context, InteractiveElement, IntoElement, ParentElement,
-    StatefulInteractiveElement, Styled, Window, div, ease_in_out, prelude::FluentBuilder as _, px,
-    relative,
+    Animation, AnimationExt, AnyElement, ClipboardItem, Context, InteractiveElement, IntoElement,
+    ParentElement, StatefulInteractiveElement, Styled, Window, div, ease_in_out,
+    prelude::FluentBuilder as _, px, relative,
 };
 use gpui_component::{
     ActiveTheme, Disableable, Icon, Selectable, StyledExt,
@@ -716,23 +716,15 @@ fn render_confirmation(app: &OrbitApp, cx: &mut Context<OrbitApp>) -> impl IntoE
 
 fn render_microsoft(app: &OrbitApp, cx: &mut Context<OrbitApp>) -> impl IntoElement {
     let session = app.microsoft_session.as_ref().expect("checked").clone();
-    let code = session
-        .get("user_code")
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or("—")
-        .to_string();
-    let url = session
-        .get("verification_uri")
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or("https://microsoft.com/devicelogin")
-        .to_string();
-    let session_id = session
-        .get("login_session_id")
-        .and_then(serde_json::Value::as_str)
-        .map(str::to_string);
+    let code = session.user_code.clone();
+    let url = session.verification_uri.clone();
+    let session_id = session.login_session_id.clone();
+    let upstream_message = session.message.filter(|message| !message.trim().is_empty());
+    let open_url = url.clone();
+    let copy_code = code.clone();
     ui::modal_backdrop(
         ui::modal(
-            500.,
+            560.,
             v_flex()
                 .gap_4()
                 .child(
@@ -746,17 +738,64 @@ fn render_microsoft(app: &OrbitApp, cx: &mut Context<OrbitApp>) -> impl IntoElem
                         .text_sm()
                         .text_color(cx.theme().muted_foreground)
                         .child(
-                            tr!("Open the Microsoft device page and enter this code:").into_owned(),
+                            tr!("Your browser should open automatically. If it does not, open this page:")
+                                .into_owned(),
                         ),
                 )
                 .child(
-                    div()
-                        .text_3xl()
-                        .font_semibold()
-                        .text_color(cx.theme().primary)
-                        .child(code),
+                    ui::themed_card(cx)
+                        .p_3()
+                        .child(div().text_sm().text_color(cx.theme().primary).child(url)),
                 )
-                .child(div().text_sm().child(url))
+                .child(
+                    Button::new("microsoft-open-browser")
+                        .label(tr!("Open sign-in page").into_owned())
+                        .primary()
+                        .on_click(cx.listener(move |_, _, _, cx| {
+                            cx.open_url(&open_url);
+                        })),
+                )
+                .child(
+                    div()
+                        .text_sm()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(tr!("Enter this code on the Microsoft page:").into_owned()),
+                )
+                .child(
+                    h_flex()
+                        .items_center()
+                        .justify_between()
+                        .gap_3()
+                        .child(
+                            div()
+                                .text_3xl()
+                                .font_semibold()
+                                .text_color(cx.theme().primary)
+                                .child(code),
+                        )
+                        .child(
+                            Button::new("microsoft-copy-code")
+                                .label(tr!("Copy code").into_owned())
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    cx.write_to_clipboard(ClipboardItem::new_string(
+                                        copy_code.clone(),
+                                    ));
+                                    this.toast = Some(super::super::Toast {
+                                        message: tr!("Microsoft sign-in code copied").into_owned(),
+                                        kind: ToastKind::Success,
+                                    });
+                                    cx.notify();
+                                })),
+                        ),
+                )
+                .when_some(upstream_message, |content, message| {
+                    content.child(
+                        div()
+                            .text_sm()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(message),
+                    )
+                })
                 .child(
                     h_flex()
                         .justify_end()
@@ -769,17 +808,15 @@ fn render_microsoft(app: &OrbitApp, cx: &mut Context<OrbitApp>) -> impl IntoElem
                                     cx.notify();
                                 })),
                         )
-                        .when_some(session_id, |row, session_id| {
-                            row.child(
-                                Button::new("microsoft-complete")
-                                    .label(tr!("Complete sign in").into_owned())
-                                    .primary()
-                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                        this.complete_microsoft_login(session_id.clone());
-                                        cx.notify();
-                                    })),
-                            )
-                        }),
+                        .child(
+                            Button::new("microsoft-complete")
+                                .label(tr!("Complete sign in").into_owned())
+                                .primary()
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.complete_microsoft_login(session_id.clone());
+                                    cx.notify();
+                                })),
+                        ),
                 ),
             cx,
         ),
@@ -1943,6 +1980,7 @@ fn render_string_policy(
 fn render_toast(app: &OrbitApp, cx: &mut Context<OrbitApp>) -> impl IntoElement {
     let toast = app.toast.as_ref().expect("checked").clone();
     let color = match toast.kind {
+        ToastKind::Success => cx.theme().success,
         ToastKind::Warning => cx.theme().warning,
         ToastKind::Danger => cx.theme().danger,
     };

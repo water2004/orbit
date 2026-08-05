@@ -363,6 +363,14 @@ pub struct AccountList {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+pub struct MicrosoftDeviceSession {
+    pub login_session_id: String,
+    pub verification_uri: String,
+    pub user_code: String,
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
 pub struct YggdrasilProvider {
     pub id: String,
     pub api_root: String,

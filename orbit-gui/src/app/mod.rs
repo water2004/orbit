@@ -99,6 +99,7 @@ pub(super) struct Confirmation {
 
 #[derive(Debug, Clone, Copy)]
 pub(super) enum ToastKind {
+    Success,
     Warning,
     Danger,
 }
@@ -444,7 +445,7 @@ pub struct OrbitApp {
     pub(super) new_instance: NewInstanceForm,
     pub(super) ygg_provider: String,
     pub(super) ygg_allow_insecure_http: bool,
-    pub(super) microsoft_session: Option<Value>,
+    pub(super) microsoft_session: Option<MicrosoftDeviceSession>,
     pub(super) eula_document: Option<Value>,
     pub(super) runtime_flow: Option<RuntimeFlow>,
     pub(super) migration_source: Option<PathBuf>,
