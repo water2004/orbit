@@ -10,7 +10,7 @@ use crate::eula::EulaAcceptance;
 use crate::instance::{InstanceKind, LoaderKind};
 
 pub const INSTANCE_LOCK_FILE: &str = "orbit-launcher.lock";
-pub const LOCK_SCHEMA: u32 = 5;
+pub const LOCK_SCHEMA: u32 = 6;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -94,6 +94,34 @@ impl LauncherLock {
                 ));
             }
         }
+        if let Some(asset_index) = &self.minecraft.asset_index {
+            let expected_path = asset_index.artifact_path();
+            let artifact = self
+                .artifacts
+                .iter()
+                .find(|artifact| artifact.path == expected_path)
+                .ok_or_else(|| {
+                    LauncherError::InvalidLock(format!(
+                        "asset index artifact '{expected_path}' is missing"
+                    ))
+                })?;
+            if artifact.owner != ArtifactOwner::Minecraft {
+                return Err(LauncherError::InvalidLock(format!(
+                    "asset index artifact '{expected_path}' is not owned by Minecraft"
+                )));
+            }
+            match &artifact.source {
+                LockedArtifactSource::Download {
+                    upstream_sha1: Some(upstream_sha1),
+                    ..
+                } if upstream_sha1 == &asset_index.runtime_name => {}
+                _ => {
+                    return Err(LauncherError::InvalidLock(format!(
+                        "asset index artifact '{expected_path}' does not match its content-addressed runtime name"
+                    )));
+                }
+            }
+        }
         match &self.entrypoint {
             LockedEntrypoint::Jar { path } | LockedEntrypoint::ArgumentFile { path } => {
                 if !paths.contains(path.as_str()) {
@@ -133,9 +161,11 @@ impl LauncherLock {
             InstanceKind::Client if self.eula.is_some() => Err(LauncherError::InvalidLock(
                 "client lock cannot contain a server EULA receipt".to_string(),
             )),
-            InstanceKind::Client if self.minecraft.asset_index.is_none() => Err(
-                LauncherError::InvalidLock("client lock requires an asset index ID".to_string()),
-            ),
+            InstanceKind::Client if self.minecraft.asset_index.is_none() => {
+                Err(LauncherError::InvalidLock(
+                    "client lock requires a content-addressed asset index".to_string(),
+                ))
+            }
             InstanceKind::Client if self.authlib_injector.is_none() => {
                 Err(LauncherError::InvalidLock(
                     "client lock requires a managed authlib-injector artifact".to_string(),
@@ -152,7 +182,7 @@ pub struct LockedMinecraft {
     pub version: String,
     pub version_type: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub asset_index: Option<String>,
+    pub asset_index: Option<LockedAssetIndex>,
     pub version_manifest_url: String,
     pub version_manifest_sha256: String,
     pub version_json_url: String,
@@ -164,7 +194,7 @@ impl LockedMinecraft {
         validate_text(&self.version, "Minecraft version")?;
         validate_text(&self.version_type, "Minecraft version type")?;
         if let Some(asset_index) = &self.asset_index {
-            validate_text(asset_index, "Minecraft asset index")?;
+            asset_index.validate()?;
         }
         validate_https(&self.version_manifest_url, "Minecraft version manifest")?;
         validate_https(&self.version_json_url, "Minecraft version JSON")?;
@@ -174,6 +204,28 @@ impl LockedMinecraft {
             "version manifest SHA-256",
         )?;
         validate_digest(&self.version_json_sha1, 40, "version JSON SHA-1")
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LockedAssetIndex {
+    /// Identifier published by Mojang. It is retained for provenance and is
+    /// deliberately not used as a shared filesystem key.
+    pub upstream_id: String,
+    /// SHA-1 content name used by both `${assets_index_name}` and the index
+    /// filename, so mutable upstream IDs cannot collide.
+    pub runtime_name: String,
+}
+
+impl LockedAssetIndex {
+    fn validate(&self) -> Result<(), LauncherError> {
+        validate_text(&self.upstream_id, "Minecraft upstream asset index ID")?;
+        validate_digest(&self.runtime_name, 40, "Minecraft asset index runtime name")
+    }
+
+    pub fn artifact_path(&self) -> String {
+        format!("assets/indexes/{}.json", self.runtime_name)
     }
 }
 
@@ -661,6 +713,80 @@ mod tests {
         }
     }
 
+    fn client_lock() -> LauncherLock {
+        let runtime_name = "f".repeat(40);
+        LauncherLock {
+            schema: LOCK_SCHEMA,
+            instance_id: Uuid::new_v4(),
+            kind: InstanceKind::Client,
+            minecraft: LockedMinecraft {
+                version: "26.2".to_string(),
+                version_type: "release".to_string(),
+                asset_index: Some(LockedAssetIndex {
+                    upstream_id: "32".to_string(),
+                    runtime_name: runtime_name.clone(),
+                }),
+                version_manifest_url:
+                    "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json".to_string(),
+                version_manifest_sha256: "a".repeat(64),
+                version_json_url: "https://piston-meta.mojang.com/version.json".to_string(),
+                version_json_sha1: "b".repeat(40),
+            },
+            loader: LockedLoader::vanilla(),
+            java: None,
+            authlib_injector: Some(LockedAuthlibInjector {
+                version: "1.2.8".to_string(),
+                build_number: 1,
+                path: "libraries/authlib-injector.jar".to_string(),
+            }),
+            entrypoint: LockedEntrypoint::Classpath {
+                main_class: "net.minecraft.client.main.Main".to_string(),
+                classpath: vec!["instances/client/minecraft.jar".to_string()],
+            },
+            arguments: LockedArguments::default(),
+            artifacts: vec![
+                LockedArtifact {
+                    logical_name: "Minecraft 32 asset index".to_string(),
+                    owner: ArtifactOwner::Minecraft,
+                    source: LockedArtifactSource::Download {
+                        url: "https://piston-meta.mojang.com/32.json".to_string(),
+                        upstream_sha1: Some(runtime_name.clone()),
+                    },
+                    sha256: "c".repeat(64),
+                    size: 100,
+                    path: format!("assets/indexes/{runtime_name}.json"),
+                    native_extraction: None,
+                },
+                LockedArtifact {
+                    logical_name: "Minecraft client".to_string(),
+                    owner: ArtifactOwner::Minecraft,
+                    source: LockedArtifactSource::Download {
+                        url: "https://piston-data.mojang.com/client.jar".to_string(),
+                        upstream_sha1: Some("d".repeat(40)),
+                    },
+                    sha256: "e".repeat(64),
+                    size: 100,
+                    path: "instances/client/minecraft.jar".to_string(),
+                    native_extraction: None,
+                },
+                LockedArtifact {
+                    logical_name: "authlib-injector".to_string(),
+                    owner: ArtifactOwner::AuthlibInjector,
+                    source: LockedArtifactSource::Download {
+                        url: "https://example.invalid/authlib-injector.jar".to_string(),
+                        upstream_sha1: Some("1".repeat(40)),
+                    },
+                    sha256: "2".repeat(64),
+                    size: 100,
+                    path: "libraries/authlib-injector.jar".to_string(),
+                    native_extraction: None,
+                },
+            ],
+            generated_files: Vec::new(),
+            eula: None,
+        }
+    }
+
     #[test]
     fn strict_lock_roundtrip_preserves_portable_paths() {
         let directory = tempfile::tempdir().unwrap();
@@ -672,6 +798,19 @@ mod tests {
     }
 
     #[test]
+    fn client_lock_roundtrip_preserves_asset_index_provenance_and_runtime_name() {
+        let directory = tempfile::tempdir().unwrap();
+        LockFile::new(directory.path(), client_lock())
+            .save()
+            .unwrap();
+        let lock = LockFile::open(directory.path()).unwrap();
+        let asset_index = lock.inner.minecraft.asset_index.unwrap();
+
+        assert_eq!(asset_index.upstream_id, "32");
+        assert_eq!(asset_index.runtime_name, "f".repeat(40));
+    }
+
+    #[test]
     fn lock_rejects_parent_paths_and_duplicate_owned_files() {
         let mut lock = server_lock();
         lock.generated_files.push("../outside".to_string());
@@ -680,5 +819,16 @@ mod tests {
         let mut lock = server_lock();
         lock.generated_files.push("server.jar".to_string());
         assert!(lock.validate().is_err());
+    }
+
+    #[test]
+    fn client_lock_binds_runtime_asset_name_to_artifact_content() {
+        let lock = client_lock();
+        lock.validate().unwrap();
+
+        let mut mismatched = lock.clone();
+        let asset_index = mismatched.minecraft.asset_index.as_mut().unwrap();
+        asset_index.runtime_name = "0".repeat(40);
+        assert!(mismatched.validate().is_err());
     }
 }

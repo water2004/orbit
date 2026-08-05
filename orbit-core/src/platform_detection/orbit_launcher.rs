@@ -17,7 +17,7 @@ use crate::metadata::Environment;
 const MANIFEST_FILE: &str = "orbit-launcher.toml";
 const LOCK_FILE: &str = "orbit-launcher.lock";
 const MANIFEST_SCHEMA: u32 = 1;
-const LOCK_SCHEMA: u32 = 5;
+const LOCK_SCHEMA: u32 = 6;
 
 pub(super) fn discover(
     instance_dir: &Path,
@@ -533,7 +533,7 @@ mod tests {
         std::fs::write(
             instance.join(LOCK_FILE),
             format!(
-                r#"schema = 5
+                r#"schema = 6
 instance_id = "f42a6bda-35dc-4ca7-8883-ec74814f0b8f"
 kind = "client"
 

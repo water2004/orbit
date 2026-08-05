@@ -249,7 +249,9 @@ cache/
 
 ```text
 <minecraft-directory>/
-  assets/                    客户端共享官方资源
+  assets/
+    indexes/<sha1>.json      按内容寻址的客户端资源索引
+    objects/<prefix>/<sha1>  客户端共享的内容寻址资源对象
   libraries/                 客户端共享 Minecraft/Loader 库
   instances/
     <instance-name>/         客户端隔离 game directory
@@ -352,6 +354,12 @@ HMCL 作为行为基准的方式是建立差分 fixture：同一份官方 Minecr
 - feature、OS name/version/arch 规则；
 - main class、classpath 顺序和 placeholder；
 - Java component 与 major version 要求。
+
+Mojang 的 `assetIndex.id` 只作为上游来源标识，不作为共享文件的唯一键。上游可能在不改变
+该 ID 的情况下修订 version JSON 和 asset index；因此索引必须以其已校验 SHA-1 保存为
+`assets/indexes/<sha1>.json`。lock 同时记录上游 ID 和作为实际运行时名称的 SHA-1，启动时
+`${assets_index_name}` 只展开为后者。不同内容的同名上游索引必须并存，禁止覆盖；
+`assets/objects` 仍按对象 SHA-1 在全部客户端实例之间共享。
 
 版本继承必须先构造可测试的 `ResolvedVersion`，后续下载和启动只能消费解析结果，不能
 在命令生成时再次临时合并 JSON。

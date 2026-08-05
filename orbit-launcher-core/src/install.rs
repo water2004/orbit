@@ -35,8 +35,8 @@ use crate::layout::{INSTANCE_MINECRAFT_JAR, InstanceLocation};
 use crate::loader::{LoaderSide, ResolvedLoaderProfile, resolve_loader_profile};
 use crate::lockfile::{
     ArtifactOwner, INSTANCE_LOCK_FILE, LOCK_SCHEMA, LauncherLock, LockFile, LockedArguments,
-    LockedArtifact, LockedArtifactSource, LockedAuthlibInjector, LockedEntrypoint, LockedLoader,
-    LockedMinecraft, portable_relative_path,
+    LockedArtifact, LockedArtifactSource, LockedAssetIndex, LockedAuthlibInjector,
+    LockedEntrypoint, LockedLoader, LockedMinecraft, portable_relative_path,
 };
 use crate::mojang::{MojangClient, ResolvedVanillaServer, VERSION_MANIFEST_V2_URL};
 use crate::platform::HostPlatform;
@@ -788,7 +788,10 @@ where
         minecraft: LockedMinecraft {
             version: resolved.minecraft_version.clone(),
             version_type: resolved.version_type,
-            asset_index: Some(resolved.asset_index_id),
+            asset_index: Some(LockedAssetIndex {
+                upstream_id: resolved.asset_index.upstream_id.clone(),
+                runtime_name: resolved.asset_index.runtime_name.clone(),
+            }),
             version_manifest_url: VERSION_MANIFEST_V2_URL.to_string(),
             version_manifest_sha256: resolved.version_manifest_sha256,
             version_json_url: resolved.version_json_url,
@@ -1471,7 +1474,7 @@ fn materialize_legacy_assets(
         if resolved.legacy_virtual_assets {
             targets.push(format!(
                 "assets/virtual/{}/{}",
-                resolved.asset_index_id, mapping.logical_path
+                resolved.asset_index.runtime_name, mapping.logical_path
             ));
         }
         if resolved.map_assets_to_resources {
@@ -2044,6 +2047,13 @@ mod tests {
         InstanceLocation::server(dunce::canonicalize(root).unwrap()).unwrap()
     }
 
+    fn client_location(root: &Path, name: &str) -> InstanceLocation {
+        let minecraft_directory = dunce::canonicalize(root).unwrap();
+        let game_directory = minecraft_directory.join("instances").join(name);
+        std::fs::create_dir_all(&game_directory).unwrap();
+        InstanceLocation::client(minecraft_directory, game_directory).unwrap()
+    }
+
     #[test]
     fn installer_profile_cleanup_removes_only_installer_metadata() {
         let directory = tempfile::tempdir().unwrap();
@@ -2133,6 +2143,54 @@ mod tests {
         assert_eq!(
             std::fs::read(directory.path().join("server.jar")).unwrap(),
             b"user file"
+        );
+    }
+
+    #[test]
+    fn content_addressed_asset_indexes_coexist_across_client_instances() {
+        let directory = tempfile::tempdir().unwrap();
+        let first = client_location(directory.path(), "first");
+        let second = client_location(directory.path(), "second");
+        let first_index = format!("assets/indexes/{}.json", "a".repeat(40));
+        let second_index = format!("assets/indexes/{}.json", "b".repeat(40));
+
+        let first_transaction = InstallTransaction::begin(&first, "install").unwrap();
+        write_staged_file(&first_transaction.staging, &first_index, b"old index").unwrap();
+        write_staged_file(
+            &first_transaction.staging,
+            &first_transaction.lock_relative,
+            b"first lock",
+        )
+        .unwrap();
+        first_transaction
+            .commit(&[
+                first_index.clone(),
+                first.instance_relative_path(INSTANCE_LOCK_FILE).unwrap(),
+            ])
+            .unwrap();
+
+        let second_transaction = InstallTransaction::begin(&second, "install").unwrap();
+        write_staged_file(&second_transaction.staging, &second_index, b"new index").unwrap();
+        write_staged_file(
+            &second_transaction.staging,
+            &second_transaction.lock_relative,
+            b"second lock",
+        )
+        .unwrap();
+        second_transaction
+            .commit(&[
+                second_index.clone(),
+                second.instance_relative_path(INSTANCE_LOCK_FILE).unwrap(),
+            ])
+            .unwrap();
+
+        assert_eq!(
+            std::fs::read(directory.path().join(first_index)).unwrap(),
+            b"old index"
+        );
+        assert_eq!(
+            std::fs::read(directory.path().join(second_index)).unwrap(),
+            b"new index"
         );
     }
 

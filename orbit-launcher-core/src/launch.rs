@@ -780,7 +780,12 @@ fn build_placeholders(
         .map_err(|error| LauncherError::Launch(format!("invalid classpath: {error}")))?
         .to_string_lossy()
         .into_owned();
-    let asset_index = lock.minecraft.asset_index.clone().unwrap_or_default();
+    let asset_index = lock
+        .minecraft
+        .asset_index
+        .as_ref()
+        .map(|asset_index| asset_index.runtime_name.clone())
+        .unwrap_or_default();
     let mut values = BTreeMap::from([
         (
             "${natives_directory}",

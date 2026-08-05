@@ -178,7 +178,8 @@ component/major。新建、更新和修复复用这些只读目录与同一个 `
 严格执行 Mojang 的顺序规则、library/classifier、asset index、logging 配置与 native 选择
 语义；安装只保存经校验的 native classifier JAR 及排除规则，启动准备阶段才重建实例自己的
 `natives` 目录，不在安装阶段做无意义的全量解压。相同 asset 内容按哈希下载一次，但会保留
-全部 legacy virtual/resources 逻辑映射。
+全部 legacy virtual/resources 逻辑映射。asset index 同样按已校验 SHA-1 命名；Mojang 的
+`assetIndex.id` 仅记录为来源事实，不能造成不同索引内容争用同一个共享文件。
 文件按上游 SHA-1 校验后进入本地 SHA-256 CAS；下载可并发，runtime 和实例分别在 staging
 中验证后原子提交。旧 lock 拥有但新精确状态不再需要的文件会在同一事务中移除；目标位置
 已有但不属于旧 lock 的文件时拒绝覆盖。实例写事务使用跨进程独占文件锁；进程崩溃留下的

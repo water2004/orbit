@@ -31,9 +31,25 @@ pub struct ResolvedVanillaClient {
     pub asset_mappings: Vec<AssetMapping>,
     pub classpath: Vec<String>,
     pub minecraft_jar: String,
-    pub asset_index_id: String,
+    pub asset_index: ResolvedAssetIndex,
     pub legacy_virtual_assets: bool,
     pub map_assets_to_resources: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedAssetIndex {
+    /// Identifier published by Mojang. It is provenance only: Mojang may
+    /// publish different index contents under the same identifier.
+    pub upstream_id: String,
+    /// Content-addressed name passed to Minecraft at runtime and used for the
+    /// file below `assets/indexes`.
+    pub runtime_name: String,
+}
+
+impl ResolvedAssetIndex {
+    pub fn artifact_path(&self) -> String {
+        format!("assets/indexes/{}.json", self.runtime_name)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -203,7 +219,21 @@ pub async fn resolve_vanilla_client(
             document.id
         ))
     })?;
+    if asset_index.id.is_empty()
+        || asset_index.id.trim() != asset_index.id
+        || asset_index.id.chars().any(char::is_control)
+    {
+        return Err(LauncherError::InvalidRemoteData(format!(
+            "Minecraft '{}' publishes an invalid asset index ID",
+            document.id
+        )));
+    }
     asset_index.download.validate("asset index")?;
+    let asset_index_runtime_name = asset_index.download.sha1.clone();
+    let resolved_asset_index = ResolvedAssetIndex {
+        upstream_id: asset_index.id.clone(),
+        runtime_name: asset_index_runtime_name,
+    };
     let asset_bytes = fetch_bounded(
         mojang.http_client(),
         &asset_index.download.url,
@@ -227,7 +257,7 @@ pub async fn resolve_vanilla_client(
         request: asset_index
             .download
             .request(format!("Minecraft {} asset index", asset_index.id))?,
-        target: format!("assets/indexes/{}.json", asset_index.id),
+        target: resolved_asset_index.artifact_path(),
         owner: ArtifactOwner::Minecraft,
         native_extract: None,
     });
@@ -334,7 +364,7 @@ pub async fn resolve_vanilla_client(
         asset_mappings,
         classpath,
         minecraft_jar: client_target,
-        asset_index_id: asset_index.id,
+        asset_index: resolved_asset_index,
         legacy_virtual_assets: assets.virtual_assets,
         map_assets_to_resources: assets.map_to_resources,
     })
@@ -822,7 +852,10 @@ mod tests {
             asset_mappings: Vec::new(),
             classpath: vec![original],
             minecraft_jar: "versions/1.21.1/1.21.1.jar".to_string(),
-            asset_index_id: "1.21".to_string(),
+            asset_index: ResolvedAssetIndex {
+                upstream_id: "1.21".to_string(),
+                runtime_name: "0".repeat(40),
+            },
             legacy_virtual_assets: false,
             map_assets_to_resources: false,
         };
@@ -832,6 +865,25 @@ mod tests {
         assert_eq!(resolved.minecraft_jar, isolated);
         assert_eq!(resolved.downloads[0].target, resolved.minecraft_jar);
         assert_eq!(resolved.classpath, [resolved.minecraft_jar.clone()]);
+    }
+
+    #[test]
+    fn mutable_upstream_asset_index_ids_resolve_to_distinct_content_paths() {
+        let original = ResolvedAssetIndex {
+            upstream_id: "32".to_string(),
+            runtime_name: "a".repeat(40),
+        };
+        let revised = ResolvedAssetIndex {
+            upstream_id: "32".to_string(),
+            runtime_name: "b".repeat(40),
+        };
+
+        assert_eq!(original.upstream_id, revised.upstream_id);
+        assert_eq!(
+            original.artifact_path(),
+            format!("assets/indexes/{}.json", "a".repeat(40))
+        );
+        assert_ne!(original.artifact_path(), revised.artifact_path());
     }
 
     #[tokio::test]
@@ -849,6 +901,15 @@ mod tests {
         );
         assert!(resolved.asset_mappings.len() >= 1000);
         assert!(resolved.downloads.len() <= resolved.asset_mappings.len() + 100);
+        let asset_index = resolved
+            .downloads
+            .iter()
+            .find(|download| download.target == resolved.asset_index.artifact_path())
+            .expect("resolved asset index is in the download queue");
+        assert_eq!(
+            asset_index.request.expected_hash,
+            ExpectedHash::Sha1(resolved.asset_index.runtime_name)
+        );
     }
 
     #[tokio::test]
