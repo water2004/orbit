@@ -152,9 +152,10 @@ JAR `mod_id` 不会被拿去猜 provider slug，resolver 也没有联网补抓�
 长事务通过 core 的强类型 `ProgressEvent` 暴露进度，core 不写 stdout/stderr。CLI
 把同一事件流渲染为交互式 spinner/进度条，非终端环境退化为逐项文本。事件边界与上述
 数据流一致：版本库变更检查、project 闭包发现、候选 JAR 下载/校验/解析、离线求解、选中包物化。
-并发下载任务只上报结构化完成计数，不各自操作终端。求解进度直接来自 fork observer：
-enumeration continuation 与 maximality probe 的 start/finish 动态扩展并完成工作总量；
-probe 内部路径不进入成功解原因轨迹。
+并发下载任务只上报结构化完成计数，不各自操作终端。求解进度直接来自 fork observer，
+但 core 会把高频 decision、propagation、backtrack 与 conflict 合并成有节流的累计快照；
+enumeration continuation 与 maximality probe 只扩展动态工作总量。偏好冲突核心的分支搜索
+同样只汇报累计工作量，内部尝试不会进入最终成功解的原因轨迹。
 
 求解包的身份恒为 JAR 声明的 `mod_id`。同一 ID 的多个顶层 `.jar` / `.jar.disabled` 是同一个包
 的多个候选，最终每包只选一个。候选以本地计算的内容哈希保持唯一；完全相同的字节跨
@@ -227,8 +228,9 @@ Jar-in-Jar artifact 使用独立的 Maven 坐标包并精确绑定 owner 候选�
 `add` / `fix` / `constraint set` 以当前 lock 为基线枚举标准 Pareto 极小逻辑包变更集合；
 `upgrade` / `outdated` 枚举标准版本 Pareto 极大 front。迁移先要求全部源包；严格无解且
 用户许可后，以源 manifest 包的保留状态枚举标准 Pareto 极小删除集合。极小变更或删除集合
-固定后仍以版本极大作为次级目标。fork 对每个保留点
-一次排除完整支配区域。唯一解自动选择，多解由调用方选择；任何降级、替换或删除都在写盘
+按完整依赖/不兼容图划分成安全的独立因子；fork 用冲突证明原生枚举每个因子的极小删除
+赋值，调用方逐因子选择后才以版本极大作为次级目标。这样解空间按因子之和传递，不构造
+“删除组合 × 版本方案”的笛卡尔积。唯一解自动选择，多解由调用方选择；任何降级、替换或删除都在写盘
 前展示并确认。upgrade 方案只要求至少一个包相对当前版本变新，允许其他包降级。
 
 `sync` 只调用可用 provider 的批量哈希识别接口，把本地精确内容恢复为
@@ -321,7 +323,7 @@ Orbit 不能仅凭字节码完整证明：
 | Modrinth | `modrinth-wrapper` + core adapter，可用 |
 | 本地 `file:` | 可用 |
 | CurseForge | `curseforge-wrapper` + core adapter，可用；无 API Key 时 provider 无法创建，Core API 与 CDN 下载均认证 |
-| PubGrub fork | 已发布并固定到 `914cf645982ba790090652bf3a09d934de857408` |
+| PubGrub fork | 已发布并固定到 `19e9622e48fe37f62abd9e270e356aab5ec2e2f6` |
 | 多个 Pareto 解 | fork 原生完整枚举变更极小或版本极大 front；唯一解自动选择，多解交给调用方选择 |
 
 ## 9. 跨平台运行环境

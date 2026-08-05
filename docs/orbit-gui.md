@@ -53,6 +53,8 @@ page 猜测，也不以替换字符掩盖损坏。JSON 的字段名、枚举码�
 
 GUI 对 schema 严格匹配；旧 schema 直接显示 protocol error，不猜字段。Orbit 的包身份、
 Pareto 方案和写盘确认都在 CLI/core 的同一执行路径中产生，GUI 只将暂停点渲染为可读卡片。
+独立的迁移删包取舍会由同一个 CLI 进程依次发出多个 `resolution` interaction；prompt 明确
+标注当前因子序号、因子总数和所代表的完整组合数，GUI 不在本地展开组合。
 方案中共同动作只显示一次，`different: true` 的选项差异用 `◆` 与文字同时突出。物理 JAR
 文件名和候选哈希不作为包名或方案标题展示。resolution 选项只按包显示安装、升级、降级、
 替换、移除或保持以及版本变化，不显示 `warnings=0`、`diagnostics=0` 或 JSON 字段计数。
@@ -115,7 +117,8 @@ Orbit CLI/core。用户取消迁移方案或写盘确认时，GUI 不会继续�
 迁移页不提供常驻的“严格/软”策略控件。`migrate check` 总是先要求保留全部源包；严格图
 无解时，CLI 在 stderr 发出 schema 2 confirmation interaction 并暂停读取 stdin，GUI 将
 冲突和“搜索 Pareto 极小删包方案”动作渲染为模态确认，再把 choice id 写回同一子进程。
-软解完成后仍用通用 resolution interaction 选择互不支配方案。审阅结果确有删除时，GUI
+软解按约束图的独立因子用通用 resolution interaction 逐组选择，随后只对合并后的删包赋值
+枚举版本方案；版本仍有多个互不支配解时再发出一次通用 resolution interaction。审阅结果确有删除时，GUI
 给随后的 export 增加 `--allow-removals`，表示复用用户刚刚作出的许可，避免重复询问；GUI
 不自行计算删除集合或选择方案。
 

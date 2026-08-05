@@ -145,7 +145,10 @@ The migration GUI sequence is intentionally transactional:
 Migration has no up-front retention strategy selector. Orbit first requires every source package.
 Only when that graph is unsatisfiable does the same CLI process show the incompatibility and ask
 whether to search the standard Pareto-minimal package-removal front. Automation may provide the same
-consent with `--allow-removals`; incomparable soft solutions still require an explicit choice.
+consent with `--allow-removals`. Independent removal trade-offs are returned as a factored product:
+the CLI asks once per factor instead of expanding every Cartesian combination, then enumerates the
+version Pareto front only for the selected removal assignment. Every remaining incomparable choice
+still requires an explicit decision.
 
 ### Launcher
 

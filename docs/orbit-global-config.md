@@ -177,11 +177,11 @@ orbit config unset network.proxy
 
 在线 add/fix/migrate/outdated/upgrade 会分别呈现 project 闭包发现、候选 JAR
 下载/缓存校验/解析、离线求解和最终物化。候选 JAR 阶段有精确的 `已完成/总数`；
-发现闭包无法预知远端递归总量，因此使用带已用时间的 spinner。多解枚举则把实际开始的
-continuation run 和 maximality probe 作为工作单元：新分支出现时总量增长，完成时进度
-推进，并同步显示 decision、propagation、backtrack、conflict 与已保留解计数。这个
-动态计数用于证明阶段和活动状态，不预测剩余耗时；Pareto 或 co-Pareto front 本身仍可能
-很大。
+发现闭包无法预知远端递归总量，因此使用带已用时间的 spinner。多解枚举以累计快照报告
+实际发现/完成的工作，并同步显示 decision、propagation、backtrack、conflict 与已保留
+解计数；快照经过节流，不会把每个求解器内部事件跨层发送。这个动态计数用于证明阶段和
+活动状态，不预测剩余耗时；独立迁移权衡按因子呈现，但单个因子或最终版本 Pareto front
+本身仍可能很大。
 
 `orbit audit` 复用同一 UI 开关，但使用独立的审计强类型事件：按实际阶段和已知总量显示
 classpath 准备、artifact、Mixin、Transformer 与冲突分析。plain 模式按比例节流，

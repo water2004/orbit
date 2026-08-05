@@ -128,11 +128,12 @@
   launcher 选择且版本可验证的 runtime game JAR。mapping/Plugin/类定义证据不完整时
   降为 readiness/coverage/inactive，不生成确定风险。
 - PubGrub fork 已发布到 `water2004/pubgrub` 的 `codex/solver-observer` 分支；
-  Orbit 固定到 `914cf645982ba790090652bf3a09d934de857408`。
+  Orbit 固定到 `19e9622e48fe37f62abd9e270e356aab5ec2e2f6`。
 - 当前 fork 原生支持 `P = mod_id`、不透明复合候选版本、调用方定义
   `same_version` / `strictly_higher`、包状态偏好以及完整 Pareto front 枚举；同声明版本的不同内容身份
-  会以各自 JAR 约束参与求解，但相同语义投影不会凭空扩成多个用户解。每个保留点会一次
-  排除完整支配区域，无效版本序回调会在产生错误排除前失败。add/fix 对未满足基线偏好的
+  会以各自 JAR 约束参与求解，但相同语义投影不会凭空扩成多个用户解。偏好求解从不可解
+  推导提取冲突核心、只分支核心成员并剪除已知极小删除集的超集；独立约束闭包返回为因子，
+  不展开选项乘积。无效版本序回调会在产生错误排除前失败。add/fix 对未满足基线偏好的
   逻辑包集合做标准 Pareto 极小，再在固定集合内做版本极大；upgrade 的“至少一个包变新、
   其他包可降级”则是对版本 Pareto 极大解的操作分类。
 - 远端 project relation 会递归构造下载闭包；JAR `mod_id` 从不作为 slug/project
@@ -152,8 +153,8 @@
   `remote list` 不显示哈希。相同版本的不同候选用 provider project/release 与实际
   JAR 依赖差异解释。
 - project 闭包的总工作量事前未知，因此显示当前 locator、已发现 artifact 与耗时。
-  Pareto 枚举的总量随 continuation run、preference probe、maximality probe 的实际发现而增长，完成数同步
-  推进；它不构成剩余耗时上界，Pareto 或 co-Pareto front 本身仍可能很大。候选 JAR
+  Pareto 枚举把实际发现/完成的工作和内部计数合并为有节流的累计快照；总量可随新区域
+  增长，它不构成剩余耗时上界。独立迁移权衡按因子交互，不展开完整方案乘积。候选 JAR
   下载/校验/解析及最终物化使用预先稳定的精确总数。远端准备受全局并发上限约束；最终
   实例写入按确定顺序发布，避免把并发下载优化错误扩展成并发修改同一实例。
 

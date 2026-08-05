@@ -67,16 +67,25 @@ Pareto 点后，fork 一次排除它支配的整个区域，而不是逐个阻�
 内部包允许变化，也不会制造重复的用户解。这些 API 仍然只理解通用
 package/version/constraint，不包含 Jar-in-Jar、loader 或 Orbit 类型。
 
-`resolve_minimal_change_solutions_with_observer()` 则接受一组独立的包状态偏好，并枚举
+`resolve_minimal_change_solutions_with_observer()` 则接受一组包状态偏好，并枚举
 未满足偏好集合按包含关系 Pareto 极小的全部解。若一个解未满足的偏好集合是另一解的真
 超集，它会被排除；互不包含的集合都会保留。因此这是标准集合 Pareto 极小，不是最小基数、
-加权打分或按枚举顺序挑一个。偏好集合固定后，fork 再用上述版本序枚举该变更集合内的
-版本 Pareto 极大 front。偏好 probe 与 maximality probe 都是 fork 的原生求解阶段，
-Orbit 不循环调用黑盒可行性测试。
+加权打分或按枚举顺序挑一个。枚举从同一次不可解推导中的强制偏好子句提取冲突核心，只对
+核心成员建立删除分支，并用已知极小删除集合剪除其全部超集；这避免了每得到一个保留点就
+重新线性探测全部包。偏好集合固定后，fork 再用上述版本序枚举该变更集合内的版本 Pareto
+极大 front。所有分支、原因与次级目标都在 fork 内，不由 Orbit 循环调用黑盒求解。
 
-probe 的 start/finish 事件带有结果。成功 probe 中的决定、传播和回溯成为当前候选的
-真实路径；失败 probe 的 observer 状态回滚。因此最终诊断仍来自产生该 Pareto 解的
-实际推导，不是事后反事实重跑。
+fork 同时提供 `resolve_factored_preference_solutions_with_observer()`：调用方把已证明约束闭包
+互不相交的偏好分量交给它，返回公共决定和多个 `PreferenceFactor`。每个因子保存自身的
+Pareto 极小替代项，完整解数量是各因子项数的乘积，但 API 不物化这个乘积。调用方选定每个
+因子后，将合并的 `PreferenceDecision` 一次性交给
+`resolve_maximal_solutions_for_preference_decisions_with_observer()`；求解器重新验证组合并只在
+该组合内枚举版本 front。普通依赖边、所有候选版本以及 provider 多项不兼容子句都会参与
+Orbit 的分量计算；固定 Root/Platform 只施加约束，不会把独立包错误地粘在一起。
+
+冲突核心枚举直接读取不可解推导中的强制偏好，不另建反事实原因路径。选定各因子后，
+最终版本 Pareto front 由一次受决定约束的真实求解产生；诊断只消费这条求解路径，失败
+分支不会混入最终原因。因此解释仍来自产生候选的实际推导，不是事后重跑出来的证明。
 
 Orbit 已核对过这项 API 与当前包语义的边界：`P` 直接使用 JAR 声明的 `mod_id`，`V` 是
 求解器视为不透明值的复合候选。Orbit 分别提供 `same_version(V)`、
@@ -206,10 +215,10 @@ Forge-family Jar-in-Jar 的 Maven 坐标是逻辑 artifact 包。每个内嵌 ar
 
 这些边界同时是进度事件边界。版本库先报告批量检查、刷新/复用 project 与动态增长的
 project 总量；队列稳定后按去重内容报告候选 JAR 完成数；纯离线求解报告包/候选规模和
-动态工作量。fork 对每个 enumeration continuation run、preference probe 和 maximality probe 发出成对
-start/finish 事件；UI 在 start 时扩大总量，在 finish 时推进，并额外显示 decision、
-propagation、backtrack、conflict 与 retained solution 计数。probe 内部决策仍使用
-noop observer，不能污染用于解释候选淘汰原因的成功路径。
+动态工作量。core 将 observer 的工作发现/完成数以及 decision、propagation、backtrack、
+conflict、retained solution 计数合并为有节流的累计 `ResolutionAdvanced` 快照，而不是
+为每个内部事件跨层发送消息。偏好冲突核心的分支求解使用 noop observer；最终诊断仍只
+消费选定组合的真实版本求解路径。
 
 provider 的 dependency relation 仅用于定位下一批 project，不携带可信的 required、
 版本或 `mod_id` 语义。JAR dependency 也不会反向触发 provider 查询，因为 `mod_id`
@@ -250,9 +259,11 @@ dry-run 仍会在多解时请求选择，因为它预览的必须是一个确定
 写入确认，不能替用户挑选真实包身份或 Pareto 解。stdin 关闭、取消或无效机器响应都会
 终止选择，不能回退到枚举顺序中的第一个。
 
-fork 对每个保留点排除完整支配区域，因此独立包的低版本不会形成需要逐项检查的笛卡尔积。
-Pareto front 或 co-Pareto front 本身仍可能很大；动态工作量说明求解器正在检查新区域，
-但不是完成时间上界。
+fork 用不可解推导的冲突核心枚举标准 Pareto 极小删除集，并剪除已知极小集合的全部超集。
+Orbit 再把依赖闭包互不相交的删除权衡表示成因子；完整删除方案数可以是各因子选项数的
+巨大乘积，但既不在内存中展开，也不要求用户从平铺列表中选择。版本 Pareto front 只在
+用户选定因子组合后求一次。单个因子内部或最终版本 front 本身仍可能很大；动态工作量只
+说明求解器仍在检查新区域，不是完成时间上界。
 
 ## 7. 本地、安装与恢复路径
 
@@ -337,5 +348,5 @@ store；`mods/` 仍只由后续 `install` 从最终 lock 物化。
 - CurseForge：需要用户 API Key；API 没有可用下载 URL 时返回可恢复的明确错误，不
   猜测 CDN 地址。
 - 远端 fork：功能分支已发布；Orbit 通过完整 commit SHA
-  `914cf645982ba790090652bf3a09d934de857408` 固定依赖，不跟随可移动分支头。
+  `19e9622e48fe37f62abd9e270e356aab5ec2e2f6` 固定依赖，不跟随可移动分支头。
 - 静态字节码判断：只给出必要条件，不宣称能完整证明模组运行时兼容。

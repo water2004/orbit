@@ -805,20 +805,18 @@ Orbit Launcher 直接使用 `orbit-machine-protocol` 中同一个信封类型，
 | `download` | `CandidateArtifact` | `{completed, total, state}`，`state` ∈ `started`/`finished`/`cached`/`failed` |
 | `download` | `CandidateDownloadFinished` | `{total}` |
 | `resolution` | `ResolutionStarted` | `{packages, candidates}` |
-| `resolution` | `ResolutionWorkStarted` | `{work}`，`work` 见下 |
-| `resolution` | `ResolutionWorkFinished` | `{work}` |
-| `resolution` | `ResolutionActivity` | `{activity}` |
+| `resolution` | `ResolutionAdvanced` | `{work_discovered, work_completed, decisions, propagations, backtracks, conflicts, solutions, current}` 的累计快照 |
 | `resolution` | `ResolutionFinished` | `{solutions}` |
 | `apply` | `ApplyStarted` | `{total}` |
 | `apply` | `ApplyArtifact` | `{completed, total, state}` |
 | `apply` | `ApplyFinished` | `{total}` |
 
-`work` 对象：`{"kind":"enumeration_run","run":1}`、
-`{"kind":"preference_probe","package":"sodium"}` 或
-`{"kind":"maximality_probe","package":"sodium"}`。preference probe 用于 `add` / `fix`
-的 Pareto 极小变更枚举；maximality probe 用于固定变更集合后的版本极大化以及
-`upgrade` / `outdated`。
-`activity` 对象：`{"kind":"decision","package":"sodium"}` / `{"kind":"propagation",...}` / `{"kind":"backtrack","from_level":3,"to_level":1}` / `{"kind":"conflict"}` / `{"kind":"solution"}`。
+`ResolutionAdvanced` 的计数均从本次 resolution 起单调累计；Core 最多每 100ms 或每 512 个
+内部事件发布一次，阶段边界和最终状态会强制刷新。`current` 是可本地化的结构化对象：
+`{"kind":"enumeration","run":1}`、`{"kind":"preference_preservation","package":"sodium"}`、
+`{"kind":"version_maximization","package":"sodium"}` 或
+`{"kind":"decision","package":"sodium"}`。前端用 `work_completed/work_discovered` 更新动态
+进度条，不能把它解释为预计剩余时间，也不能重新累计快照字段。
 
 ### audit 进度事件
 
@@ -865,7 +863,7 @@ Orbit Launcher 直接使用 `orbit-machine-protocol` 中同一个信封类型，
 | `interaction` | 说明 |
 |---|---|
 | `package` | 在同一 provider locator 返回的多个可行 JAR `mod_id` 中选择 |
-| `resolution` | 在命令对应的完整 Pareto front 中选择（`add`/`fix` 为变更极小，`upgrade`/`outdated` 为版本极大）；`data` 只含包动作，`data.changes[].different=true` 是不依赖颜色的差异标记，`kind=keep` 明确表示该方案不执行另一方案中的动作；`selected_artifact` 只含所选顶层 JAR basename，不含目录 |
+| `resolution` | 在命令对应的 Pareto 选择点中选择（`add`/`fix` 为变更极小，`upgrade`/`outdated` 为版本极大；迁移可对独立删包因子依次发送多个 interaction，最后再发送所选删包赋值下的版本选择）；`data` 只含包动作，`data.changes[].different=true` 是不依赖颜色的差异标记，`kind=keep` 明确表示该方案不执行另一方案中的动作；`selected_artifact` 只含所选顶层 JAR basename，不含目录 |
 | `confirmation` | 查看精确逻辑包事务并决定是否写入；或在 `interaction_id` 以 `migration_removals-` 开头时，查看严格迁移无解原因并决定是否搜索 Pareto 极小删包方案 |
 
 `--yes` 只跳过写入确认，不会跳过 `package`、`resolution` 或迁移删包许可。后者必须由交互
