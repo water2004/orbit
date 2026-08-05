@@ -226,6 +226,7 @@ pub struct JavaRequirement {
 pub struct InstalledPackage {
     pub mod_id: String,
     pub version: String,
+    pub enabled: bool,
     pub icon_path: Option<String>,
     #[serde(default)]
     pub remotes: Vec<String>,

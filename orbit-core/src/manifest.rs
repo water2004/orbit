@@ -157,6 +157,10 @@ pub struct PackageSpec {
         skip_serializing_if = "is_all_string"
     )]
     pub string: String,
+    /// Whether the top-level carrier is visible to the Loader. Disabled
+    /// packages remain managed and locked but use a `.jar.disabled` filename.
+    #[serde(default = "default_enabled", skip_serializing_if = "is_true")]
+    pub enabled: bool,
     #[serde(default, skip_serializing_if = "is_false")]
     pub optional: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -175,6 +179,10 @@ fn default_string_expression() -> String {
     "all".to_string()
 }
 
+fn default_enabled() -> bool {
+    true
+}
+
 fn is_all_string(value: &String) -> bool {
     value == "all"
 }
@@ -183,11 +191,16 @@ fn is_false(value: &bool) -> bool {
     !*value
 }
 
+fn is_true(value: &bool) -> bool {
+    *value
+}
+
 impl PackageSpec {
     pub fn new(version: impl Into<String>, remotes: Vec<PackageRemote>) -> Self {
         Self {
             version: version.into(),
             string: default_string_expression(),
+            enabled: true,
             optional: false,
             env: None,
             exclude: Vec::new(),
@@ -205,6 +218,10 @@ impl PackageSpec {
 
     pub fn env(&self) -> Option<crate::metadata::Environment> {
         self.env
+    }
+
+    pub fn enabled(&self) -> bool {
+        self.enabled
     }
 
     /// Resolve the optional user filter against the selected JAR's declaration.

@@ -132,7 +132,7 @@ provider slug、project ID、下载 URL 和嵌套路径都不能成为 `SolverPa
 
 远端顶层候选的 `source` 是 Orbit 对实际字节计算的内容哈希；已安装候选也优先使用
 内容哈希。哈希只保证两个具体候选不被错误覆盖，不参与版本高低比较，也不进入正常
-CLI 文本。顶层 `mods/*.jar` 是包的具体候选，身份中的 `path` 为空且
+CLI 文本。顶层 `mods/*.jar` / `mods/*.jar.disabled` 是包的具体候选，身份中的 `path` 为空且
 `owner == mod_id`。同一 `mod_id` 的多个顶层 JAR 是同一个包的不同候选，即使声明了
 相同版本也不能互相覆盖，因为依赖元数据或内容可能不同。最终解每个包只选择一个候选。
 

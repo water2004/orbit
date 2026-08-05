@@ -34,6 +34,7 @@ pub async fn handle(mod_name: Option<String>, ctx: &CliContext) -> Result<()> {
                 intent: InstallIntent::Upgrade,
                 optional: false,
                 env: None,
+                string: None,
             },
             super::install_interaction(ctx),
         )

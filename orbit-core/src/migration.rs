@@ -533,7 +533,11 @@ fn migration_lockfile(
             artifact,
             remotes,
             Some(candidate),
-        ));
+            source_manifest
+                .packages
+                .get(package)
+                .is_none_or(crate::manifest::PackageSpec::enabled),
+        )?);
     }
     packages.sort_by(|left, right| left.mod_id.cmp(&right.mod_id));
     let mut lockfile = OrbitLockfile {

@@ -154,6 +154,8 @@ pub(super) fn render(
                     }
                     let edit = package.clone();
                     let upgrade = package.mod_id.clone();
+                    let activation = package.mod_id.clone();
+                    let enable = !package.enabled;
                     let remove = package.mod_id.clone();
                     let mut facts = vec![
                         package_environment_label(&package.environment),
@@ -189,6 +191,12 @@ pub(super) fn render(
                                                     tr!("Optional").into_owned(),
                                                     cx,
                                                 ))
+                                            })
+                                            .when(!package.enabled, |row| {
+                                                row.child(ui::neutral_pill(
+                                                    tr!("Disabled").into_owned(),
+                                                    cx,
+                                                ))
                                             }),
                                     )
                                     .child(
@@ -210,6 +218,24 @@ pub(super) fn render(
                                             .on_click(cx.listener(move |this, _, _, cx| {
                                                 this.package_editor = Some(PackageEditor::new(edit.clone()));
                                                 this.load_package_versions(&edit.mod_id);
+                                                cx.notify();
+                                            })),
+                                    )
+                                    .child(
+                                        Button::new(("package-activation", index))
+                                            .icon(if package.enabled {
+                                                OrbitIcon::Close
+                                            } else {
+                                                OrbitIcon::Play
+                                            })
+                                            .ghost()
+                                            .tooltip(if package.enabled {
+                                                tr!("Disable").into_owned()
+                                            } else {
+                                                tr!("Enable").into_owned()
+                                            })
+                                            .on_click(cx.listener(move |this, _, _, cx| {
+                                                this.set_package_activation(&activation, enable);
                                                 cx.notify();
                                             })),
                                     )

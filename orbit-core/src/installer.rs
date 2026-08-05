@@ -38,6 +38,8 @@ pub struct InstallOptions {
     pub intent: InstallIntent,
     pub optional: bool,
     pub env: Option<String>,
+    /// Complete-version string rule supplied explicitly by the caller.
+    pub string: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -402,7 +404,8 @@ pub(crate) async fn repair_manifest_instance(
                 selected_source,
                 &resolved,
                 remotes,
-            ));
+                package_enabled(&manifest_file.inner, package),
+            )?);
             continue;
         }
 
@@ -427,7 +430,8 @@ pub(crate) async fn repair_manifest_instance(
             candidate_id,
             resolved,
             remotes,
-        ));
+            package_enabled(&manifest_file.inner, package),
+        )?);
     }
     already_satisfied.sort();
     let mut removals = package_removals(&resolution.changes);
@@ -437,7 +441,8 @@ pub(crate) async fn repair_manifest_instance(
         &resolution.selected_candidates,
         &catalog.resolved,
         &lock.inner,
-    ));
+        &manifest_file.inner,
+    )?);
     sort_and_deduplicate_removals(&mut removals);
     let preview = InstallReport {
         installed: planned.clone(),
@@ -593,7 +598,8 @@ pub async fn upgrade_all_in_instance(
             candidate_id,
             resolved,
             remotes,
-        ));
+            package_enabled(&manifest_file.inner, package),
+        )?);
     }
     let removals = package_removals(&resolution.changes);
 
@@ -719,6 +725,7 @@ pub struct ListedPackage {
     pub mod_id: String,
     pub version: String,
     pub version_constraint: String,
+    pub enabled: bool,
     pub remotes: Vec<String>,
     /// Explicit package filter; `None` means follow the selected JAR.
     pub configured_environment: Option<String>,
@@ -835,6 +842,7 @@ fn list_output(
                 version_constraint: requirement
                     .map(|specification| specification.version.clone())
                     .unwrap_or_else(|| "*".to_string()),
+                enabled: requirement.is_none_or(PackageSpec::enabled),
                 remotes: entry
                     .remotes
                     .iter()
@@ -986,8 +994,12 @@ async fn install_mod(input: InstallModInput<'_>) -> Result<InstallReport, OrbitE
                 .unwrap_or_default(),
         ));
     }
-    let requested_requirement =
-        requested_requirement(constraint, options.optional, options.env.as_deref())?;
+    let requested_requirement = requested_requirement(
+        constraint,
+        options.string.as_deref(),
+        options.optional,
+        options.env.as_deref(),
+    )?;
     emit_progress(
         progress.as_ref(),
         ProgressEvent::ResolutionStarted {
@@ -1049,7 +1061,8 @@ async fn install_mod(input: InstallModInput<'_>) -> Result<InstallReport, OrbitE
             candidate_id,
             resolved,
             package_remotes(mod_id, manifest, lockfile, &catalog),
-        ));
+            package_enabled(manifest, mod_id),
+        )?);
     }
 
     let report = InstallReport {
@@ -1278,7 +1291,34 @@ fn validate_install_lock(
             "orbit.lock target does not match orbit.toml; install never rewrites a solution, so run 'orbit fix' or rebuild factual state with 'orbit sync'"
         )));
     }
+    for entry in &lockfile.packages {
+        let Some(specification) = manifest.packages.get(&entry.mod_id) else {
+            continue;
+        };
+        let actual = crate::package_activation::mod_artifact_enabled(&entry.filename).ok_or_else(
+            || {
+                OrbitError::Other(anyhow::anyhow!(
+                    "orbit.lock package '{}' has unsupported physical filename '{}'; run 'orbit sync'",
+                    entry.mod_id,
+                    entry.filename
+                ))
+            },
+        )?;
+        if actual != specification.enabled {
+            return Err(OrbitError::Other(anyhow::anyhow!(
+                "package '{}' activation differs between orbit.toml and orbit.lock; run 'orbit sync'",
+                entry.mod_id
+            )));
+        }
+    }
     Ok(())
+}
+
+fn package_enabled(manifest: &OrbitManifest, package: &str) -> bool {
+    manifest
+        .packages
+        .get(package)
+        .is_none_or(PackageSpec::enabled)
 }
 
 pub(crate) fn package_remotes(
@@ -1305,7 +1345,8 @@ pub(crate) fn lock_entry_from_candidate(
     artifact: &crate::resolver::types::ResolvedArtifact,
     remotes: Vec<PackageRemote>,
     candidate: Option<&crate::resolver::types::CandidateVersion>,
-) -> PackageEntry {
+    enabled: bool,
+) -> Result<PackageEntry, OrbitError> {
     let dependencies = candidate
         .map(|candidate| candidate.dependencies.clone())
         .unwrap_or_default();
@@ -1318,13 +1359,13 @@ pub(crate) fn lock_entry_from_candidate(
                 .collect()
         })
         .unwrap_or_default();
-    PackageEntry {
+    Ok(PackageEntry {
         mod_id: package.to_string(),
         version: version.to_string(),
         sha1: artifact.sha1.clone(),
         sha256: artifact.sha256.clone(),
         sha512: artifact.sha512.clone(),
-        filename: artifact.filename.clone(),
+        filename: crate::package_activation::filename_for_activation(&artifact.filename, enabled)?,
         remotes,
         artifact_sources: artifact.sources.clone(),
         dependencies,
@@ -1339,7 +1380,7 @@ pub(crate) fn lock_entry_from_candidate(
             .map(|candidate| candidate.embedded_artifacts.clone())
             .unwrap_or_default(),
         bundled,
-    }
+    })
 }
 
 pub(crate) fn selected_packages(
@@ -1610,12 +1651,13 @@ fn plan_from_resolved(
     candidate_id: &str,
     artifact: &crate::resolver::types::ResolvedArtifact,
     remotes: Vec<PackageRemote>,
-) -> InstalledMod {
-    InstalledMod {
+    enabled: bool,
+) -> Result<InstalledMod, OrbitError> {
+    Ok(InstalledMod {
         candidate_id: Some(candidate_id.to_string()),
         mod_id: mod_id.to_string(),
         version: version.to_string(),
-        filename: artifact.filename.clone(),
+        filename: crate::package_activation::filename_for_activation(&artifact.filename, enabled)?,
         remotes,
         artifact_sources: artifact.sources.clone(),
         dependencies: Vec::new(),
@@ -1624,7 +1666,7 @@ fn plan_from_resolved(
         language_loader: None,
         embedded_artifacts: Vec::new(),
         bundled: Vec::new(),
-    }
+    })
 }
 
 async fn materialize_plans(
@@ -1657,13 +1699,16 @@ async fn materialize_plans(
             ))
         })?;
         let resolved = resolved_candidate(resolved_candidates, candidate_id)?;
+        let mut materialized = resolved.clone();
+        materialized.filename = plan.filename.clone();
         let dest_path =
-            materialize_resolved(resolved, instance_dir, mods_dir, providers, jar_cache).await?;
+            materialize_resolved(&materialized, instance_dir, mods_dir, providers, jar_cache)
+                .await?;
         let metadata = crate::jar::read_mod_metadata(&dest_path, loader)?;
         if metadata.mod_id != plan.mod_id || metadata.version != plan.version {
             return Err(OrbitError::Other(anyhow::anyhow!(
                 "downloaded JAR '{}' changed identity after resolution: expected {} {}, found {} {}",
-                resolved.filename,
+                materialized.filename,
                 plan.mod_id,
                 plan.version,
                 metadata.mod_id,
@@ -1740,7 +1785,8 @@ fn unselected_local_realizations(
     selected_candidates: &std::collections::BTreeMap<String, String>,
     resolved: &crate::resolver::types::ResolvedCandidates,
     previous_lock: &OrbitLockfile,
-) -> Vec<RemovedPackage> {
+    manifest: &OrbitManifest,
+) -> Result<Vec<RemovedPackage>, OrbitError> {
     let mut selected = std::collections::BTreeMap::<String, (String, String)>::new();
     for (package, source) in selected_sources {
         let hash = source
@@ -1759,10 +1805,14 @@ fn unselected_local_realizations(
                     .map(|entry| entry.filename.clone())
             })
             .unwrap_or_default();
+        let filename = crate::package_activation::filename_for_activation(
+            &filename,
+            package_enabled(manifest, package),
+        )?;
         selected.insert(package.clone(), (hash.to_string(), filename));
     }
 
-    local
+    Ok(local
         .iter()
         .filter_map(|realization| {
             let package = realization.mod_id.as_ref()?;
@@ -1776,7 +1826,7 @@ fn unselected_local_realizations(
                 filename: realization.filename.clone(),
             })
         })
-        .collect()
+        .collect())
 }
 
 pub(crate) fn normalize_selected_file_remotes(lockfile: &mut OrbitLockfile) {
@@ -1915,6 +1965,7 @@ fn apply_to_lockfile(lockfile: &mut OrbitLockfile, installed: &[InstalledMod], m
 
 fn requested_requirement(
     constraint: &str,
+    string: Option<&str>,
     optional: bool,
     env: Option<&str>,
 ) -> Result<PackageSpec, OrbitError> {
@@ -1927,9 +1978,12 @@ fn requested_requirement(
     } else {
         constraint.to_string()
     };
+    let string = string.unwrap_or("all");
+    crate::version_string::VersionStringRule::parse(string)?;
     Ok(PackageSpec {
         version,
-        string: crate::DEFAULT_NEW_PACKAGE_STRING.to_string(),
+        string: string.to_string(),
+        enabled: true,
         optional,
         env,
         exclude: Vec::new(),
@@ -2675,7 +2729,7 @@ physical_environment = "client"
         ensure_package_spec(
             &mut manifest,
             "actual-mod-id",
-            requested_requirement("^1", false, None).unwrap(),
+            requested_requirement("^1", None, false, None).unwrap(),
         );
 
         assert_eq!(
@@ -2684,8 +2738,29 @@ physical_environment = "client"
         );
         assert_eq!(
             manifest.packages["actual-mod-id"].string_expression(),
-            crate::DEFAULT_NEW_PACKAGE_STRING
+            "all"
         );
+    }
+
+    #[test]
+    fn requested_string_constraint_is_only_applied_when_explicit() {
+        let unrestricted = requested_requirement("*", None, false, None).unwrap();
+        assert_eq!(unrestricted.string_expression(), "all");
+
+        let explicit = requested_requirement(
+            "*",
+            Some("all; intersect not contains(i\"beta\")"),
+            false,
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            explicit.string_expression(),
+            "all; intersect not contains(i\"beta\")"
+        );
+
+        let error = requested_requirement("*", Some("not a rule"), false, None).unwrap_err();
+        assert!(error.to_string().contains("invalid string rule"));
     }
 
     #[test]
@@ -2694,25 +2769,31 @@ physical_environment = "client"
         ensure_package_spec(
             &mut manifest,
             "example",
-            requested_requirement("^1", false, None).unwrap(),
+            requested_requirement(
+                "^1",
+                Some("all; intersect contains(i\"release\")"),
+                false,
+                None,
+            )
+            .unwrap(),
         );
 
         ensure_package_spec(
             &mut manifest,
             "example",
-            requested_requirement("1.5", false, None).unwrap(),
+            requested_requirement("1.5", None, false, None).unwrap(),
         );
 
         assert_eq!(manifest.packages["example"].version_constraint(), "^1");
         assert_eq!(
             manifest.packages["example"].string_expression(),
-            crate::DEFAULT_NEW_PACKAGE_STRING
+            "all; intersect contains(i\"release\")"
         );
     }
 
     #[test]
     fn optional_environment_requirement_uses_full_manifest_form() {
-        let requirement = requested_requirement("^1", true, Some("client")).unwrap();
+        let requirement = requested_requirement("^1", None, true, Some("client")).unwrap();
 
         assert_eq!(requirement.version, "^1");
         assert!(requirement.optional);
@@ -2722,7 +2803,7 @@ physical_environment = "client"
 
     #[test]
     fn invalid_package_environment_is_rejected() {
-        let error = requested_requirement("*", false, Some("desktop")).unwrap_err();
+        let error = requested_requirement("*", None, false, Some("desktop")).unwrap_err();
 
         assert!(
             error

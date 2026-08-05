@@ -158,6 +158,7 @@ orbit [--output-format text|json] [--progress-format none|ndjson] <command> ...
         "mod_id": "sodium",
         "version": "0.5.8",
         "version_constraint": "=0.5.8",
+        "enabled": true,
         "icon_path": "/home/user/.cache/orbit/presentation/mod-icons/content.png",
         "remotes": ["modrinth:AANobbMI"],
         "configured_environment": null,
@@ -171,6 +172,7 @@ orbit [--output-format text|json] [--progress-format none|ndjson] <command> ...
 }
 ```
 
+`enabled` 是 TOML 与物理 `.jar` / `.jar.disabled` 已经对账后的 Loader 激活状态。
 `configured_environment: null` 表示 TOML 使用 `auto`；`environment` 是实际用于过滤
 的有效值：显式 TOML 设置优先，否则来自 lock 中精确候选的 JAR 声明。
 `version_constraint` 来自 TOML。所有选中顶层逻辑包都属于同一个完整 `[packages]` 集合，
@@ -199,6 +201,26 @@ orbit [--output-format text|json] [--progress-format none|ndjson] <command> ...
 
 `configured: null` 表示持久化状态为 `auto`；`effective` 来自当前 lock。尚无选中 lock
 候选时 `effective` 也为 `null`，将在候选 JAR 解析和选择后确定。
+
+### `enable` / `disable`
+
+```json
+{
+  "schema_version": 2,
+  "command": "disable",
+  "ok": true,
+  "result": {
+    "package": "sodium",
+    "previous_enabled": true,
+    "enabled": false,
+    "changed": true,
+    "dry_run": false
+  }
+}
+```
+
+机器结果只表达逻辑包状态，不泄漏物理文件路径。实际 `.jar` / `.jar.disabled` 文件名仍由
+lock 精确记录。
 
 ### `constraint` / `versions`
 

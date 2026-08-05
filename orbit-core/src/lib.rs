@@ -31,6 +31,7 @@ mod launcher;
 pub mod loader;
 pub mod migration;
 pub mod outdated;
+mod package_activation;
 pub mod package_constraint;
 pub mod package_versions;
 mod platform;
@@ -87,6 +88,7 @@ pub use outdated::{
     OutdatedInteraction, OutdatedMod, check_all_outdated, check_all_outdated_with_progress,
     check_outdated_with_interaction,
 };
+pub use package_activation::{PackageActivationReport, set_package_activation};
 pub use package_constraint::{
     PackageConstraintApplyOptions, PackageConstraintApplyReport, PackageConstraintState,
     PackageVersionPolicy, VersionComparison, apply_package_constraint, package_constraint,
@@ -106,7 +108,6 @@ pub use runtime::{
 pub use sync::{PlatformChange, SyncReport, sync_instance};
 pub use version_repository::{CandidateStorage, VersionRepository};
 pub use version_string::{
-    DEFAULT_NEW_PACKAGE_STRING, VersionStringInitialSet, VersionStringOperation,
-    VersionStringPredicate, VersionStringRule,
+    VersionStringInitialSet, VersionStringOperation, VersionStringPredicate, VersionStringRule,
 };
 pub use workspace::{Lockfile, ManifestFile};

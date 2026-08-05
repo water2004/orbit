@@ -138,6 +138,8 @@ where
 
 fn same_requirement_semantics(left: &PackageSpec, right: &PackageSpec) -> bool {
     left.version == right.version
+        && left.string == right.string
+        && left.enabled == right.enabled
         && left.optional == right.optional
         && left.env == right.env
         && left.exclude == right.exclude
@@ -166,8 +168,10 @@ pub fn import_archive(
             continue;
         };
         let is_jar = enclosed
-            .extension()
-            .is_some_and(|extension| extension.to_string_lossy().eq_ignore_ascii_case("jar"));
+            .file_name()
+            .and_then(|filename| filename.to_str())
+            .and_then(crate::package_activation::mod_artifact_enabled)
+            .is_some();
         let under_mods = enclosed.components().any(|component| {
             component
                 .as_os_str()
@@ -295,11 +299,10 @@ fn portable_entry_path(path: &Path) -> Option<PathBuf> {
     }
     if components.len() == 2
         && components[0].as_os_str() == "mods"
-        && components[1]
-            .as_os_str()
-            .to_string_lossy()
-            .to_ascii_lowercase()
-            .ends_with(".jar")
+        && crate::package_activation::mod_artifact_enabled(
+            &components[1].as_os_str().to_string_lossy(),
+        )
+        .is_some()
     {
         return Some(path.to_path_buf());
     }
@@ -853,14 +856,21 @@ mod tests {
         let options = SimpleFileOptions::default();
         zip.start_file("mods/example.jar", options).unwrap();
         zip.write_all(b"example").unwrap();
+        zip.start_file("mods/disabled.jar.disabled", options)
+            .unwrap();
+        zip.write_all(b"disabled").unwrap();
         zip.start_file("../mods/escape.jar", options).unwrap();
         zip.write_all(b"escape").unwrap();
         zip.finish().unwrap();
 
         let report = import_archive(&directory, &source, false, false).unwrap();
 
-        assert_eq!(report.extracted, vec!["example.jar"]);
+        assert_eq!(
+            report.extracted,
+            vec!["disabled.jar.disabled", "example.jar"]
+        );
         assert!(directory.join("mods/example.jar").is_file());
+        assert!(directory.join("mods/disabled.jar.disabled").is_file());
         assert!(!directory.join("escape.jar").exists());
         std::fs::remove_dir_all(directory).unwrap();
     }
@@ -982,6 +992,7 @@ mod tests {
             PackageSpec {
                 version: "*".to_string(),
                 string: "all".to_string(),
+                enabled: true,
                 optional: true,
                 env: Some(crate::metadata::Environment::Client),
                 exclude: Vec::new(),

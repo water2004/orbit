@@ -167,6 +167,7 @@ pub(super) fn render(
                                                 project: add.clone(),
                                                 environment: 0,
                                                 optional: false,
+                                                recommended_constraint: true,
                                             });
                                             cx.notify();
                                         })),

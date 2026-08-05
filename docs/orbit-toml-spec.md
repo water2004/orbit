@@ -99,6 +99,7 @@ benchmark = { packages = ["sodium", "reeses_sodium_options"] }
 package_id = {
   version = "*",
   string = 'all; intersect not contains(i"beta")',
+  enabled = false,
   optional = false,
   env = "client",
   exclude = ["broken_optional_edge"],
@@ -114,6 +115,7 @@ package_id = {
 |---|---|---|
 | `version` | `"*"` | 该包的数字核心策略；操作数不能含作者文本 |
 | `string` | `"all"` | 对完整 JAR 声明版本从左到右执行的集合规则 |
+| `enabled` | `true` | Loader 是否应发现该包；`false` 对应 lock 中的 `.jar.disabled` 载体 |
 | `optional` | `false` | 是否可由 `install --no-optional` 过滤 |
 | `env` | 无 | 可选 `client`、`server`、`both`；缺失时跟随选中 JAR 声明 |
 | `exclude` | `[]` | 用户明确排除的 JAR 依赖边 |
@@ -175,11 +177,16 @@ TOML、lock 与 JAR。无解或取消不会留下半更新状态；解除数值�
 原子为 `empty`、`present`、`"精确字符串"`、`contains(...)`、`starts_with(...)` 或
 `ends_with(...)`；在字符串引号前加 `i` 表示不区分大小写。CLI 对该原始字符串做严格解析，
 保存规范空白但不改变操作顺序。数字约束与 string 规则在进入 PubGrub 时一起筛选真实有限
-候选，不存在求解后补查。add 新请求包默认排除不区分大小写的 `beta` 与 `snapshot`；默认
-只用于新条目，不能修改已有条目。Fabric/Quilt 的 Loader-valid 不透明版本旁路数字规则，
+候选，不存在求解后补查。CLI 的 add 不添加隐式规则；只有显式 `--string` 才写入相应约束。
+GUI 默认勾选推荐的 `beta` / `snapshot` 排除规则，但实现仍是把规则原文传给 `--string`，
+取消勾选就不传，也不能修改已有条目。Fabric/Quilt 的 Loader-valid 不透明版本旁路数字规则，
 但仍执行完整字符串规则；Forge/NeoForge 声明在文件属性替换后必须以数字开头。
 
 ### 2.6 本地远端与组
+
+包激活是 TOML 用户状态，不是 JAR 元数据。启用包的精确载体名以 `.jar` 结尾；禁用包以
+`.jar.disabled` 结尾。`orbit enable/disable` 同一事务更新物理文件、`enabled` 与 lock 的
+真实文件名；`sync` 从磁盘后缀重新建立三者的一致状态。禁用不会把包移出受管集合或 lock。
 
 普通 `file` 远端可使用相对实例目录路径或绝对路径。若源位于事务输出 `mods/`，Orbit
 先复制到 `.orbit/sources/<content>.jar` 作为实例级持久本地源；它不是全局 LRU JAR cache。

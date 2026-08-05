@@ -36,6 +36,7 @@ pub struct InitOutput {
 #[derive(Debug, Clone)]
 pub struct ScannedMod {
     pub filename: String,
+    pub enabled: bool,
     pub mod_id: Option<String>,
     pub mod_name: Option<String>,
     pub version: Option<String>,
@@ -54,7 +55,7 @@ pub struct ScannedMod {
 
 /// 扫描 mods/ 目录并提取元数据。
 ///
-/// 遍历 `{instance_dir}/mods/` 下所有 .jar 文件，
+/// 遍历 `{instance_dir}/mods/` 下所有 `.jar` 与 `.jar.disabled` 文件，
 /// 按实例 loader 读取元数据并计算内容哈希。
 pub(crate) fn scan_mods_dir(
     instance_dir: &Path,
@@ -73,16 +74,14 @@ pub(crate) fn scan_mods_dir(
             .map_err(|e| OrbitError::Other(anyhow::anyhow!("cannot read directory entry: {e}")))?;
         let path = entry.path();
 
-        // 只处理 .jar 文件
-        if path.extension().map(|e| e != "jar").unwrap_or(true) {
-            continue;
-        }
-
         let filename = path
             .file_name()
             .unwrap_or_default()
             .to_string_lossy()
             .to_string();
+        let Some(enabled) = crate::package_activation::mod_artifact_enabled(&filename) else {
+            continue;
+        };
 
         let sha256 = crate::jar::compute_sha256(&path).map_err(|e| {
             OrbitError::Other(anyhow::anyhow!("cannot hash {}: {e}", path.display()))
@@ -109,6 +108,7 @@ pub(crate) fn scan_mods_dir(
 
         results.push(ScannedMod {
             filename,
+            enabled,
             mod_id: Some(metadata.mod_id.clone()),
             mod_name: Some(metadata.name.clone()).filter(|name| !name.is_empty()),
             version: Some(metadata.version.clone()),
@@ -130,6 +130,7 @@ pub(crate) fn scan_mods_dir(
         });
     }
 
+    results.sort_by(|left, right| left.filename.cmp(&right.filename));
     Ok(results)
 }
 
@@ -215,6 +216,7 @@ pub async fn run_init(
         let spec = PackageSpec {
             version: "*".to_string(),
             string: "all".to_string(),
+            enabled: m.enabled,
             optional: false,
             env: None,
             exclude: Vec::new(),
@@ -223,6 +225,10 @@ pub async fn run_init(
         packages
             .entry(key)
             .and_modify(|existing: &mut PackageSpec| {
+                // If any realization is a Loader-visible `.jar`, the logical
+                // package is factually active even when stale disabled copies
+                // also exist and must later be resolved by `fix`.
+                existing.enabled |= spec.enabled;
                 existing.remotes.extend(spec.remotes.iter().cloned());
                 existing.remotes.sort();
                 existing.remotes.dedup();
@@ -312,6 +318,7 @@ fn duplicate_packages(entries: &[crate::lockfile::PackageEntry]) -> Vec<String> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::workspace::{Lockfile, ManifestFile};
     use std::io::{Cursor, Write};
     use std::path::{Path, PathBuf};
     use zip::ZipWriter;
@@ -360,7 +367,7 @@ mod tests {
     }
 
     #[test]
-    fn scan_mods_dir_ignores_old_and_disabled_jars() {
+    fn scan_mods_dir_tracks_disabled_jars_and_ignores_unmanaged_suffixes() {
         let instance = temp_instance_dir("scan-ignores-disabled");
         let mods_dir = instance.join("mods");
         std::fs::create_dir_all(&mods_dir).unwrap();
@@ -381,10 +388,16 @@ mod tests {
 
         let scanned = scan_mods_dir(&instance, crate::loader::LoaderKind::Fabric).unwrap();
 
-        assert_eq!(scanned.len(), 1);
+        assert_eq!(scanned.len(), 2);
         assert_eq!(scanned[0].filename, "sodium-fabric-0.8.11+mc1.21.11.jar");
+        assert!(scanned[0].enabled);
         assert_eq!(scanned[0].mod_id.as_deref(), Some("sodium"));
         assert_eq!(scanned[0].embedded_jars.len(), 9);
+        assert_eq!(
+            scanned[1].filename,
+            "sodium-fabric-0.8.9+mc1.21.11.jar.disabled"
+        );
+        assert!(!scanned[1].enabled);
 
         std::fs::remove_dir_all(instance).ok();
     }
@@ -499,6 +512,51 @@ mod tests {
         assert!(report.changed.is_empty());
         assert!(report.removed.is_empty());
         assert!(!directory.join("mods").exists());
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[tokio::test]
+    async fn init_and_sync_preserve_a_disabled_package_as_managed_state() {
+        let directory = temp_instance_dir("disabled-package");
+        crate::platform_detection::test_support::write_platform(
+            &directory, "1.20.1", "fabric", "0.16.10",
+        );
+        let mods = directory.join("mods");
+        std::fs::create_dir_all(&mods).unwrap();
+        write_fabric_package(&mods.join("alpha.jar.disabled"), "alpha", "1");
+
+        let output = run_init(
+            InitInput {
+                name: "disabled-instance".to_string(),
+                mc_version: "1.20.1".to_string(),
+                modloader: "fabric".to_string(),
+                modloader_version: "0.16.10".to_string(),
+                instance_dir: directory.clone(),
+                dry_run: false,
+            },
+            &[],
+        )
+        .await
+        .unwrap();
+
+        assert!(output.lock_created);
+        assert!(!output.manifest.packages["alpha"].enabled);
+        assert_eq!(
+            Lockfile::open(&directory)
+                .unwrap()
+                .inner
+                .find("alpha")
+                .unwrap()
+                .filename,
+            "alpha.jar.disabled"
+        );
+
+        let report = crate::sync::sync_instance(&directory, &[], false)
+            .await
+            .unwrap();
+        assert!(report.added.is_empty());
+        assert!(report.changed.is_empty());
+        assert!(!ManifestFile::open(&directory).unwrap().inner.packages["alpha"].enabled);
         std::fs::remove_dir_all(directory).unwrap();
     }
 

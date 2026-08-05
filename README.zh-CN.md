@@ -123,6 +123,8 @@ orbit init survival
 
 # 3. 搜索并添加模组 (自动匹配当前 MC 版本与 Loader)
 orbit add sodium
+# CLI 约束始终显式传入；这里只是排除两个作者自定义标签的示例
+orbit add lithium --string 'all; intersect not contains(i"beta"); intersect not contains(i"snapshot")'
 orbit add cf:238222   # CurseForge 数值 project ID；需要先配置 API Key
 orbit add file:./my-local-mod.jar
 
@@ -201,7 +203,8 @@ schema、字段名、枚举码和错误码不随语言变化。Windows 控制台
 | :--- | :--- |
 | `orbit search <query>` | 在已配置来源中搜索模组；支持 Modrinth 与 CurseForge。 |
 | `orbit info <mod>` | 查看模组详细信息（描述、作者、版本历史、前置依赖、端侧支持等）。无需安装，直接请求平台 API。 |
-| `orbit add <mod>` | 添加新模组，并 Pareto 极小化对现有逻辑包的变更。支持自动查找、`mr:<project-id-or-search>`、`cf:<numeric-project-id>` 或 `file:./my-mod.jar`。可用 `--env client\|server\|both` 覆盖 JAR 声明。 |
+| `orbit add <mod>` | 添加新模组，并 Pareto 极小化对现有逻辑包的变更。支持自动查找、`mr:<project-id-or-search>`、`cf:<numeric-project-id>` 或 `file:./my-mod.jar`。可用 `--version`、`--string` 和 `--env client\|server\|both` 显式传入策略。 |
+| `orbit enable/disable <package>` | 原子重命名所选 JAR 并记录包状态，从而启用或禁止 Loader 发现该包。 |
 | `orbit env <package> <client\|server\|both\|auto>` | 修改包环境过滤；`auto` 跟随 lock 中精确 JAR 的声明。 |
 | `orbit install` | 严格校验平台快照和 lock，仅物化 lock 已记录的精确 JAR；绝不求解、修复、删包或改写 TOML/lock。 |
 | `orbit remove <mod>` | 按 JAR `mod_id` 卸载包。删除其选中内容并移除 `orbit.toml`/lock 中的记录。 |
@@ -288,8 +291,9 @@ lithium = { version = ">=0.11 <0.14", remotes = [
 可选 `string` 从 `all` 或 `none` 开始，按顺序对 **完整 JAR 声明版本字符串** 执行
 `intersect [not]`、`union [not]` 和整体 `complement`；前缀、数字、分隔符、限定词和构建文本
 都不会被裁掉。引号字符串精确且区分大小写，`i"text"` 不区分大小写。Orbit 不给作者字符串
-预设稳定版、测试版等含义。`orbit add` 只为新建请求包默认排除不区分大小写的 `beta` 与
-`snapshot`，绝不改写已有项。数字核心允许任意段。Fabric/Quilt 的不透明 Loader 版本只
+预设稳定版、测试版等含义。CLI 不会暗中添加约束，调用方必须通过 `orbit add --string`
+传入完整规则。GUI 默认勾选一条排除不区分大小写 `beta` 与 `snapshot` 的推荐规则，勾选时
+也是把规则原文传给同一个 CLI 参数，取消勾选则不传；它绝不改写已有项。数字核心允许任意段。Fabric/Quilt 的不透明 Loader 版本只
 旁路 `version`，仍执行 `string` 并给出警告；Forge/NeoForge 则保持声明版本必须以数字开头
 的 Loader 规则。
 

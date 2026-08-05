@@ -210,10 +210,8 @@ fn mod_filename(path: &str) -> Result<Option<String>, OrbitError> {
         .collect();
     if components.len() != 2
         || !components[0].to_string_lossy().eq_ignore_ascii_case("mods")
-        || !components[1]
-            .to_string_lossy()
-            .to_ascii_lowercase()
-            .ends_with(".jar")
+        || crate::package_activation::mod_artifact_enabled(&components[1].to_string_lossy())
+            .is_none()
     {
         return Ok(None);
     }

@@ -17,7 +17,7 @@
 拒绝执行，要求显式 `--instance` 或进入项目目录。当前受保护的命令是：
 
 ```text
-add install fix remove purge sync upgrade import migrate-export remote-add remote-remove
+add install fix remove enable disable purge sync upgrade import migrate-export remote-add remote-remove
 ```
 
 `init` 始终初始化当前目录；实例注册表和 cache 命令操作全局数据；`export` 读取实例但只
@@ -32,7 +32,7 @@ add install fix remove purge sync upgrade import migrate-export remote-add remot
 唯一方案自动选择，多个互不支配方案必须明确选择（dry-run 也一样，`--yes` 也不能替用户
 选择）。
 选择之后，安装、升级、降级、同版本替换和删除合并成一个计划。只要计划会替换或删除
-顶层 `mods/*.jar`，即使求解只有唯一方案也必须先展示精确逻辑包版本动作并确认。物理
+顶层 `mods/*.jar` 或 `mods/*.jar.disabled`，即使求解只有唯一方案也必须先展示精确逻辑包版本动作并确认。物理
 JAR 路径是执行层事实，永不进入 UI；多方案选择额外显示每个候选的顶层 JAR basename，
 用于区分同版本的不同真实候选。普通升级预览、诊断和删除确认仍不显示文件名。
 contained JAR 不是独立删除目标。
@@ -78,7 +78,7 @@ orbit init <name>
 3. 从游戏 JAR 的 `version.json`、launcher version profile、Prism/MultiMC component
    或 dedicated-server 官方 launch spec 检测 Minecraft 与 loader；定位并解析实际
    Minecraft/loader/runtime JAR；
-4. 扫描 `mods/*.jar`，忽略 `.old` / `.disabled`，解析对应 loader 元数据与内嵌 JAR；
+4. 扫描 `mods/*.jar` 与 `mods/*.jar.disabled`，以后缀记录 Loader 激活状态，忽略其它非受管后缀，解析对应 loader 元数据与内嵌 JAR；
 5. 计算 SHA-1/SHA-256/SHA-512 和 CurseForge fingerprint；Modrinth 始终参与批量识别，
    已配置 API Key 时 CurseForge 也参与；
 6. 同一 `mod_id` 的顶层 JAR 作为同一逻辑包的多个本地实现；无法在线识别的本地源复制到
@@ -156,6 +156,7 @@ schema 默认值”的有效配置优先级。完整键表、取值约束和路�
 orbit add <mod>
   [--platform <provider>]
   [--version <constraint>]
+  [--string <ordered-set-rule>]
   [--env client|server|both]
   [--optional]
 ```
@@ -178,9 +179,11 @@ orbit add <mod>
 逻辑包也各自写入 `[packages]`，默认版本策略为 `*`。TOML 不区分根包与传递包，所有实际
 包都能独立配置远端、环境和版本策略。
 
-add 为新请求包声明设置完整字符串集合默认值 `all; intersect not contains(i"beta"); intersect
-not contains(i"snapshot")`。它只影响新建条目；已存在的包和此次补入的其它包不会被默认规则
-覆盖。该规则是用户策略，可通过 `constraint set --string` 修改。
+`add` 不设置隐式字符串约束：未传 `--string` 时新请求包写入 `all`。调用方若要使用
+`all; intersect not contains(i"beta"); intersect not contains(i"snapshot")`，必须把规则
+原文传给 `--string`。GUI 的默认勾选项也只负责显式传入这段规则；取消勾选就不传。
+已有包和此次补入的其它包不会被该推荐规则覆盖。规则可随后通过 `constraint set --string`
+修改。
 
 `add` 以当前 lock 为基线枚举标准 Pareto 极小变更集合：如果方案 A 改动的已有逻辑包集合
 是方案 B 的真子集，B 不会返回。这不是“改动数最少”；例如只能改 A 或只能改 B 的两个
@@ -212,6 +215,19 @@ orbit env <package> <client|server|both|auto>
 策略；`auto` 删除显式覆盖，重新跟随 lock 中精确选中 JAR 的 `environment`。该命令只
 接受 JAR 声明的 `mod_id`，不修改 lock，也不重新求解或下载。支持全局 `--dry-run` 和
 `--output-format json`。
+
+### `orbit enable` 与 `orbit disable`
+
+```text
+orbit enable <package>
+orbit disable <package>
+```
+
+这两个命令只切换一个已受管逻辑包的 Loader 激活状态，不删除包、不改变版本、不求解依赖。
+`disable` 将精确载体从 `<name>.jar` 原子重命名为 `<name>.jar.disabled`，并在 TOML 写入
+`enabled = false`、在 lock 记录真实文件名；`enable` 执行反向操作并恢复默认的
+`enabled = true`。目标文件已存在、文件哈希不符或 TOML/lock 缺失时拒绝操作。`sync` 也识别
+两种后缀，因此手工切换后缀会被如实对账。支持 `--dry-run` 与 JSON 输出。
 
 ### `orbit versions` 与 `orbit constraint`
 
@@ -367,6 +383,8 @@ Modrinth 以及已配置的 CurseForge 批量哈希识别接口。匹配成功
 收敛：磁盘上已不存在的包声明与分组引用会删除，但物理 JAR 永远不会由 sync 删除；依赖图
 即使不可行也照实记录而不修复。同一 ID 有多个本地实现时，lock 无法无损表达选择，因此
 sync 保留全部 JAR 和来源后明确要求运行 `orbit fix`，绝不按扫描顺序覆盖或删除。
+此时旧 lock 的单一选择已经不再是事实，sync 会把 lock 包集合清空，直到 fix 明确选出每包
+唯一实现，不能让旧选择继续伪装成当前状态。
 
 ### `orbit outdated [mod]`
 
@@ -434,7 +452,7 @@ orbit import <file>
 ```
 
 - `.toml`：同包 remotes 始终取并集；版本、端侧、optional、exclude 等语义冲突才按策略处理；
-- `.zip`：只提取安全的 `mods/*.jar` 路径；
+- `.zip`：只提取安全的 `mods/*.jar` / `mods/*.jar.disabled` 路径；
 - `.mrpack`：先应用 bundled overrides，再按 index 从官方允许的 HTTPS 来源下载缺失
   JAR，并验证 file size、SHA-1 与 SHA-512；
 - `--yes` 未指定策略时等同 `prefer-import`；

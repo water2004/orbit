@@ -115,6 +115,9 @@ pub enum Commands {
         /// Version requirement.
         #[arg(long)]
         version: Option<String>,
+        /// Ordered set rule over the complete JAR-declared version string.
+        #[arg(long)]
+        string: Option<String>,
         /// Environment filter: client / server / both.
         #[arg(long)]
         env: Option<String>,
@@ -145,6 +148,12 @@ pub enum Commands {
         /// Mod name.
         mod_name: String,
     },
+
+    /// Enable a managed package so the Loader can discover its JAR.
+    Enable { package: String },
+
+    /// Disable a managed package while keeping it managed and locked.
+    Disable { package: String },
 
     /// Remove a mod and its configuration files.
     Purge {
@@ -407,9 +416,10 @@ impl CommandHandler for Commands {
                 mod_name,
                 platform,
                 version,
+                string,
                 env,
                 optional,
-            } => handle_add(mod_name, platform, version, env, optional, ctx).await,
+            } => handle_add(mod_name, platform, version, string, env, optional, ctx).await,
             Commands::Env {
                 package,
                 environment,
@@ -417,6 +427,8 @@ impl CommandHandler for Commands {
             Commands::Constraint { command } => handle_constraint(command, ctx).await,
             Commands::Versions { package } => handle_versions(package, ctx).await,
             Commands::Remove { mod_name } => handle_remove(mod_name, ctx).await,
+            Commands::Enable { package } => handle_activation(package, true, ctx),
+            Commands::Disable { package } => handle_activation(package, false, ctx),
             Commands::Purge { mod_name } => handle_purge(mod_name, ctx).await,
             Commands::Sync => handle_sync(ctx).await,
             Commands::Outdated { mod_name } => handle_outdated(mod_name, ctx).await,
@@ -466,6 +478,8 @@ impl Commands {
             Self::Constraint { .. } => "constraint",
             Self::Versions { .. } => "versions",
             Self::Remove { .. } => "remove",
+            Self::Enable { .. } => "enable",
+            Self::Disable { .. } => "disable",
             Self::Purge { .. } => "purge",
             Self::Sync => "sync",
             Self::Outdated { .. } => "outdated",
@@ -494,6 +508,8 @@ impl Commands {
                     command: ConstraintCommands::Set { .. },
                 }
                 | Self::Remove { .. }
+                | Self::Enable { .. }
+                | Self::Disable { .. }
                 | Self::Purge { .. }
                 | Self::Sync
                 | Self::Upgrade { .. }
@@ -718,6 +734,42 @@ mod tests {
 
         assert_eq!(package, "sodium");
         assert_eq!(environment, "auto");
+    }
+
+    #[test]
+    fn package_activation_commands_are_explicit_mutations() {
+        let enable = Cli::try_parse_from(["orbit", "enable", "sodium"]).unwrap();
+        assert!(enable.command.mutates_instance());
+        assert!(matches!(
+            &enable.command,
+            Commands::Enable { package } if package == "sodium"
+        ));
+
+        let disable = Cli::try_parse_from(["orbit", "disable", "sodium"]).unwrap();
+        assert!(disable.command.mutates_instance());
+        assert!(matches!(
+            &disable.command,
+            Commands::Disable { package } if package == "sodium"
+        ));
+    }
+
+    #[test]
+    fn add_accepts_the_frontends_explicit_complete_string_constraint() {
+        let cli = Cli::try_parse_from([
+            "orbit",
+            "add",
+            "sodium",
+            "--string",
+            orbit_machine_protocol::RECOMMENDED_NEW_PACKAGE_STRING,
+        ])
+        .unwrap();
+        let Commands::Add { string, .. } = cli.command else {
+            panic!("add command was not parsed");
+        };
+        assert_eq!(
+            string.as_deref(),
+            Some(orbit_machine_protocol::RECOMMENDED_NEW_PACKAGE_STRING)
+        );
     }
 
     #[test]

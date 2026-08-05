@@ -1024,6 +1024,20 @@ impl OrbitApp {
         );
     }
 
+    pub(super) fn set_package_activation(&mut self, package: &str, enabled: bool) {
+        self.orbit_mutation(
+            &if enabled {
+                tr!("Enabling %{package}", package = package)
+            } else {
+                tr!("Disabling %{package}", package = package)
+            },
+            vec![
+                if enabled { "enable" } else { "disable" }.into(),
+                package.into(),
+            ],
+        );
+    }
+
     pub(super) fn remove_package(&mut self, package: &str) {
         self.orbit_mutation(
             &tr!("Removing %{package}", package = package),
@@ -1121,6 +1135,7 @@ impl OrbitApp {
         result: &SearchResult,
         environment: usize,
         optional: bool,
+        recommended_constraint: bool,
     ) {
         let locator = match result.platform.as_str() {
             "modrinth" => format!("mr:{}", result.project_id),
@@ -1137,6 +1152,12 @@ impl OrbitApp {
         }
         if optional {
             command.push("--optional".into());
+        }
+        if recommended_constraint {
+            command.extend([
+                "--string".into(),
+                orbit_machine_protocol::RECOMMENDED_NEW_PACKAGE_STRING.into(),
+            ]);
         }
         self.orbit_mutation(&tr!("Adding %{name}", name = result.name), command);
     }

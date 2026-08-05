@@ -69,13 +69,15 @@ none; union "1.2.3"; union starts_with(i"release-"); complement
 - `"text"` 区分大小写，`i"text"` 不区分大小写，字符串采用 JSON 转义。
 
 操作顺序就是语义，Core 不做与/或正规化，也不把任何作者词汇解释为稳定版或预发布。
-`orbit add` 只在创建请求包新条目时默认写入：
+CLI 不会隐式写入规则。若调用方需要下面这条推荐规则，必须直接传给
+`orbit add --string`：
 
 ```text
 all; intersect not contains(i"beta"); intersect not contains(i"snapshot")
 ```
 
-这只是新建项默认值；init、sync、import、依赖补入和已有包都不会被改写。
+GUI 新建项时默认勾选该推荐规则，但勾选的效果仍是把原始字符串传给 CLI；取消勾选就不
+传。init、sync、import、依赖补入和已有包都不会被改写。
 
 ## 4. 无数字核心的候选
 

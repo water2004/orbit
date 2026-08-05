@@ -1,3 +1,4 @@
+pub mod activation;
 pub mod add;
 pub mod audit;
 pub mod cache;
@@ -190,6 +191,7 @@ pub trait CommandHandler {
     async fn execute(self, ctx: &CliContext) -> Result<()>;
 }
 
+pub use activation::handle as handle_activation;
 pub use add::handle as handle_add;
 pub use audit::handle as handle_audit;
 pub use config::handle as handle_config;

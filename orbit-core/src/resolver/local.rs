@@ -52,6 +52,7 @@ mod tests {
     ) -> IdentifiedMod {
         IdentifiedMod {
             filename: format!("{mod_id}.jar"),
+            enabled: true,
             mod_id: mod_id.to_string(),
             mod_name: mod_id.to_string(),
             version: version.to_string(),

@@ -149,6 +149,22 @@ pub(super) fn render_package_add(app: &OrbitApp, cx: &mut Context<OrbitApp>) -> 
                 ))
                 .child(
                     v_flex().gap_2().child(
+                        Switch::new("package-add-recommended-constraint")
+                            .checked(form.recommended_constraint)
+                            .label(
+                                tr!("Exclude versions containing beta or snapshot")
+                                    .into_owned(),
+                            )
+                            .on_click(cx.listener(|this, checked, _, cx| {
+                                if let Some(form) = &mut this.package_add {
+                                    form.recommended_constraint = *checked;
+                                }
+                                cx.notify();
+                            })),
+                    ),
+                )
+                .child(
+                    v_flex().gap_2().child(
                         Switch::new("package-add-optional")
                             .checked(form.optional)
                             .label(tr!("Optional package").into_owned())
@@ -183,6 +199,7 @@ pub(super) fn render_package_add(app: &OrbitApp, cx: &mut Context<OrbitApp>) -> 
                                             &form.project,
                                             form.environment,
                                             form.optional,
+                                            form.recommended_constraint,
                                         );
                                     }
                                     cx.notify();

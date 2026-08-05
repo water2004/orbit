@@ -11,6 +11,7 @@ pub async fn handle(
     mod_name: String,
     platform: Option<String>,
     version: Option<String>,
+    string: Option<String>,
     env: Option<String>,
     optional: bool,
     ctx: &CliContext,
@@ -41,6 +42,7 @@ pub async fn handle(
                 intent: InstallIntent::Add,
                 optional,
                 env,
+                string,
             },
             super::install_interaction(ctx),
         )
@@ -75,6 +77,7 @@ pub async fn handle(
             intent: InstallIntent::Add,
             optional,
             env: env.clone(),
+            string: string.clone(),
         },
         super::install_interaction(ctx),
     )
@@ -161,6 +164,7 @@ pub async fn handle(
                 project_id,
                 Some(suggestion_platform),
                 Some(constraint),
+                string,
                 env,
                 optional,
                 ctx,

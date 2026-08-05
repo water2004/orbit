@@ -25,7 +25,7 @@ pub use view::{
     ConfigValueView, DiagnosticView, ErrorJson, ExportOutput, ImportOutput, InitOutput,
     InstanceDefaultOutput, InstanceRegisterOutput, InstanceRemoveOutput, InstancesOutput,
     JsonEnvelope, MigrationExportView, MigrationOutput, MigrationSummary, OutdatedOutput,
-    OutdatedSummary, PackageConstraintOutput, PackageEnvironmentOutput,
+    OutdatedSummary, PackageActivationOutput, PackageConstraintOutput, PackageEnvironmentOutput,
     PackageVersionCandidateView, PackageVersionsOutput, PurgeOutput, RemoveOutput, SearchFilters,
     SearchOutput, SearchResultView,
 };
@@ -582,7 +582,9 @@ pub fn remote_list_table(report: &orbit_core::RemoteReport, header: Option<&str>
 
 /// Render the flat `orbit list` output as an adaptive table.
 pub fn installed_packages_table(packages: &[ListedPackage]) -> String {
-    let mut table = output_table(["Package", "Version", "Policy", "Remotes", "Env", "Notes"]);
+    let mut table = output_table([
+        "Package", "Version", "State", "Policy", "Remotes", "Env", "Notes",
+    ]);
     for package in packages {
         let mut notes = Vec::new();
         if package.optional {
@@ -597,6 +599,11 @@ pub fn installed_packages_table(packages: &[ListedPackage]) -> String {
         table.add_row([
             Cell::new(&package.mod_id),
             Cell::new(&package.version),
+            Cell::new(if package.enabled {
+                tr!("enabled")
+            } else {
+                tr!("disabled")
+            }),
             Cell::new(&package.version_constraint),
             Cell::new(package.remotes.join(", ")),
             Cell::new(&package.environment),
@@ -1032,6 +1039,7 @@ mod tests {
             mod_id: "fabric-api".to_string(),
             version: "0.100".to_string(),
             version_constraint: "*".to_string(),
+            enabled: true,
             remotes: vec!["modrinth:project".to_string()],
             configured_environment: None,
             environment: "both".to_string(),

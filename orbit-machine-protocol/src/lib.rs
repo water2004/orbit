@@ -11,6 +11,11 @@ use serde::{Deserialize, Serialize};
 /// Breaking wire revision shared by success, error, and progress messages.
 pub const SCHEMA_VERSION: u32 = 2;
 
+/// Frontend recommendation for newly added packages. It is never applied by
+/// the CLI unless the frontend passes it explicitly as `orbit add --string`.
+pub const RECOMMENDED_NEW_PACKAGE_STRING: &str =
+    "all; intersect not contains(i\"beta\"); intersect not contains(i\"snapshot\")";
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SuccessEnvelope<T> {
     pub schema_version: u32,

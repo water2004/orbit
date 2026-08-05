@@ -67,6 +67,8 @@ orbit init survival
 
 # Add provider projects or a local JAR. CurseForge requires an API key.
 orbit add sodium
+# Constraints are explicit CLI input; this example excludes two author-defined labels.
+orbit add lithium --string 'all; intersect not contains(i"beta"); intersect not contains(i"snapshot")'
 orbit add cf:238222
 orbit add file:./my-local-mod.jar
 
@@ -110,6 +112,7 @@ Orbit resolves its instance from the current directory first, then an explicit `
 | `orbit fix` | Find and confirm a standard Pareto-minimal package repair; this is the repair command. |
 | `orbit install [--target client\|server]` | Materialize the exact existing lockfile. It does not solve, repair, remove packages, or rewrite state. |
 | `orbit add <locator>` | Add a provider project or local file while Pareto-minimizing changes to the existing instance. |
+| `orbit enable/disable <package>` | Toggle Loader discovery by atomically renaming the selected JAR and recording the package state. |
 | `orbit remove <package>` | Remove the logical package and its TOML/lock state. |
 | `orbit purge <package>` | Remove the package and interactively select related configuration candidates. |
 | `orbit outdated [package]` | Explain feasible updates and why newer candidates are blocked. |
@@ -223,8 +226,10 @@ any prefix, numeric text, separators, qualifiers, and build text. It starts
 from `all` or `none`, then applies ordered `intersect [not]`, `union [not]`, and
 whole-set `complement` operations. Quoted strings are exact and case-sensitive;
 `i"text"` ignores case. Orbit assigns no release-stage meaning to author text.
-New packages created by `orbit add` default to excluding case-insensitive
-`beta` and `snapshot`; existing entries are never rewritten by that default.
+The CLI never inserts an implicit constraint: callers pass the complete rule with
+`orbit add --string`. The GUI offers a default-checked recommendation that passes the rule
+excluding case-insensitive `beta` and `snapshot` directly to that same option; unchecking it
+omits the option. Existing entries are never rewritten by a frontend recommendation.
 Numeric cores may have any number of components. A Fabric/Quilt opaque version
 bypasses only `version` and still goes through `string`, with a visible warning;
 Forge/NeoForge retain their Loader rule that declared mod versions must start

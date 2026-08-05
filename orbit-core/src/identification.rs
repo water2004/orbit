@@ -9,6 +9,7 @@ use crate::providers::{ArtifactFingerprint, ModProvider};
 #[derive(Debug, Clone)]
 pub struct IdentifiedMod {
     pub filename: String,
+    pub enabled: bool,
     /// JAR loader 元数据声明的模组 ID
     pub mod_id: String,
     pub mod_name: String,
@@ -74,6 +75,7 @@ fn unidentified_local(m: &ScannedMod) -> IdentifiedMod {
     let path = format!("mods/{}", m.filename);
     IdentifiedMod {
         filename: m.filename.clone(),
+        enabled: m.enabled,
         mod_id: m.mod_id.clone().unwrap_or_default(),
         mod_name: m.mod_name.clone().unwrap_or_default(),
         version: m.version.clone().unwrap_or_default(),

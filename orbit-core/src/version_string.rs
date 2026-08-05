@@ -10,10 +10,6 @@ use crate::error::OrbitError;
 const MAX_OPERATIONS: usize = 128;
 const MAX_VALUE_BYTES: usize = 512;
 
-/// Applied only when `orbit add` creates a brand-new package declaration.
-pub const DEFAULT_NEW_PACKAGE_STRING: &str =
-    "all; intersect not contains(i\"beta\"); intersect not contains(i\"snapshot\")";
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum VersionStringInitialSet {

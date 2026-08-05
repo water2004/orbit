@@ -85,6 +85,13 @@ pub async fn sync_instance(
         .map(IdentifiedMod::to_package_entry)
         .collect();
     let mut discovered_remotes = HashMap::<String, Vec<crate::manifest::PackageRemote>>::new();
+    let mut discovered_activation = HashMap::<String, bool>::new();
+    for package in &identified {
+        discovered_activation
+            .entry(package.package_id())
+            .and_modify(|enabled| *enabled |= package.enabled)
+            .or_insert(package.enabled);
+    }
     for entry in &local_entries {
         discovered_remotes
             .entry(entry.mod_id.clone())
@@ -118,6 +125,16 @@ pub async fn sync_instance(
     for entry in &local_entries {
         if !manifest.inner.packages.contains_key(&entry.mod_id) {
             report.added.push(entry.mod_id.clone());
+        }
+        if manifest
+            .inner
+            .packages
+            .get(&entry.mod_id)
+            .is_some_and(|specification| {
+                specification.enabled != discovered_activation[&entry.mod_id]
+            })
+        {
+            report.changed.push(entry.mod_id.clone());
         }
         match previous_lock.inner.find(&entry.mod_id) {
             Some(locked)
@@ -161,11 +178,13 @@ pub async fn sync_instance(
             .or_insert_with(|| PackageSpec {
                 version: "*".to_string(),
                 string: "all".to_string(),
+                enabled: discovered_activation[&entry.mod_id],
                 optional: false,
                 env: None,
                 exclude: Vec::new(),
                 remotes: entry.remotes.clone(),
             });
+        requirement.enabled = discovered_activation[&entry.mod_id];
         requirement.remotes = entry.remotes.clone();
     }
 
@@ -174,8 +193,18 @@ pub async fn sync_instance(
         if !dry_run {
             // The manifest can truthfully retain every discovered source, but a
             // lock is one selected realization per package. Sync must never pick
-            // that realization or delete a candidate on the user's behalf.
+            // that realization, retain a stale pre-scan selection, or delete a
+            // candidate on the user's behalf. Match init by persisting an empty
+            // lock until fix selects one exact realization per package.
             manifest.save()?;
+            Lockfile::new(
+                instance_dir,
+                crate::lockfile::OrbitLockfile {
+                    meta: refreshed_lock_meta,
+                    packages: Vec::new(),
+                },
+            )
+            .save()?;
         }
         return Err(OrbitError::Other(anyhow::anyhow!(
             "sync found multiple local realizations for the same package and cannot create a factual lock without choosing a solution:\n{}\nrun 'orbit fix' to resolve and confirm the package changes",
@@ -669,10 +698,13 @@ alpha = { version = "*", remotes = [{ type = "file", path = "alpha.jar" }] }
         assert!(error.to_string().contains("alpha"));
         assert!(mods.join("a-1.jar").exists());
         assert!(mods.join("a-2.jar").exists());
-        assert!(matches!(
-            Lockfile::open(&directory),
-            Err(OrbitError::LockfileNotFound)
-        ));
+        assert!(
+            Lockfile::open(&directory)
+                .unwrap()
+                .inner
+                .packages
+                .is_empty()
+        );
         let refreshed = ManifestFile::open(&directory).unwrap();
         let alpha = &refreshed.inner.packages["alpha"];
         assert_eq!(

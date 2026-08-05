@@ -120,6 +120,15 @@ pub struct PackageEnvironmentOutput {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct PackageActivationOutput {
+    pub package: String,
+    pub previous_enabled: bool,
+    pub enabled: bool,
+    pub changed: bool,
+    pub dry_run: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct PackageConstraintOutput {
     pub package: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -199,6 +208,7 @@ pub struct ListedPackageView {
     pub mod_id: String,
     pub version: String,
     pub version_constraint: String,
+    pub enabled: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub icon_path: Option<String>,
     pub remotes: Vec<String>,
@@ -674,6 +684,7 @@ pub fn listed_package_view(
         mod_id: pkg.mod_id.clone(),
         version: pkg.version.clone(),
         version_constraint: pkg.version_constraint.clone(),
+        enabled: pkg.enabled,
         icon_path: presentation_cache
             .and_then(|cache| orbit_core::materialize_listed_package_icon(pkg, cache).ok())
             .flatten()
@@ -953,6 +964,7 @@ mod tests {
             mod_id: "sodium".into(),
             version: "0.9.1".into(),
             version_constraint: "*".into(),
+            enabled: true,
             remotes: vec!["modrinth:AANobbMI".into()],
             configured_environment: None,
             environment: "client".into(),
@@ -964,6 +976,7 @@ mod tests {
 
         let value = serde_json::to_value(listed_package_view(&package, None)).unwrap();
         assert_eq!(value["version_constraint"], "*");
+        assert_eq!(value["enabled"], true);
         assert!(value.get("root").is_none());
         assert!(value["configured_environment"].is_null());
         assert_eq!(value["environment"], "client");

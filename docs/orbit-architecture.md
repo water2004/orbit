@@ -156,7 +156,7 @@ JAR `mod_id` 不会被拿去猜 provider slug，resolver 也没有联网补抓�
 enumeration continuation 与 maximality probe 的 start/finish 动态扩展并完成工作总量；
 probe 内部路径不进入成功解原因轨迹。
 
-求解包的身份恒为 JAR 声明的 `mod_id`。同一 ID 的多个顶层 `mods/*.jar` 是同一个包
+求解包的身份恒为 JAR 声明的 `mod_id`。同一 ID 的多个顶层 `.jar` / `.jar.disabled` 是同一个包
 的多个候选，最终每包只选一个。候选以本地计算的内容哈希保持唯一；完全相同的字节跨
 provider 合并为一个候选并累积来源，同版本不同字节仍是不同候选。哈希、文件名、slug
 和 project ID 都不能变成求解包，也不能作为正常交互中的包名。
@@ -235,10 +235,15 @@ Jar-in-Jar artifact 使用独立的 Maven 坐标包并精确绑定 owner 候选�
 project/release 远端，并按磁盘事实重建 lock；它不枚举版本、不下载候选 JAR、不求解，
 也不删除任何物理 JAR。普通对账会让 TOML、lock 与分组引用精确收敛到磁盘包集合，清除
 已从磁盘消失的包声明。发现同一 `mod_id` 的多个本地实现时，sync 保留全部文件和 TOML
-来源并要求运行 `fix`。`install` 只物化现有 lock 的精确内容，既不求解也不修改
+来源、清空无法表达多实现的旧 lock 包集合并要求运行 `fix`。`install` 只物化现有 lock 的精确内容，既不求解也不修改
 TOML/lock。联网候选闭包发现、可行解选择和未选包删除由 `add`、`fix`、`constraint set`、`upgrade` 与
 迁移等明确求解操作执行；这些写操作共享同一个 reconciliation，使 TOML 完整包集合与
 所选 lock 同步收敛。
+
+受管包的激活状态是正交用户策略：TOML `enabled` 记录意图，lock `filename` 记录精确物理
+事实，Loader 通过 `.jar` / `.jar.disabled` 后缀决定是否发现顶层载体。`enable/disable` 在
+一个文件事务中更新三者；sync 扫描两种后缀并以磁盘事实对账。禁用不删除逻辑包、不移出
+lock，也不制造另一套依赖求解路径。
 
 迁移先通过普通 archive exporter 冻结一个校验通过的便携 Orbit 源实例；Orbit 包只包含
 包管理器状态与模组配置，不包含世界、`options.txt` 或 `server.properties`。GUI 同时调用

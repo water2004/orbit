@@ -290,6 +290,7 @@ pub(super) struct PackageAddForm {
     pub project: SearchResult,
     pub environment: usize,
     pub optional: bool,
+    pub recommended_constraint: bool,
 }
 
 impl PackageEditor {

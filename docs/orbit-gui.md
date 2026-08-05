@@ -199,7 +199,7 @@ GUI 只集成有稳定桌面领域语义的命令，不能按“每个 subcomman
 
 | 领域 | GUI 中的 CLI 能力 | 有意不重复的接口 |
 | --- | --- | --- |
-| 模组 | init、list、search/add（GUI 使用 add 默认版本策略，并提供 env/optional）、versions、constraint、env、remote、remove/purge、sync、fix、install、outdated/upgrade、import/export、migrate check/export、audit、cache、instances register 与 config | CLI 的原始 add version 字符串由安装后的可视化版本策略编辑器替代；`info` 的长文本详情由 Discover 摘要替代；Orbit 的实例注册由 init/迁移自动同步，不再提供一套与 Launcher 并列的注册表页面；install 的 group/target 策略要等 TOML group 编辑器提供完整模型后再加入 |
+| 模组 | init、list、search/add（GUI 用默认勾选项决定是否把推荐的完整 `--string` 约束传给 add，并提供 env/optional）、versions、constraint、env、enable/disable、remote、remove/purge、sync、fix、install、outdated/upgrade、import/export、migrate check/export、audit、cache、instances register 与 config | CLI 的其它原始 add version 字符串由安装后的可视化版本策略编辑器替代；`info` 的长文本详情由 Discover 摘要替代；Orbit 的实例注册由 init/迁移自动同步，不再提供一套与 Launcher 并列的注册表页面；install 的 group/target 策略要等 TOML group 编辑器提供完整模型后再加入 |
 | 运行时 | install/new、launch、instance list/show/import/rename/remove/default、Loader configure/install、Minecraft/Loader/Java catalogs、Java 管理、Minecraft directory/move | 未安装的 `instance create` 中间态、launch/server dry-run、前台 server run 与隐藏 supervisor 属于 CLI/自动化接口 |
 | 账户与服务端 | login/list/refresh/select/clear/logout、Yggdrasil provider、EULA、start/stop/status/command | account show 已由账户卡片覆盖；秘密、EULA 与 token 不由 GUI 另存 |
 | 配置与审计 | 两套 typed config list/set/unset、audit min-risk/mod/report | config path/get 已包含在设置模型中；audit fail-on-risk 只用于 CI 退出码 |
