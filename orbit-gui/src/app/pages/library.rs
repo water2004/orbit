@@ -241,7 +241,7 @@ pub(super) fn render(
                                     )
                                     .child(
                                         Button::new(("package-upgrade", index))
-                                            .icon(OrbitIcon::Refresh)
+                                            .icon(OrbitIcon::Upgrade)
                                             .ghost()
                                             .tooltip(tr!("Upgrade").into_owned())
                                             .on_click(cx.listener(move |this, _, _, cx| {
@@ -315,6 +315,7 @@ fn render_updates(app: &OrbitApp, cx: &mut Context<OrbitApp>) -> impl IntoElemen
                     )
                     .child(
                         Button::new("updates-all")
+                            .icon(OrbitIcon::Upgrade)
                             .label(tr!("Upgrade all").into_owned())
                             .primary()
                             .on_click(cx.listener(|this, _, _, cx| {
@@ -356,6 +357,7 @@ fn render_updates(app: &OrbitApp, cx: &mut Context<OrbitApp>) -> impl IntoElemen
                     )
                     .child(
                         Button::new(("update-one", index))
+                            .icon(OrbitIcon::Upgrade)
                             .label(tr!("Upgrade").into_owned())
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.upgrade_package(&package);

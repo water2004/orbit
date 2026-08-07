@@ -62,6 +62,9 @@ impl AssetSource for OrbitAssets {
             "icons/trash.svg" | "icons/delete.svg" => {
                 include_bytes!("../assets/icons/trash.svg")
             }
+            "icons/upgrade.svg" | "icons/circle-arrow-up.svg" => {
+                include_bytes!("../assets/icons/upgrade.svg")
+            }
             "icons/warning.svg" | "icons/triangle-alert.svg" => {
                 include_bytes!("../assets/icons/warning.svg")
             }
@@ -102,6 +105,7 @@ pub enum OrbitIcon {
     Java,
     Folder,
     Trash,
+    Upgrade,
     Warning,
     Check,
     Close,
@@ -109,7 +113,7 @@ pub enum OrbitIcon {
 }
 
 impl OrbitIcon {
-    const ALL: [Self; 22] = [
+    const ALL: [Self; 23] = [
         Self::Home,
         Self::Mods,
         Self::Browse,
@@ -128,6 +132,7 @@ impl OrbitIcon {
         Self::Java,
         Self::Folder,
         Self::Trash,
+        Self::Upgrade,
         Self::Warning,
         Self::Check,
         Self::Close,
@@ -156,6 +161,7 @@ impl IconNamed for OrbitIcon {
             Self::Java => "java",
             Self::Folder => "folder",
             Self::Trash => "trash",
+            Self::Upgrade => "upgrade",
             Self::Warning => "warning",
             Self::Check => "check",
             Self::Close => "close",
@@ -168,9 +174,10 @@ impl IconNamed for OrbitIcon {
 #[cfg(test)]
 mod tests {
     use gpui::AssetSource as _;
+    use gpui_component::IconNamed as _;
     use image::GenericImageView as _;
 
-    use super::OrbitAssets;
+    use super::{OrbitAssets, OrbitIcon};
 
     #[test]
     fn brand_image_is_a_visible_build_time_raster_of_the_svg() {
@@ -190,5 +197,20 @@ mod tests {
                 > 4_000,
             "brand asset should contain visible pixels"
         );
+    }
+
+    #[test]
+    fn upgrade_has_a_dedicated_asset_instead_of_aliasing_refresh() {
+        let assets = OrbitAssets;
+        let upgrade = assets
+            .load(OrbitIcon::Upgrade.path().as_ref())
+            .unwrap()
+            .unwrap();
+        let refresh = assets
+            .load(OrbitIcon::Refresh.path().as_ref())
+            .unwrap()
+            .unwrap();
+
+        assert_ne!(upgrade.as_ref(), refresh.as_ref());
     }
 }
