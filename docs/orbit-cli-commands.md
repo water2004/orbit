@@ -383,6 +383,9 @@ Runtime Agent，保留现有 `JAVA_TOOL_OPTIONS` 后注入 Agent，再调用 Lau
 文本、JSON、NDJSON、语言和同进程交互参数原样传给 Launcher。客户端命令等待 Java 退出并
 立即合并 session；后台服务端在下一条 `orbit launch` / `orbit purge` 中合并。Launcher 的
 最终成功/错误信封原样透传，Orbit 不再包一层重复结果。
+每次实际启动在生成新 Agent context 之前会扫描归属账本的显式路径，删除已经不存在的节点并
+收敛对应的目录重平衡水位。只有文件系统返回 `NotFound` 时才会移除；其他 I/O 错误会明确中止启动且
+保持原账本不变。
 客户端 `--dry-run` 只透传 Launcher 的脱敏启动计划，不注入 Agent、不创建或合并 session；
 后台服务端联合启动不支持 dry-run。
 

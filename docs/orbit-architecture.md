@@ -191,6 +191,7 @@ provider 合并为一个候选并累积来源，同版本不同字节仍是不�
 ```text
 orbit launch
   → 校验当前 orbit.toml / orbit.lock、准确 Launcher 与 Agent 文件
+  → 合并上次完整 session，逐个校验账本显式节点并移除物理上已不存在的项
   → 为本次运行分配 .orbit/runtime-data/sessions/<session>.events
   → 调用 orbit-launcher launch 或 server start
   → JAVA_TOOL_OPTIONS 注入 Orbit Runtime Agent
@@ -212,6 +213,9 @@ orbit launch
 实际变更边界的归属聚合成本。Agent 只接受默认物理文件系统中的路径；ZIP/JAR 文件系统里的 `/META-INF/...` 等虚拟
 条目不是可独立清理的磁盘对象。实例内路径保存为相对路径，实例外的真实物理路径则显式保存
 为 external 项并在删除确认中完整展示。
+每次实际启动在生成新 Agent context 之前使用 `symlink_metadata` 扫描账本的显式节点：
+只有 `NotFound` 会被判定为用户或外部工具已删除并从账本移除，损坏软链接本身仍是存在的物理节点。
+权限拒绝等其他 I/O 错误会中止启动且不重写账本，不得把“无法检查”当成“不存在”。
 
 所有权采用“最后成功编辑者 + 递归目录默认值”模型：文件每次被另一个受管包成功修改后，
 所有权立即转给最后编辑者；同一包再写回时也会取回。包创建目录后，其后代继承目录默认所有者，
