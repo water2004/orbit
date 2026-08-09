@@ -22,40 +22,40 @@ public final class ObservedChannels {
                     || descriptor.equals("(Ljava/nio/file/Path;Ljava/util/Set;Ljava/util/concurrent/ExecutorService;[Ljava/nio/file/attribute/FileAttribute;)Ljava/nio/channels/AsynchronousFileChannel;")));
     }
 
-    public static FileChannel fileOpen(Path path, OpenOption... options) throws IOException {
+    public static FileChannel fileOpen(Path path, OpenOption[] options, String owner) throws IOException {
         boolean existed = java.nio.file.Files.exists(path);
         FileChannel channel = FileChannel.open(path, options);
-        observe(path, existed, Set.of(options));
+        observe(path, existed, Set.of(options), owner);
         return channel;
     }
 
-    public static FileChannel fileOpen(Path path, Set<? extends OpenOption> options, FileAttribute<?>... attributes) throws IOException {
+    public static FileChannel fileOpen(Path path, Set<? extends OpenOption> options, FileAttribute<?>[] attributes, String owner) throws IOException {
         boolean existed = java.nio.file.Files.exists(path);
         FileChannel channel = FileChannel.open(path, options, attributes);
-        observe(path, existed, options);
+        observe(path, existed, options, owner);
         return channel;
     }
 
-    public static AsynchronousFileChannel asyncOpen(Path path, OpenOption... options) throws IOException {
+    public static AsynchronousFileChannel asyncOpen(Path path, OpenOption[] options, String owner) throws IOException {
         boolean existed = java.nio.file.Files.exists(path);
         AsynchronousFileChannel channel = AsynchronousFileChannel.open(path, options);
-        observe(path, existed, Set.of(options));
+        observe(path, existed, Set.of(options), owner);
         return channel;
     }
 
-    public static AsynchronousFileChannel asyncOpen(Path path, Set<? extends OpenOption> options, ExecutorService executor, FileAttribute<?>... attributes) throws IOException {
+    public static AsynchronousFileChannel asyncOpen(Path path, Set<? extends OpenOption> options, ExecutorService executor, FileAttribute<?>[] attributes, String owner) throws IOException {
         boolean existed = java.nio.file.Files.exists(path);
         AsynchronousFileChannel channel = AsynchronousFileChannel.open(path, options, executor, attributes);
-        observe(path, existed, options);
+        observe(path, existed, options, owner);
         return channel;
     }
 
-    private static void observe(Path path, boolean existed, Set<? extends OpenOption> options) {
+    private static void observe(Path path, boolean existed, Set<? extends OpenOption> options, String owner) {
         boolean write = options.contains(StandardOpenOption.WRITE)
             || options.contains(StandardOpenOption.APPEND)
             || options.contains(StandardOpenOption.CREATE)
             || options.contains(StandardOpenOption.CREATE_NEW)
             || options.contains(StandardOpenOption.DELETE_ON_CLOSE);
-        if (write) Recorder.write(path, existed); else Recorder.read(path);
+        if (write) Recorder.write(path, existed, owner);
     }
 }

@@ -38,5 +38,18 @@ public final class AgentFixture {
         Path outside = root.getParent().resolve("agent-fixture-outside.txt");
         Files.writeString(outside, "outside");
         Files.readString(outside);
+
+        // A transient path that was never published has no lasting ownership
+        // effect and must disappear from the complete snapshot.
+        Path quick = root.getParent().resolve("agent-fixture-quick.tmp");
+        Files.writeString(quick, "quick");
+        Files.delete(quick);
+
+        // Once a generation containing a creation may have been claimed by
+        // Orbit, a later deletion must remain as an explicit tombstone.
+        Path published = root.getParent().resolve("agent-fixture-published.tmp");
+        Files.writeString(published, "published");
+        Thread.sleep(1500L);
+        Files.delete(published);
     }
 }

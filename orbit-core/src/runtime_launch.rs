@@ -4,13 +4,18 @@
 //! runtime launcher and receives the Java agent only through the child process
 //! environment.
 
+use std::collections::BTreeMap;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use base64::Engine as _;
 
 use crate::error::{OrbitError, RuntimeComponent, RuntimeDataError};
-use crate::runtime_data::{merge_observation_sessions, observation_session_path};
+use crate::runtime_data::{
+    RESERVED_INSTANCE_ROOTS, merge_observation_sessions, observation_session_path,
+    ownership_context,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RuntimeLaunchTarget {
@@ -33,7 +38,7 @@ pub struct RuntimeLaunchRequest {
 }
 
 pub fn launch_with_runtime_observation(request: &RuntimeLaunchRequest) -> Result<(), OrbitError> {
-    let instance_dir = request.instance_dir.canonicalize()?;
+    let instance_dir = dunce::canonicalize(&request.instance_dir)?;
     if !instance_dir.join("orbit.toml").is_file() {
         return Err(OrbitError::ManifestNotFound);
     }
@@ -51,7 +56,8 @@ pub fn launch_with_runtime_observation(request: &RuntimeLaunchRequest) -> Result
     } else {
         merge_observation_sessions(&instance_dir)?;
         let session = observation_session_path(&instance_dir)?;
-        let agent_option = java_agent_option(&runtime_agent, &instance_dir, &session)?;
+        let context = write_agent_context(&instance_dir)?;
+        let agent_option = java_agent_option(&runtime_agent, &instance_dir, &session, &context)?;
         Some(append_java_tool_option(
             std::env::var_os("JAVA_TOOL_OPTIONS").as_deref(),
             &agent_option,
@@ -121,7 +127,12 @@ fn absolute_file(path: &Path, component: RuntimeComponent) -> Result<PathBuf, Or
     ))
 }
 
-fn java_agent_option(agent: &Path, instance: &Path, session: &Path) -> Result<String, OrbitError> {
+fn java_agent_option(
+    agent: &Path,
+    instance: &Path,
+    session: &Path,
+    context: &Path,
+) -> Result<String, OrbitError> {
     let agent = agent.to_string_lossy();
     if agent.contains('"') {
         return Err(OrbitError::RuntimeData(
@@ -132,10 +143,125 @@ fn java_agent_option(agent: &Path, instance: &Path, session: &Path) -> Result<St
         base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(path.to_string_lossy().as_bytes())
     };
     Ok(format!(
-        "-javaagent:\"{agent}\"=root={};session={}",
+        "-javaagent:\"{agent}\"=root={};session={};context={}",
         encode(instance),
-        encode(session)
+        encode(session),
+        encode(context)
     ))
+}
+
+fn write_agent_context(instance: &Path) -> Result<PathBuf, OrbitError> {
+    const MAX_NESTED_DEPTH: usize = 16;
+    const MAX_NESTED_BYTES: u64 = 1024 * 1024 * 1024;
+
+    let lock = crate::workspace::Lockfile::open(instance)?.inner;
+    let mut sources: BTreeMap<String, Option<String>> = BTreeMap::new();
+    let mut nested_bytes = 0_u64;
+    for package in &lock.packages {
+        let artifact = instance.join("mods").join(&package.filename);
+        if !artifact.is_file() {
+            continue;
+        }
+        register_source(&mut sources, package.sha256.clone(), &package.sha256);
+        let file = std::fs::File::open(&artifact)?;
+        let mut archive = zip::ZipArchive::new(file)?;
+        collect_nested_sources(
+            &mut archive,
+            &package.sha256,
+            0,
+            MAX_NESTED_DEPTH,
+            &mut nested_bytes,
+            MAX_NESTED_BYTES,
+            &mut sources,
+        )?;
+    }
+
+    let mut document = String::from("2\tcontext\tend\n");
+    for (source, owner) in sources {
+        if let Some(owner) = owner {
+            document.push_str(&format!("source\t{source}\t{owner}\tend\n"));
+        }
+    }
+    for (path, kind, owner) in ownership_context(instance)? {
+        document.push_str(&format!(
+            "node\t{}\t{}\t{}\tend\n",
+            match kind {
+                crate::runtime_data::OwnedDataKind::File => "file",
+                crate::runtime_data::OwnedDataKind::Tree => "tree",
+            },
+            owner.as_deref().unwrap_or("-"),
+            encode_agent_path(&path)
+        ));
+    }
+    for root in RESERVED_INSTANCE_ROOTS {
+        document.push_str(&format!(
+            "reserved\t{}\tend\n",
+            encode_agent_path(&instance.join(root))
+        ));
+    }
+    let path = instance.join(".orbit/runtime-data/agent-context.tsv");
+    crate::atomic_io::write_atomic(&path, document.as_bytes())?;
+    Ok(path)
+}
+
+fn register_source(sources: &mut BTreeMap<String, Option<String>>, source: String, owner: &str) {
+    match sources.entry(source) {
+        std::collections::btree_map::Entry::Vacant(entry) => {
+            entry.insert(Some(owner.to_string()));
+        }
+        std::collections::btree_map::Entry::Occupied(mut entry) => {
+            if entry.get().as_deref() != Some(owner) {
+                entry.insert(None);
+            }
+        }
+    }
+}
+
+fn collect_nested_sources<R: Read + std::io::Seek>(
+    archive: &mut zip::ZipArchive<R>,
+    owner: &str,
+    depth: usize,
+    max_depth: usize,
+    total_bytes: &mut u64,
+    max_bytes: u64,
+    sources: &mut BTreeMap<String, Option<String>>,
+) -> Result<(), OrbitError> {
+    if depth >= max_depth {
+        return Ok(());
+    }
+    for index in 0..archive.len() {
+        let mut entry = archive.by_index(index)?;
+        if entry.is_dir() || !entry.name().to_ascii_lowercase().ends_with(".jar") {
+            continue;
+        }
+        *total_bytes = total_bytes.checked_add(entry.size()).ok_or_else(|| {
+            OrbitError::Other(anyhow::anyhow!("nested runtime source size overflowed"))
+        })?;
+        if *total_bytes > max_bytes {
+            return Err(OrbitError::Other(anyhow::anyhow!(
+                "nested runtime sources exceed the 1 GiB launch safety limit"
+            )));
+        }
+        let mut bytes = Vec::with_capacity(entry.size().try_into().unwrap_or(0));
+        entry.read_to_end(&mut bytes)?;
+        register_source(sources, crate::jar::sha256_digest(&bytes), owner);
+        if let Ok(mut nested) = zip::ZipArchive::new(std::io::Cursor::new(bytes)) {
+            collect_nested_sources(
+                &mut nested,
+                owner,
+                depth + 1,
+                max_depth,
+                total_bytes,
+                max_bytes,
+                sources,
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn encode_agent_path(path: &Path) -> String {
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(path.to_string_lossy().as_bytes())
 }
 
 fn append_java_tool_option(
@@ -179,6 +305,7 @@ mod tests {
             Path::new("C:/Program Files/Orbit/orbit-runtime-agent.jar"),
             Path::new("C:/Games/Example"),
             Path::new("C:/Games/Example/.orbit/session.events"),
+            Path::new("C:/Games/Example/.orbit/agent-context.tsv"),
         )
         .unwrap();
         assert!(option.starts_with("-javaagent:\"C:/Program Files/Orbit/"));

@@ -19,7 +19,7 @@ public final class OrbitRuntimeAgent {
         try {
             var options = AgentOptions.parse(arguments);
             exposeHelpersToEveryClassLoader(instrumentation);
-            Recorder.configure(options.instanceRoot(), options.sessionFile());
+            Recorder.configure(options.instanceRoot(), options.sessionFile(), options.contextFile());
             instrumentation.addTransformer(new FileCallTransformer());
         } catch (Throwable error) {
             System.err.println("[orbit-runtime-agent] disabled: " + error.getMessage());
@@ -61,13 +61,14 @@ public final class OrbitRuntimeAgent {
         System.setProperty(key, existing + File.pathSeparator + normalized);
     }
 
-    private record AgentOptions(Path instanceRoot, Path sessionFile) {
+    private record AgentOptions(Path instanceRoot, Path sessionFile, Path contextFile) {
         private static AgentOptions parse(String value) {
             if (value == null || value.isBlank()) {
                 throw new IllegalArgumentException("missing agent arguments");
             }
             Path root = null;
             Path session = null;
+            Path context = null;
             for (String item : value.split(";")) {
                 int separator = item.indexOf('=');
                 if (separator <= 0) {
@@ -81,13 +82,14 @@ public final class OrbitRuntimeAgent {
                 switch (key) {
                     case "root" -> root = Path.of(decoded).toAbsolutePath().normalize();
                     case "session" -> session = Path.of(decoded).toAbsolutePath().normalize();
+                    case "context" -> context = Path.of(decoded).toAbsolutePath().normalize();
                     default -> throw new IllegalArgumentException("unknown agent argument: " + key);
                 }
             }
-            if (root == null || session == null) {
-                throw new IllegalArgumentException("root and session are required");
+            if (root == null || session == null || context == null) {
+                throw new IllegalArgumentException("root, session and context are required");
             }
-            return new AgentOptions(root, session);
+            return new AgentOptions(root, session, context);
         }
     }
 }

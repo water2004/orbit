@@ -20,9 +20,7 @@ public final class FileCallTransformer implements ClassFileTransformer {
     private static final String OBSERVED_NATIVE_STORES = AGENT_PREFIX + "ObservedNativeStores";
 
     private static final Map<String, String> OBSERVED_CONSTRUCTORS = Map.of(
-        "java/io/FileInputStream", AGENT_PREFIX + "ObservedFileInputStream",
         "java/io/FileOutputStream", AGENT_PREFIX + "ObservedFileOutputStream",
-        "java/io/FileReader", AGENT_PREFIX + "ObservedFileReader",
         "java/io/FileWriter", AGENT_PREFIX + "ObservedFileWriter",
         "java/io/RandomAccessFile", AGENT_PREFIX + "ObservedRandomAccessFile"
     );
@@ -55,10 +53,14 @@ public final class FileCallTransformer implements ClassFileTransformer {
             || className.startsWith("net/bytebuddy/")) {
             return null;
         }
+        String owner = Recorder.ownerFor(protectionDomain);
+        if (owner == null) {
+            return null;
+        }
         try {
             var reader = new ClassReader(classfileBuffer);
             var writer = new ClassWriter(reader, ClassWriter.COMPUTE_MAXS);
-            var visitor = new Rewriter(writer);
+            var visitor = new Rewriter(writer, owner);
             reader.accept(visitor, 0);
             return visitor.changed ? writer.toByteArray() : null;
         } catch (Throwable ignored) {
@@ -69,9 +71,11 @@ public final class FileCallTransformer implements ClassFileTransformer {
 
     private static final class Rewriter extends ClassVisitor {
         private boolean changed;
+        private final String packageOwner;
 
-        private Rewriter(ClassVisitor visitor) {
+        private Rewriter(ClassVisitor visitor, String packageOwner) {
             super(Opcodes.ASM9, visitor);
+            this.packageOwner = packageOwner;
         }
 
         @Override
@@ -106,14 +110,28 @@ public final class FileCallTransformer implements ClassFileTransformer {
                     String constructor = OBSERVED_CONSTRUCTORS.get(owner);
                     if (constructor != null && opcode == Opcodes.INVOKESPECIAL && methodName.equals("<init>")) {
                         changed = true;
-                        super.visitMethodInsn(opcode, constructor, methodName, methodDescriptor, false);
+                        super.visitLdcInsn(packageOwner);
+                        super.visitMethodInsn(
+                            opcode,
+                            constructor,
+                            methodName,
+                            appendOwner(methodDescriptor),
+                            false
+                        );
                         return;
                     }
                     if (owner.equals("java/nio/file/Files")
                         && opcode == Opcodes.INVOKESTATIC
                         && ObservedFiles.supports(methodName, methodDescriptor)) {
                         changed = true;
-                        super.visitMethodInsn(opcode, OBSERVED_FILES, methodName, methodDescriptor, false);
+                        super.visitLdcInsn(packageOwner);
+                        super.visitMethodInsn(
+                            opcode,
+                            OBSERVED_FILES,
+                            methodName,
+                            appendOwner(methodDescriptor),
+                            false
+                        );
                         return;
                     }
                     if ((owner.equals("java/nio/channels/FileChannel")
@@ -122,11 +140,12 @@ public final class FileCallTransformer implements ClassFileTransformer {
                         && methodName.equals("open")
                         && ObservedChannels.supports(owner, methodDescriptor)) {
                         changed = true;
+                        super.visitLdcInsn(packageOwner);
                         super.visitMethodInsn(
                             opcode,
                             OBSERVED_CHANNELS,
                             owner.equals("java/nio/channels/FileChannel") ? "fileOpen" : "asyncOpen",
-                            methodDescriptor,
+                            appendOwner(methodDescriptor),
                             false
                         );
                         return;
@@ -138,11 +157,12 @@ public final class FileCallTransformer implements ClassFileTransformer {
                         && arguments.length > 0
                         && arguments[arguments.length - 1].equals(Type.getType(String.class))) {
                         changed = true;
+                        super.visitLdcInsn(packageOwner);
                         super.visitMethodInsn(
                             Opcodes.INVOKESTATIC,
                             OBSERVED_NATIVE_STORES,
                             "rocksDbPath",
-                            "(Ljava/lang/String;)Ljava/lang/String;",
+                            "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;",
                             false
                         );
                     }
@@ -153,11 +173,12 @@ public final class FileCallTransformer implements ClassFileTransformer {
                         changed = true;
                         String staticDescriptor = "(Ljava/io/File;"
                             + methodDescriptor.substring(1);
+                        super.visitLdcInsn(packageOwner);
                         super.visitMethodInsn(
                             Opcodes.INVOKESTATIC,
                             OBSERVED_FILES,
                             "file" + Character.toUpperCase(methodName.charAt(0)) + methodName.substring(1),
-                            staticDescriptor,
+                            appendOwner(staticDescriptor),
                             false
                         );
                         return;
@@ -165,6 +186,13 @@ public final class FileCallTransformer implements ClassFileTransformer {
                     super.visitMethodInsn(opcode, owner, methodName, methodDescriptor, isInterface);
                 }
             };
+        }
+
+        private static String appendOwner(String descriptor) {
+            int end = descriptor.indexOf(')');
+            return descriptor.substring(0, end)
+                + "Ljava/lang/String;"
+                + descriptor.substring(end);
         }
     }
 }

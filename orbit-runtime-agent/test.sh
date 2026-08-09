@@ -11,6 +11,7 @@ classes_root="$test_root/classes"
 harness_root="$test_root/harness"
 fixture_jar="$mods_root/agent-fixture.jar"
 session_file="$instance_root/.orbit/runtime-data/sessions/test.events"
+context_file="$instance_root/.orbit/runtime-data/agent-context.tsv"
 
 case "$test_root" in
   "$workspace_root"/target/*) ;;
@@ -20,7 +21,7 @@ case "$test_root" in
     ;;
 esac
 rm -rf -- "$test_root"
-mkdir -p "$mods_root" "$classes_root" "$harness_root"
+mkdir -p "$mods_root" "$instance_root/config" "$(dirname "$context_file")" "$classes_root" "$harness_root"
 
 javac --release 17 -d "$classes_root" "$agent_root/tests/AgentFixture.java"
 jar cf "$fixture_jar" -C "$classes_root" .
@@ -32,12 +33,17 @@ encode_path() {
 
 root_encoded="$(encode_path "$instance_root")"
 session_encoded="$(encode_path "$session_file")"
-java "-javaagent:$agent_path=root=$root_encoded;session=$session_encoded" \
+context_encoded="$(encode_path "$context_file")"
+config_encoded="$(encode_path "$instance_root/config")"
+fixture_hash="$(sha256sum "$fixture_jar" | awk '{print $1}')"
+printf '2\tcontext\tend\nsource\t%s\t%s\tend\nreserved\t%s\tend\n' \
+  "$fixture_hash" "$fixture_hash" "$config_encoded" > "$context_file"
+java "-javaagent:$agent_path=root=$root_encoded;session=$session_encoded;context=$context_encoded" \
   -cp "$harness_root" AgentIsolatedHarness "$fixture_jar" "$instance_root"
 
 record_count="$(wc -l < "$session_file")"
-if (( record_count != 3 )); then
-  echo "Expected the owned instance tree/file and one external file, got $record_count records" >&2
+if (( record_count != 4 )); then
+  echo "Expected three lasting creations and one published deletion, got $record_count records" >&2
   exit 1
 fi
 grep -q $'\ttree\t' "$session_file" || {
@@ -46,6 +52,10 @@ grep -q $'\ttree\t' "$session_file" || {
 }
 grep -q $'\tfile\t' "$session_file" || {
   echo "No owned file was recorded" >&2
+  exit 1
+}
+grep -q $'^2\tdelete\tfile\t' "$session_file" || {
+  echo "No published deletion tombstone was recorded" >&2
   exit 1
 }
 printf '%s\n' "$session_file"

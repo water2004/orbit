@@ -4737,6 +4737,7 @@ dependencies = [
  "base64",
  "bytes",
  "curseforge-wrapper",
+ "dunce",
  "futures-util",
  "hex",
  "http-body-util",
