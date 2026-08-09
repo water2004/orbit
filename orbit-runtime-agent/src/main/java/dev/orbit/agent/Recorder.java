@@ -36,6 +36,9 @@ public final class Recorder {
     private static final ThreadLocal<ArrayDeque<Boolean>> BEFORE = ThreadLocal.withInitial(ArrayDeque::new);
     private static final AtomicLong MUTATION_VERSION = new AtomicLong();
     private static final Object FLUSH_LOCK = new Object();
+    private static final boolean WINDOWS = System.getProperty("os.name", "")
+        .toLowerCase()
+        .contains("win");
 
     private static volatile Path instanceRoot;
     private static volatile Path sessionFile;
@@ -122,14 +125,13 @@ public final class Recorder {
         if (!validMutation(path, owner)) {
             return false;
         }
-        synchronized (FLUSH_LOCK) {
-            State exact = STATES.get(normalizedString(path));
-            if (exact != null && !exact.deleted() && exact.creator != null) {
-                return owner.equals(exact.creator);
-            }
-            OwnedTree inherited = nearestTree(path);
-            return inherited != null && inherited.owner.equals(owner);
+        State exact = STATES.get(normalizedString(path));
+        if (exact != null) {
+            if (exact.deleted()) return false;
+            if (exact.creator != null) return owner.equals(exact.creator);
         }
+        OwnedTree inherited = nearestTree(path);
+        return inherited != null && inherited.owner.equals(owner);
     }
 
     static void write(Path path, boolean existedBefore, String owner) {
@@ -535,9 +537,7 @@ public final class Recorder {
 
     private static String normalizedString(Path path) {
         String value = path.toString();
-        return System.getProperty("os.name", "").toLowerCase().contains("win")
-            ? value.toLowerCase()
-            : value;
+        return WINDOWS ? value.toLowerCase() : value;
     }
 
     private static void markDirty() {

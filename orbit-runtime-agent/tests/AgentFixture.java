@@ -6,6 +6,8 @@ import java.nio.file.FileSystems;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.nio.file.StandardCopyOption;
+import java.nio.file.StandardOpenOption;
 import java.util.Map;
 
 public final class AgentFixture {
@@ -18,6 +20,23 @@ public final class AgentFixture {
         for (int index = 0; index < 128; index++) {
             Files.write(tree.resolve(index + ".bin"), ("value-" + index).getBytes(StandardCharsets.UTF_8));
         }
+        // BlueMap's default file storage writes a .filepart and atomically
+        // replaces the published tile. Both paths already belong to this
+        // package tree and must not create per-tile ledger state.
+        Path tilePart = tree.resolve("tile.prbm.gz.filepart");
+        Files.write(
+            tilePart,
+            "tile".getBytes(StandardCharsets.UTF_8),
+            StandardOpenOption.CREATE,
+            StandardOpenOption.TRUNCATE_EXISTING,
+            StandardOpenOption.WRITE
+        );
+        Files.move(
+            tilePart,
+            tree.resolve("tile.prbm.gz"),
+            StandardCopyOption.ATOMIC_MOVE,
+            StandardCopyOption.REPLACE_EXISTING
+        );
         try (FileOutputStream output = new FileOutputStream(root.resolve("config/agent-fixture.properties").toFile())) {
             output.write("enabled=true".getBytes(StandardCharsets.UTF_8));
         }

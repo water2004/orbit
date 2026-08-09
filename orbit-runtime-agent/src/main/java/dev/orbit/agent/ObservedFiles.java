@@ -247,6 +247,9 @@ public final class ObservedFiles {
 
     public static Path move(Path source, Path target, CopyOption[] options, String owner) throws IOException {
         boolean sourceTree = Files.isDirectory(source);
+        if (!sourceTree && Recorder.owns(source, owner) && Recorder.owns(target, owner)) {
+            return Files.move(source, target, options);
+        }
         Path result = Files.move(source, target, options);
         Recorder.delete(source, sourceTree, owner);
         if (sourceTree) Recorder.tree(target, false, true, owner);
