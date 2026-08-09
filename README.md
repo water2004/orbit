@@ -16,7 +16,7 @@ The repository contains three deliberately separated applications:
 - `orbit-launcher` manages Minecraft, Loaders, Java, accounts, launching, and supervised servers. It never links to or calls Orbit; Orbit can wrap its start command when package-owned runtime data observation is requested.
 - `orbit-gui` is a native GPUI shell. It performs no package or launcher business logic. Runtime installation/accounts still call Launcher directly, while game start and package-data purge go through Orbit's joint-launch path.
 
-The detailed boundaries are documented in [Orbit architecture](docs/orbit-architecture.md), [Launcher architecture](docs/orbit-launcher-architecture.md), and [GUI architecture](docs/orbit-gui.md).
+The detailed boundaries are documented in [Orbit architecture](docs/orbit-architecture.md), [Launcher architecture](docs/orbit-launcher-architecture.md), [GUI architecture](docs/orbit-gui.md), and the [native bundle format](docs/orbit-bundle-format.md).
 
 ## Highlights
 
@@ -28,8 +28,8 @@ The detailed boundaries are documented in [Orbit architecture](docs/orbit-archit
 - **Loader-faithful metadata and audit backends.** Fabric, Quilt, Forge, and NeoForge keep their real registration, nesting, namespace, and Mixin activation rules before entering shared normalized models.
 - **Explainable objective-aware solving.** Dependency causes come from the actual PubGrub propagation and backtracking path. `add` and `fix` enumerate standard Pareto-minimal package-change sets; `upgrade` and `outdated` enumerate the standard Pareto-maximal version front. Every incomparable alternative remains an explicit choice.
 - **Package-level transactions.** `mod_id` is the solver package key. A selected package may own multiple contained JARs, while unselected top-level package versions are removed only after the exact plan is shown and confirmed.
-- **Observable and cancellable work.** Discovery, downloads, solving, application, audit, and portable export emit typed progress. Orbit ZIP export stores already-compressed JARs directly, reports real byte progress, and cleans failed temporary output.
-- **Portable migration snapshots.** The GUI first exports two target-independent snapshots: Orbit owns the mod graph/configuration pack, while Launcher owns game state and worlds. `orbit-launcher install --from` creates the target runtime and restores Launcher state; Orbit then resolves the frozen mod pack against the actually installed target Minecraft and Loader runtime.
+- **Observable and cancellable work.** Discovery, downloads, solving, application, audit, and package export emit typed progress. Already-compressed JARs are stored directly, real byte progress is reported, and failed temporary output is removed.
+- **One package, disjoint owners.** `.orbitbundle` is a versioned, hash-inventoried format with optional Launcher and Orbit sections. Orbit owns mods, constraints, lock state, and opted-in package data; Launcher owns runtime requirements, worlds, and game preferences. The GUI composes both projections into one migration bundle without either CLI interpreting the other's files. Official `.mrpack` import/export remains a separate strict implementation of Modrinth's format.
 - **Runtime-owned package data.** `orbit launch` wraps Orbit Launcher and injects Orbit's low-overhead Java Agent. It never observes reads. A verified, version-ranged Loader capability table maps physical JARs, Forge-family union sources, and Quilt native module identities back to one top-level logical package. A file belongs to its last successful package writer; the first package writing into an unowned directory claims that directory, while specific descendants override it. Growing exceptions are recompressed from metadata on the cold merge path so directory defaults follow the owner of the most actual files without changing per-file purge or migration results. Unknown Loader/JVM ranges reject observation instead of guessing. There is no filename, stack-walk, or static-analysis fallback.
 
 ## Installation
@@ -128,16 +128,16 @@ Orbit resolves its instance from the current directory first, then an explicit `
 
 | Command | Responsibility |
 | --- | --- |
-| `orbit export [pack.zip]` | Export verified TOML, lock state, selected JARs, and portable configuration. JARs use ZIP Stored mode. |
-| `orbit export pack.mrpack --format mrpack` | Export a Modrinth pack; remotely recoverable files stay indexed and local files become overrides. |
-| `orbit import <file>` | Import TOML, safe ZIP content, or a Modrinth pack according to an explicit merge strategy. |
+| `orbit export [pack.orbitbundle] [--content mods\|mods-and-data]` | Export a verified Orbit projection. The manifest inventories every file by owner, size, and SHA-256; JARs use ZIP Stored mode. |
+| `orbit export pack.mrpack --format mrpack [--content mods\|mods-and-data]` | Export an official Modrinth pack; recoverable files stay indexed, local JARs become overrides, and selected state uses the official side-specific override layer. |
+| `orbit import <file>` | Import TOML, a validated `.orbitbundle`, or an official `.mrpack`. Optional mrpack paths are selected explicitly with repeatable `--optional` (or `--all-optional`); generic ZIP files are not accepted. Import does not secretly run `fix`. |
 | `orbit migrate check <target>` | Resolve the complete source package set against an installed target runtime; if that set is impossible, offer a Pareto-minimal package-removal search. |
 | `orbit migrate export <target>` | Reuse the same strict-first planner and write target TOML, lock, and configuration before `orbit install`. |
-| `orbit migrate export <target> --source-pack source.zip --consume-source-pack` | Resolve from a source snapshot exported before target creation, then remove the snapshot after a confirmed export. |
+| `orbit migrate export <target> --source-pack source.orbitbundle --consume-source-pack` | Resolve from a source bundle exported before target creation, then remove it after a confirmed export. |
 
 The migration GUI sequence is intentionally transactional:
 
-1. Export and validate the source Orbit pack.
+1. Export and validate the source Orbit projection, then append Launcher-owned state to the same bundle.
 2. Create and install the isolated target Minecraft/Loader runtime.
 3. Run `orbit migrate check` and review the complete target package plan.
 4. Confirm and export target Orbit state.
@@ -179,13 +179,14 @@ orbit-launcher install --new survival-server \
   --minecraft latest-release --loader fabric
 ```
 
-Launcher state is exported without a target version and restored only through installation:
+Launcher state is exported as the Launcher projection of the same package format and restored only through installation. `--base` atomically composes it with an Orbit projection:
 
 ```text
-orbit-launcher --instance old-client export state.zip
+orbit export migration.orbitbundle --format orbit --content mods-and-data
+orbit-launcher --instance old-client export migration.orbitbundle --base migration.orbitbundle
 orbit-launcher install --new new-client --kind client \
   --minecraft 1.21.1 --loader fabric --loader-version stable \
-  --from state.zip --consume-from
+  --from migration.orbitbundle
 ```
 
 Client saves come from the isolated instance `saves/` directory. Dedicated-server worlds follow

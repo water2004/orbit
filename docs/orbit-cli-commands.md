@@ -46,7 +46,7 @@ contained JAR 不是独立删除目标。
 | `--cache-dir <directory>` | 使用指定的 content-addressed JAR 缓存目录 |
 | `--data-layout system\|executable` | 选择平台目录或可执行文件相邻目录布局 |
 | `--language system\|en\|zh-CN` | 覆盖 `core.language`；省略时使用有效全局配置，schema 默认跟随系统 |
-| `--output-format text\|json` | 输出格式；`json` 输出单个 JSON 文档到 stdout，供自动化工具集成；与 `export --format zip\|mrpack` 无歧义 |
+| `--output-format text\|json` | 输出格式；`json` 输出单个 JSON 文档到 stdout，供自动化工具集成；与 `export --format orbit\|mrpack` 无歧义 |
 | `--progress-format none\|ndjson` | 进度协议；`ndjson` 把进度事件逐行写 stderr，每行一个 JSON 对象 |
 | `-v, --verbose` | 显示已解析的配置/cache/网络策略和实例选择上下文；不倾倒 Provider/JAR 内部日志 |
 | `-q, --quiet` | 关闭成功结果、信息提示和进度；错误仍输出，完成命令所必需的选择与写入确认仍会显示 |
@@ -494,38 +494,51 @@ CurseForge，不回退到 Modrinth；缺少 API Key 或目标文件没有 API �
 ```text
 orbit import <file>
   [--merge-strategy prefer-existing|prefer-import|interactive]
+  [--optional <instance-relative-path>]...
+  [--all-optional]
 ```
 
 - `.toml`：同包 remotes 始终取并集；版本、端侧、optional、exclude 等语义冲突才按策略处理；
-- `.zip`：只提取安全的 `mods/*.jar` / `mods/*.jar.disabled` 路径；
-- `.mrpack`：先应用 bundled overrides，再按 index 从官方允许的 HTTPS 来源下载缺失
-  JAR，并验证 file size、SHA-1 与 SHA-512；
+- `.orbitbundle`：先校验 `bundle.toml`、完整 ZIP inventory 与 owner namespace，再校验
+  Orbit 投影每个文件的 size/SHA-256 并只安装该投影；Launcher 投影不会被读取，目标平台的
+  精确路径快照也不会被源包覆盖；
+- `.mrpack`：按 index 从官方允许的 HTTPS 来源下载并校验 size、SHA-1 与 SHA-512，
+  然后按官方层次应用 common 与当前端侧 overrides；optional 条目默认不安装，使用可重复的
+  `--optional` 精确选择当前端侧的条目，或用 `--all-optional` 明确选择全部；
+- 导入只复原并同步包中陈述的事实，不调用求解器；无法满足的新依赖应由用户随后显式运行
+  `orbit fix`；
+- archive 使用 `interactive` 时先完成只读校验与冲突计划，再统一询问是否替换冲突文件；
+  `prefer-existing` 保留冲突目标，`prefer-import` 替换冲突目标；
 - `--yes` 未指定策略时等同 `prefer-import`；
 - dry-run 不写 manifest、JAR 或 lockfile。
 
-ZIP 与 mrpack index 路径都经过规范化，绝对路径、`..` 与非 mods JAR 不会写入实例；
+两种格式的路径都经过规范化；绝对路径、`..`、反斜杠、符号链接、Launcher 保留路径与
+未声明内容都不会写入实例；通用 ZIP 不再是导入格式；
 导入完成后统一触发 sync。
 
 ### `orbit export`
 
 ```text
-orbit export [output] [--target client|server|both] [--format zip|mrpack]
+orbit export [output] [--target client|server|both]
+  [--format orbit|mrpack] [--content mods|mods-and-data]
 ```
 
-导出 manifest、lockfile、目标选择中校验通过的 JAR，以及 `config/`、`defaultconfigs/`、
-`serverconfig/` 中不存在符号链接的模组配置。还会递归包含入选包实际创建的实例内数据树，
+`orbit` 格式导出 manifest、lockfile 与目标选择中校验通过的 JAR。只有显式选择
+`mods-and-data` 时才加入 `config/`、`defaultconfigs/`、`serverconfig/` 和入选包实际创建的实例内数据树，
 包括其下后来由用户写入的内容；更深层属于未入选包的节点不会混入。便携包携带精确文件清单和
-所有权账本，导入时拒绝未声明文件。未指定文件名时使用安全化的
+所有权账本，导入时拒绝未声明文件。缺省输出为 `.orbitbundle`，未指定文件名时使用安全化的
 项目名称和版本。JAR 使用 ZIP Stored，避免对压缩容器二次 Deflate；校验和归档写入发出真实
-字节进度。`mrpack` 生成 Modrinth index；在线文件可成为 downloads，必须内嵌的本地文件和
-配置放入 overrides。dry-run 校验并统计计划，但不创建输出。
+字节进度。`mrpack` 只生成官方 Modrinth index 与 override 层，绝不把 Orbit TOML/lock/账本
+塞入 overrides；在线文件可成为 downloads，本地 JAR 与显式选择的数据进入相应端侧 override。
+dry-run 校验并统计计划，但不创建输出。自有格式见
+[Orbit Bundle Format](orbit-bundle-format.md)。
 
 ### `orbit migrate check` / `orbit migrate export`
 
 ```text
 orbit migrate check <target-instance-directory>
 orbit migrate export <target-instance-directory>
-orbit migrate export <target-instance-directory> --source-pack <source.zip> --consume-source-pack
+orbit migrate export <target-instance-directory> --source-pack <source.orbitbundle> --consume-source-pack
 orbit migrate check <target-instance-directory> --allow-removals
 ```
 
@@ -552,16 +565,16 @@ Pareto 极小 front。求解器从不可解推导中的强制偏好核心分支�
 `orbit install` 统一物化。GUI 的迁移向导只编排源 export、Launcher 创建目标、
 migrate export、`instances register` 与目标 install；GUI 不直接写 Orbit 全局注册表。
 
-`--source-pack` 接受同一 `orbit export --format zip` 生成的便携源快照。规划器先在受限临时
+`--source-pack` 接受同一 `orbit export --format orbit` 生成的自有包。规划器先在受限临时
 目录安全解包并验证 TOML/lock，再将该冻结源状态和真实目标运行时联合求解；它不会从 GUI
 状态或文件名猜源包。快照中为离线恢复添加的源版本 `file` 远端不是迁移候选；一个逻辑包
 只要还有 Modrinth/CurseForge project，就仅按目标 Minecraft/Loader 重新下载该 project 的
 候选。真正 file-only 的包仍进入同一 PubGrub 图，其 JAR 声明不兼容目标时会被严格排除或在
 用户许可的软迁移中成为删除项。成功计划不会把已排除的 26.2 候选诊断误报成 26.1.2 迁移
 失败。`--consume-source-pack` 只在用户确认且目标状态写入成功后删除源包。
-Orbit 归档只负责模组状态，不包含 `options.txt`、世界、`server.properties` 或 Launcher
-运行状态。GUI 因而先分别导出 Orbit 源快照与目标无关的 Launcher 状态包，成功后才用
-`orbit-launcher install --new ... --from <状态包>` 新建目标实例，再执行上述目标规划与
+Orbit 投影只负责模组状态。GUI 先导出该投影，再让 Launcher 用 `export --base` 把
+`options.txt`、世界与 `server.properties` 等 Launcher 投影原子追加到同一个 `.orbitbundle`；
+成功后用 `orbit-launcher install --new ... --from <组合包>` 新建目标实例，再执行上述目标规划与
 Orbit install。GUI 不显示
 常驻的严格/软策略控件；严格无解时由同一 CLI 子进程的 schema 2 interaction 弹出确认，
 GUI 只把选择写回该进程 stdin。
@@ -664,7 +677,7 @@ orbit cache clean
 - 非交互 init 不猜 loader/版本，重复 init 不覆盖项目；
 - 全局 `--output-format text|json` 与 `--progress-format none|ndjson`；JSON 信封 + NDJSON 进度 +
   结构化错误 JSON + 稳定错误码 + 退出码（见 [orbit-output-formats.md](orbit-output-formats.md)）；
-  `export --format zip|mrpack` 只选择归档格式，输出协议与之完全分离。
+  `export --format orbit|mrpack` 只选择包格式，输出协议与之完全分离。
 - proxy/timeout/retry、跨 provider 下载并发、认证、持久化语言、颜色和进度样式均由
   同一份强类型全局配置驱动；不存在“配置能保存但运行时忽略”的字段。
 - `--quiet` 在统一结果边界抑制 text/JSON 成功结果、信息日志和全部进度；交互协议、方案选择

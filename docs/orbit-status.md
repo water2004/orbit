@@ -38,15 +38,15 @@
 | Linux deb / Release | ✅ | amd64 拆为可独立安装的 `orbit`（含 Agent）、`orbit-launcher`、`orbit-gui`；GUI 精确依赖同版本两 CLI 并独占 desktop/icon；统一 `v*` tag 发布 MSI、三个 deb、SHA256SUMS 与 release notes |
 | Launcher Java | ✅ | Minecraft 官方 metadata 选择 Mojang 受管 runtime；下载、逐文件校验、共享、启动前复核与安全删除闭环；不受支持的 Temurin/system 分支不进入 config、实例 schema 或 GUI |
 | Launcher 安装事务 | ✅ | OS 独占文件锁串行化实例写入；journal 支持崩溃后自动安全回滚，并验证路径、文件集合与复用工件 |
-| Launcher 状态包 | ✅ | `export` 只快照当前客户端设置/saves 或服务端访问列表/世界；`install --from` 在目标运行时后恢复。服务端属性由目标 Minecraft `--initSettings` 生成字段集并按同名值合并，EULA/模组/凭据不迁移 |
+| 组合包 / mrpack | ✅ | `.orbitbundle` 用共享清单、owner namespace、size/SHA-256 inventory 容纳可选投影，并保证每个文件的 Launcher/Orbit 所有权互斥；GUI 迁移编排 Orbit export + Launcher `export --base` 得到一个包。Launcher 恢复设置/世界，Orbit 恢复模组/数据；EULA/凭据不迁移。mrpack 严格使用官方 index、依赖、env 与 override 层 |
 | 长事务进度 | ✅ | 包操作与 audit 均使用 core 强类型事件；版本库批量检查显示刷新/复用与动态 project 总量，去重候选/审计工件精确计数，求解工作总量随实际 run/probe 动态增长 |
-| JSON / 自动化输出 | ✅ | 全局 `--output-format text\|json` 与 `--progress-format none\|ndjson`；`export --format zip\|mrpack` 只选择归档类型；JSON 结果 + NDJSON 进度/交互 + stdin 响应 + 结构化错误与稳定错误码共用 schema 2；`--quiet` 统一抑制成功结果/信息/进度但保留必需交互；协议严格 UTF-8，字段/枚举码不随语言变化；view-model 层隔离哈希/文件名/密钥，并在现有 search/info 契约提供官方 icon/link/gallery 展示数据 |
+| JSON / 自动化输出 | ✅ | 全局 `--output-format text\|json` 与 `--progress-format none\|ndjson`；`export --format orbit\|mrpack` 只选择包格式，`--content` 选择数据范围；JSON 结果 + NDJSON 进度/交互 + stdin 响应 + 结构化错误与稳定错误码共用 schema 2；协议严格 UTF-8，字段/枚举码不随语言变化；view-model 层隔离哈希/文件名/密钥，并在现有 search/info 契约提供官方 icon/link/gallery 展示数据 |
 | 全局配置命令 | ✅ | `config path/list/get/set/unset`；强类型校验、单字段原子更新、注释保留、密钥脱敏、环境覆盖不回写；网络/并发/认证/cache 进入共享服务，语言/颜色/进度进入 CLI 展示边界 |
 | 受管包环境过滤 | ✅ | TOML `env` 可选；缺失时跟随 lock/JAR 声明；`orbit env ... auto` 可设置过滤或恢复自动 |
 | Loader JSON 容错 | ✅ | Fabric-compatible 字符串控制字符；仅限 JAR 内 loader/Mixin/refmap，其他 JSON 保持严格 |
 | 字节码运行时符号对齐 | ✅ | Fabric/Quilt 按实际 Tiny/identity 能力选择 official 或投影，不复制版本边界；Forge/NeoForge 验证 Loader runtime game；未对齐时在 finding 前停止 |
 | i18n | ✅ | `orbit`、`orbit-launcher` 与 GUI 共用 `system`（默认）/`en`/`zh-CN` 语言模型；CLI help、文本结果、进度、询问和结构化错误均在展示边界翻译，机器字段保持稳定 |
-| 原生 GUI | ✅ | GPUI + gpui-component 原生进程薄壳；统一 SVG/EXE 品牌标志、领域化侧栏图标、紧凑任务条、可点击外部关闭且双向过渡的 Activity 抽屉、连续触控板滚动、语言/主题/强调色；Runtime 先导出再创建的新实例迁移、可取消且有字节进度的 Orbit ZIP/Modrinth mrpack 导入导出、Java、Mods、audit、account/server；启动走 GUI→Orbit→Launcher，purge 渲染专用准确删除 interaction，其它 Launcher 操作仍直接调用 Launcher；设置页只经两套 schema 2 CLI 管理配置，不链接 core 或直读业务 TOML |
+| 原生 GUI | ✅ | GPUI + gpui-component 原生进程薄壳；统一 SVG/EXE 品牌标志、领域化侧栏图标、紧凑任务条、Activity 抽屉、连续触控板滚动、语言/主题/强调色；Runtime 用同一组合包完成先导出再创建的迁移，并提供 Orbit 数据范围与 mrpack 导入导出；GUI 只编排 CLI，不解析包、直读业务 TOML 或实现第二条路径 |
 
 ## 2. 保留的正确规范
 

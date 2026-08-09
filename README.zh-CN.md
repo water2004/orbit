@@ -25,7 +25,8 @@ lock，不替代用户已有的启动器。它可以接管一个合法的现有�
 Launcher 已完整支持 Vanilla、Fabric、Quilt、Forge、NeoForge 的客户端与独立服务端安装，
 不再是“首个基线”。项目自己的 Microsoft public-client ID 已内置，token 仍只进入操作系统
 秘密存储。详细边界见 [Orbit 架构](docs/orbit-architecture.md)、
-[Launcher 架构](docs/orbit-launcher-architecture.md) 和 [GUI 架构](docs/orbit-gui.md)。
+[Launcher 架构](docs/orbit-launcher-architecture.md)、[GUI 架构](docs/orbit-gui.md) 与
+[自有组合包格式](docs/orbit-bundle-format.md)。
 
 ---
 
@@ -40,9 +41,10 @@ Launcher 已完整支持 Vanilla、Fabric、Quilt、Forge、NeoForge 的客户�
 - **🔎 可解释求解**：依赖原因直接参与 PubGrub 的真实传播和回溯；不会用第二次反事实求解或日志解析猜原因。
 - **🧭 目标明确的完整方案选择**：`add` / `fix` 枚举标准 Pareto 极小包变更集合，`upgrade` / `outdated` 枚举标准版本 Pareto 极大 front；互不支配的方案全部请求选择。
 - **📦 包级事务**：JAR 自声明的 `mod_id` 是包；同 ID 文件是版本候选。方案会同时展示升级、允许的依赖降级与未选包版本移除，确认后一次应用。
-- **⏱️ 可观察长事务**：在线候选发现、JAR 下载/缓存校验/解析、离线求解、最终物化、audit 和便携包导出均提供强类型进度；Orbit ZIP 对已经压缩的 JAR 使用 Stored，并按真实字节显示与取消导出。
+- **⏱️ 可观察长事务**：在线候选发现、JAR 下载/缓存校验/解析、离线求解、最终物化、audit 和包导出均提供强类型进度；已经压缩的 JAR 使用 Stored，并按真实字节显示与取消导出。
+- **📦 单一组合包、互斥所有权**：`.orbitbundle` 用版本化清单记录可选的 Launcher/Orbit 投影及每个文件的 owner、大小和 SHA-256。Orbit 只管理模组、约束、lock 与选中的包数据；Launcher 只管理运行时要求、世界和游戏设置。GUI 迁移时把两者组合为一个包，但任一 CLI 都不解释或改写另一方投影。`.mrpack` 则严格按 Modrinth 官方格式单独实现。
 - **☕ 字节码下限检查**：根据目标 Minecraft 与 JAR class major 校验最低 Java；该检查不宣称能证明 API、Mixin 或运行时行为完全兼容。
-- **🚀 联合跨版本迁移**：GUI 先分别冻结目标无关的 Orbit 模组包与 Launcher 游戏状态包；`orbit-launcher install --from` 创建目标运行时并恢复世界/设置，`migrate export --source-pack` 再针对真实目标运行时求完整依赖解，最后由 `orbit install` 精确物化模组。
+- **🚀 联合跨版本迁移**：GUI 先导出目标无关的 Orbit 投影，再由 Launcher 在同一个 `.orbitbundle` 中原子追加世界和游戏设置；`orbit-launcher install --from` 创建目标运行时并恢复 Launcher 投影，`migrate export --source-pack` 再针对真实目标运行时求完整依赖解，最后由 `orbit install` 精确物化模组。
 
 ---
 
@@ -100,13 +102,15 @@ orbit-launcher install --new survival-server \
 服务端启动前必须通过专用命令完整展示并接受 Minecraft EULA；Launcher 不会代替用户默认
 同意。完整命令见 [Orbit Launcher CLI](docs/orbit-launcher-cli.md)。
 
-Launcher 状态导出不绑定目标版本，只能由安装命令恢复：
+Launcher 状态作为同一 `.orbitbundle` 的独立投影导出，只能由安装命令恢复。`--base`
+会原子地把它与 Orbit 投影组合，双方都不会解析或改写对方的文件：
 
 ```text
-orbit-launcher --instance old-client export state.zip
+orbit export migration.orbitbundle --format orbit --content mods-and-data
+orbit-launcher --instance old-client export migration.orbitbundle --base migration.orbitbundle
 orbit-launcher install --new new-client --kind client \
   --minecraft 1.21.1 --loader fabric --loader-version stable \
-  --from state.zip --consume-from
+  --from migration.orbitbundle
 ```
 
 客户端世界取自隔离实例的 `saves/`。独立服务端世界按 `server.properties` 的 `level-name`
@@ -223,11 +227,11 @@ schema、字段名、枚举码和错误码不随语言变化。Windows 控制台
 
 | 命令 | 描述 |
 | :--- | :--- |
-| `orbit import <file>` | 合并 TOML、导入安全 ZIP，或按 index/overrides 导入 mrpack，随后触发 `sync`。 |
-| `orbit export [file.zip]` | 将清单、锁文件、校验通过的 JAR 与可移植配置打包为 ZIP；JAR 不重复压缩并报告真实字节进度，也可输出 mrpack。 |
+| `orbit import <file>` | 合并 TOML、导入经清单与哈希验证的 `.orbitbundle`，或严格按官方 index/overrides 语义导入 `.mrpack`；optional 路径用可重复的 `--optional`（或 `--all-optional`）显式选择；不接受通用 ZIP，也不暗中运行 `fix`。 |
+| `orbit export [file.orbitbundle] [--content mods\|mods-and-data]` | 导出自有格式的 Orbit 投影；每个文件都有 owner、大小与 SHA-256，数据是否随包导出由显式 content 决定。`--format mrpack` 输出官方 Modrinth 格式。 |
 | `orbit migrate check <目标实例目录>` | 先要求保留全部源包并对真实目标运行时联合求解；严格解不存在时才询问是否搜索标准 Pareto 极小删包方案。 |
 | `orbit migrate export <目标实例目录>` | 复用同一严格优先迁移规划器，将目标 `orbit.toml`、`orbit.lock` 和模组配置写入空白目标实例；随后在目标运行 `orbit install`。 |
-| `orbit migrate export <目标实例目录> --source-pack source.zip --consume-source-pack` | 从新建目标前冻结的源包求解；确认写入成功后删除临时源包。GUI 的升级/迁移流程使用此模式。 |
+| `orbit migrate export <目标实例目录> --source-pack source.orbitbundle --consume-source-pack` | 从新建目标前冻结的组合包求解；确认写入成功后删除临时源包。GUI 的升级/迁移流程使用此模式。 |
 | `orbit audit` | **字节码兼容风险分析（只读）**。复用 Loader 实际选择的顶层/嵌套运行时内容，由 Fabric/Quilt/Forge/NeoForge 后端确定注册与运行时规则，再进入共享 ClassFile/效果/冲突流水线；默认输出分类摘要，`--output-format json` 或显式 `--report <path>` 保留完整 schema 5 证据。不下载 mapping，也不把依赖声明本身当作风险证据。 |
 
 `mods/` 缺失是合法的空模组集合。init、sync、检查、失败或取消的操作以及空 lock 的 install

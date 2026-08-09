@@ -96,15 +96,16 @@ Java 设置页列出、完整校验和清理未使用 Java；任一注册实例 
 Runtime 页只负责创建、导入、更新和启动实例，避免同一管理动作出现两个入口。
 
 跨版本迁移也由 Runtime 页编排领域流程：先从源实例调用同一个 `orbit export` 管线生成并
-校验便携模组源包，再调用 `orbit-launcher export` 生成与目标无关、包含世界的游戏状态包；
-两个导出都成功后才用 `orbit-launcher install --new ... --from <状态包> --consume-from`
+校验 `.orbitbundle` 的 Orbit 投影，再调用 `orbit-launcher export --base <同一路径>` 原子追加
+与目标无关、包含世界的 Launcher 投影；组合包成功后才用
+`orbit-launcher install --new ... --from <组合包>`
 创建并安装真实目标实例。客户端世界来自隔离 game directory 的 `saves/`；服务端世界来自
 工作目录下 `server.properties` 的 `level-name`（缺省 `world`）。服务端属性先由目标
 Minecraft 生成字段集合，再只迁移目标仍支持的同名值，跳过字段作为结构化结果显示；EULA
 不迁移。GUI 随后先
-调用 `orbit migrate check <目标目录> --source-pack <源包>`，把目标 Minecraft/Loader 上的
+调用 `orbit migrate check <目标目录> --source-pack <组合包>`，把目标 Minecraft/Loader 上的
 联合求解结果、升级/降级/替换/删除与诊断呈现为专用审阅页；用户接受后才调用
-`orbit migrate export <目标目录> --source-pack <源包> --consume-source-pack`，最后在目标调用
+`orbit migrate export <目标目录> --source-pack <组合包> --consume-source-pack`，最后在目标调用
 `orbit install`。GUI
 不自己拼目标 TOML、不逐包检查兼容性，也不链接 Orbit core；迁移联合求解完全属于
 Orbit CLI/core。用户取消迁移方案或写盘确认时，GUI 不会继续调用目标 `install`，源实例始终
@@ -125,12 +126,17 @@ Orbit CLI/core。用户取消迁移方案或写盘确认时，GUI 不会继续�
 给随后的 export 增加 `--allow-removals`，表示复用用户刚刚作出的许可，避免重复询问；GUI
 不自行计算删除集合或选择方案。
 
-Runtime 页也把整合包作为领域动作呈现：安装 Orbit ZIP/TOML 或 Modrinth mrpack 时调用
-`orbit import`，用户明确确认覆盖后再调用 `orbit fix` 求解并展示准确方案；导出分别调用
-`orbit export --format zip` 与 `orbit export --format mrpack`。GUI 不解析归档、不改写清单，
+Runtime 页也把整合包作为领域动作呈现：向现有实例导入 Orbit bundle/TOML 时明确确认替换，
+导入 Modrinth mrpack 时先用 Launcher 的只读检查取得当前端侧 optional 清单并逐项选择，最终
+都只调用 `orbit import` 并同步事实，不偷偷执行 `fix`。从包创建新实例时先调用
+`orbit-launcher package inspect`，以原生控件选择端侧和每个 mrpack optional 文件，再依次调用
+Launcher `install --from`、Orbit `init` 和 Orbit `import`。导出分别调用
+`orbit export --format orbit --content mods|mods-and-data` 与 `orbit export --format mrpack`。
+迁移先输出 Orbit 投影，再调用 Launcher `export --base` 把世界/游戏设置追加到同一包。
+GUI 不解析归档、不改写清单，
 也不根据扩展名实现第二套导入规则。
 
-普通 Orbit 导出、迁移源快照与 Launcher 状态包都显示 CLI 的真实字节进度并可取消。JAR 已是压缩容器，core
+普通 Orbit 导出、组合迁移包都显示 CLI 的真实字节进度并可取消。JAR 已是压缩容器，core
 以 ZIP Stored 写入；配置和小型元数据才使用 Deflate。被取消或失败的导出不会被当作可用包，
 下一次对同一路径导出会先清理精确的事务临时文件。
 

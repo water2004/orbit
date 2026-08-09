@@ -140,21 +140,24 @@ profile；精确主 JAR 和共享 Loader/library classpath 全部由 lock 记录
 
 ### 4.2 可移植实例状态
 
-Launcher 对可变游戏状态定义一份独立、目标无关的 ZIP 快照：
+Launcher 在统一 `.orbitbundle` 中拥有一份独立、目标无关的投影：
 
 ```text
-LauncherStateArchive
-  schema
-  source Minecraft version
-  instance kind
-  file inventory + byte size + SHA-256
-  client: options.txt, servers.dat, saves/**
-  server: server.properties, access lists, server icon, logical world/**
+BundleManifest
+  common: identity, exact source runtime, supported target
+  optional launcher section
+    content = runtime-only | runtime-and-state
+    launcher/** inventory + byte size + SHA-256
+    client: options.txt, servers.dat, saves/**
+    server: server.properties, access lists, server icon, logical world/**
+  optional orbit section (opaque to Launcher)
 ```
 
-`export` 只读取当前状态，不接收目标 Minecraft/Loader，也不做迁移规划。只有
-`install --new ... --from` 能消费快照，且目标实例目录必须尚不存在；已有实例的 install
-不接受状态包。它先安装目标运行时，再应用同一份快照；因此同版本恢复与跨版本迁移共享一条实现路径。客户端
+`export` 只读取当前状态，不接收目标 Minecraft/Loader，也不做迁移规划。没有 `--base` 时
+创建 Launcher-only 包；有 `--base` 时先校验现有包，再 raw-copy 非 Launcher 投影并原子替换
+同一路径。只有 `install --new ... --from` 能消费包，且目标实例目录必须尚不存在；已有实例的
+install 不接受包。它先安装目标运行时，再应用同一份 Launcher 投影；因此同版本恢复与跨版本
+迁移共享一条实现路径。客户端
 世界根固定为 Launcher 隔离 game directory 的 `saves/`。Dedicated server 世界根由实例
 工作目录和 `server.properties` 的 `level-name` 组合，缺失时使用 Minecraft 默认的 `world`；
 绝对路径、父目录、符号链接和实例边界逃逸均拒绝。Loader adapter 不改写 game/working
@@ -163,7 +166,7 @@ directory，所以 Fabric、Quilt、Forge、NeoForge 在这个层次不需要分
 服务端属性由目标 Minecraft 自己的 `--initSettings` 在正常安装事务中生成。恢复以目标字段集
 为基准，仅迁移源文件中目标仍存在的同名值；目标新增字段保留默认值，源端已删除字段进入
 结构化 skipped 列表。Launcher 不维护跨版本属性名表，不迁移 EULA 接受，也不把模组配置或
-JAR 纳入此状态包。
+JAR 纳入 Launcher 投影。
 
 ### 4.3 目标平台
 
@@ -785,13 +788,14 @@ orbit-launcher install --new main-server --server-directory <path> --kind server
 orbit-launcher install
 orbit-launcher --instance <id> install
 
-# 导出当前状态；包本身不绑定目标版本
-orbit-launcher --instance <source-id> export state.zip
+# 向同一个自有包追加 Launcher 状态；已有 Orbit 投影保持不变
+orbit-launcher --instance <source-id> export migration.orbitbundle \
+  --base migration.orbitbundle
 
-# 创建目标运行时后恢复同一状态包
+# 创建目标运行时后恢复同一包中的 Launcher 投影
 orbit-launcher install --new migrated-client --kind client \
   --minecraft 1.21.1 --loader fabric --loader-version stable \
-  --from state.zip --consume-from
+  --from migration.orbitbundle
 ```
 
 客户端 `--new` 固定使用平台 data 目录中的唯一托管 Minecraft 仓库，game directory 为
@@ -949,7 +953,7 @@ Launcher 不维护独立 `update` 求解器。`versions minecraft|loader|java` �
 GUI 的 Loader 小版本更新可在原实例执行 `configure --loader-version <exact>` 后安装；
 Minecraft 或 Loader 类型迁移创建新实例，避免破坏源运行时。普通运行时安装事务不触碰
 mod、配置或存档；只有全新实例的 `install --new ... --from` 才在运行时提交后应用已经校验的
-Launcher 状态包。恢复失败会删除整个 provisional 新实例。不存在另一套
+Launcher 投影。恢复失败会删除整个 provisional 新实例。不存在另一套
 `migrate`/`repair` 状态机。
 
 ## 17. 安全约束

@@ -613,7 +613,7 @@ Orbit 只在启动前创建 Agent session、退出后归并可用 snapshot；若
   "ok": true,
   "result": {
     "dry_run": false,
-    "path": "/tmp/my-pack-1.0.0.zip",
+    "path": "/tmp/my-pack-1.0.0.orbitbundle",
     "packages": 12,
     "bytes": 52428800
   }
@@ -768,12 +768,12 @@ schema 版本。schema 5 的 `environment.loader` 是唯一、已验证的 loade
 
 ### Orbit Launcher `export` / `install --from`
 
-Launcher 使用同一 schema 2 成功信封。`orbit-launcher export state.zip --output-format json`
-的 `command` 为 `export`，结果只描述当前状态包，不含目标版本：
+Launcher 使用同一 schema 2 成功信封。`orbit-launcher export state.orbitbundle --output-format json`
+的 `command` 为 `export`，结果只描述当前包中的 Launcher 投影，不含目标版本：
 
 ```json
 {
-  "path": "state.zip",
+  "path": "state.orbitbundle",
   "kind": "server",
   "minecraft_version": "1.21.1",
   "files": 143,
@@ -782,7 +782,7 @@ Launcher 使用同一 schema 2 成功信封。`orbit-launcher export state.zip -
 }
 ```
 
-`orbit-launcher install --new ... --from state.zip --output-format json` 仍返回唯一的 `install` 结果；
+`orbit-launcher install --new ... --from state.orbitbundle --output-format json` 仍返回唯一的 `install` 结果；
 成功应用时追加 `state`，没有第二个迁移结果或 Launcher `migrate` 命令：
 
 ```json
