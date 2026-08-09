@@ -285,10 +285,12 @@ impl ArtifactCache {
         if !*dirty {
             return Ok(());
         }
-        aliases
-            .as_ref()
-            .expect("dirty alias index was initialized")
-            .save(&self.alias_path())?;
+        let aliases = aliases.as_ref().ok_or_else(|| {
+            LauncherError::Transaction(
+                "artifact alias index was marked dirty before initialization".to_string(),
+            )
+        })?;
+        aliases.save(&self.alias_path())?;
         *dirty = false;
         Ok(())
     }
@@ -339,10 +341,9 @@ impl ArtifactCache {
         if aliases.is_none() {
             *aliases = Some(AliasIndex::load(&self.alias_path())?);
         }
-        Ok(aliases
-            .as_ref()
-            .expect("alias index was initialized")
-            .clone())
+        aliases.as_ref().cloned().ok_or_else(|| {
+            LauncherError::Transaction("artifact alias index was not initialized".to_string())
+        })
     }
 
     fn record_alias(&self, sha1: String, sha256: String) -> Result<(), LauncherError> {
@@ -352,7 +353,9 @@ impl ArtifactCache {
         if aliases.is_none() {
             *aliases = Some(AliasIndex::load(&self.alias_path())?);
         }
-        let aliases = aliases.as_mut().expect("alias index was initialized");
+        let aliases = aliases.as_mut().ok_or_else(|| {
+            LauncherError::Transaction("artifact alias index was not initialized".to_string())
+        })?;
         aliases.sha1.insert(sha1, sha256);
         *self.aliases_dirty.lock().map_err(|_| {
             LauncherError::Transaction("artifact alias dirty flag was poisoned".to_string())

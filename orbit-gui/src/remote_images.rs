@@ -1,5 +1,5 @@
 use std::collections::{HashMap, HashSet};
-use std::io::Cursor;
+use std::io::{Cursor, Write as _};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender};
 
@@ -7,7 +7,11 @@ use futures_util::StreamExt as _;
 use image::{ImageFormat, ImageReader, Limits};
 use sha2::{Digest as _, Sha256};
 
-const USER_AGENT: &str = "orbit-gui/0.1.0 (https://github.com/water2004/orbit)";
+const USER_AGENT: &str = concat!(
+    "orbit-gui/",
+    env!("CARGO_PKG_VERSION"),
+    " (https://github.com/water2004/orbit)"
+);
 const MAX_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
 const MAX_SOURCE_DIMENSION: u32 = 4096;
 const NORMALIZED_DIMENSION: u32 = 128;
@@ -36,10 +40,9 @@ impl RemoteImageBridge {
         let (request_tx, request_rx) = mpsc::channel();
         let (result_tx, result_rx) = mpsc::channel();
         let worker_cache = cache_dir.clone();
-        std::thread::Builder::new()
+        let _worker = std::thread::Builder::new()
             .name("orbit-image-cache".to_string())
-            .spawn(move || run_worker(request_rx, result_tx, worker_cache))
-            .expect("image cache worker thread can be created");
+            .spawn(move || run_worker(request_rx, result_tx, worker_cache));
         Self {
             requests: request_tx,
             results: result_rx,
@@ -111,7 +114,15 @@ fn run_worker(
     };
     let Ok(client) = reqwest::Client::builder()
         .user_agent(USER_AGENT)
-        .redirect(reqwest::redirect::Policy::limited(5))
+        .redirect(reqwest::redirect::Policy::custom(|attempt| {
+            if attempt.previous().len() >= 5 {
+                attempt.error("remote image redirect limit exceeded")
+            } else if attempt.url().scheme() != "https" {
+                attempt.error("remote image redirect attempted to leave HTTPS")
+            } else {
+                attempt.follow()
+            }
+        }))
         .timeout(std::time::Duration::from_secs(20))
         .build()
     else {
@@ -160,12 +171,13 @@ async fn fetch_and_normalize(
     let normalized = normalize_png(&bytes)?;
     std::fs::create_dir_all(cache_dir)?;
     let destination = cache_dir.join(cache_filename(url));
-    let temporary = destination.with_extension(format!("tmp-{}", std::process::id()));
-    std::fs::write(&temporary, normalized)?;
-    if destination.exists() {
-        std::fs::remove_file(&destination)?;
-    }
-    std::fs::rename(temporary, &destination)?;
+    let mut temporary = tempfile::NamedTempFile::new_in(cache_dir)?;
+    temporary.write_all(&normalized)?;
+    temporary.as_file_mut().flush()?;
+    temporary.as_file().sync_all()?;
+    temporary
+        .persist(&destination)
+        .map_err(|error| error.error)?;
     Ok(destination)
 }
 

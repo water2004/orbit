@@ -37,8 +37,14 @@ pub enum ApiError {
     Client(#[source] reqwest::Error),
     #[error("invalid CurseForge API base URL: {0}")]
     BaseUrl(#[source] url::ParseError),
+    #[error("invalid CurseForge API base URL: {0}")]
+    InvalidBaseUrl(String),
     #[error("CurseForge request failed: {0}")]
     Request(#[source] reqwest::Error),
+    #[error("CurseForge response exceeds the {0} MiB JSON limit")]
+    ResponseTooLarge(usize),
+    #[error("invalid CurseForge JSON response: {0}")]
+    Decode(#[source] serde_json::Error),
     #[error("CurseForge API returned HTTP {status}: {message}")]
     Status { status: StatusCode, message: String },
 }
@@ -51,7 +57,10 @@ impl ApiError {
             | Self::InvalidApiKey(_)
             | Self::Client(_)
             | Self::BaseUrl(_)
-            | Self::Request(_) => None,
+            | Self::InvalidBaseUrl(_)
+            | Self::Request(_)
+            | Self::ResponseTooLarge(_)
+            | Self::Decode(_) => None,
         }
     }
 }
@@ -59,7 +68,7 @@ impl ApiError {
 #[derive(Clone)]
 pub struct Client {
     http: reqwest::Client,
-    base_url: String,
+    base_url: url::Url,
 }
 
 impl Client {
@@ -85,23 +94,44 @@ impl Client {
         base_url: &str,
         config: &ClientConfig,
     ) -> Result<Self, ApiError> {
-        let api_key = api_key.trim();
-        if api_key.is_empty() {
-            return Err(ApiError::MissingApiKey);
-        }
         let mut headers = reqwest::header::HeaderMap::new();
-        let api_key =
-            reqwest::header::HeaderValue::from_str(api_key).map_err(ApiError::InvalidApiKey)?;
-        headers.insert("x-api-key", api_key);
+        headers.insert("x-api-key", api_key_header(api_key)?);
         headers.insert(
             reqwest::header::ACCEPT,
             reqwest::header::HeaderValue::from_static("application/json"),
         );
-        let base_url = format!("{}/", base_url.trim_end_matches('/'));
-        let retry_host = url::Url::parse(&base_url)
-            .map_err(ApiError::BaseUrl)?
+        let mut parsed_base = url::Url::parse(base_url).map_err(ApiError::BaseUrl)?;
+        let loopback_http = parsed_base.scheme() == "http"
+            && parsed_base.host().is_some_and(|host| match host {
+                url::Host::Domain(domain) => domain.eq_ignore_ascii_case("localhost"),
+                url::Host::Ipv4(address) => address.is_loopback(),
+                url::Host::Ipv6(address) => address.is_loopback(),
+            });
+        if parsed_base.scheme() != "https" && !loopback_http {
+            return Err(ApiError::InvalidBaseUrl(
+                "scheme must be HTTPS (plain HTTP is limited to loopback test endpoints because the endpoint receives an API key)".to_string(),
+            ));
+        }
+        if parsed_base.cannot_be_a_base()
+            || !parsed_base.username().is_empty()
+            || parsed_base.password().is_some()
+            || parsed_base.query().is_some()
+            || parsed_base.fragment().is_some()
+        {
+            return Err(ApiError::InvalidBaseUrl(
+                "URL must be an absolute HTTP endpoint without credentials, query, or fragment"
+                    .to_string(),
+            ));
+        }
+        if !parsed_base.path().ends_with('/') {
+            parsed_base
+                .path_segments_mut()
+                .map_err(|_| ApiError::InvalidBaseUrl("URL cannot be extended".to_string()))?
+                .push("");
+        }
+        let retry_host = parsed_base
             .host_str()
-            .expect("an HTTP API base URL has a host")
+            .ok_or_else(|| ApiError::InvalidBaseUrl("host is missing".to_string()))?
             .to_string();
         let retry_policy = reqwest::retry::for_host(retry_host)
             .no_budget()
@@ -131,25 +161,55 @@ impl Client {
             builder = builder.proxy(reqwest::Proxy::all(proxy).map_err(ApiError::Client)?);
         }
         let http = builder.build().map_err(ApiError::Client)?;
-        Ok(Self { http, base_url })
+        Ok(Self {
+            http,
+            base_url: parsed_base,
+        })
     }
 
-    fn url(&self, path: &str) -> String {
-        format!("{}{}", self.base_url, path.trim_start_matches('/'))
+    fn url(&self, path: &str) -> Result<url::Url, ApiError> {
+        let mut url = self.base_url.clone();
+        let mut segments = url
+            .path_segments_mut()
+            .map_err(|_| ApiError::InvalidBaseUrl("URL cannot be extended".to_string()))?;
+        segments.pop_if_empty();
+        for segment in path.split('/') {
+            if segment.is_empty() || segment.chars().any(char::is_control) {
+                return Err(ApiError::InvalidBaseUrl(
+                    "API path contains an invalid segment".to_string(),
+                ));
+            }
+            segments.push(segment);
+        }
+        drop(segments);
+        Ok(url)
     }
 
     async fn send<T: DeserializeOwned>(
         &self,
         request: reqwest::RequestBuilder,
     ) -> Result<T, ApiError> {
-        let response = request.send().await.map_err(ApiError::Request)?;
+        let mut response = request.send().await.map_err(ApiError::Request)?;
         let status = response.status();
         if !status.is_success() {
-            let message = response.text().await.unwrap_or_default();
-            let message = message.chars().take(500).collect();
+            let message = bounded_error_body(&mut response).await;
             return Err(ApiError::Status { status, message });
         }
-        response.json().await.map_err(ApiError::Request)
+        const LIMIT: usize = 32 * 1024 * 1024;
+        if response
+            .content_length()
+            .is_some_and(|length| length > LIMIT as u64)
+        {
+            return Err(ApiError::ResponseTooLarge(LIMIT / (1024 * 1024)));
+        }
+        let mut body = Vec::new();
+        while let Some(chunk) = response.chunk().await.map_err(ApiError::Request)? {
+            if body.len().saturating_add(chunk.len()) > LIMIT {
+                return Err(ApiError::ResponseTooLarge(LIMIT / (1024 * 1024)));
+            }
+            body.extend_from_slice(&chunk);
+        }
+        serde_json::from_slice(&body).map_err(ApiError::Decode)
     }
 
     pub async fn games(&self) -> Result<Vec<Game>, ApiError> {
@@ -159,7 +219,7 @@ impl Client {
             let response: PagedResponse<Game> = self
                 .send(
                     self.http
-                        .get(self.url("games"))
+                        .get(self.url("games")?)
                         .query(&[("index", index), ("pageSize", PAGE_SIZE)]),
                 )
                 .await?;
@@ -180,7 +240,7 @@ impl Client {
         let response: ApiResponse<Vec<Category>> = self
             .send(
                 self.http
-                    .get(self.url("categories"))
+                    .get(self.url("categories")?)
                     .query(&[("gameId", game_id)]),
             )
             .await?;
@@ -209,13 +269,13 @@ impl Client {
         if let Some(value) = params.mod_loader_type {
             query.push(("modLoaderType", (value as u8).to_string()));
         }
-        self.send(self.http.get(self.url("mods/search")).query(&query))
+        self.send(self.http.get(self.url("mods/search")?).query(&query))
             .await
     }
 
     pub async fn get_mod(&self, project_id: u32) -> Result<Mod, ApiError> {
         let response: ApiResponse<Mod> = self
-            .send(self.http.get(self.url(&format!("mods/{project_id}"))))
+            .send(self.http.get(self.url(&format!("mods/{project_id}"))?))
             .await?;
         Ok(response.data)
     }
@@ -225,7 +285,7 @@ impl Client {
             return Ok(Vec::new());
         }
         let response: ApiResponse<Vec<Mod>> = self
-            .send(self.http.post(self.url("mods")).json(&GetModsRequest {
+            .send(self.http.post(self.url("mods")?).json(&GetModsRequest {
                 mod_ids: project_ids,
                 filter_pc_only: false,
             }))
@@ -254,7 +314,7 @@ impl Client {
             let response: PagedResponse<File> = self
                 .send(
                     self.http
-                        .get(self.url(&format!("mods/{project_id}/files")))
+                        .get(self.url(&format!("mods/{project_id}/files"))?)
                         .query(&query),
                 )
                 .await?;
@@ -275,7 +335,7 @@ impl Client {
         let response: ApiResponse<String> = self
             .send(
                 self.http
-                    .get(self.url(&format!("mods/{project_id}/files/{file_id}/download-url"))),
+                    .get(self.url(&format!("mods/{project_id}/files/{file_id}/download-url"))?),
             )
             .await?;
         Ok(response.data)
@@ -294,10 +354,81 @@ impl Client {
         let response: ApiResponse<FingerprintMatches> = self
             .send(
                 self.http
-                    .post(self.url(&format!("fingerprints/{game_id}")))
+                    .post(self.url(&format!("fingerprints/{game_id}"))?)
                     .json(&FingerprintsRequest { fingerprints }),
             )
             .await?;
         Ok(response.data)
+    }
+}
+
+async fn bounded_error_body(response: &mut reqwest::Response) -> String {
+    const LIMIT: usize = 4 * 1024;
+    let mut body = Vec::new();
+    while body.len() < LIMIT {
+        let Ok(Some(chunk)) = response.chunk().await else {
+            break;
+        };
+        let remaining = LIMIT - body.len();
+        body.extend_from_slice(&chunk[..chunk.len().min(remaining)]);
+    }
+    String::from_utf8_lossy(&body).into_owned()
+}
+
+fn api_key_header(api_key: &str) -> Result<reqwest::header::HeaderValue, ApiError> {
+    let api_key = api_key.trim();
+    if api_key.is_empty() {
+        return Err(ApiError::MissingApiKey);
+    }
+    let mut value =
+        reqwest::header::HeaderValue::from_str(api_key).map_err(ApiError::InvalidApiKey)?;
+    value.set_sensitive(true);
+    Ok(value)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn api_key_is_sensitive_and_empty_values_are_rejected() {
+        let value = api_key_header(" secret ").unwrap();
+        assert_eq!(value.to_str().unwrap(), "secret");
+        assert!(value.is_sensitive());
+        assert!(matches!(api_key_header("  "), Err(ApiError::MissingApiKey)));
+    }
+
+    #[test]
+    fn base_url_and_endpoint_paths_are_structured() {
+        let client = Client::with_base_url(
+            "secret",
+            "orbit-test",
+            "https://example.invalid/api/v1",
+            &ClientConfig::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            client.url("mods/123").unwrap().as_str(),
+            "https://example.invalid/api/v1/mods/123"
+        );
+        assert!(client.url("mods//123").is_err());
+        assert!(
+            Client::with_base_url(
+                "secret",
+                "orbit-test",
+                "https://example.invalid/api?token=wrong-place",
+                &ClientConfig::default(),
+            )
+            .is_err()
+        );
+        assert!(
+            Client::with_base_url(
+                "secret",
+                "orbit-test",
+                "http://example.invalid/api/v1/",
+                &ClientConfig::default(),
+            )
+            .is_err()
+        );
     }
 }

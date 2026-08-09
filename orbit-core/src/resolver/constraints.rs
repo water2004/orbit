@@ -83,7 +83,6 @@ pub(super) fn compile_dependency_constraints(
     output
 }
 
-#[allow(clippy::too_many_arguments)]
 fn kind_formula(
     expression: &DependencyExpression,
     kind: DependencyKind,

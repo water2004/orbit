@@ -16,6 +16,9 @@ use crate::wire;
 
 pub type TaskId = u64;
 
+const MAX_STDOUT_BYTES: u64 = 64 * 1024 * 1024;
+const MAX_PROTOCOL_LINE_BYTES: u64 = 1024 * 1024;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CliKind {
     Orbit,
@@ -223,7 +226,11 @@ fn run_process(
         let mut bytes = Vec::new();
         loop {
             bytes.clear();
-            let read = match reader.read_until(b'\n', &mut bytes) {
+            let read = match reader
+                .by_ref()
+                .take(MAX_PROTOCOL_LINE_BYTES + 1)
+                .read_until(b'\n', &mut bytes)
+            {
                 Ok(read) => read,
                 Err(error) => {
                     let _ = stderr_events.send(BridgeEvent::ProtocolError {
@@ -235,6 +242,17 @@ fn run_process(
                 }
             };
             if read == 0 {
+                break;
+            }
+            if read as u64 > MAX_PROTOCOL_LINE_BYTES {
+                let _ = stderr_events.send(BridgeEvent::ProtocolError {
+                    task_id,
+                    message: tr!(
+                        "CLI stderr protocol line exceeds the %{limit} MiB limit",
+                        limit = MAX_PROTOCOL_LINE_BYTES / (1024 * 1024)
+                    ),
+                });
+                let _ = stderr_failure_tx.send(());
                 break;
             }
             let line = match std::str::from_utf8(&bytes) {
@@ -370,13 +388,24 @@ const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 fn read_utf8_stream(mut reader: impl Read, stream: &str) -> Result<String, String> {
     let mut bytes = Vec::new();
-    reader.read_to_end(&mut bytes).map_err(|error| {
-        tr!(
-            "Failed to read CLI %{stream}: %{error}",
+    reader
+        .by_ref()
+        .take(MAX_STDOUT_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|error| {
+            tr!(
+                "Failed to read CLI %{stream}: %{error}",
+                stream = stream,
+                error = error
+            )
+        })?;
+    if bytes.len() as u64 > MAX_STDOUT_BYTES {
+        return Err(tr!(
+            "CLI %{stream} exceeds the %{limit} MiB machine-output limit",
             stream = stream,
-            error = error
-        )
-    })?;
+            limit = MAX_STDOUT_BYTES / (1024 * 1024)
+        ));
+    }
     String::from_utf8(bytes).map_err(|error| {
         tr!(
             "CLI %{stream} is not valid UTF-8 at byte %{offset}",

@@ -29,7 +29,6 @@ struct ModuleRecord {
     provides: Vec<ProvidedMod>,
 }
 
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn register_ordering_cycles(
     provider: &mut OrbitDependencyProvider,
     lockfile: &OrbitLockfile,
@@ -347,7 +346,6 @@ fn candidate_location(origin: &crate::jar::JarModOrigin) -> CandidateLocation {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn find_ordering_cycles(
     start: usize,
     current: usize,

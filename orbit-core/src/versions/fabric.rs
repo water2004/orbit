@@ -27,9 +27,6 @@ pub struct SemanticVersion {
     pub components: Vec<i32>,
     /// prerelease 后缀（`-` 之后），None 表示正式版
     pub prerelease: Option<String>,
-    /// build 后缀（`+` 之后），比较时忽略
-    #[allow(dead_code)]
-    pub build: Option<String>,
     /// 是否有通配符
     pub has_wildcard: bool,
     position: CorePosition,
@@ -39,13 +36,13 @@ impl SemanticVersion {
     pub fn parse(raw: &str, store_x: bool) -> Result<Self, String> {
         let mut version = raw.to_string();
         // ── build  ──
-        let build = if let Some(pos) = version.find('+') {
+        if let Some(pos) = version.find('+') {
             let b = version[pos + 1..].to_string();
+            if b.is_empty() || !is_dot_separated_id(&b) {
+                return Err(format!("invalid build string '{b}'"));
+            }
             version = version[..pos].to_string();
-            Some(b)
-        } else {
-            None
-        };
+        }
         // ── prerelease ──
         let prerelease = if let Some(pos) = version.find('-') {
             let p = version[pos + 1..].to_string();
@@ -115,7 +112,6 @@ impl SemanticVersion {
             raw: raw.to_string(),
             components,
             prerelease,
-            build,
             has_wildcard,
             position: CorePosition::Concrete,
         })
@@ -151,7 +147,6 @@ impl SemanticVersion {
         let mut boundary = self.clone();
         boundary.raw = format!("{}-core-lower", self.core_display());
         boundary.prerelease = None;
-        boundary.build = None;
         boundary.has_wildcard = false;
         boundary.position = CorePosition::Before;
         boundary
@@ -501,7 +496,8 @@ mod tests {
     fn test_parse_build_ignored() {
         let ver = v("0.8.10+mc26.1.2");
         assert_eq!(ver.components, vec![0, 8, 10]);
-        assert_eq!(ver.build.as_deref(), Some("mc26.1.2"));
+        assert_eq!(ver, v("0.8.10"));
+        assert!(SemanticVersion::parse("0.8.10+", true).is_err());
     }
 
     #[test]

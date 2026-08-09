@@ -42,6 +42,7 @@ futures-util = { workspace = true }
 image = { workspace = true }
 sha2 = { workspace = true }
 tokio = { workspace = true }
+tempfile = { workspace = true }
 rfd = { version = "0.17.2", features = ["common-controls-v6"] }
 serde = { workspace = true }
 serde_json = { workspace = true }

@@ -2,8 +2,7 @@ use std::time::Duration;
 
 use gpui::{
     Animation, AnimationExt, AnyElement, App, Div, ElementId, InteractiveElement, IntoElement,
-    ParentElement, SharedString, Styled, StyledImage, Window, div, img,
-    prelude::FluentBuilder as _, px,
+    ParentElement, SharedString, Styled, StyledImage, div, img, prelude::FluentBuilder as _, px,
 };
 use gpui_component::{
     ActiveTheme, Icon, StyledExt,
@@ -370,6 +369,3 @@ pub(super) fn render_json_summary(value: &serde_json::Value, cx: &App) -> Div {
     }
     list
 }
-
-#[allow(dead_code)]
-pub(super) fn _render(_window: &mut Window) {}

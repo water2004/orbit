@@ -380,7 +380,9 @@ fn profile_url(
 }
 
 fn endpoint(root: &str, segments: &[&str]) -> Result<String, LauncherError> {
-    let mut url = url::Url::parse(root).expect("hard-coded Loader Meta root is valid");
+    let mut url = url::Url::parse(root).map_err(|error| {
+        LauncherError::InvalidRemoteData(format!("Loader Meta base URL is invalid: {error}"))
+    })?;
     {
         let mut path = url.path_segments_mut().map_err(|_| {
             LauncherError::InvalidRemoteData("Loader Meta base URL cannot be extended".to_string())

@@ -661,11 +661,13 @@ fn launcher_editor_item(
                 .unwrap_or_default();
             setting_editor(
                 app.clone(),
-                SettingOwner::Launcher,
-                key,
-                value,
-                entry.is_some_and(|entry| entry.explicit),
-                masked,
+                SettingEditorSpec {
+                    owner: SettingOwner::Launcher,
+                    key,
+                    value,
+                    explicit: entry.is_some_and(|entry| entry.explicit),
+                    masked,
+                },
                 window,
                 cx,
             )
@@ -692,11 +694,13 @@ fn orbit_editor_item(
                 .unwrap_or_default();
             setting_editor(
                 app.clone(),
-                SettingOwner::Orbit,
-                key,
-                value,
-                entry.is_some_and(|entry| entry.value.is_some()),
-                masked,
+                SettingEditorSpec {
+                    owner: SettingOwner::Orbit,
+                    key,
+                    value,
+                    explicit: entry.is_some_and(|entry| entry.value.is_some()),
+                    masked,
+                },
                 window,
                 cx,
             )
@@ -792,17 +796,27 @@ enum SettingOwner {
     Orbit,
 }
 
-#[allow(clippy::too_many_arguments)]
-fn setting_editor(
-    app: Entity<OrbitApp>,
+struct SettingEditorSpec {
     owner: SettingOwner,
     key: &'static str,
     value: String,
     explicit: bool,
     masked: bool,
+}
+
+fn setting_editor(
+    app: Entity<OrbitApp>,
+    spec: SettingEditorSpec,
     window: &mut Window,
     cx: &mut App,
 ) -> gpui::AnyElement {
+    let SettingEditorSpec {
+        owner,
+        key,
+        value,
+        explicit,
+        masked,
+    } = spec;
     let mut hasher = DefaultHasher::new();
     value.hash(&mut hasher);
     explicit.hash(&mut hasher);

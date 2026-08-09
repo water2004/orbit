@@ -196,7 +196,6 @@ fn index_directory_owners(
     Ok(counts)
 }
 
-#[allow(clippy::too_many_arguments)]
 fn encode_directory_owners(
     instance_dir: &Path,
     directory: &Path,

@@ -2,7 +2,6 @@ use std::path::{Path, PathBuf};
 
 use directories::ProjectDirs;
 use gpui::{Context, Entity, Window};
-use gpui_component::{IndexPath, select::SelectState};
 use orbit_machine_protocol::InteractionResponse;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -2223,18 +2222,6 @@ fn completion_failure_state(
     } else {
         TaskState::Failed
     }
-}
-
-#[allow(dead_code)]
-fn set_select_index<D: gpui_component::select::SelectDelegate + 'static>(
-    state: &Entity<SelectState<D>>,
-    index: usize,
-    window: &mut Window,
-    cx: &mut Context<OrbitApp>,
-) {
-    state.update(cx, |state, cx| {
-        state.set_selected_index(Some(IndexPath::default().row(index)), window, cx)
-    });
 }
 
 fn joint_launch_arguments(instance: &RuntimeInstance, launcher: &Path) -> Vec<String> {

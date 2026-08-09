@@ -126,8 +126,8 @@ mod tests {
                     mod_id: "example".to_string(),
                     version: "1".to_string(),
                     sha1: String::new(),
-                    sha256: "sha256".to_string(),
-                    sha512: "sha512".to_string(),
+                    sha256: crate::jar::sha256_digest(b"example"),
+                    sha512: crate::jar::sha512_digest(b"example"),
                     filename: "example.jar".to_string(),
                     remotes: vec![PackageRemote::File {
                         path: "example.jar".to_string(),

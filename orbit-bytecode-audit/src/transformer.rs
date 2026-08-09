@@ -1207,7 +1207,6 @@ fn effects_for_signal(
                         signal,
                         mechanism,
                         Precision::Pattern,
-                        Confidence::Low,
                         vec![ShapeRequirement {
                             kind: RequirementKind::InstructionExists,
                             target: {
@@ -1228,22 +1227,17 @@ fn effects_for_signal(
         }
     }
 
-    let (precision, confidence, requirement) = if base_target.member.is_some() {
+    let (precision, requirement) = if base_target.member.is_some() {
         (
             if signal.pattern.is_some() {
                 Precision::Pattern
             } else {
                 Precision::Method
             },
-            Confidence::Low,
             RequirementKind::MemberExists,
         )
     } else {
-        (
-            Precision::Class,
-            Confidence::Low,
-            RequirementKind::ClassExists,
-        )
+        (Precision::Class, RequirementKind::ClassExists)
     };
     vec![effect(
         artifact,
@@ -1251,7 +1245,6 @@ fn effects_for_signal(
         signal,
         mechanism,
         precision,
-        confidence,
         vec![ShapeRequirement {
             kind: requirement,
             target: base_target.clone(),
@@ -1332,14 +1325,12 @@ fn asm_node_owner(owner: &str) -> bool {
         && (owner.ends_with("Node") || owner.ends_with("InsnList") || owner.ends_with("Visitor"))
 }
 
-#[allow(clippy::too_many_arguments)]
 fn effect(
     artifact: &ParsedArtifact,
     target: Target,
     signal: &MutationSignal,
     mechanism: Mechanism,
     precision: Precision,
-    confidence: Confidence,
     requirements: Vec<ShapeRequirement>,
     target_detail: &str,
 ) -> Effect {
@@ -1368,7 +1359,7 @@ fn effect(
             evidence
         }],
         precision,
-        confidence,
+        confidence: Confidence::Low,
         activation: Activation::Candidate,
         config_priority: None,
         mixin_priority: None,
