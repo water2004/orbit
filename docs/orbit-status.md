@@ -22,7 +22,7 @@
 | 多远端包模型 | ✅ | 每个受管包非空 `remotes`；全部来源共同发现，完全相同字节跨 provider 合并 |
 | 完整 TOML 包集合 | ✅ | 所有选中顶层逻辑包均写入 `[packages]`，无根/传递分类；lock 只记录精确事实 |
 | 包启用状态 | ✅ | `enable/disable` 原子切换 `.jar` / `.jar.disabled` 并同步 TOML/lock；sync 将两种后缀都视为受管包并如实对账 |
-| 运行时数据归属与 purge | ✅ | `orbit launch` 单向包装 Launcher 并注入 Runtime Agent；精确 code-source 哈希把顶层/嵌套 JAR 归入逻辑包，只观测变更不观测读取；创建目录形成递归所有权，嵌套创建者/其它写入作为保留例外；purge 准确确认后先收敛 JAR/TOML/lock，再应用同一计划；无文件名、调用栈或静态兜底 |
+| 运行时数据归属与 purge | ✅ | `orbit launch` 单向包装 Launcher 并注入 Runtime Agent；精确 code-source 哈希把顶层/嵌套 JAR 归入逻辑包，只观测变更不观测读取；文件归最后编辑者，无主目录由首个写入包认领，目录默认值按实际文件多数动态重压缩；purge 准确确认后先收敛 JAR/TOML/lock，再应用同一计划；无文件名、调用栈或静态兜底 |
 | 包版本管理 | ✅ | `versions` 联网下载并按 JAR 声明版本排序；数字核心范围与完整字符串集合规则由 `constraint set` 以 Pareto 极小事务立即应用；GUI 用边界控件和交/并/单项取反/整体取补操作表复用同一 CLI |
 | 内容候选身份 | ✅ | 本地 SHA-512 作为内部候选主键；同版本不同内容保持独立，CLI 只显示来源与依赖差异 |
 | PubGrub fork 远端 | ✅ | 功能分支已发布，Orbit 固定到完整 commit SHA |
@@ -148,8 +148,8 @@
   不按目录顺序猜测。
 - JAR 缓存按本地 SHA-512 寻址，SHA-1 只作别名；provider 文件名不作为缓存键。
 - Runtime Agent 只归属 code-source 哈希能精确映射到当前 lock 顶层包的类；Loader 声明的
-  嵌套 JAR 映射回顶层包，映射歧义时不观测。读取完全不监听；创建目录形成递归所有权，
-  更具体创建者和其它包写入安全保留。归属账本位于实例 `.orbit/runtime-data`，不是 cache，
+  嵌套 JAR 映射回顶层包，映射歧义时不观测。读取完全不监听；文件归最后编辑者，无主目录由
+  首个写入包认领，更具体所有者安全保留，目录默认值在冷路径按文件多数动态重压缩。归属账本位于实例 `.orbit/runtime-data`，不是 cache，
   且不会通过文件名、调用栈或静态分析补猜。Launcher 直接启动不会产生 Orbit 归属；需要该能力必须使用
   `orbit launch` 且同时安装 Orbit 与 Launcher。
 - JAR cache 只保存全局去重字节并执行 LRU；版本库是独立服务。每个精确

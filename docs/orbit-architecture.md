@@ -198,12 +198,13 @@ orbit launch
   → Orbit 按已验证的 Loader 版本范围选择 code-source / 原生模块身份能力
   → Orbit 从当前 lock 的顶层 JAR、递归嵌套 JAR 与实际 mod_id 构建来源 → 顶层包映射
   → Agent 在类加载时按 ProtectionDomain 的已声明能力固定包归属
-  → 只在 create/write/delete 边界聚合文件或目录树，原子写入 session snapshot
+  → 每个 JVM 独占实例观察锁，只在 create/write/delete 边界聚合路径的最后编辑者
+  → 以带 session/generation 的完整 v3 snapshot 原子写盘，后台重启不会覆盖上一 JVM
   → Orbit 合并到 .orbit/runtime-data/ownership.toml
   → purge 用 lock 将 JAR SHA-256 映射回逻辑 mod_id
   → 展示唯一准确范围并确认
   → remove_from_instance 收敛 JAR/TOML/lock
-  → 递归删除该包创建的树，同时保留更深层的其它创建者或共享写入节点
+  → 递归删除该包当前拥有的树，同时保留更深层的其它所有者节点
 ```
 
 `.orbit/runtime-data` 是实例本地的 provenance，不是全局 JAR cache，也不是版本库。Agent 不
@@ -212,18 +213,29 @@ orbit launch
 条目不是可独立清理的磁盘对象。实例内路径保存为相对路径，实例外的真实物理路径则显式保存
 为 external 项并在删除确认中完整展示。
 
-所有权采用“创建者拥有递归子树”模型：包创建目录后，后来由用户放入该目录的文件继承该包
-所有权，因此会随包导出、迁移和 purge；若另一个包在其中创建更深的文件或目录，该更具体节点
-覆盖父所有权。另一个包只修改既有节点时不会夺取所有权，而是形成保护节点，purge 父包时保留。
+所有权采用“最后成功编辑者 + 递归目录默认值”模型：文件每次被另一个受管包成功修改后，
+所有权立即转给最后编辑者；同一包再写回时也会取回。包创建目录后，其后代继承目录默认所有者，
+因此用户后来放入其中的内容会随该包导出、迁移和 purge。包向一个没有有效所有者的目录写入
+文件时，该直接父目录成为该包的递归所有权根；标准共享根不允许这样整体认领，只记录具体文件。
+更具体的文件或目录节点始终覆盖父默认值。
+
+目录默认值只是同一逐文件归属映射的压缩形式，不改变 purge 或 migration 选中的文件集合。
+当一个树下的排除节点首次达到 64、此后相对上次检查至少翻倍时，Orbit 在合并 snapshot 的冷路径
+最多重算一棵树：只枚举目录项和元数据，不打开文件内容，逐目录选择拥有实际文件数唯一最多的
+所有者作为新默认值；并列时保留原默认值。随后只保存少数例外。换主前后每个现存文件的有效
+所有者完全相同，无法读取或扫描期间变化的树保持原表示，之后再重试，不影响 purge/migrate 正确性。
+Agent 每个 JVM 只在启动/退出维护一次活动代次；重压缩前后若发现 Agent 活跃或代次变化，Orbit
+丢弃尚未提交的扫描结果。因此长期运行时写入不需要和目录扫描争用锁。
 标准实例结构根（例如 `mods`、`libraries`、`saves`）永远不能被单个包整体认领，但其下由包实际
-创建的更具体路径可以认领。`resourcepacks` / `shaderpacks` 不按名字特殊处理：谁实际创建目录，
-谁拥有其递归内容。共享写入、来源未知、没有观测到的 native I/O 和无法
+创建的更具体路径可以认领。`resourcepacks` / `shaderpacks` 不按名字特殊处理。来源未知、没有观测到的 native I/O 和无法
 映射到顶层受管 JAR 的路径都不进入可清理计划。code-source 或原生模块身份映射歧义时安全地不观测，不允许回退
 到调用栈猜测。没有文件名猜测、静态分析或“匹配 config
 名称”兜底。服务端后台进程
-的 snapshot 由下一次 `orbit launch` / `orbit purge` 合并；损坏或截断 session 会显式报错并保留。
+的 snapshot 由下一次 `orbit launch` / `orbit purge` 合并；同一 JVM 的旧 generation 会被水位拒绝，
+不同 JVM 按启动顺序合并。损坏或截断 session 会显式报错并保留。同一实例同时只允许一个 Agent
+持有操作系统文件锁，避免两个运行时制造无法定义的“最后”顺序。
 同一包在自己已拥有的目录树下继续写入时，Agent 直接继承树归属，不再为每个文件执行
-存在性探测或生成账本节点；更深的其它创建者和已有共享写入仍会阻止该快路径。
+存在性探测或生成账本节点；更深的其它所有者会阻止该快路径。
 Agent 不要求游戏类加载器直接装载其辅助类：通用 JVM 路径使用 bootstrap search，Fabric 的
 `fabric.systemLibraries` 与 Quilt 的 `loader.systemLibraries` 仅处理二者确实不同的父加载器
 白名单。普通隔离类加载器和 Loader 隔离都必须由测试覆盖，不能退回到按 Loader 修改模组

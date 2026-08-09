@@ -571,7 +571,7 @@ lock 精确记录。
 ```
 
 `scope` 为 `instance` 或 `external`；`kind` 为 `file` 或 `tree`。树表示准确路径下的递归范围，
-文本/GUI 以 `/**` 明示；`preserved` 是其中归属更具体或被其它包写入而不会删除的根。JSON 不返回
+文本/GUI 以 `/**` 明示；`preserved` 是其中由更具体的当前所有者拥有、因而不会删除的根。JSON 不返回
 JAR 哈希。
 
 ### `launch`
