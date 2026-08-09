@@ -108,7 +108,7 @@
 | `remove` / `upgrade` / `outdated` | 使用 Fat Lockfile、保留受阻候选原因、自适应表格与多解差异高亮 |
 | `sync` | 重新探测平台并扫描 mods；批量哈希识别 provider 来源，让 TOML/lock/分组精确收敛到磁盘包集合；不求解、不下载候选、不删除 JAR 文件 |
 | `migrate check/export` | 对真实目标先严格保留全部包；无解才询问软解并枚举 Pareto 极小删除集合；check 预览，export 复用同一规划语义写目标状态和配置 |
-| `audit` | 四个 Loader backend 复用 Loader-selected runtime，先对齐 namespace，再按实际 SPI 分派 ModLauncher ITransformer 或 NeoForge ClassProcessor，进入共享 Mixin/转换效果与冲突流水线；unary/pairwise 分离 + schema 5 JSON/显式完整 report |
+| `audit` | 共享版本范围只选择一次 AuditPolicy；同一个 analyze 流水线再按实际 Loader ABI 验证并分派 ModLauncher ITransformer 或 NeoForge ClassProcessor，随后进入共享 namespace/Mixin/转换效果与冲突流水线；unary/pairwise 分离 + schema 5 JSON/显式完整 report |
 | `list` / `info` | 展示包信息、逻辑依赖和 bundled；非树形 list 与 info 均使用自适应表格 |
 | `export` / `import` | Orbit archive 与 Modrinth pack |
 | `launch` / `purge` | launch 校验 Orbit/Launcher/Agent 后单向联合启动并记录运行时归属；purge 映射 lock 中实际 JAR 哈希，专用确认后同步移除包状态与独占数据 |
@@ -168,6 +168,7 @@
 ## 6. 文档索引
 
 - [orbit-architecture.md](orbit-architecture.md)
+- [orbit-compatibility.md](orbit-compatibility.md)
 - [orbit-metadata.md](orbit-metadata.md)
 - [orbit-resolver.md](orbit-resolver.md)
 - [orbit-versions.md](orbit-versions.md)

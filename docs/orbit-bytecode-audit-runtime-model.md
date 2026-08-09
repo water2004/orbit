@@ -80,8 +80,9 @@ NeoForge/FML 10 及当前源码已经改用
 
 ## Orbit 抽象
 
-四个显式 `AuditBackend` 分别选择 runtime ABI profile、namespace alignment、Mixin
-注册来源与转换 SPI 能力。Fabric 和 Quilt 共享 mapping-resource parser 与结构化
+唯一 `AuditPolicy` 由共享 `(Loader, Minecraft 范围, Loader 范围)` 表选择 runtime ABI
+profile、namespace alignment、Mixin 注册来源与转换 SPI 能力；`analyze` 只执行一遍扫描、
+readiness、对齐、Mixin、Transformer 与冲突合成。Fabric 和 Quilt 共享 mapping-resource parser 与结构化
 namespace 校验；Forge 和 NeoForge 共享 FML 能力分派，但由实际 runtime ABI 选择
 ITransformer 或 ClassProcessor。后续统一输出
 `NamespaceReport`、效果和冲突模型。`LoaderArtifactUnit` 表达 resolver 已选顶层内容及
@@ -94,6 +95,7 @@ activation 与最终 finding activation 分层。Overwrite 合并先构造按优
 CandidateClassState；确定失败进入 unary risk，Plugin/namespace/定义歧义则分别进入
 coverage 或 readiness。
 
-这些抽象依赖资源格式、ABI 形状、实际 JAR 内容和生命周期顺序。Orbit 不在 audit
-中复制 Loader 的 Minecraft 版本边界，不另造 Loader 版本前缀、Mod 白名单或推测性
-兜底；Loader 改变内部选择策略但维持同一可观察能力时不需要修改 Orbit。
+这些抽象依赖资源格式、ABI 形状、实际 JAR 内容和生命周期顺序。版本边界只存在于
+`orbit-compatibility`；audit 不复制边界、不另造 Loader 版本前缀、Mod 白名单或推测性
+兜底。范围只选择解释能力，实际 Loader JAR 的 ABI 仍必须通过 readiness probe；Loader
+改变内部选择策略但维持同一可观察能力时不需要复制一条分析路径。

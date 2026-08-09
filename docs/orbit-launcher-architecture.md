@@ -73,8 +73,9 @@ orbit-launcher-core
   instance                实例意图、锁定状态和注册表
   platform                OS、架构、目录、可执行文件和进程能力
   metadata/mojang         版本清单、version JSON、规则与继承
-  loader/{fabric,quilt,forge,neoforge}
-                          Loader 特有的版本发现和安装 adapter
+  loader                  Fabric/Quilt profile 统一管线与真实 metadata schema adapter
+  installer               Forge/NeoForge installer 统一事务与真实输出 schema adapter
+  orbit-compatibility     共享 Loader 版本范围、NeoForge artifact/版本编码布局
   java                    Mojang Java requirement、受管 runtime 和校验
   account                 Microsoft / Offline / External Yggdrasil
   authlib_injector        外置认证 agent 下载、校验与 client/server 启动参数
@@ -91,7 +92,8 @@ LoaderKind = Vanilla | Fabric | Quilt | Forge | NeoForge
 
 “共享安装管线”表示各 adapter 生成相同的 `InstallPlan`，不表示不同 Loader 必须使用
 相同安装规则。Fabric/Quilt profile 与 Forge/NeoForge installer 的差异必须保留在各自
-adapter 中。
+adapter 中。版本差异不能混入 adapter 编排：它只能消费 `orbit-compatibility` 唯一选中的
+范围布局，并在实际 metadata/installer 输出上二次验证。
 
 ## 4. 核心领域模型
 
@@ -430,6 +432,11 @@ Forge/NeoForge installer 是被下载并执行的 Java 程序。Launcher 必须�
 - 遇到未知 installer schema 时返回 `unsupported_requirement`，不猜测参数。
 
 Loader 更新只替换 lock 中由 Launcher 拥有的运行时文件。其他实例文件不进入计划。
+
+NeoForge 的 artifact、Maven 路径和发布版本编码由共享 Minecraft 范围布局选择。1.20.1
+legacy `forge`、1.20.2–1.x 短版本、26.x 完整版本和 snapshot 编码没有散落的字符串特判；
+范围未命中直接返回不支持。官方 metadata 的不同 JSON/schema 仍由适配器保真解析，归一化
+后进入同一个安装事务。
 
 ## 8. Java 运行时
 
@@ -1067,6 +1074,8 @@ LaunchPlan golden test。没有测试覆盖的组合不得笼统宣称“支持�
 - [Quilt server installation](https://quiltmc.org/en/install/server/) 及 Quilt 官方
   installer/metadata：Quilt client/server 安装；
 - Forge、NeoForge 官方 Maven 和 installer；
+- [NeoForge versioning](https://docs.neoforged.net/docs/gettingstarted/versioning/)：完整
+  Minecraft 版本编码与缺省 patch 的 `0` 占位规则；
 - [Microsoft device authorization grant](https://learn.microsoft.com/en-us/entra/identity-platform/v2-oauth2-device-code)
   与 authorization code + PKCE：Microsoft public client 登录；
 - Xbox Live/Minecraft Services：Microsoft 账户到 Minecraft profile 的认证链；

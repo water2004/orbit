@@ -178,7 +178,8 @@ profile 找到实际 Maven library JAR，再通过同一个 JAR reader 读取 lo
 才进入解；因此 Loader 自己的依赖、端侧条件和嵌套 load condition 始终参与同一次求解，
 audit 也能直接消费该解中的实际 Loader archive chain。
 
-Java 版本由目标 Minecraft 版本确定；JAR 根目录 class 文件的最高 class major
+Java feature 由平台探测从目标 Minecraft JAR 的 `version.json` 精确读取，并沿同一
+`Platform`/`CandidateCatalog` 传入建图，不按 Minecraft 版本号推测；JAR 根目录 class 文件的最高 class major
 又会产生模组到 `java` 的最低版本依赖。因此声明式 Java feature 和实际字节码下限都
 走正常依赖边。多版本 JAR 的 `META-INF/versions/` 变体不被误当作基础运行下限。
 

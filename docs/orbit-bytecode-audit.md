@@ -127,7 +127,8 @@ conditional/unknown 时可以恢复条件效果用于交互分析，但不会产
 
 ## 5. Mixin
 
-分析器先由四个显式 backend 按 Loader 规则发现注册入口：
+分析器先从共享版本范围选择唯一 `AuditPolicy`，再由同一个注册阶段按 policy 中的 Loader
+能力发现入口；不存在四套 audit orchestration backend：
 
 - Fabric metadata schema 0/1 的 `mixins` 与 environment；
 - Quilt metadata 的 `mixin`；

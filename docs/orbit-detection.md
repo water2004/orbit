@@ -21,25 +21,26 @@
 
 ## 2. Loader detector
 
-每种加载器实现同一个策略接口：
+四种加载器不再各有一个只转发参数的 detector 类型。`detection/mod.rs` 保存一张
+`ProfileDetector` 证据注册表：
 
 ```rust
-pub trait LoaderDetector: Send + Sync {
-    fn name(&self) -> &'static str;
-    fn loader_type(&self) -> LoaderKind;
-    fn detect(
-        &self,
-        instance_dir: &Path,
-        mc_version: Option<&str>,
-    ) -> Result<LoaderInfo, OrbitError>;
+ProfileDetector {
+    loader,
+    display_name,
+    ProfileSignature { group, artifacts, main_class_markers, component_uids },
+    strip_minecraft_prefix,
 }
 ```
 
-`LoaderDetectionService::new()` 当前注册 Fabric、Forge、NeoForge 和 Quilt 四个
-detector。`LoaderInfo.versions` 保留全部候选，不在 detector 内提前取第一个。
-`detect_all()` 执行全部策略，并按置信度降序返回；手动传入
+每一行都调用同一个 `profile::detect_profile_loader()`，`LoaderInfo.versions` 保留全部候选，
+不在 detector 内提前取第一个。`detect_all()` 遍历注册表并按置信度降序返回；手动传入
 `--modloader` 时，CLI 在边界解析为 `LoaderKind`，再通过 `find_by_kind()` 只运行对应
 detector。
+
+注册表只保存输入证据和规范化事实，不保存版本行为。随版本变化的能力统一由
+`orbit-compatibility` 范围表选择；官方服务端落盘格式则由 `server/formats.rs` 的结构化
+适配器解析并全部归一化为 `ServerRuntimeSpec`。
 
 ## 3. Launcher 布局与 profile 扫描
 
@@ -190,8 +191,8 @@ Loader、runtime JAR 的实际路径和 SHA-256，以及物理端才整体写入
   `run.bat` 或用户自定义 wrapper，也不会从进程列表猜测实际启动项；
 - 多个 Minecraft、loader、loader version 或同级 Loader JAR 候选均视为歧义；
   交互 init 可让用户选择版本，sync/migrate 不猜测；
-- 游戏 `version.json` 的 Java 信息用于检测展示；resolver 依据目标 Minecraft 版本
-  注册 `java` 平台包，并用模组 feature 与 class major 校验最低 Java。它不探测用户
+- 游戏 `version.json` 的 Java 信息既用于检测展示，也作为 resolver 注册 `java` 平台包的
+  精确 feature；模组 feature 与 class major 再校验最低 Java。它不按 Minecraft 版本猜测，也不探测用户
   当前 shell 的 Java，因为安装目标应由实例版本决定；
 - CurseForge 下载 provider 与 CurseForge launcher 布局是两个独立边界；前者需要 API
   Key，后者只读取本地实例 marker/profile，不需要网络。
@@ -200,11 +201,12 @@ Loader、runtime JAR 的实际路径和 SHA-256，以及物理端才整体写入
 
 新增 loader 时需要同时完成：
 
-1. 添加 `LoaderDetector` 实现；
-2. 在 `LoaderDetectionService::new()` 注册；
+1. 在 `ProfileDetector` 注册表添加唯一一行证据；
+2. 若其官方 profile 或服务端落盘格式确实不同，增加只负责归一化输入的格式适配器；
 3. 定义能够确定版本的强证据，并将猜测保留为低置信度；
 4. 在 `metadata/`、`jar/` 和 `versions/` 接入对应格式；
-5. 添加根目录、`versions/` 子目录、弱证据和版本归一化测试。
+5. 在 `orbit-compatibility` 添加有证据的能力范围；
+6. 添加根目录、`versions/` 子目录、弱证据、范围边界和版本归一化测试。
 
 不能用固定版本、空字符串或默认 `0.0.0` 代替检测失败。无法获得可复现所需信息时，
 应要求用户显式输入。

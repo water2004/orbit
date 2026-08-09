@@ -11,6 +11,7 @@ orbit-cli       参数、交互和展示
   output        自适应表格、逻辑包事务、多方案差异高亮、audit 摘要
     ↓
 orbit-core      领域模型、编排、JAR、求解、文件事务
+    ├── orbit-compatibility（共享 Loader 身份、Minecraft/Loader 版本范围与能力事实）
     ├── modrinth-wrapper
     ├── curseforge-wrapper
     ├── orbit-bytecode-audit（只依赖已选择的实际 JAR 内容与运行时环境）
@@ -84,10 +85,10 @@ init/sync     平台探测、本地事实扫描与清单对账
 audit         复用 resolver 的 Loader-selected runtime；不包含字节码判定规则
     ↓
 orbit-bytecode-audit
-  backend/    Fabric/Quilt/Forge/NeoForge 的 ABI、namespace、注册和 transformer 策略
+  backend     从共享范围表选择一次 AuditPolicy；没有四套 orchestration backend
   classfile   第三方 parser 隔离 facade、稳定指令 ID
   jar         安全预算、活动嵌套 JAR/resource、MR-JAR、同名类多定义 Universe
-  namespace   backend 调用的共享 runtime symbol alignment、Tiny 投影/readiness
+  namespace   policy 调用的共享 runtime symbol alignment、Tiny 投影/readiness
   mixin_config Loader 注册、端侧/requiredMods/plugin 激活、config/refmap 作用域
   mixin       候选类合并；selector/slice → InjectionQuery；injector → Mutation
   transformer FML ServiceLoader 图 → ModLauncher ITransformer / NeoForge ClassProcessor → 统一效果
@@ -98,13 +99,13 @@ orbit-runtime-agent
   recorder    低分配归属聚合、目录树压缩、崩溃可恢复 session snapshot
 ```
 
-允许出现 loader 分支的位置：
+允许出现 loader/格式分派的位置：
 
 - 元数据文件名与字段映射；
-- loader 自身检测；
+- loader profile 的证据注册表；
 - 版本约束语义；
 - loader 官方定义的嵌套格式；
-- audit 的 ABI、namespace、Mixin 注册入口与 Transformer 能力。
+- 真实不同的官方 wire/archive schema 适配器。
 
 不允许出现 loader 分支的位置：
 
@@ -118,6 +119,11 @@ orbit-runtime-agent
 “统一”指四个 loader 在边界适配后消费同一个领域模型，不表示把不一致的运行时规则
 塞进公共分支。内部 loader 身份是封闭的 `LoaderKind`；TOML、CLI 和 provider 参数只在
 边界转换为字符串。新增 loader 不允许走 unknown/generic fallback。
+
+所有随 Minecraft/Loader 版本变化的能力只允许由 `orbit-compatibility` 的唯一范围记录
+选择；调用方不能再比较版本。范围选择后还要用实际 JAR/profile/ABI 二次验证。官方落盘
+格式若自带版本、classpath 和 hash，则按结构解析并归一化，不伪造多余的版本分支。完整
+约束见 [orbit-compatibility.md](orbit-compatibility.md)。
 
 ## 3. 端到端数据流
 
@@ -381,12 +387,12 @@ manifest 过滤。
 
 ## 5. loader 支持矩阵
 
-| Loader | 元数据适配 | 版本语义 | 嵌套选择 | audit 后端 | 规范化求解 |
+| Loader | 元数据适配 | 版本语义 | 嵌套选择 | audit policy | 规范化求解 |
 |---|---|---|---|---|---|
-| Fabric | `fabric.mod.json` | Fabric predicate | `jars` + parent priority | Fabric | 统一 graph |
-| Quilt | `quilt.mod.json` / Fabric fallback | Fabric predicate | Quilt `jars` 条件 | Quilt | 统一 graph |
-| Forge | `META-INF/mods.toml` | Maven | JarJar | Forge/ModLauncher | 统一 graph |
-| NeoForge | `META-INF/neoforge.mods.toml` / legacy name | Maven | JarJar | NeoForge/ClassProcessor（旧运行时按实际 ABI 走 ModLauncher） | 统一 graph |
+| Fabric | `fabric.mod.json` | Fabric predicate | `jars` + parent priority | Fabric namespace/Mixin capability | 统一 graph |
+| Quilt | `quilt.mod.json` / Fabric fallback | Fabric predicate | Quilt `jars` 条件 | Quilt namespace/Mixin capability | 统一 graph |
+| Forge | `META-INF/mods.toml` | Maven | JarJar | ModLauncher capability；实际 ABI 验证 | 统一 graph |
+| NeoForge | `META-INF/neoforge.mods.toml` / legacy name | Maven | JarJar | NeoForge capability；实际 ITransformer/ClassProcessor ABI 验证 | 统一 graph |
 
 “支持”意味着 identity、依赖类别、环境、版本、provides、内嵌和求解都进入真实路径，
 不是只识别文件名。
@@ -394,7 +400,7 @@ manifest 过滤。
 ## 6. 可维护性规则
 
 - 规范化类型表达语义，不用 tuple/字符串标志隐藏含义。
-- loader 差异必须进入 `LoaderSemantics`、metadata adapter 或 audit backend；共享流水线
+- loader 差异必须进入 `LoaderSemantics`、metadata adapter 或共享范围表选择的 audit policy；共享流水线
   不允许重新从字符串推断 loader，也不允许 generic fallback。
 - 新字段先进入 metadata model，再向 candidate/lock/solver 传播。
 - 不保留旧 lock schema 的兼容分支；项目尚无外部使用者，schema 直接收敛。
