@@ -1,0 +1,12 @@
+[package]
+name = "orbit-compatibility"
+version = "0.3.0"
+edition = "2024"
+description = "Shared, data-driven Minecraft and mod-loader compatibility facts for Orbit"
+
+[dependencies]
+serde.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

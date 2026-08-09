@@ -15,6 +15,7 @@ portable = []
 curseforge-wrapper = { path = "../curseforge-wrapper" }
 modrinth-wrapper = { path = "../modrinth-wrapper" }
 orbit-bytecode-audit = { path = "../orbit-bytecode-audit" }
+orbit-compatibility.workspace = true
 orbit-loader-json.workspace = true
 
 # 工作区共享依赖

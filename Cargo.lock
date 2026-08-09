@@ -4717,6 +4717,7 @@ name = "orbit-bytecode-audit"
 version = "0.1.2"
 dependencies = [
  "hex",
+ "orbit-compatibility",
  "orbit-loader-json",
  "ristretto_classfile",
  "serde",
@@ -4726,6 +4727,15 @@ dependencies = [
  "thiserror 2.0.18",
  "toml 0.8.23",
  "zip",
+]
+
+[[package]]
+name = "orbit-compatibility"
+version = "0.3.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -4748,6 +4758,7 @@ dependencies = [
  "java-properties",
  "modrinth-wrapper",
  "orbit-bytecode-audit",
+ "orbit-compatibility",
  "orbit-loader-json",
  "pubgrub",
  "reqwest",
@@ -4834,6 +4845,7 @@ dependencies = [
  "image",
  "java-properties",
  "md-5",
+ "orbit-compatibility",
  "os_info",
  "regex",
  "reqwest",
