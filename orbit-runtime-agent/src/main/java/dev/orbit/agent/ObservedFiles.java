@@ -77,7 +77,7 @@ public final class ObservedFiles {
 
     private ObservedFiles() {}
 
-    static boolean supports(String name, String descriptor) {
+    public static boolean supports(String name, String descriptor) {
         return SUPPORTED.contains(name + descriptor);
     }
 

@@ -21,7 +21,7 @@ import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /** Low-allocation path ownership recorder called only at file-operation boundaries. */
-final class Recorder {
+public final class Recorder {
     private static final String[] SHARED_ROOTS = {
         "assets", "config", "libraries", "logs", "mods", "natives", "resourcepacks",
         "saves", "screenshots", "shaderpacks", "versions"
@@ -41,7 +41,7 @@ final class Recorder {
 
     private Recorder() {}
 
-    static void configure(Path root, Path session) throws Exception {
+    public static void configure(Path root, Path session) throws Exception {
         instanceRoot = root.toAbsolutePath().normalize();
         modsRoot = instanceRoot.resolve("mods").normalize();
         sessionFile = session.toAbsolutePath().normalize();

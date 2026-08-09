@@ -13,7 +13,7 @@ import java.util.concurrent.ExecutorService;
 public final class ObservedChannels {
     private ObservedChannels() {}
 
-    static boolean supports(String owner, String descriptor) {
+    public static boolean supports(String owner, String descriptor) {
         return (owner.equals("java/nio/channels/FileChannel")
                 && (descriptor.equals("(Ljava/nio/file/Path;[Ljava/nio/file/OpenOption;)Ljava/nio/channels/FileChannel;")
                     || descriptor.equals("(Ljava/nio/file/Path;Ljava/util/Set;[Ljava/nio/file/attribute/FileAttribute;)Ljava/nio/channels/FileChannel;")))

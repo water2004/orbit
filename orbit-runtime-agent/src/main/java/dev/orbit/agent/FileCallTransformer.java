@@ -13,7 +13,7 @@ import net.bytebuddy.jar.asm.Opcodes;
 import net.bytebuddy.jar.asm.Type;
 
 /** Rewrites file API calls in application classes; JDK classes remain untouched. */
-final class FileCallTransformer implements ClassFileTransformer {
+public final class FileCallTransformer implements ClassFileTransformer {
     private static final String AGENT_PREFIX = "dev/orbit/agent/";
     private static final String OBSERVED_FILES = AGENT_PREFIX + "ObservedFiles";
     private static final String OBSERVED_CHANNELS = AGENT_PREFIX + "ObservedChannels";
@@ -34,6 +34,8 @@ final class FileCallTransformer implements ClassFileTransformer {
         "mkdirs()Z",
         "renameTo(Ljava/io/File;)Z"
     );
+
+    public FileCallTransformer() {}
 
     @Override
     public byte[] transform(

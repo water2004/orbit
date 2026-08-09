@@ -8,6 +8,7 @@ test_root="$workspace_root/target/orbit-runtime-agent-test"
 instance_root="$test_root/instance"
 mods_root="$instance_root/mods"
 classes_root="$test_root/classes"
+harness_root="$test_root/harness"
 fixture_jar="$mods_root/agent-fixture.jar"
 session_file="$instance_root/.orbit/runtime-data/sessions/test.events"
 
@@ -19,10 +20,11 @@ case "$test_root" in
     ;;
 esac
 rm -rf -- "$test_root"
-mkdir -p "$mods_root" "$classes_root"
+mkdir -p "$mods_root" "$classes_root" "$harness_root"
 
 javac --release 17 -d "$classes_root" "$agent_root/tests/AgentFixture.java"
 jar cf "$fixture_jar" -C "$classes_root" .
+javac --release 17 -d "$harness_root" "$agent_root/tests/AgentIsolatedHarness.java"
 
 encode_path() {
   printf '%s' "$1" | base64 | tr -d '\n=' | tr '+/' '-_'
@@ -31,7 +33,7 @@ encode_path() {
 root_encoded="$(encode_path "$instance_root")"
 session_encoded="$(encode_path "$session_file")"
 java "-javaagent:$agent_path=root=$root_encoded;session=$session_encoded" \
-  -cp "$fixture_jar" AgentFixture "$instance_root"
+  -cp "$harness_root" AgentIsolatedHarness "$fixture_jar" "$instance_root"
 
 record_count="$(wc -l < "$session_file")"
 if (( record_count > 4 )); then

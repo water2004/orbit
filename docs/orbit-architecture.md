@@ -194,6 +194,7 @@ orbit launch
   → 为本次运行分配 .orbit/runtime-data/sessions/<session>.events
   → 调用 orbit-launcher launch 或 server start
   → JAVA_TOOL_OPTIONS 注入 Orbit Runtime Agent
+  → Agent helper 进入 bootstrap 搜索路径；Fabric/Quilt 通过各自官方 system-library 属性保留父加载器可见性
   → Agent 在文件操作边界从调用栈定位实际 mods 顶层 JAR 并计算 SHA-256
   → 按 created/read/write 聚合文件或目录树，原子写入 session snapshot
   → Orbit 合并到 .orbit/runtime-data/ownership.toml
@@ -208,6 +209,10 @@ orbit launch
 成本。共享写入、来源未知、没有观测到的 native I/O 和无法映射到顶层受管 JAR 的路径都不
 进入可清理计划。没有文件名猜测、静态分析或“匹配 config 名称”兜底。服务端后台进程的
 snapshot 由下一次 `orbit launch` / `orbit purge` 合并；损坏或截断 session 会显式报错并保留。
+Agent 不要求游戏类加载器直接装载其辅助类：通用 JVM 路径使用 bootstrap search，Fabric 的
+`fabric.systemLibraries` 与 Quilt 的 `loader.systemLibraries` 仅处理二者确实不同的父加载器
+白名单。普通隔离类加载器和 Loader 隔离都必须由测试覆盖，不能退回到按 Loader 修改模组
+classpath 的兼容路径。
 
 ## 4. 统一求解
 
