@@ -348,6 +348,11 @@ orbit remove <mod>
 否则删除所选包的已校验文件，并从 manifest/lockfile 移除条目。输入不匹配时，交互模式列出
 可选依赖；`--yes` 要求精确标识，不进行猜测。dry-run 只报告计划。
 
+实际提交先校验 JAR，再在 `mods/` 同文件系统内原子重命名到短期事务目录，之后原子替换
+`orbit.toml` 和 `orbit.lock`，最后删除暂存 JAR。Windows 文件占用、校验错误、配置提交失败或
+最终删除失败都会返回错误并恢复操作前的 JAR、TOML 和 lock。只有三者全部收敛后才返回成功，
+不再用 `jar_deleted = false` 吞掉文件系统错误。
+
 ### `orbit purge`
 
 ```text

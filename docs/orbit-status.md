@@ -17,7 +17,7 @@
 | 依赖求解 | ✅ | 强类型 occurrence 图、原生变更极小与版本极大 Pareto front、any/all/unless、环境、provides、ordering、Java、JarJar |
 | 原因 | ✅ | 自定义 reason 参与原始推导；成功候选用同次 observer |
 | 本地校验 | ✅ | 转 Fat Lockfile 后复用统一建图 |
-| 安装/修复/升级 | ✅ | install 精确物化 lock；add/fix 使用 Pareto 极小变更；upgrade/outdated 使用版本 Pareto 极大；统一生成包事务计划 |
+| 安装/修复/升级/移除 | ✅ | install 精确物化 lock；add/fix 使用 Pareto 极小变更；upgrade/outdated 使用版本 Pareto 极大；统一生成包事务计划；remove 在 JAR/TOML/lock 任一失败时恢复原状 |
 | Modrinth / CurseForge / `file:` | ✅ | 查询、下载、识别、锁定；CurseForge 无 API Key 时拒绝创建 |
 | 多远端包模型 | ✅ | 每个受管包非空 `remotes`；全部来源共同发现，完全相同字节跨 provider 合并 |
 | 完整 TOML 包集合 | ✅ | 所有选中顶层逻辑包均写入 `[packages]`，无根/传递分类；lock 只记录精确事实 |

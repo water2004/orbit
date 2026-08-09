@@ -573,6 +573,8 @@ lock 精确记录。
 `scope` 为 `instance` 或 `external`；`kind` 为 `file` 或 `tree`。树表示准确路径下的递归范围，
 文本/GUI 以 `/**` 明示；`preserved` 是其中由更具体的当前所有者拥有、因而不会删除的根。JSON 不返回
 JAR 哈希。
+`remove` 的非 dry-run 成功结果中 `jar_deleted` 始终为 `true`；文件占用或事务回滚会返回统一错误信封，
+不得返回 `ok: true` 与 `jar_deleted: false`。
 
 ### `launch`
 
