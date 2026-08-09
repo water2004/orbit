@@ -63,15 +63,15 @@ Debian/Ubuntu amd64 使用三个独立 deb，不提供 MSI 式的交互式功能
 
 ```bash
 # 无图形服务端：只安装 Launcher
-sudo apt install ./orbit-launcher_0.2.1-1_amd64.deb
+sudo apt install ./orbit-launcher_0.3.0-1_amd64.deb
 
 # 服务端还需要管理模组时再安装 Orbit
-sudo apt install ./orbit_0.2.1-1_amd64.deb
+sudo apt install ./orbit_0.3.0-1_amd64.deb
 
 # 桌面完整套件：GUI 精确依赖同版本的两个 CLI
-sudo apt install ./orbit_0.2.1-1_amd64.deb \
-  ./orbit-launcher_0.2.1-1_amd64.deb \
-  ./orbit-gui_0.2.1-1_amd64.deb
+sudo apt install ./orbit_0.3.0-1_amd64.deb \
+  ./orbit-launcher_0.3.0-1_amd64.deb \
+  ./orbit-gui_0.3.0-1_amd64.deb
 ```
 
 在无图形环境中安装 GUI 并不会阻止服务端工作，但会额外引入图形运行库，而且没有图形会话

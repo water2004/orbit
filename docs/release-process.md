@@ -5,7 +5,7 @@
 
 1. tag 指向的提交是远端 `main` 的祖先；
 2. `orbit`、`orbit-core`、`orbit-launcher`、`orbit-launcher-core` 与 `orbit-gui` 版本完全一致，
-   tag 严格等于 `v` 加该三段套件版本，例如 `v0.2.0`；
+   tag 严格等于 `v` 加该三段套件版本，例如 `v0.3.0`；
 3. 存在非空的 `docs/releases/v<version>.md` 人工发行说明；
 4. 全工作区测试通过；
 5. 含三个程序的可选组件 Windows MSI，以及职责独立的三个 Linux deb 都成功构建并校验。
@@ -14,11 +14,11 @@
 
 ```bash
 # 先在合并到 main 的提交中更新版本、文档和人工 release note
-# docs/releases/v0.2.0.md
+# docs/releases/v0.3.0.md
 git switch main
 git pull --ff-only
-git tag -a v0.2.0 -m "Orbit 0.2.0"
-git push origin v0.2.0
+git tag -a v0.3.0 -m "Orbit 0.3.0"
+git push origin v0.3.0
 ```
 
 workflow 会：
