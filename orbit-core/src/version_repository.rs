@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use rusqlite::{Connection, OptionalExtension, params};
+use sha2::{Digest as _, Sha256};
 
 use crate::error::OrbitError;
 use crate::jar::InspectedJar;
@@ -183,14 +184,13 @@ impl RepositoryScope {
         let mut artifacts = Vec::new();
         for row in rows {
             let (sha512, json) = row.map_err(sql_error)?;
-            artifacts.push(StoredRemoteArtifact {
-                artifact: serde_json::from_str(&json).map_err(|error| {
-                    OrbitError::Other(anyhow::anyhow!(
-                        "remote repository contains invalid artifact metadata: {error}"
-                    ))
-                })?,
-                sha512,
-            });
+            let artifact: RemoteArtifact = serde_json::from_str(&json).map_err(|error| {
+                OrbitError::Other(anyhow::anyhow!(
+                    "remote repository contains invalid artifact metadata: {error}"
+                ))
+            })?;
+            validate_stored_artifact(provider, project_id, &artifact, &sha512)?;
+            artifacts.push(StoredRemoteArtifact { artifact, sha512 });
         }
         Ok(artifacts)
     }
@@ -202,6 +202,15 @@ impl RepositoryScope {
         marker: &str,
         artifacts: &[StoredRemoteArtifact],
     ) -> Result<(), OrbitError> {
+        validate_project_identity(provider, project_id)?;
+        if marker.trim().is_empty() || marker.trim() != marker {
+            return Err(OrbitError::Other(anyhow::anyhow!(
+                "project change marker must be non-empty and canonical"
+            )));
+        }
+        for stored in artifacts {
+            validate_stored_artifact(provider, project_id, &stored.artifact, &stored.sha512)?;
+        }
         let mut connection = open_database(&self.remote_path())?;
         let transaction = connection.transaction().map_err(sql_error)?;
         transaction
@@ -234,7 +243,7 @@ impl RepositoryScope {
                     params![
                         provider,
                         project_id,
-                        artifact_key(&stored.artifact),
+                        artifact_key(&stored.artifact)?,
                         stored.sha512,
                         json
                     ],
@@ -253,7 +262,7 @@ impl RepositoryScope {
         let row = if !sha512.is_empty() {
             connection
                 .query_row(
-                    "SELECT sha1, sha256, sha512, metadata_json FROM jars WHERE sha512 = ?1",
+                    "SELECT sha1, sha256, sha512, mod_id, version, metadata_json FROM jars WHERE sha512 = ?1",
                     params![sha512.to_ascii_lowercase()],
                     jar_row,
                 )
@@ -262,7 +271,7 @@ impl RepositoryScope {
         } else if !sha1.is_empty() {
             connection
                 .query_row(
-                    "SELECT sha1, sha256, sha512, metadata_json FROM jars WHERE sha1 = ?1",
+                    "SELECT sha1, sha256, sha512, mod_id, version, metadata_json FROM jars WHERE sha1 = ?1",
                     params![sha1.to_ascii_lowercase()],
                     jar_row,
                 )
@@ -283,6 +292,7 @@ impl RepositoryScope {
     }
 
     pub(crate) fn store_jar(&self, inspected: &InspectedJar) -> Result<(), OrbitError> {
+        validate_inspected_jar(inspected)?;
         let connection = open_database(&self.jars_path())?;
         let metadata_json = serde_json::to_string(&inspected.metadata).map_err(|error| {
             OrbitError::Other(anyhow::anyhow!("failed to serialize JAR metadata: {error}"))
@@ -356,7 +366,9 @@ fn open_database(path: &Path) -> Result<Connection, OrbitError> {
         .busy_timeout(Duration::from_secs(30))
         .map_err(sql_error)?;
     connection
-        .execute_batch("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL;")
+        .execute_batch(
+            "PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL;",
+        )
         .map_err(sql_error)?;
     Ok(connection)
 }
@@ -382,32 +394,117 @@ fn initialize_database(connection: &Connection, schema: &str) -> Result<(), Orbi
     Ok(())
 }
 
-fn jar_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<(String, String, String, String)> {
-    Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+fn jar_row(
+    row: &rusqlite::Row<'_>,
+) -> rusqlite::Result<(String, String, String, String, String, String)> {
+    Ok((
+        row.get(0)?,
+        row.get(1)?,
+        row.get(2)?,
+        row.get(3)?,
+        row.get(4)?,
+        row.get(5)?,
+    ))
 }
 
-fn decode_jar(row: (String, String, String, String)) -> Result<InspectedJar, OrbitError> {
-    let (sha1, sha256, sha512, json) = row;
-    Ok(InspectedJar {
-        metadata: serde_json::from_str(&json).map_err(|error| {
-            OrbitError::Other(anyhow::anyhow!(
-                "JAR analysis repository contains invalid metadata: {error}"
-            ))
-        })?,
+fn decode_jar(
+    row: (String, String, String, String, String, String),
+) -> Result<InspectedJar, OrbitError> {
+    let (sha1, sha256, sha512, mod_id, version, json) = row;
+    let metadata: crate::jar::JarModMetadata = serde_json::from_str(&json).map_err(|error| {
+        OrbitError::Other(anyhow::anyhow!(
+            "JAR analysis repository contains invalid metadata: {error}"
+        ))
+    })?;
+    if metadata.mod_id != mod_id || metadata.version != version {
+        return Err(OrbitError::Other(anyhow::anyhow!(
+            "JAR analysis repository row disagrees with its serialized metadata"
+        )));
+    }
+    let inspected = InspectedJar {
+        metadata,
         sha1,
         sha256,
         sha512,
-    })
+    };
+    validate_inspected_jar(&inspected)?;
+    Ok(inspected)
 }
 
-fn artifact_key(artifact: &RemoteArtifact) -> String {
-    format!(
-        "{}:{}:{}:{}",
-        artifact.provider,
-        artifact.version_id().unwrap_or_default(),
-        artifact.download_url,
-        artifact.filename
-    )
+fn validate_stored_artifact(
+    provider: &str,
+    project_id: &str,
+    artifact: &RemoteArtifact,
+    sha512: &str,
+) -> Result<(), OrbitError> {
+    let artifact_project: Option<String> = match provider {
+        "modrinth" => artifact
+            .modrinth
+            .as_ref()
+            .map(|identity| identity.project_id.clone()),
+        "curseforge" => artifact
+            .curseforge
+            .as_ref()
+            .map(|identity| identity.project_id.to_string()),
+        other => {
+            return Err(OrbitError::Other(anyhow::anyhow!(
+                "unsupported provider '{other}' in version repository"
+            )));
+        }
+    };
+    validate_project_identity(provider, project_id)?;
+    if artifact.provider != provider
+        || artifact_project.as_deref() != Some(project_id)
+        || normalized_hash(sha512, 128).is_none()
+    {
+        return Err(OrbitError::Other(anyhow::anyhow!(
+            "remote repository artifact does not belong to {provider} project '{project_id}'"
+        )));
+    }
+    Ok(())
+}
+
+fn artifact_key(artifact: &RemoteArtifact) -> Result<String, OrbitError> {
+    let document = serde_json::to_vec(artifact).map_err(|error| {
+        OrbitError::Other(anyhow::anyhow!(
+            "failed to serialize remote artifact identity: {error}"
+        ))
+    })?;
+    Ok(hex::encode(Sha256::digest(document)))
+}
+
+fn validate_project_identity(provider: &str, project_id: &str) -> Result<(), OrbitError> {
+    if provider.trim().is_empty()
+        || provider.trim() != provider
+        || project_id.trim().is_empty()
+        || project_id.trim() != project_id
+    {
+        return Err(OrbitError::Other(anyhow::anyhow!(
+            "version repository project identity must be non-empty and canonical"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_inspected_jar(inspected: &InspectedJar) -> Result<(), OrbitError> {
+    if inspected.metadata.mod_id.trim().is_empty()
+        || inspected.metadata.mod_id.trim() != inspected.metadata.mod_id
+        || inspected.metadata.version.trim().is_empty()
+        || inspected.metadata.version.trim() != inspected.metadata.version
+        || normalized_hash(&inspected.sha1, 40).is_none()
+        || normalized_hash(&inspected.sha256, 64).is_none()
+        || normalized_hash(&inspected.sha512, 128).is_none()
+    {
+        return Err(OrbitError::Other(anyhow::anyhow!(
+            "JAR analysis repository entry contains a non-canonical identity or content hash"
+        )));
+    }
+    Ok(())
+}
+
+fn normalized_hash(value: &str, length: usize) -> Option<String> {
+    (value.len() == length && value.bytes().all(|byte| byte.is_ascii_hexdigit()))
+        .then(|| value.to_ascii_lowercase())
 }
 
 pub(crate) fn remote_project(remote: &PackageRemote) -> Option<(&'static str, String)> {
@@ -456,6 +553,7 @@ mod tests {
     use crate::providers::ModrinthResolvedInfo;
 
     fn inspected(version: &str, hash: &str) -> InspectedJar {
+        let bytes = hash.as_bytes();
         InspectedJar {
             metadata: crate::jar::JarModMetadata {
                 mod_id: "example".to_string(),
@@ -471,9 +569,9 @@ mod tests {
                 embedded_artifacts: Vec::new(),
                 bundled_mods: Vec::new(),
             },
-            sha1: format!("sha1-{hash}"),
-            sha256: format!("sha256-{hash}"),
-            sha512: hash.to_string(),
+            sha1: crate::jar::sha1_digest(bytes),
+            sha256: crate::jar::sha256_digest(bytes),
+            sha512: crate::jar::sha512_digest(bytes),
         }
     }
 

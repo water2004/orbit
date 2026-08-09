@@ -40,6 +40,7 @@ pub async fn handle(
                     skipped = report.skipped.len()
                 )
             ));
+            super::print_resolution_warnings(&report.warnings);
         }
         OutputFormat::Json => {
             let view = install_instance_view(&report, ctx.dry_run);

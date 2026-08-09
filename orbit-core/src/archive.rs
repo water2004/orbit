@@ -242,15 +242,13 @@ pub fn export_instance(
                 crate::runtime_data::ownership_document(ownership_entries.clone())?;
             let state_sources =
                 portable_state_sources(instance_dir, &selected_owners, &ownership_entries)?;
-            let portable_files = sources
+            let mut portable_files = sources
                 .iter()
                 .map(|(entry, _, _)| format!("mods/{}", entry.filename))
-                .chain(
-                    state_sources
-                        .iter()
-                        .map(|source| archive_path(&source.relative)),
-                )
                 .collect::<BTreeSet<_>>();
+            for source in &state_sources {
+                portable_files.insert(archive_path(&source.relative)?);
+            }
             let portable_data_document = toml::to_string_pretty(&PortableDataManifest {
                 schema: PORTABLE_DATA_SCHEMA,
                 ownership: ownership_entries,
@@ -280,31 +278,31 @@ pub fn export_instance(
     } else {
         package_bytes
     };
-    let total_work = if dry_run {
+    let metadata_bytes = ownership_document.as_ref().map_or(0, String::len) as u64
+        + portable_data_document.as_ref().map_or(0, String::len) as u64;
+    let verification_bytes = if dry_run || format == "mrpack" {
         package_bytes
     } else {
-        package_bytes
-            + archived_bytes
-            + state_bytes
-            + ownership_document.as_ref().map_or(0, String::len) as u64
-            + portable_data_document.as_ref().map_or(0, String::len) as u64
+        0
+    };
+    let total_work = if dry_run {
+        verification_bytes + metadata_bytes
+    } else {
+        verification_bytes + archived_bytes + state_bytes + metadata_bytes
     };
     let mut tracker = ExportTracker::new(progress, sources.len(), total_work);
     tracker.started();
-    for (index, (entry, source, source_bytes)) in sources.iter().enumerate() {
-        if entry.sha256.is_empty() {
-            tracker.advance(*source_bytes);
-        } else {
-            let actual = compute_sha256_with_progress(source, &mut tracker)?;
-            if actual != entry.sha256 {
-                return Err(OrbitError::ChecksumMismatch {
-                    name: entry.filename.clone(),
-                    expected: entry.sha256.clone(),
-                    actual,
-                });
-            }
+    if dry_run || format == "mrpack" {
+        for (index, (entry, source, source_bytes)) in sources.iter().enumerate() {
+            verify_export_source(
+                entry,
+                source,
+                *source_bytes,
+                format == "mrpack",
+                &mut tracker,
+            )?;
+            tracker.complete_package(index + 1);
         }
-        tracker.complete_package(index + 1);
     }
     let report = ExportReport {
         path: output.to_path_buf(),
@@ -315,10 +313,7 @@ pub fn export_instance(
             + portable_data_document.as_ref().map_or(0, String::len) as u64,
     };
     if dry_run {
-        tracker.advance(
-            ownership_document.as_ref().map_or(0, String::len) as u64
-                + portable_data_document.as_ref().map_or(0, String::len) as u64,
-        );
+        tracker.advance(metadata_bytes);
         tracker.finished();
         return Ok(report);
     }
@@ -478,24 +473,61 @@ fn portable_state(
     (portable_manifest, portable_lock)
 }
 
-fn compute_sha256_with_progress(
+fn verify_export_source(
+    entry: &crate::lockfile::PackageEntry,
     source: &Path,
+    expected_size: u64,
+    verify_mrpack_hashes: bool,
     progress: &mut ExportTracker,
-) -> Result<String, OrbitError> {
-    use sha2::{Digest as _, Sha256};
+) -> Result<(), OrbitError> {
+    use sha2::{Digest as _, Sha256, Sha512};
 
     let mut file = std::fs::File::open(source)?;
-    let mut digest = Sha256::new();
+    let mut sha1 = sha1::Sha1::new();
+    let mut sha256 = Sha256::new();
+    let mut sha512 = Sha512::new();
+    let mut size = 0_u64;
     let mut buffer = [0_u8; 64 * 1024];
     loop {
         let read = file.read(&mut buffer)?;
         if read == 0 {
             break;
         }
-        digest.update(&buffer[..read]);
+        size = size.checked_add(read as u64).ok_or_else(|| {
+            OrbitError::Other(anyhow::anyhow!("source file size overflowed during export"))
+        })?;
+        sha1.update(&buffer[..read]);
+        sha256.update(&buffer[..read]);
+        sha512.update(&buffer[..read]);
         progress.advance(read as u64);
     }
-    Ok(hex::encode(digest.finalize()))
+    if size != expected_size {
+        return Err(OrbitError::Other(anyhow::anyhow!(
+            "source '{}' changed size during export: expected {expected_size}, read {size}",
+            source.display()
+        )));
+    }
+    let actual_sha256 = hex::encode(sha256.finalize());
+    if !entry.sha256.is_empty() && actual_sha256 != entry.sha256 {
+        return Err(OrbitError::ChecksumMismatch {
+            name: entry.filename.clone(),
+            expected: entry.sha256.clone(),
+            actual: actual_sha256,
+        });
+    }
+    if verify_mrpack_hashes && !mrpack::is_embedded(entry) {
+        let actual_sha1 = hex::encode(sha1.finalize());
+        let actual_sha512 = hex::encode(sha512.finalize());
+        if !actual_sha1.eq_ignore_ascii_case(&entry.sha1)
+            || !actual_sha512.eq_ignore_ascii_case(&entry.sha512)
+        {
+            return Err(OrbitError::Other(anyhow::anyhow!(
+                "mrpack hashes for '{}' do not match its JAR",
+                entry.filename
+            )));
+        }
+    }
+    Ok(())
 }
 
 struct ExportTracker {
@@ -807,11 +839,39 @@ fn collect_portable_files(
     Ok(())
 }
 
-fn archive_path(path: &Path) -> String {
-    path.components()
-        .map(|component| component.as_os_str().to_string_lossy())
-        .collect::<Vec<_>>()
-        .join("/")
+pub(crate) fn archive_path(path: &Path) -> Result<String, OrbitError> {
+    let mut components = Vec::new();
+    for component in path.components() {
+        let std::path::Component::Normal(component) = component else {
+            return Err(OrbitError::Other(anyhow::anyhow!(
+                "portable path must be relative and normalized: {}",
+                path.display()
+            )));
+        };
+        let component = component.to_str().ok_or_else(|| {
+            OrbitError::Other(anyhow::anyhow!(
+                "portable path is not valid UTF-8: {}",
+                path.display()
+            ))
+        })?;
+        components.push(component);
+    }
+    let value = components.join("/");
+    orbit_bundle_format::validate_relative_path(&value).map_err(|error| {
+        OrbitError::Other(anyhow::anyhow!(
+            "invalid portable path '{}': {error}",
+            path.display()
+        ))
+    })?;
+    Ok(value)
+}
+
+pub(crate) fn validate_instance_destination(
+    instance: &Path,
+    relative: &Path,
+) -> Result<(), OrbitError> {
+    let relative = archive_path(relative)?;
+    mrpack::validate_import_destination(instance, &relative)
 }
 
 #[cfg(test)]

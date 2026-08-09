@@ -78,6 +78,7 @@ pub async fn import_mrpack(
     let mut total_bytes = 0_u64;
     for file in &selected_files {
         validate_instance_payload_path(&file.path)?;
+        validate_destination(instance_dir, &instance_dir.join(&file.path))?;
         total_bytes = total_bytes
             .checked_add(file.file_size)
             .ok_or_else(|| OrbitError::Other(anyhow::anyhow!("mrpack payload size overflowed")))?;
@@ -87,8 +88,30 @@ pub async fn import_mrpack(
             )));
         }
     }
+    let indexed_paths = selected_files
+        .iter()
+        .map(|file| orbit_bundle_format::portable_path_identity(&file.path))
+        .collect::<BTreeSet<_>>();
+    let mut override_paths = BTreeMap::<String, &str>::new();
     for entry in &selected_overrides {
         validate_instance_payload_path(&entry.relative_path)?;
+        validate_destination(instance_dir, &instance_dir.join(&entry.relative_path))?;
+        let identity = orbit_bundle_format::portable_path_identity(&entry.relative_path);
+        if indexed_paths.contains(&identity) {
+            return Err(OrbitError::Other(anyhow::anyhow!(
+                "mrpack override '{}' conflicts with an indexed file",
+                entry.relative_path
+            )));
+        }
+        if let Some(previous) = override_paths.insert(identity, &entry.relative_path)
+            && previous != entry.relative_path
+        {
+            return Err(OrbitError::Other(anyhow::anyhow!(
+                "mrpack override paths '{}' and '{}' collide on a supported filesystem",
+                previous,
+                entry.relative_path
+            )));
+        }
         total_bytes = total_bytes
             .checked_add(entry.size)
             .ok_or_else(|| OrbitError::Other(anyhow::anyhow!("mrpack override size overflowed")))?;
@@ -282,6 +305,12 @@ where
     let mut buffer = vec![0_u8; 128 * 1024];
     for (index, expected) in entries.iter().enumerate() {
         let mut entry = archive.by_name(&expected.archive_path)?;
+        if !entry.is_file() || entry.size() != expected.size {
+            return Err(OrbitError::Other(anyhow::anyhow!(
+                "mrpack override '{}' changed after inspection",
+                expected.archive_path
+            )));
+        }
         if entry
             .unix_mode()
             .is_some_and(|mode| mode & 0o170_000 == 0o120_000)
@@ -453,7 +482,13 @@ fn validate_instance_payload_path(relative: &str) -> Result<(), OrbitError> {
         "orbit-launcher.lock",
         "eula.txt",
     ];
-    if RESERVED_ROOTS.contains(&first) || RESERVED_FILES.contains(&relative) {
+    if RESERVED_ROOTS
+        .iter()
+        .any(|reserved| first.eq_ignore_ascii_case(reserved))
+        || RESERVED_FILES
+            .iter()
+            .any(|reserved| relative.eq_ignore_ascii_case(reserved))
+    {
         return Err(OrbitError::Other(anyhow::anyhow!(
             "mrpack path '{relative}' belongs to Orbit or Launcher and cannot be installed as pack content"
         )));
@@ -466,23 +501,46 @@ fn validate_destination(instance: &Path, destination: &Path) -> Result<(), Orbit
         OrbitError::Other(anyhow::anyhow!("mrpack destination escaped the instance"))
     })?;
     let mut current = instance.to_path_buf();
-    for component in relative
-        .components()
-        .take(relative.components().count().saturating_sub(1))
-    {
+    let components = relative.components().collect::<Vec<_>>();
+    for component in components.iter().take(components.len().saturating_sub(1)) {
         current.push(component.as_os_str());
-        if current.exists()
-            && std::fs::symlink_metadata(&current)?
-                .file_type()
-                .is_symlink()
-        {
-            return Err(OrbitError::Other(anyhow::anyhow!(
-                "mrpack destination traverses symbolic link '{}'",
-                current.display()
-            )));
+        match std::fs::symlink_metadata(&current) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                return Err(OrbitError::Other(anyhow::anyhow!(
+                    "import destination traverses symbolic link '{}'",
+                    current.display()
+                )));
+            }
+            Ok(metadata) if !metadata.is_dir() => {
+                return Err(OrbitError::Other(anyhow::anyhow!(
+                    "import destination parent '{}' is not a directory",
+                    current.display()
+                )));
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
         }
     }
+    match std::fs::symlink_metadata(destination) {
+        Ok(metadata) if metadata.file_type().is_symlink() || metadata.is_dir() => {
+            return Err(OrbitError::Other(anyhow::anyhow!(
+                "import destination '{}' is not a regular file path",
+                destination.display()
+            )));
+        }
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.into()),
+    }
     Ok(())
+}
+
+pub(super) fn validate_import_destination(
+    instance: &Path,
+    relative: &str,
+) -> Result<(), OrbitError> {
+    validate_destination(instance, &instance.join(relative))
 }
 
 fn allowed_download_url(value: &str) -> bool {
@@ -535,7 +593,7 @@ pub(super) fn write_contents(
     for source in contents.state {
         add_file(
             archive,
-            &format!("{prefix}{}", super::archive_path(&source.relative)),
+            &format!("{prefix}{}", super::archive_path(&source.relative)?),
             &source.source,
             metadata_options,
             Some(progress),

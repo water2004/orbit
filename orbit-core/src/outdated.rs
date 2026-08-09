@@ -851,7 +851,8 @@ mod tests {
         }
     }
 
-    fn inspected(mod_id: &str, version: &str, sha512: &str) -> crate::jar::InspectedJar {
+    fn inspected(mod_id: &str, version: &str, content: &str) -> crate::jar::InspectedJar {
+        let bytes = content.as_bytes();
         crate::jar::InspectedJar {
             metadata: crate::jar::JarModMetadata {
                 mod_id: mod_id.to_string(),
@@ -867,9 +868,9 @@ mod tests {
                 embedded_artifacts: Vec::new(),
                 bundled_mods: Vec::new(),
             },
-            sha1: format!("sha1-{sha512}"),
-            sha256: format!("sha256-{sha512}"),
-            sha512: sha512.to_string(),
+            sha1: crate::jar::sha1_digest(bytes),
+            sha256: crate::jar::sha256_digest(bytes),
+            sha512: crate::jar::sha512_digest(bytes),
         }
     }
 
@@ -880,7 +881,7 @@ mod tests {
         related_project: Option<&str>,
     ) -> RemoteArtifact {
         let mut artifact = artifact(project_id, project_id);
-        artifact.sha512 = sha512.to_string();
+        artifact.sha512 = crate::jar::sha512_digest(sha512.as_bytes());
         artifact.filename = format!("{project_id}-{version}.jar");
         artifact.download_url = format!("https://example.invalid/{}", artifact.filename);
         artifact.modrinth.as_mut().unwrap().version_id = format!("{project_id}-{version}");

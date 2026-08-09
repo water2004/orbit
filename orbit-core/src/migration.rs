@@ -58,6 +58,7 @@ pub struct MigrationPlan {
 struct MigrationLocalSource {
     source: PathBuf,
     relative: PathBuf,
+    sha512: String,
 }
 
 impl MigrationPlan {
@@ -451,26 +452,37 @@ pub fn export_migration(
         return Ok(report);
     }
 
-    let mut destinations = vec![
-        plan.target_dir.join("orbit.toml"),
-        plan.target_dir.join("orbit.lock"),
-        plan.target_dir.join(".orbit/runtime-data/ownership.toml"),
+    let mut relative_destinations = vec![
+        PathBuf::from("orbit.toml"),
+        PathBuf::from("orbit.lock"),
+        PathBuf::from(".orbit/runtime-data/ownership.toml"),
     ];
-    destinations.extend(
-        state_sources
-            .iter()
-            .map(|source| plan.target_dir.join(&source.relative)),
-    );
-    destinations.extend(
+    relative_destinations.extend(state_sources.iter().map(|source| source.relative.clone()));
+    relative_destinations.extend(
         plan.local_sources
             .iter()
-            .map(|source| plan.target_dir.join(&source.relative)),
+            .map(|source| source.relative.clone()),
     );
-    if let Some(existing) = destinations.iter().find(|path| path.exists()) {
-        return Err(OrbitError::Other(anyhow::anyhow!(
-            "migration export refuses to overwrite existing target content: {}",
-            existing.display()
-        )));
+    let mut portable_destinations = BTreeSet::new();
+    for relative in &relative_destinations {
+        let portable = crate::archive::archive_path(relative)?;
+        if !portable_destinations.insert(orbit_bundle_format::portable_path_identity(&portable)) {
+            return Err(OrbitError::Other(anyhow::anyhow!(
+                "migration export contains a portable destination collision at '{portable}'"
+            )));
+        }
+        crate::archive::validate_instance_destination(&plan.target_dir, relative)?;
+        let destination = plan.target_dir.join(relative);
+        match std::fs::symlink_metadata(&destination) {
+            Ok(_) => {
+                return Err(OrbitError::Other(anyhow::anyhow!(
+                    "migration export refuses to overwrite existing target content: {}",
+                    destination.display()
+                )));
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
     }
 
     let staging = plan
@@ -483,11 +495,7 @@ pub fn export_migration(
         )));
     }
     std::fs::create_dir(&staging)?;
-    let result = stage_and_commit(plan, &state_sources, &ownership_document, &staging);
-    if result.is_err() && staging.exists() {
-        let _ = std::fs::remove_dir_all(&staging);
-    }
-    result?;
+    stage_and_commit(plan, &state_sources, &ownership_document, &staging)?;
     Ok(report)
 }
 
@@ -580,7 +588,7 @@ fn prepare_migration_local_sources(
     use crate::lockfile::ArtifactSource;
     use crate::manifest::PackageRemote;
 
-    let mut sources = BTreeMap::<PathBuf, PathBuf>::new();
+    let mut sources = BTreeMap::<PathBuf, (PathBuf, String)>::new();
     for entry in &mut lockfile.packages {
         let online = entry
             .artifact_sources
@@ -636,7 +644,9 @@ fn prepare_migration_local_sources(
             unreachable!("managed local source is always a file remote")
         };
         let relative = PathBuf::from(path);
-        sources.entry(relative).or_insert(source);
+        sources
+            .entry(relative)
+            .or_insert((source, entry.sha512.clone()));
         entry.artifact_sources = vec![crate::source_store::managed_artifact_source(&managed)];
         entry
             .remotes
@@ -648,7 +658,11 @@ fn prepare_migration_local_sources(
     crate::installer::normalize_selected_file_remotes(lockfile);
     Ok(sources
         .into_iter()
-        .map(|(relative, source)| MigrationLocalSource { source, relative })
+        .map(|(relative, (source, sha512))| MigrationLocalSource {
+            source,
+            relative,
+            sha512,
+        })
         .collect())
 }
 
@@ -729,44 +743,68 @@ fn stage_and_commit(
     ownership_document: &str,
     staging: &Path,
 ) -> Result<(), OrbitError> {
-    ManifestFile::new(staging, plan.target_manifest.clone()).save()?;
-    Lockfile::new(staging, plan.target_lockfile.clone()).save()?;
-    crate::atomic_io::write_atomic(
-        &staging.join(".orbit/runtime-data/ownership.toml"),
-        ownership_document.as_bytes(),
-    )?;
-    for source in state_sources {
-        let destination = staging.join(&source.relative);
-        if let Some(parent) = destination.parent() {
-            std::fs::create_dir_all(parent)?;
+    let stage_result = (|| {
+        ManifestFile::new(staging, plan.target_manifest.clone()).save()?;
+        Lockfile::new(staging, plan.target_lockfile.clone()).save()?;
+        crate::atomic_io::write_atomic(
+            &staging.join(".orbit/runtime-data/ownership.toml"),
+            ownership_document.as_bytes(),
+        )?;
+        for source in state_sources {
+            let destination = staging.join(&source.relative);
+            if let Some(parent) = destination.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            let copied = std::fs::copy(&source.source, destination)?;
+            if copied != source.bytes {
+                return Err(OrbitError::Other(anyhow::anyhow!(
+                    "migration source changed while copying '{}': expected {} bytes, copied {copied}",
+                    source.source.display(),
+                    source.bytes
+                )));
+            }
         }
-        std::fs::copy(&source.source, destination)?;
-    }
-    for source in &plan.local_sources {
-        let destination = staging.join(&source.relative);
-        if let Some(parent) = destination.parent() {
-            std::fs::create_dir_all(parent)?;
+        for source in &plan.local_sources {
+            let destination = staging.join(&source.relative);
+            if let Some(parent) = destination.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            crate::atomic_io::copy_atomic_verified_sha512(
+                &source.source,
+                &destination,
+                &source.sha512,
+            )?;
         }
-        std::fs::copy(&source.source, destination)?;
+        Ok(())
+    })();
+    if let Err(error) = stage_result {
+        return match std::fs::remove_dir_all(staging) {
+            Ok(()) => Err(error),
+            Err(cleanup) => Err(OrbitError::Other(anyhow::anyhow!(
+                "migration staging failed: {error}; cleanup also failed: {cleanup}; recovery data remains at '{}'",
+                staging.display()
+            ))),
+        };
     }
 
-    let mut roots = BTreeSet::new();
-    for source in state_sources {
-        if let Some(root) = source.relative.components().next() {
-            roots.insert(PathBuf::from(root.as_os_str()));
-        }
-    }
-    for source in &plan.local_sources {
-        if let Some(root) = source.relative.components().next() {
-            roots.insert(PathBuf::from(root.as_os_str()));
-        }
-    }
+    let mut paths = state_sources
+        .iter()
+        .map(|source| source.relative.clone())
+        .chain(
+            plan.local_sources
+                .iter()
+                .map(|source| source.relative.clone()),
+        )
+        .chain([
+            PathBuf::from("orbit.toml"),
+            PathBuf::from("orbit.lock"),
+            PathBuf::from(".orbit/runtime-data/ownership.toml"),
+        ])
+        .collect::<Vec<_>>();
+    paths.sort();
+    paths.dedup();
     let mut committed = Vec::new();
-    for relative in roots.into_iter().chain([
-        PathBuf::from("orbit.toml"),
-        PathBuf::from("orbit.lock"),
-        PathBuf::from(".orbit/runtime-data/ownership.toml"),
-    ]) {
+    for relative in paths {
         let source = staging.join(&relative);
         if !source.exists() {
             continue;
@@ -776,10 +814,39 @@ fn stage_and_commit(
             std::fs::create_dir_all(parent)?;
         }
         if let Err(error) = std::fs::rename(&source, &destination) {
+            let mut rollback_failures = Vec::new();
             for previous in committed.iter().rev() {
-                let _ = std::fs::rename(plan.target_dir.join(previous), staging.join(previous));
+                let staged = staging.join(previous);
+                if let Some(parent) = staged.parent()
+                    && let Err(rollback) = std::fs::create_dir_all(parent)
+                {
+                    rollback_failures.push(format!(
+                        "create rollback parent '{}': {rollback}",
+                        parent.display()
+                    ));
+                    continue;
+                }
+                if let Err(rollback) = std::fs::rename(plan.target_dir.join(previous), &staged) {
+                    rollback_failures.push(format!(
+                        "restore '{}': {rollback}",
+                        plan.target_dir.join(previous).display()
+                    ));
+                }
             }
-            return Err(OrbitError::Io(error));
+            if rollback_failures.is_empty() {
+                return match std::fs::remove_dir_all(staging) {
+                    Ok(()) => Err(OrbitError::Io(error)),
+                    Err(cleanup) => Err(OrbitError::Other(anyhow::anyhow!(
+                        "migration commit failed: {error}; rollback succeeded but staging cleanup failed: {cleanup}; recovery data remains at '{}'",
+                        staging.display()
+                    ))),
+                };
+            }
+            return Err(OrbitError::Other(anyhow::anyhow!(
+                "migration commit failed: {error}; rollback also failed ({}); recovery data remains at '{}'",
+                rollback_failures.join("; "),
+                staging.display()
+            )));
         }
         committed.push(relative);
     }

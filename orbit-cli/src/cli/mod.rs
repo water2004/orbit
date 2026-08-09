@@ -420,9 +420,23 @@ pub enum BoundInclusion {
 impl CommandHandler for Commands {
     async fn execute(self, ctx: &commands::CliContext) -> Result<()> {
         use crate::cli::commands::*;
-        if self.mutates_instance() {
+        let mutates_instance = self.mutates_instance();
+        if mutates_instance {
             ctx.require_explicit_mutation_target()?;
         }
+        let _workspace_locks = if mutates_instance {
+            let source = ctx.instance_dir()?;
+            let mut targets = vec![source];
+            if let Commands::Migrate {
+                command: MigrateCommands::Export { target, .. },
+            } = &self
+            {
+                targets.push(target.clone());
+            }
+            Some(orbit_core::WorkspaceMutationLocks::acquire(targets)?)
+        } else {
+            None
+        };
         match self {
             Commands::Init {
                 name,

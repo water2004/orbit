@@ -59,7 +59,7 @@ impl LauncherLock {
         let mut paths = HashSet::new();
         for artifact in &self.artifacts {
             artifact.validate()?;
-            if !paths.insert(artifact.path.as_str()) {
+            if !paths.insert(orbit_bundle_format::portable_path_identity(&artifact.path)) {
                 return Err(LauncherError::InvalidLock(format!(
                     "duplicate artifact path '{}'",
                     artifact.path
@@ -68,7 +68,7 @@ impl LauncherLock {
         }
         for path in &self.generated_files {
             validate_relative_path(path)?;
-            if !paths.insert(path.as_str()) {
+            if !paths.insert(orbit_bundle_format::portable_path_identity(path)) {
                 return Err(LauncherError::InvalidLock(format!(
                     "duplicate owned path '{path}'"
                 )));
@@ -520,12 +520,7 @@ impl LockedArtifact {
 
 fn validate_archive_prefix(prefix: &str) -> Result<(), LauncherError> {
     let trimmed = prefix.trim_end_matches('/');
-    if trimmed.is_empty()
-        || prefix.contains('\\')
-        || trimmed
-            .split('/')
-            .any(|part| part.is_empty() || part == "." || part == "..")
-    {
+    if orbit_bundle_format::validate_relative_path(trimmed).is_err() {
         return Err(LauncherError::InvalidLock(format!(
             "native extraction exclusion '{prefix}' is unsafe"
         )));
@@ -600,21 +595,17 @@ pub fn portable_relative_path(path: &Path) -> Result<String, LauncherError> {
             "owned path cannot be empty".to_string(),
         ));
     }
-    Ok(parts.join("/"))
+    let portable = parts.join("/");
+    validate_relative_path(&portable)?;
+    Ok(portable)
 }
 
 fn validate_relative_path(value: &str) -> Result<(), LauncherError> {
-    if value.is_empty()
-        || value.contains('\\')
-        || value.split('/').any(|part| {
-            part.is_empty() || part == "." || part == ".." || part.chars().any(char::is_control)
-        })
-    {
-        return Err(LauncherError::InvalidLock(format!(
+    orbit_bundle_format::validate_relative_path(value).map_err(|_| {
+        LauncherError::InvalidLock(format!(
             "'{value}' is not a normalized portable relative path"
-        )));
-    }
-    Ok(())
+        ))
+    })
 }
 
 fn validate_text(value: &str, subject: &str) -> Result<(), LauncherError> {

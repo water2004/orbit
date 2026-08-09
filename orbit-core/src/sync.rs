@@ -196,15 +196,14 @@ pub async fn sync_instance(
             // that realization, retain a stale pre-scan selection, or delete a
             // candidate on the user's behalf. Match init by persisting an empty
             // lock until fix selects one exact realization per package.
-            manifest.save()?;
-            Lockfile::new(
+            let empty_lock = Lockfile::new(
                 instance_dir,
                 crate::lockfile::OrbitLockfile {
                     meta: refreshed_lock_meta,
                     packages: Vec::new(),
                 },
-            )
-            .save()?;
+            );
+            crate::workspace::save_workspace(&manifest, &empty_lock)?;
         }
         return Err(OrbitError::Other(anyhow::anyhow!(
             "sync found multiple local realizations for the same package and cannot create a factual lock without choosing a solution:\n{}\nrun 'orbit fix' to resolve and confirm the package changes",
@@ -227,8 +226,7 @@ pub async fn sync_instance(
         .inner
         .packages
         .sort_by(|left, right| left.mod_id.cmp(&right.mod_id));
-    manifest.save()?;
-    lockfile.save()?;
+    crate::workspace::save_workspace(&manifest, &lockfile)?;
     if let Err(error) =
         crate::source_store::prune_unreferenced(instance_dir, &manifest.inner, &lockfile.inner)
     {
@@ -608,8 +606,8 @@ physical_environment = "client"
                     mod_id: "missing".to_string(),
                     version: "1".to_string(),
                     sha1: String::new(),
-                    sha256: "hash".to_string(),
-                    sha512: "content-identity".to_string(),
+                    sha256: crate::jar::sha256_digest(b"missing"),
+                    sha512: crate::jar::sha512_digest(b"missing"),
                     filename: "missing.jar".to_string(),
                     remotes: vec![PackageRemote::File {
                         path: "mods/missing.jar".to_string(),

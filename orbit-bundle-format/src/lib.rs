@@ -5,8 +5,8 @@
 //! disjoint projections of the same validated document.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::io::Read;
-use std::path::{Component, Path, PathBuf};
+use std::io::{Read, Write};
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -16,6 +16,7 @@ pub const BUNDLE_FORMAT_VERSION: u32 = 1;
 pub const MRPACK_INDEX_PATH: &str = "modrinth.index.json";
 pub const MRPACK_FORMAT_VERSION: u32 = 1;
 const MAX_MANIFEST_BYTES: u64 = 16 * 1024 * 1024;
+const SUPPORTED_LOADERS: &[&str] = &["vanilla", "fabric", "quilt", "forge", "neoforge"];
 
 #[derive(Debug, thiserror::Error)]
 pub enum FormatError {
@@ -136,6 +137,12 @@ impl BundleManifest {
         {
             return invalid("Orbit bundle has an empty required identity or runtime field");
         }
+        if self.runtime.minecraft.trim() != self.runtime.minecraft
+            || self.runtime.loader.trim() != self.runtime.loader
+            || !SUPPORTED_LOADERS.contains(&self.runtime.loader.as_str())
+        {
+            return invalid("Orbit bundle declares a non-canonical runtime");
+        }
         if self.runtime.loader == "vanilla" && self.runtime.loader_version.is_some() {
             return invalid("vanilla runtime must not declare a Loader version");
         }
@@ -144,7 +151,7 @@ impl BundleManifest {
                 .runtime
                 .loader_version
                 .as_deref()
-                .is_none_or(str::is_empty)
+                .is_none_or(|version| version.is_empty() || version.trim() != version)
         {
             return invalid("modded runtime must declare an exact Loader version");
         }
@@ -155,7 +162,7 @@ impl BundleManifest {
         let mut paths = BTreeSet::new();
         for file in &self.files {
             validate_relative_path(&file.path)?;
-            if !paths.insert(file.path.as_str()) {
+            if !paths.insert(portable_path_identity(&file.path)) {
                 return invalid(format!(
                     "Orbit bundle contains duplicate path '{}'",
                     file.path
@@ -174,8 +181,25 @@ impl BundleManifest {
             validate_sha256(&file.sha256, &file.path)?;
         }
         if let Some(orbit) = &self.orbit {
+            let controls = [
+                Some(orbit.manifest.as_str()),
+                Some(orbit.lock.as_str()),
+                orbit.ownership.as_deref(),
+                orbit.data_manifest.as_deref(),
+            ]
+            .into_iter()
+            .flatten()
+            .map(portable_path_identity)
+            .collect::<BTreeSet<_>>();
+            let declared_controls = 2
+                + usize::from(orbit.ownership.is_some())
+                + usize::from(orbit.data_manifest.is_some());
+            if controls.len() != declared_controls {
+                return invalid("Orbit section control files must use distinct paths");
+            }
             for required in [&orbit.manifest, &orbit.lock] {
-                if !paths.contains(required.as_str()) {
+                validate_relative_path(required)?;
+                if !paths.contains(&portable_path_identity(required)) {
                     return invalid(format!(
                         "Orbit section is missing declared file '{required}'"
                     ));
@@ -194,7 +218,8 @@ impl BundleManifest {
                                 "mods-and-data Orbit section must declare ownership and data manifest",
                             );
                         };
-                        if !paths.contains(required.as_str()) {
+                        validate_relative_path(required)?;
+                        if !paths.contains(&portable_path_identity(required)) {
                             return invalid(format!(
                                 "Orbit data section is missing declared file '{required}'"
                             ));
@@ -242,6 +267,7 @@ impl BundleArchive {
     pub fn open(source: &Path) -> Result<Self, FormatError> {
         ensure_file(source)?;
         let mut archive = zip::ZipArchive::new(std::fs::File::open(source)?)?;
+        validate_archive_structure(&mut archive, BUNDLE_MANIFEST_PATH)?;
         let manifest: BundleManifest = read_toml_entry(&mut archive, BUNDLE_MANIFEST_PATH)?;
         manifest.validate()?;
         validate_zip_inventory(&mut archive, &manifest)?;
@@ -326,16 +352,8 @@ impl BundleArchive {
             .iter()
             .filter(|file| file.owner == owner)
             .collect::<Vec<_>>();
-        let verification_bytes = selected.iter().map(|file| file.size).sum::<u64>();
-        let extraction_bytes = selected.iter().map(|file| file.size).sum::<u64>();
-        let total_bytes = verification_bytes.saturating_add(extraction_bytes);
+        let total_bytes = selected.iter().map(|file| file.size).sum::<u64>();
         let total_files = selected.len();
-        self.verify_matching(
-            |file| file.owner == owner,
-            |completed, _| {
-                progress(completed, total_bytes, 0, total_files);
-            },
-        )?;
         let mut archive = zip::ZipArchive::new(std::fs::File::open(&self.source)?)?;
         let mut extracted = Vec::new();
         let mut copied_bytes = 0_u64;
@@ -347,38 +365,92 @@ impl BundleArchive {
                     BundleFileOwner::Orbit => "orbit",
                 })
                 .map_err(|_| FormatError::Invalid("invalid bundle namespace".to_string()))?;
-            let target = destination.join(relative);
-            if let Some(parent) = target.parent() {
-                std::fs::create_dir_all(parent)?;
-            }
+            let target = prepare_extraction_target(destination, relative)?;
             let mut entry = archive.by_name(&file.path)?;
-            let mut output = std::fs::File::create(&target)?;
+            if !entry.is_file() || entry.size() != file.size {
+                return invalid(format!(
+                    "bundle file '{}' size differs from its manifest",
+                    file.path
+                ));
+            }
+            let parent = target.parent().unwrap_or(destination);
+            let mut output = tempfile::NamedTempFile::new_in(parent)?;
+            let mut digest = Sha256::new();
             loop {
                 let read = entry.read(&mut buffer)?;
                 if read == 0 {
                     break;
                 }
-                use std::io::Write as _;
                 output.write_all(&buffer[..read])?;
+                digest.update(&buffer[..read]);
                 copied_bytes = copied_bytes.saturating_add(read as u64);
-                progress(
-                    verification_bytes.saturating_add(copied_bytes),
-                    total_bytes,
-                    index,
-                    total_files,
-                );
+                progress(copied_bytes, total_bytes, index, total_files);
             }
-            output.sync_all()?;
+            output.as_file_mut().flush()?;
+            output.as_file().sync_all()?;
+            let actual = hex::encode(digest.finalize());
+            if actual != file.sha256 {
+                return invalid(format!("bundle file '{}' failed SHA-256", file.path));
+            }
+            output
+                .persist(&target)
+                .map_err(|error| FormatError::Io(error.error))?;
             extracted.push(relative.to_path_buf());
-            progress(
-                verification_bytes.saturating_add(copied_bytes),
-                total_bytes,
-                index + 1,
-                total_files,
-            );
+            progress(copied_bytes, total_bytes, index + 1, total_files);
         }
         Ok(extracted)
     }
+}
+
+fn prepare_extraction_target(destination: &Path, relative: &Path) -> Result<PathBuf, FormatError> {
+    match std::fs::symlink_metadata(destination) {
+        Ok(metadata) if metadata.file_type().is_dir() => {}
+        Ok(_) => return invalid("bundle extraction destination is not a real directory"),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            std::fs::create_dir_all(destination)?;
+            let metadata = std::fs::symlink_metadata(destination)?;
+            if !metadata.file_type().is_dir() {
+                return invalid("bundle extraction destination is not a real directory");
+            }
+        }
+        Err(error) => return Err(error.into()),
+    }
+
+    let mut current = destination.to_path_buf();
+    if let Some(parent) = relative.parent() {
+        for component in parent.components() {
+            let std::path::Component::Normal(component) = component else {
+                return invalid("bundle extraction path is not normalized");
+            };
+            current.push(component);
+            match std::fs::symlink_metadata(&current) {
+                Ok(metadata) if metadata.file_type().is_dir() => {}
+                Ok(_) => {
+                    return invalid(format!(
+                        "bundle extraction parent is not a real directory: '{}'",
+                        current.display()
+                    ));
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    std::fs::create_dir(&current)?;
+                }
+                Err(error) => return Err(error.into()),
+            }
+        }
+    }
+    let target = destination.join(relative);
+    match std::fs::symlink_metadata(&target) {
+        Ok(metadata) if metadata.file_type().is_file() => {}
+        Ok(_) => {
+            return invalid(format!(
+                "bundle extraction target is not a regular file: '{}'",
+                target.display()
+            ));
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.into()),
+    }
+    Ok(target)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -459,7 +531,7 @@ impl MrpackIndex {
         let mut paths = BTreeSet::new();
         for file in &self.files {
             validate_relative_path(&file.path)?;
-            if !paths.insert(file.path.as_str()) {
+            if !paths.insert(portable_path_identity(&file.path)) {
                 return invalid(format!(
                     "mrpack contains duplicate indexed path '{}'",
                     file.path
@@ -551,6 +623,7 @@ impl MrpackArchive {
     pub fn open(source: &Path) -> Result<Self, FormatError> {
         ensure_file(source)?;
         let mut archive = zip::ZipArchive::new(std::fs::File::open(source)?)?;
+        validate_archive_structure(&mut archive, MRPACK_INDEX_PATH)?;
         let index: MrpackIndex = read_json_entry(&mut archive, MRPACK_INDEX_PATH)?;
         index.validate()?;
         let overrides = read_mrpack_overrides(&mut archive)?;
@@ -573,20 +646,47 @@ impl MrpackArchive {
 }
 
 pub fn validate_relative_path(value: &str) -> Result<(), FormatError> {
-    let path = Path::new(value);
-    if value.is_empty()
-        || value.contains('\\')
-        || value
-            .split('/')
-            .any(|component| component.is_empty() || matches!(component, "." | ".."))
-        || path.is_absolute()
-        || path
-            .components()
-            .any(|component| !matches!(component, Component::Normal(_)))
-    {
+    if value.is_empty() || value.starts_with('/') || value.contains('\\') {
         return invalid(format!("unsafe archive path '{value}'"));
     }
+    for (index, component) in value.split('/').enumerate() {
+        if component.is_empty()
+            || matches!(component, "." | "..")
+            || component.ends_with([' ', '.'])
+            || component.chars().any(|character| {
+                character.is_control()
+                    || matches!(character, '<' | '>' | ':' | '"' | '|' | '?' | '*')
+            })
+            || (index == 0 && component.len() == 2 && component.as_bytes()[1] == b':')
+            || is_windows_device_name(component)
+        {
+            return invalid(format!("unsafe archive path '{value}'"));
+        }
+    }
     Ok(())
+}
+
+/// Returns the platform-neutral identity used to detect paths that would
+/// collide on a supported case-insensitive filesystem.
+pub fn portable_path_identity(value: &str) -> String {
+    value.to_lowercase()
+}
+
+fn is_windows_device_name(component: &str) -> bool {
+    let stem = component.split('.').next().unwrap_or(component);
+    matches!(
+        stem.to_ascii_uppercase().as_str(),
+        "CON" | "PRN" | "AUX" | "NUL"
+    ) || stem
+        .to_ascii_uppercase()
+        .strip_prefix("COM")
+        .is_some_and(|suffix| matches!(suffix, "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9"))
+        || stem
+            .to_ascii_uppercase()
+            .strip_prefix("LPT")
+            .is_some_and(|suffix| {
+                matches!(suffix, "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9")
+            })
 }
 
 fn read_mrpack_overrides<R: Read + std::io::Seek>(
@@ -610,7 +710,7 @@ fn read_mrpack_overrides<R: Read + std::io::Seek>(
             continue;
         };
         validate_relative_path(prefix)?;
-        let key = (common, layer, prefix.to_string());
+        let key = (common, layer, portable_path_identity(prefix));
         if !layered_paths.insert(key) {
             return invalid(format!("mrpack contains duplicate override path '{name}'"));
         }
@@ -633,7 +733,7 @@ fn validate_zip_inventory<R: Read + std::io::Seek>(
     let declared = manifest
         .files
         .iter()
-        .map(|file| file.path.as_str())
+        .map(|file| portable_path_identity(&file.path))
         .collect::<BTreeSet<_>>();
     let mut actual = BTreeSet::new();
     for index in 0..archive.len() {
@@ -641,23 +741,61 @@ fn validate_zip_inventory<R: Read + std::io::Seek>(
         if !entry.is_file() {
             continue;
         }
+        let name = entry.name();
+        if name == BUNDLE_MANIFEST_PATH {
+            continue;
+        }
+        if !actual.insert(portable_path_identity(name)) {
+            return invalid(format!("Orbit bundle contains duplicate path '{name}'"));
+        }
+    }
+    if actual != declared {
+        return invalid("Orbit bundle ZIP inventory differs from bundle.toml");
+    }
+    Ok(())
+}
+
+fn validate_archive_structure<R: Read + std::io::Seek>(
+    archive: &mut zip::ZipArchive<R>,
+    metadata_path: &str,
+) -> Result<(), FormatError> {
+    let mut paths = BTreeSet::new();
+    let mut metadata_entries = 0_usize;
+    for index in 0..archive.len() {
+        let entry = archive.by_index(index)?;
         if entry
             .unix_mode()
             .is_some_and(|mode| mode & 0o170_000 == 0o120_000)
         {
-            return invalid("Orbit bundle contains a symbolic link");
+            return invalid("archive contains a symbolic link");
         }
-        let name = entry.name();
+        let name = entry.name().trim_end_matches('/');
         validate_relative_path(name)?;
-        if name == BUNDLE_MANIFEST_PATH {
-            continue;
+        if !entry.is_file() && !entry.is_dir() {
+            return invalid(format!(
+                "archive entry '{}' is not a regular file or directory",
+                entry.name()
+            ));
         }
-        if !actual.insert(name.to_string()) {
-            return invalid(format!("Orbit bundle contains duplicate path '{name}'"));
+        if !paths.insert(portable_path_identity(name)) {
+            return invalid(format!(
+                "archive contains duplicate path '{}'",
+                entry.name()
+            ));
+        }
+        if entry.name() == metadata_path {
+            if !entry.is_file() {
+                return invalid(format!(
+                    "archive metadata '{metadata_path}' is not a regular file"
+                ));
+            }
+            metadata_entries += 1;
         }
     }
-    if actual.iter().map(String::as_str).collect::<BTreeSet<_>>() != declared {
-        return invalid("Orbit bundle ZIP inventory differs from bundle.toml");
+    if metadata_entries != 1 {
+        return invalid(format!(
+            "archive must contain exactly one root file '{metadata_path}'"
+        ));
     }
     Ok(())
 }
@@ -705,6 +843,9 @@ fn read_bounded_entry<R: Read + std::io::Seek>(
 }
 
 fn validate_sha256(value: &str, path: &str) -> Result<(), FormatError> {
+    if value.bytes().any(|byte| byte.is_ascii_uppercase()) {
+        return invalid(format!("file '{path}' has a non-canonical SHA-256 hash"));
+    }
     validate_hex_hash(value, 64, "SHA-256", path)
 }
 
@@ -727,7 +868,6 @@ fn invalid<T>(message: impl Into<String>) -> Result<T, FormatError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write as _;
 
     fn launcher_manifest() -> BundleManifest {
         BundleManifest {
@@ -805,6 +945,19 @@ mod tests {
 
         let bundle = BundleArchive::open(&archive_path).unwrap();
         assert!(bundle.verify().is_err());
+        let extracted = directory.path().join("extracted");
+        std::fs::create_dir(&extracted).unwrap();
+        std::fs::write(extracted.join("state.txt"), b"existing").unwrap();
+
+        assert!(
+            bundle
+                .extract_owner(BundleFileOwner::Launcher, &extracted)
+                .is_err()
+        );
+        assert_eq!(
+            std::fs::read(extracted.join("state.txt")).unwrap(),
+            b"existing"
+        );
     }
 
     #[test]
@@ -907,8 +1060,96 @@ mod tests {
             "C:/escape",
             "mods\\escape.jar",
             "a/./b",
+            "mods/NUL.jar",
+            "mods/trailing. ",
+            "mods/a?.jar",
         ] {
             assert!(validate_relative_path(invalid).is_err(), "{invalid}");
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn extraction_rejects_symbolic_link_parents() {
+        use std::os::unix::fs::symlink;
+
+        let directory = tempfile::tempdir().unwrap();
+        let destination = directory.path().join("destination");
+        let outside = directory.path().join("outside");
+        std::fs::create_dir(&destination).unwrap();
+        std::fs::create_dir(&outside).unwrap();
+        symlink(&outside, destination.join("config")).unwrap();
+
+        assert!(
+            prepare_extraction_target(&destination, Path::new("config/settings.toml")).is_err()
+        );
+    }
+
+    #[test]
+    fn bundle_paths_and_hashes_are_portable_and_canonical() {
+        let mut manifest = launcher_manifest();
+        manifest.launcher = Some(LauncherSection {
+            content: LauncherContent::RuntimeAndState,
+        });
+        manifest.files = vec![
+            BundleFile {
+                path: "launcher/State.txt".to_string(),
+                owner: BundleFileOwner::Launcher,
+                size: 0,
+                sha256: "0".repeat(64),
+            },
+            BundleFile {
+                path: "launcher/state.txt".to_string(),
+                owner: BundleFileOwner::Launcher,
+                size: 0,
+                sha256: "0".repeat(64),
+            },
+        ];
+        assert!(manifest.validate().is_err());
+
+        manifest.files.truncate(1);
+        manifest.files[0].sha256 = "A".repeat(64);
+        assert!(manifest.validate().is_err());
+    }
+
+    #[test]
+    fn archive_requires_one_unambiguous_root_manifest() {
+        let directory = tempfile::tempdir().unwrap();
+        let archive_path = directory.path().join("duplicate.orbitbundle");
+        let manifest = toml::to_string_pretty(&launcher_manifest()).unwrap();
+        let mut archive = zip::ZipWriter::new(std::fs::File::create(&archive_path).unwrap());
+        let options = zip::write::SimpleFileOptions::default();
+        archive.start_file("Bundle.toml", options).unwrap();
+        archive.write_all(manifest.as_bytes()).unwrap();
+        archive.start_file(BUNDLE_MANIFEST_PATH, options).unwrap();
+        archive.write_all(manifest.as_bytes()).unwrap();
+        archive.finish().unwrap();
+
+        assert!(BundleArchive::open(&archive_path).is_err());
+    }
+
+    #[test]
+    fn mrpack_index_rejects_case_colliding_paths() {
+        let file = |path: &str| MrpackFile {
+            path: path.to_string(),
+            hashes: MrpackHashes {
+                sha1: "0".repeat(40),
+                sha512: "0".repeat(128),
+            },
+            env: MrpackEnvironment::default(),
+            downloads: vec!["https://cdn.modrinth.com/data/example.jar".to_string()],
+            file_size: 0,
+        };
+        let index = MrpackIndex {
+            format_version: MRPACK_FORMAT_VERSION,
+            game: "minecraft".to_string(),
+            version_id: "1".to_string(),
+            name: "Pack".to_string(),
+            summary: None,
+            files: vec![file("mods/A.jar"), file("mods/a.jar")],
+            dependencies: BTreeMap::from([("minecraft".to_string(), "1.21.1".to_string())]),
+        };
+
+        assert!(index.validate().is_err());
     }
 }

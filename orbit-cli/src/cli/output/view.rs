@@ -398,6 +398,7 @@ pub struct InstanceInstallOutput {
     pub installed: Vec<String>,
     pub already_present: Vec<String>,
     pub skipped: Vec<String>,
+    pub warnings: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -919,6 +920,7 @@ pub fn install_instance_view(
         installed: report.installed.clone(),
         already_present: report.already_present.clone(),
         skipped: report.skipped.clone(),
+        warnings: report.warnings.clone(),
     }
 }
 

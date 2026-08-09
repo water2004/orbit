@@ -128,7 +128,7 @@ impl JarCache {
         {
             return false;
         }
-        if std::fs::copy(source, destination).is_err() {
+        if crate::atomic_io::copy_atomic_verified_sha512(&source, destination, &sha512).is_err() {
             return false;
         }
         self.accesses.record(sha512);
@@ -179,18 +179,30 @@ pub struct CacheSummary {
 }
 
 pub fn inspect_cache(path: &Path, protected_paths: &[&Path]) -> Result<CacheSummary, OrbitError> {
-    if path.exists() {
-        validate_cache_dir(path, protected_paths)?;
+    if !path.exists() {
+        return Ok(CacheSummary {
+            path: path.to_path_buf(),
+            ..CacheSummary::default()
+        });
     }
+    validate_cache_dir(path, protected_paths)?;
+    let cache = JarCache::open(path.to_path_buf())?;
+    let _lock = cache.shared_lock()?;
     inspect_cache_dir(path)
 }
 
 pub fn clean_cache(path: &Path, protected_paths: &[&Path]) -> Result<CacheSummary, OrbitError> {
-    let summary = inspect_cache(path, protected_paths)?;
-    if !summary.path.exists() {
-        return Ok(summary);
+    if !path.exists() {
+        return Ok(CacheSummary {
+            path: path.to_path_buf(),
+            ..CacheSummary::default()
+        });
     }
-    std::fs::remove_dir_all(&summary.path)?;
+    validate_cache_dir(path, protected_paths)?;
+    let cache = JarCache::open(path.to_path_buf())?;
+    let _lock = cache.exclusive_lock()?;
+    let summary = inspect_cache_dir(path)?;
+    remove_cache_contents(path)?;
     Ok(summary)
 }
 
@@ -206,29 +218,74 @@ fn inspect_cache_dir(path: &Path) -> Result<CacheSummary, OrbitError> {
     while let Some(directory) = pending.pop() {
         for entry in std::fs::read_dir(directory)? {
             let entry = entry?;
-            let metadata = entry.metadata()?;
-            if metadata.is_dir() {
+            if entry.file_name() == lru::LOCK_FILE {
+                continue;
+            }
+            let file_type = entry.file_type()?;
+            if file_type.is_symlink() {
+                return Err(OrbitError::Other(anyhow::anyhow!(
+                    "refusing to follow symbolic link in JAR cache: '{}'",
+                    entry.path().display()
+                )));
+            }
+            if file_type.is_dir() {
                 pending.push(entry.path());
-            } else if metadata.is_file() {
+            } else if file_type.is_file() {
+                let metadata = entry.metadata()?;
                 summary.files += 1;
-                summary.bytes += metadata.len();
+                summary.bytes = summary.bytes.checked_add(metadata.len()).ok_or_else(|| {
+                    OrbitError::Other(anyhow::anyhow!(
+                        "JAR cache size exceeds the supported byte range"
+                    ))
+                })?;
+            } else {
+                return Err(OrbitError::Other(anyhow::anyhow!(
+                    "unexpected filesystem entry in JAR cache: '{}'",
+                    entry.path().display()
+                )));
             }
         }
     }
     Ok(summary)
 }
 
+fn remove_cache_contents(path: &Path) -> Result<(), OrbitError> {
+    for entry in std::fs::read_dir(path)? {
+        let entry = entry?;
+        if entry.file_name() == lru::LOCK_FILE {
+            continue;
+        }
+        let file_type = entry.file_type()?;
+        if file_type.is_dir() && !file_type.is_symlink() {
+            std::fs::remove_dir_all(entry.path())?;
+        } else if file_type.is_file() || file_type.is_symlink() {
+            std::fs::remove_file(entry.path())?;
+        } else {
+            return Err(OrbitError::Other(anyhow::anyhow!(
+                "unexpected filesystem entry in JAR cache: '{}'",
+                entry.path().display()
+            )));
+        }
+    }
+    Ok(())
+}
+
 fn validate_cache_dir(path: &Path, protected_paths: &[&Path]) -> Result<(), OrbitError> {
+    let metadata = std::fs::symlink_metadata(path)?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err(OrbitError::Other(anyhow::anyhow!(
+            "JAR cache path must be a real directory: '{}'",
+            path.display()
+        )));
+    }
     let resolved = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-    let current = std::env::current_dir().unwrap_or_default();
-    let contains_current = current.starts_with(&resolved);
     let contains_protected_path = protected_paths.iter().any(|protected| {
         protected
             .canonicalize()
             .unwrap_or_else(|_| protected.to_path_buf())
             .starts_with(&resolved)
     });
-    if resolved.parent().is_none() || contains_current || contains_protected_path {
+    if resolved.parent().is_none() || contains_protected_path {
         return Err(OrbitError::Other(anyhow::anyhow!(
             "refusing to clear unsafe cache directory '{}'",
             resolved.display()
@@ -258,6 +315,41 @@ mod tests {
         assert_eq!(summary.files, 2);
         assert_eq!(summary.bytes, 10);
         std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn cache_cleanup_preserves_the_cross_process_lock() {
+        let directory = test_dir("clean-lock");
+        let cache = JarCache::open(directory.clone()).unwrap();
+        cache.store_bytes(b"artifact").unwrap();
+
+        let summary = clean_cache(&directory, &[]).unwrap();
+
+        assert_eq!(summary.files, 2);
+        assert!(summary.bytes > 0);
+        assert!(directory.is_dir());
+        assert!(directory.join(lru::LOCK_FILE).is_file());
+        assert_eq!(inspect_cache(&directory, &[]).unwrap().files, 0);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cache_inspection_does_not_follow_symbolic_links() {
+        use std::os::unix::fs::symlink;
+
+        let directory = test_dir("inspect-symlink");
+        let outside = test_dir("inspect-symlink-outside");
+        std::fs::create_dir_all(&directory).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("artifact"), b"outside").unwrap();
+        symlink(&outside, directory.join("linked")).unwrap();
+
+        let error = inspect_cache(&directory, &[]).unwrap_err();
+
+        assert!(error.to_string().contains("symbolic link"));
+        std::fs::remove_dir_all(directory).unwrap();
+        std::fs::remove_dir_all(outside).unwrap();
     }
 
     #[test]

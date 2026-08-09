@@ -7,10 +7,58 @@
 //! 文件位置由 [`crate::runtime::RuntimePaths`] 注入。
 
 use serde::{Deserialize, Serialize};
-use std::path::Path;
+use std::{
+    fs::{File, OpenOptions},
+    path::Path,
+};
 use toml_edit::{DocumentMut, Item, Table, value as toml_value};
 
 use crate::{atomic_io::write_atomic, error::OrbitError};
+
+const GLOBAL_STATE_LOCK_FILE: &str = ".orbit-global-state.lock";
+
+#[derive(Debug)]
+struct GlobalStateMutationLock(File);
+
+impl GlobalStateMutationLock {
+    fn acquire(state_file: &Path) -> Result<Self, OrbitError> {
+        let directory = state_file
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
+        std::fs::create_dir_all(directory)?;
+        let lock_path = directory.join(GLOBAL_STATE_LOCK_FILE);
+        match std::fs::symlink_metadata(&lock_path) {
+            Ok(metadata) if metadata.file_type().is_file() => {}
+            Ok(_) => {
+                return Err(OrbitError::Other(anyhow::anyhow!(
+                    "global state mutation lock is not a regular file: {}",
+                    lock_path.display()
+                )));
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&lock_path)?;
+        fs2::FileExt::try_lock_exclusive(&file).map_err(|error| {
+            OrbitError::Other(anyhow::anyhow!(
+                "another Orbit global-state mutation is already running: {error}"
+            ))
+        })?;
+        Ok(Self(file))
+    }
+}
+
+impl Drop for GlobalStateMutationLock {
+    fn drop(&mut self) {
+        let _ = fs2::FileExt::unlock(&self.0);
+    }
+}
 
 // ---------------------------------------------------------------------------
 // config.toml — 全局运行时配置
@@ -497,19 +545,31 @@ impl GlobalConfig {
     /// Mutation commands must use this entry point so process environment
     /// overrides, especially credentials, are never written back to disk.
     pub fn load_stored(path: &Path) -> Result<Self, OrbitError> {
-        let config = if path.exists() {
-            let content = std::fs::read_to_string(path).map_err(|e| {
-                OrbitError::Other(anyhow::anyhow!("failed to read config.toml: {e}"))
-            })?;
-            toml::from_str(&content).map_err(|e| {
-                OrbitError::Other(anyhow::anyhow!("failed to parse config.toml: {e}"))
-            })?
-        } else {
-            let cfg = Self::default();
-            cfg.save(path)?;
-            cfg
-        };
-        config.validate()?;
+        if path.exists() {
+            return Self::read_stored(path);
+        }
+
+        let _lock = GlobalStateMutationLock::acquire(path)?;
+        Self::load_or_create_stored_unlocked(path)
+    }
+
+    fn read_stored(path: &Path) -> Result<Self, OrbitError> {
+        let content = std::fs::read_to_string(path).map_err(|error| {
+            OrbitError::Other(anyhow::anyhow!("failed to read config.toml: {error}"))
+        })?;
+        let config = toml::from_str(&content).map_err(|error| {
+            OrbitError::Other(anyhow::anyhow!("failed to parse config.toml: {error}"))
+        })?;
+        Self::validate(&config)?;
+        Ok(config)
+    }
+
+    fn load_or_create_stored_unlocked(path: &Path) -> Result<Self, OrbitError> {
+        if path.exists() {
+            return Self::read_stored(path);
+        }
+        let config = Self::default();
+        config.save_unlocked(path)?;
         Ok(config)
     }
 
@@ -591,6 +651,11 @@ impl GlobalConfig {
 
     /// 保存到 config.toml
     pub fn save(&self, path: &Path) -> Result<(), OrbitError> {
+        let _lock = GlobalStateMutationLock::acquire(path)?;
+        self.save_unlocked(path)
+    }
+
+    fn save_unlocked(&self, path: &Path) -> Result<(), OrbitError> {
         self.validate()?;
         if let Some(parent) = path
             .parent()
@@ -619,6 +684,16 @@ pub fn persist_config_field(
     key: ConfigKey,
     config: &GlobalConfig,
 ) -> Result<(), OrbitError> {
+    let _lock = GlobalStateMutationLock::acquire(path)?;
+    let rendered = render_config_field(path, key, config)?;
+    write_atomic(path, rendered.as_bytes())
+}
+
+fn render_config_field(
+    path: &Path,
+    key: ConfigKey,
+    config: &GlobalConfig,
+) -> Result<String, OrbitError> {
     let content = std::fs::read_to_string(path).map_err(|error| {
         OrbitError::Other(anyhow::anyhow!("failed to read config.toml: {error}"))
     })?;
@@ -658,7 +733,7 @@ pub fn persist_config_field(
         ))
     })?;
     validated.validate()?;
-    write_atomic(path, rendered.as_bytes())
+    Ok(rendered)
 }
 
 // ---------------------------------------------------------------------------
@@ -690,50 +765,84 @@ impl InstancesRegistry {
         let registry: Self = toml::from_str(&content).map_err(|e| {
             OrbitError::Other(anyhow::anyhow!("failed to parse instances.toml: {e}"))
         })?;
+        registry.validate()?;
         Ok(registry)
     }
 
     pub fn save(&self, path: &Path) -> Result<(), OrbitError> {
+        let _lock = GlobalStateMutationLock::acquire(path)?;
+        self.save_unlocked(path)
+    }
+
+    fn save_unlocked(&self, path: &Path) -> Result<(), OrbitError> {
         if let Some(parent) = path
             .parent()
             .filter(|parent| !parent.as_os_str().is_empty())
         {
             std::fs::create_dir_all(parent)?;
         }
-        let content = toml::to_string_pretty(self).map_err(|e| {
-            OrbitError::Other(anyhow::anyhow!("failed to serialize instances.toml: {e}"))
-        })?;
-        std::fs::write(path, content)?;
-        Ok(())
+        write_atomic(path, &self.serialize()?)
+    }
+
+    fn serialize(&self) -> Result<Vec<u8>, OrbitError> {
+        self.validate()?;
+        let mut persisted = self.clone();
+        persisted.instances.sort_by(|left, right| {
+            left.name
+                .to_lowercase()
+                .cmp(&right.name.to_lowercase())
+                .then_with(|| left.path.cmp(&right.path))
+        });
+        toml::to_string_pretty(&persisted)
+            .map(String::into_bytes)
+            .map_err(|error| {
+                OrbitError::Other(anyhow::anyhow!(
+                    "failed to serialize instances.toml: {error}"
+                ))
+            })
     }
 
     pub fn find(&self, name: &str) -> Option<&InstanceEntry> {
-        self.instances.iter().find(|i| i.name == name)
+        self.instances
+            .iter()
+            .find(|instance| instance.name.eq_ignore_ascii_case(name))
     }
 
     pub fn default_instance(&self) -> Option<&InstanceEntry> {
         self.instances.iter().find(|i| i.is_default)
     }
 
-    pub fn upsert(&mut self, mut entry: InstanceEntry) {
+    pub fn upsert(&mut self, mut entry: InstanceEntry) -> Result<(), OrbitError> {
+        validate_instance_entry(&entry)?;
+        if self.instances.iter().any(|existing| {
+            !existing.name.eq_ignore_ascii_case(&entry.name)
+                && paths_equal(&existing.path, &entry.path)
+        }) {
+            return Err(OrbitError::Other(anyhow::anyhow!(
+                "another registered instance already uses path '{}'",
+                entry.path
+            )));
+        }
         if let Some(existing) = self
             .instances
             .iter_mut()
-            .find(|existing| existing.name == entry.name)
+            .find(|existing| existing.name.eq_ignore_ascii_case(&entry.name))
         {
+            entry.name = existing.name.clone();
             entry.is_default = existing.is_default || entry.is_default;
             *existing = entry;
         } else {
             self.instances.push(entry);
         }
         self.instances
-            .sort_by(|left, right| left.name.cmp(&right.name));
+            .sort_by_key(|entry| entry.name.to_lowercase());
+        self.validate()
     }
 
     pub fn set_default(&mut self, name: &str) -> Option<InstanceEntry> {
         let selected = self.find(name)?.clone();
         for instance in &mut self.instances {
-            instance.is_default = instance.name == name;
+            instance.is_default = instance.name.eq_ignore_ascii_case(name);
         }
         Some(selected)
     }
@@ -742,8 +851,64 @@ impl InstancesRegistry {
         let index = self
             .instances
             .iter()
-            .position(|instance| instance.name == name)?;
+            .position(|instance| instance.name.eq_ignore_ascii_case(name))?;
         Some(self.instances.remove(index))
+    }
+
+    fn validate(&self) -> Result<(), OrbitError> {
+        for (index, entry) in self.instances.iter().enumerate() {
+            validate_instance_entry(entry)?;
+            if self.instances[..index].iter().any(|other| {
+                other.name.eq_ignore_ascii_case(&entry.name)
+                    || paths_equal(&other.path, &entry.path)
+            }) {
+                return Err(OrbitError::Other(anyhow::anyhow!(
+                    "instances.toml contains a duplicate name or path for '{}'",
+                    entry.name
+                )));
+            }
+        }
+        if self
+            .instances
+            .iter()
+            .filter(|entry| entry.is_default)
+            .count()
+            > 1
+        {
+            return Err(OrbitError::Other(anyhow::anyhow!(
+                "instances.toml contains more than one default instance"
+            )));
+        }
+        Ok(())
+    }
+}
+
+fn validate_instance_entry(entry: &InstanceEntry) -> Result<(), OrbitError> {
+    if entry.name.trim().is_empty()
+        || entry.name.trim() != entry.name
+        || entry.name.chars().any(char::is_control)
+        || entry.path.trim().is_empty()
+        || entry.path.chars().any(char::is_control)
+        || entry.mc_version.trim().is_empty()
+        || entry.mc_version.trim() != entry.mc_version
+        || !matches!(
+            entry.modloader.as_str(),
+            "vanilla" | "fabric" | "quilt" | "forge" | "neoforge"
+        )
+    {
+        return Err(OrbitError::Other(anyhow::anyhow!(
+            "invalid registered instance '{}'",
+            entry.name
+        )));
+    }
+    Ok(())
+}
+
+fn paths_equal(left: &str, right: &str) -> bool {
+    if cfg!(windows) {
+        left.eq_ignore_ascii_case(right)
+    } else {
+        left == right
     }
 }
 
@@ -751,9 +916,10 @@ pub fn register_instance(
     paths: &crate::runtime::RuntimePaths,
     entry: InstanceEntry,
 ) -> Result<(), OrbitError> {
+    let _lock = GlobalStateMutationLock::acquire(paths.config_file())?;
     let mut registry = InstancesRegistry::load(paths.instances_file())?;
-    registry.upsert(entry);
-    registry.save(paths.instances_file())
+    registry.upsert(entry)?;
+    registry.save_unlocked(paths.instances_file())
 }
 
 /// Register a pre-existing Orbit workspace without discovering or rewriting it.
@@ -809,48 +975,128 @@ pub fn set_default_instance(
     paths: &crate::runtime::RuntimePaths,
     name: &str,
 ) -> Result<InstanceEntry, OrbitError> {
+    let _lock = GlobalStateMutationLock::acquire(paths.config_file())?;
     let mut registry = InstancesRegistry::load(paths.instances_file())?;
     let selected = registry.set_default(name).ok_or_else(|| {
         OrbitError::Other(anyhow::anyhow!(
             "instance '{name}' not found; run 'orbit instances list' to see registered instances"
         ))
     })?;
-    registry.save(paths.instances_file())?;
-
-    let mut config = GlobalConfig::load_stored(paths.config_file())?;
-    ConfigKey::CoreDefaultInstance.set(&mut config, name)?;
-    persist_config_field(paths.config_file(), ConfigKey::CoreDefaultInstance, &config)?;
+    let mut config = GlobalConfig::load_or_create_stored_unlocked(paths.config_file())?;
+    ConfigKey::CoreDefaultInstance.set(&mut config, &selected.name)?;
+    save_registry_and_config_field_unlocked(
+        paths,
+        &registry,
+        ConfigKey::CoreDefaultInstance,
+        &config,
+    )?;
     Ok(selected)
 }
 
 pub fn clear_default_instance(paths: &crate::runtime::RuntimePaths) -> Result<(), OrbitError> {
+    let _lock = GlobalStateMutationLock::acquire(paths.config_file())?;
     let mut registry = InstancesRegistry::load(paths.instances_file())?;
     for instance in &mut registry.instances {
         instance.is_default = false;
     }
-    registry.save(paths.instances_file())?;
-
-    let mut config = GlobalConfig::load_stored(paths.config_file())?;
+    let mut config = GlobalConfig::load_or_create_stored_unlocked(paths.config_file())?;
     ConfigKey::CoreDefaultInstance.unset(&mut config);
-    persist_config_field(paths.config_file(), ConfigKey::CoreDefaultInstance, &config)
+    save_registry_and_config_field_unlocked(
+        paths,
+        &registry,
+        ConfigKey::CoreDefaultInstance,
+        &config,
+    )
 }
 
 pub fn remove_instance(
     paths: &crate::runtime::RuntimePaths,
     name: &str,
 ) -> Result<InstanceEntry, OrbitError> {
+    let _lock = GlobalStateMutationLock::acquire(paths.config_file())?;
     let mut registry = InstancesRegistry::load(paths.instances_file())?;
     let removed = registry
         .remove(name)
         .ok_or_else(|| OrbitError::Other(anyhow::anyhow!("instance '{name}' not found")))?;
-    registry.save(paths.instances_file())?;
-
-    let mut config = GlobalConfig::load_stored(paths.config_file())?;
-    if config.core.default_instance.as_deref() == Some(name) {
+    let mut config = GlobalConfig::load_or_create_stored_unlocked(paths.config_file())?;
+    if config
+        .core
+        .default_instance
+        .as_deref()
+        .is_some_and(|default| default.eq_ignore_ascii_case(&removed.name))
+    {
         ConfigKey::CoreDefaultInstance.unset(&mut config);
-        persist_config_field(paths.config_file(), ConfigKey::CoreDefaultInstance, &config)?;
+        save_registry_and_config_field_unlocked(
+            paths,
+            &registry,
+            ConfigKey::CoreDefaultInstance,
+            &config,
+        )?;
+    } else {
+        registry.save_unlocked(paths.instances_file())?;
     }
     Ok(removed)
+}
+
+fn save_registry_and_config_field_unlocked(
+    paths: &crate::runtime::RuntimePaths,
+    registry: &InstancesRegistry,
+    key: ConfigKey,
+    config: &GlobalConfig,
+) -> Result<(), OrbitError> {
+    let registry_document = registry.serialize()?;
+    let config_document = render_config_field(paths.config_file(), key, config)?;
+    let original_registry = read_optional_state(paths.instances_file())?;
+    let original_config = read_optional_state(paths.config_file())?;
+    let result = (|| {
+        write_atomic(paths.instances_file(), &registry_document)?;
+        write_atomic(paths.config_file(), config_document.as_bytes())?;
+        Ok(())
+    })();
+    let Err(error) = result else {
+        return Ok(());
+    };
+
+    let mut rollback_failures = Vec::new();
+    if let Err(rollback) =
+        restore_optional_state(paths.instances_file(), original_registry.as_deref())
+    {
+        rollback_failures.push(format!("instances.toml: {rollback}"));
+    }
+    if let Err(rollback) = restore_optional_state(paths.config_file(), original_config.as_deref()) {
+        rollback_failures.push(format!("config.toml: {rollback}"));
+    }
+    if rollback_failures.is_empty() {
+        Err(error)
+    } else {
+        Err(OrbitError::Other(anyhow::anyhow!(
+            "global state update failed: {error}; rollback also failed: {}",
+            rollback_failures.join("; ")
+        )))
+    }
+}
+
+fn read_optional_state(path: &Path) -> Result<Option<Vec<u8>>, OrbitError> {
+    match std::fs::read(path) {
+        Ok(document) => Ok(Some(document)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn restore_optional_state(path: &Path, document: Option<&[u8]>) -> Result<(), OrbitError> {
+    if read_optional_state(path)?.as_deref() == document {
+        return Ok(());
+    }
+    if let Some(document) = document {
+        write_atomic(path, document)
+    } else {
+        match std::fs::remove_file(path) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(error.into()),
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1147,6 +1393,7 @@ dir = "D:/Games/OrbitCache"
 
         assert!(path.is_file());
         std::fs::remove_file(path).unwrap();
+        std::fs::remove_file(GLOBAL_STATE_LOCK_FILE).unwrap();
     }
 
     fn instance(name: &str, is_default: bool) -> InstanceEntry {
@@ -1167,7 +1414,7 @@ dir = "D:/Games/OrbitCache"
         let mut updated = instance("alpha", false);
         updated.mc_version = "1.21.5".to_string();
 
-        registry.upsert(updated);
+        registry.upsert(updated).unwrap();
 
         assert_eq!(registry.instances.len(), 1);
         assert_eq!(registry.instances[0].mc_version, "1.21.5");
@@ -1187,6 +1434,76 @@ dir = "D:/Games/OrbitCache"
         assert!(registry.find("beta").unwrap().is_default);
         assert_eq!(registry.remove("beta").unwrap().name, "beta");
         assert!(registry.default_instance().is_none());
+    }
+
+    #[test]
+    fn global_state_mutations_are_exclusive() {
+        let directory = tempfile::tempdir().unwrap();
+        let config = directory.path().join("config.toml");
+        let first = GlobalStateMutationLock::acquire(&config).unwrap();
+
+        let error = GlobalStateMutationLock::acquire(&config).unwrap_err();
+
+        assert!(error.to_string().contains("already running"));
+        drop(first);
+        GlobalStateMutationLock::acquire(&config).unwrap();
+    }
+
+    #[test]
+    fn default_instance_updates_both_global_documents() {
+        let directory = tempfile::tempdir().unwrap();
+        let paths = runtime_paths(directory.path());
+        GlobalConfig::default().save(paths.config_file()).unwrap();
+        InstancesRegistry {
+            instances: vec![instance("alpha", true), instance("beta", false)],
+        }
+        .save(paths.instances_file())
+        .unwrap();
+
+        set_default_instance(&paths, "beta").unwrap();
+
+        let registry = InstancesRegistry::load(paths.instances_file()).unwrap();
+        let config = GlobalConfig::load_stored(paths.config_file()).unwrap();
+        assert_eq!(registry.default_instance().unwrap().name, "beta");
+        assert_eq!(config.core.default_instance.as_deref(), Some("beta"));
+
+        clear_default_instance(&paths).unwrap();
+
+        let registry = InstancesRegistry::load(paths.instances_file()).unwrap();
+        let config = GlobalConfig::load_stored(paths.config_file()).unwrap();
+        assert!(registry.default_instance().is_none());
+        assert!(config.core.default_instance.is_none());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn failed_default_update_rolls_back_the_registry() {
+        use std::os::windows::fs::OpenOptionsExt;
+
+        let directory = tempfile::tempdir().unwrap();
+        let paths = runtime_paths(directory.path());
+        GlobalConfig::default().save(paths.config_file()).unwrap();
+        InstancesRegistry {
+            instances: vec![instance("alpha", true), instance("beta", false)],
+        }
+        .save(paths.instances_file())
+        .unwrap();
+        let registry_before = std::fs::read(paths.instances_file()).unwrap();
+        let config_before = std::fs::read(paths.config_file()).unwrap();
+        let _locked_config = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(1)
+            .open(paths.config_file())
+            .unwrap();
+
+        let error = set_default_instance(&paths, "beta").unwrap_err();
+
+        assert!(matches!(error, OrbitError::Io(_)));
+        assert_eq!(
+            std::fs::read(paths.instances_file()).unwrap(),
+            registry_before
+        );
+        assert_eq!(std::fs::read(paths.config_file()).unwrap(), config_before);
     }
 
     #[test]

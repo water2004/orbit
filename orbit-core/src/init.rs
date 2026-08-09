@@ -290,9 +290,10 @@ pub async fn run_init(
     let manifest_file = crate::workspace::ManifestFile::new(&input.instance_dir, manifest.clone());
     let lock = crate::workspace::Lockfile::new(&input.instance_dir, lockfile);
     if !input.dry_run {
-        manifest_file.save()?;
         if lock_created {
-            lock.save()?;
+            crate::workspace::save_workspace(&manifest_file, &lock)?;
+        } else {
+            manifest_file.save()?;
         }
     }
 

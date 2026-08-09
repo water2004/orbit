@@ -45,6 +45,7 @@ pub mod runtime_launch;
 mod source_store;
 pub mod sync;
 pub mod workspace;
+mod workspace_lock;
 
 pub use archive::{
     ExportContent, ExportReport, ImportMergeStrategy, ImportReport, PortableInstance,
@@ -123,3 +124,4 @@ pub use version_string::{
     VersionStringInitialSet, VersionStringOperation, VersionStringPredicate, VersionStringRule,
 };
 pub use workspace::{Lockfile, ManifestFile};
+pub use workspace_lock::WorkspaceMutationLocks;

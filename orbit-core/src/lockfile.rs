@@ -40,7 +40,6 @@ pub struct PackageEntry {
     pub sha256: String,
     pub sha512: String,
     /// JAR 文件名（不含路径），用于升级/删除时定位旧文件
-    #[serde(default)]
     pub filename: String,
     /// Every known candidate-discovery entry for this logical package.
     pub remotes: Vec<PackageRemote>,
@@ -179,14 +178,62 @@ impl OrbitLockfile {
     }
 
     pub fn validate(&self) -> Result<(), OrbitError> {
+        for (field, value) in [
+            ("meta.mc_version", self.meta.mc_version.as_str()),
+            ("meta.modloader", self.meta.modloader.as_str()),
+            (
+                "meta.modloader_version",
+                self.meta.modloader_version.as_str(),
+            ),
+        ] {
+            if value.trim().is_empty() || value.trim() != value {
+                return Err(OrbitError::Other(anyhow::anyhow!(
+                    "{field} must be non-empty and have no surrounding whitespace"
+                )));
+            }
+        }
+        self.meta
+            .modloader
+            .parse::<crate::loader::LoaderKind>()
+            .map_err(|error| {
+                OrbitError::Other(anyhow::anyhow!("invalid lock meta.modloader: {error}"))
+            })?;
         let mut packages = std::collections::BTreeSet::new();
+        let mut filenames = std::collections::BTreeSet::new();
         for entry in &self.packages {
             if entry.mod_id.trim().is_empty()
+                || entry.mod_id.trim() != entry.mod_id
                 || entry.version.trim().is_empty()
+                || entry.version.trim() != entry.version
                 || entry.sha512.trim().is_empty()
+                || entry.sha512.trim() != entry.sha512
             {
                 return Err(OrbitError::Other(anyhow::anyhow!(
                     "every locked package must contain a mod_id, JAR version, and SHA-512 content identity"
+                )));
+            }
+            validate_hash("SHA-1", &entry.sha1, 40, true)?;
+            validate_hash("SHA-256", &entry.sha256, 64, false)?;
+            validate_hash("SHA-512", &entry.sha512, 128, false)?;
+            orbit_bundle_format::validate_relative_path(&entry.filename).map_err(|error| {
+                OrbitError::Other(anyhow::anyhow!(
+                    "locked package '{}' has an unsafe filename '{}': {error}",
+                    entry.mod_id,
+                    entry.filename
+                ))
+            })?;
+            if entry.filename.contains('/')
+                || crate::package_activation::mod_artifact_enabled(&entry.filename).is_none()
+            {
+                return Err(OrbitError::Other(anyhow::anyhow!(
+                    "locked package '{}' filename must be one local .jar or .jar.disabled file",
+                    entry.mod_id
+                )));
+            }
+            if !filenames.insert(orbit_bundle_format::portable_path_identity(&entry.filename)) {
+                return Err(OrbitError::Other(anyhow::anyhow!(
+                    "orbit.lock assigns the same portable filename '{}' more than once",
+                    entry.filename
                 )));
             }
             if !packages.insert(entry.mod_id.as_str()) {
@@ -238,6 +285,27 @@ impl OrbitLockfile {
     }
 }
 
+fn validate_hash(
+    label: &str,
+    value: &str,
+    digits: usize,
+    optional: bool,
+) -> Result<(), OrbitError> {
+    if optional && value.is_empty() {
+        return Ok(());
+    }
+    if value.len() == digits
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Ok(());
+    }
+    Err(OrbitError::Other(anyhow::anyhow!(
+        "locked content {label} must be exactly {digits} lowercase hexadecimal characters"
+    )))
+}
+
 impl PackageEntry {
     pub fn has_online_remote(&self) -> bool {
         self.remotes
@@ -285,6 +353,7 @@ mod_id = "sodium"
 version = "0.5.8"
 sha256 = "abc123def456"
 sha512 = "sodium-content"
+filename = "sodium.jar"
 remotes = [{ type = "modrinth", project_id = "AANobbMI" }]
 artifact_sources = [{ type = "modrinth", project_id = "AANobbMI", version_id = "abc123mod", download_url = "https://cdn.modrinth.com/sodium.jar" }]
 
@@ -294,6 +363,7 @@ version = "0.92.0"
 sha1 = "deadbeef"
 sha256 = "xyz789"
 sha512 = "fabric-api-content"
+filename = "fabric-api.jar"
 remotes = [{ type = "modrinth", project_id = "P7dR8mSH" }]
 artifact_sources = [{ type = "modrinth", project_id = "P7dR8mSH", version_id = "def456ver", download_url = "https://cdn.modrinth.com/fabric-api.jar" }]
 "#;
@@ -324,6 +394,7 @@ mod_id = "carpet"
 version = "26.1+v260402"
 sha256 = "abc123"
 sha512 = "carpet-content"
+filename = "fabric-carpet-26.1+v260402.jar"
 remotes = [{ type = "file", path = "mods/fabric-carpet-26.1+v260402.jar" }]
 artifact_sources = [{ type = "file", path = "mods/fabric-carpet-26.1+v260402.jar" }]
 "#;
@@ -346,9 +417,9 @@ modloader_version = "21.1.0"
 [[package]]
 mod_id = "example"
 version = "2.0.0"
-sha1 = "deadbeef"
-sha256 = "cafebabe"
-sha512 = "example-content"
+sha1 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+sha256 = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+sha512 = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
 filename = "example.jar"
 remotes = [{ type = "curseforge", project_id = 123 }]
 artifact_sources = [{ type = "curseforge", project_id = 123, file_id = 456, download_url = "https://example.invalid/example.jar" }]
@@ -381,9 +452,9 @@ artifact_sources = [{ type = "curseforge", project_id = 123, file_id = 456, down
                 mod_id: "sodium".into(),
                 version: "0.5.8".into(),
                 sha1: String::new(),
-                sha256: "abc123".into(),
-                sha512: "sodium-content".into(),
-                filename: String::new(),
+                sha256: "b".repeat(64),
+                sha512: "c".repeat(128),
+                filename: "sodium.jar".into(),
                 remotes: vec![PackageRemote::Modrinth {
                     project_id: "AANobbMI".into(),
                 }],
@@ -419,6 +490,7 @@ mod_id = "sodium"
 version = "0.5.8"
 sha256 = "abc123"
 sha512 = "sodium-content"
+filename = "sodium.jar"
 provider = "modrinth"
 slug = "sodium"
 remotes = [{ type = "modrinth", project_id = "AANobbMI" }]
@@ -445,6 +517,7 @@ mod_id = "sodium"
 version = "0.5.8"
 sha256 = "abc123"
 sha512 = ""
+filename = "sodium.jar"
 remotes = [{ type = "modrinth", project_id = "AANobbMI" }]
 artifact_sources = [{ type = "modrinth", project_id = "different-project", version_id = "version", download_url = "https://example.invalid/sodium.jar" }]
 "#,

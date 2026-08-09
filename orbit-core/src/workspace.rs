@@ -36,8 +36,7 @@ impl ManifestFile {
 
     /// 写入 orbit.toml。
     pub fn save(&self) -> Result<(), OrbitError> {
-        std::fs::write(&self.path, self.inner.to_toml_string()?)?;
-        Ok(())
+        crate::atomic_io::write_atomic(&self.path, self.inner.to_toml_string()?.as_bytes())
     }
 
     /// 文件所在目录。
@@ -89,8 +88,12 @@ impl Lockfile {
 
     /// 写入 orbit.lock。
     pub fn save(&self) -> Result<(), OrbitError> {
-        std::fs::write(&self.path, self.inner.to_toml_string()?)?;
-        Ok(())
+        crate::atomic_io::write_atomic(&self.path, self.inner.to_toml_string()?.as_bytes())
+    }
+
+    /// 文件所在目录。
+    pub fn dir(&self) -> &Path {
+        self.path.parent().unwrap_or_else(|| Path::new("."))
     }
 
     /// 按 mod_id 查找条目。
@@ -132,6 +135,67 @@ impl Lockfile {
             }
         }
         Ok(path)
+    }
+}
+
+/// Persist a manifest/lock pair as one rollback-capable workspace update.
+///
+/// Filesystems do not provide an atomic rename spanning two paths. Both
+/// documents are therefore serialized before mutation and the original pair
+/// is restored if either durable replacement fails.
+pub fn save_workspace(manifest: &ManifestFile, lockfile: &Lockfile) -> Result<(), OrbitError> {
+    if manifest.dir() != lockfile.dir() {
+        return Err(OrbitError::Other(anyhow::anyhow!(
+            "cannot save an Orbit manifest and lock from different workspaces"
+        )));
+    }
+    let manifest_document = manifest.inner.to_toml_string()?;
+    let lock_document = lockfile.inner.to_toml_string()?;
+    let original_manifest = read_optional(&manifest.path)?;
+    let original_lock = read_optional(&lockfile.path)?;
+    let result = (|| {
+        crate::atomic_io::write_atomic(&manifest.path, manifest_document.as_bytes())?;
+        crate::atomic_io::write_atomic(&lockfile.path, lock_document.as_bytes())?;
+        Ok(())
+    })();
+    let Err(error) = result else {
+        return Ok(());
+    };
+
+    let mut rollback_failures = Vec::new();
+    if let Err(rollback) = restore_optional(&manifest.path, original_manifest.as_deref()) {
+        rollback_failures.push(format!("orbit.toml: {rollback}"));
+    }
+    if let Err(rollback) = restore_optional(&lockfile.path, original_lock.as_deref()) {
+        rollback_failures.push(format!("orbit.lock: {rollback}"));
+    }
+    if rollback_failures.is_empty() {
+        Err(error)
+    } else {
+        Err(OrbitError::Other(anyhow::anyhow!(
+            "workspace save failed: {error}; rollback also failed: {}",
+            rollback_failures.join("; ")
+        )))
+    }
+}
+
+fn read_optional(path: &Path) -> Result<Option<Vec<u8>>, OrbitError> {
+    match std::fs::read(path) {
+        Ok(document) => Ok(Some(document)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn restore_optional(path: &Path, document: Option<&[u8]>) -> Result<(), OrbitError> {
+    if let Some(document) = document {
+        crate::atomic_io::write_atomic(path, document)
+    } else {
+        match std::fs::remove_file(path) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(error.into()),
+        }
     }
 }
 

@@ -13,7 +13,7 @@ use zip::write::SimpleFileOptions;
 use super::{
     ExportTracker, ImportReport, PORTABLE_DATA_MANIFEST_PATH, PORTABLE_DATA_SCHEMA,
     PORTABLE_OWNERSHIP_PATH, PortableDataManifest, PortableFile, PortableInstance, add_content,
-    add_file, archive_path,
+    archive_path,
 };
 use crate::error::OrbitError;
 use crate::progress::{ProgressEvent, ProgressReporter, emit as emit_progress};
@@ -58,18 +58,19 @@ pub(super) fn write_contents(
         metadata_options,
         &mut files,
     )?;
-    for (entry, source, bytes) in contents.packages {
+    for (index, (entry, source, bytes)) in contents.packages.iter().enumerate() {
         let path = format!("orbit/mods/{}", entry.filename);
-        add_file(archive, &path, source, artifact_options, Some(progress))?;
-        files.push(file_record(
+        let record = add_hashed_file(
+            archive,
             path,
+            source,
             *bytes,
-            if entry.sha256.is_empty() {
-                crate::jar::compute_sha256(source)?
-            } else {
-                entry.sha256.clone()
-            },
-        ));
+            (!entry.sha256.is_empty()).then_some(entry.sha256.as_str()),
+            artifact_options,
+            progress,
+        )?;
+        files.push(record);
+        progress.complete_package(index + 1);
     }
     if let (Some(ownership), Some(data_manifest)) = (contents.ownership, contents.data_manifest) {
         add_bytes(
@@ -89,19 +90,16 @@ pub(super) fn write_contents(
         )?;
         progress.advance(data_manifest.len() as u64);
         for source in contents.state {
-            let path = format!("orbit/{}", archive_path(&source.relative));
-            add_file(
+            let path = format!("orbit/{}", archive_path(&source.relative)?);
+            files.push(add_hashed_file(
                 archive,
-                &path,
-                &source.source,
-                metadata_options,
-                Some(progress),
-            )?;
-            files.push(file_record(
                 path,
+                &source.source,
                 source.bytes,
-                crate::jar::compute_sha256(&source.source)?,
-            ));
+                None,
+                metadata_options,
+                progress,
+            )?);
         }
     }
 
@@ -146,6 +144,52 @@ pub(super) fn write_contents(
     archive.start_file(BUNDLE_MANIFEST_PATH, metadata_options)?;
     archive.write_all(document.as_bytes())?;
     Ok(())
+}
+
+fn add_hashed_file(
+    archive: &mut zip::ZipWriter<std::fs::File>,
+    archive_path: String,
+    source: &Path,
+    expected_size: u64,
+    expected_sha256: Option<&str>,
+    options: SimpleFileOptions,
+    progress: &mut ExportTracker,
+) -> Result<BundleFile, OrbitError> {
+    archive.start_file(&archive_path, options)?;
+    let mut input = std::fs::File::open(source)?;
+    let mut digest = Sha256::new();
+    let mut size = 0_u64;
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        use std::io::Read as _;
+        let read = input.read(&mut buffer)?;
+        if read == 0 {
+            break;
+        }
+        size = size.checked_add(read as u64).ok_or_else(|| {
+            OrbitError::Other(anyhow::anyhow!("source file size overflowed during export"))
+        })?;
+        digest.update(&buffer[..read]);
+        archive.write_all(&buffer[..read])?;
+        progress.advance(read as u64);
+    }
+    let sha256 = hex::encode(digest.finalize());
+    if size != expected_size {
+        return Err(OrbitError::Other(anyhow::anyhow!(
+            "source '{}' changed size during export: expected {expected_size}, read {size}",
+            source.display()
+        )));
+    }
+    if let Some(expected) = expected_sha256
+        && sha256 != expected
+    {
+        return Err(OrbitError::ChecksumMismatch {
+            name: source.display().to_string(),
+            expected: expected.to_string(),
+            actual: sha256,
+        });
+    }
+    Ok(file_record(archive_path, size, sha256))
 }
 
 fn add_bytes(
@@ -195,21 +239,13 @@ fn extract_portable_instance_with_progress(
         .iter()
         .filter(|file| file.owner == BundleFileOwner::Orbit)
         .count();
-    let verification_bytes = bundle
+    let total_bytes = bundle
         .manifest
         .files
         .iter()
         .filter(|file| file.owner == BundleFileOwner::Orbit)
         .map(|file| file.size)
         .sum::<u64>();
-    let extraction_bytes = bundle
-        .manifest
-        .files
-        .iter()
-        .filter(|file| file.owner == BundleFileOwner::Orbit)
-        .map(|file| file.size)
-        .sum::<u64>();
-    let total_bytes = verification_bytes.saturating_add(extraction_bytes);
     emit_progress(
         progress.as_ref(),
         ProgressEvent::ImportStarted { files, total_bytes },
@@ -233,8 +269,34 @@ fn extract_portable_instance_with_progress(
         progress.as_ref(),
         ProgressEvent::ImportFinished { files, total_bytes },
     );
-    ManifestFile::open(directory.path())?;
-    Lockfile::open(directory.path())?;
+    let manifest = ManifestFile::open(directory.path())?;
+    let lockfile = Lockfile::open(directory.path())?;
+    let manifest_packages = manifest.inner.packages.keys().collect::<BTreeSet<_>>();
+    let locked_packages = lockfile
+        .inner
+        .packages
+        .iter()
+        .map(|entry| &entry.mod_id)
+        .collect::<BTreeSet<_>>();
+    if manifest_packages != locked_packages {
+        return Err(OrbitError::Other(anyhow::anyhow!(
+            "portable Orbit manifest and lock describe different package sets"
+        )));
+    }
+    for entry in &lockfile.inner.packages {
+        if !directory
+            .path()
+            .join("mods")
+            .join(&entry.filename)
+            .is_file()
+        {
+            return Err(OrbitError::Other(anyhow::anyhow!(
+                "portable Orbit pack is missing JAR '{}' for package '{}'",
+                entry.filename,
+                entry.mod_id
+            )));
+        }
+    }
     if orbit.content == OrbitContent::ModsAndData {
         validate_portable_data(directory.path(), source)?;
     }
@@ -257,6 +319,9 @@ pub fn import_bundle(
         .filter(|path| path.as_str() != PORTABLE_DATA_MANIFEST_PATH)
         .cloned()
         .collect::<BTreeSet<_>>();
+    for relative in &visible {
+        super::mrpack::validate_import_destination(instance_dir, relative)?;
+    }
     if dry_run {
         return Ok(super::mrpack::plan_staging(
             instance_dir,
@@ -315,10 +380,11 @@ fn validate_orbit_layout(bundle: &BundleArchive, orbit: &OrbitSection) -> Result
 
 fn validate_target_runtime(instance_dir: &Path, bundle: &BundleArchive) -> Result<(), OrbitError> {
     let manifest = ManifestFile::open(instance_dir)?;
+    let platform = crate::platform::Platform::load(instance_dir, &manifest.inner)?;
     let runtime = &bundle.manifest.runtime;
-    let actual_loader_version = (manifest.inner.project.modloader != "vanilla")
-        .then_some(manifest.inner.project.modloader_version.as_str());
-    let actual_target = match manifest.inner.platform.physical_environment {
+    let actual_loader_version =
+        (platform.loader.as_str() != "vanilla").then_some(platform.loader_version.as_str());
+    let actual_target = match platform.physical_environment {
         crate::metadata::Environment::Client => InstanceTarget::Client,
         crate::metadata::Environment::Server => InstanceTarget::Server,
         crate::metadata::Environment::Both => {
@@ -327,8 +393,8 @@ fn validate_target_runtime(instance_dir: &Path, bundle: &BundleArchive) -> Resul
             )));
         }
     };
-    if runtime.minecraft != manifest.inner.project.mc_version
-        || runtime.loader != manifest.inner.project.modloader
+    if runtime.minecraft != platform.minecraft_version.id
+        || runtime.loader != platform.loader.as_str()
         || runtime.loader_version.as_deref() != actual_loader_version
         || !bundle.manifest.targets.contains(&actual_target)
     {

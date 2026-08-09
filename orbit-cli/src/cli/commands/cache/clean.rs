@@ -4,9 +4,11 @@ use anyhow::Result;
 use crate::cli::output::{CacheOutput, OutputFormat};
 
 pub async fn handle(ctx: &CliContext) -> Result<()> {
+    let working_directory = std::env::current_dir()?;
     let protected_paths = [
         ctx.runtime.paths().config_file(),
         ctx.runtime.paths().instances_file(),
+        working_directory.as_path(),
     ];
     let summary = orbit_core::inspect_cache(ctx.runtime.paths().cache_dir(), &protected_paths)?;
     if summary.files == 0 {

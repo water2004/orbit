@@ -98,8 +98,6 @@ pub fn set_package_activation(
         return Ok(report);
     }
 
-    let previous_manifest = manifest.inner.clone();
-    let previous_lock = lock.inner.clone();
     manifest
         .inner
         .packages
@@ -124,17 +122,17 @@ pub fn set_package_activation(
         })?;
     }
 
-    if let Err(error) = manifest.save().and_then(|_| lock.save()) {
-        manifest.inner = previous_manifest;
-        lock.inner = previous_lock;
-        let _ = manifest.save();
-        let _ = lock.save();
-        if source != target {
-            let _ = std::fs::rename(&target, &source);
+    if let Err(error) = crate::workspace::save_workspace(&manifest, &lock) {
+        if source != target
+            && let Err(rollback) = std::fs::rename(&target, &source)
+        {
+            return Err(OrbitError::Other(anyhow::anyhow!(
+                "failed to persist package '{package}' activation state: {error}; restoring '{}' to '{}' also failed: {rollback}",
+                target.display(),
+                source.display()
+            )));
         }
-        return Err(OrbitError::Other(anyhow::anyhow!(
-            "failed to persist package '{package}' activation state; filesystem and project state were rolled back: {error}"
-        )));
+        return Err(error);
     }
 
     Ok(report)

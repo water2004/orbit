@@ -172,6 +172,14 @@ where
         let _ = std::fs::remove_file(&temporary);
         return Err(error);
     }
+    if let Err(error) = (|| {
+        let completed = orbit_bundle_format::BundleArchive::open(&temporary)?;
+        completed.verify()?;
+        Ok::<_, LauncherError>(())
+    })() {
+        let _ = std::fs::remove_file(&temporary);
+        return Err(error);
+    }
     if let Err(error) = replace_output(&temporary, output) {
         let _ = std::fs::remove_file(&temporary);
         return Err(error.into());
@@ -633,7 +641,7 @@ where
         .start_file(orbit_bundle_format::BUNDLE_MANIFEST_PATH, options)
         .map_err(write_archive_error)?;
     archive.write_all(toml::to_string_pretty(&bundle)?.as_bytes())?;
-    archive.finish().map_err(write_archive_error)?;
+    archive.finish().map_err(write_archive_error)?.sync_all()?;
     Ok(())
 }
 

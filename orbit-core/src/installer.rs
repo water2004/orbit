@@ -16,9 +16,11 @@ use crate::workspace::{Lockfile, ManifestFile};
 
 mod local;
 mod removal;
+mod transaction;
 
 pub use local::install_local_file_to_instance;
 use removal::commit_package_removal;
+use transaction::PackageFileTransaction;
 
 pub type InstallPrompt = Box<dyn FnOnce(&InstallReport) -> Result<(), OrbitError> + Send>;
 pub type PackageSelector = Box<dyn FnOnce(&[String]) -> Result<usize, OrbitError> + Send>;
@@ -88,6 +90,7 @@ pub struct InstanceInstallReport {
     pub installed: Vec<String>,
     pub already_present: Vec<String>,
     pub skipped: Vec<String>,
+    pub warnings: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -148,7 +151,7 @@ pub async fn install_to_instance(
     let mods_dir = instance_dir.join("mods");
 
     let loader_package = platform.loader_package;
-    let report = install_mod(InstallModInput {
+    let mut execution = install_mod(InstallModInput {
         target,
         instance_dir,
         constraint,
@@ -165,11 +168,22 @@ pub async fn install_to_instance(
     .await?;
 
     if !dry_run {
-        manifest_file.save()?;
-        lock.save()?;
+        if let Err(error) = crate::workspace::save_workspace(&manifest_file, &lock) {
+            return Err(match execution.files.take() {
+                Some(transaction) => transaction.rollback(error),
+                None => error,
+            });
+        }
+        if let Some(warning) = execution
+            .files
+            .take()
+            .and_then(PackageFileTransaction::commit)
+        {
+            execution.report.warnings.push(warning);
+        }
     }
 
-    Ok(report)
+    Ok(execution.report)
 }
 
 /// Materialize the exact package realization recorded by `orbit.lock`.
@@ -204,16 +218,43 @@ pub async fn install_instance(
         ..InstanceInstallReport::default()
     };
 
-    let total = selected.len();
+    let mut package_states = Vec::with_capacity(selected.len());
+    for package in selected {
+        let entry = lock.inner.find(&package).ok_or_else(|| {
+            OrbitError::Other(anyhow::anyhow!(
+                "orbit.lock is missing selected package '{package}'"
+            ))
+        })?;
+        let filename = package_filename(entry);
+        let present = package_is_present(entry, &mods_dir)?;
+        package_states.push((package, filename, present));
+    }
+    PackageFileTransaction::validate_filenames(
+        package_states
+            .iter()
+            .map(|(_, filename, _)| filename.as_str()),
+    )?;
+
+    let mut files = if options.dry_run {
+        None
+    } else {
+        Some(PackageFileTransaction::begin(
+            &mods_dir,
+            package_states
+                .iter()
+                .filter(|(_, _, present)| !present)
+                .map(|(_, filename, _)| filename.as_str()),
+        )?)
+    };
+
+    let total = package_states.len();
     emit_progress(progress.as_ref(), ProgressEvent::ApplyStarted { total });
     let mut completed = 0;
-    for package in selected {
-        let Some(entry) = lock.inner.find(&package) else {
-            return Err(OrbitError::Other(anyhow::anyhow!(
-                "orbit.lock is missing selected package '{package}'"
-            )));
-        };
-        let filename = package_filename(entry);
+    for (package, filename, present) in package_states {
+        let entry = lock
+            .inner
+            .find(&package)
+            .expect("selected package was prevalidated against the immutable lock");
         emit_progress(
             progress.as_ref(),
             ProgressEvent::ApplyArtifact {
@@ -223,7 +264,7 @@ pub async fn install_instance(
                 state: ArtifactProgressState::Started,
             },
         );
-        if package_is_present(entry, &mods_dir)? {
+        if present {
             report.already_present.push(package);
             completed += 1;
             emit_progress(
@@ -251,7 +292,14 @@ pub async fn install_instance(
             );
             continue;
         }
-        restore_package(entry, instance_dir, &mods_dir, providers, jar_cache).await?;
+        if let Err(error) =
+            restore_package(entry, instance_dir, &mods_dir, providers, jar_cache).await
+        {
+            return Err(files
+                .take()
+                .expect("non-dry-run install owns a package transaction")
+                .rollback(error));
+        }
         report.installed.push(package);
         completed += 1;
         emit_progress(
@@ -268,6 +316,9 @@ pub async fn install_instance(
     report.installed.sort();
     report.already_present.sort();
     report.skipped.sort();
+    if let Some(warning) = files.and_then(PackageFileTransaction::commit) {
+        report.warnings.push(warning);
+    }
     Ok(report)
 }
 
@@ -479,25 +530,32 @@ pub(crate) async fn repair_manifest_instance(
         });
     }
 
-    let installed = materialize_plans(
+    let (installed, transaction) = materialize_plans(MaterializePlansInput {
         planned,
-        &catalog.resolved,
-        &mods_dir,
-        platform.loader,
+        removals: &removals,
+        resolved_candidates: &catalog.resolved,
+        mods_dir: &mods_dir,
+        loader: platform.loader,
         providers,
-        storage.jar_cache(),
+        jar_cache: storage.jar_cache(),
         progress,
-    )
+    })
     .await?;
-    remove_packages(&mods_dir, &removals, &installed)?;
-    retain_selected_lock_entries(&mut lock.inner, &resolution.selected_sources);
-    apply_to_lockfile(&mut lock.inner, &installed, &mods_dir);
-    normalize_selected_file_remotes(&mut lock.inner);
-    reconcile_manifest_to_lock(&mut manifest_file.inner, &lock.inner);
-    lock.inner.meta = target_meta;
-    manifest_file.save()?;
-    lock.save()?;
+    let state_result = (|| {
+        retain_selected_lock_entries(&mut lock.inner, &resolution.selected_sources);
+        apply_to_lockfile(&mut lock.inner, &installed, &mods_dir)?;
+        normalize_selected_file_remotes(&mut lock.inner);
+        reconcile_manifest_to_lock(&mut manifest_file.inner, &lock.inner);
+        lock.inner.meta = target_meta;
+        crate::workspace::save_workspace(&manifest_file, &lock)
+    })();
+    if let Err(error) = state_result {
+        return Err(transaction.rollback(error));
+    }
     let mut warnings = resolution.warnings;
+    if let Some(warning) = transaction.commit() {
+        warnings.push(warning);
+    }
     if let Err(error) =
         crate::source_store::prune_unreferenced(instance_dir, &manifest_file.inner, &lock.inner)
     {
@@ -626,26 +684,33 @@ pub async fn upgrade_all_in_instance(
         return Ok(report);
     }
 
-    let installed = materialize_plans(
+    let (installed, transaction) = materialize_plans(MaterializePlansInput {
         planned,
-        &resolved_candidates,
-        &mods_dir,
+        removals: &removals,
+        resolved_candidates: &resolved_candidates,
+        mods_dir: &mods_dir,
         loader,
         providers,
-        storage.jar_cache(),
+        jar_cache: storage.jar_cache(),
         progress,
-    )
+    })
     .await?;
-    remove_packages(&mods_dir, &removals, &installed)?;
-    retain_selected_lock_entries(&mut lock.inner, &resolution.selected_sources);
-
-    apply_to_lockfile(&mut lock.inner, &installed, &mods_dir);
-
-    if !installed.is_empty() || !removals.is_empty() {
-        normalize_selected_file_remotes(&mut lock.inner);
-        reconcile_manifest_to_lock(&mut manifest_file.inner, &lock.inner);
-        manifest_file.save()?;
-        lock.save()?;
+    let state_result = (|| {
+        retain_selected_lock_entries(&mut lock.inner, &resolution.selected_sources);
+        apply_to_lockfile(&mut lock.inner, &installed, &mods_dir)?;
+        if !installed.is_empty() || !removals.is_empty() {
+            normalize_selected_file_remotes(&mut lock.inner);
+            reconcile_manifest_to_lock(&mut manifest_file.inner, &lock.inner);
+            crate::workspace::save_workspace(&manifest_file, &lock)?;
+        }
+        Ok(())
+    })();
+    if let Err(error) = state_result {
+        return Err(transaction.rollback(error));
+    }
+    let mut warnings = warnings;
+    if let Some(warning) = transaction.commit() {
+        warnings.push(warning);
     }
 
     Ok(InstallReport {
@@ -929,7 +994,21 @@ struct InstallModInput<'a> {
     interaction: InstallInteraction,
 }
 
-async fn install_mod(input: InstallModInput<'_>) -> Result<InstallReport, OrbitError> {
+struct InstallExecution {
+    report: InstallReport,
+    files: Option<PackageFileTransaction>,
+}
+
+impl InstallExecution {
+    fn unchanged(report: InstallReport) -> Self {
+        Self {
+            report,
+            files: None,
+        }
+    }
+}
+
+async fn install_mod(input: InstallModInput<'_>) -> Result<InstallExecution, OrbitError> {
     let InstallModInput {
         target,
         instance_dir,
@@ -1051,7 +1130,7 @@ async fn install_mod(input: InstallModInput<'_>) -> Result<InstallReport, OrbitE
         crate::resolver::select_resolution(portfolio, select_resolution)
     }?;
     if options.intent == InstallIntent::Upgrade && !resolution.has_upgrade() {
-        return Ok(InstallReport {
+        return Ok(InstallExecution::unchanged(InstallReport {
             installed: Vec::new(),
             removed: Vec::new(),
             changes: Vec::new(),
@@ -1059,7 +1138,7 @@ async fn install_mod(input: InstallModInput<'_>) -> Result<InstallReport, OrbitE
             skipped_optional: Vec::new(),
             diagnostics: resolution.diagnostics,
             warnings: resolution.warnings,
-        });
+        }));
     }
     let selected_versions = resolution.selected_versions.clone();
     let selected_sources = resolution.selected_sources.clone();
@@ -1101,52 +1180,61 @@ async fn install_mod(input: InstallModInput<'_>) -> Result<InstallReport, OrbitE
     }
 
     if options.dry_run {
-        return Ok(report);
+        return Ok(InstallExecution::unchanged(report));
     }
 
-    let installed = materialize_plans(
+    let (installed, transaction) = materialize_plans(MaterializePlansInput {
         planned,
-        &catalog.resolved,
+        removals: &removals,
+        resolved_candidates: &catalog.resolved,
         mods_dir,
         loader,
         providers,
-        storage.jar_cache(),
+        jar_cache: storage.jar_cache(),
         progress,
-    )
+    })
     .await?;
-    remove_packages(mods_dir, &removals, &installed)?;
-    retain_selected_lock_entries(lockfile, &selected_sources);
+    let state_result = (|| {
+        retain_selected_lock_entries(lockfile, &selected_sources);
 
-    if options.intent == InstallIntent::Add {
-        for package in selected_candidates.keys() {
-            let remotes = package_remotes(package, manifest, lockfile, &catalog);
-            if package == &requested_package {
-                let mut specification = requested_requirement.clone();
-                specification.remotes = remotes;
-                manifest.packages.insert(package.clone(), specification);
-            } else {
-                let specification = manifest
-                    .packages
-                    .entry(package.clone())
-                    .or_insert_with(|| PackageSpec::new("*", remotes.clone()));
-                specification.remotes.extend(remotes);
-                specification.remotes.sort();
-                specification.remotes.dedup();
+        if options.intent == InstallIntent::Add {
+            for package in selected_candidates.keys() {
+                let remotes = package_remotes(package, manifest, lockfile, &catalog);
+                if package == &requested_package {
+                    let mut specification = requested_requirement.clone();
+                    specification.remotes = remotes;
+                    manifest.packages.insert(package.clone(), specification);
+                } else {
+                    let specification = manifest
+                        .packages
+                        .entry(package.clone())
+                        .or_insert_with(|| PackageSpec::new("*", remotes.clone()));
+                    specification.remotes.extend(remotes);
+                    specification.remotes.sort();
+                    specification.remotes.dedup();
+                }
             }
         }
+        apply_to_lockfile(lockfile, &installed, mods_dir)?;
+        normalize_selected_file_remotes(lockfile);
+        reconcile_manifest_to_lock(manifest, lockfile);
+        Ok(())
+    })();
+    if let Err(error) = state_result {
+        return Err(transaction.rollback(error));
     }
-    apply_to_lockfile(lockfile, &installed, mods_dir);
-    normalize_selected_file_remotes(lockfile);
-    reconcile_manifest_to_lock(manifest, lockfile);
 
-    Ok(InstallReport {
-        installed,
-        removed: removals,
-        changes,
-        already_satisfied,
-        skipped_optional: vec![],
-        diagnostics,
-        warnings,
+    Ok(InstallExecution {
+        report: InstallReport {
+            installed,
+            removed: removals,
+            changes,
+            already_satisfied,
+            skipped_optional: vec![],
+            diagnostics,
+            warnings,
+        },
+        files: Some(transaction),
     })
 }
 
@@ -1486,8 +1574,16 @@ fn package_is_present(entry: &PackageEntry, mods_dir: &Path) -> Result<bool, Orb
         return Ok(false);
     }
     let path = mods_dir.join(filename);
-    if !path.is_file() {
-        return Ok(false);
+    match std::fs::symlink_metadata(&path) {
+        Ok(metadata) if metadata.file_type().is_file() => {}
+        Ok(_) => {
+            return Err(OrbitError::Other(anyhow::anyhow!(
+                "package path is not a regular file: {}",
+                path.display()
+            )));
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(error.into()),
     }
     if !entry.sha256.is_empty() {
         return Ok(crate::jar::compute_sha256(&path)? == entry.sha256);
@@ -1573,12 +1669,7 @@ async fn materialize_resolved(
         match result {
             Ok(bytes) => {
                 jar_cache.store_bytes(&bytes)?;
-                let temporary = destination.with_extension("jar.orbit-tmp");
-                std::fs::write(&temporary, bytes)?;
-                if destination.exists() {
-                    std::fs::remove_file(&destination)?;
-                }
-                std::fs::rename(temporary, &destination)?;
+                crate::atomic_io::write_atomic(&destination, &bytes)?;
                 return Ok(destination);
             }
             Err(error) => errors.push(format!("{}: {error}", source.provider())),
@@ -1692,78 +1783,107 @@ fn plan_from_resolved(
     })
 }
 
-async fn materialize_plans(
+struct MaterializePlansInput<'a> {
     planned: Vec<InstalledMod>,
-    resolved_candidates: &crate::resolver::types::ResolvedCandidates,
-    mods_dir: &Path,
+    removals: &'a [RemovedPackage],
+    resolved_candidates: &'a crate::resolver::types::ResolvedCandidates,
+    mods_dir: &'a Path,
     loader: crate::loader::LoaderKind,
-    providers: &[Box<dyn ModProvider>],
-    jar_cache: &crate::jar_cache::JarCache,
+    providers: &'a [Box<dyn ModProvider>],
+    jar_cache: &'a crate::jar_cache::JarCache,
     progress: Option<ProgressReporter>,
-) -> Result<Vec<InstalledMod>, OrbitError> {
+}
+
+async fn materialize_plans(
+    input: MaterializePlansInput<'_>,
+) -> Result<(Vec<InstalledMod>, PackageFileTransaction), OrbitError> {
+    let MaterializePlansInput {
+        planned,
+        removals,
+        resolved_candidates,
+        mods_dir,
+        loader,
+        providers,
+        jar_cache,
+        progress,
+    } = input;
     let total = planned.len();
     let instance_dir = mods_dir.parent().unwrap_or_else(|| Path::new("."));
-    emit_progress(progress.as_ref(), ProgressEvent::ApplyStarted { total });
-    let mut installed = Vec::new();
-    for mut plan in planned {
-        emit_progress(
-            progress.as_ref(),
-            ProgressEvent::ApplyArtifact {
-                completed: installed.len(),
-                total,
-                filename: plan.filename.clone(),
-                state: ArtifactProgressState::Started,
-            },
-        );
-        let candidate_id = plan.candidate_id.as_deref().ok_or_else(|| {
-            OrbitError::Other(anyhow::anyhow!(
-                "remote install plan for '{}' has no candidate identity",
-                plan.mod_id
-            ))
-        })?;
-        let resolved = resolved_candidate(resolved_candidates, candidate_id)?;
-        let mut materialized = resolved.clone();
-        materialized.filename = plan.filename.clone();
-        let dest_path =
-            materialize_resolved(&materialized, instance_dir, mods_dir, providers, jar_cache)
-                .await?;
-        let metadata = crate::jar::read_mod_metadata(&dest_path, loader)?;
-        if metadata.mod_id != plan.mod_id || metadata.version != plan.version {
-            return Err(OrbitError::Other(anyhow::anyhow!(
-                "downloaded JAR '{}' changed identity after resolution: expected {} {}, found {} {}",
-                materialized.filename,
-                plan.mod_id,
-                plan.version,
-                metadata.mod_id,
-                metadata.version
-            )));
-        }
-        plan.dependencies = metadata.dependencies;
-        plan.environment = metadata.environment;
-        plan.provides = metadata.provides;
-        plan.language_loader = metadata.language_loader;
-        plan.embedded_artifacts = metadata.embedded_artifacts;
-        plan.bundled = metadata
-            .bundled_mods
+    let transaction = PackageFileTransaction::begin(
+        mods_dir,
+        planned
             .iter()
-            .map(crate::lockfile::BundledMod::from_jar_metadata)
-            .collect();
-        installed.push(plan);
-        emit_progress(
-            progress.as_ref(),
-            ProgressEvent::ApplyArtifact {
-                completed: installed.len(),
-                total,
-                filename: installed
-                    .last()
-                    .map(|package| package.filename.clone())
-                    .unwrap_or_default(),
-                state: ArtifactProgressState::Finished,
-            },
-        );
+            .map(|package| package.filename.as_str())
+            .chain(removals.iter().map(|package| package.filename.as_str())),
+    )?;
+    emit_progress(progress.as_ref(), ProgressEvent::ApplyStarted { total });
+    let result = async {
+        let mut installed = Vec::new();
+        for mut plan in planned {
+            emit_progress(
+                progress.as_ref(),
+                ProgressEvent::ApplyArtifact {
+                    completed: installed.len(),
+                    total,
+                    filename: plan.filename.clone(),
+                    state: ArtifactProgressState::Started,
+                },
+            );
+            let candidate_id = plan.candidate_id.as_deref().ok_or_else(|| {
+                OrbitError::Other(anyhow::anyhow!(
+                    "remote install plan for '{}' has no candidate identity",
+                    plan.mod_id
+                ))
+            })?;
+            let resolved = resolved_candidate(resolved_candidates, candidate_id)?;
+            let mut materialized = resolved.clone();
+            materialized.filename = plan.filename.clone();
+            let dest_path =
+                materialize_resolved(&materialized, instance_dir, mods_dir, providers, jar_cache)
+                    .await?;
+            let metadata = crate::jar::read_mod_metadata(&dest_path, loader)?;
+            if metadata.mod_id != plan.mod_id || metadata.version != plan.version {
+                return Err(OrbitError::Other(anyhow::anyhow!(
+                    "downloaded JAR '{}' changed identity after resolution: expected {} {}, found {} {}",
+                    materialized.filename,
+                    plan.mod_id,
+                    plan.version,
+                    metadata.mod_id,
+                    metadata.version
+                )));
+            }
+            plan.dependencies = metadata.dependencies;
+            plan.environment = metadata.environment;
+            plan.provides = metadata.provides;
+            plan.language_loader = metadata.language_loader;
+            plan.embedded_artifacts = metadata.embedded_artifacts;
+            plan.bundled = metadata
+                .bundled_mods
+                .iter()
+                .map(crate::lockfile::BundledMod::from_jar_metadata)
+                .collect();
+            installed.push(plan);
+            emit_progress(
+                progress.as_ref(),
+                ProgressEvent::ApplyArtifact {
+                    completed: installed.len(),
+                    total,
+                    filename: installed
+                        .last()
+                        .map(|package| package.filename.clone())
+                        .unwrap_or_default(),
+                    state: ArtifactProgressState::Finished,
+                },
+            );
+        }
+        emit_progress(progress.as_ref(), ProgressEvent::ApplyFinished { total });
+        Ok(installed)
     }
-    emit_progress(progress.as_ref(), ProgressEvent::ApplyFinished { total });
-    Ok(installed)
+    .await;
+    match result {
+        Ok(installed) => Ok((installed, transaction)),
+        Err(error) => Err(transaction.rollback(error)),
+    }
 }
 
 fn resolved_candidate<'a>(
@@ -1908,28 +2028,6 @@ pub(crate) fn reconcile_manifest_to_lock(manifest: &mut OrbitManifest, lockfile:
     }
 }
 
-fn remove_packages(
-    mods_dir: &Path,
-    removals: &[RemovedPackage],
-    installed: &[InstalledMod],
-) -> Result<(), OrbitError> {
-    let installed_filenames: std::collections::HashSet<_> = installed
-        .iter()
-        .map(|package| package.filename.as_str())
-        .collect();
-    for removal in removals {
-        if installed_filenames.contains(removal.filename.as_str()) {
-            continue;
-        }
-        let filename = safe_artifact_filename(&removal.filename)?;
-        let path = mods_dir.join(filename);
-        if path.exists() {
-            std::fs::remove_file(path).map_err(OrbitError::Io)?;
-        }
-    }
-    Ok(())
-}
-
 fn retain_selected_lock_entries(
     lockfile: &mut OrbitLockfile,
     selected_sources: &std::collections::BTreeMap<String, String>,
@@ -1942,6 +2040,11 @@ fn retain_selected_lock_entries(
 }
 
 fn safe_artifact_filename(filename: &str) -> Result<&std::ffi::OsStr, OrbitError> {
+    orbit_bundle_format::validate_relative_path(filename).map_err(|error| {
+        OrbitError::Other(anyhow::anyhow!(
+            "provider returned an invalid artifact filename '{filename}': {error}"
+        ))
+    })?;
     let path = Path::new(filename);
     let basename = path
         .file_name()
@@ -1959,14 +2062,18 @@ fn safe_artifact_filename(filename: &str) -> Result<&std::ffi::OsStr, OrbitError
     Ok(basename)
 }
 
-fn apply_to_lockfile(lockfile: &mut OrbitLockfile, installed: &[InstalledMod], mods_dir: &Path) {
+fn apply_to_lockfile(
+    lockfile: &mut OrbitLockfile,
+    installed: &[InstalledMod],
+    mods_dir: &Path,
+) -> Result<(), OrbitError> {
     for inst in installed {
         let key = &inst.mod_id;
         lockfile.packages.retain(|e| e.mod_id != *key);
         let jar_path = mods_dir.join(&inst.filename);
-        let sha1 = crate::jar::compute_sha1(&jar_path).unwrap_or_default();
-        let sha256 = crate::jar::compute_sha256(&jar_path).unwrap_or_default();
-        let sha512 = crate::jar::compute_sha512(&jar_path).unwrap_or_default();
+        let sha1 = crate::jar::compute_sha1(&jar_path)?;
+        let sha256 = crate::jar::compute_sha256(&jar_path)?;
+        let sha512 = crate::jar::compute_sha512(&jar_path)?;
         lockfile.packages.push(PackageEntry {
             mod_id: key.clone(),
             version: inst.version.clone(),
@@ -1984,6 +2091,7 @@ fn apply_to_lockfile(lockfile: &mut OrbitLockfile, installed: &[InstalledMod], m
             bundled: inst.bundled.clone(),
         });
     }
+    Ok(())
 }
 
 fn requested_requirement(
@@ -2054,12 +2162,13 @@ physical_environment = "client"
     }
 
     fn locked_package(mod_id: &str, dependencies: &[&str]) -> PackageEntry {
+        let content = mod_id.as_bytes();
         PackageEntry {
             mod_id: mod_id.to_string(),
             version: "1".to_string(),
-            sha1: String::new(),
-            sha256: String::new(),
-            sha512: String::new(),
+            sha1: crate::jar::sha1_digest(content),
+            sha256: crate::jar::sha256_digest(content),
+            sha512: crate::jar::sha512_digest(content),
             filename: format!("{mod_id}.jar"),
             remotes: vec![PackageRemote::File {
                 path: format!("mods/{mod_id}.jar"),
@@ -2160,6 +2269,8 @@ physical_environment = "client"
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, b"package bytes").unwrap();
         let mut package = locked_package("example", &[]);
+        package.sha1 = crate::jar::compute_sha1(&path).unwrap();
+        package.sha256 = crate::jar::compute_sha256(&path).unwrap();
         package.sha512 = crate::jar::compute_sha512(&path).unwrap();
         Lockfile::new(
             root,
@@ -2393,6 +2504,115 @@ physical_environment = "client"
             std::fs::read(directory.path().join("orbit.lock")).unwrap(),
             lock_before
         );
+    }
+
+    #[tokio::test]
+    async fn exact_install_rolls_back_all_packages_when_a_later_source_fails() {
+        let directory = tempfile::tempdir().unwrap();
+        crate::platform_detection::test_support::write_platform(
+            directory.path(),
+            "1",
+            "fabric",
+            "1",
+        );
+        let discovered = crate::platform_detection::discover_platform_for_init(
+            directory.path(),
+            "1",
+            "fabric",
+            "1",
+        )
+        .unwrap();
+        let source_directory = directory.path().join(".orbit/sources");
+        std::fs::create_dir_all(&source_directory).unwrap();
+        let alpha_source = source_directory.join("alpha-source.jar");
+        let beta_source = source_directory.join("beta-source.jar");
+        write_fabric_jar(&alpha_source, "1");
+        // Different bytes ensure restoring alpha cannot satisfy beta through
+        // the content-addressed cache populated earlier in the same command.
+        write_fabric_jar(&beta_source, "2");
+
+        let mut manifest = OrbitManifest {
+            project: crate::manifest::ProjectMeta {
+                name: "test".to_string(),
+                mc_version: "1".to_string(),
+                modloader: "fabric".to_string(),
+                modloader_version: "1".to_string(),
+                description: None,
+                authors: None,
+                version: None,
+            },
+            platform: discovered.snapshot(directory.path()).unwrap(),
+            resolver: crate::manifest::ResolverConfig::default(),
+            packages: Default::default(),
+            groups: Default::default(),
+        };
+        let mut locked = Vec::new();
+        for (mod_id, source) in [("alpha", &alpha_source), ("beta", &beta_source)] {
+            let relative_source = format!(".orbit/sources/{mod_id}-source.jar");
+            let remote = PackageRemote::File {
+                path: relative_source.clone(),
+            };
+            manifest.packages.insert(
+                mod_id.to_string(),
+                PackageSpec::new("*", vec![remote.clone()]),
+            );
+            locked.push(PackageEntry {
+                mod_id: mod_id.to_string(),
+                version: "1".to_string(),
+                sha1: crate::jar::compute_sha1(source).unwrap(),
+                sha256: crate::jar::compute_sha256(source).unwrap(),
+                sha512: crate::jar::compute_sha512(source).unwrap(),
+                filename: format!("{mod_id}.jar"),
+                remotes: vec![remote],
+                artifact_sources: vec![ArtifactSource::File {
+                    path: relative_source,
+                }],
+                dependencies: Vec::new(),
+                environment: crate::metadata::Environment::Both,
+                provides: Vec::new(),
+                language_loader: None,
+                embedded_artifacts: Vec::new(),
+                bundled: Vec::new(),
+            });
+        }
+        ManifestFile::new(directory.path(), manifest)
+            .save()
+            .unwrap();
+        Lockfile::new(
+            directory.path(),
+            OrbitLockfile {
+                meta: LockMeta {
+                    mc_version: "1".to_string(),
+                    modloader: "fabric".to_string(),
+                    modloader_version: "1".to_string(),
+                },
+                packages: locked,
+            },
+        )
+        .save()
+        .unwrap();
+        std::fs::remove_file(beta_source).unwrap();
+        let mods = directory.path().join("mods");
+        std::fs::create_dir(&mods).unwrap();
+        std::fs::write(mods.join("alpha.jar"), b"original corrupt alpha").unwrap();
+        let cache = crate::jar_cache::JarCache::open(directory.path().join("cache")).unwrap();
+
+        let error = install_instance(
+            directory.path(),
+            &[],
+            &cache,
+            InstanceInstallOptions::default(),
+            None,
+        )
+        .await
+        .unwrap_err();
+
+        assert!(error.to_string().contains("beta.jar"));
+        assert_eq!(
+            std::fs::read(mods.join("alpha.jar")).unwrap(),
+            b"original corrupt alpha"
+        );
+        assert!(!mods.join("beta.jar").exists());
     }
 
     #[tokio::test]

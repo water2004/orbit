@@ -170,9 +170,10 @@ pub async fn add_package_remote(
         if let Some(lockfile) = &lockfile {
             lockfile.inner.validate()?;
         }
-        manifest.save()?;
         if let Some(lockfile) = lockfile {
-            lockfile.save()?;
+            crate::workspace::save_workspace(&manifest, &lockfile)?;
+        } else {
+            manifest.save()?;
         }
     }
     Ok(RemoteReport {
@@ -223,9 +224,10 @@ pub fn remove_package_remote(
         if let Some(lockfile) = &lockfile {
             lockfile.inner.validate()?;
         }
-        manifest.save()?;
         if let Some(lockfile) = lockfile {
-            lockfile.save()?;
+            crate::workspace::save_workspace(&manifest, &lockfile)?;
+        } else {
+            manifest.save()?;
         }
     }
     Ok(RemoteReport {
@@ -343,9 +345,9 @@ mod tests {
                 packages: vec![crate::lockfile::PackageEntry {
                     mod_id: "sodium".to_string(),
                     version: "0.5.8".to_string(),
-                    sha1: "sha1".to_string(),
-                    sha256: "sha256".to_string(),
-                    sha512: "sha512".to_string(),
+                    sha1: crate::jar::sha1_digest(b"sodium"),
+                    sha256: crate::jar::sha256_digest(b"sodium"),
+                    sha512: crate::jar::sha512_digest(b"sodium"),
                     filename: "sodium.jar".to_string(),
                     remotes: vec![modrinth.clone(), curseforge.clone()],
                     artifact_sources: vec![crate::lockfile::ArtifactSource::Modrinth {

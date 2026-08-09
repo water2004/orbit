@@ -126,8 +126,10 @@ impl PackageRemote {
 
     pub(crate) fn validate(&self, package: &str) -> Result<(), OrbitError> {
         let valid = match self {
-            Self::File { path } => !path.trim().is_empty(),
-            Self::Modrinth { project_id } => !project_id.trim().is_empty(),
+            Self::File { path } => !path.trim().is_empty() && path.trim() == path,
+            Self::Modrinth { project_id } => {
+                !project_id.trim().is_empty() && project_id.trim() == project_id
+            }
             Self::Curseforge { project_id } => *project_id > 0,
         };
         if !valid {
@@ -278,7 +280,13 @@ pub struct GroupSpec {
 impl OrbitManifest {
     /// 从文件路径解析 orbit.toml
     pub fn from_path(path: &std::path::Path) -> Result<Self, OrbitError> {
-        let content = std::fs::read_to_string(path).map_err(|_| OrbitError::ManifestNotFound)?;
+        let content = std::fs::read_to_string(path).map_err(|error| {
+            if error.kind() == std::io::ErrorKind::NotFound {
+                OrbitError::ManifestNotFound
+            } else {
+                OrbitError::Io(error)
+            }
+        })?;
         let manifest: Self = toml::from_str(&content)?;
         manifest.validate()?;
         Ok(manifest)
@@ -317,10 +325,25 @@ impl OrbitManifest {
 
     pub fn validate(&self) -> Result<(), OrbitError> {
         let loader = self.project.loader_kind()?;
-        for (package, specification) in &self.packages {
-            if package.trim().is_empty() {
+        for (field, value) in [
+            ("project.name", self.project.name.as_str()),
+            ("project.mc_version", self.project.mc_version.as_str()),
+            (
+                "project.modloader_version",
+                self.project.modloader_version.as_str(),
+            ),
+        ] {
+            if value.trim().is_empty() || value.trim() != value {
                 return Err(OrbitError::Other(anyhow::anyhow!(
-                    "orbit.toml contains an empty package id"
+                    "{field} must be non-empty and have no surrounding whitespace"
+                )));
+            }
+        }
+        validate_platform_snapshot(&self.platform)?;
+        for (package, specification) in &self.packages {
+            if package.trim().is_empty() || package.trim() != package {
+                return Err(OrbitError::Other(anyhow::anyhow!(
+                    "orbit.toml contains an empty or non-canonical package id"
                 )));
             }
             specification.validate(package)?;
@@ -335,6 +358,16 @@ impl OrbitManifest {
             })?;
         }
         for (group_name, group) in &self.groups {
+            if group_name.trim().is_empty() || group_name.trim() != group_name {
+                return Err(OrbitError::Other(anyhow::anyhow!(
+                    "orbit.toml contains an empty or non-canonical group name"
+                )));
+            }
+            if group.packages.is_empty() {
+                return Err(OrbitError::Other(anyhow::anyhow!(
+                    "group '{group_name}' must contain at least one package"
+                )));
+            }
             let mut unique = std::collections::BTreeSet::new();
             for package in &group.packages {
                 if !self.packages.contains_key(package) {
@@ -351,6 +384,36 @@ impl OrbitManifest {
         }
         Ok(())
     }
+}
+
+fn validate_platform_snapshot(platform: &PlatformSnapshot) -> Result<(), OrbitError> {
+    let mut paths = std::collections::BTreeSet::new();
+    for (label, artifact) in std::iter::once(("Minecraft", &platform.minecraft_jar))
+        .chain(std::iter::once(("Loader", &platform.loader_jar)))
+        .chain(
+            platform
+                .runtime_jars
+                .iter()
+                .map(|artifact| ("runtime", artifact)),
+        )
+    {
+        if artifact.path.trim().is_empty()
+            || artifact.path.trim() != artifact.path
+            || artifact.sha256.trim().is_empty()
+            || artifact.sha256.trim() != artifact.sha256
+        {
+            return Err(OrbitError::Other(anyhow::anyhow!(
+                "{label} platform artifact must contain a canonical path and SHA-256"
+            )));
+        }
+        let identity = artifact.path.replace('\\', "/").to_lowercase();
+        if !paths.insert(identity) {
+            return Err(OrbitError::Other(anyhow::anyhow!(
+                "platform snapshot contains the same runtime artifact path more than once"
+            )));
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
