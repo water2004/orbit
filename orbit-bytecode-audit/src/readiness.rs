@@ -6,8 +6,12 @@ pub fn probe_readiness(request: &AuditRequest) -> Result<Readiness, AuditError> 
         Ok(()) => {}
         Err(readiness) => return Ok(readiness),
     }
+    let policy = match crate::backend::AuditPolicy::select(&request.environment) {
+        Ok(policy) => policy,
+        Err(readiness) => return Ok(readiness),
+    };
     let scanned = crate::jar::scan_artifacts_with_progress(request, None)?;
-    Ok(crate::backend::for_loader(request.environment.loader).probe_readiness(&scanned))
+    Ok(policy.probe_readiness(&scanned))
 }
 
 pub(crate) fn preflight(request: &AuditRequest) -> Result<(), Readiness> {
@@ -108,15 +112,17 @@ mod tests {
             ],
         );
         write_jar(&mod_jar, &["example/Mod"]);
-        let readiness = probe_readiness(&request(
+        let mut request = request(
             "forge",
             vec![
                 input("minecraft", minecraft, ArtifactKind::Minecraft),
                 input("loader", loader, ArtifactKind::Loader),
                 input("mod", mod_jar, ArtifactKind::Mod),
             ],
-        ))
-        .unwrap();
+        );
+        request.environment.minecraft_version = "1.16.5".to_string();
+        request.environment.loader_version = "36.2.42".to_string();
+        let readiness = probe_readiness(&request).unwrap();
         assert_eq!(readiness.status, ReadinessStatus::Unsupported);
         assert_eq!(
             readiness.message,
@@ -174,7 +180,7 @@ mod tests {
     }
 
     #[test]
-    fn actual_modlauncher_abi_can_be_ready_without_a_version_table() {
+    fn verified_modlauncher_range_still_requires_the_actual_abi() {
         let directory = tempfile::tempdir().unwrap();
         let minecraft = directory.path().join("minecraft.jar");
         let loader = directory.path().join("loader.jar");
@@ -328,17 +334,18 @@ mod tests {
     }
 
     fn request(loader: &str, artifacts: Vec<ArtifactInput>) -> AuditRequest {
+        let (minecraft_version, loader, loader_version) = match loader {
+            "fabric" => ("1.21.1", crate::model::LoaderFamily::Fabric, "0.16.14"),
+            "quilt" => ("1.21.1", crate::model::LoaderFamily::Quilt, "0.27.1"),
+            "forge" => ("1.21.1", crate::model::LoaderFamily::Forge, "52.1.0"),
+            "neoforge" => ("1.21.1", crate::model::LoaderFamily::NeoForge, "21.1.200"),
+            _ => panic!("unsupported test loader"),
+        };
         AuditRequest {
             environment: AuditEnvironment {
-                minecraft_version: "test".to_string(),
-                loader: match loader {
-                    "fabric" => crate::model::LoaderFamily::Fabric,
-                    "quilt" => crate::model::LoaderFamily::Quilt,
-                    "forge" => crate::model::LoaderFamily::Forge,
-                    "neoforge" => crate::model::LoaderFamily::NeoForge,
-                    _ => panic!("unsupported test loader"),
-                },
-                loader_version: "test".to_string(),
+                minecraft_version: minecraft_version.to_string(),
+                loader,
+                loader_version: loader_version.to_string(),
                 physical_side: PhysicalSide::Unknown,
                 java_feature: 17,
             },

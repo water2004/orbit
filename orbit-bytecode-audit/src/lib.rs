@@ -53,8 +53,8 @@ pub fn analyze_with_progress(
     use progress::{AuditProgressEvent, AuditProgressStage, emit};
 
     readiness::preflight(request).map_err(AuditError::NotReady)?;
-    let backend = backend::for_loader(request.environment.loader);
-    debug_assert_eq!(backend.loader(), request.environment.loader);
+    let policy =
+        backend::AuditPolicy::select(&request.environment).map_err(AuditError::NotReady)?;
     let mut scanned = jar::scan_artifacts_with_progress(request, progress)?;
     emit(
         progress,
@@ -63,7 +63,7 @@ pub fn analyze_with_progress(
             total: Some(1),
         },
     );
-    let readiness = backend.probe_readiness(&scanned);
+    let readiness = policy.probe_readiness(&scanned);
     if readiness.status != ReadinessStatus::Ready {
         return Err(AuditError::NotReady(readiness));
     }
@@ -74,10 +74,10 @@ pub fn analyze_with_progress(
             completed: 1,
         },
     );
-    let namespace = backend
-        .align_namespace(&mut scanned, request)
+    let namespace = policy
+        .align_namespace(&mut scanned)
         .map_err(AuditError::NotReady)?;
-    let mut registry = backend.discover_mixins(&mut scanned, request);
+    let mut registry = policy.discover_mixins(&mut scanned, request);
     let mixin_analysis = mixin::analyze_with_progress(&mut scanned, &registry, progress);
     registry.coverage_gaps.extend(mixin_analysis.coverage_gaps);
     registry
@@ -87,7 +87,7 @@ pub fn analyze_with_progress(
     let unary_risks = mixin_analysis.unary_risks;
     let interactions = mixin_analysis.interactions;
     let mut effects = mixin_analysis.effects;
-    let transformer_analysis = backend.analyze_transformers(&mut scanned, progress);
+    let transformer_analysis = policy.analyze_transformers(&mut scanned, progress);
     effects.extend(transformer_analysis.effects);
     registry
         .inactive_candidates

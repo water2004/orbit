@@ -96,31 +96,7 @@ impl Default for AnalysisLimits {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum LoaderFamily {
-    Fabric,
-    Quilt,
-    Forge,
-    NeoForge,
-}
-
-impl LoaderFamily {
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Fabric => "fabric",
-            Self::Quilt => "quilt",
-            Self::Forge => "forge",
-            Self::NeoForge => "neoforge",
-        }
-    }
-}
-
-impl std::fmt::Display for LoaderFamily {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(self.as_str())
-    }
-}
+pub use orbit_compatibility::ModLoader as LoaderFamily;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
