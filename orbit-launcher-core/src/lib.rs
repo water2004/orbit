@@ -25,6 +25,7 @@ mod maven;
 pub mod mojang;
 mod natives;
 pub mod operations;
+pub mod pack;
 pub mod platform;
 pub mod registry;
 pub mod repository;
@@ -104,6 +105,9 @@ pub use operations::{
     create_instance, import_instance, remove_instance, rename_instance, resolve_directory,
     rollback_created_instance, set_default_instance,
 };
+pub use pack::{
+    InstallPackFormat, InstallPackOptionalFile, InstallPackRequirement, inspect_install_pack,
+};
 pub use platform::{Architecture, HostPlatform, OperatingSystem};
 pub use registry::{InstanceRegistry, RegistryEntry};
 pub use repository::{MinecraftDirectoryMove, RepositoryMoveEvent, move_minecraft_directory};
@@ -113,8 +117,8 @@ pub use runtime::{
 pub use secret_store::{SecretStore, native_secret_store};
 pub use state_archive::{
     LauncherStateArchiveSummary, LauncherStateExportReport, LauncherStateRestoreReport,
-    StateArchiveProgressEvent, export_launcher_state, inspect_launcher_state,
-    restore_launcher_state,
+    StateArchiveProgressEvent, export_launcher_state, export_launcher_state_with_base,
+    inspect_launcher_state, restore_launcher_state,
 };
 pub use versions::{LoaderVersion, list_loader_versions};
 pub use yggdrasil::discover_yggdrasil_api_root;

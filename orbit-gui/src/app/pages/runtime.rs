@@ -4,6 +4,7 @@ use gpui_component::{
     button::{Button, ButtonVariants},
     h_flex,
     input::Input,
+    switch::Switch,
     v_flex,
 };
 
@@ -44,19 +45,39 @@ fn render_dashboard(
     cx: &mut Context<OrbitApp>,
 ) -> impl IntoElement {
     let selected = app.selected_instance().cloned();
-    let actions = Button::new("runtime-create")
-        .icon(OrbitIcon::Plus)
-        .label(tr!("Create installation").into_owned())
-        .primary()
-        .on_click(cx.listener(|this, _, _, cx| {
-            this.begin_runtime_flow(RuntimeFlowMode::Create);
-            cx.notify();
-        }));
+    let actions = h_flex()
+        .gap_2()
+        .child(
+            Button::new("runtime-install-package")
+                .icon(OrbitIcon::Download)
+                .label(tr!("Install package").into_owned())
+                .on_click(cx.listener(|this, _, _, cx| {
+                    if let Some(path) = rfd::FileDialog::new()
+                        .add_filter("Orbit / Modrinth", &["orbitbundle", "mrpack"])
+                        .pick_file()
+                    {
+                        this.inspect_install_package(path);
+                    }
+                    cx.notify();
+                })),
+        )
+        .child(
+            Button::new("runtime-create")
+                .icon(OrbitIcon::Plus)
+                .label(tr!("Create installation").into_owned())
+                .primary()
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.begin_runtime_flow(RuntimeFlowMode::Create);
+                    cx.notify();
+                })),
+        );
 
     let mut content = v_flex().gap_4();
     if let Some(instance) = selected {
         let orbit_initialized = instance.directory.join("orbit.toml").is_file();
-        let orbit_export_name = archive_name(&instance.name, "zip");
+        let orbit_export_name = archive_name(&instance.name, "orbitbundle");
+        let orbit_mods_export_name =
+            archive_name(&format!("{}-mods", instance.name), "orbitbundle");
         let mrpack_export_name = archive_name(&instance.name, "mrpack");
         let detail = app.instance_detail.clone();
         let installed = detail.as_ref().and_then(|item| item.installed.as_ref());
@@ -202,32 +223,43 @@ fn render_dashboard(
                             row.child(
                                 Button::new("runtime-modpack-install")
                                     .icon(OrbitIcon::Download)
-                                    .label(tr!("Install modpack").into_owned())
+                                    .label(tr!("Import package").into_owned())
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         if let Some(path) = rfd::FileDialog::new()
-                                            .add_filter("Orbit / Modrinth", &["zip", "mrpack", "toml"])
+                                            .add_filter("Orbit / Modrinth", &["orbitbundle", "mrpack", "toml"])
                                             .pick_file()
                                         {
-                                            this.confirmation = Some(Confirmation {
-                                                title: tr!("Install this modpack?").into_owned(),
-                                                body: tr!("The imported manifest and archive files replace conflicting instance content, then Fix computes and presents the exact package solution before materializing it.").into_owned(),
-                                                action: ConfirmationAction::InstallModpack(path),
-                                            });
+                                            this.prepare_modpack_import(path);
                                         }
                                         cx.notify();
                                     })),
                             )
                             .child(
                                 Button::new("runtime-export-orbit")
-                                    .label(tr!("Export Orbit pack").into_owned())
+                                    .label(tr!("Export Orbit pack with data").into_owned())
                                     .ghost()
                                     .on_click(cx.listener(move |this, _, _, cx| {
                                         if let Some(path) = rfd::FileDialog::new()
-                                            .add_filter("Orbit pack", &["zip"])
+                                            .add_filter("Orbit pack", &["orbitbundle"])
                                             .set_file_name(&orbit_export_name)
                                             .save_file()
                                         {
-                                            this.export_modpack(with_extension(path, "zip"), "zip");
+                                            this.export_modpack(with_extension(path, "orbitbundle"), "orbit", true);
+                                        }
+                                        cx.notify();
+                                    })),
+                            )
+                            .child(
+                                Button::new("runtime-export-orbit-mods")
+                                    .label(tr!("Export mods only").into_owned())
+                                    .ghost()
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        if let Some(path) = rfd::FileDialog::new()
+                                            .add_filter("Orbit pack", &["orbitbundle"])
+                                            .set_file_name(&orbit_mods_export_name)
+                                            .save_file()
+                                        {
+                                            this.export_modpack(with_extension(path, "orbitbundle"), "orbit", false);
                                         }
                                         cx.notify();
                                     })),
@@ -245,6 +277,7 @@ fn render_dashboard(
                                             this.export_modpack(
                                                 with_extension(path, "mrpack"),
                                                 "mrpack",
+                                                true,
                                             );
                                         }
                                         cx.notify();
@@ -364,6 +397,7 @@ fn render_flow(
         .on_click(cx.listener(|this, _, _, cx| {
             this.runtime_flow = None;
             this.migration_source = None;
+            this.install_package = None;
             cx.notify();
         }));
     let content = v_flex()
@@ -379,11 +413,18 @@ fn render_flow(
     ui::page(
         match flow.mode {
             RuntimeFlowMode::Create => tr!("Create installation"),
+            RuntimeFlowMode::Package => tr!("Install package"),
             RuntimeFlowMode::Migrate => tr!("Migrate installation"),
             RuntimeFlowMode::UpdateLoader => tr!("Update Loader"),
         }
         .into_owned(),
-        tr!("Choose exact catalog entries; installation uses one transactional path").into_owned(),
+        if flow.mode == RuntimeFlowMode::Package {
+            tr!("Validated package metadata drives one coordinated Launcher and Orbit installation")
+                .into_owned()
+        } else {
+            tr!("Choose exact catalog entries; installation uses one transactional path")
+                .into_owned()
+        },
         actions,
         content,
         cx,
@@ -391,7 +432,9 @@ fn render_flow(
 }
 
 fn render_steps(flow: RuntimeFlow, cx: &gpui::App) -> impl IntoElement {
-    let steps = if flow.mode == RuntimeFlowMode::UpdateLoader {
+    let steps = if flow.mode == RuntimeFlowMode::Package {
+        vec![(RuntimeFlowStep::Review, tr!("Package").into_owned())]
+    } else if flow.mode == RuntimeFlowMode::UpdateLoader {
         vec![
             (
                 RuntimeFlowStep::Components,
@@ -840,6 +883,28 @@ fn render_review_step(
             cx,
         ));
     }
+    if flow.mode == RuntimeFlowMode::Package
+        && let Some(package) = &app.install_package
+    {
+        summary = summary
+            .child(ui::key_value(
+                tr!("Package").into_owned(),
+                package.source.display().to_string(),
+                cx,
+            ))
+            .child(ui::key_value(
+                tr!("Format").into_owned(),
+                format!("{} · {}", package.format, package.version),
+                cx,
+            ))
+            .when(package.launcher_state, |card| {
+                card.child(ui::key_value(
+                    tr!("Game state").into_owned(),
+                    tr!("Included").into_owned(),
+                    cx,
+                ))
+            });
+    }
     let mut body = v_flex().gap_4().child(
         summary
             .child(ui::key_value(tr!("Minecraft").into_owned(), minecraft, cx))
@@ -854,6 +919,85 @@ fn render_review_step(
             ))
             .child(ui::key_value(tr!("Java").into_owned(), java, cx)),
     );
+    if flow.mode == RuntimeFlowMode::Package
+        && let Some(package) = app.install_package.clone()
+    {
+        if package.targets.len() > 1 {
+            body = body.child(
+                v_flex()
+                    .gap_2()
+                    .child(
+                        div()
+                            .text_sm()
+                            .font_semibold()
+                            .child(tr!("Installation type").into_owned()),
+                    )
+                    .child(
+                        h_flex()
+                            .gap_2()
+                            .when(package.targets.iter().any(|item| item == "client"), |row| {
+                                row.child(
+                                    Button::new("package-kind-client")
+                                        .label(tr!("Client").into_owned())
+                                        .selected(app.new_instance.kind == 0)
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.new_instance.kind = 0;
+                                            cx.notify();
+                                        })),
+                                )
+                            })
+                            .when(package.targets.iter().any(|item| item == "server"), |row| {
+                                row.child(
+                                    Button::new("package-kind-server")
+                                        .label(tr!("Server").into_owned())
+                                        .selected(app.new_instance.kind == 1)
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.new_instance.kind = 1;
+                                            cx.notify();
+                                        })),
+                                )
+                            }),
+                    ),
+            );
+        }
+        let target = if app.new_instance.kind == 0 {
+            "client"
+        } else {
+            "server"
+        };
+        let optional_files = package
+            .optional_files
+            .iter()
+            .filter(|file| file.targets.iter().any(|item| item == target))
+            .cloned()
+            .collect::<Vec<_>>();
+        if !optional_files.is_empty() {
+            let mut choices = ui::compact_card(cx).child(ui::section_title(
+                tr!("Optional files").into_owned(),
+                tr!("Choose each optional mrpack entry for this installation side").into_owned(),
+                cx,
+            ));
+            for (index, file) in optional_files.into_iter().enumerate() {
+                let path = file.path.clone();
+                choices = choices.child(
+                    Switch::new(("package-optional", index))
+                        .checked(package.selected_optional.contains(&file.path))
+                        .label(file.path)
+                        .on_click(cx.listener(move |this, checked, _, cx| {
+                            if let Some(package) = &mut this.install_package {
+                                if *checked {
+                                    package.selected_optional.insert(path.clone());
+                                } else {
+                                    package.selected_optional.remove(&path);
+                                }
+                            }
+                            cx.notify();
+                        })),
+                );
+            }
+            body = body.child(choices);
+        }
+    }
     let name = app.inputs.new_name.clone();
     let server_directory = app.inputs.new_server_directory.clone();
     let directory_browse = server_directory.clone();
@@ -928,12 +1072,24 @@ fn render_review_step(
             .gap_2()
             .child(
                 Button::new("review-back")
-                    .label(tr!("Back").into_owned())
+                    .label(
+                        if flow.mode == RuntimeFlowMode::Package {
+                            tr!("Cancel")
+                        } else {
+                            tr!("Back")
+                        }
+                        .into_owned(),
+                    )
                     .on_click(cx.listener(move |this, _, _, cx| {
-                        this.runtime_flow = Some(RuntimeFlow {
-                            step: RuntimeFlowStep::Components,
-                            ..flow
-                        });
+                        if flow.mode == RuntimeFlowMode::Package {
+                            this.runtime_flow = None;
+                            this.install_package = None;
+                        } else {
+                            this.runtime_flow = Some(RuntimeFlow {
+                                step: RuntimeFlowStep::Components,
+                                ..flow
+                            });
+                        }
                         cx.notify();
                     })),
             )
@@ -942,6 +1098,7 @@ fn render_review_step(
                     .icon(OrbitIcon::Download)
                     .label(match flow.mode {
                         RuntimeFlowMode::Create => tr!("Create and install").into_owned(),
+                        RuntimeFlowMode::Package => tr!("Install package").into_owned(),
                         RuntimeFlowMode::Migrate => {
                             tr!("Create target and check migration").into_owned()
                         }
@@ -1039,7 +1196,7 @@ mod tests {
             archive_name(" My Pack / 26.2 ", "mrpack"),
             "My-Pack-26-2.mrpack"
         );
-        assert_eq!(archive_name("///", "zip"), "orbit-pack.zip");
+        assert_eq!(archive_name("///", "orbitbundle"), "orbit-pack.orbitbundle");
 
         let without = with_extension(std::path::PathBuf::from("example"), "zip");
         let explicit = with_extension(std::path::PathBuf::from("example.bundle"), "zip");

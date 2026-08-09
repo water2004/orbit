@@ -77,12 +77,9 @@ pub enum Commands {
         /// Loader requirement for a new non-Vanilla instance.
         #[arg(long)]
         loader_version: Option<String>,
-        /// Apply mutable game state exported by `orbit-launcher export` after installing runtime artifacts.
+        /// Create from an .orbitbundle or .mrpack after installing runtime artifacts.
         #[arg(long, requires = "new")]
         from: Option<PathBuf>,
-        /// Remove the state archive after it has been applied successfully.
-        #[arg(long, requires = "from")]
-        consume_from: bool,
     },
 
     /// Verify and launch a client instance with its selected account.
@@ -92,10 +89,13 @@ pub enum Commands {
         dry_run: bool,
     },
 
-    /// Export mutable game state (including worlds) to a portable Launcher archive.
+    /// Export mutable game state (including worlds) to an Orbit bundle.
     Export {
-        /// New Launcher state ZIP; existing files are never overwritten.
+        /// New .orbitbundle output, or the same path as --base for atomic composition.
         output: PathBuf,
+        /// Existing Orbit bundle whose non-Launcher projection is preserved byte-for-byte.
+        #[arg(long)]
+        base: Option<PathBuf>,
     },
 
     /// Inspect and change launcher-wide configuration.
@@ -132,6 +132,12 @@ pub enum Commands {
     Java {
         #[command(subcommand)]
         command: JavaCommands,
+    },
+
+    /// Inspect installable package structure and runtime metadata without mutating an instance.
+    Package {
+        #[command(subcommand)]
+        command: PackageCommands,
     },
 
     /// Inspect or relocate the single managed multi-version Minecraft repository.
@@ -184,6 +190,12 @@ pub enum JavaCommands {
     Verify { runtime_id: String },
     /// Remove an unreferenced runtime; instance locks prevent unsafe removal.
     Remove { runtime_id: String },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum PackageCommands {
+    /// Inspect an Orbit bundle or mrpack and show its runtime requirements.
+    Inspect { source: PathBuf },
 }
 
 #[derive(Debug, Subcommand)]
@@ -535,12 +547,12 @@ mod tests {
             "--instance",
             "source",
             "export",
-            "state.zip",
+            "state.orbitbundle",
         ])
         .unwrap();
         assert!(matches!(
             export.command,
-            Commands::Export { output } if output == std::path::Path::new("state.zip")
+            Commands::Export { output, base: None } if output == std::path::Path::new("state.orbitbundle")
         ));
 
         let install = Cli::try_parse_from([
@@ -553,21 +565,40 @@ mod tests {
             "--minecraft",
             "1.21.1",
             "--from",
-            "state.zip",
-            "--consume-from",
+            "state.orbitbundle",
         ])
         .unwrap();
         assert!(matches!(
             install.command,
             Commands::Install {
                 from: Some(path),
-                consume_from: true,
                 ..
-            } if path == std::path::Path::new("state.zip")
+            } if path == std::path::Path::new("state.orbitbundle")
         ));
 
-        assert!(Cli::try_parse_from(["orbit-launcher", "install", "--from", "state.zip"]).is_err());
-        assert!(Cli::try_parse_from(["orbit-launcher", "install", "--consume-from"]).is_err());
+        assert!(
+            Cli::try_parse_from(["orbit-launcher", "install", "--from", "state.orbitbundle"])
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn package_inspection_is_a_read_only_global_command() {
+        let cli = Cli::try_parse_from([
+            "orbit-launcher",
+            "package",
+            "inspect",
+            "pack.mrpack",
+            "--output-format",
+            "json",
+        ])
+        .unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Package {
+                command: PackageCommands::Inspect { source }
+            } if source == std::path::Path::new("pack.mrpack")
+        ));
     }
 
     #[test]

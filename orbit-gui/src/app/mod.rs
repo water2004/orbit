@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, BTreeSet, HashMap},
     path::PathBuf,
     time::Duration,
 };
@@ -39,13 +39,14 @@ pub(super) enum ConfirmationAction {
     RemoveJavaRuntime(String),
     RemovePackage(String),
     CleanOrbitCache,
-    InstallModpack(PathBuf),
+    ImportPackage(PathBuf),
     AcceptEula(String),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum RuntimeFlowMode {
     Create,
+    Package,
     Migrate,
     UpdateLoader,
 }
@@ -70,6 +71,26 @@ pub(super) struct MigrationReview {
     pub target_id: String,
     pub target_name: String,
     pub plan: MigrationResult,
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct InstallPackageDraft {
+    pub source: PathBuf,
+    pub format: String,
+    pub version: String,
+    pub targets: Vec<String>,
+    pub launcher_state: bool,
+    pub orbit_content: bool,
+    pub optional_files: Vec<InstallPackageOptionalFile>,
+    pub selected_optional: BTreeSet<String>,
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct ImportPackageReview {
+    pub source: PathBuf,
+    pub target: PathBuf,
+    pub optional_files: Vec<String>,
+    pub selected_optional: BTreeSet<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -449,6 +470,8 @@ pub struct OrbitApp {
     pub(super) runtime_flow: Option<RuntimeFlow>,
     pub(super) migration_source: Option<PathBuf>,
     pub(super) migration_review: Option<MigrationReview>,
+    pub(super) install_package: Option<InstallPackageDraft>,
+    pub(super) import_package_review: Option<ImportPackageReview>,
     pub(super) runtime_rename_open: bool,
     pub(super) account_flow: Option<AccountFlow>,
     pub(super) ygg_endpoint_editor_open: bool,
@@ -561,6 +584,8 @@ impl OrbitApp {
             runtime_flow: None,
             migration_source: None,
             migration_review: None,
+            install_package: None,
+            import_package_review: None,
             runtime_rename_open: false,
             account_flow: None,
             ygg_endpoint_editor_open: false,

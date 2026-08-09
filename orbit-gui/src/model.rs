@@ -401,6 +401,26 @@ pub struct JavaRuntimeList {
     pub runtimes: Vec<JavaRuntime>,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct InstallPackageRequirement {
+    pub format: String,
+    pub name: String,
+    pub version: String,
+    pub targets: Vec<String>,
+    pub minecraft: String,
+    pub loader: String,
+    pub loader_version: Option<String>,
+    pub launcher_state: bool,
+    pub orbit_content: bool,
+    pub optional_files: Vec<InstallPackageOptionalFile>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct InstallPackageOptionalFile {
+    pub path: String,
+    pub targets: Vec<String>,
+}
+
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct ServerStatus {
     pub running: bool,
@@ -512,15 +532,41 @@ pub enum Intent {
         refresh_packages: bool,
     },
     RuntimeMutated,
+    InstallPackageInspected {
+        source: PathBuf,
+    },
+    ImportPackageInspected {
+        source: PathBuf,
+        target_side: String,
+        target: PathBuf,
+    },
+    RuntimeCreatedFromPackage {
+        source: PathBuf,
+        orbit_content: bool,
+        optional_files: Vec<String>,
+    },
+    PackageRuntimeResolved {
+        source: PathBuf,
+        target_id: String,
+        orbit_content: bool,
+        optional_files: Vec<String>,
+    },
+    PackageOrbitInitialized {
+        source: PathBuf,
+        target: PathBuf,
+        target_id: String,
+        optional_files: Vec<String>,
+    },
+    PackageInstalled {
+        target_id: String,
+    },
     MigrationSourceExported {
         source_pack: PathBuf,
-        state_pack: PathBuf,
         source_id: String,
         launcher_args: Vec<String>,
     },
-    MigrationStateExported {
+    MigrationBundleComposed {
         source_pack: PathBuf,
-        state_pack: PathBuf,
         launcher_args: Vec<String>,
     },
     RuntimeCreatedForMigration {
@@ -558,9 +604,7 @@ pub enum Intent {
         target: PathBuf,
         sync_orbit: bool,
     },
-    ModpackImported {
-        target: PathBuf,
-    },
+    ModpackImported,
     AccountMutated,
     YggdrasilProviderMutated,
     JavaRuntimeMutated,

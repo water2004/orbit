@@ -11,6 +11,9 @@ pub enum LauncherError {
     #[error("remote service returned invalid data: {0}")]
     InvalidRemoteData(String),
 
+    #[error("invalid package archive: {0}")]
+    PackFormat(#[from] orbit_bundle_format::FormatError),
+
     #[error("artifact integrity check failed: {0}")]
     ArtifactIntegrity(String),
 
@@ -123,6 +126,7 @@ impl LauncherError {
             Self::Io(_) => "io",
             Self::Network(_) => "network",
             Self::InvalidRemoteData(_) => "invalid_remote_data",
+            Self::PackFormat(_) => "pack_format",
             Self::ArtifactIntegrity(_) => "artifact_integrity",
             Self::UnsupportedRequirement(_) => "unsupported_requirement",
             Self::LockParse(_) => "lock_parse",

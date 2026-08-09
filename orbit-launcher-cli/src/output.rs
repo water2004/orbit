@@ -52,6 +52,62 @@ pub struct MinecraftDirectoryMoveView {
     pub source_removed: bool,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct PackageRequirementView {
+    pub format: String,
+    pub name: String,
+    pub version: String,
+    pub targets: Vec<String>,
+    pub minecraft: String,
+    pub loader: String,
+    pub loader_version: Option<String>,
+    pub launcher_state: bool,
+    pub orbit_content: bool,
+    pub optional_files: Vec<PackageOptionalFileView>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PackageOptionalFileView {
+    pub path: String,
+    pub targets: Vec<String>,
+}
+
+impl From<orbit_launcher_core::InstallPackRequirement> for PackageRequirementView {
+    fn from(value: orbit_launcher_core::InstallPackRequirement) -> Self {
+        Self {
+            format: match value.format {
+                orbit_launcher_core::InstallPackFormat::Orbit => "orbit",
+                orbit_launcher_core::InstallPackFormat::Mrpack => "mrpack",
+            }
+            .to_string(),
+            name: value.name,
+            version: value.version,
+            targets: value
+                .targets
+                .into_iter()
+                .map(|target| target.as_str().to_string())
+                .collect(),
+            minecraft: value.minecraft,
+            loader: value.loader.as_str().to_string(),
+            loader_version: value.loader_version,
+            launcher_state: value.launcher_state,
+            orbit_content: value.orbit_content,
+            optional_files: value
+                .optional_files
+                .into_iter()
+                .map(|file| PackageOptionalFileView {
+                    path: file.path,
+                    targets: file
+                        .targets
+                        .into_iter()
+                        .map(|target| target.as_str().to_string())
+                        .collect(),
+                })
+                .collect(),
+        }
+    }
+}
+
 impl From<orbit_launcher_core::MinecraftDirectoryMove> for MinecraftDirectoryMoveView {
     fn from(value: orbit_launcher_core::MinecraftDirectoryMove) -> Self {
         Self {

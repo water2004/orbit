@@ -138,6 +138,9 @@ fn command_name(command: &cli::Commands) -> &'static str {
             cli::JavaCommands::Verify { .. } => "java.verify",
             cli::JavaCommands::Remove { .. } => "java.remove",
         },
+        cli::Commands::Package { command } => match command {
+            cli::PackageCommands::Inspect { .. } => "package.inspect",
+        },
         cli::Commands::Minecraft { command } => match command {
             cli::MinecraftCommands::Directory => "minecraft.directory",
             cli::MinecraftCommands::Move { .. } => "minecraft.move",
@@ -186,6 +189,7 @@ fn render_success(format: OutputFormat, output: app::CommandOutput) {
             app::CommandOutput::JavaRequirement(value) => print_json(command, value),
             app::CommandOutput::MinecraftDirectory(value) => print_json(command, value),
             app::CommandOutput::MinecraftDirectoryMove(value) => print_json(command, value),
+            app::CommandOutput::PackageRequirement(value) => print_json(command, value),
         },
         OutputFormat::Text => render_text(output),
     }
@@ -303,6 +307,33 @@ fn render_text(output: app::CommandOutput) {
             if let Some(digest) = view.eula_digest_sha256 {
                 println!("  EULA SHA-256: {digest}");
             }
+        }
+        app::CommandOutput::PackageRequirement(view) => {
+            println!("{} {} ({})", view.name, view.version, view.format);
+            println!(
+                "  {}",
+                tr!("Minecraft: %{version}", version = view.minecraft)
+            );
+            println!(
+                "  {}",
+                tr!(
+                    "Loader: %{loader}",
+                    loader = view.loader_version.map_or(view.loader.clone(), |version| {
+                        format!("{} {version}", view.loader)
+                    })
+                )
+            );
+            println!(
+                "  {}",
+                tr!("Targets: %{targets}", targets = view.targets.join(", "))
+            );
+            println!(
+                "  {}",
+                tr!(
+                    "Optional files: %{count}",
+                    count = view.optional_files.len()
+                )
+            );
         }
         app::CommandOutput::LaunchPlan(view) => {
             println!(
@@ -856,6 +887,9 @@ fn localized_launcher_error(error: &LauncherError) -> String {
             "Remote service returned invalid data: %{detail}",
             detail = detail
         ),
+        LauncherError::PackFormat(detail) => {
+            tr!("Invalid package archive: %{detail}", detail = detail)
+        }
         LauncherError::ArtifactIntegrity(detail) => tr!(
             "Artifact integrity check failed: %{detail}",
             detail = detail

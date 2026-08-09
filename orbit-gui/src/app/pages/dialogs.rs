@@ -386,3 +386,117 @@ pub(super) fn render_migration_review(
         cx,
     )
 }
+
+pub(super) fn render_import_package_review(
+    app: &OrbitApp,
+    cx: &mut Context<OrbitApp>,
+) -> impl IntoElement {
+    let review = app.import_package_review.as_ref().expect("checked").clone();
+    let optional_count = review.optional_files.len();
+    let mut choices = v_flex().gap_2();
+    if review.optional_files.is_empty() {
+        choices = choices
+            .child(ui::compact_card(cx).child(
+                tr!("This mrpack has no optional files for the current side.").into_owned(),
+            ));
+    } else {
+        for (index, path) in review.optional_files.into_iter().enumerate() {
+            let selected = review.selected_optional.contains(&path);
+            let update_path = path.clone();
+            choices = choices.child(
+                ui::compact_card(cx).child(
+                    Switch::new(("import-mrpack-optional", index))
+                        .checked(selected)
+                        .label(path)
+                        .on_click(cx.listener(move |this, checked, _, cx| {
+                            if let Some(review) = &mut this.import_package_review {
+                                if *checked {
+                                    review.selected_optional.insert(update_path.clone());
+                                } else {
+                                    review.selected_optional.remove(&update_path);
+                                }
+                            }
+                            cx.notify();
+                        })),
+                ),
+            );
+        }
+    }
+    ui::modal_backdrop(
+        ui::modal(
+            700.,
+            v_flex()
+                .h(px(560.))
+                .gap_4()
+                .child(
+                    v_flex()
+                        .gap_1()
+                        .child(
+                            div()
+                                .text_xl()
+                                .font_semibold()
+                                .child(tr!("Import Modrinth package").into_owned()),
+                        )
+                        .child(
+                            div()
+                                .text_sm()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(review.source.display().to_string()),
+                        ),
+                )
+                .child(ui::section_title(
+                    tr!("Optional files").into_owned(),
+                    tr!(
+                        "Choose each optional file before importing; required files are always installed"
+                    )
+                    .into_owned(),
+                    cx,
+                ))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_h_0()
+                        .overflow_y_scrollbar()
+                        .pr_1()
+                        .child(choices),
+                )
+                .child(
+                    h_flex()
+                        .items_center()
+                        .justify_between()
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(tr!(
+                                    "%{count} optional file(s) are available",
+                                    count = optional_count
+                                )),
+                        )
+                        .child(
+                            h_flex()
+                                .gap_2()
+                                .child(
+                                    Button::new("import-mrpack-cancel")
+                                        .label(tr!("Cancel").into_owned())
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.import_package_review = None;
+                                            cx.notify();
+                                        })),
+                                )
+                                .child(
+                                    Button::new("import-mrpack-apply")
+                                        .label(tr!("Import package").into_owned())
+                                        .primary()
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.apply_import_package_review();
+                                            cx.notify();
+                                        })),
+                                ),
+                        ),
+                ),
+            cx,
+        ),
+        cx,
+    )
+}

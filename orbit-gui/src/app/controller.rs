@@ -388,6 +388,12 @@ impl OrbitApp {
                                 Intent::RuntimeInstalledAfterUpdate { .. } => {
                                     refresh_registries = true
                                 }
+                                Intent::PackageInstalled { .. }
+                                | Intent::RuntimeCreatedFromPackage {
+                                    orbit_content: false,
+                                    ..
+                                } => refresh_registries = true,
+                                Intent::ModpackImported => reload_selected = true,
                                 Intent::AccountMutated => {
                                     refresh_accounts = true;
                                     reload_selected = true;
@@ -651,35 +657,182 @@ impl OrbitApp {
             Intent::MinecraftDirectory => {
                 self.minecraft_directory = Some(decode(result)?);
             }
+            Intent::InstallPackageInspected { source } => {
+                let package: InstallPackageRequirement = decode(result)?;
+                let Some(loader) = loaders().iter().position(|item| *item == package.loader) else {
+                    anyhow::bail!("package requires unsupported Loader '{}'", package.loader);
+                };
+                if package.orbit_content && package.loader == "vanilla" {
+                    anyhow::bail!(
+                        "Orbit-owned package content requires a modded runtime; vanilla package content cannot be managed by Orbit"
+                    );
+                }
+                self.new_instance.kind =
+                    usize::from(!package.targets.iter().any(|target| target == "client"));
+                self.new_instance.minecraft = package.minecraft.clone();
+                self.new_instance.loader = loader;
+                self.new_instance.loader_version = package.loader_version.unwrap_or_default();
+                self.new_instance.name = package.name.clone();
+                self.inputs.new_name.update(cx, |input, cx| {
+                    input.set_value(package.name.clone(), window, cx)
+                });
+                let selected_optional = package
+                    .optional_files
+                    .iter()
+                    .map(|file| file.path.clone())
+                    .collect();
+                self.install_package = Some(InstallPackageDraft {
+                    source: source.clone(),
+                    format: package.format,
+                    version: package.version,
+                    targets: package.targets,
+                    launcher_state: package.launcher_state,
+                    orbit_content: package.orbit_content,
+                    optional_files: package.optional_files,
+                    selected_optional,
+                });
+                self.request_runtime_metadata(&package.minecraft, loader);
+                self.runtime_flow = Some(RuntimeFlow {
+                    mode: RuntimeFlowMode::Package,
+                    step: RuntimeFlowStep::Review,
+                });
+            }
+            Intent::ImportPackageInspected {
+                source,
+                target_side,
+                target,
+            } => {
+                let package: InstallPackageRequirement = decode(result)?;
+                let optional_files = package
+                    .optional_files
+                    .into_iter()
+                    .filter(|file| file.targets.iter().any(|side| side == target_side))
+                    .map(|file| file.path)
+                    .collect::<Vec<_>>();
+                self.import_package_review = Some(ImportPackageReview {
+                    source: source.clone(),
+                    target: target.clone(),
+                    selected_optional: optional_files.iter().cloned().collect(),
+                    optional_files,
+                });
+            }
+            Intent::RuntimeCreatedFromPackage {
+                source,
+                orbit_content,
+                optional_files,
+            } => {
+                let installed: LauncherInstallResult = decode(result)?;
+                if *orbit_content {
+                    self.launcher_task(
+                        "Loading package installation",
+                        Intent::PackageRuntimeResolved {
+                            source: source.clone(),
+                            target_id: installed.instance_id.clone(),
+                            orbit_content: true,
+                            optional_files: optional_files.clone(),
+                        },
+                        Some(installed.instance_id),
+                        ["instance", "show"],
+                        None,
+                    );
+                } else {
+                    self.preferences.selected_instance = Some(installed.instance_id);
+                    self.save_preferences();
+                }
+            }
+            Intent::PackageRuntimeResolved {
+                source,
+                target_id,
+                orbit_content,
+                optional_files,
+            } => {
+                let detail: RuntimeInstanceDetail = decode(result)?;
+                if !orbit_content {
+                    self.preferences.selected_instance = Some(target_id.clone());
+                    self.save_preferences();
+                } else {
+                    let mut command = vec![
+                        "init".into(),
+                        detail.instance.name.clone(),
+                        "--mc-version".into(),
+                        detail.desired.minecraft.clone(),
+                        "--modloader".into(),
+                        detail.desired.loader.clone(),
+                    ];
+                    if let Some(version) = detail.desired.loader_version {
+                        command.extend(["--modloader-version".into(), version]);
+                    }
+                    self.orbit_task_args(
+                        "Initializing package workspace",
+                        Intent::PackageOrbitInitialized {
+                            source: source.clone(),
+                            target: detail.instance.directory.clone(),
+                            target_id: target_id.clone(),
+                            optional_files: optional_files.clone(),
+                        },
+                        command,
+                        Some(detail.instance.directory),
+                        None,
+                    );
+                }
+            }
+            Intent::PackageOrbitInitialized {
+                source,
+                target,
+                target_id,
+                optional_files,
+            } => {
+                let mut command = vec![
+                    "import".into(),
+                    source.to_string_lossy().into_owned(),
+                    "--merge-strategy".into(),
+                    "prefer-import".into(),
+                ];
+                for path in optional_files {
+                    command.extend(["--optional".into(), path.clone()]);
+                }
+                self.orbit_task_args(
+                    "Installing package content",
+                    Intent::PackageInstalled {
+                        target_id: target_id.clone(),
+                    },
+                    command,
+                    Some(target.clone()),
+                    None,
+                );
+            }
+            Intent::PackageInstalled { target_id } => {
+                self.preferences.selected_instance = Some(target_id.clone());
+                self.save_preferences();
+                self.install_package = None;
+            }
             Intent::MigrationSourceExported {
                 source_pack,
-                state_pack,
                 source_id,
                 launcher_args,
             } => {
                 self.launcher_task_args(
-                    "Exporting game state",
-                    Intent::MigrationStateExported {
+                    "Composing migration bundle",
+                    Intent::MigrationBundleComposed {
                         source_pack: source_pack.clone(),
-                        state_pack: state_pack.clone(),
                         launcher_args: launcher_args.clone(),
                     },
                     Some(source_id.clone()),
-                    vec!["export".into(), state_pack.to_string_lossy().into_owned()],
+                    vec![
+                        "export".into(),
+                        source_pack.to_string_lossy().into_owned(),
+                        "--base".into(),
+                        source_pack.to_string_lossy().into_owned(),
+                    ],
                     None,
                 );
             }
-            Intent::MigrationStateExported {
+            Intent::MigrationBundleComposed {
                 source_pack,
-                state_pack,
                 launcher_args,
             } => {
                 let mut launcher_args = launcher_args.clone();
-                launcher_args.extend([
-                    "--from".into(),
-                    state_pack.to_string_lossy().into_owned(),
-                    "--consume-from".into(),
-                ]);
+                launcher_args.extend(["--from".into(), source_pack.to_string_lossy().into_owned()]);
                 self.launcher_task_args(
                     "Creating migration target",
                     Intent::RuntimeCreatedForMigration {
@@ -831,17 +984,7 @@ impl OrbitApp {
                     self.save_preferences();
                 }
             }
-            Intent::ModpackImported { target } => {
-                self.orbit_task_args(
-                    "Resolving imported modpack",
-                    Intent::Mutated {
-                        refresh_packages: true,
-                    },
-                    vec!["fix".into()],
-                    Some(target.clone()),
-                    None,
-                );
-            }
+            Intent::ModpackImported => {}
             Intent::LauncherConfigMutated
             | Intent::OrbitConfigMutated
             | Intent::MinecraftDirectoryMoved
@@ -1219,7 +1362,38 @@ impl OrbitApp {
                 self.new_instance.loader_version.clone(),
             ]);
         }
-        if mode == RuntimeFlowMode::Migrate {
+        if mode == RuntimeFlowMode::Package {
+            let Some(package) = self.install_package.clone() else {
+                return;
+            };
+            let target = if self.new_instance.kind == 0 {
+                "client"
+            } else {
+                "server"
+            };
+            let optional_files = package
+                .optional_files
+                .iter()
+                .filter(|file| file.targets.iter().any(|item| item == target))
+                .filter(|file| package.selected_optional.contains(&file.path))
+                .map(|file| file.path.clone())
+                .collect();
+            command.extend([
+                "--from".into(),
+                package.source.to_string_lossy().into_owned(),
+            ]);
+            self.launcher_task_args(
+                "Creating installation from package",
+                Intent::RuntimeCreatedFromPackage {
+                    source: package.source,
+                    orbit_content: package.orbit_content,
+                    optional_files,
+                },
+                None,
+                command,
+                None,
+            );
+        } else if mode == RuntimeFlowMode::Migrate {
             let Some(source) = self.migration_source.clone() else {
                 return;
             };
@@ -1236,12 +1410,10 @@ impl OrbitApp {
                 return;
             };
             let source_pack = migration_source_pack_path();
-            let state_pack = migration_state_pack_path();
             self.orbit_task_args(
                 "Exporting migration source",
                 Intent::MigrationSourceExported {
                     source_pack: source_pack.clone(),
-                    state_pack,
                     source_id,
                     launcher_args: command,
                 },
@@ -1249,7 +1421,9 @@ impl OrbitApp {
                     "export".into(),
                     source_pack.to_string_lossy().into_owned(),
                     "--format".into(),
-                    "zip".into(),
+                    "orbit".into(),
+                    "--content".into(),
+                    "mods-and-data".into(),
                 ],
                 Some(source),
                 None,
@@ -1370,15 +1544,46 @@ impl OrbitApp {
         );
     }
 
+    pub(super) fn prepare_modpack_import(&mut self, path: PathBuf) {
+        let Some(instance) = self.selected_instance().cloned() else {
+            return;
+        };
+        if path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("mrpack"))
+        {
+            self.launcher_task_args(
+                "Inspecting Modrinth package",
+                Intent::ImportPackageInspected {
+                    source: path.clone(),
+                    target_side: instance.kind,
+                    target: instance.directory,
+                },
+                None,
+                vec![
+                    "package".into(),
+                    "inspect".into(),
+                    path.to_string_lossy().into_owned(),
+                ],
+                None,
+            );
+            return;
+        }
+        self.confirmation = Some(Confirmation {
+            title: tr!("Import this package?").into_owned(),
+            body: tr!("Conflicting package files will be replaced, then Sync will reconcile TOML and lock state without dependency solving.").into_owned(),
+            action: ConfirmationAction::ImportPackage(path),
+        });
+    }
+
     pub(super) fn install_modpack(&mut self, path: PathBuf) {
         let Some(instance) = self.selected_instance().cloned() else {
             return;
         };
         self.orbit_task_args(
             "Importing modpack",
-            Intent::ModpackImported {
-                target: instance.directory.clone(),
-            },
+            Intent::ModpackImported,
             vec![
                 "import".into(),
                 path.to_string_lossy().into_owned(),
@@ -1390,7 +1595,50 @@ impl OrbitApp {
         );
     }
 
-    pub(super) fn export_modpack(&mut self, path: PathBuf, format: &'static str) {
+    pub(super) fn apply_import_package_review(&mut self) {
+        let Some(review) = self.import_package_review.take() else {
+            return;
+        };
+        let mut command = vec![
+            "import".into(),
+            review.source.to_string_lossy().into_owned(),
+            "--merge-strategy".into(),
+            "prefer-import".into(),
+        ];
+        for path in review.selected_optional {
+            command.extend(["--optional".into(), path]);
+        }
+        self.orbit_task_args(
+            "Importing Modrinth package",
+            Intent::ModpackImported,
+            command,
+            Some(review.target),
+            None,
+        );
+    }
+
+    pub(super) fn inspect_install_package(&mut self, path: PathBuf) {
+        self.launcher_task_args(
+            "Inspecting package",
+            Intent::InstallPackageInspected {
+                source: path.clone(),
+            },
+            None,
+            vec![
+                "package".into(),
+                "inspect".into(),
+                path.to_string_lossy().into_owned(),
+            ],
+            None,
+        );
+    }
+
+    pub(super) fn export_modpack(
+        &mut self,
+        path: PathBuf,
+        format: &'static str,
+        include_data: bool,
+    ) {
         let Some(instance) = self.selected_instance().cloned() else {
             return;
         };
@@ -1406,6 +1654,12 @@ impl OrbitApp {
                 path.to_string_lossy().into_owned(),
                 "--format".into(),
                 format.into(),
+                "--content".into(),
+                if include_data {
+                    "mods-and-data".into()
+                } else {
+                    "mods".into()
+                },
             ],
             Some(instance.directory),
             None,
@@ -1675,7 +1929,7 @@ impl OrbitApp {
                 Intent::Generic,
                 ["cache", "clean"],
             ),
-            ConfirmationAction::InstallModpack(path) => {
+            ConfirmationAction::ImportPackage(path) => {
                 self.install_modpack(path);
                 0
             }
@@ -1937,17 +2191,7 @@ fn migration_source_pack_path() -> PathBuf {
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |duration| duration.as_nanos());
     std::env::temp_dir().join(format!(
-        "orbit-migration-source-{}-{nonce}.zip",
-        std::process::id()
-    ))
-}
-
-fn migration_state_pack_path() -> PathBuf {
-    let nonce = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |duration| duration.as_nanos());
-    std::env::temp_dir().join(format!(
-        "orbit-launcher-migration-state-{}-{nonce}.zip",
+        "orbit-migration-source-{}-{nonce}.orbitbundle",
         std::process::id()
     ))
 }

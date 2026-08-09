@@ -92,7 +92,10 @@ pub(in crate::app) fn render_strip(app: &OrbitApp, cx: &mut Context<OrbitApp>) -
                             .text_color(cx.theme().muted_foreground)
                             .child(match (completed, total) {
                                 (Some(done), Some(total))
-                                    if task.phase == Some(ProgressPhase::Export) =>
+                                    if matches!(
+                                        task.phase,
+                                        Some(ProgressPhase::Export | ProgressPhase::Import)
+                                    ) =>
                                 {
                                     format!("{} / {}", human_bytes(done), human_bytes(total))
                                 }
@@ -183,6 +186,8 @@ pub(in crate::app) fn render_overlays(
         overlays.push(render_interaction(app, cx).into_any_element());
     } else if app.migration_review.is_some() {
         overlays.push(super::dialogs::render_migration_review(app, cx).into_any_element());
+    } else if app.import_package_review.is_some() {
+        overlays.push(super::dialogs::render_import_package_review(app, cx).into_any_element());
     } else if app.confirmation.is_some() {
         overlays.push(render_confirmation(app, cx).into_any_element());
     } else if app.microsoft_session.is_some() {

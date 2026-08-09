@@ -9,7 +9,6 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::{Cursor, Read, Write};
 use std::path::{Component, Path, PathBuf};
 
-use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 use zip::write::SimpleFileOptions;
@@ -18,10 +17,8 @@ use crate::error::LauncherError;
 use crate::instance::{InstanceKind, ManifestFile};
 use crate::lockfile::LockFile;
 
-const ARCHIVE_MANIFEST: &str = "orbit-launcher-state.toml";
-const ARCHIVE_SCHEMA: u32 = 1;
-const MAX_ARCHIVE_MANIFEST_BYTES: u64 = 4 * 1024 * 1024;
 const STATE_DIRECTORY: &str = ".orbit-launcher";
+const LAUNCHER_PREFIX: &str = "launcher/";
 const SERVER_STATE_FILES: [&str; 6] = [
     "server.properties",
     "whitelist.json",
@@ -79,17 +76,14 @@ pub struct LauncherStateRestoreReport {
     pub skipped_properties: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone)]
 struct StateArchiveManifest {
-    schema: u32,
     kind: InstanceKind,
     minecraft_version: String,
     files: Vec<StateArchiveFile>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone)]
 struct StateArchiveFile {
     path: String,
     bytes: u64,
@@ -103,9 +97,24 @@ struct StateSource {
     bytes: u64,
 }
 
-/// Export the selected instance's mutable game state to a Launcher-owned ZIP.
+/// Export the selected instance's mutable game state as a Launcher-owned
+/// projection in an Orbit bundle.
 pub fn export_launcher_state<F>(
     instance_root: &Path,
+    output: &Path,
+    progress: F,
+) -> Result<LauncherStateExportReport, LauncherError>
+where
+    F: FnMut(StateArchiveProgressEvent),
+{
+    export_launcher_state_with_base(instance_root, None, output, progress)
+}
+
+/// Add Launcher-owned mutable state to a new bundle or to an existing
+/// Orbit-runtime bundle without interpreting or rewriting the Orbit section.
+pub fn export_launcher_state_with_base<F>(
+    instance_root: &Path,
+    base: Option<&Path>,
     output: &Path,
     mut progress: F,
 ) -> Result<LauncherStateExportReport, LauncherError>
@@ -119,9 +128,9 @@ where
             "instance manifest and lock disagree about client/server kind".to_string(),
         ));
     }
-    if output.exists() {
+    if output.exists() && base != Some(output) {
         return Err(LauncherError::Transaction(format!(
-            "refusing to overwrite Launcher state archive '{}'",
+            "refusing to overwrite Orbit bundle '{}'",
             output.display()
         )));
     }
@@ -152,8 +161,9 @@ where
     }
     let result = write_state_archive(
         &temporary,
-        manifest.kind,
-        &lock.minecraft.version,
+        &manifest,
+        &lock,
+        base,
         &sources,
         total_bytes,
         &mut progress,
@@ -162,7 +172,7 @@ where
         let _ = std::fs::remove_file(&temporary);
         return Err(error);
     }
-    if let Err(error) = std::fs::rename(&temporary, output) {
+    if let Err(error) = replace_output(&temporary, output) {
         let _ = std::fs::remove_file(&temporary);
         return Err(error.into());
     }
@@ -187,11 +197,7 @@ pub fn inspect_launcher_state(source: &Path) -> Result<LauncherStateArchiveSumma
             source.display()
         )));
     }
-    let file = std::fs::File::open(source)?;
-    let mut archive = zip::ZipArchive::new(file).map_err(invalid_archive)?;
-    let manifest = read_archive_manifest(&mut archive)?;
-    validate_archive_manifest(&manifest)?;
-    validate_archive_entries(&mut archive, &manifest)?;
+    let (_, manifest) = open_state_archive(source)?;
     let bytes = manifest.files.iter().try_fold(0_u64, |total, file| {
         total.checked_add(file.bytes).ok_or_else(|| {
             LauncherError::InvalidRemoteData("Launcher state size overflowed".to_string())
@@ -238,11 +244,9 @@ where
         ));
     }
 
+    let (_, archive_manifest) = open_state_archive(source)?;
     let file = std::fs::File::open(source)?;
     let mut archive = zip::ZipArchive::new(file).map_err(invalid_archive)?;
-    let archive_manifest = read_archive_manifest(&mut archive)?;
-    validate_archive_manifest(&archive_manifest)?;
-    validate_archive_entries(&mut archive, &archive_manifest)?;
     if archive_manifest.kind != target_manifest.kind {
         return Err(LauncherError::Transaction(format!(
             "cannot install {} state into a {} instance",
@@ -337,7 +341,9 @@ where
         if entry.path == "state/server.properties" {
             continue;
         } else {
-            let mut zip_entry = archive.by_name(&entry.path).map_err(invalid_archive)?;
+            let mut zip_entry = archive
+                .by_name(&format!("{LAUNCHER_PREFIX}{}", entry.path))
+                .map_err(invalid_archive)?;
             if !zip_entry.is_file() {
                 return Err(LauncherError::InvalidRemoteData(format!(
                     "Launcher state entry '{}' is not a regular file",
@@ -510,8 +516,9 @@ fn collect_directory(
 
 fn write_state_archive<F>(
     output: &Path,
-    kind: InstanceKind,
-    minecraft_version: &str,
+    instance: &crate::instance::InstanceManifest,
+    lock: &crate::lockfile::LauncherLock,
+    base: Option<&Path>,
     sources: &[StateSource],
     total_bytes: u64,
     progress: &mut F,
@@ -524,12 +531,59 @@ where
     let options = SimpleFileOptions::default()
         .compression_method(zip::CompressionMethod::Deflated)
         .unix_permissions(0o644);
+    let mut bundle = if let Some(base) = base {
+        let bundle = orbit_bundle_format::BundleArchive::open(base)?;
+        bundle.verify()?;
+        validate_bundle_runtime(&bundle.manifest, instance.kind, lock)?;
+        if bundle.manifest.launcher.as_ref().is_some_and(|section| {
+            section.content == orbit_bundle_format::LauncherContent::RuntimeAndState
+        }) {
+            return Err(LauncherError::Transaction(
+                "base bundle already contains Launcher state".to_string(),
+            ));
+        }
+        let mut input =
+            zip::ZipArchive::new(std::fs::File::open(base)?).map_err(invalid_archive)?;
+        for index in 0..input.len() {
+            let entry = input.by_index(index).map_err(invalid_archive)?;
+            if !entry.is_file() || entry.name() == orbit_bundle_format::BUNDLE_MANIFEST_PATH {
+                continue;
+            }
+            archive.raw_copy_file(entry).map_err(write_archive_error)?;
+        }
+        bundle.manifest
+    } else {
+        let target = match instance.kind {
+            InstanceKind::Client => orbit_bundle_format::InstanceTarget::Client,
+            InstanceKind::Server => orbit_bundle_format::InstanceTarget::Server,
+        };
+        orbit_bundle_format::BundleManifest {
+            format_version: orbit_bundle_format::BUNDLE_FORMAT_VERSION,
+            id: instance.id.to_string(),
+            name: instance.name.clone(),
+            version: lock.minecraft.version.clone(),
+            summary: None,
+            targets: vec![target],
+            runtime: orbit_bundle_format::RuntimeRequirement {
+                minecraft: lock.minecraft.version.clone(),
+                loader: lock.loader.kind.as_str().to_string(),
+                loader_version: lock.loader.version.clone(),
+            },
+            launcher: None,
+            orbit: None,
+            files: Vec::new(),
+        }
+    };
+    bundle
+        .files
+        .retain(|file| file.owner != orbit_bundle_format::BundleFileOwner::Launcher);
     let mut files = Vec::with_capacity(sources.len());
     let mut completed_bytes = 0_u64;
     let mut buffer = vec![0_u8; 128 * 1024];
     for source in sources {
+        let archive_path = format!("{LAUNCHER_PREFIX}{}", source.archive_path);
         archive
-            .start_file(&source.archive_path, options)
+            .start_file(&archive_path, options)
             .map_err(write_archive_error)?;
         let mut input = std::fs::File::open(&source.source)?;
         let mut hasher = Sha256::new();
@@ -556,104 +610,113 @@ where
             )));
         }
         files.push(StateArchiveFile {
-            path: source.archive_path.clone(),
+            path: archive_path,
             bytes: written,
             sha256: hex::encode(hasher.finalize()),
         });
     }
-    let manifest = StateArchiveManifest {
-        schema: ARCHIVE_SCHEMA,
-        kind,
-        minecraft_version: minecraft_version.to_string(),
-        files,
-    };
+    bundle.launcher = Some(orbit_bundle_format::LauncherSection {
+        content: orbit_bundle_format::LauncherContent::RuntimeAndState,
+    });
+    bundle.files.extend(
+        files
+            .into_iter()
+            .map(|file| orbit_bundle_format::BundleFile {
+                path: file.path,
+                owner: orbit_bundle_format::BundleFileOwner::Launcher,
+                size: file.bytes,
+                sha256: file.sha256,
+            }),
+    );
+    bundle.validate()?;
     archive
-        .start_file(ARCHIVE_MANIFEST, options)
+        .start_file(orbit_bundle_format::BUNDLE_MANIFEST_PATH, options)
         .map_err(write_archive_error)?;
-    archive.write_all(toml::to_string_pretty(&manifest)?.as_bytes())?;
+    archive.write_all(toml::to_string_pretty(&bundle)?.as_bytes())?;
     archive.finish().map_err(write_archive_error)?;
     Ok(())
 }
 
-fn read_archive_manifest(
-    archive: &mut zip::ZipArchive<std::fs::File>,
-) -> Result<StateArchiveManifest, LauncherError> {
-    let mut entry = archive.by_name(ARCHIVE_MANIFEST).map_err(invalid_archive)?;
-    if !entry.is_file() {
-        return Err(LauncherError::InvalidRemoteData(
-            "Launcher state archive manifest is not a regular file".to_string(),
+fn validate_bundle_runtime(
+    bundle: &orbit_bundle_format::BundleManifest,
+    kind: InstanceKind,
+    lock: &crate::lockfile::LauncherLock,
+) -> Result<(), LauncherError> {
+    let target = match kind {
+        InstanceKind::Client => orbit_bundle_format::InstanceTarget::Client,
+        InstanceKind::Server => orbit_bundle_format::InstanceTarget::Server,
+    };
+    if bundle.runtime.minecraft != lock.minecraft.version
+        || bundle.runtime.loader != lock.loader.kind.as_str()
+        || bundle.runtime.loader_version != lock.loader.version
+        || !bundle.targets.contains(&target)
+    {
+        return Err(LauncherError::Transaction(
+            "base Orbit bundle runtime does not match the Launcher instance".to_string(),
         ));
     }
-    if entry.size() > MAX_ARCHIVE_MANIFEST_BYTES {
-        return Err(LauncherError::InvalidRemoteData(format!(
-            "Launcher state archive manifest exceeds {MAX_ARCHIVE_MANIFEST_BYTES} bytes"
-        )));
-    }
-    let mut content = String::new();
-    entry.read_to_string(&mut content)?;
-    toml::from_str(&content).map_err(|error| {
-        LauncherError::InvalidRemoteData(format!("failed to parse {ARCHIVE_MANIFEST}: {error}"))
-    })
+    Ok(())
 }
 
-fn validate_archive_entries(
-    archive: &mut zip::ZipArchive<std::fs::File>,
-    manifest: &StateArchiveManifest,
-) -> Result<(), LauncherError> {
-    let mut expected: HashSet<_> = manifest
+fn open_state_archive(
+    source: &Path,
+) -> Result<(orbit_bundle_format::BundleArchive, StateArchiveManifest), LauncherError> {
+    let bundle = orbit_bundle_format::BundleArchive::open(source)?;
+    let launcher = bundle.manifest.launcher.as_ref().ok_or_else(|| {
+        LauncherError::InvalidRemoteData(
+            "Orbit bundle contains no Launcher-owned content".to_string(),
+        )
+    })?;
+    if launcher.content != orbit_bundle_format::LauncherContent::RuntimeAndState {
+        return Err(LauncherError::InvalidRemoteData(
+            "Orbit bundle contains runtime metadata but no Launcher state".to_string(),
+        ));
+    }
+    let kind = match bundle.manifest.targets.as_slice() {
+        [orbit_bundle_format::InstanceTarget::Client] => InstanceKind::Client,
+        [orbit_bundle_format::InstanceTarget::Server] => InstanceKind::Server,
+        _ => {
+            return Err(LauncherError::InvalidRemoteData(
+                "Launcher state requires exactly one client or server target".to_string(),
+            ));
+        }
+    };
+    let mut paths = HashSet::new();
+    let mut files = Vec::new();
+    for file in bundle
+        .manifest
         .files
         .iter()
-        .map(|file| file.path.as_str())
-        .collect();
-    expected.insert(ARCHIVE_MANIFEST);
-    let mut seen = HashSet::new();
-    for index in 0..archive.len() {
-        let entry = archive.by_index(index).map_err(invalid_archive)?;
-        if !entry.is_file() || !expected.contains(entry.name()) {
-            return Err(LauncherError::InvalidRemoteData(format!(
-                "Launcher state archive contains unlisted or non-file entry '{}'",
-                entry.name()
-            )));
-        }
-        if !seen.insert(entry.name().to_string()) {
-            return Err(LauncherError::InvalidRemoteData(format!(
-                "Launcher state archive contains duplicate ZIP entry '{}'",
-                entry.name()
-            )));
-        }
-    }
-    if seen.len() != expected.len() {
-        return Err(LauncherError::InvalidRemoteData(
-            "Launcher state archive is missing a listed file".to_string(),
-        ));
-    }
-    Ok(())
-}
-
-fn validate_archive_manifest(manifest: &StateArchiveManifest) -> Result<(), LauncherError> {
-    if manifest.schema != ARCHIVE_SCHEMA {
-        return Err(LauncherError::InvalidRemoteData(format!(
-            "unsupported Launcher state archive schema {}; expected {ARCHIVE_SCHEMA}",
-            manifest.schema
-        )));
-    }
-    let mut paths = HashSet::new();
-    for file in &manifest.files {
-        validate_archive_path(manifest.kind, &file.path)?;
-        if file.sha256.len() != 64 || !file.sha256.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-            return Err(LauncherError::InvalidRemoteData(format!(
-                "Launcher state entry '{}' has an invalid SHA-256 digest",
+        .filter(|file| file.owner == orbit_bundle_format::BundleFileOwner::Launcher)
+    {
+        let path = file.path.strip_prefix(LAUNCHER_PREFIX).ok_or_else(|| {
+            LauncherError::InvalidRemoteData(format!(
+                "Launcher bundle path '{}' is outside its namespace",
                 file.path
-            )));
-        }
-        if !paths.insert(file.path.as_str()) {
+            ))
+        })?;
+        validate_archive_path(kind, path)?;
+        if !paths.insert(path.to_string()) {
             return Err(LauncherError::InvalidRemoteData(format!(
                 "Launcher state archive contains duplicate path '{}'",
-                file.path
+                path
             )));
         }
+        files.push(StateArchiveFile {
+            path: path.to_string(),
+            bytes: file.size,
+            sha256: file.sha256.clone(),
+        });
     }
-    Ok(())
+    let minecraft_version = bundle.manifest.runtime.minecraft.clone();
+    Ok((
+        bundle,
+        StateArchiveManifest {
+            kind,
+            minecraft_version,
+            files,
+        },
+    ))
 }
 
 fn validate_archive_path(kind: InstanceKind, path: &str) -> Result<(), LauncherError> {
@@ -709,7 +772,9 @@ fn read_verified_entry(
     archive: &mut zip::ZipArchive<std::fs::File>,
     expected: &StateArchiveFile,
 ) -> Result<Vec<u8>, LauncherError> {
-    let mut entry = archive.by_name(&expected.path).map_err(invalid_archive)?;
+    let mut entry = archive
+        .by_name(&format!("{LAUNCHER_PREFIX}{}", expected.path))
+        .map_err(invalid_archive)?;
     let mut bytes = Vec::new();
     verify_entry_reader(&mut entry, expected, |chunk| bytes.extend_from_slice(chunk))?;
     Ok(bytes)
@@ -822,12 +887,49 @@ fn temporary_output_path(output: &Path) -> PathBuf {
     output.with_file_name(format!(".{name}.tmp-{}", std::process::id()))
 }
 
+fn replace_output(temporary: &Path, output: &Path) -> Result<(), std::io::Error> {
+    #[cfg(windows)]
+    if output.exists() {
+        use std::os::windows::ffi::OsStrExt as _;
+        use windows_sys::Win32::Storage::FileSystem::ReplaceFileW;
+
+        let output = output
+            .as_os_str()
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect::<Vec<_>>();
+        let temporary = temporary
+            .as_os_str()
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect::<Vec<_>>();
+        // SAFETY: both paths are terminated UTF-16 strings that remain alive
+        // for the call. The replacement is in the same directory and no
+        // backup or reserved parameters are supplied.
+        let replaced = unsafe {
+            ReplaceFileW(
+                output.as_ptr(),
+                temporary.as_ptr(),
+                std::ptr::null(),
+                0,
+                std::ptr::null(),
+                std::ptr::null(),
+            )
+        };
+        if replaced == 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        return Ok(());
+    }
+    std::fs::rename(temporary, output)
+}
+
 fn invalid_archive(error: zip::result::ZipError) -> LauncherError {
-    LauncherError::InvalidRemoteData(format!("invalid Launcher state ZIP: {error}"))
+    LauncherError::InvalidRemoteData(format!("invalid Orbit bundle archive: {error}"))
 }
 
 fn write_archive_error(error: zip::result::ZipError) -> LauncherError {
-    LauncherError::Transaction(format!("failed to write Launcher state ZIP: {error}"))
+    LauncherError::Transaction(format!("failed to write Orbit bundle archive: {error}"))
 }
 
 fn property_write_error(error: java_properties::PropertiesError) -> LauncherError {
@@ -1153,7 +1255,7 @@ mod tests {
         )
         .unwrap();
 
-        let archive = directory.path().join("state.zip");
+        let archive = directory.path().join("state.orbitbundle");
         let exported = export_launcher_state(&source, &archive, |_| {}).unwrap();
         assert_eq!(exported.world_files, 1);
         let inspected = inspect_launcher_state(&archive).unwrap();
@@ -1177,5 +1279,84 @@ mod tests {
             b"world-data"
         );
         assert_eq!(std::fs::read(target.join("whitelist.json")).unwrap(), b"[]");
+    }
+
+    #[test]
+    fn launcher_state_composes_with_an_orbit_projection_without_rewriting_it() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("source");
+        std::fs::create_dir_all(&source).unwrap();
+        write_server_instance(&source, "1.21.1");
+        std::fs::write(source.join("server.properties"), "level-name=world\n").unwrap();
+        let output = directory.path().join("combined.orbitbundle");
+        let orbit_manifest = b"orbit projection";
+        let orbit_lock = b"lock projection";
+        let files = [
+            ("orbit/orbit.toml", orbit_manifest.as_slice()),
+            ("orbit/orbit.lock", orbit_lock.as_slice()),
+        ];
+        let bundle = orbit_bundle_format::BundleManifest {
+            format_version: orbit_bundle_format::BUNDLE_FORMAT_VERSION,
+            id: "test".to_string(),
+            name: "test".to_string(),
+            version: "1".to_string(),
+            summary: None,
+            targets: vec![orbit_bundle_format::InstanceTarget::Server],
+            runtime: orbit_bundle_format::RuntimeRequirement {
+                minecraft: "1.21.1".to_string(),
+                loader: "vanilla".to_string(),
+                loader_version: None,
+            },
+            launcher: Some(orbit_bundle_format::LauncherSection {
+                content: orbit_bundle_format::LauncherContent::RuntimeOnly,
+            }),
+            orbit: Some(orbit_bundle_format::OrbitSection {
+                content: orbit_bundle_format::OrbitContent::Mods,
+                manifest: files[0].0.to_string(),
+                lock: files[1].0.to_string(),
+                ownership: None,
+                data_manifest: None,
+            }),
+            files: files
+                .iter()
+                .map(|(path, content)| orbit_bundle_format::BundleFile {
+                    path: (*path).to_string(),
+                    owner: orbit_bundle_format::BundleFileOwner::Orbit,
+                    size: content.len() as u64,
+                    sha256: hex::encode(Sha256::digest(content)),
+                })
+                .collect(),
+        };
+        let mut archive = zip::ZipWriter::new(std::fs::File::create(&output).unwrap());
+        let options = SimpleFileOptions::default();
+        for (path, content) in files {
+            archive.start_file(path, options).unwrap();
+            archive.write_all(content).unwrap();
+        }
+        archive
+            .start_file(orbit_bundle_format::BUNDLE_MANIFEST_PATH, options)
+            .unwrap();
+        archive
+            .write_all(toml::to_string_pretty(&bundle).unwrap().as_bytes())
+            .unwrap();
+        archive.finish().unwrap();
+
+        export_launcher_state_with_base(&source, Some(&output), &output, |_| {}).unwrap();
+
+        let combined = orbit_bundle_format::BundleArchive::open(&output).unwrap();
+        combined.verify().unwrap();
+        assert!(combined.manifest.orbit.is_some());
+        assert_eq!(
+            combined.manifest.launcher.unwrap().content,
+            orbit_bundle_format::LauncherContent::RuntimeAndState
+        );
+        let mut archive = zip::ZipArchive::new(std::fs::File::open(&output).unwrap()).unwrap();
+        let mut actual = Vec::new();
+        archive
+            .by_name("orbit/orbit.toml")
+            .unwrap()
+            .read_to_end(&mut actual)
+            .unwrap();
+        assert_eq!(actual, orbit_manifest);
     }
 }

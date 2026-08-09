@@ -7,27 +7,27 @@ use std::time::Duration;
 
 use orbit_launcher_core::{
     AccountMetadata, AccountRepository, ConfigKey, ContextIntent, CreateInstanceRequest,
-    EulaAcceptanceMethod, EulaDocument, ExternalYggdrasilLoginRequest, InstallProgressEvent,
-    InstanceKind, InstanceRegistry, LaunchPreparationEvent, LaunchProcessEvent, LauncherError,
-    ManifestFile, MicrosoftLoginProgressEvent, RepositoryMoveEvent, ResolvedInstance,
-    RuntimeContext, ServerInstallPlan, StateArchiveProgressEvent, SupervisorControl,
-    SupervisorEvent, YggdrasilProviderConfig, accept_shown_eula, add_yggdrasil_provider,
-    apply_install_plan, begin_microsoft_device_login, complete_microsoft_device_login,
-    configure_instance, create_instance, create_offline_account, export_launcher_state, get_config,
-    import_instance, inspect_launcher_state, list_config, login_external_yggdrasil,
-    move_minecraft_directory, native_secret_store, prepare_install, prepare_launch,
-    remove_instance, remove_yggdrasil_provider, rename_instance, resolve_directory,
-    resolve_instance, resolve_launch_identity, restore_launcher_state, rollback_created_instance,
-    run_launch, set_config, set_default_instance, show_current_eula, supervise_server,
-    unset_config,
+    EulaAcceptanceMethod, EulaDocument, ExternalYggdrasilLoginRequest, InstallPackFormat,
+    InstallProgressEvent, InstanceKind, InstanceRegistry, LaunchPreparationEvent,
+    LaunchProcessEvent, LauncherError, ManifestFile, MicrosoftLoginProgressEvent,
+    RepositoryMoveEvent, ResolvedInstance, RuntimeContext, ServerInstallPlan,
+    StateArchiveProgressEvent, SupervisorControl, SupervisorEvent, YggdrasilProviderConfig,
+    accept_shown_eula, add_yggdrasil_provider, apply_install_plan, begin_microsoft_device_login,
+    complete_microsoft_device_login, configure_instance, create_instance, create_offline_account,
+    export_launcher_state_with_base, get_config, import_instance, inspect_install_pack,
+    list_config, login_external_yggdrasil, move_minecraft_directory, native_secret_store,
+    prepare_install, prepare_launch, remove_instance, remove_yggdrasil_provider, rename_instance,
+    resolve_directory, resolve_instance, resolve_launch_identity, restore_launcher_state,
+    rollback_created_instance, run_launch, set_config, set_default_instance, show_current_eula,
+    supervise_server, unset_config,
 };
 use tokio::sync::{mpsc, watch};
 use zeroize::Zeroizing;
 
 use crate::cli::{
     AccountCommands, AccountLoginCommands, Commands, ConfigCommands, DefaultCommands, EulaCommands,
-    InstanceCommands, JavaCommands, MicrosoftLoginCommands, MinecraftCommands, ServerCommands,
-    VersionCommands, YggdrasilProviderCommands,
+    InstanceCommands, JavaCommands, MicrosoftLoginCommands, MinecraftCommands, PackageCommands,
+    ServerCommands, VersionCommands, YggdrasilProviderCommands,
 };
 use crate::output::{
     AccountListView, AccountLoginView, AccountLogoutView, AccountSelectionView, AccountView,
@@ -37,9 +37,9 @@ use crate::output::{
     JavaRequirementView, JavaRuntimeListView, JavaRuntimeMutationView, LaunchPlanView,
     LaunchResultView, LauncherStateExportView, LoaderVersionCatalogView,
     MicrosoftDeviceSessionView, MinecraftDirectoryMoveView, MinecraftDirectoryView,
-    MinecraftVersionCatalogView, RenameView, ServerControlView, ServerStartView, ServerStatusView,
-    SupervisorResultView, YggdrasilProviderListView, YggdrasilProviderMutationView,
-    YggdrasilProviderView,
+    MinecraftVersionCatalogView, PackageRequirementView, RenameView, ServerControlView,
+    ServerStartView, ServerStatusView, SupervisorResultView, YggdrasilProviderListView,
+    YggdrasilProviderMutationView, YggdrasilProviderView,
 };
 use crate::supervisor_ipc::{
     IpcRequest, IpcServer, SupervisorLock, SupervisorState, request as supervisor_request,
@@ -83,6 +83,7 @@ pub enum CommandOutput {
     JavaRequirement(JavaRequirementView),
     MinecraftDirectory(MinecraftDirectoryView),
     MinecraftDirectoryMove(MinecraftDirectoryMoveView),
+    PackageRequirement(PackageRequirementView),
 }
 
 impl CommandOutput {
@@ -149,6 +150,7 @@ impl CommandOutput {
             Self::JavaRequirement(_) => "versions.java",
             Self::MinecraftDirectory(_) => "minecraft.directory",
             Self::MinecraftDirectoryMove(_) => "minecraft.move",
+            Self::PackageRequirement(_) => "package.inspect",
         }
     }
 
@@ -220,7 +222,6 @@ pub async fn execute(
             loader,
             loader_version,
             from,
-            consume_from,
         } => {
             execute_install(
                 instance_selector,
@@ -235,7 +236,6 @@ pub async fn execute(
                     loader,
                     loader_version,
                     from,
-                    consume_from,
                 },
             )
             .await
@@ -251,7 +251,7 @@ pub async fn execute(
             )
             .await
         }
-        Commands::Export { output } => {
+        Commands::Export { output, base } => {
             let registry = InstanceRegistry::load(&runtime.paths().instances_file())?;
             let resolved = resolve_instance(
                 &registry,
@@ -259,10 +259,12 @@ pub async fn execute(
                 current_dir,
                 ContextIntent::ReadOnly,
             )?;
-            let report =
-                export_launcher_state(resolved.entry.instance_directory(), &output, |event| {
-                    frontend.state_archive_progress("export", event)
-                })?;
+            let report = export_launcher_state_with_base(
+                resolved.entry.instance_directory(),
+                base.as_deref(),
+                &output,
+                |event| frontend.state_archive_progress("export", event),
+            )?;
             Ok(CommandOutput::LauncherStateExport(report.into()))
         }
         Commands::Config { command } => {
@@ -298,6 +300,18 @@ pub async fn execute(
         }
         Commands::Versions { command } => {
             execute_versions(command, instance_selector, runtime).await
+        }
+        Commands::Package { command } => {
+            if instance_selector.is_some() {
+                return Err(AppError::Argument(
+                    "--instance is not valid for package inspection".to_string(),
+                ));
+            }
+            match command {
+                PackageCommands::Inspect { source } => Ok(CommandOutput::PackageRequirement(
+                    inspect_install_pack(&source)?.into(),
+                )),
+            }
         }
         Commands::Supervisor => {
             execute_internal_supervisor(instance_selector, current_dir, runtime, frontend).await
@@ -743,7 +757,6 @@ struct InstallCommandRequest {
     loader: Option<crate::cli::LoaderKindArg>,
     loader_version: Option<String>,
     from: Option<PathBuf>,
-    consume_from: bool,
 }
 
 async fn execute_install(
@@ -759,30 +772,76 @@ async fn execute_install(
                 .to_string(),
         ));
     }
-    let fresh_state_install = request.from.is_some();
+    let package = request
+        .from
+        .as_deref()
+        .map(inspect_install_pack)
+        .transpose()?;
+    let fresh_package_install = package.is_some();
     let created = if let Some(name) = request.new_name {
         if selector.is_some() {
             return Err(AppError::Argument(
                 "--instance cannot be combined with install --new".to_string(),
             ));
         }
-        let kind: InstanceKind = request
-            .kind
-            .ok_or_else(|| AppError::Argument("install --new requires --kind".to_string()))?
-            .into();
-        let minecraft = request
-            .minecraft
-            .ok_or_else(|| AppError::Argument("install --new requires --minecraft".to_string()))?;
-        if let Some(source) = request.from.as_deref() {
-            let summary = inspect_launcher_state(source)?;
-            if summary.kind != kind {
+        let kind: InstanceKind = match (request.kind.map(Into::into), package.as_ref()) {
+            (Some(kind), _) => kind,
+            (None, Some(package)) if package.targets.len() == 1 => package.targets[0],
+            (None, Some(_)) => {
+                return Err(AppError::Argument(
+                    "install --from requires --kind when the package supports both client and server"
+                        .to_string(),
+                ));
+            }
+            (None, None) => {
+                return Err(AppError::Argument(
+                    "install --new requires --kind".to_string(),
+                ));
+            }
+        };
+        if package
+            .as_ref()
+            .is_some_and(|package| !package.targets.contains(&kind))
+        {
+            return Err(AppError::Argument(format!(
+                "the package does not support a {} instance",
+                kind.as_str()
+            )));
+        }
+        let minecraft = exact_package_value(
+            "Minecraft",
+            request.minecraft,
+            package.as_ref().map(|package| package.minecraft.clone()),
+            package
+                .as_ref()
+                .is_some_and(|package| package.format == InstallPackFormat::Mrpack),
+        )?;
+        let requested_loader: Option<orbit_launcher_core::LoaderKind> =
+            request.loader.map(Into::into);
+        let loader = match (requested_loader, package.as_ref()) {
+            (Some(loader), Some(package))
+                if package.format == InstallPackFormat::Mrpack && loader != package.loader =>
+            {
                 return Err(AppError::Argument(format!(
-                    "cannot install {} state into a new {} instance",
-                    summary.kind.as_str(),
-                    kind.as_str()
+                    "--loader {} conflicts with package Loader {}",
+                    loader.as_str(),
+                    package.loader.as_str()
                 )));
             }
-        }
+            (Some(loader), _) => loader,
+            (None, Some(package)) => package.loader,
+            (None, None) => orbit_launcher_core::LoaderKind::Vanilla,
+        };
+        let loader_version = exact_package_value_optional(
+            "Loader",
+            request.loader_version,
+            package
+                .as_ref()
+                .and_then(|package| package.loader_version.clone()),
+            package
+                .as_ref()
+                .is_some_and(|package| package.format == InstallPackFormat::Mrpack),
+        )?;
         let directory = match kind {
             InstanceKind::Client => {
                 if request.server_directory.is_some() {
@@ -797,7 +856,7 @@ async fn execute_install(
                 resolve_directory(current_dir, request.server_directory.as_deref())?
             }
         };
-        if fresh_state_install {
+        if fresh_package_install {
             let target = match kind {
                 InstanceKind::Client => directory.join("instances").join(&name),
                 InstanceKind::Server => directory.clone(),
@@ -816,11 +875,8 @@ async fn execute_install(
                 name,
                 kind,
                 minecraft_requirement: minecraft,
-                loader_kind: request
-                    .loader
-                    .unwrap_or(crate::cli::LoaderKindArg::Vanilla)
-                    .into(),
-                loader_requirement: request.loader_version,
+                loader_kind: loader,
+                loader_requirement: loader_version,
             },
         )?)
     } else {
@@ -845,7 +901,6 @@ async fn execute_install(
         runtime,
         frontend,
         request.from.as_deref(),
-        request.consume_from,
     )
     .await;
     if result.is_err()
@@ -859,7 +914,7 @@ async fn execute_install(
                 )))
             },
         )?;
-        if fresh_state_install && instance_directory.exists() {
+        if fresh_package_install && instance_directory.exists() {
             std::fs::remove_dir_all(&instance_directory).map_err(|error| {
                 AppError::Core(LauncherError::Transaction(format!(
                     "failed to remove the fresh bootstrap directory '{}': {error}",
@@ -877,19 +932,17 @@ async fn execute_existing_install(
     runtime: &RuntimeContext,
     frontend: &mut dyn Frontend,
     state_archive: Option<&Path>,
-    consume_state_archive: bool,
 ) -> Result<CommandOutput, AppError> {
     let registry = InstanceRegistry::load(&runtime.paths().instances_file())?;
     let resolved = resolve_instance(&registry, selector, current_dir, ContextIntent::Sensitive)?;
-    if let Some(source) = state_archive {
-        let summary = inspect_launcher_state(source)?;
-        if summary.kind != resolved.manifest.kind {
-            return Err(AppError::Argument(format!(
-                "cannot install {} state into a {} instance",
-                summary.kind.as_str(),
-                resolved.manifest.kind.as_str()
-            )));
-        }
+    let package = state_archive.map(inspect_install_pack).transpose()?;
+    if let Some(package) = &package
+        && !package.targets.contains(&resolved.manifest.kind)
+    {
+        return Err(AppError::Argument(format!(
+            "package cannot install into a {} instance",
+            resolved.manifest.kind.as_str()
+        )));
     }
     let client = runtime.config().http_client()?;
     let plan = prepare_install(&resolved.entry.location, &client, |event| {
@@ -913,6 +966,11 @@ async fn execute_existing_install(
         LauncherError::InvalidLock("completed install did not lock a Java runtime".to_string())
     })?;
     let state = state_archive
+        .filter(|_| {
+            package
+                .as_ref()
+                .is_some_and(|package| package.launcher_state)
+        })
         .map(|source| {
             restore_launcher_state(resolved.entry.instance_directory(), source, |event| {
                 frontend.state_archive_progress("install", event)
@@ -920,9 +978,6 @@ async fn execute_existing_install(
             .map(Into::into)
         })
         .transpose()?;
-    if consume_state_archive && let Some(source) = state_archive {
-        std::fs::remove_file(source).map_err(LauncherError::from)?;
-    }
     Ok(CommandOutput::Install(InstallView {
         instance_id: resolved.entry.id.to_string(),
         kind: resolved.manifest.kind.as_str().to_string(),
@@ -939,6 +994,46 @@ async fn execute_existing_install(
         cached_artifacts: result.cached_artifacts,
         state,
     }))
+}
+
+fn exact_package_value(
+    name: &str,
+    requested: Option<String>,
+    packaged: Option<String>,
+    strict: bool,
+) -> Result<String, AppError> {
+    match (requested, packaged) {
+        (Some(requested), Some(packaged)) if strict && requested != packaged => {
+            Err(AppError::Argument(format!(
+                "--{} {requested} conflicts with package value {packaged}",
+                name.to_ascii_lowercase()
+            )))
+        }
+        (Some(requested), _) => Ok(requested),
+        (None, Some(packaged)) => Ok(packaged),
+        (None, None) => Err(AppError::Argument(format!(
+            "install --new requires --{}",
+            name.to_ascii_lowercase()
+        ))),
+    }
+}
+
+fn exact_package_value_optional(
+    name: &str,
+    requested: Option<String>,
+    packaged: Option<String>,
+    strict: bool,
+) -> Result<Option<String>, AppError> {
+    match (requested, packaged) {
+        (Some(requested), Some(packaged)) if strict && requested != packaged => {
+            Err(AppError::Argument(format!(
+                "--{}-version {requested} conflicts with package value {packaged}",
+                name.to_ascii_lowercase()
+            )))
+        }
+        (Some(requested), _) => Ok(Some(requested)),
+        (None, packaged) => Ok(packaged),
+    }
 }
 
 fn ensure_server_eula_accepted(
