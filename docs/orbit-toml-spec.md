@@ -34,6 +34,8 @@ Orbit 只在 snapshot 合并冷路径枚举元数据并按实际文件数重压�
 
 ### 2.1 完整示例
 
+为缩短示例，平台哈希中的 `...` 是文档占位符，不是可写入文件的有效值。
+
 ```toml
 [project]
 name = "survival"
@@ -206,6 +208,8 @@ GUI 默认勾选推荐的 `beta` / `snapshot` 排除规则，但实现仍是把�
 
 ## 3. `orbit.lock`
 
+下例中的 `...` 仅为篇幅占位；实际 lock 不接受省略哈希或省略 `filename`。
+
 ```toml
 [meta]
 mc_version = "1.20.1"
@@ -236,7 +240,11 @@ bundled = []
 
 `dependencies`、`environment`、`provides`、`language_loader`、`embedded_artifacts` 与递归
 `bundled` 全部来自下载后的 JAR。稳定 lock 中每个顶层 `mod_id` 恰有一个 `[[package]]`，
-并要求内容身份、非空远端和非空精确恢复来源。lock 不标记根/传递关系，也不保存版本策略。
+并要求内容身份、非空远端和非空精确恢复来源。`sha256` / `sha512`（以及存在时的 `sha1`）
+必须是对应长度的小写十六进制；`filename` 必须是没有目录部分的 `.jar` 或
+`.jar.disabled`，且整个 lock 在大小写不敏感文件系统上也不能发生文件名碰撞。lock 不标记
+根/传递关系，也不保存版本策略；不符合这些约束的状态直接报错，不把哈希或文件名当成路径
+继续处理。
 
 ## 4. 命令状态转换
 

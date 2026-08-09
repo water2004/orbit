@@ -156,6 +156,8 @@ orbit config unset network.proxy
 不能指向不存在的实例。全局 `--dry-run` 对 `set`/`unset` 只验证和展示，不写文件。
 
 配置修改只更新目标字段，保留其它字段、注释和排版，并以同目录临时文件原子替换。
+全局状态修改由配置目录中的持久锁跨进程串行化；实例注册表和默认实例配置必须同时变化
+时，两份原文会先保留，任一替换失败就恢复原状，不允许留下半次默认实例更新。
 `cache.capacity-mib` 在该命令结束时立即用于 LRU 清理；`cache.dir` 决定后续命令打开
 哪个 cache，当前命令不会把已打开的 cache 中途换目录。若传入全局 `--config`，上述
 命令操作的就是该精确文件。
@@ -246,7 +248,9 @@ cache 配置只有 `dir` 和 `capacity_mib`。旧的 `enable`、`eviction_policy
 Orbit 不会静默猜测旧字段的含义。
 
 `orbit cache clean` 使用同一个注入目录。core 拒绝递归删除文件系统根或当前工作
-目录/其祖先，也拒绝删除包含 `config.toml` 或 `instances.toml` 的目录。
+目录/其祖先，也拒绝删除包含 `config.toml` 或 `instances.toml` 的目录。检查在共享锁内
+进行且不跟随符号链接；实际清理在独占锁内只删除 cache 内容，保留 cache 根和
+`lru.lock`，因此不会与仍在运行的另一个进程形成两套锁。
 
 ## 6. 本地版本库
 

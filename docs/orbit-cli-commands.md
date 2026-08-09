@@ -123,7 +123,8 @@ orbit instances remove <name>
 - `list` 展示名称、路径、Minecraft、loader 以及当前/默认标记，输出为统一自适应表格；
 - `register` 只接管一个已经同时具有有效 `orbit.toml` 与 `orbit.lock` 的工作区；名称和路径必须
   显式提供，两份文件的平台元数据必须完全一致。它不执行探测、补全、sync 或任何兜底；
-- `default` 保证只有一个默认实例，并同步 `config.toml` 的 `default_instance`；
+- `default` 保证只有一个默认实例，并以跨进程串行、失败可回滚的双文件提交同步
+  `config.toml` 的 `default_instance`；
 - `remove` 只移除全局追踪，绝不删除实例目录；若移除默认实例，同时清除默认值。
 
 ### `orbit config`
@@ -352,6 +353,11 @@ orbit remove <mod>
 `orbit.toml` 和 `orbit.lock`，最后删除暂存 JAR。Windows 文件占用、校验错误、配置提交失败或
 最终删除失败都会返回错误并恢复操作前的 JAR、TOML 和 lock。只有三者全部收敛后才返回成功，
 不再用 `jar_deleted = false` 吞掉文件系统错误。
+
+所有实例写命令在完整的读取、求解与提交期间持有实例级跨进程独占锁；另一个 Orbit/GUI
+任务正在修改同一实例时，新命令立即失败并提示稍后重试，不会在最终写文件时才互相覆盖。
+迁移导出以规范化路径顺序同时锁定源和目标，因此不会形成双实例死锁。`install` 恢复多个
+lock 工件时同样是整体事务，后一个下载或校验失败会撤销此前已经写入的 JAR。
 
 ### `orbit purge`
 
