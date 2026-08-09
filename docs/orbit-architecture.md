@@ -206,9 +206,12 @@ orbit launch
 
 `.orbit/runtime-data` 是实例本地的 provenance，不是全局 JAR cache，也不是版本库。Agent 不
 记录字节内容；大量文件在新建目录树处压缩成一条记录，持续 I/O 只付出操作边界的归属聚合
-成本。共享写入、来源未知、没有观测到的 native I/O 和无法映射到顶层受管 JAR 的路径都不
-进入可清理计划。没有文件名猜测、静态分析或“匹配 config 名称”兜底。服务端后台进程的
-snapshot 由下一次 `orbit launch` / `orbit purge` 合并；损坏或截断 session 会显式报错并保留。
+成本。Agent 只接受默认物理文件系统中的路径；ZIP/JAR 文件系统里的 `/META-INF/...` 等虚拟
+条目不是可独立清理的磁盘对象。实例内路径保存为相对路径，实例外的真实物理路径则显式保存
+为 external 项并在删除确认中完整展示。共享写入、来源未知、没有观测到的 native I/O 和无法
+映射到顶层受管 JAR 的路径都不进入可清理计划。没有文件名猜测、静态分析或“匹配 config
+名称”兜底。服务端后台进程
+的 snapshot 由下一次 `orbit launch` / `orbit purge` 合并；损坏或截断 session 会显式报错并保留。
 Agent 不要求游戏类加载器直接装载其辅助类：通用 JVM 路径使用 bootstrap search，Fabric 的
 `fabric.systemLibraries` 与 Quilt 的 `loader.systemLibraries` 仅处理二者确实不同的父加载器
 白名单。普通隔离类加载器和 Loader 隔离都必须由测试覆盖，不能退回到按 Loader 修改模组

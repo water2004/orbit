@@ -36,7 +36,7 @@ $ResolvedAgent = [System.IO.Path]::GetFullPath((Join-Path $WorkspaceRoot $AgentP
 if ($LASTEXITCODE -ne 0) { throw "Agent fixture failed" }
 
 $Records = Get-Content -LiteralPath $SessionFile
-if ($Records.Count -gt 4) { throw "Tree ownership was not compacted: $($Records.Count) records" }
+if ($Records.Count -ne 3) { throw "Expected the owned instance tree/file and one external file, got $($Records.Count) records" }
 if (-not ($Records -match "`ttree`t")) { throw "No owned directory tree was recorded" }
 if (-not ($Records -match "`tfile`t")) { throw "No owned file was recorded" }
 Write-Output $SessionFile

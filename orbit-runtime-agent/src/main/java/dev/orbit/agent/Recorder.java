@@ -4,6 +4,7 @@ import java.io.BufferedWriter;
 import java.net.URI;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.FileSystems;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
@@ -238,6 +239,12 @@ public final class Recorder {
             return null;
         }
         try {
+            // ZIP/JAR file systems describe entries inside a container rather
+            // than independently purgeable physical files. Physical paths
+            // outside the instance remain explicit external ownership entries.
+            if (path.getFileSystem() != FileSystems.getDefault()) {
+                return null;
+            }
             return path.toAbsolutePath().normalize();
         } catch (Throwable ignored) {
             return null;
