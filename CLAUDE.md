@@ -232,3 +232,10 @@
     exporter，包含校验后的包、TOML/lock 与允许的配置根；已经压缩的 JAR 使用 ZIP Stored，
     不能再次 Deflate。校验和写入按真实字节发强类型进度，失败输出必须由事务临时文件清理。
     `migrate export --source-pack` 必须从该快照规划，成功确认后才可消费临时源包。
+74. **运行时数据归属只属于 Orbit，依赖方向只能是 Orbit → Launcher**。Launcher 不得读取、
+    链接或调用 Orbit，也不得新增包身份、归属账本或 purge 接口；`orbit launch` 必须复用
+    Launcher 原有启动命令并以子进程环境注入 Orbit Runtime Agent。Agent 以实际顶层 JAR
+    内容哈希记录 created/read/write，并在实例 `.orbit/runtime-data` 保存可恢复 provenance；
+    共享、未知和未观测路径一律保留，不得添加文件名启发式、静态分析或直接 Java 启动兜底。
+    purge 必须先展示准确文件/目录树范围，确认后复用 `remove_from_instance` 收敛 JAR、TOML、
+    lock，再删除独占数据。GUI 只通过同一机器协议调用该路径，不自行注入、映射或删文件。

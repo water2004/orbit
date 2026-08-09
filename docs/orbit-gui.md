@@ -3,6 +3,9 @@
 `orbit-gui` 是 Orbit 套件的跨平台 Rust 原生桌面前端。它不链接 `orbit-core` 或
 `orbit-launcher-core`，也不实现下载、求解、安装、账户或启动业务；唯一边界是启动安装在
 同一目录的 `orbit` / `orbit-launcher` 进程，并使用两者已有的 JSON/NDJSON/stdin 协议。
+Launcher 的安装、账户、Java、停止和状态由 GUI 直接调用 Launcher；客户端/服务端启动统一
+调用 `orbit launch`，由 Orbit 单向包装 Launcher 并注入 Runtime Agent。GUI 不注入 Agent、
+不合并归属账本，也不自行组合删除路径。
 
 ## 原生技术边界
 
@@ -153,7 +156,10 @@ install、outdated、单包/全部 upgrade、环境与远端管理都调用
 值，候选 JAR 的完整声明版本和其中的文本片段作为快捷选项，同时允许输入其它原始字符串。GUI 解析并序列化
 CLI 的同一条顺序规则，但不执行匹配或求解。GUI 只把这些动作映射为结构化
 `orbit constraint set` 参数，Loader 约束编码、Pareto 极小求解、多方案选择、确认和原子提交
-全部由 CLI/core 完成。面板同时区分普通 remove 与会先展示匹配配置文件的 purge。
+全部由 CLI/core 完成。面板同时区分普通 remove 与 purge：purge 直接启动同一个 Orbit
+进程，由 `data_deletion` interaction 展示运行时观测到的准确文件/目录树及逻辑包；GUI 不先
+弹一层泛化确认，也不显示配置名称猜测。用户确认后仍由 Orbit 先清理 JAR/TOML/lock，再
+删除 Agent 证明为该包独占写入的数据。
 GUI 不复制 CLI 的项目详情报告；Discover 只提供搜索所需的名称、摘要、
 来源、兼容标签和直接添加动作，需要完整项目数据时使用 `orbit info`。
 
@@ -187,7 +193,8 @@ Install 只按 lock 精确恢复缺失文件。GUI 不根据一个命令失败�
   验证，GUI 不自行拼接认证路径；
   账户列表加载失败保留上一次成功数据，并显示可重试错误，不能渲染成“没有账户”；会话被
   明确撤销时显示“登录已失效”，Microsoft 重新进入设备授权，Yggdrasil 回到原端点登录页；
-- Server：EULA 完整正文及 digest 接受、启动/停止/状态/控制台命令；
+- Server：EULA 完整正文及 digest 接受、启动/停止/状态/控制台命令；启动走
+  `orbit launch --server`，停止、状态和命令仍直接走 Launcher；
 - Activity：真实阶段、动态完成量、结构化错误和取消；底层 subcommand、PID 与未结构化 stderr
   不渲染成终端日志，协议错误作为产品错误明确呈现。
 - Settings：使用原生设置分组、字段说明、枚举选择、路径选择和秘密输入，不把配置 key/value
@@ -203,7 +210,7 @@ GUI 只集成有稳定桌面领域语义的命令，不能按“每个 subcomman
 | 领域 | GUI 中的 CLI 能力 | 有意不重复的接口 |
 | --- | --- | --- |
 | 模组 | init、list、search/add（GUI 用默认勾选项决定是否把推荐的完整 `--string` 约束传给 add，并提供 env/optional）、versions、constraint、env、enable/disable、remote、remove/purge、sync、fix、install、outdated/upgrade、import/export、migrate check/export、audit、cache、instances register 与 config | CLI 的其它原始 add version 字符串由安装后的可视化版本策略编辑器替代；`info` 的长文本详情由 Discover 摘要替代；Orbit 的实例注册由 init/迁移自动同步，不再提供一套与 Launcher 并列的注册表页面；install 的 group/target 策略要等 TOML group 编辑器提供完整模型后再加入 |
-| 运行时 | install/new、launch、instance list/show/import/rename/remove/default、Loader configure/install、Minecraft/Loader/Java catalogs、Java 管理、Minecraft directory/move | 未安装的 `instance create` 中间态、launch/server dry-run、前台 server run 与隐藏 supervisor 属于 CLI/自动化接口 |
+| 运行时 | install/new、instance list/show/import/rename/remove/default、Loader configure/install、Minecraft/Loader/Java catalogs、Java 管理、Minecraft directory/move；客户端/服务端启动通过 `orbit launch [--server]` 单向调用 Launcher | 未安装的 `instance create` 中间态、launch/server dry-run、前台 server run 与隐藏 supervisor 属于 CLI/自动化接口；未同时安装 Orbit 与 Launcher 时数据感知启动明确禁用 |
 | 账户与服务端 | login/list/refresh/select/clear/logout、Yggdrasil provider、EULA、start/stop/status/command | account show 已由账户卡片覆盖；秘密、EULA 与 token 不由 GUI 另存 |
 | 配置与审计 | 两套 typed config list/set/unset、audit min-risk/mod/report | config path/get 已包含在设置模型中；audit fail-on-risk 只用于 CI 退出码 |
 

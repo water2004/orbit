@@ -1,6 +1,6 @@
 # Orbit 实现状态
 
-> 更新日期：2026-08-01。本文区分“正确规范曾未被代码执行”和“文档本身已经过时”。
+> 更新日期：2026-08-09。本文区分“正确规范曾未被代码执行”和“文档本身已经过时”。
 
 ## 1. 当前结论
 
@@ -22,6 +22,7 @@
 | 多远端包模型 | ✅ | 每个受管包非空 `remotes`；全部来源共同发现，完全相同字节跨 provider 合并 |
 | 完整 TOML 包集合 | ✅ | 所有选中顶层逻辑包均写入 `[packages]`，无根/传递分类；lock 只记录精确事实 |
 | 包启用状态 | ✅ | `enable/disable` 原子切换 `.jar` / `.jar.disabled` 并同步 TOML/lock；sync 将两种后缀都视为受管包并如实对账 |
+| 运行时数据归属与 purge | ✅ | `orbit launch` 单向包装 Launcher 并注入 Runtime Agent；以实际顶层 JAR SHA-256 聚合文件/目录树归属；purge 准确确认后先收敛 JAR/TOML/lock，再删除独占写入数据；无启发式/静态兜底 |
 | 包版本管理 | ✅ | `versions` 联网下载并按 JAR 声明版本排序；数字核心范围与完整字符串集合规则由 `constraint set` 以 Pareto 极小事务立即应用；GUI 用边界控件和交/并/单项取反/整体取补操作表复用同一 CLI |
 | 内容候选身份 | ✅ | 本地 SHA-512 作为内部候选主键；同版本不同内容保持独立，CLI 只显示来源与依赖差异 |
 | PubGrub fork 远端 | ✅ | 功能分支已发布，Orbit 固定到完整 commit SHA |
@@ -33,8 +34,8 @@
 | Provider 网络配置 | ✅ | metadata 与 artifact 客户端统一消费 proxy/timeout/retry；全部 provider 共享下载并发上限；Modrinth token 与 CurseForge Key 仅停留在运行时客户端 |
 | 本地版本库 | ✅ | 每个精确 Minecraft/Loader 物理隔离 `remote.sqlite` 与 `jars.sqlite`；批量 project 变更标记决定是否刷新当前作用域，未变不重拉版本/下载/解析；JAR 库只按哈希与真实 mod_id 建模，不含 project ID |
 | 跨平台全局路径 | ✅ | RuntimeEnvironment + 显式路径；system/executable 布局 |
-| Windows MSI | ✅ | x64 per-machine 完整套件；三个相邻程序、开始菜单入口、可选系统 PATH、同版本重建升级、维护模式、可选清理默认 AppData；发布产物仍需项目证书签名 |
-| Linux deb / Release | ✅ | amd64 拆为可独立安装的 `orbit`、`orbit-launcher`、`orbit-gui`；GUI 精确依赖同版本两 CLI 并独占 desktop/icon；统一 `v*` tag 发布 MSI、三个 deb、SHA256SUMS 与 release notes |
+| Windows MSI | ✅ | x64 per-machine 完整套件；Orbit 组件携带 Runtime Agent，三个相邻程序、开始菜单入口、可选系统 PATH、同版本重建升级、维护模式、可选清理默认 AppData；发布产物仍需项目证书签名 |
+| Linux deb / Release | ✅ | amd64 拆为可独立安装的 `orbit`（含 Agent）、`orbit-launcher`、`orbit-gui`；GUI 精确依赖同版本两 CLI 并独占 desktop/icon；统一 `v*` tag 发布 MSI、三个 deb、SHA256SUMS 与 release notes |
 | Launcher Java | ✅ | Minecraft 官方 metadata 选择 Mojang 受管 runtime；下载、逐文件校验、共享、启动前复核与安全删除闭环；不受支持的 Temurin/system 分支不进入 config、实例 schema 或 GUI |
 | Launcher 安装事务 | ✅ | OS 独占文件锁串行化实例写入；journal 支持崩溃后自动安全回滚，并验证路径、文件集合与复用工件 |
 | Launcher 状态包 | ✅ | `export` 只快照当前客户端设置/saves 或服务端访问列表/世界；`install --from` 在目标运行时后恢复。服务端属性由目标 Minecraft `--initSettings` 生成字段集并按同名值合并，EULA/模组/凭据不迁移 |
@@ -45,7 +46,7 @@
 | Loader JSON 容错 | ✅ | Fabric-compatible 字符串控制字符；仅限 JAR 内 loader/Mixin/refmap，其他 JSON 保持严格 |
 | 字节码运行时符号对齐 | ✅ | Fabric/Quilt 按实际 Tiny/identity 能力选择 official 或投影，不复制版本边界；Forge/NeoForge 验证 Loader runtime game；未对齐时在 finding 前停止 |
 | i18n | ✅ | `orbit`、`orbit-launcher` 与 GUI 共用 `system`（默认）/`en`/`zh-CN` 语言模型；CLI help、文本结果、进度、询问和结构化错误均在展示边界翻译，机器字段保持稳定 |
-| 原生 GUI | ✅ | GPUI + gpui-component 原生进程薄壳；统一 SVG/EXE 品牌标志、领域化侧栏图标、紧凑任务条、可点击外部关闭且双向过渡的 Activity 抽屉、连续触控板滚动、语言/主题/强调色；Runtime 先导出再创建的新实例迁移、可取消且有字节进度的 Orbit ZIP/Modrinth mrpack 导入导出、Java、Mods、audit（Loader/namespace/实际能力与结构化 warning/coverage 预览）、account/server；设置页只经两套 schema 2 CLI 管理 Launcher/Orbit 配置和客户端仓库，不链接 core 或直读业务 TOML |
+| 原生 GUI | ✅ | GPUI + gpui-component 原生进程薄壳；统一 SVG/EXE 品牌标志、领域化侧栏图标、紧凑任务条、可点击外部关闭且双向过渡的 Activity 抽屉、连续触控板滚动、语言/主题/强调色；Runtime 先导出再创建的新实例迁移、可取消且有字节进度的 Orbit ZIP/Modrinth mrpack 导入导出、Java、Mods、audit、account/server；启动走 GUI→Orbit→Launcher，purge 渲染专用准确删除 interaction，其它 Launcher 操作仍直接调用 Launcher；设置页只经两套 schema 2 CLI 管理配置，不链接 core 或直读业务 TOML |
 
 ## 2. 保留的正确规范
 
@@ -110,7 +111,8 @@
 | `audit` | 四个 Loader backend 复用 Loader-selected runtime，先对齐 namespace，再按实际 SPI 分派 ModLauncher ITransformer 或 NeoForge ClassProcessor，进入共享 Mixin/转换效果与冲突流水线；unary/pairwise 分离 + schema 5 JSON/显式完整 report |
 | `list` / `info` | 展示包信息、逻辑依赖和 bundled；非树形 list 与 info 均使用自适应表格 |
 | `export` / `import` | Orbit archive 与 Modrinth pack |
-| `cache` / `instances` / `purge` | cache 使用跨命令持久化 LRU 并在每次命令结束执行容量淘汰；instances list 输出自适应表格 |
+| `launch` / `purge` | launch 校验 Orbit/Launcher/Agent 后单向联合启动并记录运行时归属；purge 映射 lock 中实际 JAR 哈希，专用确认后同步移除包状态与独占数据 |
+| `cache` / `instances` | cache 使用跨命令持久化 LRU 并在每次命令结束执行容量淘汰；instances list 输出自适应表格 |
 | `config` | path/list/get/set/unset；只操作持久化层，强类型校验并对密钥脱敏 |
 
 ## 5. 已知边界
@@ -145,6 +147,10 @@
   launcher 下一次会启动哪一个；Orbit 明确报歧义，要求使用隔离实例或在 init 显式选择，
   不按目录顺序猜测。
 - JAR 缓存按本地 SHA-512 寻址，SHA-1 只作别名；provider 文件名不作为缓存键。
+- Runtime Agent 只归属能从调用栈映射到当前实例 `mods` 顶层 JAR 的操作；未知 native store、
+  共享写入和未观测路径安全保留。归属账本位于实例 `.orbit/runtime-data`，不是 cache，且不会
+  通过文件名或静态分析补猜。Launcher 直接启动不会产生 Orbit 归属；需要该能力必须使用
+  `orbit launch` 且同时安装 Orbit 与 Launcher。
 - JAR cache 只保存全局去重字节并执行 LRU；版本库是独立服务。每个精确
   Minecraft/Loader 目录下的 `remote.sqlite` 只存 project 标记与 artifact locator，
   `jars.sqlite` 只存内容哈希和 JAR 声明事实。需要候选的命令自动用 provider 批量接口

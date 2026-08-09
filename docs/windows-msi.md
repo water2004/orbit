@@ -2,11 +2,12 @@
 
 Orbit 的 Windows MSI 是 64 位、per-machine 套件安装包。安装向导提供三个互斥档位：
 
-1. 仅安装 `orbit.exe`；
-2. 安装 `orbit.exe` 与 `orbit-launcher.exe`；
+1. 仅安装 `orbit.exe` 及其 `orbit-runtime-agent.jar`；
+2. 安装 `orbit.exe`、Runtime Agent 与 `orbit-launcher.exe`；
 3. 完整安装三个程序，即额外安装 `orbit-gui.exe`（默认）。
 
-所选程序安装到同一个 `%ProgramFiles%\Orbit\bin`。完整档位还会在开始菜单创建 Orbit
+所选程序安装到同一个 `%ProgramFiles%\Orbit\bin`。Agent 始终跟随 Orbit 组件安装，不属于
+Launcher，也不单独暴露功能；只有 `orbit launch` 会注入它。完整档位还会在开始菜单创建 Orbit
 桌面应用入口；GUI 使用相邻的两个 CLI，不扫描 `PATH`。安装选项可把该目录加入系统
 `PATH`；卸载时会移除由 MSI 添加的 `PATH` 项。安装需要管理员权限。
 
@@ -46,6 +47,7 @@ msiexec.exe /x orbit-0.3.0-x86_64.msi /quiet REMOVE_APPDATA=1
 - Windows x64；
 - Rust MSVC toolchain；
 - .NET SDK 6 或更高版本；
+- JDK 21（用于编译 Java 17 基线的 Runtime Agent）；
 - 首次恢复 Cargo 与 .NET 工具时可访问对应包源。
 
 在仓库根目录运行：

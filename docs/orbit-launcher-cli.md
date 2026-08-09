@@ -4,8 +4,11 @@
 > NeoForge 客户端/独立服务端安装，以及客户端启动和受管理的服务端运行均已可用。
 > 未实现的命令不会以空壳形式出现在 CLI 中。
 
-`orbit-launcher` 与 Orbit 模组包管理器完全隔离。它使用自己的全局目录、实例注册表、
-`orbit-launcher.toml` 和 `orbit-launcher.lock`，不读取或调用 Orbit。
+`orbit-launcher` 与 Orbit 模组包管理器保持单向隔离。它使用自己的全局目录、实例注册表、
+`orbit-launcher.toml` 和 `orbit-launcher.lock`，不读取、链接或调用 Orbit，也没有包身份、
+运行时数据归属或 purge 接口。需要按逻辑包记录运行时数据时，用户或 GUI 调用的是
+`orbit launch`：Orbit 作为父进程向 Launcher 启动的 Java 注入 Agent。该包装不改变 Launcher
+的任何命令、状态或独立可用性。
 
 全局 `--language system|en|zh-CN` 控制 help、文本输出、进度、交互提示和结构化错误中的展示
 文字，缺省 `system`。JSON/NDJSON 的 schema、字段、枚举码与错误码保持稳定，协议编码固定为

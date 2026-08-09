@@ -544,7 +544,33 @@ lock 精确记录。
 }
 ```
 
-`purge` 额外含 `configs_removed` 数组（路径字符串）。
+`purge` 返回准确的运行时归属删除范围，而不是配置名称候选：
+
+```json
+{
+  "schema_version": 2,
+  "command": "purge",
+  "ok": true,
+  "result": {
+    "mod_id": "sodium",
+    "jar_deleted": true,
+    "data_removed": [
+      {"path": "config/sodium-options.json", "scope": "instance", "kind": "file"},
+      {"path": "config/sodium-cache", "scope": "instance", "kind": "tree"}
+    ]
+  }
+}
+```
+
+`scope` 为 `instance` 或 `external`；`kind` 为 `file` 或 `tree`。树表示准确路径下的整棵目录，
+文本/GUI 以 `/**` 明示范围。JSON 不返回 JAR 哈希。
+
+### `launch`
+
+`orbit launch` 是 Orbit 对 Launcher 现有启动命令的单向包装。它不产生第二个 success envelope：
+stdout 的唯一结果、stderr 的 progress/interaction/error 与退出状态均来自 Launcher 原始命令。
+Orbit 只在启动前创建 Agent session、退出后归并可用 snapshot；若 Orbit 自身在调用 Launcher
+前失败，才以 `command: "launch"` 返回普通 Orbit 错误。
 
 ### `import` / `export`
 
@@ -865,6 +891,7 @@ Orbit Launcher 直接使用 `orbit-machine-protocol` 中同一个信封类型，
 | `package` | 在同一 provider locator 返回的多个可行 JAR `mod_id` 中选择 |
 | `resolution` | 在命令对应的 Pareto 选择点中选择（`add`/`fix` 为变更极小，`upgrade`/`outdated` 为版本极大；迁移可对独立删包因子依次发送多个 interaction，最后再发送所选删包赋值下的版本选择）；`data` 只含包动作，`data.changes[].different=true` 是不依赖颜色的差异标记，`kind=keep` 明确表示该方案不执行另一方案中的动作；`selected_artifact` 只含所选顶层 JAR basename，不含目录 |
 | `confirmation` | 查看精确逻辑包事务并决定是否写入；或在 `interaction_id` 以 `migration_removals-` 开头时，查看严格迁移无解原因并决定是否搜索 Pareto 极小删包方案 |
+| `data_deletion` | `purge` 的唯一删除确认；`proceed.data` 含 `mod_id` 与准确 `entries[{path,scope,kind}]`。它不含 resolution 的 warnings、diagnostics、差异计数或候选哈希 |
 
 `--yes` 只跳过写入确认，不会跳过 `package`、`resolution` 或迁移删包许可。后者必须由交互
 明确同意，或由调用方传 `migrate ... --allow-removals`。唯一包身份/唯一解不会
@@ -908,6 +935,7 @@ Orbit Launcher 直接使用 `orbit-machine-protocol` 中同一个信封类型，
 | `provider_api_key_required` | 1 | provider 缺认证 |
 | `io` | 1 | 文件系统错误 |
 | `network` | 1 | 网络错误 |
+| `runtime_data` | 1 | Agent、session、归属账本或已确认数据范围无效 |
 | `json` | 1 | JSON 序列化错误 |
 | `zip` | 1 | 压缩包错误 |
 | `argument` | 2 | clap 参数错误（由 clap 处理，不经此协议） |

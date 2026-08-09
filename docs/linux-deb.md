@@ -4,7 +4,7 @@ Orbit 的 Debian/Ubuntu 发布面向 `amd64`，由三个职责独立的软件包
 
 | 软件包 | 安装内容 | 适用场景 |
 |---|---|---|
-| `orbit` | `/usr/bin/orbit` | 现有客户端或服务端实例的模组包管理 |
+| `orbit` | `/usr/bin/orbit`、`/usr/lib/orbit/orbit-runtime-agent.jar` | 现有客户端或服务端实例的模组包管理及数据感知联合启动 |
 | `orbit-launcher` | `/usr/bin/orbit-launcher` | Minecraft、Loader、Java、账户、客户端启动与服务端监督 |
 | `orbit-gui` | `/usr/bin/orbit-gui`、desktop entry、scalable icon | 图形桌面；精确依赖同版本的前两个包 |
 
@@ -12,8 +12,9 @@ deb 没有 MSI 安装向导那种交互式功能树，因此不能用一个包�
 无图形服务器只安装所需 CLI，不引入 GPUI、X11/Wayland 等图形运行依赖。服务器技术上可以
 安装 `orbit-gui` 而不启动它，但没有图形会话时无法使用，也会浪费依赖和磁盘空间。
 
-三个程序共用同一套件版本和 GitHub Release，但仍保持运行时隔离：Launcher 不调用 Orbit，
-GUI 只通过两个 CLI 的机器协议工作。用户配置、账户秘密、JAR cache 和 Minecraft 实例位于
+三个程序共用同一套件版本和 GitHub Release，但仍保持运行时隔离：Launcher 不调用 Orbit；
+需要包级运行时归属时由 Orbit 单向调用 Launcher。GUI 只通过两个 CLI 的机器协议工作，启动
+入口走 Orbit，其余 Launcher 领域操作直接走 Launcher。用户配置、账户秘密、JAR cache 和 Minecraft 实例位于
 用户级 XDG 目录或用户指定目录，不属于 deb 管理的系统文件；卸载不会删除它们。
 
 安装 GitHub Release 中的包：
@@ -39,7 +40,7 @@ sudo apt remove orbit-gui orbit-launcher orbit
 
 ## 本地构建
 
-本地构建要求 Linux、稳定版 Rust、Python 3、`dpkg-deb`、GPUI 的 Wayland/X11 原生开发库
+本地构建要求 Linux、稳定版 Rust、JDK 21、Python 3、`dpkg-deb`、GPUI 的 Wayland/X11 原生开发库
 与固定版本 `cargo-deb 3.7.0`：
 
 ```bash

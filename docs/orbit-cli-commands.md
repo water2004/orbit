@@ -17,7 +17,7 @@
 拒绝执行，要求显式 `--instance` 或进入项目目录。当前受保护的命令是：
 
 ```text
-add install fix remove enable disable purge sync upgrade import migrate-export remote-add remote-remove
+add install fix remove enable disable launch purge sync upgrade import migrate-export remote-add remote-remove
 ```
 
 `init` 始终初始化当前目录；实例注册表和 cache 命令操作全局数据；`export` 读取实例但只
@@ -351,11 +351,37 @@ orbit remove <mod>
 ### `orbit purge`
 
 ```text
-orbit purge <mod>
+orbit purge <package>
 ```
 
-先按 mod ID/slug 在 `config/` 下寻找归一化名称候选，逐项确认后执行 remove 和配置清理。
-候选路径必须位于 config 根目录。`--yes` 选择全部候选；dry-run 展示全部但不删除。
+先合并完整的 Runtime Agent session，用 lock 中当前顶层 JAR SHA-256 查询实例归属账本。只把
+“由该 JAR 创建、且只有该 JAR 写入”的文件或目录树纳入删除范围；共享写入、只读、来源未知
+和未观测路径全部保留。CLI 一次展示逻辑包与准确 `path` / `path/**`，确认后先复用
+`remove_from_instance` 删除顶层包并清理 TOML/lock，再删除已确认数据。`--yes` 只跳过最后
+一次准确计划确认；`--dry-run` 展示同一计划但不写盘。不存在文件名启发式或静态分析兜底。
+
+该能力必须先通过 `orbit launch` 产生运行时事实；未产生事实时 purge 仍可删除逻辑包，但会
+明确显示没有独占数据，而不会猜配置路径。
+
+### `orbit launch`
+
+```text
+orbit launch
+  [--launcher <exact-orbit-launcher-executable>]
+  [--launcher-instance <id|name>]
+  [--server]
+```
+
+这是 Orbit 拥有的联合启动入口。它校验当前 Orbit 工作区、准确 Launcher 和随 Orbit 安装的
+Runtime Agent，保留现有 `JAVA_TOOL_OPTIONS` 后注入 Agent，再调用 Launcher 原有的 `launch`
+或 `server start`。Launcher 不读取或调用 Orbit；依赖方向只有 Orbit → Launcher。两者任一
+未安装都会明确报错，没有 PATH 扫描或直接 Java 启动兜底。
+
+文本、JSON、NDJSON、语言和同进程交互参数原样传给 Launcher。客户端命令等待 Java 退出并
+立即合并 session；后台服务端在下一条 `orbit launch` / `orbit purge` 中合并。Launcher 的
+最终成功/错误信封原样透传，Orbit 不再包一层重复结果。
+客户端 `--dry-run` 只透传 Launcher 的脱敏启动计划，不注入 Agent、不创建或合并 session；
+后台服务端联合启动不支持 dry-run。
 
 ## 4. 同步与更新
 

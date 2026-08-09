@@ -8,7 +8,8 @@
    tag 严格等于 `v` 加该三段套件版本，例如 `v0.3.0`；
 3. 存在非空的 `docs/releases/v<version>.md` 人工发行说明；
 4. 全工作区测试通过；
-5. 含三个程序的可选组件 Windows MSI，以及职责独立的三个 Linux deb 都成功构建并校验。
+5. Runtime Agent 夹具通过，含 Agent 与三个程序的可选组件 Windows MSI，以及职责独立的
+   三个 Linux deb 都成功构建并校验。
 
 推荐发布步骤：
 

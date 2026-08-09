@@ -21,6 +21,11 @@ Orbit 区分四类对象：
 `[packages.<mod_id>]`，不区分“根包”和“传递包”。`orbit.lock` 只记录当前精确选择和从
 JAR 读取到的事实，不表达用户意图。精确恢复优先使用 lock；无 lock 时可按 TOML 重新求解。
 
+`.orbit/runtime-data/ownership.toml` 不属于 manifest/lock schema，也不是 JAR cache。它是
+`orbit launch` 的 Runtime Agent 产生的实例本地 provenance，以顶层 JAR SHA-256 记录文件/
+目录树的 created/read/write 集合。包身份仍只由 lock 的 `mod_id` 和内容哈希映射，归属账本
+不新增另一套包模型，也不参与依赖求解或精确恢复。
+
 ## 2. `orbit.toml`
 
 ### 2.1 完整示例
@@ -241,7 +246,10 @@ bundled = []
 - `upgrade`、`migrate export`：提交选择后同样让 TOML 与所选顶层包集合收敛；迁移默认
   严格保留全部源包，严格无解且用户许可软解时才允许从目标 TOML/lock 同时移除未选包。
 - `install`：只精确物化现有 lock，不联网求解、不修改 TOML/lock、不修复。
-- `remove`/`purge`：移除逻辑包，同时清理其 TOML 与 lock 条目；仍被其他 JAR 依赖时拒绝。
+- `remove`：移除逻辑包，同时清理其 TOML 与 lock 条目；仍被其他 JAR 依赖时拒绝。
+- `purge`：先由 lock 将当前顶层 JAR SHA-256 映射到运行时归属计划并展示准确路径；确认后
+  复用 `remove` 的同一事务清理 JAR/TOML/lock，再删除仅由该 JAR 创建且独占写入的数据，
+  最后清理账本引用。共享、未知或未观测数据不删除。
 
 Provider relation 只用于继续发现 project；真实 required/optional 关系只来自 JAR。所有候选
 先加入统一队列，再查询全局 LRU cache 或下载并分析，然后离线交给 PubGrub。缺少某个真实

@@ -13,8 +13,8 @@ Orbit brings package-manager semantics to Minecraft mods without replacing the l
 The repository contains three deliberately separated applications:
 
 - `orbit` manages mods and their dependency graph.
-- `orbit-launcher` manages Minecraft, Loaders, Java, accounts, launching, and supervised servers. It neither links to nor calls Orbit.
-- `orbit-gui` is a native GPUI shell. It performs no package or launcher business logic and talks to the two CLIs exclusively through their JSON/NDJSON protocols.
+- `orbit-launcher` manages Minecraft, Loaders, Java, accounts, launching, and supervised servers. It never links to or calls Orbit; Orbit can wrap its start command when package-owned runtime data observation is requested.
+- `orbit-gui` is a native GPUI shell. It performs no package or launcher business logic. Runtime installation/accounts still call Launcher directly, while game start and package-data purge go through Orbit's joint-launch path.
 
 The detailed boundaries are documented in [Orbit architecture](docs/orbit-architecture.md), [Launcher architecture](docs/orbit-launcher-architecture.md), and [GUI architecture](docs/orbit-gui.md).
 
@@ -30,6 +30,7 @@ The detailed boundaries are documented in [Orbit architecture](docs/orbit-archit
 - **Package-level transactions.** `mod_id` is the solver package key. A selected package may own multiple contained JARs, while unselected top-level package versions are removed only after the exact plan is shown and confirmed.
 - **Observable and cancellable work.** Discovery, downloads, solving, application, audit, and portable export emit typed progress. Orbit ZIP export stores already-compressed JARs directly, reports real byte progress, and cleans failed temporary output.
 - **Portable migration snapshots.** The GUI first exports two target-independent snapshots: Orbit owns the mod graph/configuration pack, while Launcher owns game state and worlds. `orbit-launcher install --from` creates the target runtime and restores Launcher state; Orbit then resolves the frozen mod pack against the actually installed target Minecraft and Loader runtime.
+- **Runtime-owned package data.** `orbit launch` wraps Orbit Launcher and injects Orbit's low-overhead Java Agent. The Agent records path/tree ownership by the actual top-level JAR hash, so `orbit purge` can show one exact deletion plan, remove the logical package from TOML/lock, and delete only data created and exclusively written by that package. There is no filename heuristic or static-analysis fallback.
 
 ## Installation
 
@@ -114,7 +115,8 @@ Orbit resolves its instance from the current directory first, then an explicit `
 | `orbit add <locator>` | Add a provider project or local file while Pareto-minimizing changes to the existing instance. |
 | `orbit enable/disable <package>` | Toggle Loader discovery by atomically renaming the selected JAR and recording the package state. |
 | `orbit remove <package>` | Remove the logical package and its TOML/lock state. |
-| `orbit purge <package>` | Remove the package and interactively select related configuration candidates. |
+| `orbit launch [--server]` | Start the current client or server through Orbit Launcher while recording runtime data ownership. Both Orbit and Launcher must be installed. |
+| `orbit purge <package>` | Show one exact package/data deletion plan, then remove the logical package from TOML/lock and delete only runtime-observed data exclusively owned by its selected JAR. |
 | `orbit outdated [package]` | Explain feasible updates and why newer candidates are blocked. |
 | `orbit upgrade [package]` | Apply a solution in which at least one requested package becomes newer; dependencies may downgrade or be replaced. |
 | `orbit list [--tree]` | Show installed logical packages from the lockfile. |

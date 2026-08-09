@@ -17,9 +17,10 @@ lock，不替代用户已有的启动器。它可以接管一个合法的现有�
 - `orbit`：模组包管理器；只管理模组及依赖图。
 - `orbit-launcher`：Minecraft 运行时管理器；负责官方 Minecraft/Loader 元数据、隔离实例、
   Mojang Java、Microsoft/离线/标准 Yggdrasil 账户、客户端启动、EULA 与服务端监督运行；
-  不链接、不调用 Orbit，也不管理模组。
+  不链接、不调用 Orbit，也不管理模组；需要包级运行时归属时由 Orbit 单向包装其启动命令。
 - `orbit-gui`：GPUI 原生桌面薄壳；不实现包管理或启动业务，只通过两个 CLI 的
-  JSON/NDJSON/stdin 协议提供完整图形交互。
+  JSON/NDJSON/stdin 协议提供完整图形交互；安装、账户等直接调用 Launcher，客户端/服务端
+  启动与包数据 purge 统一调用 Orbit 的联合路径。
 
 Launcher 已完整支持 Vanilla、Fabric、Quilt、Forge、NeoForge 的客户端与独立服务端安装，
 不再是“首个基线”。项目自己的 Microsoft public-client ID 已内置，token 仍只进入操作系统
@@ -32,7 +33,7 @@ Launcher 已完整支持 Vanilla、Fabric、Quilt、Forge、NeoForge 的客户�
 
 - **📂 非侵入式与多实例/服务器管理**：无需改变外部启动器结构。直接进入启动器实例或 Fabric、Quilt、Forge、NeoForge dedicated server 根目录即可初始化管理；Launcher 托管客户端位于 `instances/<实例>`，精确 `minecraft.jar` 属于实例，共享仓库只承载不可变 assets/libraries。
 - **🔄 事实同步与显式修复**：`orbit sync` 联网识别本地 JAR 来源，并让 TOML、lock 和分组精确收敛到实际本地 JAR 集合；它不求解依赖，也不删除任何 JAR 文件。需要选择其他包版本时由 `orbit fix` 展示完整方案并确认。
-- **🧹 彻底的深度清理 (`purge`)**：卸载模组时一并清理 `config/` 目录下残留的配置文件，保持环境绝对纯净。
+- **🧹 基于运行时事实的深度清理 (`purge`)**：`orbit launch` 包装 Launcher 启动并注入低开销 Agent，以实际顶层 JAR 哈希记录文件/目录树归属；清理时先展示准确范围，再同步移除 TOML/lock 中的逻辑包并只删除由该包创建且独占写入的数据。没有文件名启发式或静态分析兜底。
 - **🌐 多来源**：支持 Modrinth、CurseForge 与本地 `file:` JAR；不同平台只负责候选发现，最终统一验证 JAR 并求解依赖。
 - **🗃️ 按游戏版本隔离的本地版本库**：每个精确 Minecraft/Loader 分别保存远端快照与 JAR 分析数据库；批量检查 project 变更标记，未变化不重拉版本，变化时也只刷新当前游戏版本。全局 LRU JAR 缓存仍是独立的内容存储。
 - **🧩 完整 Loader 语义**：Fabric、Quilt、Forge、NeoForge 先由各自适配器保真解析，再进入同一个规范化求解模型；支持端侧、软/硬依赖、`provides`、加载顺序、内嵌模组与 Jar-in-Jar。
@@ -160,7 +161,10 @@ orbit install --target server
 # 8. 删除模组
 orbit remove voxelmap
 
-# 9. 彻底扬了不再使用的模组及其配置文件
+# 9. 通过 Orbit + Launcher 联合启动，记录真实运行时数据归属
+orbit launch
+
+# 10. 彻底移除不再使用的模组及其独占运行时数据
 orbit purge voxelmap
 ```
 
@@ -208,7 +212,8 @@ schema、字段名、枚举码和错误码不随语言变化。Windows 控制台
 | `orbit env <package> <client\|server\|both\|auto>` | 修改包环境过滤；`auto` 跟随 lock 中精确 JAR 的声明。 |
 | `orbit install` | 严格校验平台快照和 lock，仅物化 lock 已记录的精确 JAR；绝不求解、修复、删包或改写 TOML/lock。 |
 | `orbit remove <mod>` | 按 JAR `mod_id` 卸载包。删除其选中内容并移除 `orbit.toml`/lock 中的记录。 |
-| `orbit purge <mod>` | **深度清理**。在 `remove` 的基础上，启发式搜索并交互式询问以**彻底删除** `config/` 下的配置文件。 |
+| `orbit launch [--server]` | **联合启动**。由 Orbit 调用相邻的 Launcher，并向 Java 注入 Orbit Runtime Agent；客户端等待退出，服务端后台会话由后续 Orbit 命令合并。只有同时安装 Orbit 与 Launcher 才可用。 |
+| `orbit purge <mod>` | **深度清理**。展示包及运行时观测到的准确文件/目录树范围；确认后先按逻辑包执行 remove（同步清理 TOML/lock），再删除仅由当前 JAR 内容创建且独占写入的数据。共享或来源不明的数据保留。 |
 | `orbit list` | 列出当前实例记录的所有模组及版本；支持 `--tree` 和 `--target`。 |
 | `orbit remote add/remove/list` | 管理一个逻辑包的多个 `file` / Modrinth / CurseForge 候选远端；不能删除最后一个远端。 |
 | `orbit versions <package>` | 刷新当前 Minecraft/Loader 作用域内发生变化的 project，复用已分析内容，并按 JAR 实际声明版本降序列出候选。 |

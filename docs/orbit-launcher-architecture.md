@@ -1,6 +1,6 @@
 # Orbit Launcher 架构
 
-> 状态：当前实现（2026-07-30）。可用命令以
+> 状态：当前实现（2026-08-09）。可用命令以
 > [`orbit-launcher-cli.md`](orbit-launcher-cli.md) 为准。早期方案中没有落实且已由更小组合
 > 取代的命令不再保留为“规划”，避免把历史设计草案误读成产品承诺。
 >
@@ -54,7 +54,9 @@ orbit-launcher-core      安装、运行时、账户和启动领域逻辑
 
 - 两个 Launcher crate 不依赖现有 Orbit crate 或任何 mod provider wrapper；
 - Launcher 的源码、配置、协议和命令中不存在 Orbit 发现、调用、适配或集成逻辑；
-- 现有 Orbit 同样不得新增 Launcher 发现、调用、适配或集成逻辑；
+- Orbit 不链接 Launcher core，也不读取 Launcher 内部状态；唯一允许的单向编排是
+  `orbit launch` 用用户显式路径或相邻可执行文件调用 Launcher 已有启动命令，并通过子进程
+  环境注入 Orbit 自己的 Runtime Agent。Launcher 对此无感，且不得出现反向依赖；
 - 两个 CLI 可以采用相似的人机输出惯例，但不共享运行时状态，也不互相协商版本；
 - HMCL 仅用于研究所需行为和异常边界。HMCL 是 GPLv3，本仓库使用 MIT，禁止复制、改写
   或移植 HMCL 源码；实现以官方格式、官方服务和独立测试夹具为依据。

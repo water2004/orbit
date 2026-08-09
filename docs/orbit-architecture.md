@@ -3,6 +3,10 @@
 ## 1. workspace
 
 ```text
+orbit-gui       原生进程薄壳；不链接任何 core
+  ├── 启动/深度清理 → orbit
+  └── 其它运行时操作 → orbit-launcher
+
 orbit-cli       参数、交互和展示
   output        自适应表格、逻辑包事务、多方案差异高亮、audit 摘要
     ↓
@@ -11,6 +15,10 @@ orbit-core      领域模型、编排、JAR、求解、文件事务
     ├── curseforge-wrapper
     ├── orbit-bytecode-audit（只依赖已选择的实际 JAR 内容与运行时环境）
     └── water2004/pubgrub（固定 Git revision）
+
+orbit launch ──单向调用──→ orbit-launcher ──启动──→ Java
+     │                                             ↑
+     └──注入 orbit-runtime-agent.jar───────────────┘
 ```
 
 CLI 不实现业务规则。core 不打印 UI 文本，而是返回结构化报告或错误。CLI `output`
@@ -23,6 +31,11 @@ CLI 不实现业务规则。core 不打印 UI 文本，而是返回结构化报�
 `orbit-machine-protocol` 的 schema 2 成功、错误、进度和交互信封。原生 GUI 只是启动两个
 CLI 进程：读取 stdout 最终结果与 stderr NDJSON，并向同一子进程 stdin 写回交互选择；
 不存在 GUI 专用参数、旧 schema 别名、备用 JSON 路径或 core 直连。
+
+Launcher 自身始终不读取、链接或调用 Orbit，也没有包身份、数据归属或 purge 接口。需要
+运行时归属时，调用方向相反：`orbit launch` 用准确实例和 Launcher 路径启动 Launcher，
+并只通过子进程环境注入 Agent。Launcher 的直接 CLI 启动仍可独立使用，但不会产生 Orbit
+归属记录；GUI 的“启动”统一走 Orbit，账户、安装、Java、停止与状态等仍直接走 Launcher。
 
 PubGrub fork 位于
 [`water2004/pubgrub`](https://github.com/water2004/pubgrub/tree/codex/solver-observer) 的
@@ -65,6 +78,8 @@ resolver/
   diagnostics 同次求解的原因
 installer     精确 lock 物化与唯一修复事务
 migration     面向已安装目标运行时的共享迁移规划与导出
+runtime_launch Orbit → Launcher 的单向联合启动与 Agent 注入
+runtime_data  Agent 会话归并、JAR 哈希到逻辑包映射、准确 purge 事务
 init/sync     平台探测、本地事实扫描与清单对账
 audit         复用 resolver 的 Loader-selected runtime；不包含字节码判定规则
     ↓
@@ -77,6 +92,10 @@ orbit-bytecode-audit
   mixin       候选类合并；selector/slice → InjectionQuery；injector → Mutation
   transformer FML ServiceLoader 图 → ModLauncher ITransformer / NeoForge ClassProcessor → 统一效果
   conflict    独立风险原因、行为交互、query 重算、遮蔽后的硬引用风险
+
+orbit-runtime-agent
+  transformer 应用调用点的 JDK 文件 API / 已适配 native store 边界
+  recorder    低分配归属聚合、目录树压缩、崩溃可恢复 session snapshot
 ```
 
 允许出现 loader 分支的位置：
@@ -166,6 +185,29 @@ provider 合并为一个候选并累积来源，同版本不同字节仍是不�
 都是包。含 loader 元数据的 contained 模块用 owner/source/path 绑定所选顶层候选，
 普通库随 owner 一起移动而不单独求解。用户和事务计划操作的最小单元始终是逻辑包；
 执行层只为这个包物化或移除对应的顶层 artifact，绝不把包内部的单个 JAR 当删除目标。
+
+运行时数据归属是另一条不参与求解的事实流水线：
+
+```text
+orbit launch
+  → 校验当前 orbit.toml / orbit.lock、准确 Launcher 与 Agent 文件
+  → 为本次运行分配 .orbit/runtime-data/sessions/<session>.events
+  → 调用 orbit-launcher launch 或 server start
+  → JAVA_TOOL_OPTIONS 注入 Orbit Runtime Agent
+  → Agent 在文件操作边界从调用栈定位实际 mods 顶层 JAR 并计算 SHA-256
+  → 按 created/read/write 聚合文件或目录树，原子写入 session snapshot
+  → Orbit 合并到 .orbit/runtime-data/ownership.toml
+  → purge 用 lock 将 JAR SHA-256 映射回逻辑 mod_id
+  → 展示唯一准确范围并确认
+  → remove_from_instance 收敛 JAR/TOML/lock
+  → 删除仅由该 JAR 创建且独占写入的数据
+```
+
+`.orbit/runtime-data` 是实例本地的 provenance，不是全局 JAR cache，也不是版本库。Agent 不
+记录字节内容；大量文件在新建目录树处压缩成一条记录，持续 I/O 只付出操作边界的归属聚合
+成本。共享写入、来源未知、没有观测到的 native I/O 和无法映射到顶层受管 JAR 的路径都不
+进入可清理计划。没有文件名猜测、静态分析或“匹配 config 名称”兜底。服务端后台进程的
+snapshot 由下一次 `orbit launch` / `orbit purge` 合并；损坏或截断 session 会显式报错并保留。
 
 ## 4. 统一求解
 
