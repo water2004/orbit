@@ -1,5 +1,6 @@
 param(
-    [string]$AgentPath = "target/debug/orbit-runtime-agent.jar"
+    [string]$AgentPath = "target/debug/orbit-runtime-agent.jar",
+    [string]$JavaCommand = "java"
 )
 
 $ErrorActionPreference = "Stop"
@@ -23,11 +24,11 @@ if (Test-Path -LiteralPath $TestRoot) {
     Remove-Item -LiteralPath $TestRoot -Recurse -Force
 }
 New-Item -ItemType Directory -Force -Path $ModsRoot, (Join-Path $InstanceRoot "config"), (Split-Path -Parent $ContextFile), $ClassesRoot, $HarnessRoot | Out-Null
-& javac --release 17 -d $ClassesRoot (Join-Path $AgentRoot "tests/AgentFixture.java")
+& javac --release 8 -d $ClassesRoot (Join-Path $AgentRoot "tests/AgentFixture.java")
 if ($LASTEXITCODE -ne 0) { throw "Failed to compile Agent fixture" }
 & jar cf $FixtureJar -C $ClassesRoot .
 if ($LASTEXITCODE -ne 0) { throw "Failed to package Agent fixture" }
-& javac --release 17 -d $HarnessRoot (Join-Path $AgentRoot "tests/AgentIsolatedHarness.java")
+& javac --release 8 -d $HarnessRoot (Join-Path $AgentRoot "tests/AgentIsolatedHarness.java")
 if ($LASTEXITCODE -ne 0) { throw "Failed to compile isolated-loader harness" }
 
 $RootEncoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($InstanceRoot)).TrimEnd('=').Replace('+', '-').Replace('/', '_')
@@ -36,13 +37,15 @@ $ContextEncoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($Cont
 $ConfigEncoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes((Join-Path $InstanceRoot "config"))).TrimEnd('=').Replace('+', '-').Replace('/', '_')
 $FixtureHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $FixtureJar).Hash.ToLowerInvariant()
 $ContextLines = @(
-    "2`tcontext`tend"
+    "3`tcontext`tend"
+    "capability`tjava`t8-25`tend"
+    "capability`tsource`tfile`tend"
     "source`t$FixtureHash`t$FixtureHash`tend"
     "reserved`t$ConfigEncoded`tend"
 )
 [System.IO.File]::WriteAllLines($ContextFile, $ContextLines, [System.Text.UTF8Encoding]::new($false))
 $ResolvedAgent = [System.IO.Path]::GetFullPath((Join-Path $WorkspaceRoot $AgentPath))
-& java "-javaagent:$ResolvedAgent=root=$RootEncoded;session=$SessionEncoded;context=$ContextEncoded" -cp $HarnessRoot AgentIsolatedHarness $FixtureJar $InstanceRoot
+& $JavaCommand "-javaagent:$ResolvedAgent=root=$RootEncoded;session=$SessionEncoded;context=$ContextEncoded" -cp $HarnessRoot AgentIsolatedHarness $FixtureJar $InstanceRoot
 if ($LASTEXITCODE -ne 0) { throw "Agent fixture failed" }
 
 $Records = Get-Content -LiteralPath $SessionFile
@@ -51,3 +54,120 @@ if (-not ($Records -match "`ttree`t")) { throw "No owned directory tree was reco
 if (-not ($Records -match "`tfile`t")) { throw "No owned file was recorded" }
 if (-not ($Records -match "2`tdelete`tfile`t")) { throw "No published deletion tombstone was recorded" }
 Write-Output $SessionFile
+
+# The Agent itself targets Java 8, while its call-site transformer must still
+# cover mutating JDK APIs introduced by later runtimes.
+$ModernRoot = Join-Path $TestRoot "java11-apis"
+$ModernClasses = Join-Path $ModernRoot "classes"
+$ModernInstance = Join-Path $ModernRoot "instance"
+$ModernJar = Join-Path $ModernRoot "agent-modern-fixture.jar"
+$ModernSession = Join-Path $ModernInstance ".orbit/runtime-data/sessions/test.events"
+$ModernContext = Join-Path $ModernInstance ".orbit/runtime-data/agent-context.tsv"
+New-Item -ItemType Directory -Force -Path $ModernClasses, (Join-Path $ModernInstance "config"), (Split-Path -Parent $ModernSession) | Out-Null
+& javac --release 11 -d $ModernClasses (Join-Path $AgentRoot "tests/AgentModernFixture.java")
+if ($LASTEXITCODE -ne 0) { throw "Failed to compile modern Agent fixture" }
+& jar cf $ModernJar -C $ModernClasses .
+if ($LASTEXITCODE -ne 0) { throw "Failed to package modern Agent fixture" }
+$ModernHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $ModernJar).Hash.ToLowerInvariant()
+$ModernRootEncoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($ModernInstance)).TrimEnd('=').Replace('+', '-').Replace('/', '_')
+$ModernSessionEncoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($ModernSession)).TrimEnd('=').Replace('+', '-').Replace('/', '_')
+$ModernContextEncoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($ModernContext)).TrimEnd('=').Replace('+', '-').Replace('/', '_')
+[System.IO.File]::WriteAllLines($ModernContext, @(
+    "3`tcontext`tend"
+    "capability`tjava`t8-25`tend"
+    "capability`tsource`tfile`tend"
+    "source`t$ModernHash`t$ModernHash`tend"
+), [System.Text.UTF8Encoding]::new($false))
+& java "-javaagent:$ResolvedAgent=root=$ModernRootEncoded;session=$ModernSessionEncoded;context=$ModernContextEncoded" `
+    -cp $HarnessRoot AgentIsolatedHarness $ModernJar $ModernInstance AgentModernFixture
+if ($LASTEXITCODE -ne 0) { throw "Modern Java API Agent fixture failed" }
+if ((Get-Content -LiteralPath $ModernSession).Count -ne 2) {
+    throw "Java 11 write APIs were not both observed"
+}
+Write-Output $ModernSession
+
+# Forge 1.17 introduced SecureJarHandler union CodeSources. Exercise the
+# original unexported Java module so the Agent must use redefineModule before
+# resolving the physical primary JAR.
+$CompatibilityRoot = Join-Path $TestRoot "forge-union-0.9.54"
+$DependencyRoot = Join-Path $WorkspaceRoot "target/orbit-runtime-agent/compatibility"
+New-Item -ItemType Directory -Force -Path $CompatibilityRoot, $DependencyRoot | Out-Null
+$Dependencies = @(
+    @{ Name = "securejarhandler-0.9.54.jar"; Uri = "https://maven.minecraftforge.net/cpw/mods/securejarhandler/0.9.54/securejarhandler-0.9.54.jar"; Sha256 = "823c9ff565c3f29013ab17d20a03e5ba178675f1f0d0a0e2b7b8355bbadb07db" },
+    @{ Name = "asm-9.1.jar"; Uri = "https://repo1.maven.org/maven2/org/ow2/asm/asm/9.1/asm-9.1.jar"; Sha256 = "cda4de455fab48ff0bcb7c48b4639447d4de859a7afc30a094a986f0936beba2" },
+    @{ Name = "asm-tree-9.1.jar"; Uri = "https://repo1.maven.org/maven2/org/ow2/asm/asm-tree/9.1/asm-tree-9.1.jar"; Sha256 = "fd00afa49e9595d7646205b09cecb4a776a8ff0ba06f2d59b8f7bf9c704b4a73" }
+)
+foreach ($Dependency in $Dependencies) {
+    $Dependency.Path = Join-Path $DependencyRoot $Dependency.Name
+    if (-not (Test-Path -LiteralPath $Dependency.Path -PathType Leaf)) {
+        Invoke-WebRequest -UseBasicParsing -Uri $Dependency.Uri -OutFile $Dependency.Path
+    }
+    $Actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $Dependency.Path).Hash.ToLowerInvariant()
+    if ($Actual -ne $Dependency.Sha256) {
+        throw "$($Dependency.Name) SHA-256 mismatch: $Actual"
+    }
+}
+$UnionClasses = Join-Path $CompatibilityRoot "classes"
+$UnionInstance = Join-Path $CompatibilityRoot "instance"
+$UnionSession = Join-Path $UnionInstance ".orbit/runtime-data/sessions/test.events"
+$UnionContext = Join-Path $UnionInstance ".orbit/runtime-data/agent-context.tsv"
+New-Item -ItemType Directory -Force -Path $UnionClasses, (Join-Path $UnionInstance "config"), (Split-Path -Parent $UnionSession) | Out-Null
+& javac --release 17 -d $UnionClasses (Join-Path $AgentRoot "tests/AgentUnionHarness.java")
+if ($LASTEXITCODE -ne 0) { throw "Failed to compile Forge union harness" }
+$UnionRootEncoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($UnionInstance)).TrimEnd('=').Replace('+', '-').Replace('/', '_')
+$UnionSessionEncoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($UnionSession)).TrimEnd('=').Replace('+', '-').Replace('/', '_')
+$UnionContextEncoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($UnionContext)).TrimEnd('=').Replace('+', '-').Replace('/', '_')
+[System.IO.File]::WriteAllLines($UnionContext, @(
+    "3`tcontext`tend"
+    "capability`tjava`t8-25`tend"
+    "capability`tsource`tunion`tend"
+    "source`t$FixtureHash`t$FixtureHash`tend"
+), [System.Text.UTF8Encoding]::new($false))
+$ModulePath = ($Dependencies | ForEach-Object { $_.Path }) -join [System.IO.Path]::PathSeparator
+& java "-javaagent:$ResolvedAgent=root=$UnionRootEncoded;session=$UnionSessionEncoded;context=$UnionContextEncoded" `
+    --module-path $ModulePath --add-modules cpw.mods.securejarhandler `
+    -cp $UnionClasses AgentUnionHarness $FixtureJar $UnionInstance
+if ($LASTEXITCODE -ne 0) { throw "Forge union Agent fixture failed" }
+if ((Get-Content -LiteralPath $UnionSession).Count -ne 4) {
+    throw "Forge union CodeSource did not resolve to the fixture package"
+}
+Write-Output $UnionSession
+
+# Quilt 0.18.1+ may define classes from a virtual Quilt filesystem. Validate
+# the public QuiltCodeSource identity contract instead of path guessing.
+$QuiltPath = Join-Path $DependencyRoot "quilt-loader-0.30.1-beta.2.jar"
+if (-not (Test-Path -LiteralPath $QuiltPath -PathType Leaf)) {
+    Invoke-WebRequest -UseBasicParsing `
+        -Uri "https://maven.quiltmc.org/repository/release/org/quiltmc/quilt-loader/0.30.1-beta.2/quilt-loader-0.30.1-beta.2.jar" `
+        -OutFile $QuiltPath
+}
+$QuiltHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $QuiltPath).Hash.ToLowerInvariant()
+if ($QuiltHash -ne "9e5801c55cdb881d5b29967096c08e39131a8fab7f88585bd06ec31b1c5144a6") {
+    throw "Quilt Loader SHA-256 mismatch: $QuiltHash"
+}
+$QuiltRoot = Join-Path $TestRoot "quilt-0.30.1"
+$QuiltClasses = Join-Path $QuiltRoot "classes"
+$QuiltInstance = Join-Path $QuiltRoot "instance"
+$QuiltSession = Join-Path $QuiltInstance ".orbit/runtime-data/sessions/test.events"
+$QuiltContext = Join-Path $QuiltInstance ".orbit/runtime-data/agent-context.tsv"
+New-Item -ItemType Directory -Force -Path $QuiltClasses, (Join-Path $QuiltInstance "config"), (Split-Path -Parent $QuiltSession) | Out-Null
+& javac --release 17 -cp $QuiltPath -d $QuiltClasses (Join-Path $AgentRoot "tests/AgentQuiltHarness.java")
+if ($LASTEXITCODE -ne 0) { throw "Failed to compile Quilt identity harness" }
+$QuiltRootEncoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($QuiltInstance)).TrimEnd('=').Replace('+', '-').Replace('/', '_')
+$QuiltSessionEncoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($QuiltSession)).TrimEnd('=').Replace('+', '-').Replace('/', '_')
+$QuiltContextEncoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($QuiltContext)).TrimEnd('=').Replace('+', '-').Replace('/', '_')
+$ModuleEncoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes("agent-fixture")).TrimEnd('=').Replace('+', '-').Replace('/', '_')
+[System.IO.File]::WriteAllLines($QuiltContext, @(
+    "3`tcontext`tend"
+    "capability`tjava`t8-25`tend"
+    "capability`tmodule`tquilt`tend"
+    "module`t$ModuleEncoded`t$FixtureHash`tend"
+), [System.Text.UTF8Encoding]::new($false))
+& java "-javaagent:$ResolvedAgent=root=$QuiltRootEncoded;session=$QuiltSessionEncoded;context=$QuiltContextEncoded" `
+    -cp "$QuiltClasses$([System.IO.Path]::PathSeparator)$QuiltPath" `
+    AgentQuiltHarness $FixtureJar $QuiltInstance
+if ($LASTEXITCODE -ne 0) { throw "Quilt identity Agent fixture failed" }
+if ((Get-Content -LiteralPath $QuiltSession).Count -ne 4) {
+    throw "Quilt native module identity did not resolve to the fixture package"
+}
+Write-Output $QuiltSession
