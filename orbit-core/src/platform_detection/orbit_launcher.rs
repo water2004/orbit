@@ -1,4 +1,5 @@
-//! Strict adapter for client runtimes managed by `orbit-launcher`.
+//! Strict adapter for client and dedicated-server runtimes managed by
+//! `orbit-launcher`.
 //!
 //! This module is only reached by `init` and `sync`. Normal Orbit operations
 //! continue to consume the platform snapshot already recorded in `orbit.toml`.
@@ -39,7 +40,7 @@ pub(super) fn discover(
         runtime.loader,
         runtime.loader_version,
         runtime.loader_jar,
-        Environment::Client,
+        runtime.environment,
         Some(runtime.runtime_jars),
     )
     .map(Some)
@@ -58,6 +59,7 @@ struct ManagedRuntime {
     loader_version: String,
     loader_jar: PathBuf,
     runtime_jars: Vec<PathBuf>,
+    environment: Environment,
 }
 
 impl ManagedRuntime {
@@ -137,48 +139,45 @@ fn read(instance_dir: &Path) -> Result<Option<ManagedRuntime>, OrbitError> {
             "orbit-launcher.toml and orbit-launcher.lock identify different instances",
         ));
     }
-    if manifest.kind != "client" || lock.kind != "client" {
-        return Ok(None);
+    if manifest.kind != lock.kind {
+        return Err(invalid(
+            "orbit-launcher.toml and orbit-launcher.lock select different instance kinds",
+        ));
     }
+    let environment = match manifest.kind.as_str() {
+        "client" => Environment::Client,
+        "server" => Environment::Server,
+        kind => {
+            return Err(invalid(format!(
+                "managed instance kind '{kind}' is unsupported"
+            )));
+        }
+    };
     if lock.loader.kind == "vanilla" {
         return Err(invalid(
-            "the managed client is Vanilla and therefore is not an Orbit mod instance",
+            "the managed instance is Vanilla and therefore is not an Orbit mod instance",
         ));
     }
     let loader = lock.loader.kind.parse::<LoaderKind>().map_err(invalid)?;
     let loader_version = lock.loader.version.ok_or_else(|| {
         invalid(format!(
-            "managed {} client lock has no Loader version",
+            "managed {} lock has no Loader version",
             loader.as_str()
         ))
     })?;
     validate_text(&lock.minecraft.version, "Minecraft version")?;
     validate_text(&loader_version, "Loader version")?;
 
-    let instances = instance_dir.parent().ok_or_else(|| {
-        invalid(format!(
-            "managed client directory '{}' has no instances parent",
-            instance_dir.display()
-        ))
-    })?;
-    if !file_name_eq(instances, "instances") {
-        return Err(invalid(format!(
-            "managed client directory '{}' is not an immediate child of an instances directory",
-            instance_dir.display()
-        )));
-    }
-    let repository = instances.parent().ok_or_else(|| {
-        invalid(format!(
-            "instances directory '{}' has no Minecraft repository parent",
-            instances.display()
-        ))
-    })?;
-    let repository = repository.canonicalize().map_err(|error| {
-        invalid(format!(
-            "cannot resolve Minecraft repository '{}': {error}",
-            repository.display()
-        ))
-    })?;
+    let artifact_root = match environment {
+        Environment::Client => client_repository(instance_dir)?,
+        Environment::Server => instance_dir.canonicalize().map_err(|error| {
+            invalid(format!(
+                "cannot resolve managed server directory '{}': {error}",
+                instance_dir.display()
+            ))
+        })?,
+        Environment::Both => unreachable!("Launcher instances have one physical side"),
+    };
 
     let classpath = match lock.entrypoint {
         LockedEntrypoint::Classpath { classpath } if !classpath.is_empty() => classpath,
@@ -210,7 +209,7 @@ fn read(instance_dir: &Path) -> Result<Option<ManagedRuntime>, OrbitError> {
                 "classpath entry '{relative}' is absent from the artifact inventory"
             ))
         })?;
-        let path = resolve_locked_artifact(&repository, artifact)?;
+        let path = resolve_locked_artifact(&artifact_root, artifact)?;
         classpath_paths.push((relative.clone(), artifact.owner.as_str(), path));
     }
 
@@ -251,7 +250,7 @@ fn read(instance_dir: &Path) -> Result<Option<ManagedRuntime>, OrbitError> {
         kind: LauncherLayoutKind::IsolatedVersion,
         profile_paths: Vec::new(),
         game_jar_directories: Vec::new(),
-        library_roots: vec![repository.join("libraries")],
+        library_roots: vec![artifact_root.join("libraries")],
         components: Vec::new(),
     };
     let loader_jar = find_loader_jar(&layout, loader, &loader_version)?.ok_or_else(|| {
@@ -294,7 +293,35 @@ fn read(instance_dir: &Path) -> Result<Option<ManagedRuntime>, OrbitError> {
         loader_version,
         loader_jar,
         runtime_jars,
+        environment,
     }))
+}
+
+fn client_repository(instance_dir: &Path) -> Result<PathBuf, OrbitError> {
+    let instances = instance_dir.parent().ok_or_else(|| {
+        invalid(format!(
+            "managed client directory '{}' has no instances parent",
+            instance_dir.display()
+        ))
+    })?;
+    if !file_name_eq(instances, "instances") {
+        return Err(invalid(format!(
+            "managed client directory '{}' is not an immediate child of an instances directory",
+            instance_dir.display()
+        )));
+    }
+    let repository = instances.parent().ok_or_else(|| {
+        invalid(format!(
+            "instances directory '{}' has no Minecraft repository parent",
+            instances.display()
+        ))
+    })?;
+    repository.canonicalize().map_err(|error| {
+        invalid(format!(
+            "cannot resolve Minecraft repository '{}': {error}",
+            repository.display()
+        ))
+    })
 }
 
 fn parse_toml<T: for<'de> Deserialize<'de>>(path: &Path, label: &str) -> Result<T, OrbitError> {
@@ -578,5 +605,90 @@ path = "{minecraft_relative}"
         assert_eq!(runtime.loader_jar, loader_jar.canonicalize().unwrap());
         assert!(runtime.runtime_jars.as_ref().unwrap().is_empty());
         assert!(!instance.join("26.2.json").exists());
+    }
+
+    #[test]
+    fn reads_dedicated_server_artifacts_relative_to_the_server_directory() {
+        let directory = tempfile::tempdir().unwrap();
+        let instance = directory.path();
+        let minecraft_relative = "server.jar";
+        let loader_relative =
+            "libraries/net/fabricmc/fabric-loader/0.19.3/fabric-loader-0.19.3.jar";
+        let minecraft_jar = instance.join(minecraft_relative);
+        let loader_jar = instance.join(loader_relative);
+        write_jar(
+            &minecraft_jar,
+            &[(
+                "version.json",
+                r#"{
+                    "id":"1.21.1",
+                    "name":"1.21.1",
+                    "world_version":3955,
+                    "protocol_version":767,
+                    "pack_version":{"resource":34,"data":48},
+                    "java_version":21,
+                    "stable":true
+                }"#,
+            )],
+        );
+        write_jar(
+            &loader_jar,
+            &[(
+                "fabric.mod.json",
+                r#"{"schemaVersion":1,"id":"fabricloader","version":"0.19.3","name":"Fabric Loader"}"#,
+            )],
+        );
+        std::fs::write(
+            instance.join(MANIFEST_FILE),
+            "schema = 1\nid = 'f42a6bda-35dc-4ca7-8883-ec74814f0b8f'\nname = 'server'\nkind = 'server'\n",
+        )
+        .unwrap();
+        let minecraft_hash = crate::jar::compute_sha256(&minecraft_jar).unwrap();
+        let loader_hash = crate::jar::compute_sha256(&loader_jar).unwrap();
+        std::fs::write(
+            instance.join(LOCK_FILE),
+            format!(
+                r#"schema = 6
+instance_id = "f42a6bda-35dc-4ca7-8883-ec74814f0b8f"
+kind = "server"
+
+[minecraft]
+version = "1.21.1"
+
+[loader]
+kind = "fabric"
+version = "0.19.3"
+
+[entrypoint]
+kind = "classpath"
+classpath = ["{loader_relative}", "{minecraft_relative}"]
+
+[[artifacts]]
+owner = "loader"
+sha256 = "{loader_hash}"
+path = "{loader_relative}"
+
+[[artifacts]]
+owner = "minecraft"
+sha256 = "{minecraft_hash}"
+path = "{minecraft_relative}"
+"#
+            ),
+        )
+        .unwrap();
+
+        let runtime = discover(
+            instance,
+            Some("1.21.1"),
+            Some(LoaderKind::Fabric),
+            Some("0.19.3"),
+        )
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(runtime.minecraft_version.id, "1.21.1");
+        assert_eq!(runtime.minecraft_jar, minecraft_jar.canonicalize().unwrap());
+        assert_eq!(runtime.loader_jar, loader_jar.canonicalize().unwrap());
+        assert_eq!(runtime.physical_environment, Environment::Server);
     }
 }

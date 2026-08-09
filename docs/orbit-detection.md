@@ -43,17 +43,26 @@ detector。
 
 ## 3. Launcher 布局与 profile 扫描
 
-由 Orbit Launcher 管理的客户端是严格适配器，不进入下述通用扫描：当实例目录同时包含
+由 Orbit Launcher 管理的客户端与独立服务端使用严格适配器，不进入下述通用扫描：当实例目录同时包含
 `orbit-launcher.toml` 与 schema 6 `orbit-launcher.lock` 时，`init`/`sync` 只读取 lock 的准确
 Minecraft、Loader、classpath、工件路径与 SHA-256，并验证实际 JAR 内元数据。只存在其中
 一个文件、schema 不匹配、路径/hash/身份不一致都会直接报错，不回退到 profile、文件名或
 相邻目录猜测。正常的 add/install/audit 等命令仍只消费 `orbit.toml` 中的平台快照。
 
-Orbit Launcher 的 `<minecraft-directory>/instances/<实例>` 是它选择的隔离 game directory；
-实例自己的 `minecraft.jar` 与 launcher manifest/lock 位于该目录，共享 classpath 仍可引用
-仓库根的 `libraries/`；
+Orbit Launcher 客户端的 `<minecraft-directory>/instances/<实例>` 是它选择的隔离 game
+directory；实例自己的 `minecraft.jar` 与 launcher manifest/lock 位于该目录，共享 classpath
+仍引用仓库根的 `libraries/`。独立服务端的 lock 路径则严格相对于用户选择的服务端目录解析，
+`server.jar`、`libraries/` 与 launcher manifest/lock 都属于该目录；二者由 lock 的 `kind`
+明确区分，不根据目录内容猜测。
 它不是 Mojang 规定的实例 manifest 格式，也不包含派生 `<实例>.json`。通用 HMCL/官方
 Launcher 探测规则仅适用于没有 Orbit Launcher 标记的外部实例。
+
+Minecraft JAR 内 `version.json` 的 `pack_version` 也按 Mojang 不可变的 `world_version`
+范围选择唯一解析器，而不按 JSON 形状试错：`18w47b`（1913）至 `1.16.5`（2586）是单整数，
+`20w45a`（2681）至 `1.21.8`（4440）是 `resource`/`data`，`25w31a`（4534）起是
+resource/data major/minor 四字段；首个对应正式版为 `1.21.9`。未注册的版本空档或与范围
+不符的结构直接报错。`java_version` 在 `21w19a`（2714）以前未写入该文件，对应范围明确为
+Java 8；从该版本起缺失字段同样报错。
 
 `LauncherLayout` 将常见启动器归一化成 profile、Minecraft JAR 搜索目录、共享
 libraries 和组件列表：

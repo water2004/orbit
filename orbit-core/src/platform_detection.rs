@@ -1349,9 +1349,9 @@ mod tests {
         r#"{
   "id":"1.21.1",
   "name":"1.21.1",
-  "world_version":1,
+  "world_version":3955,
   "protocol_version":1,
-  "pack_version":{"resource_major":1,"resource_minor":0,"data_major":1,"data_minor":0},
+  "pack_version":{"resource":34,"data":48},
   "java_version":21,
   "stable":true
 }"#
@@ -1444,9 +1444,9 @@ pub(crate) mod test_support {
             r#"{{
   "id":"{version}",
   "name":"{version}",
-  "world_version":1,
+  "world_version":4534,
   "protocol_version":1,
-  "pack_version":{{"resource_major":1,"resource_minor":0,"data_major":1,"data_minor":0}},
+  "pack_version":{{"resource_major":65,"resource_minor":0,"data_major":82,"data_minor":0}},
   "java_version":21,
   "stable":true
 }}"#

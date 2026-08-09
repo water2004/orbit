@@ -31,7 +31,7 @@ Launcher 已完整支持 Vanilla、Fabric、Quilt、Forge、NeoForge 的客户�
 
 ## ✨ 核心特性
 
-- **📂 非侵入式与多实例/服务器管理**：无需改变外部启动器结构。直接进入启动器实例或 Fabric、Quilt、Forge、NeoForge dedicated server 根目录即可初始化管理；Launcher 托管客户端位于 `instances/<实例>`，精确 `minecraft.jar` 属于实例，共享仓库只承载不可变 assets/libraries。
+- **📂 非侵入式与多实例/服务器管理**：无需改变外部启动器结构。直接进入启动器实例或 Fabric、Quilt、Forge、NeoForge dedicated server 根目录即可初始化管理；Launcher 托管客户端位于 `instances/<实例>`，精确 `minecraft.jar` 属于实例、共享仓库只承载不可变 assets/libraries；Launcher 托管的独立服务端则把完整锁定运行时保存在用户选择的服务端目录。
 - **🔄 事实同步与显式修复**：`orbit sync` 联网识别本地 JAR 来源，并让 TOML、lock 和分组精确收敛到实际本地 JAR 集合；它不求解依赖，也不删除任何 JAR 文件。需要选择其他包版本时由 `orbit fix` 展示完整方案并确认。
 - **🧹 基于运行时事实的深度清理 (`purge`)**：`orbit launch` 包装 Launcher 启动并注入低开销 Agent，以实际顶层 JAR 哈希记录文件/目录树归属；清理时先展示准确范围，再同步移除 TOML/lock 中的逻辑包并只删除由该包创建且独占写入的数据。没有文件名启发式或静态分析兜底。
 - **🌐 多来源**：支持 Modrinth、CurseForge 与本地 `file:` JAR；不同平台只负责候选发现，最终统一验证 JAR 并求解依赖。

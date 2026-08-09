@@ -1558,7 +1558,7 @@ mod tests {
 
     fn minecraft_version_json(version: &str) -> String {
         format!(
-            r#"{{"id":"{version}","name":"{version}","world_version":1,"protocol_version":1,"pack_version":{{"resource_major":1,"resource_minor":0,"data_major":1,"data_minor":0}},"java_version":21,"stable":true}}"#
+            r#"{{"id":"{version}","name":"{version}","world_version":4534,"protocol_version":1,"pack_version":{{"resource_major":65,"resource_minor":0,"data_major":82,"data_minor":0}},"java_version":21,"stable":true}}"#
         )
     }
 

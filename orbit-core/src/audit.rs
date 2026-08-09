@@ -367,7 +367,7 @@ mod tests {
         archive.start_file("version.json", options).unwrap();
         write!(
             archive,
-            r#"{{"id":"{version}","name":"{version}","world_version":0,"protocol_version":0,"pack_version":{{"resource_major":0,"resource_minor":0,"data_major":0,"data_minor":0}},"java_version":21,"stable":true}}"#
+            r#"{{"id":"{version}","name":"{version}","world_version":4534,"protocol_version":0,"pack_version":{{"resource_major":65,"resource_minor":0,"data_major":82,"data_minor":0}},"java_version":21,"stable":true}}"#
         )
         .unwrap();
         archive
