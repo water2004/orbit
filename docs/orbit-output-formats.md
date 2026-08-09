@@ -585,8 +585,8 @@ Orbit 只在启动前创建 Agent session、退出后归并可用 snapshot；若
 
 ### `import` / `export`
 
-导出期间 NDJSON 使用 `phase: "export"`，事件依次为 `ExportStarted`、零个或多个
-`ExportAdvanced`、`ExportFinished`。`ExportAdvanced.completed/total` 是校验与实际归档写入
+导出期间 NDJSON 使用 `phase: "export"`，事件依次为 `export_started`、零个或多个
+`export_advanced`、`export_finished`。`export_advanced.completed/total` 是校验与实际归档写入
 的字节工作量，`completed_packages/packages` 是已完成校验的逻辑包数；事件不包含物理 JAR
 文件名。取消进程不会产生伪造的 finished 事件。
 
@@ -817,7 +817,7 @@ Launcher 使用同一 schema 2 成功信封。`orbit-launcher export state.orbit
 Orbit Launcher 直接使用 `orbit-machine-protocol` 中同一个信封类型，格式：
 
 ```json
-{"schema_version":2,"type":"progress","command":"install","sequence":1,"phase":"discovery","data":{"event":"DiscoveringProject","provider":"modrinth","locator":"AANobbMI","pending_projects":2,"artifacts_found":8}}
+{"schema_version":2,"type":"progress","command":"install","sequence":1,"phase":"repository","data":{"event":"repository_project_checked","completed":1,"total":2,"provider":"modrinth","project_id":"AANobbMI","refreshed":true,"artifacts":8}}
 ```
 
 | 字段 | 类型 | 说明 |
@@ -826,7 +826,7 @@ Orbit Launcher 直接使用 `orbit-machine-protocol` 中同一个信封类型，
 | `schema_version` | number | 与成功/错误信封相同的机器协议版本，当前为 2 |
 | `command` | string | 产生事件的现有 CLI 命令 |
 | `sequence` | number | 单进程内从 1 开始严格递增 |
-| `phase` | string | `discovery` / `download` / `resolution` / `apply` / `audit` / `export`；Launcher 另有 `metadata` / `eula` / `java` / `loader` / `authentication` / `launch` / `process` / `supervisor` |
+| `phase` | string | `repository` / `download` / `resolution` / `apply` / `import` / `audit` / `export`；Launcher 另有 `metadata` / `eula` / `java` / `loader` / `authentication` / `launch` / `process` / `supervisor` |
 | `data` | object | 内含 `event` 与事件特定字段（计数、阶段、包名等） |
 
 进度事件不包含内容哈希、物理 JAR 文件名或 provider 密钥。调用方按 `phase`/`event` 分流，无需解析自然语言。
@@ -835,20 +835,24 @@ Orbit Launcher 直接使用 `orbit-machine-protocol` 中同一个信封类型，
 
 | phase | event | data |
 |-------|-------|------|
-| `discovery` | `DiscoveryStarted` | `{}` |
-| `discovery` | `DiscoveringProject` | `{provider, locator, pending_projects, artifacts_found}` |
-| `discovery` | `DiscoveryFinished` | `{projects, artifacts}` |
-| `download` | `CandidateDownloadStarted` | `{total}` |
-| `download` | `CandidateArtifact` | `{completed, total, state}`，`state` ∈ `started`/`finished`/`cached`/`failed` |
-| `download` | `CandidateDownloadFinished` | `{total}` |
-| `resolution` | `ResolutionStarted` | `{packages, candidates}` |
-| `resolution` | `ResolutionAdvanced` | `{work_discovered, work_completed, decisions, propagations, backtracks, conflicts, solutions, current}` 的累计快照 |
-| `resolution` | `ResolutionFinished` | `{solutions}` |
-| `apply` | `ApplyStarted` | `{total}` |
-| `apply` | `ApplyArtifact` | `{completed, total, state}` |
-| `apply` | `ApplyFinished` | `{total}` |
+| `repository` | `repository_index_started` | `{minecraft, loader, total}` |
+| `repository` | `repository_project_checked` | `{completed, total, provider, project_id, refreshed, artifacts}` |
+| `repository` | `repository_index_finished` | `{completed, total, refreshed, reused, artifacts}` |
+| `download` | `candidate_download_started` | `{total}` |
+| `download` | `candidate_artifact` | `{completed, total, state}`，`state` ∈ `started`/`finished`/`already_present`/`failed` |
+| `download` | `candidate_download_finished` | `{total}` |
+| `resolution` | `resolution_started` | `{packages, candidates}` |
+| `resolution` | `resolution_advanced` | `{work_discovered, work_completed, decisions, propagations, backtracks, conflicts, solutions, current}` 的累计快照 |
+| `resolution` | `resolution_finished` | `{solutions}` |
+| `apply` | `apply_started` | `{total}` |
+| `apply` | `apply_artifact` | `{completed, total, state}` |
+| `apply` | `apply_finished` | `{total}` |
+| `export` | `export_started` / `export_advanced` / `export_finished` | 归档包数与字节进度，字段见上文 |
+| `import` | `import_started` | `{files, total_bytes}` |
+| `import` | `import_advanced` | `{completed_bytes, total_bytes, completed_files, files}` |
+| `import` | `import_finished` | `{files, total_bytes}` |
 
-`ResolutionAdvanced` 的计数均从本次 resolution 起单调累计；Core 最多每 100ms 或每 512 个
+`resolution_advanced` 的计数均从本次 resolution 起单调累计；Core 最多每 100ms 或每 512 个
 内部事件发布一次，阶段边界和最终状态会强制刷新。`current` 是可本地化的结构化对象：
 `{"kind":"enumeration","run":1}`、`{"kind":"preference_preservation","package":"sodium"}`、
 `{"kind":"version_maximization","package":"sodium"}` 或
@@ -859,21 +863,21 @@ Orbit Launcher 直接使用 `orbit-machine-protocol` 中同一个信封类型，
 
 | phase | event | data |
 |-------|-------|------|
-| `audit` | `StageStarted` | `{stage, total}`，`stage` ∈ `prepare_inputs`/`scan_artifacts`/`readiness`/`analyze_mixins`/`analyze_transformers`/`detect_conflicts` |
-| `audit` | `Advanced` | `{stage, completed, total}` |
-| `audit` | `StageFinished` | `{stage, completed}` |
+| `audit` | `stage_started` | `{stage, total}`，`stage` ∈ `prepare_inputs`/`scan_artifacts`/`readiness`/`analyze_mixins`/`analyze_transformers`/`detect_conflicts` |
+| `audit` | `advanced` | `{stage, completed, total}` |
+| `audit` | `stage_finished` | `{stage, completed}` |
 
 ### Launcher 状态进度事件
 
 | phase | event | data |
 |-------|-------|------|
-| `export` | `StateArchiveStarted` | `{files, completed: 0, total}` |
-| `export` | `StateArchiveAdvanced` | `{completed, total}` |
-| `export` | `StateArchiveFinished` | `{files, completed, total}` |
-| `apply` | `StateArchiveStarted` / `StateArchiveAdvanced` / `StateArchiveFinished` | 字段同上；仅出现在 `install --from` |
+| `export` | `state_archive_started` | `{files, completed: 0, total}` |
+| `export` | `state_archive_advanced` | `{completed, total}` |
+| `export` | `state_archive_finished` | `{files, completed, total}` |
+| `apply` | `state_archive_started` / `state_archive_advanced` / `state_archive_finished` | 字段同上；仅出现在 `install --from` |
 
 服务端安装还会在 `metadata` 阶段发出
-`ServerSettingsInitialized {properties}`，表示目标 Minecraft 已生成自己的属性字段集。世界
+`server_settings_initialized {properties}`，表示目标 Minecraft 已生成自己的属性字段集。世界
 复制按实际字节报告，已知总量在命令开始时给出。
 
 ## 5. 同进程交互协议

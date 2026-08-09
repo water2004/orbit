@@ -217,7 +217,7 @@ Forge-family Jar-in-Jar 的 Maven 坐标是逻辑 artifact 包。每个内嵌 ar
 这些边界同时是进度事件边界。版本库先报告批量检查、刷新/复用 project 与动态增长的
 project 总量；队列稳定后按去重内容报告候选 JAR 完成数；纯离线求解报告包/候选规模和
 动态工作量。core 将 observer 的工作发现/完成数以及 decision、propagation、backtrack、
-conflict、retained solution 计数合并为有节流的累计 `ResolutionAdvanced` 快照，而不是
+conflict、retained solution 计数合并为有节流的累计 `resolution_advanced` 快照，而不是
 为每个内部事件跨层发送消息。偏好冲突核心的分支求解使用 noop observer；最终诊断仍只
 消费选定组合的真实版本求解路径。
 

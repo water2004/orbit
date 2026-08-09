@@ -30,11 +30,10 @@ pub enum ResolutionCurrent {
 
 /// Solver/package-operation progress event.
 ///
-/// Serialized form uses `#[serde(tag = "event")]` so each variant renders as
-/// `{"event": "VariantName", ...fields}`. CLI NDJSON wrappers add the outer
-/// `type`/`phase` envelope.
+/// Serialized form uses one snake_case event vocabulary shared with Orbit
+/// Launcher. CLI NDJSON wrappers add the outer `type`/`phase` envelope.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(tag = "event", rename_all = "PascalCase")]
+#[serde(tag = "event", rename_all = "snake_case")]
 pub enum ProgressEvent {
     RepositoryIndexStarted {
         minecraft: String,

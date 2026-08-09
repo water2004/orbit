@@ -14,7 +14,7 @@ pub enum AuditProgressStage {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(tag = "event", rename_all = "PascalCase")]
+#[serde(tag = "event", rename_all = "snake_case")]
 pub enum AuditProgressEvent {
     StageStarted {
         stage: AuditProgressStage,

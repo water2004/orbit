@@ -87,14 +87,14 @@ pub fn progress_numbers(data: &Value) -> (Option<u64>, Option<u64>) {
         .or_else(|| data.get("total_bytes"))
         .and_then(Value::as_u64);
     match event {
-        Some("resolution_advanced" | "ResolutionAdvanced") => {
+        Some("resolution_advanced") => {
             completed = data.get("work_completed").and_then(Value::as_u64);
             total = data.get("work_discovered").and_then(Value::as_u64);
         }
-        Some("export_started" | "ExportStarted") if completed.is_none() => {
+        Some("export_started") if completed.is_none() => {
             completed = total.map(|_| 0);
         }
-        Some("export_finished" | "ExportFinished") => {
+        Some("export_finished") => {
             completed = total;
         }
         _ => {}
@@ -114,7 +114,7 @@ pub fn progress_label(data: &Value) -> String {
         .or_else(|| data.get("loader"))
         .or_else(|| data.get("provider"))
         .and_then(Value::as_str);
-    if matches!(event, "resolution_advanced" | "ResolutionAdvanced")
+    if event == "resolution_advanced"
         && let Some(current) = resolution_current_label(data)
     {
         return current;
@@ -152,9 +152,9 @@ fn resolution_current_label(data: &Value) -> Option<String> {
 
 fn progress_event_label(event: &str) -> String {
     let key = match event {
-        "RepositoryIndexStarted" => "Checking local version repository",
-        "RepositoryProjectChecked" => "Checking package versions",
-        "RepositoryIndexFinished" => "Local version repository is ready",
+        "repository_index_started" => "Checking local version repository",
+        "repository_project_checked" => "Checking package versions",
+        "repository_index_finished" => "Local version repository is ready",
         "metadata_started" => "Resolving official metadata",
         "minecraft_resolved" => "Minecraft metadata resolved",
         "eula_checked" => "Checking Minecraft EULA",
@@ -172,9 +172,9 @@ fn progress_event_label(event: &str) -> String {
         "loader_installer_finished" => "Loader installation complete",
         "staging_verified" => "Verifying staged runtime",
         "committed" => "Committing instance runtime",
-        "export_started" | "ExportStarted" => "Preparing export",
-        "export_advanced" | "ExportAdvanced" => "Writing export",
-        "export_finished" | "ExportFinished" => "Export complete",
+        "export_started" => "Preparing export",
+        "export_advanced" => "Writing export",
+        "export_finished" => "Export complete",
         "state_archive_started" => "Preparing game state archive",
         "state_archive_advanced" => "Processing game state",
         "state_archive_finished" => "Game state transfer complete",
@@ -457,7 +457,7 @@ mod tests {
     #[test]
     fn cumulative_resolution_progress_uses_dynamic_work_and_localized_current_stage() {
         let data = serde_json::json!({
-            "event": "ResolutionAdvanced",
+            "event": "resolution_advanced",
             "work_discovered": 27,
             "work_completed": 19,
             "decisions": 8,

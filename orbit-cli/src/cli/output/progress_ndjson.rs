@@ -166,7 +166,7 @@ mod tests {
         assert!(json.contains("\"command\":\"install\""));
         assert!(json.contains("\"sequence\":1"));
         assert!(json.contains("\"phase\":\"download\""));
-        assert!(json.contains("\"event\":\"CandidateArtifact\""));
+        assert!(json.contains("\"event\":\"candidate_artifact\""));
         assert!(json.contains("\"state\":\"finished\""));
         assert!(json.contains("\"completed\":1"));
         // filename is skipped per spec.
@@ -195,7 +195,7 @@ mod tests {
             ProgressData { event: &event },
         );
         let json = serde_json::to_string(&envelope).unwrap();
-        assert!(json.contains("\"event\":\"ResolutionAdvanced\""));
+        assert!(json.contains("\"event\":\"resolution_advanced\""));
         assert!(json.contains("\"work_discovered\":12"));
         assert!(json.contains("\"work_completed\":11"));
         assert!(json.contains("\"propagations\":200"));
@@ -217,6 +217,6 @@ mod tests {
         let json = serde_json::to_string(&envelope).unwrap();
         assert!(json.contains("\"phase\":\"audit\""));
         assert!(json.contains("\"stage\":\"scan_artifacts\""));
-        assert!(json.contains("\"event\":\"StageStarted\""));
+        assert!(json.contains("\"event\":\"stage_started\""));
     }
 }
