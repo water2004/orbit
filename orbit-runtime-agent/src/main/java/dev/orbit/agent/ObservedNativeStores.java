@@ -8,7 +8,7 @@ public final class ObservedNativeStores {
 
     public static String rocksDbPath(String value, String owner) {
         try {
-            Path path = Path.of(value);
+            Path path = java.nio.file.Paths.get(value);
             boolean existed = java.nio.file.Files.exists(path);
             Recorder.tree(path, existed, true, owner);
         } catch (Throwable ignored) {

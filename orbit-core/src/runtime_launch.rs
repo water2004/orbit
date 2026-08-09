@@ -12,6 +12,7 @@ use std::process::Command;
 use base64::Engine as _;
 
 use crate::error::{OrbitError, RuntimeComponent, RuntimeDataError};
+use crate::runtime_agent::capabilities_for;
 use crate::runtime_data::{
     RESERVED_INSTANCE_ROOTS, merge_observation_sessions, observation_session_path,
     ownership_context,
@@ -154,8 +155,16 @@ fn write_agent_context(instance: &Path) -> Result<PathBuf, OrbitError> {
     const MAX_NESTED_DEPTH: usize = 16;
     const MAX_NESTED_BYTES: u64 = 1024 * 1024 * 1024;
 
+    let manifest = crate::workspace::ManifestFile::open(instance)?.inner;
+    let loader = manifest.project.loader_kind()?;
+    let capabilities = capabilities_for(
+        loader,
+        &manifest.project.mc_version,
+        &manifest.project.modloader_version,
+    )?;
     let lock = crate::workspace::Lockfile::open(instance)?.inner;
     let mut sources: BTreeMap<String, Option<String>> = BTreeMap::new();
+    let mut modules: BTreeMap<String, Option<String>> = BTreeMap::new();
     let mut nested_bytes = 0_u64;
     for package in &lock.packages {
         let artifact = instance.join("mods").join(&package.filename);
@@ -163,6 +172,8 @@ fn write_agent_context(instance: &Path) -> Result<PathBuf, OrbitError> {
             continue;
         }
         register_source(&mut sources, package.sha256.clone(), &package.sha256);
+        register_source(&mut modules, package.mod_id.clone(), &package.sha256);
+        collect_module_owners(&package.bundled, &package.sha256, &mut modules);
         let file = std::fs::File::open(&artifact)?;
         let mut archive = zip::ZipArchive::new(file)?;
         collect_nested_sources(
@@ -176,10 +187,32 @@ fn write_agent_context(instance: &Path) -> Result<PathBuf, OrbitError> {
         )?;
     }
 
-    let mut document = String::from("2\tcontext\tend\n");
+    let mut document = String::from("3\tcontext\tend\n");
+    document.push_str(&format!(
+        "capability\tjava\t{}-{}\tend\n",
+        capabilities.java_range[0], capabilities.java_range[1]
+    ));
+    for source in capabilities.code_sources {
+        document.push_str(&format!("capability\tsource\t{}\tend\n", source.as_str()));
+    }
+    if let Some(identity) = capabilities.module_identity {
+        document.push_str(&format!("capability\tmodule\t{}\tend\n", identity.as_str()));
+    }
+    if let Some(property) = capabilities.system_library_property {
+        document.push_str(&format!("system-library\t{property}\tend\n"));
+    }
     for (source, owner) in sources {
         if let Some(owner) = owner {
             document.push_str(&format!("source\t{source}\t{owner}\tend\n"));
+        }
+    }
+    for (module, owner) in modules {
+        if let Some(owner) = owner {
+            document.push_str(&format!(
+                "module\t{}\t{}\tend\n",
+                base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(module.as_bytes()),
+                owner
+            ));
         }
     }
     for (path, kind, owner) in ownership_context(instance)? {
@@ -202,6 +235,17 @@ fn write_agent_context(instance: &Path) -> Result<PathBuf, OrbitError> {
     let path = instance.join(".orbit/runtime-data/agent-context.tsv");
     crate::atomic_io::write_atomic(&path, document.as_bytes())?;
     Ok(path)
+}
+
+fn collect_module_owners(
+    bundled: &[crate::lockfile::BundledMod],
+    owner: &str,
+    modules: &mut BTreeMap<String, Option<String>>,
+) {
+    for module in bundled {
+        register_source(modules, module.mod_id.clone(), owner);
+        collect_module_owners(&module.bundled, owner, modules);
+    }
 }
 
 fn register_source(sources: &mut BTreeMap<String, Option<String>>, source: String, owner: &str) {
@@ -315,5 +359,16 @@ mod tests {
     #[test]
     fn rejects_relative_components_before_switching_to_the_instance_directory() {
         assert!(absolute_file(Path::new("component"), RuntimeComponent::Agent).is_err());
+    }
+
+    #[test]
+    fn ambiguous_runtime_identity_is_removed_instead_of_guessed() {
+        let mut identities = BTreeMap::new();
+        register_source(&mut identities, "shared-id".into(), "owner-a");
+        register_source(&mut identities, "shared-id".into(), "owner-a");
+        assert_eq!(identities["shared-id"].as_deref(), Some("owner-a"));
+
+        register_source(&mut identities, "shared-id".into(), "owner-b");
+        assert_eq!(identities["shared-id"], None);
     }
 }

@@ -39,6 +39,7 @@ mod platform;
 mod platform_detection;
 pub mod remote;
 pub mod resolver;
+mod runtime_agent;
 pub mod runtime_data;
 pub mod runtime_launch;
 mod source_store;

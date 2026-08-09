@@ -14,10 +14,13 @@ import java.nio.file.attribute.FileAttribute;
 import java.nio.file.attribute.FileTime;
 import java.nio.file.attribute.UserPrincipal;
 import java.util.Set;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.HashSet;
 
 /** Exact-signature wrappers for mutating {@link Files} operations. */
 public final class ObservedFiles {
-    private static final Set<String> SUPPORTED = Set.of(
+    private static final Set<String> SUPPORTED = Collections.unmodifiableSet(new HashSet<String>(Arrays.asList(
         "newOutputStream(Ljava/nio/file/Path;[Ljava/nio/file/OpenOption;)Ljava/io/OutputStream;",
         "newByteChannel(Ljava/nio/file/Path;[Ljava/nio/file/OpenOption;)Ljava/nio/channels/SeekableByteChannel;",
         "newByteChannel(Ljava/nio/file/Path;Ljava/util/Set;[Ljava/nio/file/attribute/FileAttribute;)Ljava/nio/channels/SeekableByteChannel;",
@@ -42,7 +45,7 @@ public final class ObservedFiles {
         "setLastModifiedTime(Ljava/nio/file/Path;Ljava/nio/file/attribute/FileTime;)Ljava/nio/file/Path;",
         "setOwner(Ljava/nio/file/Path;Ljava/nio/file/attribute/UserPrincipal;)Ljava/nio/file/Path;",
         "setAttribute(Ljava/nio/file/Path;Ljava/lang/String;Ljava/lang/Object;[Ljava/nio/file/LinkOption;)Ljava/nio/file/Path;"
-    );
+    )));
 
     private ObservedFiles() {}
 
@@ -54,21 +57,25 @@ public final class ObservedFiles {
         return Files.exists(path);
     }
 
-    private static <T> T write(Path path, boolean existed, String owner, IoSupplier<T> operation) throws IOException {
+    private static <T> T write(Path path, String owner, IoSupplier<T> operation) throws IOException {
+        if (Recorder.owns(path, owner)) {
+            return operation.get();
+        }
+        boolean existed = before(path);
         T result = operation.get();
         Recorder.write(path, existed, owner);
         return result;
     }
 
     public static OutputStream newOutputStream(Path path, OpenOption[] options, String owner) throws IOException {
-        boolean existed = before(path);
-        return write(path, existed, owner, () -> Files.newOutputStream(path, options));
+        return write(path, owner, () -> Files.newOutputStream(path, options));
     }
 
     public static SeekableByteChannel newByteChannel(Path path, OpenOption[] options, String owner) throws IOException {
+        if (Recorder.owns(path, owner)) return Files.newByteChannel(path, options);
         boolean existed = before(path);
         SeekableByteChannel channel = Files.newByteChannel(path, options);
-        observeOptions(path, existed, Set.of(options), owner);
+        observeOptions(path, existed, new HashSet<OpenOption>(Arrays.asList(options)), owner);
         return channel;
     }
 
@@ -78,6 +85,7 @@ public final class ObservedFiles {
         FileAttribute<?>[] attributes,
         String owner
     ) throws IOException {
+        if (Recorder.owns(path, owner)) return Files.newByteChannel(path, options, attributes);
         boolean existed = before(path);
         SeekableByteChannel channel = Files.newByteChannel(path, options, attributes);
         observeOptions(path, existed, options, owner);
@@ -90,13 +98,11 @@ public final class ObservedFiles {
         OpenOption[] options,
         String owner
     ) throws IOException {
-        boolean existed = before(path);
-        return write(path, existed, owner, () -> Files.newBufferedWriter(path, charset, options));
+        return write(path, owner, () -> Files.newBufferedWriter(path, charset, options));
     }
 
     public static Path write(Path path, byte[] bytes, OpenOption[] options, String owner) throws IOException {
-        boolean existed = before(path);
-        return write(path, existed, owner, () -> Files.write(path, bytes, options));
+        return write(path, owner, () -> Files.write(path, bytes, options));
     }
 
     public static Path write(
@@ -105,8 +111,7 @@ public final class ObservedFiles {
         OpenOption[] options,
         String owner
     ) throws IOException {
-        boolean existed = before(path);
-        return write(path, existed, owner, () -> Files.write(path, lines, options));
+        return write(path, owner, () -> Files.write(path, lines, options));
     }
 
     public static Path write(
@@ -116,8 +121,7 @@ public final class ObservedFiles {
         OpenOption[] options,
         String owner
     ) throws IOException {
-        boolean existed = before(path);
-        return write(path, existed, owner, () -> Files.write(path, lines, charset, options));
+        return write(path, owner, () -> Files.write(path, lines, charset, options));
     }
 
     public static Path writeString(
@@ -126,8 +130,7 @@ public final class ObservedFiles {
         OpenOption[] options,
         String owner
     ) throws IOException {
-        boolean existed = before(path);
-        return write(path, existed, owner, () -> Files.writeString(path, value, options));
+        return write(path, owner, () -> writeCharacters(path, value, java.nio.charset.StandardCharsets.UTF_8, options));
     }
 
     public static Path writeString(
@@ -137,8 +140,19 @@ public final class ObservedFiles {
         OpenOption[] options,
         String owner
     ) throws IOException {
-        boolean existed = before(path);
-        return write(path, existed, owner, () -> Files.writeString(path, value, charset, options));
+        return write(path, owner, () -> writeCharacters(path, value, charset, options));
+    }
+
+    private static Path writeCharacters(
+        Path path,
+        CharSequence value,
+        Charset charset,
+        OpenOption[] options
+    ) throws IOException {
+        try (BufferedWriter writer = Files.newBufferedWriter(path, charset, options)) {
+            writer.append(value);
+        }
+        return path;
     }
 
     public static Path createFile(Path path, FileAttribute<?>[] attributes, String owner) throws IOException {
@@ -241,11 +255,11 @@ public final class ObservedFiles {
     }
 
     public static Path setLastModifiedTime(Path path, FileTime value, String owner) throws IOException {
-        return write(path, true, owner, () -> Files.setLastModifiedTime(path, value));
+        return write(path, owner, () -> Files.setLastModifiedTime(path, value));
     }
 
     public static Path setOwner(Path path, UserPrincipal value, String owner) throws IOException {
-        return write(path, true, owner, () -> Files.setOwner(path, value));
+        return write(path, owner, () -> Files.setOwner(path, value));
     }
 
     public static Path setAttribute(
@@ -255,7 +269,7 @@ public final class ObservedFiles {
         java.nio.file.LinkOption[] options,
         String owner
     ) throws IOException {
-        return write(path, true, owner, () -> Files.setAttribute(path, attribute, value, options));
+        return write(path, owner, () -> Files.setAttribute(path, attribute, value, options));
     }
 
     public static boolean fileCreateNewFile(java.io.File file, String owner) throws IOException {

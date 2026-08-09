@@ -8,6 +8,8 @@ import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.nio.file.attribute.FileAttribute;
 import java.util.Set;
+import java.util.Arrays;
+import java.util.HashSet;
 import java.util.concurrent.ExecutorService;
 
 public final class ObservedChannels {
@@ -23,13 +25,15 @@ public final class ObservedChannels {
     }
 
     public static FileChannel fileOpen(Path path, OpenOption[] options, String owner) throws IOException {
+        if (Recorder.owns(path, owner)) return FileChannel.open(path, options);
         boolean existed = java.nio.file.Files.exists(path);
         FileChannel channel = FileChannel.open(path, options);
-        observe(path, existed, Set.of(options), owner);
+        observe(path, existed, new HashSet<OpenOption>(Arrays.asList(options)), owner);
         return channel;
     }
 
     public static FileChannel fileOpen(Path path, Set<? extends OpenOption> options, FileAttribute<?>[] attributes, String owner) throws IOException {
+        if (Recorder.owns(path, owner)) return FileChannel.open(path, options, attributes);
         boolean existed = java.nio.file.Files.exists(path);
         FileChannel channel = FileChannel.open(path, options, attributes);
         observe(path, existed, options, owner);
@@ -37,13 +41,15 @@ public final class ObservedChannels {
     }
 
     public static AsynchronousFileChannel asyncOpen(Path path, OpenOption[] options, String owner) throws IOException {
+        if (Recorder.owns(path, owner)) return AsynchronousFileChannel.open(path, options);
         boolean existed = java.nio.file.Files.exists(path);
         AsynchronousFileChannel channel = AsynchronousFileChannel.open(path, options);
-        observe(path, existed, Set.of(options), owner);
+        observe(path, existed, new HashSet<OpenOption>(Arrays.asList(options)), owner);
         return channel;
     }
 
     public static AsynchronousFileChannel asyncOpen(Path path, Set<? extends OpenOption> options, ExecutorService executor, FileAttribute<?>[] attributes, String owner) throws IOException {
+        if (Recorder.owns(path, owner)) return AsynchronousFileChannel.open(path, options, executor, attributes);
         boolean existed = java.nio.file.Files.exists(path);
         AsynchronousFileChannel channel = AsynchronousFileChannel.open(path, options, executor, attributes);
         observe(path, existed, options, owner);

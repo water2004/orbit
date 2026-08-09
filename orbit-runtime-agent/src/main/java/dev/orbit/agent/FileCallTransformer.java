@@ -2,15 +2,19 @@ package dev.orbit.agent;
 
 import java.lang.instrument.ClassFileTransformer;
 import java.security.ProtectionDomain;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
 
-import net.bytebuddy.jar.asm.ClassReader;
-import net.bytebuddy.jar.asm.ClassVisitor;
-import net.bytebuddy.jar.asm.ClassWriter;
-import net.bytebuddy.jar.asm.MethodVisitor;
-import net.bytebuddy.jar.asm.Opcodes;
-import net.bytebuddy.jar.asm.Type;
+import org.objectweb.asm.ClassReader;
+import org.objectweb.asm.ClassVisitor;
+import org.objectweb.asm.ClassWriter;
+import org.objectweb.asm.MethodVisitor;
+import org.objectweb.asm.Opcodes;
+import org.objectweb.asm.Type;
 
 /** Rewrites file API calls in application classes; JDK classes remain untouched. */
 public final class FileCallTransformer implements ClassFileTransformer {
@@ -19,25 +23,43 @@ public final class FileCallTransformer implements ClassFileTransformer {
     private static final String OBSERVED_CHANNELS = AGENT_PREFIX + "ObservedChannels";
     private static final String OBSERVED_NATIVE_STORES = AGENT_PREFIX + "ObservedNativeStores";
 
-    private static final Map<String, String> OBSERVED_CONSTRUCTORS = Map.of(
-        "java/io/FileOutputStream", AGENT_PREFIX + "ObservedFileOutputStream",
-        "java/io/FileWriter", AGENT_PREFIX + "ObservedFileWriter",
-        "java/io/RandomAccessFile", AGENT_PREFIX + "ObservedRandomAccessFile"
-    );
+    private static final Map<String, String> OBSERVED_CONSTRUCTORS;
 
-    private static final Set<String> FILE_INSTANCE_METHODS = Set.of(
+    private static final Set<String> FILE_INSTANCE_METHODS = Collections.unmodifiableSet(new HashSet<String>(Arrays.asList(
         "createNewFile()Z",
         "delete()Z",
         "mkdir()Z",
         "mkdirs()Z",
         "renameTo(Ljava/io/File;)Z"
-    );
+    )));
+
+    static {
+        Map<String, String> constructors = new HashMap<String, String>();
+        constructors.put("java/io/FileOutputStream", AGENT_PREFIX + "ObservedFileOutputStream");
+        constructors.put(
+            "java/io/FileWriter",
+            AGENT_PREFIX + (runtimeFeature() >= 11 ? "ObservedFileWriter11" : "ObservedFileWriter")
+        );
+        constructors.put("java/io/RandomAccessFile", AGENT_PREFIX + "ObservedRandomAccessFile");
+        OBSERVED_CONSTRUCTORS = Collections.unmodifiableMap(constructors);
+    }
+
+    private static int runtimeFeature() {
+        String value = System.getProperty("java.specification.version", "8");
+        if (value.startsWith("1.")) value = value.substring(2);
+        int end = 0;
+        while (end < value.length() && Character.isDigit(value.charAt(end))) end++;
+        try {
+            return Integer.parseInt(value.substring(0, end));
+        } catch (RuntimeException ignored) {
+            return 8;
+        }
+    }
 
     public FileCallTransformer() {}
 
     @Override
     public byte[] transform(
-        Module module,
         ClassLoader loader,
         String className,
         Class<?> classBeingRedefined,
@@ -50,7 +72,7 @@ public final class FileCallTransformer implements ClassFileTransformer {
             || className.startsWith("javax/")
             || className.startsWith("jdk/")
             || className.startsWith("sun/")
-            || className.startsWith("net/bytebuddy/")) {
+            || className.startsWith("org/objectweb/asm/")) {
             return null;
         }
         String owner = Recorder.ownerFor(protectionDomain);
@@ -58,9 +80,9 @@ public final class FileCallTransformer implements ClassFileTransformer {
             return null;
         }
         try {
-            var reader = new ClassReader(classfileBuffer);
-            var writer = new ClassWriter(reader, ClassWriter.COMPUTE_MAXS);
-            var visitor = new Rewriter(writer, owner);
+            ClassReader reader = new ClassReader(classfileBuffer);
+            ClassWriter writer = new ClassWriter(reader, ClassWriter.COMPUTE_MAXS);
+            Rewriter visitor = new Rewriter(writer, owner);
             reader.accept(visitor, 0);
             return visitor.changed ? writer.toByteArray() : null;
         } catch (Throwable ignored) {

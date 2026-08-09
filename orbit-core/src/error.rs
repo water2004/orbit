@@ -53,6 +53,10 @@ pub enum RuntimeDataError {
     AgentPathContainsQuote,
     #[error("JAVA_TOOL_OPTIONS already contains the Orbit Runtime Agent")]
     AgentAlreadyPresent,
+    #[error(
+        "Orbit Runtime Agent support has not been verified for {loader} loader version '{version}'"
+    )]
+    UnsupportedRuntimeAgent { loader: String, version: String },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

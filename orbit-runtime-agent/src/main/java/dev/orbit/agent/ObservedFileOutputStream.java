@@ -8,11 +8,11 @@ import java.io.FileOutputStream;
 public final class ObservedFileOutputStream extends FileOutputStream {
     public ObservedFileOutputStream(String name, String owner) throws FileNotFoundException {
         super(Recorder.beforePath(name));
-        Recorder.write(java.nio.file.Path.of(name), Recorder.takeBefore(), owner);
+        Recorder.write(java.nio.file.Paths.get(name), Recorder.takeBefore(), owner);
     }
     public ObservedFileOutputStream(String name, boolean append, String owner) throws FileNotFoundException {
         super(Recorder.beforePath(name), append);
-        Recorder.write(java.nio.file.Path.of(name), Recorder.takeBefore(), owner);
+        Recorder.write(java.nio.file.Paths.get(name), Recorder.takeBefore(), owner);
     }
     public ObservedFileOutputStream(File file, String owner) throws FileNotFoundException {
         super(Recorder.beforeFile(file));

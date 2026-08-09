@@ -13,8 +13,8 @@ import java.security.ProtectionDomain;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Base64;
+import java.util.Collections;
 import java.util.Comparator;
-import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -26,7 +26,8 @@ import java.util.function.Function;
 /** Low-allocation mutation ownership recorder called only from managed package classes. */
 public final class Recorder {
     private static final Map<String, String> SOURCE_OWNERS = new ConcurrentHashMap<>();
-    private static final Map<Path, String> PATH_OWNERS = new ConcurrentHashMap<>();
+    private static final Map<String, String> MODULE_OWNERS = new ConcurrentHashMap<>();
+    private static final Map<String, String> SOURCE_CACHE = new ConcurrentHashMap<>();
     private static final ConcurrentSkipListMap<String, State> STATES = new ConcurrentSkipListMap<>();
     private static final ConcurrentSkipListMap<String, OwnedTree> OWNED_TREES = new ConcurrentSkipListMap<>();
     private static final ConcurrentSkipListMap<String, Path> EXPLICIT_NODES = new ConcurrentSkipListMap<>();
@@ -39,6 +40,9 @@ public final class Recorder {
     private static volatile Path instanceRoot;
     private static volatile Path sessionFile;
     private static volatile long flushedVersion;
+    private static volatile boolean fileCodeSources;
+    private static volatile boolean unionCodeSources;
+    private static volatile boolean quiltModuleIdentity;
 
     private Recorder() {}
 
@@ -77,14 +81,18 @@ public final class Recorder {
             if (domain == null || domain.getCodeSource() == null) {
                 return null;
             }
-            Path source = codeSourcePath(domain.getCodeSource().getLocation());
-            if (source == null || !Files.isRegularFile(source)) {
-                return null;
+            if (quiltModuleIdentity) {
+                String module = quiltModuleId(domain);
+                if (module != null) {
+                    String owner = MODULE_OWNERS.get(module);
+                    if (owner != null) {
+                        return owner;
+                    }
+                }
             }
-            String owner = PATH_OWNERS.computeIfAbsent(source, path -> {
-                String digest = sha256Unchecked(path);
-                return digest.isEmpty() ? "" : SOURCE_OWNERS.getOrDefault(digest, "");
-            });
+            URL location = domain.getCodeSource().getLocation();
+            final String identity = location.toExternalForm();
+            String owner = SOURCE_CACHE.computeIfAbsent(identity, ignored -> sourceOwner(location));
             return owner.isEmpty() ? null : owner;
         } catch (Throwable ignored) {
             return null;
@@ -106,6 +114,22 @@ public final class Recorder {
     static boolean takeBefore() {
         ArrayDeque<Boolean> values = BEFORE.get();
         return values.isEmpty() || values.pop();
+    }
+
+    /** Fast path for repeated writes below an already-owned directory tree. */
+    static boolean owns(Path rawPath, String owner) {
+        Path path = normalize(rawPath);
+        if (!validMutation(path, owner)) {
+            return false;
+        }
+        synchronized (FLUSH_LOCK) {
+            State exact = STATES.get(normalizedString(path));
+            if (exact != null && !exact.deleted() && exact.creator != null) {
+                return owner.equals(exact.creator);
+            }
+            OwnedTree inherited = nearestTree(path);
+            return inherited != null && inherited.owner.equals(owner);
+        }
     }
 
     static void write(Path path, boolean existedBefore, String owner) {
@@ -217,7 +241,7 @@ public final class Recorder {
     private static boolean validMutation(Path path, String owner) {
         return path != null
             && owner != null
-            && !owner.isBlank()
+            && !owner.trim().isEmpty()
             && !path.equals(instanceRoot)
             && !isControlPath(path);
     }
@@ -282,7 +306,7 @@ public final class Recorder {
             }
             if (!child.deleted()
                 && (child.creator == null || owner.equals(child.creator))
-                && (child.writers.isEmpty() || child.writers.equals(Set.of(owner)))) {
+                && (child.writers.isEmpty() || child.writers.equals(Collections.singleton(owner)))) {
                 remove.add(entry.getKey());
             }
         }
@@ -291,17 +315,42 @@ public final class Recorder {
 
     private static void loadContext(Path context) throws Exception {
         List<String> lines = Files.readAllLines(context, StandardCharsets.UTF_8);
-        if (lines.isEmpty() || !lines.get(0).equals("2\tcontext\tend")) {
+        if (lines.isEmpty() || !lines.get(0).equals("3\tcontext\tend")) {
             throw new IllegalArgumentException("invalid runtime ownership context header");
         }
+        boolean javaCapability = false;
         for (int index = 1; index < lines.size(); index++) {
             String[] fields = lines.get(index).split("\t", -1);
-            if (fields.length == 4 && fields[0].equals("source") && fields[3].equals("end")) {
+            if (fields.length == 4 && fields[0].equals("capability") && fields[3].equals("end")) {
+                if (fields[1].equals("java")) {
+                    requireJavaRange(fields[2]);
+                    javaCapability = true;
+                } else if (fields[1].equals("source") && fields[2].equals("file")) {
+                    fileCodeSources = true;
+                } else if (fields[1].equals("source") && fields[2].equals("union")) {
+                    unionCodeSources = true;
+                } else if (fields[1].equals("module") && fields[2].equals("quilt")) {
+                    quiltModuleIdentity = true;
+                } else {
+                    throw new IllegalArgumentException("unknown runtime ownership capability");
+                }
+            } else if (fields.length == 3 && fields[0].equals("system-library") && fields[2].equals("end")) {
+                if (!fields[1].equals("fabric.systemLibraries") && !fields[1].equals("loader.systemLibraries")) {
+                    throw new IllegalArgumentException("invalid Loader system-library property");
+                }
+            } else if (fields.length == 4 && fields[0].equals("source") && fields[3].equals("end")) {
                 requireDigest(fields[1]);
                 requireDigest(fields[2]);
                 String previous = SOURCE_OWNERS.putIfAbsent(fields[1], fields[2]);
                 if (previous != null && !previous.equals(fields[2])) {
                     SOURCE_OWNERS.remove(fields[1]);
+                }
+            } else if (fields.length == 4 && fields[0].equals("module") && fields[3].equals("end")) {
+                String module = new String(Base64.getUrlDecoder().decode(fields[1]), StandardCharsets.UTF_8);
+                requireDigest(fields[2]);
+                String previous = MODULE_OWNERS.putIfAbsent(module, fields[2]);
+                if (previous != null && !previous.equals(fields[2])) {
+                    MODULE_OWNERS.remove(module);
                 }
             } else if (fields.length == 5 && fields[0].equals("node") && fields[4].equals("end")) {
                 if (!fields[1].equals("file") && !fields[1].equals("tree")) {
@@ -322,6 +371,36 @@ public final class Recorder {
                 throw new IllegalArgumentException("invalid runtime ownership context record at line " + (index + 1));
             }
         }
+        if (!javaCapability || (!fileCodeSources && !unionCodeSources && !quiltModuleIdentity)) {
+            throw new IllegalArgumentException("runtime ownership context has no verified runtime strategy");
+        }
+    }
+
+    private static void requireJavaRange(String value) {
+        int separator = value.indexOf('-');
+        if (separator <= 0 || separator == value.length() - 1) {
+            throw new IllegalArgumentException("invalid verified Java range");
+        }
+        int minimum = Integer.parseInt(value.substring(0, separator));
+        int maximum = Integer.parseInt(value.substring(separator + 1));
+        int current = runtimeFeature();
+        if (current < minimum || current > maximum) {
+            throw new IllegalArgumentException(
+                "Java " + current + " is outside the verified Runtime Agent range " + value
+            );
+        }
+    }
+
+    private static int runtimeFeature() {
+        String value = System.getProperty("java.specification.version", "8");
+        if (value.startsWith("1.")) value = value.substring(2);
+        int end = 0;
+        while (end < value.length() && Character.isDigit(value.charAt(end))) end++;
+        try {
+            return Integer.parseInt(value.substring(0, end));
+        } catch (RuntimeException ignored) {
+            return 8;
+        }
     }
 
     private static void requireDigest(String value) {
@@ -331,7 +410,7 @@ public final class Recorder {
     }
 
     private static Path decodePath(String value) {
-        Path path = Path.of(new String(Base64.getUrlDecoder().decode(value), StandardCharsets.UTF_8));
+        Path path = java.nio.file.Paths.get(new String(Base64.getUrlDecoder().decode(value), StandardCharsets.UTF_8));
         Path normalized = normalize(path);
         if (normalized == null) {
             throw new IllegalArgumentException("runtime ownership context path is not physical");
@@ -339,40 +418,97 @@ public final class Recorder {
         return normalized;
     }
 
+    private static String sourceOwner(URL location) {
+        try {
+            Path source = codeSourcePath(location);
+            if (source == null || !Files.isRegularFile(source)) {
+                return "";
+            }
+            String digest = sha256Unchecked(source);
+            return digest.isEmpty() ? "" : valueOrEmpty(SOURCE_OWNERS.get(digest));
+        } catch (Throwable ignored) {
+            return "";
+        }
+    }
+
     private static Path codeSourcePath(URL location) throws Exception {
         String external = location.toExternalForm();
-        int nested = external.indexOf("!/");
-        if (nested >= 0) {
-            external = external.substring(0, nested);
-        }
+        boolean jarWrapped = false;
         while (external.startsWith("jar:")) {
+            jarWrapped = true;
             external = external.substring(4);
         }
+        if (jarWrapped) {
+            int nested = external.indexOf("!/");
+            if (nested >= 0) {
+                external = external.substring(0, nested);
+            }
+        }
         URI uri = URI.create(external);
-        if (!"file".equalsIgnoreCase(uri.getScheme())) {
+        if ("file".equalsIgnoreCase(uri.getScheme()) && fileCodeSources) {
+            return java.nio.file.Paths.get(uri).toAbsolutePath().normalize();
+        }
+        if ("union".equalsIgnoreCase(uri.getScheme()) && unionCodeSources) {
+            return ModuleAccess.unionPrimaryPath(uri);
+        }
+        return null;
+    }
+
+    private static String quiltModuleId(ProtectionDomain domain) {
+        try {
+            Object source = domain.getCodeSource();
+            ClassLoader loader = source.getClass().getClassLoader();
+            Class<?> quiltSource = Class.forName(
+                "org.quiltmc.loader.impl.launch.common.QuiltCodeSource",
+                false,
+                loader
+            );
+            if (!quiltSource.isInstance(source)) {
+                return null;
+            }
+            Object optional = quiltSource.getMethod("getQuiltMod").invoke(source);
+            Class<?> optionalClass = Class.forName("java.util.Optional");
+            if (!((Boolean) optionalClass.getMethod("isPresent").invoke(optional)).booleanValue()) {
+                return null;
+            }
+            Object container = optionalClass.getMethod("get").invoke(optional);
+            Class<?> containerApi = Class.forName("org.quiltmc.loader.api.ModContainer", false, loader);
+            Object metadata = containerApi.getMethod("metadata").invoke(container);
+            Class<?> metadataApi = Class.forName("org.quiltmc.loader.api.ModMetadata", false, loader);
+            return (String) metadataApi.getMethod("id").invoke(metadata);
+        } catch (Throwable ignored) {
             return null;
         }
-        return Path.of(uri).toAbsolutePath().normalize();
+    }
+
+    private static String valueOrEmpty(String value) {
+        return value == null ? "" : value;
     }
 
     private static String sha256Unchecked(Path path) {
         try {
             MessageDigest digest = MessageDigest.getInstance("SHA-256");
-            try (var input = Files.newInputStream(path)) {
+            try (java.io.InputStream input = Files.newInputStream(path)) {
                 byte[] buffer = new byte[128 * 1024];
                 int read;
                 while ((read = input.read(buffer)) >= 0) {
                     digest.update(buffer, 0, read);
                 }
             }
-            return HexFormat.of().formatHex(digest.digest());
+            byte[] bytes = digest.digest();
+            StringBuilder output = new StringBuilder(bytes.length * 2);
+            for (byte value : bytes) {
+                output.append(Character.forDigit((value >>> 4) & 0x0f, 16));
+                output.append(Character.forDigit(value & 0x0f, 16));
+            }
+            return output.toString();
         } catch (Throwable ignored) {
             return "";
         }
     }
 
     private static Path normalize(String path) {
-        return path == null ? null : normalize(Path.of(path));
+        return path == null ? null : normalize(java.nio.file.Paths.get(path));
     }
 
     private static Path normalize(Path path) {
@@ -419,9 +555,8 @@ public final class Recorder {
     private static void flush() throws Exception {
         synchronized (FLUSH_LOCK) {
             Path temporary = sessionFile.resolveSibling(sessionFile.getFileName() + ".tmp");
-            List<State> snapshot = STATES.values().stream()
-                .sorted(Comparator.comparing(state -> state.path.toString()))
-                .toList();
+            List<State> snapshot = new ArrayList<State>(STATES.values());
+            Collections.sort(snapshot, Comparator.comparing(state -> state.path.toString()));
             try (BufferedWriter writer = Files.newBufferedWriter(temporary, StandardCharsets.UTF_8)) {
                 for (State state : snapshot) {
                     if (state.deleted()) {
@@ -480,5 +615,13 @@ public final class Recorder {
         }
     }
 
-    private record OwnedTree(Path path, String owner) {}
+    private static final class OwnedTree {
+        private final Path path;
+        private final String owner;
+
+        private OwnedTree(Path path, String owner) {
+            this.path = path;
+            this.owner = owner;
+        }
+    }
 }

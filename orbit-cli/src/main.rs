@@ -285,6 +285,11 @@ fn localized_runtime_data_error(error: &orbit_core::RuntimeDataError) -> String 
         AgentAlreadyPresent => {
             tr!("JAVA_TOOL_OPTIONS already contains the Orbit Runtime Agent").into_owned()
         }
+        UnsupportedRuntimeAgent { loader, version } => tr!(
+            "Orbit Runtime Agent support has not been verified for %{loader} loader version '%{version}'",
+            loader = loader,
+            version = version
+        ),
     }
 }
 

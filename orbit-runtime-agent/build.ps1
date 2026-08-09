@@ -6,20 +6,20 @@ $ErrorActionPreference = "Stop"
 $AgentRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $WorkspaceRoot = Split-Path -Parent $AgentRoot
 $BuildRoot = Join-Path $WorkspaceRoot "target/orbit-runtime-agent"
-$DependencyPath = Join-Path $BuildRoot "byte-buddy-1.18.7.jar"
+$DependencyPath = Join-Path $BuildRoot "asm-9.9.1.jar"
 $ClassesPath = Join-Path $BuildRoot "classes"
 $ManifestPath = Join-Path $BuildRoot "MANIFEST.MF"
-$ExpectedSha256 = "7c3b8fd43d75b2dc30bdb8cf7303d4b15f6f9a0ccb170f8b9f47de15864014f3"
+$ExpectedSha256 = "6f3828a215c920059a5efa2fb55c233d6c54ec5cadca99ce1b1bdd10077c7ddd"
 
 New-Item -ItemType Directory -Force -Path $BuildRoot | Out-Null
 if (-not (Test-Path -LiteralPath $DependencyPath -PathType Leaf)) {
     Invoke-WebRequest -UseBasicParsing `
-        -Uri "https://repo1.maven.org/maven2/net/bytebuddy/byte-buddy/1.18.7/byte-buddy-1.18.7.jar" `
+        -Uri "https://repo1.maven.org/maven2/org/ow2/asm/asm/9.9.1/asm-9.9.1.jar" `
         -OutFile $DependencyPath
 }
 $ActualSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $DependencyPath).Hash.ToLowerInvariant()
 if ($ActualSha256 -ne $ExpectedSha256) {
-    throw "Byte Buddy SHA-256 mismatch: $ActualSha256"
+    throw "ASM SHA-256 mismatch: $ActualSha256"
 }
 
 if (Test-Path -LiteralPath $ClassesPath) {
@@ -35,18 +35,26 @@ New-Item -ItemType Directory -Force -Path $ClassesPath | Out-Null
 Push-Location $ClassesPath
 try {
     & jar xf $DependencyPath
-    if ($LASTEXITCODE -ne 0) { throw "Failed to unpack Byte Buddy" }
+    if ($LASTEXITCODE -ne 0) { throw "Failed to unpack ASM" }
 } finally {
     Pop-Location
 }
 Get-ChildItem -LiteralPath (Join-Path $ClassesPath "META-INF") -File -ErrorAction SilentlyContinue |
     Where-Object { $_.Extension -in ".SF", ".RSA", ".DSA" } |
     Remove-Item -Force
+Get-ChildItem -LiteralPath $ClassesPath -Recurse -Filter "module-info.class" -ErrorAction SilentlyContinue |
+    Remove-Item -Force
 
 $Sources = Get-ChildItem -LiteralPath (Join-Path $AgentRoot "src/main/java") -Recurse -Filter "*.java" |
     ForEach-Object { $_.FullName }
-& javac --release 17 -cp $DependencyPath -d $ClassesPath @Sources
+& javac --release 8 -cp $DependencyPath -d $ClassesPath @Sources
 if ($LASTEXITCODE -ne 0) { throw "Failed to compile Orbit Runtime Agent" }
+$OverlayClasspath = "$ClassesPath$([System.IO.Path]::PathSeparator)$DependencyPath"
+$Java11Sources = Get-ChildItem -LiteralPath (Join-Path $AgentRoot "src/main/java11") -Recurse -Filter "*.java" |
+    ForEach-Object { $_.FullName }
+$Java11Arguments = @("--release", "11", "-cp", $OverlayClasspath, "-d", $ClassesPath) + $Java11Sources
+& javac @Java11Arguments
+if ($LASTEXITCODE -ne 0) { throw "Failed to compile Java 11 Agent overlay" }
 
 @"
 Manifest-Version: 1.0
