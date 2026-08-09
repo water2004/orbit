@@ -15,7 +15,7 @@ use crate::error::{OrbitError, RuntimeComponent, RuntimeDataError};
 use crate::runtime_agent::capabilities_for;
 use crate::runtime_data::{
     RESERVED_INSTANCE_ROOTS, merge_observation_sessions, observation_session_path,
-    ownership_context,
+    ownership_context, prune_missing_ownership,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -56,6 +56,7 @@ pub fn launch_with_runtime_observation(request: &RuntimeLaunchRequest) -> Result
         None
     } else {
         merge_observation_sessions(&instance_dir)?;
+        prune_missing_ownership(&instance_dir)?;
         let session = observation_session_path(&instance_dir)?;
         let context = write_agent_context(&instance_dir)?;
         let agent_option = java_agent_option(&runtime_agent, &instance_dir, &session, &context)?;

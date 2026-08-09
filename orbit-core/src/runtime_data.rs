@@ -266,6 +266,40 @@ pub fn merge_observation_sessions(instance_dir: &Path) -> Result<usize, OrbitErr
     Ok(claimed.len())
 }
 
+/// Remove explicit ownership nodes whose physical paths no longer exist.
+/// Only `NotFound` means absence; permission and other metadata failures abort
+/// without rewriting the ledger.
+pub(crate) fn prune_missing_ownership(instance_dir: &Path) -> Result<usize, OrbitError> {
+    let root = validate_instance(instance_dir)?;
+    let mut ledger = load_ledger(&root)?;
+    let mut retained = Vec::with_capacity(ledger.entries.len());
+    let mut removed = 0;
+    for entry in std::mem::take(&mut ledger.entries) {
+        let resolved = resolve_owned_path(&root, &entry.path)?;
+        match std::fs::symlink_metadata(&resolved) {
+            Ok(_) => retained.push(entry),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => removed += 1,
+            Err(error) => return Err(error.into()),
+        }
+    }
+    ledger.entries = retained;
+    compact_ledger(&mut ledger);
+    let active_trees = ledger
+        .entries
+        .iter()
+        .filter(|entry| entry.kind == OwnedDataKind::Tree)
+        .map(|entry| ownership_path_key(&entry.path))
+        .collect::<BTreeSet<_>>();
+    let previous_watermarks = ledger.rebalance_watermarks.len();
+    ledger
+        .rebalance_watermarks
+        .retain(|path, _| active_trees.contains(path));
+    if removed != 0 || ledger.rebalance_watermarks.len() != previous_watermarks {
+        save_ledger(&root, &ledger)?;
+    }
+    Ok(removed)
+}
+
 fn observation_snapshots(sessions: &Path) -> Result<Vec<PathBuf>, OrbitError> {
     if !sessions.is_dir() {
         return Ok(Vec::new());
@@ -954,6 +988,13 @@ fn parent_owned_path(path: &OwnedDataPath) -> Option<OwnedDataPath> {
     }
 }
 
+fn ownership_path_key(path: &OwnedDataPath) -> String {
+    match path {
+        OwnedDataPath::Instance { relative } => format!("instance:{relative}"),
+        OwnedDataPath::External { absolute } => format!("external:{absolute}"),
+    }
+}
+
 fn protected_instance_root(path: &OwnedDataPath) -> bool {
     matches!(
         path,
@@ -1247,6 +1288,103 @@ mod tests {
         );
         assert_eq!(ledger.entries[0].owner.as_deref(), Some(owner.as_str()));
         assert!(!session.exists());
+    }
+
+    #[test]
+    fn prunes_only_missing_ownership_nodes_before_launch() {
+        let directory = instance();
+        let root = directory.path().canonicalize().unwrap();
+        std::fs::create_dir_all(root.join("bluemap")).unwrap();
+        std::fs::create_dir_all(root.join("config")).unwrap();
+        std::fs::write(root.join("config/current.toml"), b"present").unwrap();
+
+        let present_tree = OwnedDataPath::Instance {
+            relative: "bluemap".to_string(),
+        };
+        let missing_tree = OwnedDataPath::Instance {
+            relative: "generated/removed".to_string(),
+        };
+        let mut ledger = DataOwnershipLedger::from_entries(vec![
+            DataOwnershipEntry {
+                path: present_tree.clone(),
+                kind: OwnedDataKind::Tree,
+                owner: Some("a".repeat(64)),
+            },
+            DataOwnershipEntry {
+                path: OwnedDataPath::Instance {
+                    relative: "config/current.toml".to_string(),
+                },
+                kind: OwnedDataKind::File,
+                owner: Some("b".repeat(64)),
+            },
+            DataOwnershipEntry {
+                path: OwnedDataPath::Instance {
+                    relative: "config/deleted.toml".to_string(),
+                },
+                kind: OwnedDataKind::File,
+                owner: Some("c".repeat(64)),
+            },
+            DataOwnershipEntry {
+                path: missing_tree.clone(),
+                kind: OwnedDataKind::Tree,
+                owner: Some("d".repeat(64)),
+            },
+        ]);
+        ledger
+            .rebalance_watermarks
+            .insert(ownership_path_key(&present_tree), 64);
+        ledger
+            .rebalance_watermarks
+            .insert(ownership_path_key(&missing_tree), 128);
+        save_ledger(&root, &ledger).unwrap();
+
+        assert_eq!(prune_missing_ownership(&root).unwrap(), 2);
+
+        let ledger = load_ledger(&root).unwrap();
+        assert_eq!(ledger.entries.len(), 2);
+        assert!(
+            ledger
+                .entries
+                .iter()
+                .any(|entry| entry.path == present_tree)
+        );
+        assert!(ledger.entries.iter().any(|entry| {
+            entry.path
+                == OwnedDataPath::Instance {
+                    relative: "config/current.toml".to_string(),
+                }
+        }));
+        assert_eq!(
+            ledger.rebalance_watermarks,
+            BTreeMap::from([(ownership_path_key(&present_tree), 64)])
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pruning_preserves_a_broken_symlink_node() {
+        use std::os::unix::fs::symlink;
+
+        let directory = instance();
+        let root = directory.path().canonicalize().unwrap();
+        let link = root.join("config/broken-link");
+        std::fs::create_dir_all(link.parent().unwrap()).unwrap();
+        symlink("missing-target", &link).unwrap();
+        let path = OwnedDataPath::Instance {
+            relative: "config/broken-link".to_string(),
+        };
+        save_ledger(
+            &root,
+            &DataOwnershipLedger::from_entries(vec![DataOwnershipEntry {
+                path: path.clone(),
+                kind: OwnedDataKind::File,
+                owner: Some("a".repeat(64)),
+            }]),
+        )
+        .unwrap();
+
+        assert_eq!(prune_missing_ownership(&root).unwrap(), 0);
+        assert_eq!(load_ledger(&root).unwrap().entries[0].path, path);
     }
 
     #[test]

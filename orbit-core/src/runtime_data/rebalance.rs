@@ -6,8 +6,8 @@ use std::path::Path;
 use crate::error::OrbitError;
 
 use super::{
-    DataOwnershipEntry, DataOwnershipLedger, OwnedDataKind, OwnedDataPath, compact_ledger,
-    nearest_ancestor, owned_path, path_contains, path_depth, protected_instance_root,
+    DataOwnershipEntry, DataOwnershipLedger, OwnedDataKind, compact_ledger, nearest_ancestor,
+    owned_path, ownership_path_key, path_contains, path_depth, protected_instance_root,
     resolve_owned_path,
 };
 
@@ -283,12 +283,5 @@ fn normalized_physical_key(path: &Path) -> String {
     #[cfg(not(windows))]
     {
         value
-    }
-}
-
-fn ownership_path_key(path: &OwnedDataPath) -> String {
-    match path {
-        OwnedDataPath::Instance { relative } => format!("instance:{relative}"),
-        OwnedDataPath::External { absolute } => format!("external:{absolute}"),
     }
 }
