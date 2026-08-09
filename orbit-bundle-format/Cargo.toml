@@ -1,0 +1,18 @@
+[package]
+name = "orbit-bundle-format"
+version = "0.3.0"
+edition = "2024"
+license = "MIT"
+
+[dependencies]
+hex.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+toml.workspace = true
+url.workspace = true
+zip.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

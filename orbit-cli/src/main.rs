@@ -144,6 +144,7 @@ fn orbit_error_code(error: &orbit_core::OrbitError) -> &'static str {
         ForwardedProcessExit(_) => "forwarded_process_exit",
         Json(_) => "json",
         Zip(_) => "zip",
+        PackFormat(_) => "pack_format",
         Other(_) => "internal",
     }
 }
@@ -210,6 +211,7 @@ fn localized_orbit_error(error: &orbit_core::OrbitError) -> String {
         }
         Json(detail) => tr!("Failed to parse JSON: %{detail}", detail = detail),
         Zip(detail) => tr!("Failed to process ZIP data: %{detail}", detail = detail),
+        PackFormat(detail) => tr!("Invalid package archive: %{detail}", detail = detail),
         Other(detail) => tr!("Operation failed: %{detail}", detail = detail),
     }
 }

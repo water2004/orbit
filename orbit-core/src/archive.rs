@@ -14,7 +14,10 @@ use crate::progress::{ProgressEvent, ProgressReporter, emit as emit_progress};
 use crate::workspace::{Lockfile, ManifestFile};
 
 mod mrpack;
+mod native;
 pub use mrpack::import_mrpack;
+pub use native::import_bundle;
+pub use orbit_bundle_format::OrbitContent as ExportContent;
 
 const PORTABLE_OWNERSHIP_PATH: &str = ".orbit/runtime-data/ownership.toml";
 const PORTABLE_DATA_MANIFEST_PATH: &str = ".orbit/portable-data.toml";
@@ -158,156 +161,8 @@ fn same_requirement_semantics(left: &PackageSpec, right: &PackageSpec) -> bool {
         && left.exclude == right.exclude
 }
 
-pub fn import_archive(
-    instance_dir: &Path,
-    source: &Path,
-    overwrite: bool,
-    dry_run: bool,
-) -> Result<ImportReport, OrbitError> {
-    if !source.is_file() {
-        return Err(OrbitError::Other(anyhow::anyhow!(
-            "import archive not found: {}",
-            source.display()
-        )));
-    }
-    let file = std::fs::File::open(source)?;
-    let mut archive = zip::ZipArchive::new(file)?;
-    let mods_dir = instance_dir.join("mods");
-    let mut report = ImportReport::default();
-    let mut total_size = 0_u64;
-    for index in 0..archive.len() {
-        let mut entry = archive.by_index(index)?;
-        let Some(enclosed) = entry.enclosed_name() else {
-            continue;
-        };
-        let is_jar = enclosed
-            .file_name()
-            .and_then(|filename| filename.to_str())
-            .and_then(crate::package_activation::mod_artifact_enabled)
-            .is_some();
-        let under_mods = enclosed.components().any(|component| {
-            component
-                .as_os_str()
-                .to_string_lossy()
-                .eq_ignore_ascii_case("mods")
-        });
-        if !entry.is_file() || !is_jar || !under_mods {
-            continue;
-        }
-        total_size = total_size.saturating_add(entry.size());
-        if total_size > 4 * 1024 * 1024 * 1024 {
-            return Err(OrbitError::Other(anyhow::anyhow!(
-                "archive contains more than 4 GiB of mod files"
-            )));
-        }
-        let filename = enclosed
-            .file_name()
-            .ok_or_else(|| OrbitError::Other(anyhow::anyhow!("invalid JAR path in archive")))?
-            .to_string_lossy()
-            .into_owned();
-        let destination = mods_dir.join(&filename);
-        if destination.exists() && !overwrite {
-            report.kept.push(filename);
-            continue;
-        }
-        report.extracted.push(filename.clone());
-        if dry_run {
-            continue;
-        }
-        std::fs::create_dir_all(&mods_dir)?;
-        let temporary = mods_dir.join(format!(".{filename}.importing"));
-        let mut output = std::fs::File::create(&temporary)?;
-        std::io::copy(&mut entry, &mut output)?;
-        output.sync_all()?;
-        if destination.exists() {
-            std::fs::remove_file(&destination)?;
-        }
-        std::fs::rename(temporary, destination)?;
-    }
-    report.extracted.sort();
-    report.kept.sort();
-    Ok(report)
-}
-
 pub fn extract_portable_instance(source: &Path) -> Result<PortableInstance, OrbitError> {
-    if !source.is_file() {
-        return Err(OrbitError::Other(anyhow::anyhow!(
-            "portable Orbit pack not found: {}",
-            source.display()
-        )));
-    }
-    let directory = std::sync::Arc::new(tempfile::tempdir()?);
-    let mut archive = zip::ZipArchive::new(std::fs::File::open(source)?)?;
-    let portable_data = read_portable_data(&mut archive, source)?;
-    let ownership = read_portable_ownership(&mut archive, source)?;
-    if ownership != portable_data.ownership {
-        return Err(OrbitError::Other(anyhow::anyhow!(
-            "portable Orbit data manifest does not match its ownership ledger"
-        )));
-    }
-    let mut extracted = std::collections::BTreeSet::new();
-    let mut total_size = 0_u64;
-    for index in 0..archive.len() {
-        let mut entry = archive.by_index(index)?;
-        if !entry.is_file() {
-            continue;
-        }
-        if entry
-            .unix_mode()
-            .is_some_and(|mode| mode & 0o170_000 == 0o120_000)
-        {
-            return Err(OrbitError::Other(anyhow::anyhow!(
-                "portable Orbit pack contains a symbolic link"
-            )));
-        }
-        let Some(enclosed) = entry.enclosed_name() else {
-            return Err(OrbitError::Other(anyhow::anyhow!(
-                "portable Orbit pack contains an unsafe path"
-            )));
-        };
-        let Some(relative) = portable_entry_path(&enclosed, &portable_data) else {
-            return Err(OrbitError::Other(anyhow::anyhow!(
-                "portable Orbit pack contains undeclared file '{}'",
-                enclosed.display()
-            )));
-        };
-        if !extracted.insert(relative.clone()) {
-            return Err(OrbitError::Other(anyhow::anyhow!(
-                "portable Orbit pack contains duplicate path '{}'",
-                relative.display()
-            )));
-        }
-        total_size = total_size.saturating_add(entry.size());
-        if total_size > 8 * 1024 * 1024 * 1024 {
-            return Err(OrbitError::Other(anyhow::anyhow!(
-                "portable Orbit pack expands beyond the 8 GiB safety limit"
-            )));
-        }
-        let destination = directory.path().join(&relative);
-        if let Some(parent) = destination.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        let mut output = std::fs::File::create(destination)?;
-        std::io::copy(&mut entry, &mut output)?;
-        output.sync_all()?;
-    }
-    if !directory.path().join("orbit.toml").is_file()
-        || !directory.path().join("orbit.lock").is_file()
-    {
-        return Err(OrbitError::Other(anyhow::anyhow!(
-            "portable Orbit pack must contain orbit.toml and orbit.lock"
-        )));
-    }
-    for declared in &portable_data.files {
-        if !extracted.contains(Path::new(declared)) {
-            return Err(OrbitError::Other(anyhow::anyhow!(
-                "portable Orbit pack is missing declared file '{declared}'"
-            )));
-        }
-    }
-    ManifestFile::open(directory.path())?;
-    Lockfile::open(directory.path())?;
-    Ok(PortableInstance { directory })
+    native::extract_portable_instance(source)
 }
 
 pub fn consume_portable_instance(source: &Path) -> Result<(), OrbitError> {
@@ -317,111 +172,23 @@ pub fn consume_portable_instance(source: &Path) -> Result<(), OrbitError> {
     Ok(())
 }
 
-fn portable_entry_path(path: &Path, manifest: &PortableDataManifest) -> Option<PathBuf> {
-    let components: Vec<_> = path.components().collect();
-    if components.len() == 1
-        && matches!(
-            components[0].as_os_str().to_str(),
-            Some("orbit.toml" | "orbit.lock")
-        )
-    {
-        return Some(path.to_path_buf());
-    }
-    let portable = archive_path(path);
-    if matches!(
-        portable.as_str(),
-        PORTABLE_OWNERSHIP_PATH | PORTABLE_DATA_MANIFEST_PATH
-    ) {
-        return Some(path.to_path_buf());
-    }
-    manifest
-        .files
-        .contains(&portable)
-        .then(|| path.to_path_buf())
-}
-
-fn read_portable_data<R: Read + std::io::Seek>(
-    archive: &mut zip::ZipArchive<R>,
-    source: &Path,
-) -> Result<PortableDataManifest, OrbitError> {
-    let mut entry = archive.by_name(PORTABLE_DATA_MANIFEST_PATH).map_err(|_| {
-        OrbitError::Other(anyhow::anyhow!(
-            "portable Orbit pack is missing {PORTABLE_DATA_MANIFEST_PATH}"
-        ))
-    })?;
-    if !entry.is_file() || entry.size() > 16 * 1024 * 1024 {
-        return Err(OrbitError::Other(anyhow::anyhow!(
-            "portable Orbit data manifest is not a bounded regular file"
-        )));
-    }
-    let mut document = String::new();
-    entry.read_to_string(&mut document)?;
-    let manifest: PortableDataManifest = toml::from_str(&document).map_err(|error| {
-        OrbitError::Other(anyhow::anyhow!(
-            "invalid portable Orbit data manifest '{}': {error}",
-            source.display()
-        ))
-    })?;
-    if manifest.schema != PORTABLE_DATA_SCHEMA {
-        return Err(OrbitError::Other(anyhow::anyhow!(
-            "unsupported portable Orbit data schema {} in '{}'",
-            manifest.schema,
-            source.display()
-        )));
-    }
-    for relative in &manifest.files {
-        let path = Path::new(relative);
-        if path.as_os_str().is_empty()
-            || path.is_absolute()
-            || path
-                .components()
-                .any(|component| !matches!(component, std::path::Component::Normal(_)))
-            || matches!(
-                relative.as_str(),
-                "orbit.toml" | "orbit.lock" | PORTABLE_OWNERSHIP_PATH | PORTABLE_DATA_MANIFEST_PATH
-            )
-        {
-            return Err(OrbitError::Other(anyhow::anyhow!(
-                "portable Orbit data manifest contains unsafe file '{relative}'"
-            )));
-        }
-    }
-    Ok(manifest)
-}
-
-fn read_portable_ownership<R: Read + std::io::Seek>(
-    archive: &mut zip::ZipArchive<R>,
-    source: &Path,
-) -> Result<Vec<crate::runtime_data::DataOwnershipEntry>, OrbitError> {
-    let mut entry = archive.by_name(PORTABLE_OWNERSHIP_PATH).map_err(|_| {
-        OrbitError::Other(anyhow::anyhow!(
-            "portable Orbit pack is missing {PORTABLE_OWNERSHIP_PATH}"
-        ))
-    })?;
-    if !entry.is_file() || entry.size() > 16 * 1024 * 1024 {
-        return Err(OrbitError::Other(anyhow::anyhow!(
-            "portable Orbit ownership manifest is not a bounded regular file"
-        )));
-    }
-    let mut document = String::new();
-    entry.read_to_string(&mut document)?;
-    crate::runtime_data::parse_ownership_document(source, &document)
-}
-
 pub fn export_instance(
     instance_dir: &Path,
     output: &Path,
     target: Option<String>,
     format: &str,
+    content: ExportContent,
     dry_run: bool,
     progress: Option<ProgressReporter>,
 ) -> Result<ExportReport, OrbitError> {
-    if !matches!(format, "zip" | "mrpack") {
+    if !matches!(format, "orbit" | "mrpack") {
         return Err(OrbitError::Other(anyhow::anyhow!(
-            "unsupported export format '{format}'; expected zip or mrpack"
+            "unsupported export format '{format}'; expected orbit or mrpack"
         )));
     }
-    crate::runtime_data::merge_observation_sessions(instance_dir)?;
+    if content == ExportContent::ModsAndData {
+        crate::runtime_data::merge_observation_sessions(instance_dir)?;
+    }
     let manifest = ManifestFile::open(instance_dir)?;
     let lockfile = Lockfile::open(instance_dir)?;
     let platform = crate::platform::Platform::load(instance_dir, &manifest.inner)?;
@@ -430,7 +197,7 @@ pub fn export_instance(
         &manifest.inner,
         &lockfile.inner,
         &PackageSelection {
-            target,
+            target: target.clone(),
             ..PackageSelection::default()
         },
         loader_package.as_ref(),
@@ -462,34 +229,46 @@ pub fn export_instance(
         portable_state(&manifest.inner, &lockfile.inner, &selected);
     let portable_manifest_toml = portable_manifest.to_toml_string()?;
     let portable_lock_toml = portable_lock.to_toml_string()?;
-    let selected_owners = selected
-        .iter()
-        .filter_map(|package| lockfile.inner.find(package))
-        .map(|entry| entry.sha256.clone())
-        .collect::<BTreeSet<_>>();
-    let ownership_entries =
-        crate::runtime_data::ownership_entries_for(instance_dir, &selected_owners)?;
-    let ownership_document = crate::runtime_data::ownership_document(ownership_entries.clone())?;
-    let state_sources = portable_state_sources(instance_dir, &selected_owners, &ownership_entries)?;
-    let portable_files = sources
-        .iter()
-        .map(|(entry, _, _)| format!("mods/{}", entry.filename))
-        .chain(
-            state_sources
+    let (ownership_document, state_sources, portable_data_document) =
+        if content == ExportContent::ModsAndData {
+            let selected_owners = selected
                 .iter()
-                .map(|source| archive_path(&source.relative)),
-        )
-        .collect::<BTreeSet<_>>();
-    let portable_data_document = toml::to_string_pretty(&PortableDataManifest {
-        schema: PORTABLE_DATA_SCHEMA,
-        ownership: ownership_entries.clone(),
-        files: portable_files,
-    })
-    .map_err(|error| {
-        OrbitError::Other(anyhow::anyhow!(
-            "failed to serialize portable Orbit data manifest: {error}"
-        ))
-    })?;
+                .filter_map(|package| lockfile.inner.find(package))
+                .map(|entry| entry.sha256.clone())
+                .collect::<BTreeSet<_>>();
+            let ownership_entries =
+                crate::runtime_data::ownership_entries_for(instance_dir, &selected_owners)?;
+            let ownership_document =
+                crate::runtime_data::ownership_document(ownership_entries.clone())?;
+            let state_sources =
+                portable_state_sources(instance_dir, &selected_owners, &ownership_entries)?;
+            let portable_files = sources
+                .iter()
+                .map(|(entry, _, _)| format!("mods/{}", entry.filename))
+                .chain(
+                    state_sources
+                        .iter()
+                        .map(|source| archive_path(&source.relative)),
+                )
+                .collect::<BTreeSet<_>>();
+            let portable_data_document = toml::to_string_pretty(&PortableDataManifest {
+                schema: PORTABLE_DATA_SCHEMA,
+                ownership: ownership_entries,
+                files: portable_files,
+            })
+            .map_err(|error| {
+                OrbitError::Other(anyhow::anyhow!(
+                    "failed to serialize portable Orbit data manifest: {error}"
+                ))
+            })?;
+            (
+                Some(ownership_document),
+                state_sources,
+                Some(portable_data_document),
+            )
+        } else {
+            (None, Vec::new(), None)
+        };
     let state_bytes: u64 = state_sources.iter().map(|source| source.bytes).sum();
     let package_bytes: u64 = sources.iter().map(|(_, _, bytes)| bytes).sum();
     let archived_bytes: u64 = if format == "mrpack" {
@@ -507,8 +286,8 @@ pub fn export_instance(
         package_bytes
             + archived_bytes
             + state_bytes
-            + ownership_document.len() as u64
-            + portable_data_document.len() as u64
+            + ownership_document.as_ref().map_or(0, String::len) as u64
+            + portable_data_document.as_ref().map_or(0, String::len) as u64
     };
     let mut tracker = ExportTracker::new(progress, sources.len(), total_work);
     tracker.started();
@@ -532,11 +311,14 @@ pub fn export_instance(
         packages: sources.len(),
         bytes: package_bytes
             + state_bytes
-            + ownership_document.len() as u64
-            + portable_data_document.len() as u64,
+            + ownership_document.as_ref().map_or(0, String::len) as u64
+            + portable_data_document.as_ref().map_or(0, String::len) as u64,
     };
     if dry_run {
-        tracker.advance(ownership_document.len() as u64 + portable_data_document.len() as u64);
+        tracker.advance(
+            ownership_document.as_ref().map_or(0, String::len) as u64
+                + portable_data_document.as_ref().map_or(0, String::len) as u64,
+        );
         tracker.finished();
         return Ok(report);
     }
@@ -561,81 +343,66 @@ pub fn export_instance(
             &mut archive,
             metadata_options,
             artifact_options,
-            &portable_manifest,
-            &portable_lock_toml,
-            &sources,
+            mrpack::MrpackContents {
+                manifest: &portable_manifest,
+                packages: &sources,
+                state: &state_sources,
+                target: export_target(&target, platform.physical_environment)?,
+            },
             &mut tracker,
         )?;
     } else {
-        add_content(
+        native::write_contents(
             &mut archive,
-            "orbit.toml",
-            portable_manifest_toml.as_bytes(),
             metadata_options,
-        )?;
-        add_content(
-            &mut archive,
-            "orbit.lock",
-            portable_lock_toml.as_bytes(),
-            metadata_options,
-        )?;
-        for (entry, source, _) in &sources {
-            add_file(
-                &mut archive,
-                &format!("mods/{}", entry.filename),
-                source,
-                artifact_options,
-                Some(&mut tracker),
-            )?;
-        }
-    }
-    let ownership_destination = if format == "mrpack" {
-        format!("overrides/{PORTABLE_OWNERSHIP_PATH}")
-    } else {
-        PORTABLE_OWNERSHIP_PATH.to_string()
-    };
-    add_content(
-        &mut archive,
-        &ownership_destination,
-        ownership_document.as_bytes(),
-        metadata_options,
-    )?;
-    tracker.advance(ownership_document.len() as u64);
-    let portable_data_destination = if format == "mrpack" {
-        format!("overrides/{PORTABLE_DATA_MANIFEST_PATH}")
-    } else {
-        PORTABLE_DATA_MANIFEST_PATH.to_string()
-    };
-    add_content(
-        &mut archive,
-        &portable_data_destination,
-        portable_data_document.as_bytes(),
-        metadata_options,
-    )?;
-    tracker.advance(portable_data_document.len() as u64);
-    for source in &state_sources {
-        let relative = archive_path(&source.relative);
-        let destination = if format == "mrpack" {
-            format!("overrides/{relative}")
-        } else {
-            relative
-        };
-        add_file(
-            &mut archive,
-            &destination,
-            &source.source,
-            metadata_options,
-            Some(&mut tracker),
+            artifact_options,
+            native::NativeContents {
+                manifest: &portable_manifest,
+                manifest_toml: &portable_manifest_toml,
+                lock_toml: &portable_lock_toml,
+                packages: &sources,
+                state: &state_sources,
+                ownership: ownership_document.as_deref(),
+                data_manifest: portable_data_document.as_deref(),
+                targets: export_targets(&target, platform.physical_environment)?,
+                content,
+            },
+            &mut tracker,
         )?;
     }
     archive.finish()?.sync_all()?;
-    if output.exists() {
-        std::fs::remove_file(output)?;
-    }
-    std::fs::rename(&temporary, output)?;
+    replace_output(&temporary, output)?;
     pending.commit();
     tracker.finished();
     Ok(report)
+}
+
+fn export_targets(
+    target: &Option<String>,
+    physical: crate::metadata::Environment,
+) -> Result<Vec<orbit_bundle_format::InstanceTarget>, OrbitError> {
+    use orbit_bundle_format::InstanceTarget::{Client, Server};
+    match target.as_deref() {
+        Some("client") => Ok(vec![Client]),
+        Some("server") => Ok(vec![Server]),
+        Some("both") => Ok(vec![Client, Server]),
+        Some(other) => Err(OrbitError::Other(anyhow::anyhow!(
+            "unsupported export target '{other}'; expected client, server, or both"
+        ))),
+        None => match physical {
+            crate::metadata::Environment::Client => Ok(vec![Client]),
+            crate::metadata::Environment::Server => Ok(vec![Server]),
+            crate::metadata::Environment::Both => Ok(vec![Client, Server]),
+        },
+    }
+}
+
+fn export_target(
+    target: &Option<String>,
+    physical: crate::metadata::Environment,
+) -> Result<Option<orbit_bundle_format::InstanceTarget>, OrbitError> {
+    let targets = export_targets(target, physical)?;
+    Ok((targets.len() == 1).then(|| targets[0]))
 }
 
 fn add_file(
@@ -838,6 +605,43 @@ fn temporary_output_path(output: &Path) -> PathBuf {
         .map(|filename| filename.to_string_lossy())
         .unwrap_or_default();
     output.with_file_name(format!(".{filename}.tmp"))
+}
+
+fn replace_output(temporary: &Path, output: &Path) -> Result<(), std::io::Error> {
+    #[cfg(windows)]
+    if output.exists() {
+        use std::os::windows::ffi::OsStrExt as _;
+        use windows_sys::Win32::Storage::FileSystem::ReplaceFileW;
+
+        let output = output
+            .as_os_str()
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect::<Vec<_>>();
+        let temporary = temporary
+            .as_os_str()
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect::<Vec<_>>();
+        // SAFETY: both paths are terminated UTF-16 strings that remain alive
+        // for the call. The replacement is in the same directory and no
+        // backup or reserved parameters are supplied.
+        let replaced = unsafe {
+            ReplaceFileW(
+                output.as_ptr(),
+                temporary.as_ptr(),
+                std::ptr::null(),
+                0,
+                std::ptr::null(),
+                std::ptr::null(),
+            )
+        };
+        if replaced == 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        return Ok(());
+    }
+    std::fs::rename(temporary, output)
 }
 
 #[derive(Debug)]
@@ -1109,8 +913,8 @@ mod tests {
     }
 
     #[test]
-    fn archive_import_extracts_only_safe_mod_paths() {
-        let directory = test_dir("zip-import");
+    fn legacy_generic_zip_is_not_an_orbit_bundle() {
+        let directory = test_dir("legacy-zip-import");
         std::fs::create_dir_all(&directory).unwrap();
         let source = directory.join("pack.zip");
         let file = std::fs::File::create(&source).unwrap();
@@ -1125,21 +929,13 @@ mod tests {
         zip.write_all(b"escape").unwrap();
         zip.finish().unwrap();
 
-        let report = import_archive(&directory, &source, false, false).unwrap();
-
-        assert_eq!(
-            report.extracted,
-            vec!["disabled.jar.disabled", "example.jar"]
-        );
-        assert!(directory.join("mods/example.jar").is_file());
-        assert!(directory.join("mods/disabled.jar.disabled").is_file());
-        assert!(!directory.join("escape.jar").exists());
+        assert!(extract_portable_instance(&source).is_err());
         std::fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]
-    fn zip_export_contains_manifest_lock_and_selected_jar() {
-        let directory = test_dir("zip-export");
+    fn orbit_bundle_contains_declared_manifest_lock_mods_and_data() {
+        let directory = test_dir("bundle-export");
         crate::platform_detection::test_support::write_platform(&directory, "1", "fabric", "1");
         std::fs::create_dir_all(directory.join("mods")).unwrap();
         ManifestFile::new(&directory, detected_manifest(&directory, "example"))
@@ -1214,28 +1010,37 @@ mod tests {
             ]),
         )
         .unwrap();
-        let output = directory.join("pack.zip");
+        let output = directory.join("pack.orbitbundle");
 
         let events = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let captured = events.clone();
         let progress: ProgressReporter = std::sync::Arc::new(move |event| {
             captured.lock().unwrap().push(event);
         });
-        let report =
-            export_instance(&directory, &output, None, "zip", false, Some(progress)).unwrap();
+        let report = export_instance(
+            &directory,
+            &output,
+            None,
+            "orbit",
+            ExportContent::ModsAndData,
+            false,
+            Some(progress),
+        )
+        .unwrap();
         let mut archive = zip::ZipArchive::new(std::fs::File::open(&output).unwrap()).unwrap();
 
         assert_eq!(report.packages, 1);
-        assert!(archive.by_name("orbit.toml").is_ok());
-        assert!(archive.by_name("orbit.lock").is_ok());
-        assert!(archive.by_name("config/example.toml").is_ok());
+        assert!(archive.by_name("bundle.toml").is_ok());
+        assert!(archive.by_name("orbit/orbit.toml").is_ok());
+        assert!(archive.by_name("orbit/orbit.lock").is_ok());
+        assert!(archive.by_name("orbit/config/example.toml").is_ok());
         assert!(
             archive
-                .by_name("bluemap/maps/world/user-marker.json")
+                .by_name("orbit/bluemap/maps/world/user-marker.json")
                 .is_ok()
         );
-        assert!(archive.by_name("bluemap/foreign/state.bin").is_err());
-        let jar = archive.by_name("mods/example.jar").unwrap();
+        assert!(archive.by_name("orbit/bluemap/foreign/state.bin").is_err());
+        let jar = archive.by_name("orbit/mods/example.jar").unwrap();
         assert_eq!(jar.compression(), zip::CompressionMethod::Stored);
         drop(jar);
         let events = events.lock().unwrap();
@@ -1372,7 +1177,16 @@ mod tests {
         .unwrap();
         let output = directory.join("pack.mrpack");
 
-        export_instance(&directory, &output, None, "mrpack", false, None).unwrap();
+        export_instance(
+            &directory,
+            &output,
+            None,
+            "mrpack",
+            ExportContent::ModsAndData,
+            false,
+            None,
+        )
+        .unwrap();
         let mut archive = zip::ZipArchive::new(std::fs::File::open(&output).unwrap()).unwrap();
         let index: serde_json::Value = {
             let mut entry = archive.by_name("modrinth.index.json").unwrap();
@@ -1385,16 +1199,19 @@ mod tests {
         assert_eq!(index["files"][0]["env"]["server"], "unsupported");
         assert!(archive.by_name("mods/online.jar").is_err());
         assert!(archive.by_name("overrides/mods/local.jar").is_ok());
-        assert!(archive.by_name("overrides/orbit.toml").is_ok());
-        assert!(archive.by_name("overrides/orbit.lock").is_ok());
+        assert!(archive.by_name("overrides/orbit.toml").is_err());
+        assert!(archive.by_name("overrides/orbit.lock").is_err());
         assert!(archive.by_name("orbit.toml").is_err());
         std::fs::remove_dir_all(directory).unwrap();
     }
 
     #[tokio::test]
-    async fn mrpack_import_prefers_a_bundled_override_to_its_download_entry() {
+    async fn mrpack_import_applies_common_overrides() {
         let directory = test_dir("mrpack-import-override");
-        std::fs::create_dir_all(&directory).unwrap();
+        crate::platform_detection::test_support::write_platform(&directory, "1", "fabric", "1");
+        ManifestFile::new(&directory, detected_manifest(&directory, "example"))
+            .save()
+            .unwrap();
         let source = directory.join("input.mrpack");
         let file = std::fs::File::create(&source).unwrap();
         let mut archive = zip::ZipWriter::new(file);
@@ -1407,13 +1224,8 @@ mod tests {
                     "game": "minecraft",
                     "versionId": "test",
                     "name": "test",
-                    "files": [{
-                        "path": "mods/bundled.jar",
-                        "hashes": { "sha1": "unused", "sha512": "unused" },
-                        "downloads": ["https://invalid.example/bundled.jar"],
-                        "fileSize": 999
-                    }],
-                    "dependencies": { "minecraft": "1.21.1" }
+                    "files": [],
+                    "dependencies": { "minecraft": "1", "fabric-loader": "1" }
                 }))
                 .unwrap()
                 .as_bytes(),
@@ -1425,11 +1237,19 @@ mod tests {
         archive.write_all(b"bundled bytes").unwrap();
         archive.finish().unwrap();
 
-        let report = import_mrpack(&directory, &source, false, false)
-            .await
-            .unwrap();
+        let report = import_mrpack(
+            &directory,
+            &source,
+            false,
+            false,
+            &BTreeSet::new(),
+            false,
+            None,
+        )
+        .await
+        .unwrap();
 
-        assert_eq!(report.extracted, vec!["bundled.jar"]);
+        assert_eq!(report.extracted, vec!["mods/bundled.jar"]);
         assert_eq!(
             std::fs::read(directory.join("mods/bundled.jar")).unwrap(),
             b"bundled bytes"
@@ -1467,13 +1287,72 @@ mod tests {
             .unwrap();
         archive.finish().unwrap();
 
-        let error = import_mrpack(&directory, &source, false, false)
-            .await
-            .unwrap_err()
-            .to_string();
+        import_mrpack(
+            &directory,
+            &source,
+            false,
+            false,
+            &BTreeSet::new(),
+            false,
+            None,
+        )
+        .await
+        .unwrap_err();
 
-        assert!(error.contains("unsafe path"));
         assert!(!directory.join("escape.jar").exists());
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[tokio::test]
+    async fn mrpack_import_rejects_an_optional_path_not_available_for_the_target() {
+        let directory = test_dir("mrpack-import-optional-selection");
+        crate::platform_detection::test_support::write_platform(&directory, "1", "fabric", "1");
+        ManifestFile::new(&directory, detected_manifest(&directory, "example"))
+            .save()
+            .unwrap();
+        let source = directory.join("optional.mrpack");
+        let mut archive = zip::ZipWriter::new(std::fs::File::create(&source).unwrap());
+        archive
+            .start_file("modrinth.index.json", SimpleFileOptions::default())
+            .unwrap();
+        archive
+            .write_all(
+                serde_json::to_string(&json!({
+                    "formatVersion": 1,
+                    "game": "minecraft",
+                    "versionId": "test",
+                    "name": "test",
+                    "files": [{
+                        "path": "mods/optional.jar",
+                        "hashes": { "sha1": "0".repeat(40), "sha512": "0".repeat(128) },
+                        "env": { "client": "optional", "server": "unsupported" },
+                        "downloads": ["https://cdn.modrinth.com/data/test/optional.jar"],
+                        "fileSize": 1
+                    }],
+                    "dependencies": { "minecraft": "1", "fabric-loader": "1" }
+                }))
+                .unwrap()
+                .as_bytes(),
+            )
+            .unwrap();
+        archive.finish().unwrap();
+
+        let error = import_mrpack(
+            &directory,
+            &source,
+            false,
+            false,
+            &BTreeSet::from(["mods/not-declared.jar".to_string()]),
+            false,
+            None,
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("not optional for the selected target")
+        );
         std::fs::remove_dir_all(directory).unwrap();
     }
 }

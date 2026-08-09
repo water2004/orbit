@@ -346,6 +346,30 @@ impl ProgressRenderer {
                 &mut state,
                 tr!("Exported %{packages} package(s)", packages = packages),
             ),
+            ProgressEvent::ImportStarted { files, total_bytes } => start_bar(
+                &mut state,
+                usize::try_from(total_bytes).unwrap_or(usize::MAX),
+                tr!("Verifying and importing %{files} file(s)", files = files),
+            ),
+            ProgressEvent::ImportAdvanced {
+                completed_bytes,
+                total_bytes,
+                completed_files,
+                files,
+            } => {
+                if let Some(bar) = &state.bar {
+                    bar.set_length(total_bytes);
+                    bar.set_position(completed_bytes);
+                    bar.set_message(tr!(
+                        "Importing files %{completed}/%{total}",
+                        completed = completed_files,
+                        total = files
+                    ));
+                }
+            }
+            ProgressEvent::ImportFinished { files, .. } => {
+                finish(&mut state, tr!("Imported %{files} file(s)", files = files))
+            }
         }
     }
 }
@@ -597,6 +621,14 @@ fn plain_line(event: &ProgressEvent, state: &mut RenderState) -> Option<String> 
         ProgressEvent::ExportAdvanced { .. } => None,
         ProgressEvent::ExportFinished { packages, .. } => {
             Some(tr!("Exported %{packages} package(s).", packages = packages))
+        }
+        ProgressEvent::ImportStarted { files, .. } => Some(tr!(
+            "Verifying and importing %{files} file(s)...",
+            files = files
+        )),
+        ProgressEvent::ImportAdvanced { .. } => None,
+        ProgressEvent::ImportFinished { files, .. } => {
+            Some(tr!("Imported %{files} file(s).", files = files))
         }
         ProgressEvent::CandidateArtifact {
             state: ArtifactProgressState::Started | ArtifactProgressState::AlreadyPresent,

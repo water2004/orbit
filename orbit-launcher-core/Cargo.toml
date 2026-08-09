@@ -7,6 +7,7 @@ description = "Platform-independent core for Orbit Launcher"
 
 [dependencies]
 orbit-compatibility.workspace = true
+orbit-bundle-format.workspace = true
 serde = { workspace = true }
 serde_json = { workspace = true }
 toml = { workspace = true }
@@ -37,7 +38,7 @@ fs2 = { workspace = true }
 java-properties = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Security_Cryptography", "Win32_System_Memory"] }
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Security_Cryptography", "Win32_Storage_FileSystem", "Win32_System_Memory"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 secret-service = { version = "5.1.0", features = ["rt-tokio-crypto-rust"] }

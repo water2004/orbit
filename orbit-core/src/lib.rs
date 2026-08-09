@@ -47,8 +47,9 @@ pub mod sync;
 pub mod workspace;
 
 pub use archive::{
-    ExportReport, ImportMergeStrategy, ImportReport, PortableInstance, consume_portable_instance,
-    export_instance, extract_portable_instance, import_archive, import_manifest, import_mrpack,
+    ExportContent, ExportReport, ImportMergeStrategy, ImportReport, PortableInstance,
+    consume_portable_instance, export_instance, extract_portable_instance, import_bundle,
+    import_manifest, import_mrpack,
 };
 pub use audit::{audit_instance, audit_instance_with_progress};
 pub use config::{

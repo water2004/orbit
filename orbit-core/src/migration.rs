@@ -1106,8 +1106,17 @@ mod tests {
 
         let cache = crate::jar_cache::JarCache::open(root.path().join("cache")).unwrap();
         let repository = version_repository(root.path());
-        let pack = root.path().join("source.zip");
-        crate::archive::export_instance(&source, &pack, None, "zip", false, None).unwrap();
+        let pack = root.path().join("source.orbitbundle");
+        crate::archive::export_instance(
+            &source,
+            &pack,
+            None,
+            "orbit",
+            crate::archive::ExportContent::ModsAndData,
+            false,
+            None,
+        )
+        .unwrap();
         let portable = crate::archive::extract_portable_instance(&pack).unwrap();
         let plan = plan_migration_from_portable(
             portable,
@@ -1179,8 +1188,17 @@ mod tests {
         .unwrap();
         crate::platform_detection::test_support::write_platform(&target, "2", "fabric", "1");
 
-        let pack = root.path().join("source.zip");
-        crate::archive::export_instance(&source, &pack, None, "zip", false, None).unwrap();
+        let pack = root.path().join("source.orbitbundle");
+        crate::archive::export_instance(
+            &source,
+            &pack,
+            None,
+            "orbit",
+            crate::archive::ExportContent::ModsAndData,
+            false,
+            None,
+        )
+        .unwrap();
         let portable = crate::archive::extract_portable_instance(&pack).unwrap();
         let cache = crate::jar_cache::JarCache::open(root.path().join("cache")).unwrap();
         let repository = version_repository(root.path());

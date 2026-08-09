@@ -9,6 +9,7 @@ members = [
     "orbit-i18n",
     "orbit-machine-protocol",
     "orbit-compatibility",
+    "orbit-bundle-format",
     "orbit-bytecode-audit",
     "orbit-loader-json",
     "curseforge-wrapper",
@@ -80,3 +81,4 @@ orbit-loader-json = { path = "orbit-loader-json" }
 orbit-machine-protocol = { path = "orbit-machine-protocol" }
 orbit-i18n = { path = "orbit-i18n" }
 orbit-compatibility = { path = "orbit-compatibility" }
+orbit-bundle-format = { path = "orbit-bundle-format" }

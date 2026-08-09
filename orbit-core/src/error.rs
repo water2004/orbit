@@ -120,6 +120,9 @@ pub enum OrbitError {
     #[error("zip error: {0}")]
     Zip(#[from] zip::result::ZipError),
 
+    #[error("pack format error: {0}")]
+    PackFormat(#[from] orbit_bundle_format::FormatError),
+
     #[error("network error: {0}")]
     Network(#[from] reqwest::Error),
 

@@ -229,13 +229,19 @@ pub enum Commands {
         target: Option<String>,
     },
 
-    /// Import an external mod manifest.
+    /// Import an Orbit bundle, an official mrpack, or an Orbit manifest.
     Import {
-        /// File path (.toml or .zip).
+        /// File path (.toml, .orbitbundle, or .mrpack).
         file: String,
         /// Merge strategy.
         #[arg(long)]
         merge_strategy: Option<String>,
+        /// Include one exact optional mrpack path; repeat for multiple files.
+        #[arg(long = "optional")]
+        optional_files: Vec<String>,
+        /// Include every mrpack entry optional for the selected side.
+        #[arg(long)]
+        all_optional: bool,
     },
 
     /// Export the current instance as an archive.
@@ -245,9 +251,12 @@ pub enum Commands {
         /// Target environment filter.
         #[arg(long)]
         target: Option<String>,
-        /// Export format: zip / mrpack.
-        #[arg(long = "format", default_value = "zip")]
+        /// Export format: orbit / mrpack.
+        #[arg(long = "format", default_value = "orbit")]
         archive_format: String,
+        /// Export content: mods / mods-and-data.
+        #[arg(long, default_value = "mods-and-data")]
+        content: String,
     },
 
     /// Plan or export a package migration into an installed target runtime.
@@ -467,12 +476,15 @@ impl CommandHandler for Commands {
             Commands::Import {
                 file,
                 merge_strategy,
-            } => handle_import(file, merge_strategy, ctx).await,
+                optional_files,
+                all_optional,
+            } => handle_import(file, merge_strategy, optional_files, all_optional, ctx).await,
             Commands::Export {
                 file,
                 target,
                 archive_format,
-            } => handle_export(file, target, archive_format, ctx).await,
+                content,
+            } => handle_export(file, target, archive_format, content, ctx).await,
             Commands::Migrate { command } => command.execute(ctx).await,
             Commands::Audit {
                 min_risk,
@@ -675,8 +687,10 @@ mod tests {
         );
         assert!(
             Commands::Import {
-                file: "pack.zip".to_string(),
+                file: "pack.orbitbundle".to_string(),
                 merge_strategy: None,
+                optional_files: Vec::new(),
+                all_optional: false,
             }
             .mutates_instance()
         );
@@ -695,10 +709,35 @@ mod tests {
             !Commands::Export {
                 file: None,
                 target: None,
-                archive_format: "zip".to_string(),
+                archive_format: "orbit".to_string(),
+                content: "mods-and-data".to_string(),
             }
             .mutates_instance()
         );
+    }
+
+    #[test]
+    fn mrpack_optional_files_are_selected_by_exact_path() {
+        let cli = Cli::try_parse_from([
+            "orbit",
+            "import",
+            "pack.mrpack",
+            "--optional",
+            "mods/map.jar",
+            "--optional",
+            "resourcepacks/extra.zip",
+        ])
+        .unwrap();
+        let Commands::Import {
+            optional_files,
+            all_optional,
+            ..
+        } = cli.command
+        else {
+            panic!("unexpected command");
+        };
+        assert_eq!(optional_files, ["mods/map.jar", "resourcepacks/extra.zip"]);
+        assert!(!all_optional);
     }
 
     #[test]

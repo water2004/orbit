@@ -134,6 +134,9 @@ fn phase_for(event: &ProgressEvent) -> ProgressPhase {
         ProgressEvent::ExportStarted { .. }
         | ProgressEvent::ExportAdvanced { .. }
         | ProgressEvent::ExportFinished { .. } => ProgressPhase::Export,
+        ProgressEvent::ImportStarted { .. }
+        | ProgressEvent::ImportAdvanced { .. }
+        | ProgressEvent::ImportFinished { .. } => ProgressPhase::Import,
     }
 }
 

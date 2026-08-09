@@ -15,6 +15,7 @@ portable = []
 curseforge-wrapper = { path = "../curseforge-wrapper" }
 modrinth-wrapper = { path = "../modrinth-wrapper" }
 orbit-bytecode-audit = { path = "../orbit-bytecode-audit" }
+orbit-bundle-format.workspace = true
 orbit-compatibility.workspace = true
 orbit-loader-json.workspace = true
 
@@ -42,6 +43,9 @@ rusqlite.workspace = true
 base64.workspace = true
 dunce.workspace = true
 pubgrub = { git = "https://github.com/water2004/pubgrub.git", rev = "19e9622e48fe37f62abd9e270e356aab5ec2e2f6" }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = ["Win32_Storage_FileSystem"] }
 
 [dev-dependencies]
 bytes = "1.11"

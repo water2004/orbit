@@ -7,6 +7,7 @@ pub async fn handle(
     file: Option<String>,
     target: Option<String>,
     format: String,
+    content: String,
     ctx: &CliContext,
 ) -> Result<()> {
     let instance_dir = ctx.instance_dir()?;
@@ -15,18 +16,34 @@ pub async fn handle(
         None => {
             let manifest = orbit_core::ManifestFile::open(&instance_dir)?;
             let version = manifest.inner.project.version.as_deref().unwrap_or("1.0.0");
-            let extension = if format == "mrpack" { "mrpack" } else { "zip" };
+            let extension = if format == "mrpack" {
+                "mrpack"
+            } else {
+                "orbitbundle"
+            };
             std::path::PathBuf::from(format!(
                 "{}-{version}.{extension}",
                 safe_filename(&manifest.inner.project.name)
             ))
         }
     };
+    let content = match content.as_str() {
+        "mods" => orbit_core::ExportContent::Mods,
+        "mods-and-data" => orbit_core::ExportContent::ModsAndData,
+        other => anyhow::bail!(
+            "{}",
+            tr!(
+                "Unknown export content '%{content}'. Expected mods or mods-and-data.",
+                content = other
+            )
+        ),
+    };
     let report = orbit_core::export_instance(
         &instance_dir,
         &output,
         target,
         &format,
+        content,
         ctx.dry_run,
         super::operation_progress(ctx),
     )?;

@@ -1,9 +1,16 @@
 use super::CliContext;
 use anyhow::Result;
+use std::collections::BTreeSet;
 
 use crate::cli::output::{ImportOutput, OutputFormat};
 
-pub async fn handle(file: String, merge_strategy: Option<String>, ctx: &CliContext) -> Result<()> {
+pub async fn handle(
+    file: String,
+    merge_strategy: Option<String>,
+    optional_files: Vec<String>,
+    all_optional: bool,
+    ctx: &CliContext,
+) -> Result<()> {
     let instance_dir = ctx.instance_dir()?;
     let source = std::path::PathBuf::from(&file);
     let extension = source
@@ -11,6 +18,11 @@ pub async fn handle(file: String, merge_strategy: Option<String>, ctx: &CliConte
         .map(|extension| extension.to_string_lossy().to_ascii_lowercase())
         .unwrap_or_default();
     let strategy = parse_strategy(merge_strategy.as_deref(), ctx.yes)?;
+    let optional_files = optional_files.into_iter().collect();
+    let mrpack_selection = MrpackSelection {
+        all: all_optional,
+        files: &optional_files,
+    };
 
     match extension.as_str() {
         "toml" => {
@@ -30,7 +42,7 @@ pub async fn handle(file: String, merge_strategy: Option<String>, ctx: &CliConte
                         )
                     );
                     use std::io::Write;
-                    std::io::stdout().flush()?;
+                    std::io::stderr().flush()?;
                     let mut input = String::new();
                     std::io::stdin().read_line(&mut input)?;
                     Ok(matches!(
@@ -68,12 +80,67 @@ pub async fn handle(file: String, merge_strategy: Option<String>, ctx: &CliConte
                 }
             }
         }
-        "zip" | "mrpack" => {
-            let overwrite = strategy == orbit_core::ImportMergeStrategy::PreferImport;
-            let report = if extension == "mrpack" {
-                orbit_core::import_mrpack(&instance_dir, &source, overwrite, ctx.dry_run).await?
+        "orbitbundle" | "mrpack" => {
+            let mut overwrite = strategy == orbit_core::ImportMergeStrategy::PreferImport;
+            let preview = if strategy == orbit_core::ImportMergeStrategy::Interactive {
+                let preview = import_archive(
+                    &extension,
+                    &instance_dir,
+                    &source,
+                    false,
+                    mrpack_selection,
+                    true,
+                    ctx,
+                )
+                .await?;
+                if !preview.kept.is_empty() {
+                    eprint!(
+                        "{}",
+                        tr!(
+                            "Replace %{count} conflicting package file(s)? [y/N] ",
+                            count = preview.kept.len()
+                        )
+                    );
+                    use std::io::Write as _;
+                    std::io::stderr().flush()?;
+                    let mut input = String::new();
+                    std::io::stdin().read_line(&mut input)?;
+                    overwrite = matches!(input.trim().to_ascii_lowercase().as_str(), "y" | "yes");
+                }
+                Some(preview)
             } else {
-                orbit_core::import_archive(&instance_dir, &source, overwrite, ctx.dry_run)?
+                None
+            };
+            let report = if ctx.dry_run {
+                if let Some(mut preview) = preview {
+                    if overwrite {
+                        preview.extracted.append(&mut preview.kept);
+                        preview.extracted.sort();
+                    }
+                    preview
+                } else {
+                    import_archive(
+                        &extension,
+                        &instance_dir,
+                        &source,
+                        overwrite,
+                        mrpack_selection,
+                        true,
+                        ctx,
+                    )
+                    .await?
+                }
+            } else {
+                import_archive(
+                    &extension,
+                    &instance_dir,
+                    &source,
+                    overwrite,
+                    mrpack_selection,
+                    false,
+                    ctx,
+                )
+                .await?
             };
             if !ctx.dry_run && !report.extracted.is_empty() {
                 let providers =
@@ -137,10 +204,47 @@ pub async fn handle(file: String, merge_strategy: Option<String>, ctx: &CliConte
         }
         _ => anyhow::bail!(
             "{}",
-            tr!("Unsupported file format. Expected .toml, .zip, or .mrpack.")
+            tr!("Unsupported file format. Expected .toml, .orbitbundle, or .mrpack.")
         ),
     }
     Ok(())
+}
+
+#[derive(Clone, Copy)]
+struct MrpackSelection<'a> {
+    all: bool,
+    files: &'a BTreeSet<String>,
+}
+
+async fn import_archive(
+    extension: &str,
+    instance_dir: &std::path::Path,
+    source: &std::path::Path,
+    overwrite: bool,
+    selection: MrpackSelection<'_>,
+    dry_run: bool,
+    ctx: &CliContext,
+) -> Result<orbit_core::ImportReport> {
+    if extension == "mrpack" {
+        Ok(orbit_core::import_mrpack(
+            instance_dir,
+            source,
+            overwrite,
+            selection.all,
+            selection.files,
+            dry_run,
+            super::operation_progress(ctx),
+        )
+        .await?)
+    } else {
+        Ok(orbit_core::import_bundle(
+            instance_dir,
+            source,
+            overwrite,
+            dry_run,
+            super::operation_progress(ctx),
+        )?)
+    }
 }
 
 fn parse_strategy(

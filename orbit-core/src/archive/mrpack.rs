@@ -1,314 +1,567 @@
-use std::io::{Read, Write};
+use std::collections::{BTreeMap, BTreeSet};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use serde::Deserialize;
-use serde_json::json;
+use orbit_bundle_format::{
+    InstanceTarget, MrpackArchive, MrpackEnvironment, MrpackFile, MrpackHashes, MrpackIndex,
+    MrpackSideRequirement,
+};
+use serde_json::to_vec_pretty;
 use zip::write::SimpleFileOptions;
 
-use super::{ImportReport, add_file, import_archive};
+use super::{ExportTracker, ImportReport, PortableFile, add_file};
 use crate::error::OrbitError;
+use crate::progress::{ProgressEvent, ProgressReporter, emit as emit_progress};
 
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct MrpackIndex {
-    files: Vec<MrpackFile>,
-}
+const ALLOWED_DOWNLOAD_HOSTS: &[&str] = &[
+    "cdn.modrinth.com",
+    "github.com",
+    "raw.githubusercontent.com",
+    "gitlab.com",
+];
+const MAX_FILE_SIZE: u64 = 1024 * 1024 * 1024;
+const MAX_TOTAL_SIZE: u64 = 8 * 1024 * 1024 * 1024;
 
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct MrpackFile {
-    path: String,
-    hashes: MrpackHashes,
-    downloads: Vec<String>,
-    file_size: u64,
-}
-
-#[derive(Debug, Deserialize)]
-struct MrpackHashes {
-    sha1: String,
-    sha512: String,
-}
-
-/// Import bundled override JARs and downloadable files from a Modrinth pack.
+/// Install the Orbit-owned half of an official Modrinth pack.
+///
+/// Runtime dependencies are checked against the actual instance first. Every
+/// download and override is materialized in staging, then committed as one
+/// rollback-capable filesystem transaction. Launcher-owned paths are rejected.
 pub async fn import_mrpack(
     instance_dir: &Path,
     source: &Path,
     overwrite: bool,
+    include_all_optional: bool,
+    optional_files: &BTreeSet<String>,
     dry_run: bool,
+    progress: Option<ProgressReporter>,
 ) -> Result<ImportReport, OrbitError> {
-    let mut report = import_archive(instance_dir, source, overwrite, dry_run)?;
-    let index = read_index(source)?;
-    let bundled: std::collections::HashSet<_> = report.extracted.iter().cloned().collect();
-    let mods_dir = instance_dir.join("mods");
+    let pack = MrpackArchive::open(source)?;
+    let target = validate_runtime(instance_dir, &pack)?;
+    let transaction_root = tempfile::Builder::new()
+        .prefix(".orbit-mrpack-")
+        .tempdir_in(instance_dir)?;
+    let staging = transaction_root.path().join("staging");
+    std::fs::create_dir_all(&staging)?;
     let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(60))
-        .build()
-        .map_err(|error| {
+        .timeout(std::time::Duration::from_secs(180))
+        .redirect(reqwest::redirect::Policy::limited(10))
+        .build()?;
+    let available_optional = pack
+        .index
+        .files
+        .iter()
+        .filter(|file| file.requirement(target) == MrpackSideRequirement::Optional)
+        .map(|file| file.path.as_str())
+        .collect::<BTreeSet<_>>();
+    if let Some(path) = optional_files
+        .iter()
+        .find(|path| !available_optional.contains(path.as_str()))
+    {
+        return Err(OrbitError::Other(anyhow::anyhow!(
+            "mrpack optional file '{path}' is not optional for the selected target"
+        )));
+    }
+    let selected_files = pack
+        .index
+        .files
+        .iter()
+        .filter(|file| match file.requirement(target) {
+            MrpackSideRequirement::Required => true,
+            MrpackSideRequirement::Optional => {
+                include_all_optional || optional_files.contains(&file.path)
+            }
+            MrpackSideRequirement::Unsupported => false,
+        })
+        .collect::<Vec<_>>();
+    let selected_overrides = pack.overrides_for(target).collect::<Vec<_>>();
+    let mut total_bytes = 0_u64;
+    for file in &selected_files {
+        validate_instance_payload_path(&file.path)?;
+        total_bytes = total_bytes
+            .checked_add(file.file_size)
+            .ok_or_else(|| OrbitError::Other(anyhow::anyhow!("mrpack payload size overflowed")))?;
+        if file.file_size > MAX_FILE_SIZE || total_bytes > MAX_TOTAL_SIZE {
+            return Err(OrbitError::Other(anyhow::anyhow!(
+                "mrpack payload exceeds the configured safety limit"
+            )));
+        }
+    }
+    for entry in &selected_overrides {
+        validate_instance_payload_path(&entry.relative_path)?;
+        total_bytes = total_bytes
+            .checked_add(entry.size)
+            .ok_or_else(|| OrbitError::Other(anyhow::anyhow!("mrpack override size overflowed")))?;
+        if total_bytes > MAX_TOTAL_SIZE {
+            return Err(OrbitError::Other(anyhow::anyhow!(
+                "mrpack payload exceeds the configured safety limit"
+            )));
+        }
+    }
+    if dry_run {
+        let planned = selected_files
+            .iter()
+            .map(|file| file.path.clone())
+            .chain(
+                selected_overrides
+                    .iter()
+                    .map(|entry| entry.relative_path.clone()),
+            )
+            .collect::<BTreeSet<_>>();
+        return Ok(plan_staging(instance_dir, planned, overwrite));
+    }
+
+    let files = selected_files.len() + selected_overrides.len();
+    emit_progress(
+        progress.as_ref(),
+        ProgressEvent::ImportStarted { files, total_bytes },
+    );
+    let mut completed_bytes = 0_u64;
+    let mut completed_files = 0_usize;
+    for file in selected_files {
+        download_to_staging(&client, file, &staging.join(&file.path), |advanced| {
+            completed_bytes = completed_bytes.saturating_add(advanced);
+            emit_progress(
+                progress.as_ref(),
+                ProgressEvent::ImportAdvanced {
+                    completed_bytes,
+                    total_bytes,
+                    completed_files,
+                    files,
+                },
+            );
+        })
+        .await?;
+        completed_files += 1;
+        emit_progress(
+            progress.as_ref(),
+            ProgressEvent::ImportAdvanced {
+                completed_bytes,
+                total_bytes,
+                completed_files,
+                files,
+            },
+        );
+    }
+    extract_overrides(
+        source,
+        &selected_overrides,
+        &staging,
+        |advanced, extracted| {
+            completed_bytes = completed_bytes.saturating_add(advanced);
+            emit_progress(
+                progress.as_ref(),
+                ProgressEvent::ImportAdvanced {
+                    completed_bytes,
+                    total_bytes,
+                    completed_files: completed_files + extracted,
+                    files,
+                },
+            );
+        },
+    )?;
+    completed_files += selected_overrides.len();
+    emit_progress(
+        progress.as_ref(),
+        ProgressEvent::ImportFinished {
+            files: completed_files,
+            total_bytes,
+        },
+    );
+    let planned = collect_relative_files(&staging)?;
+    commit_staging(instance_dir, &staging, planned, overwrite)
+}
+
+fn validate_runtime(
+    instance_dir: &Path,
+    pack: &MrpackArchive,
+) -> Result<InstanceTarget, OrbitError> {
+    let manifest = crate::workspace::ManifestFile::open(instance_dir)?;
+    let platform = crate::platform::Platform::load(instance_dir, &manifest.inner)?;
+    let expected = pack.runtime()?;
+    let actual_loader_version =
+        (platform.loader.as_str() != "vanilla").then_some(platform.loader_version.as_str());
+    if expected.minecraft != platform.minecraft_version.id
+        || expected.loader != platform.loader.as_str()
+        || expected.loader_version.as_deref() != actual_loader_version
+    {
+        return Err(OrbitError::Other(anyhow::anyhow!(
+            "mrpack requires Minecraft {} / {} {}, but the instance is Minecraft {} / {} {}",
+            expected.minecraft,
+            expected.loader,
+            expected.loader_version.as_deref().unwrap_or(""),
+            platform.minecraft_version.id,
+            platform.loader,
+            platform.loader_version
+        )));
+    }
+    Ok(match platform.physical_environment {
+        crate::metadata::Environment::Client => InstanceTarget::Client,
+        crate::metadata::Environment::Server => InstanceTarget::Server,
+        crate::metadata::Environment::Both => {
+            return Err(OrbitError::Other(anyhow::anyhow!(
+                "mrpack import requires an explicitly detected client or server instance"
+            )));
+        }
+    })
+}
+
+async fn download_to_staging<F>(
+    client: &reqwest::Client,
+    file: &MrpackFile,
+    destination: &Path,
+    mut progress: F,
+) -> Result<(), OrbitError>
+where
+    F: FnMut(u64),
+{
+    let url = file
+        .downloads
+        .iter()
+        .find(|download| allowed_download_url(download))
+        .ok_or_else(|| {
             OrbitError::Other(anyhow::anyhow!(
-                "failed to create mrpack download client: {error}"
+                "mrpack file '{}' has no allowed HTTPS download URL",
+                file.path
             ))
         })?;
-    let mut total_download_size = 0_u64;
-    let mut indexed_files = std::collections::HashSet::new();
-
-    for file in index.files {
-        let Some(filename) = mod_filename(&file.path)? else {
-            continue;
-        };
-        if !indexed_files.insert(filename.clone()) {
+    let mut response = client.get(url).send().await?.error_for_status()?;
+    if response
+        .content_length()
+        .is_some_and(|length| length != file.file_size || length > MAX_FILE_SIZE)
+    {
+        return Err(OrbitError::Other(anyhow::anyhow!(
+            "mrpack response size disagrees with '{}'",
+            file.path
+        )));
+    }
+    if let Some(parent) = destination.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let mut output = std::fs::File::create(destination)?;
+    let mut sha1 = sha1::Sha1::new();
+    let mut sha512 = sha2::Sha512::new();
+    let mut bytes = 0_u64;
+    use sha1::Digest as _;
+    while let Some(chunk) = response.chunk().await? {
+        bytes = bytes.saturating_add(chunk.len() as u64);
+        if bytes > file.file_size || bytes > MAX_FILE_SIZE {
             return Err(OrbitError::Other(anyhow::anyhow!(
-                "mrpack index contains duplicate mod path '{}'",
+                "mrpack response exceeded declared size for '{}'",
                 file.path
             )));
         }
-        // Overrides are applied after downloads by the mrpack format, so a
-        // bundled JAR is authoritative when both forms are present.
-        if bundled.contains(&filename) {
-            continue;
-        }
-        let destination = mods_dir.join(&filename);
-        if destination.exists() && !overwrite {
-            report.kept.push(filename);
-            continue;
-        }
-        report.extracted.push(filename.clone());
-        if dry_run {
-            continue;
-        }
+        sha1.update(&chunk);
+        sha512.update(&chunk);
+        output.write_all(&chunk)?;
+        progress(chunk.len() as u64);
+    }
+    output.sync_all()?;
+    if bytes != file.file_size
+        || !hex::encode(sha1.finalize()).eq_ignore_ascii_case(&file.hashes.sha1)
+        || !hex::encode(sha512.finalize()).eq_ignore_ascii_case(&file.hashes.sha512)
+    {
+        return Err(OrbitError::Other(anyhow::anyhow!(
+            "mrpack content verification failed for '{}'",
+            file.path
+        )));
+    }
+    Ok(())
+}
 
-        let download_url = validated_download_url(&file.downloads, &filename)?;
-        let mut response = client
-            .get(download_url)
-            .send()
-            .await
-            .map_err(|error| {
-                OrbitError::Other(anyhow::anyhow!(
-                    "failed to download mrpack file '{filename}': {error}"
-                ))
-            })?
-            .error_for_status()
-            .map_err(|error| {
-                OrbitError::Other(anyhow::anyhow!(
-                    "failed to download mrpack file '{filename}': {error}"
-                ))
-            })?;
-        const MAX_FILE_SIZE: u64 = 1024 * 1024 * 1024;
-        if response
-            .content_length()
-            .is_some_and(|length| length > MAX_FILE_SIZE)
-            || file.file_size > MAX_FILE_SIZE
+fn extract_overrides<F>(
+    source: &Path,
+    entries: &[&orbit_bundle_format::MrpackOverride],
+    staging: &Path,
+    mut progress: F,
+) -> Result<(), OrbitError>
+where
+    F: FnMut(u64, usize),
+{
+    let mut archive = zip::ZipArchive::new(std::fs::File::open(source)?)?;
+    let mut buffer = vec![0_u8; 128 * 1024];
+    for (index, expected) in entries.iter().enumerate() {
+        let mut entry = archive.by_name(&expected.archive_path)?;
+        if entry
+            .unix_mode()
+            .is_some_and(|mode| mode & 0o170_000 == 0o120_000)
         {
             return Err(OrbitError::Other(anyhow::anyhow!(
-                "mrpack file '{filename}' exceeds the 1 GiB safety limit"
+                "mrpack override '{}' is a symbolic link",
+                expected.archive_path
             )));
         }
-        let mut bytes = Vec::with_capacity(
-            usize::try_from(file.file_size.min(MAX_FILE_SIZE)).unwrap_or_default(),
-        );
-        while let Some(chunk) = response.chunk().await.map_err(|error| {
-            OrbitError::Other(anyhow::anyhow!(
-                "failed to read mrpack file '{filename}': {error}"
-            ))
-        })? {
-            if bytes.len().saturating_add(chunk.len())
-                > usize::try_from(MAX_FILE_SIZE).unwrap_or(usize::MAX)
-            {
+        let destination = staging.join(&expected.relative_path);
+        if let Some(parent) = destination.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let mut output = std::fs::File::create(destination)?;
+        loop {
+            use std::io::Read as _;
+            let read = entry.read(&mut buffer)?;
+            if read == 0 {
+                break;
+            }
+            output.write_all(&buffer[..read])?;
+            progress(read as u64, index);
+        }
+        output.sync_all()?;
+        progress(0, index + 1);
+    }
+    Ok(())
+}
+
+pub(super) fn commit_staging(
+    instance_dir: &Path,
+    staging: &Path,
+    files: BTreeSet<String>,
+    overwrite: bool,
+) -> Result<ImportReport, OrbitError> {
+    let backup = staging
+        .parent()
+        .expect("staging has transaction parent")
+        .join("backup");
+    std::fs::create_dir_all(&backup)?;
+    let mut applied = Vec::new();
+    let mut backed_up = Vec::new();
+    let mut report = ImportReport::default();
+    for relative in files {
+        let source = staging.join(&relative);
+        let destination = instance_dir.join(&relative);
+        validate_destination(instance_dir, &destination)?;
+        if destination.exists() && !overwrite {
+            report.kept.push(relative);
+            continue;
+        }
+        let result = (|| -> Result<(), OrbitError> {
+            if destination.exists() {
+                let backup_path = backup.join(&relative);
+                if let Some(parent) = backup_path.parent() {
+                    std::fs::create_dir_all(parent)?;
+                }
+                std::fs::rename(&destination, &backup_path)?;
+                backed_up.push((backup_path, destination.clone()));
+            }
+            if let Some(parent) = destination.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            std::fs::rename(&source, &destination)?;
+            applied.push(destination);
+            Ok(())
+        })();
+        if let Err(error) = result {
+            return match rollback_files(&applied, &backed_up) {
+                Ok(()) => Err(error),
+                Err(rollback) => Err(OrbitError::Other(anyhow::anyhow!(
+                    "import transaction failed: {error}; rollback also failed: {rollback}"
+                ))),
+            };
+        }
+        report.extracted.push(relative);
+    }
+    report.extracted.sort();
+    report.kept.sort();
+    Ok(report)
+}
+
+pub(super) fn plan_staging(
+    instance_dir: &Path,
+    files: BTreeSet<String>,
+    overwrite: bool,
+) -> ImportReport {
+    let mut report = ImportReport::default();
+    for relative in files {
+        if instance_dir.join(&relative).exists() && !overwrite {
+            report.kept.push(relative);
+        } else {
+            report.extracted.push(relative);
+        }
+    }
+    report
+}
+
+fn rollback_files(applied: &[PathBuf], backed_up: &[(PathBuf, PathBuf)]) -> Result<(), OrbitError> {
+    let mut failures = Vec::new();
+    for path in applied.iter().rev() {
+        if let Err(error) = std::fs::remove_file(path) {
+            failures.push(format!("remove '{}': {error}", path.display()));
+        }
+    }
+    for (source, destination) in backed_up.iter().rev() {
+        if let Err(error) = std::fs::rename(source, destination) {
+            failures.push(format!(
+                "restore '{}' to '{}': {error}",
+                source.display(),
+                destination.display()
+            ));
+        }
+    }
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(OrbitError::Other(anyhow::anyhow!(failures.join("; "))))
+    }
+}
+
+pub(super) fn collect_relative_files(root: &Path) -> Result<BTreeSet<String>, OrbitError> {
+    fn visit(root: &Path, path: &Path, output: &mut BTreeSet<String>) -> Result<(), OrbitError> {
+        for entry in std::fs::read_dir(path)? {
+            let path = entry?.path();
+            let metadata = std::fs::symlink_metadata(&path)?;
+            if metadata.file_type().is_symlink() {
                 return Err(OrbitError::Other(anyhow::anyhow!(
-                    "mrpack file '{filename}' exceeds the 1 GiB safety limit"
+                    "mrpack staging unexpectedly contains a symbolic link"
                 )));
             }
-            bytes.extend_from_slice(&chunk);
+            if metadata.is_dir() {
+                visit(root, &path, output)?;
+            } else if metadata.is_file() {
+                output.insert(
+                    path.strip_prefix(root)
+                        .expect("visited path is beneath root")
+                        .components()
+                        .map(|component| component.as_os_str().to_string_lossy())
+                        .collect::<Vec<_>>()
+                        .join("/"),
+                );
+            }
         }
-        if bytes.len() as u64 != file.file_size {
-            return Err(OrbitError::Other(anyhow::anyhow!(
-                "mrpack file size mismatch for '{filename}': expected {}, got {}",
-                file.file_size,
-                bytes.len()
-            )));
-        }
-        verify_hashes(&filename, &bytes, &file.hashes)?;
-        total_download_size = total_download_size.saturating_add(bytes.len() as u64);
-        if total_download_size > 4 * 1024 * 1024 * 1024 {
-            return Err(OrbitError::Other(anyhow::anyhow!(
-                "mrpack contains more than 4 GiB of downloadable mod files"
-            )));
-        }
-        write_jar(&mods_dir, &filename, &bytes, &destination)?;
+        Ok(())
     }
+    let mut output = BTreeSet::new();
+    visit(root, root, &mut output)?;
+    Ok(output)
+}
 
-    report.extracted.sort();
-    report.extracted.dedup();
-    report.kept.sort();
-    report.kept.dedup();
-    Ok(report)
+fn validate_instance_payload_path(relative: &str) -> Result<(), OrbitError> {
+    orbit_bundle_format::validate_relative_path(relative)?;
+    let first = relative.split('/').next().unwrap_or_default();
+    const RESERVED_ROOTS: &[&str] = &[
+        ".orbit",
+        ".orbit-launcher",
+        "assets",
+        "libraries",
+        "runtime",
+        "versions",
+    ];
+    const RESERVED_FILES: &[&str] = &[
+        "bundle.toml",
+        "minecraft.jar",
+        "orbit.toml",
+        "orbit.lock",
+        "orbit-launcher.toml",
+        "orbit-launcher.lock",
+        "eula.txt",
+    ];
+    if RESERVED_ROOTS.contains(&first) || RESERVED_FILES.contains(&relative) {
+        return Err(OrbitError::Other(anyhow::anyhow!(
+            "mrpack path '{relative}' belongs to Orbit or Launcher and cannot be installed as pack content"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_destination(instance: &Path, destination: &Path) -> Result<(), OrbitError> {
+    let relative = destination.strip_prefix(instance).map_err(|_| {
+        OrbitError::Other(anyhow::anyhow!("mrpack destination escaped the instance"))
+    })?;
+    let mut current = instance.to_path_buf();
+    for component in relative
+        .components()
+        .take(relative.components().count().saturating_sub(1))
+    {
+        current.push(component.as_os_str());
+        if current.exists()
+            && std::fs::symlink_metadata(&current)?
+                .file_type()
+                .is_symlink()
+        {
+            return Err(OrbitError::Other(anyhow::anyhow!(
+                "mrpack destination traverses symbolic link '{}'",
+                current.display()
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn allowed_download_url(value: &str) -> bool {
+    url::Url::parse(value).is_ok_and(|url| {
+        url.scheme() == "https"
+            && url.username().is_empty()
+            && url.password().is_none()
+            && url
+                .host_str()
+                .is_some_and(|host| ALLOWED_DOWNLOAD_HOSTS.contains(&host))
+    })
+}
+
+pub(super) struct MrpackContents<'a> {
+    pub manifest: &'a crate::manifest::OrbitManifest,
+    pub packages: &'a [(&'a crate::lockfile::PackageEntry, PathBuf, u64)],
+    pub state: &'a [PortableFile],
+    pub target: Option<InstanceTarget>,
 }
 
 pub(super) fn write_contents(
     archive: &mut zip::ZipWriter<std::fs::File>,
     metadata_options: SimpleFileOptions,
     artifact_options: SimpleFileOptions,
-    manifest: &crate::manifest::OrbitManifest,
-    lock_toml: &str,
-    sources: &[(&crate::lockfile::PackageEntry, PathBuf, u64)],
-    progress: &mut super::ExportTracker,
+    contents: MrpackContents<'_>,
+    progress: &mut ExportTracker,
 ) -> Result<(), OrbitError> {
-    let index = build_index(manifest, sources);
-    archive.start_file("modrinth.index.json", metadata_options)?;
-    archive.write_all(serde_json::to_string_pretty(&index)?.as_bytes())?;
-    archive.start_file("overrides/orbit.toml", metadata_options)?;
-    archive.write_all(manifest.to_toml_string()?.as_bytes())?;
-    archive.start_file("overrides/orbit.lock", metadata_options)?;
-    archive.write_all(lock_toml.as_bytes())?;
-    for (entry, source, _) in sources {
+    let index = build_index(contents.manifest, contents.packages);
+    index.validate()?;
+    archive.start_file(orbit_bundle_format::MRPACK_INDEX_PATH, metadata_options)?;
+    archive.write_all(&to_vec_pretty(&index)?)?;
+    for (entry, source, _) in contents.packages {
         if is_embedded(entry) {
+            let environment = environment(contents.manifest, entry);
+            let prefix = override_prefix(environment, contents.target);
             add_file(
                 archive,
-                &format!("overrides/mods/{}", entry.filename),
+                &format!("{prefix}mods/{}", entry.filename),
                 source,
                 artifact_options,
                 Some(progress),
             )?;
         }
     }
-    Ok(())
-}
-
-fn read_index(source: &Path) -> Result<MrpackIndex, OrbitError> {
-    let file = std::fs::File::open(source)?;
-    let mut archive = zip::ZipArchive::new(file)?;
-    let mut entry = archive.by_name("modrinth.index.json").map_err(|_| {
-        OrbitError::Other(anyhow::anyhow!(
-            "{} does not contain modrinth.index.json",
-            source.display()
-        ))
-    })?;
-    let mut content = String::new();
-    entry.read_to_string(&mut content)?;
-    serde_json::from_str(&content)
-        .map_err(|error| OrbitError::Other(anyhow::anyhow!("invalid mrpack index: {error}")))
-}
-
-fn mod_filename(path: &str) -> Result<Option<String>, OrbitError> {
-    use std::path::Component;
-
-    let path = Path::new(path);
-    if path
-        .components()
-        .any(|component| !matches!(component, Component::Normal(_) | Component::CurDir))
-    {
-        return Err(OrbitError::Other(anyhow::anyhow!(
-            "unsafe path in mrpack index: {}",
-            path.display()
-        )));
+    let prefix = match contents.target {
+        Some(InstanceTarget::Client) => "client-overrides/",
+        Some(InstanceTarget::Server) => "server-overrides/",
+        None => "overrides/",
+    };
+    for source in contents.state {
+        add_file(
+            archive,
+            &format!("{prefix}{}", super::archive_path(&source.relative)),
+            &source.source,
+            metadata_options,
+            Some(progress),
+        )?;
     }
-    let components: Vec<_> = path
-        .components()
-        .filter_map(|component| match component {
-            Component::Normal(value) => Some(value),
-            _ => None,
-        })
-        .collect();
-    if components.len() != 2
-        || !components[0].to_string_lossy().eq_ignore_ascii_case("mods")
-        || crate::package_activation::mod_artifact_enabled(&components[1].to_string_lossy())
-            .is_none()
-    {
-        return Ok(None);
-    }
-    Ok(Some(components[1].to_string_lossy().into_owned()))
-}
-
-fn validated_download_url<'a>(
-    downloads: &'a [String],
-    filename: &str,
-) -> Result<&'a str, OrbitError> {
-    const ALLOWED_HOSTS: &[&str] = &[
-        "cdn.modrinth.com",
-        "github.com",
-        "raw.githubusercontent.com",
-        "gitlab.com",
-    ];
-    for download in downloads {
-        let Ok(url) = url::Url::parse(download) else {
-            continue;
-        };
-        if url.scheme() == "https"
-            && url.username().is_empty()
-            && url.password().is_none()
-            && url
-                .host_str()
-                .is_some_and(|host| ALLOWED_HOSTS.contains(&host))
-        {
-            return Ok(download);
-        }
-    }
-    Err(OrbitError::Other(anyhow::anyhow!(
-        "mrpack file '{filename}' has no allowed HTTPS download URL"
-    )))
-}
-
-fn verify_hashes(filename: &str, bytes: &[u8], hashes: &MrpackHashes) -> Result<(), OrbitError> {
-    if hashes.sha1.is_empty() || hashes.sha512.is_empty() {
-        return Err(OrbitError::Other(anyhow::anyhow!(
-            "mrpack file '{filename}' must include SHA-1 and SHA-512 hashes"
-        )));
-    }
-    let actual_sha1 = crate::jar::sha1_digest(bytes);
-    if !actual_sha1.eq_ignore_ascii_case(&hashes.sha1) {
-        return Err(OrbitError::ChecksumMismatch {
-            name: filename.to_string(),
-            expected: hashes.sha1.clone(),
-            actual: actual_sha1,
-        });
-    }
-    let actual_sha512 = crate::jar::sha512_digest(bytes);
-    if !actual_sha512.eq_ignore_ascii_case(&hashes.sha512) {
-        return Err(OrbitError::ChecksumMismatch {
-            name: filename.to_string(),
-            expected: hashes.sha512.clone(),
-            actual: actual_sha512,
-        });
-    }
-    Ok(())
-}
-
-fn write_jar(
-    mods_dir: &Path,
-    filename: &str,
-    bytes: &[u8],
-    destination: &Path,
-) -> Result<(), OrbitError> {
-    std::fs::create_dir_all(mods_dir)?;
-    let temporary = mods_dir.join(format!(".{filename}.importing"));
-    let mut output = std::fs::File::create(&temporary)?;
-    output.write_all(bytes)?;
-    output.sync_all()?;
-    if destination.exists() {
-        std::fs::remove_file(destination)?;
-    }
-    std::fs::rename(temporary, destination)?;
     Ok(())
 }
 
 fn build_index(
     manifest: &crate::manifest::OrbitManifest,
     sources: &[(&crate::lockfile::PackageEntry, PathBuf, u64)],
-) -> serde_json::Value {
-    let files: Vec<_> = sources
+) -> MrpackIndex {
+    let files = sources
         .iter()
-        .filter_map(|(entry, source, _)| {
-            let download_url = download_url(entry)?;
-            let (client, server) = environment(manifest, entry);
-            Some(json!({
-                "path": format!("mods/{}", entry.filename),
-                "hashes": {
-                    "sha1": entry.sha1,
-                    "sha512": entry.sha512,
+        .filter_map(|(entry, _, bytes)| {
+            let download = download_url(entry)?;
+            Some(MrpackFile {
+                path: format!("mods/{}", entry.filename),
+                hashes: MrpackHashes {
+                    sha1: entry.sha1.clone(),
+                    sha512: entry.sha512.clone(),
                 },
-                "env": { "client": client, "server": server },
-                "downloads": [download_url],
-                "fileSize": std::fs::metadata(source).map(|metadata| metadata.len()).unwrap_or(0),
-            }))
+                env: environment(manifest, entry),
+                downloads: vec![download.to_string()],
+                file_size: *bytes,
+            })
         })
         .collect();
     let loader_key = match manifest.project.modloader.as_str() {
@@ -316,39 +569,44 @@ fn build_index(
         "quilt" => "quilt-loader",
         other => other,
     };
-    let mut dependencies = serde_json::Map::new();
-    dependencies.insert("minecraft".to_string(), json!(manifest.project.mc_version));
-    dependencies.insert(
-        loader_key.to_string(),
-        json!(manifest.project.modloader_version),
-    );
-    json!({
-        "formatVersion": 1,
-        "game": "minecraft",
-        "versionId": manifest.project.version.as_deref().unwrap_or("1.0.0"),
-        "name": manifest.project.name,
-        "summary": manifest.project.description.as_deref().unwrap_or(""),
-        "files": files,
-        "dependencies": dependencies,
-    })
+    let mut dependencies =
+        BTreeMap::from([("minecraft".to_string(), manifest.project.mc_version.clone())]);
+    if manifest.project.modloader != "vanilla" {
+        dependencies.insert(
+            loader_key.to_string(),
+            manifest.project.modloader_version.clone(),
+        );
+    }
+    MrpackIndex {
+        format_version: orbit_bundle_format::MRPACK_FORMAT_VERSION,
+        game: "minecraft".to_string(),
+        version_id: manifest
+            .project
+            .version
+            .clone()
+            .unwrap_or_else(|| "1.0.0".to_string()),
+        name: manifest.project.name.clone(),
+        summary: manifest.project.description.clone(),
+        files,
+        dependencies,
+    }
 }
 
 fn download_url(entry: &crate::lockfile::PackageEntry) -> Option<&str> {
     if entry.sha1.is_empty() || entry.sha512.is_empty() {
         return None;
     }
-    let download_url = entry
+    entry
         .artifact_sources
         .iter()
-        .find_map(|source| match source {
+        .filter_map(|source| match source {
             crate::lockfile::ArtifactSource::Modrinth { download_url, .. }
             | crate::lockfile::ArtifactSource::Curseforge { download_url, .. } => {
                 Some(download_url.as_str())
             }
             crate::lockfile::ArtifactSource::File { .. } => None,
-        })?;
-    let url = url::Url::parse(download_url).ok()?;
-    (url.scheme() == "https").then_some(download_url)
+        })
+        .find(|url| allowed_download_url(url))
 }
 
 pub(super) fn is_embedded(entry: &crate::lockfile::PackageEntry) -> bool {
@@ -358,18 +616,40 @@ pub(super) fn is_embedded(entry: &crate::lockfile::PackageEntry) -> bool {
 fn environment(
     manifest: &crate::manifest::OrbitManifest,
     entry: &crate::lockfile::PackageEntry,
-) -> (&'static str, &'static str) {
+) -> MrpackEnvironment {
     let Some(requirement) = manifest.packages.get(&entry.mod_id) else {
-        return ("required", "required");
+        return MrpackEnvironment::default();
     };
     let supported = if requirement.optional() {
-        "optional"
+        MrpackSideRequirement::Optional
     } else {
-        "required"
+        MrpackSideRequirement::Required
     };
     match requirement.effective_environment(entry.environment) {
-        crate::metadata::Environment::Client => (supported, "unsupported"),
-        crate::metadata::Environment::Server => ("unsupported", supported),
-        crate::metadata::Environment::Both => (supported, supported),
+        crate::metadata::Environment::Client => MrpackEnvironment {
+            client: supported,
+            server: MrpackSideRequirement::Unsupported,
+        },
+        crate::metadata::Environment::Server => MrpackEnvironment {
+            client: MrpackSideRequirement::Unsupported,
+            server: supported,
+        },
+        crate::metadata::Environment::Both => MrpackEnvironment {
+            client: supported,
+            server: supported,
+        },
+    }
+}
+
+fn override_prefix(
+    environment: MrpackEnvironment,
+    _target: Option<InstanceTarget>,
+) -> &'static str {
+    if environment.client == MrpackSideRequirement::Unsupported {
+        "server-overrides/"
+    } else if environment.server == MrpackSideRequirement::Unsupported {
+        "client-overrides/"
+    } else {
+        "overrides/"
     }
 }

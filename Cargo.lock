@@ -4713,6 +4713,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "orbit-bundle-format"
+version = "0.3.0"
+dependencies = [
+ "hex",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "thiserror 2.0.18",
+ "toml 0.8.23",
+ "url",
+ "zip",
+]
+
+[[package]]
 name = "orbit-bytecode-audit"
 version = "0.1.2"
 dependencies = [
@@ -4757,6 +4772,7 @@ dependencies = [
  "indexmap",
  "java-properties",
  "modrinth-wrapper",
+ "orbit-bundle-format",
  "orbit-bytecode-audit",
  "orbit-compatibility",
  "orbit-loader-json",
@@ -4773,6 +4789,7 @@ dependencies = [
  "toml 0.8.23",
  "toml_edit 0.22.27",
  "url",
+ "windows-sys 0.61.2",
  "zip",
 ]
 
@@ -4845,6 +4862,7 @@ dependencies = [
  "image",
  "java-properties",
  "md-5",
+ "orbit-bundle-format",
  "orbit-compatibility",
  "os_info",
  "regex",

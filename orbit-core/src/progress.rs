@@ -113,6 +113,20 @@ pub enum ProgressEvent {
         packages: usize,
         total_bytes: u64,
     },
+    ImportStarted {
+        files: usize,
+        total_bytes: u64,
+    },
+    ImportAdvanced {
+        completed_bytes: u64,
+        total_bytes: u64,
+        completed_files: usize,
+        files: usize,
+    },
+    ImportFinished {
+        files: usize,
+        total_bytes: u64,
+    },
 }
 
 pub(crate) fn emit(progress: Option<&ProgressReporter>, event: ProgressEvent) {
