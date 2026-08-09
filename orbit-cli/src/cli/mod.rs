@@ -155,10 +155,26 @@ pub enum Commands {
     /// Disable a managed package while keeping it managed and locked.
     Disable { package: String },
 
-    /// Remove a mod and its configuration files.
+    /// Launch Minecraft through Orbit Launcher with runtime data observation.
+    Launch {
+        /// Exact Orbit Launcher executable; defaults to the one beside Orbit.
+        #[arg(long)]
+        launcher: Option<PathBuf>,
+        /// Exact Launcher instance ID or name.
+        #[arg(long)]
+        launcher_instance: Option<String>,
+        /// Start the selected dedicated server instead of a client.
+        #[arg(long)]
+        server: bool,
+        /// Exact Orbit Runtime Agent JAR (packaging/testing override).
+        #[arg(long, hide = true)]
+        runtime_agent: Option<PathBuf>,
+    },
+
+    /// Remove a package and runtime-observed data owned exclusively by it.
     Purge {
-        /// Mod name.
-        mod_name: String,
+        /// JAR-declared package mod_id.
+        package: String,
     },
 
     /// Reconcile local state in both directions.
@@ -429,7 +445,13 @@ impl CommandHandler for Commands {
             Commands::Remove { mod_name } => handle_remove(mod_name, ctx).await,
             Commands::Enable { package } => handle_activation(package, true, ctx),
             Commands::Disable { package } => handle_activation(package, false, ctx),
-            Commands::Purge { mod_name } => handle_purge(mod_name, ctx).await,
+            Commands::Launch {
+                launcher,
+                launcher_instance,
+                server,
+                runtime_agent,
+            } => handle_launch(launcher, runtime_agent, launcher_instance, server, ctx).await,
+            Commands::Purge { package } => handle_purge(package, ctx).await,
             Commands::Sync => handle_sync(ctx).await,
             Commands::Outdated { mod_name } => handle_outdated(mod_name, ctx).await,
             Commands::Upgrade { mod_name } => handle_upgrade(mod_name, ctx).await,
@@ -480,6 +502,7 @@ impl Commands {
             Self::Remove { .. } => "remove",
             Self::Enable { .. } => "enable",
             Self::Disable { .. } => "disable",
+            Self::Launch { .. } => "launch",
             Self::Purge { .. } => "purge",
             Self::Sync => "sync",
             Self::Outdated { .. } => "outdated",
@@ -510,6 +533,7 @@ impl Commands {
                 | Self::Remove { .. }
                 | Self::Enable { .. }
                 | Self::Disable { .. }
+                | Self::Launch { .. }
                 | Self::Purge { .. }
                 | Self::Sync
                 | Self::Upgrade { .. }
@@ -751,6 +775,34 @@ mod tests {
             &disable.command,
             Commands::Disable { package } if package == "sodium"
         ));
+    }
+
+    #[test]
+    fn joint_launch_selects_the_launcher_instance_and_server_target() {
+        let cli = Cli::try_parse_from([
+            "orbit",
+            "launch",
+            "--launcher",
+            "D:/Orbit/orbit-launcher.exe",
+            "--launcher-instance",
+            "server-26.2",
+            "--server",
+        ])
+        .unwrap();
+        assert!(cli.command.mutates_instance());
+        let Commands::Launch {
+            launcher,
+            launcher_instance,
+            server,
+            runtime_agent,
+        } = cli.command
+        else {
+            panic!("launch command was not parsed");
+        };
+        assert_eq!(launcher, Some(PathBuf::from("D:/Orbit/orbit-launcher.exe")));
+        assert_eq!(launcher_instance.as_deref(), Some("server-26.2"));
+        assert!(server);
+        assert!(runtime_agent.is_none());
     }
 
     #[test]

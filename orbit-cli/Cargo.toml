@@ -21,6 +21,7 @@ section = "utils"
 priority = "optional"
 assets = [
     ["target/release/orbit", "usr/bin/", "755"],
+    ["target/release/orbit-runtime-agent.jar", "usr/lib/orbit/", "644"],
     ["../README.md", "usr/share/doc/orbit/README.md", "644"],
     ["../docs/orbit-cli-commands.md", "usr/share/doc/orbit/orbit-cli.md", "644"],
 ]

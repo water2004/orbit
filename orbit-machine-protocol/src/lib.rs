@@ -107,6 +107,7 @@ pub enum InteractionKind {
     Package,
     Resolution,
     Confirmation,
+    DataDeletion,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -258,5 +259,34 @@ mod tests {
         let response = InteractionResponse::selected(decoded.interaction_id, "1");
         assert_eq!(response.kind, "interaction_response");
         assert!(!response.cancelled);
+    }
+
+    #[test]
+    fn data_deletion_is_a_first_class_interaction_kind() {
+        let envelope = InteractionEnvelope::new(
+            "purge",
+            4,
+            "data-deletion-4",
+            InteractionKind::DataDeletion,
+            "Review exact paths",
+            vec![InteractionChoice {
+                id: "proceed".to_string(),
+                label: "Remove package and data".to_string(),
+                description: None,
+                data: serde_json::json!({
+                    "mod_id": "example",
+                    "entries": [{
+                        "path": "config/example",
+                        "scope": "instance",
+                        "kind": "tree"
+                    }]
+                }),
+            }],
+        );
+        let encoded = serde_json::to_string(&envelope).unwrap();
+        assert!(encoded.contains("\"interaction\":\"data_deletion\""));
+        let decoded: InteractionEnvelope<serde_json::Value> =
+            serde_json::from_str(&encoded).unwrap();
+        assert_eq!(decoded.interaction, InteractionKind::DataDeletion);
     }
 }

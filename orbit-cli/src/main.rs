@@ -50,7 +50,8 @@ async fn main() {
             orbit_i18n::LanguageMode::SimplifiedChinese
         }
     };
-    orbit_i18n::install(cli.language.unwrap_or(configured_language));
+    let language = cli.language.unwrap_or(configured_language);
+    orbit_i18n::install(language);
     cli::output::install_color_mode(runtime.config().ui.color);
     let ctx = CliContext {
         command,
@@ -60,12 +61,20 @@ async fn main() {
         yes: cli.yes,
         dry_run: cli.dry_run,
         instance: cli.instance.clone(),
+        language,
         runtime,
         output,
     };
     ctx.print_verbose_runtime();
     let command_result = cli.command.execute(&ctx).await;
     let cache_result = ctx.runtime.prune_jar_cache().map_err(anyhow::Error::from);
+    if let Err(error) = &command_result
+        && let Some(status) = forwarded_process_status(error)
+    {
+        // Orbit Launcher already emitted the canonical text/JSON failure. Do
+        // not add a second machine error envelope around the forwarded result.
+        std::process::exit(status);
+    }
     match (command_result, cache_result) {
         (Ok(()), Ok(_)) => {}
         (Err(error), Ok(_)) | (Ok(()), Err(error)) => exit_with_error(&error, output, command),
@@ -79,6 +88,17 @@ async fn main() {
             exit_with_error(&combined, output, command);
         }
     }
+}
+
+fn forwarded_process_status(error: &anyhow::Error) -> Option<i32> {
+    error.chain().find_map(|cause| {
+        cause
+            .downcast_ref::<orbit_core::OrbitError>()
+            .and_then(|error| match error {
+                orbit_core::OrbitError::ForwardedProcessExit(status) => Some(*status),
+                _ => None,
+            })
+    })
 }
 
 fn exit_with_error(error: &anyhow::Error, output: OutputCfg, command: &'static str) -> ! {
@@ -120,6 +140,8 @@ fn orbit_error_code(error: &orbit_core::OrbitError) -> &'static str {
         ProviderApiKeyRequired { .. } => "provider_api_key_required",
         Io(_) => "io",
         Network(_) => "network",
+        RuntimeData(_) => "runtime_data",
+        ForwardedProcessExit(_) => "forwarded_process_exit",
         Json(_) => "json",
         Zip(_) => "zip",
         Other(_) => "internal",
@@ -179,9 +201,97 @@ fn localized_orbit_error(error: &orbit_core::OrbitError) -> String {
         ),
         Io(detail) => tr!("I/O operation failed: %{detail}", detail = detail),
         Network(detail) => tr!("Network operation failed: %{detail}", detail = detail),
+        RuntimeData(detail) => localized_runtime_data_error(detail),
+        ForwardedProcessExit(status) => {
+            tr!(
+                "Orbit Launcher exited with status %{status}",
+                status = status
+            )
+        }
         Json(detail) => tr!("Failed to parse JSON: %{detail}", detail = detail),
         Zip(detail) => tr!("Failed to process ZIP data: %{detail}", detail = detail),
         Other(detail) => tr!("Operation failed: %{detail}", detail = detail),
+    }
+}
+
+fn localized_runtime_data_error(error: &orbit_core::RuntimeDataError) -> String {
+    use orbit_core::RuntimeDataError::*;
+    match error {
+        NonUnicodeSnapshotName { path } => tr!(
+            "Runtime observation snapshot has a non-Unicode name at '%{path}'",
+            path = path
+        ),
+        InvalidObservation { path, line, detail } => tr!(
+            "Invalid runtime observation at %{path}:%{line}: %{detail}",
+            path = path,
+            line = line,
+            detail = detail
+        ),
+        PackageChanged { package } => tr!(
+            "Package '%{package}' changed after the purge plan was created; request a new plan",
+            package = package
+        ),
+        DeleteAfterPackageRemoval {
+            package,
+            path,
+            completed,
+            detail,
+        } => tr!(
+            "Package '%{package}' was removed, but deleting '%{path}' failed after %{completed} path(s): %{detail}",
+            package = package,
+            path = path,
+            completed = completed,
+            detail = detail
+        ),
+        LedgerParse { path, detail } => tr!(
+            "Failed to parse runtime ownership ledger '%{path}': %{detail}",
+            path = path,
+            detail = detail
+        ),
+        UnsupportedLedgerSchema { schema, path } => tr!(
+            "Unsupported runtime ownership schema %{schema} in '%{path}'",
+            schema = schema,
+            path = path
+        ),
+        LedgerSerialize { detail } => tr!(
+            "Failed to serialize runtime ownership: %{detail}",
+            detail = detail
+        ),
+        UnsafeRelativePath { path } => {
+            tr!("Unsafe instance-relative data path '%{path}'", path = path)
+        }
+        InstanceRoot => tr!("Refusing to remove the instance root").into_owned(),
+        ControlData => tr!("Refusing to remove Orbit control data").into_owned(),
+        SharedInstanceRoot { path } => tr!(
+            "Refusing to remove shared instance root '%{path}' as a tree",
+            path = path
+        ),
+        UnsafeExternalPath { path } => tr!(
+            "External path is not a safe absolute child path: '%{path}'",
+            path = path
+        ),
+        ServerDryRun => tr!("Server joint launch does not support --dry-run").into_owned(),
+        ComponentPathNotAbsolute { component, path } => tr!(
+            "%{component} path must be absolute: '%{path}'",
+            component = localized_runtime_component(*component),
+            path = path
+        ),
+        ComponentNotFound { component, path } => tr!(
+            "%{component} was not found at '%{path}'",
+            component = localized_runtime_component(*component),
+            path = path
+        ),
+        AgentPathContainsQuote => tr!("Orbit Runtime Agent path contains a quote").into_owned(),
+        AgentAlreadyPresent => {
+            tr!("JAVA_TOOL_OPTIONS already contains the Orbit Runtime Agent").into_owned()
+        }
+    }
+}
+
+fn localized_runtime_component(component: orbit_core::RuntimeComponent) -> String {
+    match component {
+        orbit_core::RuntimeComponent::Launcher => tr!("Orbit Launcher executable").into_owned(),
+        orbit_core::RuntimeComponent::Agent => tr!("Orbit Runtime Agent").into_owned(),
     }
 }
 

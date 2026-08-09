@@ -201,7 +201,7 @@ pub fn materialize_mod_icon(
     image
         .write_to(&mut encoded, image::ImageFormat::Png)
         .map_err(|error| OrbitError::Other(error.into()))?;
-    crate::jar_cache::write_atomic(&destination, encoded.get_ref())?;
+    crate::atomic_io::write_atomic(&destination, encoded.get_ref())?;
     Ok(Some(destination))
 }
 

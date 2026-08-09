@@ -1,6 +1,76 @@
 use thiserror::Error;
 
 #[derive(Error, Debug)]
+pub enum RuntimeDataError {
+    #[error("observation snapshot has a non-Unicode name at '{path}'")]
+    NonUnicodeSnapshotName { path: String },
+    #[error("invalid observation at {path}:{line}: {detail}")]
+    InvalidObservation {
+        path: String,
+        line: usize,
+        detail: String,
+    },
+    #[error("package '{package}' changed after the purge plan was created; request a new plan")]
+    PackageChanged { package: String },
+    #[error(
+        "package '{package}' was removed, but deleting '{path}' failed after {completed} path(s): {detail}"
+    )]
+    DeleteAfterPackageRemoval {
+        package: String,
+        path: String,
+        completed: usize,
+        detail: String,
+    },
+    #[error("failed to parse runtime ownership ledger '{path}': {detail}")]
+    LedgerParse { path: String, detail: String },
+    #[error("unsupported runtime ownership schema {schema} in '{path}'")]
+    UnsupportedLedgerSchema { schema: u32, path: String },
+    #[error("failed to serialize runtime ownership: {detail}")]
+    LedgerSerialize { detail: String },
+    #[error("unsafe instance-relative data path '{path}'")]
+    UnsafeRelativePath { path: String },
+    #[error("refusing to remove the instance root")]
+    InstanceRoot,
+    #[error("refusing to remove Orbit control data")]
+    ControlData,
+    #[error("refusing to remove shared instance root '{path}' as a tree")]
+    SharedInstanceRoot { path: String },
+    #[error("external path is not a safe absolute child path: '{path}'")]
+    UnsafeExternalPath { path: String },
+    #[error("server joint launch does not support --dry-run")]
+    ServerDryRun,
+    #[error("{component} path must be absolute: '{path}'")]
+    ComponentPathNotAbsolute {
+        component: RuntimeComponent,
+        path: String,
+    },
+    #[error("{component} was not found at '{path}'")]
+    ComponentNotFound {
+        component: RuntimeComponent,
+        path: String,
+    },
+    #[error("Orbit Runtime Agent path contains a quote")]
+    AgentPathContainsQuote,
+    #[error("JAVA_TOOL_OPTIONS already contains the Orbit Runtime Agent")]
+    AgentAlreadyPresent,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuntimeComponent {
+    Launcher,
+    Agent,
+}
+
+impl std::fmt::Display for RuntimeComponent {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::Launcher => "Orbit Launcher executable",
+            Self::Agent => "Orbit Runtime Agent",
+        })
+    }
+}
+
+#[derive(Error, Debug)]
 pub enum OrbitError {
     #[error("orbit.toml not found in this directory")]
     ManifestNotFound,
@@ -48,6 +118,12 @@ pub enum OrbitError {
 
     #[error("network error: {0}")]
     Network(#[from] reqwest::Error),
+
+    #[error("runtime data ownership failed: {0}")]
+    RuntimeData(#[from] RuntimeDataError),
+
+    #[error("launcher process exited with status {0}")]
+    ForwardedProcessExit(i32),
 
     #[error(
         "{provider} provider requires an API key; set {environment_variable} or \

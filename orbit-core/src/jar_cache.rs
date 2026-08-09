@@ -9,11 +9,10 @@ mod lru;
 
 use std::{
     fs::{File, OpenOptions},
-    io::Write,
     path::{Path, PathBuf},
 };
 
-use crate::error::OrbitError;
+use crate::{atomic_io::write_atomic, error::OrbitError};
 
 #[derive(Debug, Clone)]
 pub struct JarCache {
@@ -158,23 +157,6 @@ impl JarCache {
 pub(super) fn normalized_hash(value: &str, expected_len: usize) -> Option<String> {
     (value.len() == expected_len && value.bytes().all(|byte| byte.is_ascii_hexdigit()))
         .then(|| value.to_ascii_lowercase())
-}
-
-pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), OrbitError> {
-    let parent = path.parent().ok_or_else(|| {
-        OrbitError::Other(anyhow::anyhow!(
-            "cache file '{}' has no parent directory",
-            path.display()
-        ))
-    })?;
-    std::fs::create_dir_all(parent)?;
-    let mut temporary = tempfile::NamedTempFile::new_in(parent)?;
-    temporary.write_all(bytes)?;
-    temporary.flush()?;
-    temporary
-        .persist(path)
-        .map_err(|error| OrbitError::Io(error.error))?;
-    Ok(())
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]

@@ -5,6 +5,7 @@
 //!
 //! 此 crate 不包含任何 CLI 或 UI 代码。
 
+mod atomic_io;
 pub mod config;
 mod dependency_environment;
 mod detection;
@@ -36,9 +37,10 @@ pub mod package_constraint;
 pub mod package_versions;
 mod platform;
 mod platform_detection;
-pub mod purge;
 pub mod remote;
 pub mod resolver;
+pub mod runtime_data;
+pub mod runtime_launch;
 mod source_store;
 pub mod sync;
 pub mod workspace;
@@ -54,7 +56,7 @@ pub use config::{
     register_existing_instance, register_instance, remove_instance, set_default_instance,
 };
 pub use dependency_environment::{PackageEnvironmentReport, set_package_environment};
-pub use error::OrbitError;
+pub use error::{OrbitError, RuntimeComponent, RuntimeDataError};
 pub use installer::{
     InstallIntent, InstallInteraction, InstallOptions, InstallPrompt, InstallReport, InstallTarget,
     InstalledMod, InstanceInstallOptions, InstanceInstallReport, ListOutput, ListedPackage,
@@ -96,7 +98,6 @@ pub use package_constraint::{
 pub use package_versions::{PackageVersionCandidate, PackageVersionsReport, list_package_versions};
 pub use progress::{ArtifactProgressState, ProgressEvent, ProgressReporter, ResolutionCurrent};
 pub use providers::ModProvider;
-pub use purge::{CandidateConfig, find_config_candidates, remove_config_candidates};
 pub use remote::{RemoteReport, add_package_remote, list_package_remotes, remove_package_remote};
 pub use resolver::types::{
     PackageChange, PackageChangeKind, ResolutionReport, ResolutionSelectionContext,
@@ -105,6 +106,14 @@ pub use resolver::types::{
 pub use runtime::{
     NativeRuntimeEnvironment, PathLayout, RuntimeContext, RuntimeEnvironment, RuntimePathOptions,
     RuntimePaths, compiled_default_layout,
+};
+pub use runtime_data::{
+    DataOwnershipEntry, DataPurgeEntry, DataPurgePlan, DataPurgeReport, OwnedDataKind,
+    OwnedDataPath, apply_data_purge, merge_observation_sessions, observation_session_path,
+    plan_data_purge,
+};
+pub use runtime_launch::{
+    RuntimeLaunchRequest, RuntimeLaunchTarget, launch_with_runtime_observation,
 };
 pub use sync::{PlatformChange, SyncReport, sync_instance};
 pub use version_repository::{CandidateStorage, VersionRepository};

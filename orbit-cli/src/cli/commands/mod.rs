@@ -12,6 +12,7 @@ pub mod info;
 pub mod init;
 pub mod install;
 pub mod instances;
+pub mod launch;
 pub mod list;
 pub mod migrate;
 pub mod outdated;
@@ -40,6 +41,7 @@ pub struct CliContext {
     pub yes: bool,
     pub dry_run: bool,
     pub instance: Option<String>,
+    pub language: orbit_i18n::LanguageMode,
     pub runtime: orbit_core::RuntimeContext,
     /// 输出格式与进度协议，由全局 `--output-format` / `--progress-format` 决定。
     pub output: crate::cli::output::OutputCfg,
@@ -201,6 +203,7 @@ pub use import::handle as handle_import;
 pub use info::handle as handle_info;
 pub use init::handle as handle_init;
 pub use install::handle as handle_install;
+pub use launch::handle as handle_launch;
 pub use list::handle as handle_list;
 pub use outdated::handle as handle_outdated;
 pub use purge::handle as handle_purge;
@@ -524,6 +527,100 @@ fn machine_confirm_install(
         _ => Err(orbit_core::OrbitError::Cancelled(
             tr!("Interaction cancelled by user").into_owned(),
         )),
+    }
+}
+
+pub fn confirm_data_purge(
+    ctx: &CliContext,
+    plan: &orbit_core::DataPurgePlan,
+) -> Result<(), orbit_core::OrbitError> {
+    if ctx.dry_run || ctx.yes {
+        if ctx.output.format == crate::cli::output::OutputFormat::Text && !ctx.quiet {
+            print_data_purge_plan(plan);
+        }
+        return Ok(());
+    }
+    if ctx.output.format == crate::cli::output::OutputFormat::Json {
+        use orbit_machine_protocol::{InteractionChoice, InteractionKind};
+        let entries = plan
+            .entries
+            .iter()
+            .map(crate::cli::output::data_purge_entry_view)
+            .collect::<Vec<_>>();
+        let envelope = machine_interaction(
+            ctx.command,
+            &ctx.machine_sequence,
+            "data-deletion",
+            InteractionKind::DataDeletion,
+            &tr!("Review the package and runtime-owned data before deleting them"),
+            vec![
+                InteractionChoice {
+                    id: "proceed".to_string(),
+                    label: tr!("Remove package and data").into_owned(),
+                    description: Some(
+                        tr!("Delete only the displayed runtime-owned paths").into_owned(),
+                    ),
+                    data: serde_json::json!({
+                        "mod_id": plan.mod_id,
+                        "entries": entries,
+                    }),
+                },
+                InteractionChoice {
+                    id: "cancel".to_string(),
+                    label: tr!("Cancel").into_owned(),
+                    description: Some(tr!("Leave the package and data unchanged").into_owned()),
+                    data: serde_json::json!({}),
+                },
+            ],
+            Some("cancel".to_string()),
+        );
+        return match read_machine_response(&envelope)? {
+            selected if selected == "proceed" => Ok(()),
+            _ => Err(orbit_core::OrbitError::Cancelled(
+                tr!("Purge cancelled by user").into_owned(),
+            )),
+        };
+    }
+
+    print_data_purge_plan(plan);
+    eprint!(
+        "{}",
+        tr!("Remove this package and delete exactly these paths? [y/N] ")
+    );
+    use std::io::Write;
+    std::io::stderr().flush().ok();
+    let mut input = String::new();
+    let read = std::io::stdin().read_line(&mut input).map_err(|error| {
+        interaction_failure(tr!(
+            "Purge confirmation could not read stdin: %{error}",
+            error = error
+        ))
+    })?;
+    if read == 0 || !matches!(input.trim().to_ascii_lowercase().as_str(), "y" | "yes") {
+        return Err(orbit_core::OrbitError::Cancelled(
+            tr!("Purge cancelled by user").into_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn print_data_purge_plan(plan: &orbit_core::DataPurgePlan) {
+    eprintln!(
+        "{}",
+        tr!(
+            "Package '%{package}' will be removed. Runtime-owned paths selected for deletion:",
+            package = plan.mod_id
+        )
+    );
+    if plan.entries.is_empty() {
+        eprintln!(
+            "  {}",
+            tr!("No exclusively owned runtime data was observed.")
+        );
+    } else {
+        for entry in &plan.entries {
+            eprintln!("  {}", entry.display_path());
+        }
     }
 }
 

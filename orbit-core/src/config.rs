@@ -7,10 +7,10 @@
 //! 文件位置由 [`crate::runtime::RuntimePaths`] 注入。
 
 use serde::{Deserialize, Serialize};
-use std::{io::Write, path::Path};
+use std::path::Path;
 use toml_edit::{DocumentMut, Item, Table, value as toml_value};
 
-use crate::error::OrbitError;
+use crate::{atomic_io::write_atomic, error::OrbitError};
 
 // ---------------------------------------------------------------------------
 // config.toml — 全局运行时配置
@@ -659,21 +659,6 @@ pub fn persist_config_field(
     })?;
     validated.validate()?;
     write_atomic(path, rendered.as_bytes())
-}
-
-fn write_atomic(path: &Path, content: &[u8]) -> Result<(), OrbitError> {
-    let parent = path
-        .parent()
-        .filter(|parent| !parent.as_os_str().is_empty())
-        .unwrap_or_else(|| Path::new("."));
-    std::fs::create_dir_all(parent)?;
-    let mut temporary = tempfile::NamedTempFile::new_in(parent)?;
-    temporary.write_all(content)?;
-    temporary.flush()?;
-    temporary
-        .persist(path)
-        .map_err(|error| OrbitError::Io(error.error))?;
-    Ok(())
 }
 
 // ---------------------------------------------------------------------------

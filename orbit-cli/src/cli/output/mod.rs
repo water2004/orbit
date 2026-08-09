@@ -27,7 +27,7 @@ pub use view::{
     JsonEnvelope, MigrationExportView, MigrationOutput, MigrationSummary, OutdatedOutput,
     OutdatedSummary, PackageActivationOutput, PackageConstraintOutput, PackageEnvironmentOutput,
     PackageVersionCandidateView, PackageVersionsOutput, PurgeOutput, RemoveOutput, SearchFilters,
-    SearchOutput, SearchResultView,
+    SearchOutput, SearchResultView, data_purge_entry_view,
 };
 
 static COLOR_MODE: AtomicU8 = AtomicU8::new(0);

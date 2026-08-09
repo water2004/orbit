@@ -11,8 +11,8 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 
-use super::{CachePruneSummary, normalized_hash, write_atomic};
-use crate::error::OrbitError;
+use super::{CachePruneSummary, normalized_hash};
+use crate::{atomic_io::write_atomic, error::OrbitError};
 
 const INDEX_VERSION: u32 = 1;
 const INDEX_FILE: &str = "lru-index.json";

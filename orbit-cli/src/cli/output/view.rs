@@ -453,10 +453,29 @@ pub struct RemoveOutput {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct DataPurgeEntryView {
+    pub path: String,
+    pub scope: &'static str,
+    pub kind: orbit_core::OwnedDataKind,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct PurgeOutput {
     pub mod_id: String,
     pub jar_deleted: bool,
-    pub configs_removed: Vec<String>,
+    pub data_removed: Vec<DataPurgeEntryView>,
+}
+
+pub fn data_purge_entry_view(entry: &orbit_core::DataPurgeEntry) -> DataPurgeEntryView {
+    let (path, scope) = match &entry.path {
+        orbit_core::OwnedDataPath::Instance { relative } => (relative.clone(), "instance"),
+        orbit_core::OwnedDataPath::External { absolute } => (absolute.clone(), "external"),
+    };
+    DataPurgeEntryView {
+        path,
+        scope,
+        kind: entry.kind,
+    }
 }
 
 // ---------------------------------------------------------------------------
