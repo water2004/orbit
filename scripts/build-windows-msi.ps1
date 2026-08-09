@@ -20,6 +20,7 @@ $toolManifest = Join-Path $repoRoot ".config\dotnet-tools.json"
 $executable = Join-Path $repoRoot "target\release\orbit.exe"
 $launcherExecutable = Join-Path $repoRoot "target\release\orbit-launcher.exe"
 $guiExecutable = Join-Path $repoRoot "target\release\orbit-gui.exe"
+$runtimeAgent = Join-Path $repoRoot "target\release\orbit-runtime-agent.jar"
 $guiBuildDirectory = Join-Path $repoRoot "target\release\build"
 $license = Join-Path $repoRoot "LICENSE"
 
@@ -73,6 +74,15 @@ try {
         }
     }
 
+    & (Join-Path $repoRoot "orbit-runtime-agent\build.ps1") -OutputPath "target/release/orbit-runtime-agent.jar"
+    if ($LASTEXITCODE -ne 0) {
+        throw "The Orbit Runtime Agent build failed."
+    }
+    & (Join-Path $repoRoot "orbit-runtime-agent\test.ps1") -AgentPath "target/release/orbit-runtime-agent.jar"
+    if ($LASTEXITCODE -ne 0) {
+        throw "The Orbit Runtime Agent fixture failed."
+    }
+
     if (-not (Test-Path -LiteralPath $executable -PathType Leaf)) {
         throw "Release executable not found at '$executable'."
     }
@@ -81,6 +91,9 @@ try {
     }
     if (-not (Test-Path -LiteralPath $guiExecutable -PathType Leaf)) {
         throw "Release executable not found at '$guiExecutable'."
+    }
+    if (-not (Test-Path -LiteralPath $runtimeAgent -PathType Leaf)) {
+        throw "Orbit Runtime Agent not found at '$runtimeAgent'."
     }
     $guiIcon = Get-ChildItem -LiteralPath $guiBuildDirectory -Directory -Filter "orbit-gui-*" |
         ForEach-Object { Join-Path $_.FullName "out\orbit-gui.ico" } |
@@ -123,6 +136,7 @@ try {
         -d "OrbitExecutable=$executable" `
         -d "OrbitLauncherExecutable=$launcherExecutable" `
         -d "OrbitGuiExecutable=$guiExecutable" `
+        -d "OrbitRuntimeAgent=$runtimeAgent" `
         -d "OrbitGuiIcon=$guiIcon" `
         -d "OrbitLicense=$license" `
         -d "OrbitLicenseRtf=$licenseRtf" `

@@ -72,6 +72,11 @@ if [[ "$skip_cargo_build" != true ]]; then
 		--target "$target"
 fi
 
+bash ./orbit-runtime-agent/build.sh \
+	"$repo_root/target/$target/release/orbit-runtime-agent.jar"
+bash ./orbit-runtime-agent/test.sh \
+	"$repo_root/target/$target/release/orbit-runtime-agent.jar"
+
 for binary_name in orbit orbit-launcher orbit-gui; do
 	binary="target/$target/release/$binary_name"
 	if [[ ! -x "$binary" ]]; then
@@ -79,6 +84,10 @@ for binary_name in orbit orbit-launcher orbit-gui; do
 		exit 1
 	fi
 done
+if [[ ! -f "target/$target/release/orbit-runtime-agent.jar" ]]; then
+	echo "Orbit Runtime Agent was not built" >&2
+	exit 1
+fi
 
 "target/$target/release/orbit" --help >/dev/null
 "target/$target/release/orbit-launcher" --help >/dev/null
@@ -113,6 +122,12 @@ for package in "${packages[@]}"; do
 		}
 		grep -Fq "orbit-launcher (= $version-1)" <<<"$depends" || {
 			echo "orbit-gui must depend on the matching orbit-launcher package" >&2
+			exit 1
+		}
+	fi
+	if [[ "$package" == "orbit" ]]; then
+		dpkg-deb --contents "$deb" | grep -Fq "./usr/lib/orbit/orbit-runtime-agent.jar" || {
+			echo "orbit package must contain the Orbit Runtime Agent" >&2
 			exit 1
 		}
 	fi

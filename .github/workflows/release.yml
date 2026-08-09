@@ -86,6 +86,18 @@ jobs:
             libxkbcommon-dev \
             libxkbcommon-x11-dev
 
+      - name: Install the Java toolchain for the Runtime Agent
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Build and test the Runtime Agent
+        shell: bash
+        run: |
+          bash ./orbit-runtime-agent/build.sh ./target/debug/orbit-runtime-agent.jar
+          bash ./orbit-runtime-agent/test.sh ./target/debug/orbit-runtime-agent.jar
+
       - name: Run the workspace test suite
         run: cargo test --workspace --locked
 
@@ -102,6 +114,12 @@ jobs:
         run: |
           rustup toolchain install stable --profile minimal
           rustup default stable
+
+      - name: Install the Java toolchain for the Runtime Agent
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "21"
 
       - name: Build and validate MSI
         shell: pwsh
@@ -127,6 +145,12 @@ jobs:
         run: |
           rustup toolchain install stable --profile minimal
           rustup default stable
+
+      - name: Install the Java toolchain for the Runtime Agent
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "21"
 
       - name: Install native GUI build dependencies
         run: |

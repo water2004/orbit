@@ -86,6 +86,10 @@
               Source="$(var.OrbitExecutable)"
               Name="orbit.exe"
               KeyPath="yes" />
+            <File
+              Id="OrbitRuntimeAgent"
+              Source="$(var.OrbitRuntimeAgent)"
+              Name="orbit-runtime-agent.jar" />
             <RegistryValue
               Root="HKLM"
               Key="Software\water2004\Orbit"
