@@ -33,7 +33,7 @@ Launcher 已完整支持 Vanilla、Fabric、Quilt、Forge、NeoForge 的客户�
 
 - **📂 非侵入式与多实例/服务器管理**：无需改变外部启动器结构。直接进入启动器实例或 Fabric、Quilt、Forge、NeoForge dedicated server 根目录即可初始化管理；Launcher 托管客户端位于 `instances/<实例>`，精确 `minecraft.jar` 属于实例、共享仓库只承载不可变 assets/libraries；Launcher 托管的独立服务端则把完整锁定运行时保存在用户选择的服务端目录。
 - **🔄 事实同步与显式修复**：`orbit sync` 联网识别本地 JAR 来源，并让 TOML、lock 和分组精确收敛到实际本地 JAR 集合；它不求解依赖，也不删除任何 JAR 文件。需要选择其他包版本时由 `orbit fix` 展示完整方案并确认。
-- **🧹 基于运行时事实的数据生命周期**：`orbit launch` 包装 Launcher 启动并注入低开销 Agent；读取完全不监听，顶层与 Loader 声明的嵌套 JAR 都按精确 code-source 哈希归入同一逻辑包。包创建的目录递归拥有其中的用户内容，更深层创建者与其它包写入形成保留例外；export、migration 和 `purge` 共用同一账本。没有文件名、调用栈或静态分析兜底。
+- **🧹 基于运行时事实的数据生命周期**：`orbit launch` 包装 Launcher 启动并注入低开销 Agent；读取完全不监听，按已验证的 Loader 版本能力表把物理 JAR、Forge 系 `union:` 来源和 Quilt 原生模块身份归入同一顶层逻辑包，未知 Loader/JVM 范围明确拒绝观测。包创建的目录递归拥有其中的用户内容，更深层创建者与其它包写入形成保留例外；export、migration 和 `purge` 共用同一账本。没有文件名、调用栈或静态分析兜底。
 - **🌐 多来源**：支持 Modrinth、CurseForge 与本地 `file:` JAR；不同平台只负责候选发现，最终统一验证 JAR 并求解依赖。
 - **🗃️ 按游戏版本隔离的本地版本库**：每个精确 Minecraft/Loader 分别保存远端快照与 JAR 分析数据库；批量检查 project 变更标记，未变化不重拉版本，变化时也只刷新当前游戏版本。全局 LRU JAR 缓存仍是独立的内容存储。
 - **🧩 完整 Loader 语义**：Fabric、Quilt、Forge、NeoForge 先由各自适配器保真解析，再进入同一个规范化求解模型；支持端侧、软/硬依赖、`provides`、加载顺序、内嵌模组与 Jar-in-Jar。

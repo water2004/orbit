@@ -195,8 +195,9 @@ orbit launch
   → 调用 orbit-launcher launch 或 server start
   → JAVA_TOOL_OPTIONS 注入 Orbit Runtime Agent
   → Agent helper 进入 bootstrap 搜索路径；Fabric/Quilt 通过各自官方 system-library 属性保留父加载器可见性
-  → Orbit 从当前 lock 的顶层 JAR 和 Loader 声明的嵌套 JAR 构建 code-source SHA-256 → 顶层包映射
-  → Agent 在类加载时按 ProtectionDomain 的物理 code source 固定包归属
+  → Orbit 按已验证的 Loader 版本范围选择 code-source / 原生模块身份能力
+  → Orbit 从当前 lock 的顶层 JAR、递归嵌套 JAR 与实际 mod_id 构建来源 → 顶层包映射
+  → Agent 在类加载时按 ProtectionDomain 的已声明能力固定包归属
   → 只在 create/write/delete 边界聚合文件或目录树，原子写入 session snapshot
   → Orbit 合并到 .orbit/runtime-data/ownership.toml
   → purge 用 lock 将 JAR SHA-256 映射回逻辑 mod_id
@@ -217,14 +218,35 @@ orbit launch
 标准实例结构根（例如 `mods`、`libraries`、`saves`）永远不能被单个包整体认领，但其下由包实际
 创建的更具体路径可以认领。`resourcepacks` / `shaderpacks` 不按名字特殊处理：谁实际创建目录，
 谁拥有其递归内容。共享写入、来源未知、没有观测到的 native I/O 和无法
-映射到顶层受管 JAR 的路径都不进入可清理计划。code-source 映射歧义时安全地不观测，不允许回退
+映射到顶层受管 JAR 的路径都不进入可清理计划。code-source 或原生模块身份映射歧义时安全地不观测，不允许回退
 到调用栈猜测。没有文件名猜测、静态分析或“匹配 config
 名称”兜底。服务端后台进程
 的 snapshot 由下一次 `orbit launch` / `orbit purge` 合并；损坏或截断 session 会显式报错并保留。
+同一包在自己已拥有的目录树下继续写入时，Agent 直接继承树归属，不再为每个文件执行
+存在性探测或生成账本节点；更深的其它创建者和已有共享写入仍会阻止该快路径。
 Agent 不要求游戏类加载器直接装载其辅助类：通用 JVM 路径使用 bootstrap search，Fabric 的
 `fabric.systemLibraries` 与 Quilt 的 `loader.systemLibraries` 仅处理二者确实不同的父加载器
 白名单。普通隔离类加载器和 Loader 隔离都必须由测试覆盖，不能退回到按 Loader 修改模组
 classpath 的兼容路径。
+
+Loader 差异由 `runtime_agent` 的只读能力范围表选择，Agent 本身只执行能力，不包含
+Minecraft/Loader 版本分支。当前经过 Loader 源码与真实接口测试的范围如下：
+
+| Loader 范围 | 类来源能力 | 原生身份能力 |
+|---|---|---|
+| Fabric Loader 0.4.x–0.19.x | `file:`，包括 Loader 解出的嵌套 JAR | 无 |
+| Quilt Loader 0.12.x–0.17.x | `file:` | 无 |
+| Quilt Loader 0.18.x–0.30.x | `file:` | `QuiltCodeSource.getQuiltMod()` 声明的 mod_id |
+| Forge 14.x–36.x | `file:` | 无 |
+| Forge 37.x–64.x | `file:`、SecureJarHandler/securemodules `union:` 主路径 | 无 |
+| NeoForge 47.1.x、20.2.x–21.11.x、26.1.x–26.2.x | `file:`、securemodules `union:` 主路径 | 无 |
+
+Minecraft 版本不另造一套来源算法；它通过所选 Loader 版本和真正启动的 Java 运行时影响该表。
+Agent 基础 classfile 为 Java 8，并显式接受已经验证的 Java 8–25。Loader 范围或 Java feature
+不在表中时，本次观测明确停用并报告，不猜测、不回落到文件名或调用栈。扩展范围前必须同时
+检查相应 Loader 版本源码，并用其真实公开接口/文件系统运行 Agent 夹具；当前回归覆盖 Java 8、
+Java 11+ 新增文件 API、Forge 1.17 首代未导出的 `securejarhandler 0.9.54` 命名模块及
+Quilt 0.30.1 原生身份。
 
 ## 4. 统一求解
 

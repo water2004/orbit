@@ -385,9 +385,12 @@ Runtime Agent，保留现有 `JAVA_TOOL_OPTIONS` 后注入 Agent，再调用 Lau
 客户端 `--dry-run` 只透传 Launcher 的脱敏启动计划，不注入 Agent、不创建或合并 session；
 后台服务端联合启动不支持 dry-run。
 
-每次实际启动前，Orbit 依据当前 lock 构建物理 code-source 到顶层包哈希的精确映射；Loader
-声明的嵌套 JAR 始终映射回其顶层逻辑包。Agent 只改写属于这些 code source 的类，并且只拦截
-create/write/delete，不拦截任何读取调用。
+每次实际启动前，Orbit 依据当前 Loader 版本的已验证能力表构建来源到顶层包哈希的精确映射。
+Fabric 与旧 Quilt 使用物理 `file:` source；新 Quilt 还使用 Loader 公开的 mod_id 身份；
+Forge 1.17+ 与 NeoForge 还把 `union:` source 回溯到 SecureJarHandler/securemodules 的主 JAR。
+Loader 声明的递归嵌套 JAR 或模块始终映射回其顶层逻辑包。Agent 只改写属于这些来源的类，
+并且只拦截 create/write/delete，不拦截任何读取调用。未验证的 Loader 版本或 Java feature
+明确拒绝观测，不走猜测或兼容兜底。
 
 ## 4. 同步与更新
 
