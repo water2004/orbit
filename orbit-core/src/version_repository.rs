@@ -313,6 +313,7 @@ impl RepositoryScope {
     pub(crate) fn build_catalog(
         &self,
         seed_remotes: &[(PackageRemote, bool)],
+        java_feature: u32,
     ) -> Result<CandidateCatalog, OrbitError> {
         let mut queue: VecDeque<_> = seed_remotes.iter().cloned().collect();
         let requested: BTreeSet<_> = seed_remotes
@@ -321,7 +322,7 @@ impl RepositoryScope {
             .map(|(remote, _)| remote.clone())
             .collect();
         let mut seen = BTreeSet::new();
-        let mut catalog = CandidateCatalog::default();
+        let mut catalog = CandidateCatalog::empty(java_feature);
         while let Some((remote, direct_requested)) = queue.pop_front() {
             let Some((provider, project_id)) = remote_project(&remote) else {
                 continue;
@@ -517,12 +518,15 @@ mod tests {
         let jars = std::fs::read(scope.jars_path()).unwrap();
         assert!(!String::from_utf8_lossy(&jars).contains("project-a"));
         let catalog = scope
-            .build_catalog(&[(
-                PackageRemote::Modrinth {
-                    project_id: "project-a".to_string(),
-                },
-                true,
-            )])
+            .build_catalog(
+                &[(
+                    PackageRemote::Modrinth {
+                        project_id: "project-a".to_string(),
+                    },
+                    true,
+                )],
+                21,
+            )
             .unwrap();
         assert_eq!(catalog.candidates["example"][0].jar_version, "1.0.0");
     }

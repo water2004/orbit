@@ -57,6 +57,7 @@ pub(crate) struct CandidateDiscoveryInput<'a> {
     pub lockfile: &'a OrbitLockfile,
     pub mc_version: &'a str,
     pub loader: LoaderKind,
+    pub java_feature: u32,
     pub storage: crate::version_repository::CandidateStorage<'a>,
     pub progress: Option<ProgressReporter>,
 }
@@ -106,7 +107,7 @@ pub(crate) async fn download_candidate_catalog(
         }
     }
     refresh_remote_repository(&input, &scope, &remote_seeds).await?;
-    let mut catalog = scope.build_catalog(&remote_seeds)?;
+    let mut catalog = scope.build_catalog(&remote_seeds, input.java_feature)?;
     for (inspected, path, filename, requested) in local {
         catalog.record_local(inspected, path, filename, requested)?;
     }
@@ -632,6 +633,7 @@ async fn check_outdated_with_progress(
             lockfile,
             mc_version,
             loader,
+            java_feature: platform.minecraft_version.java_version,
             storage,
             progress: progress.clone(),
         },
@@ -930,6 +932,7 @@ mod tests {
                     lockfile: &lockfile,
                     mc_version: "1.21.1",
                     loader: LoaderKind::Fabric,
+                    java_feature: 21,
                     storage: crate::version_repository::CandidateStorage::new(
                         &jar_cache,
                         &version_repository,
@@ -1036,6 +1039,7 @@ mod tests {
                 lockfile: &lockfile,
                 mc_version: "1.21.1",
                 loader: LoaderKind::Fabric,
+                java_feature: 21,
                 storage: crate::version_repository::CandidateStorage::new(
                     &jar_cache,
                     &version_repository,
@@ -1110,6 +1114,7 @@ mod tests {
                 lockfile: &lockfile,
                 mc_version: "1.21.1",
                 loader: LoaderKind::Fabric,
+                java_feature: 21,
                 storage: crate::version_repository::CandidateStorage::new(
                     &jar_cache,
                     &version_repository,

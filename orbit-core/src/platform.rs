@@ -181,7 +181,7 @@ fn load_loader_package(
 ) -> Result<Option<PlatformCandidate>, OrbitError> {
     match crate::jar::read_mod_metadata_if_present(loader_jar, loader) {
         Ok(Some(metadata)) => {
-            let expected_mod_id = loader.semantics().canonical_package;
+            let expected_mod_id = crate::loader::semantics(loader).canonical_package;
             if metadata.mod_id != expected_mod_id {
                 return Err(snapshot_error(format!(
                     "platform.loader_jar '{}' declares mod_id '{}', expected '{}'",

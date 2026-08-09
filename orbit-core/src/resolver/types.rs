@@ -266,12 +266,15 @@ pub struct ResolvedArtifact {
 
 pub type ResolvedCandidates = HashMap<String, ResolvedArtifact>;
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct CandidateCatalog {
     pub candidates: HashMap<String, Vec<CandidateVersion>>,
     pub resolved: ResolvedCandidates,
     /// Loader package metadata read from the actual launcher library JAR.
     pub loader_package: Option<PlatformCandidate>,
+    /// Exact Java feature read from the target Minecraft JAR's version.json.
+    /// A zero value is incomplete and is rejected before graph construction.
+    pub java_feature: u32,
     /// Provider lookup key (slug or project id) to every JAR-declared package id.
     ///
     /// A provider project is only a download locator. Its artifacts may change
@@ -422,6 +425,18 @@ impl PlatformCandidate {
 }
 
 impl CandidateCatalog {
+    pub(crate) fn empty(java_feature: u32) -> Self {
+        Self {
+            candidates: HashMap::new(),
+            resolved: HashMap::new(),
+            loader_package: None,
+            java_feature,
+            remote_packages: HashMap::new(),
+            requested_packages: Default::default(),
+            requested_remotes: HashMap::new(),
+        }
+    }
+
     #[cfg(test)]
     pub(crate) fn record_test(
         &mut self,
@@ -638,6 +653,13 @@ impl CandidateCatalog {
             remotes.dedup();
         }
         result
+    }
+}
+
+#[cfg(test)]
+impl Default for CandidateCatalog {
+    fn default() -> Self {
+        Self::empty(21)
     }
 }
 

@@ -78,6 +78,7 @@ pub async fn add_package_remote(
         },
         packages: Vec::new(),
     };
+    let platform = crate::platform::Platform::load(instance_dir, &manifest.inner)?;
     let catalog = crate::outdated::download_candidate_catalog(
         crate::outdated::CandidateDiscoveryInput {
             instance_dir,
@@ -85,7 +86,8 @@ pub async fn add_package_remote(
             additional_remotes: &[],
             lockfile: &empty_lock,
             mc_version: &manifest.inner.project.mc_version,
-            loader: manifest.inner.project.loader_kind()?,
+            loader: platform.loader,
+            java_feature: platform.minecraft_version.java_version,
             storage,
             progress,
         },

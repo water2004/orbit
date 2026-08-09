@@ -434,6 +434,7 @@ pub fn export_instance(
             ..PackageSelection::default()
         },
         loader_package.as_ref(),
+        platform.minecraft_version.java_version,
     )?;
     let mut sources = Vec::new();
     for package in &selected {

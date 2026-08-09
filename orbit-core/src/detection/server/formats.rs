@@ -466,11 +466,7 @@ fn identify_loader_jar(
     classpath: &[PathBuf],
     loader: LoaderKind,
 ) -> Result<(PathBuf, String), OrbitError> {
-    let expected_id = match loader {
-        LoaderKind::Fabric => "fabricloader",
-        LoaderKind::Quilt => "quilt_loader",
-        LoaderKind::Forge | LoaderKind::NeoForge => unreachable!(),
-    };
+    let expected_id = crate::loader::semantics(loader).canonical_package;
     let mut matches = Vec::new();
     for path in classpath {
         if let Some(metadata) = crate::jar::read_mod_metadata_if_present(path, loader)?

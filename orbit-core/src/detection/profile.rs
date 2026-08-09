@@ -5,18 +5,11 @@ use crate::error::OrbitError;
 use crate::metadata::LoaderKind;
 use crate::metadata::version_profile::VersionProfile;
 
-pub(super) struct ProfileSignature {
-    pub group: &'static str,
-    pub artifacts: &'static [&'static str],
-    pub main_class_markers: &'static [&'static str],
-    pub component_uids: &'static [&'static str],
-}
-
 pub(super) fn detect_profile_loader(
     instance_dir: &Path,
     mc_version: Option<&str>,
     loader: LoaderKind,
-    signature: &ProfileSignature,
+    signature: &orbit_compatibility::loader::LauncherIdentity,
 ) -> Result<LoaderInfo, OrbitError> {
     let layout = crate::launcher::LauncherLayout::discover(instance_dir)?;
     let mut versions = Vec::new();
@@ -60,23 +53,6 @@ pub(super) fn detect_profile_loader(
     })
 }
 
-pub(super) fn strip_minecraft_version_prefix(version: String) -> String {
-    version
-        .split_once('-')
-        .filter(|(minecraft, loader)| {
-            minecraft.contains('.')
-                && minecraft
-                    .chars()
-                    .all(|character| character.is_ascii_digit() || character == '.')
-                && loader
-                    .chars()
-                    .next()
-                    .is_some_and(|character| character.is_ascii_digit())
-        })
-        .map(|(_, loader)| loader.to_string())
-        .unwrap_or(version)
-}
-
 struct ProfileScan {
     version: Option<String>,
     evidence: Vec<String>,
@@ -85,7 +61,7 @@ struct ProfileScan {
 fn scan_profile(
     path: &Path,
     mc_version: Option<&str>,
-    signature: &ProfileSignature,
+    signature: &orbit_compatibility::loader::LauncherIdentity,
 ) -> Option<ProfileScan> {
     let mut evidence = Vec::new();
     let profile = VersionProfile::from_path(path).ok()?;
@@ -104,10 +80,10 @@ fn scan_profile(
         }
     }
     for artifact in signature.artifacts {
-        if let Some(version) = profile.find_library(signature.group, artifact) {
+        if let Some(version) = profile.find_library(signature.maven_group, artifact) {
             evidence.push(format!(
                 "found {}:{}:{} in {}",
-                signature.group, artifact, version, filename
+                signature.maven_group, artifact, version, filename
             ));
             return Some(ProfileScan {
                 version: Some(version),
@@ -154,12 +130,7 @@ mod tests {
             &root,
             Some("1.21.11"),
             LoaderKind::Quilt,
-            &ProfileSignature {
-                group: "org.quiltmc",
-                artifacts: &["quilt-loader"],
-                main_class_markers: &["quiltmc"],
-                component_uids: &["org.quiltmc.quilt-loader"],
-            },
+            &orbit_compatibility::loader::launcher_identity(LoaderKind::Quilt),
         )
         .unwrap();
 
@@ -181,33 +152,12 @@ mod tests {
             &root,
             None,
             LoaderKind::Forge,
-            &ProfileSignature {
-                group: "net.minecraftforge",
-                artifacts: &["forge"],
-                main_class_markers: &["minecraftforge"],
-                component_uids: &["net.minecraftforge"],
-            },
+            &orbit_compatibility::loader::launcher_identity(LoaderKind::Forge),
         )
         .unwrap();
 
         assert_eq!(result.confidence, Confidence::Low);
         assert!(result.versions.is_empty());
         std::fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn strips_minecraft_prefix_without_damaging_prereleases() {
-        assert_eq!(
-            strip_minecraft_version_prefix("1.21.1-52.0.0".to_string()),
-            "52.0.0"
-        );
-        assert_eq!(
-            strip_minecraft_version_prefix("26.1-61.0.3".to_string()),
-            "61.0.3"
-        );
-        assert_eq!(
-            strip_minecraft_version_prefix("21.1.0-beta".to_string()),
-            "21.1.0-beta"
-        );
     }
 }

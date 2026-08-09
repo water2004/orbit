@@ -276,6 +276,7 @@ pub async fn run_init(
             &manifest,
             &lockfile,
             platform.loader_package.as_ref(),
+            platform.minecraft_version.java_version,
         )
         .err()
         .map(|error| error.to_string())

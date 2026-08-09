@@ -42,6 +42,7 @@ pub async fn list_package_versions(
     progress: Option<ProgressReporter>,
 ) -> Result<PackageVersionsReport, OrbitError> {
     let manifest = ManifestFile::open(instance_dir)?;
+    let platform = crate::platform::Platform::load(instance_dir, &manifest.inner)?;
     let lockfile = Lockfile::open_or_default(
         instance_dir,
         LockMeta {
@@ -55,7 +56,7 @@ pub async fn list_package_versions(
         .packages
         .get(package)
         .ok_or_else(|| OrbitError::ModNotFound(package.to_string()))?;
-    let loader = manifest.inner.project.loader_kind()?;
+    let loader = platform.loader;
     let discovery_lock = OrbitLockfile {
         meta: lockfile.inner.meta.clone(),
         packages: Vec::new(),
@@ -68,6 +69,7 @@ pub async fn list_package_versions(
             lockfile: &discovery_lock,
             mc_version: &manifest.inner.project.mc_version,
             loader,
+            java_feature: platform.minecraft_version.java_version,
             storage,
             progress,
         },
@@ -206,25 +208,28 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         write_fabric_jar(&directory.path().join("example-alpha.jar"), "1.2.3-alpha");
         write_fabric_jar(&directory.path().join("example-newer.jar"), "1.2.4-preview");
+        let (minecraft_sha256, loader_sha256) = write_platform(directory.path());
         std::fs::write(
             directory.path().join("orbit.toml"),
-            r#"
+            format!(
+                r#"
 [project]
 name = "test"
 mc_version = "1.20.1"
 modloader = "fabric"
 modloader_version = "0.16"
 [platform]
-minecraft_jar = { path = "minecraft.jar", sha256 = "test" }
-loader_jar = { path = "loader.jar", sha256 = "test" }
+minecraft_jar = {{ path = "minecraft.jar", sha256 = "{minecraft_sha256}" }}
+loader_jar = {{ path = "loader.jar", sha256 = "{loader_sha256}" }}
 runtime_jars = []
 physical_environment = "client"
 [packages]
-example = { version = ">=1.2.3", remotes = [
-  { type = "file", path = "example-alpha.jar" },
-  { type = "file", path = "example-newer.jar" },
-] }
-"#,
+example = {{ version = ">=1.2.3", remotes = [
+  {{ type = "file", path = "example-alpha.jar" }},
+  {{ type = "file", path = "example-newer.jar" }},
+] }}
+"#
+            ),
         )
         .unwrap();
         let cache = crate::jar_cache::JarCache::open(directory.path().join("cache")).unwrap();
@@ -263,24 +268,27 @@ example = { version = ">=1.2.3", remotes = [
     async fn opaque_versions_bypass_only_numeric_filtering() {
         let directory = tempfile::tempdir().unwrap();
         write_fabric_jar(&directory.path().join("example.jar"), "release-vNext");
+        let (minecraft_sha256, loader_sha256) = write_platform(directory.path());
         std::fs::write(
             directory.path().join("orbit.toml"),
-            r#"
+            format!(
+                r#"
 [project]
 name = "test"
 mc_version = "1.20.1"
 modloader = "fabric"
 modloader_version = "0.16"
 [platform]
-minecraft_jar = { path = "minecraft.jar", sha256 = "test" }
-loader_jar = { path = "loader.jar", sha256 = "test" }
+minecraft_jar = {{ path = "minecraft.jar", sha256 = "{minecraft_sha256}" }}
+loader_jar = {{ path = "loader.jar", sha256 = "{loader_sha256}" }}
 runtime_jars = []
 physical_environment = "client"
 [packages]
-example = { version = "=999", string = 'all; intersect not contains(i"release")', remotes = [
-  { type = "file", path = "example.jar" },
-] }
-"#,
+example = {{ version = "=999", string = 'all; intersect not contains(i"release")', remotes = [
+  {{ type = "file", path = "example.jar" }},
+] }}
+"#
+            ),
         )
         .unwrap();
         let cache = crate::jar_cache::JarCache::open(directory.path().join("cache")).unwrap();
@@ -341,5 +349,38 @@ example = { version = "=999", string = 'all; intersect not contains(i"release")'
         )
         .unwrap();
         archive.finish().unwrap();
+    }
+
+    fn write_platform(root: &Path) -> (String, String) {
+        let minecraft = root.join("minecraft.jar");
+        let file = std::fs::File::create(&minecraft).unwrap();
+        let mut archive = zip::ZipWriter::new(file);
+        archive
+            .start_file("version.json", zip::write::SimpleFileOptions::default())
+            .unwrap();
+        write!(
+            archive,
+            r#"{{"id":"1.20.1","name":"1.20.1","world_version":3465,"protocol_version":763,"pack_version":{{"resource":15,"data":15}},"java_version":17,"stable":true}}"#
+        )
+        .unwrap();
+        archive.finish().unwrap();
+
+        let loader = root.join("loader.jar");
+        let file = std::fs::File::create(&loader).unwrap();
+        let mut archive = zip::ZipWriter::new(file);
+        archive
+            .start_file("fabric.mod.json", zip::write::SimpleFileOptions::default())
+            .unwrap();
+        write!(
+            archive,
+            r#"{{"schemaVersion":1,"id":"fabricloader","version":"0.16","name":"Fabric Loader"}}"#
+        )
+        .unwrap();
+        archive.finish().unwrap();
+
+        (
+            crate::jar::compute_sha256(&minecraft).unwrap(),
+            crate::jar::compute_sha256(&loader).unwrap(),
+        )
     }
 }

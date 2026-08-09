@@ -240,9 +240,9 @@ pub fn known_loader_choices() -> Vec<(String, String)> {
 }
 
 fn parse_loader(value: &str) -> Result<LoaderKind, OrbitError> {
-    value.parse().map_err(|message: String| {
+    value.parse().map_err(|error| {
         OrbitError::Other(anyhow::anyhow!(
-            "{message}. Supported: {}",
+            "{error}. Supported: {}",
             LoaderKind::ALL
                 .into_iter()
                 .map(LoaderKind::as_str)
@@ -1036,16 +1036,12 @@ fn one_candidate(
 }
 
 fn loader_signature(loader: LoaderKind) -> (&'static str, &'static [&'static str]) {
-    match loader {
-        LoaderKind::Fabric => ("net.fabricmc", &["fabric-loader"]),
-        LoaderKind::Quilt => ("org.quiltmc", &["quilt-loader"]),
-        LoaderKind::Forge => ("net.minecraftforge", &["forge"]),
-        LoaderKind::NeoForge => ("net.neoforged", &["neoforge", "forge"]),
-    }
+    let identity = orbit_compatibility::loader::launcher_identity(loader);
+    (identity.maven_group, identity.artifacts)
 }
 
 fn loader_mod_id(loader: LoaderKind) -> &'static str {
-    loader.semantics().canonical_package
+    crate::loader::semantics(loader).canonical_package
 }
 
 fn coordinate_version_matches(loader: LoaderKind, actual: &str, expected: &str) -> bool {
@@ -1053,21 +1049,8 @@ fn coordinate_version_matches(loader: LoaderKind, actual: &str, expected: &str) 
 }
 
 fn normalized_loader_version(loader: LoaderKind, version: &str) -> String {
-    if matches!(loader, LoaderKind::Forge | LoaderKind::NeoForge) {
-        version
-            .split_once('-')
-            .filter(|(minecraft, loader_version)| {
-                minecraft.contains('.')
-                    && minecraft
-                        .chars()
-                        .all(|character| character.is_ascii_digit() || character == '.')
-                    && loader_version
-                        .chars()
-                        .next()
-                        .is_some_and(|character| character.is_ascii_digit())
-            })
-            .map(|(_, loader_version)| loader_version.to_string())
-            .unwrap_or_else(|| version.to_string())
+    if orbit_compatibility::loader::launcher_identity(loader).coordinate_may_prefix_minecraft {
+        orbit_compatibility::normalize_launcher_loader_version(version, None).into_owned()
     } else {
         version.to_string()
     }

@@ -1,23 +1,16 @@
-//! 实例环境检测层。
+//! Data-driven launcher profile detection.
 //!
-//! 策略模式：每个加载器实现 `LoaderDetector` trait，
-//! `LoaderDetectionService` 负责编排检测并选择置信度最高的结果。
+//! Every loader traverses the same launcher/layout/profile pipeline. The
+//! registry below contains only format evidence and normalization facts. Exact
+//! dedicated-server formats remain isolated in `server::formats` and produce
+//! the same normalized `LoaderInfo`/runtime model after parsing.
 
-pub mod fabric;
-pub mod forge;
-pub mod neoforge;
 mod profile;
-pub mod quilt;
 pub(crate) mod server;
 
 use crate::error::OrbitError;
 use crate::metadata::LoaderKind;
 
-// ---------------------------------------------------------------------------
-// 类型
-// ---------------------------------------------------------------------------
-
-/// 加载器检测信息
 #[derive(Debug, Clone)]
 pub struct LoaderInfo {
     pub loader: LoaderKind,
@@ -26,91 +19,107 @@ pub struct LoaderInfo {
     pub evidence: Vec<String>,
 }
 
-/// 检测置信度
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Confidence {
-    /// 无任何线索 — 走交互式选择
     None = 0,
-    /// 猜测 — 目录名或版本名包含关键词
     Low = 1,
-    /// 确定 — 找到了加载器专属文件
     Certain = 2,
 }
 
-// ---------------------------------------------------------------------------
-// trait
-// ---------------------------------------------------------------------------
+#[derive(Debug, Clone, Copy)]
+pub struct ProfileDetector {
+    loader: LoaderKind,
+}
 
-/// 每个加载器实现此 trait
-pub trait LoaderDetector: Send + Sync {
-    /// 探测器名称（如 "Fabric"）
-    fn name(&self) -> &'static str;
+impl ProfileDetector {
+    pub fn name(self) -> &'static str {
+        orbit_compatibility::loader::launcher_identity(self.loader).display_name
+    }
 
-    /// 对应的加载器类型
-    fn loader_type(&self) -> LoaderKind;
+    pub fn loader_type(self) -> LoaderKind {
+        self.loader
+    }
 
-    /// 检测目标目录，返回该加载器的证据和置信度
-    fn detect(
-        &self,
+    pub fn detect(
+        self,
         instance_dir: &std::path::Path,
         mc_version: Option<&str>,
-    ) -> Result<LoaderInfo, OrbitError>;
+    ) -> Result<LoaderInfo, OrbitError> {
+        let identity = orbit_compatibility::loader::launcher_identity(self.loader);
+        let mut info =
+            profile::detect_profile_loader(instance_dir, mc_version, self.loader, &identity)?;
+        if identity.coordinate_may_prefix_minecraft {
+            info.versions = info
+                .versions
+                .into_iter()
+                .map(|version| {
+                    orbit_compatibility::normalize_launcher_loader_version(&version, None)
+                        .into_owned()
+                })
+                .collect();
+            info.versions.sort();
+            info.versions.dedup();
+        }
+        Ok(info)
+    }
 }
 
-// ---------------------------------------------------------------------------
-// 编排层
-// ---------------------------------------------------------------------------
-
-pub struct LoaderDetectionService {
-    detectors: Vec<Box<dyn LoaderDetector>>,
-}
+pub struct LoaderDetectionService;
 
 impl LoaderDetectionService {
     pub fn new() -> Self {
-        Self {
-            detectors: vec![
-                Box::new(self::fabric::FabricDetector),
-                Box::new(self::forge::ForgeDetector),
-                Box::new(self::neoforge::NeoForgeDetector),
-                Box::new(self::quilt::QuiltDetector),
-            ],
-        }
+        Self
     }
 
-    /// 遍历所有 detector，返回按置信度降序排列的结果
     pub fn detect_all(
         &self,
         instance_dir: &std::path::Path,
         mc_version: Option<&str>,
     ) -> Result<Vec<LoaderInfo>, OrbitError> {
-        let mut results: Vec<LoaderInfo> = self
-            .detectors
-            .iter()
-            .map(|d| d.detect(instance_dir, mc_version))
-            .collect::<Result<_, _>>()?;
-
-        results.sort_by(|a, b| b.confidence.cmp(&a.confidence));
+        let mut results = LoaderKind::ALL
+            .into_iter()
+            .map(|loader| ProfileDetector { loader }.detect(instance_dir, mc_version))
+            .collect::<Result<Vec<_>, _>>()?;
+        results.sort_by(|left, right| right.confidence.cmp(&left.confidence));
         Ok(results)
     }
 
-    /// 返回已知加载器列表（供交互式选择使用）
     pub fn known_loaders(&self) -> Vec<(LoaderKind, &'static str)> {
-        self.detectors
-            .iter()
-            .map(|d| (d.loader_type(), d.name()))
+        LoaderKind::ALL
+            .into_iter()
+            .map(|loader| {
+                let detector = ProfileDetector { loader };
+                (detector.loader_type(), detector.name())
+            })
             .collect()
     }
 
-    pub fn find_by_kind(&self, loader: LoaderKind) -> Option<&dyn LoaderDetector> {
-        self.detectors
-            .iter()
-            .find(|detector| detector.loader_type() == loader)
-            .map(|detector| detector.as_ref())
+    pub fn find_by_kind(&self, loader: LoaderKind) -> Option<ProfileDetector> {
+        LoaderKind::ALL
+            .contains(&loader)
+            .then_some(ProfileDetector { loader })
     }
 }
 
 impl Default for LoaderDetectionService {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn registry_has_one_detector_for_every_loader() {
+        let service = LoaderDetectionService::new();
+        let registered = service
+            .known_loaders()
+            .into_iter()
+            .map(|(loader, _)| loader)
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(registered, LoaderKind::ALL.into_iter().collect());
+        assert_eq!(registered.len(), LoaderKind::ALL.len());
     }
 }

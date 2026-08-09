@@ -172,12 +172,14 @@ pub(crate) fn build_solver_graph(
     lockfile: &OrbitLockfile,
     candidates: &HashMap<String, Vec<CandidateVersion>>,
     loader_package: Option<&PlatformCandidate>,
+    java_feature: u32,
 ) -> Result<SolverGraph, String> {
     build_solver_graph_with_package_roots(
         manifest,
         lockfile,
         candidates,
         loader_package,
+        java_feature,
         Environment::Both,
         ManifestPackageRoots::Required,
     )
@@ -188,6 +190,7 @@ pub(crate) fn build_solver_graph_for_target(
     lockfile: &OrbitLockfile,
     candidates: &HashMap<String, Vec<CandidateVersion>>,
     loader_package: Option<&PlatformCandidate>,
+    java_feature: u32,
     target: Environment,
 ) -> Result<SolverGraph, String> {
     build_solver_graph_with_package_roots(
@@ -195,6 +198,7 @@ pub(crate) fn build_solver_graph_for_target(
         lockfile,
         candidates,
         loader_package,
+        java_feature,
         target,
         ManifestPackageRoots::Required,
     )
@@ -205,6 +209,7 @@ pub(crate) fn build_solver_graph_with_package_roots(
     lockfile: &OrbitLockfile,
     candidates: &HashMap<String, Vec<CandidateVersion>>,
     loader_package: Option<&PlatformCandidate>,
+    java_feature: u32,
     target: Environment,
     package_roots: ManifestPackageRoots,
 ) -> Result<SolverGraph, String> {
@@ -220,7 +225,16 @@ pub(crate) fn build_solver_graph_with_package_roots(
         target,
     };
 
-    register_platform_packages(&mut provider, manifest, loader_package, &context);
+    if java_feature == 0 {
+        return Err("Minecraft platform metadata declares invalid Java feature 0".to_string());
+    }
+    register_platform_packages(
+        &mut provider,
+        manifest,
+        loader_package,
+        java_feature,
+        &context,
+    )?;
     register_lockfile(&mut provider, lockfile, &context);
     register_candidate_map(&mut provider, candidates, &context);
     register_ordering_cycles(
@@ -265,8 +279,9 @@ fn register_platform_packages(
     provider: &mut OrbitDependencyProvider,
     manifest: &OrbitManifest,
     loader_package: Option<&PlatformCandidate>,
+    java_feature: u32,
     context: &GraphContext<'_>,
-) {
+) -> Result<(), String> {
     let loader = context.loader;
     register_leaf(
         provider,
@@ -274,7 +289,7 @@ fn register_platform_packages(
         Version::parse(&manifest.project.mc_version, loader),
     );
 
-    let canonical_loader = loader.semantics().canonical_package;
+    let canonical_loader = crate::loader::semantics(loader).canonical_package;
     let loader_version = Version::parse(&manifest.project.modloader_version, loader);
     if let Some(metadata) = loader_package
         .filter(|metadata| metadata.mod_id == canonical_loader)
@@ -285,18 +300,18 @@ fn register_platform_packages(
         register_leaf(provider, canonical_loader, loader_version.clone());
     }
 
-    for (capability, version) in loader.platform_capabilities(&manifest.project.modloader_version) {
+    for (capability, version) in
+        crate::loader::platform_capabilities(loader, &manifest.project.modloader_version)?
+    {
         register_leaf(provider, capability, Version::parse(&version, loader));
     }
 
     register_leaf(
         provider,
         "java",
-        Version::parse(
-            &minecraft_java_version(&manifest.project.mc_version),
-            loader,
-        ),
+        Version::parse(&java_feature.to_string(), loader),
     );
+    Ok(())
 }
 
 fn register_platform_candidate(
@@ -763,7 +778,7 @@ fn register_module(
     add_version(provider, package.clone(), solver_version.clone());
     provider.add_candidate_priority(
         identity.clone(),
-        if loader.semantics().nested_priority == NestedPriorityPolicy::ParentOrder {
+        if crate::loader::semantics(loader).nested_priority == NestedPriorityPolicy::ParentOrder {
             parent_priority
         } else {
             Vec::new()
@@ -973,7 +988,7 @@ fn root_dependencies(
             loader,
         ))),
     ));
-    let canonical_loader = loader.semantics().canonical_package;
+    let canonical_loader = crate::loader::semantics(loader).canonical_package;
     dependencies.push((
         SolverPackage::Platform(canonical_loader.to_string()),
         solver_range(Ranges::singleton(Version::parse(
@@ -1123,24 +1138,6 @@ pub(crate) fn is_platform_package(package: &str) -> bool {
     )
 }
 
-fn minecraft_java_version(minecraft: &str) -> String {
-    let numeric = minecraft
-        .split(['-', '+'])
-        .next()
-        .unwrap_or(minecraft)
-        .split('.')
-        .filter_map(|part| part.parse::<u32>().ok())
-        .collect::<Vec<_>>();
-    match numeric.as_slice() {
-        [major, ..] if *major >= 26 => "25",
-        [major, minor, patch, ..] if (*major, *minor, *patch) >= (1, 20, 5) => "21",
-        [major, minor, ..] if (*major, *minor) >= (1, 18) => "17",
-        [1, 17, ..] => "16",
-        _ => "8",
-    }
-    .to_string()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1154,7 +1151,7 @@ mod tests {
         candidates: &HashMap<String, Vec<CandidateVersion>>,
         loader_package: Option<&PlatformCandidate>,
     ) -> SolverGraph {
-        super::build_solver_graph(manifest, lockfile, candidates, loader_package).unwrap()
+        super::build_solver_graph(manifest, lockfile, candidates, loader_package, 21).unwrap()
     }
 
     fn build_solver_graph_for_target(
@@ -1164,8 +1161,15 @@ mod tests {
         loader_package: Option<&PlatformCandidate>,
         target: Environment,
     ) -> SolverGraph {
-        super::build_solver_graph_for_target(manifest, lockfile, candidates, loader_package, target)
-            .unwrap()
+        super::build_solver_graph_for_target(
+            manifest,
+            lockfile,
+            candidates,
+            loader_package,
+            21,
+            target,
+        )
+        .unwrap()
     }
 
     fn dependency(id: &str, requirement: &str, kind: DependencyKind) -> DependencyExpression {
@@ -1596,7 +1600,7 @@ carpet_tis = { version = "*", remotes = [{ type = "file", path = "carpet_tis.jar
             ],
         };
 
-        let error = crate::resolver::check_lockfile_graph(&manifest, &lockfile).unwrap_err();
+        let error = crate::resolver::check_lockfile_graph(&manifest, &lockfile, 21).unwrap_err();
 
         assert!(error.contains("load ordering cycle: a -> b -> a"));
     }
@@ -1624,7 +1628,7 @@ carpet_tis = { version = "*", remotes = [{ type = "file", path = "carpet_tis.jar
             packages: vec![a, b],
         };
 
-        let error = crate::resolver::check_lockfile_graph(&manifest, &lockfile).unwrap_err();
+        let error = crate::resolver::check_lockfile_graph(&manifest, &lockfile, 21).unwrap_err();
 
         assert!(
             error.contains("a 1 requires org.example:shared >=1, <2"),

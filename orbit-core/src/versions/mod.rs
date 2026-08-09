@@ -119,7 +119,7 @@ impl Version {
     /// Parse a raw version string into a Version.
     /// The version string should come from the mod's own fabric.mod.json, not a platform release name.
     pub fn parse(raw: &str, loader: LoaderKind) -> Self {
-        match loader.semantics().version_scheme {
+        match crate::loader::semantics(loader).version_scheme {
             VersionScheme::FabricPredicate => {
                 // Fabric and Quilt allow wildcard components in constraints,
                 // not in a mod's declared version.  Their Loader parsers fall
@@ -140,7 +140,7 @@ impl Version {
             return Ranges::full();
         }
 
-        match loader.semantics().version_scheme {
+        match crate::loader::semantics(loader).version_scheme {
             VersionScheme::FabricPredicate => fabric::parse_constraint(constraint),
             VersionScheme::MavenRange => maven::parse_constraint(constraint),
         }

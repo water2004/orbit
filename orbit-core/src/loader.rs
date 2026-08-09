@@ -1,113 +1,44 @@
 //! Strongly typed loader identity and normalized loader-level semantics.
 //!
-//! Persistent formats and CLI arguments use strings at their boundaries. Core
-//! services parse those strings once and pass `LoaderKind` thereafter.
+//! The closed loader identity and invariant semantics live in the shared
+//! compatibility crate. Core only expands the selected platform capability
+//! scheme into solver package versions.
 
-use serde::{Deserialize, Serialize};
-use std::str::FromStr;
+pub use orbit_compatibility::ModLoader as LoaderKind;
+pub(crate) use orbit_compatibility::loader::{
+    DependencyVersionScheme as VersionScheme, LoaderSemantics, NestedPriorityPolicy,
+    PlatformCapabilityScheme,
+};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum LoaderKind {
-    Fabric,
-    Quilt,
-    Forge,
-    NeoForge,
+pub(crate) fn semantics(loader: LoaderKind) -> LoaderSemantics {
+    orbit_compatibility::loader::semantics(loader)
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum VersionScheme {
-    FabricPredicate,
-    MavenRange,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum NestedPriorityPolicy {
-    ParentOrder,
-    Independent,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct LoaderSemantics {
-    pub version_scheme: VersionScheme,
-    pub nested_priority: NestedPriorityPolicy,
-    pub canonical_package: &'static str,
-}
-
-impl LoaderKind {
-    pub const ALL: [Self; 4] = [Self::Fabric, Self::Quilt, Self::Forge, Self::NeoForge];
-
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Fabric => "fabric",
-            Self::Quilt => "quilt",
-            Self::Forge => "forge",
-            Self::NeoForge => "neoforge",
+pub(crate) fn platform_capabilities(
+    loader: LoaderKind,
+    loader_version: &str,
+) -> Result<Vec<(&'static str, String)>, String> {
+    let capabilities = match semantics(loader).platform_capabilities {
+        PlatformCapabilityScheme::MirrorLoader { package } => {
+            vec![(package, loader_version.to_string())]
         }
-    }
-
-    pub(crate) const fn semantics(self) -> LoaderSemantics {
-        match self {
-            Self::Fabric => LoaderSemantics {
-                version_scheme: VersionScheme::FabricPredicate,
-                nested_priority: NestedPriorityPolicy::ParentOrder,
-                canonical_package: "fabricloader",
-            },
-            Self::Quilt => LoaderSemantics {
-                version_scheme: VersionScheme::FabricPredicate,
-                nested_priority: NestedPriorityPolicy::Independent,
-                canonical_package: "quilt_loader",
-            },
-            Self::Forge => LoaderSemantics {
-                version_scheme: VersionScheme::MavenRange,
-                nested_priority: NestedPriorityPolicy::Independent,
-                canonical_package: "forge",
-            },
-            Self::NeoForge => LoaderSemantics {
-                version_scheme: VersionScheme::MavenRange,
-                nested_priority: NestedPriorityPolicy::Independent,
-                canonical_package: "neoforge",
-            },
+        PlatformCapabilityScheme::ForgeMajor => {
+            let major = orbit_compatibility::NumericVersion::parse(loader_version)
+                .ok_or_else(|| {
+                    format!(
+                        "Forge loader version '{loader_version}' has no numeric major component"
+                    )
+                })?
+                .major()
+                .to_string();
+            vec![("javafml", major.clone()), ("lowcodefml", major)]
         }
-    }
-
-    pub(crate) fn platform_capabilities(self, loader_version: &str) -> Vec<(&'static str, String)> {
-        match self {
-            Self::Fabric => vec![("fabric", loader_version.to_string())],
-            Self::Quilt => vec![("quiltloader", loader_version.to_string())],
-            Self::Forge => {
-                let major = loader_version.split('.').next().unwrap_or(loader_version);
-                vec![
-                    ("javafml", major.to_string()),
-                    ("lowcodefml", major.to_string()),
-                ]
-            }
-            Self::NeoForge => vec![
-                ("javafml", "1".to_string()),
-                ("lowcodefml", "1".to_string()),
-            ],
-        }
-    }
-}
-
-impl std::fmt::Display for LoaderKind {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(self.as_str())
-    }
-}
-
-impl FromStr for LoaderKind {
-    type Err = String;
-
-    fn from_str(value: &str) -> Result<Self, Self::Err> {
-        match value.trim().to_ascii_lowercase().as_str() {
-            "fabric" => Ok(Self::Fabric),
-            "quilt" => Ok(Self::Quilt),
-            "forge" => Ok(Self::Forge),
-            "neoforge" => Ok(Self::NeoForge),
-            _ => Err(format!("unsupported loader '{value}'")),
-        }
-    }
+        PlatformCapabilityScheme::NeoForgeFmlOne => vec![
+            ("javafml", "1".to_string()),
+            ("lowcodefml", "1".to_string()),
+        ],
+    };
+    Ok(capabilities)
 }
 
 #[cfg(test)]
@@ -124,5 +55,17 @@ mod tests {
                 loader
             );
         }
+    }
+
+    #[test]
+    fn every_loader_has_exactly_one_semantics_row() {
+        for loader in LoaderKind::ALL {
+            assert!(!semantics(loader).canonical_package.is_empty());
+        }
+    }
+
+    #[test]
+    fn malformed_forge_version_is_not_reused_as_a_capability_version() {
+        assert!(platform_capabilities(LoaderKind::Forge, "unknown").is_err());
     }
 }

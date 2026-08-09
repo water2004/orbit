@@ -158,6 +158,7 @@ pub async fn install_to_instance(
         lockfile: &mut lock.inner,
         mods_dir: &mods_dir,
         loader_package,
+        java_feature: platform.minecraft_version.java_version,
         options,
         interaction,
     })
@@ -196,6 +197,7 @@ pub async fn install_instance(
         &lock.inner,
         &options.selection,
         loader_package.as_ref(),
+        platform.minecraft_version.java_version,
     )?;
     let mut report = InstanceInstallReport {
         skipped,
@@ -340,6 +342,7 @@ pub(crate) async fn repair_manifest_instance(
             lockfile: &lock.inner,
             mc_version: &manifest_file.inner.project.mc_version,
             loader: platform.loader,
+            java_feature: platform.minecraft_version.java_version,
             storage,
             progress: progress.clone(),
         },
@@ -812,6 +815,7 @@ pub fn list_installed_for_target(
         &lock.inner,
         &options,
         loader_package.as_ref(),
+        platform.minecraft_version.java_version,
     )?;
     let selected: std::collections::HashSet<_> = selected.into_iter().collect();
     Ok(list_output(
@@ -920,6 +924,7 @@ struct InstallModInput<'a> {
     lockfile: &'a mut OrbitLockfile,
     mods_dir: &'a Path,
     loader_package: Option<crate::resolver::types::PlatformCandidate>,
+    java_feature: u32,
     options: InstallOptions,
     interaction: InstallInteraction,
 }
@@ -935,6 +940,7 @@ async fn install_mod(input: InstallModInput<'_>) -> Result<InstallReport, OrbitE
         lockfile,
         mods_dir,
         loader_package,
+        java_feature,
         options,
         interaction,
     } = input;
@@ -989,6 +995,7 @@ async fn install_mod(input: InstallModInput<'_>) -> Result<InstallReport, OrbitE
             lockfile,
             mc_version,
             loader,
+            java_feature,
             storage,
             progress: progress.clone(),
         },
@@ -1402,6 +1409,7 @@ pub(crate) fn selected_packages(
     lockfile: &OrbitLockfile,
     options: &PackageSelection,
     loader_package: Option<&crate::resolver::types::PlatformCandidate>,
+    java_feature: u32,
 ) -> Result<(Vec<String>, Vec<String>), OrbitError> {
     let group = options
         .group
@@ -1456,6 +1464,7 @@ pub(crate) fn selected_packages(
         lockfile,
         target,
         loader_package,
+        java_feature,
     )
     .map_err(|error| OrbitError::Conflict(error.to_string()))?;
     let mut selected: Vec<_> = solution
@@ -2031,9 +2040,9 @@ mod tests {
             r#"
 [project]
 name = "test"
-mc_version = "1"
+mc_version = "1.20.1"
 modloader = "forge"
-modloader_version = "1"
+modloader_version = "47.2.0"
 [platform]
 minecraft_jar = { path = "minecraft.jar", sha256 = "test" }
 loader_jar = { path = "loader.jar", sha256 = "test" }
@@ -2681,9 +2690,9 @@ physical_environment = "client"
     fn empty_lockfile() -> OrbitLockfile {
         OrbitLockfile {
             meta: LockMeta {
-                mc_version: "1".to_string(),
+                mc_version: "1.20.1".to_string(),
                 modloader: "forge".to_string(),
-                modloader_version: "1".to_string(),
+                modloader_version: "47.2.0".to_string(),
             },
             packages: Vec::new(),
         }
@@ -3016,7 +3025,8 @@ packages = ["client-mod", "optional-mod"]
             no_optional: true,
         };
 
-        let (selected, skipped) = selected_packages(&manifest, &lockfile, &options, None).unwrap();
+        let (selected, skipped) =
+            selected_packages(&manifest, &lockfile, &options, None, 21).unwrap();
 
         assert_eq!(selected, vec!["client-mod", "library"]);
         assert_eq!(skipped, vec!["optional-mod", "server-mod"]);
@@ -3062,11 +3072,11 @@ example = { version = "*", remotes = [{ type = "file", path = "example.jar" }] }
         };
 
         assert_eq!(
-            selected_packages(&manifest, &lockfile, &client, None).unwrap(),
+            selected_packages(&manifest, &lockfile, &client, None, 21).unwrap(),
             (vec!["example".to_string()], Vec::new())
         );
         assert_eq!(
-            selected_packages(&manifest, &lockfile, &server, None).unwrap(),
+            selected_packages(&manifest, &lockfile, &server, None, 21).unwrap(),
             (Vec::new(), vec!["example".to_string()])
         );
     }
@@ -3106,7 +3116,7 @@ example = { version = "*", remotes = [{ type = "file", path = "example.jar" }] }
             ..PackageSelection::default()
         };
 
-        assert!(selected_packages(&manifest, &lockfile, &server, None).is_err());
+        assert!(selected_packages(&manifest, &lockfile, &server, None, 21).is_err());
     }
 
     #[test]
@@ -3138,7 +3148,8 @@ example = { version = "*", remotes = [{ type = "file", path = "example.jar" }] }
         };
 
         let (selected, _) =
-            selected_packages(&manifest, &lockfile, &PackageSelection::default(), None).unwrap();
+            selected_packages(&manifest, &lockfile, &PackageSelection::default(), None, 21)
+                .unwrap();
 
         assert_eq!(selected, ["example"]);
     }

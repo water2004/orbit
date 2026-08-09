@@ -127,23 +127,32 @@ pub(crate) fn normalize_candidate_diagnostics(
 pub fn check_local_graph(
     manifest: &OrbitManifest,
     local_mods: &[crate::identification::IdentifiedMod],
+    java_feature: u32,
 ) -> Result<(), String> {
-    local::check_local_graph(manifest, local_mods)
+    local::check_local_graph(manifest, local_mods, java_feature)
 }
 
 pub fn check_lockfile_graph(
     manifest: &OrbitManifest,
     lockfile: &OrbitLockfile,
+    java_feature: u32,
 ) -> Result<(), String> {
-    check_lockfile_graph_with_loader(manifest, lockfile, None)
+    check_lockfile_graph_with_loader(manifest, lockfile, None, java_feature)
 }
 
 pub(crate) fn check_lockfile_graph_with_loader(
     manifest: &OrbitManifest,
     lockfile: &OrbitLockfile,
     loader_package: Option<&types::PlatformCandidate>,
+    java_feature: u32,
 ) -> Result<(), String> {
-    let graph = build_solver_graph(manifest, lockfile, &HashMap::new(), loader_package)?;
+    let graph = build_solver_graph(
+        manifest,
+        lockfile,
+        &HashMap::new(),
+        loader_package,
+        java_feature,
+    )?;
     match pubgrub::resolve(&graph.provider, graph.root_package, graph.root_version) {
         Ok(_) => Ok(()),
         Err(pubgrub::PubGrubError::NoSolution(derivation_tree)) => {
@@ -162,9 +171,16 @@ pub(crate) fn resolve_lockfile_for_target(
     lockfile: &OrbitLockfile,
     target: Environment,
     loader_package: Option<&types::PlatformCandidate>,
+    java_feature: u32,
 ) -> Result<pubgrub::SelectedDependencies<SolverPackage, SolverVersion>, String> {
-    let graph =
-        build_solver_graph_for_target(manifest, lockfile, &HashMap::new(), loader_package, target)?;
+    let graph = build_solver_graph_for_target(
+        manifest,
+        lockfile,
+        &HashMap::new(),
+        loader_package,
+        java_feature,
+        target,
+    )?;
     match pubgrub::resolve(&graph.provider, graph.root_package, graph.root_version) {
         Ok(solution) => Ok(solution),
         Err(pubgrub::PubGrubError::NoSolution(derivation_tree)) => {
@@ -200,9 +216,11 @@ pub(crate) fn selected_runtime_load(
     manifest: &OrbitManifest,
     lockfile: &OrbitLockfile,
     loader_package: Option<&types::PlatformCandidate>,
+    java_feature: u32,
     target: Environment,
 ) -> Result<RuntimeLoadSelection, String> {
-    let solution = resolve_lockfile_for_target(manifest, lockfile, target, loader_package)?;
+    let solution =
+        resolve_lockfile_for_target(manifest, lockfile, target, loader_package, java_feature)?;
     let mut selected = RuntimeLoadSelection::default();
     if let Some(loader_package) = loader_package {
         selected
@@ -533,6 +551,7 @@ pub(crate) async fn resolve_package_preserving_portfolio_with_progress(
         lockfile,
         &catalog.candidates,
         catalog.loader_package.as_ref(),
+        catalog.java_feature,
         Environment::Both,
         ManifestPackageRoots::Preferred,
     )
@@ -637,6 +656,7 @@ async fn resolve_portfolio_with_progress_detailed(
             lockfile,
             &catalog.candidates,
             catalog.loader_package.as_ref(),
+            catalog.java_feature,
             Environment::Both,
             ManifestPackageRoots::RequiredTopLevel,
         ),
@@ -646,6 +666,7 @@ async fn resolve_portfolio_with_progress_detailed(
                 lockfile,
                 &catalog.candidates,
                 catalog.loader_package.as_ref(),
+                catalog.java_feature,
             )
         }
     }
@@ -2251,7 +2272,7 @@ iris = { version = "*", remotes = [{ type = "file", path = "iris.jar" }] }
             packages: vec![iris, sodium],
         };
 
-        let error = check_lockfile_graph(&manifest, &lockfile).unwrap_err();
+        let error = check_lockfile_graph(&manifest, &lockfile, 21).unwrap_err();
 
         assert!(error.contains("sodium 0.9.x"), "{error}");
         assert!(!error.contains("x-upper"), "{error}");
@@ -2350,7 +2371,7 @@ iris = { version = "*", remotes = [{ type = "file", path = "iris.jar" }] }
         };
 
         let selected =
-            selected_runtime_load(&manifest(), &current, None, Environment::Both).unwrap();
+            selected_runtime_load(&manifest(), &current, None, 21, Environment::Both).unwrap();
 
         assert_eq!(
             selected.top_level_jars,
@@ -2389,9 +2410,14 @@ iris = { version = "*", remotes = [{ type = "file", path = "iris.jar" }] }
             }],
         };
 
-        let selected =
-            selected_runtime_load(&manifest(), &lockfile(), Some(&loader), Environment::Both)
-                .unwrap();
+        let selected = selected_runtime_load(
+            &manifest(),
+            &lockfile(),
+            Some(&loader),
+            21,
+            Environment::Both,
+        )
+        .unwrap();
 
         assert!(selected.active_mod_ids.contains("loader_child"));
         assert_eq!(

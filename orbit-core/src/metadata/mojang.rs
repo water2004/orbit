@@ -7,6 +7,10 @@
 use serde::Deserialize;
 use serde_json::Value;
 
+use orbit_compatibility::minecraft::{
+    JavaVersionPolicy, PackVersionSchema, java_version_policy, pack_version_schema,
+};
+
 use crate::error::OrbitError;
 
 #[derive(Debug, Clone)]
@@ -39,46 +43,6 @@ struct McVersionWire {
     stable: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum PackVersionSchema {
-    /// `pack_version: 6`
-    SharedInteger,
-    /// `pack_version: { "resource": 64, "data": 81 }`
-    SeparateInteger,
-    /// `pack_version: { "resource_major": 69, ... }`
-    MajorMinor,
-}
-
-#[derive(Debug, Clone, Copy)]
-struct PackVersionSchemaRange {
-    first_world_version: u32,
-    last_world_version: Option<u32>,
-    schema: PackVersionSchema,
-}
-
-// These ranges come from the version.json files inside Mojang's official
-// server JARs. The gaps contain no published Minecraft version:
-// - 18w47b (1913) through 1.16.5 (2586): shared integer
-// - 20w45a (2681) through 1.21.8 (4440): resource/data integers
-// - 25w31a (4534) onward; first release 1.21.9: major/minor pairs
-const PACK_VERSION_SCHEMA_RANGES: &[PackVersionSchemaRange] = &[
-    PackVersionSchemaRange {
-        first_world_version: 1913,
-        last_world_version: Some(2586),
-        schema: PackVersionSchema::SharedInteger,
-    },
-    PackVersionSchemaRange {
-        first_world_version: 2681,
-        last_world_version: Some(4440),
-        schema: PackVersionSchema::SeparateInteger,
-    },
-    PackVersionSchemaRange {
-        first_world_version: 4534,
-        last_world_version: None,
-        schema: PackVersionSchema::MajorMinor,
-    },
-];
-
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct SeparatePackVersion {
@@ -99,26 +63,31 @@ impl McVersion {
     /// Parse the `version.json` extracted by `jar.rs` or platform detection.
     pub fn from_json(content: &str) -> Result<Self, OrbitError> {
         let wire: McVersionWire = serde_json::from_str(content).map_err(invalid_json)?;
-        let schema = pack_version_schema(wire.world_version).ok_or_else(|| {
+        let schema = pack_version_schema(wire.world_version).map_err(|error| {
             invalid_json(format!(
-                "Minecraft '{}' has unregistered world version {}; no pack_version schema range contains it",
-                wire.id, wire.world_version
+                "Minecraft '{}' cannot select its pack_version schema: {error}",
+                wire.id
             ))
         })?;
         let pack_version =
             parse_pack_version(&wire.id, wire.world_version, schema, wire.pack_version)?;
+        let java_policy = java_version_policy(wire.world_version).map_err(|error| {
+            invalid_json(format!(
+                "Minecraft '{}' cannot select its java_version policy: {error}",
+                wire.id
+            ))
+        })?;
         let java_version = match wire.java_version {
             Some(version) => version,
-            // Mojang did not add java_version until 21w19a (world version
-            // 2714). Every official version.json before that range targets
-            // Java 8.
-            None if wire.world_version < 2714 => 8,
-            None => {
-                return Err(invalid_json(format!(
-                    "Minecraft '{}' (world version {}) must declare java_version",
-                    wire.id, wire.world_version
-                )));
-            }
+            None => match java_policy {
+                JavaVersionPolicy::ImplicitFeature(feature) => feature,
+                JavaVersionPolicy::Declared => {
+                    return Err(invalid_json(format!(
+                        "Minecraft '{}' (world version {}) must declare java_version",
+                        wire.id, wire.world_version
+                    )));
+                }
+            },
         };
 
         Ok(Self {
@@ -131,18 +100,6 @@ impl McVersion {
             stable: wire.stable,
         })
     }
-}
-
-fn pack_version_schema(world_version: u32) -> Option<PackVersionSchema> {
-    PACK_VERSION_SCHEMA_RANGES
-        .iter()
-        .find(|range| {
-            world_version >= range.first_world_version
-                && range
-                    .last_world_version
-                    .is_none_or(|last| world_version <= last)
-        })
-        .map(|range| range.schema)
 }
 
 fn parse_pack_version(
@@ -297,6 +254,10 @@ mod tests {
         )
         .unwrap_err();
 
-        assert!(error.to_string().contains("no pack_version schema range"));
+        assert!(
+            error
+                .to_string()
+                .contains("no registered pack_version schema format rule")
+        );
     }
 }

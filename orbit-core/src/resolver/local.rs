@@ -11,6 +11,7 @@ use crate::resolver::graph::build_solver_graph;
 pub(crate) fn check_local_graph(
     manifest: &OrbitManifest,
     local_mods: &[IdentifiedMod],
+    java_feature: u32,
 ) -> Result<(), String> {
     let lockfile = OrbitLockfile {
         meta: LockMeta {
@@ -23,7 +24,7 @@ pub(crate) fn check_local_graph(
             .map(IdentifiedMod::to_package_entry)
             .collect(),
     };
-    let graph = build_solver_graph(manifest, &lockfile, &HashMap::new(), None)?;
+    let graph = build_solver_graph(manifest, &lockfile, &HashMap::new(), None, java_feature)?;
 
     match pubgrub::resolve(&graph.provider, graph.root_package, graph.root_version) {
         Ok(_) => Ok(()),
@@ -100,7 +101,7 @@ missing-mod = { version = "*", remotes = [{ type = "file", path = "missing.jar" 
         )
         .unwrap();
 
-        let error = check_local_graph(&manifest, &[]).unwrap_err();
+        let error = check_local_graph(&manifest, &[], 21).unwrap_err();
 
         assert!(error.starts_with("dependency resolution failed"));
         assert!(error.contains("missing-mod"));
@@ -133,7 +134,7 @@ b = { version = "=1", remotes = [{ type = "file", path = "b.jar" }] }
             local_mod("b", "1", Vec::new()),
         ];
 
-        let error = check_local_graph(&manifest, &mods).unwrap_err();
+        let error = check_local_graph(&manifest, &mods, 21).unwrap_err();
         assert!(error.starts_with("dependency resolution failed"));
         assert!(error.contains('b'));
     }
@@ -161,7 +162,7 @@ a = { version = "*", exclude = ["b"], remotes = [{ type = "file", path = "a.jar"
         .unwrap();
         let mods = vec![local_mod("a", "1", vec![required("b", "*")])];
 
-        check_local_graph(&manifest, &mods).unwrap();
+        check_local_graph(&manifest, &mods, 21).unwrap();
     }
 
     #[test]
@@ -187,7 +188,7 @@ a = { version = ">=2", remotes = [{ type = "file", path = "a.jar" }] }
         .unwrap();
         let mods = vec![local_mod("a", "1", Vec::new())];
 
-        let error = check_local_graph(&manifest, &mods).unwrap_err();
+        let error = check_local_graph(&manifest, &mods, 21).unwrap_err();
 
         assert!(error.starts_with("dependency resolution failed"));
         assert!(error.contains('a'));

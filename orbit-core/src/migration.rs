@@ -154,6 +154,7 @@ async fn plan_migration_inner(
             lockfile: &discovery_lock,
             mc_version: &target_meta.mc_version,
             loader: target_platform.loader,
+            java_feature: target_platform.minecraft_version.java_version,
             storage,
             progress: interaction.progress.clone(),
         },
