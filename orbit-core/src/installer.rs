@@ -15,8 +15,10 @@ use crate::resolver::types::{CandidateDiagnostic, ResolutionSelector};
 use crate::workspace::{Lockfile, ManifestFile};
 
 mod local;
+mod removal;
 
 pub use local::install_local_file_to_instance;
+use removal::commit_package_removal;
 
 pub type InstallPrompt = Box<dyn FnOnce(&InstallReport) -> Result<(), OrbitError> + Send>;
 pub type PackageSelector = Box<dyn FnOnce(&[String]) -> Result<usize, OrbitError> + Send>;
@@ -688,17 +690,29 @@ pub fn remove_from_instance(
     }
 
     let mods_dir = instance_dir.join("mods");
-    let jar_deleted = !dry_run && lock.remove_jar(&key, &mods_dir).is_ok();
+    let jar_path = if dry_run {
+        None
+    } else {
+        Some(lock.find_jar_path(&key, &mods_dir)?)
+    };
     lock.inner.packages.retain(|e| e.mod_id != key);
     reconcile_manifest_to_lock(&mut manifest_file.inner, &lock.inner);
 
     if !dry_run {
-        manifest_file.save()?;
-        lock.save()?;
+        let manifest_document = manifest_file.inner.to_toml_string()?;
+        let lock_document = lock.inner.to_toml_string()?;
+        commit_package_removal(
+            instance_dir,
+            jar_path
+                .as_deref()
+                .expect("a non-dry-run removal has an artifact path"),
+            manifest_document.as_bytes(),
+            lock_document.as_bytes(),
+        )?;
     }
     Ok(RemoveReport {
         mod_id: key,
-        jar_deleted,
+        jar_deleted: !dry_run,
     })
 }
 
@@ -2122,6 +2136,150 @@ physical_environment = "client"
         )
         .unwrap();
         archive.finish().unwrap();
+    }
+
+    fn removal_fixture(root: &Path) -> PathBuf {
+        let remote = PackageRemote::File {
+            path: "mods/example.jar".to_string(),
+        };
+        let mut manifest = manifest();
+        manifest
+            .packages
+            .insert("example".to_string(), PackageSpec::new("*", vec![remote]));
+        ManifestFile::new(root, manifest).save().unwrap();
+        let path = root.join("mods/example.jar");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, b"package bytes").unwrap();
+        let mut package = locked_package("example", &[]);
+        package.sha512 = crate::jar::compute_sha512(&path).unwrap();
+        Lockfile::new(
+            root,
+            OrbitLockfile {
+                meta: LockMeta {
+                    mc_version: "1".to_string(),
+                    modloader: "forge".to_string(),
+                    modloader_version: "1".to_string(),
+                },
+                packages: vec![package],
+            },
+        )
+        .save()
+        .unwrap();
+        path
+    }
+
+    #[test]
+    fn remove_propagates_artifact_verification_failure_without_committing_state() {
+        let directory = tempfile::tempdir().unwrap();
+        let jar = removal_fixture(directory.path());
+        let mut lock = Lockfile::open(directory.path()).unwrap();
+        lock.inner.packages[0].sha256 = "0".repeat(64);
+        lock.save().unwrap();
+        let manifest_before = std::fs::read(directory.path().join("orbit.toml")).unwrap();
+        let lock_before = std::fs::read(directory.path().join("orbit.lock")).unwrap();
+
+        let error = remove_from_instance("example", directory.path(), false).unwrap_err();
+
+        assert!(matches!(error, OrbitError::ChecksumMismatch { .. }));
+        assert!(jar.is_file());
+        assert_eq!(
+            std::fs::read(directory.path().join("orbit.toml")).unwrap(),
+            manifest_before
+        );
+        assert_eq!(
+            std::fs::read(directory.path().join("orbit.lock")).unwrap(),
+            lock_before
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn remove_propagates_a_windows_sharing_violation_without_committing_state() {
+        use std::os::windows::fs::OpenOptionsExt;
+
+        let directory = tempfile::tempdir().unwrap();
+        let jar = removal_fixture(directory.path());
+        let manifest_before = std::fs::read(directory.path().join("orbit.toml")).unwrap();
+        let lock_before = std::fs::read(directory.path().join("orbit.lock")).unwrap();
+        let _exclusive_handle = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(0)
+            .open(&jar)
+            .unwrap();
+
+        let error = remove_from_instance("example", directory.path(), false).unwrap_err();
+
+        assert!(matches!(error, OrbitError::Io(_)));
+        assert!(jar.is_file());
+        assert_eq!(
+            std::fs::read(directory.path().join("orbit.toml")).unwrap(),
+            manifest_before
+        );
+        assert_eq!(
+            std::fs::read(directory.path().join("orbit.lock")).unwrap(),
+            lock_before
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn remove_rolls_back_the_jar_and_manifest_when_lock_commit_fails() {
+        use std::os::windows::fs::OpenOptionsExt;
+
+        let directory = tempfile::tempdir().unwrap();
+        let jar = removal_fixture(directory.path());
+        let manifest_before = std::fs::read(directory.path().join("orbit.toml")).unwrap();
+        let lock_before = std::fs::read(directory.path().join("orbit.lock")).unwrap();
+        // FILE_SHARE_READ lets Orbit parse the lock but prevents replacing it.
+        let _locked_lockfile = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(1)
+            .open(directory.path().join("orbit.lock"))
+            .unwrap();
+
+        let error = remove_from_instance("example", directory.path(), false).unwrap_err();
+
+        assert!(matches!(error, OrbitError::Io(_)));
+        assert!(jar.is_file());
+        assert_eq!(
+            std::fs::read(directory.path().join("orbit.toml")).unwrap(),
+            manifest_before
+        );
+        assert_eq!(
+            std::fs::read(directory.path().join("orbit.lock")).unwrap(),
+            lock_before
+        );
+        assert_eq!(
+            std::fs::read_dir(directory.path().join("mods"))
+                .unwrap()
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn remove_commits_only_after_the_package_artifact_is_deleted() {
+        let directory = tempfile::tempdir().unwrap();
+        let jar = removal_fixture(directory.path());
+
+        let report = remove_from_instance("example", directory.path(), false).unwrap();
+
+        assert!(report.jar_deleted);
+        assert!(!jar.exists());
+        assert!(
+            !ManifestFile::open(directory.path())
+                .unwrap()
+                .inner
+                .packages
+                .contains_key("example")
+        );
+        assert!(
+            Lockfile::open(directory.path())
+                .unwrap()
+                .inner
+                .find("example")
+                .is_none()
+        );
     }
 
     #[tokio::test]

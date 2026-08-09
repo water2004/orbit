@@ -133,13 +133,6 @@ impl Lockfile {
         }
         Ok(path)
     }
-
-    /// 删除指定 mod_id 的旧 JAR。
-    pub fn remove_jar(&self, mod_id: &str, mods_dir: &Path) -> Result<(), OrbitError> {
-        let path = self.find_jar_path(mod_id, mods_dir)?;
-        std::fs::remove_file(&path)?;
-        Ok(())
-    }
 }
 
 #[cfg(test)]

@@ -90,19 +90,6 @@ pub async fn handle(input: String, ctx: &CliContext) -> Result<()> {
             };
             Box::pin(handle(key, ctx)).await
         }
-        Err(OrbitError::Conflict(msg)) => anyhow::bail!("{msg}"),
-        Err(OrbitError::ManifestNotFound) => {
-            anyhow::bail!(
-                "{}",
-                tr!("orbit.toml was not found in the current instance")
-            )
-        }
-        Err(OrbitError::LockfileNotFound) => {
-            anyhow::bail!(
-                "{}",
-                tr!("orbit.lock was not found in the current instance")
-            )
-        }
-        Err(e) => anyhow::bail!("{}", tr!("Remove failed: %{detail}", detail = e)),
+        Err(error) => Err(error.into()),
     }
 }
