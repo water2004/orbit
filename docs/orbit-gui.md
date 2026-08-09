@@ -158,8 +158,8 @@ CLI 的同一条顺序规则，但不执行匹配或求解。GUI 只把这些动
 `orbit constraint set` 参数，Loader 约束编码、Pareto 极小求解、多方案选择、确认和原子提交
 全部由 CLI/core 完成。面板同时区分普通 remove 与 purge：purge 直接启动同一个 Orbit
 进程，由 `data_deletion` interaction 展示运行时观测到的准确文件/目录树及逻辑包；GUI 不先
-弹一层泛化确认，也不显示配置名称猜测。用户确认后仍由 Orbit 先清理 JAR/TOML/lock，再
-删除 Agent 证明为该包独占写入的数据。
+弹一层泛化确认，也不显示配置名称猜测。目录树条目还要列出其中将保留的其它创建者/共享写入
+节点。用户确认后仍由 Orbit 先清理 JAR/TOML/lock，再按递归所有权计划删除数据。
 GUI 不复制 CLI 的项目详情报告；Discover 只提供搜索所需的名称、摘要、
 来源、兼容标签和直接添加动作，需要完整项目数据时使用 `orbit info`。
 

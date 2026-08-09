@@ -23,8 +23,10 @@ JAR 读取到的事实，不表达用户意图。精确恢复优先使用 lock�
 
 `.orbit/runtime-data/ownership.toml` 不属于 manifest/lock schema，也不是 JAR cache。它是
 `orbit launch` 的 Runtime Agent 产生的实例本地 provenance，以顶层 JAR SHA-256 记录文件/
-目录树的 created/read/write 集合。包身份仍只由 lock 的 `mod_id` 和内容哈希映射，归属账本
-不新增另一套包模型，也不参与依赖求解或精确恢复。
+目录树的创建者和其它写入者。它不记录读取。目录创建者递归拥有后代；更具体的创建节点覆盖
+父归属，其它包修改既有节点只添加保护关系。包身份仍只由 lock 的 `mod_id` 和内容哈希映射，
+归属账本不新增另一套包模型，也不参与依赖求解或 lock 的包版本选择；但 export/migration 会
+用它携带入选包拥有的用户数据并重绑定目标 artifact 哈希。
 
 ## 2. `orbit.toml`
 
@@ -247,9 +249,9 @@ bundled = []
   严格保留全部源包，严格无解且用户许可软解时才允许从目标 TOML/lock 同时移除未选包。
 - `install`：只精确物化现有 lock，不联网求解、不修改 TOML/lock、不修复。
 - `remove`：移除逻辑包，同时清理其 TOML 与 lock 条目；仍被其他 JAR 依赖时拒绝。
-- `purge`：先由 lock 将当前顶层 JAR SHA-256 映射到运行时归属计划并展示准确路径；确认后
-  复用 `remove` 的同一事务清理 JAR/TOML/lock，再删除仅由该 JAR 创建且独占写入的数据，
-  最后清理账本引用。共享、未知或未观测数据不删除。
+- `purge`：先由 lock 将当前顶层 JAR SHA-256 映射到运行时归属计划并展示准确路径及保留的
+  嵌套例外；确认后复用 `remove` 的同一事务清理 JAR/TOML/lock，再递归删除该包的所有权根，
+  最后清理账本引用。更具体的其它创建者、其它包写入保护、未知或未观测数据不删除。
 
 Provider relation 只用于继续发现 project；真实 required/optional 关系只来自 JAR。所有候选
 先加入统一队列，再查询全局 LRU cache 或下载并分析，然后离线交给 PubGrub。缺少某个真实

@@ -317,7 +317,8 @@ lock 精确记录。
 ```
 
 `migrate export` 使用相同结果体并令 `subcommand` 为 `"export"`，另外包含
-`export: { "applied": true, "config_files": 14, "config_bytes": 8192 }`。两个子命令
+`export: { "applied": true, "state_files": 14, "state_bytes": 8192 }`。字段统计配置与
+入选包递归所有权树内实际迁移的全部状态文件。两个子命令
 使用同一个目标运行时联合规划器；导出不会逐包重新检查。迁移成功时 `diagnostics` 只解释
 所选软迁移方案实际删除的顶层包；被目标平台硬约束排除、但不影响所选方案的源版本和内置
 候选不会出现在结果中。
@@ -555,15 +556,23 @@ lock 精确记录。
     "mod_id": "sodium",
     "jar_deleted": true,
     "data_removed": [
-      {"path": "config/sodium-options.json", "scope": "instance", "kind": "file"},
-      {"path": "config/sodium-cache", "scope": "instance", "kind": "tree"}
+      {"path": "config/sodium-options.json", "scope": "instance", "kind": "file", "preserved": []},
+      {
+        "path": "config/sodium-cache",
+        "scope": "instance",
+        "kind": "tree",
+        "preserved": [
+          {"path": "config/sodium-cache/foreign-index", "scope": "instance"}
+        ]
+      }
     ]
   }
 }
 ```
 
-`scope` 为 `instance` 或 `external`；`kind` 为 `file` 或 `tree`。树表示准确路径下的整棵目录，
-文本/GUI 以 `/**` 明示范围。JSON 不返回 JAR 哈希。
+`scope` 为 `instance` 或 `external`；`kind` 为 `file` 或 `tree`。树表示准确路径下的递归范围，
+文本/GUI 以 `/**` 明示；`preserved` 是其中归属更具体或被其它包写入而不会删除的根。JSON 不返回
+JAR 哈希。
 
 ### `launch`
 

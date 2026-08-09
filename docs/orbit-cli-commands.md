@@ -354,11 +354,13 @@ orbit remove <mod>
 orbit purge <package>
 ```
 
-先合并完整的 Runtime Agent session，用 lock 中当前顶层 JAR SHA-256 查询实例归属账本。只把
-“由该 JAR 创建、且只有该 JAR 写入”的文件或目录树纳入删除范围；共享写入、只读、来源未知
-和未观测路径全部保留。CLI 一次展示逻辑包与准确 `path` / `path/**`，确认后先复用
+先合并完整的 Runtime Agent session，用 lock 中当前顶层 JAR SHA-256 查询实例归属账本。包创建
+的目录是递归所有权根；用户后来写入其中的内容继承该包归属。更深层由其它包创建的节点会覆盖
+父所有权，其它包修改过的既有节点成为保护节点。CLI 一次展示逻辑包、准确 `path` / `path/**`
+以及树内将被保留的嵌套节点，确认后先复用
 `remove_from_instance` 删除顶层包并清理 TOML/lock，再删除已确认数据。`--yes` 只跳过最后
-一次准确计划确认；`--dry-run` 展示同一计划但不写盘。不存在文件名启发式或静态分析兜底。
+一次准确计划确认；`--dry-run` 展示同一计划但不写盘。读取不被监听，来源未知、未观测的 native
+写入也不会被猜测。不存在文件名启发式、静态分析或调用栈归属兜底。
 
 该能力必须先通过 `orbit launch` 产生运行时事实；未产生事实时 purge 仍可删除逻辑包，但会
 明确显示没有独占数据，而不会猜配置路径。
@@ -382,6 +384,10 @@ Runtime Agent，保留现有 `JAVA_TOOL_OPTIONS` 后注入 Agent，再调用 Lau
 最终成功/错误信封原样透传，Orbit 不再包一层重复结果。
 客户端 `--dry-run` 只透传 Launcher 的脱敏启动计划，不注入 Agent、不创建或合并 session；
 后台服务端联合启动不支持 dry-run。
+
+每次实际启动前，Orbit 依据当前 lock 构建物理 code-source 到顶层包哈希的精确映射；Loader
+声明的嵌套 JAR 始终映射回其顶层逻辑包。Agent 只改写属于这些 code source 的类，并且只拦截
+create/write/delete，不拦截任何读取调用。
 
 ## 4. 同步与更新
 
@@ -495,7 +501,9 @@ orbit export [output] [--target client|server|both] [--format zip|mrpack]
 ```
 
 导出 manifest、lockfile、目标选择中校验通过的 JAR，以及 `config/`、`defaultconfigs/`、
-`serverconfig/` 中不存在符号链接的模组配置。未指定文件名时使用安全化的
+`serverconfig/` 中不存在符号链接的模组配置。还会递归包含入选包实际创建的实例内数据树，
+包括其下后来由用户写入的内容；更深层属于未入选包的节点不会混入。便携包携带精确文件清单和
+所有权账本，导入时拒绝未声明文件。未指定文件名时使用安全化的
 项目名称和版本。JAR 使用 ZIP Stored，避免对压缩容器二次 Deflate；校验和归档写入发出真实
 字节进度。`mrpack` 生成 Modrinth index；在线文件可成为 downloads，必须内嵌的本地文件和
 配置放入 overrides。dry-run 校验并统计计划，但不创建输出。
@@ -526,8 +534,8 @@ Pareto 极小 front。求解器从不可解推导中的强制偏好核心分支�
 关闭、机器交互取消或用户拒绝时，迁移以严格无解失败，目标不发生写入。
 
 `check` 只展示将发生的安装、升级、降级、替换和删除。`export` 复用同一规划路径，将目标
-平台快照、入选 lock 和源实例的 `config/`、`defaultconfigs/`、`serverconfig/`
-写入目标；拒绝覆盖已有 Orbit 状态或配置。它不把模组 JAR 安装到 `mods/`；
+平台快照、入选 lock、源实例配置以及仍被选中包拥有的递归用户数据写入目标；所有权从源 artifact
+哈希重绑定到目标选中 artifact 哈希。拒绝覆盖已有 Orbit 状态或数据。它不把模组 JAR 安装到 `mods/`；
 入选的 file-only 内容会进入目标按哈希寻址的 `.orbit/sources`，随后仍必须在目标目录运行
 `orbit install` 统一物化。GUI 的迁移向导只编排源 export、Launcher 创建目标、
 migrate export、`instances register` 与目标 install；GUI 不直接写 Orbit 全局注册表。

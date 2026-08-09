@@ -195,21 +195,30 @@ orbit launch
   → 调用 orbit-launcher launch 或 server start
   → JAVA_TOOL_OPTIONS 注入 Orbit Runtime Agent
   → Agent helper 进入 bootstrap 搜索路径；Fabric/Quilt 通过各自官方 system-library 属性保留父加载器可见性
-  → Agent 在文件操作边界从调用栈定位实际 mods 顶层 JAR 并计算 SHA-256
-  → 按 created/read/write 聚合文件或目录树，原子写入 session snapshot
+  → Orbit 从当前 lock 的顶层 JAR 和 Loader 声明的嵌套 JAR 构建 code-source SHA-256 → 顶层包映射
+  → Agent 在类加载时按 ProtectionDomain 的物理 code source 固定包归属
+  → 只在 create/write/delete 边界聚合文件或目录树，原子写入 session snapshot
   → Orbit 合并到 .orbit/runtime-data/ownership.toml
   → purge 用 lock 将 JAR SHA-256 映射回逻辑 mod_id
   → 展示唯一准确范围并确认
   → remove_from_instance 收敛 JAR/TOML/lock
-  → 删除仅由该 JAR 创建且独占写入的数据
+  → 递归删除该包创建的树，同时保留更深层的其它创建者或共享写入节点
 ```
 
 `.orbit/runtime-data` 是实例本地的 provenance，不是全局 JAR cache，也不是版本库。Agent 不
-记录字节内容；大量文件在新建目录树处压缩成一条记录，持续 I/O 只付出操作边界的归属聚合
-成本。Agent 只接受默认物理文件系统中的路径；ZIP/JAR 文件系统里的 `/META-INF/...` 等虚拟
+记录字节内容，也完全不拦截读取 API；大量文件在新建目录树处压缩成一条记录，持续 I/O 只付出
+实际变更边界的归属聚合成本。Agent 只接受默认物理文件系统中的路径；ZIP/JAR 文件系统里的 `/META-INF/...` 等虚拟
 条目不是可独立清理的磁盘对象。实例内路径保存为相对路径，实例外的真实物理路径则显式保存
-为 external 项并在删除确认中完整展示。共享写入、来源未知、没有观测到的 native I/O 和无法
-映射到顶层受管 JAR 的路径都不进入可清理计划。没有文件名猜测、静态分析或“匹配 config
+为 external 项并在删除确认中完整展示。
+
+所有权采用“创建者拥有递归子树”模型：包创建目录后，后来由用户放入该目录的文件继承该包
+所有权，因此会随包导出、迁移和 purge；若另一个包在其中创建更深的文件或目录，该更具体节点
+覆盖父所有权。另一个包只修改既有节点时不会夺取所有权，而是形成保护节点，purge 父包时保留。
+标准实例结构根（例如 `mods`、`libraries`、`saves`）永远不能被单个包整体认领，但其下由包实际
+创建的更具体路径可以认领。`resourcepacks` / `shaderpacks` 不按名字特殊处理：谁实际创建目录，
+谁拥有其递归内容。共享写入、来源未知、没有观测到的 native I/O 和无法
+映射到顶层受管 JAR 的路径都不进入可清理计划。code-source 映射歧义时安全地不观测，不允许回退
+到调用栈猜测。没有文件名猜测、静态分析或“匹配 config
 名称”兜底。服务端后台进程
 的 snapshot 由下一次 `orbit launch` / `orbit purge` 合并；损坏或截断 session 会显式报错并保留。
 Agent 不要求游戏类加载器直接装载其辅助类：通用 JVM 路径使用 bootstrap search，Fabric 的
@@ -297,14 +306,18 @@ TOML/lock。联网候选闭包发现、可行解选择和未选包删除由 `add
 一个文件事务中更新三者；sync 扫描两种后缀并以磁盘事实对账。禁用不删除逻辑包、不移出
 lock，也不制造另一套依赖求解路径。
 
-迁移先通过普通 archive exporter 冻结一个校验通过的便携 Orbit 源实例；Orbit 包只包含
-包管理器状态与模组配置，不包含世界、`options.txt` 或 `server.properties`。GUI 同时调用
+迁移先通过普通 archive exporter 冻结一个校验通过的便携 Orbit 源实例；Orbit 包包含
+包管理器状态、模组配置和入选包运行时所有权树内的实例数据，不包含未归属于模组的世界、
+`options.txt` 或 `server.properties`。用户在包所建目录中写入的内容继承所有权并随包迁移，
+更具体的其它包节点按实际目标选择排除。便携包用精确文件清单约束解包，不允许仅凭父目录
+所有权向 ZIP 中注入未声明文件。GUI 同时调用
 `orbit-launcher export` 生成与目标无关的游戏状态包；两个导出均成功后，才由
 `orbit-launcher install --new ... --from <状态包>` 创建真实目标实例。随后同一个
 `migration::plan_migration()` 从便携 Orbit 源读取包与配置事实、
 从目标读取 Minecraft/Loader JAR，枚举目标版本候选并选择 Pareto 解。`migrate check` 只
-展示这份计划；`migrate export` 复用同一计划写入目标 `orbit.toml`、`orbit.lock` 和
-配置文件，拒绝覆盖已有目标状态。导出不把模组 JAR 安装到 `mods/`；入选的 file-only 内容
+展示这份计划；`migrate export` 复用同一计划写入目标 `orbit.toml`、`orbit.lock`、
+配置和包拥有的数据，并将源 artifact 所有权哈希重绑定到目标选中 artifact。它拒绝覆盖已有
+目标状态。导出不把模组 JAR 安装到 `mods/`；入选的 file-only 内容
 会按哈希保存到目标 `.orbit/sources`，在线内容仍由随后执行的 `orbit install` 按新 lock 精确
 物化，因而预检和导出不会走两条推导路径。便携源包不会替代真实目标平台
 探测；它只消除源实例在目标创建期间发生变化的竞态。便携包为精确恢复注入的源实例
