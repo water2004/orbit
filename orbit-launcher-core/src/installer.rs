@@ -14,6 +14,9 @@ use crate::instance::LoaderKind;
 use crate::maven::artifact_path;
 use crate::platform::{HostPlatform, OperatingSystem};
 use crate::versions::LoaderVersion;
+use orbit_compatibility::neoforge::{
+    Distribution as NeoForgeDistribution, Layout as NeoForgeLayout,
+};
 
 const FORGE_METADATA_URL: &str =
     "https://files.minecraftforge.net/net/minecraftforge/forge/maven-metadata.json";
@@ -411,8 +414,7 @@ pub fn installed_server_argument_file(
     };
     let group = match resolved.kind {
         LoaderKind::Forge => "net/minecraftforge/forge",
-        LoaderKind::Neoforge if resolved.minecraft_version == "1.20.1" => "net/neoforged/forge",
-        LoaderKind::Neoforge => "net/neoforged/neoforge",
+        LoaderKind::Neoforge => neoforge_layout(&resolved.minecraft_version)?.maven_group_path(),
         _ => {
             return Err(LauncherError::UnsupportedRequirement(
                 "server argument files only apply to installer Loaders".to_string(),
@@ -632,12 +634,9 @@ async fn resolve_neoforge_version(
     })?
     .version
     .clone();
-    let legacy = minecraft == "1.20.1";
-    let (artifact, root) = if legacy {
-        ("forge", format!("{NEOFORGE_MAVEN_ROOT}/forge"))
-    } else {
-        ("neoforge", format!("{NEOFORGE_MAVEN_ROOT}/neoforge"))
-    };
+    let layout = neoforge_layout(minecraft)?;
+    let artifact = layout.artifact();
+    let root = format!("{NEOFORGE_MAVEN_ROOT}/{artifact}");
     let url = format!("{root}/{selected}/{artifact}-{selected}-installer.jar");
     Ok((selected, url))
 }
@@ -646,11 +645,12 @@ async fn list_neoforge_versions(
     client: &reqwest::Client,
     minecraft: &str,
 ) -> Result<Vec<LoaderVersion>, LauncherError> {
-    let legacy = minecraft == "1.20.1";
-    let endpoint = if legacy {
-        NEOFORGE_LEGACY_VERSIONS_URL
-    } else {
-        NEOFORGE_VERSIONS_URL
+    let layout = neoforge_layout(minecraft)?;
+    let endpoint = match layout.distribution() {
+        NeoForgeDistribution::LegacyForge => NEOFORGE_LEGACY_VERSIONS_URL,
+        NeoForgeDistribution::ShortVersion
+        | NeoForgeDistribution::FullMinecraftVersion
+        | NeoForgeDistribution::Snapshot => NEOFORGE_VERSIONS_URL,
     };
     let bytes = fetch_bounded(
         client,
@@ -665,7 +665,12 @@ async fn list_neoforge_versions(
     let mut compatible: Vec<_> = index
         .versions
         .into_iter()
-        .filter(|version| neoforge_minecraft_version(version, legacy).as_deref() == Some(minecraft))
+        .filter(|version| {
+            layout
+                .release_minecraft_version(minecraft, version)
+                .as_deref()
+                == Some(minecraft)
+        })
         .collect();
     compatible.reverse();
     Ok(compatible
@@ -681,29 +686,11 @@ async fn list_neoforge_versions(
         .collect())
 }
 
-fn neoforge_minecraft_version(version: &str, legacy: bool) -> Option<String> {
-    if legacy {
-        return version
-            .strip_prefix("1.20.1-")
-            .or(Some(version))
-            .filter(|value| value.starts_with("47.1."))
-            .map(|_| "1.20.1".to_string());
-    }
-    if let Some(rest) = version.strip_prefix("0.") {
-        let snapshot = rest.split('.').next()?;
-        return (!snapshot.is_empty()).then(|| snapshot.to_string());
-    }
-    let numeric = version.split(['-', '+']).next()?;
-    let parts: Vec<_> = numeric.split('.').collect();
-    let major: u32 = parts.first()?.parse().ok()?;
-    if major >= 26 {
-        return (parts.len() >= 4).then(|| parts[..parts.len() - 1].join("."));
-    }
-    let minor = parts.get(1)?.parse::<u32>().ok()?;
-    Some(if minor == 0 {
-        format!("1.{major}")
-    } else {
-        format!("1.{major}.{minor}")
+fn neoforge_layout(minecraft: &str) -> Result<NeoForgeLayout, LauncherError> {
+    orbit_compatibility::neoforge::layout_for_minecraft(minecraft).ok_or_else(|| {
+        LauncherError::UnsupportedRequirement(format!(
+            "Minecraft {minecraft} has no verified NeoForge distribution layout"
+        ))
     })
 }
 
@@ -927,24 +914,44 @@ mod tests {
 
     #[test]
     fn neoforge_versions_map_to_their_real_minecraft_line() {
+        let short = neoforge_layout("1.21.1").unwrap();
         assert_eq!(
-            neoforge_minecraft_version("21.1.244", false).as_deref(),
+            short
+                .release_minecraft_version("1.21.1", "21.1.244")
+                .as_deref(),
             Some("1.21.1")
         );
+        let full = neoforge_layout("26.1.2").unwrap();
         assert_eq!(
-            neoforge_minecraft_version("26.1.2.87", false).as_deref(),
+            full.release_minecraft_version("26.1.2", "26.1.2.87")
+                .as_deref(),
             Some("26.1.2")
         );
+        let without_patch = neoforge_layout("26.2").unwrap();
         assert_eq!(
-            neoforge_minecraft_version("1.20.1-47.1.106", true).as_deref(),
+            without_patch
+                .release_minecraft_version("26.2", "26.2.0.24-beta")
+                .as_deref(),
+            Some("26.2")
+        );
+        let legacy = neoforge_layout("1.20.1").unwrap();
+        assert_eq!(
+            legacy
+                .release_minecraft_version("1.20.1", "1.20.1-47.1.106")
+                .as_deref(),
             Some("1.20.1")
         );
         assert_eq!(
-            neoforge_minecraft_version("47.1.82", true).as_deref(),
+            legacy
+                .release_minecraft_version("1.20.1", "47.1.82")
+                .as_deref(),
             Some("1.20.1")
         );
+        let snapshot = neoforge_layout("25w14craftmine").unwrap();
         assert_eq!(
-            neoforge_minecraft_version("0.25w14craftmine.3-beta", false).as_deref(),
+            snapshot
+                .release_minecraft_version("25w14craftmine", "0.25w14craftmine.3-beta")
+                .as_deref(),
             Some("25w14craftmine")
         );
     }

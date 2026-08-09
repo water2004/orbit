@@ -11,9 +11,46 @@ use crate::lockfile::ArtifactOwner;
 use crate::maven::artifact_url;
 use crate::versions::LoaderVersion;
 
-const FABRIC_META_ROOT: &str = "https://meta.fabricmc.net/v2/versions/loader";
-const QUILT_META_ROOT: &str = "https://meta.quiltmc.org/v3/versions/loader";
 const MAX_PROFILE_BYTES: u64 = 16 * 1024 * 1024;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProfileMetadataFormat {
+    Fabric,
+    Quilt,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ProfileLoaderAdapter {
+    kind: LoaderKind,
+    metadata_root: &'static str,
+    format: ProfileMetadataFormat,
+}
+
+const PROFILE_LOADERS: &[ProfileLoaderAdapter] = &[
+    ProfileLoaderAdapter {
+        kind: LoaderKind::Fabric,
+        metadata_root: "https://meta.fabricmc.net/v2/versions/loader",
+        format: ProfileMetadataFormat::Fabric,
+    },
+    ProfileLoaderAdapter {
+        kind: LoaderKind::Quilt,
+        metadata_root: "https://meta.quiltmc.org/v3/versions/loader",
+        format: ProfileMetadataFormat::Quilt,
+    },
+];
+
+fn profile_adapter(kind: LoaderKind) -> Result<ProfileLoaderAdapter, LauncherError> {
+    PROFILE_LOADERS
+        .iter()
+        .find(|adapter| adapter.kind == kind)
+        .copied()
+        .ok_or_else(|| {
+            LauncherError::UnsupportedRequirement(format!(
+                "Loader '{}' does not use a launcher profile adapter",
+                kind.as_str()
+            ))
+        })
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LoaderSide {
@@ -43,13 +80,14 @@ pub(crate) async fn list_profile_loader_versions(
     minecraft_version: &str,
 ) -> Result<Vec<LoaderVersion>, LauncherError> {
     validate_path_segment(minecraft_version, "Minecraft version")?;
-    match kind {
-        LoaderKind::Fabric => list_fabric_versions(client, minecraft_version).await,
-        LoaderKind::Quilt => list_quilt_versions(client, minecraft_version).await,
-        _ => Err(LauncherError::UnsupportedRequirement(format!(
-            "Loader '{}' does not use a launcher profile adapter",
-            kind.as_str()
-        ))),
+    let adapter = profile_adapter(kind)?;
+    match adapter.format {
+        ProfileMetadataFormat::Fabric => {
+            list_fabric_versions(client, adapter, minecraft_version).await
+        }
+        ProfileMetadataFormat::Quilt => {
+            list_quilt_versions(client, adapter, minecraft_version).await
+        }
     }
 }
 
@@ -62,22 +100,17 @@ pub async fn resolve_loader_profile(
 ) -> Result<ResolvedLoaderProfile, LauncherError> {
     validate_path_segment(minecraft_version, "Minecraft version")?;
     validate_requirement(requirement)?;
-    let (version, minimum_java_major) = match kind {
-        LoaderKind::Fabric => {
-            resolve_fabric_version(client, minecraft_version, requirement).await?
+    let adapter = profile_adapter(kind)?;
+    let (version, minimum_java_major) = match adapter.format {
+        ProfileMetadataFormat::Fabric => {
+            resolve_fabric_version(client, adapter, minecraft_version, requirement).await?
         }
-        LoaderKind::Quilt => (
-            resolve_quilt_version(client, minecraft_version, requirement).await?,
+        ProfileMetadataFormat::Quilt => (
+            resolve_quilt_version(client, adapter, minecraft_version, requirement).await?,
             None,
         ),
-        _ => {
-            return Err(LauncherError::UnsupportedRequirement(format!(
-                "Loader '{}' does not use a launcher profile adapter",
-                kind.as_str()
-            )));
-        }
     };
-    let profile_url = profile_url(kind, minecraft_version, &version, side)?;
+    let profile_url = profile_url(adapter, minecraft_version, &version, side)?;
     let profile_bytes =
         fetch_bounded(client, &profile_url, MAX_PROFILE_BYTES, "Loader profile").await?;
     let profile_sha256 = hex::encode(Sha256::digest(&profile_bytes));
@@ -141,10 +174,11 @@ pub async fn resolve_loader_profile(
 
 async fn resolve_fabric_version(
     client: &reqwest::Client,
+    adapter: ProfileLoaderAdapter,
     minecraft: &str,
     requirement: &str,
 ) -> Result<(String, Option<u32>), LauncherError> {
-    let versions = list_fabric_versions(client, minecraft).await?;
+    let versions = list_fabric_versions(client, adapter, minecraft).await?;
     let selected = match requirement {
         "latest" => versions.iter().find(|entry| entry.latest),
         "stable" => versions.iter().find(|entry| entry.stable),
@@ -160,9 +194,10 @@ async fn resolve_fabric_version(
 
 async fn list_fabric_versions(
     client: &reqwest::Client,
+    adapter: ProfileLoaderAdapter,
     minecraft: &str,
 ) -> Result<Vec<LoaderVersion>, LauncherError> {
-    let url = endpoint(FABRIC_META_ROOT, &[minecraft])?;
+    let url = endpoint(adapter.metadata_root, &[minecraft])?;
     let bytes = fetch_bounded(client, &url, MAX_PROFILE_BYTES, "Fabric Loader versions").await?;
     let versions: Vec<FabricMetadata> = serde_json::from_slice(&bytes).map_err(|error| {
         LauncherError::InvalidRemoteData(format!(
@@ -184,6 +219,7 @@ async fn list_fabric_versions(
 
 async fn resolve_quilt_version(
     client: &reqwest::Client,
+    adapter: ProfileLoaderAdapter,
     minecraft: &str,
     requirement: &str,
 ) -> Result<String, LauncherError> {
@@ -193,7 +229,7 @@ async fn resolve_quilt_version(
                 .to_string(),
         ));
     }
-    let versions = list_quilt_versions(client, minecraft).await?;
+    let versions = list_quilt_versions(client, adapter, minecraft).await?;
     let selected = match requirement {
         "latest" => versions.iter().find(|entry| entry.latest),
         exact => versions.iter().find(|entry| entry.version == exact),
@@ -207,9 +243,10 @@ async fn resolve_quilt_version(
 
 async fn list_quilt_versions(
     client: &reqwest::Client,
+    adapter: ProfileLoaderAdapter,
     minecraft: &str,
 ) -> Result<Vec<LoaderVersion>, LauncherError> {
-    let compatible_url = endpoint(QUILT_META_ROOT, &[minecraft])?;
+    let compatible_url = endpoint(adapter.metadata_root, &[minecraft])?;
     let compatible_bytes = fetch_bounded(
         client,
         &compatible_url,
@@ -229,7 +266,7 @@ async fn list_quilt_versions(
         .collect();
     let all_bytes = fetch_bounded(
         client,
-        QUILT_META_ROOT,
+        adapter.metadata_root,
         MAX_PROFILE_BYTES,
         "Quilt Loader index",
     )
@@ -327,21 +364,19 @@ fn string_arguments(
 }
 
 fn profile_url(
-    kind: LoaderKind,
+    adapter: ProfileLoaderAdapter,
     minecraft: &str,
     version: &str,
     side: LoaderSide,
 ) -> Result<String, LauncherError> {
-    let root = match kind {
-        LoaderKind::Fabric => FABRIC_META_ROOT,
-        LoaderKind::Quilt => QUILT_META_ROOT,
-        _ => unreachable!("profile URL is only called for profile loaders"),
-    };
     let suffix = match side {
         LoaderSide::Client => ["profile", "json"],
         LoaderSide::Server => ["server", "json"],
     };
-    endpoint(root, &[minecraft, version, suffix[0], suffix[1]])
+    endpoint(
+        adapter.metadata_root,
+        &[minecraft, version, suffix[0], suffix[1]],
+    )
 }
 
 fn endpoint(root: &str, segments: &[&str]) -> Result<String, LauncherError> {
@@ -490,10 +525,24 @@ mod tests {
     #[test]
     fn profile_endpoints_encode_only_valid_exact_identifiers() {
         assert_eq!(
-            profile_url(LoaderKind::Fabric, "1.21.1", "0.16.14", LoaderSide::Client).unwrap(),
+            profile_url(
+                profile_adapter(LoaderKind::Fabric).unwrap(),
+                "1.21.1",
+                "0.16.14",
+                LoaderSide::Client,
+            )
+            .unwrap(),
             "https://meta.fabricmc.net/v2/versions/loader/1.21.1/0.16.14/profile/json"
         );
-        assert!(profile_url(LoaderKind::Quilt, "../escape", "0.27.1", LoaderSide::Server).is_err());
+        assert!(
+            profile_url(
+                profile_adapter(LoaderKind::Quilt).unwrap(),
+                "../escape",
+                "0.27.1",
+                LoaderSide::Server,
+            )
+            .is_err()
+        );
     }
 
     #[tokio::test]
