@@ -4,10 +4,13 @@ import java.io.BufferedWriter;
 import java.net.URI;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
+import java.nio.channels.FileChannel;
+import java.nio.channels.FileLock;
 import java.nio.file.FileSystems;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.nio.file.StandardOpenOption;
 import java.security.MessageDigest;
 import java.security.ProtectionDomain;
 import java.util.ArrayDeque;
@@ -42,6 +45,11 @@ public final class Recorder {
 
     private static volatile Path instanceRoot;
     private static volatile Path sessionFile;
+    private static volatile FileChannel observationLockChannel;
+    private static volatile FileLock observationLock;
+    private static volatile Path observationActiveMarker;
+    private static volatile String sessionId;
+    private static volatile long sessionStartedAtMillis;
     private static volatile long flushedVersion;
     private static volatile boolean fileCodeSources;
     private static volatile boolean unionCodeSources;
@@ -51,9 +59,14 @@ public final class Recorder {
 
     public static void configure(Path root, Path session, Path context) throws Exception {
         instanceRoot = root.toAbsolutePath().normalize();
-        sessionFile = session.toAbsolutePath().normalize();
+        acquireObservationLock();
+        sessionStartedAtMillis = System.currentTimeMillis();
+        sessionId = Long.toUnsignedString(sessionStartedAtMillis, 36)
+            + "-" + Long.toUnsignedString(System.nanoTime(), 36);
+        sessionFile = allocateSessionFile(session.toAbsolutePath().normalize());
         loadContext(context.toAbsolutePath().normalize());
         Files.createDirectories(sessionFile.getParent());
+        publishObservationActivity();
         Thread writer = new Thread(() -> {
             while (true) {
                 try {
@@ -74,8 +87,73 @@ public final class Recorder {
                 flush();
             } catch (Throwable ignored) {
                 // Launcher also recovers the latest periodic snapshot after crashes.
+            } finally {
+                releaseObservationLock();
             }
         }, "orbit-data-recorder-shutdown"));
+    }
+
+    private static void acquireObservationLock() throws Exception {
+        Path lockPath = instanceRoot.resolve(".orbit/runtime-data/observation.lock");
+        Files.createDirectories(lockPath.getParent());
+        observationLockChannel = FileChannel.open(
+            lockPath,
+            StandardOpenOption.CREATE,
+            StandardOpenOption.WRITE
+        );
+        observationLock = observationLockChannel.tryLock();
+        if (observationLock == null) {
+            observationLockChannel.close();
+            throw new IllegalStateException("another observed runtime is already active for this instance");
+        }
+    }
+
+    private static void releaseObservationLock() {
+        try {
+            if (observationActiveMarker != null) Files.deleteIfExists(observationActiveMarker);
+        } catch (Throwable ignored) {
+        }
+        try {
+            if (observationLock != null) observationLock.release();
+        } catch (Throwable ignored) {
+        }
+        try {
+            if (observationLockChannel != null) observationLockChannel.close();
+        } catch (Throwable ignored) {
+        }
+    }
+
+    private static void publishObservationActivity() throws Exception {
+        Path runtimeData = instanceRoot.resolve(".orbit/runtime-data");
+        observationActiveMarker = runtimeData.resolve("observation.active");
+        writeMarker(runtimeData.resolve("observation.epoch"), sessionId);
+        writeMarker(observationActiveMarker, sessionId);
+    }
+
+    private static void writeMarker(Path path, String value) throws Exception {
+        Path temporary = path.resolveSibling(path.getFileName() + ".tmp-" + sessionId);
+        Files.write(
+            temporary,
+            value.getBytes(StandardCharsets.UTF_8),
+            StandardOpenOption.CREATE_NEW,
+            StandardOpenOption.WRITE
+        );
+        try {
+            Files.move(temporary, path, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+        } catch (java.nio.file.AtomicMoveNotSupportedException ignored) {
+            Files.move(temporary, path, StandardCopyOption.REPLACE_EXISTING);
+        }
+    }
+
+    private static Path allocateSessionFile(Path requested) {
+        if (!Files.exists(requested)) {
+            return requested;
+        }
+        String name = requested.getFileName().toString();
+        String stem = name.endsWith(".events")
+            ? name.substring(0, name.length() - ".events".length())
+            : name;
+        return requested.resolveSibling(stem + "-" + sessionId + ".events");
     }
 
     /** Resolve one class definition to the selected top-level package artifact. */
@@ -128,7 +206,7 @@ public final class Recorder {
         State exact = STATES.get(normalizedString(path));
         if (exact != null) {
             if (exact.deleted()) return false;
-            if (exact.creator != null) return owner.equals(exact.creator);
+            if (exact.owner != null) return owner.equals(exact.owner);
         }
         OwnedTree inherited = nearestTree(path);
         return inherited != null && inherited.owner.equals(owner);
@@ -174,9 +252,10 @@ public final class Recorder {
                 return;
             }
             State state = new State(normalized, tree);
-            state.deletedBy = owner;
+            state.action = "delete";
+            state.owner = owner;
+            state.revision = nextMutation();
             STATES.put(key, state);
-            markDirty();
         }
     }
 
@@ -207,13 +286,14 @@ public final class Recorder {
             }
             String key = normalizedString(path);
             State state = new State(path, tree);
-            state.creator = owner;
+            state.action = "create";
+            state.owner = owner;
+            state.revision = nextMutation();
             STATES.put(key, state);
             if (tree) {
                 OWNED_TREES.put(key, new OwnedTree(path, owner));
                 compactSameOwnerDescendants(path, key, owner);
             }
-            markDirty();
         }
     }
 
@@ -225,7 +305,7 @@ public final class Recorder {
         synchronized (FLUSH_LOCK) {
             String key = normalizedString(path);
             State exact = STATES.get(key);
-            if (exact != null && !exact.deleted() && owner.equals(exact.creator)) {
+            if (exact != null && !exact.deleted() && owner.equals(exact.owner)) {
                 return;
             }
             OwnedTree inherited = nearestTree(path);
@@ -234,8 +314,9 @@ public final class Recorder {
             }
             State state = STATES.computeIfAbsent(key, ignored -> new State(path, tree));
             if (!state.deleted()) {
-                state.writers.add(owner);
-                markDirty();
+                state.action = "write";
+                state.owner = owner;
+                state.revision = nextMutation();
             }
         }
     }
@@ -307,8 +388,7 @@ public final class Recorder {
                 break;
             }
             if (!child.deleted()
-                && (child.creator == null || owner.equals(child.creator))
-                && (child.writers.isEmpty() || child.writers.equals(Collections.singleton(owner)))) {
+                && (child.owner == null || owner.equals(child.owner))) {
                 remove.add(entry.getKey());
             }
         }
@@ -540,8 +620,12 @@ public final class Recorder {
         return WINDOWS ? value.toLowerCase() : value;
     }
 
+    private static long nextMutation() {
+        return MUTATION_VERSION.incrementAndGet();
+    }
+
     private static void markDirty() {
-        MUTATION_VERSION.incrementAndGet();
+        nextMutation();
     }
 
     private static void flushIfDirty() throws Exception {
@@ -558,18 +642,16 @@ public final class Recorder {
             List<State> snapshot = new ArrayList<State>(STATES.values());
             Collections.sort(snapshot, Comparator.comparing(state -> state.path.toString()));
             try (BufferedWriter writer = Files.newBufferedWriter(temporary, StandardCharsets.UTF_8)) {
+                writer.write("3\tsnapshot\t");
+                writer.write(sessionId);
+                writer.write('\t');
+                writer.write(Long.toString(sessionStartedAtMillis));
+                writer.write('\t');
+                writer.write(Long.toString(MUTATION_VERSION.get()));
+                writer.write("\tend\n");
                 for (State state : snapshot) {
-                    if (state.deleted()) {
-                        writeRecord(writer, "delete", state, state.deletedBy);
-                        continue;
-                    }
-                    if (state.creator != null) {
-                        writeRecord(writer, "create", state, state.creator);
-                    }
-                    for (String owner : new java.util.TreeSet<>(state.writers)) {
-                        if (!owner.equals(state.creator)) {
-                            writeRecord(writer, "write", state, owner);
-                        }
+                    if (state.action != null && state.owner != null) {
+                        writeRecord(writer, state.action, state, state.owner);
                     }
                 }
             }
@@ -585,12 +667,14 @@ public final class Recorder {
     }
 
     private static void writeRecord(BufferedWriter writer, String action, State state, String owner) throws Exception {
-        writer.write("2\t");
+        writer.write("3\t");
         writer.write(action);
         writer.write('\t');
         writer.write(state.tree ? "tree" : "file");
         writer.write('\t');
         writer.write(owner);
+        writer.write('\t');
+        writer.write(Long.toString(state.revision));
         writer.write('\t');
         writer.write(Base64.getUrlEncoder().withoutPadding().encodeToString(
             state.path.toString().getBytes(StandardCharsets.UTF_8)
@@ -601,9 +685,9 @@ public final class Recorder {
     private static final class State {
         private final Path path;
         private final boolean tree;
-        private final Set<String> writers = ConcurrentHashMap.newKeySet();
-        private volatile String creator;
-        private volatile String deletedBy;
+        private volatile String action;
+        private volatile String owner;
+        private volatile long revision;
 
         private State(Path path, boolean tree) {
             this.path = path;
@@ -611,7 +695,7 @@ public final class Recorder {
         }
 
         private boolean deleted() {
-            return deletedBy != null;
+            return "delete".equals(action);
         }
     }
 

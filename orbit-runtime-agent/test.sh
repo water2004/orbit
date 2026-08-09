@@ -26,7 +26,9 @@ mkdir -p "$mods_root" "$instance_root/config" "$(dirname "$context_file")" "$cla
 
 javac --release 8 -d "$classes_root" "$agent_root/tests/AgentFixture.java"
 jar cf "$fixture_jar" -C "$classes_root" .
-javac --release 8 -d "$harness_root" "$agent_root/tests/AgentIsolatedHarness.java"
+javac --release 8 -d "$harness_root" \
+  "$agent_root/tests/AgentIsolatedHarness.java" \
+  "$agent_root/tests/AgentOwnershipHarness.java"
 
 encode_path() {
   printf '%s' "$1" | base64 | tr -d '\n=' | tr '+/' '-_'
@@ -43,10 +45,14 @@ printf '3\tcontext\tend\ncapability\tjava\t8-25\tend\ncapability\tsource\tfile\t
   -cp "$harness_root" AgentIsolatedHarness "$fixture_jar" "$instance_root"
 
 record_count="$(wc -l < "$session_file")"
-if (( record_count != 4 )); then
-  echo "Expected three lasting creations and one published deletion, got $record_count records" >&2
+if (( record_count != 5 )); then
+  echo "Expected one header, three lasting creations and one published deletion, got $record_count lines" >&2
   exit 1
 fi
+grep -q $'^3\tsnapshot\t' "$session_file" || {
+  echo "No v3 snapshot header was recorded" >&2
+  exit 1
+}
 grep -q $'\ttree\t' "$session_file" || {
   echo "No owned directory tree was recorded" >&2
   exit 1
@@ -55,11 +61,65 @@ grep -q $'\tfile\t' "$session_file" || {
   echo "No owned file was recorded" >&2
   exit 1
 }
-grep -q $'^2\tdelete\tfile\t' "$session_file" || {
+grep -q $'^3\tdelete\tfile\t' "$session_file" || {
   echo "No published deletion tombstone was recorded" >&2
   exit 1
 }
+[[ ! -e "$instance_root/.orbit/runtime-data/observation.active" ]] || {
+  echo "Observation activity marker survived JVM shutdown" >&2
+  exit 1
+}
+[[ -f "$instance_root/.orbit/runtime-data/observation.epoch" ]] || {
+  echo "Observation epoch marker was not published" >&2
+  exit 1
+}
 printf '%s\n' "$session_file"
+
+# The final successful writer owns a path. A -> B -> A must compact to one A
+# record rather than retaining the creator or a set of writers.
+ownership_root="$test_root/last-writer"
+ownership_instance="$ownership_root/instance"
+owner_a_classes="$ownership_root/owner-a"
+owner_b_classes="$ownership_root/owner-b"
+owner_a_jar="$ownership_root/owner-a.jar"
+owner_b_jar="$ownership_root/owner-b.jar"
+ownership_session="$ownership_instance/.orbit/runtime-data/sessions/test.events"
+ownership_context="$ownership_instance/.orbit/runtime-data/agent-context.tsv"
+mkdir -p "$owner_a_classes" "$owner_b_classes" "$ownership_instance/config" \
+  "$(dirname "$ownership_session")"
+javac --release 8 -d "$owner_a_classes" "$agent_root/tests/AgentOwnerA.java"
+javac --release 8 -d "$owner_b_classes" "$agent_root/tests/AgentOwnerB.java"
+jar cf "$owner_a_jar" -C "$owner_a_classes" .
+jar cf "$owner_b_jar" -C "$owner_b_classes" .
+owner_a_hash="$(sha256sum "$owner_a_jar" | awk '{print $1}')"
+owner_b_hash="$(sha256sum "$owner_b_jar" | awk '{print $1}')"
+ownership_root_encoded="$(encode_path "$ownership_instance")"
+ownership_session_encoded="$(encode_path "$ownership_session")"
+ownership_context_encoded="$(encode_path "$ownership_context")"
+printf '3\tcontext\tend\ncapability\tjava\t8-25\tend\ncapability\tsource\tfile\tend\nsource\t%s\t%s\tend\nsource\t%s\t%s\tend\n' \
+  "$owner_a_hash" "$owner_a_hash" "$owner_b_hash" "$owner_b_hash" > "$ownership_context"
+"$java_command" "-javaagent:$agent_path=root=$ownership_root_encoded;session=$ownership_session_encoded;context=$ownership_context_encoded" \
+  -cp "$harness_root" AgentOwnershipHarness "$owner_a_jar" "$owner_b_jar" "$ownership_instance"
+if (( $(wc -l < "$ownership_session") != 2 )); then
+  echo "Last-writer snapshot was not compacted to one path" >&2
+  exit 1
+fi
+grep -q "^3[[:space:]]write[[:space:]]file[[:space:]]$owner_a_hash[[:space:]]3[[:space:]]" "$ownership_session" || {
+  echo "The package that performed the final write did not own the file" >&2
+  exit 1
+}
+first_snapshot_hash="$(sha256sum "$ownership_session" | awk '{print $1}')"
+"$java_command" "-javaagent:$agent_path=root=$ownership_root_encoded;session=$ownership_session_encoded;context=$ownership_context_encoded" \
+  -cp "$harness_root" AgentOwnershipHarness "$owner_a_jar" "$owner_b_jar" "$ownership_instance"
+if (( $(find "$(dirname "$ownership_session")" -maxdepth 1 -type f -name '*.events' | wc -l) != 2 )); then
+  echo "A restarted JVM overwrote the previous snapshot" >&2
+  exit 1
+fi
+if [[ "$(sha256sum "$ownership_session" | awk '{print $1}')" != "$first_snapshot_hash" ]]; then
+  echo "The original JVM snapshot changed after restart" >&2
+  exit 1
+fi
+printf '%s\n' "$ownership_session"
 
 # The Agent has a Java 8 baseline but must still rewrite APIs introduced by
 # newer JDKs at application call sites.
@@ -80,7 +140,7 @@ printf '3\tcontext\tend\ncapability\tjava\t8-25\tend\ncapability\tsource\tfile\t
   "$modern_hash" "$modern_hash" > "$modern_context"
 java "-javaagent:$agent_path=root=$modern_root_encoded;session=$modern_session_encoded;context=$modern_context_encoded" \
   -cp "$harness_root" AgentIsolatedHarness "$modern_jar" "$modern_instance" AgentModernFixture
-if (( $(wc -l < "$modern_session") != 2 )); then
+if (( $(wc -l < "$modern_session") != 3 )); then
   echo "Java 11 write APIs were not both observed" >&2
   exit 1
 fi
@@ -128,7 +188,7 @@ java "-javaagent:$agent_path=root=$union_root_encoded;session=$union_session_enc
   --module-path "$module_path" --add-modules cpw.mods.securejarhandler \
   -cp "$compatibility_root/classes" AgentUnionHarness "$fixture_jar" "$union_instance"
 union_record_count="$(wc -l < "$union_session")"
-if (( union_record_count != 4 )); then
+if (( union_record_count != 5 )); then
   echo "Forge union CodeSource did not resolve to the fixture package" >&2
   exit 1
 fi
@@ -156,7 +216,7 @@ printf '3\tcontext\tend\ncapability\tjava\t8-25\tend\ncapability\tmodule\tquilt\
 java "-javaagent:$agent_path=root=$quilt_root_encoded;session=$quilt_session_encoded;context=$quilt_context_encoded" \
   -cp "$quilt_classes:$quilt_jar" AgentQuiltHarness "$fixture_jar" "$quilt_instance"
 quilt_record_count="$(wc -l < "$quilt_session")"
-if (( quilt_record_count != 4 )); then
+if (( quilt_record_count != 5 )); then
   echo "Quilt native module identity did not resolve to the fixture package" >&2
   exit 1
 fi

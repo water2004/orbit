@@ -1165,17 +1165,15 @@ mod tests {
         .unwrap();
         crate::runtime_data::save_ledger(
             &source,
-            &crate::runtime_data::DataOwnershipLedger {
-                schema: crate::runtime_data::LEDGER_SCHEMA,
-                entries: vec![crate::runtime_data::DataOwnershipEntry {
+            &crate::runtime_data::DataOwnershipLedger::from_entries(vec![
+                crate::runtime_data::DataOwnershipEntry {
                     path: crate::runtime_data::OwnedDataPath::Instance {
                         relative: "local-data".to_string(),
                     },
                     kind: crate::runtime_data::OwnedDataKind::Tree,
                     owner: Some(source_owner),
-                    protected_by: BTreeSet::new(),
-                }],
-            },
+                },
+            ]),
         )
         .unwrap();
         crate::platform_detection::test_support::write_platform(&target, "2", "fabric", "1");

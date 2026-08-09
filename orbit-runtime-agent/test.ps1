@@ -28,7 +28,9 @@ New-Item -ItemType Directory -Force -Path $ModsRoot, (Join-Path $InstanceRoot "c
 if ($LASTEXITCODE -ne 0) { throw "Failed to compile Agent fixture" }
 & jar cf $FixtureJar -C $ClassesRoot .
 if ($LASTEXITCODE -ne 0) { throw "Failed to package Agent fixture" }
-& javac --release 8 -d $HarnessRoot (Join-Path $AgentRoot "tests/AgentIsolatedHarness.java")
+& javac --release 8 -d $HarnessRoot `
+    (Join-Path $AgentRoot "tests/AgentIsolatedHarness.java") `
+    (Join-Path $AgentRoot "tests/AgentOwnershipHarness.java")
 if ($LASTEXITCODE -ne 0) { throw "Failed to compile isolated-loader harness" }
 
 $RootEncoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($InstanceRoot)).TrimEnd('=').Replace('+', '-').Replace('/', '_')
@@ -49,11 +51,70 @@ $ResolvedAgent = [System.IO.Path]::GetFullPath((Join-Path $WorkspaceRoot $AgentP
 if ($LASTEXITCODE -ne 0) { throw "Agent fixture failed" }
 
 $Records = Get-Content -LiteralPath $SessionFile
-if ($Records.Count -ne 4) { throw "Expected three lasting creations and one published deletion, got $($Records.Count) records" }
+if ($Records.Count -ne 5) { throw "Expected one header, three lasting creations and one published deletion, got $($Records.Count) lines" }
+if ($Records[0] -notmatch '^3\tsnapshot\t') { throw "No v3 snapshot header was recorded" }
 if (-not ($Records -match "`ttree`t")) { throw "No owned directory tree was recorded" }
 if (-not ($Records -match "`tfile`t")) { throw "No owned file was recorded" }
-if (-not ($Records -match "2`tdelete`tfile`t")) { throw "No published deletion tombstone was recorded" }
+if (-not ($Records -match "3`tdelete`tfile`t")) { throw "No published deletion tombstone was recorded" }
+if (Test-Path -LiteralPath (Join-Path $InstanceRoot ".orbit/runtime-data/observation.active")) {
+    throw "Observation activity marker survived JVM shutdown"
+}
+if (-not (Test-Path -LiteralPath (Join-Path $InstanceRoot ".orbit/runtime-data/observation.epoch"))) {
+    throw "Observation epoch marker was not published"
+}
 Write-Output $SessionFile
+
+# Ownership is the package that performed the final successful mutation, not
+# the creator and not an accumulated set of writers.
+$OwnershipRoot = Join-Path $TestRoot "last-writer"
+$OwnershipInstance = Join-Path $OwnershipRoot "instance"
+$OwnerAClasses = Join-Path $OwnershipRoot "owner-a"
+$OwnerBClasses = Join-Path $OwnershipRoot "owner-b"
+$OwnerAJar = Join-Path $OwnershipRoot "owner-a.jar"
+$OwnerBJar = Join-Path $OwnershipRoot "owner-b.jar"
+$OwnershipSession = Join-Path $OwnershipInstance ".orbit/runtime-data/sessions/test.events"
+$OwnershipContext = Join-Path $OwnershipInstance ".orbit/runtime-data/agent-context.tsv"
+New-Item -ItemType Directory -Force -Path `
+    $OwnerAClasses, $OwnerBClasses, (Join-Path $OwnershipInstance "config"), `
+    (Split-Path -Parent $OwnershipSession) | Out-Null
+& javac --release 8 -d $OwnerAClasses (Join-Path $AgentRoot "tests/AgentOwnerA.java")
+if ($LASTEXITCODE -ne 0) { throw "Failed to compile owner A fixture" }
+& javac --release 8 -d $OwnerBClasses (Join-Path $AgentRoot "tests/AgentOwnerB.java")
+if ($LASTEXITCODE -ne 0) { throw "Failed to compile owner B fixture" }
+& jar cf $OwnerAJar -C $OwnerAClasses .
+if ($LASTEXITCODE -ne 0) { throw "Failed to package owner A fixture" }
+& jar cf $OwnerBJar -C $OwnerBClasses .
+if ($LASTEXITCODE -ne 0) { throw "Failed to package owner B fixture" }
+$OwnerAHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $OwnerAJar).Hash.ToLowerInvariant()
+$OwnerBHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $OwnerBJar).Hash.ToLowerInvariant()
+$OwnershipRootEncoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($OwnershipInstance)).TrimEnd('=').Replace('+', '-').Replace('/', '_')
+$OwnershipSessionEncoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($OwnershipSession)).TrimEnd('=').Replace('+', '-').Replace('/', '_')
+$OwnershipContextEncoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($OwnershipContext)).TrimEnd('=').Replace('+', '-').Replace('/', '_')
+[System.IO.File]::WriteAllLines($OwnershipContext, @(
+    "3`tcontext`tend"
+    "capability`tjava`t8-25`tend"
+    "capability`tsource`tfile`tend"
+    "source`t$OwnerAHash`t$OwnerAHash`tend"
+    "source`t$OwnerBHash`t$OwnerBHash`tend"
+), [System.Text.UTF8Encoding]::new($false))
+& $JavaCommand "-javaagent:$ResolvedAgent=root=$OwnershipRootEncoded;session=$OwnershipSessionEncoded;context=$OwnershipContextEncoded" `
+    -cp $HarnessRoot AgentOwnershipHarness $OwnerAJar $OwnerBJar $OwnershipInstance
+if ($LASTEXITCODE -ne 0) { throw "Last-writer Agent fixture failed" }
+$OwnershipRecords = Get-Content -LiteralPath $OwnershipSession
+if ($OwnershipRecords.Count -ne 2) { throw "Last-writer snapshot was not compacted to one path" }
+if ($OwnershipRecords[1] -notmatch "^3`twrite`tfile`t$OwnerAHash`t3`t") {
+    throw "The package that performed the final write did not own the file"
+}
+$FirstSnapshotHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $OwnershipSession).Hash
+& $JavaCommand "-javaagent:$ResolvedAgent=root=$OwnershipRootEncoded;session=$OwnershipSessionEncoded;context=$OwnershipContextEncoded" `
+    -cp $HarnessRoot AgentOwnershipHarness $OwnerAJar $OwnerBJar $OwnershipInstance
+if ($LASTEXITCODE -ne 0) { throw "Restarted last-writer Agent fixture failed" }
+$OwnershipSnapshots = Get-ChildItem -LiteralPath (Split-Path -Parent $OwnershipSession) -Filter "*.events"
+if ($OwnershipSnapshots.Count -ne 2) { throw "A restarted JVM overwrote the previous snapshot" }
+if ((Get-FileHash -Algorithm SHA256 -LiteralPath $OwnershipSession).Hash -ne $FirstSnapshotHash) {
+    throw "The original JVM snapshot changed after restart"
+}
+Write-Output $OwnershipSession
 
 # The Agent itself targets Java 8, while its call-site transformer must still
 # cover mutating JDK APIs introduced by later runtimes.
@@ -81,7 +142,7 @@ $ModernContextEncoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes
 & java "-javaagent:$ResolvedAgent=root=$ModernRootEncoded;session=$ModernSessionEncoded;context=$ModernContextEncoded" `
     -cp $HarnessRoot AgentIsolatedHarness $ModernJar $ModernInstance AgentModernFixture
 if ($LASTEXITCODE -ne 0) { throw "Modern Java API Agent fixture failed" }
-if ((Get-Content -LiteralPath $ModernSession).Count -ne 2) {
+if ((Get-Content -LiteralPath $ModernSession).Count -ne 3) {
     throw "Java 11 write APIs were not both observed"
 }
 Write-Output $ModernSession
@@ -128,7 +189,7 @@ $ModulePath = ($Dependencies | ForEach-Object { $_.Path }) -join [System.IO.Path
     --module-path $ModulePath --add-modules cpw.mods.securejarhandler `
     -cp $UnionClasses AgentUnionHarness $FixtureJar $UnionInstance
 if ($LASTEXITCODE -ne 0) { throw "Forge union Agent fixture failed" }
-if ((Get-Content -LiteralPath $UnionSession).Count -ne 4) {
+if ((Get-Content -LiteralPath $UnionSession).Count -ne 5) {
     throw "Forge union CodeSource did not resolve to the fixture package"
 }
 Write-Output $UnionSession
@@ -167,7 +228,7 @@ $ModuleEncoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes("agent
     -cp "$QuiltClasses$([System.IO.Path]::PathSeparator)$QuiltPath" `
     AgentQuiltHarness $FixtureJar $QuiltInstance
 if ($LASTEXITCODE -ne 0) { throw "Quilt identity Agent fixture failed" }
-if ((Get-Content -LiteralPath $QuiltSession).Count -ne 4) {
+if ((Get-Content -LiteralPath $QuiltSession).Count -ne 5) {
     throw "Quilt native module identity did not resolve to the fixture package"
 }
 Write-Output $QuiltSession

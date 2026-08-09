@@ -1195,27 +1195,22 @@ mod tests {
         .unwrap();
         crate::runtime_data::save_ledger(
             &directory,
-            &crate::runtime_data::DataOwnershipLedger {
-                schema: crate::runtime_data::LEDGER_SCHEMA,
-                entries: vec![
-                    crate::runtime_data::DataOwnershipEntry {
-                        path: crate::runtime_data::OwnedDataPath::Instance {
-                            relative: "bluemap".to_string(),
-                        },
-                        kind: crate::runtime_data::OwnedDataKind::Tree,
-                        owner: Some(owner),
-                        protected_by: BTreeSet::new(),
+            &crate::runtime_data::DataOwnershipLedger::from_entries(vec![
+                crate::runtime_data::DataOwnershipEntry {
+                    path: crate::runtime_data::OwnedDataPath::Instance {
+                        relative: "bluemap".to_string(),
                     },
-                    crate::runtime_data::DataOwnershipEntry {
-                        path: crate::runtime_data::OwnedDataPath::Instance {
-                            relative: "bluemap/foreign".to_string(),
-                        },
-                        kind: crate::runtime_data::OwnedDataKind::Tree,
-                        owner: Some("b".repeat(64)),
-                        protected_by: BTreeSet::new(),
+                    kind: crate::runtime_data::OwnedDataKind::Tree,
+                    owner: Some(owner),
+                },
+                crate::runtime_data::DataOwnershipEntry {
+                    path: crate::runtime_data::OwnedDataPath::Instance {
+                        relative: "bluemap/foreign".to_string(),
                     },
-                ],
-            },
+                    kind: crate::runtime_data::OwnedDataKind::Tree,
+                    owner: Some("b".repeat(64)),
+                },
+            ]),
         )
         .unwrap();
         let output = directory.join("pack.zip");
