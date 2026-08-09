@@ -1050,6 +1050,13 @@ impl OrbitApp {
         );
     }
 
+    pub(super) fn purge_package(&mut self, package: &str) {
+        self.orbit_mutation(
+            &tr!("Purging %{package}", package = package),
+            vec!["purge".into(), package.into()],
+        );
+    }
+
     pub(super) fn upgrade_all_packages(&mut self) {
         self.orbit_mutation("Upgrading mod environment", vec!["upgrade".into()]);
     }
@@ -1434,17 +1441,22 @@ impl OrbitApp {
     }
 
     pub(super) fn launch_selected(&mut self) {
+        if !self.preferences.orbit_binary.is_file() || !self.preferences.launcher_binary.is_file() {
+            self.toast = Some(Toast {
+                message: tr!("Runtime data-aware launch requires both Orbit and Orbit Launcher.")
+                    .into_owned(),
+                kind: ToastKind::Warning,
+            });
+            return;
+        }
         if let Some(instance) = self.selected_instance().cloned() {
-            let (label, command, intent) = if instance.kind == "server" {
-                (
-                    "Starting server",
-                    vec!["server".into(), "start".into()],
-                    Intent::ServerMutated,
-                )
+            let command = joint_launch_arguments(&instance, &self.preferences.launcher_binary);
+            let (label, intent) = if instance.kind == "server" {
+                ("Starting server", Intent::ServerMutated)
             } else {
-                ("Launching game", vec!["launch".into()], Intent::Generic)
+                ("Launching game", Intent::Generic)
             };
-            self.launcher_task_args(label, intent, Some(instance.id), command, None);
+            self.orbit_task_args(label, intent, command, Some(instance.directory), None);
         }
     }
 
@@ -1460,8 +1472,11 @@ impl OrbitApp {
 
     pub(super) fn server_action(&mut self, action: &str) {
         if let Some(instance) = self.selected_instance().cloned() {
+            if action == "start" {
+                self.launch_selected();
+                return;
+            }
             let (label, intent) = match action {
-                "start" => ("Starting server", Intent::ServerMutated),
                 "stop" => ("Stopping server", Intent::ServerMutated),
                 "eula" => ("Loading Minecraft EULA", Intent::EulaShow),
                 _ => return,
@@ -1653,13 +1668,6 @@ impl OrbitApp {
             ),
             ConfirmationAction::RemovePackage(id) => {
                 self.remove_package(&id);
-                0
-            }
-            ConfirmationAction::PurgePackage(id) => {
-                self.orbit_mutation(
-                    &tr!("Purging %{package}", package = id),
-                    vec!["purge".into(), id],
-                );
                 0
             }
             ConfirmationAction::CleanOrbitCache => self.orbit_task(
@@ -1985,11 +1993,27 @@ fn set_select_index<D: gpui_component::select::SelectDelegate + 'static>(
     });
 }
 
+fn joint_launch_arguments(instance: &RuntimeInstance, launcher: &Path) -> Vec<String> {
+    let mut arguments = vec![
+        "launch".into(),
+        "--launcher".into(),
+        launcher.to_string_lossy().into_owned(),
+        "--launcher-instance".into(),
+        instance.id.clone(),
+    ];
+    if instance.kind == "server" {
+        arguments.push("--server".into());
+    }
+    arguments
+}
+
 #[cfg(test)]
 mod completion_tests {
     use super::{
-        MicrosoftDeviceSession, TaskState, completion_failure_state, microsoft_verification_uri,
+        MicrosoftDeviceSession, RuntimeInstance, TaskState, completion_failure_state,
+        joint_launch_arguments, microsoft_verification_uri,
     };
+    use std::path::{Path, PathBuf};
 
     #[test]
     fn structured_cli_cancellation_is_not_presented_as_a_failure() {
@@ -2035,5 +2059,39 @@ mod completion_tests {
         };
 
         assert!(microsoft_verification_uri(&session).is_err());
+    }
+
+    #[test]
+    fn client_launch_is_routed_through_orbit_with_the_exact_launcher_instance() {
+        let instance = runtime_instance("client");
+        assert_eq!(
+            joint_launch_arguments(&instance, Path::new("C:/Orbit/orbit-launcher.exe")),
+            [
+                "launch",
+                "--launcher",
+                "C:/Orbit/orbit-launcher.exe",
+                "--launcher-instance",
+                "instance-id",
+            ]
+        );
+    }
+
+    #[test]
+    fn server_start_uses_the_same_joint_launch_path() {
+        let instance = runtime_instance("server");
+        let arguments = joint_launch_arguments(&instance, Path::new("C:/Orbit/orbit-launcher.exe"));
+        assert_eq!(arguments.last().map(String::as_str), Some("--server"));
+        assert_eq!(arguments.first().map(String::as_str), Some("launch"));
+    }
+
+    fn runtime_instance(kind: &str) -> RuntimeInstance {
+        RuntimeInstance {
+            id: "instance-id".into(),
+            name: "instance".into(),
+            directory: PathBuf::from("C:/Games/instance"),
+            minecraft_directory: None,
+            kind: kind.into(),
+            is_default: false,
+        }
     }
 }

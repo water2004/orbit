@@ -38,7 +38,6 @@ pub(super) enum ConfirmationAction {
     UnregisterInstance(String),
     RemoveJavaRuntime(String),
     RemovePackage(String),
-    PurgePackage(String),
     CleanOrbitCache,
     InstallModpack(PathBuf),
     AcceptEula(String),

@@ -328,9 +328,12 @@ fn render_drawer(app: &OrbitApp, cx: &mut Context<OrbitApp>) -> impl IntoElement
         )
 }
 
-fn render_interaction(app: &OrbitApp, cx: &mut Context<OrbitApp>) -> impl IntoElement {
+fn render_interaction(app: &OrbitApp, cx: &mut Context<OrbitApp>) -> AnyElement {
     let pending = app.interaction.as_ref().expect("checked").clone();
     let interaction_kind = pending.envelope.interaction;
+    if interaction_kind == InteractionKind::DataDeletion {
+        return render_data_deletion_interaction(pending, cx);
+    }
     let parsed = pending
         .envelope
         .choices
@@ -459,13 +462,17 @@ fn render_interaction(app: &OrbitApp, cx: &mut Context<OrbitApp>) -> impl IntoEl
                         .font_semibold()
                         .child(pending.envelope.prompt),
                 )
-                .child(
-                    div()
-                        .flex_shrink_0()
-                        .text_xs()
-                        .text_color(cx.theme().muted_foreground)
-                        .child(tr!("◆ marks actions that differ between choices.").into_owned()),
-                )
+                .when(interaction_kind == InteractionKind::Resolution, |modal| {
+                    modal.child(
+                        div()
+                            .flex_shrink_0()
+                            .text_xs()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(
+                                tr!("◆ marks actions that differ between choices.").into_owned(),
+                            ),
+                    )
+                })
                 .child(
                     div()
                         .id("interaction-choice-scroll")
@@ -491,6 +498,170 @@ fn render_interaction(app: &OrbitApp, cx: &mut Context<OrbitApp>) -> impl IntoEl
         ),
         cx,
     )
+    .into_any_element()
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct DataDeletionChoiceData {
+    mod_id: String,
+    entries: Vec<DataDeletionEntry>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct DataDeletionEntry {
+    path: String,
+    scope: String,
+    kind: String,
+}
+
+fn render_data_deletion_interaction(
+    pending: super::super::PendingInteraction,
+    cx: &mut Context<OrbitApp>,
+) -> AnyElement {
+    let proceed = pending
+        .envelope
+        .choices
+        .iter()
+        .find(|choice| choice.id == "proceed");
+    let plan = proceed.and_then(|choice| {
+        serde_json::from_value::<DataDeletionChoiceData>(choice.data.clone()).ok()
+    });
+    let invalid = plan.is_none();
+    let mut content = v_flex().w_full().min_w_0().gap_3();
+    if let Some(plan) = plan {
+        content = content
+            .child(
+                h_flex()
+                    .gap_2()
+                    .child(ui::pill(
+                        tr!("Remove package").into_owned(),
+                        cx.theme().danger.opacity(0.14),
+                        cx.theme().danger,
+                    ))
+                    .child(div().font_semibold().child(plan.mod_id)),
+            )
+            .child(
+                div()
+                    .text_sm()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(
+                        proceed
+                            .and_then(|choice| choice.description.clone())
+                            .unwrap_or_else(|| {
+                                tr!("Delete only the displayed runtime-owned paths").into_owned()
+                            }),
+                    ),
+            );
+        if plan.entries.is_empty() {
+            content = content.child(
+                div()
+                    .text_sm()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(tr!("No exclusively owned runtime data was observed.").into_owned()),
+            );
+        } else {
+            content = content.child(v_flex().w_full().gap_1().children(
+                plan.entries.into_iter().map(|entry| {
+                    let path = if entry.kind == "tree" {
+                        format!("{}/**", entry.path.trim_end_matches(['/', '\\']))
+                    } else {
+                        entry.path
+                    };
+                    h_flex()
+                        .w_full()
+                        .min_w_0()
+                        .gap_2()
+                        .child(ui::neutral_pill(
+                            if entry.kind == "tree" {
+                                tr!("Directory tree").into_owned()
+                            } else {
+                                tr!("File").into_owned()
+                            },
+                            cx,
+                        ))
+                        .when(entry.scope == "external", |row| {
+                            row.child(ui::pill(
+                                tr!("External").into_owned(),
+                                cx.theme().warning.opacity(0.14),
+                                cx.theme().warning,
+                            ))
+                        })
+                        .child(
+                            div()
+                                .min_w_0()
+                                .flex_1()
+                                .text_sm()
+                                .whitespace_normal()
+                                .child(path),
+                        )
+                }),
+            ));
+        }
+    } else {
+        content = content.child(
+            div()
+                .text_sm()
+                .text_color(cx.theme().danger)
+                .child(tr!("The deletion plan is invalid and cannot be applied.").into_owned()),
+        );
+    }
+    ui::modal_backdrop(
+        ui::modal(
+            760.,
+            v_flex()
+                .h(px(540.))
+                .max_h_full()
+                .gap_3()
+                .child(
+                    div()
+                        .text_xl()
+                        .font_semibold()
+                        .child(pending.envelope.prompt),
+                )
+                .child(
+                    div()
+                        .id("data-deletion-scroll")
+                        .flex_1()
+                        .min_h_0()
+                        .overflow_y_scrollbar()
+                        .pr_1()
+                        .child(content),
+                )
+                .child(
+                    h_flex()
+                        .flex_shrink_0()
+                        .justify_end()
+                        .gap_2()
+                        .when(pending.envelope.allow_cancel, |row| {
+                            row.child(
+                                Button::new("data-deletion-cancel")
+                                    .label(tr!("Cancel operation").into_owned())
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.answer_interaction(None);
+                                        cx.notify();
+                                    })),
+                            )
+                        })
+                        .child(
+                            Button::new("data-deletion-proceed")
+                                .label(
+                                    proceed.map(|choice| choice.label.clone()).unwrap_or_else(
+                                        || tr!("Remove package and data").into_owned(),
+                                    ),
+                                )
+                                .danger()
+                                .disabled(invalid)
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.answer_interaction(Some("proceed".into()));
+                                    cx.notify();
+                                })),
+                        ),
+                ),
+            cx,
+        ),
+        cx,
+    )
+    .into_any_element()
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -532,6 +703,7 @@ fn interaction_package_actions(
             })
         }
         InteractionKind::Package => Ok(Vec::new()),
+        InteractionKind::DataDeletion => Ok(Vec::new()),
     }
 }
 
@@ -1086,7 +1258,7 @@ fn render_package_settings(app: &OrbitApp, cx: &mut Context<OrbitApp>) -> AnyEle
                     v_flex()
                         .gap_1()
                         .child(div().text_sm().font_semibold().child(tr!("Remove package data").into_owned()))
-                        .child(div().text_xs().text_color(cx.theme().muted_foreground).child(tr!("Purge removes the package and presents matching configuration files before deletion.").into_owned())),
+                        .child(div().text_xs().text_color(cx.theme().muted_foreground).child(tr!("Purge presents runtime-observed exclusive files and directory trees before removing the package.").into_owned())),
                 )
                 .child(
                     Button::new("package-purge")
@@ -1095,11 +1267,7 @@ fn render_package_settings(app: &OrbitApp, cx: &mut Context<OrbitApp>) -> AnyEle
                         .danger()
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.package_editor = None;
-                            this.confirmation = Some(super::super::Confirmation {
-                                title: tr!("Purge %{package}?", package = purge_package),
-                                body: tr!("Orbit will first show the exact package and matching configuration files. Nothing is deleted until you confirm that plan.").into_owned(),
-                                action: super::super::ConfirmationAction::PurgePackage(purge_package.clone()),
-                            });
+                            this.purge_package(&purge_package);
                             cx.notify();
                         })),
                 ),
