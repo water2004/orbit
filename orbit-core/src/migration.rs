@@ -78,8 +78,8 @@ impl MigrationPlan {
 pub struct MigrationExportReport {
     pub target_dir: PathBuf,
     pub packages: usize,
-    pub config_files: usize,
-    pub config_bytes: u64,
+    pub state_files: usize,
+    pub state_bytes: u64,
 }
 
 /// Build the one authoritative migration plan used by both `migrate check`
@@ -416,14 +416,35 @@ pub fn export_migration(
     dry_run: bool,
 ) -> Result<MigrationExportReport, OrbitError> {
     validate_target_is_unchanged(plan)?;
-    let config_sources = crate::archive::portable_config_sources(&plan.source_dir)?;
-    let config_files = config_sources.len();
-    let config_bytes = config_sources.iter().map(|source| source.bytes).sum();
+    crate::runtime_data::merge_observation_sessions(&plan.source_dir)?;
+    let source_lock = Lockfile::open(&plan.source_dir)?.inner;
+    let owner_rebindings = plan
+        .target_lockfile
+        .packages
+        .iter()
+        .filter_map(|target| {
+            source_lock
+                .find(&target.mod_id)
+                .map(|source| (source.sha256.clone(), target.sha256.clone()))
+        })
+        .collect::<std::collections::BTreeMap<_, _>>();
+    let source_owners = owner_rebindings.keys().cloned().collect::<BTreeSet<_>>();
+    let mut ownership_entries =
+        crate::runtime_data::ownership_entries_for(&plan.source_dir, &source_owners)?;
+    let state_sources = crate::archive::portable_state_sources(
+        &plan.source_dir,
+        &source_owners,
+        &ownership_entries,
+    )?;
+    crate::runtime_data::rebind_ownership_entries(&mut ownership_entries, &owner_rebindings);
+    let ownership_document = crate::runtime_data::ownership_document(ownership_entries)?;
+    let state_files = state_sources.len();
+    let state_bytes = state_sources.iter().map(|source| source.bytes).sum();
     let report = MigrationExportReport {
         target_dir: plan.target_dir.clone(),
         packages: plan.target_lockfile.packages.len(),
-        config_files,
-        config_bytes,
+        state_files,
+        state_bytes,
     };
     if dry_run {
         return Ok(report);
@@ -432,9 +453,10 @@ pub fn export_migration(
     let mut destinations = vec![
         plan.target_dir.join("orbit.toml"),
         plan.target_dir.join("orbit.lock"),
+        plan.target_dir.join(".orbit/runtime-data/ownership.toml"),
     ];
     destinations.extend(
-        config_sources
+        state_sources
             .iter()
             .map(|source| plan.target_dir.join(&source.relative)),
     );
@@ -460,7 +482,7 @@ pub fn export_migration(
         )));
     }
     std::fs::create_dir(&staging)?;
-    let result = stage_and_commit(plan, &config_sources, &staging);
+    let result = stage_and_commit(plan, &state_sources, &ownership_document, &staging);
     if result.is_err() && staging.exists() {
         let _ = std::fs::remove_dir_all(&staging);
     }
@@ -702,12 +724,17 @@ fn validate_target_is_unchanged(plan: &MigrationPlan) -> Result<(), OrbitError> 
 
 fn stage_and_commit(
     plan: &MigrationPlan,
-    config_sources: &[crate::archive::PortableFile],
+    state_sources: &[crate::archive::PortableFile],
+    ownership_document: &str,
     staging: &Path,
 ) -> Result<(), OrbitError> {
     ManifestFile::new(staging, plan.target_manifest.clone()).save()?;
     Lockfile::new(staging, plan.target_lockfile.clone()).save()?;
-    for source in config_sources {
+    crate::atomic_io::write_atomic(
+        &staging.join(".orbit/runtime-data/ownership.toml"),
+        ownership_document.as_bytes(),
+    )?;
+    for source in state_sources {
         let destination = staging.join(&source.relative);
         if let Some(parent) = destination.parent() {
             std::fs::create_dir_all(parent)?;
@@ -723,7 +750,7 @@ fn stage_and_commit(
     }
 
     let mut roots = BTreeSet::new();
-    for source in config_sources {
+    for source in state_sources {
         if let Some(root) = source.relative.components().next() {
             roots.insert(PathBuf::from(root.as_os_str()));
         }
@@ -734,15 +761,19 @@ fn stage_and_commit(
         }
     }
     let mut committed = Vec::new();
-    for relative in roots
-        .into_iter()
-        .chain([PathBuf::from("orbit.toml"), PathBuf::from("orbit.lock")])
-    {
+    for relative in roots.into_iter().chain([
+        PathBuf::from("orbit.toml"),
+        PathBuf::from("orbit.lock"),
+        PathBuf::from(".orbit/runtime-data/ownership.toml"),
+    ]) {
         let source = staging.join(&relative);
         if !source.exists() {
             continue;
         }
         let destination = plan.target_dir.join(&relative);
+        if let Some(parent) = destination.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
         if let Err(error) = std::fs::rename(&source, &destination) {
             for previous in committed.iter().rev() {
                 let _ = std::fs::rename(plan.target_dir.join(previous), staging.join(previous));
@@ -751,7 +782,7 @@ fn stage_and_commit(
         }
         committed.push(relative);
     }
-    std::fs::remove_dir(staging)?;
+    std::fs::remove_dir_all(staging)?;
     Ok(())
 }
 
@@ -1092,7 +1123,7 @@ mod tests {
         assert_eq!(plan.target_mc_version, "2");
         assert_eq!(plan.selected_packages, 0);
         let report = export_migration(&plan, false).unwrap();
-        assert_eq!(report.config_files, 1);
+        assert_eq!(report.state_files, 1);
         assert!(target.join("orbit.toml").is_file());
         assert!(target.join("orbit.lock").is_file());
         assert_eq!(
@@ -1119,6 +1150,34 @@ mod tests {
         write_empty_orbit_instance(&source, "1", "1");
         write_fabric_package(&source.join("mods/local.jar"), "local", ">=1");
         crate::sync_instance(&source, &[], false).await.unwrap();
+        let source_owner = Lockfile::open(&source)
+            .unwrap()
+            .inner
+            .find("local")
+            .unwrap()
+            .sha256
+            .clone();
+        std::fs::create_dir_all(source.join("local-data/exports")).unwrap();
+        std::fs::write(
+            source.join("local-data/exports/user-created.txt"),
+            b"user content inherited from the package tree",
+        )
+        .unwrap();
+        crate::runtime_data::save_ledger(
+            &source,
+            &crate::runtime_data::DataOwnershipLedger {
+                schema: crate::runtime_data::LEDGER_SCHEMA,
+                entries: vec![crate::runtime_data::DataOwnershipEntry {
+                    path: crate::runtime_data::OwnedDataPath::Instance {
+                        relative: "local-data".to_string(),
+                    },
+                    kind: crate::runtime_data::OwnedDataKind::Tree,
+                    owner: Some(source_owner),
+                    protected_by: BTreeSet::new(),
+                }],
+            },
+        )
+        .unwrap();
         crate::platform_detection::test_support::write_platform(&target, "2", "fabric", "1");
 
         let pack = root.path().join("source.zip");
@@ -1144,6 +1203,18 @@ mod tests {
         ));
         export_migration(&plan, false).unwrap();
         assert!(target.join(managed).is_file());
+        assert_eq!(
+            std::fs::read(target.join("local-data/exports/user-created.txt")).unwrap(),
+            b"user content inherited from the package tree"
+        );
+        let target_owner = plan.target_lockfile().find("local").unwrap().sha256.clone();
+        assert_eq!(
+            crate::runtime_data::effective_owner_for_relative(
+                &crate::runtime_data::load_ledger(&target).unwrap().entries,
+                Path::new("local-data/exports/user-created.txt")
+            ),
+            Some(target_owner)
+        );
     }
 
     #[tokio::test]

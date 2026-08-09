@@ -42,8 +42,8 @@ pub async fn handle_export(
         "export",
         Some(MigrationExportView {
             applied,
-            config_files: report.config_files,
-            config_bytes: report.config_bytes,
+            state_files: report.state_files,
+            state_bytes: report.state_bytes,
         }),
         ctx,
     );
@@ -61,9 +61,9 @@ pub async fn handle_export(
             ctx.print_result_line(format_args!(
                 "{}",
                 tr!(
-                    "Migration export preview: %{packages} package(s) and %{configs} configuration file(s).",
+                    "Migration export preview: %{packages} package(s) and %{files} package state file(s).",
                     packages = report.packages,
-                    configs = report.config_files
+                    files = report.state_files
                 )
             ));
         }
@@ -293,8 +293,8 @@ fn confirm_export(
                     id: "proceed".to_string(),
                     label: tr!("Export migration").into_owned(),
                     description: Some(tr!(
-                        "Write Orbit state and %{configs} configuration file(s)",
-                        configs = preview.config_files
+                        "Write Orbit state and %{files} package state file(s)",
+                        files = preview.state_files
                     )),
                     data: serde_json::to_value(migration_view(plan, "export", None, false))
                         .expect("migration view is serializable"),
@@ -323,8 +323,8 @@ fn confirm_export(
     eprint!(
         "\n{}",
         tr!(
-            "Export this migration and %{configs} configuration file(s) to %{target}? [y/N] ",
-            configs = preview.config_files,
+            "Export this migration and %{files} package state file(s) to %{target}? [y/N] ",
+            files = preview.state_files,
             target = preview.target_dir.display()
         )
     );

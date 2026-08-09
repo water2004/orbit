@@ -512,6 +512,14 @@ struct DataDeletionEntry {
     path: String,
     scope: String,
     kind: String,
+    #[serde(default)]
+    preserved: Vec<DataDeletionPreservedPath>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct DataDeletionPreservedPath {
+    path: String,
+    scope: String,
 }
 
 fn render_data_deletion_interaction(
@@ -567,33 +575,53 @@ fn render_data_deletion_interaction(
                     } else {
                         entry.path
                     };
-                    h_flex()
+                    v_flex()
                         .w_full()
-                        .min_w_0()
-                        .gap_2()
-                        .child(ui::neutral_pill(
-                            if entry.kind == "tree" {
-                                tr!("Directory tree").into_owned()
-                            } else {
-                                tr!("File").into_owned()
-                            },
-                            cx,
-                        ))
-                        .when(entry.scope == "external", |row| {
-                            row.child(ui::pill(
-                                tr!("External").into_owned(),
-                                cx.theme().warning.opacity(0.14),
-                                cx.theme().warning,
+                        .gap_1()
+                        .child(
+                            h_flex()
+                                .w_full()
+                                .min_w_0()
+                                .gap_2()
+                                .child(ui::neutral_pill(
+                                    if entry.kind == "tree" {
+                                        tr!("Directory tree").into_owned()
+                                    } else {
+                                        tr!("File").into_owned()
+                                    },
+                                    cx,
+                                ))
+                                .when(entry.scope == "external", |row| {
+                                    row.child(ui::pill(
+                                        tr!("External").into_owned(),
+                                        cx.theme().warning.opacity(0.14),
+                                        cx.theme().warning,
+                                    ))
+                                })
+                                .child(
+                                    div()
+                                        .min_w_0()
+                                        .flex_1()
+                                        .text_sm()
+                                        .whitespace_normal()
+                                        .child(path),
+                                ),
+                        )
+                        .when(!entry.preserved.is_empty(), |column| {
+                            column.child(v_flex().ml_8().gap_1().children(
+                                entry.preserved.into_iter().map(|preserved| {
+                                    h_flex()
+                                        .gap_2()
+                                        .text_sm()
+                                        .text_color(cx.theme().muted_foreground)
+                                        .child(tr!("Preserve nested ownership:").into_owned())
+                                        .when(preserved.scope == "external", |row| {
+                                            row.child(tr!("External").into_owned())
+                                        })
+                                        .child(preserved.path)
+                                }),
                             ))
                         })
-                        .child(
-                            div()
-                                .min_w_0()
-                                .flex_1()
-                                .text_sm()
-                                .whitespace_normal()
-                                .child(path),
-                        )
                 }),
             ));
         }

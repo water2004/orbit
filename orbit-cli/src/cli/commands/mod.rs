@@ -620,6 +620,13 @@ fn print_data_purge_plan(plan: &orbit_core::DataPurgePlan) {
     } else {
         for entry in &plan.entries {
             eprintln!("  {}", entry.display_path());
+            for preserved in &entry.preserved {
+                eprintln!(
+                    "    {} {}",
+                    tr!("Preserve nested ownership:"),
+                    preserved.display()
+                );
+            }
         }
     }
 }

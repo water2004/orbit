@@ -253,8 +253,8 @@ pub struct MigrationSummary {
 #[derive(Debug, Clone, Serialize)]
 pub struct MigrationExportView {
     pub applied: bool,
-    pub config_files: usize,
-    pub config_bytes: u64,
+    pub state_files: usize,
+    pub state_bytes: u64,
 }
 
 // ---------------------------------------------------------------------------
@@ -457,6 +457,13 @@ pub struct DataPurgeEntryView {
     pub path: String,
     pub scope: &'static str,
     pub kind: orbit_core::OwnedDataKind,
+    pub preserved: Vec<DataPurgePathView>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct DataPurgePathView {
+    pub path: String,
+    pub scope: &'static str,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -467,14 +474,25 @@ pub struct PurgeOutput {
 }
 
 pub fn data_purge_entry_view(entry: &orbit_core::DataPurgeEntry) -> DataPurgeEntryView {
-    let (path, scope) = match &entry.path {
-        orbit_core::OwnedDataPath::Instance { relative } => (relative.clone(), "instance"),
-        orbit_core::OwnedDataPath::External { absolute } => (absolute.clone(), "external"),
-    };
+    let path_view = data_purge_path_view(&entry.path);
     DataPurgeEntryView {
-        path,
-        scope,
+        path: path_view.path,
+        scope: path_view.scope,
         kind: entry.kind,
+        preserved: entry.preserved.iter().map(data_purge_path_view).collect(),
+    }
+}
+
+fn data_purge_path_view(path: &orbit_core::OwnedDataPath) -> DataPurgePathView {
+    match path {
+        orbit_core::OwnedDataPath::Instance { relative } => DataPurgePathView {
+            path: relative.clone(),
+            scope: "instance",
+        },
+        orbit_core::OwnedDataPath::External { absolute } => DataPurgePathView {
+            path: absolute.clone(),
+            scope: "external",
+        },
     }
 }
 

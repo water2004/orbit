@@ -1,8 +1,10 @@
 //! Manifest import and instance archive export.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
+use serde::{Deserialize, Serialize};
 use zip::write::SimpleFileOptions;
 
 use crate::error::OrbitError;
@@ -13,6 +15,17 @@ use crate::workspace::{Lockfile, ManifestFile};
 
 mod mrpack;
 pub use mrpack::import_mrpack;
+
+const PORTABLE_OWNERSHIP_PATH: &str = ".orbit/runtime-data/ownership.toml";
+const PORTABLE_DATA_MANIFEST_PATH: &str = ".orbit/portable-data.toml";
+const PORTABLE_DATA_SCHEMA: u32 = 1;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct PortableDataManifest {
+    schema: u32,
+    ownership: Vec<crate::runtime_data::DataOwnershipEntry>,
+    files: BTreeSet<String>,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ImportMergeStrategy {
@@ -225,6 +238,13 @@ pub fn extract_portable_instance(source: &Path) -> Result<PortableInstance, Orbi
     }
     let directory = std::sync::Arc::new(tempfile::tempdir()?);
     let mut archive = zip::ZipArchive::new(std::fs::File::open(source)?)?;
+    let portable_data = read_portable_data(&mut archive, source)?;
+    let ownership = read_portable_ownership(&mut archive, source)?;
+    if ownership != portable_data.ownership {
+        return Err(OrbitError::Other(anyhow::anyhow!(
+            "portable Orbit data manifest does not match its ownership ledger"
+        )));
+    }
     let mut extracted = std::collections::BTreeSet::new();
     let mut total_size = 0_u64;
     for index in 0..archive.len() {
@@ -245,8 +265,11 @@ pub fn extract_portable_instance(source: &Path) -> Result<PortableInstance, Orbi
                 "portable Orbit pack contains an unsafe path"
             )));
         };
-        let Some(relative) = portable_entry_path(&enclosed) else {
-            continue;
+        let Some(relative) = portable_entry_path(&enclosed, &portable_data) else {
+            return Err(OrbitError::Other(anyhow::anyhow!(
+                "portable Orbit pack contains undeclared file '{}'",
+                enclosed.display()
+            )));
         };
         if !extracted.insert(relative.clone()) {
             return Err(OrbitError::Other(anyhow::anyhow!(
@@ -275,6 +298,13 @@ pub fn extract_portable_instance(source: &Path) -> Result<PortableInstance, Orbi
             "portable Orbit pack must contain orbit.toml and orbit.lock"
         )));
     }
+    for declared in &portable_data.files {
+        if !extracted.contains(Path::new(declared)) {
+            return Err(OrbitError::Other(anyhow::anyhow!(
+                "portable Orbit pack is missing declared file '{declared}'"
+            )));
+        }
+    }
     ManifestFile::open(directory.path())?;
     Lockfile::open(directory.path())?;
     Ok(PortableInstance { directory })
@@ -287,7 +317,7 @@ pub fn consume_portable_instance(source: &Path) -> Result<(), OrbitError> {
     Ok(())
 }
 
-fn portable_entry_path(path: &Path) -> Option<PathBuf> {
+fn portable_entry_path(path: &Path, manifest: &PortableDataManifest) -> Option<PathBuf> {
     let components: Vec<_> = path.components().collect();
     if components.len() == 1
         && matches!(
@@ -297,24 +327,85 @@ fn portable_entry_path(path: &Path) -> Option<PathBuf> {
     {
         return Some(path.to_path_buf());
     }
-    if components.len() == 2
-        && components[0].as_os_str() == "mods"
-        && crate::package_activation::mod_artifact_enabled(
-            &components[1].as_os_str().to_string_lossy(),
-        )
-        .is_some()
-    {
+    let portable = archive_path(path);
+    if matches!(
+        portable.as_str(),
+        PORTABLE_OWNERSHIP_PATH | PORTABLE_DATA_MANIFEST_PATH
+    ) {
         return Some(path.to_path_buf());
     }
-    if components.len() >= 2
-        && matches!(
-            components[0].as_os_str().to_str(),
-            Some("config" | "defaultconfigs" | "serverconfig")
-        )
-    {
-        return Some(path.to_path_buf());
+    manifest
+        .files
+        .contains(&portable)
+        .then(|| path.to_path_buf())
+}
+
+fn read_portable_data<R: Read + std::io::Seek>(
+    archive: &mut zip::ZipArchive<R>,
+    source: &Path,
+) -> Result<PortableDataManifest, OrbitError> {
+    let mut entry = archive.by_name(PORTABLE_DATA_MANIFEST_PATH).map_err(|_| {
+        OrbitError::Other(anyhow::anyhow!(
+            "portable Orbit pack is missing {PORTABLE_DATA_MANIFEST_PATH}"
+        ))
+    })?;
+    if !entry.is_file() || entry.size() > 16 * 1024 * 1024 {
+        return Err(OrbitError::Other(anyhow::anyhow!(
+            "portable Orbit data manifest is not a bounded regular file"
+        )));
     }
-    None
+    let mut document = String::new();
+    entry.read_to_string(&mut document)?;
+    let manifest: PortableDataManifest = toml::from_str(&document).map_err(|error| {
+        OrbitError::Other(anyhow::anyhow!(
+            "invalid portable Orbit data manifest '{}': {error}",
+            source.display()
+        ))
+    })?;
+    if manifest.schema != PORTABLE_DATA_SCHEMA {
+        return Err(OrbitError::Other(anyhow::anyhow!(
+            "unsupported portable Orbit data schema {} in '{}'",
+            manifest.schema,
+            source.display()
+        )));
+    }
+    for relative in &manifest.files {
+        let path = Path::new(relative);
+        if path.as_os_str().is_empty()
+            || path.is_absolute()
+            || path
+                .components()
+                .any(|component| !matches!(component, std::path::Component::Normal(_)))
+            || matches!(
+                relative.as_str(),
+                "orbit.toml" | "orbit.lock" | PORTABLE_OWNERSHIP_PATH | PORTABLE_DATA_MANIFEST_PATH
+            )
+        {
+            return Err(OrbitError::Other(anyhow::anyhow!(
+                "portable Orbit data manifest contains unsafe file '{relative}'"
+            )));
+        }
+    }
+    Ok(manifest)
+}
+
+fn read_portable_ownership<R: Read + std::io::Seek>(
+    archive: &mut zip::ZipArchive<R>,
+    source: &Path,
+) -> Result<Vec<crate::runtime_data::DataOwnershipEntry>, OrbitError> {
+    let mut entry = archive.by_name(PORTABLE_OWNERSHIP_PATH).map_err(|_| {
+        OrbitError::Other(anyhow::anyhow!(
+            "portable Orbit pack is missing {PORTABLE_OWNERSHIP_PATH}"
+        ))
+    })?;
+    if !entry.is_file() || entry.size() > 16 * 1024 * 1024 {
+        return Err(OrbitError::Other(anyhow::anyhow!(
+            "portable Orbit ownership manifest is not a bounded regular file"
+        )));
+    }
+    let mut document = String::new();
+    entry.read_to_string(&mut document)?;
+    crate::runtime_data::parse_ownership_document(source, &document)
 }
 
 pub fn export_instance(
@@ -330,6 +421,7 @@ pub fn export_instance(
             "unsupported export format '{format}'; expected zip or mrpack"
         )));
     }
+    crate::runtime_data::merge_observation_sessions(instance_dir)?;
     let manifest = ManifestFile::open(instance_dir)?;
     let lockfile = Lockfile::open(instance_dir)?;
     let platform = crate::platform::Platform::load(instance_dir, &manifest.inner)?;
@@ -369,8 +461,35 @@ pub fn export_instance(
         portable_state(&manifest.inner, &lockfile.inner, &selected);
     let portable_manifest_toml = portable_manifest.to_toml_string()?;
     let portable_lock_toml = portable_lock.to_toml_string()?;
-    let config_sources = portable_config_sources(instance_dir)?;
-    let config_bytes: u64 = config_sources.iter().map(|source| source.bytes).sum();
+    let selected_owners = selected
+        .iter()
+        .filter_map(|package| lockfile.inner.find(package))
+        .map(|entry| entry.sha256.clone())
+        .collect::<BTreeSet<_>>();
+    let ownership_entries =
+        crate::runtime_data::ownership_entries_for(instance_dir, &selected_owners)?;
+    let ownership_document = crate::runtime_data::ownership_document(ownership_entries.clone())?;
+    let state_sources = portable_state_sources(instance_dir, &selected_owners, &ownership_entries)?;
+    let portable_files = sources
+        .iter()
+        .map(|(entry, _, _)| format!("mods/{}", entry.filename))
+        .chain(
+            state_sources
+                .iter()
+                .map(|source| archive_path(&source.relative)),
+        )
+        .collect::<BTreeSet<_>>();
+    let portable_data_document = toml::to_string_pretty(&PortableDataManifest {
+        schema: PORTABLE_DATA_SCHEMA,
+        ownership: ownership_entries.clone(),
+        files: portable_files,
+    })
+    .map_err(|error| {
+        OrbitError::Other(anyhow::anyhow!(
+            "failed to serialize portable Orbit data manifest: {error}"
+        ))
+    })?;
+    let state_bytes: u64 = state_sources.iter().map(|source| source.bytes).sum();
     let package_bytes: u64 = sources.iter().map(|(_, _, bytes)| bytes).sum();
     let archived_bytes: u64 = if format == "mrpack" {
         sources
@@ -384,7 +503,11 @@ pub fn export_instance(
     let total_work = if dry_run {
         package_bytes
     } else {
-        package_bytes + archived_bytes + config_bytes
+        package_bytes
+            + archived_bytes
+            + state_bytes
+            + ownership_document.len() as u64
+            + portable_data_document.len() as u64
     };
     let mut tracker = ExportTracker::new(progress, sources.len(), total_work);
     tracker.started();
@@ -406,9 +529,13 @@ pub fn export_instance(
     let report = ExportReport {
         path: output.to_path_buf(),
         packages: sources.len(),
-        bytes: package_bytes + config_bytes,
+        bytes: package_bytes
+            + state_bytes
+            + ownership_document.len() as u64
+            + portable_data_document.len() as u64,
     };
     if dry_run {
+        tracker.advance(ownership_document.len() as u64 + portable_data_document.len() as u64);
         tracker.finished();
         return Ok(report);
     }
@@ -461,7 +588,31 @@ pub fn export_instance(
             )?;
         }
     }
-    for source in &config_sources {
+    let ownership_destination = if format == "mrpack" {
+        format!("overrides/{PORTABLE_OWNERSHIP_PATH}")
+    } else {
+        PORTABLE_OWNERSHIP_PATH.to_string()
+    };
+    add_content(
+        &mut archive,
+        &ownership_destination,
+        ownership_document.as_bytes(),
+        metadata_options,
+    )?;
+    tracker.advance(ownership_document.len() as u64);
+    let portable_data_destination = if format == "mrpack" {
+        format!("overrides/{PORTABLE_DATA_MANIFEST_PATH}")
+    } else {
+        PORTABLE_DATA_MANIFEST_PATH.to_string()
+    };
+    add_content(
+        &mut archive,
+        &portable_data_destination,
+        portable_data_document.as_bytes(),
+        metadata_options,
+    )?;
+    tracker.advance(portable_data_document.len() as u64);
+    for source in &state_sources {
         let relative = archive_path(&source.relative);
         let destination = if format == "mrpack" {
             format!("overrides/{relative}")
@@ -710,6 +861,116 @@ pub(crate) fn portable_config_sources(
     Ok(sources)
 }
 
+pub(crate) fn portable_state_sources(
+    instance_dir: &Path,
+    owners: &BTreeSet<String>,
+    ownership: &[crate::runtime_data::DataOwnershipEntry],
+) -> Result<Vec<PortableFile>, OrbitError> {
+    let mut by_path = portable_config_sources(instance_dir)?
+        .into_iter()
+        .map(|source| (source.relative.clone(), source))
+        .collect::<BTreeMap<_, _>>();
+    if owners.is_empty() || ownership.is_empty() {
+        return Ok(by_path.into_values().collect());
+    }
+
+    let all_entries = crate::runtime_data::load_ledger(instance_dir)?.entries;
+    let mut roots = ownership
+        .iter()
+        .filter_map(|entry| match &entry.path {
+            crate::runtime_data::OwnedDataPath::Instance { relative } => {
+                Some((PathBuf::from(relative), entry.kind))
+            }
+            crate::runtime_data::OwnedDataPath::External { .. } => None,
+        })
+        .collect::<Vec<_>>();
+    roots.sort_by(|left, right| {
+        left.0
+            .components()
+            .count()
+            .cmp(&right.0.components().count())
+            .then_with(|| left.0.cmp(&right.0))
+    });
+    let mut selected_roots: Vec<(PathBuf, crate::runtime_data::OwnedDataKind)> = Vec::new();
+    for (path, kind) in roots {
+        if selected_roots.iter().any(|(root, root_kind)| {
+            *root_kind == crate::runtime_data::OwnedDataKind::Tree && path.starts_with(root)
+        }) {
+            continue;
+        }
+        selected_roots.push((path, kind));
+    }
+    for (relative, kind) in selected_roots {
+        let source = instance_dir.join(&relative);
+        if !source.exists() {
+            continue;
+        }
+        collect_owned_files(
+            instance_dir,
+            &source,
+            kind,
+            owners,
+            &all_entries,
+            &mut by_path,
+        )?;
+    }
+    Ok(by_path.into_values().collect())
+}
+
+fn collect_owned_files(
+    instance_dir: &Path,
+    path: &Path,
+    kind: crate::runtime_data::OwnedDataKind,
+    owners: &BTreeSet<String>,
+    ownership: &[crate::runtime_data::DataOwnershipEntry],
+    sources: &mut BTreeMap<PathBuf, PortableFile>,
+) -> Result<(), OrbitError> {
+    let metadata = std::fs::symlink_metadata(path)?;
+    if metadata.file_type().is_symlink() {
+        return Err(OrbitError::Other(anyhow::anyhow!(
+            "portable package data contains a symbolic link: {}",
+            path.display()
+        )));
+    }
+    if metadata.is_dir() {
+        if kind == crate::runtime_data::OwnedDataKind::File {
+            return Ok(());
+        }
+        for entry in std::fs::read_dir(path)? {
+            collect_owned_files(
+                instance_dir,
+                &entry?.path(),
+                crate::runtime_data::OwnedDataKind::Tree,
+                owners,
+                ownership,
+                sources,
+            )?;
+        }
+        return Ok(());
+    }
+    if !metadata.is_file() {
+        return Ok(());
+    }
+    let relative = path.strip_prefix(instance_dir).map_err(|_| {
+        OrbitError::Other(anyhow::anyhow!(
+            "portable package data escaped its instance directory"
+        ))
+    })?;
+    if crate::runtime_data::effective_owner_for_relative(ownership, relative)
+        .is_none_or(|owner| !owners.contains(&owner))
+    {
+        return Ok(());
+    }
+    sources
+        .entry(relative.to_path_buf())
+        .or_insert(PortableFile {
+            source: path.to_path_buf(),
+            relative: relative.to_path_buf(),
+            bytes: metadata.len(),
+        });
+    Ok(())
+}
+
 fn collect_portable_files(
     instance_dir: &Path,
     path: &Path,
@@ -885,6 +1146,7 @@ mod tests {
             .unwrap();
         let jar = directory.join("mods/example.jar");
         std::fs::write(&jar, b"example").unwrap();
+        let owner = crate::jar::compute_sha256(&jar).unwrap();
         std::fs::create_dir_all(directory.join("config")).unwrap();
         std::fs::write(directory.join("config/example.toml"), b"enabled = true\n").unwrap();
         Lockfile::new(
@@ -899,7 +1161,7 @@ mod tests {
                     mod_id: "example".to_string(),
                     version: "1".to_string(),
                     sha1: String::new(),
-                    sha256: crate::jar::compute_sha256(&jar).unwrap(),
+                    sha256: owner.clone(),
                     sha512: crate::jar::compute_sha512(&jar).unwrap(),
                     filename: "example.jar".to_string(),
                     remotes: vec![PackageRemote::File {
@@ -919,6 +1181,43 @@ mod tests {
         )
         .save()
         .unwrap();
+        std::fs::create_dir_all(directory.join("bluemap/maps/world")).unwrap();
+        std::fs::create_dir_all(directory.join("bluemap/foreign")).unwrap();
+        std::fs::write(
+            directory.join("bluemap/maps/world/user-marker.json"),
+            b"user-authored content",
+        )
+        .unwrap();
+        std::fs::write(
+            directory.join("bluemap/foreign/state.bin"),
+            b"other package",
+        )
+        .unwrap();
+        crate::runtime_data::save_ledger(
+            &directory,
+            &crate::runtime_data::DataOwnershipLedger {
+                schema: crate::runtime_data::LEDGER_SCHEMA,
+                entries: vec![
+                    crate::runtime_data::DataOwnershipEntry {
+                        path: crate::runtime_data::OwnedDataPath::Instance {
+                            relative: "bluemap".to_string(),
+                        },
+                        kind: crate::runtime_data::OwnedDataKind::Tree,
+                        owner: Some(owner),
+                        protected_by: BTreeSet::new(),
+                    },
+                    crate::runtime_data::DataOwnershipEntry {
+                        path: crate::runtime_data::OwnedDataPath::Instance {
+                            relative: "bluemap/foreign".to_string(),
+                        },
+                        kind: crate::runtime_data::OwnedDataKind::Tree,
+                        owner: Some("b".repeat(64)),
+                        protected_by: BTreeSet::new(),
+                    },
+                ],
+            },
+        )
+        .unwrap();
         let output = directory.join("pack.zip");
 
         let events = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
@@ -934,6 +1233,12 @@ mod tests {
         assert!(archive.by_name("orbit.toml").is_ok());
         assert!(archive.by_name("orbit.lock").is_ok());
         assert!(archive.by_name("config/example.toml").is_ok());
+        assert!(
+            archive
+                .by_name("bluemap/maps/world/user-marker.json")
+                .is_ok()
+        );
+        assert!(archive.by_name("bluemap/foreign/state.bin").is_err());
         let jar = archive.by_name("mods/example.jar").unwrap();
         assert_eq!(jar.compression(), zip::CompressionMethod::Stored);
         drop(jar);
@@ -969,6 +1274,11 @@ mod tests {
             std::fs::read_to_string(portable.path().join("config/example.toml")).unwrap(),
             "enabled = true\n"
         );
+        assert_eq!(
+            std::fs::read(portable.path().join("bluemap/maps/world/user-marker.json")).unwrap(),
+            b"user-authored content"
+        );
+        assert!(!portable.path().join("bluemap/foreign/state.bin").exists());
         std::fs::remove_dir_all(directory).unwrap();
     }
 
