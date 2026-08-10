@@ -153,7 +153,10 @@ dependency_root="$workspace_root/target/orbit-runtime-agent/compatibility"
 mkdir -p "$compatibility_root/classes" "$compatibility_root/instance/config" \
   "$compatibility_root/instance/.orbit/runtime-data/sessions" "$dependency_root"
 download_checked() {
-  local name="$1" url="$2" expected="$3" path="$dependency_root/$name"
+  local name="$1"
+  local url="$2"
+  local expected="$3"
+  local path="$dependency_root/$name"
   if [[ ! -f "$path" ]]; then
     curl --fail --location --output "$path" "$url"
   fi
