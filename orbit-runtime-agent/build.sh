@@ -7,6 +7,7 @@ output_path="${1:-$workspace_root/target/release/orbit-runtime-agent.jar}"
 build_root="$workspace_root/target/orbit-runtime-agent"
 dependency="$build_root/asm-9.9.1.jar"
 classes="$build_root/classes"
+relocator_classes="$build_root/relocator-classes"
 manifest="$build_root/MANIFEST.MF"
 expected_sha256="6f3828a215c920059a5efa2fb55c233d6c54ec5cadca99ce1b1bdd10077c7ddd"
 
@@ -21,8 +22,8 @@ actual_sha256="$(sha256sum "$dependency" | cut -d' ' -f1)"
   exit 1
 }
 
-rm -rf -- "$classes"
-mkdir -p "$classes"
+rm -rf -- "$classes" "$relocator_classes"
+mkdir -p "$classes" "$relocator_classes"
 (cd "$classes" && jar xf "$dependency")
 find "$classes/META-INF" -maxdepth 1 -type f \
   \( -name '*.SF' -o -name '*.RSA' -o -name '*.DSA' \) -delete 2>/dev/null || true
@@ -31,6 +32,8 @@ mapfile -t sources < <(find "$agent_root/src/main/java" -type f -name '*.java' -
 javac --release 8 -cp "$dependency" -d "$classes" "${sources[@]}"
 mapfile -t java11_sources < <(find "$agent_root/src/main/java11" -type f -name '*.java' -print)
 javac --release 11 -cp "$classes:$dependency" -d "$classes" "${java11_sources[@]}"
+javac --release 8 -d "$relocator_classes" "$agent_root/tools/RelocateAsm.java"
+java -cp "$relocator_classes" RelocateAsm "$classes"
 printf '%s\n' \
   'Manifest-Version: 1.0' \
   'Premain-Class: dev.orbit.agent.OrbitRuntimeAgent' \

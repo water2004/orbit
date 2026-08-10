@@ -1023,7 +1023,8 @@ pub(crate) fn analyze_with_progress(
     }
     finalize_injection_groups(&mut effects);
     let (candidate_risks, candidate_interactions) = candidate_query_findings(&effects, &candidates);
-    let unary_risks = candidate_merge_risks(&candidates);
+    let mut unary_risks = candidate_merge_risks(&candidates);
+    unary_risks.extend(plugin_controlled_merge_risks(scanned, registry));
     scanned.coverage.unsupported_selector_syntax += findings.unsupported_selectors;
     scanned.coverage.unsupported_injection_points += findings.unsupported_injection_points;
     scanned.coverage.valid_multi_target_selectors += findings.valid_multi_target_selectors;
@@ -1109,6 +1110,75 @@ fn candidate_merge_risks(
             }
         })
         .collect()
+}
+
+fn plugin_controlled_merge_risks(
+    scanned: &ScannedArtifacts,
+    registry: &MixinRegistry,
+) -> Vec<crate::model::UnaryCompatibilityRisk> {
+    let mut risks = Vec::new();
+    for registered in registry.mixins.iter().filter(|registered| {
+        registered.activation == crate::model::MixinActivation::PluginControlled
+    }) {
+        let Some(artifact) = scanned
+            .artifacts
+            .iter()
+            .find(|artifact| artifact.id == registered.artifact_id)
+        else {
+            continue;
+        };
+        let Some(mixin) = artifact
+            .classes
+            .iter()
+            .find(|class| class.name == registered.mixin_class)
+        else {
+            continue;
+        };
+        let Some(mixin_annotation) = annotation(&mixin.annotations, MIXIN) else {
+            continue;
+        };
+        for target_class in mixin_targets(mixin_annotation) {
+            let definitions = scanned
+                .universe
+                .parsed_definitions(&scanned.artifacts, &target_class);
+            let [(target_artifact, target)] = definitions.as_slice() else {
+                continue;
+            };
+            for method in &mixin.methods {
+                if annotation(&method.annotations, OVERWRITE).is_none()
+                    || target.methods.iter().any(|target_method| {
+                        target_method.name == method.name
+                            && target_method.descriptor == method.descriptor
+                    })
+                {
+                    continue;
+                }
+                let target = Target::method(&target_class, &method.name, &method.descriptor);
+                let reason = "@Overwrite names a method which does not exist in the active target class when its controlling plugin applies.";
+                let mut evidence = Evidence::new(&artifact.id, &mixin.name, reason);
+                evidence.method = Some(format!("{}{}", method.name, method.descriptor));
+                evidence.annotation = Some(OVERWRITE.to_string());
+                let severity = crate::model::Severity::High;
+                let confidence = Confidence::Exact;
+                let activation = Activation::Conditional;
+                risks.push(crate::model::UnaryCompatibilityRisk {
+                    artifact_id: artifact.id.clone(),
+                    environment_target: target_artifact.id.clone(),
+                    target,
+                    rule: "invalid_overwrite_target".to_string(),
+                    reason: reason.to_string(),
+                    mutations: vec![MutationKind::ReplaceMethodBody],
+                    evidence: vec![evidence],
+                    severity,
+                    confidence,
+                    precision: Precision::Method,
+                    risk_index: effective_risk_index(severity, confidence, activation),
+                    activation,
+                });
+            }
+        }
+    }
+    risks
 }
 
 fn analyze_mixin_structure(
@@ -5075,7 +5145,7 @@ mod tests {
     }
 
     #[test]
-    fn plugin_controlled_overwrite_is_not_a_definite_unary_risk() {
+    fn plugin_controlled_invalid_overwrite_is_a_conditional_unary_risk() {
         let mut scanned = mixin_fixture("HEAD", "Lorg/spongepowered/asm/mixin/injection/Inject;");
         let mut invalid = overwrite_artifact(
             "controlled",
@@ -5097,12 +5167,13 @@ mod tests {
 
         let analysis = analyze_with_progress(&mut scanned, &registry, None);
 
-        assert!(
-            analysis
-                .unary_risks
-                .iter()
-                .all(|risk| risk.artifact_id != "controlled")
-        );
+        assert!(analysis.unary_risks.iter().any(|risk| {
+            risk.artifact_id == "controlled"
+                && risk.rule == "invalid_overwrite_target"
+                && risk.activation == Activation::Conditional
+                && risk.confidence == Confidence::Exact
+                && risk.precision == Precision::Method
+        }));
         assert!(analysis.effects.iter().any(|effect| {
             effect.artifact_id == "controlled" && effect.activation == Activation::Conditional
         }));

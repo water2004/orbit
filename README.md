@@ -41,16 +41,16 @@ server needs only Launcher, and can add Orbit when it also wants managed mods:
 
 ```bash
 # Headless Minecraft runtime management.
-sudo apt install ./orbit-launcher_0.4.0-1_amd64.deb
+sudo apt install ./orbit-launcher_0.4.1-1_amd64.deb
 
 # Optional mod package management on that server.
-sudo apt install ./orbit_0.4.0-1_amd64.deb
+sudo apt install ./orbit_0.4.1-1_amd64.deb
 
 # Desktop installation: apt resolves the GUI's exact-version CLI dependencies
 # when all three downloaded files are supplied together.
-sudo apt install ./orbit_0.4.0-1_amd64.deb \
-  ./orbit-launcher_0.4.0-1_amd64.deb \
-  ./orbit-gui_0.4.0-1_amd64.deb
+sudo apt install ./orbit_0.4.1-1_amd64.deb \
+  ./orbit-launcher_0.4.1-1_amd64.deb \
+  ./orbit-gui_0.4.1-1_amd64.deb
 ```
 
 Installing the GUI on a headless host is technically harmless, but it pulls graphical runtime

@@ -11,6 +11,7 @@ $InstanceRoot = Join-Path $TestRoot "instance"
 $ModsRoot = Join-Path $InstanceRoot "mods"
 $ClassesRoot = Join-Path $TestRoot "classes"
 $HarnessRoot = Join-Path $TestRoot "harness"
+$AsmDependency = Join-Path $WorkspaceRoot "target/orbit-runtime-agent/asm-9.9.1.jar"
 $FixtureJar = Join-Path $ModsRoot "agent-fixture.jar"
 $SessionFile = Join-Path $InstanceRoot ".orbit/runtime-data/sessions/test.events"
 $ContextFile = Join-Path $InstanceRoot ".orbit/runtime-data/agent-context.tsv"
@@ -29,6 +30,7 @@ if ($LASTEXITCODE -ne 0) { throw "Failed to compile Agent fixture" }
 & jar cf $FixtureJar -C $ClassesRoot .
 if ($LASTEXITCODE -ne 0) { throw "Failed to package Agent fixture" }
 & javac --release 8 -d $HarnessRoot `
+    (Join-Path $AgentRoot "tests/AgentClasspathHarness.java") `
     (Join-Path $AgentRoot "tests/AgentIsolatedHarness.java") `
     (Join-Path $AgentRoot "tests/AgentOwnershipHarness.java")
 if ($LASTEXITCODE -ne 0) { throw "Failed to compile isolated-loader harness" }
@@ -47,6 +49,36 @@ $ContextLines = @(
 )
 [System.IO.File]::WriteAllLines($ContextFile, $ContextLines, [System.Text.UTF8Encoding]::new($false))
 $ResolvedAgent = [System.IO.Path]::GetFullPath((Join-Path $WorkspaceRoot $AgentPath))
+$AgentEntries = & jar tf $ResolvedAgent
+if ($LASTEXITCODE -ne 0) { throw "Failed to inspect Orbit Runtime Agent" }
+if ($AgentEntries -contains "org/objectweb/asm/ClassReader.class") {
+    throw "Orbit Runtime Agent exposes an unrelocated ASM ClassReader"
+}
+if (-not ($AgentEntries -contains "dev/orbit/shd/asm/ClassReader.class")) {
+    throw "Orbit Runtime Agent is missing its relocated ASM ClassReader"
+}
+if (-not (Test-Path -LiteralPath $AsmDependency -PathType Leaf)) {
+    throw "ASM test dependency is missing; build the Agent before running its tests"
+}
+
+$ClasspathRoot = Join-Path $TestRoot "classpath-isolation"
+$ClasspathInstance = Join-Path $ClasspathRoot "instance"
+$ClasspathSession = Join-Path $ClasspathInstance ".orbit/runtime-data/sessions/test.events"
+$ClasspathContext = Join-Path $ClasspathInstance ".orbit/runtime-data/agent-context.tsv"
+New-Item -ItemType Directory -Force -Path (Split-Path -Parent $ClasspathSession) | Out-Null
+$ClasspathRootEncoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($ClasspathInstance)).TrimEnd('=').Replace('+', '-').Replace('/', '_')
+$ClasspathSessionEncoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($ClasspathSession)).TrimEnd('=').Replace('+', '-').Replace('/', '_')
+$ClasspathContextEncoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($ClasspathContext)).TrimEnd('=').Replace('+', '-').Replace('/', '_')
+[System.IO.File]::WriteAllLines($ClasspathContext, @(
+    "3`tcontext`tend"
+    "capability`tjava`t8-25`tend"
+    "capability`tsource`tfile`tend"
+), [System.Text.UTF8Encoding]::new($false))
+$PublicAsmClasspath = "$HarnessRoot$([System.IO.Path]::PathSeparator)$AsmDependency"
+& $JavaCommand "-javaagent:$ResolvedAgent=root=$ClasspathRootEncoded;session=$ClasspathSessionEncoded;context=$ClasspathContextEncoded" `
+    -cp $PublicAsmClasspath AgentClasspathHarness
+if ($LASTEXITCODE -ne 0) { throw "Agent ASM classpath isolation failed" }
+
 & $JavaCommand "-javaagent:$ResolvedAgent=root=$RootEncoded;session=$SessionEncoded;context=$ContextEncoded" -cp $HarnessRoot AgentIsolatedHarness $FixtureJar $InstanceRoot
 if ($LASTEXITCODE -ne 0) { throw "Agent fixture failed" }
 

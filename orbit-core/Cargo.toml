@@ -1,6 +1,6 @@
 [package]
 name = "orbit-core"
-version = "0.4.0"
+version = "0.4.1"
 edition = "2024"
 description = "Core business logic for Orbit — the Minecraft mod package manager"
 

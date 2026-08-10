@@ -10,6 +10,7 @@ instance_root="$test_root/instance"
 mods_root="$instance_root/mods"
 classes_root="$test_root/classes"
 harness_root="$test_root/harness"
+asm_dependency="$workspace_root/target/orbit-runtime-agent/asm-9.9.1.jar"
 fixture_jar="$mods_root/agent-fixture.jar"
 session_file="$instance_root/.orbit/runtime-data/sessions/test.events"
 context_file="$instance_root/.orbit/runtime-data/agent-context.tsv"
@@ -27,6 +28,7 @@ mkdir -p "$mods_root" "$instance_root/config" "$(dirname "$context_file")" "$cla
 javac --release 8 -d "$classes_root" "$agent_root/tests/AgentFixture.java"
 jar cf "$fixture_jar" -C "$classes_root" .
 javac --release 8 -d "$harness_root" \
+  "$agent_root/tests/AgentClasspathHarness.java" \
   "$agent_root/tests/AgentIsolatedHarness.java" \
   "$agent_root/tests/AgentOwnershipHarness.java"
 
@@ -41,6 +43,34 @@ config_encoded="$(encode_path "$instance_root/config")"
 fixture_hash="$(sha256sum "$fixture_jar" | awk '{print $1}')"
 printf '3\tcontext\tend\ncapability\tjava\t8-25\tend\ncapability\tsource\tfile\tend\nsource\t%s\t%s\tend\nreserved\t%s\tend\n' \
   "$fixture_hash" "$fixture_hash" "$config_encoded" > "$context_file"
+
+agent_entries="$(jar tf "$agent_path")"
+if grep -Fxq 'org/objectweb/asm/ClassReader.class' <<<"$agent_entries"; then
+  echo "Orbit Runtime Agent exposes an unrelocated ASM ClassReader" >&2
+  exit 1
+fi
+grep -Fxq 'dev/orbit/shd/asm/ClassReader.class' <<<"$agent_entries" || {
+  echo "Orbit Runtime Agent is missing its relocated ASM ClassReader" >&2
+  exit 1
+}
+[[ -f "$asm_dependency" ]] || {
+  echo "ASM test dependency is missing; build the Agent before running its tests" >&2
+  exit 1
+}
+
+classpath_root="$test_root/classpath-isolation"
+classpath_instance="$classpath_root/instance"
+classpath_session="$classpath_instance/.orbit/runtime-data/sessions/test.events"
+classpath_context="$classpath_instance/.orbit/runtime-data/agent-context.tsv"
+mkdir -p "$(dirname "$classpath_session")"
+classpath_root_encoded="$(encode_path "$classpath_instance")"
+classpath_session_encoded="$(encode_path "$classpath_session")"
+classpath_context_encoded="$(encode_path "$classpath_context")"
+printf '3\tcontext\tend\ncapability\tjava\t8-25\tend\ncapability\tsource\tfile\tend\n' \
+  > "$classpath_context"
+"$java_command" "-javaagent:$agent_path=root=$classpath_root_encoded;session=$classpath_session_encoded;context=$classpath_context_encoded" \
+  -cp "$harness_root:$asm_dependency" AgentClasspathHarness
+
 "$java_command" "-javaagent:$agent_path=root=$root_encoded;session=$session_encoded;context=$context_encoded" \
   -cp "$harness_root" AgentIsolatedHarness "$fixture_jar" "$instance_root"
 

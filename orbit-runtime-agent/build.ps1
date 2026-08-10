@@ -8,6 +8,7 @@ $WorkspaceRoot = Split-Path -Parent $AgentRoot
 $BuildRoot = Join-Path $WorkspaceRoot "target/orbit-runtime-agent"
 $DependencyPath = Join-Path $BuildRoot "asm-9.9.1.jar"
 $ClassesPath = Join-Path $BuildRoot "classes"
+$RelocatorClasses = Join-Path $BuildRoot "relocator-classes"
 $ManifestPath = Join-Path $BuildRoot "MANIFEST.MF"
 $ExpectedSha256 = "6f3828a215c920059a5efa2fb55c233d6c54ec5cadca99ce1b1bdd10077c7ddd"
 
@@ -22,15 +23,17 @@ if ($ActualSha256 -ne $ExpectedSha256) {
     throw "ASM SHA-256 mismatch: $ActualSha256"
 }
 
-if (Test-Path -LiteralPath $ClassesPath) {
-    $ResolvedBuild = [System.IO.Path]::GetFullPath($BuildRoot)
-    $ResolvedClasses = [System.IO.Path]::GetFullPath($ClassesPath)
-    if (-not $ResolvedClasses.StartsWith($ResolvedBuild, [System.StringComparison]::OrdinalIgnoreCase)) {
-        throw "Refusing to clean classes outside the Agent build directory"
+foreach ($Directory in @($ClassesPath, $RelocatorClasses)) {
+    if (Test-Path -LiteralPath $Directory) {
+        $ResolvedBuild = [System.IO.Path]::GetFullPath($BuildRoot)
+        $ResolvedDirectory = [System.IO.Path]::GetFullPath($Directory)
+        if (-not $ResolvedDirectory.StartsWith($ResolvedBuild, [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw "Refusing to clean output outside the Agent build directory"
+        }
+        Remove-Item -LiteralPath $Directory -Recurse -Force
     }
-    Remove-Item -LiteralPath $ClassesPath -Recurse -Force
 }
-New-Item -ItemType Directory -Force -Path $ClassesPath | Out-Null
+New-Item -ItemType Directory -Force -Path $ClassesPath, $RelocatorClasses | Out-Null
 
 Push-Location $ClassesPath
 try {
@@ -55,6 +58,11 @@ $Java11Sources = Get-ChildItem -LiteralPath (Join-Path $AgentRoot "src/main/java
 $Java11Arguments = @("--release", "11", "-cp", $OverlayClasspath, "-d", $ClassesPath) + $Java11Sources
 & javac @Java11Arguments
 if ($LASTEXITCODE -ne 0) { throw "Failed to compile Java 11 Agent overlay" }
+
+& javac --release 8 -d $RelocatorClasses (Join-Path $AgentRoot "tools/RelocateAsm.java")
+if ($LASTEXITCODE -ne 0) { throw "Failed to compile ASM relocator" }
+& java -cp $RelocatorClasses RelocateAsm $ClassesPath
+if ($LASTEXITCODE -ne 0) { throw "Failed to relocate Agent ASM classes" }
 
 @"
 Manifest-Version: 1.0
