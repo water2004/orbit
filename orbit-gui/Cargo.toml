@@ -1,6 +1,6 @@
 [package]
 name = "orbit-gui"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2024"
 license = "MIT"
 description = "Native desktop shell for Orbit and Orbit Launcher"
