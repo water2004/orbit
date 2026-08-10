@@ -45,13 +45,16 @@ for package in orbit-core orbit-launcher orbit-launcher-core orbit-gui; do
 	fi
 done
 
-python3 - "$version" <<'PY'
+python3 -c '
+import json
 import sys
-import tomllib
 
 version = sys.argv[1]
-with open("orbit-gui/Cargo.toml", "rb") as manifest:
-    configured = tomllib.load(manifest)["package"]["metadata"]["deb"]["depends"]
+metadata = json.load(sys.stdin)
+gui_package = next(
+    package for package in metadata["packages"] if package["name"] == "orbit-gui"
+)
+configured = gui_package["metadata"]["deb"]["depends"]
 
 dependencies = {dependency.strip() for dependency in configured.split(",")}
 expected = {
@@ -66,7 +69,7 @@ if missing:
         file=sys.stderr,
     )
     raise SystemExit(1)
-PY
+' "$version" <<<"$metadata"
 
 package_assets=(
 	"README.md"
