@@ -126,7 +126,7 @@ for package in "${packages[@]}"; do
 		}
 	fi
 	if [[ "$package" == "orbit" ]]; then
-		dpkg-deb --contents "$deb" | grep -Fq "./usr/lib/orbit/orbit-runtime-agent.jar" || {
+		dpkg-deb --contents "$deb" | grep -F "./usr/lib/orbit/orbit-runtime-agent.jar" >/dev/null || {
 			echo "orbit package must contain the Orbit Runtime Agent" >&2
 			exit 1
 		}
