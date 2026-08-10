@@ -124,7 +124,7 @@ impl LauncherLock {
         }
         match &self.entrypoint {
             LockedEntrypoint::Jar { path } | LockedEntrypoint::ArgumentFile { path } => {
-                if !paths.contains(path.as_str()) {
+                if !paths.contains(&orbit_bundle_format::portable_path_identity(path)) {
                     return Err(LauncherError::InvalidLock(format!(
                         "entrypoint file '{path}' is not present in the artifact inventory"
                     )));
@@ -132,7 +132,7 @@ impl LauncherLock {
             }
             LockedEntrypoint::Classpath { classpath, .. } => {
                 for entry in classpath {
-                    if !paths.contains(entry.as_str()) {
+                    if !paths.contains(&orbit_bundle_format::portable_path_identity(entry)) {
                         return Err(LauncherError::InvalidLock(format!(
                             "classpath entry '{entry}' is not present in the artifact inventory"
                         )));
@@ -821,5 +821,18 @@ mod tests {
         let asset_index = mismatched.minecraft.asset_index.as_mut().unwrap();
         asset_index.runtime_name = "0".repeat(40);
         assert!(mismatched.validate().is_err());
+    }
+
+    #[test]
+    fn entrypoint_inventory_lookup_uses_the_portable_path_identity() {
+        let mut lock = client_lock();
+        let artifact = lock
+            .artifacts
+            .iter_mut()
+            .find(|artifact| artifact.path.ends_with("minecraft.jar"))
+            .unwrap();
+        artifact.path = "instances/client/Minecraft.jar".to_string();
+
+        lock.validate().unwrap();
     }
 }
