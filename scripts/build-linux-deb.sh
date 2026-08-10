@@ -45,6 +45,29 @@ for package in orbit-core orbit-launcher orbit-launcher-core orbit-gui; do
 	fi
 done
 
+python3 - "$version" <<'PY'
+import sys
+import tomllib
+
+version = sys.argv[1]
+with open("orbit-gui/Cargo.toml", "rb") as manifest:
+    configured = tomllib.load(manifest)["package"]["metadata"]["deb"]["depends"]
+
+dependencies = {dependency.strip() for dependency in configured.split(",")}
+expected = {
+    f"orbit (= {version}-1)",
+    f"orbit-launcher (= {version}-1)",
+}
+missing = sorted(expected - dependencies)
+if missing:
+    print(
+        "orbit-gui Debian metadata is missing exact suite dependencies: "
+        + ", ".join(missing),
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+PY
+
 package_assets=(
 	"README.md"
 	"docs/orbit-cli-commands.md"
@@ -126,7 +149,8 @@ for package in "${packages[@]}"; do
 		}
 	fi
 	if [[ "$package" == "orbit" ]]; then
-		dpkg-deb --contents "$deb" | grep -F "./usr/lib/orbit/orbit-runtime-agent.jar" >/dev/null || {
+		package_contents="$(dpkg-deb --contents "$deb")"
+		grep -Fq "./usr/lib/orbit/orbit-runtime-agent.jar" <<<"$package_contents" || {
 			echo "orbit package must contain the Orbit Runtime Agent" >&2
 			exit 1
 		}

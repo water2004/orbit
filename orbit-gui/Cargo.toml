@@ -16,7 +16,7 @@ extended-description = """\
 Orbit GUI is the native desktop shell for the Orbit mod package manager and \
 Orbit Launcher. It delegates all domain operations to the two command-line \
 programs through their machine-readable protocols."""
-depends = "orbit (= 0.3.0-1), orbit-launcher (= 0.3.0-1), $auto"
+depends = "orbit (= 0.4.0-1), orbit-launcher (= 0.4.0-1), $auto"
 section = "games"
 priority = "optional"
 assets = [

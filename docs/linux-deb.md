@@ -21,15 +21,15 @@ deb 没有 MSI 安装向导那种交互式功能树，因此不能用一个包�
 
 ```bash
 # 只管理模组
-sudo apt install ./orbit_0.3.0-1_amd64.deb
+sudo apt install ./orbit_0.4.0-1_amd64.deb
 
 # 无图形服务端；需要模组管理时可同时传入 orbit deb
-sudo apt install ./orbit-launcher_0.3.0-1_amd64.deb
+sudo apt install ./orbit-launcher_0.4.0-1_amd64.deb
 
 # 桌面完整套件。GitHub Release 不是 apt 仓库，所以一次传入三个本地文件。
-sudo apt install ./orbit_0.3.0-1_amd64.deb \
-  ./orbit-launcher_0.3.0-1_amd64.deb \
-  ./orbit-gui_0.3.0-1_amd64.deb
+sudo apt install ./orbit_0.4.0-1_amd64.deb \
+  ./orbit-launcher_0.4.0-1_amd64.deb \
+  ./orbit-gui_0.4.0-1_amd64.deb
 ```
 
 卸载：
