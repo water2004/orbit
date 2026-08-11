@@ -516,6 +516,10 @@ mod tests {
             "Choose JAR",
             "No compatible candidate",
             "Excluded by dependencies",
+            "Files & data",
+            "Managed artifact",
+            "Runtime-owned files and directories",
+            "No runtime-owned data recorded",
         ] {
             assert_ne!(
                 text_for(LanguageMode::SimplifiedChinese, key),

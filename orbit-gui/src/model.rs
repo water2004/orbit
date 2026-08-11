@@ -244,6 +244,35 @@ pub struct PackageList {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+pub struct PackageOwnership {
+    pub mod_id: String,
+    pub artifacts: Vec<OwnedPackageArtifact>,
+    pub data: Vec<OwnedPathRoot>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct OwnedPackageArtifact {
+    pub path: String,
+    pub scope: String,
+    pub present: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct OwnedPathRoot {
+    pub path: String,
+    pub scope: String,
+    pub kind: String,
+    #[serde(default)]
+    pub preserved: Vec<OwnershipPath>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct OwnershipPath {
+    pub path: String,
+    pub scope: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
 pub struct PackageVersions {
     pub package: String,
     pub string: String,
@@ -508,6 +537,9 @@ pub enum Intent {
     LauncherInstanceDetail,
     Packages,
     PackageVersions {
+        package: String,
+    },
+    PackageOwnership {
         package: String,
     },
     Search,

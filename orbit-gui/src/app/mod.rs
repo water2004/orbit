@@ -153,6 +153,7 @@ pub(super) struct PackageEditor {
 pub(super) enum PackageEditorSection {
     Numeric,
     String,
+    Ownership,
     Settings,
 }
 
@@ -429,6 +430,7 @@ pub struct OrbitApp {
     pub(super) instance_detail: Option<RuntimeInstanceDetail>,
     pub(super) packages: Vec<InstalledPackage>,
     pub(super) package_versions: Option<PackageVersions>,
+    pub(super) package_ownership: Option<PackageOwnership>,
     pub(super) mod_view: usize,
     pub(super) search_results: Vec<SearchResult>,
     pub(super) search_truncated: bool,
@@ -543,6 +545,7 @@ impl OrbitApp {
             instance_detail: None,
             packages: Vec::new(),
             package_versions: None,
+            package_ownership: None,
             mod_view: 0,
             search_results: Vec::new(),
             search_truncated: false,

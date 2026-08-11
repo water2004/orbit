@@ -166,6 +166,10 @@ CLI 的同一条顺序规则，但不执行匹配或求解。GUI 只把这些动
 进程，由 `data_deletion` interaction 展示运行时观测到的准确文件/目录树及逻辑包；GUI 不先
 弹一层泛化确认，也不显示配置名称猜测。目录树条目还要列出其中将保留的其它当前所有者
 节点。用户确认后仍由 Orbit 先清理 JAR/TOML/lock，再按递归所有权计划删除数据。
+管理面板在打开时并行请求 `orbit versions` 和只读的 `orbit ownership`，并在独立的
+“文件与数据”工作区展示 lock 选中的实际顶层 JAR、文件是否存在、Agent 观测到的独占
+文件/递归目录树及其它包的精确排除根。GUI 只消费 CLI 的 schema 2 结果，不读
+`.orbit/runtime-data` 和 JAR，不枚举压缩树内的所有文件，也不实现第二套所有权计算。
 GUI 不复制 CLI 的项目详情报告；Discover 只提供搜索所需的名称、摘要、
 来源、兼容标签和直接添加动作，需要完整项目数据时使用 `orbit info`。
 
@@ -215,7 +219,7 @@ GUI 只集成有稳定桌面领域语义的命令，不能按“每个 subcomman
 
 | 领域 | GUI 中的 CLI 能力 | 有意不重复的接口 |
 | --- | --- | --- |
-| 模组 | init、list、search/add（GUI 用默认勾选项决定是否把推荐的完整 `--string` 约束传给 add，并提供 env/optional）、versions、constraint、env、enable/disable、remote、remove/purge、sync、fix、install、outdated/upgrade、import/export、migrate check/export、audit、cache、instances register 与 config | CLI 的其它原始 add version 字符串由安装后的可视化版本策略编辑器替代；`info` 的长文本详情由 Discover 摘要替代；Orbit 的实例注册由 init/迁移自动同步，不再提供一套与 Launcher 并列的注册表页面；install 的 group/target 策略要等 TOML group 编辑器提供完整模型后再加入 |
+| 模组 | init、list、search/add（GUI 用默认勾选项决定是否把推荐的完整 `--string` 约束传给 add，并提供 env/optional）、versions/ownership、constraint、env、enable/disable、remote、remove/purge、sync、fix、install、outdated/upgrade、import/export、migrate check/export、audit、cache、instances register 与 config | CLI 的其它原始 add version 字符串由安装后的可视化版本策略编辑器替代；`info` 的长文本详情由 Discover 摘要替代；Orbit 的实例注册由 init/迁移自动同步，不再提供一套与 Launcher 并列的注册表页面；install 的 group/target 策略要等 TOML group 编辑器提供完整模型后再加入 |
 | 运行时 | install/new、instance list/show/import/rename/remove/default、Loader configure/install、Minecraft/Loader/Java catalogs、Java 管理、Minecraft directory/move；客户端/服务端启动通过 `orbit launch [--server]` 单向调用 Launcher | 未安装的 `instance create` 中间态、launch/server dry-run、前台 server run 与隐藏 supervisor 属于 CLI/自动化接口；未同时安装 Orbit 与 Launcher 时数据感知启动明确禁用 |
 | 账户与服务端 | login/list/refresh/select/clear/logout、Yggdrasil provider、EULA、start/stop/status/command | account show 已由账户卡片覆盖；秘密、EULA 与 token 不由 GUI 另存 |
 | 配置与审计 | 两套 typed config list/set/unset、audit min-risk/mod/report | config path/get 已包含在设置模型中；audit fail-on-risk 只用于 CI 退出码 |

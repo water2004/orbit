@@ -1085,6 +1085,7 @@ fn render_package_editor(app: &OrbitApp, cx: &mut Context<OrbitApp>) -> impl Int
         PackageEditorSection::String => {
             render_string_policy(app, app.package_versions.as_ref(), cx)
         }
+        PackageEditorSection::Ownership => render_package_ownership(app, cx),
         PackageEditorSection::Settings => render_package_settings(app, cx),
     };
     let tabs = [
@@ -1095,6 +1096,10 @@ fn render_package_editor(app: &OrbitApp, cx: &mut Context<OrbitApp>) -> impl Int
         (
             PackageEditorSection::String,
             tr!("String filter").into_owned(),
+        ),
+        (
+            PackageEditorSection::Ownership,
+            tr!("Files & data").into_owned(),
         ),
         (
             PackageEditorSection::Settings,
@@ -1116,8 +1121,11 @@ fn render_package_editor(app: &OrbitApp, cx: &mut Context<OrbitApp>) -> impl Int
                 })),
         );
     }
-    let policy_footer = (editor.section != PackageEditorSection::Settings)
-        .then(|| render_package_policy_footer(app, &policy_package, cx));
+    let policy_footer = matches!(
+        editor.section,
+        PackageEditorSection::Numeric | PackageEditorSection::String
+    )
+    .then(|| render_package_policy_footer(app, &policy_package, cx));
 
     ui::modal_backdrop(
         ui::modal(
@@ -1164,6 +1172,200 @@ fn render_package_editor(app: &OrbitApp, cx: &mut Context<OrbitApp>) -> impl Int
         ),
         cx,
     )
+}
+
+fn render_package_ownership(app: &OrbitApp, cx: &mut Context<OrbitApp>) -> AnyElement {
+    let package = app
+        .package_editor
+        .as_ref()
+        .expect("checked")
+        .package
+        .mod_id
+        .clone();
+    let Some(ownership) = app
+        .package_ownership
+        .as_ref()
+        .filter(|ownership| ownership.mod_id == package)
+    else {
+        return ui::compact_card(cx)
+            .child(
+                h_flex()
+                    .gap_2()
+                    .items_center()
+                    .child(Icon::new(OrbitIcon::Activity))
+                    .child(tr!("Loading owned files and directories…").into_owned()),
+            )
+            .into_any_element();
+    };
+
+    let mut artifacts = v_flex().gap_2();
+    for (index, artifact) in ownership.artifacts.iter().enumerate() {
+        artifacts = artifacts.child(
+            ui::compact_card(cx).child(
+                h_flex()
+                    .min_w_0()
+                    .gap_3()
+                    .items_center()
+                    .child(ui::icon_tile(OrbitIcon::Runtime, cx))
+                    .child(
+                        v_flex()
+                            .min_w_0()
+                            .flex_1()
+                            .gap_1()
+                            .child(div().text_sm().font_semibold().child(artifact.path.clone()))
+                            .child(
+                                h_flex()
+                                    .gap_2()
+                                    .child(ui::neutral_pill(tr!("JAR file").into_owned(), cx))
+                                    .child(ui::neutral_pill(
+                                        ownership_scope_label(&artifact.scope),
+                                        cx,
+                                    )),
+                            ),
+                    )
+                    .child(ui::pill(
+                        if artifact.present {
+                            tr!("File exists").into_owned()
+                        } else {
+                            tr!("File is missing").into_owned()
+                        },
+                        if artifact.present {
+                            cx.theme().success.opacity(0.13)
+                        } else {
+                            cx.theme().danger.opacity(0.13)
+                        },
+                        if artifact.present {
+                            cx.theme().success
+                        } else {
+                            cx.theme().danger
+                        },
+                    ))
+                    .id(("owned-artifact", index)),
+            ),
+        );
+    }
+
+    let mut data = v_flex().gap_2();
+    if ownership.data.is_empty() {
+        data = data.child(
+            ui::compact_card(cx).child(
+                v_flex()
+                    .gap_1()
+                    .child(
+                        div()
+                            .text_sm()
+                            .font_semibold()
+                            .child(tr!("No runtime-owned data recorded").into_owned()),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(tr!("Launch this installation through Orbit to observe future file writes.").into_owned()),
+                    ),
+            ),
+        );
+    } else {
+        for (index, entry) in ownership.data.iter().enumerate() {
+            let display_path = owned_display_path(&entry.path, &entry.kind);
+            let mut card = ui::compact_card(cx).child(
+                h_flex()
+                    .min_w_0()
+                    .gap_3()
+                    .items_center()
+                    .child(ui::icon_tile(
+                        if entry.kind == "tree" {
+                            OrbitIcon::Folder
+                        } else {
+                            OrbitIcon::Runtime
+                        },
+                        cx,
+                    ))
+                    .child(
+                        v_flex()
+                            .min_w_0()
+                            .flex_1()
+                            .gap_1()
+                            .child(div().text_sm().font_semibold().child(display_path))
+                            .child(
+                                h_flex()
+                                    .gap_2()
+                                    .child(ui::neutral_pill(
+                                        if entry.kind == "tree" {
+                                            tr!("Directory tree").into_owned()
+                                        } else {
+                                            tr!("File").into_owned()
+                                        },
+                                        cx,
+                                    ))
+                                    .child(ui::neutral_pill(
+                                        ownership_scope_label(&entry.scope),
+                                        cx,
+                                    )),
+                            ),
+                    ),
+            );
+            if !entry.preserved.is_empty() {
+                card = card.child(
+                    v_flex()
+                        .gap_1()
+                        .pl_3()
+                        .border_l_2()
+                        .border_color(cx.theme().warning.opacity(0.45))
+                        .child(
+                            div()
+                                .text_xs()
+                                .font_medium()
+                                .child(tr!("Excluded paths owned by other packages").into_owned()),
+                        )
+                        .children(entry.preserved.iter().map(|preserved| {
+                            div()
+                                .text_xs()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(format!(
+                                    "{} · {}",
+                                    ownership_scope_label(&preserved.scope),
+                                    preserved.path
+                                ))
+                        })),
+                );
+            }
+            data = data.child(card.id(("owned-data", index)));
+        }
+    }
+
+    v_flex()
+        .gap_5()
+        .pb_1()
+        .child(ui::section_title(
+            tr!("Managed artifact").into_owned(),
+            tr!("The physical JAR selected by orbit.lock").into_owned(),
+            cx,
+        ))
+        .child(artifacts)
+        .child(ui::section_title(
+            tr!("Runtime-owned files and directories").into_owned(),
+            tr!("Directory trees are compressed; /** includes every descendant except the paths shown below").into_owned(),
+            cx,
+        ))
+        .child(data)
+        .into_any_element()
+}
+
+fn ownership_scope_label(scope: &str) -> String {
+    match scope {
+        "instance" => tr!("Instance").into_owned(),
+        "external" => tr!("External").into_owned(),
+        other => other.to_string(),
+    }
+}
+
+fn owned_display_path(path: &str, kind: &str) -> String {
+    if kind == "tree" {
+        format!("{path}/**")
+    } else {
+        path.to_string()
+    }
 }
 
 fn render_package_settings(app: &OrbitApp, cx: &mut Context<OrbitApp>) -> AnyElement {
@@ -2317,6 +2519,18 @@ mod interaction_tests {
         assert_eq!(
             single_line_summary("Operation failed:\n dependency conflict\r\n user cancelled"),
             "Operation failed: dependency conflict user cancelled"
+        );
+    }
+
+    #[test]
+    fn ownership_tree_paths_are_visibly_recursive() {
+        assert_eq!(
+            owned_display_path("bluemap/web/maps", "tree"),
+            "bluemap/web/maps/**"
+        );
+        assert_eq!(
+            owned_display_path("config/sodium-options.json", "file"),
+            "config/sodium-options.json"
         );
     }
 }

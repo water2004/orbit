@@ -1,6 +1,6 @@
 # Orbit 实现状态
 
-> 更新日期：2026-08-09。本文区分“正确规范曾未被代码执行”和“文档本身已经过时”。
+> 更新日期：2026-08-11。本文区分“正确规范曾未被代码执行”和“文档本身已经过时”。
 
 ## 1. 当前结论
 
@@ -22,7 +22,7 @@
 | 多远端包模型 | ✅ | 每个受管包非空 `remotes`；全部来源共同发现，完全相同字节跨 provider 合并 |
 | 完整 TOML 包集合 | ✅ | 所有选中顶层逻辑包均写入 `[packages]`，无根/传递分类；lock 只记录精确事实 |
 | 包启用状态 | ✅ | `enable/disable` 原子切换 `.jar` / `.jar.disabled` 并同步 TOML/lock；sync 将两种后缀都视为受管包并如实对账 |
-| 运行时数据归属与 purge | ✅ | `orbit launch` 单向包装 Launcher 并注入 Runtime Agent；启动前移除账本中已不存在的显式节点；精确 code-source 哈希把顶层/嵌套 JAR 归入逻辑包，只观测变更不观测读取；文件归最后编辑者，无主目录由首个写入包认领，目录默认值按实际文件多数动态重压缩；purge 准确确认后先收敛 JAR/TOML/lock，再应用同一计划；无文件名、调用栈或静态兜底 |
+| 运行时数据归属与 purge | ✅ | `orbit launch` 单向包装 Launcher 并注入 Runtime Agent；启动前移除账本中已不存在的显式节点；精确 code-source 哈希把顶层/嵌套 JAR 归入逻辑包，只观测变更不观测读取；文件归最后编辑者，无主目录由首个写入包认领，目录默认值按实际文件多数动态重压缩；`ownership` 只读显示实际顶层 JAR、压缩数据树和排除根，不启动冷路径递归扫描；purge 准确确认后先收敛 JAR/TOML/lock，再应用同一计划；无文件名、调用栈或静态兜底 |
 | 包版本管理 | ✅ | `versions` 联网下载并按 JAR 声明版本排序；数字核心范围与完整字符串集合规则由 `constraint set` 以 Pareto 极小事务立即应用；GUI 用边界控件和交/并/单项取反/整体取补操作表复用同一 CLI |
 | 内容候选身份 | ✅ | 本地 SHA-512 作为内部候选主键；同版本不同内容保持独立，CLI 只显示来源与依赖差异 |
 | PubGrub fork 远端 | ✅ | 功能分支已发布，Orbit 固定到完整 commit SHA |
@@ -40,13 +40,13 @@
 | Launcher 安装事务 | ✅ | OS 独占文件锁串行化实例写入；journal 支持崩溃后自动安全回滚，并验证路径、文件集合与复用工件 |
 | 组合包 / mrpack | ✅ | `.orbitbundle` 用共享清单、owner namespace、size/SHA-256 inventory 容纳可选投影，并保证每个文件的 Launcher/Orbit 所有权互斥；GUI 迁移编排 Orbit export + Launcher `export --base` 得到一个包。Launcher 恢复设置/世界，Orbit 恢复模组/数据；EULA/凭据不迁移。mrpack 严格使用官方 index、依赖、env 与 override 层 |
 | 长事务进度 | ✅ | 包操作与 audit 均使用 core 强类型事件；版本库批量检查显示刷新/复用与动态 project 总量，去重候选/审计工件精确计数，求解工作总量随实际 run/probe 动态增长 |
-| JSON / 自动化输出 | ✅ | 全局 `--output-format text\|json` 与 `--progress-format none\|ndjson`；`export --format orbit\|mrpack` 只选择包格式，`--content` 选择数据范围；JSON 结果 + NDJSON 进度/交互 + stdin 响应 + 结构化错误与稳定错误码共用 schema 2；协议严格 UTF-8，字段/枚举码不随语言变化；view-model 层隔离哈希/文件名/密钥，并在现有 search/info 契约提供官方 icon/link/gallery 展示数据 |
+| JSON / 自动化输出 | ✅ | 全局 `--output-format text\|json` 与 `--progress-format none\|ndjson`；`export --format orbit\|mrpack` 只选择包格式，`--content` 选择数据范围；JSON 结果 + NDJSON 进度/交互 + stdin 响应 + 结构化错误与稳定错误码共用 schema 2；协议严格 UTF-8，字段/枚举码不随语言变化；view-model 层隔离哈希、密钥和无意义的候选文件名，仅 `ownership` 按领域语义返回当前受管顶层 JAR 路径；search/info 契约提供官方 icon/link/gallery 展示数据 |
 | 全局配置命令 | ✅ | `config path/list/get/set/unset`；强类型校验、单字段原子更新、注释保留、密钥脱敏、环境覆盖不回写；网络/并发/认证/cache 进入共享服务，语言/颜色/进度进入 CLI 展示边界 |
 | 受管包环境过滤 | ✅ | TOML `env` 可选；缺失时跟随 lock/JAR 声明；`orbit env ... auto` 可设置过滤或恢复自动 |
 | Loader JSON 容错 | ✅ | Fabric-compatible 字符串控制字符；仅限 JAR 内 loader/Mixin/refmap，其他 JSON 保持严格 |
 | 字节码运行时符号对齐 | ✅ | Fabric/Quilt 按实际 Tiny/identity 能力选择 official 或投影，不复制版本边界；Forge/NeoForge 验证 Loader runtime game；未对齐时在 finding 前停止 |
 | i18n | ✅ | `orbit`、`orbit-launcher` 与 GUI 共用 `system`（默认）/`en`/`zh-CN` 语言模型；CLI help、文本结果、进度、询问和结构化错误均在展示边界翻译，机器字段保持稳定 |
-| 原生 GUI | ✅ | GPUI + gpui-component 原生进程薄壳；统一 SVG/EXE 品牌标志、领域化侧栏图标、紧凑任务条、Activity 抽屉、连续触控板滚动、语言/主题/强调色；Runtime 用同一组合包完成先导出再创建的迁移，并提供 Orbit 数据范围与 mrpack 导入导出；GUI 只编排 CLI，不解析包、直读业务 TOML 或实现第二条路径 |
+| 原生 GUI | ✅ | GPUI + gpui-component 原生进程薄壳；统一 SVG/EXE 品牌标志、领域化侧栏图标、紧凑任务条、Activity 抽屉、连续触控板滚动、语言/主题/强调色；Runtime 用同一组合包完成先导出再创建的迁移，并提供 Orbit 数据范围与 mrpack 导入导出；模组管理以独立“文件与数据”工作区消费 `ownership` 机器结果；GUI 只编排 CLI，不解析包、直读业务 TOML/归属账本或实现第二条路径 |
 
 ## 2. 保留的正确规范
 
@@ -111,7 +111,7 @@
 | `audit` | 共享版本范围只选择一次 AuditPolicy；同一个 analyze 流水线再按实际 Loader ABI 验证并分派 ModLauncher ITransformer 或 NeoForge ClassProcessor，随后进入共享 namespace/Mixin/转换效果与冲突流水线；unary/pairwise 分离 + schema 5 JSON/显式完整 report |
 | `list` / `info` | 展示包信息、逻辑依赖和 bundled；非树形 list 与 info 均使用自适应表格 |
 | `export` / `import` | Orbit archive 与 Modrinth pack |
-| `launch` / `purge` | launch 校验 Orbit/Launcher/Agent 后单向联合启动并记录运行时归属；purge 映射 lock 中实际 JAR 哈希，专用确认后同步移除包状态与独占数据 |
+| `launch` / `ownership` / `purge` | launch 校验 Orbit/Launcher/Agent 后单向联合启动并记录运行时归属；ownership 只读展示 lock 中实际顶层 JAR 和压缩归属树；purge 映射实际 JAR 哈希，专用确认后同步移除包状态与独占数据 |
 | `cache` / `instances` | cache 使用跨命令持久化 LRU 并在每次命令结束执行容量淘汰；instances list 输出自适应表格 |
 | `config` | path/list/get/set/unset；只操作持久化层，强类型校验并对密钥脱敏 |
 

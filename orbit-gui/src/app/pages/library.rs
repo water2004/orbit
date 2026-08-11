@@ -218,6 +218,7 @@ pub(super) fn render(
                                             .on_click(cx.listener(move |this, _, _, cx| {
                                                 this.package_editor = Some(PackageEditor::new(edit.clone()));
                                                 this.load_package_versions(&edit.mod_id);
+                                                this.load_package_ownership(&edit.mod_id);
                                                 cx.notify();
                                             })),
                                     )

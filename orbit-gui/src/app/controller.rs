@@ -142,6 +142,9 @@ impl OrbitApp {
     }
 
     pub(super) fn load_selected(&mut self, _window: &mut Window, _cx: &mut Context<Self>) {
+        self.package_editor = None;
+        self.package_versions = None;
+        self.package_ownership = None;
         let Some(instance) = self.selected_instance().cloned() else {
             self.instance_detail = None;
             self.packages.clear();
@@ -568,6 +571,17 @@ impl OrbitApp {
                             PackagePolicyDraft::from_policy(&versions.policy, &versions.string)?;
                     }
                     self.package_versions = Some(versions);
+                }
+            }
+            Intent::PackageOwnership { package } => {
+                let ownership: PackageOwnership = decode(result)?;
+                if ownership.mod_id == *package
+                    && self
+                        .package_editor
+                        .as_ref()
+                        .is_some_and(|editor| editor.package.mod_id == *package)
+                {
+                    self.package_ownership = Some(ownership);
                 }
             }
             Intent::Search => {
@@ -1219,6 +1233,21 @@ impl OrbitApp {
                     package: package.to_string(),
                 },
                 vec!["versions".into(), package.into()],
+                Some(root),
+                None,
+            );
+        }
+    }
+
+    pub(super) fn load_package_ownership(&mut self, package: &str) {
+        self.package_ownership = None;
+        if let Some(root) = self.selected_root() {
+            self.orbit_task_args(
+                &tr!("Loading files owned by %{package}", package = package),
+                Intent::PackageOwnership {
+                    package: package.to_string(),
+                },
+                vec!["ownership".into(), package.into()],
                 Some(root),
                 None,
             );
