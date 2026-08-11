@@ -183,6 +183,43 @@ orbit [--output-format text|json] [--progress-format none|ndjson] <command> ...
 写入全局展示缓存的本地路径；缺少或无效图标时省略。GUI 不打开 JAR，也不拿远端项目图标
 冒充已安装内容的图标。
 
+### `ownership`
+
+```json
+{
+  "schema_version": 2,
+  "command": "ownership",
+  "ok": true,
+  "result": {
+    "mod_id": "sodium",
+    "artifacts": [
+      {
+        "path": "mods/sodium-fabric-0.6.13+mc1.21.1.jar",
+        "scope": "instance",
+        "present": true
+      }
+    ],
+    "data": [
+      {
+        "path": "config/sodium-cache",
+        "scope": "instance",
+        "kind": "tree",
+        "preserved": [
+          {"path": "config/sodium-cache/foreign-index", "scope": "instance"}
+        ]
+      }
+    ]
+  }
+}
+```
+
+`artifacts` 是 lock 选中的顶层物理 JAR，`present` 只表示该精确路径当前是否存在。
+`data` 与 `purge.data_removed` 使用同一数据模型：`scope` 为 `instance` 或 `external`，
+`kind` 为 `file` 或 `tree`，`tree` 是递归所有权根，`preserved` 是树内归其它包所有的
+精确排除根。命令不返回内嵌 JAR 列表、内容哈希或递归展开的数据文件列表。
+查询是只读的，但会在内存中叠加已完整写入的待归并 Agent snapshot，使 UI 可看到最新事实；
+它不消费 snapshot，也不写 `ownership.toml`。
+
 ### `env`
 
 ```json

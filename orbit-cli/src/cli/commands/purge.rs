@@ -1,7 +1,7 @@
 use anyhow::Result;
 
 use super::{CliContext, confirm_data_purge};
-use crate::cli::output::{OutputFormat, PurgeOutput, data_purge_entry_view};
+use crate::cli::output::{OutputFormat, PurgeOutput, owned_path_view};
 
 pub async fn handle(package: String, ctx: &CliContext) -> Result<()> {
     let instance_dir = ctx.instance_dir()?;
@@ -36,7 +36,7 @@ pub async fn handle(package: String, ctx: &CliContext) -> Result<()> {
             &PurgeOutput {
                 mod_id: report.mod_id,
                 jar_deleted: report.jar_deleted,
-                data_removed: report.removed.iter().map(data_purge_entry_view).collect(),
+                data_removed: report.removed.iter().map(owned_path_view).collect(),
             },
         ),
     }

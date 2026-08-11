@@ -208,8 +208,8 @@ orbit launch
   → 每个 JVM 独占实例观察锁，只在 create/write/delete 边界聚合路径的最后编辑者
   → 以带 session/generation 的完整 v3 snapshot 原子写盘，后台重启不会覆盖上一 JVM
   → Orbit 合并到 .orbit/runtime-data/ownership.toml
-  → purge 用 lock 将 JAR SHA-256 映射回逻辑 mod_id
-  → 展示唯一准确范围并确认
+  → ownership / purge 用 lock 将 JAR SHA-256 映射回逻辑 mod_id
+  → ownership 只读展示；purge 展示唯一准确范围并确认
   → remove_from_instance 收敛 JAR/TOML/lock
   → 递归删除该包当前拥有的树，同时保留更深层的其它所有者节点
 ```
@@ -222,6 +222,14 @@ orbit launch
 每次实际启动在生成新 Agent context 之前使用 `symlink_metadata` 扫描账本的显式节点：
 只有 `NotFound` 会被判定为用户或外部工具已删除并从账本移除，损坏软链接本身仍是存在的物理节点。
 权限拒绝等其他 I/O 错误会中止启动且不重写账本，不得把“无法检查”当成“不存在”。
+
+Core 还向 CLI 提供同一归属投影的只读视图：顶层受管 JAR 来自 lock，数据范围来自当前
+账本与内存中叠加的完整待归并 snapshot。`ownership` 查询不消费 snapshot、不重写账本，
+也不启动 purge 冷路径的递归目录重平衡；`purge` 才在事务路径中持久化归并结果。
+两者共用同一个压缩树构建器，因此 GUI 看到的 `path/**` 与之后 purge 的逐文件
+归属语义不会分叉，即使 purge 在确认前把同一文件集重压缩成了不同树根。
+展示层只渲染树根和精确排除根，
+不为了 UI 递归枚举大型目录的所有后代。
 
 所有权采用“最后成功编辑者 + 递归目录默认值”模型：文件每次被另一个受管包成功修改后，
 所有权立即转给最后编辑者；同一包再写回时也会取回。包创建目录后，其后代继承目录默认所有者，

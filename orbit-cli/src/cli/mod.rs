@@ -143,6 +143,9 @@ pub enum Commands {
     /// Download, inspect, and list every remote candidate for a managed package.
     Versions { package: String },
 
+    /// Show the managed JAR and runtime-observed files or directory trees owned by a package.
+    Ownership { package: String },
+
     /// Remove a mod.
     Remove {
         /// Mod name.
@@ -465,6 +468,7 @@ impl CommandHandler for Commands {
             } => handle_env(package, environment, ctx),
             Commands::Constraint { command } => handle_constraint(command, ctx).await,
             Commands::Versions { package } => handle_versions(package, ctx).await,
+            Commands::Ownership { package } => handle_ownership(package, ctx),
             Commands::Remove { mod_name } => handle_remove(mod_name, ctx).await,
             Commands::Enable { package } => handle_activation(package, true, ctx),
             Commands::Disable { package } => handle_activation(package, false, ctx),
@@ -525,6 +529,7 @@ impl Commands {
             Self::Env { .. } => "env",
             Self::Constraint { .. } => "constraint",
             Self::Versions { .. } => "versions",
+            Self::Ownership { .. } => "ownership",
             Self::Remove { .. } => "remove",
             Self::Enable { .. } => "enable",
             Self::Disable { .. } => "disable",
@@ -897,6 +902,12 @@ mod tests {
         let versions = Cli::try_parse_from(["orbit", "versions", "sodium"]).unwrap();
         let Commands::Versions { package } = versions.command else {
             panic!("versions command was not parsed");
+        };
+        assert_eq!(package, "sodium");
+
+        let ownership = Cli::try_parse_from(["orbit", "ownership", "sodium"]).unwrap();
+        let Commands::Ownership { package } = ownership.command else {
+            panic!("ownership command was not parsed");
         };
         assert_eq!(package, "sodium");
 

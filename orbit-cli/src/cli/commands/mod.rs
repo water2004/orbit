@@ -16,6 +16,7 @@ pub mod launch;
 pub mod list;
 pub mod migrate;
 pub mod outdated;
+pub mod ownership;
 pub mod purge;
 pub mod remote;
 pub mod remove;
@@ -206,6 +207,7 @@ pub use install::handle as handle_install;
 pub use launch::handle as handle_launch;
 pub use list::handle as handle_list;
 pub use outdated::handle as handle_outdated;
+pub use ownership::handle as handle_ownership;
 pub use purge::handle as handle_purge;
 pub use remote::handle as handle_remote;
 pub use remove::handle as handle_remove;
@@ -545,7 +547,7 @@ pub fn confirm_data_purge(
         let entries = plan
             .entries
             .iter()
-            .map(crate::cli::output::data_purge_entry_view)
+            .map(crate::cli::output::owned_path_view)
             .collect::<Vec<_>>();
         let envelope = machine_interaction(
             ctx.command,

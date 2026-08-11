@@ -25,9 +25,10 @@ pub use view::{
     ConfigValueView, DiagnosticView, ErrorJson, ExportOutput, ImportOutput, InitOutput,
     InstanceDefaultOutput, InstanceRegisterOutput, InstanceRemoveOutput, InstancesOutput,
     JsonEnvelope, MigrationExportView, MigrationOutput, MigrationSummary, OutdatedOutput,
-    OutdatedSummary, PackageActivationOutput, PackageConstraintOutput, PackageEnvironmentOutput,
-    PackageVersionCandidateView, PackageVersionsOutput, PurgeOutput, RemoveOutput, SearchFilters,
-    SearchOutput, SearchResultView, data_purge_entry_view,
+    OutdatedSummary, OwnershipOutput, PackageActivationOutput, PackageConstraintOutput,
+    PackageEnvironmentOutput, PackageVersionCandidateView, PackageVersionsOutput, PurgeOutput,
+    RemoveOutput, SearchFilters, SearchOutput, SearchResultView, owned_artifact_view,
+    owned_path_view,
 };
 
 static COLOR_MODE: AtomicU8 = AtomicU8::new(0);
@@ -613,6 +614,87 @@ pub fn installed_packages_table(packages: &[ListedPackage]) -> String {
     table.to_string()
 }
 
+/// Render one package's physical artifact and compressed runtime ownership
+/// roots. Directory trees stay compressed so large generated datasets do not
+/// turn a read-only inspection into a recursive filesystem walk.
+pub fn package_ownership_table(report: &orbit_core::PackageOwnershipReport) -> String {
+    let mut table = output_table(["Category", "Kind", "Scope", "Path", "Details"]);
+    for artifact in &report.artifacts {
+        let (scope, path) = ownership_path_parts(&artifact.path);
+        table.add_row([
+            Cell::new(tr!("Package artifact")),
+            Cell::new(tr!("File")),
+            Cell::new(ownership_scope_text(scope)),
+            Cell::new(path),
+            Cell::new(if artifact.present {
+                tr!("File exists")
+            } else {
+                tr!("File is missing")
+            }),
+        ]);
+    }
+    for entry in &report.data {
+        let (scope, path) = ownership_path_parts(&entry.path);
+        let path = if entry.kind == orbit_core::OwnedDataKind::Tree {
+            format!("{path}/**")
+        } else {
+            path.to_string()
+        };
+        let details = if entry.preserved.is_empty() {
+            String::new()
+        } else {
+            format!(
+                "{}\n{}",
+                tr!("Excluded paths owned by other packages:"),
+                entry
+                    .preserved
+                    .iter()
+                    .map(|path| ownership_path_parts(path).1.to_string())
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            )
+        };
+        table.add_row([
+            Cell::new(tr!("Runtime data")),
+            Cell::new(if entry.kind == orbit_core::OwnedDataKind::Tree {
+                tr!("Directory tree")
+            } else {
+                tr!("File")
+            }),
+            Cell::new(ownership_scope_text(scope)),
+            Cell::new(path),
+            Cell::new(details),
+        ]);
+    }
+    let no_data = if report.data.is_empty() {
+        format!("\n{}", tr!("No runtime-owned data recorded"))
+    } else {
+        String::new()
+    };
+    format!(
+        "{}\n{table}{no_data}",
+        tr!(
+            "Owned files and directories for '%{package}':",
+            package = report.mod_id
+        )
+    )
+}
+
+fn ownership_path_parts(path: &orbit_core::OwnedDataPath) -> (&'static str, &str) {
+    match path {
+        orbit_core::OwnedDataPath::Instance { relative } => ("instance", relative),
+        orbit_core::OwnedDataPath::External { absolute } => ("external", absolute),
+    }
+}
+
+fn ownership_scope_text(scope: &str) -> std::borrow::Cow<'static, str> {
+    match scope {
+        "instance" => tr!("Instance"),
+        "external" => tr!("External"),
+        _ => std::borrow::Cow::Owned(scope.to_string()),
+    }
+}
+
 pub fn package_versions_table(output: &PackageVersionsOutput) -> String {
     let mut table = output_table(["", "Version", "Numeric", "Policy", "Sources", "Details"]);
     for candidate in &output.candidates {
@@ -832,6 +914,33 @@ mod tests {
         assert!(output.contains("sodium"));
         assert!(output.contains("upgrade"));
         assert!(!output.contains(".jar"));
+    }
+
+    #[test]
+    fn ownership_table_shows_the_actual_artifact_and_compressed_tree() {
+        let report = orbit_core::PackageOwnershipReport {
+            mod_id: "bluemap".to_string(),
+            artifacts: vec![orbit_core::OwnedPackageArtifact {
+                path: orbit_core::OwnedDataPath::Instance {
+                    relative: "mods/bluemap-5.10.jar".to_string(),
+                },
+                present: true,
+            }],
+            data: vec![orbit_core::OwnedPathRoot {
+                path: orbit_core::OwnedDataPath::Instance {
+                    relative: "bluemap/web/maps".to_string(),
+                },
+                kind: orbit_core::OwnedDataKind::Tree,
+                preserved: vec![orbit_core::OwnedDataPath::Instance {
+                    relative: "bluemap/web/maps/shared".to_string(),
+                }],
+            }],
+        };
+
+        let output = package_ownership_table(&report);
+        assert!(output.contains("mods/bluemap-5.10.jar"));
+        assert!(output.contains("bluemap/web/maps/**"));
+        assert!(output.contains("bluemap/web/maps/shared"));
     }
 
     #[test]

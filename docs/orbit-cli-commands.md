@@ -359,6 +359,24 @@ orbit remove <mod>
 迁移导出以规范化路径顺序同时锁定源和目标，因此不会形成双实例死锁。`install` 恢复多个
 lock 工件时同样是整体事务，后一个下载或校验失败会撤销此前已经写入的 JAR。
 
+### `orbit ownership`
+
+```text
+orbit ownership <package>
+orbit --output-format json ownership <package>
+```
+
+只读展示一个受管逻辑包当前的顶层 `mods/` JAR 以及 Runtime Agent 观测到的
+独占文件和递归目录树。JAR 使用 lock 记录的实际文件名，并报告物理文件是否存在；
+数据路径标明 `instance` / `external` 作用域，目录树用 `/**` 表示，同时列出树中
+属于其它包而必须保留的更具体节点。
+
+该命令与 `purge` 共用同一套归属投影，但不删除、不求解、不重写账本，也不消费尚未
+归并的完整 Agent snapshot或启动 purge 冷路径的目录重平衡。递归树始终保持压缩表示，
+因此查看 BlueMap 等大数据目录时
+不会为了 UI 枚举出每个文件。尚未经 `orbit launch` 观测到写入时，仅显示受管 JAR
+并明确报告没有已观测数据，不根据文件名猜测。
+
 ### `orbit purge`
 
 ```text
@@ -678,7 +696,7 @@ orbit cache clean
 - 全部命令 handler 已接入 core，不再是 `exit(2)` 占位；
 - Forge、NeoForge、Quilt 检测和 JAR 解析；
 - `file:` 添加、精确 install、target/group/optional；
-- list target、sync/fix/migrate/purge、导入导出、实例与 cache；
+- list target、ownership、sync/fix/migrate/purge、导入导出、实例与 cache；
 - 默认实例的修改型命令安全阻断；
 - 非交互 init 不猜 loader/版本，重复 init 不覆盖项目；
 - 全局 `--output-format text|json` 与 `--progress-format none|ndjson`；JSON 信封 + NDJSON 进度 +

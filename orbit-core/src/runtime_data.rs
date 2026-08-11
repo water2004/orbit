@@ -105,8 +105,8 @@ impl DataOwnershipLedger {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
-pub struct DataPurgeEntry {
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct OwnedPathRoot {
     pub path: OwnedDataPath,
     pub kind: OwnedDataKind,
     /// More specific ownership roots retained below a tree.
@@ -114,7 +114,7 @@ pub struct DataPurgeEntry {
     pub preserved: Vec<OwnedDataPath>,
 }
 
-impl DataPurgeEntry {
+impl OwnedPathRoot {
     pub fn display_path(&self) -> String {
         let suffix = matches!(self.kind, OwnedDataKind::Tree)
             .then_some("/**")
@@ -128,14 +128,27 @@ pub struct DataPurgePlan {
     pub mod_id: String,
     #[serde(skip_serializing)]
     artifact_sha256: String,
-    pub entries: Vec<DataPurgeEntry>,
+    pub entries: Vec<OwnedPathRoot>,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct DataPurgeReport {
     pub mod_id: String,
     pub jar_deleted: bool,
-    pub removed: Vec<DataPurgeEntry>,
+    pub removed: Vec<OwnedPathRoot>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct OwnedPackageArtifact {
+    pub path: OwnedDataPath,
+    pub present: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PackageOwnershipReport {
+    pub mod_id: String,
+    pub artifacts: Vec<OwnedPackageArtifact>,
+    pub data: Vec<OwnedPathRoot>,
 }
 
 /// Allocate a unique session snapshot path for a Java launch.
@@ -173,7 +186,7 @@ fn nearest_ancestor<'a>(
         .max_by_key(|entry| path_depth(&entry.path))
 }
 
-fn build_purge_entries(ledger: &DataOwnershipLedger, owner: &str) -> Vec<DataPurgeEntry> {
+fn build_owned_roots(ledger: &DataOwnershipLedger, owner: &str) -> Vec<OwnedPathRoot> {
     let roots = ledger
         .entries
         .iter()
@@ -203,7 +216,7 @@ fn build_purge_entries(ledger: &DataOwnershipLedger, owner: &str) -> Vec<DataPur
                 .map(|entry| entry.path.clone())
                 .collect::<Vec<_>>();
             preserved.sort_by(|left, right| left.display().cmp(right.display()));
-            DataPurgeEntry {
+            OwnedPathRoot {
                 path: root.path.clone(),
                 kind: root.kind,
                 preserved,
@@ -272,10 +285,21 @@ pub fn merge_observation_sessions(instance_dir: &Path) -> Result<usize, OrbitErr
 pub(crate) fn prune_missing_ownership(instance_dir: &Path) -> Result<usize, OrbitError> {
     let root = validate_instance(instance_dir)?;
     let mut ledger = load_ledger(&root)?;
+    let (removed, changed) = prune_missing_entries(&root, &mut ledger)?;
+    if changed {
+        save_ledger(&root, &ledger)?;
+    }
+    Ok(removed)
+}
+
+fn prune_missing_entries(
+    root: &Path,
+    ledger: &mut DataOwnershipLedger,
+) -> Result<(usize, bool), OrbitError> {
     let mut retained = Vec::with_capacity(ledger.entries.len());
     let mut removed = 0;
     for entry in std::mem::take(&mut ledger.entries) {
-        let resolved = resolve_owned_path(&root, &entry.path)?;
+        let resolved = resolve_owned_path(root, &entry.path)?;
         match std::fs::symlink_metadata(&resolved) {
             Ok(_) => retained.push(entry),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => removed += 1,
@@ -283,7 +307,7 @@ pub(crate) fn prune_missing_ownership(instance_dir: &Path) -> Result<usize, Orbi
         }
     }
     ledger.entries = retained;
-    compact_ledger(&mut ledger);
+    compact_ledger(ledger);
     let active_trees = ledger
         .entries
         .iter()
@@ -294,10 +318,10 @@ pub(crate) fn prune_missing_ownership(instance_dir: &Path) -> Result<usize, Orbi
     ledger
         .rebalance_watermarks
         .retain(|path, _| active_trees.contains(path));
-    if removed != 0 || ledger.rebalance_watermarks.len() != previous_watermarks {
-        save_ledger(&root, &ledger)?;
-    }
-    Ok(removed)
+    Ok((
+        removed,
+        removed != 0 || ledger.rebalance_watermarks.len() != previous_watermarks,
+    ))
 }
 
 fn observation_snapshots(sessions: &Path) -> Result<Vec<PathBuf>, OrbitError> {
@@ -366,37 +390,96 @@ fn is_claimed_snapshot(path: &Path) -> bool {
         .is_some_and(|name| name.contains(".events.claimed-"))
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OwnershipLedgerMode {
+    Inspect,
+    DryRunPurge,
+    PersistentPurge,
+}
+
+fn current_ownership_ledger(
+    root: &Path,
+    mode: OwnershipLedgerMode,
+) -> Result<DataOwnershipLedger, OrbitError> {
+    if mode == OwnershipLedgerMode::PersistentPurge {
+        merge_observation_sessions(root)?;
+        prune_missing_ownership(root)?;
+        load_ledger(root)
+    } else {
+        let mut ledger = load_ledger(root)?;
+        let sessions = root.join(RUNTIME_DATA_DIRECTORY).join(SESSIONS_DIRECTORY);
+        let snapshots = observation_snapshots(&sessions)?;
+        let ownership_changed = merge_snapshots_into_ledger(root, &snapshots, &mut ledger)?;
+        compact_ledger(&mut ledger);
+        if ownership_changed && mode == OwnershipLedgerMode::DryRunPurge {
+            rebalance_ownership(root, &mut ledger)?;
+        }
+        prune_missing_entries(root, &mut ledger)?;
+        Ok(ledger)
+    }
+}
+
+fn locked_package_ownership(
+    root: &Path,
+    package: &str,
+    ledger: &DataOwnershipLedger,
+) -> Result<(crate::lockfile::PackageEntry, PackageOwnershipReport), OrbitError> {
+    let lock = Lockfile::open(root)?;
+    let entry = lock
+        .find_entry(package)
+        .cloned()
+        .ok_or_else(|| OrbitError::ModNotFound(package.to_string()))?;
+    let artifact_path = OwnedDataPath::Instance {
+        relative: format!("mods/{}", entry.filename),
+    };
+    let resolved_artifact = resolve_owned_path(root, &artifact_path)?;
+    let present = match std::fs::symlink_metadata(resolved_artifact) {
+        Ok(_) => true,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+        Err(error) => return Err(error.into()),
+    };
+    let mut data = build_owned_roots(ledger, &entry.sha256);
+    data.sort_by(|left, right| left.path.display().cmp(right.path.display()));
+    let report = PackageOwnershipReport {
+        mod_id: entry.mod_id.clone(),
+        artifacts: vec![OwnedPackageArtifact {
+            path: artifact_path,
+            present,
+        }],
+        data,
+    };
+    Ok((entry, report))
+}
+
+/// Inspect the physical package artifact and the compressed runtime-data
+/// ownership roots without consuming Agent sessions or rewriting the ledger.
+pub fn package_ownership(
+    instance_dir: &Path,
+    package: &str,
+) -> Result<PackageOwnershipReport, OrbitError> {
+    let root = validate_instance(instance_dir)?;
+    let ledger = current_ownership_ledger(&root, OwnershipLedgerMode::Inspect)?;
+    let (_, report) = locked_package_ownership(&root, package, &ledger)?;
+    Ok(report)
+}
+
 pub fn plan_data_purge(
     instance_dir: &Path,
     package: &str,
     dry_run: bool,
 ) -> Result<DataPurgePlan, OrbitError> {
     let root = validate_instance(instance_dir)?;
-    let ledger = if dry_run {
-        let mut ledger = load_ledger(&root)?;
-        let sessions = root.join(RUNTIME_DATA_DIRECTORY).join(SESSIONS_DIRECTORY);
-        let snapshots = observation_snapshots(&sessions)?;
-        let ownership_changed = merge_snapshots_into_ledger(&root, &snapshots, &mut ledger)?;
-        compact_ledger(&mut ledger);
-        if ownership_changed {
-            rebalance_ownership(&root, &mut ledger)?;
-        }
-        ledger
+    let mode = if dry_run {
+        OwnershipLedgerMode::DryRunPurge
     } else {
-        merge_observation_sessions(&root)?;
-        load_ledger(&root)?
+        OwnershipLedgerMode::PersistentPurge
     };
-    let lock = Lockfile::open(&root)?;
-    let entry = lock
-        .find_entry(package)
-        .ok_or_else(|| OrbitError::ModNotFound(package.to_string()))?;
-    let artifact_sha256 = entry.sha256.clone();
-    let mut entries = build_purge_entries(&ledger, &artifact_sha256);
-    entries.sort_by(|left, right| left.path.display().cmp(right.path.display()));
+    let ledger = current_ownership_ledger(&root, mode)?;
+    let (entry, report) = locked_package_ownership(&root, package, &ledger)?;
     Ok(DataPurgePlan {
         mod_id: entry.mod_id.clone(),
-        artifact_sha256,
-        entries,
+        artifact_sha256: entry.sha256,
+        entries: report.data,
     })
 }
 
@@ -1045,7 +1128,7 @@ fn path_contains(parent: &OwnedDataPath, child: &OwnedDataPath) -> bool {
     }
 }
 
-fn validate_plan_paths(instance_dir: &Path, entries: &[DataPurgeEntry]) -> Result<(), OrbitError> {
+fn validate_plan_paths(instance_dir: &Path, entries: &[OwnedPathRoot]) -> Result<(), OrbitError> {
     for entry in entries {
         let resolved = resolve_owned_path(instance_dir, &entry.path)?;
         if resolved == instance_dir {
@@ -1145,7 +1228,7 @@ fn remove_tree_preserving(path: &Path, preserved: &[PathBuf]) -> Result<(), std:
 fn remove_artifact_references(
     ledger: &mut DataOwnershipLedger,
     artifact_sha256: &str,
-    removed: &[DataPurgeEntry],
+    removed: &[OwnedPathRoot],
 ) {
     ledger.entries.retain_mut(|entry| {
         let was_removed = removed.iter().any(|item| {
@@ -1451,7 +1534,7 @@ mod tests {
             ),
             Some(nested_owner)
         );
-        let plan = build_purge_entries(&ledger, &owner);
+        let plan = build_owned_roots(&ledger, &owner);
         assert_eq!(plan.len(), 1);
         assert_eq!(
             plan[0].preserved,
@@ -1512,7 +1595,7 @@ mod tests {
             .find(|entry| entry.path == shared)
             .unwrap();
         assert_eq!(shared_entry.owner.as_deref(), Some(writer.as_str()));
-        let plan = build_purge_entries(&ledger, &owner);
+        let plan = build_owned_roots(&ledger, &owner);
         assert_eq!(plan.len(), 1);
         assert_eq!(plan[0].path, root);
         assert_eq!(plan[0].preserved, vec![shared]);
@@ -1626,7 +1709,7 @@ mod tests {
             30
         );
 
-        let majority_plan = build_purge_entries(&ledger, &majority);
+        let majority_plan = build_owned_roots(&ledger, &majority);
         assert_eq!(majority_plan.len(), 1);
         assert_eq!(majority_plan[0].path, owned_root);
         assert_eq!(majority_plan[0].preserved.len(), 30);
@@ -1808,6 +1891,28 @@ mod tests {
         )
         .unwrap();
 
+        let ownership = package_ownership(root, "example").unwrap();
+        assert_eq!(ownership.mod_id, "example");
+        assert_eq!(
+            ownership.artifacts,
+            vec![OwnedPackageArtifact {
+                path: OwnedDataPath::Instance {
+                    relative: "mods/example.jar".to_string(),
+                },
+                present: true,
+            }]
+        );
+        assert_eq!(
+            ownership.data,
+            vec![OwnedPathRoot {
+                path: OwnedDataPath::Instance {
+                    relative: "config/example".to_string(),
+                },
+                kind: OwnedDataKind::Tree,
+                preserved: Vec::new(),
+            }]
+        );
+
         let plan = plan_data_purge(root, "example", false).unwrap();
         assert_eq!(plan.entries.len(), 1);
         let report = apply_data_purge(root, &plan, false).unwrap();
@@ -1831,6 +1936,7 @@ mod tests {
             ),
         )
         .unwrap();
+        std::fs::create_dir_all(root.join("config/example/database")).unwrap();
         let session = observation_session_path(&root).unwrap();
         std::fs::write(
             &session,
@@ -1842,6 +1948,15 @@ mod tests {
             ),
         )
         .unwrap();
+
+        let ownership = package_ownership(&root, "example").unwrap();
+        assert_eq!(ownership.data.len(), 1);
+        assert_eq!(
+            ownership.data[0].display_path(),
+            "config/example/database/**"
+        );
+        assert!(session.exists());
+        assert!(!ledger_path(&root).exists());
 
         let plan = plan_data_purge(&root, "example", true).unwrap();
         assert_eq!(plan.entries.len(), 1);

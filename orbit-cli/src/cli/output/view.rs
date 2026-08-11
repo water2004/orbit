@@ -454,43 +454,66 @@ pub struct RemoveOutput {
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct DataPurgeEntryView {
+pub struct OwnedPathView {
     pub path: String,
     pub scope: &'static str,
     pub kind: orbit_core::OwnedDataKind,
-    pub preserved: Vec<DataPurgePathView>,
+    pub preserved: Vec<OwnershipPathView>,
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct DataPurgePathView {
+pub struct OwnershipPathView {
     pub path: String,
     pub scope: &'static str,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct OwnedArtifactView {
+    pub path: String,
+    pub scope: &'static str,
+    pub present: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct OwnershipOutput {
+    pub mod_id: String,
+    pub artifacts: Vec<OwnedArtifactView>,
+    pub data: Vec<OwnedPathView>,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct PurgeOutput {
     pub mod_id: String,
     pub jar_deleted: bool,
-    pub data_removed: Vec<DataPurgeEntryView>,
+    pub data_removed: Vec<OwnedPathView>,
 }
 
-pub fn data_purge_entry_view(entry: &orbit_core::DataPurgeEntry) -> DataPurgeEntryView {
-    let path_view = data_purge_path_view(&entry.path);
-    DataPurgeEntryView {
+pub fn owned_path_view(entry: &orbit_core::OwnedPathRoot) -> OwnedPathView {
+    let path_view = ownership_path_view(&entry.path);
+    OwnedPathView {
         path: path_view.path,
         scope: path_view.scope,
         kind: entry.kind,
-        preserved: entry.preserved.iter().map(data_purge_path_view).collect(),
+        preserved: entry.preserved.iter().map(ownership_path_view).collect(),
     }
 }
 
-fn data_purge_path_view(path: &orbit_core::OwnedDataPath) -> DataPurgePathView {
+pub fn owned_artifact_view(artifact: &orbit_core::OwnedPackageArtifact) -> OwnedArtifactView {
+    let path = ownership_path_view(&artifact.path);
+    OwnedArtifactView {
+        path: path.path,
+        scope: path.scope,
+        present: artifact.present,
+    }
+}
+
+fn ownership_path_view(path: &orbit_core::OwnedDataPath) -> OwnershipPathView {
     match path {
-        orbit_core::OwnedDataPath::Instance { relative } => DataPurgePathView {
+        orbit_core::OwnedDataPath::Instance { relative } => OwnershipPathView {
             path: relative.clone(),
             scope: "instance",
         },
-        orbit_core::OwnedDataPath::External { absolute } => DataPurgePathView {
+        orbit_core::OwnedDataPath::External { absolute } => OwnershipPathView {
             path: absolute.clone(),
             scope: "external",
         },
@@ -1019,6 +1042,39 @@ mod tests {
         assert!(value.get("root").is_none());
         assert!(value["configured_environment"].is_null());
         assert_eq!(value["environment"], "client");
+    }
+
+    #[test]
+    fn ownership_json_distinguishes_artifacts_trees_and_preserved_exclusions() {
+        let artifact = orbit_core::OwnedPackageArtifact {
+            path: orbit_core::OwnedDataPath::Instance {
+                relative: "mods/example.jar".into(),
+            },
+            present: true,
+        };
+        let data = orbit_core::OwnedPathRoot {
+            path: orbit_core::OwnedDataPath::Instance {
+                relative: "bluemap".into(),
+            },
+            kind: orbit_core::OwnedDataKind::Tree,
+            preserved: vec![orbit_core::OwnedDataPath::Instance {
+                relative: "bluemap/shared".into(),
+            }],
+        };
+        let view = OwnershipOutput {
+            mod_id: "example".into(),
+            artifacts: vec![owned_artifact_view(&artifact)],
+            data: vec![owned_path_view(&data)],
+        };
+
+        let json = serde_json::to_value(JsonEnvelope::new("ownership", &view)).unwrap();
+        assert_eq!(json["result"]["artifacts"][0]["path"], "mods/example.jar");
+        assert_eq!(json["result"]["artifacts"][0]["present"], true);
+        assert_eq!(json["result"]["data"][0]["kind"], "tree");
+        assert_eq!(
+            json["result"]["data"][0]["preserved"][0]["path"],
+            "bluemap/shared"
+        );
     }
 
     #[test]
