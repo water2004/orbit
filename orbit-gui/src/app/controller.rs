@@ -555,6 +555,22 @@ impl OrbitApp {
             }
             Intent::LauncherInstanceDetail => {
                 let detail: RuntimeInstanceDetail = decode(result)?;
+                let width = detail
+                    .client_resolution
+                    .as_ref()
+                    .map(|resolution| resolution.width.to_string())
+                    .unwrap_or_default();
+                let height = detail
+                    .client_resolution
+                    .as_ref()
+                    .map(|resolution| resolution.height.to_string())
+                    .unwrap_or_default();
+                self.inputs
+                    .client_resolution_width
+                    .update(cx, |input, cx| input.set_value(width, window, cx));
+                self.inputs
+                    .client_resolution_height
+                    .update(cx, |input, cx| input.set_value(height, window, cx));
                 self.instance_detail = Some(detail);
             }
             Intent::Packages => self.packages = decode::<PackageList>(result)?.packages,
@@ -1210,6 +1226,71 @@ impl OrbitApp {
         self.orbit_mutation(
             &tr!("Purging %{package}", package = package),
             vec!["purge".into(), package.into()],
+        );
+    }
+
+    pub(super) fn reset_package_data(&mut self, package: &str) {
+        self.orbit_mutation(
+            &tr!("Resetting %{package} data", package = package),
+            vec!["reset".into(), package.into()],
+        );
+    }
+
+    pub(super) fn set_client_resolution(&mut self, width: &str, height: &str) {
+        let Some(instance) = self.selected_instance().cloned() else {
+            self.warn(tr!("Select a client installation first").into_owned());
+            return;
+        };
+        if instance.kind != "client" {
+            self.warn(
+                tr!("Window resolution is available only for client installations").into_owned(),
+            );
+            return;
+        }
+        let Ok(width) = width.trim().parse::<u32>() else {
+            self.warn(tr!("Window width must be a positive integer").into_owned());
+            return;
+        };
+        let Ok(height) = height.trim().parse::<u32>() else {
+            self.warn(tr!("Window height must be a positive integer").into_owned());
+            return;
+        };
+        if width == 0 || height == 0 {
+            self.warn(tr!("Window dimensions must be positive").into_owned());
+            return;
+        }
+        self.launcher_task_args(
+            "Updating client window resolution",
+            Intent::LauncherInstanceDetail,
+            Some(instance.id),
+            vec![
+                "instance".into(),
+                "resolution".into(),
+                "set".into(),
+                width.to_string(),
+                height.to_string(),
+            ],
+            None,
+        );
+    }
+
+    pub(super) fn clear_client_resolution(&mut self) {
+        let Some(instance) = self.selected_instance().cloned() else {
+            self.warn(tr!("Select a client installation first").into_owned());
+            return;
+        };
+        if instance.kind != "client" {
+            self.warn(
+                tr!("Window resolution is available only for client installations").into_owned(),
+            );
+            return;
+        }
+        self.launcher_task(
+            "Clearing client window resolution",
+            Intent::LauncherInstanceDetail,
+            Some(instance.id),
+            ["instance", "resolution", "clear"],
+            None,
         );
     }
 

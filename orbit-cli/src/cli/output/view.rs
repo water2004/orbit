@@ -488,6 +488,13 @@ pub struct PurgeOutput {
     pub data_removed: Vec<OwnedPathView>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct ResetOutput {
+    pub mod_id: String,
+    pub data_removed: Vec<OwnedPathView>,
+    pub warnings: Vec<String>,
+}
+
 pub fn owned_path_view(entry: &orbit_core::OwnedPathRoot) -> OwnedPathView {
     let path_view = ownership_path_view(&entry.path);
     OwnedPathView {

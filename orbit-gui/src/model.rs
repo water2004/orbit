@@ -166,6 +166,13 @@ pub struct RuntimeInstanceDetail {
     pub desired: DesiredRuntime,
     pub installed: Option<InstalledRuntime>,
     pub selected_account_id: Option<String>,
+    pub client_resolution: Option<ClientResolution>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ClientResolution {
+    pub width: u32,
+    pub height: u32,
 }
 
 #[derive(Debug, Clone, Deserialize)]

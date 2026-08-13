@@ -369,6 +369,8 @@ pub(super) struct Inputs {
     pub runtime_name: Entity<InputState>,
     pub audit_filter: Entity<InputState>,
     pub minecraft_move_destination: Entity<InputState>,
+    pub client_resolution_width: Entity<InputState>,
+    pub client_resolution_height: Entity<InputState>,
 }
 
 impl Inputs {
@@ -416,6 +418,8 @@ impl Inputs {
                 cx,
                 tr!("New Minecraft directory").into_owned(),
             ),
+            client_resolution_width: input(window, cx, tr!("Width").into_owned()),
+            client_resolution_height: input(window, cx, tr!("Height").into_owned()),
         }
     }
 }

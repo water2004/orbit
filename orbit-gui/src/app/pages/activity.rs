@@ -508,6 +508,7 @@ fn render_interaction(app: &OrbitApp, cx: &mut Context<OrbitApp>) -> AnyElement 
 
 #[derive(Debug, Clone, Deserialize)]
 struct DataDeletionChoiceData {
+    operation: String,
     mod_id: String,
     entries: Vec<DataDeletionEntry>,
 }
@@ -542,14 +543,27 @@ fn render_data_deletion_interaction(
     let invalid = plan.is_none();
     let mut content = v_flex().w_full().min_w_0().gap_3();
     if let Some(plan) = plan {
+        let resetting = plan.operation == "reset";
         content = content
             .child(
                 h_flex()
                     .gap_2()
                     .child(ui::pill(
-                        tr!("Remove package").into_owned(),
-                        cx.theme().danger.opacity(0.14),
-                        cx.theme().danger,
+                        if resetting {
+                            tr!("Keep package").into_owned()
+                        } else {
+                            tr!("Remove package").into_owned()
+                        },
+                        if resetting {
+                            cx.theme().warning.opacity(0.14)
+                        } else {
+                            cx.theme().danger.opacity(0.14)
+                        },
+                        if resetting {
+                            cx.theme().warning
+                        } else {
+                            cx.theme().danger
+                        },
                     ))
                     .child(div().font_semibold().child(plan.mod_id)),
             )
@@ -1373,6 +1387,7 @@ fn render_package_settings(app: &OrbitApp, cx: &mut Context<OrbitApp>) -> AnyEle
     let package_id = editor.package.mod_id.clone();
     let remote_package = package_id.clone();
     let purge_package = package_id.clone();
+    let reset_package = package_id.clone();
     let remote_input = app.inputs.remote_locator.clone();
     let remote_read = remote_input.clone();
     let providers = ["file", "modrinth", "curseforge"];
@@ -1485,6 +1500,26 @@ fn render_package_settings(app: &OrbitApp, cx: &mut Context<OrbitApp>) -> AnyEle
                 }))),
         )
         .child(ui::divider(cx))
+        .child(
+            h_flex()
+                .justify_between()
+                .gap_3()
+                .child(
+                    v_flex()
+                        .gap_1()
+                        .child(div().text_sm().font_semibold().child(tr!("Reset package data").into_owned()))
+                        .child(div().text_xs().text_color(cx.theme().muted_foreground).child(tr!("Delete runtime-observed data and configuration while keeping the package installed.").into_owned())),
+                )
+                .child(
+                    Button::new("package-reset-data")
+                        .label(tr!("Reset data…").into_owned())
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.package_editor = None;
+                            this.reset_package_data(&reset_package);
+                            cx.notify();
+                        })),
+                ),
+        )
         .child(
             h_flex()
                 .justify_between()

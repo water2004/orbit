@@ -20,6 +20,7 @@ pub mod ownership;
 pub mod purge;
 pub mod remote;
 pub mod remove;
+pub mod reset;
 pub mod search;
 pub mod sync;
 pub mod upgrade;
@@ -211,6 +212,7 @@ pub use ownership::handle as handle_ownership;
 pub use purge::handle as handle_purge;
 pub use remote::handle as handle_remote;
 pub use remove::handle as handle_remove;
+pub use reset::handle as handle_reset;
 pub use search::handle as handle_search;
 pub use sync::handle as handle_sync;
 pub use upgrade::handle as handle_upgrade;
@@ -536,41 +538,89 @@ pub fn confirm_data_purge(
     ctx: &CliContext,
     plan: &orbit_core::DataPurgePlan,
 ) -> Result<(), orbit_core::OrbitError> {
+    confirm_data_deletion(
+        ctx,
+        &plan.mod_id,
+        &plan.entries,
+        DataDeletionOperation::Purge,
+    )
+}
+
+pub fn confirm_data_reset(
+    ctx: &CliContext,
+    plan: &orbit_core::DataResetPlan,
+) -> Result<(), orbit_core::OrbitError> {
+    confirm_data_deletion(
+        ctx,
+        &plan.mod_id,
+        &plan.entries,
+        DataDeletionOperation::Reset,
+    )
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DataDeletionOperation {
+    Purge,
+    Reset,
+}
+
+fn confirm_data_deletion(
+    ctx: &CliContext,
+    package: &str,
+    entries: &[orbit_core::OwnedPathRoot],
+    operation: DataDeletionOperation,
+) -> Result<(), orbit_core::OrbitError> {
     if ctx.dry_run || ctx.yes {
         if ctx.output.format == crate::cli::output::OutputFormat::Text && !ctx.quiet {
-            print_data_purge_plan(plan);
+            print_data_deletion_plan(package, entries, operation);
         }
         return Ok(());
     }
     if ctx.output.format == crate::cli::output::OutputFormat::Json {
         use orbit_machine_protocol::{InteractionChoice, InteractionKind};
-        let entries = plan
-            .entries
+        let entries = entries
             .iter()
             .map(crate::cli::output::owned_path_view)
             .collect::<Vec<_>>();
+        let (prompt, label, description, unchanged, cancelled, operation_id) = match operation {
+            DataDeletionOperation::Purge => (
+                tr!("Review the package and runtime-owned data before deleting them"),
+                tr!("Remove package and data"),
+                tr!("Delete only the displayed runtime-owned paths"),
+                tr!("Leave the package and data unchanged"),
+                tr!("Purge cancelled by user"),
+                "purge",
+            ),
+            DataDeletionOperation::Reset => (
+                tr!("Review runtime-owned data before resetting the package"),
+                tr!("Reset package data"),
+                tr!("Delete the displayed runtime-owned paths but keep the package installed"),
+                tr!("Leave the package data unchanged"),
+                tr!("Package data reset cancelled by user"),
+                "reset",
+            ),
+        };
         let envelope = machine_interaction(
             ctx.command,
             &ctx.machine_sequence,
             "data-deletion",
             InteractionKind::DataDeletion,
-            &tr!("Review the package and runtime-owned data before deleting them"),
+            &prompt,
             vec![
                 InteractionChoice {
                     id: "proceed".to_string(),
-                    label: tr!("Remove package and data").into_owned(),
-                    description: Some(
-                        tr!("Delete only the displayed runtime-owned paths").into_owned(),
-                    ),
+                    label: label.into_owned(),
+                    description: Some(description.into_owned()),
                     data: serde_json::json!({
-                        "mod_id": plan.mod_id,
+                        "operation": operation_id,
+                        "mod_id": package,
                         "entries": entries,
                     }),
                 },
                 InteractionChoice {
                     id: "cancel".to_string(),
                     label: tr!("Cancel").into_owned(),
-                    description: Some(tr!("Leave the package and data unchanged").into_owned()),
+                    description: Some(unchanged.into_owned()),
                     data: serde_json::json!({}),
                 },
             ],
@@ -578,49 +628,73 @@ pub fn confirm_data_purge(
         );
         return match read_machine_response(&envelope)? {
             selected if selected == "proceed" => Ok(()),
-            _ => Err(orbit_core::OrbitError::Cancelled(
-                tr!("Purge cancelled by user").into_owned(),
-            )),
+            _ => Err(orbit_core::OrbitError::Cancelled(cancelled.into_owned())),
         };
     }
 
-    print_data_purge_plan(plan);
+    print_data_deletion_plan(package, entries, operation);
     eprint!(
         "{}",
-        tr!("Remove this package and delete exactly these paths? [y/N] ")
+        match operation {
+            DataDeletionOperation::Purge => {
+                tr!("Remove this package and delete exactly these paths? [y/N] ")
+            }
+            DataDeletionOperation::Reset => {
+                tr!("Delete exactly these paths while keeping the package installed? [y/N] ")
+            }
+        }
     );
     use std::io::Write;
     std::io::stderr().flush().ok();
     let mut input = String::new();
     let read = std::io::stdin().read_line(&mut input).map_err(|error| {
-        interaction_failure(tr!(
-            "Purge confirmation could not read stdin: %{error}",
-            error = error
-        ))
+        interaction_failure(match operation {
+            DataDeletionOperation::Purge => tr!(
+                "Purge confirmation could not read stdin: %{error}",
+                error = error
+            ),
+            DataDeletionOperation::Reset => tr!(
+                "Package data reset confirmation could not read stdin: %{error}",
+                error = error
+            ),
+        })
     })?;
     if read == 0 || !matches!(input.trim().to_ascii_lowercase().as_str(), "y" | "yes") {
-        return Err(orbit_core::OrbitError::Cancelled(
-            tr!("Purge cancelled by user").into_owned(),
-        ));
+        return Err(orbit_core::OrbitError::Cancelled(match operation {
+            DataDeletionOperation::Purge => tr!("Purge cancelled by user").into_owned(),
+            DataDeletionOperation::Reset => {
+                tr!("Package data reset cancelled by user").into_owned()
+            }
+        }));
     }
     Ok(())
 }
 
-fn print_data_purge_plan(plan: &orbit_core::DataPurgePlan) {
+fn print_data_deletion_plan(
+    package: &str,
+    entries: &[orbit_core::OwnedPathRoot],
+    operation: DataDeletionOperation,
+) {
     eprintln!(
         "{}",
-        tr!(
-            "Package '%{package}' will be removed. Runtime-owned paths selected for deletion:",
-            package = plan.mod_id
-        )
+        match operation {
+            DataDeletionOperation::Purge => tr!(
+                "Package '%{package}' will be removed. Runtime-owned paths selected for deletion:",
+                package = package
+            ),
+            DataDeletionOperation::Reset => tr!(
+                "Package '%{package}' will remain installed. Runtime-owned paths selected for reset:",
+                package = package
+            ),
+        }
     );
-    if plan.entries.is_empty() {
+    if entries.is_empty() {
         eprintln!(
             "  {}",
             tr!("No exclusively owned runtime data was observed.")
         );
     } else {
-        for entry in &plan.entries {
+        for entry in entries {
             eprintln!("  {}", entry.display_path());
             for preserved in &entry.preserved {
                 eprintln!(

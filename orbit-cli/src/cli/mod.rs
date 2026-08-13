@@ -180,6 +180,12 @@ pub enum Commands {
         package: String,
     },
 
+    /// Delete runtime-observed package data while keeping the package installed.
+    Reset {
+        /// JAR-declared package mod_id.
+        package: String,
+    },
+
     /// Reconcile local state in both directions.
     Sync,
 
@@ -479,6 +485,7 @@ impl CommandHandler for Commands {
                 runtime_agent,
             } => handle_launch(launcher, runtime_agent, launcher_instance, server, ctx).await,
             Commands::Purge { package } => handle_purge(package, ctx).await,
+            Commands::Reset { package } => handle_reset(package, ctx).await,
             Commands::Sync => handle_sync(ctx).await,
             Commands::Outdated { mod_name } => handle_outdated(mod_name, ctx).await,
             Commands::Upgrade { mod_name } => handle_upgrade(mod_name, ctx).await,
@@ -535,6 +542,7 @@ impl Commands {
             Self::Disable { .. } => "disable",
             Self::Launch { .. } => "launch",
             Self::Purge { .. } => "purge",
+            Self::Reset { .. } => "reset",
             Self::Sync => "sync",
             Self::Outdated { .. } => "outdated",
             Self::Upgrade { .. } => "upgrade",
@@ -566,6 +574,7 @@ impl Commands {
                 | Self::Disable { .. }
                 | Self::Launch { .. }
                 | Self::Purge { .. }
+                | Self::Reset { .. }
                 | Self::Sync
                 | Self::Upgrade { .. }
                 | Self::Import { .. }
@@ -714,6 +723,12 @@ mod tests {
             .mutates_instance()
         );
         assert!(!Commands::Outdated { mod_name: None }.mutates_instance());
+        assert!(
+            Commands::Reset {
+                package: "sodium".to_string(),
+            }
+            .mutates_instance()
+        );
         assert!(
             !Commands::Audit {
                 min_risk: 0,

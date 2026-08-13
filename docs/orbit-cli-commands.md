@@ -17,7 +17,7 @@
 拒绝执行，要求显式 `--instance` 或进入项目目录。当前受保护的命令是：
 
 ```text
-add install fix remove enable disable launch purge sync upgrade import migrate-export remote-add remote-remove
+add install fix remove enable disable launch reset purge sync upgrade import migrate-export remote-add remote-remove
 ```
 
 `init` 始终初始化当前目录；实例注册表和 cache 命令操作全局数据；`export` 读取实例但只
@@ -371,11 +371,25 @@ orbit --output-format json ownership <package>
 数据路径标明 `instance` / `external` 作用域，目录树用 `/**` 表示，同时列出树中
 属于其它包而必须保留的更具体节点。
 
-该命令与 `purge` 共用同一套归属投影，但不删除、不求解、不重写账本，也不消费尚未
+该命令与 `reset` / `purge` 共用同一套归属投影，但不删除、不求解、不重写账本，也不消费尚未
 归并的完整 Agent snapshot或启动 purge 冷路径的目录重平衡。递归树始终保持压缩表示，
 因此查看 BlueMap 等大数据目录时
 不会为了 UI 枚举出每个文件。尚未经 `orbit launch` 观测到写入时，仅显示受管 JAR
 并明确报告没有已观测数据，不根据文件名猜测。
+
+### `orbit reset`
+
+```text
+orbit reset <package>
+```
+
+合并完整 Runtime Agent session，并展示与 `purge` 相同的准确数据删除计划，但不删除逻辑包。
+确认后把计划中的文件/目录先移动到实例同文件系统的事务暂存区，再提交归属账本；任一步失败都
+恢复原路径和原账本。成功后才清理暂存区，因此 JAR、`orbit.toml`、`orbit.lock`、远端、环境和
+版本约束完全不变。它适合把模组恢复为“刚安装但尚未产生配置/数据”的状态。
+
+共享实例根、世界根和系统临时目录不能作为递归删除根；包在其中实际写入的更具体文件或子目录
+仍可进入计划。`--yes` 与 `--dry-run` 的确认语义和 `purge` 一致。
 
 ### `orbit purge`
 
@@ -390,7 +404,8 @@ orbit purge <package>
 以及树内将被保留的嵌套节点，确认后先复用
 `remove_from_instance` 删除顶层包并清理 TOML/lock，再删除已确认数据。`--yes` 只跳过最后
 一次准确计划确认；`--dry-run` 展示同一计划但不写盘。读取不被监听，来源未知、未观测的 native
-写入也不会被猜测。不存在文件名启发式、静态分析或调用栈归属兜底。
+写入也不会被猜测。不存在文件名启发式或静态分析兜底；调用栈只在来源身份已经精确、且 lock
+证明外层包声明依赖实际 I/O 包时解析委托写入，不能创造或猜测包身份。
 
 该能力必须先通过 `orbit launch` 产生运行时事实；未产生事实时 purge 仍可删除逻辑包，但会
 明确显示没有独占数据，而不会猜配置路径。

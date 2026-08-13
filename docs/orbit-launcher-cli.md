@@ -73,6 +73,8 @@ orbit-launcher [--instance <id|name>] instance configure \
   [--minecraft <requirement>] \
   [--loader <vanilla|fabric|quilt|forge|neoforge>] \
   [--loader-version <requirement>]
+orbit-launcher [--instance <id|name>] instance resolution set <width> <height>
+orbit-launcher [--instance <id|name>] instance resolution clear
 orbit-launcher [--instance <id|name>] instance remove
 orbit-launcher instance default set <id|name>
 orbit-launcher instance default clear
@@ -168,6 +170,11 @@ GUI 的 Loader 版本更新只允许在同一 Minecraft 与同一 Loader 类型�
 版本，并严格编排 `configure --loader-version -> install`。Minecraft/Loader 类型变化属于新实例
 迁移，不原地改写实例；若实例已有 Orbit 状态，Launcher 成功后由 GUI 调用 `orbit sync` 重新
 探测和记录平台，但 Launcher 本身仍不知道 Orbit。
+
+客户端实例可在 manifest 的 `[client.resolution]` 中保存正整数 `width` / `height`，但只能通过
+强类型 `instance resolution set|clear` 修改。启动时 Launcher 把它们转换为 Minecraft 标准
+`--width` / `--height` 参数；清除后由 Minecraft 使用自身默认值。服务端实例禁止该配置，GUI
+也只在客户端实例显示分辨率卡片和常用预设。该值是用户设置，不读取或记忆上一次实际窗口大小。
 
 GUI 与其他前端不得用自由文本或安装失败重试来猜版本。`versions minecraft` 直接返回 Mojang
 version manifest v2 的完整有序目录、类型、发布时间及 latest 标记；选定精确 Minecraft 后，

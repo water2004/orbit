@@ -1,4 +1,6 @@
-use gpui::{Context, IntoElement, ParentElement, Styled, Window, div, prelude::FluentBuilder as _};
+use gpui::{
+    Context, IntoElement, ParentElement, Styled, Window, div, prelude::FluentBuilder as _, px,
+};
 use gpui_component::{
     ActiveTheme, Disableable, Selectable, StyledExt,
     button::{Button, ButtonVariants},
@@ -318,6 +320,100 @@ fn render_dashboard(
                         ),
                 ),
         );
+        if instance.kind == "client" {
+            let width_input = app.inputs.client_resolution_width.clone();
+            let height_input = app.inputs.client_resolution_height.clone();
+            let width_read = width_input.clone();
+            let height_read = height_input.clone();
+            let configured = detail
+                .as_ref()
+                .and_then(|detail| detail.client_resolution.as_ref())
+                .map(|resolution| format!("{} × {}", resolution.width, resolution.height))
+                .unwrap_or_else(|| tr!("Minecraft default").into_owned());
+            let mut presets = h_flex().gap_2().flex_wrap();
+            for (index, (width, height)) in [(1280, 720), (1600, 900), (1920, 1080)]
+                .into_iter()
+                .enumerate()
+            {
+                let width_input = width_input.clone();
+                let height_input = height_input.clone();
+                presets = presets.child(
+                    Button::new(("resolution-preset", index))
+                        .label(format!("{width} × {height}"))
+                        .ghost()
+                        .on_click(move |_, window, cx| {
+                            width_input.update(cx, |input, cx| {
+                                input.set_value(width.to_string(), window, cx)
+                            });
+                            height_input.update(cx, |input, cx| {
+                                input.set_value(height.to_string(), window, cx)
+                            });
+                        }),
+                );
+            }
+            content = content.child(
+                ui::themed_card(cx)
+                    .child(ui::section_title(
+                        tr!("Game window").into_owned(),
+                        tr!("Applied only when launching this client installation").into_owned(),
+                        cx,
+                    ))
+                    .child(ui::key_value(
+                        tr!("Configured resolution").into_owned(),
+                        configured,
+                        cx,
+                    ))
+                    .child(
+                        h_flex()
+                            .items_end()
+                            .gap_2()
+                            .child(
+                                v_flex()
+                                    .gap_1()
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(cx.theme().muted_foreground)
+                                            .child(tr!("Width").into_owned()),
+                                    )
+                                    .child(Input::new(&width_input).w(px(120.0))),
+                            )
+                            .child(div().pb_2().child("×"))
+                            .child(
+                                v_flex()
+                                    .gap_1()
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(cx.theme().muted_foreground)
+                                            .child(tr!("Height").into_owned()),
+                                    )
+                                    .child(Input::new(&height_input).w(px(120.0))),
+                            )
+                            .child(
+                                Button::new("resolution-apply")
+                                    .label(tr!("Apply").into_owned())
+                                    .primary()
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        let width = width_read.read(cx).value().to_string();
+                                        let height = height_read.read(cx).value().to_string();
+                                        this.set_client_resolution(&width, &height);
+                                        cx.notify();
+                                    })),
+                            )
+                            .child(
+                                Button::new("resolution-clear")
+                                    .label(tr!("Use default").into_owned())
+                                    .ghost()
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.clear_client_resolution();
+                                        cx.notify();
+                                    })),
+                            ),
+                    )
+                    .child(presets),
+            );
+        }
     } else {
         let create = Button::new("runtime-empty-create")
             .icon(OrbitIcon::Plus)

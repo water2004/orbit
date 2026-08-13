@@ -214,7 +214,7 @@ orbit [--output-format text|json] [--progress-format none|ndjson] <command> ...
 ```
 
 `artifacts` 是 lock 选中的顶层物理 JAR，`present` 只表示该精确路径当前是否存在。
-`data` 与 `purge.data_removed` 使用同一数据模型：`scope` 为 `instance` 或 `external`，
+`data` 与 `reset.data_removed` / `purge.data_removed` 使用同一数据模型：`scope` 为 `instance` 或 `external`，
 `kind` 为 `file` 或 `tree`，`tree` 是递归所有权根，`preserved` 是树内归其它包所有的
 精确排除根。命令不返回内嵌 JAR 列表、内容哈希或递归展开的数据文件列表。
 查询是只读的，但会在内存中叠加已完整写入的待归并 Agent snapshot，使 UI 可看到最新事实；
@@ -568,7 +568,7 @@ lock 精确记录。
 `changes[].kind` 枚举：`install` / `upgrade` / `downgrade` / `replace` / `remove`。
 内容哈希、物理 JAR 文件名、provider 密钥永不进入 JSON，与 text 表格一致（CLAUDE.md #41/#50）。
 
-### `remove` / `purge`
+### `remove` / `reset` / `purge`
 
 ```json
 {
@@ -612,6 +612,23 @@ lock 精确记录。
 JAR 哈希。
 `remove` 的非 dry-run 成功结果中 `jar_deleted` 始终为 `true`；文件占用或事务回滚会返回统一错误信封，
 不得返回 `ok: true` 与 `jar_deleted: false`。
+
+`reset` 复用 `data_removed` 条目但不返回 `jar_deleted`，因为包状态没有变化：
+
+```json
+{
+  "schema_version": 2,
+  "command": "reset",
+  "ok": true,
+  "result": {
+    "mod_id": "sodium",
+    "data_removed": [
+      {"path": "config/sodium-options.json", "scope": "instance", "kind": "file", "preserved": []}
+    ],
+    "warnings": []
+  }
+}
+```
 
 ### `launch`
 
@@ -943,7 +960,7 @@ Orbit Launcher 直接使用 `orbit-machine-protocol` 中同一个信封类型，
 | `package` | 在同一 provider locator 返回的多个可行 JAR `mod_id` 中选择 |
 | `resolution` | 在命令对应的 Pareto 选择点中选择（`add`/`fix` 为变更极小，`upgrade`/`outdated` 为版本极大；迁移可对独立删包因子依次发送多个 interaction，最后再发送所选删包赋值下的版本选择）；`data` 只含包动作，`data.changes[].different=true` 是不依赖颜色的差异标记，`kind=keep` 明确表示该方案不执行另一方案中的动作；`selected_artifact` 只含所选顶层 JAR basename，不含目录 |
 | `confirmation` | 查看精确逻辑包事务并决定是否写入；或在 `interaction_id` 以 `migration_removals-` 开头时，查看严格迁移无解原因并决定是否搜索 Pareto 极小删包方案 |
-| `data_deletion` | `purge` 的唯一删除确认；`proceed.data` 含 `mod_id` 与准确 `entries[{path,scope,kind}]`。它不含 resolution 的 warnings、diagnostics、差异计数或候选哈希 |
+| `data_deletion` | `reset` / `purge` 的唯一删除确认；`proceed.data` 含稳定 `operation`（`reset` 或 `purge`）、`mod_id` 与准确 `entries[{path,scope,kind}]`。它不含 resolution 的 warnings、diagnostics、差异计数或候选哈希 |
 
 `--yes` 只跳过写入确认，不会跳过 `package`、`resolution` 或迁移删包许可。后者必须由交互
 明确同意，或由调用方传 `migrate ... --allow-removals`。唯一包身份/唯一解不会

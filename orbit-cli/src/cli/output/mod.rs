@@ -27,7 +27,7 @@ pub use view::{
     JsonEnvelope, MigrationExportView, MigrationOutput, MigrationSummary, OutdatedOutput,
     OutdatedSummary, OwnershipOutput, PackageActivationOutput, PackageConstraintOutput,
     PackageEnvironmentOutput, PackageVersionCandidateView, PackageVersionsOutput, PurgeOutput,
-    RemoveOutput, SearchFilters, SearchOutput, SearchResultView, owned_artifact_view,
+    RemoveOutput, ResetOutput, SearchFilters, SearchOutput, SearchResultView, owned_artifact_view,
     owned_path_view,
 };
 

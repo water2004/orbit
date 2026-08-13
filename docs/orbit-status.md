@@ -22,7 +22,7 @@
 | 多远端包模型 | ✅ | 每个受管包非空 `remotes`；全部来源共同发现，完全相同字节跨 provider 合并 |
 | 完整 TOML 包集合 | ✅ | 所有选中顶层逻辑包均写入 `[packages]`，无根/传递分类；lock 只记录精确事实 |
 | 包启用状态 | ✅ | `enable/disable` 原子切换 `.jar` / `.jar.disabled` 并同步 TOML/lock；sync 将两种后缀都视为受管包并如实对账 |
-| 运行时数据归属与 purge | ✅ | `orbit launch` 单向包装 Launcher 并注入 Runtime Agent；启动前移除账本中已不存在的显式节点；精确 code-source 哈希把顶层/嵌套 JAR 归入逻辑包，只观测变更不观测读取；文件归最后编辑者，无主目录由首个写入包认领，目录默认值按实际文件多数动态重压缩；`ownership` 只读显示实际顶层 JAR、压缩数据树和排除根，不启动冷路径递归扫描；purge 准确确认后先收敛 JAR/TOML/lock，再应用同一计划；无文件名、调用栈或静态兜底 |
+| 运行时数据归属、reset 与 purge | ✅ | `orbit launch` 单向包装 Launcher 并注入 Runtime Agent；启动前移除账本中已不存在的显式节点；精确 code-source 哈希把顶层/嵌套 JAR 归入逻辑包，只观测变更不观测读取；文件归最后编辑者，无主目录由首个写入包认领，但共享游戏/世界根保持无主；声明依赖库代写时只沿依赖边回溯调用包，普通写入不走栈扫描；目录默认值按实际文件多数动态重压缩；`ownership` 只读显示压缩数据树，reset 保留包并事务删除数据，purge 再移除包状态；无文件名或静态兜底 |
 | 包版本管理 | ✅ | `versions` 联网下载并按 JAR 声明版本排序；数字核心范围与完整字符串集合规则由 `constraint set` 以 Pareto 极小事务立即应用；GUI 用边界控件和交/并/单项取反/整体取补操作表复用同一 CLI |
 | 内容候选身份 | ✅ | 本地 SHA-512 作为内部候选主键；同版本不同内容保持独立，CLI 只显示来源与依赖差异 |
 | PubGrub fork 远端 | ✅ | 功能分支已发布，Orbit 固定到完整 commit SHA |
@@ -111,7 +111,7 @@
 | `audit` | 共享版本范围只选择一次 AuditPolicy；同一个 analyze 流水线再按实际 Loader ABI 验证并分派 ModLauncher ITransformer 或 NeoForge ClassProcessor，随后进入共享 namespace/Mixin/转换效果与冲突流水线；unary/pairwise 分离 + schema 5 JSON/显式完整 report |
 | `list` / `info` | 展示包信息、逻辑依赖和 bundled；非树形 list 与 info 均使用自适应表格 |
 | `export` / `import` | Orbit archive 与 Modrinth pack |
-| `launch` / `ownership` / `purge` | launch 校验 Orbit/Launcher/Agent 后单向联合启动并记录运行时归属；ownership 只读展示 lock 中实际顶层 JAR 和压缩归属树；purge 映射实际 JAR 哈希，专用确认后同步移除包状态与独占数据 |
+| `launch` / `ownership` / `reset` / `purge` | launch 校验 Orbit/Launcher/Agent 后单向联合启动并记录运行时归属；ownership 只读展示 lock 中实际顶层 JAR 和压缩归属树；reset 事务删除独占数据但保留包；purge 再同步移除包状态与独占数据 |
 | `cache` / `instances` | cache 使用跨命令持久化 LRU 并在每次命令结束执行容量淘汰；instances list 输出自适应表格 |
 | `config` | path/list/get/set/unset；只操作持久化层，强类型校验并对密钥脱敏 |
 
@@ -150,7 +150,8 @@
 - Runtime Agent 只归属 code-source 哈希能精确映射到当前 lock 顶层包的类；Loader 声明的
   嵌套 JAR 映射回顶层包，映射歧义时不观测。读取完全不监听；文件归最后编辑者，无主目录由
   首个写入包认领，更具体所有者安全保留，目录默认值在冷路径按文件多数动态重压缩。归属账本位于实例 `.orbit/runtime-data`，不是 cache，
-  且不会通过文件名、调用栈或静态分析补猜。Launcher 直接启动不会产生 Orbit 归属；需要该能力必须使用
+  且不会通过文件名或静态分析补猜；依赖委托调用栈只能在 lock 已证明双方包身份和依赖边后转交写入归属。
+  Launcher 直接启动不会产生 Orbit 归属；需要该能力必须使用
   `orbit launch` 且同时安装 Orbit 与 Launcher。
 - JAR cache 只保存全局去重字节并执行 LRU；版本库是独立服务。每个精确
   Minecraft/Loader 目录下的 `remote.sqlite` 只存 project 标记与 artifact locator，

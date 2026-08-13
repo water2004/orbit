@@ -264,8 +264,8 @@ fn localized_runtime_data_error(error: &orbit_core::RuntimeDataError) -> String 
         }
         InstanceRoot => tr!("Refusing to remove the instance root").into_owned(),
         ControlData => tr!("Refusing to remove Orbit control data").into_owned(),
-        SharedInstanceRoot { path } => tr!(
-            "Refusing to remove shared instance root '%{path}' as a tree",
+        SharedRuntimeRoot { path } => tr!(
+            "Refusing to remove shared runtime root '%{path}' as a tree",
             path = path
         ),
         UnsafeExternalPath { path } => tr!(
