@@ -33,8 +33,8 @@ pub enum RuntimeDataError {
     InstanceRoot,
     #[error("refusing to remove Orbit control data")]
     ControlData,
-    #[error("refusing to remove shared instance root '{path}' as a tree")]
-    SharedInstanceRoot { path: String },
+    #[error("refusing to remove shared runtime root '{path}' as a tree")]
+    SharedRuntimeRoot { path: String },
     #[error("external path is not a safe absolute child path: '{path}'")]
     UnsafeExternalPath { path: String },
     #[error("server joint launch does not support --dry-run")]

@@ -31,6 +31,7 @@ if ($LASTEXITCODE -ne 0) { throw "Failed to compile Agent fixture" }
 if ($LASTEXITCODE -ne 0) { throw "Failed to package Agent fixture" }
 & javac --release 8 -d $HarnessRoot `
     (Join-Path $AgentRoot "tests/AgentClasspathHarness.java") `
+    (Join-Path $AgentRoot "tests/AgentDelegationHarness.java") `
     (Join-Path $AgentRoot "tests/AgentIsolatedHarness.java") `
     (Join-Path $AgentRoot "tests/AgentOwnershipHarness.java")
 if ($LASTEXITCODE -ne 0) { throw "Failed to compile isolated-loader harness" }
@@ -147,6 +148,51 @@ if ((Get-FileHash -Algorithm SHA256 -LiteralPath $OwnershipSession).Hash -ne $Fi
     throw "The original JVM snapshot changed after restart"
 }
 Write-Output $OwnershipSession
+
+# A package may delegate persistence to a declared library dependency. The
+# outer logical caller, rather than the helper JAR containing Files.write, owns
+# the resulting path.
+$DelegationRoot = Join-Path $TestRoot "delegation"
+$DelegationInstance = Join-Path $DelegationRoot "instance"
+$DelegationLibraryClasses = Join-Path $DelegationRoot "library-classes"
+$DelegationConsumerClasses = Join-Path $DelegationRoot "consumer-classes"
+$DelegationLibraryJar = Join-Path $DelegationRoot "library.jar"
+$DelegationConsumerJar = Join-Path $DelegationRoot "consumer.jar"
+$DelegationSession = Join-Path $DelegationInstance ".orbit/runtime-data/sessions/test.events"
+$DelegationContext = Join-Path $DelegationInstance ".orbit/runtime-data/agent-context.tsv"
+New-Item -ItemType Directory -Force -Path `
+    $DelegationLibraryClasses, $DelegationConsumerClasses, `
+    (Join-Path $DelegationInstance "config"), (Split-Path -Parent $DelegationSession) | Out-Null
+& javac --release 8 -d $DelegationLibraryClasses (Join-Path $AgentRoot "tests/AgentDelegateLibrary.java")
+if ($LASTEXITCODE -ne 0) { throw "Failed to compile delegation library fixture" }
+& jar cf $DelegationLibraryJar -C $DelegationLibraryClasses .
+if ($LASTEXITCODE -ne 0) { throw "Failed to package delegation library fixture" }
+& javac --release 8 -cp $DelegationLibraryJar -d $DelegationConsumerClasses `
+    (Join-Path $AgentRoot "tests/AgentDelegateConsumer.java")
+if ($LASTEXITCODE -ne 0) { throw "Failed to compile delegation consumer fixture" }
+& jar cf $DelegationConsumerJar -C $DelegationConsumerClasses .
+if ($LASTEXITCODE -ne 0) { throw "Failed to package delegation consumer fixture" }
+$DelegationLibraryHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $DelegationLibraryJar).Hash.ToLowerInvariant()
+$DelegationConsumerHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $DelegationConsumerJar).Hash.ToLowerInvariant()
+$DelegationRootEncoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($DelegationInstance)).TrimEnd('=').Replace('+', '-').Replace('/', '_')
+$DelegationSessionEncoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($DelegationSession)).TrimEnd('=').Replace('+', '-').Replace('/', '_')
+$DelegationContextEncoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($DelegationContext)).TrimEnd('=').Replace('+', '-').Replace('/', '_')
+[System.IO.File]::WriteAllLines($DelegationContext, @(
+    "3`tcontext`tend"
+    "capability`tjava`t8-25`tend"
+    "capability`tsource`tfile`tend"
+    "source`t$DelegationLibraryHash`t$DelegationLibraryHash`tend"
+    "source`t$DelegationConsumerHash`t$DelegationConsumerHash`tend"
+    "delegation`t$DelegationConsumerHash`t$DelegationLibraryHash`tend"
+), [System.Text.UTF8Encoding]::new($false))
+& $JavaCommand "-javaagent:$ResolvedAgent=root=$DelegationRootEncoded;session=$DelegationSessionEncoded;context=$DelegationContextEncoded" `
+    -cp $HarnessRoot AgentDelegationHarness $DelegationConsumerJar $DelegationLibraryJar $DelegationInstance
+if ($LASTEXITCODE -ne 0) { throw "Delegated writer Agent fixture failed" }
+$DelegationRecords = Get-Content -LiteralPath $DelegationSession
+if ($DelegationRecords.Count -ne 2 -or $DelegationRecords[1] -notmatch "^3`tcreate`tfile`t$DelegationConsumerHash`t") {
+    throw "Delegated file write was not attributed to the logical caller"
+}
+Write-Output $DelegationSession
 
 # The Agent itself targets Java 8, while its call-site transformer must still
 # cover mutating JDK APIs introduced by later runtimes.

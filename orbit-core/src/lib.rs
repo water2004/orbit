@@ -111,9 +111,10 @@ pub use runtime::{
     RuntimePaths, compiled_default_layout,
 };
 pub use runtime_data::{
-    DataOwnershipEntry, DataPurgePlan, DataPurgeReport, OwnedDataKind, OwnedDataPath,
-    OwnedPackageArtifact, OwnedPathRoot, PackageOwnershipReport, apply_data_purge,
-    merge_observation_sessions, observation_session_path, package_ownership, plan_data_purge,
+    DataOwnershipEntry, DataPurgePlan, DataPurgeReport, DataResetPlan, DataResetReport,
+    OwnedDataKind, OwnedDataPath, OwnedPackageArtifact, OwnedPathRoot, PackageOwnershipReport,
+    apply_data_purge, apply_data_reset, merge_observation_sessions, observation_session_path,
+    package_ownership, plan_data_purge, plan_data_reset,
 };
 pub use runtime_launch::{
     RuntimeLaunchRequest, RuntimeLaunchTarget, launch_with_runtime_observation,

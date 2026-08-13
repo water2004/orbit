@@ -146,7 +146,7 @@ public final class FileCallTransformer implements ClassFileTransformer {
                         && opcode == Opcodes.INVOKESTATIC
                         && ObservedFiles.supports(methodName, methodDescriptor)) {
                         changed = true;
-                        super.visitLdcInsn(packageOwner);
+                        pushResolvedOwner(this, packageOwner);
                         super.visitMethodInsn(
                             opcode,
                             OBSERVED_FILES,
@@ -162,7 +162,7 @@ public final class FileCallTransformer implements ClassFileTransformer {
                         && methodName.equals("open")
                         && ObservedChannels.supports(owner, methodDescriptor)) {
                         changed = true;
-                        super.visitLdcInsn(packageOwner);
+                        pushResolvedOwner(this, packageOwner);
                         super.visitMethodInsn(
                             opcode,
                             OBSERVED_CHANNELS,
@@ -179,7 +179,7 @@ public final class FileCallTransformer implements ClassFileTransformer {
                         && arguments.length > 0
                         && arguments[arguments.length - 1].equals(Type.getType(String.class))) {
                         changed = true;
-                        super.visitLdcInsn(packageOwner);
+                        pushResolvedOwner(this, packageOwner);
                         super.visitMethodInsn(
                             Opcodes.INVOKESTATIC,
                             OBSERVED_NATIVE_STORES,
@@ -195,7 +195,7 @@ public final class FileCallTransformer implements ClassFileTransformer {
                         changed = true;
                         String staticDescriptor = "(Ljava/io/File;"
                             + methodDescriptor.substring(1);
-                        super.visitLdcInsn(packageOwner);
+                        pushResolvedOwner(this, packageOwner);
                         super.visitMethodInsn(
                             Opcodes.INVOKESTATIC,
                             OBSERVED_FILES,
@@ -215,6 +215,17 @@ public final class FileCallTransformer implements ClassFileTransformer {
             return descriptor.substring(0, end)
                 + "Ljava/lang/String;"
                 + descriptor.substring(end);
+        }
+
+        private static void pushResolvedOwner(MethodVisitor visitor, String owner) {
+            visitor.visitLdcInsn(owner);
+            visitor.visitMethodInsn(
+                Opcodes.INVOKESTATIC,
+                AGENT_PREFIX + "Recorder",
+                "resolveOwner",
+                "(Ljava/lang/String;)Ljava/lang/String;",
+                false
+            );
         }
     }
 }

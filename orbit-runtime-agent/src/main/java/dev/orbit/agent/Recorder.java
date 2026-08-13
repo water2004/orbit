@@ -31,6 +31,8 @@ public final class Recorder {
     private static final Map<String, String> SOURCE_OWNERS = new ConcurrentHashMap<>();
     private static final Map<String, String> MODULE_OWNERS = new ConcurrentHashMap<>();
     private static final Map<String, String> SOURCE_CACHE = new ConcurrentHashMap<>();
+    private static final Map<String, Set<String>> DELEGATIONS = new ConcurrentHashMap<>();
+    private static final Set<String> DELEGATED_OWNERS = ConcurrentHashMap.newKeySet();
     private static final ConcurrentSkipListMap<String, State> STATES = new ConcurrentSkipListMap<>();
     private static final ConcurrentSkipListMap<String, OwnedTree> OWNED_TREES = new ConcurrentSkipListMap<>();
     private static final ConcurrentSkipListMap<String, Path> EXPLICIT_NODES = new ConcurrentSkipListMap<>();
@@ -42,6 +44,14 @@ public final class Recorder {
     private static final boolean WINDOWS = System.getProperty("os.name", "")
         .toLowerCase()
         .contains("win");
+    private static final ClassValue<String> CLASS_OWNERS = new ClassValue<String>() {
+        @Override
+        protected String computeValue(Class<?> type) {
+            String owner = ownerFor(type.getProtectionDomain());
+            return owner == null ? "" : owner;
+        }
+    };
+    private static final OwnerAttributor OWNER_ATTRIBUTOR = OwnerAttributor.create();
 
     private static volatile Path instanceRoot;
     private static volatile Path sessionFile;
@@ -434,6 +444,12 @@ public final class Recorder {
                 if (previous != null && !previous.equals(fields[2])) {
                     MODULE_OWNERS.remove(module);
                 }
+            } else if (fields.length == 4 && fields[0].equals("delegation") && fields[3].equals("end")) {
+                requireDigest(fields[1]);
+                requireDigest(fields[2]);
+                DELEGATIONS.computeIfAbsent(fields[1], ignored -> ConcurrentHashMap.newKeySet())
+                    .add(fields[2]);
+                DELEGATED_OWNERS.add(fields[2]);
             } else if (fields.length == 5 && fields[0].equals("node") && fields[4].equals("end")) {
                 if (!fields[1].equals("file") && !fields[1].equals("tree")) {
                     throw new IllegalArgumentException("invalid runtime ownership node kind");
@@ -473,7 +489,7 @@ public final class Recorder {
         }
     }
 
-    private static int runtimeFeature() {
+    static int runtimeFeature() {
         String value = System.getProperty("java.specification.version", "8");
         if (value.startsWith("1.")) value = value.substring(2);
         int end = 0;
@@ -565,6 +581,27 @@ public final class Recorder {
 
     private static String valueOrEmpty(String value) {
         return value == null ? "" : value;
+    }
+
+    static String ownerForClass(Class<?> type) {
+        String owner = CLASS_OWNERS.get(type);
+        return owner.isEmpty() ? null : owner;
+    }
+
+    static boolean delegates(String caller, String library) {
+        Set<String> libraries = DELEGATIONS.get(caller);
+        return libraries != null && libraries.contains(library);
+    }
+
+    public static String resolveOwner(String directOwner) {
+        if (!DELEGATED_OWNERS.contains(directOwner)) {
+            return directOwner;
+        }
+        try {
+            return OWNER_ATTRIBUTOR.resolve(directOwner);
+        } catch (Throwable ignored) {
+            return directOwner;
+        }
     }
 
     private static String sha256Unchecked(Path path) {

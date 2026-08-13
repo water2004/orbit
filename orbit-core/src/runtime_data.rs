@@ -138,6 +138,21 @@ pub struct DataPurgeReport {
     pub removed: Vec<OwnedPathRoot>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct DataResetPlan {
+    pub mod_id: String,
+    #[serde(skip_serializing)]
+    artifact_sha256: String,
+    pub entries: Vec<OwnedPathRoot>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct DataResetReport {
+    pub mod_id: String,
+    pub removed: Vec<OwnedPathRoot>,
+    pub warnings: Vec<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct OwnedPackageArtifact {
     pub path: OwnedDataPath,
@@ -267,6 +282,7 @@ pub fn merge_observation_sessions(instance_dir: &Path) -> Result<usize, OrbitErr
     }
 
     let mut ledger = load_ledger(&root)?;
+    drop_protected_tree_claims(&root, &mut ledger);
     let ownership_changed = merge_snapshots_into_ledger(&root, &claimed, &mut ledger)?;
     compact_ledger(&mut ledger);
     if ownership_changed {
@@ -285,8 +301,9 @@ pub fn merge_observation_sessions(instance_dir: &Path) -> Result<usize, OrbitErr
 pub(crate) fn prune_missing_ownership(instance_dir: &Path) -> Result<usize, OrbitError> {
     let root = validate_instance(instance_dir)?;
     let mut ledger = load_ledger(&root)?;
+    let sanitized = drop_protected_tree_claims(&root, &mut ledger);
     let (removed, changed) = prune_missing_entries(&root, &mut ledger)?;
-    if changed {
+    if sanitized || changed {
         save_ledger(&root, &ledger)?;
     }
     Ok(removed)
@@ -407,6 +424,7 @@ fn current_ownership_ledger(
         load_ledger(root)
     } else {
         let mut ledger = load_ledger(root)?;
+        drop_protected_tree_claims(root, &mut ledger);
         let sessions = root.join(RUNTIME_DATA_DIRECTORY).join(SESSIONS_DIRECTORY);
         let snapshots = observation_snapshots(&sessions)?;
         let ownership_changed = merge_snapshots_into_ledger(root, &snapshots, &mut ledger)?;
@@ -480,6 +498,68 @@ pub fn plan_data_purge(
         mod_id: entry.mod_id.clone(),
         artifact_sha256: entry.sha256,
         entries: report.data,
+    })
+}
+
+pub fn plan_data_reset(
+    instance_dir: &Path,
+    package: &str,
+    dry_run: bool,
+) -> Result<DataResetPlan, OrbitError> {
+    let root = validate_instance(instance_dir)?;
+    let mode = if dry_run {
+        OwnershipLedgerMode::DryRunPurge
+    } else {
+        OwnershipLedgerMode::PersistentPurge
+    };
+    let ledger = current_ownership_ledger(&root, mode)?;
+    let (entry, report) = locked_package_ownership(&root, package, &ledger)?;
+    Ok(DataResetPlan {
+        mod_id: entry.mod_id,
+        artifact_sha256: entry.sha256,
+        entries: report.data,
+    })
+}
+
+/// Delete only runtime-owned mutable data. The managed package artifact and
+/// both workspace documents remain unchanged. Physical data is renamed into
+/// same-filesystem staging first, so a staging or ledger failure restores the
+/// original paths before returning an error.
+pub fn apply_data_reset(
+    instance_dir: &Path,
+    plan: &DataResetPlan,
+    dry_run: bool,
+) -> Result<DataResetReport, OrbitError> {
+    let root = validate_instance(instance_dir)?;
+    let lock = Lockfile::open(&root)?;
+    let entry = lock
+        .find_entry(&plan.mod_id)
+        .ok_or_else(|| OrbitError::ModNotFound(plan.mod_id.clone()))?;
+    if entry.sha256 != plan.artifact_sha256 {
+        return Err(OrbitError::RuntimeData(RuntimeDataError::PackageChanged {
+            package: plan.mod_id.clone(),
+        }));
+    }
+    validate_plan_paths(&root, &plan.entries)?;
+    if dry_run {
+        return Ok(DataResetReport {
+            mod_id: plan.mod_id.clone(),
+            removed: plan.entries.clone(),
+            warnings: Vec::new(),
+        });
+    }
+
+    let mut transaction = OwnedDataTransaction::begin(&root, &plan.entries)?;
+    let mut ledger = load_ledger(&root)?;
+    remove_artifact_references(&mut ledger, &plan.artifact_sha256, &plan.entries);
+    if let Err(error) = save_ledger(&root, &ledger) {
+        return Err(transaction.rollback(error));
+    }
+    let warnings = transaction.commit();
+    Ok(DataResetReport {
+        mod_id: plan.mod_id.clone(),
+        removed: plan.entries.clone(),
+        warnings,
     })
 }
 
@@ -561,7 +641,8 @@ pub(crate) fn ownership_context(
     instance_dir: &Path,
 ) -> Result<Vec<(PathBuf, OwnedDataKind, Option<String>)>, OrbitError> {
     let root = validate_instance(instance_dir)?;
-    let ledger = load_ledger(&root)?;
+    let mut ledger = load_ledger(&root)?;
+    drop_protected_tree_claims(&root, &mut ledger);
     ledger
         .entries
         .into_iter()
@@ -654,6 +735,7 @@ pub(crate) fn ownership_entries_for(
 ) -> Result<Vec<DataOwnershipEntry>, OrbitError> {
     let root = validate_instance(instance_dir)?;
     let mut ledger = load_ledger(&root)?;
+    drop_protected_tree_claims(&root, &mut ledger);
     compact_ledger(&mut ledger);
     let selected_trees = ledger
         .entries
@@ -858,22 +940,33 @@ fn merge_observation(
         return Ok(false);
     }
     let changed = match observation.action {
-        ObservationAction::Create => {
-            apply_creation(ledger, path, observation.kind, observation.owner)
-        }
-        ObservationAction::Write => apply_write(ledger, path, observation.kind, observation.owner),
+        ObservationAction::Create => apply_creation(
+            instance_dir,
+            ledger,
+            path,
+            observation.kind,
+            observation.owner,
+        ),
+        ObservationAction::Write => apply_write(
+            instance_dir,
+            ledger,
+            path,
+            observation.kind,
+            observation.owner,
+        ),
         ObservationAction::Delete => apply_deletion(ledger, &path),
     };
     Ok(changed)
 }
 
 fn apply_creation(
+    instance_dir: &Path,
     ledger: &mut DataOwnershipLedger,
     path: OwnedDataPath,
     kind: OwnedDataKind,
     owner: String,
 ) -> bool {
-    if kind == OwnedDataKind::Tree && protected_instance_root(&path) {
+    if kind == OwnedDataKind::Tree && protected_shared_tree(instance_dir, &path) {
         return false;
     }
     let before = ledger.entries.clone();
@@ -881,7 +974,7 @@ fn apply_creation(
         .entries
         .retain(|entry| !path_contains(&path, &entry.path) && entry.path != path);
     if kind == OwnedDataKind::File {
-        claim_unowned_parent(ledger, &path, &owner);
+        claim_unowned_parent(instance_dir, ledger, &path, &owner);
     }
     if effective_owner(ledger, &path).is_some_and(|inherited| inherited == owner) {
         return ledger.entries != before;
@@ -895,15 +988,19 @@ fn apply_creation(
 }
 
 fn apply_write(
+    instance_dir: &Path,
     ledger: &mut DataOwnershipLedger,
     path: OwnedDataPath,
     kind: OwnedDataKind,
     writer: String,
 ) -> bool {
+    if kind == OwnedDataKind::Tree && protected_shared_tree(instance_dir, &path) {
+        return false;
+    }
     if let Some(index) = ledger.entries.iter().position(|entry| entry.path == path) {
         if kind == OwnedDataKind::File && ledger.entries[index].owner.is_none() {
             ledger.entries.remove(index);
-            if claim_unowned_parent(ledger, &path, &writer) {
+            if claim_unowned_parent(instance_dir, ledger, &path, &writer) {
                 return true;
             }
             ledger.entries.push(DataOwnershipEntry {
@@ -924,7 +1021,7 @@ fn apply_write(
     if effective_owner(ledger, &path).as_deref() == Some(writer.as_str()) {
         return false;
     }
-    if kind == OwnedDataKind::File && claim_unowned_parent(ledger, &path, &writer) {
+    if kind == OwnedDataKind::File && claim_unowned_parent(instance_dir, ledger, &path, &writer) {
         return true;
     }
     ledger.entries.push(DataOwnershipEntry {
@@ -944,6 +1041,7 @@ fn apply_deletion(ledger: &mut DataOwnershipLedger, path: &OwnedDataPath) -> boo
 }
 
 fn claim_unowned_parent(
+    instance_dir: &Path,
     ledger: &mut DataOwnershipLedger,
     path: &OwnedDataPath,
     owner: &str,
@@ -951,7 +1049,13 @@ fn claim_unowned_parent(
     let Some(parent) = parent_owned_path(path) else {
         return false;
     };
-    if protected_instance_root(&parent) || effective_owner(ledger, &parent).is_some() {
+    // A file written below an existing external directory does not establish
+    // ownership of that shared system/user directory. Explicit directory
+    // creation is still represented by a separate tree observation.
+    if matches!(parent, OwnedDataPath::External { .. }) {
+        return false;
+    }
+    if protected_shared_tree(instance_dir, &parent) || effective_owner(ledger, &parent).is_some() {
         return false;
     }
     ledger.entries.retain(|entry| entry.path != parent);
@@ -1086,6 +1190,65 @@ fn protected_instance_root(path: &OwnedDataPath) -> bool {
     )
 }
 
+/// Shared containers can hold package-owned descendants, but the container
+/// itself must never become a package-owned tree merely because a package
+/// created or changed one child.
+fn protected_shared_tree(instance_dir: &Path, path: &OwnedDataPath) -> bool {
+    if protected_instance_root(path) {
+        return true;
+    }
+    if let OwnedDataPath::Instance { relative } = path {
+        let components = Path::new(relative).components().collect::<Vec<_>>();
+        if components.len() == 2 && components[0].as_os_str().to_string_lossy() == "saves" {
+            return true;
+        }
+    }
+    let Ok(resolved) = resolve_owned_path(instance_dir, path) else {
+        return true;
+    };
+    if matches!(path, OwnedDataPath::External { .. })
+        && same_physical_path(&resolved, &std::env::temp_dir())
+    {
+        return true;
+    }
+    // Dedicated-server world directory names are configurable. Stable world
+    // files are a better boundary than launcher or loader name guesses.
+    resolved.join("level.dat").is_file()
+        || resolved.join("level.dat_old").is_file()
+        || resolved.join("session.lock").is_file()
+}
+
+fn same_physical_path(left: &Path, right: &Path) -> bool {
+    let left = dunce::canonicalize(left).unwrap_or_else(|_| left.to_path_buf());
+    let right = dunce::canonicalize(right).unwrap_or_else(|_| right.to_path_buf());
+    #[cfg(windows)]
+    {
+        left.to_string_lossy()
+            .eq_ignore_ascii_case(&right.to_string_lossy())
+    }
+    #[cfg(not(windows))]
+    {
+        left == right
+    }
+}
+
+fn drop_protected_tree_claims(instance_dir: &Path, ledger: &mut DataOwnershipLedger) -> bool {
+    let before = ledger.entries.len();
+    let mut removed_keys = BTreeSet::new();
+    ledger.entries.retain(|entry| {
+        let protected =
+            entry.kind == OwnedDataKind::Tree && protected_shared_tree(instance_dir, &entry.path);
+        if protected {
+            removed_keys.insert(ownership_path_key(&entry.path));
+        }
+        !protected
+    });
+    for key in removed_keys {
+        ledger.rebalance_watermarks.remove(&key);
+    }
+    before != ledger.entries.len()
+}
+
 fn validate_relative(relative: &Path) -> Result<(), OrbitError> {
     if relative.as_os_str().is_empty()
         || relative
@@ -1134,19 +1297,17 @@ fn validate_plan_paths(instance_dir: &Path, entries: &[OwnedPathRoot]) -> Result
         if resolved == instance_dir {
             return Err(OrbitError::RuntimeData(RuntimeDataError::InstanceRoot));
         }
-        if let OwnedDataPath::Instance { relative } = &entry.path {
-            if relative == ".orbit" || relative.starts_with(".orbit/") {
-                return Err(OrbitError::RuntimeData(RuntimeDataError::ControlData));
-            }
-            if entry.kind == OwnedDataKind::Tree
-                && RESERVED_INSTANCE_ROOTS.contains(&relative.as_str())
-            {
-                return Err(OrbitError::RuntimeData(
-                    RuntimeDataError::SharedInstanceRoot {
-                        path: relative.clone(),
-                    },
-                ));
-            }
+        if let OwnedDataPath::Instance { relative } = &entry.path
+            && (relative == ".orbit" || relative.starts_with(".orbit/"))
+        {
+            return Err(OrbitError::RuntimeData(RuntimeDataError::ControlData));
+        }
+        if entry.kind == OwnedDataKind::Tree && protected_shared_tree(instance_dir, &entry.path) {
+            return Err(OrbitError::RuntimeData(
+                RuntimeDataError::SharedRuntimeRoot {
+                    path: entry.path.display().to_string(),
+                },
+            ));
         }
     }
     Ok(())
@@ -1174,6 +1335,186 @@ fn resolve_owned_path(instance_dir: &Path, path: &OwnedDataPath) -> Result<PathB
                 ));
             }
             Ok(path)
+        }
+    }
+}
+
+struct StagedDataMove {
+    original: PathBuf,
+    staged: PathBuf,
+}
+
+struct OwnedDataTransaction {
+    staging: Vec<tempfile::TempDir>,
+    moves: Vec<StagedDataMove>,
+    finished: bool,
+}
+
+impl OwnedDataTransaction {
+    fn begin(instance_dir: &Path, entries: &[OwnedPathRoot]) -> Result<Self, OrbitError> {
+        let mut transaction = Self {
+            staging: Vec::with_capacity(entries.len()),
+            moves: Vec::new(),
+            finished: false,
+        };
+        for entry in entries {
+            let original = resolve_owned_path(instance_dir, &entry.path)?;
+            let preserved = entry
+                .preserved
+                .iter()
+                .map(|path| resolve_owned_path(instance_dir, path))
+                .collect::<Result<Vec<_>, _>>()?;
+            if let Err(error) = transaction.stage(&original, entry.kind, &preserved) {
+                return Err(transaction.rollback(error));
+            }
+        }
+        Ok(transaction)
+    }
+
+    fn stage(
+        &mut self,
+        original: &Path,
+        kind: OwnedDataKind,
+        preserved: &[PathBuf],
+    ) -> Result<(), OrbitError> {
+        let metadata = match std::fs::symlink_metadata(original) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => return Err(error.into()),
+        };
+        let parent = original.parent().ok_or_else(|| {
+            OrbitError::Other(anyhow::anyhow!(
+                "owned data path has no parent: {}",
+                original.display()
+            ))
+        })?;
+        let staging = tempfile::Builder::new()
+            .prefix(".orbit-reset-")
+            .tempdir_in(parent)?;
+        let payload = staging.path().join("payload");
+        self.staging.push(staging);
+        if metadata.file_type().is_symlink()
+            || metadata.is_file()
+            || kind == OwnedDataKind::File
+            || preserved.is_empty()
+        {
+            std::fs::rename(original, &payload)?;
+            self.moves.push(StagedDataMove {
+                original: original.to_path_buf(),
+                staged: payload,
+            });
+        } else {
+            std::fs::create_dir(&payload)?;
+            self.stage_tree_children(original, &payload, preserved)?;
+        }
+        Ok(())
+    }
+
+    fn stage_tree_children(
+        &mut self,
+        original: &Path,
+        staged: &Path,
+        preserved: &[PathBuf],
+    ) -> Result<(), OrbitError> {
+        for child in std::fs::read_dir(original)? {
+            let child = child?.path();
+            if preserved.iter().any(|keep| keep == &child) {
+                continue;
+            }
+            let staged_child = staged.join(child.file_name().ok_or_else(|| {
+                OrbitError::Other(anyhow::anyhow!(
+                    "owned data child has no filename: {}",
+                    child.display()
+                ))
+            })?);
+            let metadata = std::fs::symlink_metadata(&child)?;
+            let has_preserved_descendant = preserved.iter().any(|keep| keep.starts_with(&child));
+            if metadata.is_dir() && !metadata.file_type().is_symlink() && has_preserved_descendant {
+                std::fs::create_dir(&staged_child)?;
+                self.stage_tree_children(&child, &staged_child, preserved)?;
+            } else {
+                std::fs::rename(&child, &staged_child)?;
+                self.moves.push(StagedDataMove {
+                    original: child,
+                    staged: staged_child,
+                });
+            }
+        }
+        Ok(())
+    }
+
+    fn commit(mut self) -> Vec<String> {
+        self.finished = true;
+        std::mem::take(&mut self.staging)
+            .into_iter()
+            .filter_map(|staging| {
+                let path = staging.path().to_path_buf();
+                staging.close().err().map(|error| {
+                    format!(
+                        "package data was reset, but transaction staging '{}' could not be removed: {error}",
+                        path.display()
+                    )
+                })
+            })
+            .collect()
+    }
+
+    fn rollback(&mut self, cause: OrbitError) -> OrbitError {
+        let failures = self.restore();
+        self.finished = true;
+        if failures.is_empty() {
+            return cause;
+        }
+        let retained = std::mem::take(&mut self.staging)
+            .into_iter()
+            .map(tempfile::TempDir::keep)
+            .map(|path| path.display().to_string())
+            .collect::<Vec<_>>();
+        OrbitError::Other(anyhow::anyhow!(
+            "package data reset failed: {cause}; restoring the original data also failed ({}); recovery data was retained at {}",
+            failures.join("; "),
+            retained.join(", ")
+        ))
+    }
+
+    fn restore(&mut self) -> Vec<String> {
+        let mut failures = Vec::new();
+        for moved in self.moves.iter().rev() {
+            if let Some(parent) = moved.original.parent()
+                && let Err(error) = std::fs::create_dir_all(parent)
+            {
+                failures.push(format!("recreate parent '{}': {error}", parent.display()));
+                continue;
+            }
+            match std::fs::symlink_metadata(&moved.original) {
+                Ok(_) => {
+                    failures.push(format!(
+                        "original path was occupied during rollback: {}",
+                        moved.original.display()
+                    ));
+                    continue;
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    failures.push(format!(
+                        "inspect original path '{}': {error}",
+                        moved.original.display()
+                    ));
+                    continue;
+                }
+            }
+            if let Err(error) = std::fs::rename(&moved.staged, &moved.original) {
+                failures.push(format!("restore '{}': {error}", moved.original.display()));
+            }
+        }
+        failures
+    }
+}
+
+impl Drop for OwnedDataTransaction {
+    fn drop(&mut self) {
+        if !self.finished {
+            let _ = self.restore();
         }
     }
 }
@@ -1506,6 +1847,7 @@ mod tests {
         let nested_owner = "b".repeat(64);
         let mut ledger = DataOwnershipLedger::default();
         apply_creation(
+            Path::new("."),
             &mut ledger,
             OwnedDataPath::Instance {
                 relative: "shaderpacks".to_string(),
@@ -1514,6 +1856,7 @@ mod tests {
             owner.clone(),
         );
         apply_creation(
+            Path::new("."),
             &mut ledger,
             OwnedDataPath::Instance {
                 relative: "shaderpacks/generated-by-b".to_string(),
@@ -1576,12 +1919,14 @@ mod tests {
         };
         let mut ledger = DataOwnershipLedger::default();
         apply_creation(
+            Path::new("."),
             &mut ledger,
             root.clone(),
             OwnedDataKind::Tree,
             owner.clone(),
         );
         apply_write(
+            Path::new("."),
             &mut ledger,
             shared.clone(),
             OwnedDataKind::File,
@@ -1606,6 +1951,7 @@ mod tests {
         let owner = "a".repeat(64);
         let mut ledger = DataOwnershipLedger::default();
         apply_write(
+            Path::new("."),
             &mut ledger,
             OwnedDataPath::Instance {
                 relative: "config/example/state.bin".to_string(),
@@ -1625,6 +1971,7 @@ mod tests {
 
         let mut reserved = DataOwnershipLedger::default();
         apply_write(
+            Path::new("."),
             &mut reserved,
             OwnedDataPath::Instance {
                 relative: "config/global-state.bin".to_string(),
@@ -1634,6 +1981,116 @@ mod tests {
         );
         assert_eq!(reserved.entries.len(), 1);
         assert_eq!(reserved.entries[0].kind, OwnedDataKind::File);
+    }
+
+    #[test]
+    fn a_world_root_remains_shared_while_package_subtrees_can_be_owned() {
+        let directory = instance();
+        let root = directory.path().canonicalize().unwrap();
+        std::fs::create_dir_all(root.join("saves/example")).unwrap();
+        std::fs::write(root.join("saves/example/level.dat"), b"world").unwrap();
+        let xaero = "a".repeat(64);
+        let voxy = "b".repeat(64);
+        let mut ledger = DataOwnershipLedger::default();
+
+        apply_write(
+            &root,
+            &mut ledger,
+            OwnedDataPath::Instance {
+                relative: "saves/example/xaeromap.txt".to_string(),
+            },
+            OwnedDataKind::File,
+            xaero.clone(),
+        );
+        apply_creation(
+            &root,
+            &mut ledger,
+            OwnedDataPath::Instance {
+                relative: "saves/example/voxy".to_string(),
+            },
+            OwnedDataKind::Tree,
+            voxy.clone(),
+        );
+        compact_ledger(&mut ledger);
+
+        assert_eq!(ledger.entries.len(), 2);
+        assert!(ledger.entries.iter().any(|entry| {
+            entry.path
+                == OwnedDataPath::Instance {
+                    relative: "saves/example/xaeromap.txt".to_string(),
+                }
+                && entry.kind == OwnedDataKind::File
+                && entry.owner.as_deref() == Some(xaero.as_str())
+        }));
+        assert!(ledger.entries.iter().any(|entry| {
+            entry.path
+                == OwnedDataPath::Instance {
+                    relative: "saves/example/voxy".to_string(),
+                }
+                && entry.kind == OwnedDataKind::Tree
+                && entry.owner.as_deref() == Some(voxy.as_str())
+        }));
+        assert!(!ledger.entries.iter().any(|entry| {
+            entry.path
+                == OwnedDataPath::Instance {
+                    relative: "saves/example".to_string(),
+                }
+        }));
+    }
+
+    #[test]
+    fn stale_shared_world_claims_are_dropped_without_losing_descendants() {
+        let directory = instance();
+        let root = directory.path().canonicalize().unwrap();
+        std::fs::create_dir_all(root.join("saves/example/voxy")).unwrap();
+        std::fs::write(root.join("saves/example/level.dat"), b"world").unwrap();
+        let world = OwnedDataPath::Instance {
+            relative: "saves/example".to_string(),
+        };
+        let nested = OwnedDataPath::Instance {
+            relative: "saves/example/voxy".to_string(),
+        };
+        let mut ledger = DataOwnershipLedger::from_entries(vec![
+            DataOwnershipEntry {
+                path: world.clone(),
+                kind: OwnedDataKind::Tree,
+                owner: Some("a".repeat(64)),
+            },
+            DataOwnershipEntry {
+                path: nested.clone(),
+                kind: OwnedDataKind::Tree,
+                owner: Some("b".repeat(64)),
+            },
+        ]);
+
+        assert!(drop_protected_tree_claims(&root, &mut ledger));
+        assert_eq!(ledger.entries.len(), 1);
+        assert_eq!(ledger.entries[0].path, nested);
+        assert!(
+            !build_owned_roots(&ledger, &"a".repeat(64))
+                .iter()
+                .any(|entry| entry.path == world)
+        );
+    }
+
+    #[test]
+    fn configurable_server_world_is_detected_from_world_markers() {
+        let directory = instance();
+        let root = directory.path().canonicalize().unwrap();
+        std::fs::create_dir_all(root.join("custom-level")).unwrap();
+        std::fs::write(root.join("custom-level/level.dat"), b"world").unwrap();
+        let mut ledger = DataOwnershipLedger::default();
+        apply_write(
+            &root,
+            &mut ledger,
+            OwnedDataPath::Instance {
+                relative: "custom-level/xaeromap.txt".to_string(),
+            },
+            OwnedDataKind::File,
+            "a".repeat(64),
+        );
+        assert_eq!(ledger.entries.len(), 1);
+        assert_eq!(ledger.entries[0].kind, OwnedDataKind::File);
     }
 
     #[test]
@@ -1649,6 +2106,7 @@ mod tests {
         };
         let mut ledger = DataOwnershipLedger::default();
         apply_creation(
+            &root,
             &mut ledger,
             owned_root.clone(),
             OwnedDataKind::Tree,
@@ -1659,6 +2117,7 @@ mod tests {
             std::fs::write(root.join(&relative), [index as u8]).unwrap();
             if index < 70 {
                 apply_write(
+                    &root,
                     &mut ledger,
                     OwnedDataPath::Instance {
                         relative: relative.clone(),
@@ -1770,6 +2229,7 @@ mod tests {
         let owner = "a".repeat(64);
         let mut ledger = DataOwnershipLedger::default();
         apply_creation(
+            Path::new("."),
             &mut ledger,
             OwnedDataPath::Instance {
                 relative: "bluemap".to_string(),
@@ -1783,6 +2243,7 @@ mod tests {
             "bluemap/maps/world/tiles/0/0.bin",
         ] {
             apply_creation(
+                Path::new("."),
                 &mut ledger,
                 OwnedDataPath::Instance {
                     relative: relative.to_string(),
@@ -1921,6 +2382,53 @@ mod tests {
         assert!(!root.join("config/example").exists());
         assert!(ManifestFile::open(root).unwrap().inner.packages.is_empty());
         assert!(Lockfile::open(root).unwrap().inner.packages.is_empty());
+    }
+
+    #[test]
+    fn reset_removes_owned_data_but_keeps_package_and_workspace_documents() {
+        let directory = instance();
+        let root = directory.path().canonicalize().unwrap();
+        std::fs::create_dir_all(root.join("mods")).unwrap();
+        let bytes = b"managed package";
+        std::fs::write(root.join("mods/example.jar"), bytes).unwrap();
+        let owner = crate::jar::sha256_digest(bytes);
+        std::fs::write(
+            root.join("orbit.lock"),
+            format!(
+                "[meta]\nmc_version = \"1\"\nmodloader = \"fabric\"\nmodloader_version = \"1\"\n\n[[package]]\nmod_id = \"example\"\nversion = \"1\"\nsha256 = \"{owner}\"\nsha512 = \"{}\"\nfilename = \"example.jar\"\nremotes = [{{ type = \"file\", path = \"example.jar\" }}]\nartifact_sources = [{{ type = \"file\", path = \"example.jar\" }}]\n",
+                crate::jar::sha512_digest(bytes)
+            ),
+        )
+        .unwrap();
+        std::fs::create_dir_all(root.join("config/example/cache")).unwrap();
+        std::fs::write(root.join("config/example/cache/data.bin"), b"state").unwrap();
+        save_ledger(
+            &root,
+            &DataOwnershipLedger::from_entries(vec![DataOwnershipEntry {
+                path: OwnedDataPath::Instance {
+                    relative: "config/example".to_string(),
+                },
+                kind: OwnedDataKind::Tree,
+                owner: Some(owner),
+            }]),
+        )
+        .unwrap();
+        let manifest_before = std::fs::read(root.join("orbit.toml")).unwrap();
+        let lock_before = std::fs::read(root.join("orbit.lock")).unwrap();
+
+        let plan = plan_data_reset(&root, "example", false).unwrap();
+        let report = apply_data_reset(&root, &plan, false).unwrap();
+
+        assert_eq!(report.mod_id, "example");
+        assert_eq!(report.removed.len(), 1);
+        assert!(!root.join("config/example").exists());
+        assert!(root.join("mods/example.jar").is_file());
+        assert_eq!(
+            std::fs::read(root.join("orbit.toml")).unwrap(),
+            manifest_before
+        );
+        assert_eq!(std::fs::read(root.join("orbit.lock")).unwrap(), lock_before);
+        assert!(load_ledger(&root).unwrap().entries.is_empty());
     }
 
     #[test]

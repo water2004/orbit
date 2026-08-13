@@ -4,7 +4,7 @@
 //! runtime launcher and receives the Java agent only through the child process
 //! environment.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -166,8 +166,10 @@ fn write_agent_context(instance: &Path) -> Result<PathBuf, OrbitError> {
     let lock = crate::workspace::Lockfile::open(instance)?.inner;
     let mut sources: BTreeMap<String, Option<String>> = BTreeMap::new();
     let mut modules: BTreeMap<String, Option<String>> = BTreeMap::new();
+    let mut package_owners: BTreeMap<String, Option<String>> = BTreeMap::new();
     let mut nested_bytes = 0_u64;
     for package in &lock.packages {
+        register_package_identities(package, &package.sha256, &mut package_owners);
         let artifact = instance.join("mods").join(&package.filename);
         if !artifact.is_file() {
             continue;
@@ -186,6 +188,16 @@ fn write_agent_context(instance: &Path) -> Result<PathBuf, OrbitError> {
             MAX_NESTED_BYTES,
             &mut sources,
         )?;
+    }
+    let mut delegations = BTreeSet::new();
+    for package in &lock.packages {
+        collect_package_delegations(
+            &package.sha256,
+            &package.dependencies,
+            &package.bundled,
+            &package_owners,
+            &mut delegations,
+        );
     }
 
     let mut document = String::from("3\tcontext\tend\n");
@@ -216,6 +228,9 @@ fn write_agent_context(instance: &Path) -> Result<PathBuf, OrbitError> {
             ));
         }
     }
+    for (caller, library) in delegations {
+        document.push_str(&format!("delegation\t{caller}\t{library}\tend\n"));
+    }
     for (path, kind, owner) in ownership_context(instance)? {
         document.push_str(&format!(
             "node\t{}\t{}\t{}\tend\n",
@@ -236,6 +251,82 @@ fn write_agent_context(instance: &Path) -> Result<PathBuf, OrbitError> {
     let path = instance.join(".orbit/runtime-data/agent-context.tsv");
     crate::atomic_io::write_atomic(&path, document.as_bytes())?;
     Ok(path)
+}
+
+fn register_package_identities(
+    package: &crate::lockfile::PackageEntry,
+    owner: &str,
+    identities: &mut BTreeMap<String, Option<String>>,
+) {
+    register_source(identities, package.mod_id.clone(), owner);
+    for provided in &package.provides {
+        register_source(identities, provided.id.clone(), owner);
+    }
+    register_bundled_identities(&package.bundled, owner, identities);
+}
+
+fn register_bundled_identities(
+    bundled: &[crate::lockfile::BundledMod],
+    owner: &str,
+    identities: &mut BTreeMap<String, Option<String>>,
+) {
+    for module in bundled {
+        register_source(identities, module.mod_id.clone(), owner);
+        for provided in &module.provides {
+            register_source(identities, provided.id.clone(), owner);
+        }
+        register_bundled_identities(&module.bundled, owner, identities);
+    }
+}
+
+fn collect_package_delegations(
+    caller: &str,
+    dependencies: &[crate::metadata::DependencyExpression],
+    bundled: &[crate::lockfile::BundledMod],
+    identities: &BTreeMap<String, Option<String>>,
+    output: &mut BTreeSet<(String, String)>,
+) {
+    collect_dependency_delegations(caller, dependencies, identities, output);
+    collect_bundled_delegations(caller, bundled, identities, output);
+}
+
+fn collect_bundled_delegations(
+    caller: &str,
+    bundled: &[crate::lockfile::BundledMod],
+    identities: &BTreeMap<String, Option<String>>,
+    output: &mut BTreeSet<(String, String)>,
+) {
+    for module in bundled {
+        collect_dependency_delegations(caller, &module.dependencies, identities, output);
+        collect_bundled_delegations(caller, &module.bundled, identities, output);
+    }
+}
+
+fn collect_dependency_delegations(
+    caller: &str,
+    dependencies: &[crate::metadata::DependencyExpression],
+    identities: &BTreeMap<String, Option<String>>,
+    output: &mut BTreeSet<(String, String)>,
+) {
+    use crate::metadata::DependencyKind;
+
+    for relation in dependencies
+        .iter()
+        .flat_map(|expression| expression.relations())
+    {
+        if matches!(
+            relation.kind,
+            DependencyKind::Incompatible | DependencyKind::Discouraged
+        ) {
+            continue;
+        }
+        let Some(Some(library)) = identities.get(&relation.id) else {
+            continue;
+        };
+        if library != caller {
+            output.insert((caller.to_string(), library.clone()));
+        }
+    }
 }
 
 fn collect_module_owners(
@@ -371,5 +462,28 @@ mod tests {
 
         register_source(&mut identities, "shared-id".into(), "owner-b");
         assert_eq!(identities["shared-id"], None);
+    }
+
+    #[test]
+    fn declared_library_edges_drive_delegated_writer_attribution() {
+        use crate::metadata::{DependencyExpression, DependencyKind, ModDependency};
+
+        let caller = "a".repeat(64);
+        let library = "b".repeat(64);
+        let blocked = "c".repeat(64);
+        let identities = BTreeMap::from([
+            ("library".to_string(), Some(library.clone())),
+            ("blocked".to_string(), Some(blocked.clone())),
+        ]);
+        let mut incompatible = ModDependency::required("blocked", "*");
+        incompatible.kind = DependencyKind::Incompatible;
+        let dependencies = vec![
+            DependencyExpression::from(ModDependency::required("library", "*")),
+            DependencyExpression::from(incompatible),
+        ];
+        let mut output = BTreeSet::new();
+        collect_dependency_delegations(&caller, &dependencies, &identities, &mut output);
+
+        assert_eq!(output, BTreeSet::from([(caller, library)]));
     }
 }

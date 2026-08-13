@@ -29,6 +29,7 @@ javac --release 8 -d "$classes_root" "$agent_root/tests/AgentFixture.java"
 jar cf "$fixture_jar" -C "$classes_root" .
 javac --release 8 -d "$harness_root" \
   "$agent_root/tests/AgentClasspathHarness.java" \
+  "$agent_root/tests/AgentDelegationHarness.java" \
   "$agent_root/tests/AgentIsolatedHarness.java" \
   "$agent_root/tests/AgentOwnershipHarness.java"
 
@@ -150,6 +151,45 @@ if [[ "$(sha256sum "$ownership_session" | awk '{print $1}')" != "$first_snapshot
   exit 1
 fi
 printf '%s\n' "$ownership_session"
+
+# I/O performed by a declared helper dependency belongs to the outer logical
+# package that invoked that helper.
+delegation_root="$test_root/delegation"
+delegation_instance="$delegation_root/instance"
+delegation_library_classes="$delegation_root/library-classes"
+delegation_consumer_classes="$delegation_root/consumer-classes"
+delegation_library_jar="$delegation_root/library.jar"
+delegation_consumer_jar="$delegation_root/consumer.jar"
+delegation_session="$delegation_instance/.orbit/runtime-data/sessions/test.events"
+delegation_context="$delegation_instance/.orbit/runtime-data/agent-context.tsv"
+mkdir -p "$delegation_library_classes" "$delegation_consumer_classes" \
+  "$delegation_instance/config" "$(dirname "$delegation_session")"
+javac --release 8 -d "$delegation_library_classes" "$agent_root/tests/AgentDelegateLibrary.java"
+jar cf "$delegation_library_jar" -C "$delegation_library_classes" .
+javac --release 8 -cp "$delegation_library_jar" -d "$delegation_consumer_classes" \
+  "$agent_root/tests/AgentDelegateConsumer.java"
+jar cf "$delegation_consumer_jar" -C "$delegation_consumer_classes" .
+delegation_library_hash="$(sha256sum "$delegation_library_jar" | awk '{print $1}')"
+delegation_consumer_hash="$(sha256sum "$delegation_consumer_jar" | awk '{print $1}')"
+delegation_root_encoded="$(encode_path "$delegation_instance")"
+delegation_session_encoded="$(encode_path "$delegation_session")"
+delegation_context_encoded="$(encode_path "$delegation_context")"
+printf '3\tcontext\tend\ncapability\tjava\t8-25\tend\ncapability\tsource\tfile\tend\nsource\t%s\t%s\tend\nsource\t%s\t%s\tend\ndelegation\t%s\t%s\tend\n' \
+  "$delegation_library_hash" "$delegation_library_hash" \
+  "$delegation_consumer_hash" "$delegation_consumer_hash" \
+  "$delegation_consumer_hash" "$delegation_library_hash" > "$delegation_context"
+"$java_command" "-javaagent:$agent_path=root=$delegation_root_encoded;session=$delegation_session_encoded;context=$delegation_context_encoded" \
+  -cp "$harness_root" AgentDelegationHarness \
+  "$delegation_consumer_jar" "$delegation_library_jar" "$delegation_instance"
+if (( $(wc -l < "$delegation_session") != 2 )); then
+  echo "Delegated writer snapshot did not contain one owned path" >&2
+  exit 1
+fi
+grep -q "^3[[:space:]]create[[:space:]]file[[:space:]]$delegation_consumer_hash[[:space:]]" "$delegation_session" || {
+  echo "Delegated file write was not attributed to the logical caller" >&2
+  exit 1
+}
+printf '%s\n' "$delegation_session"
 
 # The Agent has a Java 8 baseline but must still rewrite APIs introduced by
 # newer JDKs at application call sites.
