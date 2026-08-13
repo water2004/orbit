@@ -371,6 +371,12 @@ pub enum InstanceCommands {
         loader_version: Option<String>,
     },
 
+    /// Inspect or change the client launch resolution for this instance.
+    Resolution {
+        #[command(subcommand)]
+        command: ResolutionCommands,
+    },
+
     /// Unregister the explicit or local instance without deleting its files.
     Remove,
 
@@ -385,9 +391,21 @@ impl InstanceCommands {
     pub const fn accepts_instance_context(&self) -> bool {
         matches!(
             self,
-            Self::Show | Self::Rename { .. } | Self::Configure { .. } | Self::Remove
+            Self::Show
+                | Self::Rename { .. }
+                | Self::Configure { .. }
+                | Self::Resolution { .. }
+                | Self::Remove
         )
     }
+}
+
+#[derive(Debug, Subcommand)]
+pub enum ResolutionCommands {
+    /// Persist a windowed launch resolution for this client instance.
+    Set { width: u32, height: u32 },
+    /// Stop passing an explicit client launch resolution.
+    Clear,
 }
 
 #[derive(Debug, Subcommand)]
@@ -672,6 +690,50 @@ mod tests {
                 command: InstanceCommands::Configure {
                     loader: Some(LoaderKindArg::Fabric),
                     ..
+                }
+            }
+        ));
+    }
+
+    #[test]
+    fn client_resolution_commands_have_typed_set_and_clear_shapes() {
+        let set = Cli::try_parse_from([
+            "orbit-launcher",
+            "--instance",
+            "client",
+            "instance",
+            "resolution",
+            "set",
+            "1920",
+            "1080",
+        ])
+        .unwrap();
+        assert!(matches!(
+            set.command,
+            Commands::Instance {
+                command: InstanceCommands::Resolution {
+                    command: ResolutionCommands::Set {
+                        width: 1920,
+                        height: 1080
+                    }
+                }
+            }
+        ));
+
+        let clear = Cli::try_parse_from([
+            "orbit-launcher",
+            "--instance",
+            "client",
+            "instance",
+            "resolution",
+            "clear",
+        ])
+        .unwrap();
+        assert!(matches!(
+            clear.command,
+            Commands::Instance {
+                command: InstanceCommands::Resolution {
+                    command: ResolutionCommands::Clear
                 }
             }
         ));

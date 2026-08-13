@@ -4,8 +4,8 @@ use uuid::Uuid;
 
 use crate::error::LauncherError;
 use crate::instance::{
-    INSTANCE_MANIFEST_FILE, InstanceKind, InstanceManifest, LoaderKind, ManifestFile,
-    validate_instance_name,
+    ClientConfig, ClientResolution, INSTANCE_MANIFEST_FILE, InstanceKind, InstanceManifest,
+    LoaderKind, ManifestFile, validate_instance_name,
 };
 use crate::layout::{InstanceLocation, validate_directory_name};
 use crate::registry::{InstanceRegistry, RegistryEntry};
@@ -263,6 +263,41 @@ pub struct ConfigureInstanceRequest {
 pub struct ConfigureInstanceResult {
     pub entry: RegistryEntry,
     pub manifest: InstanceManifest,
+}
+
+pub fn set_client_resolution(
+    paths: &RuntimePaths,
+    selector: &str,
+    resolution: Option<ClientResolution>,
+) -> Result<ConfigureInstanceResult, LauncherError> {
+    if let Some(resolution) = resolution {
+        resolution.validate()?;
+    }
+    let registry = InstanceRegistry::load(&paths.instances_file())?;
+    let entry = registry
+        .find(selector)
+        .cloned()
+        .ok_or_else(|| LauncherError::InstanceNotFound(selector.to_string()))?;
+    let mut manifest_file = ManifestFile::open(entry.instance_directory())?;
+    if manifest_file.inner.id != entry.id {
+        return Err(LauncherError::InstanceRegistryMismatch(format!(
+            "registry entry '{}' and manifest have different IDs",
+            entry.name
+        )));
+    }
+    if manifest_file.inner.kind != InstanceKind::Client {
+        return Err(LauncherError::InvalidManifest(
+            "server instances do not have a client window resolution".to_string(),
+        ));
+    }
+    manifest_file.inner.client = resolution.map(|resolution| ClientConfig {
+        resolution: Some(resolution),
+    });
+    manifest_file.save()?;
+    Ok(ConfigureInstanceResult {
+        entry,
+        manifest: manifest_file.inner,
+    })
 }
 
 pub fn configure_instance(
@@ -533,6 +568,68 @@ mod tests {
                 .unwrap()
                 .id,
             created.entry.id
+        );
+    }
+
+    #[test]
+    fn client_resolution_is_instance_local_and_can_be_cleared() {
+        let directory = tempfile::tempdir().unwrap();
+        let paths = paths(directory.path());
+        let repository = directory.path().join("minecraft");
+        create_instance(
+            &paths,
+            CreateInstanceRequest {
+                directory: repository,
+                name: "client".to_string(),
+                kind: InstanceKind::Client,
+                minecraft_requirement: "1.21.1".to_string(),
+                loader_kind: LoaderKind::Vanilla,
+                loader_requirement: None,
+            },
+        )
+        .unwrap();
+
+        let configured = set_client_resolution(
+            &paths,
+            "client",
+            Some(ClientResolution {
+                width: 1920,
+                height: 1080,
+            }),
+        )
+        .unwrap();
+        assert_eq!(
+            configured.manifest.client.unwrap().resolution,
+            Some(ClientResolution {
+                width: 1920,
+                height: 1080,
+            })
+        );
+        assert!(
+            set_client_resolution(&paths, "client", None)
+                .unwrap()
+                .manifest
+                .client
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn server_rejects_client_resolution() {
+        let directory = tempfile::tempdir().unwrap();
+        let paths = paths(directory.path());
+        let root = directory.path().join("server");
+        create_instance(&paths, request(root, "server")).unwrap();
+        assert!(
+            set_client_resolution(
+                &paths,
+                "server",
+                Some(ClientResolution {
+                    width: 1280,
+                    height: 720,
+                })
+            )
+            .is_err()
         );
     }
 

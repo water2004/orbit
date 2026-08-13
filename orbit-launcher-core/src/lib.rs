@@ -74,7 +74,8 @@ pub use installer::{
     resolve_loader_installer, run_loader_installer,
 };
 pub use instance::{
-    INSTANCE_MANIFEST_FILE, InstanceKind, InstanceManifest, LoaderKind, ManifestFile, RestartPolicy,
+    ClientConfig, ClientResolution, INSTANCE_MANIFEST_FILE, InstanceKind, InstanceManifest,
+    LoaderKind, ManifestFile, RestartPolicy,
 };
 pub use java::{
     InstalledJavaRuntime, JavaProgressEvent, JavaTarget, MOJANG_RUNTIME_MANIFEST_URL,
@@ -103,7 +104,7 @@ pub use operations::{
     ConfigureInstanceRequest, ConfigureInstanceResult, CreateInstanceRequest, CreateInstanceResult,
     ImportInstanceResult, RemoveInstanceResult, RenameInstanceResult, configure_instance,
     create_instance, import_instance, remove_instance, rename_instance, resolve_directory,
-    rollback_created_instance, set_default_instance,
+    rollback_created_instance, set_client_resolution, set_default_instance,
 };
 pub use pack::{
     InstallPackFormat, InstallPackOptionalFile, InstallPackRequirement, inspect_install_pack,

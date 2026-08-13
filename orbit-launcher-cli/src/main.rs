@@ -96,6 +96,7 @@ fn command_name(command: &cli::Commands) -> &'static str {
             cli::InstanceCommands::Show => "instance.show",
             cli::InstanceCommands::Rename { .. } => "instance.rename",
             cli::InstanceCommands::Configure { .. } => "instance.configure",
+            cli::InstanceCommands::Resolution { .. } => "instance.resolution",
             cli::InstanceCommands::Remove => "instance.remove",
             cli::InstanceCommands::Default { .. } => "instance.default",
         },
@@ -171,6 +172,7 @@ fn render_success(format: OutputFormat, output: app::CommandOutput) {
             app::CommandOutput::InstanceMutation(value) => print_json(command, value),
             app::CommandOutput::Rename(value) => print_json(command, value),
             app::CommandOutput::InstanceConfigured(value) => print_json(command, value),
+            app::CommandOutput::InstanceResolution(value) => print_json(command, value),
             app::CommandOutput::LauncherStateExport(value) => print_json(command, value),
             app::CommandOutput::Default(value) => print_json(command, value),
             app::CommandOutput::AccountList(value) => print_json(command, value),
@@ -499,6 +501,16 @@ fn render_text(output: app::CommandOutput) {
                     version = loader_version
                 )
             );
+            if let Some(resolution) = view.client_resolution {
+                println!(
+                    "  {}",
+                    tr!(
+                        "Client resolution: %{width}×%{height}",
+                        width = resolution.width,
+                        height = resolution.height
+                    )
+                );
+            }
         }
         app::CommandOutput::InstanceMutation(view) => {
             println!(
@@ -550,6 +562,24 @@ fn render_text(output: app::CommandOutput) {
                 )
             );
         }
+        app::CommandOutput::InstanceResolution(view) => match view.client_resolution {
+            Some(resolution) => println!(
+                "{}",
+                tr!(
+                    "Set client launch resolution for %{instance} to %{width}×%{height}.",
+                    instance = view.instance.name,
+                    width = resolution.width,
+                    height = resolution.height
+                )
+            ),
+            None => println!(
+                "{}",
+                tr!(
+                    "Cleared the explicit client launch resolution for %{instance}.",
+                    instance = view.instance.name
+                )
+            ),
+        },
         app::CommandOutput::LauncherStateExport(view) => println!(
             "{}",
             tr!(

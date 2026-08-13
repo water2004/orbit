@@ -18,8 +18,8 @@ use orbit_launcher_core::{
     list_config, login_external_yggdrasil, move_minecraft_directory, native_secret_store,
     prepare_install, prepare_launch, remove_instance, remove_yggdrasil_provider, rename_instance,
     resolve_directory, resolve_instance, resolve_launch_identity, restore_launcher_state,
-    rollback_created_instance, run_launch, set_config, set_default_instance, show_current_eula,
-    supervise_server, unset_config,
+    rollback_created_instance, run_launch, set_client_resolution, set_config, set_default_instance,
+    show_current_eula, supervise_server, unset_config,
 };
 use tokio::sync::{mpsc, watch};
 use zeroize::Zeroizing;
@@ -27,7 +27,7 @@ use zeroize::Zeroizing;
 use crate::cli::{
     AccountCommands, AccountLoginCommands, Commands, ConfigCommands, DefaultCommands, EulaCommands,
     InstanceCommands, JavaCommands, MicrosoftLoginCommands, MinecraftCommands, PackageCommands,
-    ServerCommands, VersionCommands, YggdrasilProviderCommands,
+    ResolutionCommands, ServerCommands, VersionCommands, YggdrasilProviderCommands,
 };
 use crate::output::{
     AccountListView, AccountLoginView, AccountLogoutView, AccountSelectionView, AccountView,
@@ -65,6 +65,7 @@ pub enum CommandOutput {
     InstanceMutation(InstanceMutationView),
     Rename(RenameView),
     InstanceConfigured(InstanceDetailView),
+    InstanceResolution(InstanceDetailView),
     LauncherStateExport(LauncherStateExportView),
     Default(DefaultView),
     AccountList(AccountListView),
@@ -122,6 +123,7 @@ impl CommandOutput {
             Self::InstanceMutation(view) => view.action.command_name(),
             Self::Rename(_) => "instance.rename",
             Self::InstanceConfigured(_) => "instance.configure",
+            Self::InstanceResolution(_) => "instance.resolution",
             Self::LauncherStateExport(_) => "export",
             Self::Default(_) => "instance.default",
             Self::AccountList(_) => "account.list",
@@ -1601,6 +1603,29 @@ fn execute_instance(
                 configured.entry.instance_directory(),
             )?;
             Ok(CommandOutput::InstanceConfigured(InstanceDetailView::new(
+                &configured.entry,
+                &configured.manifest,
+                installed.as_ref().map(|lock| &lock.inner),
+                registry.default_instance,
+                resolved.source,
+            )))
+        }
+        InstanceCommands::Resolution { command } => {
+            let registry = InstanceRegistry::load(&registry_path)?;
+            let resolved =
+                resolve_instance(&registry, selector, current_dir, ContextIntent::Sensitive)?;
+            let resolution = match command {
+                ResolutionCommands::Set { width, height } => {
+                    Some(orbit_launcher_core::ClientResolution { width, height })
+                }
+                ResolutionCommands::Clear => None,
+            };
+            let configured =
+                set_client_resolution(runtime.paths(), &resolved.entry.id.to_string(), resolution)?;
+            let installed = orbit_launcher_core::LockFile::open_optional(
+                configured.entry.instance_directory(),
+            )?;
+            Ok(CommandOutput::InstanceResolution(InstanceDetailView::new(
                 &configured.entry,
                 &configured.manifest,
                 installed.as_ref().map(|lock| &lock.inner),

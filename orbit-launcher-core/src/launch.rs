@@ -880,7 +880,26 @@ fn assemble_arguments(
     }
     arguments.extend(expand_arguments(&lock.arguments.game, placeholders)?);
     arguments.extend(manifest.launch.game_args.iter().cloned());
+    append_client_resolution(manifest, &mut arguments);
     Ok(arguments)
+}
+
+fn append_client_resolution(
+    manifest: &crate::instance::InstanceManifest,
+    arguments: &mut Vec<String>,
+) {
+    if let Some(resolution) = manifest
+        .client
+        .as_ref()
+        .and_then(|client| client.resolution)
+    {
+        arguments.extend([
+            "--width".to_string(),
+            resolution.width.to_string(),
+            "--height".to_string(),
+            resolution.height.to_string(),
+        ]);
+    }
 }
 
 fn authentication_arguments(
@@ -1064,6 +1083,30 @@ mod tests {
         )
         .unwrap();
         assert_eq!(arguments, ["--token=<redacted>", "1.20.1"]);
+    }
+
+    #[test]
+    fn client_resolution_becomes_standard_game_arguments() {
+        let mut manifest = crate::instance::InstanceManifest::new(
+            Uuid::new_v4(),
+            "client",
+            InstanceKind::Client,
+            "26.2",
+            crate::instance::LoaderKind::Vanilla,
+            None,
+        )
+        .unwrap();
+        manifest.client = Some(crate::instance::ClientConfig {
+            resolution: Some(crate::instance::ClientResolution {
+                width: 1600,
+                height: 900,
+            }),
+        });
+        let mut arguments = vec!["--demo".to_string()];
+
+        append_client_resolution(&manifest, &mut arguments);
+
+        assert_eq!(arguments, ["--demo", "--width", "1600", "--height", "900"]);
     }
 
     #[tokio::test]

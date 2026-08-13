@@ -99,6 +99,8 @@ pub struct InstanceManifest {
     pub loader: LoaderConfig,
     #[serde(default)]
     pub launch: LaunchConfig,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client: Option<ClientConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub server: Option<ServerConfig>,
 }
@@ -125,6 +127,7 @@ impl InstanceManifest {
                 requirement: loader_requirement,
             },
             launch: LaunchConfig::default(),
+            client: None,
             server: (kind == InstanceKind::Server).then(ServerConfig::default),
         };
         manifest.validate()?;
@@ -165,21 +168,29 @@ impl InstanceManifest {
                     .to_string(),
             ));
         }
-        match (self.kind, &self.server) {
-            (InstanceKind::Client, Some(_)) => {
+        match (self.kind, &self.client, &self.server) {
+            (InstanceKind::Client, _, Some(_)) => {
                 return Err(LauncherError::InvalidManifest(
                     "client instance cannot contain a [server] section".to_string(),
                 ));
             }
-            (InstanceKind::Server, None) => {
+            (InstanceKind::Server, Some(_), _) => {
+                return Err(LauncherError::InvalidManifest(
+                    "server instance cannot contain a [client] section".to_string(),
+                ));
+            }
+            (InstanceKind::Server, _, None) => {
                 return Err(LauncherError::InvalidManifest(
                     "server instance requires a [server] section".to_string(),
                 ));
             }
-            (_, _) => {}
+            (_, _, _) => {}
         }
         if let Some(server) = &self.server {
             server.validate()?;
+        }
+        if let Some(resolution) = self.client.as_ref().and_then(|client| client.resolution) {
+            resolution.validate()?;
         }
         Ok(())
     }
@@ -236,6 +247,37 @@ pub struct LaunchConfig {
     pub game_args: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub account: Option<Uuid>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ClientConfig {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resolution: Option<ClientResolution>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ClientResolution {
+    pub width: u32,
+    pub height: u32,
+}
+
+impl ClientResolution {
+    pub fn validate(self) -> Result<(), LauncherError> {
+        if self.width == 0 || self.height == 0 {
+            return Err(LauncherError::InvalidManifest(
+                "client resolution width and height must be greater than zero".to_string(),
+            ));
+        }
+        if self.width > i32::MAX as u32 || self.height > i32::MAX as u32 {
+            return Err(LauncherError::InvalidManifest(
+                "client resolution width and height must fit a signed 32-bit Minecraft argument"
+                    .to_string(),
+            ));
+        }
+        Ok(())
+    }
 }
 
 impl Default for LaunchConfig {
@@ -455,6 +497,66 @@ mod tests {
         .unwrap();
         client.server = Some(ServerConfig::default());
         assert!(client.validate().is_err());
+
+        let mut server = InstanceManifest::new(
+            id,
+            "server",
+            InstanceKind::Server,
+            "1.21.1",
+            LoaderKind::Vanilla,
+            None,
+        )
+        .unwrap();
+        server.client = Some(ClientConfig {
+            resolution: Some(ClientResolution {
+                width: 1920,
+                height: 1080,
+            }),
+        });
+        assert!(server.validate().is_err());
+    }
+
+    #[test]
+    fn client_resolution_roundtrips_and_rejects_zero_dimensions() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut manifest = InstanceManifest::new(
+            Uuid::new_v4(),
+            "client",
+            InstanceKind::Client,
+            "1.21.1",
+            LoaderKind::Vanilla,
+            None,
+        )
+        .unwrap();
+        manifest.client = Some(ClientConfig {
+            resolution: Some(ClientResolution {
+                width: 1600,
+                height: 900,
+            }),
+        });
+        ManifestFile::new(directory.path(), manifest)
+            .save()
+            .unwrap();
+        assert_eq!(
+            ManifestFile::open(directory.path())
+                .unwrap()
+                .inner
+                .client
+                .unwrap()
+                .resolution,
+            Some(ClientResolution {
+                width: 1600,
+                height: 900,
+            })
+        );
+        assert!(
+            ClientResolution {
+                width: 0,
+                height: 900,
+            }
+            .validate()
+            .is_err()
+        );
     }
 
     #[test]

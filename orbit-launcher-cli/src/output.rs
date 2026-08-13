@@ -134,6 +134,14 @@ pub struct InstanceDetailView {
     pub installed: Option<InstalledRuntimeView>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub selected_account_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub client_resolution: Option<ClientResolutionView>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+pub struct ClientResolutionView {
+    pub width: u32,
+    pub height: u32,
 }
 
 impl InstanceDetailView {
@@ -154,6 +162,14 @@ impl InstanceDetailView {
             },
             installed: installed.map(InstalledRuntimeView::from),
             selected_account_id: manifest.launch.account.map(|account| account.to_string()),
+            client_resolution: manifest
+                .client
+                .as_ref()
+                .and_then(|client| client.resolution)
+                .map(|resolution| ClientResolutionView {
+                    width: resolution.width,
+                    height: resolution.height,
+                }),
         }
     }
 }
