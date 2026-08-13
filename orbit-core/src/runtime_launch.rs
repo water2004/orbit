@@ -166,10 +166,8 @@ fn write_agent_context(instance: &Path) -> Result<PathBuf, OrbitError> {
     let lock = crate::workspace::Lockfile::open(instance)?.inner;
     let mut sources: BTreeMap<String, Option<String>> = BTreeMap::new();
     let mut modules: BTreeMap<String, Option<String>> = BTreeMap::new();
-    let mut package_owners: BTreeMap<String, Option<String>> = BTreeMap::new();
     let mut nested_bytes = 0_u64;
     for package in &lock.packages {
-        register_package_identities(package, &package.sha256, &mut package_owners);
         let artifact = instance.join("mods").join(&package.filename);
         if !artifact.is_file() {
             continue;
@@ -189,16 +187,7 @@ fn write_agent_context(instance: &Path) -> Result<PathBuf, OrbitError> {
             &mut sources,
         )?;
     }
-    let mut delegations = BTreeSet::new();
-    for package in &lock.packages {
-        collect_package_delegations(
-            &package.sha256,
-            &package.dependencies,
-            &package.bundled,
-            &package_owners,
-            &mut delegations,
-        );
-    }
+    let delegations = package_delegations(&lock);
 
     let mut document = String::from("3\tcontext\tend\n");
     document.push_str(&format!(
@@ -251,6 +240,31 @@ fn write_agent_context(instance: &Path) -> Result<PathBuf, OrbitError> {
     let path = instance.join(".orbit/runtime-data/agent-context.tsv");
     crate::atomic_io::write_atomic(&path, document.as_bytes())?;
     Ok(path)
+}
+
+fn package_delegations(lock: &crate::lockfile::OrbitLockfile) -> BTreeSet<(String, String)> {
+    let mut identities = BTreeMap::new();
+    for package in &lock.packages {
+        register_package_identities(package, &package.sha256, &mut identities);
+    }
+    let mut delegations = BTreeSet::new();
+    for package in &lock.packages {
+        collect_package_delegations(
+            &package.sha256,
+            &package.dependencies,
+            &package.bundled,
+            &identities,
+            &mut delegations,
+        );
+    }
+    delegations
+}
+
+pub(crate) fn delegated_library_owners(lock: &crate::lockfile::OrbitLockfile) -> BTreeSet<String> {
+    package_delegations(lock)
+        .into_iter()
+        .map(|(_, library)| library)
+        .collect()
 }
 
 fn register_package_identities(

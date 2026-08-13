@@ -22,6 +22,7 @@ const RUNTIME_DATA_DIRECTORY: &str = ".orbit/runtime-data";
 const LEDGER_FILE: &str = "ownership.toml";
 const SESSIONS_DIRECTORY: &str = "sessions";
 pub(crate) const LEDGER_SCHEMA: u32 = 3;
+const ATTRIBUTION_MODEL: u32 = 1;
 const OBSERVATION_SCHEMA: &str = "3";
 
 pub(crate) const RESERVED_INSTANCE_ROOTS: &[&str] = &[
@@ -73,6 +74,10 @@ pub struct DataOwnershipEntry {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct DataOwnershipLedger {
     pub(crate) schema: u32,
+    /// Model 1 distinguishes an I/O helper package from its declared caller.
+    /// Missing values are legacy model 0 and are migrated conservatively.
+    #[serde(default)]
+    attribution_model: u32,
     #[serde(default)]
     pub(crate) entries: Vec<DataOwnershipEntry>,
     /// Highest complete snapshot generation merged for each JVM session.
@@ -82,15 +87,19 @@ pub(crate) struct DataOwnershipLedger {
     /// A new physical scan is delayed until that representation has doubled.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     rebalance_watermarks: BTreeMap<String, usize>,
+    #[serde(skip)]
+    attribution_migrated: bool,
 }
 
 impl Default for DataOwnershipLedger {
     fn default() -> Self {
         Self {
             schema: LEDGER_SCHEMA,
+            attribution_model: ATTRIBUTION_MODEL,
             entries: Vec::new(),
             merged_sessions: BTreeMap::new(),
             rebalance_watermarks: BTreeMap::new(),
+            attribution_migrated: false,
         }
     }
 }
@@ -301,7 +310,7 @@ pub fn merge_observation_sessions(instance_dir: &Path) -> Result<usize, OrbitErr
 pub(crate) fn prune_missing_ownership(instance_dir: &Path) -> Result<usize, OrbitError> {
     let root = validate_instance(instance_dir)?;
     let mut ledger = load_ledger(&root)?;
-    let sanitized = drop_protected_tree_claims(&root, &mut ledger);
+    let sanitized = ledger.attribution_migrated || drop_protected_tree_claims(&root, &mut ledger);
     let (removed, changed) = prune_missing_entries(&root, &mut ledger)?;
     if sanitized || changed {
         save_ledger(&root, &ledger)?;
@@ -662,7 +671,7 @@ pub(crate) fn load_ledger(instance_dir: &Path) -> Result<DataOwnershipLedger, Or
         return Ok(DataOwnershipLedger::default());
     }
     let document = std::fs::read_to_string(&path)?;
-    let ledger: DataOwnershipLedger = toml::from_str(&document).map_err(|error| {
+    let mut ledger: DataOwnershipLedger = toml::from_str(&document).map_err(|error| {
         OrbitError::RuntimeData(RuntimeDataError::LedgerParse {
             path: path.display().to_string(),
             detail: error.to_string(),
@@ -676,7 +685,41 @@ pub(crate) fn load_ledger(instance_dir: &Path) -> Result<DataOwnershipLedger, Or
             },
         ));
     }
+    migrate_legacy_attribution(instance_dir, &mut ledger)?;
     Ok(ledger)
+}
+
+fn migrate_legacy_attribution(
+    instance_dir: &Path,
+    ledger: &mut DataOwnershipLedger,
+) -> Result<(), OrbitError> {
+    if ledger.attribution_model == ATTRIBUTION_MODEL {
+        return Ok(());
+    }
+    if ledger.attribution_model > ATTRIBUTION_MODEL {
+        return Err(OrbitError::Other(anyhow::anyhow!(
+            "unsupported runtime ownership attribution model {}",
+            ledger.attribution_model
+        )));
+    }
+
+    // Model 0 attributed an I/O helper's writes to the helper JAR. Those
+    // records cannot be reassigned after the fact without guessing which
+    // dependent called it. Removing only the ambiguous helper-owned facts is
+    // conservative: no user data is touched, and model 1 observations rebuild
+    // exact ownership on subsequent writes.
+    let lock = Lockfile::open(instance_dir)?.inner;
+    let ambiguous = crate::runtime_launch::delegated_library_owners(&lock);
+    ledger.entries.retain(|entry| {
+        !entry
+            .owner
+            .as_ref()
+            .is_some_and(|owner| ambiguous.contains(owner))
+    });
+    ledger.rebalance_watermarks.clear();
+    ledger.attribution_model = ATTRIBUTION_MODEL;
+    ledger.attribution_migrated = true;
+    Ok(())
 }
 
 pub(crate) fn save_ledger(
@@ -697,9 +740,11 @@ pub(crate) fn save_ledger(
 pub(crate) fn ownership_document(entries: Vec<DataOwnershipEntry>) -> Result<String, OrbitError> {
     toml::to_string_pretty(&DataOwnershipLedger {
         schema: LEDGER_SCHEMA,
+        attribution_model: ATTRIBUTION_MODEL,
         entries,
         merged_sessions: BTreeMap::new(),
         rebalance_watermarks: BTreeMap::new(),
+        attribution_migrated: false,
     })
     .map_err(|error| {
         OrbitError::RuntimeData(RuntimeDataError::LedgerSerialize {
@@ -773,9 +818,11 @@ pub(crate) fn effective_owner_for_relative(
     };
     let ledger = DataOwnershipLedger {
         schema: LEDGER_SCHEMA,
+        attribution_model: ATTRIBUTION_MODEL,
         entries: entries.to_vec(),
         merged_sessions: BTreeMap::new(),
         rebalance_watermarks: BTreeMap::new(),
+        attribution_migrated: false,
     };
     effective_owner(&ledger, &path)
 }
@@ -792,9 +839,11 @@ pub(crate) fn rebind_ownership_entries(
     }
     let mut ledger = DataOwnershipLedger {
         schema: LEDGER_SCHEMA,
+        attribution_model: ATTRIBUTION_MODEL,
         entries: std::mem::take(entries),
         merged_sessions: BTreeMap::new(),
         rebalance_watermarks: BTreeMap::new(),
+        attribution_migrated: false,
     };
     compact_ledger(&mut ledger);
     *entries = ledger.entries;
@@ -1601,6 +1650,34 @@ mod tests {
     };
     use crate::workspace::{Lockfile, ManifestFile};
 
+    fn locked_package(
+        mod_id: &str,
+        owner: &str,
+        dependencies: Vec<crate::metadata::DependencyExpression>,
+    ) -> PackageEntry {
+        let remote = PackageRemote::File {
+            path: format!("{mod_id}.jar"),
+        };
+        PackageEntry {
+            mod_id: mod_id.to_string(),
+            version: "1".to_string(),
+            sha1: String::new(),
+            sha256: owner.to_string(),
+            sha512: "c".repeat(128),
+            filename: format!("{mod_id}.jar"),
+            remotes: vec![remote.clone()],
+            artifact_sources: vec![ArtifactSource::File {
+                path: format!("{mod_id}.jar"),
+            }],
+            dependencies,
+            environment: crate::metadata::Environment::Both,
+            provides: Vec::new(),
+            language_loader: None,
+            embedded_artifacts: Vec::new(),
+            bundled: Vec::new(),
+        }
+    }
+
     fn instance() -> tempfile::TempDir {
         let directory = tempfile::tempdir().unwrap();
         std::fs::write(directory.path().join("orbit.toml"), "test fixture").unwrap();
@@ -1632,6 +1709,52 @@ mod tests {
     #[test]
     fn rejects_truncated_observation_records() {
         assert!(parse_observation("3\tcreate\tfile").is_err());
+    }
+
+    #[test]
+    fn legacy_helper_owned_facts_are_dropped_instead_of_guessed() {
+        let directory = instance();
+        let root = directory.path().canonicalize().unwrap();
+        let caller = "a".repeat(64);
+        let helper = "b".repeat(64);
+        Lockfile::new(
+            &root,
+            OrbitLockfile {
+                meta: LockMeta {
+                    mc_version: "1".to_string(),
+                    modloader: "fabric".to_string(),
+                    modloader_version: "1".to_string(),
+                },
+                packages: vec![
+                    locked_package(
+                        "caller",
+                        &caller,
+                        vec![crate::metadata::DependencyExpression::from(
+                            crate::metadata::ModDependency::required("helper", "*"),
+                        )],
+                    ),
+                    locked_package("helper", &helper, Vec::new()),
+                ],
+            },
+        )
+        .save()
+        .unwrap();
+        let path = ledger_path(&root);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &path,
+            format!(
+                "schema = 3\n\n[[entries]]\nkind = \"tree\"\nowner = \"{helper}\"\n[entries.path]\nscope = \"instance\"\nrelative = \"config/caller\"\n\n[[entries]]\nkind = \"file\"\nowner = \"{caller}\"\n[entries.path]\nscope = \"instance\"\nrelative = \"caller-state.bin\"\n"
+            ),
+        )
+        .unwrap();
+
+        let ledger = load_ledger(&root).unwrap();
+
+        assert!(ledger.attribution_migrated);
+        assert_eq!(ledger.attribution_model, ATTRIBUTION_MODEL);
+        assert_eq!(ledger.entries.len(), 1);
+        assert_eq!(ledger.entries[0].owner.as_deref(), Some(caller.as_str()));
     }
 
     #[test]
