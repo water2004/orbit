@@ -1,6 +1,6 @@
 [package]
 name = "orbit"
-version = "0.4.1"
+version = "0.5.0"
 edition = "2024"
 authors = ["Yuan Shui"]
 description = "A non-intrusive package manager for Minecraft mods"
