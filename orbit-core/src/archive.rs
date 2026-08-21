@@ -234,10 +234,11 @@ pub fn export_instance(
             let selected_owners = selected
                 .iter()
                 .filter_map(|package| lockfile.inner.find(package))
-                .map(|entry| entry.sha256.clone())
+                .map(|entry| entry.mod_id.clone())
                 .collect::<BTreeSet<_>>();
-            let ownership_entries =
+            let mut ownership_entries =
                 crate::runtime_data::ownership_entries_for(instance_dir, &selected_owners)?;
+            crate::runtime_data::retain_instance_ownership(&mut ownership_entries);
             let ownership_document =
                 crate::runtime_data::ownership_document(ownership_entries.clone())?;
             let state_sources =
@@ -1058,14 +1059,14 @@ mod tests {
                         relative: "bluemap".to_string(),
                     },
                     kind: crate::runtime_data::OwnedDataKind::Tree,
-                    owner: Some(owner),
+                    owner: Some("example".to_string()),
                 },
                 crate::runtime_data::DataOwnershipEntry {
                     path: crate::runtime_data::OwnedDataPath::Instance {
                         relative: "bluemap/foreign".to_string(),
                     },
                     kind: crate::runtime_data::OwnedDataKind::Tree,
-                    owner: Some("b".repeat(64)),
+                    owner: Some("other-package".to_string()),
                 },
             ]),
         )

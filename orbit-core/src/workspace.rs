@@ -149,6 +149,7 @@ pub fn save_workspace(manifest: &ManifestFile, lockfile: &Lockfile) -> Result<()
             "cannot save an Orbit manifest and lock from different workspaces"
         )));
     }
+    crate::runtime_data::migrate_ledger_before_workspace_update(manifest.dir())?;
     let manifest_document = manifest.inner.to_toml_string()?;
     let lock_document = lockfile.inner.to_toml_string()?;
     let original_manifest = read_optional(&manifest.path)?;

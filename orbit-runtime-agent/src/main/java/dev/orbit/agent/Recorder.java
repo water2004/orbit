@@ -30,6 +30,8 @@ import java.util.function.Function;
 public final class Recorder {
     private static final Map<String, String> SOURCE_OWNERS = new ConcurrentHashMap<>();
     private static final Map<String, String> MODULE_OWNERS = new ConcurrentHashMap<>();
+    /** Runtime artifact digest to stable logical package ID. */
+    private static final Map<String, String> PACKAGE_IDENTITIES = new ConcurrentHashMap<>();
     private static final Map<String, String> SOURCE_CACHE = new ConcurrentHashMap<>();
     private static final Map<String, Set<String>> DELEGATIONS = new ConcurrentHashMap<>();
     private static final Set<String> DELEGATED_OWNERS = ConcurrentHashMap.newKeySet();
@@ -407,7 +409,7 @@ public final class Recorder {
 
     private static void loadContext(Path context) throws Exception {
         List<String> lines = Files.readAllLines(context, StandardCharsets.UTF_8);
-        if (lines.isEmpty() || !lines.get(0).equals("3\tcontext\tend")) {
+        if (lines.isEmpty() || !lines.get(0).equals("4\tcontext\tend")) {
             throw new IllegalArgumentException("invalid runtime ownership context header");
         }
         boolean javaCapability = false;
@@ -429,6 +431,13 @@ public final class Recorder {
             } else if (fields.length == 3 && fields[0].equals("system-library") && fields[2].equals("end")) {
                 if (!fields[1].equals("fabric.systemLibraries") && !fields[1].equals("loader.systemLibraries")) {
                     throw new IllegalArgumentException("invalid Loader system-library property");
+                }
+            } else if (fields.length == 4 && fields[0].equals("package") && fields[3].equals("end")) {
+                requireDigest(fields[1]);
+                String packageId = decodeIdentity(fields[2]);
+                String previous = PACKAGE_IDENTITIES.putIfAbsent(fields[1], packageId);
+                if (previous != null && !previous.equals(packageId)) {
+                    throw new IllegalArgumentException("artifact maps to multiple logical packages");
                 }
             } else if (fields.length == 4 && fields[0].equals("source") && fields[3].equals("end")) {
                 requireDigest(fields[1]);
@@ -472,6 +481,12 @@ public final class Recorder {
         if (!javaCapability || (!fileCodeSources && !unionCodeSources && !quiltModuleIdentity)) {
             throw new IllegalArgumentException("runtime ownership context has no verified runtime strategy");
         }
+        for (String owner : SOURCE_OWNERS.values()) {
+            requirePackageIdentity(owner);
+        }
+        for (String owner : MODULE_OWNERS.values()) {
+            requirePackageIdentity(owner);
+        }
     }
 
     private static void requireJavaRange(String value) {
@@ -504,6 +519,20 @@ public final class Recorder {
     private static void requireDigest(String value) {
         if (value.length() != 64 || !value.chars().allMatch(character -> Character.digit(character, 16) >= 0)) {
             throw new IllegalArgumentException("invalid SHA-256 in runtime ownership context");
+        }
+    }
+
+    private static String decodeIdentity(String value) {
+        String identity = new String(Base64.getUrlDecoder().decode(value), StandardCharsets.UTF_8);
+        if (identity.isEmpty()) {
+            throw new IllegalArgumentException("empty logical package identity");
+        }
+        return identity;
+    }
+
+    private static void requirePackageIdentity(String owner) {
+        if (!PACKAGE_IDENTITIES.containsKey(owner)) {
+            throw new IllegalArgumentException("runtime artifact has no logical package identity");
         }
     }
 
@@ -679,7 +708,7 @@ public final class Recorder {
             List<State> snapshot = new ArrayList<State>(STATES.values());
             Collections.sort(snapshot, Comparator.comparing(state -> state.path.toString()));
             try (BufferedWriter writer = Files.newBufferedWriter(temporary, StandardCharsets.UTF_8)) {
-                writer.write("3\tsnapshot\t");
+                writer.write("4\tsnapshot\t");
                 writer.write(sessionId);
                 writer.write('\t');
                 writer.write(Long.toString(sessionStartedAtMillis));
@@ -688,7 +717,11 @@ public final class Recorder {
                 writer.write("\tend\n");
                 for (State state : snapshot) {
                     if (state.action != null && state.owner != null) {
-                        writeRecord(writer, state.action, state, state.owner);
+                        String packageId = PACKAGE_IDENTITIES.get(state.owner);
+                        if (packageId == null) {
+                            throw new IllegalStateException("observed artifact has no logical package identity");
+                        }
+                        writeRecord(writer, state.action, state, packageId);
                     }
                 }
             }
@@ -704,12 +737,14 @@ public final class Recorder {
     }
 
     private static void writeRecord(BufferedWriter writer, String action, State state, String owner) throws Exception {
-        writer.write("3\t");
+        writer.write("4\t");
         writer.write(action);
         writer.write('\t');
         writer.write(state.tree ? "tree" : "file");
         writer.write('\t');
-        writer.write(owner);
+        writer.write(Base64.getUrlEncoder().withoutPadding().encodeToString(
+            owner.getBytes(StandardCharsets.UTF_8)
+        ));
         writer.write('\t');
         writer.write(Long.toString(state.revision));
         writer.write('\t');

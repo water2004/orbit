@@ -420,25 +420,21 @@ pub fn export_migration(
     validate_target_is_unchanged(plan)?;
     crate::runtime_data::merge_observation_sessions(&plan.source_dir)?;
     let source_lock = Lockfile::open(&plan.source_dir)?.inner;
-    let owner_rebindings = plan
+    let source_owners = plan
         .target_lockfile
         .packages
         .iter()
-        .filter_map(|target| {
-            source_lock
-                .find(&target.mod_id)
-                .map(|source| (source.sha256.clone(), target.sha256.clone()))
-        })
-        .collect::<std::collections::BTreeMap<_, _>>();
-    let source_owners = owner_rebindings.keys().cloned().collect::<BTreeSet<_>>();
+        .filter(|target| source_lock.find(&target.mod_id).is_some())
+        .map(|target| target.mod_id.clone())
+        .collect::<BTreeSet<_>>();
     let mut ownership_entries =
         crate::runtime_data::ownership_entries_for(&plan.source_dir, &source_owners)?;
+    crate::runtime_data::retain_instance_ownership(&mut ownership_entries);
     let state_sources = crate::archive::portable_state_sources(
         &plan.source_dir,
         &source_owners,
         &ownership_entries,
     )?;
-    crate::runtime_data::rebind_ownership_entries(&mut ownership_entries, &owner_rebindings);
     let ownership_document = crate::runtime_data::ownership_document(ownership_entries)?;
     let state_files = state_sources.len();
     let state_bytes = state_sources.iter().map(|source| source.bytes).sum();
@@ -1227,13 +1223,6 @@ mod tests {
         write_empty_orbit_instance(&source, "1", "1");
         write_fabric_package(&source.join("mods/local.jar"), "local", ">=1");
         crate::sync_instance(&source, &[], false).await.unwrap();
-        let source_owner = Lockfile::open(&source)
-            .unwrap()
-            .inner
-            .find("local")
-            .unwrap()
-            .sha256
-            .clone();
         std::fs::create_dir_all(source.join("local-data/exports")).unwrap();
         std::fs::write(
             source.join("local-data/exports/user-created.txt"),
@@ -1248,7 +1237,7 @@ mod tests {
                         relative: "local-data".to_string(),
                     },
                     kind: crate::runtime_data::OwnedDataKind::Tree,
-                    owner: Some(source_owner),
+                    owner: Some("local".to_string()),
                 },
             ]),
         )
@@ -1291,13 +1280,12 @@ mod tests {
             std::fs::read(target.join("local-data/exports/user-created.txt")).unwrap(),
             b"user content inherited from the package tree"
         );
-        let target_owner = plan.target_lockfile().find("local").unwrap().sha256.clone();
         assert_eq!(
             crate::runtime_data::effective_owner_for_relative(
                 &crate::runtime_data::load_ledger(&target).unwrap().entries,
                 Path::new("local-data/exports/user-created.txt")
             ),
-            Some(target_owner)
+            Some("local".to_string())
         );
     }
 

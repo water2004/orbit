@@ -42,8 +42,9 @@ session_encoded="$(encode_path "$session_file")"
 context_encoded="$(encode_path "$context_file")"
 config_encoded="$(encode_path "$instance_root/config")"
 fixture_hash="$(sha256sum "$fixture_jar" | awk '{print $1}')"
-printf '3\tcontext\tend\ncapability\tjava\t8-25\tend\ncapability\tsource\tfile\tend\nsource\t%s\t%s\tend\nreserved\t%s\tend\n' \
-  "$fixture_hash" "$fixture_hash" "$config_encoded" > "$context_file"
+fixture_package="$(encode_path agent-fixture)"
+printf '4\tcontext\tend\ncapability\tjava\t8-25\tend\ncapability\tsource\tfile\tend\nsource\t%s\t%s\tend\npackage\t%s\t%s\tend\nreserved\t%s\tend\n' \
+  "$fixture_hash" "$fixture_hash" "$fixture_hash" "$fixture_package" "$config_encoded" > "$context_file"
 
 agent_entries="$(jar tf "$agent_path")"
 if grep -Fxq 'org/objectweb/asm/ClassReader.class' <<<"$agent_entries"; then
@@ -67,7 +68,7 @@ mkdir -p "$(dirname "$classpath_session")"
 classpath_root_encoded="$(encode_path "$classpath_instance")"
 classpath_session_encoded="$(encode_path "$classpath_session")"
 classpath_context_encoded="$(encode_path "$classpath_context")"
-printf '3\tcontext\tend\ncapability\tjava\t8-25\tend\ncapability\tsource\tfile\tend\n' \
+printf '4\tcontext\tend\ncapability\tjava\t8-25\tend\ncapability\tsource\tfile\tend\n' \
   > "$classpath_context"
 "$java_command" "-javaagent:$agent_path=root=$classpath_root_encoded;session=$classpath_session_encoded;context=$classpath_context_encoded" \
   -cp "$harness_root:$asm_dependency" AgentClasspathHarness
@@ -80,8 +81,8 @@ if (( record_count != 5 )); then
   echo "Expected one header, three lasting creations and one published deletion, got $record_count lines" >&2
   exit 1
 fi
-grep -q $'^3\tsnapshot\t' "$session_file" || {
-  echo "No v3 snapshot header was recorded" >&2
+grep -q $'^4\tsnapshot\t' "$session_file" || {
+  echo "No v4 snapshot header was recorded" >&2
   exit 1
 }
 grep -q $'\ttree\t' "$session_file" || {
@@ -92,7 +93,7 @@ grep -q $'\tfile\t' "$session_file" || {
   echo "No owned file was recorded" >&2
   exit 1
 }
-grep -q $'^3\tdelete\tfile\t' "$session_file" || {
+grep -q $'^4\tdelete\tfile\t' "$session_file" || {
   echo "No published deletion tombstone was recorded" >&2
   exit 1
 }
@@ -124,18 +125,21 @@ jar cf "$owner_a_jar" -C "$owner_a_classes" .
 jar cf "$owner_b_jar" -C "$owner_b_classes" .
 owner_a_hash="$(sha256sum "$owner_a_jar" | awk '{print $1}')"
 owner_b_hash="$(sha256sum "$owner_b_jar" | awk '{print $1}')"
+owner_a_package="$(encode_path owner-a)"
+owner_b_package="$(encode_path owner-b)"
 ownership_root_encoded="$(encode_path "$ownership_instance")"
 ownership_session_encoded="$(encode_path "$ownership_session")"
 ownership_context_encoded="$(encode_path "$ownership_context")"
-printf '3\tcontext\tend\ncapability\tjava\t8-25\tend\ncapability\tsource\tfile\tend\nsource\t%s\t%s\tend\nsource\t%s\t%s\tend\n' \
-  "$owner_a_hash" "$owner_a_hash" "$owner_b_hash" "$owner_b_hash" > "$ownership_context"
+printf '4\tcontext\tend\ncapability\tjava\t8-25\tend\ncapability\tsource\tfile\tend\nsource\t%s\t%s\tend\nsource\t%s\t%s\tend\npackage\t%s\t%s\tend\npackage\t%s\t%s\tend\n' \
+  "$owner_a_hash" "$owner_a_hash" "$owner_b_hash" "$owner_b_hash" \
+  "$owner_a_hash" "$owner_a_package" "$owner_b_hash" "$owner_b_package" > "$ownership_context"
 "$java_command" "-javaagent:$agent_path=root=$ownership_root_encoded;session=$ownership_session_encoded;context=$ownership_context_encoded" \
   -cp "$harness_root" AgentOwnershipHarness "$owner_a_jar" "$owner_b_jar" "$ownership_instance"
 if (( $(wc -l < "$ownership_session") != 2 )); then
   echo "Last-writer snapshot was not compacted to one path" >&2
   exit 1
 fi
-grep -q "^3[[:space:]]write[[:space:]]file[[:space:]]$owner_a_hash[[:space:]]3[[:space:]]" "$ownership_session" || {
+grep -q "^4[[:space:]]write[[:space:]]file[[:space:]]$owner_a_package[[:space:]]3[[:space:]]" "$ownership_session" || {
   echo "The package that performed the final write did not own the file" >&2
   exit 1
 }
@@ -171,13 +175,17 @@ javac --release 8 -cp "$delegation_library_jar" -d "$delegation_consumer_classes
 jar cf "$delegation_consumer_jar" -C "$delegation_consumer_classes" .
 delegation_library_hash="$(sha256sum "$delegation_library_jar" | awk '{print $1}')"
 delegation_consumer_hash="$(sha256sum "$delegation_consumer_jar" | awk '{print $1}')"
+delegation_library_package="$(encode_path delegation-library)"
+delegation_consumer_package="$(encode_path delegation-consumer)"
 delegation_root_encoded="$(encode_path "$delegation_instance")"
 delegation_session_encoded="$(encode_path "$delegation_session")"
 delegation_context_encoded="$(encode_path "$delegation_context")"
-printf '3\tcontext\tend\ncapability\tjava\t8-25\tend\ncapability\tsource\tfile\tend\nsource\t%s\t%s\tend\nsource\t%s\t%s\tend\ndelegation\t%s\t%s\tend\n' \
+printf '4\tcontext\tend\ncapability\tjava\t8-25\tend\ncapability\tsource\tfile\tend\nsource\t%s\t%s\tend\nsource\t%s\t%s\tend\ndelegation\t%s\t%s\tend\npackage\t%s\t%s\tend\npackage\t%s\t%s\tend\n' \
   "$delegation_library_hash" "$delegation_library_hash" \
   "$delegation_consumer_hash" "$delegation_consumer_hash" \
-  "$delegation_consumer_hash" "$delegation_library_hash" > "$delegation_context"
+  "$delegation_consumer_hash" "$delegation_library_hash" \
+  "$delegation_library_hash" "$delegation_library_package" \
+  "$delegation_consumer_hash" "$delegation_consumer_package" > "$delegation_context"
 "$java_command" "-javaagent:$agent_path=root=$delegation_root_encoded;session=$delegation_session_encoded;context=$delegation_context_encoded" \
   -cp "$harness_root" AgentDelegationHarness \
   "$delegation_consumer_jar" "$delegation_library_jar" "$delegation_instance"
@@ -185,7 +193,7 @@ if (( $(wc -l < "$delegation_session") != 2 )); then
   echo "Delegated writer snapshot did not contain one owned path" >&2
   exit 1
 fi
-grep -q "^3[[:space:]]create[[:space:]]file[[:space:]]$delegation_consumer_hash[[:space:]]" "$delegation_session" || {
+grep -q "^4[[:space:]]create[[:space:]]file[[:space:]]$delegation_consumer_package[[:space:]]" "$delegation_session" || {
   echo "Delegated file write was not attributed to the logical caller" >&2
   exit 1
 }
@@ -203,11 +211,12 @@ mkdir -p "$modern_classes" "$modern_instance/config" "$(dirname "$modern_session
 javac --release 11 -d "$modern_classes" "$agent_root/tests/AgentModernFixture.java"
 jar cf "$modern_jar" -C "$modern_classes" .
 modern_hash="$(sha256sum "$modern_jar" | awk '{print $1}')"
+modern_package="$(encode_path modern-fixture)"
 modern_root_encoded="$(encode_path "$modern_instance")"
 modern_session_encoded="$(encode_path "$modern_session")"
 modern_context_encoded="$(encode_path "$modern_context")"
-printf '3\tcontext\tend\ncapability\tjava\t8-25\tend\ncapability\tsource\tfile\tend\nsource\t%s\t%s\tend\n' \
-  "$modern_hash" "$modern_hash" > "$modern_context"
+printf '4\tcontext\tend\ncapability\tjava\t8-25\tend\ncapability\tsource\tfile\tend\nsource\t%s\t%s\tend\npackage\t%s\t%s\tend\n' \
+  "$modern_hash" "$modern_hash" "$modern_hash" "$modern_package" > "$modern_context"
 java "-javaagent:$agent_path=root=$modern_root_encoded;session=$modern_session_encoded;context=$modern_context_encoded" \
   -cp "$harness_root" AgentIsolatedHarness "$modern_jar" "$modern_instance" AgentModernFixture
 if (( $(wc -l < "$modern_session") != 3 )); then
@@ -254,8 +263,8 @@ union_context="$union_instance/.orbit/runtime-data/agent-context.tsv"
 union_root_encoded="$(encode_path "$union_instance")"
 union_session_encoded="$(encode_path "$union_session")"
 union_context_encoded="$(encode_path "$union_context")"
-printf '3\tcontext\tend\ncapability\tjava\t8-25\tend\ncapability\tsource\tunion\tend\nsource\t%s\t%s\tend\n' \
-  "$fixture_hash" "$fixture_hash" > "$union_context"
+printf '4\tcontext\tend\ncapability\tjava\t8-25\tend\ncapability\tsource\tunion\tend\nsource\t%s\t%s\tend\npackage\t%s\t%s\tend\n' \
+  "$fixture_hash" "$fixture_hash" "$fixture_hash" "$fixture_package" > "$union_context"
 module_path="$dependency_root/securejarhandler-0.9.54.jar:$dependency_root/asm-9.1.jar:$dependency_root/asm-tree-9.1.jar"
 java "-javaagent:$agent_path=root=$union_root_encoded;session=$union_session_encoded;context=$union_context_encoded" \
   --module-path "$module_path" --add-modules cpw.mods.securejarhandler \
@@ -284,8 +293,8 @@ quilt_root_encoded="$(encode_path "$quilt_instance")"
 quilt_session_encoded="$(encode_path "$quilt_session")"
 quilt_context_encoded="$(encode_path "$quilt_context")"
 module_encoded="$(encode_path agent-fixture)"
-printf '3\tcontext\tend\ncapability\tjava\t8-25\tend\ncapability\tmodule\tquilt\tend\nmodule\t%s\t%s\tend\n' \
-  "$module_encoded" "$fixture_hash" > "$quilt_context"
+printf '4\tcontext\tend\ncapability\tjava\t8-25\tend\ncapability\tmodule\tquilt\tend\nmodule\t%s\t%s\tend\npackage\t%s\t%s\tend\n' \
+  "$module_encoded" "$fixture_hash" "$fixture_hash" "$fixture_package" > "$quilt_context"
 java "-javaagent:$agent_path=root=$quilt_root_encoded;session=$quilt_session_encoded;context=$quilt_context_encoded" \
   -cp "$quilt_classes:$quilt_jar" AgentQuiltHarness "$fixture_jar" "$quilt_instance"
 quilt_record_count="$(wc -l < "$quilt_session")"

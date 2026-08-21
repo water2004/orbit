@@ -106,11 +106,13 @@ function Invoke-ModeTrial([string]$Mode, [bool]$UseAgent, [bool]$Delegated, [int
     $Arguments = @()
     if ($UseAgent) {
         $ContextLines = @(
-            "3`tcontext`tend",
+            "4`tcontext`tend",
             "capability`tjava`t8-25`tend",
             "capability`tsource`tfile`tend",
             "source`t$LibraryHash`t$LibraryHash`tend",
-            "source`t$ConsumerHash`t$ConsumerHash`tend"
+            "source`t$ConsumerHash`t$ConsumerHash`tend",
+            "package`t$LibraryHash`t$(ConvertTo-UrlBase64 'profile-library')`tend",
+            "package`t$ConsumerHash`t$(ConvertTo-UrlBase64 'profile-consumer')`tend"
         )
         if ($Delegated) {
             $ContextLines += "delegation`t$ConsumerHash`t$LibraryHash`tend"

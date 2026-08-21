@@ -41,11 +41,13 @@ $SessionEncoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($Sess
 $ContextEncoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($ContextFile)).TrimEnd('=').Replace('+', '-').Replace('/', '_')
 $ConfigEncoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes((Join-Path $InstanceRoot "config"))).TrimEnd('=').Replace('+', '-').Replace('/', '_')
 $FixtureHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $FixtureJar).Hash.ToLowerInvariant()
+$FixturePackage = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes("agent-fixture")).TrimEnd('=').Replace('+', '-').Replace('/', '_')
 $ContextLines = @(
-    "3`tcontext`tend"
+    "4`tcontext`tend"
     "capability`tjava`t8-25`tend"
     "capability`tsource`tfile`tend"
     "source`t$FixtureHash`t$FixtureHash`tend"
+    "package`t$FixtureHash`t$FixturePackage`tend"
     "reserved`t$ConfigEncoded`tend"
 )
 [System.IO.File]::WriteAllLines($ContextFile, $ContextLines, [System.Text.UTF8Encoding]::new($false))
@@ -71,7 +73,7 @@ $ClasspathRootEncoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes
 $ClasspathSessionEncoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($ClasspathSession)).TrimEnd('=').Replace('+', '-').Replace('/', '_')
 $ClasspathContextEncoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($ClasspathContext)).TrimEnd('=').Replace('+', '-').Replace('/', '_')
 [System.IO.File]::WriteAllLines($ClasspathContext, @(
-    "3`tcontext`tend"
+    "4`tcontext`tend"
     "capability`tjava`t8-25`tend"
     "capability`tsource`tfile`tend"
 ), [System.Text.UTF8Encoding]::new($false))
@@ -85,10 +87,10 @@ if ($LASTEXITCODE -ne 0) { throw "Agent fixture failed" }
 
 $Records = Get-Content -LiteralPath $SessionFile
 if ($Records.Count -ne 5) { throw "Expected one header, three lasting creations and one published deletion, got $($Records.Count) lines" }
-if ($Records[0] -notmatch '^3\tsnapshot\t') { throw "No v3 snapshot header was recorded" }
+if ($Records[0] -notmatch '^4\tsnapshot\t') { throw "No v4 snapshot header was recorded" }
 if (-not ($Records -match "`ttree`t")) { throw "No owned directory tree was recorded" }
 if (-not ($Records -match "`tfile`t")) { throw "No owned file was recorded" }
-if (-not ($Records -match "3`tdelete`tfile`t")) { throw "No published deletion tombstone was recorded" }
+if (-not ($Records -match "4`tdelete`tfile`t")) { throw "No published deletion tombstone was recorded" }
 if (Test-Path -LiteralPath (Join-Path $InstanceRoot ".orbit/runtime-data/observation.active")) {
     throw "Observation activity marker survived JVM shutdown"
 }
@@ -120,22 +122,26 @@ if ($LASTEXITCODE -ne 0) { throw "Failed to package owner A fixture" }
 if ($LASTEXITCODE -ne 0) { throw "Failed to package owner B fixture" }
 $OwnerAHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $OwnerAJar).Hash.ToLowerInvariant()
 $OwnerBHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $OwnerBJar).Hash.ToLowerInvariant()
+$OwnerAPackage = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes("owner-a")).TrimEnd('=').Replace('+', '-').Replace('/', '_')
+$OwnerBPackage = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes("owner-b")).TrimEnd('=').Replace('+', '-').Replace('/', '_')
 $OwnershipRootEncoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($OwnershipInstance)).TrimEnd('=').Replace('+', '-').Replace('/', '_')
 $OwnershipSessionEncoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($OwnershipSession)).TrimEnd('=').Replace('+', '-').Replace('/', '_')
 $OwnershipContextEncoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($OwnershipContext)).TrimEnd('=').Replace('+', '-').Replace('/', '_')
 [System.IO.File]::WriteAllLines($OwnershipContext, @(
-    "3`tcontext`tend"
+    "4`tcontext`tend"
     "capability`tjava`t8-25`tend"
     "capability`tsource`tfile`tend"
     "source`t$OwnerAHash`t$OwnerAHash`tend"
     "source`t$OwnerBHash`t$OwnerBHash`tend"
+    "package`t$OwnerAHash`t$OwnerAPackage`tend"
+    "package`t$OwnerBHash`t$OwnerBPackage`tend"
 ), [System.Text.UTF8Encoding]::new($false))
 & $JavaCommand "-javaagent:$ResolvedAgent=root=$OwnershipRootEncoded;session=$OwnershipSessionEncoded;context=$OwnershipContextEncoded" `
     -cp $HarnessRoot AgentOwnershipHarness $OwnerAJar $OwnerBJar $OwnershipInstance
 if ($LASTEXITCODE -ne 0) { throw "Last-writer Agent fixture failed" }
 $OwnershipRecords = Get-Content -LiteralPath $OwnershipSession
 if ($OwnershipRecords.Count -ne 2) { throw "Last-writer snapshot was not compacted to one path" }
-if ($OwnershipRecords[1] -notmatch "^3`twrite`tfile`t$OwnerAHash`t3`t") {
+if ($OwnershipRecords[1] -notmatch "^4`twrite`tfile`t$OwnerAPackage`t3`t") {
     throw "The package that performed the final write did not own the file"
 }
 $FirstSnapshotHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $OwnershipSession).Hash
@@ -174,22 +180,26 @@ if ($LASTEXITCODE -ne 0) { throw "Failed to compile delegation consumer fixture"
 if ($LASTEXITCODE -ne 0) { throw "Failed to package delegation consumer fixture" }
 $DelegationLibraryHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $DelegationLibraryJar).Hash.ToLowerInvariant()
 $DelegationConsumerHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $DelegationConsumerJar).Hash.ToLowerInvariant()
+$DelegationLibraryPackage = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes("delegation-library")).TrimEnd('=').Replace('+', '-').Replace('/', '_')
+$DelegationConsumerPackage = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes("delegation-consumer")).TrimEnd('=').Replace('+', '-').Replace('/', '_')
 $DelegationRootEncoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($DelegationInstance)).TrimEnd('=').Replace('+', '-').Replace('/', '_')
 $DelegationSessionEncoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($DelegationSession)).TrimEnd('=').Replace('+', '-').Replace('/', '_')
 $DelegationContextEncoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($DelegationContext)).TrimEnd('=').Replace('+', '-').Replace('/', '_')
 [System.IO.File]::WriteAllLines($DelegationContext, @(
-    "3`tcontext`tend"
+    "4`tcontext`tend"
     "capability`tjava`t8-25`tend"
     "capability`tsource`tfile`tend"
     "source`t$DelegationLibraryHash`t$DelegationLibraryHash`tend"
     "source`t$DelegationConsumerHash`t$DelegationConsumerHash`tend"
     "delegation`t$DelegationConsumerHash`t$DelegationLibraryHash`tend"
+    "package`t$DelegationLibraryHash`t$DelegationLibraryPackage`tend"
+    "package`t$DelegationConsumerHash`t$DelegationConsumerPackage`tend"
 ), [System.Text.UTF8Encoding]::new($false))
 & $JavaCommand "-javaagent:$ResolvedAgent=root=$DelegationRootEncoded;session=$DelegationSessionEncoded;context=$DelegationContextEncoded" `
     -cp $HarnessRoot AgentDelegationHarness $DelegationConsumerJar $DelegationLibraryJar $DelegationInstance
 if ($LASTEXITCODE -ne 0) { throw "Delegated writer Agent fixture failed" }
 $DelegationRecords = Get-Content -LiteralPath $DelegationSession
-if ($DelegationRecords.Count -ne 2 -or $DelegationRecords[1] -notmatch "^3`tcreate`tfile`t$DelegationConsumerHash`t") {
+if ($DelegationRecords.Count -ne 2 -or $DelegationRecords[1] -notmatch "^4`tcreate`tfile`t$DelegationConsumerPackage`t") {
     throw "Delegated file write was not attributed to the logical caller"
 }
 Write-Output $DelegationSession
@@ -208,14 +218,16 @@ if ($LASTEXITCODE -ne 0) { throw "Failed to compile modern Agent fixture" }
 & jar cf $ModernJar -C $ModernClasses .
 if ($LASTEXITCODE -ne 0) { throw "Failed to package modern Agent fixture" }
 $ModernHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $ModernJar).Hash.ToLowerInvariant()
+$ModernPackage = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes("modern-fixture")).TrimEnd('=').Replace('+', '-').Replace('/', '_')
 $ModernRootEncoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($ModernInstance)).TrimEnd('=').Replace('+', '-').Replace('/', '_')
 $ModernSessionEncoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($ModernSession)).TrimEnd('=').Replace('+', '-').Replace('/', '_')
 $ModernContextEncoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($ModernContext)).TrimEnd('=').Replace('+', '-').Replace('/', '_')
 [System.IO.File]::WriteAllLines($ModernContext, @(
-    "3`tcontext`tend"
+    "4`tcontext`tend"
     "capability`tjava`t8-25`tend"
     "capability`tsource`tfile`tend"
     "source`t$ModernHash`t$ModernHash`tend"
+    "package`t$ModernHash`t$ModernPackage`tend"
 ), [System.Text.UTF8Encoding]::new($false))
 & java "-javaagent:$ResolvedAgent=root=$ModernRootEncoded;session=$ModernSessionEncoded;context=$ModernContextEncoded" `
     -cp $HarnessRoot AgentIsolatedHarness $ModernJar $ModernInstance AgentModernFixture
@@ -257,10 +269,11 @@ $UnionRootEncoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($Un
 $UnionSessionEncoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($UnionSession)).TrimEnd('=').Replace('+', '-').Replace('/', '_')
 $UnionContextEncoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($UnionContext)).TrimEnd('=').Replace('+', '-').Replace('/', '_')
 [System.IO.File]::WriteAllLines($UnionContext, @(
-    "3`tcontext`tend"
+    "4`tcontext`tend"
     "capability`tjava`t8-25`tend"
     "capability`tsource`tunion`tend"
     "source`t$FixtureHash`t$FixtureHash`tend"
+    "package`t$FixtureHash`t$FixturePackage`tend"
 ), [System.Text.UTF8Encoding]::new($false))
 $ModulePath = ($Dependencies | ForEach-Object { $_.Path }) -join [System.IO.Path]::PathSeparator
 & java "-javaagent:$ResolvedAgent=root=$UnionRootEncoded;session=$UnionSessionEncoded;context=$UnionContextEncoded" `
@@ -297,10 +310,11 @@ $QuiltSessionEncoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes(
 $QuiltContextEncoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($QuiltContext)).TrimEnd('=').Replace('+', '-').Replace('/', '_')
 $ModuleEncoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes("agent-fixture")).TrimEnd('=').Replace('+', '-').Replace('/', '_')
 [System.IO.File]::WriteAllLines($QuiltContext, @(
-    "3`tcontext`tend"
+    "4`tcontext`tend"
     "capability`tjava`t8-25`tend"
     "capability`tmodule`tquilt`tend"
     "module`t$ModuleEncoded`t$FixtureHash`tend"
+    "package`t$FixtureHash`t$FixturePackage`tend"
 ), [System.Text.UTF8Encoding]::new($false))
 & java "-javaagent:$ResolvedAgent=root=$QuiltRootEncoded;session=$QuiltSessionEncoded;context=$QuiltContextEncoded" `
     -cp "$QuiltClasses$([System.IO.Path]::PathSeparator)$QuiltPath" `

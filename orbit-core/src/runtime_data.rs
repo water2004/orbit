@@ -1,8 +1,9 @@
 //! Runtime-observed mutable-data ownership for managed packages.
 //!
 //! The Java agent writes crash-tolerant session snapshots. Orbit merges those
-//! snapshots into an instance-local ledger and maps the recorded top-level JAR
-//! hashes back to logical packages through `orbit.lock`.
+//! snapshots into an instance-local ledger. Runtime attribution uses physical
+//! JAR hashes, but snapshots and the persistent ledger use stable logical
+//! package IDs so replacing a package artifact does not orphan its data.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Component, Path, PathBuf};
@@ -21,9 +22,10 @@ use rebalance::rebalance_ownership;
 const RUNTIME_DATA_DIRECTORY: &str = ".orbit/runtime-data";
 const LEDGER_FILE: &str = "ownership.toml";
 const SESSIONS_DIRECTORY: &str = "sessions";
-pub(crate) const LEDGER_SCHEMA: u32 = 3;
+pub(crate) const LEDGER_SCHEMA: u32 = 4;
 const ATTRIBUTION_MODEL: u32 = 1;
-const OBSERVATION_SCHEMA: &str = "3";
+const OBSERVATION_SCHEMA: &str = "4";
+const LEGACY_LEDGER_SCHEMA: u32 = 3;
 
 pub(crate) const RESERVED_INSTANCE_ROOTS: &[&str] = &[
     ".orbit",
@@ -65,7 +67,7 @@ impl OwnedDataPath {
 pub struct DataOwnershipEntry {
     pub path: OwnedDataPath,
     pub kind: OwnedDataKind,
-    /// The package artifact that last changed this path. Descendants inherit
+    /// The logical package that last changed this path. Descendants inherit
     /// the nearest tree owner unless a more specific entry overrides it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub owner: Option<String>,
@@ -89,6 +91,8 @@ pub(crate) struct DataOwnershipLedger {
     rebalance_watermarks: BTreeMap<String, usize>,
     #[serde(skip)]
     attribution_migrated: bool,
+    #[serde(skip)]
+    schema_migrated: bool,
 }
 
 impl Default for DataOwnershipLedger {
@@ -100,6 +104,7 @@ impl Default for DataOwnershipLedger {
             merged_sessions: BTreeMap::new(),
             rebalance_watermarks: BTreeMap::new(),
             attribution_migrated: false,
+            schema_migrated: false,
         }
     }
 }
@@ -310,7 +315,9 @@ pub fn merge_observation_sessions(instance_dir: &Path) -> Result<usize, OrbitErr
 pub(crate) fn prune_missing_ownership(instance_dir: &Path) -> Result<usize, OrbitError> {
     let root = validate_instance(instance_dir)?;
     let mut ledger = load_ledger(&root)?;
-    let sanitized = ledger.attribution_migrated || drop_protected_tree_claims(&root, &mut ledger);
+    let sanitized = ledger.attribution_migrated
+        || ledger.schema_migrated
+        || drop_protected_tree_claims(&root, &mut ledger);
     let (removed, changed) = prune_missing_entries(&root, &mut ledger)?;
     if sanitized || changed {
         save_ledger(&root, &ledger)?;
@@ -379,6 +386,16 @@ fn merge_snapshots_into_ledger(
             .then_with(|| left.session.cmp(&right.session))
             .then_with(|| left.generation.cmp(&right.generation))
     });
+    let legacy_owners = parsed
+        .iter()
+        .any(|snapshot| {
+            snapshot
+                .observations
+                .iter()
+                .any(|observation| observation.owner_is_artifact)
+        })
+        .then(|| legacy_artifact_owner_map(instance_dir))
+        .transpose()?;
 
     let mut changed = false;
     for mut snapshot in parsed {
@@ -394,7 +411,17 @@ fn merge_snapshots_into_ledger(
                 .cmp(&right.revision)
                 .then_with(|| left.absolute.cmp(&right.absolute))
         });
-        for observation in snapshot.observations {
+        for mut observation in snapshot.observations {
+            if observation.owner_is_artifact {
+                let Some(owner) = legacy_owners
+                    .as_ref()
+                    .and_then(|owners| owners.get(&observation.owner))
+                else {
+                    continue;
+                };
+                observation.owner.clone_from(owner);
+                observation.owner_is_artifact = false;
+            }
             changed |= merge_observation(instance_dir, ledger, observation)?;
         }
         ledger
@@ -465,7 +492,7 @@ fn locked_package_ownership(
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
         Err(error) => return Err(error.into()),
     };
-    let mut data = build_owned_roots(ledger, &entry.sha256);
+    let mut data = build_owned_roots(ledger, &entry.mod_id);
     data.sort_by(|left, right| left.path.display().cmp(right.path.display()));
     let report = PackageOwnershipReport {
         mod_id: entry.mod_id.clone(),
@@ -560,7 +587,7 @@ pub fn apply_data_reset(
 
     let mut transaction = OwnedDataTransaction::begin(&root, &plan.entries)?;
     let mut ledger = load_ledger(&root)?;
-    remove_artifact_references(&mut ledger, &plan.artifact_sha256, &plan.entries);
+    remove_package_references(&mut ledger, &plan.mod_id, &plan.entries);
     if let Err(error) = save_ledger(&root, &ledger) {
         return Err(transaction.rollback(error));
     }
@@ -613,7 +640,7 @@ pub fn apply_data_purge(
             .map(|entry| resolve_owned_path(&root, entry))
             .collect::<Result<Vec<_>, _>>()?;
         if let Err(error) = remove_owned_path(&path, selected.kind, &preserved) {
-            remove_artifact_references(&mut ledger, &plan.artifact_sha256, &removed);
+            remove_package_references(&mut ledger, &plan.mod_id, &removed);
             save_ledger(&root, &ledger)?;
             return Err(OrbitError::RuntimeData(
                 RuntimeDataError::DeleteAfterPackageRemoval {
@@ -626,7 +653,7 @@ pub fn apply_data_purge(
         }
         removed.push(selected.clone());
     }
-    remove_artifact_references(&mut ledger, &plan.artifact_sha256, &removed);
+    remove_package_references(&mut ledger, &plan.mod_id, &removed);
     save_ledger(&root, &ledger)?;
     Ok(DataPurgeReport {
         mod_id,
@@ -677,7 +704,7 @@ pub(crate) fn load_ledger(instance_dir: &Path) -> Result<DataOwnershipLedger, Or
             detail: error.to_string(),
         })
     })?;
-    if ledger.schema != LEDGER_SCHEMA {
+    if ledger.schema != LEDGER_SCHEMA && ledger.schema != LEGACY_LEDGER_SCHEMA {
         return Err(OrbitError::RuntimeData(
             RuntimeDataError::UnsupportedLedgerSchema {
                 schema: ledger.schema,
@@ -686,7 +713,87 @@ pub(crate) fn load_ledger(instance_dir: &Path) -> Result<DataOwnershipLedger, Or
         ));
     }
     migrate_legacy_attribution(instance_dir, &mut ledger)?;
+    if ledger.schema == LEGACY_LEDGER_SCHEMA {
+        migrate_artifact_owners(instance_dir, &mut ledger)?;
+    }
     Ok(ledger)
+}
+
+/// Schema 3 stored the current top-level JAR digest as the owner. Recover the
+/// corresponding logical package once, then persist only package IDs. The
+/// current lock is authoritative for unchanged artifacts; the last Agent
+/// context supplies the old digest-to-package relation after `sync` replaced a
+/// JAR. Ambiguous or already removed packages become unowned rather than being
+/// guessed or assigned to another package.
+fn migrate_artifact_owners(
+    instance_dir: &Path,
+    ledger: &mut DataOwnershipLedger,
+) -> Result<(), OrbitError> {
+    let owners = legacy_artifact_owner_map(instance_dir)?;
+    for entry in &mut ledger.entries {
+        if let Some(owner) = &entry.owner {
+            entry.owner = owners.get(&owner.to_ascii_lowercase()).cloned();
+        }
+    }
+    ledger.schema = LEDGER_SCHEMA;
+    ledger.schema_migrated = true;
+    compact_ledger(ledger);
+    Ok(())
+}
+
+fn legacy_artifact_owner_map(instance_dir: &Path) -> Result<BTreeMap<String, String>, OrbitError> {
+    let lock = Lockfile::open(instance_dir)?.inner;
+    let package_ids = lock
+        .packages
+        .iter()
+        .map(|package| package.mod_id.clone())
+        .collect::<BTreeSet<_>>();
+    let mut candidates = BTreeMap::<String, BTreeSet<String>>::new();
+
+    for package in &lock.packages {
+        candidates
+            .entry(package.sha256.to_ascii_lowercase())
+            .or_default()
+            .insert(package.mod_id.clone());
+    }
+
+    let context = instance_dir
+        .join(RUNTIME_DATA_DIRECTORY)
+        .join("agent-context.tsv");
+    if let Ok(document) = std::fs::read_to_string(context) {
+        let mut lines = document.lines();
+        if lines.next() == Some("3\tcontext\tend") {
+            for line in lines {
+                let fields = line.split('\t').collect::<Vec<_>>();
+                if fields.len() != 4 || fields[0] != "module" || fields[3] != "end" {
+                    continue;
+                }
+                let Ok(bytes) = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(fields[1])
+                else {
+                    continue;
+                };
+                let Ok(package) = String::from_utf8(bytes) else {
+                    continue;
+                };
+                if package_ids.contains(&package)
+                    && fields[2].len() == 64
+                    && fields[2].bytes().all(|byte| byte.is_ascii_hexdigit())
+                {
+                    candidates
+                        .entry(fields[2].to_ascii_lowercase())
+                        .or_default()
+                        .insert(package);
+                }
+            }
+        }
+    }
+
+    Ok(candidates
+        .into_iter()
+        .filter_map(|(artifact, packages)| {
+            (packages.len() == 1).then(|| (artifact, packages.into_iter().next().unwrap()))
+        })
+        .collect())
 }
 
 fn migrate_legacy_attribution(
@@ -737,6 +844,23 @@ pub(crate) fn save_ledger(
     crate::atomic_io::write_atomic(&path, document.as_bytes())
 }
 
+/// Convert a released legacy ownership ledger while the existing lock still
+/// describes its artifact hashes. Workspace mutations call this before they
+/// replace TOML/lock, so the last Agent context is recovery evidence rather
+/// than the normal migration path.
+pub(crate) fn migrate_ledger_before_workspace_update(
+    instance_dir: &Path,
+) -> Result<(), OrbitError> {
+    if !ledger_path(instance_dir).is_file() {
+        return Ok(());
+    }
+    let ledger = load_ledger(instance_dir)?;
+    if ledger.schema_migrated || ledger.attribution_migrated {
+        save_ledger(instance_dir, &ledger)?;
+    }
+    Ok(())
+}
+
 pub(crate) fn ownership_document(entries: Vec<DataOwnershipEntry>) -> Result<String, OrbitError> {
     toml::to_string_pretty(&DataOwnershipLedger {
         schema: LEDGER_SCHEMA,
@@ -745,6 +869,7 @@ pub(crate) fn ownership_document(entries: Vec<DataOwnershipEntry>) -> Result<Str
         merged_sessions: BTreeMap::new(),
         rebalance_watermarks: BTreeMap::new(),
         attribution_migrated: false,
+        schema_migrated: false,
     })
     .map_err(|error| {
         OrbitError::RuntimeData(RuntimeDataError::LedgerSerialize {
@@ -763,7 +888,10 @@ pub(crate) fn parse_ownership_document(
             detail: error.to_string(),
         })
     })?;
-    if ledger.schema != LEDGER_SCHEMA {
+    // Schema 3 may appear inside a verified 0.5.x portable bundle. The target
+    // instance converts its artifact owners with the imported lock on first
+    // use; validation here only compares the two signed bundle documents.
+    if ledger.schema != LEDGER_SCHEMA && ledger.schema != LEGACY_LEDGER_SCHEMA {
         return Err(OrbitError::RuntimeData(
             RuntimeDataError::UnsupportedLedgerSchema {
                 schema: ledger.schema,
@@ -809,6 +937,13 @@ pub(crate) fn ownership_entries_for(
         .collect())
 }
 
+/// Portable exports and cross-instance migrations never carry absolute paths.
+/// External ownership remains useful for local reset/purge, but copying it
+/// would either target the source machine or escape the destination instance.
+pub(crate) fn retain_instance_ownership(entries: &mut Vec<DataOwnershipEntry>) {
+    entries.retain(|entry| matches!(entry.path, OwnedDataPath::Instance { .. }));
+}
+
 pub(crate) fn effective_owner_for_relative(
     entries: &[DataOwnershipEntry],
     relative: &Path,
@@ -823,36 +958,16 @@ pub(crate) fn effective_owner_for_relative(
         merged_sessions: BTreeMap::new(),
         rebalance_watermarks: BTreeMap::new(),
         attribution_migrated: false,
+        schema_migrated: false,
     };
     effective_owner(&ledger, &path)
-}
-
-pub(crate) fn rebind_ownership_entries(
-    entries: &mut Vec<DataOwnershipEntry>,
-    owners: &std::collections::BTreeMap<String, String>,
-) {
-    for entry in entries.iter_mut() {
-        entry.owner = entry
-            .owner
-            .as_ref()
-            .and_then(|owner| owners.get(owner).cloned());
-    }
-    let mut ledger = DataOwnershipLedger {
-        schema: LEDGER_SCHEMA,
-        attribution_model: ATTRIBUTION_MODEL,
-        entries: std::mem::take(entries),
-        merged_sessions: BTreeMap::new(),
-        rebalance_watermarks: BTreeMap::new(),
-        attribution_migrated: false,
-    };
-    compact_ledger(&mut ledger);
-    *entries = ledger.entries;
 }
 
 struct Observation {
     action: ObservationAction,
     kind: OwnedDataKind,
     owner: String,
+    owner_is_artifact: bool,
     revision: u64,
     absolute: PathBuf,
 }
@@ -880,12 +995,13 @@ fn parse_snapshot(path: &Path, document: &str) -> Result<ObservationSnapshot, Or
         OrbitError::RuntimeData(RuntimeDataError::InvalidObservation {
             path: path.display().to_string(),
             line: 1,
-            detail: "missing v3 snapshot header".to_string(),
+            detail: "missing runtime ownership snapshot header".to_string(),
         })
     })?;
     let fields = header.split('\t').collect::<Vec<_>>();
+    let schema = fields.first().copied().unwrap_or_default();
     if fields.len() != 6
-        || fields[0] != OBSERVATION_SCHEMA
+        || (schema != OBSERVATION_SCHEMA && schema != "3")
         || fields[1] != "snapshot"
         || fields[5] != "end"
         || fields[2].is_empty()
@@ -897,7 +1013,7 @@ fn parse_snapshot(path: &Path, document: &str) -> Result<ObservationSnapshot, Or
             RuntimeDataError::InvalidObservation {
                 path: path.display().to_string(),
                 line: 1,
-                detail: "expected a complete v3 snapshot header".to_string(),
+                detail: "expected a complete runtime ownership snapshot header".to_string(),
             },
         ));
     }
@@ -914,7 +1030,7 @@ fn parse_snapshot(path: &Path, document: &str) -> Result<ObservationSnapshot, Or
     let generation = parse_header_number(fields[4], "invalid snapshot generation")?;
     let mut observations = Vec::new();
     for (index, line) in lines {
-        let observation = parse_observation(line).map_err(|detail| {
+        let observation = parse_observation(schema, line).map_err(|detail| {
             OrbitError::RuntimeData(RuntimeDataError::InvalidObservation {
                 path: path.display().to_string(),
                 line: index + 1,
@@ -940,10 +1056,10 @@ fn parse_snapshot(path: &Path, document: &str) -> Result<ObservationSnapshot, Or
     })
 }
 
-fn parse_observation(line: &str) -> Result<Observation, String> {
+fn parse_observation(schema: &str, line: &str) -> Result<Observation, String> {
     let fields = line.split('\t').collect::<Vec<_>>();
-    if fields.len() != 7 || fields[0] != OBSERVATION_SCHEMA || fields[6] != "end" {
-        return Err("expected a complete v3 mutation record".to_string());
+    if fields.len() != 7 || fields[0] != schema || fields[6] != "end" {
+        return Err("expected a complete runtime ownership mutation record".to_string());
     }
     let action = match fields[1] {
         "create" => ObservationAction::Create,
@@ -956,9 +1072,22 @@ fn parse_observation(line: &str) -> Result<Observation, String> {
         "tree" => OwnedDataKind::Tree,
         value => return Err(format!("unknown path kind '{value}'")),
     };
-    if fields[3].len() != 64 || !fields[3].bytes().all(|byte| byte.is_ascii_hexdigit()) {
-        return Err("invalid owner SHA-256".to_string());
-    }
+    let (owner, owner_is_artifact) = if schema == "3" {
+        if fields[3].len() != 64 || !fields[3].bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return Err("invalid legacy owner SHA-256".to_string());
+        }
+        (fields[3].to_ascii_lowercase(), true)
+    } else {
+        let decoded = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .decode(fields[3])
+            .map_err(|error| format!("invalid package owner encoding: {error}"))?;
+        let owner = String::from_utf8(decoded)
+            .map_err(|error| format!("package owner is not UTF-8: {error}"))?;
+        if owner.is_empty() {
+            return Err("package owner is empty".to_string());
+        }
+        (owner, false)
+    };
     let revision = fields[4]
         .parse::<u64>()
         .map_err(|_| "invalid mutation revision".to_string())?;
@@ -973,7 +1102,8 @@ fn parse_observation(line: &str) -> Result<Observation, String> {
     Ok(Observation {
         action,
         kind,
-        owner: fields[3].to_ascii_lowercase(),
+        owner,
+        owner_is_artifact,
         revision,
         absolute,
     })
@@ -1615,9 +1745,9 @@ fn remove_tree_preserving(path: &Path, preserved: &[PathBuf]) -> Result<(), std:
     }
 }
 
-fn remove_artifact_references(
+fn remove_package_references(
     ledger: &mut DataOwnershipLedger,
-    artifact_sha256: &str,
+    package: &str,
     removed: &[OwnedPathRoot],
 ) {
     ledger.entries.retain_mut(|entry| {
@@ -1632,7 +1762,7 @@ fn remove_artifact_references(
         if was_removed {
             return false;
         }
-        if entry.owner.as_deref() == Some(artifact_sha256) {
+        if entry.owner.as_deref() == Some(package) {
             entry.owner = None;
         }
         true
@@ -1687,8 +1817,9 @@ mod tests {
     fn observation_line(action: &str, kind: &str, owner: &str, path: &Path) -> String {
         let encoded = base64::engine::general_purpose::URL_SAFE_NO_PAD
             .encode(path.to_string_lossy().as_bytes());
+        let owner = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(owner.as_bytes());
         format!(
-            "3\tsnapshot\ttest-session\t1\t1\tend\n3\t{action}\t{kind}\t{owner}\t1\t{encoded}\tend\n"
+            "4\tsnapshot\ttest-session\t1\t1\tend\n4\t{action}\t{kind}\t{owner}\t1\t{encoded}\tend\n"
         )
     }
 
@@ -1697,18 +1828,16 @@ mod tests {
         let absolute = std::env::temp_dir().join("orbit-runtime-data-parse");
         let path = base64::engine::general_purpose::URL_SAFE_NO_PAD
             .encode(absolute.to_string_lossy().as_bytes());
-        let record = parse_observation(&format!(
-            "3\tcreate\ttree\t{}\t1\t{path}\tend",
-            "a".repeat(64)
-        ))
-        .unwrap();
+        let owner = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(b"example");
+        let record =
+            parse_observation("4", &format!("4\tcreate\ttree\t{owner}\t1\t{path}\tend")).unwrap();
         assert_eq!(record.kind, OwnedDataKind::Tree);
         assert_eq!(record.action, ObservationAction::Create);
     }
 
     #[test]
     fn rejects_truncated_observation_records() {
-        assert!(parse_observation("3\tcreate\tfile").is_err());
+        assert!(parse_observation("4", "4\tcreate\tfile").is_err());
     }
 
     #[test]
@@ -1752,9 +1881,115 @@ mod tests {
         let ledger = load_ledger(&root).unwrap();
 
         assert!(ledger.attribution_migrated);
+        assert!(ledger.schema_migrated);
         assert_eq!(ledger.attribution_model, ATTRIBUTION_MODEL);
         assert_eq!(ledger.entries.len(), 1);
-        assert_eq!(ledger.entries[0].owner.as_deref(), Some(caller.as_str()));
+        assert_eq!(ledger.entries[0].owner.as_deref(), Some("caller"));
+    }
+
+    #[test]
+    fn legacy_owner_survives_an_artifact_replacement_via_the_last_context() {
+        let directory = instance();
+        let root = directory.path().canonicalize().unwrap();
+        let old_artifact = "a".repeat(64);
+        let new_artifact = "b".repeat(64);
+        Lockfile::new(
+            &root,
+            OrbitLockfile {
+                meta: LockMeta {
+                    mc_version: "1".to_string(),
+                    modloader: "fabric".to_string(),
+                    modloader_version: "1".to_string(),
+                },
+                packages: vec![locked_package("example", &new_artifact, Vec::new())],
+            },
+        )
+        .save()
+        .unwrap();
+        let path = ledger_path(&root);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &path,
+            format!(
+                "schema = 3\nattribution_model = 1\n\n[[entries]]\nkind = \"tree\"\nowner = \"{old_artifact}\"\n[entries.path]\nscope = \"instance\"\nrelative = \"config/example\"\n"
+            ),
+        )
+        .unwrap();
+        let package = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(b"example");
+        std::fs::write(
+            root.join(RUNTIME_DATA_DIRECTORY).join("agent-context.tsv"),
+            format!(
+                "3\tcontext\tend\ncapability\tjava\t8-25\tend\ncapability\tsource\tfile\tend\nmodule\t{package}\t{old_artifact}\tend\n"
+            ),
+        )
+        .unwrap();
+
+        let ledger = load_ledger(&root).unwrap();
+
+        assert_eq!(ledger.schema, LEDGER_SCHEMA);
+        assert!(ledger.schema_migrated);
+        assert_eq!(ledger.entries[0].owner.as_deref(), Some("example"));
+    }
+
+    #[test]
+    fn workspace_preflight_persists_logical_owners_before_lock_replacement() {
+        let directory = instance();
+        let root = directory.path().canonicalize().unwrap();
+        let old_artifact = "a".repeat(64);
+        let new_artifact = "b".repeat(64);
+        let lock = |artifact: &str| OrbitLockfile {
+            meta: LockMeta {
+                mc_version: "1".to_string(),
+                modloader: "fabric".to_string(),
+                modloader_version: "1".to_string(),
+            },
+            packages: vec![locked_package("example", artifact, Vec::new())],
+        };
+        Lockfile::new(&root, lock(&old_artifact)).save().unwrap();
+        let path = ledger_path(&root);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &path,
+            format!(
+                "schema = 3\nattribution_model = 1\n\n[[entries]]\nkind = \"file\"\nowner = \"{old_artifact}\"\n[entries.path]\nscope = \"instance\"\nrelative = \"config/example.json\"\n"
+            ),
+        )
+        .unwrap();
+
+        migrate_ledger_before_workspace_update(&root).unwrap();
+        Lockfile::new(&root, lock(&new_artifact)).save().unwrap();
+        let ledger = load_ledger(&root).unwrap();
+
+        assert_eq!(ledger.schema, LEDGER_SCHEMA);
+        assert_eq!(ledger.entries[0].owner.as_deref(), Some("example"));
+    }
+
+    #[test]
+    fn portable_ownership_excludes_external_paths() {
+        let mut entries = vec![
+            DataOwnershipEntry {
+                path: OwnedDataPath::Instance {
+                    relative: "config/example.json".to_string(),
+                },
+                kind: OwnedDataKind::File,
+                owner: Some("example".to_string()),
+            },
+            DataOwnershipEntry {
+                path: OwnedDataPath::External {
+                    absolute: std::env::temp_dir()
+                        .join("example.tmp")
+                        .to_string_lossy()
+                        .into_owned(),
+                },
+                kind: OwnedDataKind::File,
+                owner: Some("example".to_string()),
+            },
+        ];
+
+        retain_instance_ownership(&mut entries);
+
+        assert_eq!(entries.len(), 1);
+        assert!(matches!(entries[0].path, OwnedDataPath::Instance { .. }));
     }
 
     #[test]
@@ -2296,7 +2531,7 @@ mod tests {
         assert_eq!(majority_plan[0].path, owned_root);
         assert_eq!(majority_plan[0].preserved.len(), 30);
         let mut after_purge = ledger.clone();
-        remove_artifact_references(&mut after_purge, &majority, &majority_plan);
+        remove_package_references(&mut after_purge, &majority, &majority_plan);
         assert_eq!(
             after_purge
                 .entries
@@ -2314,21 +2549,25 @@ mod tests {
         let path = root.join("config/example/state.bin");
         let encoded = base64::engine::general_purpose::URL_SAFE_NO_PAD
             .encode(path.to_string_lossy().as_bytes());
-        let owner_a = "a".repeat(64);
-        let owner_b = "b".repeat(64);
+        let owner_a = "package-a";
+        let owner_b = "package-b";
+        let encoded_owner_a =
+            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(owner_a.as_bytes());
+        let encoded_owner_b =
+            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(owner_b.as_bytes());
         let old = root.join("old.events");
         let new = root.join("new.events");
         std::fs::write(
             &old,
             format!(
-                "3\tsnapshot\tordered-session\t10\t1\tend\n3\tcreate\tfile\t{owner_a}\t1\t{encoded}\tend\n"
+                "4\tsnapshot\tordered-session\t10\t1\tend\n4\tcreate\tfile\t{encoded_owner_a}\t1\t{encoded}\tend\n"
             ),
         )
         .unwrap();
         std::fs::write(
             &new,
             format!(
-                "3\tsnapshot\tordered-session\t10\t2\tend\n3\twrite\tfile\t{owner_b}\t2\t{encoded}\tend\n"
+                "4\tsnapshot\tordered-session\t10\t2\tend\n4\twrite\tfile\t{encoded_owner_b}\t2\t{encoded}\tend\n"
             ),
         )
         .unwrap();
@@ -2338,12 +2577,12 @@ mod tests {
         );
         assert_eq!(
             effective_owner_for_relative(&ledger.entries, Path::new("config/example/state.bin")),
-            Some(owner_b.clone())
+            Some(owner_b.to_string())
         );
         assert!(!merge_snapshots_into_ledger(&root, &[old], &mut ledger).unwrap());
         assert_eq!(
             effective_owner_for_relative(&ledger.entries, Path::new("config/example/state.bin")),
-            Some(owner_b)
+            Some(owner_b.to_string())
         );
     }
 
@@ -2470,7 +2709,7 @@ mod tests {
                     relative: "config/example".to_string(),
                 },
                 kind: OwnedDataKind::Tree,
-                owner: Some(sha256),
+                owner: Some("example".to_string()),
             }]),
         )
         .unwrap();
@@ -2532,7 +2771,7 @@ mod tests {
                     relative: "config/example".to_string(),
                 },
                 kind: OwnedDataKind::Tree,
-                owner: Some(owner),
+                owner: Some("example".to_string()),
             }]),
         )
         .unwrap();
@@ -2574,7 +2813,7 @@ mod tests {
             observation_line(
                 "create",
                 "tree",
-                &owner,
+                "example",
                 &root.join("config/example/database"),
             ),
         )

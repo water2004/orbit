@@ -166,6 +166,11 @@ fn write_agent_context(instance: &Path) -> Result<PathBuf, OrbitError> {
     let lock = crate::workspace::Lockfile::open(instance)?.inner;
     let mut sources: BTreeMap<String, Option<String>> = BTreeMap::new();
     let mut modules: BTreeMap<String, Option<String>> = BTreeMap::new();
+    let package_artifacts = lock
+        .packages
+        .iter()
+        .map(|package| (package.mod_id.clone(), package.sha256.clone()))
+        .collect::<BTreeMap<_, _>>();
     let mut nested_bytes = 0_u64;
     for package in &lock.packages {
         let artifact = instance.join("mods").join(&package.filename);
@@ -189,7 +194,7 @@ fn write_agent_context(instance: &Path) -> Result<PathBuf, OrbitError> {
     }
     let delegations = package_delegations(&lock);
 
-    let mut document = String::from("3\tcontext\tend\n");
+    let mut document = String::from("4\tcontext\tend\n");
     document.push_str(&format!(
         "capability\tjava\t{}-{}\tend\n",
         capabilities.java_range[0], capabilities.java_range[1]
@@ -202,6 +207,13 @@ fn write_agent_context(instance: &Path) -> Result<PathBuf, OrbitError> {
     }
     if let Some(property) = capabilities.system_library_property {
         document.push_str(&format!("system-library\t{property}\tend\n"));
+    }
+    for package in &lock.packages {
+        document.push_str(&format!(
+            "package\t{}\t{}\tend\n",
+            package.sha256,
+            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(package.mod_id.as_bytes())
+        ));
     }
     for (source, owner) in sources {
         if let Some(owner) = owner {
@@ -221,13 +233,16 @@ fn write_agent_context(instance: &Path) -> Result<PathBuf, OrbitError> {
         document.push_str(&format!("delegation\t{caller}\t{library}\tend\n"));
     }
     for (path, kind, owner) in ownership_context(instance)? {
+        let artifact_owner = owner
+            .as_ref()
+            .and_then(|package| package_artifacts.get(package));
         document.push_str(&format!(
             "node\t{}\t{}\t{}\tend\n",
             match kind {
                 crate::runtime_data::OwnedDataKind::File => "file",
                 crate::runtime_data::OwnedDataKind::Tree => "tree",
             },
-            owner.as_deref().unwrap_or("-"),
+            artifact_owner.map(String::as_str).unwrap_or("-"),
             encode_agent_path(&path)
         ));
     }
