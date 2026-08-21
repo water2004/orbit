@@ -157,6 +157,55 @@ pub(super) enum PackageEditorSection {
     Settings,
 }
 
+#[derive(Debug, Clone, Default)]
+pub(super) enum PackageOwnershipState {
+    #[default]
+    Idle,
+    Loading {
+        package: String,
+        task_id: TaskId,
+    },
+    Loaded(PackageOwnership),
+    Failed {
+        package: String,
+        message: String,
+    },
+}
+
+impl PackageOwnershipState {
+    fn begin(package: &str, task_id: TaskId) -> Self {
+        Self::Loading {
+            package: package.to_string(),
+            task_id,
+        }
+    }
+
+    fn finish(&mut self, package: &str, task_id: TaskId, ownership: PackageOwnership) {
+        if self.matches_request(package, task_id) {
+            *self = Self::Loaded(ownership);
+        }
+    }
+
+    fn fail(&mut self, package: &str, task_id: TaskId, message: &str) {
+        if self.matches_request(package, task_id) {
+            *self = Self::Failed {
+                package: package.to_string(),
+                message: message.to_string(),
+            };
+        }
+    }
+
+    fn matches_request(&self, package: &str, task_id: TaskId) -> bool {
+        matches!(
+            self,
+            Self::Loading {
+                package: loading_package,
+                task_id: loading_task,
+            } if loading_package == package && *loading_task == task_id
+        )
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum PackagePolicyMode {
     Any,
@@ -434,7 +483,7 @@ pub struct OrbitApp {
     pub(super) instance_detail: Option<RuntimeInstanceDetail>,
     pub(super) packages: Vec<InstalledPackage>,
     pub(super) package_versions: Option<PackageVersions>,
-    pub(super) package_ownership: Option<PackageOwnership>,
+    pub(super) package_ownership: PackageOwnershipState,
     pub(super) mod_view: usize,
     pub(super) search_results: Vec<SearchResult>,
     pub(super) search_truncated: bool,
@@ -549,7 +598,7 @@ impl OrbitApp {
             instance_detail: None,
             packages: Vec::new(),
             package_versions: None,
-            package_ownership: None,
+            package_ownership: PackageOwnershipState::Idle,
             mod_view: 0,
             search_results: Vec::new(),
             search_truncated: false,
@@ -1007,5 +1056,78 @@ mod package_policy_tests {
             }))
             .is_err()
         );
+    }
+
+    #[test]
+    fn package_ownership_ignores_results_from_superseded_requests() {
+        let mut state = PackageOwnershipState::begin("axiom", 8);
+        state.finish(
+            "axiom",
+            7,
+            PackageOwnership {
+                mod_id: "axiom".to_string(),
+                artifacts: Vec::new(),
+                data: Vec::new(),
+            },
+        );
+        assert!(matches!(
+            state,
+            PackageOwnershipState::Loading { task_id: 8, .. }
+        ));
+    }
+
+    #[test]
+    fn package_ownership_result_from_the_active_cli_request_becomes_visible() {
+        let envelope = crate::wire::success_document(
+            r#"{
+                "schema_version": 2,
+                "command": "ownership",
+                "ok": true,
+                "result": {
+                    "mod_id": "xaerominimap",
+                    "artifacts": [{
+                        "path": "mods/xaerominimap.jar",
+                        "scope": "instance",
+                        "present": true
+                    }],
+                    "data": [{
+                        "path": "xaero/minimap/world",
+                        "scope": "instance",
+                        "kind": "tree",
+                        "preserved": []
+                    }]
+                }
+            }"#,
+        )
+        .unwrap();
+        let ownership: PackageOwnership = serde_json::from_value(envelope.result).unwrap();
+        let mut state = PackageOwnershipState::begin("xaerominimap", 12);
+
+        state.finish("xaerominimap", 12, ownership);
+
+        assert!(matches!(
+            state,
+            PackageOwnershipState::Loaded(PackageOwnership {
+                ref mod_id,
+                ref artifacts,
+                ref data,
+            }) if mod_id == "xaerominimap" && artifacts.len() == 1 && data.len() == 1
+        ));
+    }
+
+    #[test]
+    fn package_ownership_failure_replaces_only_the_active_request() {
+        let mut state = PackageOwnershipState::begin("axiom", 8);
+        state.fail("other", 8, "wrong request");
+        assert!(matches!(state, PackageOwnershipState::Loading { .. }));
+
+        state.fail("axiom", 8, "cannot read ledger");
+        assert!(matches!(
+            state,
+            PackageOwnershipState::Failed {
+                ref package,
+                ref message,
+            } if package == "axiom" && message == "cannot read ledger"
+        ));
     }
 }

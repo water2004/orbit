@@ -19,8 +19,9 @@ use orbit_machine_protocol::{InteractionKind, ProgressPhase};
 use serde::Deserialize;
 
 use super::super::{
-    ACTIVITY_DRAWER_TRANSITION, OrbitApp, PackageEditorSection, PackagePolicyDraft,
-    PackagePolicyMode, PackagePolicyOperator, TaskState, ToastKind, controller::human_bytes,
+    ACTIVITY_DRAWER_TRANSITION, OrbitApp, PackageEditorSection, PackageOwnershipState,
+    PackagePolicyDraft, PackagePolicyMode, PackagePolicyOperator, TaskState, ToastKind,
+    controller::human_bytes,
 };
 use crate::app::components as ui;
 use crate::assets::OrbitIcon;
@@ -1122,14 +1123,23 @@ fn render_package_editor(app: &OrbitApp, cx: &mut Context<OrbitApp>) -> impl Int
     ];
     let mut navigation = h_flex().gap_1().p_1().rounded_lg().bg(cx.theme().secondary);
     for (index, (section, label)) in tabs.into_iter().enumerate() {
+        let section_package = package_id.clone();
         navigation = navigation.child(
             Button::new(("package-editor-section", index))
                 .label(label)
                 .ghost()
                 .selected(editor.section == section)
                 .on_click(cx.listener(move |this, _, _, cx| {
+                    let entering_ownership = section == PackageEditorSection::Ownership
+                        && this
+                            .package_editor
+                            .as_ref()
+                            .is_some_and(|editor| editor.section != section);
                     if let Some(editor) = &mut this.package_editor {
                         editor.section = section;
+                    }
+                    if entering_ownership {
+                        this.load_package_ownership(&section_package);
                     }
                     cx.notify();
                 })),
@@ -1196,20 +1206,53 @@ fn render_package_ownership(app: &OrbitApp, cx: &mut Context<OrbitApp>) -> AnyEl
         .package
         .mod_id
         .clone();
-    let Some(ownership) = app
-        .package_ownership
-        .as_ref()
-        .filter(|ownership| ownership.mod_id == package)
-    else {
-        return ui::compact_card(cx)
-            .child(
-                h_flex()
-                    .gap_2()
-                    .items_center()
-                    .child(Icon::new(OrbitIcon::Activity))
-                    .child(tr!("Loading owned files and directories…").into_owned()),
-            )
-            .into_any_element();
+    let ownership = match &app.package_ownership {
+        PackageOwnershipState::Loaded(ownership) if ownership.mod_id == package => ownership,
+        PackageOwnershipState::Failed {
+            package: failed_package,
+            message,
+        } if failed_package == &package => {
+            let retry_package = package.clone();
+            return ui::compact_card(cx)
+                .child(
+                    v_flex()
+                        .gap_2()
+                        .child(
+                            div()
+                                .text_sm()
+                                .font_semibold()
+                                .text_color(cx.theme().danger)
+                                .child(tr!("Failed to inspect package ownership").into_owned()),
+                        )
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(message.clone()),
+                        )
+                        .child(
+                            Button::new("package-ownership-retry")
+                                .icon(OrbitIcon::Refresh)
+                                .label(tr!("Retry").into_owned())
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.load_package_ownership(&retry_package);
+                                    cx.notify();
+                                })),
+                        ),
+                )
+                .into_any_element();
+        }
+        _ => {
+            return ui::compact_card(cx)
+                .child(
+                    h_flex()
+                        .gap_2()
+                        .items_center()
+                        .child(Icon::new(OrbitIcon::Activity))
+                        .child(tr!("Loading owned files and directories…").into_owned()),
+                )
+                .into_any_element();
+        }
     };
 
     let mut artifacts = v_flex().gap_2();
@@ -1348,14 +1391,30 @@ fn render_package_ownership(app: &OrbitApp, cx: &mut Context<OrbitApp>) -> AnyEl
         }
     }
 
+    let refresh_package = package.clone();
     v_flex()
         .gap_5()
         .pb_1()
-        .child(ui::section_title(
-            tr!("Managed artifact").into_owned(),
-            tr!("The physical JAR selected by orbit.lock").into_owned(),
-            cx,
-        ))
+        .child(
+            h_flex()
+                .items_center()
+                .justify_between()
+                .child(ui::section_title(
+                    tr!("Managed artifact").into_owned(),
+                    tr!("The physical JAR selected by orbit.lock").into_owned(),
+                    cx,
+                ))
+                .child(
+                    Button::new("package-ownership-refresh")
+                        .icon(OrbitIcon::Refresh)
+                        .tooltip(tr!("Refresh").into_owned())
+                        .ghost()
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.load_package_ownership(&refresh_package);
+                            cx.notify();
+                        })),
+                ),
+        )
         .child(artifacts)
         .child(ui::section_title(
             tr!("Runtime-owned files and directories").into_owned(),

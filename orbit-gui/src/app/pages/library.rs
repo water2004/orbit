@@ -5,7 +5,9 @@ use gpui_component::{
     h_flex, v_flex,
 };
 
-use super::super::{Confirmation, ConfirmationAction, OrbitApp, PackageEditor};
+use super::super::{
+    Confirmation, ConfirmationAction, OrbitApp, PackageEditor, PackageOwnershipState,
+};
 use crate::app::components as ui;
 use crate::assets::OrbitIcon;
 
@@ -218,7 +220,7 @@ pub(super) fn render(
                                             .on_click(cx.listener(move |this, _, _, cx| {
                                                 this.package_editor = Some(PackageEditor::new(edit.clone()));
                                                 this.load_package_versions(&edit.mod_id);
-                                                this.load_package_ownership(&edit.mod_id);
+                                                this.package_ownership = PackageOwnershipState::Idle;
                                                 cx.notify();
                                             })),
                                     )

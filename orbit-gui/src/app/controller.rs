@@ -144,7 +144,7 @@ impl OrbitApp {
     pub(super) fn load_selected(&mut self, _window: &mut Window, _cx: &mut Context<Self>) {
         self.package_editor = None;
         self.package_versions = None;
-        self.package_ownership = None;
+        self.package_ownership = PackageOwnershipState::Idle;
         let Some(instance) = self.selected_instance().cloned() else {
             self.instance_detail = None;
             self.packages.clear();
@@ -347,6 +347,7 @@ impl OrbitApp {
                     if matches!(intent, Intent::Search) {
                         self.search_state = SearchState::Failed(message.clone());
                     }
+                    self.record_package_ownership_failure(&intent, task_id, &message);
                     if let Some(task) = self.tasks.get_mut(&task_id) {
                         task.state = TaskState::Failed;
                         task.status_line = message.clone();
@@ -374,7 +375,9 @@ impl OrbitApp {
                             )
                         ))
                     };
-                    match result.and_then(|value| self.apply_result(&intent, value, window, cx)) {
+                    match result
+                        .and_then(|value| self.apply_result(task_id, &intent, value, window, cx))
+                    {
                         Ok(()) => {
                             if let Some(task) = self.tasks.get_mut(&task_id) {
                                 task.state = TaskState::Succeeded;
@@ -423,15 +426,16 @@ impl OrbitApp {
                             let error_code = self
                                 .tasks
                                 .get(&task_id)
-                                .and_then(|task| task.error_code.as_deref());
-                            let command_cancelled = error_code == Some("cancelled");
+                                .and_then(|task| task.error_code.clone());
+                            let command_cancelled = error_code.as_deref() == Some("cancelled");
                             if matches!(intent, Intent::Search) {
                                 self.search_state = SearchState::Failed(message.clone());
                             }
                             if matches!(intent, Intent::Accounts) {
                                 self.accounts_error = Some(message.clone());
                             }
-                            if error_code == Some("reauthentication_required") {
+                            self.record_package_ownership_failure(&intent, task_id, &message);
+                            if error_code.as_deref() == Some("reauthentication_required") {
                                 refresh_accounts = true;
                             }
                             if let Some(task) = self.tasks.get_mut(&task_id) {
@@ -515,6 +519,7 @@ impl OrbitApp {
 
     fn apply_result(
         &mut self,
+        task_id: TaskId,
         intent: &Intent,
         result: Value,
         window: &mut Window,
@@ -591,14 +596,13 @@ impl OrbitApp {
             }
             Intent::PackageOwnership { package } => {
                 let ownership: PackageOwnership = decode(result)?;
-                if ownership.mod_id == *package
-                    && self
-                        .package_editor
-                        .as_ref()
-                        .is_some_and(|editor| editor.package.mod_id == *package)
-                {
-                    self.package_ownership = Some(ownership);
-                }
+                anyhow::ensure!(
+                    ownership.mod_id == *package,
+                    "ownership response for '{}' was returned for requested package '{}'",
+                    ownership.mod_id,
+                    package
+                );
+                self.package_ownership.finish(package, task_id, ownership);
             }
             Intent::Search => {
                 let response: SearchResults = decode(result)?;
@@ -1321,9 +1325,8 @@ impl OrbitApp {
     }
 
     pub(super) fn load_package_ownership(&mut self, package: &str) {
-        self.package_ownership = None;
         if let Some(root) = self.selected_root() {
-            self.orbit_task_args(
+            let task_id = self.orbit_task_args(
                 &tr!("Loading files owned by %{package}", package = package),
                 Intent::PackageOwnership {
                     package: package.to_string(),
@@ -1332,7 +1335,25 @@ impl OrbitApp {
                 Some(root),
                 None,
             );
+            self.package_ownership = PackageOwnershipState::begin(package, task_id);
+        } else {
+            self.package_ownership = PackageOwnershipState::Failed {
+                package: package.to_string(),
+                message: tr!("No installation selected").into_owned(),
+            };
         }
+    }
+
+    fn record_package_ownership_failure(
+        &mut self,
+        intent: &Intent,
+        task_id: TaskId,
+        message: &str,
+    ) {
+        let Intent::PackageOwnership { package } = intent else {
+            return;
+        };
+        self.package_ownership.fail(package, task_id, message);
     }
 
     pub(super) fn apply_package_policy(&mut self, package: &str, policy: Vec<String>) {
