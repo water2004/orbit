@@ -207,9 +207,9 @@ orbit launch
   → Orbit 从同一 lock 的声明依赖边构建调用包 → I/O helper 包委托关系
   → Agent 在类加载时按 ProtectionDomain 的已声明能力固定包归属
   → 每个 JVM 独占实例观察锁，只在 create/write/delete 边界聚合路径的最后编辑者
-  → 以带 session/generation 的完整 v3 snapshot 原子写盘，后台重启不会覆盖上一 JVM
+  → snapshot 落盘前把运行期 artifact 哈希转换成稳定逻辑 mod_id，再以 session/generation 原子写盘
   → Orbit 合并到 .orbit/runtime-data/ownership.toml
-  → ownership / purge 用 lock 将 JAR SHA-256 映射回逻辑 mod_id
+  → ownership / purge 直接按逻辑 mod_id 读取，不依赖当前 JAR 哈希
   → ownership 只读展示；purge 展示唯一准确范围并确认
   → remove_from_instance 收敛 JAR/TOML/lock
   → 递归删除该包当前拥有的树，同时保留更深层的其它所有者节点
@@ -219,7 +219,8 @@ orbit launch
 记录字节内容，也完全不拦截读取 API；大量文件在新建目录树处压缩成一条记录，持续 I/O 只付出
 实际变更边界的归属聚合成本。Agent 只接受默认物理文件系统中的路径；ZIP/JAR 文件系统里的 `/META-INF/...` 等虚拟
 条目不是可独立清理的磁盘对象。实例内路径保存为相对路径，实例外的真实物理路径则显式保存
-为 external 项并在删除确认中完整展示。
+为 external 项并在本机删除确认中完整展示。external 项绝不进入组合包或跨实例迁移，避免把
+系统临时文件和源机器绝对路径带到目标环境。
 每次实际启动在生成新 Agent context 之前使用 `symlink_metadata` 扫描账本的显式节点：
 只有 `NotFound` 会被判定为用户或外部工具已删除并从账本移除，损坏软链接本身仍是存在的物理节点。
 权限拒绝等其他 I/O 错误会中止启动且不重写账本，不得把“无法检查”当成“不存在”。
@@ -402,7 +403,7 @@ lock，也不制造另一套依赖求解路径。
 `migration::plan_migration()` 从便携 Orbit 源读取包与配置事实、
 从目标读取 Minecraft/Loader JAR，枚举目标版本候选并选择 Pareto 解。`migrate check` 只
 展示这份计划；`migrate export` 复用同一计划写入目标 `orbit.toml`、`orbit.lock`、
-配置和包拥有的数据，并将源 artifact 所有权哈希重绑定到目标选中 artifact。它拒绝覆盖已有
+配置和包拥有的实例内数据，并按稳定逻辑包 ID 保留所有权；`external` 记录和文件不迁移。它拒绝覆盖已有
 目标状态。导出不把模组 JAR 安装到 `mods/`；入选的 file-only 内容
 会按哈希保存到目标 `.orbit/sources`，在线内容仍由随后执行的 `orbit install` 按新 lock 精确
 物化，因而预检和导出不会走两条推导路径。便携源包不会替代真实目标平台

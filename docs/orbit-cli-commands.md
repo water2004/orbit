@@ -397,7 +397,9 @@ orbit reset <package>
 orbit purge <package>
 ```
 
-先合并完整的 Runtime Agent session，用 lock 中当前顶层 JAR SHA-256 查询实例归属账本。目录
+先合并完整的 Runtime Agent session，用稳定的逻辑 `mod_id` 查询实例归属账本。运行时仍以当前
+顶层 JAR SHA-256 精确识别代码来源，但在 snapshot 落盘前转换为逻辑包，因此 `sync`、升级或
+同版本不同哈希替换 JAR 不会让已有数据归属失联。目录
 记录递归默认所有者，用户后来写入其中的内容继承该归属；受管包最后成功修改的文件归最后编辑者，
 更具体节点覆盖父所有权。无主目录第一次被包写入时由该包认领，排除项增长后目录默认所有者会在
 冷路径按实际文件数动态重压缩，但逐文件 purge 结果不变。CLI 一次展示逻辑包、准确 `path` / `path/**`
@@ -598,8 +600,9 @@ Pareto 极小 front。求解器从不可解推导中的强制偏好核心分支�
 关闭、机器交互取消或用户拒绝时，迁移以严格无解失败，目标不发生写入。
 
 `check` 只展示将发生的安装、升级、降级、替换和删除。`export` 复用同一规划路径，将目标
-平台快照、入选 lock、源实例配置以及仍被选中包拥有的递归用户数据写入目标；所有权从源 artifact
-哈希重绑定到目标选中 artifact 哈希。拒绝覆盖已有 Orbit 状态或数据。它不把模组 JAR 安装到 `mods/`；
+平台快照、入选 lock、源实例配置以及仍被选中包拥有的递归用户数据写入目标；所有权沿稳定逻辑
+包 ID 保留。只有实例内的相对路径会迁移，系统临时目录等 `external` 记录仍可供源实例 reset/purge
+使用，但不会写入便携包或目标账本。拒绝覆盖已有 Orbit 状态或数据。它不把模组 JAR 安装到 `mods/`；
 入选的 file-only 内容会进入目标按哈希寻址的 `.orbit/sources`，随后仍必须在目标目录运行
 `orbit install` 统一物化。GUI 的迁移向导只编排源 export、Launcher 创建目标、
 migrate export、`instances register` 与目标 install；GUI 不直接写 Orbit 全局注册表。

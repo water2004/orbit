@@ -30,7 +30,7 @@ The detailed boundaries are documented in [Orbit architecture](docs/orbit-archit
 - **Package-level transactions.** `mod_id` is the solver package key. A selected package may own multiple contained JARs, while unselected top-level package versions are removed only after the exact plan is shown and confirmed.
 - **Observable and cancellable work.** Discovery, downloads, solving, application, audit, and package export emit typed progress. Already-compressed JARs are stored directly, real byte progress is reported, and failed temporary output is removed.
 - **One package, disjoint owners.** `.orbitbundle` is a versioned, hash-inventoried format with optional Launcher and Orbit sections. Orbit owns mods, constraints, lock state, and opted-in package data; Launcher owns runtime requirements, worlds, and game preferences. The GUI composes both projections into one migration bundle without either CLI interpreting the other's files. Official `.mrpack` import/export remains a separate strict implementation of Modrinth's format.
-- **Runtime-owned package data.** `orbit launch` wraps Orbit Launcher and injects Orbit's low-overhead Java Agent. It never observes reads. A verified, version-ranged Loader capability table maps physical JARs, Forge-family union sources, and Quilt native module identities back to one top-level logical package. A file belongs to its last successful package writer; the first package writing into an unowned directory claims that directory, while shared game/world roots remain unowned and specific descendants may still be owned. When a declared library dependency performs I/O for its caller, the Agent attributes the write through that dependency edge instead of hard-coding library or mod names. Growing exceptions are recompressed from metadata on the cold merge path so directory defaults follow the owner of the most actual files without changing per-file purge or migration results. Unknown Loader/JVM ranges reject observation instead of guessing; filenames and static analysis are never used as ownership evidence.
+- **Runtime-owned package data.** `orbit launch` wraps Orbit Launcher and injects Orbit's low-overhead Java Agent. It never observes reads. A verified, version-ranged Loader capability table maps physical JARs, Forge-family union sources, and Quilt native module identities back to one top-level logical package. Runtime attribution uses exact artifact hashes, while snapshots and the ledger persist stable mod IDs, so replacing a JAR does not orphan its data. A file belongs to its last successful package writer; the first package writing into an unowned directory claims that directory, while shared game/world roots remain unowned and specific descendants may still be owned. When a declared library dependency performs I/O for its caller, the Agent attributes the write through that dependency edge instead of hard-coding library or mod names. Growing exceptions are recompressed from metadata on the cold merge path so directory defaults follow the owner of the most actual files without changing per-file purge or migration results. External paths remain available for local reset/purge but are excluded from portable exports and migrations. Unknown Loader/JVM ranges reject observation instead of guessing; filenames and static analysis are never used as ownership evidence.
 
 ## Installation
 
@@ -41,16 +41,16 @@ server needs only Launcher, and can add Orbit when it also wants managed mods:
 
 ```bash
 # Headless Minecraft runtime management.
-sudo apt install ./orbit-launcher_0.5.1-1_amd64.deb
+sudo apt install ./orbit-launcher_0.6.0-1_amd64.deb
 
 # Optional mod package management on that server.
-sudo apt install ./orbit_0.5.1-1_amd64.deb
+sudo apt install ./orbit_0.6.0-1_amd64.deb
 
 # Desktop installation: apt resolves the GUI's exact-version CLI dependencies
 # when all three downloaded files are supplied together.
-sudo apt install ./orbit_0.5.1-1_amd64.deb \
-  ./orbit-launcher_0.5.1-1_amd64.deb \
-  ./orbit-gui_0.5.1-1_amd64.deb
+sudo apt install ./orbit_0.6.0-1_amd64.deb \
+  ./orbit-launcher_0.6.0-1_amd64.deb \
+  ./orbit-gui_0.6.0-1_amd64.deb
 ```
 
 Installing the GUI on a headless host is technically harmless, but it pulls graphical runtime

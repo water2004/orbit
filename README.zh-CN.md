@@ -34,7 +34,7 @@ Launcher 已完整支持 Vanilla、Fabric、Quilt、Forge、NeoForge 的客户�
 
 - **📂 非侵入式与多实例/服务器管理**：无需改变外部启动器结构。直接进入启动器实例或 Fabric、Quilt、Forge、NeoForge dedicated server 根目录即可初始化管理；Launcher 托管客户端位于 `instances/<实例>`，精确 `minecraft.jar` 属于实例、共享仓库只承载不可变 assets/libraries；Launcher 托管的独立服务端则把完整锁定运行时保存在用户选择的服务端目录。
 - **🔄 事实同步与显式修复**：`orbit sync` 联网识别本地 JAR 来源，并让 TOML、lock 和分组精确收敛到实际本地 JAR 集合；它不求解依赖，也不删除任何 JAR 文件。需要选择其他包版本时由 `orbit fix` 展示完整方案并确认。
-- **🧹 基于运行时事实的数据生命周期**：`orbit launch` 包装 Launcher 启动并注入低开销 Agent；读取完全不监听，按已验证的 Loader 版本能力表把物理 JAR、Forge 系 `union:` 来源和 Quilt 原生模块身份归入同一顶层逻辑包，未知 Loader/JVM 范围明确拒绝观测。文件归最后成功编辑它的包，无主目录由第一个写入包认领，但游戏/存档等共享根保持无主，只有更具体的实际路径可被包拥有。声明的依赖库替调用者执行 I/O 时，Agent 只沿真实依赖边回溯调用包，不硬编码 Masa 或其它模组名。排除项增长后只在合并冷路径枚举元数据，按实际文件数动态重压缩目录默认所有者，逐文件 purge/migration 结果不变。export、migration、`reset` 和 `purge` 共用同一账本，不用文件名或静态分析猜归属。
+- **🧹 基于运行时事实的数据生命周期**：`orbit launch` 包装 Launcher 启动并注入低开销 Agent；读取完全不监听，按已验证的 Loader 版本能力表把物理 JAR、Forge 系 `union:` 来源和 Quilt 原生模块身份归入同一顶层逻辑包，未知 Loader/JVM 范围明确拒绝观测。运行时以精确 artifact 哈希归因，snapshot 与账本持久化稳定 mod ID，因此换 JAR 不会丢失历史归属。文件归最后成功编辑它的包，无主目录由第一个写入包认领，但游戏/存档等共享根保持无主，只有更具体的实际路径可被包拥有。声明的依赖库替调用者执行 I/O 时，Agent 只沿真实依赖边回溯调用包，不硬编码 Masa 或其它模组名。排除项增长后只在合并冷路径枚举元数据，按实际文件数动态重压缩目录默认所有者，逐文件 purge/migration 结果不变。external 路径只用于源实例本机清理，不进入便携导出与迁移；export、migration、`reset` 和 `purge` 共用同一账本，不用文件名或静态分析猜归属。
 - **🌐 多来源**：支持 Modrinth、CurseForge 与本地 `file:` JAR；不同平台只负责候选发现，最终统一验证 JAR 并求解依赖。
 - **🗃️ 按游戏版本隔离的本地版本库**：每个精确 Minecraft/Loader 分别保存远端快照与 JAR 分析数据库；批量检查 project 变更标记，未变化不重拉版本，变化时也只刷新当前游戏版本。全局 LRU JAR 缓存仍是独立的内容存储。
 - **🧩 完整 Loader 语义**：Fabric、Quilt、Forge、NeoForge 先由各自适配器保真解析，再进入同一个规范化求解模型；支持端侧、软/硬依赖、`provides`、加载顺序、内嵌模组与 Jar-in-Jar。
@@ -66,15 +66,15 @@ Debian/Ubuntu amd64 使用三个独立 deb，不提供 MSI 式的交互式功能
 
 ```bash
 # 无图形服务端：只安装 Launcher
-sudo apt install ./orbit-launcher_0.5.1-1_amd64.deb
+sudo apt install ./orbit-launcher_0.6.0-1_amd64.deb
 
 # 服务端还需要管理模组时再安装 Orbit
-sudo apt install ./orbit_0.5.1-1_amd64.deb
+sudo apt install ./orbit_0.6.0-1_amd64.deb
 
 # 桌面完整套件：GUI 精确依赖同版本的两个 CLI
-sudo apt install ./orbit_0.5.1-1_amd64.deb \
-  ./orbit-launcher_0.5.1-1_amd64.deb \
-  ./orbit-gui_0.5.1-1_amd64.deb
+sudo apt install ./orbit_0.6.0-1_amd64.deb \
+  ./orbit-launcher_0.6.0-1_amd64.deb \
+  ./orbit-gui_0.6.0-1_amd64.deb
 ```
 
 在无图形环境中安装 GUI 并不会阻止服务端工作，但会额外引入图形运行库，而且没有图形会话

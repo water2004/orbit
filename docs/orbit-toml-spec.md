@@ -22,13 +22,15 @@ Orbit 区分四类对象：
 JAR 读取到的事实，不表达用户意图。精确恢复优先使用 lock；无 lock 时可按 TOML 重新求解。
 
 `.orbit/runtime-data/ownership.toml` 不属于 manifest/lock schema，也不是 JAR cache。它是
-`orbit launch` 的 Runtime Agent 产生的实例本地 provenance，以顶层 JAR SHA-256 记录文件的
+`orbit launch` 的 Runtime Agent 产生的实例本地 provenance，以稳定逻辑 `mod_id` 记录文件的
 最后编辑者及目录树的递归默认所有者。它不记录读取。另一个包成功修改文件即取得该文件；向
 无主目录写入文件会认领直接父目录（共享实例根除外）；更具体节点覆盖父归属。排除项持续增长时，
 Orbit 只在 snapshot 合并冷路径枚举元数据并按实际文件数重压缩目录默认值，逐文件有效归属不变。
-包身份仍只由 lock 的 `mod_id` 和内容哈希映射，
+运行时来源仍由 lock 的内容哈希精确识别，并在 snapshot 落盘前转换为 `mod_id`；因此替换 JAR
+不会切断历史归属。包身份仍只由 lock 的 `mod_id` 和内容哈希映射，
 归属账本不新增另一套包模型，也不参与依赖求解或 lock 的包版本选择；但 export/migration 会
-用它携带入选包拥有的用户数据并重绑定目标 artifact 哈希。
+用它携带入选包拥有的实例内用户数据。`external` 记录只参与源实例本机 reset/purge，不进入
+便携导出或迁移目标。
 
 ## 2. `orbit.toml`
 
@@ -261,7 +263,8 @@ bundled = []
 - `remove`：移除逻辑包，同时清理其 TOML 与 lock 条目；仍被其他 JAR 依赖时拒绝。
 - `reset`：使用运行时归属账本事务性删除所选包的数据，但保持 JAR、TOML、lock、远端、环境和
   约束不变；它不是 remove 的别名。
-- `purge`：先由 lock 将当前顶层 JAR SHA-256 映射到运行时归属计划并展示准确路径及保留的
+- `purge`：按逻辑包 ID 读取运行时归属计划，并用 lock 中当前顶层 JAR SHA-256 防止确认后包被
+  替换；展示准确路径及保留的
   嵌套例外；确认后复用 `remove` 的同一事务清理 JAR/TOML/lock，再递归删除该包的所有权根，
   最后清理账本引用。更具体的其它当前所有者、未知或未观测数据不删除。
 
