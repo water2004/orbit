@@ -305,14 +305,8 @@ pub async fn resolve_vanilla_client(
     let mut logging_argument = None;
     if let Some(logging) = version.logging.and_then(|logging| logging.client) {
         logging.file.validate("logging configuration")?;
-        let target = format!("log_configs/{}", logging.file.id);
-        if !logging.argument.contains("${path}") {
-            return Err(LauncherError::InvalidRemoteData(
-                "Minecraft logging argument does not contain the required '${path}' placeholder"
-                    .to_string(),
-            ));
-        }
-        logging_argument = Some(logging.argument.replace("${path}", &target));
+        let (target, argument) = resolve_logging(&logging.argument, &logging.file.id)?;
+        logging_argument = Some(argument);
         downloads.push(ClientDownload {
             request: logging.file.request(format!(
                 "Minecraft logging configuration {}",
@@ -368,6 +362,19 @@ pub async fn resolve_vanilla_client(
         legacy_virtual_assets: assets.virtual_assets,
         map_assets_to_resources: assets.map_to_resources,
     })
+}
+
+fn resolve_logging(argument: &str, file_id: &str) -> Result<(String, String), LauncherError> {
+    if !argument.contains("${path}") {
+        return Err(LauncherError::InvalidRemoteData(
+            "Minecraft logging argument does not contain the required '${path}' placeholder"
+                .to_string(),
+        ));
+    }
+    let target = format!("assets/log_configs/{file_id}");
+    validate_portable_target(&target)?;
+    let runtime_path = format!("${{assets_root}}/log_configs/{file_id}");
+    Ok((target, argument.replace("${path}", &runtime_path)))
 }
 
 fn resolve_arguments(
@@ -884,6 +891,39 @@ mod tests {
             format!("assets/indexes/{}.json", "a".repeat(40))
         );
         assert_ne!(original.artifact_path(), revised.artifact_path());
+    }
+
+    #[test]
+    fn logging_configuration_is_addressed_from_the_official_assets_directory() {
+        let argument = "-Dlog4j.configurationFile=${path}";
+        let file_id = "client.xml";
+
+        assert_eq!(
+            resolve_logging(argument, file_id).unwrap(),
+            (
+                "assets/log_configs/client.xml".to_string(),
+                "-Dlog4j.configurationFile=${assets_root}/log_configs/client.xml".to_string(),
+            )
+        );
+    }
+
+    #[test]
+    fn logging_configuration_requires_the_official_path_placeholder() {
+        let error = resolve_logging(
+            "-Dlog4j.configurationFile=log_configs/client.xml",
+            "client.xml",
+        )
+        .unwrap_err();
+
+        assert_eq!(error.code(), "invalid_remote_data");
+    }
+
+    #[test]
+    fn logging_configuration_rejects_an_unsafe_file_id() {
+        let error =
+            resolve_logging("-Dlog4j.configurationFile=${path}", "../client.xml").unwrap_err();
+
+        assert_eq!(error.code(), "invalid_remote_data");
     }
 
     #[tokio::test]
