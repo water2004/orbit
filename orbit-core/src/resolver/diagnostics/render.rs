@@ -115,14 +115,17 @@ fn collect_external_facts(cause: &Cause, facts: &mut Vec<String>) {
                 External::FromDependencyOf(package, versions, dependency, required) => {
                     if package == &SolverPackage::Root {
                         Some(format!(
-                            "the project requires {} {required}",
-                            dependency.user_label()
+                            "the project requires {} {}",
+                            dependency.user_label(),
+                            display_unique(required)
                         ))
                     } else {
                         Some(format!(
-                            "{} {versions} requires {} {required}",
+                            "{} {} requires {} {}",
                             package.user_label(),
-                            dependency.user_label()
+                            display_unique(versions),
+                            dependency.user_label(),
+                            display_unique(required)
                         ))
                     }
                 }
@@ -147,7 +150,26 @@ fn collect_external_facts(cause: &Cause, facts: &mut Vec<String>) {
 }
 
 fn display_versions(versions: &pubgrub::Ranges<SolverVersion>) -> String {
-    fabric_wildcard(versions).unwrap_or_else(|| versions.to_string())
+    fabric_wildcard(versions).unwrap_or_else(|| display_unique(versions))
+}
+
+/// Several candidate identities can share one declared version; their
+/// singleton segments render identically, so collapse duplicates for display.
+fn display_unique(versions: &pubgrub::Ranges<SolverVersion>) -> String {
+    let mut seen = std::collections::HashSet::new();
+    let mut segments = Vec::new();
+    for segment in versions.clone() {
+        let rendered = std::iter::once(segment)
+            .collect::<pubgrub::Ranges<SolverVersion>>()
+            .to_string();
+        if seen.insert(rendered.clone()) {
+            segments.push(rendered);
+        }
+    }
+    if segments.is_empty() {
+        return versions.to_string();
+    }
+    segments.join(" | ")
 }
 
 fn fabric_wildcard(versions: &pubgrub::Ranges<SolverVersion>) -> Option<String> {
@@ -186,6 +208,30 @@ mod rendering_tests {
         let versions = solver_range(Version::parse_constraint("0.9.x", LoaderKind::Fabric));
 
         assert_eq!(display_versions(&versions), "0.9.x");
+    }
+
+    #[test]
+    fn collapses_candidate_singletons_sharing_one_declared_version() {
+        use crate::resolver::types::{CandidateIdentity, CandidateLocation};
+
+        let identity = |source: &str, installed: bool| CandidateIdentity {
+            owner: "a".to_string(),
+            source: source.to_string(),
+            path: Vec::new(),
+            location: CandidateLocation::Root,
+            installed,
+        };
+        let semantic = || Version::parse("1.0.0", LoaderKind::Fabric);
+        let versions = pubgrub::Ranges::singleton(SolverVersion::candidate(
+            semantic(),
+            identity("modrinth:abc", true),
+        ))
+        .union(&pubgrub::Ranges::singleton(SolverVersion::candidate(
+            semantic(),
+            identity("file:sources/a.jar", false),
+        )));
+
+        assert_eq!(display_unique(&versions), "1.0.0");
     }
 
     #[test]

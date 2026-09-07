@@ -1290,6 +1290,68 @@ b = { version = "*", remotes = [{ type = "file", path = "b.jar" }] }
     }
 
     #[tokio::test]
+    async fn unsatisfiable_minimal_change_reports_both_sides_of_the_version_conflict() {
+        let manifest: OrbitManifest = toml::from_str(
+            r#"
+[project]
+name = "test"
+mc_version = "1.20.1"
+modloader = "forge"
+modloader_version = "47.2.0"
+[platform]
+minecraft_jar = { path = "minecraft.jar", sha256 = "test" }
+loader_jar = { path = "loader.jar", sha256 = "test" }
+runtime_jars = []
+physical_environment = "client"
+[packages]
+eco = { version = "*", remotes = [{ type = "file", path = "eco.jar" }] }
+pin = { version = "*", remotes = [{ type = "file", path = "pin.jar" }] }
+fapi = { version = "*", remotes = [{ type = "file", path = "fapi.jar" }] }
+"#,
+        )
+        .unwrap();
+        let lockfile = OrbitLockfile {
+            meta: lockfile().meta,
+            packages: vec![
+                PackageEntry {
+                    dependencies: vec![ModDependency::required("fapi", "[2,)").into()],
+                    ..locked("eco")
+                },
+                PackageEntry {
+                    dependencies: vec![ModDependency::required("fapi", "[1]").into()],
+                    ..locked("pin")
+                },
+                locked("fapi"),
+            ],
+        };
+        let mut catalog = CandidateCatalog::default();
+        catalog.candidates.insert(
+            "eco".to_string(),
+            vec![candidate(
+                "1",
+                vec![ModDependency::required("fapi", "[2,)")],
+            )],
+        );
+        catalog.candidates.insert(
+            "pin".to_string(),
+            vec![candidate("1", vec![ModDependency::required("fapi", "[1]")])],
+        );
+        catalog.candidates.insert(
+            "fapi".to_string(),
+            vec![candidate("1", Vec::new()), candidate("2", Vec::new())],
+        );
+
+        let error = resolve_minimal_change_portfolio(&manifest, &lockfile, &catalog)
+            .await
+            .unwrap_err();
+
+        // The explanation must name both packages pinning incompatible `fapi`
+        // ranges, not just the side whose preference branch failed first.
+        assert!(error.contains("eco"), "{error}");
+        assert!(error.contains("pin"), "{error}");
+    }
+
+    #[tokio::test]
     async fn selected_opaque_version_warns_that_numeric_filtering_was_bypassed() {
         let mut manifest = manifest();
         manifest.project.modloader = "fabric".to_string();

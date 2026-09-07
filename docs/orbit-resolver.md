@@ -58,7 +58,8 @@ fork 仍保留 observer。observer 只解释一次成功求解里“某个候选
 - `Backtracked`
 
 不可解原因则直接来自同次求解的 `DerivationTree`，其中也包含 Orbit 自定义子句的
-`reason`。
+`reason`。渲染事实时，共享同一 JAR 声明版本的多个候选身份只显示一次版本号，不把
+同一版本按来源重复列出。
 
 fork 还提供 `resolve_maximal_solutions_with_observer()`。它在同一个 solver session
 中枚举完整 Pareto front：先用 probe 寻找一个可行方案，使所有已选投影包保持等价或
@@ -74,6 +75,12 @@ package/version/constraint，不包含 Jar-in-Jar、loader 或 Orbit 类型。
 核心成员建立删除分支，并用已知极小删除集合剪除其全部超集；这避免了每得到一个保留点就
 重新线性探测全部包。偏好集合固定后，fork 再用上述版本序枚举该变更集合内的版本 Pareto
 极大 front。所有分支、原因与次级目标都在 fork 内，不由 Orbit 循环调用黑盒求解。
+
+若全部偏好分支都不可解，说明依赖图本身已经不满足任何偏好赋值（无约束问题的一个解
+必然落在某个分支内），此时单分支的失败树只会把原因归咎到强制偏好子句上。fork 因此再
+做一次不带任何偏好强制的求解并返回它的失败树：这棵树只包含真实的依赖事实，能同时
+指出冲突双方（例如一个包要求 `>=0.159.0` 而另一个包钉死 `=0.158.0`），而不是只显示
+偏好固定住的一侧。
 
 fork 同时提供 `resolve_factored_preference_solutions_with_observer()`：调用方把已证明约束闭包
 互不相交的偏好分量交给它，返回公共决定和多个 `PreferenceFactor`。每个因子保存自身的
