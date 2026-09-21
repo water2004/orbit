@@ -44,6 +44,12 @@ PubGrub fork 位于
 分支后续移动导致构建结果变化。仓库内的 `pubgrub-fork` 仍是独立 checkout，不加入根
 workspace，仅供继续开发和向 fork 推送。
 
+因式化属于求解器：Orbit 只提供有限候选图、物理端、包投影和偏好。fork 在完整约束闭包上
+传播候选域，证明 Pareto 恒定状态后划分剩余超图；包括可选包的安装/缺席，不先展开完整
+笛卡尔积，也不由 Orbit 删除中间节点猜测独立性。具体选择最终在同一图中整体验证。
+候选求解与本地校验统一消费 TOML 的 `physical_environment`：客户端内置服务器不改变
+客户端 Loader 的物理端，独立服务端才走 server 模块过滤。
+
 `modrinth-wrapper` 与 `curseforge-wrapper` 分别拥有平台的 HTTP client、请求参数、
 响应 DTO、分页和传输错误。`orbit-core/src/providers/{modrinth,curseforge}` 只把
 wrapper 输出适配成统一的 `RemoteArtifact` / 查询模型。

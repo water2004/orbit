@@ -196,7 +196,8 @@ impl ResolutionTrace {
             SolverEvent::PreferenceProbeFinished { .. } => {
                 self.progress_state.work_completed += 1;
             }
-            SolverEvent::Decision { package, .. } => {
+            SolverEvent::Decision { package, .. }
+            | SolverEvent::AbsenceDecision { package, .. } => {
                 self.progress_state.decisions += 1;
                 self.progress_state.current = Some(ResolutionCurrent::Decision {
                     package: package.to_string(),

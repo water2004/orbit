@@ -1,6 +1,6 @@
 //! Builds the loader-independent constraint graph consumed by PubGrub.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 
 use pubgrub::{IncompatibilityConstraint, IncompatibilityConstraintTerm, Ranges};
 
@@ -75,113 +75,6 @@ pub(crate) struct SolverGraph {
     pub(crate) target: Environment,
 }
 
-impl SolverGraph {
-    /// Partition soft package preferences by the constraint graph that can couple them.
-    ///
-    /// Root and platform packages are fixed inputs, so dependencies on them constrain a component
-    /// without joining otherwise independent components. Provider incompatibilities are
-    /// hyperedges: every non-fixed package mentioned by one clause belongs to the same component.
-    pub(crate) fn preference_components(
-        &self,
-        preferences: Vec<pubgrub::PackagePreference<SolverPackage, Ranges<SolverVersion>>>,
-    ) -> Vec<Vec<pubgrub::PackagePreference<SolverPackage, Ranges<SolverVersion>>>> {
-        let mut preferences = preferences
-            .into_iter()
-            .map(|preference| (preference.package().clone(), preference))
-            .collect::<BTreeMap<_, _>>();
-        self.package_components(preferences.keys().cloned().collect())
-            .into_iter()
-            .map(|component| {
-                component
-                    .into_iter()
-                    .filter_map(|package| preferences.remove(&package))
-                    .collect()
-            })
-            .collect()
-    }
-
-    /// Partition projected packages by every dependency and incompatibility path which can couple
-    /// their selected state. The graph is the union across all selectable versions, making the
-    /// partition conservative even when changing a version changes its dependencies.
-    pub(crate) fn package_components(
-        &self,
-        packages: Vec<SolverPackage>,
-    ) -> Vec<Vec<SolverPackage>> {
-        let mut adjacency: HashMap<SolverPackage, HashSet<SolverPackage>> = HashMap::new();
-        for ((owner, _), dependencies) in &self.provider.dependencies {
-            for (dependency, _) in dependencies {
-                connect_variable_packages(&mut adjacency, [owner, dependency]);
-            }
-        }
-        for ((owner, _), incompatibilities) in &self.provider.incompatibilities {
-            for incompatibility in incompatibilities {
-                let packages = std::iter::once(owner).chain(incompatibility.terms.iter().map(
-                    |term| match term {
-                        pubgrub::IncompatibilityConstraintTerm::Positive(package, _)
-                        | pubgrub::IncompatibilityConstraintTerm::Negative(package, _) => package,
-                    },
-                ));
-                connect_variable_packages(&mut adjacency, packages);
-            }
-        }
-
-        let mut remaining = packages
-            .into_iter()
-            .map(|package| (package.clone(), package))
-            .collect::<BTreeMap<_, _>>();
-        let mut components = Vec::new();
-        while let Some(start) = remaining.keys().next().cloned() {
-            let mut stack = vec![start];
-            let mut visited = HashSet::new();
-            let mut component = Vec::new();
-            while let Some(package) = stack.pop() {
-                if !visited.insert(package.clone()) {
-                    continue;
-                }
-                if let Some(projected) = remaining.remove(&package) {
-                    component.push(projected);
-                }
-                stack.extend(
-                    adjacency
-                        .get(&package)
-                        .into_iter()
-                        .flatten()
-                        .filter(|neighbor| !visited.contains(*neighbor))
-                        .cloned(),
-                );
-            }
-            component.sort();
-            components.push(component);
-        }
-        components
-    }
-}
-
-fn connect_variable_packages<'a>(
-    adjacency: &mut HashMap<SolverPackage, HashSet<SolverPackage>>,
-    packages: impl IntoIterator<Item = &'a SolverPackage>,
-) {
-    let packages = packages
-        .into_iter()
-        .filter(|package| !matches!(package, SolverPackage::Root | SolverPackage::Platform(_)))
-        .cloned()
-        .collect::<Vec<_>>();
-    let Some(first) = packages.first() else {
-        return;
-    };
-    adjacency.entry(first.clone()).or_default();
-    for package in packages.iter().skip(1) {
-        adjacency
-            .entry(first.clone())
-            .or_default()
-            .insert(package.clone());
-        adjacency
-            .entry(package.clone())
-            .or_default()
-            .insert(first.clone());
-    }
-}
-
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ManifestPackageRoots {
     Required,
@@ -202,7 +95,7 @@ pub(crate) fn build_solver_graph(
         candidates,
         loader_package,
         java_feature,
-        Environment::Both,
+        manifest.platform.physical_environment,
         ManifestPackageRoots::Required,
     )
 }
@@ -417,6 +310,20 @@ fn register_candidate_versions(
         };
         let solver_version = SolverVersion::candidate(version.clone(), identity.clone());
         let solver_package = SolverPackage::Mod(package.to_string());
+        // The local file and the repository may name the same content hash. Register its
+        // module/owner graph once, retaining the installed identity for transaction planning.
+        if provider
+            .versions
+            .get(&solver_package)
+            .is_some_and(|versions| {
+                let realization = solver_version.same_realization();
+                versions
+                    .iter()
+                    .any(|existing| realization.contains(existing))
+            })
+        {
+            continue;
+        }
         let bundled = candidate_bundled_links(&candidate.bundled, &identity, context.loader);
         register_module(
             provider,

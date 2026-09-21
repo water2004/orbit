@@ -1545,7 +1545,10 @@ pub(crate) fn selected_packages(
             })
         })
         .transpose()?;
-    let target = options.target.as_deref().unwrap_or("both");
+    let target = options
+        .target
+        .as_deref()
+        .unwrap_or(manifest.platform.physical_environment.as_str());
     let mut requirements = Vec::new();
     let mut skipped = Vec::new();
     for (package, spec) in &manifest.packages {
@@ -3332,6 +3335,24 @@ example = { version = "*", remotes = [{ type = "file", path = "example.jar" }] }
         );
         assert_eq!(
             selected_packages(&manifest, &lockfile, &server, None, 21).unwrap(),
+            (Vec::new(), vec!["example".to_string()])
+        );
+        assert_eq!(
+            selected_packages(&manifest, &lockfile, &PackageSelection::default(), None, 21)
+                .unwrap(),
+            (vec!["example".to_string()], Vec::new())
+        );
+        let mut dedicated_server = manifest;
+        dedicated_server.platform.physical_environment = crate::metadata::Environment::Server;
+        assert_eq!(
+            selected_packages(
+                &dedicated_server,
+                &lockfile,
+                &PackageSelection::default(),
+                None,
+                21
+            )
+            .unwrap(),
             (Vec::new(), vec!["example".to_string()])
         );
     }

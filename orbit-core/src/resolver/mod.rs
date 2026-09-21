@@ -626,7 +626,7 @@ async fn resolve_portfolio_with_progress_detailed(
             &catalog.candidates,
             catalog.loader_package.as_ref(),
             catalog.java_feature,
-            Environment::Both,
+            manifest.platform.physical_environment,
             ManifestPackageRoots::RequiredTopLevel,
         ),
         ResolutionObjective::PreserveManifestPackages => build_solver_graph_with_package_roots(
@@ -635,7 +635,7 @@ async fn resolve_portfolio_with_progress_detailed(
             &catalog.candidates,
             catalog.loader_package.as_ref(),
             catalog.java_feature,
-            Environment::Both,
+            manifest.platform.physical_environment,
             ManifestPackageRoots::Preferred,
         ),
         ResolutionObjective::MaximizeVersions | ResolutionObjective::MinimizeChanges => {
@@ -676,12 +676,11 @@ async fn resolve_portfolio_with_progress_detailed(
             Vec::new()
         }
     };
-    let preference_components = graph.preference_components(preferences);
     let factored_preferences = pubgrub::resolve_factored_preference_solutions_with_observer(
         &graph.provider,
         graph.root_package.clone(),
         graph.root_version.clone(),
-        preference_components,
+        preferences,
         &mut trace,
     )
     .map_err(solver_failure)?;
@@ -719,14 +718,13 @@ async fn resolve_portfolio_with_progress_detailed(
             )
         })?;
 
-    let package_components = graph.package_components(maximized_packages);
     let factored_versions =
         pubgrub::resolve_factored_maximal_solutions_for_preference_decisions_with_observer(
             &graph.provider,
             graph.root_package.clone(),
             graph.root_version.clone(),
             preference_decisions.clone(),
-            package_components,
+            maximized_packages,
             solver_version_ordering(),
             &mut trace,
         )
@@ -1335,7 +1333,7 @@ mod tests {
     use crate::OrbitError;
     use crate::jar::JarModOrigin;
     use crate::lockfile::{BundledMod, LockMeta, PackageEntry};
-    use crate::metadata::{Environment, ModDependency, ModLoadCondition};
+    use crate::metadata::{Environment, ModDependency, ModLoadCondition, ProvidedMod};
     use crate::progress::{ProgressEvent, ProgressReporter};
     use std::sync::{Arc, Mutex};
 
@@ -1840,6 +1838,106 @@ fapi = { version = "*", remotes = [{ type = "file", path = "fapi.jar" }] }
                 "{alternative:?}"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn physical_environment_controls_voxy_provider_and_iris_dependencies() {
+        let manifest: OrbitManifest = toml::from_str(
+            r#"
+[project]
+name = "test"
+mc_version = "1.20.1"
+modloader = "fabric"
+modloader_version = "0.16.10"
+[platform]
+minecraft_jar = { path = "minecraft.jar", sha256 = "test" }
+loader_jar = { path = "loader.jar", sha256 = "test" }
+runtime_jars = []
+physical_environment = "client"
+[packages]
+sodium = { version = "*", remotes = [{ type = "file", path = "sodium.jar" }] }
+voxy = { version = "*", remotes = [{ type = "file", path = "voxy.jar" }] }
+iris = { version = "*", remotes = [{ type = "file", path = "iris.jar" }] }
+"#,
+        )
+        .unwrap();
+        let mut voxy = locked("voxy");
+        voxy.dependencies =
+            vec![ModDependency::required("sodium", "=0.0.0 || >=0.9.1- <=0.9.1").into()];
+        voxy.bundled = vec![BundledMod {
+            mod_id: "sodiumprovider".to_string(),
+            version: "0.0.0".to_string(),
+            load_condition: ModLoadCondition::IfPossible,
+            origin: JarModOrigin::Nested {
+                path: "META-INF/jars/dummyprovider.jar".to_string(),
+                artifact: None,
+            },
+            environment: Environment::Server,
+            dependencies: Vec::new(),
+            provides: vec![ProvidedMod {
+                id: "sodium".to_string(),
+                version: None,
+            }],
+            language_loader: None,
+            embedded_artifacts: Vec::new(),
+            bundled: Vec::new(),
+        }];
+        let mut sodium = locked("sodium");
+        sodium.version = "0.9.1".to_string();
+        sodium.environment = Environment::Client;
+        let mut iris = locked("iris");
+        iris.environment = Environment::Client;
+        iris.dependencies = vec![ModDependency::required("sodium", "0.9.x").into()];
+        let mut lockfile = OrbitLockfile {
+            meta: LockMeta {
+                mc_version: "1.20.1".to_string(),
+                modloader: "fabric".to_string(),
+                modloader_version: "0.16.10".to_string(),
+            },
+            packages: vec![sodium, voxy, iris],
+        };
+        let mut catalog = CandidateCatalog::default();
+        catalog
+            .candidates
+            .insert("sodium".to_string(), vec![candidate("0.9.2", Vec::new())]);
+
+        let portfolio = resolve_candidate_portfolio(&manifest, &lockfile, &catalog)
+            .await
+            .unwrap();
+        let report = &portfolio.alternatives[0];
+
+        assert!(report.selected_versions.contains_key("sodium"));
+        assert!(!report.changes.iter().any(|change| {
+            change.package == "sodium" && change.kind == PackageChangeKind::Remove
+        }));
+        assert_eq!(report.selected_versions["sodium"], "0.9.1");
+
+        // Disabling/removing the actual JAR cannot satisfy either client's dependency.
+        let mut manifest = manifest;
+        manifest.packages.shift_remove("sodium");
+        lockfile.packages.retain(|entry| entry.mod_id != "sodium");
+        let empty_catalog = CandidateCatalog::default();
+        let error = resolve_candidate_portfolio(&manifest, &lockfile, &empty_catalog)
+            .await
+            .unwrap_err();
+        assert!(error.contains("sodium"), "{error}");
+
+        // The same Voxy package is valid on a dedicated server: Iris is environment-disabled,
+        // and its nested server-only provider legitimately supplies sodium 0.0.0.
+        manifest.platform.physical_environment = Environment::Server;
+        let server = resolve_candidate_portfolio(&manifest, &lockfile, &empty_catalog)
+            .await
+            .unwrap();
+        assert!(
+            server.alternatives[0]
+                .selected_versions
+                .contains_key("voxy")
+        );
+        assert!(
+            !server.alternatives[0]
+                .selected_versions
+                .contains_key("sodium")
+        );
     }
 
     #[tokio::test]

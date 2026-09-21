@@ -257,3 +257,10 @@
     `.mrpack` 必须直接遵循 Modrinth 官方 formatVersion 1：Launcher 只消费运行时 dependencies，
     Orbit 只消费 indexed files 与 overrides，端侧 optional 必须由路径显式选择，不得向 overrides
     塞入 Orbit TOML/lock/所有权元数据。
+78. **求解必须服从实例物理端**。所有 portfolio 目标及本地校验消费
+    `[platform].physical_environment`，禁止用 `both` 合并 client/server 候选。客户端的内置
+    服务器不改变 Loader 物理端；服务端专用嵌套 provider 只能在独立服务端参与加载。
+79. **直积拆分由 fork 证明**。Orbit 传平坦包投影/偏好和完整约束，不再提供猜测分区；fork
+    通过有限候选域传播、Pareto 恒定状态证明、剩余不兼容超边划分独立因子。非投影节点
+    不能跳过；缺席必须参与决定、传播、回退和枚举排除。版本支配比较相同投影存在集合，
+    独立安装/不安装选择不先展开为全量组合，最终各因子选择仍在完整图中验证。

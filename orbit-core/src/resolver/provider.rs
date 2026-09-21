@@ -25,14 +25,12 @@ struct CandidatePriority {
 
 #[derive(Debug)]
 pub(crate) enum ProviderError {
-    MissingVersions(SolverPackage),
     MissingDependencies(SolverPackage, SolverVersion),
 }
 
 impl std::fmt::Display for ProviderError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::MissingVersions(package) => write!(f, "missing versions for {package}"),
             Self::MissingDependencies(package, version) => {
                 write!(f, "missing dependencies for {package} {version}")
             }
@@ -141,7 +139,7 @@ impl DependencyProvider for OrbitDependencyProvider {
                     compare_versions(package, left, right, &self.candidate_priorities)
                 })
                 .cloned()),
-            None => Err(ProviderError::MissingVersions(package.clone())),
+            None => Ok(None),
         }
     }
 
