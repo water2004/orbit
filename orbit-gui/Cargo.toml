@@ -7,6 +7,11 @@ description = "Native desktop shell for Orbit and Orbit Launcher"
 repository = "https://github.com/water2004/orbit"
 build = "build.rs"
 
+# These are consumed by build.rs to rasterize and embed the Windows icon.
+# cargo-machete does not currently attribute those build-script references.
+[package.metadata.cargo-machete]
+ignored = ["embed-resource", "resvg"]
+
 [package.metadata.deb]
 name = "orbit-gui"
 maintainer = "Yuan Shui <water2004@users.noreply.github.com>"

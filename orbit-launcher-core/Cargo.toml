@@ -5,6 +5,11 @@ edition = "2024"
 license = "MIT"
 description = "Platform-independent core for Orbit Launcher"
 
+# cargo-machete matches dependency keys to Rust import names. The md-5 package
+# deliberately exports the `md5` crate used by the offline-profile UUID code.
+[package.metadata.cargo-machete]
+ignored = ["md-5"]
+
 [dependencies]
 orbit-compatibility.workspace = true
 orbit-bundle-format.workspace = true
