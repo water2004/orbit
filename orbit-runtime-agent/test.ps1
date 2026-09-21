@@ -245,13 +245,21 @@ $DependencyRoot = Join-Path $WorkspaceRoot "target/orbit-runtime-agent/compatibi
 New-Item -ItemType Directory -Force -Path $CompatibilityRoot, $DependencyRoot | Out-Null
 $Dependencies = @(
     @{ Name = "securejarhandler-0.9.54.jar"; Uri = "https://maven.minecraftforge.net/cpw/mods/securejarhandler/0.9.54/securejarhandler-0.9.54.jar"; Sha256 = "823c9ff565c3f29013ab17d20a03e5ba178675f1f0d0a0e2b7b8355bbadb07db" },
-    @{ Name = "asm-9.1.jar"; Uri = "https://repo1.maven.org/maven2/org/ow2/asm/asm/9.1/asm-9.1.jar"; Sha256 = "cda4de455fab48ff0bcb7c48b4639447d4de859a7afc30a094a986f0936beba2" },
-    @{ Name = "asm-tree-9.1.jar"; Uri = "https://repo1.maven.org/maven2/org/ow2/asm/asm-tree/9.1/asm-tree-9.1.jar"; Sha256 = "fd00afa49e9595d7646205b09cecb4a776a8ff0ba06f2d59b8f7bf9c704b4a73" }
+    @{ Name = "asm-9.1.jar"; Uri = "https://repo.maven.apache.org/maven2/org/ow2/asm/asm/9.1/asm-9.1.jar"; Sha256 = "cda4de455fab48ff0bcb7c48b4639447d4de859a7afc30a094a986f0936beba2" },
+    @{ Name = "asm-tree-9.1.jar"; Uri = "https://repo.maven.apache.org/maven2/org/ow2/asm/asm-tree/9.1/asm-tree-9.1.jar"; Sha256 = "fd00afa49e9595d7646205b09cecb4a776a8ff0ba06f2d59b8f7bf9c704b4a73" }
 )
 foreach ($Dependency in $Dependencies) {
     $Dependency.Path = Join-Path $DependencyRoot $Dependency.Name
     if (-not (Test-Path -LiteralPath $Dependency.Path -PathType Leaf)) {
-        Invoke-WebRequest -UseBasicParsing -Uri $Dependency.Uri -OutFile $Dependency.Path
+        $PartialDependencyPath = "$($Dependency.Path).part"
+        Remove-Item -LiteralPath $PartialDependencyPath -Force -ErrorAction SilentlyContinue
+        try {
+            Invoke-WebRequest -UseBasicParsing -MaximumRetryCount 5 -RetryIntervalSec 2 `
+                -Uri $Dependency.Uri -OutFile $PartialDependencyPath
+            Move-Item -LiteralPath $PartialDependencyPath -Destination $Dependency.Path
+        } finally {
+            Remove-Item -LiteralPath $PartialDependencyPath -Force -ErrorAction SilentlyContinue
+        }
     }
     $Actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $Dependency.Path).Hash.ToLowerInvariant()
     if ($Actual -ne $Dependency.Sha256) {
@@ -289,9 +297,16 @@ Write-Output $UnionSession
 # the public QuiltCodeSource identity contract instead of path guessing.
 $QuiltPath = Join-Path $DependencyRoot "quilt-loader-0.30.1-beta.2.jar"
 if (-not (Test-Path -LiteralPath $QuiltPath -PathType Leaf)) {
-    Invoke-WebRequest -UseBasicParsing `
-        -Uri "https://maven.quiltmc.org/repository/release/org/quiltmc/quilt-loader/0.30.1-beta.2/quilt-loader-0.30.1-beta.2.jar" `
-        -OutFile $QuiltPath
+    $PartialQuiltPath = "$QuiltPath.part"
+    Remove-Item -LiteralPath $PartialQuiltPath -Force -ErrorAction SilentlyContinue
+    try {
+        Invoke-WebRequest -UseBasicParsing -MaximumRetryCount 5 -RetryIntervalSec 2 `
+            -Uri "https://maven.quiltmc.org/repository/release/org/quiltmc/quilt-loader/0.30.1-beta.2/quilt-loader-0.30.1-beta.2.jar" `
+            -OutFile $PartialQuiltPath
+        Move-Item -LiteralPath $PartialQuiltPath -Destination $QuiltPath
+    } finally {
+        Remove-Item -LiteralPath $PartialQuiltPath -Force -ErrorAction SilentlyContinue
+    }
 }
 $QuiltHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $QuiltPath).Hash.ToLowerInvariant()
 if ($QuiltHash -ne "9e5801c55cdb881d5b29967096c08e39131a8fab7f88585bd06ec31b1c5144a6") {

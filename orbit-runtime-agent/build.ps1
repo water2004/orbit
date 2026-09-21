@@ -14,9 +14,16 @@ $ExpectedSha256 = "6f3828a215c920059a5efa2fb55c233d6c54ec5cadca99ce1b1bdd10077c7
 
 New-Item -ItemType Directory -Force -Path $BuildRoot | Out-Null
 if (-not (Test-Path -LiteralPath $DependencyPath -PathType Leaf)) {
-    Invoke-WebRequest -UseBasicParsing `
-        -Uri "https://repo1.maven.org/maven2/org/ow2/asm/asm/9.9.1/asm-9.9.1.jar" `
-        -OutFile $DependencyPath
+    $PartialDependencyPath = "$DependencyPath.part"
+    Remove-Item -LiteralPath $PartialDependencyPath -Force -ErrorAction SilentlyContinue
+    try {
+        Invoke-WebRequest -UseBasicParsing -MaximumRetryCount 5 -RetryIntervalSec 2 `
+            -Uri "https://repo.maven.apache.org/maven2/org/ow2/asm/asm/9.9.1/asm-9.9.1.jar" `
+            -OutFile $PartialDependencyPath
+        Move-Item -LiteralPath $PartialDependencyPath -Destination $DependencyPath
+    } finally {
+        Remove-Item -LiteralPath $PartialDependencyPath -Force -ErrorAction SilentlyContinue
+    }
 }
 $ActualSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $DependencyPath).Hash.ToLowerInvariant()
 if ($ActualSha256 -ne $ExpectedSha256) {

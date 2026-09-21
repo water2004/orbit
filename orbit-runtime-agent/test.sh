@@ -237,7 +237,11 @@ download_checked() {
   local expected="$3"
   local path="$dependency_root/$name"
   if [[ ! -f "$path" ]]; then
-    curl --fail --location --output "$path" "$url"
+    local partial="$path.part"
+    rm -f -- "$partial"
+    curl --fail --location --retry 5 --retry-delay 2 --retry-all-errors \
+      --output "$partial" "$url"
+    mv -- "$partial" "$path"
   fi
   local actual
   actual="$(sha256sum "$path" | cut -d' ' -f1)"
@@ -250,10 +254,10 @@ download_checked securejarhandler-0.9.54.jar \
   https://maven.minecraftforge.net/cpw/mods/securejarhandler/0.9.54/securejarhandler-0.9.54.jar \
   823c9ff565c3f29013ab17d20a03e5ba178675f1f0d0a0e2b7b8355bbadb07db
 download_checked asm-9.1.jar \
-  https://repo1.maven.org/maven2/org/ow2/asm/asm/9.1/asm-9.1.jar \
+  https://repo.maven.apache.org/maven2/org/ow2/asm/asm/9.1/asm-9.1.jar \
   cda4de455fab48ff0bcb7c48b4639447d4de859a7afc30a094a986f0936beba2
 download_checked asm-tree-9.1.jar \
-  https://repo1.maven.org/maven2/org/ow2/asm/asm-tree/9.1/asm-tree-9.1.jar \
+  https://repo.maven.apache.org/maven2/org/ow2/asm/asm-tree/9.1/asm-tree-9.1.jar \
   fd00afa49e9595d7646205b09cecb4a776a8ff0ba06f2d59b8f7bf9c704b4a73
 
 javac --release 17 -d "$compatibility_root/classes" "$agent_root/tests/AgentUnionHarness.java"

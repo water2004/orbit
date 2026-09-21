@@ -13,8 +13,12 @@ expected_sha256="6f3828a215c920059a5efa2fb55c233d6c54ec5cadca99ce1b1bdd10077c7dd
 
 mkdir -p "$build_root"
 if [[ ! -f "$dependency" ]]; then
-  curl --fail --location --output "$dependency" \
-    "https://repo1.maven.org/maven2/org/ow2/asm/asm/9.9.1/asm-9.9.1.jar"
+  partial="$dependency.part"
+  rm -f -- "$partial"
+  curl --fail --location --retry 5 --retry-delay 2 --retry-all-errors \
+    --output "$partial" \
+    "https://repo.maven.apache.org/maven2/org/ow2/asm/asm/9.9.1/asm-9.9.1.jar"
+  mv -- "$partial" "$dependency"
 fi
 actual_sha256="$(sha256sum "$dependency" | cut -d' ' -f1)"
 [[ "$actual_sha256" == "$expected_sha256" ]] || {
