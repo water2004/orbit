@@ -82,17 +82,24 @@ package/version/constraint，不包含 Jar-in-Jar、loader 或 Orbit 类型。
 指出冲突双方（例如一个包要求 `>=0.159.0` 而另一个包钉死 `=0.158.0`），而不是只显示
 偏好固定住的一侧。
 
-fork 同时提供 `resolve_factored_preference_solutions_with_observer()`：调用方把已证明约束闭包
-互不相交的偏好分量交给它，返回公共决定和多个 `PreferenceFactor`。每个因子保存自身的
-Pareto 极小替代项，完整解数量是各因子项数的乘积，但 API 不物化这个乘积。调用方选定每个
-因子后，将合并的 `PreferenceDecision` 一次性交给
-`resolve_maximal_solutions_for_preference_decisions_with_observer()`；求解器重新验证组合并只在
-该组合内枚举版本 front。普通依赖边、所有候选版本以及 provider 多项不兼容子句都会参与
-Orbit 的分量计算；固定 Root/Platform 只施加约束，不会把独立包错误地粘在一起。
+fork 同时提供两层因式化 API。`resolve_factored_preference_solutions_with_observer()` 表示包状态
+偏好（保留/改变、安装/缺席）的 Pareto 极小因子；
+`resolve_factored_maximal_solutions_for_preference_decisions_with_observer()` 表示固定偏好选择后的
+版本与具体 JAR 实现 Pareto 极大因子。因子替代项的原子状态统一为“包缺席”或“选中某个具体
+候选”，因此可选模组的安装/不安装、互斥包、不同版本以及同声明版本的不同内容实现都不需要
+特殊路径。完整解数量是各因子项数的乘积，但 API 只保存各因子的局部 front，不物化笛卡尔积。
+
+Orbit 对所有候选版本的依赖边、provider 多项不兼容、provides、同文件模块、嵌套 owner 与
+load preference 构造约束并图；仅当两个投影包在这个并图中不可达时才允许拆分。固定
+Root/Platform 只施加约束，不会把独立包错误地粘在一起。`add`、`fix`、`constraint set`、
+`upgrade`、`outdated` 与迁移共用这条编排：逐因子选择后，把全部偏好决定和具体包状态决定
+一次性交给 `resolve_for_preference_and_package_decisions_with_observer()`，做一次完整图验证并
+产生最终报告。
 
 冲突核心枚举直接读取不可解推导中的强制偏好，不另建反事实原因路径。选定各因子后，
-最终版本 Pareto front 由一次受决定约束的真实求解产生；诊断只消费这条求解路径，失败
-分支不会混入最终原因。因此解释仍来自产生候选的实际推导，不是事后重跑出来的证明。
+最终解由一次受全部决定约束的真实求解产生。局部因子枚举中的候选排除原因会作为诊断证据
+保留，但最终选中状态和事务只消费组合验证的实际路径；这不是先枚举完整解再压缩，也不是
+求解后运行反事实黑盒测试。
 
 Orbit 已核对过这项 API 与当前包语义的边界：`P` 直接使用 JAR 声明的 `mod_id`，`V` 是
 求解器视为不透明值的复合候选。Orbit 分别提供 `same_version(V)`、
@@ -101,7 +108,7 @@ Orbit 已核对过这项 API 与当前包语义的边界：`P` 直接使用 JAR 
 同一数值核心的不同实现不是升级，却仍保留为不同用户方案。fork 会验证等价范围包含当前
 候选且不与严格更高范围重叠；无效回调直接返回
 `InvalidVersionOrdering`，不能加入一个未排除当前投影的子句后原地重复。包/候选建模
-与 Pareto 枚举均由 fork 原生抽象覆盖，不需要在 Orbit 中做第二次求解。
+与 Pareto 枚举均由 fork 原生抽象覆盖；Orbit 只负责证明安全分区、展示因子并提交选择。
 
 已安装内容在建图时用 `lock:sha512:<digest>`（或 SHA-256）保持选择优先级，下载目录中的
 同一字节内容使用不带 `lock:` 的身份。两者必须落入同一个 `same_version` 等价类；它们只是
@@ -109,7 +116,7 @@ Orbit 已核对过这项 API 与当前包语义的边界：`P` 直接使用 JAR 
 JAR 才是不同实现，即使它们声明了相同版本。
 
 `upgrade` 另有一个操作层条件：相对当前安装集合，方案中至少存在一个
-`PackageChangeKind::Upgrade`。这只是对 fork 一次性返回的 Pareto 解做分类；方案中的其他包
+`PackageChangeKind::Upgrade`。这只是对 fork 因式化 Pareto 空间中选定的完整解做分类；方案中的其他包
 允许降级、替换或删除。它不改变可行性定义，也不产生另一条证明路径。
 
 ## 3. 规范化依赖语义
@@ -267,11 +274,12 @@ dry-run 仍会在多解时请求选择，因为它预览的必须是一个确定
 写入确认，不能替用户挑选真实包身份或 Pareto 解。stdin 关闭、取消或无效机器响应都会
 终止选择，不能回退到枚举顺序中的第一个。
 
-fork 用不可解推导的冲突核心枚举标准 Pareto 极小删除集，并剪除已知极小集合的全部超集。
-Orbit 再把依赖闭包互不相交的删除权衡表示成因子；完整删除方案数可以是各因子选项数的
-巨大乘积，但既不在内存中展开，也不要求用户从平铺列表中选择。版本 Pareto front 只在
-用户选定因子组合后求一次。单个因子内部或最终版本 front 本身仍可能很大；动态工作量只
-说明求解器仍在检查新区域，不是完成时间上界。
+fork 用不可解推导的冲突核心枚举标准 Pareto 极小状态集，并剪除已知极小集合的全部超集。
+Orbit 把依赖闭包互不相交的包状态权衡表示成偏好因子，再把固定偏好下互不相交的候选权衡
+表示成版本因子。安装/缺席也是包状态，不是版本因式化之外的特例。完整方案数可以是各因子
+项数的巨大乘积，但既不在内存中展开，也不要求用户从平铺列表中选择；选完全部因子后只做
+一次组合验证。只有单个耦合因子自身的 Pareto front 仍可能很大；动态工作量只说明求解器仍
+在检查新区域，不是完成时间上界。
 
 ## 7. 本地、安装与恢复路径
 

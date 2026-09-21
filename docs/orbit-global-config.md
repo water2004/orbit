@@ -182,8 +182,8 @@ orbit config unset network.proxy
 发现闭包无法预知远端递归总量，因此使用带已用时间的 spinner。多解枚举以累计快照报告
 实际发现/完成的工作，并同步显示 decision、propagation、backtrack、conflict 与已保留
 解计数；快照经过节流，不会把每个求解器内部事件跨层发送。这个动态计数用于证明阶段和
-活动状态，不预测剩余耗时；独立迁移权衡按因子呈现，但单个因子或最终版本 Pareto front
-本身仍可能很大。
+活动状态，不预测剩余耗时；所有命令的独立包状态与版本权衡按因子呈现，但单个耦合因子的
+Pareto front 本身仍可能很大。
 
 `orbit audit` 复用同一 UI 开关，但使用独立的审计强类型事件：按实际阶段和已知总量显示
 classpath 准备、artifact、Mixin、Transformer 与冲突分析。plain 模式按比例节流，

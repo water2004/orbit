@@ -56,7 +56,7 @@ page 猜测，也不以替换字符掩盖损坏。JSON 的字段名、枚举码�
 
 GUI 对 schema 严格匹配；旧 schema 直接显示 protocol error，不猜字段。Orbit 的包身份、
 Pareto 方案和写盘确认都在 CLI/core 的同一执行路径中产生，GUI 只将暂停点渲染为可读卡片。
-独立的迁移删包取舍会由同一个 CLI 进程依次发出多个 `resolution` interaction；prompt 明确
+所有命令中独立的包状态与版本取舍都会由同一个 CLI 进程依次发出多个 `resolution` interaction；prompt 明确
 标注当前因子序号、因子总数和所代表的完整组合数，GUI 不在本地展开组合。
 方案中共同动作只显示一次，`different: true` 的选项差异用 `◆` 与文字同时突出。物理 JAR
 文件名和候选哈希不作为包名或方案标题展示。resolution 选项只按包显示安装、升级、降级、
