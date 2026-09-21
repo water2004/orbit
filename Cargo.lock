@@ -5350,7 +5350,7 @@ dependencies = [
 [[package]]
 name = "pubgrub"
 version = "0.4.0"
-source = "git+https://github.com/water2004/pubgrub.git?rev=ad0e04536af334b2d678428010a58b34f773b043#ad0e04536af334b2d678428010a58b34f773b043"
+source = "git+https://github.com/water2004/pubgrub.git?rev=0d05cfb3d37382f032e7d2cbb83fda58ec911fd3#0d05cfb3d37382f032e7d2cbb83fda58ec911fd3"
 dependencies = [
  "indexmap",
  "log",
@@ -7928,7 +7928,7 @@ checksum = "accd4ea62f7bb7a82fe23066fb0957d48ef677f6eeb8215f372f52e48bb32426"
 [[package]]
 name = "version-ranges"
 version = "0.1.3"
-source = "git+https://github.com/water2004/pubgrub.git?rev=ad0e04536af334b2d678428010a58b34f773b043#ad0e04536af334b2d678428010a58b34f773b043"
+source = "git+https://github.com/water2004/pubgrub.git?rev=0d05cfb3d37382f032e7d2cbb83fda58ec911fd3#0d05cfb3d37382f032e7d2cbb83fda58ec911fd3"
 dependencies = [
  "smallvec",
 ]

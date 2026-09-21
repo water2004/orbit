@@ -786,7 +786,7 @@ pub struct ResolutionPortfolio {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ResolutionSelectionContext {
     CompleteSolution,
-    PreferenceFactor {
+    IndependentFactor {
         index: usize,
         total: usize,
         complete_assignments: Option<u128>,

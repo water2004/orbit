@@ -612,7 +612,7 @@ async fn check_outdated_with_progress(
         lockfile,
         providers,
         requested_package,
-        selector,
+        mut selector,
         storage,
         progress,
     } = input;
@@ -666,11 +666,12 @@ async fn check_outdated_with_progress(
             candidates: catalog.candidates.values().map(Vec::len).sum(),
         },
     );
-    let portfolio = crate::resolver::resolve_candidate_portfolio_with_progress(
+    let portfolio = crate::resolver::resolve_candidate_portfolio_with_progress_and_selector(
         manifest,
         lockfile,
         &catalog,
         progress.clone(),
+        &mut selector,
     )
     .await
     .map_err(|e| OrbitError::Other(anyhow::anyhow!("{e}")))?;

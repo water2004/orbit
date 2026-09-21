@@ -70,6 +70,7 @@ pub(crate) struct ResolutionTrace {
     pending_progress_events: u64,
     last_progress_emit: Instant,
     probe_checkpoint: Option<HashMap<SolverPackage, WatchedVersion>>,
+    factor_reasons: HashMap<SolverPackage, SkippedVersionReason>,
 }
 
 #[derive(Default)]
@@ -114,6 +115,7 @@ impl ResolutionTrace {
             pending_progress_events: 0,
             last_progress_emit: Instant::now(),
             probe_checkpoint: None,
+            factor_reasons: HashMap::new(),
         }
     }
 
@@ -141,6 +143,27 @@ impl ResolutionTrace {
         );
         self.pending_progress_events = 0;
         self.last_progress_emit = Instant::now();
+    }
+
+    /// Keep cumulative work and derivation state while dropping intermediate local-factor
+    /// snapshots. The next `Solution` event then represents the single fully composed result.
+    pub(crate) fn discard_solution_snapshots(&mut self) {
+        for snapshot in &self.solutions {
+            for (package, watched) in &snapshot.watched {
+                let Some(reason) = &watched.reason else {
+                    continue;
+                };
+                match self.factor_reasons.get(package) {
+                    Some(current)
+                        if render::has_domain_facts(current.cause())
+                            || !render::has_domain_facts(reason.cause()) => {}
+                    _ => {
+                        self.factor_reasons.insert(package.clone(), reason.clone());
+                    }
+                }
+            }
+        }
+        self.solutions.clear();
     }
 
     fn report_progress(
@@ -305,9 +328,15 @@ impl SolverObserver<SolverPackage, Ranges<SolverVersion>, String> for Resolution
                 }
             }
             SolverEvent::NoVersion { .. } | SolverEvent::Conflict { .. } => {}
-            SolverEvent::Solution => self.solutions.push(ResolutionSnapshot {
-                watched: self.watched.clone(),
-            }),
+            SolverEvent::Solution => {
+                let mut watched = self.watched.clone();
+                for (package, reason) in &self.factor_reasons {
+                    if let Some(candidate) = watched.get_mut(package) {
+                        candidate.record_reason(reason.clone());
+                    }
+                }
+                self.solutions.push(ResolutionSnapshot { watched });
+            }
             _ => {}
         }
     }

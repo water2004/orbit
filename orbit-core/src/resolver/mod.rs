@@ -458,7 +458,7 @@ pub fn check_version_conflict(
     Ok(())
 }
 
-/// Complete the candidate graph and enumerate its package-version Pareto front.
+/// Complete the candidate graph, factor its Pareto space, and return one selected assignment.
 pub async fn resolve_candidate_portfolio(
     manifest: &OrbitManifest,
     lockfile: &OrbitLockfile,
@@ -481,12 +481,31 @@ pub async fn resolve_candidate_portfolio_with_progress(
     catalog: &CandidateCatalog,
     progress: Option<ProgressReporter>,
 ) -> Result<ResolutionPortfolio, String> {
+    let mut selector = None;
+    resolve_candidate_portfolio_with_progress_and_selector(
+        manifest,
+        lockfile,
+        catalog,
+        progress,
+        &mut selector,
+    )
+    .await
+}
+
+pub(crate) async fn resolve_candidate_portfolio_with_progress_and_selector(
+    manifest: &OrbitManifest,
+    lockfile: &OrbitLockfile,
+    catalog: &CandidateCatalog,
+    progress: Option<ProgressReporter>,
+    selector: &mut Option<ResolutionSelector>,
+) -> Result<ResolutionPortfolio, String> {
     resolve_portfolio_with_progress_detailed(
         manifest,
         lockfile,
         catalog,
         ResolutionObjective::MaximizeVersions,
         progress,
+        selector,
     )
     .await
     .map_err(|error| error.to_string())
@@ -498,12 +517,31 @@ pub async fn resolve_minimal_change_portfolio_with_progress(
     catalog: &CandidateCatalog,
     progress: Option<ProgressReporter>,
 ) -> Result<ResolutionPortfolio, String> {
+    let mut selector = None;
+    resolve_minimal_change_portfolio_with_progress_and_selector(
+        manifest,
+        lockfile,
+        catalog,
+        progress,
+        &mut selector,
+    )
+    .await
+}
+
+pub(crate) async fn resolve_minimal_change_portfolio_with_progress_and_selector(
+    manifest: &OrbitManifest,
+    lockfile: &OrbitLockfile,
+    catalog: &CandidateCatalog,
+    progress: Option<ProgressReporter>,
+    selector: &mut Option<ResolutionSelector>,
+) -> Result<ResolutionPortfolio, String> {
     resolve_portfolio_with_progress_detailed(
         manifest,
         lockfile,
         catalog,
         ResolutionObjective::MinimizeChanges,
         progress,
+        selector,
     )
     .await
     .map_err(|error| error.to_string())
@@ -513,12 +551,14 @@ pub async fn resolve_minimal_change_portfolio_with_progress(
 pub(crate) enum ResolutionFailure {
     NoSolution(String),
     Internal(String),
+    Interaction(crate::OrbitError),
 }
 
 impl std::fmt::Display for ResolutionFailure {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::NoSolution(message) | Self::Internal(message) => formatter.write_str(message),
+            Self::Interaction(error) => error.fmt(formatter),
         }
     }
 }
@@ -528,6 +568,7 @@ pub(crate) async fn resolve_required_package_portfolio_with_progress(
     lockfile: &OrbitLockfile,
     catalog: &CandidateCatalog,
     progress: Option<ProgressReporter>,
+    selector: &mut Option<ResolutionSelector>,
 ) -> Result<ResolutionPortfolio, ResolutionFailure> {
     resolve_portfolio_with_progress_detailed(
         manifest,
@@ -535,6 +576,7 @@ pub(crate) async fn resolve_required_package_portfolio_with_progress(
         catalog,
         ResolutionObjective::RequireManifestPackages,
         progress,
+        selector,
     )
     .await
 }
@@ -546,94 +588,19 @@ pub(crate) async fn resolve_package_preserving_portfolio_with_progress(
     progress: Option<ProgressReporter>,
     selector: &mut Option<ResolutionSelector>,
 ) -> Result<ResolutionPortfolio, crate::OrbitError> {
-    let graph = build_solver_graph_with_package_roots(
+    resolve_portfolio_with_progress_detailed(
         manifest,
         lockfile,
-        &catalog.candidates,
-        catalog.loader_package.as_ref(),
-        catalog.java_feature,
-        Environment::Both,
-        ManifestPackageRoots::Preferred,
+        catalog,
+        ResolutionObjective::PreserveManifestPackages,
+        progress,
+        selector,
     )
-    .map_err(crate::OrbitError::Conflict)?;
-    let mut maximized_mods: Vec<_> = catalog
-        .candidates
-        .keys()
-        .chain(manifest.packages.keys())
-        .chain(lockfile.packages.iter().map(|entry| &entry.mod_id))
-        .cloned()
-        .collect();
-    maximized_mods.sort();
-    maximized_mods.dedup();
-    let maximized_packages = maximized_mods
-        .iter()
-        .cloned()
-        .map(SolverPackage::logical)
-        .collect::<Vec<_>>();
-    let watched_candidates = highest_candidates(&catalog.candidates, graph.loader);
-    let mut trace = diagnostics::ResolutionTrace::with_progress(watched_candidates, progress);
-    let preferences = manifest_package_preferences(manifest, &graph.provider);
-    let components = graph.preference_components(preferences);
-    let factored = pubgrub::resolve_factored_preference_solutions_with_observer(
-        &graph.provider,
-        graph.root_package.clone(),
-        graph.root_version.clone(),
-        components,
-        &mut trace,
-    )
-    .map_err(solver_failure)
-    .map_err(|failure| crate::OrbitError::Conflict(failure.to_string()))?;
-    trace.flush_progress();
-    let mut selected_factors = Vec::with_capacity(factored.factors().len());
-    let factor_total = factored.factors().len();
-    let complete_assignments = factored.complete_assignment_count();
-    for (factor_index, factor) in factored.factors().iter().enumerate() {
-        let alternatives = preference_factor_reports(manifest, factor);
-        selected_factors.push(select_resolution_index(
-            &alternatives,
-            ResolutionSelectionContext::PreferenceFactor {
-                index: factor_index + 1,
-                total: factor_total,
-                complete_assignments,
-            },
-            selector.as_mut(),
-        )?);
-    }
-    let decisions = factored.decisions_for(&selected_factors).ok_or_else(|| {
-        crate::OrbitError::Other(anyhow::anyhow!(
-            "internal error: invalid factored preference selection"
-        ))
-    })?;
-    let solutions = pubgrub::resolve_maximal_solutions_for_preference_decisions_with_observer(
-        &graph.provider,
-        graph.root_package.clone(),
-        graph.root_version.clone(),
-        decisions,
-        maximized_packages,
-        solver_version_ordering(),
-        &mut trace,
-    )
-    .map_err(solver_failure)
-    .map_err(|failure| crate::OrbitError::Conflict(failure.to_string()))?;
-    let snapshots = trace.into_solutions();
-    if snapshots.len() != solutions.len() {
-        return Err(crate::OrbitError::Other(anyhow::anyhow!(
-            "internal error: solver trace count does not match solution count"
-        )));
-    }
-    let report_context = ReportContext {
-        lockfile,
-        candidates: &catalog.candidates,
-        loader: graph.loader,
-        exclusions: &graph.exclusions,
-        target: graph.target,
-    };
-    let alternatives = solutions
-        .into_iter()
-        .zip(snapshots)
-        .map(|(solution, snapshot)| collect_report(&report_context, &solution, &snapshot))
-        .collect();
-    Ok(ResolutionPortfolio { alternatives })
+    .await
+    .map_err(|failure| match failure {
+        ResolutionFailure::Interaction(error) => error,
+        other => crate::OrbitError::Conflict(other.to_string()),
+    })
 }
 
 #[derive(Clone, Copy)]
@@ -641,6 +608,7 @@ enum ResolutionObjective {
     MaximizeVersions,
     MinimizeChanges,
     RequireManifestPackages,
+    PreserveManifestPackages,
 }
 
 async fn resolve_portfolio_with_progress_detailed(
@@ -649,6 +617,7 @@ async fn resolve_portfolio_with_progress_detailed(
     catalog: &CandidateCatalog,
     objective: ResolutionObjective,
     progress: Option<ProgressReporter>,
+    selector: &mut Option<ResolutionSelector>,
 ) -> Result<ResolutionPortfolio, ResolutionFailure> {
     let graph = match objective {
         ResolutionObjective::RequireManifestPackages => build_solver_graph_with_package_roots(
@@ -659,6 +628,15 @@ async fn resolve_portfolio_with_progress_detailed(
             catalog.java_feature,
             Environment::Both,
             ManifestPackageRoots::RequiredTopLevel,
+        ),
+        ResolutionObjective::PreserveManifestPackages => build_solver_graph_with_package_roots(
+            manifest,
+            lockfile,
+            &catalog.candidates,
+            catalog.loader_package.as_ref(),
+            catalog.java_feature,
+            Environment::Both,
+            ManifestPackageRoots::Preferred,
         ),
         ResolutionObjective::MaximizeVersions | ResolutionObjective::MinimizeChanges => {
             build_solver_graph(
@@ -687,72 +665,73 @@ async fn resolve_portfolio_with_progress_detailed(
         .collect::<Vec<_>>();
     let watched_candidates = highest_candidates(&catalog.candidates, graph.loader);
     let mut trace = diagnostics::ResolutionTrace::with_progress(watched_candidates, progress);
-    let solved = match objective {
-        ResolutionObjective::MaximizeVersions | ResolutionObjective::RequireManifestPackages => {
-            pubgrub::resolve_maximal_solutions_with_observer(
-                &graph.provider,
-                graph.root_package.clone(),
-                graph.root_version.clone(),
-                maximized_packages,
-                solver_version_ordering(),
-                &mut trace,
-            )
-        }
+    let preferences = match objective {
         ResolutionObjective::MinimizeChanges => {
-            let preferences =
-                minimal_change_preferences(manifest, lockfile, &graph.provider, &maximized_mods);
-            pubgrub::resolve_minimal_change_solutions_with_observer(
-                &graph.provider,
-                graph.root_package.clone(),
-                graph.root_version.clone(),
-                preferences,
-                maximized_packages,
-                solver_version_ordering(),
-                &mut trace,
+            minimal_change_preferences(manifest, lockfile, &graph.provider, &maximized_mods)
+        }
+        ResolutionObjective::PreserveManifestPackages => {
+            manifest_package_preferences(manifest, &graph.provider)
+        }
+        ResolutionObjective::MaximizeVersions | ResolutionObjective::RequireManifestPackages => {
+            Vec::new()
+        }
+    };
+    let preference_components = graph.preference_components(preferences);
+    let factored_preferences = pubgrub::resolve_factored_preference_solutions_with_observer(
+        &graph.provider,
+        graph.root_package.clone(),
+        graph.root_version.clone(),
+        preference_components,
+        &mut trace,
+    )
+    .map_err(solver_failure)?;
+    let mut selected = Vec::with_capacity(factored_preferences.factors().len());
+    let preference_factor_total = factored_preferences
+        .factors()
+        .iter()
+        .filter(|factor| factor.alternatives().len() > 1)
+        .count();
+    let preference_assignments = factored_preferences.complete_assignment_count();
+    let mut displayed_factor = 0;
+    for factor in factored_preferences.factors() {
+        let reports = preference_factor_reports(manifest, lockfile, factor);
+        if reports.len() > 1 {
+            displayed_factor += 1;
+        }
+        selected.push(
+            select_resolution_index(
+                &reports,
+                ResolutionSelectionContext::IndependentFactor {
+                    index: displayed_factor,
+                    total: preference_factor_total,
+                    complete_assignments: preference_assignments,
+                },
+                selector.as_mut(),
             )
-        }
-    };
-    let solutions = match solved {
-        Ok(solutions) => solutions,
-        Err(pubgrub::PubGrubError::NoSolution(derivation_tree)) => {
-            return Err(ResolutionFailure::NoSolution(
-                diagnostics::describe_no_solution(&derivation_tree),
-            ));
-        }
-        Err(pubgrub::PubGrubError::ErrorChoosingVersion { package, source: _ }) => {
-            return Err(ResolutionFailure::Internal(format!(
-                "internal error: no version of '{package}' matches constraint"
-            )));
-        }
-        Err(pubgrub::PubGrubError::ErrorRetrievingDependencies {
-            package,
-            version,
-            source,
-        }) => {
-            return Err(ResolutionFailure::Internal(format!(
-                "internal error: deps of '{package}' v{version}: {source}"
-            )));
-        }
-        Err(pubgrub::PubGrubError::ErrorInShouldCancel(error)) => {
-            return Err(ResolutionFailure::Internal(error.to_string()));
-        }
-        Err(pubgrub::PubGrubError::InvalidVersionOrdering {
-            package,
-            version,
-            reason,
-        }) => {
-            return Err(ResolutionFailure::Internal(format!(
-                "internal error: invalid version ordering for '{package}' v{version}: {reason}"
-            )));
-        }
-    };
-    let snapshots = trace.into_solutions();
-    if snapshots.len() != solutions.len() {
-        return Err(ResolutionFailure::Internal(
-            "internal error: solver trace count does not match solution count".to_string(),
-        ));
+            .map_err(ResolutionFailure::Interaction)?,
+        );
     }
+    let preference_decisions = factored_preferences
+        .decisions_for(&selected)
+        .ok_or_else(|| {
+            ResolutionFailure::Internal(
+                "internal error: invalid factored preference selection".to_string(),
+            )
+        })?;
 
+    let package_components = graph.package_components(maximized_packages);
+    let factored_versions =
+        pubgrub::resolve_factored_maximal_solutions_for_preference_decisions_with_observer(
+            &graph.provider,
+            graph.root_package.clone(),
+            graph.root_version.clone(),
+            preference_decisions.clone(),
+            package_components,
+            solver_version_ordering(),
+            &mut trace,
+        )
+        .map_err(solver_failure)?;
+    trace.flush_progress();
     let report_context = ReportContext {
         lockfile,
         candidates: &catalog.candidates,
@@ -760,11 +739,63 @@ async fn resolve_portfolio_with_progress_detailed(
         exclusions: &graph.exclusions,
         target: graph.target,
     };
-    let alternatives = solutions
-        .into_iter()
-        .zip(snapshots)
-        .map(|(solution, snapshot)| collect_report(&report_context, &solution, &snapshot))
-        .collect();
+    let version_factor_total = factored_versions
+        .factors()
+        .iter()
+        .filter(|factor| factor.alternatives().len() > 1)
+        .count();
+    let version_assignments = factored_versions.complete_assignment_count();
+    let mut selected = Vec::with_capacity(factored_versions.factors().len());
+    let mut displayed_factor = 0;
+    for factor in factored_versions.factors() {
+        let mut alternatives = version_factor_reports(&report_context, factor)
+            .into_iter()
+            .enumerate()
+            .collect::<Vec<_>>();
+        alternatives.sort_by_key(|(_, report)| !report.has_upgrade());
+        if alternatives.len() > 1 {
+            displayed_factor += 1;
+        }
+        let reports = alternatives
+            .iter()
+            .map(|(_, report)| report.clone())
+            .collect::<Vec<_>>();
+        let displayed_selection = select_resolution_index(
+            &reports,
+            ResolutionSelectionContext::IndependentFactor {
+                index: displayed_factor,
+                total: version_factor_total,
+                complete_assignments: version_assignments,
+            },
+            selector.as_mut(),
+        )
+        .map_err(ResolutionFailure::Interaction)?;
+        selected.push(alternatives[displayed_selection].0);
+    }
+    let package_decisions = factored_versions.decisions_for(&selected).ok_or_else(|| {
+        ResolutionFailure::Internal(
+            "internal error: invalid factored package-state selection".to_string(),
+        )
+    })?;
+
+    trace.discard_solution_snapshots();
+    let solution = pubgrub::resolve_for_preference_and_package_decisions_with_observer(
+        &graph.provider,
+        graph.root_package.clone(),
+        graph.root_version.clone(),
+        preference_decisions,
+        package_decisions,
+        SolverVersion::same_realization,
+        &mut trace,
+    )
+    .map_err(solver_failure)?;
+    let snapshots = trace.into_solutions();
+    if snapshots.len() != 1 {
+        return Err(ResolutionFailure::Internal(
+            "internal error: solver trace count does not match solution count".to_string(),
+        ));
+    }
+    let alternatives = vec![collect_report(&report_context, &solution, &snapshots[0])];
     Ok(ResolutionPortfolio { alternatives })
 }
 
@@ -859,6 +890,7 @@ fn manifest_package_preferences(
 
 fn preference_factor_reports(
     manifest: &OrbitManifest,
+    lockfile: &OrbitLockfile,
     factor: &pubgrub::PreferenceFactor<SolverPackage, Ranges<SolverVersion>>,
 ) -> Vec<ResolutionReport> {
     factor
@@ -871,17 +903,25 @@ fn preference_factor_reports(
                 .filter(|decision| !decision.is_satisfied())
                 .filter_map(|decision| {
                     let mod_id = decision.preference().package().top_level_mod_id()?;
+                    let installed = lockfile
+                        .packages
+                        .iter()
+                        .find(|entry| entry.mod_id == mod_id);
+                    let kind = if manifest.packages.contains_key(mod_id) {
+                        PackageChangeKind::Remove
+                    } else {
+                        PackageChangeKind::Install
+                    };
                     Some(PackageChange {
                         package: mod_id.to_string(),
-                        current_version: manifest
-                            .packages
-                            .get(mod_id)
-                            .map(|spec| spec.version.clone()),
+                        current_version: installed.map(|entry| entry.version.clone()),
                         selected_version: None,
-                        filename: None,
+                        filename: installed
+                            .filter(|entry| !entry.filename.is_empty())
+                            .map(|entry| entry.filename.clone()),
                         selected_filename: None,
                         selected_description: None,
-                        kind: PackageChangeKind::Remove,
+                        kind,
                     })
                 })
                 .collect::<Vec<_>>();
@@ -889,6 +929,100 @@ fn preference_factor_reports(
             ResolutionReport {
                 changes,
                 ..ResolutionReport::default()
+            }
+        })
+        .collect()
+}
+
+fn version_factor_reports(
+    context: &ReportContext<'_>,
+    factor: &pubgrub::VersionFactor<SolverPackage, SolverVersion>,
+) -> Vec<ResolutionReport> {
+    factor
+        .alternatives()
+        .iter()
+        .map(|alternative| {
+            let mut changes = Vec::new();
+            let mut selected_versions = BTreeMap::new();
+            let mut selected_sources = BTreeMap::new();
+            let mut selected_candidates = BTreeMap::new();
+            for decision in alternative.decisions() {
+                let Some(mod_id) = decision.package().top_level_mod_id() else {
+                    continue;
+                };
+                let selected = decision.version().and_then(|version| {
+                    let identity = version.candidate_identity()?.clone();
+                    let semantic = version.domain()?.to_string();
+                    (identity.path.is_empty() && identity.owner == mod_id)
+                        .then_some((semantic, identity))
+                });
+                let installed = context
+                    .lockfile
+                    .packages
+                    .iter()
+                    .filter(|entry| entry.mod_id == mod_id)
+                    .collect::<Vec<_>>();
+                let Some((semantic, identity)) = selected else {
+                    changes.extend(installed.into_iter().map(removal_change));
+                    continue;
+                };
+                selected_versions.insert(mod_id.to_string(), semantic.clone());
+                selected_sources.insert(mod_id.to_string(), identity.source.clone());
+                if context.candidates.get(mod_id).is_some_and(|candidates| {
+                    candidates
+                        .iter()
+                        .any(|candidate| candidate.id == identity.source)
+                }) {
+                    selected_candidates.insert(mod_id.to_string(), identity.source.clone());
+                }
+                if installed
+                    .iter()
+                    .any(|entry| identity.installed && locked_source(entry) == identity.source)
+                {
+                    continue;
+                }
+                let current = installed.iter().copied().max_by(|left, right| {
+                    Version::parse(&left.version, context.loader)
+                        .cmp_precedence(&Version::parse(&right.version, context.loader))
+                });
+                let kind =
+                    current.map_or(PackageChangeKind::Install, |entry| {
+                        match Version::parse(&semantic, context.loader)
+                            .cmp_precedence(&Version::parse(&entry.version, context.loader))
+                        {
+                            std::cmp::Ordering::Greater => PackageChangeKind::Upgrade,
+                            std::cmp::Ordering::Less => PackageChangeKind::Downgrade,
+                            std::cmp::Ordering::Equal => PackageChangeKind::Replace,
+                        }
+                    });
+                changes.push(PackageChange {
+                    package: mod_id.to_string(),
+                    current_version: current.map(|entry| entry.version.clone()),
+                    selected_version: Some(semantic),
+                    filename: current
+                        .filter(|entry| !entry.filename.is_empty())
+                        .map(|entry| entry.filename.clone()),
+                    selected_filename: selected_candidate_filename(
+                        context.candidates,
+                        mod_id,
+                        &identity.source,
+                    ),
+                    selected_description: selected_candidate_description(
+                        context.candidates,
+                        mod_id,
+                        &identity.source,
+                    ),
+                    kind,
+                });
+            }
+            changes.sort_by(|left, right| left.package.cmp(&right.package));
+            ResolutionReport {
+                selected_versions,
+                selected_sources,
+                selected_candidates,
+                changes,
+                diagnostics: Vec::new(),
+                warnings: Vec::new(),
             }
         })
         .collect()
@@ -1275,6 +1409,74 @@ b = { version = "*", remotes = [{ type = "file", path = "b.jar" }] }
         }
     }
 
+    async fn candidate_solution_with_choices(
+        manifest: &OrbitManifest,
+        lockfile: &OrbitLockfile,
+        catalog: &CandidateCatalog,
+        choices: Vec<usize>,
+    ) -> (ResolutionReport, Vec<Vec<ResolutionReport>>) {
+        let pending = Arc::new(Mutex::new(std::collections::VecDeque::from(choices)));
+        let observed = Arc::new(Mutex::new(Vec::new()));
+        let pending_for_selector = Arc::clone(&pending);
+        let observed_for_selector = Arc::clone(&observed);
+        let mut selector: Option<ResolutionSelector> = Some(Box::new(move |_, alternatives| {
+            observed_for_selector
+                .lock()
+                .unwrap()
+                .push(alternatives.to_vec());
+            Ok(pending_for_selector
+                .lock()
+                .unwrap()
+                .pop_front()
+                .unwrap_or(0))
+        }));
+        let portfolio = resolve_candidate_portfolio_with_progress_and_selector(
+            manifest,
+            lockfile,
+            catalog,
+            None,
+            &mut selector,
+        )
+        .await
+        .unwrap();
+        let observed = observed.lock().unwrap().clone();
+        (portfolio.alternatives.into_iter().next().unwrap(), observed)
+    }
+
+    async fn minimal_change_solution_with_choices(
+        manifest: &OrbitManifest,
+        lockfile: &OrbitLockfile,
+        catalog: &CandidateCatalog,
+        choices: Vec<usize>,
+    ) -> (ResolutionReport, Vec<Vec<ResolutionReport>>) {
+        let pending = Arc::new(Mutex::new(std::collections::VecDeque::from(choices)));
+        let observed = Arc::new(Mutex::new(Vec::new()));
+        let pending_for_selector = Arc::clone(&pending);
+        let observed_for_selector = Arc::clone(&observed);
+        let mut selector: Option<ResolutionSelector> = Some(Box::new(move |_, alternatives| {
+            observed_for_selector
+                .lock()
+                .unwrap()
+                .push(alternatives.to_vec());
+            Ok(pending_for_selector
+                .lock()
+                .unwrap()
+                .pop_front()
+                .unwrap_or(0))
+        }));
+        let portfolio = resolve_minimal_change_portfolio_with_progress_and_selector(
+            manifest,
+            lockfile,
+            catalog,
+            None,
+            &mut selector,
+        )
+        .await
+        .unwrap();
+        let observed = observed.lock().unwrap().clone();
+        (portfolio.alternatives.into_iter().next().unwrap(), observed)
+    }
+
     fn upgrades(report: &ResolutionReport) -> BTreeMap<String, String> {
         report
             .changes
@@ -1442,7 +1644,7 @@ fapi = { version = "*", remotes = [{ type = "file", path = "fapi.jar" }] }
         let mut selector: Option<ResolutionSelector> = Some(Box::new(|context, alternatives| {
             assert!(matches!(
                 context,
-                ResolutionSelectionContext::PreferenceFactor { .. }
+                ResolutionSelectionContext::IndependentFactor { .. }
             ));
             assert_eq!(alternatives.len(), 2);
             alternatives
@@ -1518,7 +1720,7 @@ fapi = { version = "*", remotes = [{ type = "file", path = "fapi.jar" }] }
         };
         let mut calls = 0;
         let mut selector: Option<ResolutionSelector> = Some(Box::new(move |context, choices| {
-            let ResolutionSelectionContext::PreferenceFactor {
+            let ResolutionSelectionContext::IndependentFactor {
                 index,
                 total,
                 complete_assignments,
@@ -1605,16 +1807,24 @@ fapi = { version = "*", remotes = [{ type = "file", path = "fapi.jar" }] }
             vec![candidate("1", Vec::new()), candidate("2", Vec::new())],
         );
 
-        let portfolio = resolve_candidate_portfolio(&manifest(), &lockfile(), &catalog)
-            .await
-            .unwrap();
-        let upgrades: std::collections::BTreeSet<_> =
-            portfolio.alternatives.iter().map(upgrades).collect();
+        let manifest = manifest();
+        let lockfile = lockfile();
+        let (first, groups) =
+            candidate_solution_with_choices(&manifest, &lockfile, &catalog, vec![0]).await;
+        assert_eq!(groups.len(), 1);
+        let b_upgrade = groups[0]
+            .iter()
+            .position(|alternative| upgrades(alternative).contains_key("b"))
+            .expect("the b-upgrade tradeoff must be represented");
+        let (second, _) =
+            candidate_solution_with_choices(&manifest, &lockfile, &catalog, vec![b_upgrade]).await;
+        let alternatives = [first, second];
+        let upgrades: std::collections::BTreeSet<_> = alternatives.iter().map(upgrades).collect();
 
         assert_eq!(upgrades.len(), 2);
         assert!(upgrades.contains(&BTreeMap::from([("a".to_string(), "2".to_string())])));
         assert!(upgrades.contains(&BTreeMap::from([("b".to_string(), "2".to_string())])));
-        for alternative in &portfolio.alternatives {
+        for alternative in &alternatives {
             assert_eq!(alternative.diagnostics.len(), 1, "{alternative:?}");
             let diagnostic = &alternative.diagnostics[0];
             assert_ne!(
@@ -1825,11 +2035,14 @@ fapi = { version = "*", remotes = [{ type = "file", path = "fapi.jar" }] }
             .candidates
             .insert("b".to_string(), vec![candidate("2", Vec::new())]);
 
-        let portfolio = resolve_minimal_change_portfolio(&manifest(), &current, &catalog)
-            .await
-            .unwrap();
-        let choices = portfolio
-            .alternatives
+        let manifest = manifest();
+        let (first, groups) =
+            minimal_change_solution_with_choices(&manifest, &current, &catalog, vec![0]).await;
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].len(), 2);
+        let (second, _) =
+            minimal_change_solution_with_choices(&manifest, &current, &catalog, vec![1]).await;
+        let choices = [first, second]
             .iter()
             .map(|alternative| {
                 (
@@ -1906,11 +2119,14 @@ fapi = { version = "*", remotes = [{ type = "file", path = "fapi.jar" }] }
             ],
         );
 
-        let portfolio = resolve_candidate_portfolio(&manifest, &lockfile, &catalog)
-            .await
-            .unwrap();
-        let selected: std::collections::BTreeSet<_> = portfolio
-            .alternatives
+        let (first, groups) =
+            candidate_solution_with_choices(&manifest, &lockfile, &catalog, vec![0]).await;
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].len(), 2);
+        let (second, _) =
+            candidate_solution_with_choices(&manifest, &lockfile, &catalog, vec![1]).await;
+        let alternatives = [first, second];
+        let selected: std::collections::BTreeSet<_> = alternatives
             .iter()
             .map(|alternative| alternative.selected_versions["a"].clone())
             .collect();
@@ -1921,7 +2137,7 @@ fapi = { version = "*", remotes = [{ type = "file", path = "fapi.jar" }] }
                 ["1.2.3-alpha".to_string(), "1.2.3-beta".to_string(),]
             )
         );
-        assert!(portfolio.alternatives.iter().all(|alternative| {
+        assert!(alternatives.iter().all(|alternative| {
             alternative
                 .changes
                 .iter()
@@ -1974,11 +2190,13 @@ fapi = { version = "*", remotes = [{ type = "file", path = "fapi.jar" }] }
             .candidates
             .insert("a".to_string(), vec![first, second]);
 
-        let portfolio = resolve_candidate_portfolio(&manifest, &lockfile, &catalog)
-            .await
-            .unwrap();
-        let selected: std::collections::BTreeSet<_> = portfolio
-            .alternatives
+        let (first, groups) =
+            candidate_solution_with_choices(&manifest, &lockfile, &catalog, vec![0]).await;
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].len(), 2);
+        let (second, _) =
+            candidate_solution_with_choices(&manifest, &lockfile, &catalog, vec![1]).await;
+        let selected: std::collections::BTreeSet<_> = [first, second]
             .iter()
             .map(|alternative| alternative.selected_candidates["a"].clone())
             .collect();
@@ -2004,23 +2222,29 @@ fapi = { version = "*", remotes = [{ type = "file", path = "fapi.jar" }] }
             .candidates
             .insert("a".to_string(), vec![candidate("1.2.3-beta", Vec::new())]);
 
-        let portfolio = resolve_candidate_portfolio(&manifest, &lockfile, &catalog)
-            .await
-            .unwrap();
-        let replacement = portfolio
-            .alternatives
+        let (_, groups) =
+            candidate_solution_with_choices(&manifest, &lockfile, &catalog, vec![0]).await;
+        let replacement_index = groups[0]
             .iter()
-            .flat_map(|alternative| &alternative.changes)
+            .position(|alternative| {
+                alternative.selected_versions.get("a").map(String::as_str) == Some("1.2.3-beta")
+            })
+            .expect("the replacement realization must be offered");
+        let (selected, _) = candidate_solution_with_choices(
+            &manifest,
+            &lockfile,
+            &catalog,
+            vec![replacement_index],
+        )
+        .await;
+        let replacement = selected
+            .changes
+            .iter()
             .find(|change| change.package == "a")
             .unwrap();
 
         assert_eq!(replacement.kind, PackageChangeKind::Replace);
-        assert!(
-            portfolio
-                .alternatives
-                .iter()
-                .all(|alternative| !alternative.has_upgrade())
-        );
+        assert!(!selected.has_upgrade());
     }
 
     #[tokio::test]
@@ -2172,24 +2396,25 @@ voxy = { version = "*", remotes = [{ type = "file", path = "voxy.jar" }] }
             .candidates
             .insert("a".to_string(), vec![candidate("1", Vec::new())]);
 
-        let portfolio = resolve_candidate_portfolio(&only_a, &current, &catalog)
-            .await
-            .unwrap();
+        let (first, groups) =
+            candidate_solution_with_choices(&only_a, &current, &catalog, vec![0]).await;
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].len(), 2);
+        let (second, _) =
+            candidate_solution_with_choices(&only_a, &current, &catalog, vec![1]).await;
+        let alternatives = [first, second];
 
         assert!(
-            portfolio
-                .alternatives
+            alternatives
                 .iter()
                 .all(|alternative| !alternative.has_upgrade())
         );
-        assert_eq!(portfolio.alternatives.len(), 2);
         assert!(
-            portfolio
-                .alternatives
+            alternatives
                 .iter()
                 .any(|alternative| alternative.changes.is_empty())
         );
-        assert!(portfolio.alternatives.iter().any(|alternative| {
+        assert!(alternatives.iter().any(|alternative| {
             alternative
                 .changes
                 .iter()

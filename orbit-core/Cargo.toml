@@ -43,7 +43,7 @@ java-properties.workspace = true
 rusqlite.workspace = true
 base64.workspace = true
 dunce.workspace = true
-pubgrub = { git = "https://github.com/water2004/pubgrub.git", rev = "ad0e04536af334b2d678428010a58b34f773b043" }
+pubgrub = { git = "https://github.com/water2004/pubgrub.git", rev = "0d05cfb3d37382f032e7d2cbb83fda58ec911fd3" }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61.2", features = ["Win32_Storage_FileSystem"] }

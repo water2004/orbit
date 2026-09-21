@@ -192,6 +192,7 @@ async fn plan_migration_inner(
             &empty_target_lock,
             &catalog,
             progress.clone(),
+            &mut select_resolution,
         )
         .await
         {
@@ -199,6 +200,7 @@ async fn plan_migration_inner(
             Err(crate::resolver::ResolutionFailure::Internal(error)) => {
                 return Err(OrbitError::Conflict(error));
             }
+            Err(crate::resolver::ResolutionFailure::Interaction(error)) => return Err(error),
             Err(crate::resolver::ResolutionFailure::NoSolution(strict_failure)) => {
                 let prompt = MigrationFallbackPrompt {
                     strict_failure: strict_failure.clone(),

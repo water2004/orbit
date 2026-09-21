@@ -85,6 +85,28 @@ impl SolverGraph {
         &self,
         preferences: Vec<pubgrub::PackagePreference<SolverPackage, Ranges<SolverVersion>>>,
     ) -> Vec<Vec<pubgrub::PackagePreference<SolverPackage, Ranges<SolverVersion>>>> {
+        let mut preferences = preferences
+            .into_iter()
+            .map(|preference| (preference.package().clone(), preference))
+            .collect::<BTreeMap<_, _>>();
+        self.package_components(preferences.keys().cloned().collect())
+            .into_iter()
+            .map(|component| {
+                component
+                    .into_iter()
+                    .filter_map(|package| preferences.remove(&package))
+                    .collect()
+            })
+            .collect()
+    }
+
+    /// Partition projected packages by every dependency and incompatibility path which can couple
+    /// their selected state. The graph is the union across all selectable versions, making the
+    /// partition conservative even when changing a version changes its dependencies.
+    pub(crate) fn package_components(
+        &self,
+        packages: Vec<SolverPackage>,
+    ) -> Vec<Vec<SolverPackage>> {
         let mut adjacency: HashMap<SolverPackage, HashSet<SolverPackage>> = HashMap::new();
         for ((owner, _), dependencies) in &self.provider.dependencies {
             for (dependency, _) in dependencies {
@@ -103,9 +125,9 @@ impl SolverGraph {
             }
         }
 
-        let mut remaining = preferences
+        let mut remaining = packages
             .into_iter()
-            .map(|preference| (preference.package().clone(), preference))
+            .map(|package| (package.clone(), package))
             .collect::<BTreeMap<_, _>>();
         let mut components = Vec::new();
         while let Some(start) = remaining.keys().next().cloned() {
@@ -116,8 +138,8 @@ impl SolverGraph {
                 if !visited.insert(package.clone()) {
                     continue;
                 }
-                if let Some(preference) = remaining.remove(&package) {
-                    component.push(preference);
+                if let Some(projected) = remaining.remove(&package) {
+                    component.push(projected);
                 }
                 stack.extend(
                     adjacency
@@ -128,7 +150,7 @@ impl SolverGraph {
                         .cloned(),
                 );
             }
-            component.sort_by(|left, right| left.package().cmp(right.package()));
+            component.sort();
             components.push(component);
         }
         components

@@ -367,7 +367,7 @@ pub(crate) async fn repair_manifest_instance(
 ) -> Result<ManifestRepairOutcome, OrbitError> {
     let InstallInteraction {
         select_package: _,
-        select_resolution,
+        mut select_resolution,
         confirm_install,
         progress,
     } = interaction;
@@ -409,11 +409,12 @@ pub(crate) async fn repair_manifest_instance(
             candidates: catalog.candidates.values().map(Vec::len).sum(),
         },
     );
-    let portfolio = crate::resolver::resolve_minimal_change_portfolio_with_progress(
+    let portfolio = crate::resolver::resolve_minimal_change_portfolio_with_progress_and_selector(
         &manifest_file.inner,
         &lock.inner,
         &catalog,
         progress.clone(),
+        &mut select_resolution,
     )
     .await
     .map_err(|error| OrbitError::Conflict(error.to_string()))?;
@@ -1025,7 +1026,7 @@ async fn install_mod(input: InstallModInput<'_>) -> Result<InstallExecution, Orb
     } = input;
     let InstallInteraction {
         select_package,
-        select_resolution,
+        mut select_resolution,
         confirm_install,
         progress,
     } = interaction;
@@ -1107,17 +1108,51 @@ async fn install_mod(input: InstallModInput<'_>) -> Result<InstallExecution, Orb
             candidates: catalog.candidates.values().map(Vec::len).sum(),
         },
     );
-    let (requested_package, portfolio) = resolve_requested_package(RequestedPackageInput {
-        requested_package,
-        intent: options.intent,
-        manifest,
-        lockfile,
-        catalog: &catalog,
-        requirement: requested_requirement.clone(),
-        selector: select_package,
-        progress: progress.clone(),
-    })
-    .await?;
+    let (requested_package, _feasibility_portfolio) =
+        resolve_requested_package(RequestedPackageInput {
+            requested_package,
+            intent: options.intent,
+            manifest,
+            lockfile,
+            catalog: &catalog,
+            requirement: requested_requirement.clone(),
+            selector: select_package,
+            progress: progress.clone(),
+        })
+        .await?;
+
+    // Package identity discovery is deliberately a feasibility-only pass. Once the logical
+    // package is known, solve it again through the factored interactive path so independent
+    // install/absence and version choices are presented instead of silently choosing one member
+    // of their Cartesian product.
+    let mut resolution_manifest = manifest.clone();
+    let mut selected_requirement = requested_requirement.clone();
+    selected_requirement.remotes = catalog.remotes_for_package(&requested_package);
+    ensure_package_spec(
+        &mut resolution_manifest,
+        &requested_package,
+        selected_requirement,
+    );
+    let portfolio = if options.intent == InstallIntent::Upgrade {
+        crate::resolver::resolve_candidate_portfolio_with_progress_and_selector(
+            &resolution_manifest,
+            lockfile,
+            &catalog,
+            progress.clone(),
+            &mut select_resolution,
+        )
+        .await
+    } else {
+        crate::resolver::resolve_minimal_change_portfolio_with_progress_and_selector(
+            &resolution_manifest,
+            lockfile,
+            &catalog,
+            progress.clone(),
+            &mut select_resolution,
+        )
+        .await
+    }
+    .map_err(OrbitError::Conflict)?;
 
     // 3. Resolve offline
     let resolution = if options.intent == InstallIntent::Upgrade {

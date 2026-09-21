@@ -848,19 +848,19 @@ fn resolution_selection_prompt(context: orbit_core::ResolutionSelectionContext) 
         orbit_core::ResolutionSelectionContext::CompleteSolution => {
             tr!("Choose one non-dominated dependency solution").into_owned()
         }
-        orbit_core::ResolutionSelectionContext::PreferenceFactor {
+        orbit_core::ResolutionSelectionContext::IndependentFactor {
             index,
             total,
             complete_assignments,
         } => match complete_assignments {
             Some(assignments) => tr!(
-                "Choose removal plan group %{index} of %{total}; independent groups represent %{assignments} complete plan combinations",
+                "Choose independent solution group %{index} of %{total}; the groups represent %{assignments} complete solution combinations",
                 index = index,
                 total = total,
                 assignments = assignments
             ),
             None => tr!(
-                "Choose removal plan group %{index} of %{total}; the complete plan count exceeds the supported display range",
+                "Choose independent solution group %{index} of %{total}; the complete solution count exceeds the supported display range",
                 index = index,
                 total = total
             ),
