@@ -160,8 +160,10 @@ init / sync
 1. manifest、lock 与本次输入中的全部 package remotes 同时作为种子；每一轮先用
    provider 官方批量 project 接口读取变更标记。标记未变时复用本作用域的远端快照，
    标记变化时才请求该 project 在当前精确 Minecraft/loader 下的 artifact；
-2. 只按 project relation 递归，队列稳定后按强哈希去重整个 artifact 队列；优先复用
-   `jars.sqlite` 中的真实 Loader 元数据，未命中才统一查全局 JAR cache 或下载并解析；
+2. 只按 project relation 递归；provider 返回但已经不存在的派生 project 只是不可信的
+   发现提示，按父 project 变更标记负缓存并跳过。用户显式配置的缺失 project 仍然失败；
+   队列稳定后按强哈希去重整个 artifact 队列，优先复用 `jars.sqlite` 中的真实 Loader
+   元数据，未命中才统一查全局 JAR cache 或下载并解析；
 3. resolver 纯离线消费 JAR 候选，缺少实际依赖时产生正常的无解证明。
 
 版本库不是一个跨游戏版本的大表。每个精确作用域都物理分离：

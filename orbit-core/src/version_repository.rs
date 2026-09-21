@@ -21,7 +21,7 @@ use crate::manifest::PackageRemote;
 use crate::providers::RemoteArtifact;
 use crate::resolver::types::CandidateCatalog;
 
-const SCHEMA_VERSION: i64 = 1;
+const SCHEMA_VERSION: i64 = 2;
 
 #[derive(Debug, Clone)]
 pub struct VersionRepository {
@@ -129,7 +129,15 @@ impl RepositoryScope {
                     REFERENCES projects(provider, project_id) ON DELETE CASCADE
              );
              CREATE INDEX IF NOT EXISTS artifacts_project
-                ON artifacts(provider, project_id);",
+                ON artifacts(provider, project_id);
+             CREATE TABLE IF NOT EXISTS ignored_remote_relationships (
+                provider TEXT NOT NULL,
+                parent_project_id TEXT NOT NULL,
+                parent_marker TEXT NOT NULL,
+                related_project_id TEXT NOT NULL,
+                checked_at INTEGER NOT NULL,
+                PRIMARY KEY (provider, parent_project_id, related_project_id)
+             );",
         )?;
         let jars = open_database(&self.jars_path())?;
         initialize_database(
@@ -251,6 +259,77 @@ impl RepositoryScope {
                 .map_err(sql_error)?;
         }
         transaction.commit().map_err(sql_error)
+    }
+
+    /// Returns whether a provider relationship is known to point at a missing
+    /// project for this exact revision of the parent project.
+    ///
+    /// Provider relationships are discovery hints only. Caching broken hints
+    /// avoids repeating the same failed lookup on every command, while the
+    /// parent marker makes the result expire automatically when its metadata
+    /// changes.
+    pub(crate) fn ignores_remote_relationship(
+        &self,
+        provider: &str,
+        parent_project_id: &str,
+        parent_marker: &str,
+        related_project_id: &str,
+    ) -> Result<bool, OrbitError> {
+        validate_project_identity(provider, parent_project_id)?;
+        validate_project_identity(provider, related_project_id)?;
+        let connection = open_database(&self.remote_path())?;
+        connection
+            .query_row(
+                "SELECT 1 FROM ignored_remote_relationships
+                 WHERE provider = ?1 AND parent_project_id = ?2
+                   AND parent_marker = ?3 AND related_project_id = ?4",
+                params![
+                    provider,
+                    parent_project_id,
+                    parent_marker,
+                    related_project_id
+                ],
+                |_| Ok(()),
+            )
+            .optional()
+            .map(|row| row.is_some())
+            .map_err(sql_error)
+    }
+
+    pub(crate) fn ignore_remote_relationship(
+        &self,
+        provider: &str,
+        parent_project_id: &str,
+        parent_marker: &str,
+        related_project_id: &str,
+    ) -> Result<(), OrbitError> {
+        validate_project_identity(provider, parent_project_id)?;
+        validate_project_identity(provider, related_project_id)?;
+        if parent_marker.trim().is_empty() || parent_marker.trim() != parent_marker {
+            return Err(OrbitError::Other(anyhow::anyhow!(
+                "ignored remote relationship requires a canonical parent marker"
+            )));
+        }
+        let connection = open_database(&self.remote_path())?;
+        connection
+            .execute(
+                "INSERT INTO ignored_remote_relationships(
+                    provider, parent_project_id, parent_marker,
+                    related_project_id, checked_at
+                 ) VALUES(?1, ?2, ?3, ?4, unixepoch())
+                 ON CONFLICT(provider, parent_project_id, related_project_id)
+                 DO UPDATE SET
+                    parent_marker = excluded.parent_marker,
+                    checked_at = excluded.checked_at",
+                params![
+                    provider,
+                    parent_project_id,
+                    parent_marker,
+                    related_project_id
+                ],
+            )
+            .map_err(sql_error)?;
+        Ok(())
     }
 
     pub(crate) fn find_jar(
@@ -378,7 +457,7 @@ fn initialize_database(connection: &Connection, schema: &str) -> Result<(), Orbi
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .map_err(sql_error)?;
     match version {
-        0 => {
+        0 | 1 => {
             connection.execute_batch(schema).map_err(sql_error)?;
             connection
                 .execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION}"))
@@ -644,5 +723,26 @@ mod tests {
         assert_ne!(fabric.remote_path(), newer.remote_path());
         assert_ne!(uppercase.remote_path(), lowercase.remote_path());
         assert_ne!(punctuation.remote_path(), literal.remote_path());
+    }
+
+    #[test]
+    fn missing_remote_relationship_cache_expires_with_the_parent_marker() {
+        let directory = tempfile::tempdir().unwrap();
+        let repository = VersionRepository::open(directory.path().to_path_buf()).unwrap();
+        let scope = repository.scope("1.21.1", LoaderKind::Fabric).unwrap();
+
+        scope
+            .ignore_remote_relationship("modrinth", "parent", "revision-1", "missing")
+            .unwrap();
+        assert!(
+            scope
+                .ignores_remote_relationship("modrinth", "parent", "revision-1", "missing")
+                .unwrap()
+        );
+        assert!(
+            !scope
+                .ignores_remote_relationship("modrinth", "parent", "revision-2", "missing")
+                .unwrap()
+        );
     }
 }

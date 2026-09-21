@@ -129,7 +129,7 @@ async fn refresh_remote_repository(
     let mut queue = VecDeque::new();
     for (remote, _) in seeds {
         if let Some((provider, project_id)) = crate::version_repository::remote_project(remote) {
-            queue.push_back((provider.to_string(), project_id, None::<String>));
+            queue.push_back((provider.to_string(), project_id, None::<RemoteReference>));
         }
     }
     let mut visited = BTreeSet::new();
@@ -152,7 +152,7 @@ async fn refresh_remote_repository(
         },
     );
     while !queue.is_empty() {
-        let mut wave = BTreeMap::<String, Vec<(String, Option<String>)>>::new();
+        let mut wave = BTreeMap::<String, Vec<(String, Option<RemoteReference>)>>::new();
         while let Some((provider, project_id, referenced_by)) = queue.pop_front() {
             if visited.insert((provider.clone(), project_id.clone())) {
                 wave.entry(provider)
@@ -175,16 +175,21 @@ async fn refresh_remote_repository(
                 .into_iter()
                 .map(|state| (state.project_id.clone(), state))
                 .collect::<HashMap<_, _>>();
-            for (project_id, referenced_by) in projects {
-                let state = states.get(&project_id).ok_or_else(|| {
-                    let context = referenced_by
-                        .as_ref()
-                        .map(|parent| format!(" referenced by project '{parent}'"))
-                        .unwrap_or_default();
-                    OrbitError::Other(anyhow::anyhow!(
-                        "{provider_name} batch project lookup did not return project '{project_id}'{context}"
-                    ))
-                })?;
+            for (project_id, reference) in projects {
+                let Some(state) = states.get(&project_id) else {
+                    let Some(reference) = reference else {
+                        return Err(OrbitError::ModNotFound(format!(
+                            "{provider_name}:{project_id}"
+                        )));
+                    };
+                    scope.ignore_remote_relationship(
+                        &provider_name,
+                        &reference.parent_project_id,
+                        &reference.parent_marker,
+                        &project_id,
+                    )?;
+                    continue;
+                };
                 if state.marker.trim().is_empty() {
                     return Err(OrbitError::Other(anyhow::anyhow!(
                         "{provider_name} project '{project_id}' returned an empty project change marker"
@@ -195,23 +200,29 @@ async fn refresh_remote_repository(
                     .as_deref()
                     != Some(state.marker.as_str());
                 let artifacts = if changed {
-                    refreshed_projects += 1;
-                    provider
+                    let artifacts = match provider
                         .get_versions(
                             &project_id,
                             Some(input.mc_version),
                             Some(input.loader.as_str()),
                         )
                         .await
-                        .map_err(|error| match error {
-                            OrbitError::ModNotFound(_) if referenced_by.is_some() => {
-                                OrbitError::Other(anyhow::anyhow!(
-                                    "{provider_name} project '{}' references missing project '{project_id}'",
-                                    referenced_by.unwrap_or_default()
-                                ))
-                            }
-                            other => other,
-                        })?
+                    {
+                        Ok(artifacts) => artifacts,
+                        Err(OrbitError::ModNotFound(_)) if reference.is_some() => {
+                            let reference = reference.as_ref().expect("checked above");
+                            scope.ignore_remote_relationship(
+                                &provider_name,
+                                &reference.parent_project_id,
+                                &reference.parent_marker,
+                                &project_id,
+                            )?;
+                            continue;
+                        }
+                        Err(error) => return Err(error),
+                    };
+                    refreshed_projects += 1;
+                    artifacts
                 } else {
                     reused_projects += 1;
                     scope
@@ -229,11 +240,21 @@ async fn refresh_remote_repository(
                                 "{provider_name} project '{project_id}' returned a dependency without a stable project ID"
                             ))
                         })?;
-                        queue.push_back((
-                            provider_name.clone(),
-                            related_id,
-                            Some(project_id.clone()),
-                        ));
+                        if !scope.ignores_remote_relationship(
+                            &provider_name,
+                            &project_id,
+                            &state.marker,
+                            &related_id,
+                        )? {
+                            queue.push_back((
+                                provider_name.clone(),
+                                related_id,
+                                Some(RemoteReference {
+                                    parent_project_id: project_id.clone(),
+                                    parent_marker: state.marker.clone(),
+                                }),
+                            ));
+                        }
                     }
                 }
                 if changed {
@@ -287,6 +308,12 @@ async fn refresh_remote_repository(
         },
     );
     Ok(())
+}
+
+#[derive(Debug, Clone)]
+struct RemoteReference {
+    parent_project_id: String,
+    parent_marker: String,
 }
 
 struct PendingProjectUpdate {
@@ -763,6 +790,7 @@ mod tests {
         RemoteProjectState, SearchResultItem,
     };
     use async_trait::async_trait;
+    use std::collections::BTreeSet;
     use std::io::Write;
     use std::sync::{Arc, Mutex};
 
@@ -771,6 +799,7 @@ mod tests {
         state_calls: Arc<Mutex<Vec<Vec<String>>>>,
         version_calls: Arc<Mutex<Vec<VersionCall>>>,
         projects: HashMap<String, Vec<RemoteArtifact>>,
+        missing_projects: BTreeSet<String>,
     }
 
     type VersionCall = (String, Option<String>, Option<String>);
@@ -806,6 +835,7 @@ mod tests {
             self.state_calls.lock().unwrap().push(project_ids.to_vec());
             Ok(project_ids
                 .iter()
+                .filter(|project_id| !self.missing_projects.contains(*project_id))
                 .map(|project_id| RemoteProjectState {
                     project_id: project_id.clone(),
                     marker: "unchanged-marker".to_string(),
@@ -907,6 +937,7 @@ mod tests {
             state_calls: state_calls.clone(),
             version_calls: version_calls.clone(),
             projects: HashMap::new(),
+            missing_projects: BTreeSet::new(),
         })];
         let jar_cache =
             crate::jar_cache::JarCache::open(directory.path().join("jar-cache")).unwrap();
@@ -1016,6 +1047,7 @@ mod tests {
                     vec![repository_artifact("grandchild", "1", "grandchild-1", None)],
                 ),
             ]),
+            missing_projects: BTreeSet::new(),
         })];
         let jar_cache =
             crate::jar_cache::JarCache::open(directory.path().join("jar-cache")).unwrap();
@@ -1078,7 +1110,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn repository_rejects_a_missing_related_project_before_materialization() {
+    async fn repository_ignores_and_caches_a_missing_related_project_hint() {
         let directory = tempfile::tempdir().unwrap();
         let version_repository =
             crate::version_repository::VersionRepository::open(directory.path().join("repository"))
@@ -1088,14 +1120,77 @@ mod tests {
             .unwrap()
             .store_jar(&inspected("root", "1", "root-1"))
             .unwrap();
+        let state_calls = Arc::new(Mutex::new(Vec::new()));
+        let version_calls = Arc::new(Mutex::new(Vec::new()));
         let providers: Vec<Box<dyn ModProvider>> = vec![Box::new(RepositoryProvider {
             downloader: ArtifactDownloadClient::test_anonymous("orbit-test").unwrap(),
-            state_calls: Arc::new(Mutex::new(Vec::new())),
-            version_calls: Arc::new(Mutex::new(Vec::new())),
+            state_calls: state_calls.clone(),
+            version_calls: version_calls.clone(),
             projects: HashMap::from([(
                 "root".to_string(),
                 vec![repository_artifact("root", "1", "root-1", Some("missing"))],
             )]),
+            missing_projects: BTreeSet::from(["missing".to_string()]),
+        })];
+        let jar_cache =
+            crate::jar_cache::JarCache::open(directory.path().join("jar-cache")).unwrap();
+        let lockfile = OrbitLockfile {
+            meta: crate::lockfile::LockMeta {
+                mc_version: "1.21.1".to_string(),
+                modloader: "fabric".to_string(),
+                modloader_version: "0.16".to_string(),
+            },
+            packages: Vec::new(),
+        };
+
+        for _ in 0..2 {
+            let catalog = download_candidate_catalog(
+                CandidateDiscoveryInput {
+                    instance_dir: directory.path(),
+                    providers: &providers,
+                    additional_remotes: &[],
+                    lockfile: &lockfile,
+                    mc_version: "1.21.1",
+                    loader: LoaderKind::Fabric,
+                    java_feature: 21,
+                    storage: crate::version_repository::CandidateStorage::new(
+                        &jar_cache,
+                        &version_repository,
+                    ),
+                    progress: None,
+                },
+                &[PackageRemote::Modrinth {
+                    project_id: "root".to_string(),
+                }],
+            )
+            .await
+            .unwrap();
+            assert_eq!(catalog.candidates["root"].len(), 1);
+        }
+
+        assert_eq!(version_calls.lock().unwrap().len(), 1);
+        assert_eq!(
+            state_calls.lock().unwrap().as_slice(),
+            &[
+                vec!["root".to_string()],
+                vec!["missing".to_string()],
+                vec!["root".to_string()]
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn repository_rejects_a_missing_explicit_project() {
+        let directory = tempfile::tempdir().unwrap();
+        let version_repository =
+            crate::version_repository::VersionRepository::open(directory.path().join("repository"))
+                .unwrap();
+        let providers: Vec<Box<dyn ModProvider>> = vec![Box::new(RepositoryProvider {
+            downloader: ArtifactDownloadClient::test_anonymous("orbit-test").unwrap(),
+            state_calls: Arc::new(Mutex::new(Vec::new())),
+            version_calls: Arc::new(Mutex::new(Vec::new())),
+            projects: HashMap::new(),
+            missing_projects: BTreeSet::from(["missing".to_string()]),
         })];
         let jar_cache =
             crate::jar_cache::JarCache::open(directory.path().join("jar-cache")).unwrap();
@@ -1124,17 +1219,13 @@ mod tests {
                 progress: None,
             },
             &[PackageRemote::Modrinth {
-                project_id: "root".to_string(),
+                project_id: "missing".to_string(),
             }],
         )
         .await
         .unwrap_err();
 
-        assert!(
-            error
-                .to_string()
-                .contains("references missing project 'missing'")
-        );
+        assert!(matches!(error, OrbitError::ModNotFound(_)));
     }
 
     fn fabric_jar_bytes(mod_id: &str, version: &str) -> Vec<u8> {

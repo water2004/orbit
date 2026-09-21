@@ -32,7 +32,7 @@
 | 远端身份边界 | ✅ | provider 只给下载 locator；一个 locator 的多种真实 mod_id 按 JAR 身份分区并选择 |
 | Provider 分层 | ✅ | Modrinth / CurseForge HTTP 与 DTO 各在独立 wrapper，core 只做领域适配 |
 | Provider 网络配置 | ✅ | metadata 与 artifact 客户端统一消费 proxy/timeout/retry；全部 provider 共享下载并发上限；Modrinth token 与 CurseForge Key 仅停留在运行时客户端 |
-| 本地版本库 | ✅ | 每个精确 Minecraft/Loader 物理隔离 `remote.sqlite` 与 `jars.sqlite`；批量 project 变更标记决定是否刷新当前作用域，未变不重拉版本/下载/解析；JAR 库只按哈希与真实 mod_id 建模，不含 project ID |
+| 本地版本库 | ✅ | 每个精确 Minecraft/Loader 物理隔离 `remote.sqlite` 与 `jars.sqlite`；批量 project 变更标记决定是否刷新当前作用域，未变不重拉版本/下载/解析；失效派生 relation 按父标记负缓存，显式缺失仍失败；JAR 库只按哈希与真实 mod_id 建模，不含 project ID |
 | 跨平台全局路径 | ✅ | RuntimeEnvironment + 显式路径；system/executable 布局 |
 | Windows MSI | ✅ | x64 per-machine 完整套件；Orbit 组件携带 Runtime Agent，三个相邻程序、开始菜单入口、可选系统 PATH、同版本重建升级、维护模式、可选清理默认 AppData；发布产物仍需项目证书签名 |
 | Linux deb / Release | ✅ | amd64 拆为可独立安装的 `orbit`（含 Agent）、`orbit-launcher`、`orbit-gui`；GUI 精确依赖同版本两 CLI 并独占 desktop/icon；统一 `v*` tag 发布 MSI、三个 deb、SHA256SUMS 与 release notes |

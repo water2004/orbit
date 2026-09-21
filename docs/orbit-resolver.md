@@ -231,7 +231,9 @@ Forge-family Jar-in-Jar 的 Maven 坐标是逻辑 artifact 包。每个内嵌 ar
 2. 按 provider 批量读取 project 级变更标记；每个精确 Minecraft/loader 作用域拥有独立
    `remote.sqlite`，未变化的 project 直接复用快照，变化的 project 才用精确游戏版本和
    loader 过滤枚举可下载版本，绝不请求全部游戏版本；
-3. 只沿 provider project relation 递归，直到远端 project 闭包稳定；
+3. 只沿 provider project relation 递归，直到远端 project 闭包稳定。派生 relation 指向
+   已删除或不可见 project 时跳过，并按父 project 的变更标记负缓存；父标记变化后自动
+   重试。显式 remote 缺失仍报错，派生提示不会被伪造成包或依赖；
 4. 按 SHA-512/SHA-1 对完整 artifact 队列去重后统一处理；当前作用域独立的
    `jars.sqlite` 先按内容哈希复用 Loader 分析，未命中才访问全局 LRU JAR cache 或下载；
 5. 每个新内容校验来源强哈希并解析真实 JAR metadata，再以真实 `mod_id` 建候选；
@@ -257,6 +259,9 @@ provider 的 dependency relation 仅用于定位下一批 project，不携带可
 版本或 `mod_id` 语义。JAR dependency 也不会反向触发 provider 查询，因为 `mod_id`
 不是 slug。若下载闭包中没有 JAR 声明某个 required identity，建图会把该引用注册为
 空版本包，并由 PubGrub 产生可解释的无可行解。
+
+因此失效的 provider relation 不会阻断父 JAR 的分析：若它只是陈旧提示，求解正常继续；
+若父 JAR 确实声明了必需依赖但候选闭包中不存在实现，仍由求解器按真实 `mod_id` 报告无解。
 
 `resolve_candidate_portfolio()` 不持有 provider、下载器或缓存，也不会动态联网。
 这保证下载失败、JAR 解析和依赖求解是三个清楚的错误边界。
