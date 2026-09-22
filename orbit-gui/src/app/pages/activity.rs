@@ -340,6 +340,9 @@ fn render_interaction(app: &OrbitApp, cx: &mut Context<OrbitApp>) -> AnyElement 
     if interaction_kind == InteractionKind::DataDeletion {
         return render_data_deletion_interaction(pending, cx);
     }
+    if interaction_kind == InteractionKind::Confirmation {
+        return render_confirmation_interaction(pending, cx);
+    }
     let parsed = pending
         .envelope
         .choices
@@ -500,6 +503,94 @@ fn render_interaction(app: &OrbitApp, cx: &mut Context<OrbitApp>) -> AnyElement 
                         ),
                     )
                 }),
+            cx,
+        ),
+        cx,
+    )
+    .into_any_element()
+}
+
+fn render_confirmation_interaction(
+    pending: super::super::PendingInteraction,
+    cx: &mut Context<OrbitApp>,
+) -> AnyElement {
+    let preview_actions = pending
+        .envelope
+        .choices
+        .iter()
+        .filter_map(|choice| {
+            interaction_package_actions(InteractionKind::Confirmation, &choice.data).ok()
+        })
+        .find(|actions| !actions.is_empty())
+        .unwrap_or_default();
+
+    let mut action_choices = pending
+        .envelope
+        .choices
+        .iter()
+        .cloned()
+        .enumerate()
+        .collect::<Vec<_>>();
+    action_choices.sort_by_key(|(_, choice)| {
+        pending.envelope.default_choice.as_deref() != Some(choice.id.as_str())
+    });
+    let mut actions = h_flex().flex_shrink_0().justify_end().gap_2();
+    for (index, choice) in action_choices {
+        let choice_id = choice.id.clone();
+        let primary = pending.envelope.default_choice.as_deref() != Some(choice.id.as_str());
+        actions = actions.child(
+            Button::new(("confirmation-interaction-choice", index))
+                .label(choice.label)
+                .when(primary, |button| button.primary())
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.answer_interaction(Some(choice_id.clone()));
+                    cx.notify();
+                })),
+        );
+    }
+    if pending.envelope.choices.is_empty() && pending.envelope.allow_cancel {
+        actions = actions.child(
+            Button::new("confirmation-interaction-cancel")
+                .label(tr!("Cancel operation").into_owned())
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.answer_interaction(None);
+                    cx.notify();
+                })),
+        );
+    }
+
+    let preview = if preview_actions.is_empty() {
+        div().into_any_element()
+    } else {
+        ui::compact_card(cx)
+            .child(render_package_actions(&preview_actions, false, cx))
+            .into_any_element()
+    };
+
+    ui::modal_backdrop(
+        ui::modal(
+            760.,
+            v_flex()
+                .h(px(540.))
+                .max_h_full()
+                .gap_3()
+                .child(
+                    div()
+                        .flex_shrink_0()
+                        .text_xl()
+                        .font_semibold()
+                        .child(pending.envelope.prompt),
+                )
+                .child(
+                    div()
+                        .id("confirmation-interaction-scroll")
+                        .flex_1()
+                        .min_h_0()
+                        .overflow_y_scrollbar()
+                        .pr_1()
+                        .child(preview),
+                )
+                .child(actions),
             cx,
         ),
         cx,
