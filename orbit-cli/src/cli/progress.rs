@@ -721,12 +721,13 @@ fn resolution_current_label(current: &ResolutionCurrent) -> String {
         ResolutionCurrent::Enumeration { run } => {
             tr!("Searching solution space (run %{run})", run = run)
         }
-        ResolutionCurrent::VersionMaximization { package } => {
-            tr!(
-                "Checking whether %{package} can be upgraded",
-                package = package
-            )
+        ResolutionCurrent::VersionMaximization => {
+            tr!("Searching for a dominating version plan").into_owned()
         }
+        ResolutionCurrent::Factorization { package } => tr!(
+            "Proving independent choices for %{package}",
+            package = package
+        ),
         ResolutionCurrent::PreferencePreservation { package } => {
             tr!(
                 "Checking whether %{package} can be preserved",
@@ -827,9 +828,7 @@ mod tests {
                 backtracks: 1,
                 conflicts: 1,
                 solutions: 0,
-                current: Some(ResolutionCurrent::VersionMaximization {
-                    package: "sodium".to_string(),
-                }),
+                current: Some(ResolutionCurrent::VersionMaximization),
             },
             &mut state,
         );
@@ -842,7 +841,7 @@ mod tests {
         assert!(
             second
                 .unwrap()
-                .contains("[1/2] Checking whether sodium can be upgraded")
+                .contains("[1/2] Searching for a dominating version plan")
         );
         assert_eq!(state.resolution_completed, 1);
         assert_eq!(state.resolution_total, 2);

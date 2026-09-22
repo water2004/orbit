@@ -23,7 +23,8 @@ pub enum ArtifactProgressState {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ResolutionCurrent {
     Enumeration { run: usize },
-    VersionMaximization { package: String },
+    VersionMaximization,
+    Factorization { package: String },
     PreferencePreservation { package: String },
     Decision { package: String },
 }

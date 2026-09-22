@@ -29,10 +29,9 @@ fn failed_probe_rolls_back_path_state_while_improved_probe_commits_it() {
     });
 
     trace.on_event(SolverEvent::MaximalityProbeStarted {
-        package: &selected_package,
+        continuation: false,
     });
     trace.on_event(SolverEvent::MaximalityProbeFinished {
-        package: &selected_package,
         result: MaximalityProbeResult::NoImprovement,
     });
     assert_eq!(
@@ -42,16 +41,46 @@ fn failed_probe_rolls_back_path_state_while_improved_probe_commits_it() {
     );
 
     trace.on_event(SolverEvent::MaximalityProbeStarted {
-        package: &selected_package,
+        continuation: false,
     });
     trace.on_event(SolverEvent::MaximalityProbeFinished {
-        package: &selected_package,
         result: MaximalityProbeResult::Improved,
     });
     assert_eq!(
         trace.watched[&selected_package].decision_level, None,
         "a successful probe becomes the new retained candidate path"
     );
+}
+
+#[test]
+fn incremental_probe_retains_path_state_and_keeps_progress_in_the_probe_stage() {
+    let selected = version("2");
+    let selected_package = package("a");
+    let mut trace = ResolutionTrace::with_progress([("a".to_string(), selected.clone())], None);
+    trace.on_event(SolverEvent::MaximalityProbeStarted {
+        continuation: false,
+    });
+    trace.on_event(SolverEvent::Decision {
+        package: &selected_package,
+        version: &selected,
+        decision_level: 1,
+    });
+    trace.on_event(SolverEvent::MaximalityProbeFinished {
+        result: MaximalityProbeResult::Improved,
+    });
+    trace.on_event(SolverEvent::MaximalityProbeStarted { continuation: true });
+    assert_eq!(trace.watched[&selected_package].decision_level, Some(1));
+    assert_eq!(
+        trace.progress_state.current,
+        Some(ResolutionCurrent::VersionMaximization)
+    );
+    trace.on_event(SolverEvent::MaximalityProbeFinished {
+        result: MaximalityProbeResult::NoImprovement,
+    });
+    assert_eq!(trace.watched[&selected_package].decision_level, Some(1));
+    assert_eq!(trace.progress_state.work_discovered, 2);
+    assert_eq!(trace.progress_state.work_completed, 2);
+    assert_eq!(trace.progress_state.decisions, 1);
 }
 
 #[test]

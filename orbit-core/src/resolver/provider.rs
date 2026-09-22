@@ -109,21 +109,29 @@ impl DependencyProvider for OrbitDependencyProvider {
     type P = SolverPackage;
     type V = SolverVersion;
     type VS = Ranges<SolverVersion>;
-    type Priority = usize;
+    type Priority = (std::cmp::Reverse<usize>, u32);
     type M = String;
     type Err = ProviderError;
 
     fn prioritize(
         &self,
-        _package: &Self::P,
+        package: &Self::P,
         range: &Self::VS,
-        _package_conflicts_counts: &pubgrub::PackageResolutionStatistics,
+        package_conflicts_counts: &pubgrub::PackageResolutionStatistics,
     ) -> Self::Priority {
-        // Prefer constrained packages over packages that still allow every version.
-        if range == &Ranges::full() {
-            return 0;
-        }
-        range.bounding_range().map(|_| 1).unwrap_or(0)
+        // Fail first: an empty/singleton finite domain is more informative than an arbitrary
+        // syntactically bounded range. Break equal-domain ties with learned conflict activity.
+        // This affects traversal only; version order and feasibility remain unchanged.
+        let remaining = self.versions.get(package).map_or(0, |versions| {
+            versions
+                .iter()
+                .filter(|version| range.contains(version))
+                .count()
+        });
+        (
+            std::cmp::Reverse(remaining),
+            package_conflicts_counts.conflict_count(),
+        )
     }
 
     fn choose_version(

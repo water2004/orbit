@@ -134,8 +134,9 @@ fn resolution_current_label(data: &Value) -> Option<String> {
             "Searching solution space (run %{run})",
             run = current.get("run")?.as_u64()?
         )),
-        "version_maximization" => Some(tr!(
-            "Checking whether %{package} can be upgraded",
+        "version_maximization" => Some(tr!("Searching for a dominating version plan").into_owned()),
+        "factorization" => Some(tr!(
+            "Proving independent choices for %{package}",
             package = current.get("package")?.as_str()?
         )),
         "preference_preservation" => Some(tr!(

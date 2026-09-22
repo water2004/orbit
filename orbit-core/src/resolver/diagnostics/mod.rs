@@ -83,6 +83,7 @@ struct ResolutionProgress {
     conflicts: u64,
     solutions: usize,
     current: Option<ResolutionCurrent>,
+    invariant_package: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -173,19 +174,32 @@ impl ResolutionTrace {
         match event {
             SolverEvent::EnumerationRunStarted { run } => {
                 self.progress_state.work_discovered += 1;
-                self.progress_state.current = Some(ResolutionCurrent::Enumeration { run: *run });
+                self.progress_state.current =
+                    Some(self.progress_state.invariant_package.as_ref().map_or(
+                        ResolutionCurrent::Enumeration { run: *run },
+                        |package| ResolutionCurrent::Factorization {
+                            package: package.clone(),
+                        },
+                    ));
             }
             SolverEvent::EnumerationRunFinished { .. } => {
                 self.progress_state.work_completed += 1;
             }
-            SolverEvent::MaximalityProbeStarted { package } => {
+            SolverEvent::MaximalityProbeStarted { .. } => {
                 self.progress_state.work_discovered += 1;
-                self.progress_state.current = Some(ResolutionCurrent::VersionMaximization {
-                    package: package.to_string(),
-                });
+                self.progress_state.current = Some(ResolutionCurrent::VersionMaximization);
             }
             SolverEvent::MaximalityProbeFinished { .. } => {
                 self.progress_state.work_completed += 1;
+            }
+            SolverEvent::InvariantProbeStarted { package } => {
+                self.progress_state.invariant_package = Some(package.to_string());
+                self.progress_state.current = Some(ResolutionCurrent::Factorization {
+                    package: package.to_string(),
+                });
+            }
+            SolverEvent::InvariantProbeFinished { .. } => {
+                self.progress_state.invariant_package = None;
             }
             SolverEvent::PreferenceProbeStarted { package } => {
                 self.progress_state.work_discovered += 1;
@@ -199,9 +213,13 @@ impl ResolutionTrace {
             SolverEvent::Decision { package, .. }
             | SolverEvent::AbsenceDecision { package, .. } => {
                 self.progress_state.decisions += 1;
-                self.progress_state.current = Some(ResolutionCurrent::Decision {
-                    package: package.to_string(),
-                });
+                if self.probe_checkpoint.is_none()
+                    && self.progress_state.invariant_package.is_none()
+                {
+                    self.progress_state.current = Some(ResolutionCurrent::Decision {
+                        package: package.to_string(),
+                    });
+                }
             }
             SolverEvent::Derivation { .. } => self.progress_state.propagations += 1,
             SolverEvent::Backtrack { .. } => self.progress_state.backtracks += 1,
@@ -241,15 +259,17 @@ impl SolverObserver<SolverPackage, Ranges<SolverVersion>, String> for Resolution
     fn on_event(&mut self, event: SolverEvent<'_, SolverPackage, Ranges<SolverVersion>, String>) {
         self.report_progress(&event);
         match event {
-            SolverEvent::MaximalityProbeStarted { .. } => {
+            SolverEvent::MaximalityProbeStarted { continuation } => {
                 assert!(
                     self.probe_checkpoint.is_none(),
                     "maximality probes must not be nested"
                 );
                 self.probe_checkpoint = Some(self.watched.clone());
-                for watched in self.watched.values_mut() {
-                    watched.decision_level = None;
-                    watched.reason = None;
+                if !continuation {
+                    for watched in self.watched.values_mut() {
+                        watched.decision_level = None;
+                        watched.reason = None;
+                    }
                 }
             }
             SolverEvent::MaximalityProbeFinished { result, .. } => {

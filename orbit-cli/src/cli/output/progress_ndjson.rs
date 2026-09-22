@@ -184,9 +184,7 @@ mod tests {
             backtracks: 4,
             conflicts: 3,
             solutions: 2,
-            current: Some(ResolutionCurrent::VersionMaximization {
-                package: "sodium".to_string(),
-            }),
+            current: Some(ResolutionCurrent::VersionMaximization),
         };
         let envelope = ProgressEnvelope::new(
             "migrate",
