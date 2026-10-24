@@ -28,8 +28,7 @@ workflow 会：
 2. 在 `ubuntu-22.04` 原生构建三个 amd64 ELF，并用固定的 cargo-deb 3.7.0 分别生成
    `orbit`、`orbit-launcher`、`orbit-gui` 三个 deb；GUI 包精确依赖同版本的两个 CLI；
 3. 汇总一个 MSI 与三个 deb，并生成 `SHA256SUMS`；
-4. 把 `docs/releases/v<version>.md` 作为正式说明前半部分，再使用 GitHub Release Notes
-   API 与 `.github/release.yml` 的类别追加 PR/贡献者变更记录；
+4. 使用 `docs/releases/v<version>.md` 中人工撰写的用户发行说明，不自动追加内部提交记录；
 5. 发布 GitHub Release。
 
 发布 job 只有 `contents: write` 权限；构建 job 仅有 `contents: read`。它使用

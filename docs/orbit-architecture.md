@@ -27,11 +27,19 @@ CLI 不实现业务规则。core 不打印 UI 文本，而是返回结构化报�
 `◆` 才是可重定向的差异语义。表格在 TTY 中服从终端宽度，无法探测宽度的重定向输出
 以 120 列为上限。平台 SDK、网络、ZIP 和文件系统位于边界模块。
 
+远端添加入口在 core 通过 provider 官方批量 project 接口把 Modrinth slug 解析为
+真实 project ID；候选版本库、工件归属校验与持久化只消费该规范身份。GUI 与 CLI
+共享此入口，搜索展示的 project ID 与实际添加标识一致。
+
 `orbit --output-format json` 与 `orbit-launcher --output-format json` 配合各自的
 `--progress-format ndjson`，直接复用
 `orbit-machine-protocol` 的 schema 2 成功、错误、进度和交互信封。原生 GUI 只是启动两个
 CLI 进程：读取 stdout 最终结果与 stderr NDJSON，并向同一子进程 stdin 写回交互选择；
 不存在 GUI 专用参数、旧 schema 别名、备用 JSON 路径或 core 直连。
+
+GUI 的原生文件选择由 `app/path_dialog.rs` 统一异步调度，选择后才通过弱实体引用重新
+进入窗口更新并调用原有 CLI 动作；取消或窗口关闭不会启动操作。事件回调不得同步等待
+系统文件弹窗，防止原生消息循环重入仍被借用的 GUI 状态。
 
 Launcher 自身始终不读取、链接或调用 Orbit，也没有包身份、数据归属或 purge 接口。需要
 运行时归属时，调用方向相反：`orbit launch` 用准确实例和 Launcher 路径启动 Launcher，
@@ -284,7 +292,7 @@ Minecraft/Loader 版本分支。当前经过 Loader 源码与真实接口测试�
 
 | Loader 范围 | 类来源能力 | 原生身份能力 |
 |---|---|---|
-| Fabric Loader 0.4.x–0.19.x | `file:`，包括 Loader 解出的嵌套 JAR | 无 |
+| Fabric Loader 0.4.x–0.20.x | `file:`，包括 Loader 解出的嵌套 JAR | 无 |
 | Quilt Loader 0.12.x–0.17.x | `file:` | 无 |
 | Quilt Loader 0.18.x–0.30.x | `file:` | `QuiltCodeSource.getQuiltMod()` 声明的 mod_id |
 | Forge 14.x–36.x | `file:` | 无 |
@@ -295,7 +303,8 @@ Minecraft 版本不另造一套来源算法；它通过所选 Loader 版本和�
 Agent 基础 classfile 为 Java 8，并显式接受已经验证的 Java 8–25。Loader 范围或 Java feature
 不在表中时，本次观测明确停用并报告，不猜测、不回落到文件名或委托调用栈来建立来源身份。扩展范围前必须同时
 检查相应 Loader 版本源码，并用其真实公开接口/文件系统运行 Agent 夹具；当前回归覆盖 Java 8、
-Java 11+ 新增文件 API、Forge 1.17 首代未导出的 `securejarhandler 0.9.54` 命名模块及
+Java 11+ 新增文件 API、Fabric 0.19.5 / 0.20.0 / 0.20.1 的两种真实 Knot 加载器、
+Forge 1.17 首代未导出的 `securejarhandler 0.9.54` 命名模块及
 Quilt 0.30.1 原生身份。
 
 ## 4. 统一求解
