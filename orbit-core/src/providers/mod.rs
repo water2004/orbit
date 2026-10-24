@@ -11,6 +11,7 @@ pub mod modrinth;
 pub mod rate_limiter;
 
 use crate::error::OrbitError;
+use crate::manifest::PackageRemote;
 use async_trait::async_trait;
 pub use download::ArtifactDownloadClient;
 
@@ -358,12 +359,59 @@ pub struct ModVersionInfo {
     pub released_at: String,
 }
 
-/// Cheap provider-owned project freshness cursor. It is used only by the
-/// remote repository and never enters package identity or dependency solving.
+/// Cheap provider-owned project identity and freshness cursor. It is used for
+/// locator resolution and the remote repository, never as a JAR package identity
+/// or a dependency constraint.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RemoteProjectState {
+    /// Canonical provider project ID, even when looked up using a slug.
     pub project_id: String,
     pub marker: String,
+}
+
+/// Resolve user-supplied project aliases before they enter the version
+/// repository or persisted package remotes. Numeric CurseForge IDs and local
+/// file paths already have their final identity.
+pub(crate) async fn resolve_package_remote(
+    remote: PackageRemote,
+    providers: &[Box<dyn ModProvider>],
+) -> Result<PackageRemote, OrbitError> {
+    let PackageRemote::Modrinth {
+        project_id: locator,
+    } = &remote
+    else {
+        return Ok(remote);
+    };
+    let provider = providers
+        .iter()
+        .find(|provider| provider.name() == remote.provider())
+        .ok_or_else(|| {
+            OrbitError::Other(anyhow::anyhow!(
+                "package remotes require the unconfigured provider '{}'",
+                remote.provider()
+            ))
+        })?;
+    let states = provider
+        .project_states(std::slice::from_ref(locator))
+        .await?;
+    let state = match states.as_slice() {
+        [] => return Err(OrbitError::ModNotFound(remote.display_locator())),
+        [state]
+            if !state.project_id.trim().is_empty()
+                && state.project_id.trim() == state.project_id =>
+        {
+            state
+        }
+        _ => {
+            return Err(OrbitError::Other(anyhow::anyhow!(
+                "{} project lookup for '{locator}' did not return one canonical project ID",
+                remote.provider()
+            )));
+        }
+    };
+    Ok(PackageRemote::Modrinth {
+        project_id: state.project_id.clone(),
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -404,9 +452,10 @@ pub trait ModProvider: Send + Sync {
         Ok(Vec::new())
     }
 
-    /// Read project-level change markers in batches. Provider implementations
-    /// must use their official bulk endpoint and return one non-empty marker
-    /// for every requested stable project ID.
+    /// Read project-level change markers in batches using the official bulk
+    /// endpoint. Modrinth also accepts user-facing slugs; results always carry
+    /// canonical IDs. Missing projects are omitted. Repository callers must
+    /// pass stable IDs, while input alias resolution happens before discovery.
     async fn project_states(
         &self,
         project_ids: &[String],

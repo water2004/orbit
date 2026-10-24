@@ -60,6 +60,11 @@ pub trait ModProvider: Send + Sync {
 
 ## 4. 统一类型与来源事实
 
+用户输入的 Modrinth slug 在 `add` 和 `remote add` 的 core 入口通过官方批量 project
+接口解析为真实 `project.id`，之后才进入候选发现与持久化。`project_states` 即使接收 slug，
+也必须返回官方项目 ID，不能把请求别名回填为 ID。版本库仍严格校验工件所属项目，
+不得放宽校验来接受 slug；CLI `search` 的文本表格与 JSON 都显示项目 ID。
+
 `RemoteArtifact` 只包含下载所需的来源 locator、文件名、URL 和 provider
 强哈希；专属字段分别位于：
 

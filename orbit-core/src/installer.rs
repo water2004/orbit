@@ -1059,7 +1059,9 @@ async fn install_mod(input: InstallModInput<'_>) -> Result<InstallExecution, Orb
 
     // 1-2. BFS download all JARs
     let requested_remotes: Vec<_> = match &target {
-        InstallTarget::Remote(remote) => vec![remote.clone()],
+        InstallTarget::Remote(remote) => {
+            vec![crate::providers::resolve_package_remote(remote.clone(), providers).await?]
+        }
         InstallTarget::Package(_) => Vec::new(),
     };
     let manifest_remotes: Vec<_> = manifest

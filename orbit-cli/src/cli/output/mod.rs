@@ -488,9 +488,22 @@ fn truncate(text: &str, max: usize) -> String {
 /// single table so the output stays readable when redirected.
 pub fn search_results_table(results: &[(&str, &SearchResultItem)], ref_mc: Option<&str>) -> String {
     let mut table = if ref_mc.is_some() {
-        output_table(["", "Package", "Platform", "Downloads", "MC versions"])
+        output_table([
+            "",
+            "Package",
+            "Platform",
+            "Project ID",
+            "Downloads",
+            "MC versions",
+        ])
     } else {
-        output_table(["Package", "Platform", "Downloads", "MC versions"])
+        output_table([
+            "Package",
+            "Platform",
+            "Project ID",
+            "Downloads",
+            "MC versions",
+        ])
     };
     for (provider, item) in results {
         let mc_list = item
@@ -515,6 +528,7 @@ pub fn search_results_table(results: &[(&str, &SearchResultItem)], ref_mc: Optio
                 Cell::new(mark),
                 Cell::new(format!("{name_part}\n{}", truncate(&item.description, 80))),
                 Cell::new(*provider),
+                Cell::new(&item.project_id),
                 Cell::new(format_downloads(item.downloads)),
                 Cell::new(mc_list),
             ]
@@ -522,6 +536,7 @@ pub fn search_results_table(results: &[(&str, &SearchResultItem)], ref_mc: Optio
             vec![
                 Cell::new(format!("{name_part}\n{}", truncate(&item.description, 80))),
                 Cell::new(*provider),
+                Cell::new(&item.project_id),
                 Cell::new(format_downloads(item.downloads)),
                 Cell::new(mc_list),
             ]
@@ -1084,6 +1099,8 @@ mod tests {
         assert!(output.contains("sodium"));
         assert!(output.contains("1.5M"));
         assert!(output.contains("modrinth"));
+        assert!(output.contains("Project ID"));
+        assert!(output.contains("id-sodium"));
     }
 
     #[test]
@@ -1093,6 +1110,7 @@ mod tests {
 
         assert!(!output.contains('\u{2713}'));
         assert!(output.contains("sodium"));
+        assert!(output.contains("id-sodium"));
     }
 
     #[test]

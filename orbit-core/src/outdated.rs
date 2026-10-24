@@ -799,6 +799,7 @@ mod tests {
         state_calls: Arc<Mutex<Vec<Vec<String>>>>,
         version_calls: Arc<Mutex<Vec<VersionCall>>>,
         projects: HashMap<String, Vec<RemoteArtifact>>,
+        aliases: HashMap<String, String>,
         missing_projects: BTreeSet<String>,
     }
 
@@ -837,7 +838,7 @@ mod tests {
                 .iter()
                 .filter(|project_id| !self.missing_projects.contains(*project_id))
                 .map(|project_id| RemoteProjectState {
-                    project_id: project_id.clone(),
+                    project_id: self.aliases.get(project_id).unwrap_or(project_id).clone(),
                     marker: "unchanged-marker".to_string(),
                 })
                 .collect())
@@ -928,6 +929,148 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn add_resolves_slug_before_indexing_with_cold_and_warm_repository() {
+        let directory = tempfile::tempdir().unwrap();
+        crate::platform_detection::test_support::write_platform(
+            directory.path(),
+            "1.21.1",
+            "fabric",
+            "0.16.10",
+        );
+        let platform = crate::platform_detection::discover_platform_for_init(
+            directory.path(),
+            "1.21.1",
+            "fabric",
+            "0.16.10",
+        )
+        .unwrap();
+        let manifest = OrbitManifest {
+            project: crate::manifest::ProjectMeta {
+                name: "slug-input".to_string(),
+                mc_version: "1.21.1".to_string(),
+                modloader: "fabric".to_string(),
+                modloader_version: "0.16.10".to_string(),
+                description: None,
+                authors: None,
+                version: None,
+            },
+            platform: platform.snapshot(directory.path()).unwrap(),
+            resolver: Default::default(),
+            packages: Default::default(),
+            groups: Default::default(),
+        };
+        crate::workspace::ManifestFile::new(directory.path(), manifest)
+            .save()
+            .unwrap();
+        let jar_cache = crate::jar_cache::JarCache::open(directory.path().join("cache")).unwrap();
+        let repository =
+            crate::version_repository::VersionRepository::open(directory.path().join("repository"))
+                .unwrap();
+        let scope = repository.scope("1.21.1", LoaderKind::Fabric).unwrap();
+        scope.store_jar(&inspected("root", "1", "root-1")).unwrap();
+        let version_calls = Arc::new(Mutex::new(Vec::new()));
+        let providers: Vec<Box<dyn ModProvider>> = vec![Box::new(RepositoryProvider {
+            downloader: ArtifactDownloadClient::test_anonymous("orbit-test").unwrap(),
+            state_calls: Arc::new(Mutex::new(Vec::new())),
+            version_calls: version_calls.clone(),
+            projects: HashMap::from([(
+                "CanonicalID".to_string(),
+                vec![repository_artifact("CanonicalID", "1", "root-1", None)],
+            )]),
+            aliases: HashMap::from([("root-slug".to_string(), "CanonicalID".to_string())]),
+            missing_projects: BTreeSet::from(["missing-slug".to_string()]),
+        })];
+        let canonical = PackageRemote::Modrinth {
+            project_id: "CanonicalID".to_string(),
+        };
+        for locator in ["root-slug", "root-slug", "CanonicalID"] {
+            let report = crate::installer::install_to_instance(
+                crate::installer::InstallTarget::Remote(PackageRemote::Modrinth {
+                    project_id: locator.to_string(),
+                }),
+                "*",
+                directory.path(),
+                &providers,
+                crate::version_repository::CandidateStorage::new(&jar_cache, &repository),
+                crate::installer::InstallOptions {
+                    dry_run: true,
+                    ..Default::default()
+                },
+                crate::installer::InstallInteraction::default(),
+            )
+            .await
+            .unwrap();
+            assert_eq!(report.installed.len(), 1);
+            assert_eq!(report.installed[0].mod_id, "root");
+            assert_eq!(report.installed[0].remotes, vec![canonical.clone()]);
+        }
+        assert_eq!(
+            version_calls.lock().unwrap().as_slice(),
+            &[(
+                "CanonicalID".to_string(),
+                Some("1.21.1".to_string()),
+                Some("fabric".to_string())
+            ),]
+        );
+        assert!(
+            scope
+                .project_marker("modrinth", "CanonicalID")
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            scope
+                .project_marker("modrinth", "root-slug")
+                .unwrap()
+                .is_none()
+        );
+
+        // Remote management must persist the same canonical identity as add.
+        let mut manifest = crate::workspace::ManifestFile::open(directory.path()).unwrap();
+        manifest.inner.packages.insert(
+            "root".to_string(),
+            crate::manifest::PackageSpec::new(
+                "*",
+                vec![PackageRemote::File {
+                    path: "local.jar".to_string(),
+                }],
+            ),
+        );
+        manifest.save().unwrap();
+        crate::remote::add_package_remote(
+            directory.path(),
+            "root",
+            PackageRemote::Modrinth {
+                project_id: "root-slug".to_string(),
+            },
+            &providers,
+            crate::version_repository::CandidateStorage::new(&jar_cache, &repository),
+            false,
+            None,
+        )
+        .await
+        .unwrap();
+        let manifest = crate::workspace::ManifestFile::open(directory.path()).unwrap();
+        assert!(manifest.inner.packages["root"].remotes.contains(&canonical));
+        assert!(
+            !manifest.inner.packages["root"]
+                .remotes
+                .contains(&PackageRemote::Modrinth {
+                    project_id: "root-slug".to_string(),
+                })
+        );
+        let error = crate::providers::resolve_package_remote(
+            PackageRemote::Modrinth {
+                project_id: "missing-slug".to_string(),
+            },
+            &providers,
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(error, OrbitError::ModNotFound(_)));
+    }
+
+    #[tokio::test]
     async fn repository_batches_markers_filters_exact_scope_and_reuses_unchanged_projects() {
         let directory = tempfile::tempdir().unwrap();
         let state_calls = Arc::new(Mutex::new(Vec::new()));
@@ -937,6 +1080,7 @@ mod tests {
             state_calls: state_calls.clone(),
             version_calls: version_calls.clone(),
             projects: HashMap::new(),
+            aliases: HashMap::new(),
             missing_projects: BTreeSet::new(),
         })];
         let jar_cache =
@@ -1047,6 +1191,7 @@ mod tests {
                     vec![repository_artifact("grandchild", "1", "grandchild-1", None)],
                 ),
             ]),
+            aliases: HashMap::new(),
             missing_projects: BTreeSet::new(),
         })];
         let jar_cache =
@@ -1130,6 +1275,7 @@ mod tests {
                 "root".to_string(),
                 vec![repository_artifact("root", "1", "root-1", Some("missing"))],
             )]),
+            aliases: HashMap::new(),
             missing_projects: BTreeSet::from(["missing".to_string()]),
         })];
         let jar_cache =
@@ -1190,6 +1336,7 @@ mod tests {
             state_calls: Arc::new(Mutex::new(Vec::new())),
             version_calls: Arc::new(Mutex::new(Vec::new())),
             projects: HashMap::new(),
+            aliases: HashMap::new(),
             missing_projects: BTreeSet::from(["missing".to_string()]),
         })];
         let jar_cache =

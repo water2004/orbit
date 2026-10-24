@@ -167,12 +167,14 @@ orbit add <mod>
 | 形式 | 行为 |
 |------|------|
 | `sodium` | 先按 `[resolver].catalogs` 尝试作为 project locator；未找到时搜索并让用户选择 |
-| `mr:<project-id-or-search>` | 只用 Modrinth；持久化时规范为 project ID |
+| `mr:<project-id-or-slug>` | 只用 Modrinth；先解析真实 project ID，再发现候选与持久化；未找到时搜索并让用户选择 |
 | `cf:<numeric-project-id>` | 只用 CurseForge；需要 API Key |
 | `file:./mod.jar` | 解析并复制本地 JAR |
 
 来源前缀与 `--platform` 同时出现时必须指向同一 provider；冲突会直接报错，不会把
 `cf:` locator 交给 Modrinth 或反向处理。CurseForge 的持久远端只接受数值 project ID。
+例如 `orbit add fabric-api`、`orbit add mr:fabric-api` 和
+`orbit add mr:P7dR8mSH` 都定位同一个 Modrinth 项目；别名不进入版本库主键。
 
 在线流程先取得并验证候选 JAR，再以 JAR 的真实 `mod_id`、版本和 required dependencies
 求解。确认后写入 `mods/`、manifest 和 lockfile。请求包的 constraint、`optional` 和显式
@@ -516,9 +518,10 @@ orbit versions <package>
 ```
 
 - `search` 合并已配置 provider 的结果并应用可选的 Minecraft/loader 过滤；结果由统一
-  展示层渲染为自适应表格，按 slug/名称、平台、下载量和最新 MC 版本分列，参考 MC 版本
+  展示层渲染为自适应表格，按 slug/名称、平台、项目 ID、下载量和最新 MC 版本分列，参考 MC 版本
   存在时附加 `✓` 兼容列；同一现有 JSON 结果还返回最新展示版本、side、categories、
   provider 官方 icon URL 与 RGB accent，原生界面无需调用另一套查询接口；
+  项目 ID 可直接用于 `orbit add mr:<id>` / `orbit add cf:<id>`；
 - `info` 按 provider 顺序查询详情；`mr:` / `cf:` 前缀可显式选择来源；字段渲染为自适应
   表格，内嵌 recent versions 子表；JSON 同时返回 provider 官方 project links 与 gallery；
 - `list` 从 lockfile 展示版本、TOML 版本策略、全部 remotes、env/optional；`--tree` 展示

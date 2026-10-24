@@ -201,7 +201,7 @@ impl ModProvider for ModrinthProvider {
                     project.id == *requested || project.slug.eq_ignore_ascii_case(requested)
                 }) {
                     states.push(RemoteProjectState {
-                        project_id: requested.clone(),
+                        project_id: project.id.clone(),
                         marker: project.updated.clone(),
                     });
                 }

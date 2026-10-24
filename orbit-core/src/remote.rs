@@ -55,7 +55,7 @@ pub async fn add_package_remote(
                 path: source.to_string_lossy().into_owned(),
             }
         }
-        remote => remote,
+        remote => crate::providers::resolve_package_remote(remote, providers).await?,
     };
     let requirement = manifest
         .inner
