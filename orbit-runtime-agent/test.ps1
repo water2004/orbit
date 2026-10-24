@@ -248,23 +248,27 @@ $Dependencies = @(
     @{ Name = "asm-9.1.jar"; Uri = "https://repo.maven.apache.org/maven2/org/ow2/asm/asm/9.1/asm-9.1.jar"; Sha256 = "cda4de455fab48ff0bcb7c48b4639447d4de859a7afc30a094a986f0936beba2" },
     @{ Name = "asm-tree-9.1.jar"; Uri = "https://repo.maven.apache.org/maven2/org/ow2/asm/asm-tree/9.1/asm-tree-9.1.jar"; Sha256 = "fd00afa49e9595d7646205b09cecb4a776a8ff0ba06f2d59b8f7bf9c704b4a73" }
 )
-foreach ($Dependency in $Dependencies) {
-    $Dependency.Path = Join-Path $DependencyRoot $Dependency.Name
-    if (-not (Test-Path -LiteralPath $Dependency.Path -PathType Leaf)) {
-        $PartialDependencyPath = "$($Dependency.Path).part"
+function Get-CheckedDependency([string]$Name, [string]$Uri, [string]$Sha256) {
+    $DependencyPath = Join-Path $DependencyRoot $Name
+    if (-not (Test-Path -LiteralPath $DependencyPath -PathType Leaf)) {
+        $PartialDependencyPath = "$DependencyPath.part"
         Remove-Item -LiteralPath $PartialDependencyPath -Force -ErrorAction SilentlyContinue
         try {
             Invoke-WebRequest -UseBasicParsing -MaximumRetryCount 5 -RetryIntervalSec 2 `
-                -Uri $Dependency.Uri -OutFile $PartialDependencyPath
-            Move-Item -LiteralPath $PartialDependencyPath -Destination $Dependency.Path
+                -Uri $Uri -OutFile $PartialDependencyPath
+            Move-Item -LiteralPath $PartialDependencyPath -Destination $DependencyPath
         } finally {
             Remove-Item -LiteralPath $PartialDependencyPath -Force -ErrorAction SilentlyContinue
         }
     }
-    $Actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $Dependency.Path).Hash.ToLowerInvariant()
-    if ($Actual -ne $Dependency.Sha256) {
-        throw "$($Dependency.Name) SHA-256 mismatch: $Actual"
+    $Actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $DependencyPath).Hash.ToLowerInvariant()
+    if ($Actual -ne $Sha256) {
+        throw "$Name SHA-256 mismatch: $Actual"
     }
+    return $DependencyPath
+}
+foreach ($Dependency in $Dependencies) {
+    $Dependency.Path = Get-CheckedDependency $Dependency.Name $Dependency.Uri $Dependency.Sha256
 }
 $UnionClasses = Join-Path $CompatibilityRoot "classes"
 $UnionInstance = Join-Path $CompatibilityRoot "instance"
@@ -295,23 +299,9 @@ Write-Output $UnionSession
 
 # Quilt 0.18.1+ may define classes from a virtual Quilt filesystem. Validate
 # the public QuiltCodeSource identity contract instead of path guessing.
-$QuiltPath = Join-Path $DependencyRoot "quilt-loader-0.30.1-beta.2.jar"
-if (-not (Test-Path -LiteralPath $QuiltPath -PathType Leaf)) {
-    $PartialQuiltPath = "$QuiltPath.part"
-    Remove-Item -LiteralPath $PartialQuiltPath -Force -ErrorAction SilentlyContinue
-    try {
-        Invoke-WebRequest -UseBasicParsing -MaximumRetryCount 5 -RetryIntervalSec 2 `
-            -Uri "https://maven.quiltmc.org/repository/release/org/quiltmc/quilt-loader/0.30.1-beta.2/quilt-loader-0.30.1-beta.2.jar" `
-            -OutFile $PartialQuiltPath
-        Move-Item -LiteralPath $PartialQuiltPath -Destination $QuiltPath
-    } finally {
-        Remove-Item -LiteralPath $PartialQuiltPath -Force -ErrorAction SilentlyContinue
-    }
-}
-$QuiltHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $QuiltPath).Hash.ToLowerInvariant()
-if ($QuiltHash -ne "9e5801c55cdb881d5b29967096c08e39131a8fab7f88585bd06ec31b1c5144a6") {
-    throw "Quilt Loader SHA-256 mismatch: $QuiltHash"
-}
+$QuiltPath = Get-CheckedDependency "quilt-loader-0.30.1-beta.2.jar" `
+    "https://maven.quiltmc.org/repository/release/org/quiltmc/quilt-loader/0.30.1-beta.2/quilt-loader-0.30.1-beta.2.jar" `
+    "9e5801c55cdb881d5b29967096c08e39131a8fab7f88585bd06ec31b1c5144a6"
 $QuiltRoot = Join-Path $TestRoot "quilt-0.30.1"
 $QuiltClasses = Join-Path $QuiltRoot "classes"
 $QuiltInstance = Join-Path $QuiltRoot "instance"
@@ -339,3 +329,53 @@ if ((Get-Content -LiteralPath $QuiltSession).Count -ne 5) {
     throw "Quilt native module identity did not resolve to the fixture package"
 }
 Write-Output $QuiltSession
+
+# Fabric 0.20 retains Knot's file CodeSource and system-library contract. Test
+# both real isolation implementations against the previous and new releases.
+$FabricMixin = Get-CheckedDependency "sponge-mixin-0.17.5+mixin.0.8.7.jar" `
+    "https://maven.fabricmc.net/net/fabricmc/sponge-mixin/0.17.5+mixin.0.8.7/sponge-mixin-0.17.5+mixin.0.8.7.jar" `
+    "03f0065023bfc3045d71bfb99872451d9ad5a0800a5a0dac34ab8c7d5c134f5d"
+$FabricAsm = Get-CheckedDependency "asm-9.11.jar" `
+    "https://maven.fabricmc.net/org/ow2/asm/asm/9.11/asm-9.11.jar" `
+    "5fe3b469b8646e5bc53a897840952d63b712d4923d2a7a26aebc585f1fec7676"
+$FabricVersions = @(
+    @{ Version = "0.19.5"; Sha256 = "93044e4dd46de5d8136701292f05e868da096d2c9fddb4793e4fdbcc63efc695" },
+    @{ Version = "0.20.0"; Sha256 = "911ad609f6faf309401fae4f5c8a20e665c11b475d66befc41dd35ea6f41e15e" },
+    @{ Version = "0.20.1"; Sha256 = "d0c5a082e07410aaff9de7ab196aa6b4236002870f9ba3ad5c1260fcce5110ad" }
+)
+foreach ($Fabric in $FabricVersions) {
+    $Version = $Fabric.Version
+    $FabricJar = Get-CheckedDependency "fabric-loader-$Version.jar" `
+        "https://maven.fabricmc.net/net/fabricmc/fabric-loader/$Version/fabric-loader-$Version.jar" $Fabric.Sha256
+    $FabricRoot = Join-Path $TestRoot "fabric-$Version"
+    $FabricClasses = Join-Path $FabricRoot "classes"
+    New-Item -ItemType Directory -Force -Path $FabricClasses | Out-Null
+    $FabricClasspath = @($FabricJar, $FabricMixin, $FabricAsm) -join [System.IO.Path]::PathSeparator
+    & javac --release 8 -proc:none -cp $FabricClasspath -d $FabricClasses (Join-Path $AgentRoot "tests/AgentFabricHarness.java")
+    if ($LASTEXITCODE -ne 0) { throw "Failed to compile Fabric $Version harness" }
+    foreach ($Compatibility in @("false", "true")) {
+        $FabricInstance = Join-Path $FabricRoot "knot-$Compatibility/instance"
+        $FabricSession = Join-Path $FabricInstance ".orbit/runtime-data/sessions/test.events"
+        $FabricContext = Join-Path $FabricInstance ".orbit/runtime-data/agent-context.tsv"
+        New-Item -ItemType Directory -Force -Path (Join-Path $FabricInstance "config"), (Split-Path -Parent $FabricSession) | Out-Null
+        $FabricRootEncoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($FabricInstance)).TrimEnd('=').Replace('+', '-').Replace('/', '_')
+        $FabricSessionEncoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($FabricSession)).TrimEnd('=').Replace('+', '-').Replace('/', '_')
+        $FabricContextEncoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($FabricContext)).TrimEnd('=').Replace('+', '-').Replace('/', '_')
+        [System.IO.File]::WriteAllLines($FabricContext, @(
+            "4`tcontext`tend"
+            "capability`tjava`t8-25`tend"
+            "capability`tsource`tfile`tend"
+            "system-library`tfabric.systemLibraries`tend"
+            "source`t$FixtureHash`t$FixtureHash`tend"
+            "package`t$FixtureHash`t$FixturePackage`tend"
+        ), [System.Text.UTF8Encoding]::new($false))
+        & java "-javaagent:$ResolvedAgent=root=$FabricRootEncoded;session=$FabricSessionEncoded;context=$FabricContextEncoded" `
+            -cp "$FabricClasses$([System.IO.Path]::PathSeparator)$FabricClasspath" `
+            AgentFabricHarness $FixtureJar $FabricInstance $Compatibility
+        if ($LASTEXITCODE -ne 0) { throw "Fabric $Version Knot ($Compatibility) Agent fixture failed" }
+        if ((Get-Content -LiteralPath $FabricSession).Count -ne 5) {
+            throw "Fabric $Version Knot ($Compatibility) lost fixture ownership observations"
+        }
+        Write-Output $FabricSession
+    }
+}

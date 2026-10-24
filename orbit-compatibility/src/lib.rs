@@ -544,7 +544,7 @@ pub mod runtime_agent {
         rule(
             ModLoader::Fabric,
             [0, 4, 0, 0],
-            [0, 19, u32::MAX, u32::MAX],
+            [0, 20, u32::MAX, u32::MAX],
             Capabilities {
                 code_sources: FILE,
                 module_identity: None,
@@ -728,7 +728,7 @@ pub mod audit {
         rule(
             ModLoader::Fabric,
             [0, 4, 0, 0],
-            [0, 19, u32::MAX, u32::MAX],
+            [0, 20, u32::MAX, u32::MAX],
             FABRIC,
         ),
         rule(
@@ -985,7 +985,7 @@ mod tests {
     #[test]
     fn unknown_future_lines_are_rejected() {
         assert!(runtime_agent::select(ModLoader::Forge, "27.1", "65.0.0").is_err());
-        assert!(audit::select(ModLoader::Fabric, "27.1", "0.20.0").is_err());
+        assert!(audit::select(ModLoader::Fabric, "27.1", "0.21.0").is_err());
     }
 
     #[test]
@@ -993,7 +993,7 @@ mod tests {
         assert!(runtime_agent::select(ModLoader::Fabric, "1.14", "0.4.0").is_ok());
         assert!(runtime_agent::select(ModLoader::Fabric, "26.2", "0.19.99").is_ok());
         assert!(runtime_agent::select(ModLoader::Fabric, "1.14", "0.3.99").is_err());
-        assert!(runtime_agent::select(ModLoader::Fabric, "27.1", "0.20.0").is_err());
+        assert!(runtime_agent::select(ModLoader::Fabric, "27.1", "0.21.0").is_err());
 
         let quilt_old = runtime_agent::select(ModLoader::Quilt, "1.19.2", "0.17.99").unwrap();
         let quilt_new = runtime_agent::select(ModLoader::Quilt, "1.20.1", "0.18.0").unwrap();
@@ -1007,6 +1007,24 @@ mod tests {
         assert!(runtime_agent::select(ModLoader::Forge, "1.17.1", "37.0.0").is_ok());
         assert!(runtime_agent::select(ModLoader::NeoForge, "1.20.1", "47.1.999").is_ok());
         assert!(runtime_agent::select(ModLoader::NeoForge, "1.20.1", "47.2.0").is_err());
+    }
+
+    #[test]
+    fn fabric_020_keeps_the_verified_source_and_audit_models() {
+        let previous_agent = runtime_agent::select(ModLoader::Fabric, "26.3", "0.19.5").unwrap();
+        let previous_audit = audit::select(ModLoader::Fabric, "26.3", "0.19.5").unwrap();
+        for version in ["0.20.0", "0.20.1", "0.20.99"] {
+            assert_eq!(
+                runtime_agent::select(ModLoader::Fabric, "26.3", version).unwrap(),
+                previous_agent
+            );
+            assert_eq!(
+                audit::select(ModLoader::Fabric, "26.3", version).unwrap(),
+                previous_audit
+            );
+        }
+        assert!(runtime_agent::select(ModLoader::Fabric, "26.3", "0.21.0").is_err());
+        assert!(audit::select(ModLoader::Fabric, "26.3", "0.21.0").is_err());
     }
 
     #[test]

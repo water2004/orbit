@@ -100,6 +100,8 @@ mod tests {
     fn verified_loader_lines_select_configuration_for_one_pipeline() {
         for (loader, minecraft, version) in [
             (LoaderFamily::Fabric, "26.2", "0.19.2"),
+            (LoaderFamily::Fabric, "26.3", "0.20.0"),
+            (LoaderFamily::Fabric, "26.3", "0.20.1"),
             (LoaderFamily::Quilt, "1.21.1", "0.27.1"),
             (LoaderFamily::Forge, "1.21.1", "52.1.0"),
             (LoaderFamily::NeoForge, "26.2", "26.2.0.24-beta"),
@@ -121,7 +123,7 @@ mod tests {
         let environment = AuditEnvironment {
             minecraft_version: "27.1".to_string(),
             loader: LoaderFamily::Fabric,
-            loader_version: "0.20.0".to_string(),
+            loader_version: "0.21.0".to_string(),
             physical_side: PhysicalSide::Unknown,
             java_feature: 25,
         };

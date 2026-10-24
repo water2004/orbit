@@ -67,7 +67,7 @@ Runtime Agent 与 audit 当前注册的 Loader 线为：
 
 | Loader | 已注册范围 | 关键边界 |
 |---|---|---|
-| Fabric | 0.4.x–0.19.x | Mixin/Fabric namespace；Agent `file:` source |
+| Fabric | 0.4.x–0.20.x | Mixin/Fabric namespace；Agent `file:` source |
 | Quilt | 0.12.x–0.30.x | 0.18 起可用 Quilt 原生 module identity |
 | Forge | 14.x–64.x | 37 起 secure module/`union:`；14–36 audit 由实际 ABI 拒绝 LaunchWrapper |
 | NeoForge | 47.1.x、20.2.x–21.11.x、26.1.x–26.2.x | 实际 ABI 在 ITransformer/ClassProcessor 间验证 |
@@ -87,6 +87,14 @@ Minecraft JAR 内部格式按不可变 `world_version` 范围选择：1913–258
 
 未登记的空档和未来线直接不支持。扩展范围必须同时加入边界内、边界外、歧义和真实工件
 fixture；只修改 maximum 但没有证据与测试不算支持。
+
+Fabric 0.20 的证据来自官方 `0.19.5`（`c75cac1`）、`0.20.0`（`e8ebce8`）、
+`0.20.1`（`cb9523b`）源码对比，以及固定 SHA-256 的发行 JAR 回归。
+`KnotClassLoader` / `KnotCompatibilityClassLoader` 和 `fabric.systemLibraries` 契约保持不变，
+KnotClassDelegate 的变化是 ZIP 文件系统访问改为显式只读，没有改变物理 JAR CodeSource。
+`orbit-runtime-agent/test.ps1` 与 `test.sh` 对这三版的两种真实 Knot 加载器逐一执行文件
+写入夹具，校验物理来源、父加载器隔离、Agent helper 可见性与完整所有权快照。
+这些夹具只验证 Agent 的来源/隔离契约，不替代完整 Minecraft 启动或所有 Mixin 行为测试。
 
 ## 5. 禁止事项
 

@@ -307,3 +307,44 @@ if (( quilt_record_count != 5 )); then
   exit 1
 fi
 printf '%s\n' "$quilt_session"
+
+# Exercise both real Knot class loaders, including the 0.19 -> 0.20 boundary.
+download_checked sponge-mixin-0.17.5+mixin.0.8.7.jar \
+  https://maven.fabricmc.net/net/fabricmc/sponge-mixin/0.17.5+mixin.0.8.7/sponge-mixin-0.17.5+mixin.0.8.7.jar \
+  03f0065023bfc3045d71bfb99872451d9ad5a0800a5a0dac34ab8c7d5c134f5d
+download_checked asm-9.11.jar \
+  https://maven.fabricmc.net/org/ow2/asm/asm/9.11/asm-9.11.jar \
+  5fe3b469b8646e5bc53a897840952d63b712d4923d2a7a26aebc585f1fec7676
+for fabric_release in \
+  0.19.5:93044e4dd46de5d8136701292f05e868da096d2c9fddb4793e4fdbcc63efc695 \
+  0.20.0:911ad609f6faf309401fae4f5c8a20e665c11b475d66befc41dd35ea6f41e15e \
+  0.20.1:d0c5a082e07410aaff9de7ab196aa6b4236002870f9ba3ad5c1260fcce5110ad; do
+  fabric_version="${fabric_release%%:*}"
+  download_checked "fabric-loader-$fabric_version.jar" \
+    "https://maven.fabricmc.net/net/fabricmc/fabric-loader/$fabric_version/fabric-loader-$fabric_version.jar" \
+    "${fabric_release#*:}"
+  fabric_root="$test_root/fabric-$fabric_version"
+  fabric_classes="$fabric_root/classes"
+  fabric_classpath="$dependency_root/fabric-loader-$fabric_version.jar:$dependency_root/sponge-mixin-0.17.5+mixin.0.8.7.jar:$dependency_root/asm-9.11.jar"
+  mkdir -p "$fabric_classes"
+  javac --release 8 -proc:none -cp "$fabric_classpath" -d "$fabric_classes" "$agent_root/tests/AgentFabricHarness.java"
+  for compatibility in false true; do
+    fabric_instance="$fabric_root/knot-$compatibility/instance"
+    fabric_session="$fabric_instance/.orbit/runtime-data/sessions/test.events"
+    fabric_context="$fabric_instance/.orbit/runtime-data/agent-context.tsv"
+    mkdir -p "$fabric_instance/config" "$(dirname "$fabric_session")"
+    fabric_root_encoded="$(encode_path "$fabric_instance")"
+    fabric_session_encoded="$(encode_path "$fabric_session")"
+    fabric_context_encoded="$(encode_path "$fabric_context")"
+    printf '4\tcontext\tend\ncapability\tjava\t8-25\tend\ncapability\tsource\tfile\tend\nsystem-library\tfabric.systemLibraries\tend\nsource\t%s\t%s\tend\npackage\t%s\t%s\tend\n' \
+      "$fixture_hash" "$fixture_hash" "$fixture_hash" "$fixture_package" > "$fabric_context"
+    java "-javaagent:$agent_path=root=$fabric_root_encoded;session=$fabric_session_encoded;context=$fabric_context_encoded" \
+      -cp "$fabric_classes:$fabric_classpath" AgentFabricHarness \
+      "$fixture_jar" "$fabric_instance" "$compatibility"
+    if (( $(wc -l < "$fabric_session") != 5 )); then
+      echo "Fabric $fabric_version Knot ($compatibility) lost fixture ownership observations" >&2
+      exit 1
+    fi
+    printf '%s\n' "$fabric_session"
+  done
+done
