@@ -7,6 +7,7 @@ use gpui_component::{
 
 use super::super::OrbitApp;
 use crate::app::components as ui;
+use crate::app::path_dialog::PathDialog;
 use crate::assets::OrbitIcon;
 use crate::model::AuditNotice;
 
@@ -57,16 +58,13 @@ pub(super) fn render(
             .child(
                 Button::new("audit-export")
                     .label(tr!("Export full report…").into_owned())
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        if let Some(path) = rfd::FileDialog::new()
-                            .add_filter("JSON", &["json"])
-                            .set_file_name("orbit-audit.json")
-                            .save_file()
-                        {
-                            let filter = filter_read.read(cx).value().trim().to_string();
-                            this.run_audit(Some(path), filter);
-                        }
-                        cx.notify();
+                    .on_click(cx.listener(move |_, _, window, cx| {
+                        let filter = filter_read.read(cx).value().trim().to_string();
+                        PathDialog::save_file("orbit-audit.json")
+                            .filter("JSON", &["json"])
+                            .show(&cx.entity(), window, cx, move |this, path, _, _| {
+                                this.run_audit(Some(path), filter);
+                            });
                     })),
             ),
     );

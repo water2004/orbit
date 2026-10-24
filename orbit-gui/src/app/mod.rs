@@ -28,6 +28,7 @@ use crate::string_rule::{StringOperationDraft, StringRuleDraft};
 mod components;
 mod controller;
 mod pages;
+mod path_dialog;
 
 pub(super) const ACTIVITY_DRAWER_TRANSITION: Duration = Duration::from_millis(180);
 

@@ -1627,14 +1627,9 @@ fn render_package_settings(app: &OrbitApp, cx: &mut Context<OrbitApp>) -> AnyEle
                         Button::new("remote-file-browse")
                             .label(tr!("Choose JAR").into_owned())
                             .on_click(move |_, window, cx| {
-                                if let Some(path) = rfd::FileDialog::new()
-                                    .add_filter("JAR", &["jar"])
-                                    .pick_file()
-                                {
-                                    remote_input.update(cx, |state, cx| {
-                                        state.set_value(path.display().to_string(), window, cx)
-                                    });
-                                }
+                                crate::app::path_dialog::PathDialog::open_file()
+                                    .filter("JAR", &["jar"])
+                                    .select_into(&remote_input, window, cx);
                             }),
                     )
                 })

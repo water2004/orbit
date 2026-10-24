@@ -15,6 +15,7 @@ use super::super::{
 };
 use crate::app::components as ui;
 use crate::app::controller::{loaders, title_case};
+use crate::app::path_dialog::PathDialog;
 use crate::assets::OrbitIcon;
 use crate::model::{LoaderVersion, MinecraftVersion};
 
@@ -53,14 +54,12 @@ fn render_dashboard(
             Button::new("runtime-install-package")
                 .icon(OrbitIcon::Download)
                 .label(tr!("Install package").into_owned())
-                .on_click(cx.listener(|this, _, _, cx| {
-                    if let Some(path) = rfd::FileDialog::new()
-                        .add_filter("Orbit / Modrinth", &["orbitbundle", "mrpack"])
-                        .pick_file()
-                    {
-                        this.inspect_install_package(path);
-                    }
-                    cx.notify();
+                .on_click(cx.listener(|_, _, window, cx| {
+                    PathDialog::open_file()
+                        .filter("Orbit / Modrinth", &["orbitbundle", "mrpack"])
+                        .show(&cx.entity(), window, cx, |this, path, _, _| {
+                            this.inspect_install_package(path);
+                        });
                 })),
         )
         .child(
@@ -226,63 +225,52 @@ fn render_dashboard(
                                 Button::new("runtime-modpack-install")
                                     .icon(OrbitIcon::Download)
                                     .label(tr!("Import package").into_owned())
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        if let Some(path) = rfd::FileDialog::new()
-                                            .add_filter("Orbit / Modrinth", &["orbitbundle", "mrpack", "toml"])
-                                            .pick_file()
-                                        {
-                                            this.prepare_modpack_import(path);
-                                        }
-                                        cx.notify();
+                                    .on_click(cx.listener(|_, _, window, cx| {
+                                        PathDialog::open_file()
+                                            .filter("Orbit / Modrinth", &["orbitbundle", "mrpack", "toml"])
+                                            .show(&cx.entity(), window, cx, |this, path, _, _| {
+                                                this.prepare_modpack_import(path);
+                                            });
                                     })),
                             )
                             .child(
                                 Button::new("runtime-export-orbit")
                                     .label(tr!("Export Orbit pack with data").into_owned())
                                     .ghost()
-                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                        if let Some(path) = rfd::FileDialog::new()
-                                            .add_filter("Orbit pack", &["orbitbundle"])
-                                            .set_file_name(&orbit_export_name)
-                                            .save_file()
-                                        {
-                                            this.export_modpack(with_extension(path, "orbitbundle"), "orbit", true);
-                                        }
-                                        cx.notify();
+                                    .on_click(cx.listener(move |_, _, window, cx| {
+                                        PathDialog::save_file(orbit_export_name.clone())
+                                            .filter("Orbit pack", &["orbitbundle"])
+                                            .show(&cx.entity(), window, cx, |this, path, _, _| {
+                                                this.export_modpack(with_extension(path, "orbitbundle"), "orbit", true);
+                                            });
                                     })),
                             )
                             .child(
                                 Button::new("runtime-export-orbit-mods")
                                     .label(tr!("Export mods only").into_owned())
                                     .ghost()
-                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                        if let Some(path) = rfd::FileDialog::new()
-                                            .add_filter("Orbit pack", &["orbitbundle"])
-                                            .set_file_name(&orbit_mods_export_name)
-                                            .save_file()
-                                        {
-                                            this.export_modpack(with_extension(path, "orbitbundle"), "orbit", false);
-                                        }
-                                        cx.notify();
+                                    .on_click(cx.listener(move |_, _, window, cx| {
+                                        PathDialog::save_file(orbit_mods_export_name.clone())
+                                            .filter("Orbit pack", &["orbitbundle"])
+                                            .show(&cx.entity(), window, cx, |this, path, _, _| {
+                                                this.export_modpack(with_extension(path, "orbitbundle"), "orbit", false);
+                                            });
                                     })),
                             )
                             .child(
                                 Button::new("runtime-export-mrpack")
                                     .label(tr!("Export Modrinth pack").into_owned())
                                     .ghost()
-                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                        if let Some(path) = rfd::FileDialog::new()
-                                            .add_filter("Modrinth pack", &["mrpack"])
-                                            .set_file_name(&mrpack_export_name)
-                                            .save_file()
-                                        {
-                                            this.export_modpack(
-                                                with_extension(path, "mrpack"),
-                                                "mrpack",
-                                                true,
-                                            );
-                                        }
-                                        cx.notify();
+                                    .on_click(cx.listener(move |_, _, window, cx| {
+                                        PathDialog::save_file(mrpack_export_name.clone())
+                                            .filter("Modrinth pack", &["mrpack"])
+                                            .show(&cx.entity(), window, cx, |this, path, _, _| {
+                                                this.export_modpack(
+                                                    with_extension(path, "mrpack"),
+                                                    "mrpack",
+                                                    true,
+                                                );
+                                            });
                                     })),
                             )
                         })

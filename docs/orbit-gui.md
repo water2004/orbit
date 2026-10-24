@@ -36,6 +36,12 @@ Accounts、Server、Settings 与 Activity；`process.rs`/`wire.rs` 是唯一进�
 `theme.rs` 只处理共享展示 token，`model.rs` 只承载稳定 view model。页面不能自行读取 TOML、
 lock、JAR、账户或 Launcher 存储。
 
+文件/目录选择统一由 `app/path_dialog.rs` 调用原生异步对话框，并绑定所属窗口。
+导入、导出、审计报告、JAR 和设置页浏览均在对话框返回后重新进入 GPUI 更新；禁止在
+持有 App/Window/entity 借用的点击回调中同步打开文件对话框，以免 Windows 弹窗消息循环
+重入导致崩溃。取消选择不启动命令，所属窗口或实体已关闭时丢弃返回结果。
+崩溃报告保留同次运行的首个异常及后续异常，避免原始原因被 `cannot unwind` 覆盖。
+
 ## 单一进程协议
 
 每次操作启动一个 CLI 子进程：

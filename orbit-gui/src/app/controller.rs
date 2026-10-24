@@ -2255,11 +2255,7 @@ impl OrbitApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if let Some(path) = rfd::FileDialog::new().pick_folder() {
-            input.update(cx, |state, cx| {
-                state.set_value(path.display().to_string(), window, cx)
-            });
-        }
+        super::path_dialog::PathDialog::directory().select_into(input, window, cx);
     }
 }
 

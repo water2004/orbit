@@ -16,6 +16,7 @@ use gpui_component::{
 
 use super::super::{Confirmation, ConfirmationAction, OrbitApp};
 use crate::app::components as ui;
+use crate::app::path_dialog::PathDialog;
 use crate::assets::OrbitIcon;
 use crate::model::{LauncherConfigEntry, OrbitConfigEntry};
 use crate::theme::{AccentTheme, ThemeMode};
@@ -468,11 +469,7 @@ fn path_row(
                 )))
                 .label(tr!("Browse").into_owned())
                 .on_click(move |_, window, cx| {
-                    if let Some(path) = rfd::FileDialog::new().pick_file() {
-                        browse_input.update(cx, |state, cx| {
-                            state.set_value(path.display().to_string(), window, cx)
-                        });
-                    }
+                    PathDialog::open_file().select_into(&browse_input, window, cx);
                 }),
             ),
         )
@@ -519,11 +516,7 @@ fn minecraft_directory_item(app: &Entity<OrbitApp>) -> SettingItem {
                         Button::new("settings-browse-minecraft")
                             .label(tr!("Browse").into_owned())
                             .on_click(move |_, window, cx| {
-                                if let Some(path) = rfd::FileDialog::new().pick_folder() {
-                                    browse.update(cx, |state, cx| {
-                                        state.set_value(path.display().to_string(), window, cx)
-                                    });
-                                }
+                                PathDialog::directory().select_into(&browse, window, cx);
                             }),
                     )
                     .child(
