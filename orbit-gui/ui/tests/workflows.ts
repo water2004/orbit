@@ -10,7 +10,7 @@ mockConvertFileSrc("windows");
 // excluded test entry replaces the mock's conversion; production stays strict.
 window.__TAURI_INTERNALS__.convertFileSrc = (path: string) => path;
 import type { Channel } from "@tauri-apps/api/core";
-import type { Request } from "../src/services/cli";
+import { activity, type Request } from "../src/services/cli";
 import { discoverySession } from "../src/services/discovery";
 const instances = [
   {
@@ -213,4 +213,14 @@ mockIPC((cmd, args) => {
   }
   throw new Error(`Read-only fixture does not implement ${cmd}`);
 });
+if (new URLSearchParams(location.search).has("activity")) {
+  for (let index = 1; index <= 60; index++)
+    activity.tasks.push({
+      id: -index,
+      label: `测试活动 ${index}`,
+      state: "succeeded",
+      message: "",
+    });
+  activity.open = true;
+}
 await import("../src/main");

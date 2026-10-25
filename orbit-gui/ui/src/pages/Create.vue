@@ -13,7 +13,7 @@ import {
   Boxes,
   FolderInput,
 } from "lucide-vue-next";
-import { act, launcher, workspace, refresh } from "../services/workspace";
+import { act, launcher, workspace } from "../services/workspace";
 import { Cancelled } from "../services/cli";
 import {
   createInstallation,
@@ -32,6 +32,8 @@ import BigOptionButton from "../components/upstream/BigOptionButton.vue";
 import DropdownSelect from "../components/upstream/DropdownSelect.vue";
 import ProgressSpinner from "../components/upstream/ProgressSpinner.vue";
 import LoaderIcon from "../components/LoaderIcon.vue";
+import ImportInstance from "../components/ImportInstance.vue";
+const importOpen = ref(false);
 const route = useRoute(),
   router = useRouter(),
   step = ref(route.query.migrate || route.query.loader ? 0 : -1),
@@ -155,20 +157,7 @@ async function inspectPack() {
   await components();
 }
 async function importDirectory() {
-  const path = await open({ directory: true });
-  if (typeof path !== "string") return;
-  busy.value = true;
-  try {
-    await launcher(
-      ["instance", "import", "--directory", path],
-      t("Importing instance", "正在导入实例"),
-      null,
-    );
-    await refresh();
-    await router.push("/");
-  } finally {
-    busy.value = false;
-  }
+  importOpen.value = true;
 }
 watch(
   () => draft.kind,
@@ -259,6 +248,16 @@ watch(step, (value) => {
 });
 </script>
 <template>
+  <ImportInstance
+    v-if="importOpen"
+    @close="importOpen = false"
+    @imported="
+      (id) => {
+        importOpen = false;
+        router.push(instancePath(id, 'runtime'));
+      }
+    "
+  />
   <div class="page create-page">
     <header class="page-heading">
       <div>
@@ -339,8 +338,8 @@ watch(step, (value) => {
         :title="t('Import an existing instance', '导入已有实例')"
         :description="
           t(
-            'Add a game directory to your library without reinstalling it.',
-            '把已有游戏目录加入实例库，不重新安装。',
+            'Copy an existing launcher instance into Orbit, keeping your original files.',
+            '将其他启动器的实例导入 Orbit，保留原文件。',
           )
         "
         @click="act(importDirectory)"

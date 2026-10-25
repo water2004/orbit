@@ -175,6 +175,8 @@ fn progress_event_label(event: &str) -> String {
         "repository_project_checked" => "Checking package versions",
         "repository_index_finished" => "Local version repository is ready",
         "metadata_started" => "Resolving official metadata",
+        "instance_import_copying" => "Copying instance data",
+        "instance_import_verified" => "Imported instance data verified",
         "minecraft_resolved" => "Minecraft metadata resolved",
         "eula_checked" => "Checking Minecraft EULA",
         "artifact_started" | "artifact_bytes" => "Downloading file",

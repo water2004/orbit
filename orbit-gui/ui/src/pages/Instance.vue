@@ -119,7 +119,10 @@ function selected() {
 }
 const renameOpen = ref(false),
   newName = ref(""),
-  unregister = ref(false);
+  unregister = ref(false),
+  deleteOpen = ref(false),
+  deleting = ref(false),
+  deletion = ref<{ name: string; directory: string }>();
 const tab = computed(() => String(route.params.tab || "mods"));
 interface Updates {
   updates: { mod_id: string; current_version: string; new_version: string }[];
@@ -188,6 +191,8 @@ watch(
     importReview.value = undefined;
     exportOpen.value = false;
     unregister.value = false;
+    deleteOpen.value = false;
+    deletion.value = undefined;
     renameOpen.value = false;
   },
 );
@@ -215,6 +220,29 @@ async function initializeMods() {
     ],
     t("Initializing mod workspace", "正在初始化模组工作区"),
   );
+}
+async function reviewDeletion() {
+  deletion.value = await dialogLauncher(
+    ["instance", "delete", "--dry-run"],
+    t("Reviewing instance deletion", "正在检查实例删除范围"),
+    selected(),
+  );
+  deleteOpen.value = true;
+}
+async function deleteInstance() {
+  deleting.value = true;
+  try {
+    await dialogLauncher(
+      ["instance", "delete", "--yes"],
+      t("Deleting entire instance", "正在删除整个实例"),
+      selected(),
+    );
+    deleteOpen.value = false;
+    await refresh();
+    await router.push("/");
+  } finally {
+    deleting.value = false;
+  }
 }
 async function checkUpdates() {
   const selected = workspace.selected;
@@ -691,6 +719,9 @@ async function status() {
           >{{ t("Rename", "重命名") }}</Button
         ><Button @click="unregister = true">{{
           t("Remove from library…", "从实例库移除…")
+        }}</Button
+        ><Button @click="act(reviewDeletion)">{{
+          t("Delete instance…", "删除实例…")
         }}</Button>
       </div>
       <div class="card row">
@@ -897,6 +928,45 @@ async function status() {
         ></template
       ></Modal
     >
+    <Modal
+      v-if="deleteOpen && deletion"
+      :title="t('Delete the entire instance?', '删除整个实例？')"
+      :task="dialogTask"
+      :closable="!deleting"
+      @close="deleteOpen = false"
+    >
+      <div class="stack">
+        <strong>{{ deletion.name }}</strong>
+        <p style="overflow-wrap: anywhere">{{ deletion.directory }}</p>
+        <p>
+          {{
+            t(
+              "This deletes the complete instance directory, including worlds, mods, settings and screenshots. Shared libraries and other instances are not deleted.",
+              "这会删除整个实例目录，包括世界、模组、设置与截图。共享运行库和其他实例不会删除。",
+            )
+          }}
+        </p>
+        <p>
+          {{
+            t(
+              "The directory is moved to the system trash. If trash is unavailable, deletion fails without falling back to permanent removal. Close the game first.",
+              "目录将移入系统回收站；若回收站不可用则报错，不会改为永久删除。请先关闭游戏。",
+            )
+          }}
+        </p>
+      </div>
+      <template #footer
+        ><Button :disabled="deleting" @click="deleteOpen = false">{{
+          t("Cancel", "取消")
+        }}</Button
+        ><Button
+          type="colored"
+          :loading="deleting"
+          @click="act(deleteInstance)"
+          >{{ t("Delete entire instance", "删除整个实例") }}</Button
+        ></template
+      >
+    </Modal>
     <Modal
       v-if="unregister"
       :task="dialogTask"

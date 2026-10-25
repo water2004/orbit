@@ -106,7 +106,12 @@ const deletion = computed(
             <h2 class="grow">{{ t("Activity", "活动") }}</h2>
             <Button type="quiet" @click="activity.open = false"><X /></Button>
           </header>
-          <section class="stack">
+          <section
+            class="activity-list stack"
+            role="region"
+            :aria-label="t('Recent activity', '最近活动')"
+            tabindex="0"
+          >
             <article
               v-for="task in [...activity.tasks].reverse()"
               :key="task.id"
@@ -295,13 +300,20 @@ progress {
   box-shadow: -10px 0 50px #0003;
   display: flex;
   flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
 }
 .activity-drawer > header {
   padding: 20px;
+  flex-shrink: 0;
 }
 .activity-drawer > section {
   padding: 0 16px 16px;
-  overflow: auto;
+  flex: 1;
+  min-height: 0;
+  overflow-y: scroll;
+  overflow-x: hidden;
+  scrollbar-gutter: stable;
   overscroll-behavior: contain;
 }
 .activity-drawer p {
@@ -309,6 +321,7 @@ progress {
   overflow-wrap: anywhere;
 }
 .activity-drawer article {
+  flex-shrink: 0;
   padding: 0;
   overflow: hidden;
 }
