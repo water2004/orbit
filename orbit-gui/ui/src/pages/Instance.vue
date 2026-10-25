@@ -1,0 +1,901 @@
+<script setup lang="ts">
+import { computed, ref, watch } from "vue";
+import { useRoute, useRouter } from "vue-router";
+import { invoke } from "@tauri-apps/api/core";
+import { open, save } from "@tauri-apps/plugin-dialog";
+import {
+  FolderOpen,
+  Play,
+  ArrowUpCircle,
+  Settings2,
+  Trash2,
+  PackagePlus,
+  Download,
+  Upload,
+  ShieldCheck,
+  RefreshCw,
+} from "lucide-vue-next";
+import {
+  workspace,
+  orbit,
+  launcher,
+  mutate,
+  refresh,
+  selectInstance,
+  launch,
+  act,
+} from "../services/workspace";
+import { importArguments } from "../services/commands";
+import type { Package } from "../types";
+import { t } from "../i18n";
+import Avatar from "../components/Avatar.vue";
+import Button from "../components/upstream/Button.vue";
+import Modal from "../components/Modal.vue";
+import PackageManager from "../components/PackageManager.vue";
+const route = useRoute(),
+  router = useRouter(),
+  query = ref(""),
+  manager = ref<Package>(),
+  checking = ref(false),
+  showUpdates = ref(false);
+const openPath = (path: string) => invoke("open_directory", { path });
+function selected() {
+  if (!workspace.selected)
+    throw new Error(t("Select an instance", "请选择实例"));
+  return workspace.selected;
+}
+const renameOpen = ref(false),
+  newName = ref(""),
+  unregister = ref(false);
+const tab = computed(() => String(route.params.tab || "mods"));
+interface Updates {
+  updates: { mod_id: string; current_version: string; new_version: string }[];
+  diagnostics: {
+    package: string;
+    candidate_version: string;
+    facts: string[];
+  }[];
+  warnings: string[];
+}
+const updates = ref<Updates>(),
+  audit = ref<{
+    readiness_message: string;
+    artifacts: number;
+    runtime_namespace?: string;
+    findings: {
+      packages: string;
+      rule: string;
+      reason: string;
+      risk: number;
+      severity: string;
+      confidence: string;
+    }[];
+    warnings: { detail: string }[];
+    coverage_gaps: { detail: string; count: number }[];
+  }>();
+const minRisk = ref("35"),
+  auditFilter = ref(""),
+  auditBusy = ref(false);
+const packages = computed(() =>
+  workspace.packages.filter(
+    (p) =>
+      p.mod_id.toLowerCase().includes(query.value.toLowerCase()) &&
+      (!showUpdates.value ||
+        updates.value?.updates.some((u) => u.mod_id === p.mod_id)),
+  ),
+);
+const exportOpen = ref(false),
+  format = ref("orbit"),
+  includeData = ref(false),
+  includeRuntime = ref(false);
+const importReview = ref<{
+  path: string;
+  optional: string[];
+  selected: string[];
+}>();
+const width = ref(1280),
+  height = ref(720),
+  serverCommand = ref(""),
+  serverStatus = ref<{ running: boolean }>(),
+  eula = ref<{ text: string; digest_sha256: string; url: string }>();
+watch(
+  () => workspace.selected?.id,
+  () => {
+    updates.value = undefined;
+    audit.value = undefined;
+    manager.value = undefined;
+    serverStatus.value = undefined;
+    eula.value = undefined;
+    importReview.value = undefined;
+    exportOpen.value = false;
+    unregister.value = false;
+    renameOpen.value = false;
+  },
+);
+watch(
+  () => workspace.detail,
+  (detail) => {
+    width.value = detail?.client_resolution?.width ?? 1280;
+    height.value = detail?.client_resolution?.height ?? 720;
+  },
+);
+async function initializeMods() {
+  const d = workspace.detail;
+  if (!d) return;
+  await mutate(
+    [
+      "init",
+      d.name,
+      "--mc-version",
+      d.desired.minecraft,
+      "--modloader",
+      d.desired.loader,
+      ...(d.desired.loader_version
+        ? ["--modloader-version", d.desired.loader_version]
+        : []),
+    ],
+    t("Initializing mod workspace", "正在初始化模组工作区"),
+  );
+}
+async function checkUpdates() {
+  const selected = workspace.selected;
+  checking.value = true;
+  try {
+    const result = await orbit<Updates>(
+      ["outdated"],
+      t("Checking mod updates", "正在检查模组更新"),
+      selected,
+    );
+    if (workspace.selected?.id === selected?.id) {
+      updates.value = result;
+      showUpdates.value = true;
+    }
+  } finally {
+    checking.value = false;
+  }
+}
+async function runAudit(report?: string) {
+  const selected = workspace.selected;
+  auditBusy.value = true;
+  try {
+    const result = await orbit<NonNullable<typeof audit.value>>(
+      [
+        "audit",
+        "--min-risk",
+        minRisk.value,
+        ...(auditFilter.value ? ["--mod", auditFilter.value] : []),
+        ...(report ? ["--report", report] : []),
+      ],
+      t("Auditing compatibility", "正在审计兼容性"),
+      selected,
+    );
+    if (workspace.selected?.id === selected?.id) audit.value = result;
+  } finally {
+    auditBusy.value = false;
+  }
+}
+async function exportPack() {
+  const instance = workspace.selected;
+  if (!instance) return;
+  const selectedFormat = format.value;
+  const content = includeData.value ? "mods-and-data" : "mods";
+  const withRuntime = selectedFormat === "orbit" && includeRuntime.value;
+  const path = await save({
+    defaultPath: `${instance.name}.${selectedFormat === "orbit" ? "orbitbundle" : "mrpack"}`,
+  });
+  if (!path) return;
+  exportOpen.value = false;
+  await orbit(
+    ["export", path, "--format", selectedFormat, "--content", content],
+    t("Exporting modpack", "正在导出整合包"),
+    instance,
+  );
+  if (withRuntime)
+    await launcher(
+      ["export", path, "--base", path],
+      t("Exporting worlds and runtime state", "正在导出世界及运行时状态"),
+      instance,
+    );
+}
+async function importPack() {
+  const instance = selected();
+  const path = await open({
+    multiple: false,
+    filters: [
+      {
+        name: t("Modpack", "整合包"),
+        extensions: ["orbitbundle", "mrpack", "toml"],
+      },
+    ],
+  });
+  if (typeof path !== "string") return;
+  let optional: string[] = [];
+  if (!path.endsWith(".toml")) {
+    const pack = await launcher<{
+      optional_files: { path: string; targets: string[] }[];
+    }>(
+      ["package", "inspect", path],
+      t("Inspecting modpack", "正在检查整合包"),
+      null,
+    );
+    optional = pack.optional_files
+      .filter((f) => f.targets.includes(instance.kind))
+      .map((f) => f.path);
+  }
+  if (workspace.selected?.id === instance.id)
+    importReview.value = { path, optional, selected: [...optional] };
+}
+async function importConfirmed() {
+  const pack = importReview.value;
+  if (!pack) return;
+  importReview.value = undefined;
+  await mutate(
+    importArguments(pack.path, pack.selected),
+    t("Importing modpack", "正在导入整合包"),
+  );
+}
+async function resolution(clear = false) {
+  await launcher(
+    clear
+      ? ["instance", "resolution", "clear"]
+      : [
+          "instance",
+          "resolution",
+          "set",
+          String(width.value),
+          String(height.value),
+        ],
+    t("Updating launch resolution", "正在更新启动分辨率"),
+  );
+  if (workspace.selected) await selectInstance(workspace.selected);
+}
+async function status() {
+  serverStatus.value = await launcher(
+    ["server", "status"],
+    t("Checking server status", "正在检查服务端状态"),
+  );
+}
+</script>
+<template>
+  <div v-if="workspace.selected" class="page">
+    <header class="page-heading">
+      <div>
+        <h1>{{ workspace.selected.name }}</h1>
+        <p>
+          {{
+            workspace.detail?.installed?.minecraft ||
+            workspace.detail?.desired.minecraft
+          }}
+          ·
+          {{
+            workspace.detail?.installed?.loader ||
+            workspace.detail?.desired.loader
+          }}
+          {{ workspace.detail?.installed?.loader_version }} ·
+          {{
+            workspace.selected.kind === "server"
+              ? t("Server", "服务端")
+              : t("Client", "客户端")
+          }}
+        </p>
+      </div>
+      <div class="row">
+        <Button
+          :title="t('Open instance folder', '打开实例目录')"
+          @click="act(() => openPath(selected().directory))"
+          ><FolderOpen /></Button
+        ><Button type="colored" @click="act(() => launch(selected()))"
+          ><Play />{{
+            workspace.selected.kind === "server"
+              ? t("Start server", "启动服务端")
+              : t("Play", "开始游戏")
+          }}</Button
+        >
+      </div>
+    </header>
+    <nav class="tabs">
+      <button
+        v-for="item in [
+          ['mods', t('Content', '模组内容')],
+          ['runtime', t('Installation', '运行时')],
+          ['audit', t('Compatibility', '兼容性')],
+          ...(workspace.selected.kind === 'server'
+            ? [['server', t('Server', '服务端')]]
+            : []),
+        ]"
+        :key="item[0]"
+        :class="{ active: tab === item[0] }"
+        @click="router.push('/instance/' + item[0])"
+      >
+        {{ item[1] }}
+      </button>
+    </nav>
+    <template v-if="tab === 'mods'">
+      <div v-if="workspace.inventoryError" class="card stack">
+        <p class="error">{{ workspace.inventoryError }}</p>
+        <Button
+          :disabled="
+            !workspace.detail || workspace.detail.desired.loader === 'vanilla'
+          "
+          @click="act(initializeMods)"
+          >{{ t("Initialize Orbit workspace", "初始化 Orbit 工作区") }}</Button
+        >
+      </div>
+      <template v-else>
+        <div class="toolbar">
+          <input
+            v-model="query"
+            class="search"
+            :placeholder="t('Filter installed mods', '筛选已安装模组')"
+          /><Button @click="router.push('/browse')"
+            ><PackagePlus />{{ t("Add content", "添加模组") }}</Button
+          ><Button @click="act(importPack)"
+            ><Download />{{ t("Import", "导入") }}</Button
+          ><Button @click="exportOpen = true"
+            ><Upload />{{ t("Export", "导出") }}</Button
+          >
+        </div>
+        <div class="toolbar">
+          <div class="tabs grow">
+            <button
+              :class="{ active: !showUpdates }"
+              @click="showUpdates = false"
+            >
+              {{ t("Installed", "已安装") }}
+              {{ workspace.packages.length }}</button
+            ><button
+              :class="{ active: showUpdates }"
+              @click="showUpdates = true"
+            >
+              {{ t("Updates", "更新") }} {{ updates?.updates.length ?? "—" }}
+            </button>
+          </div>
+          <Button size="sm" :disabled="checking" @click="act(checkUpdates)"
+            ><RefreshCw />{{ t("Check for updates", "检查更新") }}</Button
+          ><Button
+            v-if="updates?.updates.length"
+            type="colored"
+            @click="
+              act(() =>
+                mutate(['upgrade'], t('Upgrading mods', '正在升级模组')),
+              )
+            "
+            ><ArrowUpCircle />{{ t("Update all", "全部升级") }}</Button
+          >
+        </div>
+        <div class="list">
+          <div v-for="pkg in packages" :key="pkg.mod_id" class="item-row">
+            <Avatar :src="pkg.icon_path" :alt="pkg.mod_id" :size="44" />
+            <div class="grow">
+              <div class="row wrap">
+                <strong>{{ pkg.mod_id }}</strong
+                ><span class="badge">{{ pkg.version }}</span
+                ><span v-if="!pkg.enabled" class="badge">{{
+                  t("Disabled", "已禁用")
+                }}</span>
+              </div>
+              <small
+                >{{ pkg.environment }} · {{ pkg.dependencies.length }}
+                {{ t("dependencies", "个依赖")
+                }}<template v-if="pkg.bundled_count">
+                  · {{ pkg.bundled_count }}
+                  {{ t("bundled modules", "个内置模块") }}</template
+                ></small
+              >
+              <p v-if="updates?.updates.find((u) => u.mod_id === pkg.mod_id)">
+                →
+                {{
+                  updates.updates.find((u) => u.mod_id === pkg.mod_id)
+                    ?.new_version
+                }}
+              </p>
+            </div>
+            <Button
+              type="quiet"
+              :title="t('Manage', '管理')"
+              @click="manager = pkg"
+              ><Settings2 /></Button
+            ><Button
+              type="quiet"
+              :title="t('Upgrade', '升级')"
+              @click="
+                act(() =>
+                  mutate(
+                    ['upgrade', pkg.mod_id],
+                    t('Upgrading', '正在升级') + ' ' + pkg.mod_id,
+                  ),
+                )
+              "
+              ><ArrowUpCircle /></Button
+            ><label :title="t('Enabled', '启用')"
+              ><input
+                type="checkbox"
+                :checked="pkg.enabled"
+                @change="
+                  act(() =>
+                    mutate(
+                      [pkg.enabled ? 'disable' : 'enable', pkg.mod_id],
+                      t('Updating activation', '正在更新启用状态'),
+                    ),
+                  )
+                " /></label
+            ><Button
+              type="quiet"
+              :title="t('Remove', '移除')"
+              @click="
+                act(() =>
+                  mutate(
+                    ['remove', pkg.mod_id],
+                    t('Removing', '正在移除') + ' ' + pkg.mod_id,
+                  ),
+                )
+              "
+              ><Trash2
+            /></Button>
+          </div>
+        </div>
+        <p v-if="!packages.length" class="empty">
+          {{ t("No matching content.", "没有符合筛选条件的模组。") }}
+        </p>
+        <template v-if="showUpdates && updates"
+          ><details
+            v-for="diagnostic in updates.diagnostics"
+            :key="diagnostic.package + diagnostic.candidate_version"
+            class="card"
+          >
+            <summary>
+              {{ diagnostic.package }} · {{ diagnostic.candidate_version }}
+            </summary>
+            <p v-for="fact in diagnostic.facts" :key="fact">{{ fact }}</p>
+          </details>
+          <p v-for="warning in updates.warnings" :key="warning">
+            {{ warning }}
+          </p></template
+        >
+        <div class="toolbar">
+          <small class="grow">{{
+            t(
+              "Sync records disk state. Fix resolves dependency conflicts.",
+              "同步如实记录磁盘状态；修复用于解决依赖冲突。",
+            )
+          }}</small
+          ><Button
+            @click="
+              act(() =>
+                mutate(['sync'], t('Synchronizing mods', '正在同步模组')),
+              )
+            "
+            >{{ t("Sync", "同步") }}</Button
+          ><Button
+            @click="
+              act(() =>
+                mutate(['fix'], t('Fixing dependencies', '正在修复依赖')),
+              )
+            "
+            >{{ t("Fix", "修复") }}</Button
+          ><Button
+            @click="
+              act(() =>
+                mutate(
+                  ['install'],
+                  t('Restoring locked files', '正在安装锁定文件'),
+                ),
+              )
+            "
+            ><Download />{{ t("Install locked files", "安装锁定文件") }}</Button
+          >
+        </div>
+      </template>
+    </template>
+    <template v-if="tab === 'runtime'">
+      <div class="card stack">
+        <h2>{{ t("Game installation", "游戏安装") }}</h2>
+        <div class="row wrap">
+          <span class="badge"
+            >Minecraft {{ workspace.detail?.installed?.minecraft ?? "—" }}</span
+          ><span class="badge"
+            >{{ workspace.detail?.installed?.loader }}
+            {{ workspace.detail?.installed?.loader_version }}</span
+          ><span class="badge"
+            >Java {{ workspace.detail?.installed?.java?.major ?? "—" }}</span
+          >
+        </div>
+        <p class="path">{{ workspace.selected.directory }}</p>
+        <div class="toolbar">
+          <Button @click="router.push('/create?migrate=1')"
+            ><ArrowUpCircle />{{
+              t("Migrate to a new instance", "迁移到新实例")
+            }}</Button
+          ><Button
+            :disabled="workspace.detail?.desired.loader === 'vanilla'"
+            @click="router.push('/create?loader=1')"
+            >{{ t("Update loader", "更新加载器") }}</Button
+          ><Button
+            @click="
+              act(async () => {
+                await launcher(
+                  ['install'],
+                  t('Verifying runtime', '正在校验运行时'),
+                );
+                await selectInstance(selected());
+              })
+            "
+            ><ShieldCheck />{{ t("Verify & repair", "校验与修复") }}</Button
+          >
+        </div>
+      </div>
+      <div v-if="workspace.selected.kind === 'client'" class="card stack">
+        <h2>{{ t("Window resolution", "窗口分辨率") }}</h2>
+        <p>
+          {{
+            t(
+              "Only affects the game client, not the server.",
+              "仅影响游戏客户端，不用于服务端启动。",
+            )
+          }}
+        </p>
+        <div class="row">
+          <input
+            v-model.number="width"
+            type="number"
+            min="1"
+            :aria-label="t('Width', '宽度')"
+          /><span>×</span
+          ><input
+            v-model.number="height"
+            type="number"
+            min="1"
+            :aria-label="t('Height', '高度')"
+          /><Button @click="act(() => resolution())">{{
+            t("Save", "保存")
+          }}</Button
+          ><Button type="quiet" @click="act(() => resolution(true))">{{
+            t("Use game default", "使用游戏默认值")
+          }}</Button>
+        </div>
+      </div>
+      <div class="card row">
+        <div class="grow">
+          <h3>{{ t("Instance identity", "实例身份") }}</h3>
+          <p>{{ workspace.selected.name }}</p>
+        </div>
+        <Button
+          @click="
+            newName = selected().name;
+            renameOpen = true;
+          "
+          >{{ t("Rename", "重命名") }}</Button
+        ><Button @click="unregister = true">{{
+          t("Remove from library…", "从实例库移除…")
+        }}</Button>
+      </div>
+      <div class="card row">
+        <div class="grow">
+          <h3>{{ t("Default installation", "默认实例") }}</h3>
+          <p>
+            {{
+              t(
+                "Use this installation when no local context is available.",
+                "没有局部上下文时使用此实例。",
+              )
+            }}
+          </p>
+        </div>
+        <Button
+          @click="
+            act(() =>
+              launcher(
+                ['instance', 'default', 'set', selected().id],
+                t('Setting default instance', '正在设置默认实例'),
+                null,
+              ),
+            )
+          "
+          >{{ t("Set as default", "设为默认") }}</Button
+        >
+      </div>
+    </template>
+    <template v-if="tab === 'audit'">
+      <div class="card stack">
+        <h2>{{ t("Bytecode compatibility", "字节码兼容性") }}</h2>
+        <p>
+          {{
+            t(
+              "Static analysis reports risks, not a guarantee that the game will run.",
+              "静态分析提供兼容风险信息，不保证游戏一定能够运行。",
+            )
+          }}
+        </p>
+        <div class="toolbar">
+          <input
+            v-model="auditFilter"
+            :placeholder="t('All mods', '全部模组')"
+          /><select v-model="minRisk">
+            <option value="0">{{ t("All risks", "全部风险") }}</option>
+            <option value="35">
+              {{ t("Medium and above", "中等及以上") }}
+            </option>
+            <option value="70">{{ t("High risk", "高风险") }}</option></select
+          ><Button
+            type="colored"
+            :disabled="auditBusy"
+            @click="act(() => runAudit())"
+            ><ShieldCheck />{{ t("Run audit", "运行审计") }}</Button
+          ><Button
+            :disabled="auditBusy"
+            @click="
+              act(async () => {
+                const path = await save({ defaultPath: 'orbit-audit.json' });
+                if (path) await runAudit(path);
+              })
+            "
+            >{{ t("Save detailed report", "保存详细报告") }}</Button
+          >
+        </div>
+      </div>
+      <template v-if="audit"
+        ><div class="card">
+          <h3>{{ audit.readiness_message }}</h3>
+          <p>
+            {{ audit.artifacts }}
+            {{ t("artifacts inspected", "个工件已分析") }} ·
+            {{ audit.runtime_namespace }}
+          </p>
+        </div>
+        <div
+          v-for="(finding, index) in audit.findings"
+          :key="index"
+          class="card stack"
+        >
+          <div class="row">
+            <strong class="grow">{{ finding.packages }}</strong
+            ><span class="badge"
+              >{{ finding.risk }} · {{ finding.severity }}</span
+            >
+          </div>
+          <p>{{ finding.reason }}</p>
+          <small>{{ finding.rule }} · {{ finding.confidence }}</small>
+        </div>
+        <details
+          v-if="audit.warnings.length || audit.coverage_gaps.length"
+          class="card"
+        >
+          <summary>
+            {{ t("Analysis coverage and notices", "分析覆盖情况与提示") }}
+          </summary>
+          <p
+            v-for="(notice, index) in [
+              ...audit.warnings,
+              ...audit.coverage_gaps,
+            ]"
+            :key="index"
+          >
+            {{ notice.detail }}
+          </p>
+        </details></template
+      >
+    </template>
+    <template v-if="tab === 'server' && workspace.selected.kind === 'server'">
+      <div class="card stack">
+        <h2>{{ t("Server controls", "服务端控制") }}</h2>
+        <div class="toolbar">
+          <span v-if="serverStatus" class="badge">{{
+            serverStatus.running
+              ? t("Running", "正在运行")
+              : t("Stopped", "已停止")
+          }}</span
+          ><Button @click="act(status)">{{
+            t("Refresh status", "刷新状态")
+          }}</Button
+          ><Button
+            @click="
+              act(async () => {
+                await launcher(
+                  ['server', 'stop'],
+                  t('Stopping server', '正在停止服务端'),
+                );
+                await status();
+              })
+            "
+            >{{ t("Stop server", "停止服务端") }}</Button
+          ><Button
+            @click="
+              act(async () => {
+                eula = await launcher(
+                  ['server', 'eula', 'show'],
+                  t('Loading Minecraft EULA', '正在加载 Minecraft EULA'),
+                );
+              })
+            "
+            >{{ t("Minecraft EULA", "Minecraft 最终用户许可协议") }}</Button
+          >
+        </div>
+        <form
+          class="row"
+          @submit.prevent="
+            act(async () => {
+              await launcher(
+                ['server', 'command', ...serverCommand.trim().split(/\s+/)],
+                t('Sending server command', '正在发送服务端命令'),
+              );
+              serverCommand = '';
+            })
+          "
+        >
+          <input
+            v-model="serverCommand"
+            class="grow"
+            :placeholder="t('Server console command', '服务端控制台命令')"
+          /><Button
+            :disabled="!serverCommand.trim()"
+            @click="
+              act(async () => {
+                await launcher(
+                  ['server', 'command', ...serverCommand.trim().split(/\s+/)],
+                  t('Sending server command', '正在发送服务端命令'),
+                );
+                serverCommand = '';
+              })
+            "
+            >{{ t("Send", "发送") }}</Button
+          >
+        </form>
+      </div>
+    </template>
+    <Modal
+      v-if="renameOpen"
+      :title="t('Rename instance', '重命名实例')"
+      @close="renameOpen = false"
+      ><label class="field"
+        >{{ t("Name", "名称") }}<input v-model="newName" /></label
+      ><template #footer
+        ><Button
+          type="colored"
+          :disabled="!newName.trim()"
+          @click="
+            act(async () => {
+              const instance = selected();
+              await launcher(
+                ['instance', 'rename', newName],
+                t('Renaming instance', '正在重命名实例'),
+                instance,
+              );
+              renameOpen = false;
+              await refresh();
+            })
+          "
+          >{{ t("Save", "保存") }}</Button
+        ></template
+      ></Modal
+    >
+    <Modal
+      v-if="unregister"
+      :title="t('Remove from library?', '从实例库移除？')"
+      @close="unregister = false"
+      ><p>
+        {{
+          t(
+            "Only unregisters this instance. Its game files, mods and worlds are kept on disk.",
+            "仅移除实例注册记录。游戏文件、模组和世界都保留在磁盘上。",
+          )
+        }}
+      </p>
+      <template #footer
+        ><Button @click="unregister = false">{{ t("Cancel", "取消") }}</Button
+        ><Button
+          type="colored"
+          @click="
+            act(async () => {
+              await launcher(
+                ['instance', 'remove'],
+                t('Unregistering instance', '正在取消实例注册'),
+                selected(),
+              );
+              unregister = false;
+              await refresh();
+              await router.push('/');
+            })
+          "
+          >{{ t("Remove from library", "从实例库移除") }}</Button
+        ></template
+      ></Modal
+    >
+    <PackageManager
+      v-if="manager"
+      :key="manager.mod_id"
+      :pkg="manager"
+      @close="manager = undefined"
+    />
+    <Modal
+      v-if="exportOpen"
+      :title="t('Export modpack', '导出整合包')"
+      @close="exportOpen = false"
+      ><div class="stack">
+        <label class="field"
+          >{{ t("Format", "格式")
+          }}<select v-model="format">
+            <option value="orbit">Orbit (.orbitbundle)</option>
+            <option value="mrpack">Modrinth (.mrpack)</option>
+          </select></label
+        ><label
+          ><input v-model="includeData" type="checkbox" />{{
+            t("Include owned mod data", "包含模组所属数据")
+          }}</label
+        ><label v-if="format === 'orbit'"
+          ><input v-model="includeRuntime" type="checkbox" />{{
+            t("Include worlds and Launcher state", "包含世界与 Launcher 状态")
+          }}</label
+        >
+      </div>
+      <template #footer
+        ><Button type="colored" @click="act(exportPack)">{{
+          t("Choose destination…", "选择导出位置…")
+        }}</Button></template
+      ></Modal
+    >
+    <Modal
+      v-if="importReview"
+      :title="t('Import modpack', '导入整合包')"
+      @close="importReview = undefined"
+      ><div class="stack">
+        <p>{{ importReview.path }}</p>
+        <p>
+          {{
+            t(
+              "Package files and configuration will be merged into this instance. No dependency repair is performed.",
+              "整合包文件及配置将合并到当前实例，不自动求解或修复依赖。",
+            )
+          }}
+        </p>
+        <label v-for="file in importReview.optional" :key="file"
+          ><input
+            v-model="importReview.selected"
+            type="checkbox"
+            :value="file"
+          />{{ file }}</label
+        >
+      </div>
+      <template #footer
+        ><Button type="colored" @click="act(importConfirmed)">{{
+          t("Import", "导入")
+        }}</Button></template
+      ></Modal
+    >
+    <Modal v-if="eula" title="Minecraft EULA" wide @close="eula = undefined"
+      ><p style="white-space: pre-wrap">{{ eula.text }}</p>
+      <template #footer
+        ><Button @click="eula = undefined">{{ t("Decline", "不同意") }}</Button
+        ><Button
+          type="colored"
+          @click="
+            act(async () => {
+              await launcher(
+                ['server', 'eula', 'accept', eula!.digest_sha256],
+                t('Accepting EULA', '正在接受 EULA'),
+              );
+              eula = undefined;
+            })
+          "
+          >{{ t("I agree", "我同意") }}</Button
+        ></template
+      ></Modal
+    >
+  </div>
+  <div v-else class="page empty">
+    <h2>
+      {{ t("Choose an instance from your library", "请从实例库选择实例") }}
+    </h2>
+    <Button @click="router.push('/')">{{ t("Library", "实例库") }}</Button>
+  </div>
+</template>
+<style scoped>
+.path {
+  overflow-wrap: anywhere;
+}
+.item-row small {
+  overflow-wrap: anywhere;
+}
+details > p {
+  margin-top: 12px;
+}
+</style>

@@ -1,0 +1,15 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Orbit",
+  "version": "0.6.4",
+  "identifier": "dev.orbit.gui",
+  "build": {"frontendDist": "ui/dist", "devUrl": "http://localhost:1420", "beforeDevCommand": "npm --prefix ui run dev", "beforeBuildCommand": "npm --prefix ui run build"},
+  "app": {
+    "windows": [{"label": "main", "title": "Orbit", "width": 1220, "height": 780, "minWidth": 900, "minHeight": 600}],
+    "security": {
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' asset: http://asset.localhost https: data:; connect-src ipc: http://ipc.localhost; object-src 'none'; frame-src 'none'",
+      "assetProtocol": {"enable": true, "scope": []}
+    }
+  },
+  "bundle": {"active": false, "icon": ["icons/orbit.png", "icons/orbit.ico"]}
+}

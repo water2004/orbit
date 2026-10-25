@@ -1,0 +1,346 @@
+/* Modrinth App's surface hierarchy and rail/card layout, adapted for Orbit.
+   Vendored component provenance is recorded in UPSTREAM.md. */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+:root {
+  font-family:
+    Inter, "Segoe UI", "Noto Sans CJK SC", "Microsoft YaHei", sans-serif;
+  font-size: 14px;
+  color-scheme: dark;
+  --surface-1: #171a20;
+  --surface-2: #20242c;
+  --surface-3: #292e38;
+  --surface-4: #343b46;
+  --surface-5: #444d5b;
+  --color-base: #b8c1ce;
+  --color-contrast: #f3f5f7;
+  --color-brand: #8b91ff;
+  --color-accent-contrast: #171a20;
+  --brand-shadow: #8b91ff44;
+  --color-button-bg-selected: #8b91ff25;
+  --color-button-text-selected: #aaaefe;
+  --color-red: #fa727c;
+  --color-orange: #f5ac68;
+  --color-green: #5cce9a;
+  --color-blue: #72b4f8;
+  --color-purple: #c498fa;
+  --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+  --hover-brightness: 1.12;
+}
+:root[data-theme="light"] {
+  color-scheme: light;
+  --surface-1: #edf0f4;
+  --surface-2: #f6f7fa;
+  --surface-3: #fff;
+  --surface-4: #e9edf2;
+  --surface-5: #d6dde5;
+  --color-base: #526074;
+  --color-contrast: #1f2937;
+  --color-brand: #5760da;
+  --color-accent-contrast: white;
+  --color-button-bg-selected: #5760da20;
+  --color-button-text-selected: #4751c8;
+  --hover-brightness: 0.97;
+}
+:root[data-accent="emerald"] {
+  --color-brand: #42b98a;
+  --color-button-text-selected: #249f70;
+  --color-button-bg-selected: #42b98a25;
+  --brand-shadow: #42b98a44;
+}
+:root[data-accent="amber"] {
+  --color-brand: #d89c47;
+  --color-button-text-selected: #cb922f;
+  --color-button-bg-selected: #d89c4725;
+  --brand-shadow: #d89c4744;
+}
+* {
+  box-sizing: border-box;
+  min-width: 0;
+}
+body {
+  margin: 0;
+  overflow: hidden;
+  background: var(--surface-1);
+  color: var(--color-base);
+}
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+button {
+  color: inherit;
+}
+a {
+  color: var(--color-brand);
+}
+h1,
+h2,
+h3,
+p {
+  margin: 0;
+}
+h1 {
+  font-size: 25px;
+  font-weight: 750;
+  letter-spacing: -0.6px;
+  color: var(--color-contrast);
+}
+h2 {
+  font-size: 19px;
+  font-weight: 700;
+  color: var(--color-contrast);
+}
+h3 {
+  font-size: 15px;
+  font-weight: 650;
+  color: var(--color-contrast);
+}
+input:not([type="checkbox"]),
+select,
+textarea {
+  border: 1px solid var(--surface-5);
+  border-radius: 10px;
+  padding: 9px 12px;
+  background: var(--surface-2);
+  color: var(--color-contrast);
+  outline: none;
+}
+input:focus,
+select:focus,
+textarea:focus {
+  border-color: var(--color-brand);
+  box-shadow: 0 0 0 3px var(--brand-shadow);
+}
+input[type="checkbox"] {
+  accent-color: var(--color-brand);
+  width: 17px;
+  height: 17px;
+}
+label {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+label.field {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 7px;
+}
+small,
+.muted {
+  color: var(--color-base);
+}
+strong {
+  color: var(--color-contrast);
+}
+svg {
+  flex-shrink: 0;
+}
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--surface-5) transparent;
+}
+*:focus-visible {
+  outline: 2px solid var(--color-brand);
+  outline-offset: 3px;
+}
+.page {
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  min-height: 100%;
+}
+.page-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+.page-heading p {
+  margin-top: 5px;
+}
+.row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.wrap {
+  flex-wrap: wrap;
+}
+.grow {
+  flex: 1;
+}
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.card {
+  background: var(--surface-3);
+  border: 1px solid var(--surface-4);
+  border-radius: 16px;
+  padding: 18px;
+}
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.search {
+  flex: 1;
+  min-width: 180px;
+}
+.badge {
+  display: inline-flex;
+  align-items: center;
+  background: var(--surface-4);
+  padding: 3px 8px;
+  border-radius: 7px;
+  font-size: 12px;
+  gap: 4px;
+}
+.empty {
+  padding: 40px 20px;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+.tabs {
+  display: flex;
+  gap: 5px;
+  flex-wrap: wrap;
+}
+.tabs button {
+  padding: 8px 12px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  cursor: pointer;
+  font-weight: 600;
+}
+.tabs button.active {
+  background: var(--surface-4);
+  color: var(--color-contrast);
+}
+.error {
+  color: var(--color-red);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.modal {
+  padding: 0;
+  border: 1px solid var(--surface-5);
+  border-radius: 20px;
+  width: min(680px, calc(100vw - 48px));
+  max-height: calc(100dvh - 48px);
+  background: var(--surface-2);
+  color: var(--color-base);
+  box-shadow: 0 24px 90px #0005;
+  overflow: hidden;
+}
+.modal[open] {
+  display: flex;
+  flex-direction: column;
+}
+.modal.wide {
+  width: min(1000px, calc(100vw - 48px));
+}
+.modal::backdrop {
+  background: #080b1266;
+  backdrop-filter: blur(5px);
+}
+.modal > header,
+.modal > footer {
+  padding: 18px 22px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-shrink: 0;
+}
+.modal > header {
+  border-bottom: 1px solid var(--surface-4);
+}
+.modal > footer {
+  border-top: 1px solid var(--surface-4);
+  justify-content: flex-end;
+}
+.modal-scroll {
+  padding: 20px 22px;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+.item-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--surface-4);
+}
+.item-row:last-child {
+  border-bottom: 0;
+}
+.list {
+  background: var(--surface-3);
+  border: 1px solid var(--surface-4);
+  border-radius: 14px;
+  overflow: hidden;
+}
+.truncate {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.danger-zone {
+  border-color: color-mix(in srgb, var(--color-red) 35%, transparent);
+}
+.page-enter-active,
+.page-leave-active {
+  transition:
+    opacity 0.12s,
+    transform 0.12s;
+}
+.page-enter-from {
+  opacity: 0;
+  transform: translateY(5px);
+}
+.page-leave-to {
+  opacity: 0;
+}
+.slide-enter-active,
+.slide-leave-active {
+  transition:
+    transform 0.18s var(--ease-out-expo),
+    opacity 0.18s;
+}
+.slide-enter-from,
+.slide-leave-to {
+  transform: translateX(20px);
+  opacity: 0;
+}
+.spin {
+  animation: spin 1s linear infinite;
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+}

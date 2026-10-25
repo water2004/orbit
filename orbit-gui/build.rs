@@ -19,23 +19,17 @@ fn generate_brand_assets() -> Result<(), Box<dyn std::error::Error>> {
     let tree = resvg::usvg::Tree::from_data(&svg, &resvg::usvg::Options::default())?;
     std::fs::write(output_dir.join("orbit-gui.png"), render_png(&tree, 256)?)?;
     if std::env::var_os("CARGO_CFG_WINDOWS").is_none() {
+        tauri_build::build();
         return Ok(());
     }
 
     let icon_path = output_dir.join("orbit-gui.ico");
     write_icon(&tree, &icon_path)?;
 
-    let resource_path = output_dir.join("orbit-gui.rc");
-    std::fs::write(
-        &resource_path,
-        format!(
-            "1 ICON \"{}\"\n",
-            icon_path.display().to_string().replace('\\', "\\\\")
-        ),
+    tauri_build::try_build(
+        tauri_build::Attributes::new()
+            .windows_attributes(tauri_build::WindowsAttributes::new().window_icon_path(icon_path)),
     )?;
-    embed_resource::compile(resource_path, embed_resource::NONE)
-        .manifest_required()
-        .map_err(|error| format!("Windows resource compiler failed: {error}"))?;
     Ok(())
 }
 

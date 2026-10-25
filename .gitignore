@@ -28,3 +28,8 @@ fabric-loader-master/
 
 # Local customized PubGrub checkout
 pubgrub-fork/
+
+# Desktop frontend build products
+orbit-gui/ui/node_modules/
+orbit-gui/ui/dist/
+orbit-gui/gen/

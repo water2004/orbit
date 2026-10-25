@@ -1,14 +1,15 @@
 //! Presentation parser for Core's ordered version-string set rule.
 
 use anyhow::{Result, anyhow, bail};
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct StringRuleDraft {
     pub initial_all: bool,
     pub operations: Vec<StringOperationDraft>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct StringOperationDraft {
     pub operator: StringSetOperator,
     pub negated: bool,
@@ -17,14 +18,16 @@ pub(crate) struct StringOperationDraft {
     pub case_sensitive: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub(crate) enum StringSetOperator {
     Intersect,
     Union,
     Complement,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub(crate) enum StringPredicate {
     Empty,
     Present,
@@ -153,14 +156,6 @@ impl StringOperationDraft {
                 quoted(value?)
             ),
         })
-    }
-
-    pub fn needs_value(&self) -> bool {
-        self.operator != StringSetOperator::Complement
-            && !matches!(
-                self.predicate,
-                StringPredicate::Empty | StringPredicate::Present
-            )
     }
 }
 

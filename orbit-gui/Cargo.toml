@@ -2,21 +2,21 @@
 name = "orbit-gui"
 version = "0.6.4"
 edition = "2024"
-license = "MIT"
-description = "Native desktop shell for Orbit and Orbit Launcher"
+license = "GPL-3.0-only"
+description = "Vue/Tauri desktop shell for Orbit and Orbit Launcher"
 repository = "https://github.com/water2004/orbit"
 build = "build.rs"
 
 # These are consumed by build.rs to rasterize and embed the Windows icon.
 # cargo-machete does not currently attribute those build-script references.
 [package.metadata.cargo-machete]
-ignored = ["embed-resource", "resvg"]
+ignored = ["resvg", "tauri-build"]
 
 [package.metadata.deb]
 name = "orbit-gui"
 maintainer = "Yuan Shui <water2004@users.noreply.github.com>"
 copyright = "2026, Yuan Shui"
-license-file = ["../LICENSE", "0"]
+license-file = ["ui/LICENSE", "0"]
 extended-description = """\
 Orbit GUI is the native desktop shell for the Orbit mod package manager and \
 Orbit Launcher. It delegates all domain operations to the two command-line \
@@ -29,40 +29,33 @@ assets = [
     ["../assets/orbit.desktop", "usr/share/applications/orbit.desktop", "644"],
     ["../assets/orbit.svg", "usr/share/icons/hicolor/scalable/apps/orbit.svg", "644"],
     ["../docs/orbit-gui.md", "usr/share/doc/orbit-gui/README.md", "644"],
+    ["ui/UPSTREAM.md", "usr/share/doc/orbit-gui/UPSTREAM.md", "644"],
 ]
 
 [[bin]]
 name = "orbit-gui"
 path = "src/main.rs"
 
+[features]
+# Packaging uses cargo directly, so embedded frontend assets must be the default.
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]
+
 [dependencies]
 anyhow = { workspace = true }
 command-group = "5.0.1"
 directories = "6.0.0"
-gpui-component = "0.5.1"
 orbit-i18n = { workspace = true }
 orbit-machine-protocol = { workspace = true }
-reqwest = { workspace = true, features = ["stream"] }
-futures-util = { workspace = true }
-image = { workspace = true }
-sha2 = { workspace = true }
-tokio = { workspace = true }
 tempfile = { workspace = true }
-rfd = { version = "0.17.2", features = ["common-controls-v6"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 zeroize = { workspace = true }
-url = { workspace = true }
 
-[target.'cfg(target_os = "windows")'.dependencies]
-gpui = { version = "0.2.2", default-features = false, features = ["windows-manifest"] }
-
-[target.'cfg(target_os = "linux")'.dependencies]
-gpui = { version = "0.2.2", default-features = false, features = ["wayland", "x11"] }
-
-[target.'cfg(target_os = "macos")'.dependencies]
-gpui = { version = "0.2.2", default-features = false }
+tauri = { version = "2", features = ["protocol-asset"] }
+tauri-plugin-dialog = "2"
+tauri-plugin-opener = "2"
 
 [build-dependencies]
-embed-resource = "3.0.11"
+tauri-build = "2"
 resvg = "0.45.1"

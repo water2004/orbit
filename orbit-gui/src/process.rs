@@ -19,7 +19,8 @@ pub type TaskId = u64;
 const MAX_STDOUT_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_PROTOCOL_LINE_BYTES: u64 = 1024 * 1024;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum CliKind {
     Orbit,
     Launcher,
@@ -30,7 +31,6 @@ pub struct ProcessRequest {
     pub program: PathBuf,
     pub args: Vec<String>,
     pub working_directory: Option<PathBuf>,
-    pub label: String,
     /// Optional first stdin line. This is used only for protocols that
     /// explicitly require stdin (for example Yggdrasil passwords) and is
     /// never copied into errors or persistent GUI state.
@@ -348,7 +348,10 @@ fn run_process(
                 }
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {}
-            Err(mpsc::RecvTimeoutError::Disconnected) => {}
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                cancelled = true;
+                let _ = child.kill();
+            }
         }
     };
 
