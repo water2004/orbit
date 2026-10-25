@@ -118,6 +118,27 @@ pub struct BundleManifest {
 }
 
 impl BundleManifest {
+    /// Instance-relative payload paths reserved by the Orbit projection.
+    /// Composition uses only this public archive layout, not Orbit's package
+    /// metadata or ownership ledger. Control documents are not instance data.
+    pub fn orbit_payload_files(&self) -> impl Iterator<Item = (&str, &BundleFile)> {
+        self.files.iter().filter_map(|file| {
+            let section = self.orbit.as_ref()?;
+            if file.owner != BundleFileOwner::Orbit
+                || [
+                    Some(section.manifest.as_str()),
+                    Some(section.lock.as_str()),
+                    section.ownership.as_deref(),
+                    section.data_manifest.as_deref(),
+                ]
+                .contains(&Some(file.path.as_str()))
+            {
+                return None;
+            }
+            file.path.strip_prefix("orbit/").map(|path| (path, file))
+        })
+    }
+
     pub fn validate(&self) -> Result<(), FormatError> {
         if self.format_version != BUNDLE_FORMAT_VERSION {
             return invalid(format!(

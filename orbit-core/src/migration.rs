@@ -446,10 +446,6 @@ pub fn export_migration(
         state_files,
         state_bytes,
     };
-    if dry_run {
-        return Ok(report);
-    }
-
     let mut relative_destinations = vec![
         PathBuf::from("orbit.toml"),
         PathBuf::from("orbit.lock"),
@@ -481,6 +477,9 @@ pub fn export_migration(
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => return Err(error.into()),
         }
+    }
+    if dry_run {
+        return Ok(report);
     }
 
     let staging = plan
@@ -1317,6 +1316,12 @@ mod tests {
         )
         .await
         .unwrap();
+        assert!(
+            export_migration(&plan, true)
+                .unwrap_err()
+                .to_string()
+                .contains("refuses to overwrite")
+        );
         let error = export_migration(&plan, false).unwrap_err();
 
         assert!(error.to_string().contains("refuses to overwrite"));

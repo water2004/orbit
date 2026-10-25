@@ -191,6 +191,7 @@ async function install() {
       if (!source)
         throw new Error(t("Select a source instance", "请选择源实例"));
       review.value = await prepareMigration({ ...draft }, source);
+      await migrate();
     } else {
       await createInstallation({ ...draft }, pack.value, optional.value);
       await router.push(instancePath(workspace.selected!.id, "runtime"));
@@ -347,40 +348,33 @@ watch(step, (value) => {
     </div>
     <template v-if="review"
       ><div class="card stack">
-        <h2>{{ t("Migration preview", "迁移预览") }}</h2>
+        <h2>{{ t("Migration target", "迁移目标") }}</h2>
         <p>{{ source?.name }} → {{ review.target.name }}</p>
         <p>
           {{
             t(
-              "The target runtime is ready. Confirm below to select and install the mod migration.",
-              "目标运行时已准备好。继续后将选择并安装模组迁移方案。",
+              "The target runtime is ready. Orbit selects and confirms the mod migration in one operation.",
+              "目标运行时已准备好。Orbit 将在同一次操作中完成模组方案选择与最终确认。",
             )
           }}
         </p>
       </div>
-      <div class="list">
-        <div
-          v-for="change in review.changes"
-          :key="change.package"
-          class="item-row"
-        >
-          <span class="badge">{{ change.kind }}</span
-          ><strong class="grow">{{ change.package }}</strong
-          ><span
-            >{{ change.current_version || "—" }} →
-            {{ change.selected_version || "—" }}</span
-          >
-        </div>
-      </div>
-      <p v-for="warning in review.warnings" :key="warning">{{ warning }}</p>
       <div class="toolbar">
-        <p class="grow">
+        <p v-if="!review.exported" class="grow">
           {{
             t(
               "The source snapshot is kept if you stop here.",
               "若在此停止，迁移源快照会保留。",
             )
           }}<br /><small>{{ review.sourcePack }}</small>
+        </p>
+        <p v-else class="grow">
+          {{
+            t(
+              "The selected plan is saved in the target. Continue to install its exact packages without selecting again.",
+              "所选方案已保存到目标实例。继续将安装精确包版本，无需重新选择。",
+            )
+          }}
         </p>
         <Button type="colored" :loading="busy" @click="act(migrate)">{{
           t("Continue migration", "继续迁移")

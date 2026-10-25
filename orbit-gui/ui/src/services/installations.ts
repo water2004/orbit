@@ -8,7 +8,7 @@ import {
 } from "./workspace";
 import { importArguments } from "./commands";
 import { t } from "../i18n";
-import type { Change, Detail, Instance } from "../types";
+import type { Detail, Instance } from "../types";
 
 export interface InstallDraft {
   name: string;
@@ -34,9 +34,8 @@ export interface Pack {
 export interface Migration {
   target: Detail;
   sourcePack: string;
-  summary: { removals: number };
-  changes: Change[];
-  warnings: string[];
+  exported: boolean;
+  registered: boolean;
 }
 
 export function installArguments(draft: InstallDraft) {
@@ -132,37 +131,35 @@ export async function prepareMigration(
     t("Loading migration target", "正在加载迁移目标"),
     { id: installed.instance_id } as Instance,
   );
-  const plan = await orbit<{
-    summary: { removals: number };
-    changes: Change[];
-    warnings: string[];
-  }>(
-    ["migrate", "check", target.directory, "--source-pack", sourcePack],
-    t("Checking mod migration", "正在检查模组迁移"),
-    target,
-  );
-  return { target, sourcePack, ...plan };
+  return { target, sourcePack, exported: false, registered: false };
 }
 export async function applyMigration(review: Migration) {
-  const result = await orbit<{ export?: { applied: boolean } }>(
-    [
-      "migrate",
-      "export",
-      review.target.directory,
-      "--source-pack",
-      review.sourcePack,
-      "--consume-source-pack",
-      ...(review.summary.removals ? ["--allow-removals"] : []),
-    ],
-    t("Applying mod migration", "正在应用模组迁移"),
-    review.target,
-  );
-  if (!result.export?.applied) return false;
-  await orbit(
-    ["instances", "register", review.target.name, review.target.directory],
-    t("Registering mod workspace", "正在注册模组工作区"),
-    null,
-  );
+  // The same CLI process selects the solution and confirms its exact plan.
+  // Retrying materialization must not repeat a committed export or re-solve.
+  if (!review.exported) {
+    const result = await orbit<{ export?: { applied: boolean } }>(
+      [
+        "migrate",
+        "export",
+        review.target.directory,
+        "--source-pack",
+        review.sourcePack,
+        "--consume-source-pack",
+      ],
+      t("Applying mod migration", "正在应用模组迁移"),
+      review.target,
+    );
+    if (!result.export?.applied) return false;
+    review.exported = true;
+  }
+  if (!review.registered) {
+    await orbit(
+      ["instances", "register", review.target.name, review.target.directory],
+      t("Registering mod workspace", "正在注册模组工作区"),
+      null,
+    );
+    review.registered = true;
+  }
   await orbit(
     ["install"],
     t("Installing migrated mods", "正在安装迁移后的模组"),

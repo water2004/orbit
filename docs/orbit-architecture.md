@@ -442,16 +442,22 @@ lock，也不制造另一套依赖求解路径。
 更具体的其它包节点按实际目标选择排除。便携包用精确文件清单约束解包，不允许仅凭父目录
 所有权向包中注入未声明文件。GUI 随后调用 `orbit-launcher export --base`，在同一个
 `.orbitbundle` 中原子追加目标无关的 Launcher 游戏状态投影；组合时 Launcher 校验完整基础
-包并按 ZIP raw-copy 保留 Orbit 投影，不解压、解释或重写其内容。组合包完成后才由
+包并按 ZIP raw-copy 保留 Orbit 投影，不解压、解释或重写其内容。
+Launcher 根据公共清单的 Orbit payload 路径，排除世界内已由 Orbit 携带的文件，
+并检查其源字节仍匹配快照 size/SHA-256；不读取包元数据或归属账本。这样世界与包数据的
+恢复路径互斥，未入选包的数据也不会通过世界副本漏回目标；服务端自定义 `level-name`
+使用实际实例相对路径比较，不按归档中的 `world/` 别名猜测。组合包完成后才由
 `orbit-launcher install --new ... --from <组合包>` 创建真实目标实例。随后同一个
 `migration::plan_migration()` 从便携 Orbit 源读取包与配置事实、
 从目标读取 Minecraft/Loader JAR，枚举目标版本候选并选择 Pareto 解。`migrate check` 只
-展示这份计划；`migrate export` 复用同一计划写入目标 `orbit.toml`、`orbit.lock`、
+展示这份计划；GUI 不先调用 check，而在一次 `migrate export` 进程中选择和最终确认，
+再写入目标 `orbit.toml`、`orbit.lock`、
 配置和包拥有的实例内数据，并按稳定逻辑包 ID 保留所有权；`external` 记录和文件不迁移。它拒绝覆盖已有
-目标状态。导出不把模组 JAR 安装到 `mods/`；入选的 file-only 内容
+目标状态，dry-run/最终确认前同样检查冲突。导出不把模组 JAR 安装到 `mods/`；入选的 file-only 内容
 会按哈希保存到目标 `.orbit/sources`，在线内容仍由随后执行的 `orbit install` 按新 lock 精确
-物化，因而预检和导出不会走两条推导路径。便携源包不会替代真实目标平台
-探测；它只消除源实例在目标创建期间发生变化的竞态。便携包为精确恢复注入的源实例
+物化，因而预检和导出不会走两条推导路径。
+GUI 在 export 成功后重试失败的 install 时只物化已提交 lock，不再次消费源包或求解。
+便携源包不会替代真实目标平台探测；它只消除源实例在目标创建期间发生变化的竞态。便携包为精确恢复注入的源实例
 `file` 载体也不会污染迁移候选：有 Provider project 的逻辑包只枚举目标版本远端，只有
 file-only 包保留本地 JAR 并由同一个求解图检查其真实 Loader/Minecraft 依赖。
 

@@ -135,6 +135,20 @@ where
         )));
     }
 
+    let base_bundle = base
+        .map(orbit_bundle_format::BundleArchive::open)
+        .transpose()?;
+    if let Some(bundle) = &base_bundle {
+        bundle.verify()?;
+        validate_bundle_runtime(&bundle.manifest, manifest.kind, &lock)?;
+        if bundle.manifest.launcher.as_ref().is_some_and(|section| {
+            section.content == orbit_bundle_format::LauncherContent::RuntimeAndState
+        }) {
+            return Err(LauncherError::Transaction(
+                "base bundle already contains Launcher state".to_string(),
+            ));
+        }
+    }
     let mut sources = collect_state_sources(instance_root, manifest.kind)?;
     if let Some(icon) = &manifest.icon {
         collect_file(
@@ -143,6 +157,9 @@ where
             "appearance/instance-icon.png",
             &mut sources,
         )?;
+    }
+    if let Some(bundle) = &base_bundle {
+        exclude_base_payload(instance_root, &mut sources, &bundle.manifest)?;
     }
     let total_bytes = sources.iter().try_fold(0_u64, |total, source| {
         total
@@ -171,7 +188,7 @@ where
         &temporary,
         &manifest,
         &lock,
-        base,
+        base_bundle,
         &sources,
         total_bytes,
         &mut progress,
@@ -458,6 +475,43 @@ fn collect_state_sources(
     Ok(sources)
 }
 
+/// A composed bundle has one writer per instance path. In particular, a world
+/// can contain package-owned data; Launcher carries the rest of the world, not
+/// another copy of that data. Compare physical source paths so custom server
+/// level-name values do not change the partition.
+fn exclude_base_payload(
+    instance_root: &Path,
+    sources: &mut Vec<StateSource>,
+    base: &orbit_bundle_format::BundleManifest,
+) -> Result<(), LauncherError> {
+    let reserved = base
+        .orbit_payload_files()
+        .map(|(path, file)| (orbit_bundle_format::portable_path_identity(path), file))
+        .collect::<BTreeMap<_, _>>();
+    let mut retained = Vec::with_capacity(sources.len());
+    for source in sources.drain(..) {
+        let relative = source.source.strip_prefix(instance_root).map_err(|_| {
+            LauncherError::Transaction("Launcher state escaped its instance directory".to_string())
+        })?;
+        let identity = orbit_bundle_format::portable_path_identity(&portable_path(relative));
+        if let Some(file) = reserved.get(&identity) {
+            let mut input = std::fs::File::open(&source.source)?;
+            let mut hash = Sha256::new();
+            let bytes = std::io::copy(&mut input, &mut hash)?;
+            if bytes != file.size || hex::encode(hash.finalize()) != file.sha256 {
+                return Err(LauncherError::Transaction(format!(
+                    "source file '{}' changed since the base bundle was exported; export the source again",
+                    source.source.display()
+                )));
+            }
+        } else {
+            retained.push(source);
+        }
+    }
+    *sources = retained;
+    Ok(())
+}
+
 fn collect_file(
     instance_root: &Path,
     source: &Path,
@@ -542,7 +596,7 @@ fn write_state_archive<F>(
     output: &Path,
     instance: &crate::instance::InstanceManifest,
     lock: &crate::lockfile::LauncherLock,
-    base: Option<&Path>,
+    base: Option<orbit_bundle_format::BundleArchive>,
     sources: &[StateSource],
     total_bytes: u64,
     progress: &mut F,
@@ -555,19 +609,9 @@ where
     let options = SimpleFileOptions::default()
         .compression_method(zip::CompressionMethod::Deflated)
         .unix_permissions(0o644);
-    let mut bundle = if let Some(base) = base {
-        let bundle = orbit_bundle_format::BundleArchive::open(base)?;
-        bundle.verify()?;
-        validate_bundle_runtime(&bundle.manifest, instance.kind, lock)?;
-        if bundle.manifest.launcher.as_ref().is_some_and(|section| {
-            section.content == orbit_bundle_format::LauncherContent::RuntimeAndState
-        }) {
-            return Err(LauncherError::Transaction(
-                "base bundle already contains Launcher state".to_string(),
-            ));
-        }
+    let mut bundle = if let Some(bundle) = base {
         let mut input =
-            zip::ZipArchive::new(std::fs::File::open(base)?).map_err(invalid_archive)?;
+            zip::ZipArchive::new(std::fs::File::open(&bundle.source)?).map_err(invalid_archive)?;
         for index in 0..input.len() {
             let entry = input.by_index(index).map_err(invalid_archive)?;
             if !entry.is_file() || entry.name() == orbit_bundle_format::BUNDLE_MANIFEST_PATH {
@@ -1449,5 +1493,188 @@ mod tests {
             .read_to_end(&mut actual)
             .unwrap();
         assert_eq!(actual, orbit_manifest);
+    }
+
+    fn write_data_base(output: &Path, kind: InstanceKind, world: &str) {
+        use orbit_bundle_format::*;
+        let mut files = vec![
+            (
+                "orbit/orbit.toml".to_string(),
+                b"opaque manifest".as_slice(),
+            ),
+            ("orbit/orbit.lock".to_string(), b"opaque lock".as_slice()),
+            (
+                "orbit/ownership.toml".to_string(),
+                b"opaque ledger".as_slice(),
+            ),
+            (
+                "orbit/data.toml".to_string(),
+                b"opaque inventory".as_slice(),
+            ),
+        ];
+        files.extend(["syncmatica", "removed"].map(|name| {
+            (
+                format!("orbit/{world}/{name}/config.json"),
+                b"mod data".as_slice(),
+            )
+        }));
+        let manifest = BundleManifest {
+            format_version: BUNDLE_FORMAT_VERSION,
+            id: "source".into(),
+            name: "Source".into(),
+            version: "1".into(),
+            summary: None,
+            targets: vec![match kind {
+                InstanceKind::Client => InstanceTarget::Client,
+                InstanceKind::Server => InstanceTarget::Server,
+            }],
+            runtime: RuntimeRequirement {
+                minecraft: "1.21.1".into(),
+                loader: "vanilla".into(),
+                loader_version: None,
+            },
+            launcher: Some(LauncherSection {
+                content: LauncherContent::RuntimeOnly,
+            }),
+            orbit: Some(OrbitSection {
+                content: OrbitContent::ModsAndData,
+                manifest: "orbit/orbit.toml".into(),
+                lock: "orbit/orbit.lock".into(),
+                ownership: Some("orbit/ownership.toml".into()),
+                data_manifest: Some("orbit/data.toml".into()),
+            }),
+            files: files
+                .iter()
+                .map(|(path, bytes)| BundleFile {
+                    path: path.clone(),
+                    owner: BundleFileOwner::Orbit,
+                    size: bytes.len() as u64,
+                    sha256: hex::encode(Sha256::digest(bytes)),
+                })
+                .collect(),
+        };
+        manifest.validate().unwrap();
+        let mut archive = zip::ZipWriter::new(std::fs::File::create(output).unwrap());
+        let options = SimpleFileOptions::default();
+        for (path, bytes) in files {
+            archive.start_file(path, options).unwrap();
+            archive.write_all(bytes).unwrap();
+        }
+        archive.start_file(BUNDLE_MANIFEST_PATH, options).unwrap();
+        archive
+            .write_all(toml::to_string_pretty(&manifest).unwrap().as_bytes())
+            .unwrap();
+        archive.finish().unwrap();
+    }
+
+    #[test]
+    fn composed_worlds_leave_package_data_to_its_projection_on_both_sides() {
+        for kind in [InstanceKind::Client, InstanceKind::Server] {
+            let directory = tempfile::tempdir().unwrap();
+            let source = directory.path().join("source");
+            let target = directory.path().join("target");
+            for root in [&source, &target] {
+                write_server_instance(root, "1.21.1");
+                let mut manifest = ManifestFile::open(root).unwrap();
+                manifest.inner = InstanceManifest::new(
+                    manifest.inner.id,
+                    "Test",
+                    kind,
+                    "1.21.1",
+                    LoaderKind::Vanilla,
+                    None,
+                )
+                .unwrap();
+                manifest.save().unwrap();
+                let mut lock = LockFile::open(root).unwrap();
+                lock.inner.kind = kind;
+                if kind == InstanceKind::Client {
+                    lock.inner.eula = None;
+                    lock.inner.generated_files.clear();
+                    lock.inner.minecraft.asset_index = Some(crate::lockfile::LockedAssetIndex {
+                        upstream_id: "32".into(),
+                        runtime_name: "f".repeat(40),
+                    });
+                    lock.inner.authlib_injector = Some(crate::lockfile::LockedAuthlibInjector {
+                        version: "1.2.8".into(),
+                        build_number: 1,
+                        path: "libraries/authlib-injector.jar".into(),
+                    });
+                    for (path, owner, digest) in [
+                        (
+                            format!("assets/indexes/{}.json", "f".repeat(40)),
+                            ArtifactOwner::Minecraft,
+                            "f",
+                        ),
+                        (
+                            "libraries/authlib-injector.jar".into(),
+                            ArtifactOwner::AuthlibInjector,
+                            "a",
+                        ),
+                    ] {
+                        lock.inner.artifacts.push(LockedArtifact {
+                            logical_name: path.clone(),
+                            owner,
+                            path,
+                            source: LockedArtifactSource::Download {
+                                url: "https://example.invalid/fixture".into(),
+                                upstream_sha1: Some(digest.repeat(40)),
+                            },
+                            sha256: "a".repeat(64),
+                            size: 100,
+                            native_extraction: None,
+                        });
+                    }
+                }
+                lock.save().unwrap();
+                if kind == InstanceKind::Server {
+                    std::fs::write(root.join("server.properties"), b"level-name=custom/world\n")
+                        .unwrap();
+                }
+            }
+            let world = if kind == InstanceKind::Client {
+                "saves/buildings"
+            } else {
+                "custom/world"
+            };
+            for name in ["syncmatica", "removed"] {
+                let path = source.join(world).join(name).join("config.json");
+                std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+                std::fs::write(path, b"mod data").unwrap();
+            }
+            std::fs::write(source.join(world).join("level.dat"), b"world state").unwrap();
+            let output = directory.path().join("combined.orbitbundle");
+            write_data_base(&output, kind, world);
+            export_launcher_state_with_base(&source, Some(&output), &output, |_| {}).unwrap();
+            let bundle = orbit_bundle_format::BundleArchive::open(&output).unwrap();
+            bundle.verify().unwrap();
+            assert_eq!(bundle.manifest.orbit_payload_files().count(), 2);
+            assert!(!bundle.manifest.files.iter().any(|file| file.owner
+                == orbit_bundle_format::BundleFileOwner::Launcher
+                && file.path.ends_with("config.json")));
+            restore_launcher_state(&target, &output, |_| {}).unwrap();
+            assert_eq!(
+                std::fs::read(target.join(world).join("level.dat")).unwrap(),
+                b"world state"
+            );
+            // The selected package will restore its own data later. A removed
+            // package's data must not sneak back in through the world payload.
+            assert!(!target.join(world).join("syncmatica/config.json").exists());
+            assert!(!target.join(world).join("removed/config.json").exists());
+            // An export cannot silently skip a changed source in favor of stale
+            // bytes from the base snapshot, and must leave that base untouched.
+            let base = directory.path().join("base.orbitbundle");
+            write_data_base(&base, kind, world);
+            let before = std::fs::read(&base).unwrap();
+            std::fs::write(
+                source.join(world).join("syncmatica/config.json"),
+                b"changed",
+            )
+            .unwrap();
+            let error =
+                export_launcher_state_with_base(&source, Some(&base), &base, |_| {}).unwrap_err();
+            assert!(error.to_string().contains("changed since the base bundle"));
+            assert_eq!(std::fs::read(base).unwrap(), before);
+        }
     }
 }

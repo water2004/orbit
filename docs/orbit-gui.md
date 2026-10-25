@@ -101,8 +101,10 @@ CLI 交互仅在 `allow_cancel` 时允许关闭，关闭通过原进程回传取
 export --base 追加世界与运行时状态。
 
 迁移先 orbit export，再 Launcher export --base；源导出成功后才 install --new --from
-创建目标。随后 migrate check --source-pack 提供审阅，继续后 migrate export，最后目标
-orbit install。源实例不原地修改，取消或失败不继续下一步，快照路径保留供恢复。
+创建目标。随后单次 migrate export --source-pack 在同一进程完成方案选择和最终审阅确认，
+最后目标 orbit install，不以 check + export 重复求解。源实例不原地修改，取消或失败不继续
+下一步；未导出的快照保留供恢复，已导出后安装失败只重试精确物化，不重选方案。
+组合世界投影排除公共清单中已由 Orbit 携带的数据路径，避免恢复重叠。
 严格保包无解时由 CLI 询问是否搜索最少删包方案，不提供常驻“软/硬策略”控件。
 
 ### 账户、设置与审计

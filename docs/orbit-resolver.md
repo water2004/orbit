@@ -401,9 +401,10 @@ Pareto 极小枚举，再在同一保留集合内做版本 Pareto 极大化。�
 移除包能在不牺牲其他已保留包时恢复”的完整 front，不是最小数量启发式，也不是逐包删除后
 重试。约束不允许的候选在建图时已经从该逻辑包定义域移除，不能经传递依赖绕过 manifest。
 
-`migrate check` 与 `migrate export` 直接复用这个严格优先规划器。GUI 首次 check 若接受软解，
-会根据已审阅计划中的删除动作给 export 传入 `--allow-removals`，避免重复确认；export 仍重建
-同一完整候选闭包并执行同一目标函数，不存在 GUI 专用求解。export 产生可在目标由 `install`
+`migrate check` 与 `migrate export` 直接复用这个严格优先规划器。GUI 迁移只启动一次
+`migrate export`：严格无解许可、逐因子选择、最终完整方案确认都发生在同一 CLI 进程中，
+禁止先交互式 check 再用 export 重新求解。check 仍是独立的只读检查命令。
+export 产生可在目标由 `install`
 精确物化的 lock。便携源快照为离线恢复添加的 `file` 载体不属于目标版本候选：只要同一包
 存在 Modrinth/CurseForge project，迁移发现层就丢弃该恢复载体并按目标 Minecraft/Loader
 重新枚举 project；真正没有在线 project 的本地包才保留其文件来源。无论候选来自哪一层，

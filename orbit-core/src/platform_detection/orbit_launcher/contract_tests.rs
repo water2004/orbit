@@ -248,6 +248,180 @@ fn actual_launcher_writers_are_readable_with_both_java_providers_and_physical_si
     }
 }
 
+#[tokio::test]
+async fn composed_bundle_migrates_world_and_selected_package_data_without_overlap() {
+    use crate::runtime_data::{
+        DataOwnershipEntry, DataOwnershipLedger, OwnedDataKind, OwnedDataPath,
+    };
+    for kind in [
+        launcher::InstanceKind::Client,
+        launcher::InstanceKind::Server,
+    ] {
+        let mut source = Fixture::new(kind, JavaProvider::System);
+        let mut target = Fixture::new(kind, JavaProvider::System);
+        source.manifest.icon = None;
+        target.manifest.icon = None;
+        source.save();
+        target.manifest.minecraft.requirement = "26.3".into();
+        target.lock.minecraft.version = "26.3".into();
+        let artifacts = if kind == launcher::InstanceKind::Client {
+            target._root.path().join("minecraft")
+        } else {
+            target.instance.clone()
+        };
+        let mc = target
+            .lock
+            .artifacts
+            .iter_mut()
+            .find(|file| {
+                file.path.ends_with(".jar") && file.owner == launcher::ArtifactOwner::Minecraft
+            })
+            .unwrap();
+        let path = artifacts.join(&mc.path);
+        jar(
+            &path,
+            &[(
+                "version.json",
+                r#"{"id":"26.3","name":"26.3","world_version":5001,"protocol_version":801,"pack_version":{"resource_major":80,"resource_minor":0,"data_major":100,"data_minor":0},"java_version":25,"stable":true}"#,
+            )],
+        );
+        mc.sha256 = launcher::hash_file_sha256(&path).unwrap();
+        mc.size = std::fs::metadata(path).unwrap().len();
+        target.save();
+        for (id, requirement) in [("kept", ">=26.1"), ("removed", "=26.2")] {
+            jar(
+                &source.instance.join(format!("mods/{id}.jar")),
+                &[(
+                    "fabric.mod.json",
+                    &format!(
+                        r#"{{"schemaVersion":1,"id":"{id}","version":"1","depends":{{"minecraft":"{requirement}"}}}}"#
+                    ),
+                )],
+            );
+        }
+        crate::init::run_init(
+            crate::init::InitInput {
+                name: "Source".into(),
+                mc_version: "26.2".into(),
+                modloader: "fabric".into(),
+                modloader_version: "0.19.3".into(),
+                instance_dir: source.instance.clone(),
+                dry_run: false,
+            },
+            &[],
+        )
+        .await
+        .unwrap();
+        let world = if kind == launcher::InstanceKind::Client {
+            "saves/buildings"
+        } else {
+            "custom/world"
+        };
+        if kind == launcher::InstanceKind::Server {
+            for fixture in [&source, &target] {
+                std::fs::write(
+                    fixture.instance.join("server.properties"),
+                    "level-name=custom/world\n",
+                )
+                .unwrap();
+            }
+        }
+        let mut entries = Vec::new();
+        for (owner, directory) in [("kept", "syncmatica"), ("removed", "removed")] {
+            let relative = format!("{world}/{directory}");
+            std::fs::create_dir_all(source.instance.join(&relative)).unwrap();
+            std::fs::write(source.instance.join(&relative).join("config.json"), owner).unwrap();
+            entries.push(DataOwnershipEntry {
+                path: OwnedDataPath::Instance { relative },
+                kind: OwnedDataKind::Tree,
+                owner: Some(owner.into()),
+            });
+        }
+        std::fs::write(
+            source.instance.join(world).join("level.dat"),
+            b"world state",
+        )
+        .unwrap();
+        crate::runtime_data::save_ledger(
+            &source.instance,
+            &DataOwnershipLedger::from_entries(entries),
+        )
+        .unwrap();
+        let pack = source._root.path().join("migration.orbitbundle");
+        crate::archive::export_instance(
+            &source.instance,
+            &pack,
+            None,
+            "orbit",
+            crate::archive::ExportContent::ModsAndData,
+            false,
+            None,
+        )
+        .unwrap();
+        launcher::state_archive::export_launcher_state_with_base(
+            &source.instance,
+            Some(&pack),
+            &pack,
+            |_| {},
+        )
+        .unwrap();
+        launcher::state_archive::restore_launcher_state(&target.instance, &pack, |_| {}).unwrap();
+        let portable = crate::archive::extract_portable_instance(&pack).unwrap();
+        let cache = crate::jar_cache::JarCache::open(source._root.path().join("cache")).unwrap();
+        let repository = crate::version_repository::VersionRepository::open(
+            source._root.path().join("repository"),
+        )
+        .unwrap();
+        let plan = crate::migration::plan_migration_from_portable(
+            portable,
+            &target.instance,
+            &[],
+            crate::version_repository::CandidateStorage::new(&cache, &repository),
+            crate::migration::MigrationOptions {
+                allow_package_removals: true,
+            },
+            crate::migration::MigrationInteraction::default(),
+        )
+        .await
+        .unwrap();
+        assert!(plan.target_lockfile().find("kept").is_some());
+        assert!(plan.target_lockfile().find("removed").is_none());
+        crate::migration::export_migration(&plan, true).unwrap();
+        crate::migration::export_migration(&plan, false).unwrap();
+        assert_eq!(
+            std::fs::read(target.instance.join(world).join("syncmatica/config.json")).unwrap(),
+            b"kept"
+        );
+        assert_eq!(
+            std::fs::read(target.instance.join(world).join("level.dat")).unwrap(),
+            b"world state"
+        );
+        assert!(
+            !target
+                .instance
+                .join(world)
+                .join("removed/config.json")
+                .exists()
+        );
+        assert!(
+            source
+                .instance
+                .join(world)
+                .join("removed/config.json")
+                .is_file()
+        );
+        assert_eq!(
+            crate::runtime_data::effective_owner_for_relative(
+                &crate::runtime_data::load_ledger(&target.instance)
+                    .unwrap()
+                    .entries,
+                Path::new(&format!("{world}/syncmatica/config.json"))
+            ),
+            Some("kept".into())
+        );
+    }
+}
+
 #[test]
 fn released_and_partially_upgraded_storage_use_one_read_only_projection() {
     let mut fixture = Fixture::new(launcher::InstanceKind::Client, JavaProvider::Mojang);

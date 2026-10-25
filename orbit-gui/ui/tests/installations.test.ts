@@ -13,6 +13,7 @@ vi.mock("../src/services/workspace", () => ({
 import {
   installArguments,
   prepareMigration,
+  applyMigration,
   updateLoader,
 } from "../src/services/installations";
 import { policyArguments } from "../src/services/commands";
@@ -66,9 +67,69 @@ it("composes both source projections before installing the fresh target", async 
     "launcher export",
     "launcher install",
     "launcher instance",
-    "orbit migrate",
   ]);
   expect(calls.launcher.mock.calls[1][0]).toContain("--from");
+});
+it("selects and confirms migration in a single export command, without a preceding check", async () => {
+  calls.launcher
+    .mockResolvedValueOnce({ instance_id: "target" })
+    .mockResolvedValue({
+      id: "target",
+      name: "Target",
+      directory: "/target",
+    });
+  const review = await prepareMigration(draft, source);
+  calls.orbit.mockResolvedValue({ export: { applied: true } });
+  expect(await applyMigration(review)).toBe(true);
+  const migrations = calls.orbit.mock.calls.filter(
+    ([args]) => args[0] === "migrate",
+  );
+  expect(migrations).toHaveLength(1);
+  expect(migrations[0][0]).toEqual([
+    "migrate",
+    "export",
+    "/target",
+    "--source-pack",
+    review.sourcePack,
+    "--consume-source-pack",
+  ]);
+  expect(review.exported).toBe(true);
+});
+it("cancellation never registers or installs packages, and can retry against the prepared target", async () => {
+  const review = {
+    target: { ...source, desired: { minecraft: "26.2", loader: "fabric" } },
+    sourcePack: "/source.orbitbundle",
+    exported: false,
+    registered: false,
+  };
+  calls.orbit.mockRejectedValueOnce(new Error("cancelled"));
+  await expect(applyMigration(review)).rejects.toThrow("cancelled");
+  expect(review.exported).toBe(false);
+  expect(calls.orbit).toHaveBeenCalledTimes(1);
+  calls.orbit.mockResolvedValue({ export: { applied: true } });
+  expect(await applyMigration(review)).toBe(true);
+  expect(calls.launcher).not.toHaveBeenCalled();
+});
+it("retrying a failed package install reuses the committed plan, not the consumed source snapshot", async () => {
+  const review = {
+    target: { ...source, desired: { minecraft: "26.2", loader: "fabric" } },
+    sourcePack: "/source.orbitbundle",
+    exported: false,
+    registered: false,
+  };
+  calls.orbit
+    .mockResolvedValueOnce({ export: { applied: true } })
+    .mockResolvedValueOnce({})
+    .mockRejectedValueOnce(new Error("download failed"));
+  await expect(applyMigration(review)).rejects.toThrow("download failed");
+  calls.orbit.mockResolvedValue({});
+  expect(await applyMigration(review)).toBe(true);
+  expect(calls.orbit.mock.calls.map(([args]) => args.slice(0, 2))).toEqual([
+    ["migrate", "export"],
+    ["instances", "register"],
+    ["install"],
+    ["install"],
+  ]);
 });
 it("keeps client and server installation locations distinct", () => {
   expect(installArguments(draft)).not.toContain("--server-directory");
