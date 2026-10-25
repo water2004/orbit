@@ -9,8 +9,7 @@ use crate::error::LauncherError;
 use crate::eula::EulaAcceptance;
 use crate::instance::{InstanceKind, LoaderKind};
 
-pub const INSTANCE_LOCK_FILE: &str = "orbit-launcher.lock";
-pub const LOCK_SCHEMA: u32 = 7;
+pub use orbit_launcher_format::{LOCK_FILE as INSTANCE_LOCK_FILE, LOCK_SCHEMA};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

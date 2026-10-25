@@ -22,8 +22,14 @@ impl DocumentKind {
         match self {
             // Baselines are the formats shipped in v0.7.0, not development snapshots.
             Self::Config => (2, crate::config::CONFIG_SCHEMA.into()),
-            Self::Instance => (1, crate::instance::INSTANCE_SCHEMA.into()),
-            Self::Lock => (6, crate::lockfile::LOCK_SCHEMA.into()),
+            Self::Instance => (
+                orbit_launcher_format::V0_7_MANIFEST_SCHEMA.into(),
+                crate::instance::INSTANCE_SCHEMA.into(),
+            ),
+            Self::Lock => (
+                orbit_launcher_format::V0_7_LOCK_SCHEMA.into(),
+                crate::lockfile::LOCK_SCHEMA.into(),
+            ),
         }
     }
     fn steps(self) -> &'static [MigrationStep] {

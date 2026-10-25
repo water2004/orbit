@@ -1,4 +1,4 @@
-//! Launcher-specific platform discovery used exclusively by `init` and `sync`.
+//! Launcher-specific platform discovery for `init`, `sync` and migration targets.
 //!
 //! This is the deliberately isolated boundary for launcher layouts, profile
 //! inheritance, Maven coordinates, and other discovery rules. No normal Orbit

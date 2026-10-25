@@ -10,13 +10,20 @@ Launcher 外部实例导入集中于 `external_instance/`，来源适配后复�
 GUI 导航与基础控件基于 Modrinth App 源码适配，采用 GPL-3.0-only；不导入其业务后端。
 原 GPUI 页面已移除。Vue 仅通过 Tauri 进程桥消费同一 CLI 协议，细节见 [GUI 架构](orbit-gui.md)。
 Launcher 的实例图标、Java 环境发现/选择与存储升级均由 Launcher core 提供；GUI 只展示 CLI
-清单并提交命令。历史读取只进入 `storage_migrations`，以 v0.7.0 schema 为起点备份并逐级
+清单并提交命令。Launcher 自有存储升级只进入 `storage_migrations`，以 v0.7.0 schema 为起点备份并逐级
 升级，业务不保留旧字段/旧格式分支。Orbit 的求解和实例物理端语义不因这些展示能力改变。
 GUI 控件只消费 CLI 设置定义、运行时清单和真实任务事件；弹窗在创建任务时绑定进度归属。
 终态由同一 finished 事件及命令返回结果展示，进度消息不能越过终态保留；升级结果只做有界展示投影，
 不在 GUI 重新推测版本或再发一次更新查询。
 单包与全部升级复用完整图/事实/事务，但求解目标不同：单包先最大化目标，再最小化其余变动；
 全部升级最大化完整用户包投影。目标差异不在 GUI 实现。
+
+`orbit-launcher-format` 只提供运行时只读字段、文件名和明确的 schema 集合，分别静态编入
+Orbit 与 Launcher，不引入程序安装依赖或 core 之间的生产链接。Orbit 在 init/sync 与迁移
+目标发现时只读取 Minecraft/Loader、物理端、classpath 和工件哈希；不解释账户、图标或 Java
+设置，不迁移/改写 Launcher 文件。旧版 1/6 与当前 2/7 的运行时字段一致，使用同一读取投影；
+未知版本、损坏文件与 I/O 错误明确拒绝。测试用 Launcher 正式保存入口产生输入，避免两边各自
+维护过时夹具却同时通过。Launcher 完整配置模型和升级仍属于 Launcher，自身不依赖 Orbit。
 
 ```text
 orbit-gui       Vue/Tauri 进程薄壳；不链接任何 core

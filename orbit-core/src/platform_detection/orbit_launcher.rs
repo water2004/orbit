@@ -1,13 +1,11 @@
 //! Strict adapter for client and dedicated-server runtimes managed by
 //! `orbit-launcher`.
 //!
-//! This module is only reached by `init` and `sync`. Normal Orbit operations
+//! Reached by `init`, `sync` and migration-target discovery. Normal Orbit operations
 //! continue to consume the platform snapshot already recorded in `orbit.toml`.
 
 use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};
-
-use serde::Deserialize;
 
 use super::{DiscoveredPlatform, build_discovered_platform, find_loader_jar};
 use crate::error::OrbitError;
@@ -15,10 +13,13 @@ use crate::launcher::{LauncherLayout, LauncherLayoutKind};
 use crate::loader::LoaderKind;
 use crate::metadata::Environment;
 
-const MANIFEST_FILE: &str = "orbit-launcher.toml";
-const LOCK_FILE: &str = "orbit-launcher.lock";
-const MANIFEST_SCHEMA: u32 = 1;
-const LOCK_SCHEMA: u32 = 6;
+#[path = "orbit_launcher/format.rs"]
+mod format;
+use format::{RuntimeArtifact as LockedArtifact, RuntimeEntrypoint as LockedEntrypoint};
+
+#[cfg(test)]
+#[path = "orbit_launcher/contract_tests.rs"]
+mod contract_tests;
 
 pub(super) fn discover(
     instance_dir: &Path,
@@ -99,51 +100,9 @@ impl ManagedRuntime {
 }
 
 fn read(instance_dir: &Path) -> Result<Option<ManagedRuntime>, OrbitError> {
-    let manifest_path = instance_dir.join(MANIFEST_FILE);
-    let lock_path = instance_dir.join(LOCK_FILE);
-    match (manifest_path.is_file(), lock_path.is_file()) {
-        (false, false) => return Ok(None),
-        (true, false) => {
-            return Err(invalid(format!(
-                "'{}' exists but '{}' is missing; run 'orbit-launcher install'",
-                manifest_path.display(),
-                lock_path.display()
-            )));
-        }
-        (false, true) => {
-            return Err(invalid(format!(
-                "'{}' exists but '{}' is missing",
-                lock_path.display(),
-                manifest_path.display()
-            )));
-        }
-        (true, true) => {}
-    }
-
-    let manifest: LauncherManifest = parse_toml(&manifest_path, "launcher manifest")?;
-    let lock: LauncherLock = parse_toml(&lock_path, "launcher lock")?;
-    if manifest.schema != MANIFEST_SCHEMA {
-        return Err(invalid(format!(
-            "launcher manifest schema {} is unsupported; expected {MANIFEST_SCHEMA}",
-            manifest.schema
-        )));
-    }
-    if lock.schema != LOCK_SCHEMA {
-        return Err(invalid(format!(
-            "launcher lock schema {} is unsupported; expected {LOCK_SCHEMA}; reinstall the instance",
-            lock.schema
-        )));
-    }
-    if manifest.id != lock.instance_id {
-        return Err(invalid(
-            "orbit-launcher.toml and orbit-launcher.lock identify different instances",
-        ));
-    }
-    if manifest.kind != lock.kind {
-        return Err(invalid(
-            "orbit-launcher.toml and orbit-launcher.lock select different instance kinds",
-        ));
-    }
+    let Some((manifest, lock)) = format::read(instance_dir)? else {
+        return Ok(None);
+    };
     let environment = match manifest.kind.as_str() {
         "client" => Environment::Client,
         "server" => Environment::Server,
@@ -182,11 +141,11 @@ fn read(instance_dir: &Path) -> Result<Option<ManagedRuntime>, OrbitError> {
     let classpath = match lock.entrypoint {
         LockedEntrypoint::Classpath { classpath } if !classpath.is_empty() => classpath,
         LockedEntrypoint::Classpath { .. } => {
-            return Err(invalid("managed client classpath is empty"));
+            return Err(invalid("managed runtime classpath is empty"));
         }
         LockedEntrypoint::Other => {
             return Err(invalid(
-                "managed client does not use a locked classpath entrypoint",
+                "managed runtime does not use a locked classpath entrypoint",
             ));
         }
     };
@@ -324,16 +283,6 @@ fn client_repository(instance_dir: &Path) -> Result<PathBuf, OrbitError> {
     })
 }
 
-fn parse_toml<T: for<'de> Deserialize<'de>>(path: &Path, label: &str) -> Result<T, OrbitError> {
-    let content = std::fs::read_to_string(path)?;
-    toml::from_str(&content).map_err(|error| {
-        invalid(format!(
-            "cannot parse {label} '{}': {error}",
-            path.display()
-        ))
-    })
-}
-
 fn resolve_locked_artifact(
     repository: &Path,
     artifact: &LockedArtifact,
@@ -407,76 +356,11 @@ fn invalid(message: impl std::fmt::Display) -> OrbitError {
     OrbitError::Other(anyhow::anyhow!("invalid Orbit Launcher runtime: {message}"))
 }
 
-#[derive(Deserialize)]
-struct LauncherManifest {
-    schema: u32,
-    id: String,
-    kind: String,
-}
-
-#[derive(Deserialize)]
-struct LauncherLock {
-    schema: u32,
-    instance_id: String,
-    kind: String,
-    minecraft: LockedMinecraft,
-    loader: LockedLoader,
-    entrypoint: LockedEntrypoint,
-    artifacts: Vec<LockedArtifact>,
-}
-
-#[derive(Deserialize)]
-struct LockedMinecraft {
-    version: String,
-}
-
-#[derive(Deserialize)]
-struct LockedLoader {
-    kind: String,
-    version: Option<String>,
-}
-
-#[derive(Deserialize)]
-#[serde(tag = "kind", rename_all = "kebab-case")]
-enum LockedEntrypoint {
-    Classpath {
-        classpath: Vec<String>,
-    },
-    #[serde(other)]
-    Other,
-}
-
-#[derive(Deserialize)]
-struct LockedArtifact {
-    owner: LockedArtifactOwner,
-    sha256: String,
-    path: String,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "kebab-case")]
-enum LockedArtifactOwner {
-    Minecraft,
-    Loader,
-    Java,
-    AuthlibInjector,
-}
-
-impl LockedArtifactOwner {
-    const fn as_str(&self) -> &'static str {
-        match self {
-            Self::Minecraft => "minecraft",
-            Self::Loader => "loader",
-            Self::Java => "java",
-            Self::AuthlibInjector => "authlib-injector",
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::io::Write;
 
+    use super::format::{LOCK_FILE, MANIFEST_FILE};
     use super::*;
 
     fn write_jar(path: &Path, entries: &[(&str, &str)]) {

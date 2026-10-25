@@ -6,6 +6,8 @@ GUI 的发现查询必须绑定准确实例，再消费其版本/Loader；Launch
 和外部实例导入/完整删除不属于 resolver。外部导入只是复制已有游戏数据，不暗中求解、
 修复或改写 mod 约束；用户在目标工作区显式 sync/fix 后才进入 Orbit 原有职责。
 本地 schema 升级同样不属于 resolver。Orbit TOML/lock 本次不变，不能为这些能力增加求解旁路。
+Launcher 运行时格式适配仅在平台发现边界；共享的 `orbit-launcher-format` 是无 I/O 的只读契约，
+不是配置迁移服务。Orbit 消费平台快照后，求解仍不读取 Launcher 文件，也不需要安装 Launcher。
 GUI 显示“无可行更新”的依据只允许是同次升级返回的无变更报告及其 diagnostics，不能把最后一条
 solver 进度当成仍在求解，也不能为补充显示原因另跑一轮求解。
 

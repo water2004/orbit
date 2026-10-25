@@ -18,6 +18,7 @@ orbit-bytecode-audit = { path = "../orbit-bytecode-audit" }
 orbit-bundle-format.workspace = true
 orbit-compatibility.workspace = true
 orbit-loader-json.workspace = true
+orbit-launcher-format.workspace = true
 
 # 工作区共享依赖
 tokio.workspace = true
@@ -49,6 +50,7 @@ pubgrub = { git = "https://github.com/water2004/pubgrub.git", rev = "fb5b61ed4f5
 windows-sys = { version = "0.61.2", features = ["Win32_Storage_FileSystem"] }
 
 [dev-dependencies]
+orbit-launcher-core = { path = "../orbit-launcher-core" }
 bytes = "1.11"
 http-body-util = "0.1"
 hyper = { version = "1.9", features = ["http1", "server"] }

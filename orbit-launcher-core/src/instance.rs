@@ -7,8 +7,9 @@ use uuid::Uuid;
 use crate::atomic_io::write_atomic;
 use crate::error::LauncherError;
 
-pub const INSTANCE_MANIFEST_FILE: &str = "orbit-launcher.toml";
-pub const INSTANCE_SCHEMA: u32 = 2;
+pub use orbit_launcher_format::{
+    MANIFEST_FILE as INSTANCE_MANIFEST_FILE, MANIFEST_SCHEMA as INSTANCE_SCHEMA,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]

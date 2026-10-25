@@ -13,6 +13,7 @@ ignored = ["md-5"]
 [dependencies]
 orbit-compatibility.workspace = true
 orbit-bundle-format.workspace = true
+orbit-launcher-format.workspace = true
 serde = { workspace = true }
 serde_json = { workspace = true }
 toml = { workspace = true }

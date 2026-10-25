@@ -4,6 +4,13 @@
 
 ## 1. 当前结论
 
+修复 Launcher 实例格式升级后 Orbit sync 仍只接受旧 schema 的脱节。只读运行时契约集中到
+`orbit-launcher-format`，两个程序独立编译/安装；Orbit 不修改或迁移 Launcher 文件。新增
+生产保存入口 → Orbit 平台发现的契约测试，覆盖旧版/当前/部分升级、物理端与本地/托管 Java。
+
+0.8.0 汇总以下实例导入、完整删除、Java 选择和桌面交互改进。Windows 统一 MSI，Linux
+继续按 Orbit、Launcher、GUI 分为三个 deb；人工发行说明见 `releases/v0.8.0.md`。
+
 已有实例导入已补全为 Launcher 独立来源适配和复制/校验流程，覆盖标准 profile、HMCL、
 PCL、Prism/MultiMC、CurseForge、GDLauncher Carbon、ATLauncher 和 Modrinth App 已应用
 状态。未知全局隔离设置要求选择准确目录，不猜测；目标只在完成后注册，支持同源中断续导。

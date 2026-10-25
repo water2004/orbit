@@ -3506,6 +3506,8 @@ dependencies = [
  "orbit-bundle-format",
  "orbit-bytecode-audit",
  "orbit-compatibility",
+ "orbit-launcher-core",
+ "orbit-launcher-format",
  "orbit-loader-json",
  "pubgrub",
  "reqwest",
@@ -3590,6 +3592,7 @@ dependencies = [
  "md-5",
  "orbit-bundle-format",
  "orbit-compatibility",
+ "orbit-launcher-format",
  "os_info",
  "regex",
  "reqwest",
@@ -3612,6 +3615,13 @@ dependencies = [
  "windows-sys 0.61.2",
  "zeroize",
  "zip",
+]
+
+[[package]]
+name = "orbit-launcher-format"
+version = "0.8.0"
+dependencies = [
+ "serde",
 ]
 
 [[package]]

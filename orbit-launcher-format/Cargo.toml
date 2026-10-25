@@ -1,0 +1,9 @@
+[package]
+name = "orbit-launcher-format"
+version = "0.8.0"
+edition = "2024"
+license = "MIT"
+description = "Read-only installed runtime contract shared by Orbit and Orbit Launcher"
+
+[dependencies]
+serde.workspace = true
