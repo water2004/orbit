@@ -1,5 +1,6 @@
 use std::path::Path;
 
+use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -9,6 +10,26 @@ use crate::instance::{InstanceManifest, validate_instance_name};
 use crate::layout::InstanceLocation;
 
 pub const REGISTRY_SCHEMA: u32 = 3;
+
+/// Serialize read/modify/write operations without locking read-only snapshots.
+pub(crate) fn mutation_lock(path: &Path) -> Result<std::fs::File, LauncherError> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| LauncherError::InvalidRegistry("registry has no parent".into()))?;
+    std::fs::create_dir_all(parent)?;
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(parent.join("instances.lock"))?;
+    file.try_lock_exclusive().map_err(|e| {
+        LauncherError::Transaction(format!(
+            "another operation is changing the instance library: {e}"
+        ))
+    })?;
+    Ok(file)
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

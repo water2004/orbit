@@ -63,6 +63,10 @@ pub enum CommandOutput {
     InstanceList(InstanceListView),
     InstanceDetail(InstanceDetailView),
     InstanceMutation(InstanceMutationView),
+    InstanceSources(orbit_launcher_core::ExternalInstanceCatalog),
+    InstanceImportPreview(orbit_launcher_core::ExternalImportPlan),
+    InstanceImported(crate::output::InstanceImportView),
+    InstanceDeletion(orbit_launcher_core::InstanceDeletionPlan),
     Rename(RenameView),
     InstanceConfigured(InstanceDetailView),
     InstanceResolution(InstanceDetailView),
@@ -123,6 +127,9 @@ impl CommandOutput {
             Self::InstanceList(_) => "instance.list",
             Self::InstanceDetail(_) => "instance.show",
             Self::InstanceMutation(view) => view.action.command_name(),
+            Self::InstanceSources(_) => "instance.inspect",
+            Self::InstanceImportPreview(_) | Self::InstanceImported(_) => "instance.import",
+            Self::InstanceDeletion(_) => "instance.delete",
             Self::Rename(_) => "instance.rename",
             Self::InstanceConfigured(_) => "instance.configure",
             Self::InstanceResolution(_) => "instance.resolution",
@@ -172,6 +179,20 @@ impl CommandOutput {
 }
 
 pub trait Frontend: Send {
+    fn external_import_progress(&mut self, event: orbit_launcher_core::ExternalImportEvent) {
+        if let orbit_launcher_core::ExternalImportEvent::Install(event) = event {
+            self.progress(event);
+        }
+    }
+
+    fn confirm_instance_deletion(
+        &mut self,
+        _plan: &orbit_launcher_core::InstanceDeletionPlan,
+    ) -> Result<bool, LauncherError> {
+        Err(LauncherError::InteractionRequired(
+            "complete instance deletion requires explicit confirmation (--yes)".into(),
+        ))
+    }
     fn progress(&mut self, event: InstallProgressEvent);
 
     fn confirm_eula(&mut self, document: &EulaDocument) -> Result<bool, LauncherError>;
@@ -287,7 +308,84 @@ pub async fn execute(
                     "--instance is not valid for this instance subcommand".to_string(),
                 ));
             }
-            execute_instance(command, instance_selector, current_dir, runtime)
+            match command {
+                InstanceCommands::Import {
+                    directory,
+                    source,
+                    name,
+                    game_directory,
+                    dry_run,
+                } => {
+                    let directory = resolve_directory(current_dir, directory.as_deref())?;
+                    let catalog = orbit_launcher_core::inspect_external_instances(&directory)?;
+                    if catalog.instances.len() == 1 && catalog.instances[0].format == "orbit" {
+                        if source.is_some() || name.is_some() || game_directory.is_some() || dry_run
+                        {
+                            return Err(AppError::Argument("Orbit instances are registered in place; external import options do not apply".into()));
+                        }
+                        let imported = import_instance(runtime.paths(), &directory)?;
+                        return Ok(CommandOutput::InstanceImported(
+                            crate::output::InstanceImportView {
+                                instance: InstanceView::from_entry(&imported.entry, None),
+                                copied: false,
+                                source_directory: directory,
+                                files: 0,
+                                bytes: 0,
+                                warnings: Vec::new(),
+                            },
+                        ));
+                    }
+                    let plan = orbit_launcher_core::plan_external_import(
+                        runtime,
+                        orbit_launcher_core::ExternalImportRequest {
+                            directory,
+                            source,
+                            name,
+                            game_directory: game_directory
+                                .map(|p| resolve_directory(current_dir, Some(&p)))
+                                .transpose()?,
+                        },
+                    )?;
+                    if dry_run {
+                        return Ok(CommandOutput::InstanceImportPreview(plan));
+                    }
+                    let result =
+                        orbit_launcher_core::import_external_instance(runtime, plan, |event| {
+                            frontend.external_import_progress(event)
+                        })
+                        .await?;
+                    Ok(CommandOutput::InstanceImported(result.into()))
+                }
+                InstanceCommands::Delete { yes, dry_run } => {
+                    let registry = InstanceRegistry::load(&runtime.paths().instances_file())?;
+                    let resolved = resolve_instance(
+                        &registry,
+                        instance_selector,
+                        current_dir,
+                        ContextIntent::Sensitive,
+                    )?;
+                    let plan = orbit_launcher_core::plan_instance_deletion(
+                        runtime.paths(),
+                        &resolved.entry.id.to_string(),
+                    )?;
+                    if dry_run {
+                        return Ok(CommandOutput::InstanceDeletion(plan));
+                    }
+                    if !yes && !frontend.confirm_instance_deletion(&plan)? {
+                        return Err(LauncherError::InteractionRequired(
+                            "instance deletion was cancelled".into(),
+                        )
+                        .into());
+                    }
+                    let entry = orbit_launcher_core::delete_instance(runtime.paths(), &plan)?;
+                    Ok(CommandOutput::InstanceMutation(InstanceMutationView {
+                        instance: InstanceView::from_entry(&entry, None),
+                        action: InstanceMutationAction::Deleted,
+                        files_deleted: true,
+                    }))
+                }
+                other => execute_instance(other, instance_selector, current_dir, runtime),
+            }
         }
         Commands::Server { command } => {
             execute_server(command, instance_selector, current_dir, runtime, frontend).await
@@ -1545,15 +1643,14 @@ fn execute_instance(
                 files_deleted: false,
             }))
         }
-        InstanceCommands::Import { directory } => {
-            let directory = resolve_directory(current_dir, directory.as_deref())?;
-            let imported = import_instance(runtime.paths(), &directory)?;
-            let registry = InstanceRegistry::load(&registry_path)?;
-            Ok(CommandOutput::InstanceMutation(InstanceMutationView {
-                instance: InstanceView::from_entry(&imported.entry, registry.default_instance),
-                action: InstanceMutationAction::Imported,
-                files_deleted: false,
-            }))
+        InstanceCommands::Inspect { directory } => Ok(CommandOutput::InstanceSources(
+            orbit_launcher_core::inspect_external_instances(&resolve_directory(
+                current_dir,
+                Some(&directory),
+            )?)?,
+        )),
+        InstanceCommands::Import { .. } | InstanceCommands::Delete { .. } => {
+            unreachable!("async instance operations are dispatched by execute")
         }
         InstanceCommands::List => {
             let registry = InstanceRegistry::load(&registry_path)?;

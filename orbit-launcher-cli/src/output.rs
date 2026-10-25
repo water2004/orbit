@@ -151,6 +151,29 @@ pub struct InstanceListView {
 }
 
 #[derive(Debug, Serialize)]
+pub struct InstanceImportView {
+    pub instance: InstanceView,
+    pub copied: bool,
+    pub source_directory: PathBuf,
+    pub files: u64,
+    pub bytes: u64,
+    pub warnings: Vec<String>,
+}
+
+impl From<orbit_launcher_core::ExternalImportResult> for InstanceImportView {
+    fn from(report: orbit_launcher_core::ExternalImportResult) -> Self {
+        Self {
+            instance: InstanceView::from_entry(&report.entry, None),
+            copied: true,
+            source_directory: report.source_directory,
+            files: report.files,
+            bytes: report.bytes,
+            warnings: report.warnings,
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
 pub struct InstanceDetailView {
     #[serde(flatten)]
     pub instance: InstanceView,
@@ -444,8 +467,8 @@ impl From<orbit_launcher_core::LauncherStateRestoreReport> for LauncherStateRest
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum InstanceMutationAction {
+    Deleted,
     Created,
-    Imported,
     Removed,
 }
 
@@ -453,7 +476,7 @@ impl InstanceMutationAction {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Created => "created",
-            Self::Imported => "imported",
+            Self::Deleted => "deleted",
             Self::Removed => "removed",
         }
     }
@@ -461,7 +484,7 @@ impl InstanceMutationAction {
     pub const fn command_name(self) -> &'static str {
         match self {
             Self::Created => "instance.create",
-            Self::Imported => "instance.import",
+            Self::Deleted => "instance.delete",
             Self::Removed => "instance.remove",
         }
     }
@@ -776,6 +799,11 @@ impl From<MicrosoftDeviceSession> for MicrosoftDeviceSessionView {
 #[derive(Debug, Serialize)]
 #[serde(tag = "event", rename_all = "snake_case")]
 pub enum ProgressData {
+    InstanceImportCopying {
+        completed: u64,
+        total: u64,
+    },
+    InstanceImportVerified,
     MetadataStarted,
     MinecraftResolved {
         version: String,
@@ -1003,6 +1031,9 @@ impl ProgressData {
             | Self::StateArchiveAdvanced { .. }
             | Self::StateArchiveFinished { .. } => ProgressPhase::Export,
             Self::StagingVerified | Self::Committed => ProgressPhase::Apply,
+            Self::InstanceImportCopying { .. } | Self::InstanceImportVerified => {
+                ProgressPhase::Import
+            }
             Self::MicrosoftAuthorizationPolling { .. }
             | Self::MicrosoftAuthorizationReceived
             | Self::XboxAuthenticated

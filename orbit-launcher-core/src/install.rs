@@ -1683,6 +1683,7 @@ struct TransactionJournal {
 }
 
 struct InstallTransaction {
+    _lease: crate::instance_lifecycle::InstanceLease,
     root: PathBuf,
     instance_root: PathBuf,
     state: PathBuf,
@@ -1695,6 +1696,8 @@ struct InstallTransaction {
 
 impl InstallTransaction {
     fn begin(location: &InstanceLocation, command: &str) -> Result<Self, LauncherError> {
+        let lease =
+            crate::instance_lifecycle::InstanceLease::acquire(location.instance_directory(), true)?;
         let root = location.artifact_directory();
         let instance_root = location.instance_directory();
         let state = instance_root.join(STATE_DIRECTORY);
@@ -1742,6 +1745,7 @@ impl InstallTransaction {
             return Err(error.into());
         }
         Ok(Self {
+            _lease: lease,
             root: root.to_path_buf(),
             instance_root: instance_root.to_path_buf(),
             state,

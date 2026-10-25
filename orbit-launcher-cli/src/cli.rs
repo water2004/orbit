@@ -345,11 +345,28 @@ pub enum InstanceCommands {
         loader_version: Option<String>,
     },
 
-    /// Register an existing orbit-launcher.toml, including after moving it.
+    /// Inspect supported launcher instances without changing any files.
+    Inspect {
+        #[arg(long)]
+        directory: PathBuf,
+    },
+
+    /// Import a foreign instance into isolated storage, or register an existing Orbit instance.
     Import {
         /// Exact isolated client game directory or dedicated server directory; defaults to current directory.
         #[arg(long)]
         directory: Option<PathBuf>,
+        /// Exact source ID from instance inspect; required when several versions exist.
+        #[arg(long)]
+        source: Option<String>,
+        #[arg(long)]
+        name: Option<String>,
+        /// Explicit working directory when foreign launcher global settings are unavailable.
+        #[arg(long)]
+        game_directory: Option<PathBuf>,
+        /// Show the exact copy plan without installing or writing files.
+        #[arg(long)]
+        dry_run: bool,
     },
 
     /// List globally registered instances.
@@ -390,6 +407,15 @@ pub enum InstanceCommands {
     /// Unregister the explicit or local instance without deleting its files.
     Remove,
 
+    /// Delete the entire instance (including worlds and mods) through the system trash.
+    Delete {
+        /// Explicitly confirm complete directory deletion.
+        #[arg(long)]
+        yes: bool,
+        #[arg(long)]
+        dry_run: bool,
+    },
+
     /// Manage the read-only global default context.
     Default {
         #[command(subcommand)]
@@ -408,6 +434,7 @@ impl InstanceCommands {
                 | Self::Icon { .. }
                 | Self::Java { .. }
                 | Self::Remove
+                | Self::Delete { .. }
         )
     }
 }
@@ -523,6 +550,55 @@ mod tests {
         ])
         .unwrap();
         assert_eq!(cli.instance.as_deref(), Some("server-id"));
+    }
+
+    #[test]
+    fn external_import_has_explicit_source_data_directory_and_readonly_preview() {
+        let cli = Cli::try_parse_from([
+            "orbit-launcher",
+            "instance",
+            "import",
+            "--directory",
+            "source",
+            "--source",
+            "fabric",
+            "--name",
+            "Imported",
+            "--game-directory",
+            "source/versions/fabric",
+            "--dry-run",
+        ])
+        .unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Instance {
+                command: InstanceCommands::Import {
+                    source: Some(_),
+                    name: Some(_),
+                    game_directory: Some(_),
+                    dry_run: true,
+                    ..
+                }
+            }
+        ));
+        let delete = Cli::try_parse_from([
+            "orbit-launcher",
+            "--instance",
+            "server",
+            "instance",
+            "delete",
+            "--dry-run",
+        ])
+        .unwrap();
+        assert!(matches!(
+            delete.command,
+            Commands::Instance {
+                command: InstanceCommands::Delete {
+                    yes: false,
+                    dry_run: true
+                }
+            }
+        ));
     }
 
     #[test]

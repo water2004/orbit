@@ -291,6 +291,7 @@ pub async fn run_launch<F>(
 where
     F: FnMut(LaunchProcessEvent),
 {
+    let _lease = crate::instance_lifecycle::InstanceLease::acquire(&plan.working_directory, false)?;
     let instance_id = plan.instance_id;
     let kind = plan.kind;
     let started = Instant::now();
@@ -383,6 +384,7 @@ pub async fn supervise_server<F>(
 where
     F: FnMut(SupervisorEvent),
 {
+    let _lease = crate::instance_lifecycle::InstanceLease::acquire(&plan.working_directory, false)?;
     if plan.kind != InstanceKind::Server {
         return Err(LauncherError::Launch(
             "server supervisor requires a server launch plan".to_string(),

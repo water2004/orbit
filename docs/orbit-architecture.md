@@ -1,5 +1,10 @@
 # Orbit 架构
 
+Launcher 外部实例导入集中于 `external_instance/`，来源适配后复用现有官方运行时安装，
+原样复制不透明数据并在校验完成后注册。GUI 只调用 inspect/import 及删除预览/确认命令。
+完整实例删除与注销分离，生命周期锁和可回滚回收站事务不依赖 Orbit 模组管理，详见
+[`orbit-launcher-import.md`](orbit-launcher-import.md)。
+
 ## 1. workspace
 
 GUI 导航与基础控件基于 Modrinth App 源码适配，采用 GPL-3.0-only；不导入其业务后端。

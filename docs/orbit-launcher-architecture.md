@@ -31,13 +31,15 @@ Launcher 不负责：
 - 解析 mod 元数据、mod 版本约束或 Jar-in-Jar；
 - mod 依赖求解、多方案选择或字节码兼容审计；
 - 识别、调用或适配其他包管理器；
-- 解释任何不属于 Launcher 的实例文件。
+- 在正常安装/启动路径解释第三方启动器或 mod 的实例文件；显式外部导入只在独立边界适配启动器 metadata，其余内容保持不透明。
 - LittleSkin 等站点专属 OAuth 扩展、联机大厅、房间、好友、聊天、端口映射或服务器
   发现；
 - Windows Service、systemd/launchd service 和开机启动。
 
 Launcher 只管理自己声明拥有的运行时 artifact 和状态文件。实例中的其他内容一律视为
-不透明用户数据：不扫描、不解释、不改写，也不根据其内容改变安装或启动行为。
+不透明用户数据：正常运行不扫描、不解释、不改写，也不根据其内容改变安装或启动行为。
+显式外部导入可枚举并逐字节复制它们，完整实例删除可在确认后移除整目录；二者不是 mod
+管理入口。来源适配、复制恢复与删除事务见 [`orbit-launcher-import.md`](orbit-launcher-import.md)。
 
 ## 2. 仓库和依赖边界
 
@@ -129,8 +131,9 @@ profile；精确主 JAR 和共享 Loader/library classpath 全部由 lock 记录
 `id` 是不可变 UUID；`name` 是全局唯一但可修改的人类名称。GUI 和 supervisor 必须始终
 使用 `id`，不能把名称或绝对路径当作进程身份。客户端仓库只通过
 `minecraft move <absolute-destination>` 整体迁移；该事务同时更新全部客户端 location，
-不能逐实例产生多个隐式仓库。导入客户端时目录必须是 `instances/` 的直接子目录，不猜测
-扁平布局。服务端路径只在 create/import/bootstrap 边界出现。
+不能逐实例产生多个隐式仓库。注册 Orbit 客户端时目录必须是 `instances/` 的直接子目录；
+外部导入先在边界识别真实运行目录，再复制为该模型，不把第三方扁平目录注册为 Orbit 客户端。
+服务端路径只在 create/import/bootstrap 边界出现。
 
 命令实例上下文按固定优先级解析：
 
@@ -548,7 +551,8 @@ Launcher 缓存采用内容寻址和命令结束后的 LRU 清理：
   校验 journal 的 schema、规范化路径和文件集合，再恢复备份、移除已提交的新文件并保留
   明确标记为复用的共享文件；journal 损坏或状态不足以安全恢复时明确拒绝；
 - 跨卷无法原子 rename 时，计划阶段必须显示降级策略；
-- 未记录为 Launcher 所有的文件永远不进入 Launcher 删除集合。
+- 正常运行时更新仅删除 lock 记录的 Launcher 工件；显式 instance delete 是独立的整目录事务，
+  必须先确认包含全部用户数据的范围，不与运行时工件更新混用。
 
 ## 10. 账户和登录
 
@@ -980,8 +984,8 @@ Launcher 投影。恢复失败会删除整个 provisional 新实例。不存在�
 - 日志和错误在序列化前统一脱敏；
 - `launch --dry-run`、bug report 和诊断包不得包含 token；
 - 账户密码只允许在安全 stdin/TTY 或 OS 凭据 API 输入，不接受普通命令行参数；
-- 删除实例、runtime 和 cache 前解析并验证绝对目标，实例删除默认保留 worlds/saves，除非
-  用户明确选择完整删除。
+- 删除实例、runtime 和 cache 前解析并验证绝对目标；instance remove 只注销，instance delete
+  明确删除包括 worlds/saves 在内的全部实例数据，要求确认且默认送入系统回收站。
 
 ## 18. 错误模型
 
@@ -1072,8 +1076,8 @@ LaunchPlan golden test。没有测试覆盖的组合不得笼统宣称“支持�
    Windows Service、systemd/launchd service、开机启动或退出登录后继续运行。
 5. **旧版本范围**：支持声明按 fixture 和 LaunchPlan golden test 逐步扩大；未覆盖组合不得
    best-effort 宣称支持，遇到未知历史格式返回结构化 unsupported 错误。
-6. **实例删除策略**：默认只注销实例并保留目录；删除文件需要第二次明确选择，并默认保留
-   world/save/截图。服务端世界同样处理。
+6. **实例删除策略**：注销与完整删除是不同命令和 UI 动作。完整删除包含 world/save/截图，
+   先展示准确路径和范围并明确确认；回收站不可用不退回永久删除，失败回滚注册表与目录。
 7. **发布形态**：三个程序共用一个 `v*` 套件版本和 GitHub Release。Windows 使用带三个
    安装档位的套件 MSI；Linux 使用三个独立 deb，`orbit-launcher` 不依赖其它程序，适合无
    图形服务端，GUI 包精确依赖同版本两个 CLI。统一交付不改变进程和业务边界。

@@ -49,6 +49,24 @@ pub fn create_instance(
     paths: &RuntimePaths,
     request: CreateInstanceRequest,
 ) -> Result<CreateInstanceResult, LauncherError> {
+    create_instance_inner(paths, request, true)
+}
+
+/// Allocate a strictly new runtime for a multi-stage import. Publication in the
+/// global library happens only after runtime and user data have been verified.
+pub(crate) fn allocate_import_instance(
+    paths: &RuntimePaths,
+    request: CreateInstanceRequest,
+) -> Result<CreateInstanceResult, LauncherError> {
+    create_instance_inner(paths, request, false)
+}
+
+fn create_instance_inner(
+    paths: &RuntimePaths,
+    request: CreateInstanceRequest,
+    register: bool,
+) -> Result<CreateInstanceResult, LauncherError> {
+    let _registry_guard = crate::registry::mutation_lock(&paths.instances_file())?;
     if !request.directory.is_absolute() {
         return Err(LauncherError::RelativeInstanceDirectory(request.directory));
     }
@@ -78,7 +96,10 @@ pub fn create_instance(
         InstanceKind::Client => {
             let game_directory = directory.join("instances").join(&manifest.name);
             instance_directory_created = !game_directory.exists();
-            std::fs::create_dir_all(&game_directory)?;
+            std::fs::create_dir_all(directory.join("instances"))?;
+            if !register || instance_directory_created {
+                std::fs::create_dir(&game_directory)?;
+            }
             let game_directory = dunce::canonicalize(game_directory)?;
             InstanceLocation::client(directory.clone(), game_directory)?
         }
@@ -123,6 +144,9 @@ pub fn create_instance(
         );
         return Err(error);
     }
+    if !register {
+        return Ok(CreateInstanceResult { entry, manifest });
+    }
     registry.push(entry.clone());
     if let Err(error) = registry.save(&registry_path) {
         let cleanup_result = std::fs::remove_file(&manifest_path);
@@ -164,6 +188,7 @@ pub fn import_instance(
     paths: &RuntimePaths,
     root: &Path,
 ) -> Result<ImportInstanceResult, LauncherError> {
+    let _registry_guard = crate::registry::mutation_lock(&paths.instances_file())?;
     if !root.is_absolute() {
         return Err(LauncherError::RelativeInstanceDirectory(root.to_path_buf()));
     }
@@ -230,6 +255,7 @@ pub fn remove_instance(
     paths: &RuntimePaths,
     selector: &str,
 ) -> Result<RemoveInstanceResult, LauncherError> {
+    let _registry_guard = crate::registry::mutation_lock(&paths.instances_file())?;
     let registry_path = paths.instances_file();
     let mut registry = InstanceRegistry::load(&registry_path)?;
     let entry = registry
@@ -386,6 +412,7 @@ pub fn rename_instance(
     selector: &str,
     new_name: &str,
 ) -> Result<RenameInstanceResult, LauncherError> {
+    let _registry_guard = crate::registry::mutation_lock(&paths.instances_file())?;
     validate_instance_name(new_name)?;
     let registry_path = paths.instances_file();
     let mut registry = InstanceRegistry::load(&registry_path)?;
@@ -438,6 +465,7 @@ pub fn set_default_instance(
     paths: &RuntimePaths,
     selector: Option<&str>,
 ) -> Result<Option<RegistryEntry>, LauncherError> {
+    let _registry_guard = crate::registry::mutation_lock(&paths.instances_file())?;
     let registry_path = paths.instances_file();
     let mut registry = InstanceRegistry::load(&registry_path)?;
     let selected = selector

@@ -28,6 +28,10 @@ Launcher 不向父目录搜索。重命名、注销、安装、更新、启动�
 
 ## 当前命令
 
+已有实例导入支持常见启动器的共享/隔离/自定义目录：外部来源复制到新 Orbit 隔离实例，
+Orbit 自有实例重新注册。完整删除与注销分开，参见
+[`orbit-launcher-import.md`](orbit-launcher-import.md) 的来源范围、预览、恢复及安全约束。
+
 ```text
 orbit-launcher config path
 orbit-launcher config list
@@ -65,7 +69,9 @@ orbit-launcher instance create \
   [--loader <vanilla|fabric|quilt|forge|neoforge>] \
   [--loader-version <requirement>]
 
-orbit-launcher instance import --directory <path>
+orbit-launcher instance inspect --directory <path>
+orbit-launcher instance import --directory <path> [--source <id>] \
+  [--name <new-name>] [--game-directory <actual-game-directory>] [--dry-run]
 orbit-launcher instance list
 orbit-launcher [--instance <id|name>] instance show
 orbit-launcher [--instance <id|name>] instance rename <new-name>
@@ -76,6 +82,7 @@ orbit-launcher [--instance <id|name>] instance configure \
 orbit-launcher [--instance <id|name>] instance resolution set <width> <height>
 orbit-launcher [--instance <id|name>] instance resolution clear
 orbit-launcher [--instance <id|name>] instance remove
+orbit-launcher [--instance <id|name>] instance delete [--dry-run] [--yes]
 orbit-launcher instance default set <id|name>
 orbit-launcher instance default clear
 orbit-launcher instance default show

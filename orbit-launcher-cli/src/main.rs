@@ -93,6 +93,8 @@ fn command_name(command: &cli::Commands) -> &'static str {
         cli::Commands::Instance { command } => match command {
             cli::InstanceCommands::Create { .. } => "instance.create",
             cli::InstanceCommands::Import { .. } => "instance.import",
+            cli::InstanceCommands::Inspect { .. } => "instance.inspect",
+            cli::InstanceCommands::Delete { .. } => "instance.delete",
             cli::InstanceCommands::List => "instance.list",
             cli::InstanceCommands::Show => "instance.show",
             cli::InstanceCommands::Rename { .. } => "instance.rename",
@@ -173,6 +175,10 @@ fn render_success(format: OutputFormat, output: app::CommandOutput) {
             app::CommandOutput::InstanceList(value) => print_json(command, value),
             app::CommandOutput::InstanceDetail(value) => print_json(command, value),
             app::CommandOutput::InstanceMutation(value) => print_json(command, value),
+            app::CommandOutput::InstanceSources(value) => print_json(command, value),
+            app::CommandOutput::InstanceImportPreview(value) => print_json(command, value),
+            app::CommandOutput::InstanceImported(value) => print_json(command, value),
+            app::CommandOutput::InstanceDeletion(value) => print_json(command, value),
             app::CommandOutput::Rename(value) => print_json(command, value),
             app::CommandOutput::InstanceConfigured(value) => print_json(command, value),
             app::CommandOutput::InstanceResolution(value) => print_json(command, value),
@@ -516,6 +522,67 @@ fn render_text(output: app::CommandOutput) {
                     )
                 );
             }
+        }
+        app::CommandOutput::InstanceSources(view) => {
+            for source in view.instances {
+                println!("{} — {} ({})", source.id, source.name, source.format);
+                if let Some(runtime) = source.runtime {
+                    println!(
+                        "  Minecraft {} · {} {}",
+                        runtime.minecraft,
+                        runtime.loader.as_str(),
+                        runtime.loader_version.as_deref().unwrap_or("")
+                    );
+                }
+                println!("  {}", source.directory_evidence);
+                if let Some(path) = source.game_directory {
+                    println!("  {}", path.display());
+                }
+                if let Some(error) = source.error {
+                    println!("  {error}");
+                }
+            }
+        }
+        app::CommandOutput::InstanceImportPreview(view) => {
+            println!(
+                "{} → {}",
+                view.game_directory.display(),
+                view.destination.display()
+            );
+            println!(
+                "{}",
+                tr!(
+                    "Copy %{files} files (%{bytes}). The source is preserved; accounts and launch hooks are excluded.",
+                    files = view.files,
+                    bytes = human_bytes(view.bytes)
+                )
+            );
+            for path in view.excluded {
+                println!("  {}: {}", tr!("Excluded"), path.display());
+            }
+        }
+        app::CommandOutput::InstanceImported(view) => {
+            println!(
+                "{}",
+                tr!(
+                    "Imported '%{name}' to %{path}. The source was preserved.",
+                    name = view.instance.name,
+                    path = view.instance.directory.display()
+                )
+            );
+            for warning in view.warnings {
+                println!("  {warning}");
+            }
+        }
+        app::CommandOutput::InstanceDeletion(view) => {
+            println!(
+                "{}",
+                tr!(
+                    "Delete the entire instance '%{name}' including worlds, mods and settings: %{path}",
+                    name = view.name,
+                    path = view.directory.display()
+                )
+            );
         }
         app::CommandOutput::InstanceMutation(view) => {
             println!(
@@ -1098,6 +1165,26 @@ impl TerminalFrontend {
 
     fn render_text_progress(&mut self, data: ProgressData) {
         match data {
+            ProgressData::InstanceImportCopying { completed, total } => {
+                if completed == 0
+                    || completed == total
+                    || self.last_text_progress.elapsed() >= Duration::from_secs(1)
+                {
+                    self.last_text_progress = Instant::now();
+                    eprintln!(
+                        "{}",
+                        tr!(
+                            "Copying instance data: %{completed} / %{total}.",
+                            completed = human_bytes(completed),
+                            total = human_bytes(total)
+                        )
+                    );
+                }
+            }
+            ProgressData::InstanceImportVerified => eprintln!(
+                "{}",
+                tr!("Imported instance data verified. Source preserved.")
+            ),
             ProgressData::MetadataStarted => eprintln!("{}", tr!("Resolving Mojang metadata…")),
             ProgressData::MinecraftResolved { version, .. } => {
                 eprintln!(
@@ -1425,6 +1512,45 @@ impl TerminalFrontend {
 }
 
 impl app::Frontend for TerminalFrontend {
+    fn external_import_progress(&mut self, event: orbit_launcher_core::ExternalImportEvent) {
+        let data = match event {
+            orbit_launcher_core::ExternalImportEvent::Install(event) => ProgressData::from(event),
+            orbit_launcher_core::ExternalImportEvent::Copying { completed, total } => {
+                ProgressData::InstanceImportCopying { completed, total }
+            }
+            orbit_launcher_core::ExternalImportEvent::Verified => {
+                ProgressData::InstanceImportVerified
+            }
+        };
+        self.render_launch_event("instance.import", data);
+    }
+
+    fn confirm_instance_deletion(
+        &mut self,
+        plan: &orbit_launcher_core::InstanceDeletionPlan,
+    ) -> Result<bool, LauncherError> {
+        if self.non_interactive
+            || self.output_format == OutputFormat::Json
+            || !std::io::stdin().is_terminal()
+        {
+            return Err(LauncherError::InteractionRequired(tr!("Review 'instance delete --dry-run', then pass --yes to delete the entire directory.").into_owned()));
+        }
+        eprintln!(
+            "{}",
+            tr!(
+                "Delete the entire instance '%{name}' including worlds, mods and settings: %{path}",
+                name = plan.name,
+                path = plan.directory.display()
+            )
+        );
+        eprintln!(
+            "{}",
+            tr!("The directory will be moved to the system trash. Type DELETE to continue:")
+        );
+        let mut answer = String::new();
+        std::io::stdin().lock().read_line(&mut answer)?;
+        Ok(answer.trim() == "DELETE")
+    }
     fn progress(&mut self, event: InstallProgressEvent) {
         let data = ProgressData::from(event);
         match self.progress_format {

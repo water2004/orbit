@@ -13,9 +13,12 @@ pub mod config;
 pub mod context;
 pub mod error;
 pub mod eula;
+pub mod external_instance;
 pub mod install;
 pub mod installer;
 pub mod instance;
+pub mod instance_deletion;
+mod instance_lifecycle;
 pub mod java;
 pub mod launch;
 pub mod layout;
@@ -65,6 +68,11 @@ pub use eula::{
     EulaAcceptance, EulaAcceptanceMethod, EulaDocument, MINECRAFT_EULA_URL, accept_shown_eula,
     require_current_acceptance, show_current_eula,
 };
+pub use external_instance::{
+    ExternalImportEvent, ExternalImportRequest, ExternalImportResult, ExternalInstance,
+    ExternalInstanceCatalog, import_external_instance, inspect_external_instances,
+};
+pub use external_instance::{ExternalImportPlan, plan_external_import};
 pub use install::{
     ClientInstallPlan, InstallPlan, InstallProgressEvent, InstallResult, ServerInstallPlan,
     apply_install_plan, prepare_install,
@@ -79,6 +87,7 @@ pub use instance::{
     ClientConfig, ClientResolution, INSTANCE_MANIFEST_FILE, InstanceKind, InstanceManifest,
     LoaderKind, ManifestFile, RestartPolicy,
 };
+pub use instance_deletion::{InstanceDeletionPlan, delete_instance, plan_instance_deletion};
 pub use java::{
     InstalledJavaRuntime, JavaProgressEvent, JavaSelection, JavaTarget,
     MOJANG_RUNTIME_MANIFEST_URL, MojangJavaPlan, PreparedJavaRuntime, SystemJava,

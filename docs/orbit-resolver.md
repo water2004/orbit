@@ -3,7 +3,9 @@
 > 本文描述当前实现。依赖语义的来源是 JAR 内的 loader 元数据，所有 loader 都经过同一条求解路径。
 
 GUI 的发现查询必须绑定准确实例，再消费其版本/Loader；Launcher 的 Java 选择、实例图标
-和本地 schema 升级不属于 resolver。Orbit TOML/lock 本次不变，不能为这些能力增加求解旁路。
+和外部实例导入/完整删除不属于 resolver。外部导入只是复制已有游戏数据，不暗中求解、
+修复或改写 mod 约束；用户在目标工作区显式 sync/fix 后才进入 Orbit 原有职责。
+本地 schema 升级同样不属于 resolver。Orbit TOML/lock 本次不变，不能为这些能力增加求解旁路。
 GUI 显示“无可行更新”的依据只允许是同次升级返回的无变更报告及其 diagnostics，不能把最后一条
 solver 进度当成仍在求解，也不能为补充显示原因另跑一轮求解。
 

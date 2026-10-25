@@ -34,6 +34,7 @@ pub fn move_minecraft_directory<F>(
 where
     F: FnMut(RepositoryMoveEvent),
 {
+    let _registry_guard = crate::registry::mutation_lock(&paths.instances_file())?;
     if !destination.is_absolute() {
         return Err(LauncherError::InvalidConfig(format!(
             "Minecraft directory destination '{}' must be absolute",

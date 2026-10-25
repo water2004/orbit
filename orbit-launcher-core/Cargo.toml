@@ -40,6 +40,8 @@ md-5 = { workspace = true }
 base64 = { workspace = true }
 image = { workspace = true }
 fs2 = { workspace = true }
+trash = { workspace = true }
+rusqlite = { workspace = true }
 java-properties = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]

@@ -4,6 +4,12 @@
 
 ## 1. 当前结论
 
+已有实例导入已补全为 Launcher 独立来源适配和复制/校验流程，覆盖标准 profile、HMCL、
+PCL、Prism/MultiMC、CurseForge、GDLauncher Carbon、ATLauncher 和 Modrinth App 已应用
+状态。未知全局隔离设置要求选择准确目录，不猜测；目标只在完成后注册，支持同源中断续导。
+新增完整实例删除（含存档/模组/设置），区别于注销；回收站失败/文件占用回滚。GUI 已接入
+来源选择、预览、删除确认；活动列表可独立滚动且卡片不再压扁。外部服务端发行包转换不在此次声明范围。
+
 0.7.0 把 GUI 替换为基于 Modrinth App 控件/实例交互的 Vue/Tauri 薄壳，保留 CLI 业务边界。
 首次服务端安装的 EULA 已接入 Launcher 同一 JSON 交互协议。构建与协议/交互测试通过；
 这些检查不替代原生窗口、真实账户及安装任务的端到端验收。
