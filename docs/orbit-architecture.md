@@ -7,6 +7,10 @@ Launcher 外部实例导入集中于 `external_instance/`，来源适配后复�
 
 ## 1. workspace
 
+GUI 动效属于纯展示层：统一 motion token、可复用的 keyed `ContentStage` 及 Vue 过渡，不进入
+CLI/core。仅导航切换重建展示节点，任务进度不重建控件；原生 dialog 关闭、交互响应和取消
+不等待动画，系统减少动态效果时停用。详见 [GUI 架构](orbit-gui.md)。
+
 第三方认证服务输入归 Launcher：普通 URL 与 authlib-injector 拖放 URI 共用
 `yggdrasil::input` 和同一 ALI/metadata 发现路径。GUI 只检测拖放类型并传递原文；
 只读 inspect 返回预览，用户确认后仍调用既有 add，不在 Tauri/Vue 新增认证或配置写入接口。

@@ -15,7 +15,7 @@ const baseClasses = [
   "relative inline-flex min-w-0 shrink-0 items-center justify-center",
   "whitespace-nowrap border-0 no-underline",
   // Interactions
-  "touch-manipulation cursor-pointer select-none transition-[background-color,color,box-shadow,filter,opacity,transform] duration-150 ease-out",
+  "touch-manipulation cursor-pointer select-none transition-[background-color,color,box-shadow,filter,opacity,transform] duration-[var(--motion-fast)] ease-out",
   "enabled:active:scale-[0.97]",
   // Hovering
   "[&:not(:disabled):not([aria-disabled=true]):hover]:brightness-[--hover-brightness]",

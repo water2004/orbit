@@ -25,7 +25,6 @@
   --color-green: #5cce9a;
   --color-blue: #72b4f8;
   --color-purple: #c498fa;
-  --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
   --hover-brightness: 1.12;
 }
 :root[data-theme="light"] {
@@ -351,44 +350,4 @@ button:disabled {
 }
 .danger-zone {
   border-color: color-mix(in srgb, var(--color-red) 35%, transparent);
-}
-.page-enter-active,
-.page-leave-active {
-  transition:
-    opacity 0.12s,
-    transform 0.12s;
-}
-.page-enter-from {
-  opacity: 0;
-  transform: translateY(5px);
-}
-.page-leave-to {
-  opacity: 0;
-}
-.slide-enter-active,
-.slide-leave-active {
-  transition:
-    transform 0.18s var(--ease-out-expo),
-    opacity 0.18s;
-}
-.slide-enter-from,
-.slide-leave-to {
-  transform: translateX(20px);
-  opacity: 0;
-}
-.spin {
-  animation: spin 1s linear infinite;
-}
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-@media (prefers-reduced-motion: reduce) {
-  *,
-  *::before,
-  *::after {
-    animation: none !important;
-    transition: none !important;
-  }
 }

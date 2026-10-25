@@ -28,7 +28,7 @@ defineEmits<{ "update:modelValue": [value: boolean] }>();
   border: 1px solid var(--surface-5);
   border-radius: 20px;
   background: var(--surface-4);
-  transition: background 0.15s;
+  transition: background-color var(--motion-fast);
   cursor: pointer;
 }
 .toggle span {
@@ -36,7 +36,7 @@ defineEmits<{ "update:modelValue": [value: boolean] }>();
   height: 14px;
   border-radius: 50%;
   background: var(--color-base);
-  transition: transform 0.15s;
+  transition: transform var(--motion-fast) var(--motion-ease);
 }
 .toggle.enabled {
   background: var(--color-brand);

@@ -9,6 +9,7 @@ import Accounts from "./pages/Accounts.vue";
 import Settings from "./pages/Settings.vue";
 import Create from "./pages/Create.vue";
 import "./styles.css";
+import "./motion.css";
 const router = createRouter({
   history: createWebHashHistory(),
   routes: [

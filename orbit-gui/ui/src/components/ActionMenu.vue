@@ -1,10 +1,23 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref } from "vue";
+import { nextTick, onMounted, onUnmounted, ref, useId } from "vue";
 import { MoreHorizontal } from "lucide-vue-next";
 defineProps<{ label: string }>();
-const root = ref<HTMLDetailsElement>();
-function close() {
-  if (root.value) root.value.open = false;
+const root = ref<HTMLElement>();
+const trigger = ref<HTMLButtonElement>();
+const opened = ref(false);
+const panelId = useId();
+function close(restoreFocus = false) {
+  opened.value = false;
+  if (restoreFocus) trigger.value?.focus({ preventScroll: true });
+}
+async function openFirst() {
+  opened.value = true;
+  await nextTick();
+  root.value
+    ?.querySelector<HTMLElement>(
+      ".menu-panel button:not(:disabled), .menu-panel a[href]",
+    )
+    ?.focus({ preventScroll: true });
 }
 function outside(event: PointerEvent) {
   if (!root.value?.contains(event.target as Node)) close();
@@ -13,31 +26,50 @@ onMounted(() => document.addEventListener("pointerdown", outside));
 onUnmounted(() => document.removeEventListener("pointerdown", outside));
 </script>
 <template>
-  <details ref="root" class="action-menu" @keydown.esc.stop="close">
-    <summary :aria-label="label" :title="label">
+  <div
+    ref="root"
+    class="action-menu"
+    @keydown.esc.stop.prevent="close(true)"
+    @focusout="!root?.contains($event.relatedTarget as Node) && close()"
+  >
+    <button
+      ref="trigger"
+      type="button"
+      class="menu-trigger"
+      :aria-label="label"
+      :title="label"
+      :aria-expanded="opened"
+      :aria-controls="panelId"
+      aria-haspopup="true"
+      @click="opened = !opened"
+      @keydown.down.prevent="openFirst"
+    >
       <slot name="trigger"><MoreHorizontal :size="20" /></slot>
-    </summary>
-    <div class="menu-panel" @click="close"><slot /></div>
-  </details>
+    </button>
+    <Transition name="popover">
+      <div v-if="opened" :id="panelId" class="menu-panel" @click="close()">
+        <slot />
+      </div>
+    </Transition>
+  </div>
 </template>
 <style scoped>
 .action-menu {
   position: relative;
 }
-summary {
+.menu-trigger {
   display: flex;
   align-items: center;
   gap: 8px;
   padding: 8px;
   border-radius: 8px;
   cursor: pointer;
-  list-style: none;
+  border: 0;
+  background: transparent;
+  transition: background-color var(--motion-fast);
 }
-summary::-webkit-details-marker {
-  display: none;
-}
-summary:hover,
-details[open] > summary {
+.menu-trigger:hover,
+.menu-trigger[aria-expanded="true"] {
   background: var(--surface-4);
 }
 .menu-panel {
@@ -55,6 +87,7 @@ details[open] > summary {
   display: flex;
   flex-direction: column;
   gap: 2px;
+  transform-origin: top right;
 }
 .menu-panel :deep(button),
 .menu-panel :deep(a) {
@@ -67,6 +100,7 @@ details[open] > summary {
   text-align: left;
   text-decoration: none;
   color: var(--color-contrast);
+  transition: background-color var(--motion-fast);
 }
 .menu-panel :deep(button:hover),
 .menu-panel :deep(a:hover) {

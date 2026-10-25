@@ -95,7 +95,7 @@ const deletion = computed(
     />
   </div>
   <Teleport to="body"
-    ><Transition name="slide"
+    ><Transition name="drawer"
       ><div
         v-if="activity.open"
         class="activity-backdrop"
@@ -333,8 +333,8 @@ progress {
   cursor: pointer;
   width: 100%;
   transition:
-    border-color 0.15s,
-    background 0.15s;
+    border-color var(--motion-fast),
+    background-color var(--motion-fast);
 }
 .choice:hover,
 .choice:focus-visible {

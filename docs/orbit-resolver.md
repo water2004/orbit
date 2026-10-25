@@ -16,6 +16,9 @@ Modrinth 用户输入的 slug 在进入候选发现前解析为官方 project ID
 
 ## 1. 模块边界
 
+GUI 过渡动画只随展示导航/控件状态变化，不触发、重试或拆分求解；方案选择、最终确认和
+取消仍立即发送同一 CLI 交互响应。动画不生成进度、不改变 Pareto 策略或数据格式。
+
 authlib-injector 拖放配置属于 Launcher 认证端点发现；既不进入 Orbit 的 provider 目录，
 也不进入依赖求解。GUI 只转交标准 URI，不能把认证 URL 当作模组来源。
 

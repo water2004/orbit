@@ -129,15 +129,17 @@ watchEffect(() => {
     </main>
     <div class="app-status"><ActivityPanel /></div>
     <AuthEndpointDrop />
-    <div v-if="workspace.error" role="alert" class="error-toast">
-      <p>{{ workspace.error }}</p>
-      <Button
-        type="quiet"
-        :title="t('Dismiss', '关闭')"
-        @click="workspace.error = ''"
-        ><X
-      /></Button>
-    </div>
+    <Transition name="toast">
+      <div v-if="workspace.error" role="alert" class="error-toast">
+        <p>{{ workspace.error }}</p>
+        <Button
+          type="quiet"
+          :title="t('Dismiss', '关闭')"
+          @click="workspace.error = ''"
+          ><X
+        /></Button>
+      </div>
+    </Transition>
   </div>
 </template>
 <style scoped>

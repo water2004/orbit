@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import ContentStage from "./ContentStage.vue";
 import { computed, ref } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import {
@@ -224,368 +225,383 @@ function editRules(next: string) {
       >
         <LoaderCircle class="spin" />{{ t("Loading…", "正在加载…") }}
       </p>
-      <template v-if="tab === 'overview'">
-        <fieldset :disabled="working" class="package-controls">
-          <div class="package-summary row">
-            <Avatar :src="current.icon_path" :alt="current.mod_id" :size="64" />
-            <div class="grow stack">
-              <h2>{{ current.mod_id }}</h2>
-              <div class="row wrap">
-                <span class="badge">{{ current.version }}</span
-                ><span class="badge">{{
-                  current.enabled
-                    ? t("Enabled", "已启用")
-                    : t("Disabled", "已禁用")
-                }}</span>
+      <ContentStage :stage="tab">
+        <template v-if="tab === 'overview'">
+          <fieldset :disabled="working" class="package-controls">
+            <div class="package-summary row">
+              <Avatar
+                :src="current.icon_path"
+                :alt="current.mod_id"
+                :size="64"
+              />
+              <div class="grow stack">
+                <h2>{{ current.mod_id }}</h2>
+                <div class="row wrap">
+                  <span class="badge">{{ current.version }}</span
+                  ><span class="badge">{{
+                    current.enabled
+                      ? t("Enabled", "已启用")
+                      : t("Disabled", "已禁用")
+                  }}</span>
+                </div>
               </div>
+              <Button
+                @click="
+                  act(() =>
+                    mutate(
+                      [current.enabled ? 'disable' : 'enable', pkg.mod_id],
+                      t('Updating activation', '正在更新启用状态'),
+                    ),
+                  )
+                "
+                >{{
+                  current.enabled ? t("Disable", "禁用") : t("Enable", "启用")
+                }}</Button
+              >
             </div>
-            <Button
-              @click="
-                act(() =>
-                  mutate(
-                    [current.enabled ? 'disable' : 'enable', pkg.mod_id],
-                    t('Updating activation', '正在更新启用状态'),
-                  ),
-                )
-              "
-              >{{
-                current.enabled ? t("Disable", "禁用") : t("Enable", "启用")
-              }}</Button
-            >
-          </div>
-          <div class="management-actions">
-            <button
-              @click="
-                act(() =>
-                  mutate(
-                    ['upgrade', pkg.mod_id],
-                    t('Upgrading mod', '正在升级模组'),
-                  ),
-                )
-              "
-            >
-              <ArrowUpCircle /><span
-                ><strong>{{ t("Find an update", "查找可行更新") }}</strong
-                ><small>{{
-                  t(
-                    "Review compatible upgrades before applying.",
-                    "先查看兼容的升级方案，再确认应用。",
+            <div class="management-actions">
+              <button
+                @click="
+                  act(() =>
+                    mutate(
+                      ['upgrade', pkg.mod_id],
+                      t('Upgrading mod', '正在升级模组'),
+                    ),
                   )
-                }}</small></span
-              ><ChevronRight />
-            </button>
-            <button @click="editRules('versions')">
-              <SlidersHorizontal /><span
-                ><strong>{{
-                  t("Choose versions & rules", "选择版本与约束")
-                }}</strong
-                ><small>{{
-                  t(
-                    "Browse versions, pin a version or limit updates.",
-                    "浏览可用版本、锁定版本或限定更新范围。",
-                  )
-                }}</small></span
-              ><ChevronRight />
-            </button>
-            <button @click="files">
-              <Folder /><span
-                ><strong>{{ t("Files & data", "文件与数据") }}</strong
-                ><small>{{
-                  t(
-                    "View ownership and reset this mod’s data.",
-                    "查看所属文件，或重置此模组的数据。",
-                  )
-                }}</small></span
-              ><ChevronRight />
-            </button>
-          </div>
-        </fieldset>
-      </template>
-      <template v-if="tab === 'versions' && versions">
-        <div class="toolbar">
-          <DropdownSelect
-            v-model="mode"
-            :label="t('Numeric rule', '数字规则')"
-            :searchable="false"
-            :options="[
-              {
-                value: 'any',
-                label: t('Any compatible version', '任意兼容版本'),
-              },
-              { value: 'comparison', label: t('One boundary', '单边界') },
-              { value: 'range', label: t('Version range', '版本区间') },
-              ...(policy.kind === 'custom'
-                ? [
-                    {
-                      value: 'custom',
-                      label: t(
-                        'Existing custom rule (unchanged)',
-                        '现有自定义规则（未修改）',
-                      ),
-                    },
-                  ]
-                : []),
-            ]"
-          />
-          <template v-if="mode === 'comparison'"
-            ><DropdownSelect
-              v-model="operator"
-              :label="t('Comparison', '比较运算')"
-              :searchable="false"
-              :options="
-                ['=', '>', '>=', '<', '<='].map((value) => ({
-                  value,
-                  label: value,
-                }))
-              " />
-            <DropdownSelect
-              v-model="lower"
-              :label="t('Boundary version', '边界版本')"
-              :options="versionOptions"
-          /></template>
-          <template v-if="mode === 'range'"
-            ><DropdownSelect
-              v-model="lower"
-              :label="t('Lower version', '下界版本')"
-              :options="versionOptions"
-            />
-            <label
-              ><input v-model="includeLower" type="checkbox" />{{
-                t("Include lower", "包含下界")
-              }}</label
-            ><span>—</span
-            ><DropdownSelect
-              v-model="upper"
-              :label="t('Upper version', '上界版本')"
-              :options="versionOptions"
-            />
-            <label
-              ><input v-model="includeUpper" type="checkbox" />{{
-                t("Include upper", "包含上界")
-              }}</label
-            ></template
-          >
-        </div>
-        <p>
-          {{
-            t(
-              "Choose a version below, then a boundary. Applying a policy solves the complete mod environment before changing anything.",
-              "选择下方版本作为边界。应用策略前会对完整模组环境求解并让你确认方案。",
-            )
-          }}
-        </p>
-        <div class="list">
-          <div
-            v-for="(candidate, index) in versions.candidates"
-            :key="index"
-            class="item-row"
-          >
-            <div class="grow stack">
-              <div class="row wrap">
-                <strong>{{ candidate.version }}</strong
-                ><span v-if="candidate.selected" class="badge">{{
-                  t("Installed", "已安装")
-                }}</span
-                ><span v-if="!candidate.matches_constraint" class="badge">{{
-                  t("Filtered", "已被策略过滤")
-                }}</span>
-              </div>
-              <small>{{ candidate.details }}</small
-              ><small v-if="!candidate.numeric_filterable">{{
-                t(
-                  "No numeric comparison; string filters still apply.",
-                  "无法进行数字比较，字符串过滤仍然生效。",
-                )
-              }}</small>
+                "
+              >
+                <ArrowUpCircle /><span
+                  ><strong>{{ t("Find an update", "查找可行更新") }}</strong
+                  ><small>{{
+                    t(
+                      "Review compatible upgrades before applying.",
+                      "先查看兼容的升级方案，再确认应用。",
+                    )
+                  }}</small></span
+                ><ChevronRight />
+              </button>
+              <button @click="editRules('versions')">
+                <SlidersHorizontal /><span
+                  ><strong>{{
+                    t("Choose versions & rules", "选择版本与约束")
+                  }}</strong
+                  ><small>{{
+                    t(
+                      "Browse versions, pin a version or limit updates.",
+                      "浏览可用版本、锁定版本或限定更新范围。",
+                    )
+                  }}</small></span
+                ><ChevronRight />
+              </button>
+              <button @click="files">
+                <Folder /><span
+                  ><strong>{{ t("Files & data", "文件与数据") }}</strong
+                  ><small>{{
+                    t(
+                      "View ownership and reset this mod’s data.",
+                      "查看所属文件，或重置此模组的数据。",
+                    )
+                  }}</small></span
+                ><ChevronRight />
+              </button>
             </div>
-            <Button
-              size="sm"
-              @click="
-                lower = candidate.version;
-                mode = mode === 'range' ? 'range' : 'comparison';
-              "
-              >{{
-                mode === "range" ? t("Lower", "设为下界") : t("Select", "选择")
-              }}</Button
-            ><Button
-              v-if="mode === 'range'"
-              size="sm"
-              @click="upper = candidate.version"
-              >{{ t("Upper", "设为上界") }}</Button
-            >
-          </div>
-        </div>
-      </template>
-      <StringRules v-if="tab === 'strings' && versions" v-model="rules" />
-      <template v-if="tab === 'files' && ownership">
-        <h3>{{ t("Package files", "模组本体") }}</h3>
-        <div
-          v-for="file in ownership.artifacts"
-          :key="file.path"
-          class="row card"
-        >
-          <File /><span class="grow">{{ file.path }}</span
-          ><span class="badge">{{
-            file.present ? t("Present", "存在") : t("Missing", "缺失")
-          }}</span>
-        </div>
-        <h3>{{ t("Owned data", "所属数据") }}</h3>
-        <p v-if="!ownership.data.length">
-          {{ t("No observed owned data.", "尚无已观测的所属数据。") }}
-        </p>
-        <div
-          v-for="entry in ownership.data"
-          :key="entry.path"
-          class="card stack"
-        >
-          <div class="row">
-            <Folder v-if="entry.kind === 'tree'" /><File v-else /><strong
-              >{{ entry.path }}{{ entry.kind === "tree" ? "/**" : "" }}</strong
-            ><span class="badge">{{ entry.scope }}</span>
-          </div>
-          <small v-for="keep in entry.preserved" :key="keep.path"
-            >{{ t("Preserve", "保留") }} · {{ keep.path }}</small
-          >
-        </div>
-        <div class="card danger-zone stack">
-          <h3>{{ t("Reset mod data", "重置模组数据") }}</h3>
-          <p>
-            {{
-              t(
-                "Keeps the mod installed. Orbit will ask you to review the exact files before deleting them.",
-                "保留模组本体。Orbit 会在删除前列出具体文件并要求确认。",
-              )
-            }}
-          </p>
-          <Button
-            @click="
-              act(async () => {
-                await mutate(
-                  ['reset', pkg.mod_id],
-                  t('Resetting mod data', '正在重置模组数据'),
-                );
-                await files();
-              })
-            "
-            >{{ t("Reset data…", "重置数据…") }}</Button
-          >
-        </div>
-      </template>
-      <template v-if="tab === 'settings'">
-        <div class="card stack">
-          <h3>{{ t("Environment", "运行环境") }}</h3>
-          <div class="row">
+          </fieldset>
+        </template>
+        <template v-if="tab === 'versions' && versions">
+          <div class="toolbar">
             <DropdownSelect
-              v-model="environment"
-              :label="t('Environment', '运行环境')"
+              v-model="mode"
+              :label="t('Numeric rule', '数字规则')"
               :searchable="false"
               :options="[
                 {
-                  value: 'auto',
-                  label: t('Use JAR declaration', '按 JAR 声明'),
+                  value: 'any',
+                  label: t('Any compatible version', '任意兼容版本'),
                 },
-                { value: 'client', label: t('Client', '客户端') },
-                { value: 'server', label: t('Server', '服务端') },
-                { value: 'both', label: t('Both', '两端') },
+                { value: 'comparison', label: t('One boundary', '单边界') },
+                { value: 'range', label: t('Version range', '版本区间') },
+                ...(policy.kind === 'custom'
+                  ? [
+                      {
+                        value: 'custom',
+                        label: t(
+                          'Existing custom rule (unchanged)',
+                          '现有自定义规则（未修改）',
+                        ),
+                      },
+                    ]
+                  : []),
               ]"
             />
-            <Button
-              @click="
-                act(() =>
-                  mutate(
-                    ['env', pkg.mod_id, environment],
-                    t('Updating environment', '正在更新环境'),
-                  ),
-                )
-              "
-              >{{ t("Apply", "应用") }}</Button
+            <template v-if="mode === 'comparison'"
+              ><DropdownSelect
+                v-model="operator"
+                :label="t('Comparison', '比较运算')"
+                :searchable="false"
+                :options="
+                  ['=', '>', '>=', '<', '<='].map((value) => ({
+                    value,
+                    label: value,
+                  }))
+                " />
+              <DropdownSelect
+                v-model="lower"
+                :label="t('Boundary version', '边界版本')"
+                :options="versionOptions"
+            /></template>
+            <template v-if="mode === 'range'"
+              ><DropdownSelect
+                v-model="lower"
+                :label="t('Lower version', '下界版本')"
+                :options="versionOptions"
+              />
+              <label
+                ><input v-model="includeLower" type="checkbox" />{{
+                  t("Include lower", "包含下界")
+                }}</label
+              ><span>—</span
+              ><DropdownSelect
+                v-model="upper"
+                :label="t('Upper version', '上界版本')"
+                :options="versionOptions"
+              />
+              <label
+                ><input v-model="includeUpper" type="checkbox" />{{
+                  t("Include upper", "包含上界")
+                }}</label
+              ></template
             >
           </div>
-        </div>
-        <div class="card stack">
-          <h3>{{ t("Sources", "远端来源") }}</h3>
+          <p>
+            {{
+              t(
+                "Choose a version below, then a boundary. Applying a policy solves the complete mod environment before changing anything.",
+                "选择下方版本作为边界。应用策略前会对完整模组环境求解并让你确认方案。",
+              )
+            }}
+          </p>
+          <div class="list">
+            <div
+              v-for="(candidate, index) in versions.candidates"
+              :key="index"
+              class="item-row"
+            >
+              <div class="grow stack">
+                <div class="row wrap">
+                  <strong>{{ candidate.version }}</strong
+                  ><span v-if="candidate.selected" class="badge">{{
+                    t("Installed", "已安装")
+                  }}</span
+                  ><span v-if="!candidate.matches_constraint" class="badge">{{
+                    t("Filtered", "已被策略过滤")
+                  }}</span>
+                </div>
+                <small>{{ candidate.details }}</small
+                ><small v-if="!candidate.numeric_filterable">{{
+                  t(
+                    "No numeric comparison; string filters still apply.",
+                    "无法进行数字比较，字符串过滤仍然生效。",
+                  )
+                }}</small>
+              </div>
+              <Button
+                size="sm"
+                @click="
+                  lower = candidate.version;
+                  mode = mode === 'range' ? 'range' : 'comparison';
+                "
+                >{{
+                  mode === "range"
+                    ? t("Lower", "设为下界")
+                    : t("Select", "选择")
+                }}</Button
+              ><Button
+                v-if="mode === 'range'"
+                size="sm"
+                @click="upper = candidate.version"
+                >{{ t("Upper", "设为上界") }}</Button
+              >
+            </div>
+          </div>
+        </template>
+        <StringRules v-if="tab === 'strings' && versions" v-model="rules" />
+        <template v-if="tab === 'files' && ownership">
+          <h3>{{ t("Package files", "模组本体") }}</h3>
           <div
-            v-for="(remote, index) in current.remotes"
-            :key="remote"
-            class="row"
+            v-for="file in ownership.artifacts"
+            :key="file.path"
+            class="row card"
           >
-            <span class="grow">{{ remote }}</span
-            ><Button
-              type="quiet"
-              :disabled="current.remotes.length === 1"
-              :aria-label="t('Remove source', '移除来源')"
-              @click="
-                act(() =>
-                  mutate(
-                    ['remote', 'remove', pkg.mod_id, '--index', String(index)],
-                    t('Removing source', '正在移除来源'),
-                  ),
-                )
-              "
-              ><Trash2
-            /></Button>
+            <File /><span class="grow">{{ file.path }}</span
+            ><span class="badge">{{
+              file.present ? t("Present", "存在") : t("Missing", "缺失")
+            }}</span>
           </div>
-          <div class="row">
-            <DropdownSelect
-              v-model="provider"
-              :label="t('Source type', '来源类型')"
-              :searchable="false"
-              :options="
-                ['modrinth', 'curseforge', 'file'].map((value) => ({
-                  value,
-                  label: value,
-                }))
-              "
-            />
-            <input
-              v-model="locator"
-              class="grow"
-              :placeholder="
-                provider === 'file'
-                  ? t('JAR path', 'JAR 路径')
-                  : t('Project ID', '项目 ID')
-              "
-            /><Button
-              :disabled="!locator.trim()"
-              @click="
-                act(async () => {
-                  await mutate(
-                    ['remote', 'add', pkg.mod_id, provider, locator],
-                    t('Adding source', '正在添加来源'),
-                  );
-                  locator = '';
-                })
-              "
-              ><Plus />{{ t("Add", "添加") }}</Button
+          <h3>{{ t("Owned data", "所属数据") }}</h3>
+          <p v-if="!ownership.data.length">
+            {{ t("No observed owned data.", "尚无已观测的所属数据。") }}
+          </p>
+          <div
+            v-for="entry in ownership.data"
+            :key="entry.path"
+            class="card stack"
+          >
+            <div class="row">
+              <Folder v-if="entry.kind === 'tree'" /><File v-else /><strong
+                >{{ entry.path
+                }}{{ entry.kind === "tree" ? "/**" : "" }}</strong
+              ><span class="badge">{{ entry.scope }}</span>
+            </div>
+            <small v-for="keep in entry.preserved" :key="keep.path"
+              >{{ t("Preserve", "保留") }} · {{ keep.path }}</small
             >
           </div>
-        </div>
-        <div class="card danger-zone row wrap">
-          <div class="grow">
-            <h3>{{ t("Remove mod and data", "移除模组及数据") }}</h3>
+          <div class="card danger-zone stack">
+            <h3>{{ t("Reset mod data", "重置模组数据") }}</h3>
             <p>
               {{
                 t(
-                  "Review all affected files before removal.",
-                  "删除前会展示全部受影响文件。",
+                  "Keeps the mod installed. Orbit will ask you to review the exact files before deleting them.",
+                  "保留模组本体。Orbit 会在删除前列出具体文件并要求确认。",
                 )
               }}
             </p>
+            <Button
+              @click="
+                act(async () => {
+                  await mutate(
+                    ['reset', pkg.mod_id],
+                    t('Resetting mod data', '正在重置模组数据'),
+                  );
+                  await files();
+                })
+              "
+              >{{ t("Reset data…", "重置数据…") }}</Button
+            >
           </div>
-          <Button
-            @click="
-              act(async () => {
-                await mutate(
-                  ['purge', pkg.mod_id],
-                  t('Removing mod and data', '正在移除模组及数据'),
-                );
-                emit('close');
-              })
-            "
-            >{{ t("Purge…", "彻底移除…") }}</Button
-          >
-        </div>
-      </template>
+        </template>
+        <template v-if="tab === 'settings'">
+          <div class="card stack">
+            <h3>{{ t("Environment", "运行环境") }}</h3>
+            <div class="row">
+              <DropdownSelect
+                v-model="environment"
+                :label="t('Environment', '运行环境')"
+                :searchable="false"
+                :options="[
+                  {
+                    value: 'auto',
+                    label: t('Use JAR declaration', '按 JAR 声明'),
+                  },
+                  { value: 'client', label: t('Client', '客户端') },
+                  { value: 'server', label: t('Server', '服务端') },
+                  { value: 'both', label: t('Both', '两端') },
+                ]"
+              />
+              <Button
+                @click="
+                  act(() =>
+                    mutate(
+                      ['env', pkg.mod_id, environment],
+                      t('Updating environment', '正在更新环境'),
+                    ),
+                  )
+                "
+                >{{ t("Apply", "应用") }}</Button
+              >
+            </div>
+          </div>
+          <div class="card stack">
+            <h3>{{ t("Sources", "远端来源") }}</h3>
+            <div
+              v-for="(remote, index) in current.remotes"
+              :key="remote"
+              class="row"
+            >
+              <span class="grow">{{ remote }}</span
+              ><Button
+                type="quiet"
+                :disabled="current.remotes.length === 1"
+                :aria-label="t('Remove source', '移除来源')"
+                @click="
+                  act(() =>
+                    mutate(
+                      [
+                        'remote',
+                        'remove',
+                        pkg.mod_id,
+                        '--index',
+                        String(index),
+                      ],
+                      t('Removing source', '正在移除来源'),
+                    ),
+                  )
+                "
+                ><Trash2
+              /></Button>
+            </div>
+            <div class="row">
+              <DropdownSelect
+                v-model="provider"
+                :label="t('Source type', '来源类型')"
+                :searchable="false"
+                :options="
+                  ['modrinth', 'curseforge', 'file'].map((value) => ({
+                    value,
+                    label: value,
+                  }))
+                "
+              />
+              <input
+                v-model="locator"
+                class="grow"
+                :placeholder="
+                  provider === 'file'
+                    ? t('JAR path', 'JAR 路径')
+                    : t('Project ID', '项目 ID')
+                "
+              /><Button
+                :disabled="!locator.trim()"
+                @click="
+                  act(async () => {
+                    await mutate(
+                      ['remote', 'add', pkg.mod_id, provider, locator],
+                      t('Adding source', '正在添加来源'),
+                    );
+                    locator = '';
+                  })
+                "
+                ><Plus />{{ t("Add", "添加") }}</Button
+              >
+            </div>
+          </div>
+          <div class="card danger-zone row wrap">
+            <div class="grow">
+              <h3>{{ t("Remove mod and data", "移除模组及数据") }}</h3>
+              <p>
+                {{
+                  t(
+                    "Review all affected files before removal.",
+                    "删除前会展示全部受影响文件。",
+                  )
+                }}
+              </p>
+            </div>
+            <Button
+              @click="
+                act(async () => {
+                  await mutate(
+                    ['purge', pkg.mod_id],
+                    t('Removing mod and data', '正在移除模组及数据'),
+                  );
+                  emit('close');
+                })
+              "
+              >{{ t("Purge…", "彻底移除…") }}</Button
+            >
+          </div>
+        </template>
+      </ContentStage>
     </div>
     <template #footer>
       <Button @click="emit('close')">{{ t("Close", "关闭") }}</Button>

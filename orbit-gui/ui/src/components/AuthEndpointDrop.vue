@@ -83,9 +83,11 @@ onUnmounted(() => {
 </script>
 <template>
   <Teleport to="body"
-    ><div v-if="dragging" class="auth-drop-hint">
-      {{ t("Drop to add an authentication service", "放开以添加认证服务") }}
-    </div></Teleport
+    ><Transition name="toast"
+      ><div v-if="dragging" class="auth-drop-hint">
+        {{ t("Drop to add an authentication service", "放开以添加认证服务") }}
+      </div></Transition
+    ></Teleport
   >
   <AuthEndpointDialog
     v-if="endpointDialog"

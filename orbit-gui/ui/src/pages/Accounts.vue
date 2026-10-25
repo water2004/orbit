@@ -175,7 +175,7 @@ watch(
       <p class="error">{{ workspace.accountsError }}</p>
       <Button @click="act(reload)">{{ t("Retry", "重试") }}</Button>
     </div>
-    <div class="accounts-grid">
+    <TransitionGroup name="list" tag="div" class="accounts-grid">
       <article
         v-for="account in workspace.accounts"
         :key="account.id"
@@ -253,7 +253,7 @@ watch(
           >
         </div>
       </article>
-    </div>
+    </TransitionGroup>
     <div
       v-if="!workspace.accounts.length && !workspace.accountsError"
       class="empty"

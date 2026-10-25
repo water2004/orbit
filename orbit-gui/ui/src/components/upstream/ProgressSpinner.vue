@@ -36,9 +36,4 @@ circle {
     transform: rotate(360deg);
   }
 }
-@media (prefers-reduced-motion: reduce) {
-  .progress-spinner {
-    animation-duration: 3s;
-  }
-}
 </style>

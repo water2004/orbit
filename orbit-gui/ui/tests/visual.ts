@@ -3,6 +3,7 @@ import { createApp, h } from "vue";
 import ActivityPanel from "../src/components/ActivityPanel.vue";
 import { activity } from "../src/services/cli";
 import "../src/styles.css";
+import "../src/motion.css";
 document.documentElement.dataset.theme = "light";
 activity.tasks.push({
   id: 1,

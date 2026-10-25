@@ -10,7 +10,7 @@
       'subpage-active': isSubpage && isSubpage(route),
       disabled: disabled,
     }"
-    class="nav-button border-none text-primary cursor-pointer w-12 rounded-full h-12 flex items-center justify-center text-2xl transition-all bg-transparent hover:bg-button-bg hover:text-contrast"
+    class="nav-button border-none text-primary cursor-pointer w-12 rounded-full h-12 flex items-center justify-center text-2xl bg-transparent hover:bg-button-bg hover:text-contrast"
     @click="onClick"
   >
     <slot />
@@ -55,6 +55,9 @@ defineOptions({
 .nav-button {
   position: relative;
   isolation: isolate;
+  transition:
+    background-color var(--motion-fast),
+    color var(--motion-fast);
 
   &::before {
     content: "";
@@ -66,8 +69,8 @@ defineOptions({
     scale: 0.4;
     z-index: -1;
     transition:
-      opacity 0.25s var(--ease-out-expo),
-      scale 0.25s var(--ease-out-expo);
+      opacity var(--motion-slow) var(--motion-ease),
+      scale var(--motion-slow) var(--motion-ease);
   }
 }
 

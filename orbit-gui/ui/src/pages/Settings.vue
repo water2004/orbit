@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import ContentStage from "../components/ContentStage.vue";
 import { computed, onMounted, reactive, ref, watch } from "vue";
 import { open } from "@tauri-apps/plugin-dialog";
 import { FolderOpen, RefreshCw, ShieldCheck, Trash2 } from "lucide-vue-next";
@@ -266,7 +267,7 @@ watch(tab, (value) => {
           {{ item[1] }}
         </button>
       </nav>
-      <section class="stack settings-content">
+      <ContentStage :stage="tab" class="settings-content">
         <template v-if="tab === 'appearance' && workspace.preferences">
           <div class="card stack">
             <h2>{{ t("Language & theme", "语言与主题") }}</h2>
@@ -572,7 +573,7 @@ watch(tab, (value) => {
             {{ t("No Java runtimes found.", "未发现 Java 运行时。") }}
           </p></template
         >
-      </section>
+      </ContentStage>
     </div>
     <Modal
       v-if="removeJava"

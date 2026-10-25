@@ -33,6 +33,7 @@ import DropdownSelect from "../components/upstream/DropdownSelect.vue";
 import ProgressSpinner from "../components/upstream/ProgressSpinner.vue";
 import LoaderIcon from "../components/LoaderIcon.vue";
 import ImportInstance from "../components/ImportInstance.vue";
+import ContentStage from "../components/ContentStage.vue";
 const importOpen = ref(false);
 const route = useRoute(),
   router = useRouter(),
@@ -250,17 +251,17 @@ watch(step, (value) => {
 });
 </script>
 <template>
-  <ImportInstance
-    v-if="importOpen"
-    @close="importOpen = false"
-    @imported="
-      (id) => {
-        importOpen = false;
-        router.push(instancePath(id, 'runtime'));
-      }
-    "
-  />
   <div class="page create-page">
+    <ImportInstance
+      v-if="importOpen"
+      @close="importOpen = false"
+      @imported="
+        (id) => {
+          importOpen = false;
+          router.push(instancePath(id, 'runtime'));
+        }
+      "
+    />
     <header class="page-heading">
       <div>
         <h1>
@@ -310,309 +311,315 @@ watch(step, (value) => {
       </div>
     </nav>
     <p v-if="error" class="error card">{{ error }}</p>
-    <div v-if="step === -1" class="setup-options stack">
-      <h2>{{ t("How would you like to start?", "从哪里开始？") }}</h2>
-      <BigOptionButton
-        :icon="Boxes"
-        :title="t('Build your own', '创建自己的实例')"
-        :description="
-          t(
-            'Choose Minecraft and a loader, then add the mods you want.',
-            '选择 Minecraft 和加载器，再添加你需要的模组。',
-          )
-        "
-        @click="customInstallation"
-      />
-      <BigOptionButton
-        :icon="Download"
-        :title="t('Install a modpack', '从整合包安装')"
-        :description="
-          t(
-            'Open an Orbit bundle or Modrinth .mrpack file.',
-            '打开 Orbit 组合包或 Modrinth .mrpack 文件。',
-          )
-        "
-        @click="act(inspectPack)"
-      />
-      <BigOptionButton
-        :icon="FolderInput"
-        :disabled="busy"
-        :title="t('Import an existing instance', '导入已有实例')"
-        :description="
-          t(
-            'Copy an existing launcher instance into Orbit, keeping your original files.',
-            '将其他启动器的实例导入 Orbit，保留原文件。',
-          )
-        "
-        @click="act(importDirectory)"
-      />
-    </div>
-    <template v-if="review"
-      ><div class="card stack">
-        <h2>{{ t("Migration target", "迁移目标") }}</h2>
-        <p>{{ source?.name }} → {{ review.target.name }}</p>
-        <p>
-          {{
+    <ContentStage :stage="review ? 'migration' : step">
+      <div v-if="step === -1" class="setup-options stack">
+        <h2>{{ t("How would you like to start?", "从哪里开始？") }}</h2>
+        <BigOptionButton
+          :icon="Boxes"
+          :title="t('Build your own', '创建自己的实例')"
+          :description="
             t(
-              "The target runtime is ready. Orbit selects and confirms the mod migration in one operation.",
-              "目标运行时已准备好。Orbit 将在同一次操作中完成模组方案选择与最终确认。",
+              'Choose Minecraft and a loader, then add the mods you want.',
+              '选择 Minecraft 和加载器，再添加你需要的模组。',
             )
-          }}
-        </p>
+          "
+          @click="customInstallation"
+        />
+        <BigOptionButton
+          :icon="Download"
+          :title="t('Install a modpack', '从整合包安装')"
+          :description="
+            t(
+              'Open an Orbit bundle or Modrinth .mrpack file.',
+              '打开 Orbit 组合包或 Modrinth .mrpack 文件。',
+            )
+          "
+          @click="act(inspectPack)"
+        />
+        <BigOptionButton
+          :icon="FolderInput"
+          :disabled="busy"
+          :title="t('Import an existing instance', '导入已有实例')"
+          :description="
+            t(
+              'Copy an existing launcher instance into Orbit, keeping your original files.',
+              '将其他启动器的实例导入 Orbit，保留原文件。',
+            )
+          "
+          @click="act(importDirectory)"
+        />
       </div>
-      <div class="toolbar">
-        <p v-if="!review.exported" class="grow">
-          {{
-            t(
-              "The source snapshot is kept if you stop here.",
-              "若在此停止，迁移源快照会保留。",
-            )
-          }}<br /><small>{{ review.sourcePack }}</small>
-        </p>
-        <p v-else class="grow">
-          {{
-            t(
-              "The selected plan is saved in the target. Continue to install its exact packages without selecting again.",
-              "所选方案已保存到目标实例。继续将安装精确包版本，无需重新选择。",
-            )
-          }}
-        </p>
-        <Button type="colored" :loading="busy" @click="act(migrate)">{{
-          t("Continue migration", "继续迁移")
-        }}</Button>
-      </div></template
-    >
-    <template v-else-if="step >= 0">
-      <div v-if="step === 0" class="stack">
-        <div class="toolbar">
-          <div class="tabs">
-            <button
-              v-for="item in [
-                ['release', t('Releases', '正式版')],
-                ['snapshot', t('Snapshots', '快照')],
-                ['all', t('All versions', '全部版本')],
-              ]"
-              :key="item[0]"
-              :class="{ active: versionFilter === item[0] }"
-              @click="versionFilter = item[0]"
-            >
-              {{ item[1] }}
-            </button>
-          </div>
-        </div>
-        <label class="field"
-          >{{ t("Minecraft version", "Minecraft 版本")
-          }}<DropdownSelect
-            v-model="draft.minecraft"
-            :label="t('Minecraft version', 'Minecraft 版本')"
-            :loading="catalogLoading"
-            :options="
-              visibleVersions.map((version) => ({
-                value: version.id,
-                label: version.id,
-                badge:
-                  version.version_type === 'release'
-                    ? t('Release', '正式版')
-                    : version.version_type === 'snapshot'
-                      ? t('Snapshot', '快照')
-                      : version.version_type,
-              }))
-            "
-        /></label>
-        <Button
-          v-if="!catalogLoading && !catalog.length"
-          @click="loadCatalog"
-          >{{ t("Retry", "重试") }}</Button
-        >
-      </div>
-      <div v-if="step === 1" class="stack">
-        <div class="card stack components-card">
-          <h2>Minecraft {{ draft.minecraft }}</h2>
+      <template v-if="review"
+        ><div class="card stack">
+          <h2>{{ t("Migration target", "迁移目标") }}</h2>
+          <p>{{ source?.name }} → {{ review.target.name }}</p>
           <p>
             {{
               t(
-                "Only versions compatible with this Minecraft release are listed.",
-                "这里只列出兼容此 Minecraft 版本的加载器版本。",
+                "The target runtime is ready. Orbit selects and confirms the mod migration in one operation.",
+                "目标运行时已准备好。Orbit 将在同一次操作中完成模组方案选择与最终确认。",
               )
             }}
           </p>
-          <div class="loader-grid">
-            <button
-              v-for="loader in [
-                'vanilla',
-                'fabric',
-                'quilt',
-                'forge',
-                'neoforge',
-              ]"
-              :key="loader"
-              :disabled="mode === 'loader' || !!pack"
-              :class="{ selected: draft.loader === loader }"
-              :aria-pressed="draft.loader === loader"
-              @click="
-                draft.loader = loader;
-                act(components);
-              "
-            >
-              <LoaderIcon
-                v-if="loader !== 'vanilla'"
-                :loader="loader"
-                :size="20"
-              />
-              <strong>{{
-                loader === "vanilla"
-                  ? t("Vanilla", "原版")
-                  : loader === "neoforge"
-                    ? "NeoForge"
-                    : loader[0].toUpperCase() + loader.slice(1)
-              }}</strong
-              ><Check v-if="draft.loader === loader" :size="16" />
-            </button>
+        </div>
+        <div class="toolbar">
+          <p v-if="!review.exported" class="grow">
+            {{
+              t(
+                "The source snapshot is kept if you stop here.",
+                "若在此停止，迁移源快照会保留。",
+              )
+            }}<br /><small>{{ review.sourcePack }}</small>
+          </p>
+          <p v-else class="grow">
+            {{
+              t(
+                "The selected plan is saved in the target. Continue to install its exact packages without selecting again.",
+                "所选方案已保存到目标实例。继续将安装精确包版本，无需重新选择。",
+              )
+            }}
+          </p>
+          <Button type="colored" :loading="busy" @click="act(migrate)">{{
+            t("Continue migration", "继续迁移")
+          }}</Button>
+        </div></template
+      >
+      <template v-else-if="step >= 0">
+        <div v-if="step === 0" class="stack">
+          <div class="toolbar">
+            <div class="tabs">
+              <button
+                v-for="item in [
+                  ['release', t('Releases', '正式版')],
+                  ['snapshot', t('Snapshots', '快照')],
+                  ['all', t('All versions', '全部版本')],
+                ]"
+                :key="item[0]"
+                :class="{ active: versionFilter === item[0] }"
+                @click="versionFilter = item[0]"
+              >
+                {{ item[1] }}
+              </button>
+            </div>
           </div>
-          <label v-if="draft.loader !== 'vanilla'" class="field loader-version"
-            >{{ t("Loader version", "加载器版本")
+          <label class="field"
+            >{{ t("Minecraft version", "Minecraft 版本")
             }}<DropdownSelect
-              v-model="draft.loaderVersion"
-              :disabled="!!pack"
-              :loading="loading"
-              :label="t('Loader version', '加载器版本')"
+              v-model="draft.minecraft"
+              :label="t('Minecraft version', 'Minecraft 版本')"
+              :loading="catalogLoading"
               :options="
-                loaders.map((version) => ({
-                  value: version.version,
-                  label: version.version,
-                  badge: version.stable ? t('Stable', '稳定版') : undefined,
+                visibleVersions.map((version) => ({
+                  value: version.id,
+                  label: version.id,
+                  badge:
+                    version.version_type === 'release'
+                      ? t('Release', '正式版')
+                      : version.version_type === 'snapshot'
+                        ? t('Snapshot', '快照')
+                        : version.version_type,
                 }))
               "
           /></label>
-          <div class="java-requirement row">
-            <div class="grow">
-              <h3>Java {{ java ?? "—" }}</h3>
-              <p>
-                {{
-                  t(
-                    "Launcher follows your Java selection, preferring a matching local runtime in automatic mode.",
-                    "Launcher 遵循 Java 选择；自动模式优先使用匹配的本地运行时。",
-                  )
-                }}
-              </p>
-            </div>
-            <ProgressSpinner v-if="loading" /><span v-else class="badge">{{
-              t("Automatic selection", "按设置选择")
-            }}</span>
-          </div>
-        </div>
-        <Button v-if="!loading && error" @click="components">{{
-          t("Retry loading components", "重新加载组件")
-        }}</Button>
-      </div>
-      <div v-if="step === 2" class="stack">
-        <div class="card stack">
-          <label class="field"
-            >{{ t("Instance name", "实例名称")
-            }}<input v-model="draft.name" :disabled="mode === 'loader'"
-          /></label>
-          <div class="row">
-            <label
-              ><input
-                v-model="draft.kind"
-                type="radio"
-                value="client"
-                :disabled="
-                  mode !== 'new' || (!!pack && !pack.targets.includes('client'))
-                "
-              />{{ t("Client", "客户端") }}</label
-            ><label
-              ><input
-                v-model="draft.kind"
-                type="radio"
-                value="server"
-                :disabled="
-                  mode !== 'new' || (!!pack && !pack.targets.includes('server'))
-                "
-              />{{ t("Dedicated server", "独立服务端") }}</label
-            >
-          </div>
-          <div v-if="draft.kind === 'server'" class="row">
-            <span class="grow">{{
-              draft.serverDirectory ||
-              t("Choose a new server directory", "选择新的服务端目录")
-            }}</span
-            ><Button
-              @click="
-                act(async () => {
-                  const path = await open({ directory: true });
-                  if (typeof path === 'string')
-                    draft.serverDirectory = await join(path, draft.name);
-                })
-              "
-              ><FolderOpen />{{
-                t("Choose parent folder", "选择存放位置")
-              }}</Button
-            >
-          </div>
-          <div class="review-grid">
-            <span>Minecraft</span><strong>{{ draft.minecraft }}</strong
-            ><span>{{ t("Loader", "加载器") }}</span
-            ><strong>{{ draft.loader }} {{ draft.loaderVersion }}</strong
-            ><span>Java</span><strong>{{ java }}</strong
-            ><template v-if="pack"
-              ><span>{{ t("Modpack", "整合包") }}</span
-              ><strong>{{ pack.name }} {{ pack.version }}</strong></template
-            >
-          </div>
-        </div>
-        <div v-if="pack?.optional_files.length" class="card stack">
-          <h3>{{ t("Optional content", "可选内容") }}</h3>
-          <label
-            v-for="file in pack.optional_files.filter((f) =>
-              f.targets.includes(draft.kind),
-            )"
-            :key="file.path"
-            ><input v-model="optional" type="checkbox" :value="file.path" />{{
-              file.path
-            }}</label
+          <Button
+            v-if="!catalogLoading && !catalog.length"
+            @click="loadCatalog"
+            >{{ t("Retry", "重试") }}</Button
           >
         </div>
-        <p v-if="mode === 'migrate'">
-          {{
-            t(
-              "The source is exported first. The new runtime is then installed, and Orbit checks mod compatibility against the actual target.",
-              "先导出源实例，再安装目标运行时，随后由 Orbit 针对实际目标检查模组兼容性。",
-            )
-          }}
-        </p>
-      </div>
-      <footer class="wizard-footer">
-        <Button
-          :disabled="
-            busy ||
-            (step === 0 && mode !== 'new') ||
-            (step === 1 && (mode === 'loader' || !!pack))
-          "
-          @click="step--"
-          ><ChevronLeft />{{ t("Back", "上一步") }}</Button
-        ><span class="grow" /><Button
-          v-if="step < 2"
-          type="colored"
-          :disabled="!canNext || loading"
-          @click="act(next)"
-          >{{ t("Continue", "继续") }}<ChevronRight /></Button
-        ><Button
-          v-else
-          type="colored"
-          :disabled="!canNext"
-          :loading="busy"
-          @click="install"
-          ><ArrowUpCircle v-if="mode !== 'new'" /><Download v-else />{{
-            mode === "migrate"
-              ? t("Create target & check", "创建目标并检查")
-              : mode === "loader"
-                ? t("Update loader", "更新加载器")
-                : t("Install", "安装")
-          }}</Button
-        >
-      </footer>
-    </template>
+        <div v-if="step === 1" class="stack">
+          <div class="card stack components-card">
+            <h2>Minecraft {{ draft.minecraft }}</h2>
+            <p>
+              {{
+                t(
+                  "Only versions compatible with this Minecraft release are listed.",
+                  "这里只列出兼容此 Minecraft 版本的加载器版本。",
+                )
+              }}
+            </p>
+            <div class="loader-grid">
+              <button
+                v-for="loader in [
+                  'vanilla',
+                  'fabric',
+                  'quilt',
+                  'forge',
+                  'neoforge',
+                ]"
+                :key="loader"
+                :disabled="mode === 'loader' || !!pack"
+                :class="{ selected: draft.loader === loader }"
+                :aria-pressed="draft.loader === loader"
+                @click="
+                  draft.loader = loader;
+                  act(components);
+                "
+              >
+                <LoaderIcon
+                  v-if="loader !== 'vanilla'"
+                  :loader="loader"
+                  :size="20"
+                />
+                <strong>{{
+                  loader === "vanilla"
+                    ? t("Vanilla", "原版")
+                    : loader === "neoforge"
+                      ? "NeoForge"
+                      : loader[0].toUpperCase() + loader.slice(1)
+                }}</strong
+                ><Check v-if="draft.loader === loader" :size="16" />
+              </button>
+            </div>
+            <label
+              v-if="draft.loader !== 'vanilla'"
+              class="field loader-version"
+              >{{ t("Loader version", "加载器版本")
+              }}<DropdownSelect
+                v-model="draft.loaderVersion"
+                :disabled="!!pack"
+                :loading="loading"
+                :label="t('Loader version', '加载器版本')"
+                :options="
+                  loaders.map((version) => ({
+                    value: version.version,
+                    label: version.version,
+                    badge: version.stable ? t('Stable', '稳定版') : undefined,
+                  }))
+                "
+            /></label>
+            <div class="java-requirement row">
+              <div class="grow">
+                <h3>Java {{ java ?? "—" }}</h3>
+                <p>
+                  {{
+                    t(
+                      "Launcher follows your Java selection, preferring a matching local runtime in automatic mode.",
+                      "Launcher 遵循 Java 选择；自动模式优先使用匹配的本地运行时。",
+                    )
+                  }}
+                </p>
+              </div>
+              <ProgressSpinner v-if="loading" /><span v-else class="badge">{{
+                t("Automatic selection", "按设置选择")
+              }}</span>
+            </div>
+          </div>
+          <Button v-if="!loading && error" @click="components">{{
+            t("Retry loading components", "重新加载组件")
+          }}</Button>
+        </div>
+        <div v-if="step === 2" class="stack">
+          <div class="card stack">
+            <label class="field"
+              >{{ t("Instance name", "实例名称")
+              }}<input v-model="draft.name" :disabled="mode === 'loader'"
+            /></label>
+            <div class="row">
+              <label
+                ><input
+                  v-model="draft.kind"
+                  type="radio"
+                  value="client"
+                  :disabled="
+                    mode !== 'new' ||
+                    (!!pack && !pack.targets.includes('client'))
+                  "
+                />{{ t("Client", "客户端") }}</label
+              ><label
+                ><input
+                  v-model="draft.kind"
+                  type="radio"
+                  value="server"
+                  :disabled="
+                    mode !== 'new' ||
+                    (!!pack && !pack.targets.includes('server'))
+                  "
+                />{{ t("Dedicated server", "独立服务端") }}</label
+              >
+            </div>
+            <div v-if="draft.kind === 'server'" class="row">
+              <span class="grow">{{
+                draft.serverDirectory ||
+                t("Choose a new server directory", "选择新的服务端目录")
+              }}</span
+              ><Button
+                @click="
+                  act(async () => {
+                    const path = await open({ directory: true });
+                    if (typeof path === 'string')
+                      draft.serverDirectory = await join(path, draft.name);
+                  })
+                "
+                ><FolderOpen />{{
+                  t("Choose parent folder", "选择存放位置")
+                }}</Button
+              >
+            </div>
+            <div class="review-grid">
+              <span>Minecraft</span><strong>{{ draft.minecraft }}</strong
+              ><span>{{ t("Loader", "加载器") }}</span
+              ><strong>{{ draft.loader }} {{ draft.loaderVersion }}</strong
+              ><span>Java</span><strong>{{ java }}</strong
+              ><template v-if="pack"
+                ><span>{{ t("Modpack", "整合包") }}</span
+                ><strong>{{ pack.name }} {{ pack.version }}</strong></template
+              >
+            </div>
+          </div>
+          <div v-if="pack?.optional_files.length" class="card stack">
+            <h3>{{ t("Optional content", "可选内容") }}</h3>
+            <label
+              v-for="file in pack.optional_files.filter((f) =>
+                f.targets.includes(draft.kind),
+              )"
+              :key="file.path"
+              ><input v-model="optional" type="checkbox" :value="file.path" />{{
+                file.path
+              }}</label
+            >
+          </div>
+          <p v-if="mode === 'migrate'">
+            {{
+              t(
+                "The source is exported first. The new runtime is then installed, and Orbit checks mod compatibility against the actual target.",
+                "先导出源实例，再安装目标运行时，随后由 Orbit 针对实际目标检查模组兼容性。",
+              )
+            }}
+          </p>
+        </div>
+        <footer class="wizard-footer">
+          <Button
+            :disabled="
+              busy ||
+              (step === 0 && mode !== 'new') ||
+              (step === 1 && (mode === 'loader' || !!pack))
+            "
+            @click="step--"
+            ><ChevronLeft />{{ t("Back", "上一步") }}</Button
+          ><span class="grow" /><Button
+            v-if="step < 2"
+            type="colored"
+            :disabled="!canNext || loading"
+            @click="act(next)"
+            >{{ t("Continue", "继续") }}<ChevronRight /></Button
+          ><Button
+            v-else
+            type="colored"
+            :disabled="!canNext"
+            :loading="busy"
+            @click="install"
+            ><ArrowUpCircle v-if="mode !== 'new'" /><Download v-else />{{
+              mode === "migrate"
+                ? t("Create target & check", "创建目标并检查")
+                : mode === "loader"
+                  ? t("Update loader", "更新加载器")
+                  : t("Install", "安装")
+            }}</Button
+          >
+        </footer>
+      </template>
+    </ContentStage>
   </div>
 </template>
 <style scoped>
@@ -637,6 +644,7 @@ watch(step, (value) => {
   display: flex;
   align-items: center;
   gap: 8px;
+  transition: color var(--motion-fast);
 }
 .stepper span {
   width: 27px;
@@ -645,6 +653,9 @@ watch(step, (value) => {
   place-items: center;
   border-radius: 50%;
   background: var(--surface-4);
+  transition:
+    background-color var(--motion-normal),
+    color var(--motion-normal);
 }
 .stepper .active {
   color: var(--color-contrast);
@@ -674,6 +685,10 @@ watch(step, (value) => {
   gap: 7px;
   background: var(--surface-2);
   cursor: pointer;
+  transition:
+    background-color var(--motion-fast),
+    border-color var(--motion-fast),
+    box-shadow var(--motion-fast);
 }
 .loader-grid strong {
   flex: 1;

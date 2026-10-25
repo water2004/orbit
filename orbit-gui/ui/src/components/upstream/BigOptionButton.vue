@@ -30,8 +30,9 @@ defineEmits<{ click: [] }>();
   background: var(--surface-3);
   border: 1px solid var(--surface-5);
   transition:
-    background 0.15s,
-    transform 0.15s;
+    background-color var(--motion-fast),
+    border-color var(--motion-fast),
+    transform var(--motion-fast) var(--motion-ease);
   cursor: pointer;
 }
 .big-option:hover {

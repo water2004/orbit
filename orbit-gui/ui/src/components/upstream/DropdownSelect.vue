@@ -178,7 +178,7 @@ onUnmounted(() => document.removeEventListener("pointerdown", outside));
         :class="{ rotated: opened }"
       />
     </button>
-    <Transition name="select">
+    <Transition name="popover">
       <div
         v-if="opened"
         class="options-wrapper"
@@ -279,7 +279,7 @@ img {
 }
 .select-trigger > svg {
   flex-shrink: 0;
-  transition: transform 0.15s;
+  transition: transform var(--motion-fast) var(--motion-ease);
 }
 .rotated {
   transform: rotate(180deg);
@@ -298,10 +298,12 @@ img {
   border-radius: 12px;
   background: var(--surface-2);
   box-shadow: 0 8px 24px #0003;
+  transform-origin: top center;
 }
 .options-wrapper.above {
   top: auto;
   bottom: calc(100% + 6px);
+  transform-origin: bottom center;
 }
 .select-search {
   display: flex;
@@ -340,22 +342,5 @@ img {
 }
 .no-options {
   padding: 12px;
-}
-.select-enter-active,
-.select-leave-active {
-  transition:
-    opacity 0.12s,
-    transform 0.12s;
-}
-.select-enter-from,
-.select-leave-to {
-  opacity: 0;
-  transform: translateY(-4px);
-}
-@media (prefers-reduced-motion: reduce) {
-  .select-enter-active,
-  .select-leave-active {
-    transition: none;
-  }
 }
 </style>

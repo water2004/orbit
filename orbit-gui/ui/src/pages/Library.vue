@@ -71,7 +71,12 @@ async function openInstance(id: string) {
         }}</label
       >
     </div>
-    <div class="instance-grid" :class="{ compact }">
+    <TransitionGroup
+      name="list"
+      tag="div"
+      class="instance-grid"
+      :class="{ compact }"
+    >
       <article
         v-for="instance in instances"
         :key="instance.id"
@@ -104,7 +109,7 @@ async function openInstance(id: string) {
           /></Button>
         </div>
       </article>
-    </div>
+    </TransitionGroup>
     <div v-if="!instances.length" class="empty">
       <h2>
         {{
@@ -154,6 +159,7 @@ async function openInstance(id: string) {
   background: none;
   border-radius: 20px;
   cursor: pointer;
+  transition: filter var(--motion-fast);
 }
 .card-link:hover {
   filter: brightness(1.05);

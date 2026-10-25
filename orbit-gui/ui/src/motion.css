@@ -1,0 +1,140 @@
+/* Presentation only: never animate task counters or delay CLI interactions. */
+:root {
+  --motion-fast: 120ms;
+  --motion-normal: 180ms;
+  --motion-slow: 240ms;
+  --motion-exit: 90ms;
+  --motion-ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+input:not([type="checkbox"]),
+select,
+textarea {
+  transition:
+    border-color var(--motion-fast),
+    box-shadow var(--motion-fast);
+}
+.tabs button {
+  transition:
+    background-color var(--motion-fast),
+    color var(--motion-fast),
+    border-color var(--motion-fast);
+}
+.back-link,
+.text-link {
+  transition: color var(--motion-fast);
+}
+
+.page-enter-active,
+.content-enter-active {
+  transition:
+    opacity var(--motion-normal) var(--motion-ease),
+    transform var(--motion-normal) var(--motion-ease);
+}
+.page-leave-active,
+.content-leave-active {
+  transition: opacity var(--motion-exit) ease-out;
+  pointer-events: none;
+}
+.page-enter-from,
+.content-enter-from {
+  opacity: 0;
+  transform: translateY(6px);
+}
+.page-leave-to,
+.content-leave-to {
+  opacity: 0;
+}
+
+.popover-enter-active,
+.toast-enter-active,
+.list-enter-active {
+  transition:
+    opacity var(--motion-normal) var(--motion-ease),
+    transform var(--motion-normal) var(--motion-ease);
+}
+.popover-leave-active,
+.toast-leave-active,
+.list-leave-active {
+  transition:
+    opacity var(--motion-exit),
+    transform var(--motion-exit);
+  pointer-events: none;
+}
+.popover-enter-from,
+.popover-leave-to {
+  opacity: 0;
+  transform: translateY(-4px) scale(0.98);
+}
+.toast-enter-from,
+.toast-leave-to {
+  opacity: 0;
+  transform: translateY(8px);
+}
+.list-enter-from,
+.list-leave-to {
+  opacity: 0;
+  transform: translateY(6px);
+}
+.list-move {
+  transition: transform var(--motion-normal) var(--motion-ease);
+}
+
+/* Keep the backdrop stationary; only the drawer itself slides. */
+.drawer-enter-active,
+.drawer-leave-active {
+  transition: opacity var(--motion-slow) var(--motion-ease);
+}
+.drawer-enter-active .activity-drawer,
+.drawer-leave-active .activity-drawer {
+  transition: transform var(--motion-slow) var(--motion-ease);
+}
+.drawer-enter-from,
+.drawer-leave-to {
+  opacity: 0;
+}
+.drawer-enter-from .activity-drawer,
+.drawer-leave-to .activity-drawer {
+  transform: translateX(100%);
+}
+.drawer-leave-active {
+  pointer-events: none;
+}
+
+/* Native dialog keeps its own top-layer, focus and Escape lifecycle. */
+.modal[open] {
+  animation: dialog-enter var(--motion-normal) var(--motion-ease);
+}
+.modal[open]::backdrop {
+  animation: backdrop-enter var(--motion-normal) ease-out;
+}
+@keyframes dialog-enter {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.985);
+  }
+}
+@keyframes backdrop-enter {
+  from {
+    opacity: 0;
+  }
+}
+
+.spin {
+  animation: spin 1s linear infinite;
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
+    scroll-behavior: auto !important;
+  }
+}
