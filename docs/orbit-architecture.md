@@ -9,6 +9,8 @@ Launcher 外部实例导入集中于 `external_instance/`，来源适配后复�
 
 可安全重放的网络读取统一使用 `orbit-http`，重试覆盖响应体完成，状态/发送/读取共享一次
 有限预算。HTTP 传输与 JSON/领域校验分开，GUI 不重放事务；具体规则见 [网络重试](orbit-network.md)。
+Microsoft 认证的重放安全性由认证模块按步骤决定：proof 交换与 GET 可以有限重试，
+OAuth 设备码/token 请求不重放；不因统一客户端关闭底层重试而遗漏认证链，也不重跑完整登录。
 
 GUI 导航与基础控件基于 Modrinth App 源码适配，采用 GPL-3.0-only；不导入其业务后端。
 原 GPUI 页面已移除。Vue 仅通过 Tauri 进程桥消费同一 CLI 协议，细节见 [GUI 架构](orbit-gui.md)。

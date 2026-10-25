@@ -60,13 +60,12 @@ pub async fn begin_microsoft_device_login(
     secrets: &dyn SecretStore,
 ) -> Result<MicrosoftDeviceSession, LauncherError> {
     let client_id = MICROSOFT_CLIENT_ID;
-    let response = client
+    let request = client
         .post(DEVICE_CODE_URL)
-        .form(&[("client_id", client_id), ("scope", MICROSOFT_SCOPE)])
-        .send()
-        .await?;
-    let response: DeviceCodeResponse =
-        decode_success("Microsoft device authorization", response).await?;
+        .form(&[("client_id", client_id), ("scope", MICROSOFT_SCOPE)]);
+    let response =
+        read_auth_response("Microsoft device authorization", request, AuthReplay::Never).await?;
+    let response: DeviceCodeResponse = decode_success("Microsoft device authorization", response)?;
     if response.device_code.is_empty()
         || response.user_code.is_empty()
         || response.expires_in == 0
@@ -166,17 +165,15 @@ where
                 "Microsoft device authorization expired before it was approved".to_string(),
             ));
         }
-        let response = client
-            .post(TOKEN_URL)
-            .form(&[
-                ("grant_type", "urn:ietf:params:oauth:grant-type:device_code"),
-                ("client_id", private.client_id.as_str()),
-                ("device_code", private.device_code.as_str()),
-            ])
-            .send()
-            .await?;
-        let status = response.status();
-        let token: OAuthTokenResponse = decode_json("Microsoft device token", response).await?;
+        let request = client.post(TOKEN_URL).form(&[
+            ("grant_type", "urn:ietf:params:oauth:grant-type:device_code"),
+            ("client_id", private.client_id.as_str()),
+            ("device_code", private.device_code.as_str()),
+        ]);
+        let response =
+            read_auth_response("Microsoft device token", request, AuthReplay::Never).await?;
+        let status = response.status;
+        let token: OAuthTokenResponse = decode_json("Microsoft device token", &response.body)?;
         if status.is_success() {
             break token.require_tokens()?;
         }
@@ -288,18 +285,16 @@ pub(super) async fn resolve_microsoft_identity(
     }
 
     let client_id = MICROSOFT_CLIENT_ID;
-    let response = client
-        .post(TOKEN_URL)
-        .form(&[
-            ("client_id", client_id),
-            ("refresh_token", refresh_token.as_str()),
-            ("grant_type", "refresh_token"),
-            ("scope", MICROSOFT_SCOPE),
-        ])
-        .send()
-        .await?;
-    let status = response.status();
-    let oauth: OAuthTokenResponse = decode_json("Microsoft token refresh", response).await?;
+    let request = client.post(TOKEN_URL).form(&[
+        ("client_id", client_id),
+        ("refresh_token", refresh_token.as_str()),
+        ("grant_type", "refresh_token"),
+        ("scope", MICROSOFT_SCOPE),
+    ]);
+    let response =
+        read_auth_response("Microsoft token refresh", request, AuthReplay::Never).await?;
+    let status = response.status;
+    let oauth: OAuthTokenResponse = decode_json("Microsoft token refresh", &response.body)?;
     if !status.is_success() {
         let detail = oauth
             .error_description
@@ -372,7 +367,7 @@ async fn exchange_microsoft_token<F>(
 where
     F: FnMut(MicrosoftLoginProgressEvent),
 {
-    let xbox: XboxAuthenticationResponse = post_json(
+    let xbox: XboxAuthenticationResponse = exchange_proof(
         client,
         "Xbox Live authentication",
         XBOX_USER_AUTH_URL,
@@ -389,7 +384,7 @@ where
     .await?;
     let uhs = xbox.uhs()?;
     progress(MicrosoftLoginProgressEvent::XboxAuthenticated);
-    let xsts: XboxAuthenticationResponse = post_json(
+    let xsts: XboxAuthenticationResponse = exchange_proof(
         client,
         "Xbox XSTS authorization",
         XSTS_AUTH_URL,
@@ -408,7 +403,7 @@ where
             "Xbox XSTS response changed the user hash".to_string(),
         ));
     }
-    let login: MinecraftLoginResponse = post_json(
+    let login: MinecraftLoginResponse = exchange_proof(
         client,
         "Minecraft Services authentication",
         MINECRAFT_LOGIN_URL,
@@ -422,13 +417,17 @@ where
             "Minecraft Services returned an incomplete session".to_string(),
         ));
     }
-    let entitlements_response = client
+    let entitlements_request = client
         .get(MINECRAFT_ENTITLEMENTS_URL)
-        .bearer_auth(&login.access_token)
-        .send()
-        .await?;
+        .bearer_auth(&login.access_token);
+    let entitlements_response = read_auth_response(
+        "Minecraft ownership check",
+        entitlements_request,
+        AuthReplay::Read,
+    )
+    .await?;
     let entitlements: EntitlementsResponse =
-        decode_success("Minecraft ownership check", entitlements_response).await?;
+        decode_success("Minecraft ownership check", entitlements_response)?;
     if entitlements.items.is_empty() {
         return Err(LauncherError::Authentication(
             "Microsoft account does not own Minecraft: Java Edition".to_string(),
@@ -461,23 +460,21 @@ async fn get_minecraft_profile(
     token_type: &str,
     access_token: &str,
 ) -> Result<ProfileLookup, LauncherError> {
-    let response = client
-        .get(MINECRAFT_PROFILE_URL)
-        .header(
-            reqwest::header::AUTHORIZATION,
-            format!("{token_type} {access_token}"),
-        )
-        .send()
-        .await?;
-    if matches!(response.status().as_u16(), 401 | 403) {
+    let request = client.get(MINECRAFT_PROFILE_URL).header(
+        reqwest::header::AUTHORIZATION,
+        format!("{token_type} {access_token}"),
+    );
+    let response = read_auth_response("Minecraft profile", request, AuthReplay::Read).await?;
+    if matches!(response.status.as_u16(), 401 | 403) {
         return Ok(ProfileLookup::Unauthorized);
     }
-    decode_success("Minecraft profile", response)
-        .await
-        .map(ProfileLookup::Found)
+    decode_success("Minecraft profile", response).map(ProfileLookup::Found)
 }
 
-async fn post_json<T, R>(
+/// These three proof exchanges (XBL, XSTS and Minecraft login) can be repeated
+/// with the same proof, unlike redeeming a device code or rotating OAuth tokens.
+/// The authentication protocol opts in here, not based on the HTTP method.
+async fn exchange_proof<T, R>(
     client: &reqwest::Client,
     subject: &str,
     url: &str,
@@ -487,16 +484,51 @@ where
     T: Serialize + ?Sized,
     R: for<'de> Deserialize<'de>,
 {
-    let response = client.post(url).json(request).send().await?;
-    decode_success(subject, response).await
+    let response = read_auth_response(
+        subject,
+        client
+            .post(url)
+            .header(reqwest::header::ACCEPT, "application/json")
+            .json(request),
+        AuthReplay::ProofExchange,
+    )
+    .await?;
+    decode_success(subject, response)
 }
 
-async fn decode_success<R>(subject: &str, response: reqwest::Response) -> Result<R, LauncherError>
+#[derive(Clone, Copy)]
+enum AuthReplay {
+    Never,
+    ProofExchange,
+    Read,
+}
+
+async fn read_auth_response(
+    subject: &str,
+    request: reqwest::RequestBuilder,
+    replay: AuthReplay,
+) -> Result<orbit_http::BufferedResponse, LauncherError> {
+    let retries = match replay {
+        AuthReplay::Never => 0,
+        AuthReplay::ProofExchange | AuthReplay::Read => 3,
+    };
+    orbit_http::read(request, retries, MAX_AUTH_RESPONSE_BYTES as u64)
+        .await
+        .map_err(|error| match error {
+            orbit_http::Error::Network(error) => LauncherError::Network(error),
+            error => LauncherError::Authentication(format!("{subject}: {error}")),
+        })
+}
+
+fn decode_success<R>(
+    subject: &str,
+    response: orbit_http::BufferedResponse,
+) -> Result<R, LauncherError>
 where
     R: for<'de> Deserialize<'de>,
 {
-    let status = response.status();
-    let bytes = read_bounded_response(subject, response).await?;
+    let status = response.status;
+    let bytes = response.body;
     if !status.is_success() {
         let remote = serde_json::from_slice::<RemoteServiceError>(&bytes).ok();
         let code = remote
@@ -524,40 +556,16 @@ where
             status.as_u16(),
         )));
     }
-    serde_json::from_slice(&bytes).map_err(|error| {
-        LauncherError::Authentication(format!("{subject} returned invalid JSON: {error}"))
-    })
+    decode_json(subject, &bytes)
 }
 
-async fn decode_json<R>(subject: &str, response: reqwest::Response) -> Result<R, LauncherError>
+fn decode_json<R>(subject: &str, bytes: &[u8]) -> Result<R, LauncherError>
 where
     R: for<'de> Deserialize<'de>,
 {
-    let bytes = read_bounded_response(subject, response).await?;
-    serde_json::from_slice(&bytes).map_err(|error| {
+    serde_json::from_slice(bytes).map_err(|error| {
         LauncherError::Authentication(format!("{subject} returned invalid JSON: {error}"))
     })
-}
-
-async fn read_bounded_response(
-    subject: &str,
-    response: reqwest::Response,
-) -> Result<Vec<u8>, LauncherError> {
-    if response
-        .content_length()
-        .is_some_and(|length| length > MAX_AUTH_RESPONSE_BYTES as u64)
-    {
-        return Err(LauncherError::Authentication(format!(
-            "{subject} response exceeds {MAX_AUTH_RESPONSE_BYTES} bytes"
-        )));
-    }
-    let bytes = response.bytes().await?;
-    if bytes.len() > MAX_AUTH_RESPONSE_BYTES {
-        return Err(LauncherError::Authentication(format!(
-            "{subject} response exceeds {MAX_AUTH_RESPONSE_BYTES} bytes"
-        )));
-    }
-    Ok(bytes.to_vec())
 }
 
 fn device_session_path(paths: &RuntimePaths, id: Uuid) -> PathBuf {
@@ -831,26 +839,4 @@ struct MinecraftSession {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn microsoft_client_id_is_the_registered_public_application() {
-        assert_eq!(MICROSOFT_CLIENT_ID, "a1b083c0-2c7f-47c8-a351-451279131fc7");
-    }
-
-    #[test]
-    fn device_session_path_is_derived_only_from_a_uuid() {
-        let paths = RuntimePaths::resolve(&crate::runtime::RuntimePathOptions {
-            config_dir: Some(PathBuf::from("config")),
-            data_dir: Some(PathBuf::from("data")),
-            cache_dir: Some(PathBuf::from("cache")),
-        })
-        .unwrap();
-        let id = Uuid::nil();
-        assert_eq!(
-            device_session_path(&paths, id),
-            PathBuf::from("data/auth-sessions/00000000-0000-0000-0000-000000000000.json")
-        );
-    }
-}
+mod tests;

@@ -5,8 +5,9 @@
 ## 1. 当前结论
 
 网络重试已覆盖响应体完成，不再只保护响应头。provider 查询、工件与 mrpack 单文件传输、
-Launcher 公共元数据走同一有限预算与退避策略；无效 JSON/哈希/本地 I/O 不重试，认证 POST
-不重放。故障注入测试覆盖混合失败预算、只读 POST、取消、Retry-After 与响应边界。
+Launcher 公共元数据走同一有限预算与退避策略；无效 JSON/哈希/本地 I/O 不重试。Microsoft
+proof 交换及 GET 由认证模块显式接入有限重试，OAuth 设备码/token 请求不自动重放。
+故障注入测试覆盖混合失败预算、可重放 POST、取消、Retry-After 与响应边界。
 
 修复 Launcher 实例格式升级后 Orbit sync 仍只接受旧 schema 的脱节。只读运行时契约集中到
 `orbit-launcher-format`，两个程序独立编译/安装；Orbit 不修改或迁移 Launcher 文件。新增

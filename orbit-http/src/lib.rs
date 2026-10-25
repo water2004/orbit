@@ -1,5 +1,6 @@
-//! Transport only. Callers explicitly opt in only for replay-safe reads and
-//! read-only POST lookups, never authentication or arbitrary mutations.
+//! Transport only. Callers explicitly establish replay safety: reads, read-only
+//! POST lookups or protocol-approved proof exchanges. OAuth redemption, token
+//! rotation and arbitrary mutations must not opt in based on their HTTP method.
 use reqwest::{RequestBuilder, Response, StatusCode, header::RETRY_AFTER};
 use std::time::{Duration, SystemTime};
 

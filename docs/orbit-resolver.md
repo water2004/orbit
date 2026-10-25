@@ -18,6 +18,8 @@ Modrinth 用户输入的 slug 在进入候选发现前解析为官方 project ID
 
 候选获取的网络重试只在 wrapper/下载层完成；响应体中断可重试，候选 JSON 无效或求解无解
 不能重试为“另一个网络请求”。一次完整候选输入仍只进入原有离线求解路径。
+Launcher 的 Microsoft proof 交换重试由认证协议层单独确认安全性，既不进入 resolver，也不
+使 GUI 重新运行求解或整条登录事务；OAuth token 请求不自动重放。
 
 ```text
 resolver/

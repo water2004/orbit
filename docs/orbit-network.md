@@ -15,7 +15,7 @@
 - 200ms 起指数退避并加入小幅抖动；读取 `Retry-After` 的秒数和 HTTP 日期。单次等待超过
   30 秒时返回该响应，不忽略服务器要求提前重试，也不无限等待。
 - 取消会中断异步请求/等待；只能重放可克隆的缓冲请求体。只读批量 POST 明确由各 wrapper
-  确认语义，不能把认证 POST 或任意变更请求自动归入重试。
+  确认语义，不能按 POST 方法或“认证请求”这一笼统类别决定重放安全性。
 
 ## 接入路径
 
@@ -25,7 +25,15 @@ Modrinth/CurseForge 的项目、搜索、版本、依赖和哈希批量查询，
 
 Orbit provider JAR 下载与 mrpack indexed file 下载按单文件重试。Launcher 的 Minecraft、
 Loader/installer、Java、authlib-injector 元数据、EULA、皮肤、Yggdrasil 公开元数据/profile GET
-接入同一传输策略；认证和 token 变更不自动重放。
+接入同一传输策略。
+
+Microsoft 认证链按步骤显式标记：Xbox 用户凭据交换、XSTS 授权和 Minecraft login-with-Xbox
+可以使用相同 proof 重试，所有权/profile GET 同样可重放，额外重试最多 3 次并覆盖完整
+响应体。设备码申请/兑换及 OAuth refresh token 请求只尝试一次；`authorization_pending` /
+`slow_down` 仍由 OAuth 轮询状态机处理，不被传输重试吞掉。401/403 和 Xbox `XErr` 等永久
+认证拒绝按原路径返回，无效 JSON 不重试；既有账户只在整条登录成功后写入。
+协议参考 [Xbox 调用最佳实践](https://learn.microsoft.com/en-us/gaming/gdk/docs/services/develop/best-practices/live-best-practices-calling-xbl)
+与 [HMCL 的 Microsoft 认证实现](https://github.com/HMCL-dev/HMCL/blob/main/HMCLCore/src/main/java/org/jackhuang/hmcl/auth/microsoft/MicrosoftService.java)。
 
 Launcher 工件下载仍流式写临时文件；重试时丢弃该次未完成文件，并重新计算哈希，成功后才
 发布缓存对象。mrpack 仍在归档事务 staging 中处理，每次重试截断该文件，进度按当前文件
@@ -37,3 +45,5 @@ Launcher 工件下载仍流式写临时文件；重试时丢弃该次未完成�
 本地 HTTP 故障注入覆盖：响应体截断后成功、503 与 body 错误混合预算耗尽、批量 POST 的
 正文/头完整重放、永久状态不重试、响应大小限制、完整但无效 JSON 不作网络重试、Retry-After
 秒数/日期及长等待拒绝、取消退避后不发新请求。不依赖线上服务故障或启动实际游戏。
+Microsoft 链另验证 proof POST 的 408 后成功、混合 body 故障、四次尝试上限、相同正文/头、
+XErr/无效 JSON 不重试、OAuth 请求不重放，以及所有响应大小有界；仅使用本地服务与虚构凭据。
