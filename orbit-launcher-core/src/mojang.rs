@@ -205,29 +205,8 @@ impl MojangClient {
     }
 
     async fn fetch_metadata(&self, url: &str) -> Result<Vec<u8>, LauncherError> {
-        let response = self.client.get(url).send().await?.error_for_status()?;
-        if response.url().scheme() != "https" {
-            return Err(LauncherError::InvalidRemoteData(format!(
-                "Mojang metadata redirected to non-HTTPS URL '{}'",
-                response.url()
-            )));
-        }
-        if response
-            .content_length()
-            .is_some_and(|length| length > MAX_METADATA_BYTES)
-        {
-            return Err(LauncherError::InvalidRemoteData(format!(
-                "Mojang metadata '{}' exceeds {MAX_METADATA_BYTES} bytes",
-                response.url()
-            )));
-        }
-        let bytes = response.bytes().await?;
-        if bytes.len() as u64 > MAX_METADATA_BYTES {
-            return Err(LauncherError::InvalidRemoteData(format!(
-                "Mojang metadata '{url}' exceeds {MAX_METADATA_BYTES} bytes"
-            )));
-        }
-        Ok(bytes.to_vec())
+        crate::network::fetch_bounded(&self.client, url, MAX_METADATA_BYTES, "Mojang metadata")
+            .await
     }
 }
 

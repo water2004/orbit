@@ -8,6 +8,7 @@ exclude = [
 description = "A Rust wrapper for the Modrinth API."
 license = "MIT"
 [dependencies]
+orbit-http.workspace = true
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true

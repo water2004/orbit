@@ -135,9 +135,7 @@ impl Client {
     /// `GET /project/{id|slug}`
     pub async fn get_project(&self, id_or_slug: &str) -> Result<Project> {
         let url = self.endpoint(&["project", id_or_slug], &[])?;
-        let resp = self.http.get(url).send().await?;
-        let resp = self.check_response(resp).await?;
-        self.decode_json(resp).await
+        self.send(self.http.get(url)).await
     }
 
     /// Get multiple projects by their IDs.
@@ -145,9 +143,7 @@ impl Client {
     pub async fn get_projects(&self, ids: &[&str]) -> Result<Vec<Project>> {
         let ids_json = serde_json::to_string(ids)?;
         let url = self.endpoint(&["projects"], &[("ids", ids_json)])?;
-        let resp = self.http.get(url).send().await?;
-        let resp = self.check_response(resp).await?;
-        self.decode_json(resp).await
+        self.send(self.http.get(url)).await
     }
 
     /// Get all of a project's dependencies.
@@ -157,9 +153,7 @@ impl Client {
         id_or_slug: &str,
     ) -> Result<ProjectDependencyList> {
         let url = self.endpoint(&["project", id_or_slug, "dependencies"], &[])?;
-        let resp = self.http.get(url).send().await?;
-        let resp = self.check_response(resp).await?;
-        self.decode_json(resp).await
+        self.send(self.http.get(url)).await
     }
 
     /// Search projects with a simple query string.
@@ -185,9 +179,7 @@ impl Client {
             query_params.push(("limit", limit.to_string()));
         }
         let url = self.endpoint(&["search"], &query_params)?;
-        let resp = self.http.get(url).send().await?;
-        let resp = self.check_response(resp).await?;
-        self.decode_json(resp).await
+        self.send(self.http.get(url)).await
     }
 
     // ─────────────────────────────────────────
@@ -198,9 +190,7 @@ impl Client {
     /// `GET /version/{id}`
     pub async fn get_version_by_id(&self, version_id: &str) -> Result<Version> {
         let url = self.endpoint(&["version", version_id], &[])?;
-        let resp = self.http.get(url).send().await?;
-        let resp = self.check_response(resp).await?;
-        self.decode_json(resp).await
+        self.send(self.http.get(url)).await
     }
 
     /// Get a version given a project ID/slug and a version ID or number.
@@ -214,9 +204,7 @@ impl Client {
             &["project", project_id, "version", version_id_or_number],
             &[],
         )?;
-        let resp = self.http.get(url).send().await?;
-        let resp = self.check_response(resp).await?;
-        self.decode_json(resp).await
+        self.send(self.http.get(url)).await
     }
 
     /// Get multiple versions by their IDs.
@@ -224,18 +212,14 @@ impl Client {
     pub async fn get_versions_by_ids(&self, ids: &[&str]) -> Result<Vec<Version>> {
         let ids_json = serde_json::to_string(ids)?;
         let url = self.endpoint(&["versions"], &[("ids", ids_json)])?;
-        let resp = self.http.get(url).send().await?;
-        let resp = self.check_response(resp).await?;
-        self.decode_json(resp).await
+        self.send(self.http.get(url)).await
     }
 
     /// List all versions of a project (no filtering).
     /// `GET /project/{id|slug}/version`
     pub async fn list_versions(&self, project_id: &str) -> Result<Vec<Version>> {
         let url = self.endpoint(&["project", project_id, "version"], &[])?;
-        let resp = self.http.get(url).send().await?;
-        let resp = self.check_response(resp).await?;
-        self.decode_json(resp).await
+        self.send(self.http.get(url)).await
     }
 
     /// List versions of a project with filtering via [`ListVersionsParams`] builder.
@@ -259,9 +243,7 @@ impl Client {
             query_params.push(("include_changelog", include.to_string()));
         }
         let url = self.endpoint(&["project", project_id, "version"], &query_params)?;
-        let resp = self.http.get(url).send().await?;
-        let resp = self.check_response(resp).await?;
-        self.decode_json(resp).await
+        self.send(self.http.get(url)).await
     }
 
     // ─────────────────────────────────────────
@@ -285,9 +267,7 @@ impl Client {
             query_params.push(("multiple", "true".to_string()));
         }
         let url = self.endpoint(&["version_file", hash], &query_params)?;
-        let resp = self.http.get(url).send().await?;
-        let resp = self.check_response(resp).await?;
-        self.decode_json(resp).await
+        self.send(self.http.get(url)).await
     }
 
     /// Get versions from multiple file hashes.
@@ -303,9 +283,7 @@ impl Client {
             "hashes": hashes,
             "algorithm": algo
         });
-        let resp = self.http.post(url).json(&body).send().await?;
-        let resp = self.check_response(resp).await?;
-        self.decode_json(resp).await
+        self.send(self.http.post(url).json(&body)).await
     }
 
     /// Get the latest version of a project from a file hash, loader(s), and game version(s).
@@ -326,9 +304,7 @@ impl Client {
             "loaders": loaders,
             "game_versions": game_versions
         });
-        let resp = self.http.post(url).json(&body).send().await?;
-        let resp = self.check_response(resp).await?;
-        self.decode_json(resp).await
+        self.send(self.http.post(url).json(&body)).await
     }
 
     /// Get the latest versions of multiple projects from file hashes, loader(s), and game version(s).
@@ -348,8 +324,6 @@ impl Client {
             "loaders": loaders,
             "game_versions": game_versions
         });
-        let resp = self.http.post(url).json(&body).send().await?;
-        let resp = self.check_response(resp).await?;
-        self.decode_json(resp).await
+        self.send(self.http.post(url).json(&body)).await
     }
 }

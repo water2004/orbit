@@ -208,12 +208,14 @@ pub(super) async fn fetch_profile_skin(
                 "cannot build Yggdrasil profile endpoint: {error}"
             ))
         })?;
-    let response = client.get(endpoint).send().await?;
-    if matches!(response.status().as_u16(), 204 | 404) {
+    let response = orbit_http::read(client.get(endpoint), 3, MAX_AUTH_RESPONSE_BYTES as u64)
+        .await
+        .map_err(crate::network::error)?;
+    if matches!(response.status.as_u16(), 204 | 404) {
         return Ok(None);
     }
-    let status = response.status();
-    let bytes = response.bytes().await?;
+    let status = response.status;
+    let bytes = response.body;
     if bytes.len() > MAX_AUTH_RESPONSE_BYTES {
         return Err(LauncherError::Authentication(
             "Yggdrasil profile response is too large".to_string(),

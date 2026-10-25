@@ -126,6 +126,30 @@ impl ArtifactCache {
             return Ok(cached);
         }
 
+        let mut retry = orbit_http::RetryState::default();
+        loop {
+            match self
+                .fetch_uncached(client, request, &mut progress, &mut retry)
+                .await
+            {
+                Err(LauncherError::Network(error)) => {
+                    if retry.retry_error(&error).await {
+                        continue;
+                    }
+                    return Err(LauncherError::Network(error));
+                }
+                result => return result,
+            }
+        }
+    }
+
+    async fn fetch_uncached<F: FnMut(ArtifactTransferEvent)>(
+        &self,
+        client: &reqwest::Client,
+        request: &ArtifactRequest,
+        progress: &mut F,
+        retry: &mut orbit_http::RetryState,
+    ) -> Result<CachedArtifact, LauncherError> {
         std::fs::create_dir_all(self.root.join("staging"))?;
         let temporary = tempfile::Builder::new()
             .prefix("artifact-")
@@ -138,7 +162,11 @@ impl ArtifactCache {
             .truncate(true)
             .open(&temporary_path)?;
 
-        let mut response = client.get(&request.url).send().await?.error_for_status()?;
+        let mut response = retry
+            .send(client.get(&request.url))
+            .await
+            .map_err(crate::network::error)?
+            .error_for_status()?;
         if response.url().scheme() != "https" {
             let _ = std::fs::remove_file(&temporary_path);
             return Err(LauncherError::InvalidRemoteData(format!(

@@ -6,6 +6,7 @@
 - 简单的 `Client` 初始化（强制指定 `User-Agent`）
 - 封装常用 API：搜索项目、获取项目、批量获取项目、获取依赖、版本查询、按哈希查询版本与批量查询
 - 一致的 `ProjectInfo` trait，用于统一处理 `Project` 与 `SearchHit`
+- 有限网络重试覆盖完整响应体，保留类型化 HTTP 状态；无效 JSON 不当作网络错误重试。
 - 完整的集成测试（依赖真实 Modrinth API，位于 `tests/api_tests.rs`）
 
 ## 安装
@@ -31,7 +32,7 @@ use modrinth_wrapper::Client;
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
 	// 必须提供明确且可识别的 User-Agent
-	let client = Client::new("your_github_username/your_project/0.1.0 (your_email@example.com)")?;
+	let client = Client::new("your_github_username/your_project/0.1.0 (your_email@example.com)", &Default::default())?;
 
 	let project = client.get_project("fabric-api").await?;
 	println!("project title: {:?}", project.title);
@@ -41,7 +42,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ```
 
 常用方法（示例）：
-- `Client::new(user_agent: &str)` — 构造请求客户端
+- `Client::new(user_agent: &str, config: &ClientConfig)` — 构造请求客户端
 - `get_project(&self, id_or_slug: &str) -> Result<Project>`
 - `get_projects(&self, ids: &[&str]) -> Result<Vec<Project>>`
 - `search_projects(&self, query: &str) -> Result<SearchResult>`

@@ -69,6 +69,7 @@ impl ApiError {
 pub struct Client {
     http: reqwest::Client,
     base_url: url::Url,
+    max_retries: u32,
 }
 
 impl Client {
@@ -129,26 +130,6 @@ impl Client {
                 .map_err(|_| ApiError::InvalidBaseUrl("URL cannot be extended".to_string()))?
                 .push("");
         }
-        let retry_host = parsed_base
-            .host_str()
-            .ok_or_else(|| ApiError::InvalidBaseUrl("host is missing".to_string()))?
-            .to_string();
-        let retry_policy = reqwest::retry::for_host(retry_host)
-            .no_budget()
-            .max_retries_per_request(config.max_retries)
-            .classify_fn(|request| {
-                if request.error().is_some()
-                    || request.status().is_some_and(|status| {
-                        status == StatusCode::REQUEST_TIMEOUT
-                            || status == StatusCode::TOO_MANY_REQUESTS
-                            || status.is_server_error()
-                    })
-                {
-                    request.retryable()
-                } else {
-                    request.success()
-                }
-            });
         let mut builder = reqwest::Client::builder()
             .user_agent(user_agent)
             .default_headers(headers)
@@ -156,7 +137,7 @@ impl Client {
             // Never forward x-api-key through an unvalidated redirect.
             .redirect(reqwest::redirect::Policy::none())
             // CurseForge operations are read-only, including its POST lookup endpoints.
-            .retry(retry_policy);
+            .retry(reqwest::retry::never());
         if let Some(proxy) = config.proxy.as_deref() {
             builder = builder.proxy(reqwest::Proxy::all(proxy).map_err(ApiError::Client)?);
         }
@@ -164,6 +145,7 @@ impl Client {
         Ok(Self {
             http,
             base_url: parsed_base,
+            max_retries: config.max_retries,
         })
     }
 
@@ -189,27 +171,23 @@ impl Client {
         &self,
         request: reqwest::RequestBuilder,
     ) -> Result<T, ApiError> {
-        let mut response = request.send().await.map_err(ApiError::Request)?;
-        let status = response.status();
+        let response = orbit_http::read(request, self.max_retries, 32 * 1024 * 1024)
+            .await
+            .map_err(|error| match error {
+                orbit_http::Error::Network(error) => ApiError::Request(error),
+                orbit_http::Error::TooLarge(limit) => {
+                    ApiError::ResponseTooLarge(limit as usize / (1024 * 1024))
+                }
+                orbit_http::Error::NotReplayable => {
+                    ApiError::InvalidBaseUrl("read-only lookup body cannot be replayed".into())
+                }
+            })?;
+        let status = response.status;
         if !status.is_success() {
-            let message = bounded_error_body(&mut response).await;
+            let message = String::from_utf8_lossy(&response.body).into_owned();
             return Err(ApiError::Status { status, message });
         }
-        const LIMIT: usize = 32 * 1024 * 1024;
-        if response
-            .content_length()
-            .is_some_and(|length| length > LIMIT as u64)
-        {
-            return Err(ApiError::ResponseTooLarge(LIMIT / (1024 * 1024)));
-        }
-        let mut body = Vec::new();
-        while let Some(chunk) = response.chunk().await.map_err(ApiError::Request)? {
-            if body.len().saturating_add(chunk.len()) > LIMIT {
-                return Err(ApiError::ResponseTooLarge(LIMIT / (1024 * 1024)));
-            }
-            body.extend_from_slice(&chunk);
-        }
-        serde_json::from_slice(&body).map_err(ApiError::Decode)
+        serde_json::from_slice(&response.body).map_err(ApiError::Decode)
     }
 
     pub async fn games(&self) -> Result<Vec<Game>, ApiError> {
@@ -360,19 +338,6 @@ impl Client {
             .await?;
         Ok(response.data)
     }
-}
-
-async fn bounded_error_body(response: &mut reqwest::Response) -> String {
-    const LIMIT: usize = 4 * 1024;
-    let mut body = Vec::new();
-    while body.len() < LIMIT {
-        let Ok(Some(chunk)) = response.chunk().await else {
-            break;
-        };
-        let remaining = LIMIT - body.len();
-        body.extend_from_slice(&chunk[..chunk.len().min(remaining)]);
-    }
-    String::from_utf8_lossy(&body).into_owned()
 }
 
 fn api_key_header(api_key: &str) -> Result<reqwest::header::HeaderValue, ApiError> {

@@ -87,6 +87,7 @@ impl ArtifactDownloadClient {
             // Authentication is applied per request, so every redirect target
             // must be validated before a credential can be attached.
             .redirect(reqwest::redirect::Policy::none());
+        builder = builder.retry(reqwest::retry::never());
         if let Some(proxy) = config.proxy.as_deref() {
             builder = builder.proxy(
                 reqwest::Proxy::all(proxy).map_err(|error| OrbitError::Other(error.into()))?,
@@ -109,6 +110,26 @@ impl ArtifactDownloadClient {
                 "artifact download concurrency limiter unexpectedly closed"
             ))
         })?;
+        let mut retry = orbit_http::RetryState::new(self.max_retries);
+        loop {
+            match self.download_attempt(url, filename, &mut retry).await {
+                Err(OrbitError::Network(error)) => {
+                    if retry.retry_error(&error).await {
+                        continue;
+                    }
+                    return Err(OrbitError::Network(error));
+                }
+                result => return result,
+            }
+        }
+    }
+
+    async fn download_attempt(
+        &self,
+        url: &str,
+        filename: &str,
+        retry: &mut orbit_http::RetryState,
+    ) -> Result<Vec<u8>, OrbitError> {
         let mut current = Url::parse(url).map_err(|error| {
             OrbitError::Other(anyhow::anyhow!(
                 "invalid download URL for '{filename}': {error}"
@@ -116,7 +137,14 @@ impl ArtifactDownloadClient {
         })?;
 
         for redirect_count in 0..=MAX_REDIRECTS {
-            let response = self.send_with_retries(&current).await?;
+            let response =
+                retry
+                    .send(self.request(&current)?)
+                    .await
+                    .map_err(|error| match error {
+                        orbit_http::Error::Network(error) => OrbitError::Network(error),
+                        error => OrbitError::Other(error.into()),
+                    })?;
             let status = response.status();
             if status.is_redirection() {
                 if redirect_count == MAX_REDIRECTS {
@@ -160,25 +188,6 @@ impl ArtifactDownloadClient {
         )))
     }
 
-    async fn send_with_retries(&self, url: &Url) -> Result<reqwest::Response, OrbitError> {
-        for retry in 0..=self.max_retries {
-            match self.request(url)?.send().await {
-                Ok(response)
-                    if retry < self.max_retries
-                        && (response.status() == reqwest::StatusCode::REQUEST_TIMEOUT
-                            || response.status() == reqwest::StatusCode::TOO_MANY_REQUESTS
-                            || response.status().is_server_error()) =>
-                {
-                    wait_before_retry(retry).await;
-                }
-                Ok(response) => return Ok(response),
-                Err(_) if retry < self.max_retries => wait_before_retry(retry).await,
-                Err(error) => return Err(OrbitError::Network(error)),
-            }
-        }
-        unreachable!("the retry loop always returns on its final attempt")
-    }
-
     fn request(&self, url: &Url) -> Result<reqwest::RequestBuilder, OrbitError> {
         if !matches!(url.scheme(), "http" | "https") {
             return Err(OrbitError::Other(anyhow::anyhow!(
@@ -196,12 +205,6 @@ impl ArtifactDownloadClient {
         }
         Ok(request)
     }
-}
-
-async fn wait_before_retry(retry: u32) {
-    let exponent = retry.min(5);
-    let milliseconds = 200_u64.saturating_mul(1_u64 << exponent);
-    tokio::time::sleep(std::time::Duration::from_millis(milliseconds)).await;
 }
 
 impl ScopedAuthorization {

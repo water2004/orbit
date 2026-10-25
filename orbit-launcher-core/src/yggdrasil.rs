@@ -21,23 +21,27 @@ pub async fn discover_yggdrasil_api_root(
     allow_insecure_http: bool,
 ) -> Result<String, LauncherError> {
     let entered = parse_entered_address(address, allow_insecure_http)?;
-    let response = client.get(entered).send().await?;
-    let status = response.status();
-    let response_url = response.url().clone();
+    let response = orbit_http::read(client.get(entered), 3, MAX_METADATA_BYTES as u64)
+        .await
+        .map_err(crate::network::error)?;
+    let status = response.status;
+    let response_url = response.url.clone();
     if !status.is_success() {
         return Err(LauncherError::InvalidRemoteData(format!(
             "Yggdrasil endpoint discovery failed with HTTP {} at '{}'",
             status.as_u16(),
-            response.url()
+            response.url
         )));
     }
 
-    let location = response.headers().get(API_LOCATION_HEADER).cloned();
+    let location = response.headers.get(API_LOCATION_HEADER).cloned();
     let api_root = resolve_api_location(&response_url, location.as_ref(), allow_insecure_http)?;
     if api_root == normalized_api_url(response_url, allow_insecure_http)? {
         validate_metadata_response(response).await?;
     } else {
-        let metadata = client.get(api_root.clone()).send().await?;
+        let metadata = orbit_http::read(client.get(api_root.clone()), 3, MAX_METADATA_BYTES as u64)
+            .await
+            .map_err(crate::network::error)?;
         validate_metadata_response(metadata).await?;
     }
     Ok(api_root.to_string())
@@ -65,7 +69,13 @@ pub(crate) async fn fetch_provider_metadata(
     client: &reqwest::Client,
     provider: &YggdrasilProviderConfig,
 ) -> Result<String, LauncherError> {
-    let response = client.get(provider_api_root(provider)?).send().await?;
+    let response = orbit_http::read(
+        client.get(provider_api_root(provider)?),
+        3,
+        MAX_METADATA_BYTES as u64,
+    )
+    .await
+    .map_err(crate::network::error)?;
     metadata_json(response).await.map_err(|error| match error {
         LauncherError::InvalidRemoteData(message) => LauncherError::Authentication(message),
         other => other,
@@ -167,14 +177,16 @@ fn normalized_api_url(
     Ok(url)
 }
 
-async fn validate_metadata_response(response: reqwest::Response) -> Result<(), LauncherError> {
+async fn validate_metadata_response(
+    response: orbit_http::BufferedResponse,
+) -> Result<(), LauncherError> {
     metadata_json(response).await.map(|_| ())
 }
 
-async fn metadata_json(response: reqwest::Response) -> Result<String, LauncherError> {
-    let status = response.status();
-    let response_url = response.url().clone();
-    let bytes = response.bytes().await?;
+async fn metadata_json(response: orbit_http::BufferedResponse) -> Result<String, LauncherError> {
+    let status = response.status;
+    let response_url = response.url;
+    let bytes = response.body;
     if bytes.len() > MAX_METADATA_BYTES {
         return Err(LauncherError::InvalidRemoteData(format!(
             "Yggdrasil provider metadata exceeds {MAX_METADATA_BYTES} bytes"

@@ -24,26 +24,21 @@ pub struct ResolvedAuthlibInjector {
 pub async fn resolve_authlib_injector(
     client: &reqwest::Client,
 ) -> Result<ResolvedAuthlibInjector, LauncherError> {
-    let response = client
-        .get(AUTHLIB_INJECTOR_LATEST_URL)
-        .send()
-        .await?
-        .error_for_status()?;
-    validate_official_url(response.url(), "metadata")?;
-    if response
-        .content_length()
-        .is_some_and(|length| length > MAX_METADATA_BYTES as u64)
-    {
-        return Err(LauncherError::InvalidRemoteData(
-            "authlib-injector metadata is too large".to_string(),
-        ));
+    let response = orbit_http::read(
+        client.get(AUTHLIB_INJECTOR_LATEST_URL),
+        3,
+        MAX_METADATA_BYTES as u64,
+    )
+    .await
+    .map_err(crate::network::error)?;
+    validate_official_url(&response.url, "metadata")?;
+    if !response.status.is_success() {
+        return Err(LauncherError::InvalidRemoteData(format!(
+            "authlib-injector metadata returned HTTP {}",
+            response.status
+        )));
     }
-    let bytes = response.bytes().await?;
-    if bytes.len() > MAX_METADATA_BYTES {
-        return Err(LauncherError::InvalidRemoteData(
-            "authlib-injector metadata is too large".to_string(),
-        ));
-    }
+    let bytes = response.body;
     let latest: LatestArtifact = serde_json::from_slice(&bytes).map_err(|error| {
         LauncherError::InvalidRemoteData(format!(
             "failed to parse authlib-injector latest artifact metadata: {error}"

@@ -112,7 +112,8 @@ pub async fn resolve_loader_profile(
     };
     let profile_url = profile_url(adapter, minecraft_version, &version, side)?;
     let profile_bytes =
-        fetch_bounded(client, &profile_url, MAX_PROFILE_BYTES, "Loader profile").await?;
+        crate::network::fetch_bounded(client, &profile_url, MAX_PROFILE_BYTES, "Loader profile")
+            .await?;
     let profile_sha256 = hex::encode(Sha256::digest(&profile_bytes));
     let profile: LauncherProfile = serde_json::from_slice(&profile_bytes).map_err(|error| {
         LauncherError::InvalidRemoteData(format!(
@@ -198,7 +199,9 @@ async fn list_fabric_versions(
     minecraft: &str,
 ) -> Result<Vec<LoaderVersion>, LauncherError> {
     let url = endpoint(adapter.metadata_root, &[minecraft])?;
-    let bytes = fetch_bounded(client, &url, MAX_PROFILE_BYTES, "Fabric Loader versions").await?;
+    let bytes =
+        crate::network::fetch_bounded(client, &url, MAX_PROFILE_BYTES, "Fabric Loader versions")
+            .await?;
     let versions: Vec<FabricMetadata> = serde_json::from_slice(&bytes).map_err(|error| {
         LauncherError::InvalidRemoteData(format!(
             "failed to parse Fabric Loader versions for Minecraft {minecraft}: {error}"
@@ -247,7 +250,7 @@ async fn list_quilt_versions(
     minecraft: &str,
 ) -> Result<Vec<LoaderVersion>, LauncherError> {
     let compatible_url = endpoint(adapter.metadata_root, &[minecraft])?;
-    let compatible_bytes = fetch_bounded(
+    let compatible_bytes = crate::network::fetch_bounded(
         client,
         &compatible_url,
         MAX_PROFILE_BYTES,
@@ -264,7 +267,7 @@ async fn list_quilt_versions(
         .into_iter()
         .map(|entry| entry.loader.version)
         .collect();
-    let all_bytes = fetch_bounded(
+    let all_bytes = crate::network::fetch_bounded(
         client,
         adapter.metadata_root,
         MAX_PROFILE_BYTES,
@@ -324,7 +327,8 @@ async fn fetch_sha1_sidecar(
     coordinate: &str,
 ) -> Result<String, LauncherError> {
     let sidecar = format!("{artifact_url}.sha1");
-    let bytes = fetch_bounded(client, &sidecar, 1024, "Maven SHA-1 sidecar").await?;
+    let bytes =
+        crate::network::fetch_bounded(client, &sidecar, 1024, "Maven SHA-1 sidecar").await?;
     let value = std::str::from_utf8(&bytes).map_err(|error| {
         LauncherError::InvalidRemoteData(format!(
             "Maven SHA-1 sidecar for '{coordinate}' is not UTF-8: {error}"
@@ -394,37 +398,6 @@ fn endpoint(root: &str, segments: &[&str]) -> Result<String, LauncherError> {
         }
     }
     Ok(url.to_string())
-}
-
-async fn fetch_bounded(
-    client: &reqwest::Client,
-    url: &str,
-    maximum: u64,
-    subject: &str,
-) -> Result<Vec<u8>, LauncherError> {
-    let parsed = url::Url::parse(url).map_err(|error| {
-        LauncherError::InvalidRemoteData(format!("{subject} URL is invalid: {error}"))
-    })?;
-    if parsed.scheme() != "https" || parsed.host_str().is_none() {
-        return Err(LauncherError::InvalidRemoteData(format!(
-            "{subject} URL must use HTTPS"
-        )));
-    }
-    let response = client.get(parsed).send().await?.error_for_status()?;
-    if response.url().scheme() != "https"
-        || response.content_length().is_some_and(|size| size > maximum)
-    {
-        return Err(LauncherError::InvalidRemoteData(format!(
-            "{subject} response URL or size is invalid"
-        )));
-    }
-    let bytes = response.bytes().await?;
-    if bytes.len() as u64 > maximum {
-        return Err(LauncherError::InvalidRemoteData(format!(
-            "{subject} exceeds {maximum} bytes"
-        )));
-    }
-    Ok(bytes.to_vec())
 }
 
 fn validate_requirement(value: &str) -> Result<(), LauncherError> {

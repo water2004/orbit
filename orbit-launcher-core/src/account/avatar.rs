@@ -42,21 +42,9 @@ pub async fn ensure_account_avatar(
         return Ok(Some(path));
     }
 
-    let response = client.get(skin_url).send().await?.error_for_status()?;
-    if response
-        .content_length()
-        .is_some_and(|length| length > MAX_SKIN_BYTES as u64)
-    {
-        return Err(LauncherError::Authentication(
-            "account skin exceeds the 4 MiB presentation limit".to_string(),
-        ));
-    }
-    let bytes = response.bytes().await?;
-    if bytes.len() > MAX_SKIN_BYTES {
-        return Err(LauncherError::Authentication(
-            "account skin exceeds the 4 MiB presentation limit".to_string(),
-        ));
-    }
+    let bytes =
+        crate::network::fetch_bounded(client, skin_url, MAX_SKIN_BYTES as u64, "account skin")
+            .await?;
     let avatar = render_avatar(&bytes)?;
     let mut encoded = Cursor::new(Vec::new());
     DynamicImage::ImageRgba8(avatar)

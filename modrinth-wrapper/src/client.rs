@@ -25,6 +25,7 @@ impl Default for ClientConfig {
 pub struct Client {
     pub(crate) http: ReqwestClient,
     base_url: url::Url,
+    max_retries: u32,
 }
 
 impl Client {
@@ -39,28 +40,11 @@ impl Client {
             headers.insert(header::AUTHORIZATION, value);
         }
 
-        let retry_policy = reqwest::retry::for_host("api.modrinth.com")
-            .no_budget()
-            .max_retries_per_request(config.max_retries)
-            .classify_fn(|request| {
-                if request.error().is_some()
-                    || request.status().is_some_and(|status| {
-                        status == reqwest::StatusCode::REQUEST_TIMEOUT
-                            || status == reqwest::StatusCode::TOO_MANY_REQUESTS
-                            || status.is_server_error()
-                    })
-                {
-                    request.retryable()
-                } else {
-                    request.success()
-                }
-            });
-
         let mut builder = ReqwestClient::builder()
             .default_headers(headers)
             .timeout(config.timeout)
             .redirect(reqwest::redirect::Policy::none())
-            .retry(retry_policy);
+            .retry(reqwest::retry::never());
         if let Some(proxy) = config.proxy.as_deref() {
             builder = builder.proxy(reqwest::Proxy::all(proxy)?);
         }
@@ -68,22 +52,11 @@ impl Client {
 
         let base_url = url::Url::parse("https://api.modrinth.com/v2/")
             .map_err(|error| crate::error::ModrinthError::Api(error.to_string()))?;
-        Ok(Self { http, base_url })
-    }
-
-    /// 检查 HTTP 响应状态，保留 body 文本用于错误报告
-    pub(crate) async fn check_response(
-        &self,
-        mut resp: reqwest::Response,
-    ) -> Result<reqwest::Response> {
-        let status = resp.status();
-        if status.is_success() {
-            return Ok(resp);
-        }
-        let body = bounded_error_body(&mut resp).await;
-        Err(crate::error::ModrinthError::Api(format!(
-            "HTTP {status}: {body}"
-        )))
+        Ok(Self {
+            http,
+            base_url,
+            max_retries: config.max_retries,
+        })
     }
 
     pub(crate) fn endpoint(&self, segments: &[&str], query: &[(&str, String)]) -> Result<url::Url> {
@@ -111,43 +84,24 @@ impl Client {
         Ok(url)
     }
 
-    pub(crate) async fn decode_json<T: DeserializeOwned>(
+    pub(crate) async fn send<T: DeserializeOwned>(
         &self,
-        mut response: reqwest::Response,
+        request: reqwest::RequestBuilder,
     ) -> Result<T> {
-        const LIMIT: usize = 32 * 1024 * 1024;
-        if response
-            .content_length()
-            .is_some_and(|length| length > LIMIT as u64)
-        {
-            return Err(crate::error::ModrinthError::Api(
-                "Modrinth response exceeds the 32 MiB JSON limit".to_string(),
-            ));
+        let response = orbit_http::read(request, self.max_retries, 32 * 1024 * 1024)
+            .await
+            .map_err(|e| match e {
+                orbit_http::Error::Network(error) => crate::error::ModrinthError::Reqwest(error),
+                error => crate::error::ModrinthError::Api(error.to_string()),
+            })?;
+        if !response.status.is_success() {
+            return Err(crate::error::ModrinthError::Status {
+                status: response.status,
+                message: String::from_utf8_lossy(&response.body).into_owned(),
+            });
         }
-        let mut body = Vec::new();
-        while let Some(chunk) = response.chunk().await? {
-            if body.len().saturating_add(chunk.len()) > LIMIT {
-                return Err(crate::error::ModrinthError::Api(
-                    "Modrinth response exceeds the 32 MiB JSON limit".to_string(),
-                ));
-            }
-            body.extend_from_slice(&chunk);
-        }
-        Ok(serde_json::from_slice(&body)?)
+        Ok(serde_json::from_slice(&response.body)?)
     }
-}
-
-async fn bounded_error_body(response: &mut reqwest::Response) -> String {
-    const LIMIT: usize = 4 * 1024;
-    let mut body = Vec::new();
-    while body.len() < LIMIT {
-        let Ok(Some(chunk)) = response.chunk().await else {
-            break;
-        };
-        let remaining = LIMIT - body.len();
-        body.extend_from_slice(&chunk[..chunk.len().min(remaining)]);
-    }
-    String::from_utf8_lossy(&body).into_owned()
 }
 
 fn authorization_header(token: Option<&str>) -> Result<Option<header::HeaderValue>> {

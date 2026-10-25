@@ -110,6 +110,9 @@ fn map_api_error(e: modrinth_wrapper::ModrinthError, slug: &str) -> OrbitError {
         {
             OrbitError::ModNotFound(slug.to_string())
         }
+        ModrinthError::Status { status, .. } if *status == reqwest::StatusCode::NOT_FOUND => {
+            OrbitError::ModNotFound(slug.to_string())
+        }
         _ => OrbitError::Other(e.into()),
     }
 }
@@ -486,6 +489,17 @@ impl ModProvider for ModrinthProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn typed_not_found_status_keeps_the_package_search_flow() {
+        let error = modrinth_wrapper::ModrinthError::Status {
+            status: reqwest::StatusCode::NOT_FOUND,
+            message: "not found".into(),
+        };
+        assert!(
+            matches!(map_api_error(error,"missing"),OrbitError::ModNotFound(id) if id=="missing")
+        );
+    }
 
     #[test]
     fn search_version_ids_are_never_exposed_as_version_numbers() {

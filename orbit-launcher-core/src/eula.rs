@@ -51,15 +51,24 @@ pub async fn show_current_eula(
     instance_root: &Path,
     client: &reqwest::Client,
 ) -> Result<EulaDocument, LauncherError> {
-    let response = client.get(MINECRAFT_EULA_URL).send().await?;
-    let response = response.error_for_status()?;
-    let final_url = response.url().clone();
+    let response = orbit_http::read(client.get(MINECRAFT_EULA_URL), 3, 16 * 1024 * 1024)
+        .await
+        .map_err(crate::network::error)?;
+    if !response.status.is_success() {
+        return Err(LauncherError::InvalidRemoteData(format!(
+            "Minecraft EULA returned HTTP {}",
+            response.status
+        )));
+    }
+    let final_url = response.url;
     if final_url.scheme() != "https" || final_url.host_str() != Some("www.minecraft.net") {
         return Err(LauncherError::InvalidRemoteData(format!(
             "Minecraft EULA redirected to untrusted URL '{final_url}'"
         )));
     }
-    let html = response.text().await?;
+    let html = String::from_utf8(response.body).map_err(|error| {
+        LauncherError::InvalidRemoteData(format!("Minecraft EULA is not UTF-8: {error}"))
+    })?;
     let text = extract_eula_text(&html)?;
     let document = EulaDocument::new(final_url.to_string(), text)?;
     write_json(&shown_path(instance_root), &document)?;

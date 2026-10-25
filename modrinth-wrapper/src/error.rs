@@ -8,6 +8,11 @@ pub enum ModrinthError {
     Serde(#[from] serde_json::Error),
     #[error("API returned error: {0}")]
     Api(String),
+    #[error("API returned HTTP {status}: {message}")]
+    Status {
+        status: reqwest::StatusCode,
+        message: String,
+    },
 }
 
 pub type Result<T> = std::result::Result<T, ModrinthError>;

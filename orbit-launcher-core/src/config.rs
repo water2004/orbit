@@ -59,6 +59,7 @@ impl GlobalConfig {
             .connect_timeout(Duration::from_secs(self.network.connect_timeout_seconds))
             .timeout(Duration::from_secs(self.network.request_timeout_seconds))
             .user_agent(concat!("orbit-launcher-core/", env!("CARGO_PKG_VERSION")))
+            .retry(reqwest::retry::never())
             .build()?)
     }
 

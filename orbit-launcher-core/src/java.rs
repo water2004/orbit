@@ -891,24 +891,7 @@ impl Drop for StagingDirectoryGuard {
 }
 
 async fn fetch_metadata(client: &reqwest::Client, url: &str) -> Result<Vec<u8>, LauncherError> {
-    let response = client.get(url).send().await?.error_for_status()?;
-    if response.url().scheme() != "https"
-        || response
-            .content_length()
-            .is_some_and(|size| size > MAX_METADATA_BYTES)
-    {
-        return Err(LauncherError::InvalidRemoteData(format!(
-            "Mojang Java metadata URL '{}' or size is invalid",
-            response.url()
-        )));
-    }
-    let bytes = response.bytes().await?;
-    if bytes.len() as u64 > MAX_METADATA_BYTES {
-        return Err(LauncherError::InvalidRemoteData(format!(
-            "Mojang Java metadata '{url}' exceeds {MAX_METADATA_BYTES} bytes"
-        )));
-    }
-    Ok(bytes.to_vec())
+    crate::network::fetch_bounded(client, url, MAX_METADATA_BYTES, "Mojang Java metadata").await
 }
 
 fn validate_mojang_url(value: &str, subject: &str) -> Result<(), LauncherError> {

@@ -46,6 +46,7 @@ pub async fn import_mrpack(
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(180))
         .redirect(reqwest::redirect::Policy::limited(10))
+        .retry(reqwest::retry::never())
         .build()?;
     let available_optional = pack
         .index
@@ -142,8 +143,9 @@ pub async fn import_mrpack(
     let mut completed_bytes = 0_u64;
     let mut completed_files = 0_usize;
     for file in selected_files {
-        download_to_staging(&client, file, &staging.join(&file.path), |advanced| {
-            completed_bytes = completed_bytes.saturating_add(advanced);
+        let completed_before_file = completed_bytes;
+        download_to_staging(&client, file, &staging.join(&file.path), |downloaded| {
+            completed_bytes = completed_before_file.saturating_add(downloaded);
             emit_progress(
                 progress.as_ref(),
                 ProgressEvent::ImportAdvanced {
@@ -238,6 +240,28 @@ async fn download_to_staging<F>(
 where
     F: FnMut(u64),
 {
+    let mut retry = orbit_http::RetryState::default();
+    loop {
+        progress(0);
+        match download_attempt(client, file, destination, &mut progress, &mut retry).await {
+            Err(OrbitError::Network(error)) => {
+                if retry.retry_error(&error).await {
+                    continue;
+                }
+                return Err(OrbitError::Network(error));
+            }
+            result => return result,
+        }
+    }
+}
+
+async fn download_attempt<F: FnMut(u64)>(
+    client: &reqwest::Client,
+    file: &MrpackFile,
+    destination: &Path,
+    progress: &mut F,
+    retry: &mut orbit_http::RetryState,
+) -> Result<(), OrbitError> {
     let url = file
         .downloads
         .iter()
@@ -248,7 +272,14 @@ where
                 file.path
             ))
         })?;
-    let mut response = client.get(url).send().await?.error_for_status()?;
+    let mut response = retry
+        .send(client.get(url))
+        .await
+        .map_err(|error| match error {
+            orbit_http::Error::Network(error) => OrbitError::Network(error),
+            error => OrbitError::Other(error.into()),
+        })?
+        .error_for_status()?;
     if response
         .content_length()
         .is_some_and(|length| length != file.file_size || length > MAX_FILE_SIZE)
@@ -277,7 +308,7 @@ where
         sha1.update(&chunk);
         sha512.update(&chunk);
         output.write_all(&chunk)?;
-        progress(chunk.len() as u64);
+        progress(bytes);
     }
     output.sync_all()?;
     if bytes != file.file_size

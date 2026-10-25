@@ -1,0 +1,13 @@
+[package]
+name = "orbit-http"
+version = "0.8.0"
+edition = "2024"
+license = "MIT"
+description = "Bounded replay-safe HTTP transport retries through response-body completion"
+
+[dependencies]
+reqwest.workspace = true
+tokio.workspace = true
+thiserror.workspace = true
+httpdate = "1"
+fastrand = "2"

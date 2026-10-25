@@ -234,7 +234,7 @@ pub async fn resolve_vanilla_client(
         upstream_id: asset_index.id.clone(),
         runtime_name: asset_index_runtime_name,
     };
-    let asset_bytes = fetch_bounded(
+    let asset_bytes = crate::network::fetch_bounded(
         mojang.http_client(),
         &asset_index.download.url,
         MAX_ASSET_INDEX_BYTES,
@@ -539,37 +539,6 @@ fn legacy_library_download(
             excludes: library.extract.clone().unwrap_or_default().exclude,
         }),
     })
-}
-
-async fn fetch_bounded(
-    client: &reqwest::Client,
-    url: &str,
-    maximum: u64,
-    subject: &str,
-) -> Result<Vec<u8>, LauncherError> {
-    let parsed = url::Url::parse(url).map_err(|error| {
-        LauncherError::InvalidRemoteData(format!("{subject} URL is invalid: {error}"))
-    })?;
-    if parsed.scheme() != "https" || parsed.host_str().is_none() {
-        return Err(LauncherError::InvalidRemoteData(format!(
-            "{subject} URL must use HTTPS"
-        )));
-    }
-    let response = client.get(parsed).send().await?.error_for_status()?;
-    if response.url().scheme() != "https"
-        || response.content_length().is_some_and(|size| size > maximum)
-    {
-        return Err(LauncherError::InvalidRemoteData(format!(
-            "{subject} response URL or size is invalid"
-        )));
-    }
-    let bytes = response.bytes().await?;
-    if bytes.len() as u64 > maximum {
-        return Err(LauncherError::InvalidRemoteData(format!(
-            "{subject} exceeds {maximum} bytes"
-        )));
-    }
-    Ok(bytes.to_vec())
 }
 
 fn validate_asset_logical_path(path: &str) -> Result<(), LauncherError> {

@@ -1019,6 +1019,7 @@ checksum = "914a755b7c2d4af2bdcff7ce1739e2db9a1b81a9b07123d8015786ae03c0980d"
 name = "curseforge-wrapper"
 version = "0.1.2"
 dependencies = [
+ "orbit-http",
  "reqwest",
  "serde",
  "serde_json",
@@ -2981,6 +2982,7 @@ dependencies = [
 name = "modrinth-wrapper"
 version = "0.1.2"
 dependencies = [
+ "orbit-http",
  "reqwest",
  "serde",
  "serde_json",
@@ -3506,6 +3508,7 @@ dependencies = [
  "orbit-bundle-format",
  "orbit-bytecode-audit",
  "orbit-compatibility",
+ "orbit-http",
  "orbit-launcher-core",
  "orbit-launcher-format",
  "orbit-loader-json",
@@ -3544,6 +3547,17 @@ dependencies = [
  "tauri-plugin-opener",
  "tempfile",
  "zeroize",
+]
+
+[[package]]
+name = "orbit-http"
+version = "0.8.0"
+dependencies = [
+ "fastrand",
+ "httpdate",
+ "reqwest",
+ "thiserror 2.0.18",
+ "tokio",
 ]
 
 [[package]]
@@ -3592,6 +3606,7 @@ dependencies = [
  "md-5",
  "orbit-bundle-format",
  "orbit-compatibility",
+ "orbit-http",
  "orbit-launcher-format",
  "os_info",
  "regex",

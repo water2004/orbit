@@ -570,7 +570,7 @@ async fn list_forge_versions(
     client: &reqwest::Client,
     minecraft: &str,
 ) -> Result<Vec<LoaderVersion>, LauncherError> {
-    let bytes = fetch_bounded(
+    let bytes = crate::network::fetch_bounded(
         client,
         FORGE_METADATA_URL,
         MAX_METADATA_BYTES,
@@ -585,7 +585,7 @@ async fn list_forge_versions(
             "Forge publishes no installer versions for Minecraft {minecraft}"
         ))
     })?;
-    let bytes = fetch_bounded(
+    let bytes = crate::network::fetch_bounded(
         client,
         FORGE_PROMOTIONS_URL,
         MAX_METADATA_BYTES,
@@ -652,7 +652,7 @@ async fn list_neoforge_versions(
         | NeoForgeDistribution::FullMinecraftVersion
         | NeoForgeDistribution::Snapshot => NEOFORGE_VERSIONS_URL,
     };
-    let bytes = fetch_bounded(
+    let bytes = crate::network::fetch_bounded(
         client,
         endpoint,
         MAX_METADATA_BYTES,
@@ -705,7 +705,7 @@ async fn fetch_digest_sidecar(
     url: &str,
     length: usize,
 ) -> Result<String, LauncherError> {
-    let bytes = fetch_bounded(client, url, 1024, "Maven digest sidecar").await?;
+    let bytes = crate::network::fetch_bounded(client, url, 1024, "Maven digest sidecar").await?;
     let value = std::str::from_utf8(&bytes)
         .map_err(|error| {
             LauncherError::InvalidRemoteData(format!("Maven digest sidecar is not UTF-8: {error}"))
@@ -722,37 +722,6 @@ async fn fetch_digest_sidecar(
         ));
     }
     Ok(value)
-}
-
-async fn fetch_bounded(
-    client: &reqwest::Client,
-    url: &str,
-    maximum: u64,
-    subject: &str,
-) -> Result<Vec<u8>, LauncherError> {
-    let parsed = url::Url::parse(url).map_err(|error| {
-        LauncherError::InvalidRemoteData(format!("{subject} URL is invalid: {error}"))
-    })?;
-    if parsed.scheme() != "https" || parsed.host_str().is_none() {
-        return Err(LauncherError::InvalidRemoteData(format!(
-            "{subject} URL must use HTTPS"
-        )));
-    }
-    let response = client.get(parsed).send().await?.error_for_status()?;
-    if response.url().scheme() != "https"
-        || response.content_length().is_some_and(|size| size > maximum)
-    {
-        return Err(LauncherError::InvalidRemoteData(format!(
-            "{subject} response URL or size is invalid"
-        )));
-    }
-    let bytes = response.bytes().await?;
-    if bytes.len() as u64 > maximum {
-        return Err(LauncherError::InvalidRemoteData(format!(
-            "{subject} exceeds {maximum} bytes"
-        )));
-    }
-    Ok(bytes.to_vec())
 }
 
 fn validate_requirement(value: &str) -> Result<(), LauncherError> {

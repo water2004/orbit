@@ -27,6 +27,7 @@ pub mod lockfile;
 mod maven;
 pub mod mojang;
 mod natives;
+mod network;
 pub mod operations;
 pub mod pack;
 pub mod platform;
