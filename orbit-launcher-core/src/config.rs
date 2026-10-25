@@ -9,12 +9,20 @@ use toml_edit::{ArrayOfTables, DocumentMut, Item, Table, value};
 use crate::atomic_io::write_atomic;
 use crate::error::LauncherError;
 
-pub const CONFIG_SCHEMA: u32 = 2;
+pub const CONFIG_SCHEMA: u32 = 3;
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct JavaConfig {
+    pub selection: crate::java::JavaSelection,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct GlobalConfig {
     pub schema: u32,
+    #[serde(default)]
+    pub java: JavaConfig,
     #[serde(default)]
     pub network: NetworkConfig,
     #[serde(default)]
@@ -33,6 +41,7 @@ impl Default for GlobalConfig {
     fn default() -> Self {
         Self {
             schema: CONFIG_SCHEMA,
+            java: JavaConfig::default(),
             network: NetworkConfig::default(),
             installer: InstallerConfig::default(),
             cache: CacheConfig::default(),
@@ -57,7 +66,10 @@ impl GlobalConfig {
         if !path.exists() {
             return Ok(Self::default());
         }
-        let content = std::fs::read_to_string(path)?;
+        let content = crate::storage_migrations::read_current(
+            path,
+            crate::storage_migrations::DocumentKind::Config,
+        )?;
         let config: Self = toml::from_str(&content).map_err(LauncherError::ConfigParse)?;
         config.validate()?;
         Ok(config)
@@ -145,6 +157,7 @@ impl GlobalConfig {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ConfigKey {
+    JavaSelection,
     NetworkConcurrency,
     NetworkConnectTimeoutSeconds,
     NetworkRequestTimeoutSeconds,
@@ -155,7 +168,8 @@ pub enum ConfigKey {
 }
 
 impl ConfigKey {
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 8] = [
+        Self::JavaSelection,
         Self::NetworkConcurrency,
         Self::NetworkConnectTimeoutSeconds,
         Self::NetworkRequestTimeoutSeconds,
@@ -167,6 +181,7 @@ impl ConfigKey {
 
     pub const fn as_str(self) -> &'static str {
         match self {
+            Self::JavaSelection => "java.selection",
             Self::NetworkConcurrency => "network.concurrency",
             Self::NetworkConnectTimeoutSeconds => "network.connect-timeout-seconds",
             Self::NetworkRequestTimeoutSeconds => "network.request-timeout-seconds",
@@ -177,8 +192,16 @@ impl ConfigKey {
         }
     }
 
+    pub const fn allowed_values(self) -> &'static [&'static str] {
+        match self {
+            Self::UiProgressBar | Self::UiColor => &["auto", "always", "never"],
+            _ => &[],
+        }
+    }
+
     const fn toml_path(self) -> (&'static str, &'static str) {
         match self {
+            Self::JavaSelection => ("java", "selection"),
             Self::NetworkConcurrency => ("network", "concurrency"),
             Self::NetworkConnectTimeoutSeconds => ("network", "connect_timeout_seconds"),
             Self::NetworkRequestTimeoutSeconds => ("network", "request_timeout_seconds"),
@@ -191,6 +214,7 @@ impl ConfigKey {
 
     fn read(self, config: &GlobalConfig) -> Option<String> {
         match self {
+            Self::JavaSelection => Some(config.java.selection.clone().into()),
             Self::NetworkConcurrency => Some(config.network.concurrency.to_string()),
             Self::NetworkConnectTimeoutSeconds => {
                 Some(config.network.connect_timeout_seconds.to_string())
@@ -213,6 +237,13 @@ impl ConfigKey {
             ))
         };
         Ok(match self {
+            Self::JavaSelection => {
+                let selection = raw.parse::<crate::java::JavaSelection>()?;
+                if let crate::java::JavaSelection::Executable(path) = &selection {
+                    crate::java::inspect_system_java(path)?;
+                }
+                value(String::from(selection))
+            }
             Self::NetworkConcurrency => value(
                 raw.parse::<u16>()
                     .map_err(|_| invalid("an integer from 1 to 65535"))? as i64,

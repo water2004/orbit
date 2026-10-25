@@ -3,4 +3,13 @@ Follow system: Follow system
 English: English
 Simplified Chinese: Simplified Chinese
 Settings: Settings
+"Updated icon for %{instance}.": "Updated icon for %{instance}."
+"Updated Java selection for %{instance}.": "Updated Java selection for %{instance}."
+"Java runtime verified": "Java runtime verified"
+"No Java runtimes were found.": "No Java runtimes were found."
+"Discover system Java and manage downloaded runtimes.": "Discover system Java and manage downloaded runtimes."
+"Discover system Java and list managed runtimes; optionally verify managed files.": "Discover system Java and list managed runtimes; optionally verify managed files."
+"Set or reset this instance's image.": "Set or reset this instance's image."
+"Override global Java selection for this instance.": "Override global Java selection for this instance."
 "Installed %{kind} instance %{id}.": "Installed %{kind} instance %{id}."
+"Configured Orbit Launcher does not provide the complete Java inventory. Update the Launcher executable selected in GUI settings.": "Configured Orbit Launcher does not provide the complete Java inventory. Update the Launcher executable selected in GUI settings."

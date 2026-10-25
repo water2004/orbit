@@ -1,6 +1,5 @@
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Component, Path, PathBuf};
-use std::process::Command;
 use std::sync::{Arc, Mutex};
 
 use futures_util::StreamExt;
@@ -16,6 +15,12 @@ use crate::lockfile::LockedJavaRuntime;
 use crate::mojang::MojangJavaRequirement;
 use crate::platform::{Architecture, HostPlatform, OperatingSystem};
 use crate::runtime::RuntimePaths;
+mod environment;
+mod selection;
+pub use selection::{
+    JavaInstallPlan, JavaSelection, SelectedJava, SystemJava, discover_system_java,
+    inspect_system_java, materialize_java, plan_java, resolve_launch_java,
+};
 
 pub const MOJANG_RUNTIME_MANIFEST_URL: &str = "https://piston-meta.mojang.com/v1/products/java-runtime/2ec0cc96c44e5a76b9c8b7c39df7210883d12871/all.json";
 const MAX_METADATA_BYTES: u64 = 16 * 1024 * 1024;
@@ -69,14 +74,6 @@ impl JavaTarget {
         match self {
             Self::WindowsX64 | Self::WindowsX86 | Self::WindowsArm64 => "bin/java.exe",
             _ => "bin/java",
-        }
-    }
-
-    const fn expected_os_arch(self) -> &'static [&'static str] {
-        match self {
-            Self::WindowsX64 | Self::LinuxX64 | Self::MacOsX64 => &["amd64", "x86_64"],
-            Self::WindowsX86 | Self::LinuxX86 => &["x86", "i386"],
-            Self::WindowsArm64 | Self::MacOsArm64 => &["aarch64", "arm64"],
         }
     }
 }
@@ -146,9 +143,9 @@ pub enum JavaProgressEvent {
 }
 
 #[derive(Debug, Clone)]
-pub struct ManagedJavaRuntime {
+pub struct PreparedJavaRuntime {
     pub locked: LockedJavaRuntime,
-    pub root: PathBuf,
+    pub executable: PathBuf,
     pub downloaded_artifacts: usize,
     pub cached_artifacts: usize,
 }
@@ -313,13 +310,18 @@ pub fn verify_locked_java_runtime(
     runtime_paths: &RuntimePaths,
     locked: &LockedJavaRuntime,
 ) -> Result<PathBuf, LauncherError> {
+    if locked.provider != crate::lockfile::JavaProvider::Mojang {
+        return Err(LauncherError::InvalidLock(
+            "managed Java verification requires a Mojang runtime".into(),
+        ));
+    }
     let root = runtime_paths
         .data_dir()
         .join("runtimes")
         .join(&locked.runtime_id);
     let inventory = JavaRuntimeInventory::load(&root.join(RUNTIME_INVENTORY_FILE))?;
     if inventory.runtime_id != locked.runtime_id
-        || inventory.provider != locked.provider
+        || inventory.provider != locked.provider.as_str()
         || inventory.platform != locked.platform
         || inventory.version != locked.version
         || inventory.major != locked.major
@@ -429,7 +431,7 @@ pub async fn install_mojang_java<F>(
     plan: MojangJavaPlan,
     concurrency: usize,
     progress: F,
-) -> Result<ManagedJavaRuntime, LauncherError>
+) -> Result<PreparedJavaRuntime, LauncherError>
 where
     F: FnMut(JavaProgressEvent) + Send,
 {
@@ -447,9 +449,9 @@ where
         progress(JavaProgressEvent::RuntimeCached {
             runtime_id: plan.runtime_id,
         });
-        return Ok(ManagedJavaRuntime {
+        return Ok(PreparedJavaRuntime {
+            executable: final_root.join(&locked.executable),
             locked,
-            root: final_root,
             downloaded_artifacts: 0,
             cached_artifacts: artifact_count,
         });
@@ -521,9 +523,9 @@ where
         }
         Err(error) => return Err(error.into()),
     }
-    Ok(ManagedJavaRuntime {
+    Ok(PreparedJavaRuntime {
+        executable: final_root.join(&locked.executable),
         locked,
-        root: final_root,
         downloaded_artifacts: downloaded,
         cached_artifacts: cached,
     })
@@ -607,53 +609,25 @@ fn verify_runtime(root: &Path, plan: &MojangJavaPlan) -> Result<LockedJavaRuntim
             plan.runtime_id, executable_relative
         )));
     }
-    let output = Command::new(&executable)
-        .args(["-XshowSettings:properties", "-version"])
-        .output()
-        .map_err(|error| {
-            LauncherError::Transaction(format!(
-                "failed to execute managed Java '{}': {error}",
-                executable.display()
-            ))
-        })?;
-    if !output.status.success() {
-        return Err(LauncherError::Transaction(format!(
-            "managed Java '{}' exited with {} during verification",
-            executable.display(),
-            output.status
-        )));
-    }
-    let properties = format!(
-        "{}\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let java_version = property(&properties, "java.version").ok_or_else(|| {
-        LauncherError::InvalidRemoteData(
-            "managed Java did not report the java.version property".to_string(),
-        )
-    })?;
-    let os_arch = property(&properties, "os.arch").ok_or_else(|| {
-        LauncherError::InvalidRemoteData(
-            "managed Java did not report the os.arch property".to_string(),
-        )
-    })?;
-    let actual_major = parse_java_major(java_version)?;
+    let inspected = inspect_system_java(&executable)?;
+    let java_version = &inspected.version;
+    let actual_major = inspected.major;
     if actual_major != plan.major || !java_version.starts_with(&plan.version) {
         return Err(LauncherError::ArtifactIntegrity(format!(
             "managed Java reported version '{java_version}', expected {} (major {})",
             plan.version, plan.major
         )));
     }
-    if !plan.target.expected_os_arch().contains(&os_arch) {
+    if JavaTarget::native()? != plan.target {
         return Err(LauncherError::ArtifactIntegrity(format!(
-            "managed Java reported architecture '{os_arch}', expected {}",
+            "managed Java reported platform '{}', expected {}",
+            inspected.platform,
             plan.target.mojang_name()
         )));
     }
     Ok(LockedJavaRuntime {
         runtime_id: plan.runtime_id.clone(),
-        provider: "mojang".to_string(),
+        provider: crate::lockfile::JavaProvider::Mojang,
         version: plan.version.clone(),
         major: plan.major,
         platform: plan.target.mojang_name().to_string(),
@@ -1147,7 +1121,7 @@ mod tests {
                 loader: LockedLoader::vanilla(),
                 java: Some(LockedJavaRuntime {
                     runtime_id: "runtime-21".to_string(),
-                    provider: "mojang".to_string(),
+                    provider: crate::lockfile::JavaProvider::Mojang,
                     version: "21.0.7".to_string(),
                     major: 21,
                     platform: if cfg!(windows) {

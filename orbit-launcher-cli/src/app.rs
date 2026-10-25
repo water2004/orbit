@@ -66,6 +66,8 @@ pub enum CommandOutput {
     Rename(RenameView),
     InstanceConfigured(InstanceDetailView),
     InstanceResolution(InstanceDetailView),
+    InstanceIcon(InstanceDetailView),
+    InstanceJava(InstanceDetailView),
     LauncherStateExport(LauncherStateExportView),
     Default(DefaultView),
     AccountList(AccountListView),
@@ -124,6 +126,8 @@ impl CommandOutput {
             Self::Rename(_) => "instance.rename",
             Self::InstanceConfigured(_) => "instance.configure",
             Self::InstanceResolution(_) => "instance.resolution",
+            Self::InstanceIcon(_) => "instance.icon",
+            Self::InstanceJava(_) => "instance.java",
             Self::LauncherStateExport(_) => "export",
             Self::Default(_) => "instance.default",
             Self::AccountList(_) => "account.list",
@@ -375,10 +379,16 @@ fn execute_java(
     }
     match command {
         JavaCommands::List { verify } => Ok(CommandOutput::JavaRuntimeList(JavaRuntimeListView {
+            sources: ["mojang", "system"],
             verification_requested: verify,
             runtimes: orbit_launcher_core::list_managed_java_runtimes(runtime.paths(), verify)?
                 .into_iter()
                 .map(Into::into)
+                .chain(
+                    orbit_launcher_core::discover_system_java()
+                        .into_iter()
+                        .map(Into::into),
+                )
                 .collect(),
         })),
         JavaCommands::Verify { runtime_id } => Ok(CommandOutput::JavaRuntimeMutation(
@@ -947,9 +957,12 @@ async fn execute_existing_install(
         )));
     }
     let client = runtime.config().http_client()?;
-    let plan = prepare_install(&resolved.entry.location, &client, |event| {
-        frontend.progress(event)
-    })
+    let plan = prepare_install(
+        &resolved.entry.location,
+        &client,
+        &runtime.config().java.selection,
+        |event| frontend.progress(event),
+    )
     .await?;
     if let Some(server) = plan.server() {
         ensure_server_eula_accepted(resolved.entry.instance_directory(), server, frontend)?;
@@ -1547,8 +1560,23 @@ fn execute_instance(
             let instances = registry
                 .instances
                 .iter()
-                .map(|entry| InstanceView::from_entry(entry, registry.default_instance))
-                .collect();
+                .map(|entry| {
+                    let resolved = resolve_instance(
+                        &registry,
+                        Some(&entry.id.to_string()),
+                        current_dir,
+                        ContextIntent::ReadOnly,
+                    )?;
+                    let installed =
+                        orbit_launcher_core::LockFile::open_optional(entry.instance_directory())?;
+                    Ok(InstanceView::from_snapshot(
+                        entry,
+                        &resolved.manifest,
+                        installed.as_ref().map(|f| &f.inner),
+                        registry.default_instance,
+                    ))
+                })
+                .collect::<Result<Vec<_>, LauncherError>>()?;
             Ok(CommandOutput::InstanceList(InstanceListView { instances }))
         }
         InstanceCommands::Show => {
@@ -1629,6 +1657,54 @@ fn execute_instance(
                 &configured.entry,
                 &configured.manifest,
                 installed.as_ref().map(|lock| &lock.inner),
+                registry.default_instance,
+                resolved.source,
+            )))
+        }
+        InstanceCommands::Icon { command } => {
+            let registry = InstanceRegistry::load(&registry_path)?;
+            let resolved =
+                resolve_instance(&registry, selector, current_dir, ContextIntent::Sensitive)?;
+            let source = match &command {
+                crate::cli::IconCommands::Set { image } => Some(image.as_path()),
+                crate::cli::IconCommands::Clear => None,
+            };
+            let configured = orbit_launcher_core::presentation::set_instance_icon(
+                runtime.paths(),
+                &resolved.entry.id.to_string(),
+                source,
+            )?;
+            let installed = orbit_launcher_core::LockFile::open_optional(
+                configured.entry.instance_directory(),
+            )?;
+            Ok(CommandOutput::InstanceIcon(InstanceDetailView::new(
+                &configured.entry,
+                &configured.manifest,
+                installed.as_ref().map(|f| &f.inner),
+                registry.default_instance,
+                resolved.source,
+            )))
+        }
+        InstanceCommands::Java { command } => {
+            let registry = InstanceRegistry::load(&registry_path)?;
+            let resolved =
+                resolve_instance(&registry, selector, current_dir, ContextIntent::Sensitive)?;
+            let selection = match command {
+                crate::cli::InstanceJavaCommands::Set { selection } => Some(selection.parse()?),
+                crate::cli::InstanceJavaCommands::Clear => None,
+            };
+            let configured = orbit_launcher_core::operations::set_instance_java(
+                runtime.paths(),
+                &resolved.entry.id.to_string(),
+                selection,
+            )?;
+            let installed = orbit_launcher_core::LockFile::open_optional(
+                configured.entry.instance_directory(),
+            )?;
+            Ok(CommandOutput::InstanceJava(InstanceDetailView::new(
+                &configured.entry,
+                &configured.manifest,
+                installed.as_ref().map(|f| &f.inner),
                 registry.default_instance,
                 resolved.source,
             )))

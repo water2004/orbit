@@ -16,7 +16,7 @@ lock，不替代用户已有的启动器。它可以接管一个合法的现有�
 
 - `orbit`：模组包管理器；只管理模组及依赖图。
 - `orbit-launcher`：Minecraft 运行时管理器；负责官方 Minecraft/Loader 元数据、隔离实例、
-  Mojang Java、Microsoft/离线/标准 Yggdrasil 账户、客户端启动、EULA 与服务端监督运行；
+  系统 Java 选择与按需安装 Mojang Java、Microsoft/离线/标准 Yggdrasil 账户、客户端启动、EULA 与服务端监督运行；
   不链接、不调用 Orbit，也不管理模组；需要包级运行时归属时由 Orbit 单向包装其启动命令。
 - `orbit-gui`：基于 Modrinth App 导航、实例库及控件改造的 Vue/Tauri 桌面薄壳；不实现包管理或启动业务，只通过两个 CLI 的
   JSON/NDJSON/stdin 协议提供完整图形交互；安装、账户等直接调用 Launcher，客户端/服务端

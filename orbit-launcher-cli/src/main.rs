@@ -98,6 +98,8 @@ fn command_name(command: &cli::Commands) -> &'static str {
             cli::InstanceCommands::Rename { .. } => "instance.rename",
             cli::InstanceCommands::Configure { .. } => "instance.configure",
             cli::InstanceCommands::Resolution { .. } => "instance.resolution",
+            cli::InstanceCommands::Icon { .. } => "instance.icon",
+            cli::InstanceCommands::Java { .. } => "instance.java",
             cli::InstanceCommands::Remove => "instance.remove",
             cli::InstanceCommands::Default { .. } => "instance.default",
         },
@@ -174,6 +176,8 @@ fn render_success(format: OutputFormat, output: app::CommandOutput) {
             app::CommandOutput::Rename(value) => print_json(command, value),
             app::CommandOutput::InstanceConfigured(value) => print_json(command, value),
             app::CommandOutput::InstanceResolution(value) => print_json(command, value),
+            app::CommandOutput::InstanceIcon(value) => print_json(command, value),
+            app::CommandOutput::InstanceJava(value) => print_json(command, value),
             app::CommandOutput::LauncherStateExport(value) => print_json(command, value),
             app::CommandOutput::Default(value) => print_json(command, value),
             app::CommandOutput::AccountList(value) => print_json(command, value),
@@ -563,6 +567,20 @@ fn render_text(output: app::CommandOutput) {
                 )
             );
         }
+        app::CommandOutput::InstanceIcon(view) => println!(
+            "{}",
+            tr!(
+                "Updated icon for %{instance}.",
+                instance = view.instance.name
+            )
+        ),
+        app::CommandOutput::InstanceJava(view) => println!(
+            "{}",
+            tr!(
+                "Updated Java selection for %{instance}.",
+                instance = view.instance.name
+            )
+        ),
         app::CommandOutput::InstanceResolution(view) => match view.client_resolution {
             Some(resolution) => println!(
                 "{}",
@@ -685,7 +703,7 @@ fn render_text(output: app::CommandOutput) {
         ),
         app::CommandOutput::JavaRuntimeList(view) => {
             if view.runtimes.is_empty() {
-                println!("{}", tr!("No managed Java runtimes are installed."));
+                println!("{}", tr!("No Java runtimes were found."));
             }
             for runtime in view.runtimes {
                 println!(
@@ -697,8 +715,11 @@ fn render_text(output: app::CommandOutput) {
                         version = runtime.version,
                         provider = runtime.provider,
                         platform = runtime.platform,
-                        files = runtime.files,
-                        bytes = human_bytes(runtime.bytes),
+                        files = runtime
+                            .files
+                            .map(|n| n.to_string())
+                            .unwrap_or_else(|| "—".into()),
+                        bytes = runtime.bytes.map(human_bytes).unwrap_or_else(|| "—".into()),
                         verified = if runtime.verified == Some(true) {
                             format!(" [{}]", tr!("verified"))
                         } else {

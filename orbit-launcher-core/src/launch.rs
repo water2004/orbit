@@ -22,7 +22,7 @@ use crate::error::LauncherError;
 use crate::instance::{
     InstanceKind, ManifestFile, RestartPolicy, ServerAuthenticationProvider, ServerConfig,
 };
-use crate::java::verify_locked_java_runtime;
+use crate::java::resolve_launch_java;
 use crate::layout::InstanceLocation;
 use crate::lockfile::{LauncherLock, LockFile, LockedEntrypoint};
 use crate::natives::prepare_native_directory;
@@ -217,9 +217,14 @@ where
     let locked_java = lock.java.as_ref().ok_or_else(|| {
         LauncherError::InvalidLock("installed instance does not lock a Java runtime".to_string())
     })?;
-    let java_executable = verify_locked_java_runtime(runtime_paths, locked_java)?;
+    let selection = manifest
+        .launch
+        .java
+        .as_ref()
+        .unwrap_or(&config.java.selection);
+    let selected_java = resolve_launch_java(runtime_paths, locked_java, selection)?;
     progress(LaunchPreparationEvent::JavaVerified {
-        runtime_id: locked_java.runtime_id.clone(),
+        runtime_id: selected_java.runtime_id,
     });
 
     if manifest.kind == InstanceKind::Client {
@@ -271,7 +276,7 @@ where
     Ok(LaunchPlan {
         instance_id: manifest.id,
         kind: manifest.kind,
-        java_executable,
+        java_executable: selected_java.executable,
         working_directory: instance_root,
         arguments,
         redacted_arguments,

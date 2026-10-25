@@ -8,7 +8,7 @@ use crate::atomic_io::write_atomic;
 use crate::error::LauncherError;
 
 pub const INSTANCE_MANIFEST_FILE: &str = "orbit-launcher.toml";
-pub const INSTANCE_SCHEMA: u32 = 1;
+pub const INSTANCE_SCHEMA: u32 = 2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -94,6 +94,8 @@ pub struct InstanceManifest {
     pub schema: u32,
     pub id: Uuid,
     pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
     pub kind: InstanceKind,
     pub minecraft: MinecraftConfig,
     pub loader: LoaderConfig,
@@ -118,6 +120,7 @@ impl InstanceManifest {
             schema: INSTANCE_SCHEMA,
             id,
             name: name.into(),
+            icon: None,
             kind,
             minecraft: MinecraftConfig {
                 requirement: minecraft_requirement.into(),
@@ -147,6 +150,15 @@ impl InstanceManifest {
             ));
         }
         validate_instance_name(&self.name)?;
+        if self
+            .icon
+            .as_deref()
+            .is_some_and(|icon| icon != crate::presentation::INSTANCE_ICON)
+        {
+            return Err(LauncherError::InvalidManifest(
+                "instance icon must use the Launcher-owned icon location".into(),
+            ));
+        }
         validate_requirement(&self.minecraft.requirement, "Minecraft")?;
         match self.loader.kind {
             LoaderKind::Vanilla if self.loader.requirement.is_some() => {
@@ -241,6 +253,8 @@ pub struct LoaderConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct LaunchConfig {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub java: Option<crate::java::JavaSelection>,
     pub min_memory_mib: u32,
     pub max_memory_mib: u32,
     pub jvm_args: Vec<String>,
@@ -283,6 +297,7 @@ impl ClientResolution {
 impl Default for LaunchConfig {
     fn default() -> Self {
         Self {
+            java: None,
             min_memory_mib: 512,
             max_memory_mib: 4096,
             jvm_args: Vec::new(),
@@ -416,7 +431,10 @@ impl ManifestFile {
         if !path.is_file() {
             return Err(LauncherError::ManifestNotFound(root.to_path_buf()));
         }
-        let content = std::fs::read_to_string(&path)?;
+        let content = crate::storage_migrations::read_current(
+            &path,
+            crate::storage_migrations::DocumentKind::Instance,
+        )?;
         let inner: InstanceManifest =
             toml::from_str(&content).map_err(LauncherError::ManifestParse)?;
         inner.validate()?;
@@ -447,6 +465,37 @@ impl ManifestFile {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn schema_one_instance_keeps_its_identity_and_launch_configuration() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut old = InstanceManifest::new(
+            Uuid::new_v4(),
+            "Existing client",
+            InstanceKind::Client,
+            "26.2",
+            LoaderKind::Fabric,
+            Some("0.20.0".into()),
+        )
+        .unwrap();
+        old.schema = 1;
+        old.launch.account = Some(Uuid::new_v4());
+        old.launch.max_memory_mib = 8192;
+        old.launch.jvm_args = vec!["-Dexample=true".into()];
+        std::fs::write(
+            dir.path().join(INSTANCE_MANIFEST_FILE),
+            toml::to_string_pretty(&old).unwrap(),
+        )
+        .unwrap();
+        let migrated = ManifestFile::open(dir.path()).unwrap().inner;
+        assert_eq!(migrated.schema, INSTANCE_SCHEMA);
+        assert_eq!(migrated.id, old.id);
+        assert_eq!(migrated.launch.account, old.launch.account);
+        assert_eq!(migrated.launch.max_memory_mib, 8192);
+        assert_eq!(migrated.launch.jvm_args, old.launch.jvm_args);
+        assert!(migrated.icon.is_none());
+        assert!(migrated.launch.java.is_none());
+    }
 
     #[test]
     fn server_manifest_roundtrip_keeps_restart_and_authentication_policy() {

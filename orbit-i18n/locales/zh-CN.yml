@@ -3,6 +3,14 @@ Follow system: 跟随系统
 English: 英语
 Simplified Chinese: 简体中文
 Settings: 设置
+"Updated icon for %{instance}.": "已更新 %{instance} 的图标。"
+"Updated Java selection for %{instance}.": "已更新 %{instance} 的 Java 选择。"
+"Java runtime verified": "Java 运行时已校验"
+"No Java runtimes were found.": "未发现 Java 运行时。"
+"Discover system Java and manage downloaded runtimes.": "检测系统 Java 并管理已下载的运行时。"
+"Discover system Java and list managed runtimes; optionally verify managed files.": "检测系统 Java 并列出托管运行时，可选校验托管文件。"
+"Set or reset this instance's image.": "设置或重置此实例的图片。"
+"Override global Java selection for this instance.": "为此实例覆盖全局 Java 选择。"
 "Project ID": "项目 ID"
 "Local package data": "本地包数据"
 "Version repository directory": "版本库目录"
@@ -1868,3 +1876,4 @@ Height: "高度"
 "Set client launch resolution for %{instance} to %{width}×%{height}.": "已将客户端实例 %{instance} 的启动分辨率设为 %{width}×%{height}。"
 "Cleared the explicit client launch resolution for %{instance}.": "已清除客户端实例 %{instance} 的显式启动分辨率。"
 "Review the Minecraft EULA before installing": "安装前请阅读 Minecraft 最终用户许可协议"
+"Configured Orbit Launcher does not provide the complete Java inventory. Update the Launcher executable selected in GUI settings.": "配置的 Orbit Launcher 未提供完整 Java 清单，请在 GUI 设置中更新所选的 Launcher 可执行文件。"

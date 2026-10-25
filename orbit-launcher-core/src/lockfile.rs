@@ -10,7 +10,7 @@ use crate::eula::EulaAcceptance;
 use crate::instance::{InstanceKind, LoaderKind};
 
 pub const INSTANCE_LOCK_FILE: &str = "orbit-launcher.lock";
-pub const LOCK_SCHEMA: u32 = 6;
+pub const LOCK_SCHEMA: u32 = 7;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -333,11 +333,26 @@ impl LockedLoader {
 #[serde(deny_unknown_fields)]
 pub struct LockedJavaRuntime {
     pub runtime_id: String,
-    pub provider: String,
+    pub provider: JavaProvider,
     pub version: String,
     pub major: u32,
     pub platform: String,
     pub executable: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum JavaProvider {
+    Mojang,
+    System,
+}
+impl JavaProvider {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Mojang => "mojang",
+            Self::System => "system",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -364,10 +379,17 @@ impl LockedAuthlibInjector {
 impl LockedJavaRuntime {
     fn validate(&self) -> Result<(), LauncherError> {
         validate_identifier(&self.runtime_id, "Java runtime ID")?;
-        validate_text(&self.provider, "Java provider")?;
         validate_text(&self.version, "Java version")?;
         validate_text(&self.platform, "Java platform")?;
-        validate_relative_path(&self.executable)?;
+        match self.provider {
+            JavaProvider::Mojang => validate_relative_path(&self.executable)?,
+            JavaProvider::System if Path::new(&self.executable).is_absolute() => {}
+            JavaProvider::System => {
+                return Err(LauncherError::InvalidLock(
+                    "system Java executable must be absolute".into(),
+                ));
+            }
+        }
         if self.major == 0 {
             return Err(LauncherError::InvalidLock(
                 "Java major version must be greater than zero".to_string(),
@@ -536,7 +558,10 @@ pub struct LockFile {
 
 impl LockFile {
     pub fn open(root: &Path) -> Result<Self, LauncherError> {
-        let content = std::fs::read_to_string(root.join(INSTANCE_LOCK_FILE))?;
+        let content = crate::storage_migrations::read_current(
+            &root.join(INSTANCE_LOCK_FILE),
+            crate::storage_migrations::DocumentKind::Lock,
+        )?;
         let inner: LauncherLock = toml::from_str(&content).map_err(LauncherError::LockParse)?;
         inner.validate()?;
         Ok(Self {
@@ -600,7 +625,7 @@ pub fn portable_relative_path(path: &Path) -> Result<String, LauncherError> {
     Ok(portable)
 }
 
-fn validate_relative_path(value: &str) -> Result<(), LauncherError> {
+pub(crate) fn validate_relative_path(value: &str) -> Result<(), LauncherError> {
     orbit_bundle_format::validate_relative_path(value).map_err(|_| {
         LauncherError::InvalidLock(format!(
             "'{value}' is not a normalized portable relative path"
@@ -702,6 +727,25 @@ mod tests {
                 method: EulaAcceptanceMethod::DigestCommand,
             }),
         }
+    }
+
+    #[test]
+    fn schema_six_is_upgraded_before_the_runtime_reads_the_lock() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut old = server_lock();
+        old.schema = 6;
+        let text = toml::to_string_pretty(&old).unwrap();
+        std::fs::write(dir.path().join(INSTANCE_LOCK_FILE), &text).unwrap();
+        let lock = LockFile::open(dir.path()).unwrap();
+        assert_eq!(lock.inner.schema, LOCK_SCHEMA);
+        assert_eq!(lock.inner.instance_id, old.instance_id);
+        assert_eq!(lock.inner.artifacts[0].sha256, old.artifacts[0].sha256);
+        assert!(
+            std::fs::read_dir(dir.path())
+                .unwrap()
+                .flatten()
+                .any(|e| e.path().extension().is_some_and(|s| s == "bak"))
+        );
     }
 
     fn client_lock() -> LauncherLock {

@@ -27,11 +27,13 @@ mod natives;
 pub mod operations;
 pub mod pack;
 pub mod platform;
+pub mod presentation;
 pub mod registry;
 pub mod repository;
 pub mod runtime;
 pub mod secret_store;
 pub mod state_archive;
+mod storage_migrations;
 pub mod versions;
 pub mod yggdrasil;
 
@@ -78,8 +80,9 @@ pub use instance::{
     LoaderKind, ManifestFile, RestartPolicy,
 };
 pub use java::{
-    InstalledJavaRuntime, JavaProgressEvent, JavaTarget, MOJANG_RUNTIME_MANIFEST_URL,
-    ManagedJavaRuntime, MojangJavaPlan, install_mojang_java, list_managed_java_runtimes,
+    InstalledJavaRuntime, JavaProgressEvent, JavaSelection, JavaTarget,
+    MOJANG_RUNTIME_MANIFEST_URL, MojangJavaPlan, PreparedJavaRuntime, SystemJava,
+    discover_system_java, inspect_system_java, install_mojang_java, list_managed_java_runtimes,
     plan_mojang_java, remove_managed_java_runtime, verify_locked_java_runtime,
     verify_managed_java_runtime,
 };

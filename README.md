@@ -157,7 +157,7 @@ once. Every remaining incomparable choice still requires an explicit decision.
 
 `orbit-launcher` is the runtime half of the suite. It creates isolated client instances and explicit
 server directories from official Minecraft and Loader metadata; installs Vanilla, Fabric, Quilt,
-Forge, and NeoForge; manages Mojang Java runtimes; handles Microsoft, offline, and standard
+Forge, and NeoForge; detects suitable system Java or installs Mojang runtimes when needed; handles Microsoft, offline, and standard
 Yggdrasil accounts; and launches clients or supervises cancellable, restartable servers. It owns no
 mod logic and never calls Orbit. The project Microsoft public-client registration is built in, while
 tokens remain in the operating system's secret store.

@@ -1,6 +1,6 @@
 # Orbit Launcher CLI
 
-> 实现状态：实例、配置、账户持久化、Mojang Java runtime，Vanilla、Fabric、Quilt、Forge、
+> 实现状态：实例、配置、账户持久化、系统与 Mojang Java runtime，Vanilla、Fabric、Quilt、Forge、
 > NeoForge 客户端/独立服务端安装，以及客户端启动和受管理的服务端运行均已可用。
 > 未实现的命令不会以空壳形式出现在 CLI 中。
 
@@ -112,8 +112,7 @@ orbit-launcher java remove <runtime-id>
 ```
 
 配置键是稳定协议，目前包括网络并发数与超时、installer 超时、缓存上限，以及进度条和
-颜色偏好。Java 只使用 Minecraft 官方元数据指定的 Mojang 受管 runtime，不暴露最终必然
-失败的 provider 选择。`list`/`get` 会区分显式值与默认值；`unset` 删除显式值并恢复
+颜色偏好，以及 `java.selection`。`list`/`get` 会区分显式值与默认值；`unset` 删除显式值并恢复
 默认值。修改经过强类型解析和完整配置校验后原子写入，同时保留已有 TOML 注释。External
 Yggdrasil provider 属于复合对象，由 `config yggdrasil` 的强类型命令管理，不接受任意 TOML
 路径写入。`add` 接受站点地址或精确 API root：缺少协议时只补全 HTTPS，随后执行
@@ -125,8 +124,8 @@ authlib-injector 的 API Location Indication（`X-Authlib-Injector-API-Location`
 `accounts.json` 是 Launcher 管理的全局内部状态，不是实例配置，也不属于
 `orbit-launcher.toml`。其 schema 3 只保存 account ID、provider、角色 UUID/name、认证状态、可选 HTTPS
 皮肤纹理 URL 和时间等非秘密元数据。皮肤只用于展示，URL 无效或缺失不会改变账户身份；token、
-密码和纹理内容都不进入该文件。格式尚未发布，因此不保留旧 schema 迁移路径；不匹配时明确
-报错，不能伪装成空账户列表。
+密码和纹理内容都不进入该文件。v0.7.0 的账户 schema 3 本次不变；不支持更早 schema，
+不匹配时明确报错，不能伪装成空账户列表。
 账户 JSON view 不把皮肤纹理 URL 当作可直接显示的头像。Launcher 根据 Minecraft 皮肤布局
 裁取脸部 `(8,8)-(16,16)`，再叠加帽子层 `(40,8)-(48,16)`，按 64 像素逻辑宽度适配
 64×32、64×64 和等比例高清皮肤，最后返回全局派生缓存中的 `avatar_path`。GUI 只显示该
@@ -200,13 +199,53 @@ component/major。新建、更新和修复复用这些只读目录与同一个 `
 有效 journal 会在下一次 `install` 取得锁后自动回滚，损坏或包含非规范化路径的 journal
 会明确拒绝，不依赖不存在的手动 repair 命令。
 
-Java 下载不是 GUI 或独立脚本的第二条实现：`install` 根据目标 Minecraft 官方 version JSON
-中的 component/major 解析 Mojang Java runtime manifest，将全部文件加入统一下载队列，逐项
+Java 选择不是 GUI 或独立脚本的第二条实现。全局 `java.selection` 默认为 `auto`：
+优先选择实测版本/架构匹配官方要求的系统 Java（同主版本优先较新的补丁版本），没有才下载。
+候选来自 JAVA_HOME/JDK_HOME、PATH 和平台常规 JDK 目录；去重后实际运行有时限、输出上限的
+Java probe。不递归扫描全盘，不用目录名判断版本。
+
+```sh
+orbit-launcher java list
+orbit-launcher config set java.selection auto
+orbit-launcher config set java.selection managed
+orbit-launcher config set java.selection /usr/lib/jvm/java-25-openjdk-amd64/bin/java
+orbit-launcher --instance MyServer instance java set /usr/lib/jvm/java-25-openjdk-amd64/bin/java
+orbit-launcher --instance MyServer instance java clear
+orbit-launcher --instance MyServer instance icon set /path/to/icon.png
+orbit-launcher --instance MyServer instance icon clear
+```
+
+Windows 使用准确的 Java 可执行文件绝对路径。明确指定的 Java 缺失、架构或主版本不匹配时
+报错，不静默换用别的 Java。`managed` 强制使用托管 Java；从系统 Java 切换到托管且尚未安装时
+需执行 install。客户端、独立服务端和 Loader installer 共用选择/物化路径；只接受真实官方
+component/major 要求，不把“Java 越新”当作普遍兼容。
+
+只有需要托管 Java 时，`install` 根据官方 version JSON 的 component/major 解析 Mojang manifest，
+将全部文件加入统一下载队列，逐项
 校验 SHA-1 后物化到 Launcher data `runtimes/<runtime-id>`，并在实例 lock 中记录精确 runtime。
-`java list` 查看已安装版本、平台、路径、文件数与大小；`--verify` / `java verify` 重新校验
-完整 inventory。`java remove` 只允许删除没有被任何已注册实例 lock 引用的 runtime，且只删除
+`java list` 同时返回系统与托管版本、平台和真实路径；只有托管项有文件数、大小与 inventory。
+`--verify` / `java verify` 重新校验托管 inventory。系统 Java 永远不会被 Launcher 删除。
+`java remove` 只允许删除没有被任何已注册实例 lock 引用的托管 runtime，且只删除
 经过目录边界校验的单个 runtime 目录。`runtimes/.staging` 是安装事务的内部工作区，不属于
 runtime inventory，也不得被 `list`、`verify` 或 `remove` 枚举为已安装 Java。
+
+## 已发布 schema 的自动迁移
+
+唯一历史起点是 **v0.7.0** 使用的格式；更早、未知或更新的 schema 明确拒绝，不猜测。
+相同 schema 的数据不按程序版本号重新解释。开发中未发布的中间结构不注册迁移步骤。
+
+| 文件 | v0.7.0 schema | 当前开发 schema |
+| --- | --- | --- |
+| Launcher 全局 config.toml | 2 | 3 |
+| orbit-launcher.toml | 1 | 2 |
+| orbit-launcher.lock | 6 | 7 |
+
+注册表 schema 3、账户和 GUI 偏好格式未变，不额外重写。Orbit 自身 TOML/lock 也未变。
+`storage_migrations` 在正式读取入口按有序步骤迁移，完整校验目标文档后，先以内容摘要命名
+保存原始 `.bak`，再原子替换；保留注释、ID、账户选择、启动参数和原锁定工件。
+跨进程锁及重新读取避免重复迁移。失败不替换原文件，不清空实例，也不恢复默认值；
+备份只含本机旧配置，不能上传为遥测。迁移后的数据不能交给旧版程序使用。
+后续只有已发布的 schema 才能成为新迁移步骤的输入，正常业务永远只处理当前模型。
 
 Fabric 与 Quilt 都通过各自官方 Meta API 解析与目标 Minecraft 版本匹配的 profile，并将
 Loader libraries、main class 和参数合并到同一个精确运行时模型。两者共享 profile 机制，
@@ -222,7 +261,8 @@ lock 保留 profile URL 与 SHA-256，原始响应由元数据缓存负责。
 `orbit-launcher export <state.orbitbundle>` 只写所选实例的 Launcher 投影，不接收 Minecraft、
 Loader 或目标实例参数，也不做兼容性推断。客户端包含 `options.txt`、`servers.dat` 和隔离
 game directory 下的 `saves/`；独立服务端包含 `server.properties`、白名单/管理员/封禁列表、
-服务端图标，以及 `server.properties` 的 `level-name` 指向的世界目录（缺省 `world`）。凭据、
+服务端图标，以及 `server.properties` 的 `level-name` 指向的世界目录（缺省 `world`）。
+自定义实例展示图标由 Launcher 投影保存并随新实例恢复；绝对 Java 路径不跨机器迁移。凭据、
 EULA 接受、日志、缓存和 Minecraft/Loader/Java artifact 都不进入该投影。包内每个文件
 有独立 SHA-256，路径、符号链接和实例目录边界在写入前验证。`--base` 要求运行时和端侧匹配，
 保留并验证已有 Orbit 投影后原子写出同一路径；Launcher 不解析 Orbit 文件。

@@ -22,9 +22,31 @@ pub struct InstanceView {
     pub minecraft_directory: Option<PathBuf>,
     pub kind: String,
     pub is_default: bool,
+    pub game_version: Option<String>,
+    pub loader: Option<String>,
+    pub icon_path: Option<PathBuf>,
 }
 
 impl InstanceView {
+    pub fn from_snapshot(
+        entry: &RegistryEntry,
+        manifest: &InstanceManifest,
+        installed: Option<&orbit_launcher_core::LauncherLock>,
+        default: Option<uuid::Uuid>,
+    ) -> Self {
+        let mut view = Self::from_entry(entry, default);
+        view.game_version = Some(
+            installed
+                .map(|lock| lock.minecraft.version.clone())
+                .unwrap_or_else(|| manifest.minecraft.requirement.clone()),
+        );
+        view.loader = Some(manifest.loader.kind.as_str().into());
+        view.icon_path = manifest
+            .icon
+            .as_ref()
+            .map(|path| entry.instance_directory().join(path));
+        view
+    }
     pub fn from_entry(entry: &RegistryEntry, default: Option<uuid::Uuid>) -> Self {
         Self {
             id: entry.id.to_string(),
@@ -33,6 +55,9 @@ impl InstanceView {
             minecraft_directory: entry.location.minecraft_directory().map(Path::to_path_buf),
             kind: entry.kind().as_str().to_string(),
             is_default: default == Some(entry.id),
+            game_version: None,
+            loader: None,
+            icon_path: None,
         }
     }
 }
@@ -136,6 +161,7 @@ pub struct InstanceDetailView {
     pub selected_account_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub client_resolution: Option<ClientResolutionView>,
+    pub java_selection: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize)]
@@ -153,7 +179,8 @@ impl InstanceDetailView {
         context: ContextSource,
     ) -> Self {
         Self {
-            instance: InstanceView::from_entry(entry, default),
+            instance: InstanceView::from_snapshot(entry, manifest, installed, default),
+            java_selection: manifest.launch.java.clone().map(Into::into),
             context,
             desired: DesiredRuntimeView {
                 minecraft: manifest.minecraft.requirement.clone(),
@@ -204,7 +231,7 @@ pub struct InstalledJavaView {
 impl From<&orbit_launcher_core::LockedJavaRuntime> for InstalledJavaView {
     fn from(java: &orbit_launcher_core::LockedJavaRuntime) -> Self {
         Self {
-            provider: java.provider.clone(),
+            provider: java.provider.as_str().to_string(),
             version: java.version.clone(),
             major: java.major,
             platform: java.platform.clone(),
@@ -297,14 +324,14 @@ pub struct JavaRequirementView {
 pub struct JavaRuntimeView {
     pub runtime_id: String,
     pub provider: String,
-    pub component: String,
+    pub component: Option<String>,
     pub platform: String,
     pub version: String,
     pub major: u32,
-    pub root: PathBuf,
+    pub root: Option<PathBuf>,
     pub executable: PathBuf,
-    pub files: usize,
-    pub bytes: u64,
+    pub files: Option<usize>,
+    pub bytes: Option<u64>,
     pub verified: Option<bool>,
 }
 
@@ -313,21 +340,40 @@ impl From<orbit_launcher_core::InstalledJavaRuntime> for JavaRuntimeView {
         Self {
             runtime_id: runtime.runtime_id,
             provider: runtime.provider,
-            component: runtime.component,
+            component: Some(runtime.component),
             platform: runtime.platform,
             version: runtime.version,
             major: runtime.major,
-            root: runtime.root,
+            root: Some(runtime.root),
             executable: runtime.executable,
-            files: runtime.files,
-            bytes: runtime.bytes,
+            files: Some(runtime.files),
+            bytes: Some(runtime.bytes),
             verified: runtime.verified,
+        }
+    }
+}
+
+impl From<orbit_launcher_core::SystemJava> for JavaRuntimeView {
+    fn from(java: orbit_launcher_core::SystemJava) -> Self {
+        Self {
+            runtime_id: java.locked().runtime_id,
+            provider: "system".into(),
+            component: None,
+            platform: java.platform,
+            version: java.version,
+            major: java.major,
+            root: None,
+            executable: java.executable,
+            files: None,
+            bytes: None,
+            verified: Some(true),
         }
     }
 }
 
 #[derive(Debug, Serialize)]
 pub struct JavaRuntimeListView {
+    pub sources: [&'static str; 2],
     pub verification_requested: bool,
     pub runtimes: Vec<JavaRuntimeView>,
 }
@@ -476,6 +522,7 @@ pub struct ConfigEntryView {
     pub key: &'static str,
     pub value: Option<String>,
     pub explicit: bool,
+    pub allowed_values: &'static [&'static str],
 }
 
 impl From<orbit_launcher_core::ConfigEntry> for ConfigEntryView {
@@ -484,6 +531,7 @@ impl From<orbit_launcher_core::ConfigEntry> for ConfigEntryView {
             key: entry.key.as_str(),
             value: entry.value,
             explicit: entry.explicit,
+            allowed_values: entry.key.allowed_values(),
         }
     }
 }

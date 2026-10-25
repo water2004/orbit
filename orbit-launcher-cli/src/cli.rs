@@ -128,7 +128,7 @@ pub enum Commands {
         command: VersionCommands,
     },
 
-    /// Inspect, verify, and remove managed Java runtimes.
+    /// Discover system Java and manage downloaded runtimes.
     Java {
         #[command(subcommand)]
         command: JavaCommands,
@@ -181,7 +181,7 @@ pub enum AccountCommands {
 
 #[derive(Debug, Subcommand)]
 pub enum JavaCommands {
-    /// List installed managed runtimes; optionally verify every file.
+    /// Discover system Java and list managed runtimes; optionally verify managed files.
     List {
         #[arg(long)]
         verify: bool,
@@ -376,6 +376,16 @@ pub enum InstanceCommands {
         #[command(subcommand)]
         command: ResolutionCommands,
     },
+    /// Set or reset this instance's image.
+    Icon {
+        #[command(subcommand)]
+        command: IconCommands,
+    },
+    /// Override global Java selection for this instance.
+    Java {
+        #[command(subcommand)]
+        command: InstanceJavaCommands,
+    },
 
     /// Unregister the explicit or local instance without deleting its files.
     Remove,
@@ -395,6 +405,8 @@ impl InstanceCommands {
                 | Self::Rename { .. }
                 | Self::Configure { .. }
                 | Self::Resolution { .. }
+                | Self::Icon { .. }
+                | Self::Java { .. }
                 | Self::Remove
         )
     }
@@ -405,6 +417,18 @@ pub enum ResolutionCommands {
     /// Persist a windowed launch resolution for this client instance.
     Set { width: u32, height: u32 },
     /// Stop passing an explicit client launch resolution.
+    Clear,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum IconCommands {
+    Set { image: PathBuf },
+    Clear,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum InstanceJavaCommands {
+    Set { selection: String },
     Clear,
 }
 

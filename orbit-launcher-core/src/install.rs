@@ -28,9 +28,7 @@ use crate::installer::{
 use crate::instance::{
     InstanceKind, InstanceManifest, LoaderKind, ManifestFile, ServerAuthenticationProvider,
 };
-use crate::java::{
-    JavaProgressEvent, JavaTarget, MojangJavaPlan, install_mojang_java, plan_mojang_java,
-};
+use crate::java::{JavaInstallPlan, JavaProgressEvent, JavaSelection, materialize_java, plan_java};
 use crate::layout::{INSTANCE_MINECRAFT_JAR, InstanceLocation};
 use crate::loader::{LoaderSide, ResolvedLoaderProfile, resolve_loader_profile};
 use crate::lockfile::{
@@ -53,7 +51,8 @@ pub struct ServerInstallPlan {
     minecraft_requirement: String,
     loader_requirement: Option<String>,
     resolved: ResolvedVanillaServer,
-    java: MojangJavaPlan,
+    java: JavaInstallPlan,
+    java_override: Option<JavaSelection>,
     eula: EulaDocument,
     acceptance: Option<EulaAcceptance>,
     loader: PlannedLoader,
@@ -66,7 +65,8 @@ pub struct ClientInstallPlan {
     minecraft_requirement: String,
     loader_requirement: Option<String>,
     resolved: ResolvedVanillaClient,
-    java: MojangJavaPlan,
+    java: JavaInstallPlan,
+    java_override: Option<JavaSelection>,
     loader: PlannedLoader,
     authlib_injector: Option<ResolvedAuthlibInjector>,
 }
@@ -232,6 +232,7 @@ fn lock_authlib_injector(
 async fn prepare_vanilla_client_install<F>(
     instance_root: &Path,
     client: &reqwest::Client,
+    selection: &JavaSelection,
     mut progress: F,
 ) -> Result<ClientInstallPlan, LauncherError>
 where
@@ -257,11 +258,12 @@ where
             resolved.minecraft_version
         ))
     })?;
-    let java = plan_mojang_java(client, java_requirement, JavaTarget::native()?, |event| {
+    let java = plan_java(client, java_requirement, selection, |event| {
         progress(InstallProgressEvent::Java(event));
     })
     .await?;
     Ok(ClientInstallPlan {
+        java_override: manifest.launch.java,
         instance_id: manifest.id,
         minecraft_requirement: manifest.minecraft.requirement,
         loader_requirement: manifest.loader.requirement,
@@ -275,6 +277,7 @@ where
 async fn prepare_vanilla_server_install<F>(
     instance_root: &Path,
     client: &reqwest::Client,
+    selection: &JavaSelection,
     mut progress: F,
 ) -> Result<ServerInstallPlan, LauncherError>
 where
@@ -297,7 +300,7 @@ where
             resolved.minecraft_version
         ))
     })?;
-    let java = plan_mojang_java(client, java_requirement, JavaTarget::native()?, |event| {
+    let java = plan_java(client, java_requirement, selection, |event| {
         progress(InstallProgressEvent::Java(event));
     })
     .await?;
@@ -312,6 +315,7 @@ where
         accepted: acceptance.is_some(),
     });
     Ok(ServerInstallPlan {
+        java_override: manifest.launch.java,
         instance_id: manifest.id,
         minecraft_requirement: manifest.minecraft.requirement,
         loader_requirement: manifest.loader.requirement,
@@ -327,6 +331,7 @@ where
 async fn prepare_profile_loader_install<F>(
     instance_root: &Path,
     client: &reqwest::Client,
+    selection: &JavaSelection,
     mut progress: F,
 ) -> Result<InstallPlan, LauncherError>
 where
@@ -380,8 +385,10 @@ where
                     resolved.minecraft_version
                 ))
             })?;
-            let java = plan_selected_java(client, java_requirement, &mut progress).await?;
+            let java =
+                plan_selected_java(client, java_requirement, selection, &mut progress).await?;
             Ok(InstallPlan::Client(ClientInstallPlan {
+                java_override: manifest.launch.java,
                 instance_id: manifest.id,
                 minecraft_requirement: manifest.minecraft.requirement,
                 loader_requirement: manifest.loader.requirement,
@@ -422,7 +429,8 @@ where
                     resolved.minecraft_version
                 ))
             })?;
-            let java = plan_selected_java(client, java_requirement, &mut progress).await?;
+            let java =
+                plan_selected_java(client, java_requirement, selection, &mut progress).await?;
             let eula = show_current_eula(instance_root, client).await?;
             let acceptance = match require_current_acceptance(instance_root, &eula) {
                 Ok(acceptance) => Some(acceptance),
@@ -434,6 +442,7 @@ where
                 accepted: acceptance.is_some(),
             });
             Ok(InstallPlan::Server(ServerInstallPlan {
+                java_override: manifest.launch.java,
                 instance_id: manifest.id,
                 minecraft_requirement: manifest.minecraft.requirement,
                 loader_requirement: manifest.loader.requirement,
@@ -451,6 +460,7 @@ where
 async fn prepare_installer_loader_install<F>(
     instance_root: &Path,
     client: &reqwest::Client,
+    selection: &JavaSelection,
     mut progress: F,
 ) -> Result<InstallPlan, LauncherError>
 where
@@ -501,8 +511,10 @@ where
                     resolved.minecraft_version
                 ))
             })?;
-            let java = plan_selected_java(client, java_requirement, &mut progress).await?;
+            let java =
+                plan_selected_java(client, java_requirement, selection, &mut progress).await?;
             Ok(InstallPlan::Client(ClientInstallPlan {
+                java_override: manifest.launch.java,
                 instance_id: manifest.id,
                 minecraft_requirement: manifest.minecraft.requirement,
                 loader_requirement: manifest.loader.requirement,
@@ -534,7 +546,8 @@ where
                     resolved.minecraft_version
                 ))
             })?;
-            let java = plan_selected_java(client, java_requirement, &mut progress).await?;
+            let java =
+                plan_selected_java(client, java_requirement, selection, &mut progress).await?;
             let eula = show_current_eula(instance_root, client).await?;
             let acceptance = match require_current_acceptance(instance_root, &eula) {
                 Ok(acceptance) => Some(acceptance),
@@ -546,6 +559,7 @@ where
                 accepted: acceptance.is_some(),
             });
             Ok(InstallPlan::Server(ServerInstallPlan {
+                java_override: manifest.launch.java,
                 instance_id: manifest.id,
                 minecraft_requirement: manifest.minecraft.requirement,
                 loader_requirement: manifest.loader.requirement,
@@ -563,6 +577,7 @@ where
 pub async fn prepare_install<F>(
     location: &InstanceLocation,
     client: &reqwest::Client,
+    global_java: &JavaSelection,
     progress: F,
 ) -> Result<InstallPlan, LauncherError>
 where
@@ -573,6 +588,7 @@ where
         .map_err(LauncherError::InvalidRegistry)?;
     let instance_root = location.instance_directory();
     let manifest = ManifestFile::open(instance_root)?.inner;
+    let selection = manifest.launch.java.as_ref().unwrap_or(global_java);
     if manifest.kind != location.kind() {
         return Err(LauncherError::InstanceRegistryMismatch(
             "registered instance layout kind disagrees with orbit-launcher.toml".to_string(),
@@ -580,18 +596,22 @@ where
     }
     let mut plan = match manifest.loader.kind {
         LoaderKind::Vanilla => match manifest.kind {
-            InstanceKind::Client => prepare_vanilla_client_install(instance_root, client, progress)
-                .await
-                .map(InstallPlan::Client),
-            InstanceKind::Server => prepare_vanilla_server_install(instance_root, client, progress)
-                .await
-                .map(InstallPlan::Server),
+            InstanceKind::Client => {
+                prepare_vanilla_client_install(instance_root, client, selection, progress)
+                    .await
+                    .map(InstallPlan::Client)
+            }
+            InstanceKind::Server => {
+                prepare_vanilla_server_install(instance_root, client, selection, progress)
+                    .await
+                    .map(InstallPlan::Server)
+            }
         },
         LoaderKind::Fabric | LoaderKind::Quilt => {
-            prepare_profile_loader_install(instance_root, client, progress).await
+            prepare_profile_loader_install(instance_root, client, selection, progress).await
         }
         LoaderKind::Forge | LoaderKind::Neoforge => {
-            prepare_installer_loader_install(instance_root, client, progress).await
+            prepare_installer_loader_install(instance_root, client, selection, progress).await
         }
     }?;
     if let InstallPlan::Client(client) = &mut plan {
@@ -605,12 +625,13 @@ where
 async fn plan_selected_java<F>(
     client: &reqwest::Client,
     requirement: &crate::mojang::MojangJavaRequirement,
+    selection: &JavaSelection,
     progress: &mut F,
-) -> Result<MojangJavaPlan, LauncherError>
+) -> Result<JavaInstallPlan, LauncherError>
 where
     F: FnMut(InstallProgressEvent) + Send,
 {
-    plan_mojang_java(client, requirement, JavaTarget::native()?, |event| {
+    plan_java(client, requirement, selection, |event| {
         progress(InstallProgressEvent::Java(event));
     })
     .await
@@ -655,6 +676,7 @@ where
     let manifest = ManifestFile::open(instance_root)?.inner;
     require_supported_client(&manifest)?;
     if manifest.id != plan.instance_id
+        || manifest.launch.java != plan.java_override
         || manifest.minecraft.requirement != plan.minecraft_requirement
         || manifest.loader.requirement != plan.loader_requirement
         || manifest_requires_authlib_injector(&manifest) != plan.authlib_injector.is_some()
@@ -665,7 +687,7 @@ where
     }
     let authlib_injector = plan.authlib_injector.clone();
     let transaction = InstallTransaction::begin(location, "install")?;
-    let java = install_mojang_java(runtime_paths, client, plan.java, concurrency, |event| {
+    let java = materialize_java(runtime_paths, client, plan.java, concurrency, |event| {
         progress(InstallProgressEvent::Java(event));
     })
     .await?;
@@ -688,7 +710,7 @@ where
             let staged_installer = transaction.staging.join(INSTALLER_STAGING_NAME);
             cache.materialize(&installer_artifact, &staged_installer)?;
             run_loader_installer(
-                &java.root.join(&java.locked.executable),
+                &java.executable,
                 &staged_installer,
                 &installer,
                 InstallerSide::Client,
@@ -858,6 +880,7 @@ where
     let manifest = ManifestFile::open(instance_root)?.inner;
     require_supported_server(&manifest)?;
     if manifest.id != plan.instance_id
+        || manifest.launch.java != plan.java_override
         || manifest.minecraft.requirement != plan.minecraft_requirement
         || manifest.loader.requirement != plan.loader_requirement
         || manifest_requires_authlib_injector(&manifest) != plan.authlib_injector.is_some()
@@ -869,7 +892,7 @@ where
     let authlib_injector = plan.authlib_injector.clone();
     let acceptance = require_current_acceptance(instance_root, &plan.eula)?;
     let transaction = InstallTransaction::begin(location, "install")?;
-    let java = install_mojang_java(runtime_paths, client, plan.java, concurrency, |event| {
+    let java = materialize_java(runtime_paths, client, plan.java, concurrency, |event| {
         progress(InstallProgressEvent::Java(event))
     })
     .await?;
@@ -894,7 +917,7 @@ where
             let staged_installer = transaction.staging.join(INSTALLER_STAGING_NAME);
             cache.materialize(&installer_artifact, &staged_installer)?;
             run_loader_installer(
-                &java.root.join(&java.locked.executable),
+                &java.executable,
                 &staged_installer,
                 &installer,
                 InstallerSide::Server,
@@ -1009,7 +1032,7 @@ where
         "server.jar"
     };
     let properties = initialize_server_settings(
-        &java.root.join(&java.locked.executable),
+        &java.executable,
         &transaction.staging,
         settings_jar,
         std::time::Duration::from_secs(installer_timeout_seconds),

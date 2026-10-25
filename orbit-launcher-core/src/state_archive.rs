@@ -135,7 +135,15 @@ where
         )));
     }
 
-    let sources = collect_state_sources(instance_root, manifest.kind)?;
+    let mut sources = collect_state_sources(instance_root, manifest.kind)?;
+    if let Some(icon) = &manifest.icon {
+        collect_file(
+            instance_root,
+            &instance_root.join(icon),
+            "appearance/instance-icon.png",
+            &mut sources,
+        )?;
+    }
     let total_bytes = sources.iter().try_fold(0_u64, |total, source| {
         total
             .checked_add(source.bytes)
@@ -244,7 +252,7 @@ where
             source.display()
         )));
     }
-    let target_manifest = ManifestFile::open(target_root)?.inner;
+    let mut target_manifest = ManifestFile::open(target_root)?.inner;
     let target_lock = LockFile::open(target_root)?.inner;
     if target_manifest.kind != target_lock.kind {
         return Err(LauncherError::InvalidLock(
@@ -377,6 +385,14 @@ where
             completed_bytes: total_bytes,
             total_bytes,
         });
+    }
+    if archive_manifest
+        .files
+        .iter()
+        .any(|f| f.path == "appearance/instance-icon.png")
+    {
+        target_manifest.icon = Some(crate::presentation::INSTANCE_ICON.into());
+        ManifestFile::new(&transaction.staging, target_manifest.clone()).save()?;
     }
     transaction.commit(target_manifest.kind == InstanceKind::Server)?;
     progress(StateArchiveProgressEvent::Finished {
@@ -728,6 +744,9 @@ fn open_state_archive(
 }
 
 fn validate_archive_path(kind: InstanceKind, path: &str) -> Result<(), LauncherError> {
+    if path == "appearance/instance-icon.png" {
+        return Ok(());
+    }
     let allowed_state = match kind {
         InstanceKind::Client => CLIENT_STATE_FILES.as_slice(),
         InstanceKind::Server => SERVER_STATE_FILES.as_slice(),
@@ -757,6 +776,9 @@ fn destination_relative(
     server_world: Option<&Path>,
 ) -> Result<PathBuf, LauncherError> {
     validate_archive_path(kind, archive_path)?;
+    if archive_path == "appearance/instance-icon.png" {
+        return Ok(PathBuf::from(crate::presentation::INSTANCE_ICON));
+    }
     if let Some(name) = archive_path.strip_prefix("state/") {
         return Ok(PathBuf::from(name));
     }
@@ -949,6 +971,7 @@ struct StateRestoreTransaction {
     root: PathBuf,
     staging: PathBuf,
     files: Vec<PathBuf>,
+    retain_on_drop: bool,
 }
 
 impl StateRestoreTransaction {
@@ -964,6 +987,7 @@ impl StateRestoreTransaction {
             root,
             staging,
             files: Vec::new(),
+            retain_on_drop: false,
         })
     }
 
@@ -1031,8 +1055,9 @@ impl StateRestoreTransaction {
                 )));
             }
             let target = self.target_root.join(relative);
-            let may_replace =
-                replace_server_properties && relative == Path::new("server.properties");
+            let may_replace = (replace_server_properties
+                && relative == Path::new("server.properties"))
+                || relative == Path::new(crate::instance::INSTANCE_MANIFEST_FILE);
             if target.exists() && !may_replace {
                 return Err(LauncherError::Transaction(format!(
                     "refusing to overwrite existing state path '{}'",
@@ -1042,29 +1067,53 @@ impl StateRestoreTransaction {
         }
 
         let backup = self.root.join("backup");
-        let properties = self.target_root.join("server.properties");
-        let properties_backup = backup.join("server.properties");
-        if replace_server_properties && properties.exists() {
-            std::fs::create_dir_all(&backup)?;
-            std::fs::rename(&properties, &properties_backup)?;
-        }
         let mut committed = Vec::new();
-        for relative in &self.files {
-            let staged = self.staging.join(relative);
-            let target = self.target_root.join(relative);
-            if let Some(parent) = target.parent() {
-                std::fs::create_dir_all(parent)?;
-            }
-            if let Err(error) = std::fs::rename(&staged, &target) {
-                for committed in committed.iter().rev() {
-                    let _ = std::fs::remove_file(self.target_root.join(committed));
+        let mut replaced = Vec::new();
+        let result = (|| -> Result<(), std::io::Error> {
+            for relative in &self.files {
+                let target = self.target_root.join(relative);
+                if target.exists() {
+                    let destination = backup.join(relative);
+                    if let Some(parent) = destination.parent() {
+                        std::fs::create_dir_all(parent)?;
+                    }
+                    std::fs::rename(&target, destination)?;
+                    replaced.push(relative.clone());
                 }
-                if properties_backup.exists() {
-                    let _ = std::fs::rename(&properties_backup, &properties);
-                }
-                return Err(error.into());
             }
-            committed.push(relative.clone());
+            for relative in &self.files {
+                let target = self.target_root.join(relative);
+                if let Some(parent) = target.parent() {
+                    std::fs::create_dir_all(parent)?;
+                }
+                std::fs::rename(self.staging.join(relative), target)?;
+                committed.push(relative.clone());
+            }
+            Ok(())
+        })();
+        if let Err(error) = result {
+            let mut failures = Vec::new();
+            for relative in committed.iter().rev() {
+                if let Err(e) = std::fs::remove_file(self.target_root.join(relative)) {
+                    failures.push(e.to_string());
+                }
+            }
+            for relative in replaced.iter().rev() {
+                if let Err(e) =
+                    std::fs::rename(backup.join(relative), self.target_root.join(relative))
+                {
+                    failures.push(e.to_string());
+                }
+            }
+            if !failures.is_empty() {
+                self.retain_on_drop = true;
+                return Err(LauncherError::Transaction(format!(
+                    "state restore failed: {error}; rollback failed: {}; recovery files retained in '{}'",
+                    failures.join("; "),
+                    self.root.display()
+                )));
+            }
+            return Err(error.into());
         }
         let _ = std::fs::remove_dir_all(&self.root);
         Ok(())
@@ -1073,7 +1122,9 @@ impl StateRestoreTransaction {
 
 impl Drop for StateRestoreTransaction {
     fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.root);
+        if !self.retain_on_drop {
+            let _ = std::fs::remove_dir_all(&self.root);
+        }
     }
 }
 
@@ -1287,6 +1338,38 @@ mod tests {
             b"world-data"
         );
         assert_eq!(std::fs::read(target.join("whitelist.json")).unwrap(), b"[]");
+    }
+
+    #[test]
+    fn instance_icon_travels_with_launcher_state_not_machine_java_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("source");
+        let target = dir.path().join("target");
+        write_server_instance(&source, "1.21.1");
+        write_server_instance(&target, "1.21.1");
+        std::fs::write(target.join("server.properties"), "level-name=world\n").unwrap();
+        let icon = source.join(crate::presentation::INSTANCE_ICON);
+        std::fs::create_dir_all(icon.parent().unwrap()).unwrap();
+        image::RgbaImage::new(32, 32).save(&icon).unwrap();
+        let mut file = ManifestFile::open(&source).unwrap();
+        file.inner.icon = Some(crate::presentation::INSTANCE_ICON.into());
+        file.inner.launch.java = Some(crate::java::JavaSelection::Executable(
+            std::env::current_exe().unwrap(),
+        ));
+        file.save().unwrap();
+        let package = dir.path().join("state.orbitbundle");
+        export_launcher_state(&source, &package, |_| {}).unwrap();
+        restore_launcher_state(&target, &package, |_| {}).unwrap();
+        let restored = ManifestFile::open(&target).unwrap();
+        assert_eq!(
+            restored.inner.icon.as_deref(),
+            Some(crate::presentation::INSTANCE_ICON)
+        );
+        assert_eq!(
+            std::fs::read(&icon).unwrap(),
+            std::fs::read(target.join(crate::presentation::INSTANCE_ICON)).unwrap()
+        );
+        assert!(restored.inner.launch.java.is_none());
     }
 
     #[test]

@@ -1,6 +1,6 @@
 # Orbit Launcher 架构
 
-> 状态：当前实现（2026-08-09）。可用命令以
+> 状态：当前实现（2026-10-25）。可用命令以
 > [`orbit-launcher-cli.md`](orbit-launcher-cli.md) 为准。早期方案中没有落实且已由更小组合
 > 取代的命令不再保留为“规划”，避免把历史设计草案误读成产品承诺。
 >
@@ -18,7 +18,8 @@ Launcher 负责：
 - Minecraft 客户端、服务端及其官方元数据；
 - Fabric、Quilt、Forge、NeoForge Loader 的下载、安装与更新；
 - libraries、assets、natives、logging 配置与启动参数；
-- Mojang 官方 Java 运行时的解析、下载、校验、固定与共享；
+- 系统 Java 的检测和显式选择、Mojang Java 的解析、下载、校验、固定与共享；
+- 实例展示元数据与自定义图标；
 - 客户端账户登录、令牌刷新和安全存储；
 - 客户端与独立服务端进程的启动、监视和停止；
 - 全局实例注册、当前目录实例上下文和一次命令创建并安装实例；
@@ -76,7 +77,11 @@ orbit-launcher-core
   loader                  Fabric/Quilt profile 统一管线与真实 metadata schema adapter
   installer               Forge/NeoForge installer 统一事务与真实输出 schema adapter
   orbit-compatibility     共享 Loader 版本范围、NeoForge artifact/版本编码布局
-  java                    Mojang Java requirement、受管 runtime 和校验
+  java                    官方 Java requirement、系统检测、统一选择、受管 runtime 和校验
+    environment           JavaEnvironment 的平台路径实现，隔离环境变量和 OS 安装目录
+    selection             auto / managed / 绝对可执行文件；安装和启动共用
+  presentation            有界图片校验、缩放、实例图标持久化
+  storage_migrations      仅从 v0.7.0 schema 起的逐级文件迁移、备份和原子替换
   account                 Microsoft / Offline / External Yggdrasil
   authlib_injector        外置认证 agent 下载、校验与 client/server 启动参数
   artifact                下载计划、内容缓存、哈希和物化
@@ -450,16 +455,18 @@ Java 要求只读取目标 Minecraft version JSON 的 `javaVersion.component` �
 官方 component。字段存在但为空或 major 为零时属于无效远端数据；字段缺失时当前安装明确
 返回不支持，不用散落的 `if minecraft >= ...` compatibility 表猜测。
 
-### 8.2 受管来源
+### 8.2 统一 Java 选择
 
-Launcher 的 Java 事实来源只有 Minecraft version JSON 指向的 Mojang Java Runtime
-manifest。实例没有 Java policy 或 provider 选择；目标 Minecraft 声明的 component 始终
-进入唯一一条逐文件校验路径。没有 Temurin 分支或 system-Java 兜底。Mojang 没有为当前
-平台发布所需 component 时明确返回 `unsupported_requirement`。
+全局 `java.selection` 为 `auto`、`managed` 或准确可执行文件绝对路径，实例的 `launch.java`
+可覆盖或继承。auto 实测本机 Java 的版本与架构，优先选择匹配官方主版本的较新补丁；
+没有适用项才解析 Mojang runtime。明确指定的路径无效或不兼容时直接报错，不静默回退。
+系统和 Mojang 来源共同进入 `JavaInstallPlan`，安装物化、Loader installer、客户端和独立
+服务端共用此模型。lock 的 provider 是封闭枚举，系统路径必须绝对，托管路径必须相对其 runtime。
 
-早期草案曾列出 Temurin 与 system Java，但代码只暴露设置而没有实现安装/lock/启动闭环，
-属于错误的产品入口，现已从 config schema、GUI 和实例枚举中删除。以后若引入另一来源，
-必须同时完成下载、校验、lock、启动和平台矩阵，不能先增加一个最终必然失败的选项。
+`JavaEnvironment` 只提供平台候选位置，业务不读取环境变量或全盘扫描。候选按规范路径去重，
+有时限、有输出上限地执行探测；不按目录名或任意较新主版本猜测兼容。系统 Java 不复制、不下载、
+不删除。早期只有设置而无闭环的 system/Temurin 入口仍不保留；当前新增的是完整可用的本机选择，
+不是异常后的隐式兜底。托管来源仍只有 Mojang；其 component 不存在时返回 unsupported。
 
 ### 8.3 校验和更新
 
@@ -473,7 +480,8 @@ manifest。实例没有 Java policy 或 provider 选择；目标 Minecraft 声�
 - 允许多个实例共享同一 runtime；
 - 更新时保留仍被 lock 引用的旧 runtime。
 
-Launcher 不修改系统 `PATH`，也不把当前 shell 恰好能找到的 Java 当作可复现实例事实。
+Launcher 不修改系统 `PATH`。本机运行时在 lock 中明确标为 system 并记录实测信息；它不是
+可下载工件，也不随跨机器导出携带。启动前重新验证选中的 Java，不能把旧探测结果当作永久可用。
 
 ## 9. 下载、缓存与事务
 
@@ -880,7 +888,10 @@ JSON 错误写入 stderr，使用稳定 code：
 全局 `config.toml`：
 
 ```toml
-schema = 2
+schema = 3
+
+[java]
+selection = "auto" # auto / managed / Java 可执行文件绝对路径
 
 [network]
 concurrency = 8
@@ -906,7 +917,7 @@ color = "auto"
 实例 `orbit-launcher.toml`：
 
 ```toml
-schema = 1
+schema = 2
 id = "018f4f42-..."
 name = "main-client"
 kind = "client"
@@ -919,6 +930,7 @@ kind = "fabric"
 requirement = "stable"
 
 [launch]
+# java = "managed" # 不设置则继承全局策略
 min_memory_mib = 512
 max_memory_mib = 4096
 jvm_args = []
@@ -1054,9 +1066,8 @@ LaunchPlan golden test。没有测试覆盖的组合不得笼统宣称“支持�
 2. **Microsoft 应用注册**：项目自有的 Entra public-client ID 固定在 core 中；它不是秘密，
    不进入用户配置或 CI secret。开发与 release 使用完全相同的认证路径，token 仍只进入
    操作系统秘密存储。
-3. **Java runtime**：安装事务只使用 Minecraft 官方元数据选择 Mojang 受管 runtime。
-   Temurin 与 system Java 不在当前产品模型中，config、实例 schema 和 GUI 均不暴露；
-   不能作为异常后的静默回退。
+3. **Java runtime**：官方 metadata 决定要求，默认 auto 优先适用的本机 Java，缺失才安装
+   Mojang runtime；全局/实例均可明确选择，指定路径不静默回退，不实现另一下载提供商。
 4. **服务端后台模式**：`server start` 与 supervisor、IPC、stop、自动重启一起交付；不实现
    Windows Service、systemd/launchd service、开机启动或退出登录后继续运行。
 5. **旧版本范围**：支持声明按 fixture 和 LaunchPlan golden test 逐步扩大；未覆盖组合不得
