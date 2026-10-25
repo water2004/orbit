@@ -1,366 +1,182 @@
-# Orbit 🪐
-
-[English](README.md)
-
 <p align="center">
-  <img src="assets/orbit.svg" width="112" height="112" alt="Orbit 图标">
+  <img src="assets/orbit.svg" width="96" height="96" alt="Orbit 图标">
 </p>
 
-**面向 Minecraft Java Edition 的现代、非侵入式模组包管理器与桌面工作区。**
+# Orbit
 
-Orbit 本体的目标没有改变：`orbit` 只管理模组包、真实 JAR 元数据、依赖图、可复现清单与
-lock，不替代用户已有的启动器。它可以接管一个合法的现有实例，也可以管理 Launcher 新建的
-隔离实例，并提供接近 `cargo` / `npm` 的明确同步、修复、升级和恢复语义。
+[English](README.md) · [下载](https://github.com/water2004/orbit/releases) · [文档](docs/orbit-cli-commands.md)
 
-同一仓库现在包含三个职责严格分离的程序：
+**Minecraft 模组管理、运行时管理与桌面工作区，职责清晰、各自独立。**
 
-- `orbit`：模组包管理器；只管理模组及依赖图。
-- `orbit-launcher`：Minecraft 运行时管理器；负责官方 Minecraft/Loader 元数据、隔离实例、
-  系统 Java 选择与按需安装 Mojang Java、Microsoft/离线/标准 Yggdrasil 账户、客户端启动、EULA 与服务端监督运行；
-  不链接、不调用 Orbit，也不管理模组；需要包级运行时归属时由 Orbit 单向包装其启动命令。
-- `orbit-gui`：基于 Modrinth App 导航、实例库及控件改造的 Vue/Tauri 桌面薄壳；不实现包管理或启动业务，只通过两个 CLI 的
-  JSON/NDJSON/stdin 协议提供完整图形交互；安装、账户等直接调用 Launcher，客户端/服务端
-  启动与包数据 purge 统一调用 Orbit 的联合路径。
+Orbit 本体的目标没有改变：非侵入式管理现有合法 Minecraft 实例中的模组，不要求用户更换
+启动器。套件同时提供独立的 Launcher，以及封装两个 CLI 的图形界面。
 
-Launcher 已完整支持 Vanilla、Fabric、Quilt、Forge、NeoForge 的客户端与独立服务端安装，
-不再是“首个基线”。项目自己的 Microsoft public-client ID 已内置，token 仍只进入操作系统
-秘密存储。详细边界见 [Orbit 架构](docs/orbit-architecture.md)、
-[Launcher 架构](docs/orbit-launcher-architecture.md)、[GUI 架构](docs/orbit-gui.md) 与
-[自有组合包格式](docs/orbit-bundle-format.md)。
+| 程序 | 职责 |
+| --- | --- |
+| **Orbit**（`orbit`） | 模组、JAR 声明的依赖、版本约束、修复、更新、精确恢复、兼容性审计及包数据。 |
+| **Orbit Launcher**（`orbit-launcher`） | Minecraft、加载器、Java、账户、隔离实例、启动和服务端监督运行，不求解或管理模组来源。 |
+| **Orbit GUI**（`orbit-gui`） | 以实例为中心的 Vue/Tauri 桌面界面；所有业务使用终端用户同样的 CLI 命令和机器协议。 |
 
----
+Launcher 不链接、不调用 Orbit。需要记录包数据归属时，由 Orbit 单向包装 Launcher 的现有
+启动命令并注入自己的运行时 Agent。两个 CLI 也都能独立使用。
 
-## ✨ 核心特性
+## 桌面工作区
 
-- **📂 非侵入式与多实例/服务器管理**：无需改变外部启动器结构。直接进入启动器实例或 Fabric、Quilt、Forge、NeoForge dedicated server 根目录即可初始化管理；Launcher 托管客户端位于 `instances/<实例>`，精确 `minecraft.jar` 属于实例、共享仓库只承载不可变 assets/libraries；Launcher 托管的独立服务端则把完整锁定运行时保存在用户选择的服务端目录。
-- **🔄 事实同步与显式修复**：`orbit sync` 联网识别本地 JAR 来源，并让 TOML、lock 和分组精确收敛到实际本地 JAR 集合；它不求解依赖，也不删除任何 JAR 文件。需要选择其他包版本时由 `orbit fix` 展示完整方案并确认。
-- **🧹 基于运行时事实的数据生命周期**：`orbit launch` 包装 Launcher 启动并注入低开销 Agent；读取完全不监听，按已验证的 Loader 版本能力表把物理 JAR、Forge 系 `union:` 来源和 Quilt 原生模块身份归入同一顶层逻辑包，未知 Loader/JVM 范围明确拒绝观测。运行时以精确 artifact 哈希归因，snapshot 与账本持久化稳定 mod ID，因此换 JAR 不会丢失历史归属。文件归最后成功编辑它的包，无主目录由第一个写入包认领，但游戏/存档等共享根保持无主，只有更具体的实际路径可被包拥有。声明的依赖库替调用者执行 I/O 时，Agent 只沿真实依赖边回溯调用包，不硬编码 Masa 或其它模组名。排除项增长后只在合并冷路径枚举元数据，按实际文件数动态重压缩目录默认所有者，逐文件 purge/migration 结果不变。external 路径只用于源实例本机清理，不进入便携导出与迁移；export、migration、`reset` 和 `purge` 共用同一账本，不用文件名或静态分析猜归属。
-- **🌐 多来源**：支持 Modrinth、CurseForge 与本地 `file:` JAR；不同平台只负责候选发现，最终统一验证 JAR 并求解依赖。
-- **🗃️ 按游戏版本隔离的本地版本库**：每个精确 Minecraft/Loader 分别保存远端快照与 JAR 分析数据库；批量检查 project 变更标记，未变化不重拉版本，变化时也只刷新当前游戏版本。全局 LRU JAR 缓存仍是独立的内容存储。
-- **🧩 完整 Loader 语义**：Fabric、Quilt、Forge、NeoForge 先由各自适配器保真解析，再进入同一个规范化求解模型；支持端侧、软/硬依赖、`provides`、加载顺序、内嵌模组与 Jar-in-Jar。
-- **🔎 可解释求解**：依赖原因直接参与 PubGrub 的真实传播和回溯；不会用第二次反事实求解或日志解析猜原因。
-- **🧭 目标明确的完整方案选择**：`add` / `fix` 枚举标准 Pareto 极小包变更集合，`upgrade` / `outdated` 枚举标准版本 Pareto 极大 front；互不支配的方案全部请求选择。
-- **📦 包级事务**：JAR 自声明的 `mod_id` 是包；同 ID 文件是版本候选。方案会同时展示升级、允许的依赖降级与未选包版本移除，确认后一次应用。
-- **⏱️ 可观察长事务**：在线候选发现、JAR 下载/缓存校验/解析、离线求解、最终物化、audit 和包导出均提供强类型进度；已经压缩的 JAR 使用 Stored，并按真实字节显示与取消导出。
-- **📦 单一组合包、互斥所有权**：`.orbitbundle` 用版本化清单记录可选的 Launcher/Orbit 投影及每个文件的 owner、大小和 SHA-256。Orbit 只管理模组、约束、lock 与选中的包数据；Launcher 只管理运行时要求、世界和游戏设置。GUI 迁移时把两者组合为一个包，但任一 CLI 都不解释或改写另一方投影。`.mrpack` 则严格按 Modrinth 官方格式单独实现。
-- **☕ 字节码下限检查**：根据目标 Minecraft 与 JAR class major 校验最低 Java；该检查不宣称能证明 API、Mixin 或运行时行为完全兼容。
-- **🚀 联合跨版本迁移**：GUI 先导出目标无关的 Orbit 投影，再由 Launcher 在同一个 `.orbitbundle` 中原子追加世界和游戏设置；`orbit-launcher install --from` 创建目标运行时并恢复 Launcher 投影，`migrate export --source-pack` 再针对真实目标运行时求完整依赖解，最后由 `orbit install` 精确物化模组。
+实例库、绑定实例的模组发现、包与版本管理、账户、Java 选择、安装向导、整合包导入导出和
+迁移都可在桌面操作。长任务提供真实进度、取消入口及明确的方案选择。
 
----
+![Orbit 实例库](assets/screenshots/instance-library.png)
 
-## 🚀 快速开始
+![Minecraft 与加载器选择](assets/screenshots/create-instance.png)
 
-### 安装
+*图片为实际前端的中文界面，使用隔离演示数据；不是设计稿，也没有启动游戏。
+界面同时支持英文与跟随系统语言。*
 
-Windows x64 用户可以从 release 页面下载
-`orbit-<version>-x86_64.msi`。MSI 会把 Orbit 安装到
-`%ProgramFiles%\Orbit\bin`；其中包含相邻的 `orbit`、`orbit-launcher` 和原生
-`orbit-gui`，并创建开始菜单入口。安装向导默认勾选加入系统 `PATH`，也可以取消。
-安装需要管理员权限。重复运行同一安装包会进入修改/修复/卸载界面；同版本的新构建
-也能覆盖旧构建。卸载时可选择是否删除默认 AppData 中的 Orbit 配置和缓存。
+## Orbit 能做什么
 
-从源码构建 MSI 的方法见
-[Windows MSI](docs/windows-msi.md)。
+- **以 JAR 为事实来源。** 包 ID、版本、依赖、运行环境和内置内容来自 Loader 元数据，
+  不信任远端展示标签。Modrinth、CurseForge 负责定位下载；同一逻辑包可配置多个远端和本地文件。
+- **同步、恢复、修复分工明确。** `sync` 如实记录本地状态并可联网恢复来源；`install`
+  精确恢复 lock；`fix` 求解依赖问题。同步和安装不会暗中修复实例。
+- **提供真正的选择。** add/fix 最小化变动，全部更新求 Pareto 极大版本前沿；单包更新
+  优先达到目标包的最高可行版本，再最小化其它包变动。独立选择因式分解，不展开巨大的
+  笛卡尔列表；必要的降级、替换和删除在应用前明确展示、确认。
+- **不用改 TOML 也能管理版本。** 查看远端实际 JAR 版本、设置数字约束、组合字符串过滤，
+  并启用或禁用包。GUI 提供可视化规则编辑。
+- **解释兼容风险。** audit 按不同 Loader 的运行时、命名空间和 Mixin 规则分析字节码。
+  这是静态风险报告，不保证整合包一定能够正常运行。
+- **明确处理包数据。** 可选的运行时观测只记录成功写入，不监听读取；可浏览、重置、
+  purge 或迁移已知包数据。未知所有权保留，实例外路径不进入便携迁移。
+- **减少重复请求和分析。** 按准确游戏版本/Loader 隔离的远端索引、JAR 解析数据库，
+  与全局按哈希寻址的 LRU JAR 缓存各司其职。
 
-Debian/Ubuntu amd64 使用三个独立 deb，不提供 MSI 式的交互式功能选择：
+## Launcher 能做什么
 
-```bash
-# 无图形服务端：只安装 Launcher
-sudo apt install ./orbit-launcher_0.7.0-1_amd64.deb
+- 按官方元数据/安装器适配安装 Vanilla、Fabric、Quilt、Forge、NeoForge，具体受支持版本范围约束。
+- 客户端使用 `instances/<名称>` 版本隔离：Minecraft JAR 和可变数据属于实例，共享不可变
+  libraries/assets；独立服务端使用明确选择的服务器目录。
+- 自动模式优先使用适用的**本地 Java**，缺失时才安装 Mojang Java；全局和单实例均可显式指定。
+- 支持 Microsoft、离线、标准 External Yggdrasil 账户。令牌进入操作系统秘密存储，
+  项目自己的 Microsoft public-client 注册信息已经内置。
+- 支持客户端分辨率设置、服务端监督运行和可选的崩溃重启；安装服务端时完整展示并明确确认当前 EULA。
+- **导入已有客户端实例。** 支持标准/官方 profile、HMCL、PCL、Prism/MultiMC、
+  CurseForge、GDLauncher Carbon、ATLauncher 和已适配的 Modrinth App 存储布局。
+  先预览实际游戏目录，再复制到新的隔离实例，原文件保留；无法取得全局隔离设置时要求
+  用户明确选目录，不做猜测。
+- **完整删除实例。** 与“仅从列表移除”分开，确认后将包括世界和模组在内的整目录移入
+  系统回收站；失败不会悄悄退回永久删除。
 
-# 服务端还需要管理模组时再安装 Orbit
-sudo apt install ./orbit_0.7.0-1_amd64.deb
+外部导入只是把模组当作不透明用户文件复制，不管理或求解它们；不自动转换任意定制运行时
+或服务端发行包。准确范围与中断恢复规则见[已有实例导入与删除](docs/orbit-launcher-import.md)。
 
-# 桌面完整套件：GUI 精确依赖同版本的两个 CLI
-sudo apt install ./orbit_0.7.0-1_amd64.deb \
-  ./orbit-launcher_0.7.0-1_amd64.deb \
-  ./orbit-gui_0.7.0-1_amd64.deb
-```
+## 安装
 
-在无图形环境中安装 GUI 并不会阻止服务端工作，但会额外引入图形运行库，而且没有图形会话
-也无法使用，因此服务端应安装 `orbit-launcher`，需要模组管理时再加 `orbit`。
+在 [GitHub Releases](https://github.com/water2004/orbit/releases) 下载发布包。
 
-三个程序使用同一个套件版本。tag 必须指向 `main` 且与全部公开 crate 版本一致，GitHub
-Actions 才会同时发布 Windows MSI、三个 deb、
-`SHA256SUMS` 和自动分类的 Release notes。构建与发布规则见
-[Release 流程](docs/release-process.md)，deb 细节见
-[Linux deb](docs/linux-deb.md)。
+- **Windows x64：** 一个 MSI，提供仅 Orbit、Orbit + Launcher、完整套件三个档位；
+  支持可选 PATH 集成、同版本维护，以及卸载时的数据清理选择。
+- **Debian / Ubuntu amd64：** `orbit`、`orbit-launcher`、`orbit-gui` 三个独立 deb。
+  无图形服务器只装 Launcher，需要模组管理再加 Orbit；GUI 依赖同版本的两个 CLI，并需要图形会话。
 
-### Launcher 快速开始
+Windows GUI 使用 WebView2，Linux 使用 WebKitGTK 4.1。服务端 supervisor 不包含系统服务、
+开机自启或退出登录后继续运行。
 
-```bash
-# 一条命令创建并安装隔离客户端
-orbit-launcher install --new fabric-1.21.1 \
-  --kind client --minecraft 1.21.1 --loader fabric
+## 快速开始
 
-# 在明确目录安装服务端
-orbit-launcher install --new survival-server \
-  --kind server --server-directory /srv/minecraft/survival \
-  --minecraft latest-release --loader fabric
-```
+### 接管现有游戏目录的模组
 
-服务端启动前必须通过专用命令完整展示并接受 Minecraft EULA；Launcher 不会代替用户默认
-同意。完整命令见 [Orbit Launcher CLI](docs/orbit-launcher-cli.md)。
-
-Launcher 状态作为同一 `.orbitbundle` 的独立投影导出，只能由安装命令恢复。`--base`
-会原子地把它与 Orbit 投影组合，双方都不会解析或改写对方的文件：
-
-```text
-orbit export migration.orbitbundle --format orbit --content mods-and-data
-orbit-launcher --instance old-client export migration.orbitbundle --base migration.orbitbundle
-orbit-launcher install --new new-client --kind client \
-  --minecraft 1.21.1 --loader fabric --loader-version stable \
-  --from migration.orbitbundle
-```
-
-客户端世界取自隔离实例的 `saves/`。独立服务端世界按 `server.properties` 的 `level-name`
-定位（缺省 `world`）；目标 Minecraft 先生成自己的属性字段，Launcher 只迁移目标仍存在的
-同名值。EULA 接受永不迁移。
-
-### 体验丝滑工作流
-
-```bash
-# 1. 进入你现有的、混乱的 Minecraft 实例目录
-cd "D:/Games/HMCL/instances/MySurvival/.minecraft"
-
-# 2. 让 Orbit 接管这个目录，并命名为 "survival"
+```sh
+cd /path/to/your/game-directory
 orbit init survival
-
-# 3. 搜索并添加模组 (自动匹配当前 MC 版本与 Loader)
+orbit sync
 orbit add sodium
-# CLI 约束始终显式传入；这里只是排除两个作者自定义标签的示例
-orbit add lithium --string 'all; intersect not contains(i"beta"); intersect not contains(i"snapshot")'
-orbit add cf:238222   # CurseForge 数值 project ID；需要先配置 API Key
-orbit add file:./my-local-mod.jar
-
-# 给现有包增加/移除候选远端；Modrinth 使用 project ID，CurseForge 使用数值 project ID
-orbit remote add sodium modrinth AANobbMI
-orbit remote add sodium curseforge 394468
-orbit remote list sodium
-orbit remote remove sodium --index 2
-
-# 4. 添加客户端专用模组 (开服时自动跳过)
-orbit add zoomify --env client
-
-# 修改已有包的过滤策略；auto 恢复跟随 JAR 声明
-orbit env sodium client
-orbit env sodium auto
-
-# 从全部配置远端下载并列出 JAR 实际版本，然后立即求解并应用策略
 orbit versions sodium
-orbit constraint set sodium exact 0.6.13
-orbit constraint set sodium any --string 'all; intersect not contains(i"beta")'
-# 也可使用 any、greater-than、at-least、less-than、at-most，
-# 或 range <下界> <上界> [--lower-bound ...] [--upper-bound ...]
-
-# 5. 按 Pareto 极小变更修复依赖图；多个互不支配方案会要求选择
-orbit fix
-
-# 6. 按 orbit.lock 一键还原精确环境 (新电脑 clone 后)
-orbit install
-
-# 7. 一键部署到服务器 (自动过滤客户端模组)
-orbit install --target server
-
-# 8. 删除模组
-orbit remove voxelmap
-
-# 9. 通过 Orbit + Launcher 联合启动，记录真实运行时数据归属
-orbit launch
-
-# 10. 彻底移除不再使用的模组及其独占运行时数据
-orbit purge voxelmap
+orbit upgrade sodium
 ```
 
----
+| 命令 | 作用 |
+| --- | --- |
+| `orbit sync` | 从实际运行时与本地 JAR 重建事实，联网识别已知远端；不求解、不删 JAR。 |
+| `orbit fix` | 求解并确认最小变动的依赖修复。 |
+| `orbit install` | 严格恢复已有 lock，不求解。 |
+| `orbit outdated` / `orbit upgrade` | 检查/执行全局更新，同时解释受阻原因。 |
+| `orbit upgrade <mod_id>` | 优先更新指定包，再最小化其它变动。 |
+| `orbit constraint set <mod_id> …` | 以同一事务求解并应用版本策略；失败或取消不写入策略。 |
+| `orbit disable <mod_id>` / `orbit enable <mod_id>` | 原子重命名所选 JAR 并记录状态，改变 Loader 是否发现它。 |
+| `orbit audit` | 只读的字节码兼容风险分析。 |
+| `orbit reset <mod_id>` / `orbit purge <mod_id>` | 确认后仅重置包数据，或移除包及已观测的所属数据。 |
 
-## 📖 命令参考 (CLI Reference)
+### 新建或导入实例
 
-Orbit 采用**目录优先**的上下文逻辑。命令会默认作用于当前所在目录的 `orbit.toml`，如果你在非项目目录执行命令，它将作用于你设置的**全局默认实例**（或通过 `-i <实例名>` 显式指定）。
+```sh
+# 新建隔离客户端；可在 GUI 或 versions 命令中选择具体版本。
+orbit-launcher install --new survival --kind client \
+  --minecraft latest-release --loader fabric --loader-version stable
 
-`orbit` 与 `orbit-launcher` 均提供全局 `--language system|en|zh-CN`。Orbit 持久化的
-`core.language` 默认为 `system`，显式参数优先；help、文本结果、进度、询问和错误会使用
-所选语言。JSON/NDJSON/stdin 机器协议固定为严格 UTF-8，
-schema、字段名、枚举码和错误码不随语言变化。Windows 控制台不要求切换 code page；管道中的
-非法 UTF-8 会明确报协议错误，而不会被替换或静默忽略。
+# 先检查和预览其它启动器的实例。
+orbit-launcher instance inspect --directory /path/to/source
+orbit-launcher instance import --directory /path/to/source \
+  --source <inspect返回的ID> --name imported --dry-run
+# 确认后去掉 --dry-run 再执行。
 
-### 1. 实例管理 (Instance Management)
-
-| 命令 | 描述 |
-| :--- | :--- |
-| `orbit init <name>` | 在合法游戏目录中初始化实例并记录本地事实；同 ID 存在多个实现时保留全部文件和远端，要求随后运行 `fix`。 |
-| `orbit instances list` | 列出所有被 Orbit 托管的 MC 实例及其路径（当前/默认实例会有 `*` 标记）。 |
-| `orbit instances register <name> <path>` | 注册已经具有一致 `orbit.toml` 与 `orbit.lock` 的实例；不探测、不补全状态。 |
-| `orbit instances default <name>`| 将指定实例设为全局默认。在任意目录下执行命令都将默认作用于它。 |
-| `orbit instances remove <name>` | 从 Orbit 全局列表中移除对该实例的追踪（**绝不会**删除硬盘上的文件）。 |
-
-### 2. 同步与更新 (Sync & Update)
-
-*Orbit 严格区分本地状态同步与网络更新操作。*
-
-| 命令 | 描述 |
-| :--- | :--- |
-| `orbit sync` | **事实对账**。重新探测平台、扫描 `mods/`，并联网调用可用 provider 的批量哈希 API 恢复来源；按磁盘包集合重建 TOML/lock，清除已不存在包的声明和分组引用，但不发现依赖候选、不求解、不删除 JAR 文件。 |
-| `orbit fix` | **依赖修复**。递归下载所有远端候选的 JAR 元数据，枚举相对当前 lock 的 Pareto 极小包变更方案；确认后安装入选包、删除未选包，并同步清理 TOML 与 lock。 |
-| `orbit outdated [mod]` | **检查过时模组（只读）**。显示可行更新；更高候选受阻或没有适用 JAR 时同时给出原因。 |
-| `orbit upgrade [mod]` | **执行更新**。单包模式必须让该包变新；方案也可包含依赖降级/替换/删除，确认后更新文件与 lock。 |
-
-### 3. 模组管理 (CRUD)
-
-| 命令 | 描述 |
-| :--- | :--- |
-| `orbit search <query>` | 在已配置来源中搜索模组；支持 Modrinth 与 CurseForge。 |
-| `orbit info <mod>` | 查看模组详细信息（描述、作者、版本历史、前置依赖、端侧支持等）。无需安装，直接请求平台 API。 |
-| `orbit add <mod>` | 添加新模组，并 Pareto 极小化对现有逻辑包的变更。支持自动查找、`mr:<project-id-or-search>`、`cf:<numeric-project-id>` 或 `file:./my-mod.jar`。可用 `--version`、`--string` 和 `--env client\|server\|both` 显式传入策略。 |
-| `orbit enable/disable <package>` | 原子重命名所选 JAR 并记录包状态，从而启用或禁止 Loader 发现该包。 |
-| `orbit env <package> <client\|server\|both\|auto>` | 修改包环境过滤；`auto` 跟随 lock 中精确 JAR 的声明。 |
-| `orbit install` | 严格校验平台快照和 lock，仅物化 lock 已记录的精确 JAR；绝不求解、修复、删包或改写 TOML/lock。 |
-| `orbit remove <mod>` | 按 JAR `mod_id` 卸载包。删除其选中内容并移除 `orbit.toml`/lock 中的记录。 |
-| `orbit launch [--server]` | **联合启动**。由 Orbit 调用相邻的 Launcher，并向 Java 注入 Orbit Runtime Agent；客户端等待退出，服务端后台会话由后续 Orbit 命令合并。只有同时安装 Orbit 与 Launcher 才可用。 |
-| `orbit purge <mod>` | **深度清理**。展示包、运行时观测到的递归所有权范围及其中保留的嵌套节点；确认后先按逻辑包执行 remove（同步清理 TOML/lock），再删除该包所有权树。其它当前所有者或来源不明的数据保留。 |
-| `orbit reset <mod>` | **重置包数据**。展示同一套准确数据计划，确认后事务性删除该包拥有的数据，但保留 JAR、TOML、lock、远端和版本约束。失败会恢复已移动的数据与账本。 |
-| `orbit list` | 列出当前实例记录的所有模组及版本；支持 `--tree` 和 `--target`。 |
-| `orbit remote add/remove/list` | 管理一个逻辑包的多个 `file` / Modrinth / CurseForge 候选远端；不能删除最后一个远端。 |
-| `orbit versions <package>` | 刷新当前 Minecraft/Loader 作用域内发生变化的 project，复用已分析内容，并按 JAR 实际声明版本降序列出候选。 |
-| `orbit constraint show/set` | 查看或原子应用数字核心策略与完整版本字符串规则；应用时按 Pareto 极小包变更求解并提交。 |
-
-### 4. 导入、导出与进阶工具 (IO & Utility)
-
-| 命令 | 描述 |
-| :--- | :--- |
-| `orbit import <file>` | 合并 TOML、导入经清单与哈希验证的 `.orbitbundle`，或严格按官方 index/overrides 语义导入 `.mrpack`；optional 路径用可重复的 `--optional`（或 `--all-optional`）显式选择；不接受通用 ZIP，也不暗中运行 `fix`。 |
-| `orbit export [file.orbitbundle] [--content mods\|mods-and-data]` | 导出自有格式的 Orbit 投影；每个文件都有 owner、大小与 SHA-256，数据是否随包导出由显式 content 决定。`--format mrpack` 输出官方 Modrinth 格式。 |
-| `orbit migrate check <目标实例目录>` | 先要求保留全部源包并对真实目标运行时联合求解；严格解不存在时才询问是否搜索标准 Pareto 极小删包方案。 |
-| `orbit migrate export <目标实例目录>` | 复用同一严格优先迁移规划器，将目标 `orbit.toml`、`orbit.lock` 和模组配置写入空白目标实例；随后在目标运行 `orbit install`。 |
-| `orbit migrate export <目标实例目录> --source-pack source.orbitbundle --consume-source-pack` | 从新建目标前冻结的组合包求解；确认写入成功后删除临时源包。GUI 的升级/迁移流程使用此模式。 |
-| `orbit audit` | **字节码兼容风险分析（只读）**。复用 Loader 实际选择的顶层/嵌套运行时内容，由 Fabric/Quilt/Forge/NeoForge 后端确定注册与运行时规则，再进入共享 ClassFile/效果/冲突流水线；默认输出分类摘要，`--output-format json` 或显式 `--report <path>` 保留完整 schema 5 证据。不下载 mapping，也不把依赖声明本身当作风险证据。 |
-
-`mods/` 缺失是合法的空模组集合。init、sync、检查、失败或取消的操作以及空 lock 的 install
-都不会补建该目录；只有选中的 JAR 真正物化时才创建。Loader 版本更新始终由 Launcher 执行
-`instance configure --loader-version` 后再 `install`；跨 Minecraft/Loader 类型迁移则创建新实例，
-GUI 在写入目标 Orbit 状态前先展示 `migrate check` 的完整包级方案。
-
-迁移界面不预先展示“严格/软”策略。Orbit 总是先求保留全部源包的严格解；只有严格图无解时，
-才在同一个 CLI 进程中显示原因并询问是否搜索标准 Pareto 极小删包 front。自动化可用
-`--allow-removals` 表达同一许可。互相独立的包状态与版本取舍以因式乘积返回；缺席或选中某个
-具体 JAR 候选是统一的原子状态，因此也覆盖可选模组的安装/不安装。CLI 对每个因子分别询问，
-不展开全部笛卡尔组合，最后只验证一次选定组合。剩余的每个互不支配选择仍必须由用户明确决定。
-| `orbit cache clean` | 清理 Orbit 在后台全局保存的 `.jar` 下载缓存，释放磁盘空间。 |
-
----
-
-## ⚙️ 工作原理：`orbit.toml` & `orbit.lock`
-
-每一个被 Orbit 接管的 `.minecraft` 目录下都会生成两个文件。`orbit.toml`
-声明完整的受管逻辑包集合和每个包的全部候选远端；所有选中顶层包都有地位相同的
-`[packages.<mod_id>]`，不区分根包与传递包。`orbit.lock` 只锁定实际版本、内容校验值、
-JAR 元数据和能够恢复该精确内容的工件来源。相同字节跨来源按哈希合并，同版本不同
-字节保持为不同候选；哈希不会作为用户界面中的包名或选项名称。两者都应纳入版本控制。
-
-```toml
-[project]
-name = "survival"
-mc_version = "1.20.1"
-modloader = "fabric"
-modloader_version = "0.15.7"
-
-[platform]
-minecraft_jar = { path = "../../1.20.1/1.20.1.jar", sha256 = "..." }
-loader_jar = { path = "../../libraries/net/fabricmc/fabric-loader/0.15.7/fabric-loader-0.15.7.jar", sha256 = "..." }
-runtime_jars = [
-  { path = "../../libraries/net/fabricmc/intermediary/1.20.1/intermediary-1.20.1.jar", sha256 = "..." },
-]
-physical_environment = "client"
-
-[resolver]
-catalogs = ["modrinth"]
-
-[packages]
-# 一个包可同时声明多个远端；包身份和版本始终从下载后的 JAR 读取
-sodium = { version = "^0.5", string = 'all; intersect not contains(i"beta")', remotes = [
-  { type = "modrinth", project_id = "AANobbMI" },
-  { type = "curseforge", project_id = 394468 },
-] }
-lithium = { version = ">=0.11 <0.14", remotes = [
-  { type = "modrinth", project_id = "MODRINTH_PROJECT_ID" },
-] }
-
-# 客户端专用
-"inventory-hud" = { version = "*", env = "client", remotes = [
-  { type = "modrinth", project_id = "MODRINTH_PROJECT_ID" },
-] }
-
-# 本地文件也是同一远端模型
-"my-local-mod" = { version = "1.0.0", remotes = [
-  { type = "file", path = "../sources/my-local-mod.jar" },
-] }
+# 独立服务端；需要明确接受完整 EULA。
+orbit-launcher install --new server --kind server --server-directory /srv/minecraft \
+  --minecraft latest-release --loader fabric --loader-version stable
 ```
 
-`version` 只描述数字核心，因此 `=1.2.3` 匹配数字核心为 `1.2.3` 的全部 Loader 合法表示；
-`-alpha` 等作者文本必须由 `string` 表达，不能混入数字操作数。完整表示仍是不同求解方案，
-但数字核心相同就具有相同的升级与 Pareto 优先级。
+`instance remove` 只注销实例；`instance delete --dry-run` 预览整个目录的删除范围。
+没有 `--yes` 时，终端会再次要求确认。
 
-可选 `string` 从 `all` 或 `none` 开始，按顺序对 **完整 JAR 声明版本字符串** 执行
-`intersect [not]`、`union [not]` 和整体 `complement`；前缀、数字、分隔符、限定词和构建文本
-都不会被裁掉。引号字符串精确且区分大小写，`i"text"` 不区分大小写。Orbit 不给作者字符串
-预设稳定版、测试版等含义。CLI 不会暗中添加约束，调用方必须通过 `orbit add --string`
-传入完整规则。GUI 默认勾选一条排除不区分大小写 `beta` 与 `snapshot` 的推荐规则，勾选时
-也是把规则原文传给同一个 CLI 参数，取消勾选则不传；它绝不改写已有项。数字核心允许任意段。Fabric/Quilt 的不透明 Loader 版本只
-旁路 `version`，仍执行 `string` 并给出警告；Forge/NeoForge 则保持声明版本必须以数字开头
-的 Loader 规则。
+### 整合包与迁移
 
-> **提示**：强烈建议将 `orbit.toml` 和 `orbit.lock` 一同纳入 Git 版本控制！结合 `orbit install --target server`，你可以在任何机器上一键还原完整的模组环境。
+`.orbitbundle` 是一种版本化组合包格式，可选包含彼此独立的 Orbit 和 Launcher 部分。
+Orbit 管模组、约束、lock 和选中的包数据；Launcher 管运行时要求、世界和游戏偏好。
+GUI 编排已有命令，将它们组合导出或迁移到**新实例**；也支持官方 Modrinth `.mrpack` 导入导出。
 
-### CurseForge API Key
+迁移先尝试保留所有源包；无解时才询问是否搜索最小删包方案，不静默覆盖已有实例或原地跨版本升级。
 
-CurseForge provider 不支持匿名或降级运行。使用 `cf:`、把 `curseforge` 加入
-`[resolver].catalogs`、为包添加 CurseForge 远端，或者操作含 CurseForge 远端的实例前，
-必须任选一种方式
-配置 API Key：
+## 配置与自动化
 
-```toml
-# Windows system 布局：%APPDATA%/orbit/config.toml
-# Linux system 布局：$XDG_CONFIG_HOME/orbit/config.toml
-#   （未设置 XDG_CONFIG_HOME 时为 $HOME/.config/orbit/config.toml）
-[auth]
-curseforge_api_key = "YOUR_API_KEY"
-```
+`orbit.toml` 记录所有受管顶层逻辑包及策略，`orbit.lock` 如实记录精确选择。
+一起纳入版本控制即可精确恢复；不区分根包与传递包。
 
-也可以不手工编辑 TOML：
+CurseForge 必须配置用户自己的 API key，没有匿名兜底：
 
-```powershell
+```sh
 orbit config set auth.curseforge-api-key YOUR_API_KEY
-orbit config set cache.capacity-mib 2048
-orbit config set repository.dir D:/OrbitRepository
-orbit config list
 ```
 
-密钥在 `config get/list` 和 JSON 输出中只显示 `<redacted>`；由于命令行可能进入 shell
-历史，无人值守环境仍建议使用环境变量。
+也可用 `ORBIT_CURSEFORGE_API_KEY`，避免将密钥留在 shell 历史中。
+全局配置、缓存容量、Java 等均可通过 CLI 或 GUI 管理。
 
-或设置环境变量 `ORBIT_CURSEFORGE_API_KEY`。API Key 需要按
-[CurseForge 官方说明](https://support.curseforge.com/support/solutions/articles/9000208346-about-the-curseforge-api-and-how-to-apply-for-a-key)
-申请；Orbit 不内置共享 Key。Key 同时用于 Core API 与 CurseForge CDN 下载，只在
-运行时保存，不写入 `orbit.toml` 或 `orbit.lock`。
+两个 CLI 都支持 `--language system|en|zh-CN`（缺省 system）、`--output-format json` 和
+`--progress-format ndjson`。结构化 stdout/stderr 与交互 stdin 使用严格 UTF-8，GUI
+不走另一套业务 API。已发布的 Launcher 存储从 v0.7.0 起，通过独立的有序迁移模块升级，
+替换前保留备份。
 
-也可以用全局 `--config <file>`、`--cache-dir <directory>` 与
-`--repository-dir <directory>` 传入精确路径，或用
-`--data-layout executable` 将 `config.toml`、`instances.toml` 和 `cache/` 放在
-可执行文件旁。完整跨平台规则见
-[全局配置与运行路径](docs/orbit-global-config.md)。
+## 文档与开发
 
----
+- [Orbit 命令](docs/orbit-cli-commands.md) · [Launcher 命令](docs/orbit-launcher-cli.md)
+- [已有实例导入与删除](docs/orbit-launcher-import.md)
+- [TOML 规范](docs/orbit-toml-spec.md) · [版本规则](docs/orbit-versions.md)
+- [组合包格式](docs/orbit-bundle-format.md) · [字节码审计](docs/orbit-bytecode-audit.md)
+- [GUI 架构与构建](docs/orbit-gui.md) · [项目架构](docs/orbit-architecture.md)
+- [Windows MSI](docs/windows-msi.md) · [Linux deb](docs/linux-deb.md) · [发布流程](docs/release-process.md)
 
-## 🤝 贡献与反馈
+```sh
+npm --prefix orbit-gui/ui ci
+npm --prefix orbit-gui/ui test
+npm --prefix orbit-gui/ui run build
+cargo test --workspace
+cargo clippy --workspace --all-targets -- -D warnings
+```
 
-欢迎提交 Issue 报告 bug，或者发起 Pull Request 改进 Orbit！
+贡献请遵循[项目规范](CLAUDE.md)，保持 CLI/core/wrapper 的依赖边界，并为 Loader 特有
+行为编写测试。[PubGrub fork](https://github.com/water2004/pubgrub) 提供求解原语，
+求解策略不在 GUI 中实现。
 
-## 桌面界面
+## 许可证
 
-Orbit 0.7.0 用基于 Modrinth App 的 Vue/Tauri 界面替换旧 GPUI 路径，围绕实例库、模组内容、
-账户和安装向导整理交互，底层继续使用原有 CLI 进程协议。Windows 需要 WebView2，
-Linux 使用 WebKitGTK 4.1；构建与边界见 [GUI 文档](docs/orbit-gui.md)。
-
-## 📄 License
-
-Orbit 与 Orbit Launcher 使用 MIT；GUI 改造部分采用 GPL-3.0-only，详见 [GUI 许可证](orbit-gui/ui/LICENSE) 和 [上游来源说明](orbit-gui/ui/UPSTREAM.md)。
+Orbit 和 Orbit Launcher 使用 MIT。GUI 因改造 Modrinth App 组件而使用 GPL-3.0-only；
+参见 [GUI 许可证](orbit-gui/ui/LICENSE)、[上游来源](orbit-gui/ui/UPSTREAM.md) 和
+[截图说明](assets/screenshots/README.md)。
