@@ -331,6 +331,7 @@ fn excluded_root(name: &str, source: &ExternalInstance) -> bool {
             | "launcher_profiles.json"
             | "launcher_profiles_microsoft_store.json"
             | "launcher_accounts.json"
+            | "launcher_msa_credentials.bin"
             | "accounts.json"
             | "hmcl.json"
             | ".hmcl.json"
@@ -527,6 +528,7 @@ mod tests {
             ("custom-mod-data/user.schematic", "user data"),
             ("assets/shared", "runtime"),
             ("launcher_accounts.json", "secret"),
+            ("launcher_msa_credentials.bin", "secret"),
         ] {
             let file = version.join(path);
             std::fs::create_dir_all(file.parent().unwrap()).unwrap();
@@ -563,6 +565,7 @@ mod tests {
         assert!(target.join("saves/world/level.dat").is_file());
         assert!(!target.join("assets").exists());
         assert!(!target.join("launcher_accounts.json").exists());
+        assert!(!target.join("launcher_msa_credentials.bin").exists());
         assert!(plan.game_directory.join("launcher_accounts.json").is_file());
         verify_inventory(&plan).unwrap();
         assert!(
