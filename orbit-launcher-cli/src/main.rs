@@ -1,4 +1,6 @@
 mod app;
+#[macro_use]
+mod output_sink;
 mod cli;
 mod interaction;
 mod output;
@@ -33,12 +35,15 @@ async fn main() -> ExitCode {
             data_dir: cli.data_dir.clone(),
             cache_dir: cli.cache_dir.clone(),
         });
-    let runtime = match runtime {
+    let mut runtime = match runtime {
         Ok(runtime) => runtime,
         Err(error) => {
             return render_launcher_error(cli.output_format, command_name, &error);
         }
     };
+    if let Some(source) = cli.download_source {
+        runtime.override_download_source(source);
+    }
     let current_dir = match std::env::current_dir() {
         Ok(path) => path,
         Err(error) => {
@@ -51,6 +56,17 @@ async fn main() -> ExitCode {
     };
     let mut frontend =
         TerminalFrontend::new(cli.output_format, cli.progress_format, cli.non_interactive);
+    if matches!(
+        cli.command,
+        cli::Commands::Install { .. }
+            | cli::Commands::Versions { .. }
+            | cli::Commands::Instance {
+                command: cli::InstanceCommands::Import { .. }
+            }
+    ) && let Some(attribution) = runtime.config().network.download_source.attribution()
+    {
+        frontend.download_source(command_name, attribution);
+    }
     match app::execute(
         cli.command,
         cli.instance.as_deref(),
@@ -98,6 +114,7 @@ fn command_name(command: &cli::Commands) -> &'static str {
             cli::InstanceCommands::Delete { .. } => "instance.delete",
             cli::InstanceCommands::List => "instance.list",
             cli::InstanceCommands::Show => "instance.show",
+            cli::InstanceCommands::LaunchReport => "instance.launch-report",
             cli::InstanceCommands::Rename { .. } => "instance.rename",
             cli::InstanceCommands::Configure { .. } => "instance.configure",
             cli::InstanceCommands::Resolution { .. } => "instance.resolution",
@@ -169,6 +186,7 @@ fn render_success(format: OutputFormat, output: app::CommandOutput) {
             app::CommandOutput::Install(value) => print_json(command, value),
             app::CommandOutput::LaunchPlan(value) => print_json(command, value),
             app::CommandOutput::LaunchResult(value) => print_json(command, value),
+            app::CommandOutput::LaunchReport(value) => print_json(command, value),
             app::CommandOutput::ServerStart(value) => print_json(command, value),
             app::CommandOutput::ServerStatus(value) => print_json(command, value),
             app::CommandOutput::ServerControl(value) => print_json(command, value),
@@ -212,7 +230,7 @@ fn render_success(format: OutputFormat, output: app::CommandOutput) {
 
 fn print_json<T: serde::Serialize>(command: &'static str, value: T) {
     let envelope = SuccessEnvelope::new(command, value);
-    println!(
+    outln!(
         "{}",
         serde_json::to_string(&envelope).expect("launcher output views are serializable")
     );
@@ -220,7 +238,26 @@ fn print_json<T: serde::Serialize>(command: &'static str, value: T) {
 
 fn render_text(output: app::CommandOutput) {
     match output {
-        app::CommandOutput::ConfigPath(view) => println!("{}", view.path.display()),
+        app::CommandOutput::LaunchReport(record) => {
+            if let Some(record) = record {
+                outln!(
+                    "{} · {}",
+                    record.session_id,
+                    record.pid.map_or_else(|| "—".into(), |pid| pid.to_string())
+                );
+                outln!(
+                    "{}\n{}",
+                    record.stdout_log.display(),
+                    record.stderr_log.display()
+                );
+                if let Some(result) = record.result {
+                    render_text(app::CommandOutput::LaunchResult(result.into()));
+                }
+            } else {
+                outln!("{}", tr!("No launch record exists for this instance."));
+            }
+        }
+        app::CommandOutput::ConfigPath(view) => outln!("{}", view.path.display()),
         app::CommandOutput::ConfigList(view) => {
             for setting in view.settings {
                 render_config_entry(&setting);
@@ -235,7 +272,7 @@ fn render_text(output: app::CommandOutput) {
             } else {
                 tr!("default")
             };
-            println!(
+            outln!(
                 "{}",
                 tr!(
                     "%{key} = %{current} (%{source}; was %{previous})",
@@ -248,9 +285,9 @@ fn render_text(output: app::CommandOutput) {
         }
         app::CommandOutput::EulaDocument(view) => {
             print!("{}", view.text);
-            println!("\n{}", tr!("Official URL: %{url}", url = view.url));
-            println!("SHA-256: {}", view.digest_sha256);
-            println!(
+            outln!("\n{}", tr!("Official URL: %{url}", url = view.url));
+            outln!("SHA-256: {}", view.digest_sha256);
+            outln!(
                 "{}",
                 tr!(
                     "To accept this exact document, run: orbit-launcher --instance %{instance} server eula accept %{digest}",
@@ -259,7 +296,7 @@ fn render_text(output: app::CommandOutput) {
                 )
             );
         }
-        app::CommandOutput::EulaAcceptance(view) => println!(
+        app::CommandOutput::EulaAcceptance(view) => outln!(
             "{}",
             tr!(
                 "Accepted Minecraft EULA %{digest} for instance %{instance}.",
@@ -268,7 +305,7 @@ fn render_text(output: app::CommandOutput) {
             )
         ),
         app::CommandOutput::Install(view) => {
-            println!(
+            outln!(
                 "{}",
                 tr!(
                     "Installed %{kind} instance %{id}.",
@@ -277,7 +314,7 @@ fn render_text(output: app::CommandOutput) {
                 )
             );
             if let Some(state) = view.state {
-                println!(
+                outln!(
                     "{}",
                     tr!(
                         "Applied %{kind} state from Minecraft %{source}: %{files} file(s), %{world_files} world file(s), %{properties} server property value(s).",
@@ -289,7 +326,7 @@ fn render_text(output: app::CommandOutput) {
                     )
                 );
                 if !state.skipped_properties.is_empty() {
-                    println!(
+                    outln!(
                         "{}",
                         tr!(
                             "Skipped server properties absent from the target version: %{properties}",
@@ -298,12 +335,12 @@ fn render_text(output: app::CommandOutput) {
                     );
                 }
             }
-            println!(
+            outln!(
                 "  {}",
                 tr!("Minecraft: %{version}", version = view.minecraft_version)
             );
-            println!("  {}", tr!("Loader: %{loader}", loader = view.loader));
-            println!(
+            outln!("  {}", tr!("Loader: %{loader}", loader = view.loader));
+            outln!(
                 "  {}",
                 tr!(
                     "Java: %{version} (%{runtime})",
@@ -311,7 +348,7 @@ fn render_text(output: app::CommandOutput) {
                     runtime = view.java_runtime_id
                 )
             );
-            println!(
+            outln!(
                 "  {}",
                 tr!(
                     "Artifacts: %{downloaded} downloaded, %{cached} cached",
@@ -320,16 +357,16 @@ fn render_text(output: app::CommandOutput) {
                 )
             );
             if let Some(digest) = view.eula_digest_sha256 {
-                println!("  EULA SHA-256: {digest}");
+                outln!("  EULA SHA-256: {digest}");
             }
         }
         app::CommandOutput::PackageRequirement(view) => {
-            println!("{} {} ({})", view.name, view.version, view.format);
-            println!(
+            outln!("{} {} ({})", view.name, view.version, view.format);
+            outln!(
                 "  {}",
                 tr!("Minecraft: %{version}", version = view.minecraft)
             );
-            println!(
+            outln!(
                 "  {}",
                 tr!(
                     "Loader: %{loader}",
@@ -338,11 +375,11 @@ fn render_text(output: app::CommandOutput) {
                     })
                 )
             );
-            println!(
+            outln!(
                 "  {}",
                 tr!("Targets: %{targets}", targets = view.targets.join(", "))
             );
-            println!(
+            outln!(
                 "  {}",
                 tr!(
                     "Optional files: %{count}",
@@ -351,7 +388,7 @@ fn render_text(output: app::CommandOutput) {
             );
         }
         app::CommandOutput::LaunchPlan(view) => {
-            println!(
+            outln!(
                 "{}",
                 tr!(
                     "Verified %{kind} launch plan for %{instance}.",
@@ -359,20 +396,20 @@ fn render_text(output: app::CommandOutput) {
                     instance = view.instance_id
                 )
             );
-            println!(
+            outln!(
                 "  {}",
                 tr!(
                     "Working directory: %{path}",
                     path = view.working_directory.display()
                 )
             );
-            println!(
+            outln!(
                 "  {}",
                 tr!("Executable: %{path}", path = view.executable.display())
             );
-            println!("  {}", tr!("Arguments (authentication redacted):"));
+            outln!("  {}", tr!("Arguments (authentication redacted):"));
             for argument in view.arguments {
-                println!("    {argument}");
+                outln!("    {argument}");
             }
         }
         app::CommandOutput::LaunchResult(view) => {
@@ -381,7 +418,7 @@ fn render_text(output: app::CommandOutput) {
             } else {
                 tr!("failed")
             };
-            println!(
+            outln!(
                 "{}",
                 tr!(
                     "%{kind} process %{pid} %{status} (exit %{exit}, %{elapsed} ms).",
@@ -394,9 +431,12 @@ fn render_text(output: app::CommandOutput) {
                     elapsed = view.elapsed_milliseconds
                 )
             );
+            if let Some(diagnostics) = &view.diagnostics {
+                render_diagnostics(diagnostics);
+            }
         }
         app::CommandOutput::ServerStart(view) => {
-            println!(
+            outln!(
                 "{}",
                 tr!(
                     "Started server supervisor %{pid} for instance %{instance}.",
@@ -404,21 +444,21 @@ fn render_text(output: app::CommandOutput) {
                     instance = view.state.instance_id
                 )
             );
-            println!(
+            outln!(
                 "  {}",
                 tr!("State: %{state}", state = tr!(view.state.phase.as_str()))
             );
-            println!(
+            outln!(
                 "  {}",
                 tr!("Standard output: %{path}", path = view.stdout_log.display())
             );
-            println!(
+            outln!(
                 "  {}",
                 tr!("Standard error: %{path}", path = view.stderr_log.display())
             );
         }
         app::CommandOutput::ServerStatus(view) => match view.state {
-            Some(state) => println!(
+            Some(state) => outln!(
                 "{}",
                 tr!(
                     "Server supervisor %{pid} is %{state} (child %{child}, generation %{generation}, restarts %{restarts}).",
@@ -431,9 +471,9 @@ fn render_text(output: app::CommandOutput) {
                     restarts = state.restarts
                 )
             ),
-            None => println!("{}", tr!("Server supervisor is not running.")),
+            None => outln!("{}", tr!("Server supervisor is not running.")),
         },
-        app::CommandOutput::ServerControl(view) => println!(
+        app::CommandOutput::ServerControl(view) => outln!(
             "{}",
             tr!(
                 "Server %{action}: %{message} (accepted: %{accepted}, state: %{state}).",
@@ -443,26 +483,31 @@ fn render_text(output: app::CommandOutput) {
                 state = tr!(view.state.phase.as_str())
             )
         ),
-        app::CommandOutput::SupervisorResult(view) => println!(
-            "{}",
-            tr!(
-                "Server supervisor stopped after %{generations} generation(s) and %{restarts} restart(s); exit %{exit}, requested: %{requested}, restart limit reached: %{limited}.",
-                generations = view.generations,
-                restarts = view.restarts,
-                exit = view
-                    .final_exit_code
-                    .map_or_else(|| tr!("signal").into_owned(), |code| code.to_string()),
-                requested = tr!(if view.stopped_by_request { "yes" } else { "no" }),
-                limited = tr!(if view.restart_limit_reached {
-                    "yes"
-                } else {
-                    "no"
-                })
-            )
-        ),
+        app::CommandOutput::SupervisorResult(view) => {
+            outln!(
+                "{}",
+                tr!(
+                    "Server supervisor stopped after %{generations} generation(s) and %{restarts} restart(s); exit %{exit}, requested: %{requested}, restart limit reached: %{limited}.",
+                    generations = view.generations,
+                    restarts = view.restarts,
+                    exit = view
+                        .final_exit_code
+                        .map_or_else(|| tr!("signal").into_owned(), |code| code.to_string()),
+                    requested = tr!(if view.stopped_by_request { "yes" } else { "no" }),
+                    limited = tr!(if view.restart_limit_reached {
+                        "yes"
+                    } else {
+                        "no"
+                    })
+                )
+            );
+            if let Some(diagnostics) = &view.diagnostics {
+                render_diagnostics(diagnostics);
+            }
+        }
         app::CommandOutput::InstanceList(view) => {
             if view.instances.is_empty() {
-                println!("{}", tr!("No launcher instances are registered."));
+                outln!("{}", tr!("No launcher instances are registered."));
             } else {
                 for instance in view.instances {
                     let default = if instance.is_default {
@@ -470,7 +515,7 @@ fn render_text(output: app::CommandOutput) {
                     } else {
                         String::new()
                     };
-                    println!(
+                    outln!(
                         "{}  {}  {}  {}{}",
                         instance.id,
                         instance.name,
@@ -482,23 +527,23 @@ fn render_text(output: app::CommandOutput) {
             }
         }
         app::CommandOutput::InstanceDetail(view) => {
-            println!("{} ({})", view.instance.name, view.instance.id);
-            println!(
+            outln!("{} ({})", view.instance.name, view.instance.id);
+            outln!(
                 "  {}",
                 tr!(
                     "Directory: %{path}",
                     path = view.instance.directory.display()
                 )
             );
-            println!(
+            outln!(
                 "  {}",
                 tr!("Kind: %{kind}", kind = tr!(&view.instance.kind))
             );
-            println!(
+            outln!(
                 "  {}",
                 tr!("Context: %{context}", context = tr!(view.context.as_str()))
             );
-            println!(
+            outln!(
                 "  {}",
                 tr!("Minecraft: %{version}", version = view.desired.minecraft)
             );
@@ -506,7 +551,7 @@ fn render_text(output: app::CommandOutput) {
                 .desired
                 .loader_version
                 .unwrap_or_else(|| tr!("n/a").into_owned());
-            println!(
+            outln!(
                 "  {}",
                 tr!(
                     "Loader: %{loader} %{version}",
@@ -515,7 +560,7 @@ fn render_text(output: app::CommandOutput) {
                 )
             );
             if let Some(resolution) = view.client_resolution {
-                println!(
+                outln!(
                     "  {}",
                     tr!(
                         "Client resolution: %{width}×%{height}",
@@ -527,31 +572,31 @@ fn render_text(output: app::CommandOutput) {
         }
         app::CommandOutput::InstanceSources(view) => {
             for source in view.instances {
-                println!("{} — {} ({})", source.id, source.name, source.format);
+                outln!("{} — {} ({})", source.id, source.name, source.format);
                 if let Some(runtime) = source.runtime {
-                    println!(
+                    outln!(
                         "  Minecraft {} · {} {}",
                         runtime.minecraft,
                         runtime.loader.as_str(),
                         runtime.loader_version.as_deref().unwrap_or("")
                     );
                 }
-                println!("  {}", source.directory_evidence);
+                outln!("  {}", source.directory_evidence);
                 if let Some(path) = source.game_directory {
-                    println!("  {}", path.display());
+                    outln!("  {}", path.display());
                 }
                 if let Some(error) = source.error {
-                    println!("  {error}");
+                    outln!("  {error}");
                 }
             }
         }
         app::CommandOutput::InstanceImportPreview(view) => {
-            println!(
+            outln!(
                 "{} → {}",
                 view.game_directory.display(),
                 view.destination.display()
             );
-            println!(
+            outln!(
                 "{}",
                 tr!(
                     "Copy %{files} files (%{bytes}). The source is preserved; accounts and launch hooks are excluded.",
@@ -560,11 +605,11 @@ fn render_text(output: app::CommandOutput) {
                 )
             );
             for path in view.excluded {
-                println!("  {}: {}", tr!("Excluded"), path.display());
+                outln!("  {}: {}", tr!("Excluded"), path.display());
             }
         }
         app::CommandOutput::InstanceImported(view) => {
-            println!(
+            outln!(
                 "{}",
                 tr!(
                     "Imported '%{name}' to %{path}. The source was preserved.",
@@ -573,11 +618,11 @@ fn render_text(output: app::CommandOutput) {
                 )
             );
             for warning in view.warnings {
-                println!("  {warning}");
+                outln!("  {warning}");
             }
         }
         app::CommandOutput::InstanceDeletion(view) => {
-            println!(
+            outln!(
                 "{}",
                 tr!(
                     "Delete the entire instance '%{name}' including worlds, mods and settings: %{path}",
@@ -587,7 +632,7 @@ fn render_text(output: app::CommandOutput) {
             );
         }
         app::CommandOutput::InstanceMutation(view) => {
-            println!(
+            outln!(
                 "{}",
                 tr!(
                     "%{action} instance '%{name}' (%{id}) at %{path}",
@@ -598,11 +643,11 @@ fn render_text(output: app::CommandOutput) {
                 )
             );
             if view.action == output::InstanceMutationAction::Removed {
-                println!("{}", tr!("Instance files were preserved."));
+                outln!("{}", tr!("Instance files were preserved."));
             }
         }
         app::CommandOutput::Rename(view) => {
-            println!(
+            outln!(
                 "{}",
                 tr!(
                     "Renamed instance '%{old}' to '%{new}' (%{id}).",
@@ -613,18 +658,18 @@ fn render_text(output: app::CommandOutput) {
             );
         }
         app::CommandOutput::InstanceConfigured(view) => {
-            println!(
+            outln!(
                 "{}",
                 tr!(
                     "Updated desired runtime for %{instance}.",
                     instance = view.instance.name
                 )
             );
-            println!(
+            outln!(
                 "  {}",
                 tr!("Minecraft: %{version}", version = view.desired.minecraft)
             );
-            println!(
+            outln!(
                 "  {}",
                 tr!(
                     "Loader: %{loader} %{version}",
@@ -636,14 +681,14 @@ fn render_text(output: app::CommandOutput) {
                 )
             );
         }
-        app::CommandOutput::InstanceIcon(view) => println!(
+        app::CommandOutput::InstanceIcon(view) => outln!(
             "{}",
             tr!(
                 "Updated icon for %{instance}.",
                 instance = view.instance.name
             )
         ),
-        app::CommandOutput::InstanceJava(view) => println!(
+        app::CommandOutput::InstanceJava(view) => outln!(
             "{}",
             tr!(
                 "Updated Java selection for %{instance}.",
@@ -651,7 +696,7 @@ fn render_text(output: app::CommandOutput) {
             )
         ),
         app::CommandOutput::InstanceResolution(view) => match view.client_resolution {
-            Some(resolution) => println!(
+            Some(resolution) => outln!(
                 "{}",
                 tr!(
                     "Set client launch resolution for %{instance} to %{width}×%{height}.",
@@ -660,7 +705,7 @@ fn render_text(output: app::CommandOutput) {
                     height = resolution.height
                 )
             ),
-            None => println!(
+            None => outln!(
                 "{}",
                 tr!(
                     "Cleared the explicit client launch resolution for %{instance}.",
@@ -668,7 +713,7 @@ fn render_text(output: app::CommandOutput) {
                 )
             ),
         },
-        app::CommandOutput::LauncherStateExport(view) => println!(
+        app::CommandOutput::LauncherStateExport(view) => outln!(
             "{}",
             tr!(
                 "Exported %{kind} state for Minecraft %{version} to %{path}: %{files} file(s), %{world_files} world file(s), %{bytes}.",
@@ -681,7 +726,7 @@ fn render_text(output: app::CommandOutput) {
             )
         ),
         app::CommandOutput::Default(view) => match view.instance {
-            Some(instance) => println!(
+            Some(instance) => outln!(
                 "{}",
                 tr!(
                     "Default instance: %{name} (%{id})",
@@ -689,11 +734,11 @@ fn render_text(output: app::CommandOutput) {
                     id = instance.id
                 )
             ),
-            None => println!("{}", tr!("No default instance is configured.")),
+            None => outln!("{}", tr!("No default instance is configured.")),
         },
         app::CommandOutput::AccountList(view) => {
             if view.accounts.is_empty() {
-                println!("{}", tr!("No launcher accounts are configured."));
+                outln!("{}", tr!("No launcher accounts are configured."));
             } else {
                 for account in view.accounts {
                     render_account(&account);
@@ -702,12 +747,12 @@ fn render_text(output: app::CommandOutput) {
         }
         app::CommandOutput::AccountDetail(view) => render_account(&view),
         app::CommandOutput::AccountRefresh(view) => {
-            println!("{}", tr!("Refreshed account profile."));
+            outln!("{}", tr!("Refreshed account profile."));
             render_account(&view);
         }
         app::CommandOutput::AccountLogin(view) => render_account(&view.account),
         app::CommandOutput::AccountSelection(view) => match view.account {
-            Some(account) => println!(
+            Some(account) => outln!(
                 "{}",
                 tr!(
                     "Selected %{name} (%{id}) for %{scope} scope.",
@@ -716,7 +761,7 @@ fn render_text(output: app::CommandOutput) {
                     scope = tr!(view.scope)
                 )
             ),
-            None => println!(
+            None => outln!(
                 "{}",
                 tr!(
                     "Cleared the %{scope} account selection.",
@@ -724,7 +769,7 @@ fn render_text(output: app::CommandOutput) {
                 )
             ),
         },
-        app::CommandOutput::AccountLogout(view) => println!(
+        app::CommandOutput::AccountLogout(view) => outln!(
             "{}",
             tr!(
                 "Removed local session for %{name} (%{id}).",
@@ -733,13 +778,13 @@ fn render_text(output: app::CommandOutput) {
             )
         ),
         app::CommandOutput::MicrosoftDeviceSession(view) => {
-            println!("{}", tr!("Open: %{url}", url = view.verification_uri));
-            println!("{}", tr!("Enter code: %{code}", code = view.user_code));
-            println!(
+            outln!("{}", tr!("Open: %{url}", url = view.verification_uri));
+            outln!("{}", tr!("Enter code: %{code}", code = view.user_code));
+            outln!(
                 "{}",
                 tr!("Login session: %{id}", id = view.login_session_id)
             );
-            println!(
+            outln!(
                 "{}",
                 tr!(
                     "Then run: orbit-launcher account login microsoft complete %{id}",
@@ -748,14 +793,14 @@ fn render_text(output: app::CommandOutput) {
             );
         }
         app::CommandOutput::YggdrasilEndpoint(view) => {
-            println!(
+            outln!(
                 "{}: {}",
                 tr!("Name"),
                 view.server_name.as_deref().unwrap_or(&view.suggested_id)
             );
-            println!("{}: {}", tr!("API root"), view.api_root);
+            outln!("{}: {}", tr!("API root"), view.api_root);
             if view.insecure_http {
-                println!(
+                outln!(
                     "{}",
                     tr!(
                         "HTTP sends passwords without encryption; only add this service if you accept the risk."
@@ -763,12 +808,12 @@ fn render_text(output: app::CommandOutput) {
                 );
             }
             if let Some(id) = view.existing_provider_id {
-                println!("{}: {}", tr!("Configured provider"), id);
+                outln!("{}: {}", tr!("Configured provider"), id);
             }
         }
         app::CommandOutput::YggdrasilProviderList(view) => {
             if view.providers.is_empty() {
-                println!("{}", tr!("No External Yggdrasil providers are configured."));
+                outln!("{}", tr!("No External Yggdrasil providers are configured."));
             } else {
                 for provider in view.providers {
                     let insecure = if provider.allow_insecure_http {
@@ -776,11 +821,11 @@ fn render_text(output: app::CommandOutput) {
                     } else {
                         String::new()
                     };
-                    println!("{}  {}{}", provider.id, provider.api_root, insecure);
+                    outln!("{}  {}{}", provider.id, provider.api_root, insecure);
                 }
             }
         }
-        app::CommandOutput::YggdrasilProviderMutation(view) => println!(
+        app::CommandOutput::YggdrasilProviderMutation(view) => outln!(
             "{}",
             tr!(
                 "%{action} External Yggdrasil provider '%{id}' (%{url}).",
@@ -791,10 +836,10 @@ fn render_text(output: app::CommandOutput) {
         ),
         app::CommandOutput::JavaRuntimeList(view) => {
             if view.runtimes.is_empty() {
-                println!("{}", tr!("No Java runtimes were found."));
+                outln!("{}", tr!("No Java runtimes were found."));
             }
             for runtime in view.runtimes {
-                println!(
+                outln!(
                     "{}",
                     tr!(
                         "%{id}: Java %{major} %{version} (%{provider}, %{platform}, %{files} files, %{bytes})%{verified}",
@@ -815,13 +860,13 @@ fn render_text(output: app::CommandOutput) {
                         }
                     )
                 );
-                println!(
+                outln!(
                     "  {}",
                     tr!("Executable: %{path}", path = runtime.executable.display())
                 );
             }
         }
-        app::CommandOutput::JavaRuntimeMutation(view) => println!(
+        app::CommandOutput::JavaRuntimeMutation(view) => outln!(
             "{}",
             tr!(
                 "%{action} managed Java runtime %{id} (Java %{major} %{version}).",
@@ -836,7 +881,7 @@ fn render_text(output: app::CommandOutput) {
             )
         ),
         app::CommandOutput::MinecraftVersions(view) => {
-            println!(
+            outln!(
                 "{}",
                 tr!(
                     "Minecraft versions (latest release %{release}, latest snapshot %{snapshot}):",
@@ -852,14 +897,17 @@ fn render_text(output: app::CommandOutput) {
                 } else {
                     String::new()
                 };
-                println!(
+                outln!(
                     "{}  {}  {}{}",
-                    version.id, version.version_type, version.release_time, latest
+                    version.id,
+                    version.version_type,
+                    version.release_time,
+                    latest
                 );
             }
         }
         app::CommandOutput::LoaderVersions(view) => {
-            println!(
+            outln!(
                 "{}",
                 tr!(
                     "%{loader} versions compatible with Minecraft %{minecraft}:",
@@ -893,11 +941,11 @@ fn render_text(output: app::CommandOutput) {
                     .minimum_java_major
                     .map(|major| format!(" · Java {major}+"))
                     .unwrap_or_default();
-                println!("{}{}{}", version.version, tags, java);
+                outln!("{}{}{}", version.version, tags, java);
             }
         }
         app::CommandOutput::JavaRequirement(view) => match (view.component, view.major) {
-            (Some(component), Some(major)) => println!(
+            (Some(component), Some(major)) => outln!(
                 "{}",
                 tr!(
                     "Minecraft %{minecraft} requires Java %{major} (%{component}).",
@@ -906,7 +954,7 @@ fn render_text(output: app::CommandOutput) {
                     component = component
                 )
             ),
-            _ => println!(
+            _ => outln!(
                 "{}",
                 tr!(
                     "Minecraft %{minecraft} publishes no managed Java requirement.",
@@ -914,7 +962,7 @@ fn render_text(output: app::CommandOutput) {
                 )
             ),
         },
-        app::CommandOutput::MinecraftDirectory(view) => println!(
+        app::CommandOutput::MinecraftDirectory(view) => outln!(
             "{}",
             tr!(
                 "Managed Minecraft directory: %{path} (%{source})",
@@ -923,7 +971,7 @@ fn render_text(output: app::CommandOutput) {
             )
         ),
         app::CommandOutput::MinecraftDirectoryMove(view) => {
-            println!(
+            outln!(
                 "{}",
                 tr!(
                     "Moved managed Minecraft directory from %{previous} to %{current}.",
@@ -932,7 +980,7 @@ fn render_text(output: app::CommandOutput) {
                 )
             );
             if !view.source_removed {
-                println!(
+                outln!(
                     "{}",
                     tr!(
                         "The verified destination is active, but the old directory could not be removed: %{path}",
@@ -955,9 +1003,13 @@ fn render_account(view: &output::AccountView) {
         .as_ref()
         .map(|id| format!("{}:{id}", view.provider))
         .unwrap_or_else(|| view.provider.clone());
-    println!(
+    outln!(
         "{}  {}  {}  {}{}",
-        view.id, view.profile_name, view.profile_id, provider, default
+        view.id,
+        view.profile_name,
+        view.profile_id,
+        provider,
+        default
     );
 }
 
@@ -971,7 +1023,7 @@ fn render_config_entry(view: &output::ConfigEntryView) {
     } else {
         tr!("default")
     };
-    println!(
+    outln!(
         "{}",
         tr!(
             "%{key} = %{value} [%{source}]",
@@ -986,12 +1038,12 @@ fn render_error(format: OutputFormat, command: &str, code: &str, message: &str) 
     match format {
         OutputFormat::Json => {
             let envelope = ErrorEnvelope::new(command, code, message);
-            eprintln!(
+            errln!(
                 "{}",
                 serde_json::to_string(&envelope).expect("launcher error view is serializable")
             );
         }
-        OutputFormat::Text => eprintln!("{}: {message}", tr!("error")),
+        OutputFormat::Text => errln!("{}: {message}", tr!("error")),
     }
     match code {
         "argument" => ExitCode::from(2),
@@ -1186,13 +1238,16 @@ impl TerminalFrontend {
 
     fn render_text_progress(&mut self, data: ProgressData) {
         match data {
+            ProgressData::DownloadSource { attribution } => {
+                errln!("{} — {}", attribution.name, attribution.documentation)
+            }
             ProgressData::InstanceImportCopying { completed, total } => {
                 if completed == 0
                     || completed == total
                     || self.last_text_progress.elapsed() >= Duration::from_secs(1)
                 {
                     self.last_text_progress = Instant::now();
-                    eprintln!(
+                    errln!(
                         "{}",
                         tr!(
                             "Copying instance data: %{completed} / %{total}.",
@@ -1202,31 +1257,31 @@ impl TerminalFrontend {
                     );
                 }
             }
-            ProgressData::InstanceImportVerified => eprintln!(
+            ProgressData::InstanceImportVerified => errln!(
                 "{}",
                 tr!("Imported instance data verified. Source preserved.")
             ),
-            ProgressData::MetadataStarted => eprintln!("{}", tr!("Resolving Mojang metadata…")),
+            ProgressData::MetadataStarted => errln!("{}", tr!("Resolving Mojang metadata…")),
             ProgressData::MinecraftResolved { version, .. } => {
-                eprintln!(
+                errln!(
                     "{}",
                     tr!("Resolved Minecraft %{version}.", version = version)
                 )
             }
             ProgressData::EulaChecked { accepted, .. } if accepted => {
-                eprintln!("{}", tr!("Verified EULA acceptance."))
+                errln!("{}", tr!("Verified EULA acceptance."))
             }
             ProgressData::EulaChecked { .. } => {
-                eprintln!("{}", tr!("Current EULA requires explicit acceptance."))
+                errln!("{}", tr!("Current EULA requires explicit acceptance."))
             }
             ProgressData::JavaManifestStarted => {
-                eprintln!("{}", tr!("Resolving managed Java runtime…"))
+                errln!("{}", tr!("Resolving managed Java runtime…"))
             }
             ProgressData::JavaRuntimeResolved {
                 runtime_id,
                 artifacts,
                 total_bytes,
-            } => eprintln!(
+            } => errln!(
                 "{}",
                 tr!(
                     "Resolved Java runtime %{id}: %{artifacts} files, %{bytes}.",
@@ -1238,7 +1293,7 @@ impl TerminalFrontend {
             ProgressData::ArtifactStarted {
                 logical_name,
                 total_bytes,
-            } => eprintln!(
+            } => errln!(
                 "{}",
                 tr!(
                     "Downloading %{name}%{size}…",
@@ -1257,7 +1312,7 @@ impl TerminalFrontend {
                 let total = total_bytes
                     .map(|size| format!(" / {}", human_bytes(size)))
                     .unwrap_or_default();
-                eprintln!(
+                errln!(
                     "{}",
                     tr!(
                         "Downloading %{name}: %{downloaded}%{total}",
@@ -1269,15 +1324,15 @@ impl TerminalFrontend {
             }
             ProgressData::ArtifactBytes { .. } => {}
             ProgressData::ArtifactCached { logical_name, .. } => {
-                eprintln!("{}", tr!("Using cached %{name}.", name = logical_name))
+                errln!("{}", tr!("Using cached %{name}.", name = logical_name))
             }
             ProgressData::ArtifactFinished { logical_name, .. } => {
-                eprintln!("{}", tr!("Downloaded %{name}.", name = logical_name))
+                errln!("{}", tr!("Downloaded %{name}.", name = logical_name))
             }
             ProgressData::JavaMaterialized { completed, total }
                 if completed == total || completed % 25 == 0 =>
             {
-                eprintln!(
+                errln!(
                     "{}",
                     tr!(
                         "Materializing Java runtime: %{completed}/%{total} files.",
@@ -1288,10 +1343,10 @@ impl TerminalFrontend {
             }
             ProgressData::JavaMaterialized { .. } => {}
             ProgressData::JavaRuntimeVerified { runtime_id } => {
-                eprintln!("{}", tr!("Verified Java runtime %{id}.", id = runtime_id))
+                errln!("{}", tr!("Verified Java runtime %{id}.", id = runtime_id))
             }
             ProgressData::JavaRuntimeCached { runtime_id } => {
-                eprintln!(
+                errln!(
                     "{}",
                     tr!("Using installed Java runtime %{id}.", id = runtime_id)
                 )
@@ -1302,7 +1357,7 @@ impl TerminalFrontend {
                 side,
             } => {
                 self.installer_output_lines = 0;
-                eprintln!(
+                errln!(
                     "{}",
                     tr!(
                         "Running official %{loader} %{version} installer for %{side}…",
@@ -1317,10 +1372,10 @@ impl TerminalFrontend {
                 if self.installer_output_lines <= 20
                     || self.installer_output_lines.is_multiple_of(100)
                 {
-                    eprintln!("[{stream}] {line}")
+                    errln!("[{stream}] {line}")
                 }
             }
-            ProgressData::LoaderInstallerOutputSuppressed { maximum_lines } => eprintln!(
+            ProgressData::LoaderInstallerOutputSuppressed { maximum_lines } => errln!(
                 "{}",
                 tr!(
                     "Installer output exceeded %{maximum} lines; additional lines are suppressed.",
@@ -1328,7 +1383,7 @@ impl TerminalFrontend {
                 )
             ),
             ProgressData::LoaderInstallerFinished { loader, version } => {
-                eprintln!(
+                errln!(
                     "{}",
                     tr!(
                         "Official %{loader} %{version} installer completed.",
@@ -1337,14 +1392,14 @@ impl TerminalFrontend {
                     )
                 )
             }
-            ProgressData::ServerSettingsInitialized { properties } => eprintln!(
+            ProgressData::ServerSettingsInitialized { properties } => errln!(
                 "{}",
                 tr!(
                     "Minecraft initialized %{properties} server setting(s).",
                     properties = properties
                 )
             ),
-            ProgressData::StateArchiveStarted { files, total, .. } => eprintln!(
+            ProgressData::StateArchiveStarted { files, total, .. } => errln!(
                 "{}",
                 tr!(
                     "Preparing %{files} Launcher state file(s), %{bytes} total.",
@@ -1356,7 +1411,7 @@ impl TerminalFrontend {
                 if self.last_text_progress.elapsed() >= Duration::from_secs(1) =>
             {
                 self.last_text_progress = Instant::now();
-                eprintln!(
+                errln!(
                     "{}",
                     tr!(
                         "Processing Launcher state: %{completed} / %{total}.",
@@ -1366,7 +1421,7 @@ impl TerminalFrontend {
                 );
             }
             ProgressData::StateArchiveAdvanced { .. } => {}
-            ProgressData::StateArchiveFinished { files, total, .. } => eprintln!(
+            ProgressData::StateArchiveFinished { files, total, .. } => errln!(
                 "{}",
                 tr!(
                     "Finished %{files} Launcher state file(s), %{bytes}.",
@@ -1375,9 +1430,9 @@ impl TerminalFrontend {
                 )
             ),
             ProgressData::StagingVerified => {
-                eprintln!("{}", tr!("Verified staged instance runtime."))
+                errln!("{}", tr!("Verified staged instance runtime."))
             }
-            ProgressData::Committed => eprintln!("{}", tr!("Committed instance runtime.")),
+            ProgressData::Committed => errln!("{}", tr!("Committed instance runtime.")),
             ProgressData::MicrosoftAuthorizationPolling { .. }
             | ProgressData::MicrosoftAuthorizationReceived
             | ProgressData::XboxAuthenticated
@@ -1388,7 +1443,7 @@ impl TerminalFrontend {
             ProgressData::LaunchArtifactVerified { completed, total }
                 if completed == total || completed % 25 == 0 =>
             {
-                eprintln!(
+                errln!(
                     "{}",
                     tr!(
                         "Verifying installed runtime: %{completed}/%{total} artifacts.",
@@ -1399,20 +1454,20 @@ impl TerminalFrontend {
             }
             ProgressData::LaunchArtifactVerified { .. } => {}
             ProgressData::LaunchJavaVerified { runtime_id } => {
-                eprintln!(
+                errln!(
                     "{}",
                     tr!("Verified managed Java runtime %{id}.", id = runtime_id)
                 )
             }
-            ProgressData::LaunchNativesPrepared { files } => eprintln!(
+            ProgressData::LaunchNativesPrepared { files } => errln!(
                 "{}",
                 tr!("Prepared %{files} native runtime file(s).", files = files)
             ),
-            ProgressData::LaunchPlanReady => eprintln!("{}", tr!("Launch plan is ready.")),
+            ProgressData::LaunchPlanReady => errln!("{}", tr!("Launch plan is ready.")),
             ProgressData::RepositoryCopying { completed, total }
                 if completed == total || completed % 100 == 0 =>
             {
-                eprintln!(
+                errln!(
                     "{}",
                     tr!(
                         "Copying Minecraft directory: %{completed}/%{total} files.",
@@ -1425,7 +1480,7 @@ impl TerminalFrontend {
             ProgressData::RepositoryVerifying { completed, total }
                 if completed == total || completed % 100 == 0 =>
             {
-                eprintln!(
+                errln!(
                     "{}",
                     tr!(
                         "Verifying Minecraft directory: %{completed}/%{total} files.",
@@ -1436,19 +1491,21 @@ impl TerminalFrontend {
             }
             ProgressData::RepositoryVerifying { .. } => {}
             ProgressData::RepositorySwitching => {
-                eprintln!("{}", tr!("Switching registered client instances."))
+                errln!("{}", tr!("Switching registered client instances."))
             }
             ProgressData::RepositoryRemovingSource => {
-                eprintln!("{}", tr!("Removing the verified source directory."))
+                errln!("{}", tr!("Removing the verified source directory."))
             }
             ProgressData::ProcessSpawned { pid } => {
-                eprintln!("{}", tr!("Started Java process %{pid}.", pid = pid))
+                errln!("{}", tr!("Started Java process %{pid}.", pid = pid))
             }
             ProgressData::ProcessOutput { stream, line } => match (self.output_format, stream) {
-                (OutputFormat::Text, LaunchOutputStream::Stdout) => println!("{line}"),
-                _ => eprintln!("{line}"),
+                (OutputFormat::Text, LaunchOutputStream::Stdout) => outln!("{line}"),
+                _ => errln!("{line}"),
             },
-            ProgressData::ProcessExited { exit_code, success } => eprintln!(
+            ProgressData::ProcessExited {
+                exit_code, success, ..
+            } => errln!(
                 "{}",
                 tr!(
                     "Java process exited: %{exit} (success: %{success}).",
@@ -1458,7 +1515,7 @@ impl TerminalFrontend {
                 )
             ),
             ProgressData::SupervisorSpawned { pid, generation } => {
-                eprintln!(
+                errln!(
                     "{}",
                     tr!(
                         "Started server process %{pid} (generation %{generation}).",
@@ -1468,20 +1525,20 @@ impl TerminalFrontend {
                 )
             }
             ProgressData::SupervisorCommandSent { command } => {
-                eprintln!(
+                errln!(
                     "{}",
                     tr!("Sent server command: %{command}", command = command)
                 )
             }
             ProgressData::SupervisorStopRequested => {
-                eprintln!("{}", tr!("Requested a graceful server stop."))
+                errln!("{}", tr!("Requested a graceful server stop."))
             }
             ProgressData::SupervisorExited {
                 exit_code,
                 success,
                 expected,
                 uptime_milliseconds,
-            } => eprintln!(
+            } => errln!(
                 "{}",
                 tr!(
                     "Server exited: %{exit} (success: %{success}, expected: %{expected}, uptime: %{uptime} ms).",
@@ -1496,7 +1553,7 @@ impl TerminalFrontend {
                 delay_seconds,
                 restart_attempt,
             } => {
-                eprintln!(
+                errln!(
                     "{}",
                     tr!(
                         "Restart attempt %{attempt} begins in %{seconds} second(s).",
@@ -1506,7 +1563,7 @@ impl TerminalFrontend {
                 )
             }
             ProgressData::SupervisorRestarting { generation } => {
-                eprintln!(
+                errln!(
                     "{}",
                     tr!(
                         "Starting server generation %{generation}.",
@@ -1517,7 +1574,7 @@ impl TerminalFrontend {
             ProgressData::SupervisorRestartLimitReached {
                 attempts,
                 window_seconds,
-            } => eprintln!(
+            } => errln!(
                 "{}",
                 tr!(
                     "Restart limit reached: %{attempts} restart(s) within %{seconds} seconds.",
@@ -1526,7 +1583,7 @@ impl TerminalFrontend {
                 )
             ),
             ProgressData::SupervisorStopped => {
-                eprintln!("{}", tr!("Server supervisor stopped."))
+                errln!("{}", tr!("Server supervisor stopped."))
             }
         }
     }
@@ -1556,7 +1613,7 @@ impl app::Frontend for TerminalFrontend {
         {
             return Err(LauncherError::InteractionRequired(tr!("Review 'instance delete --dry-run', then pass --yes to delete the entire directory.").into_owned()));
         }
-        eprintln!(
+        errln!(
             "{}",
             tr!(
                 "Delete the entire instance '%{name}' including worlds, mods and settings: %{path}",
@@ -1564,7 +1621,7 @@ impl app::Frontend for TerminalFrontend {
                 path = plan.directory.display()
             )
         );
-        eprintln!(
+        errln!(
             "{}",
             tr!("The directory will be moved to the system trash. Type DELETE to continue:")
         );
@@ -1581,7 +1638,7 @@ impl app::Frontend for TerminalFrontend {
                 self.sequence += 1;
                 let phase = data.phase();
                 let envelope = ProgressEnvelope::new("install", self.sequence, phase, data);
-                eprintln!(
+                errln!(
                     "{}",
                     serde_json::to_string(&envelope)
                         .expect("launcher progress views are serializable")
@@ -1680,7 +1737,7 @@ impl app::Frontend for TerminalFrontend {
                     attempt,
                     elapsed_seconds,
                     ..
-                } => eprintln!(
+                } => errln!(
                     "{}",
                     tr!(
                         "Waiting for Microsoft authorization (attempt %{attempt}, %{seconds}s)…",
@@ -1689,16 +1746,16 @@ impl app::Frontend for TerminalFrontend {
                     )
                 ),
                 ProgressData::MicrosoftAuthorizationReceived => {
-                    eprintln!("{}", tr!("Microsoft authorization received."))
+                    errln!("{}", tr!("Microsoft authorization received."))
                 }
                 ProgressData::XboxAuthenticated => {
-                    eprintln!("{}", tr!("Authenticated with Xbox Live."))
+                    errln!("{}", tr!("Authenticated with Xbox Live."))
                 }
                 ProgressData::MinecraftAuthenticated => {
-                    eprintln!("{}", tr!("Verified Minecraft ownership and profile."))
+                    errln!("{}", tr!("Verified Minecraft ownership and profile."))
                 }
                 ProgressData::AccountSessionStored { .. } => {
-                    eprintln!("{}", tr!("Stored the renewable account session securely."))
+                    errln!("{}", tr!("Stored the renewable account session securely."))
                 }
                 _ => unreachable!("Microsoft progress produced a non-authentication event"),
             },
@@ -1711,7 +1768,7 @@ impl app::Frontend for TerminalFrontend {
                     phase,
                     data,
                 );
-                eprintln!(
+                errln!(
                     "{}",
                     serde_json::to_string(&envelope)
                         .expect("launcher progress views are serializable")
@@ -1749,7 +1806,7 @@ impl app::Frontend for TerminalFrontend {
                     orbit_machine_protocol::ProgressPhase::Apply
                 };
                 let envelope = ProgressEnvelope::new(command, self.sequence, phase, data);
-                eprintln!(
+                errln!(
                     "{}",
                     serde_json::to_string(&envelope)
                         .expect("launcher state progress views are serializable")
@@ -1760,6 +1817,18 @@ impl app::Frontend for TerminalFrontend {
 }
 
 impl TerminalFrontend {
+    fn download_source(
+        &mut self,
+        command: &'static str,
+        attribution: orbit_launcher_core::download_source::DownloadAttribution,
+    ) {
+        if self.progress_format == ProgressFormat::None {
+            // Attribution remains visible even when ordinary progress is disabled.
+            errln!("{} — {}", attribution.name, attribution.documentation);
+        } else {
+            self.render_launch_event(command, ProgressData::DownloadSource { attribution });
+        }
+    }
     fn render_launch_event(&mut self, command: &'static str, data: ProgressData) {
         match self.progress_format {
             ProgressFormat::None => {}
@@ -1768,13 +1837,35 @@ impl TerminalFrontend {
                 self.sequence += 1;
                 let phase = data.phase();
                 let envelope = ProgressEnvelope::new(command, self.sequence, phase, data);
-                eprintln!(
+                errln!(
                     "{}",
                     serde_json::to_string(&envelope)
                         .expect("launcher progress views are serializable")
                 );
             }
         }
+    }
+}
+
+fn render_diagnostics(diagnostics: &orbit_launcher_core::launch_diagnostics::LaunchDiagnostics) {
+    if diagnostics.reports.is_empty() {
+        outln!("{}", tr!("No new crash report was generated."));
+    }
+    for report in diagnostics
+        .reports
+        .iter()
+        .chain(diagnostics.log_tail.iter())
+    {
+        outln!("\n{}\n{}", report.path.display(), report.text);
+        if report.truncated {
+            outln!(
+                "{}",
+                tr!("Preview truncated. Open the original file for the complete report.")
+            );
+        }
+    }
+    for warning in &diagnostics.warnings {
+        errln!("{warning}");
     }
 }
 

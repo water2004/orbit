@@ -133,6 +133,10 @@ impl RuntimeContext {
     pub fn config(&self) -> &GlobalConfig {
         &self.config
     }
+    /// Command-local override; never changes the persisted configuration.
+    pub fn override_download_source(&mut self, source: crate::download_source::DownloadSource) {
+        self.config.network.download_source = source;
+    }
 
     pub fn minecraft_directory(&self) -> PathBuf {
         self.config

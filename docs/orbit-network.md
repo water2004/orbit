@@ -1,5 +1,31 @@
 # 网络重试边界
 
+## Launcher 可选 BMCLAPI 下载源
+
+`network.download-source = official|bmclapi` 使用已有 `config get/set/unset/list`；全局
+`--download-source` 只覆盖本次命令。默认官方源，GUI 的设置页和安装向导也只调用这些 CLI。
+切换只影响之后的请求，不使有效缓存失效，也不改写已锁定的源 URL。
+
+依据 [BMCLAPI 文档与使用协议](https://bmclapidoc.bangbang93.com/) 的路径映射，
+`DownloadClient` 在公共下载边界映射 Mojang 元数据/Java/资源、Maven 库、Fabric、
+Forge/NeoForge Maven 工件及 authlib-injector 公开下载。Mojang Piston 元数据保留原路径，
+带上游字节摘要的 JSON（版本文档、asset index、Java manifest）及 Maven SHA sidecar/签名
+始终从声明的原站获取：实测镜像会重新序列化 Java JSON，且不保证提供校验 sidecar；不能
+以“JSON 等价”绕过字节摘要。此策略在请求前决定，不是哈希失败/404 后隐式回退。大工件
+仍使用选定镜像，内容严格按声明的 SHA 校验；所有读取共用同一有界传输/重试内核。
+Quilt 镜像在该文档中标为不可用，因此保留官方端点；未明确映射的 URL（包括部分
+Forge/NeoForge 目录端点）同样使用上游。Forge-family 官方安装器作为外部进程的内部
+网络请求不被代理或改写，不能宣称所有安装器流量都经过 BMCLAPI。
+
+账户认证使用独立的官方/用户指定 HTTP client，EULA 也始终来自官方。模组 Provider
+不属于 Launcher，切换不会转发 Modrinth/CurseForge 流量。匹配精确 HTTPS 主机，
+不匹配带凭据、额外端口、相似域名或任意自定义域名的地址；镜像失败按同一有限重试预算
+报错，不暗中切回上游。未在 BMCLAPI 之上新增对外 API/代理协议。
+
+BMCLAPI 由 bangbang93 提供，资源版权属于原站；该服务不保证完整性/时效性。按其协议，
+CLI 即使禁用普通进度也显示来源和文档地址，NDJSON 使用 `download_source` 类型化事件；
+GUI 安装/设置和下载任务保留可见署名及协议链接。用户自行启用，不在账户登录时推广镜像。
+
 `orbit-http` 是无业务语义的传输组件，分别编进 Orbit、Launcher 与平台 wrapper；不要求程序
 同时安装。GUI 不重跑整条命令，事务、版本发现和求解也不重跑。
 

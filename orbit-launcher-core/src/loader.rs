@@ -75,7 +75,7 @@ pub struct ResolvedLoaderProfile {
 }
 
 pub(crate) async fn list_profile_loader_versions(
-    client: &reqwest::Client,
+    client: &crate::download_source::DownloadClient,
     kind: LoaderKind,
     minecraft_version: &str,
 ) -> Result<Vec<LoaderVersion>, LauncherError> {
@@ -92,7 +92,7 @@ pub(crate) async fn list_profile_loader_versions(
 }
 
 pub async fn resolve_loader_profile(
-    client: &reqwest::Client,
+    client: &crate::download_source::DownloadClient,
     kind: LoaderKind,
     minecraft_version: &str,
     requirement: &str,
@@ -174,7 +174,7 @@ pub async fn resolve_loader_profile(
 }
 
 async fn resolve_fabric_version(
-    client: &reqwest::Client,
+    client: &crate::download_source::DownloadClient,
     adapter: ProfileLoaderAdapter,
     minecraft: &str,
     requirement: &str,
@@ -194,7 +194,7 @@ async fn resolve_fabric_version(
 }
 
 async fn list_fabric_versions(
-    client: &reqwest::Client,
+    client: &crate::download_source::DownloadClient,
     adapter: ProfileLoaderAdapter,
     minecraft: &str,
 ) -> Result<Vec<LoaderVersion>, LauncherError> {
@@ -221,7 +221,7 @@ async fn list_fabric_versions(
 }
 
 async fn resolve_quilt_version(
-    client: &reqwest::Client,
+    client: &crate::download_source::DownloadClient,
     adapter: ProfileLoaderAdapter,
     minecraft: &str,
     requirement: &str,
@@ -245,7 +245,7 @@ async fn resolve_quilt_version(
 }
 
 async fn list_quilt_versions(
-    client: &reqwest::Client,
+    client: &crate::download_source::DownloadClient,
     adapter: ProfileLoaderAdapter,
     minecraft: &str,
 ) -> Result<Vec<LoaderVersion>, LauncherError> {
@@ -295,7 +295,7 @@ async fn list_quilt_versions(
 }
 
 async fn resolve_profile_library(
-    client: &reqwest::Client,
+    client: &crate::download_source::DownloadClient,
     library: ProfileLibrary,
 ) -> Result<ClientDownload, LauncherError> {
     let (path, url) = artifact_url(&library.url, &library.name, None)?;
@@ -322,7 +322,7 @@ async fn resolve_profile_library(
 }
 
 async fn fetch_sha1_sidecar(
-    client: &reqwest::Client,
+    client: &crate::download_source::DownloadClient,
     artifact_url: &str,
     coordinate: &str,
 ) -> Result<String, LauncherError> {
@@ -527,6 +527,7 @@ mod tests {
             .user_agent("orbit-launcher-tests/0.1")
             .build()
             .unwrap();
+        let client = crate::download_source::DownloadClient::new(client, Default::default());
         for (kind, requirement) in [
             (LoaderKind::Fabric, "stable"),
             (LoaderKind::Quilt, "latest"),

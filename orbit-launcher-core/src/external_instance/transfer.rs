@@ -253,7 +253,7 @@ where
             &root.join(IMPORT_JOURNAL),
             &serde_json::to_vec(&journal).map_err(|e| invalid(e.to_string()))?,
         )?;
-        let client = runtime.config().http_client()?;
+        let client = runtime.config().download_client()?;
         let install = prepare_install(
             &created.entry.location,
             &client,

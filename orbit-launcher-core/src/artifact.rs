@@ -117,7 +117,7 @@ impl ArtifactCache {
 
     pub async fn fetch<F>(
         &self,
-        client: &reqwest::Client,
+        client: &crate::download_source::DownloadClient,
         request: &ArtifactRequest,
         mut progress: F,
     ) -> Result<CachedArtifact, LauncherError>
@@ -153,7 +153,7 @@ impl ArtifactCache {
 
     async fn fetch_uncached<F: FnMut(ArtifactTransferEvent)>(
         &self,
-        client: &reqwest::Client,
+        client: &crate::download_source::DownloadClient,
         request: &ArtifactRequest,
         progress: &mut F,
         retry: &mut orbit_http::RetryState,
@@ -171,7 +171,12 @@ impl ArtifactCache {
             .open(&temporary_path)?;
 
         let mut response = retry
-            .send(client.get(&request.url))
+            .send(
+                client.get(
+                    url::Url::parse(&request.url)
+                        .map_err(|error| LauncherError::InvalidRemoteData(error.to_string()))?,
+                ),
+            )
             .await
             .map_err(crate::network::error)?
             .error_for_status()?;

@@ -44,7 +44,7 @@ pub struct MinecraftVersion {
 
 #[derive(Debug, Clone)]
 pub struct MojangClient {
-    client: reqwest::Client,
+    client: crate::download_source::DownloadClient,
 }
 
 #[derive(Debug, Clone)]
@@ -58,11 +58,11 @@ pub(crate) struct MojangVersionDocument {
 }
 
 impl MojangClient {
-    pub fn new(client: reqwest::Client) -> Self {
+    pub fn new(client: crate::download_source::DownloadClient) -> Self {
         Self { client }
     }
 
-    pub(crate) fn http_client(&self) -> &reqwest::Client {
+    pub(crate) fn http_client(&self) -> &crate::download_source::DownloadClient {
         &self.client
     }
 
@@ -173,7 +173,13 @@ impl MojangClient {
         validate_mojang_url(&entry.url, &["piston-meta.mojang.com"], "version JSON")?;
         validate_digest(&entry.sha1, 40, "version JSON SHA-1")?;
 
-        let version_bytes = self.fetch_metadata(&entry.url).await?;
+        let version_bytes = crate::network::fetch_integrity_metadata(
+            &self.client,
+            &entry.url,
+            MAX_METADATA_BYTES,
+            "Mojang version JSON",
+        )
+        .await?;
         let actual_version_sha1 = hex::encode(Sha1::digest(&version_bytes));
         if actual_version_sha1 != entry.sha1 {
             return Err(LauncherError::ArtifactIntegrity(format!(

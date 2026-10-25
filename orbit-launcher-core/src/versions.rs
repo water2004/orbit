@@ -11,7 +11,7 @@ pub struct LoaderVersion {
 }
 
 pub async fn list_loader_versions(
-    client: &reqwest::Client,
+    client: &crate::download_source::DownloadClient,
     kind: LoaderKind,
     minecraft_version: &str,
 ) -> Result<Vec<LoaderVersion>, LauncherError> {

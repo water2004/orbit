@@ -353,7 +353,7 @@ pub fn verify_locked_java_runtime(
 }
 
 pub async fn plan_mojang_java<F>(
-    client: &reqwest::Client,
+    client: &crate::download_source::DownloadClient,
     requirement: &MojangJavaRequirement,
     target: JavaTarget,
     mut progress: F,
@@ -386,7 +386,13 @@ where
             "Mojang Java runtime version is empty".to_string(),
         ));
     }
-    let manifest_bytes = fetch_metadata(client, &runtime.manifest.url).await?;
+    let manifest_bytes = crate::network::fetch_integrity_metadata(
+        client,
+        &runtime.manifest.url,
+        MAX_METADATA_BYTES,
+        "Mojang Java runtime manifest",
+    )
+    .await?;
     if hex::encode(Sha1::digest(&manifest_bytes)) != runtime.manifest.sha1 {
         return Err(LauncherError::ArtifactIntegrity(format!(
             "Mojang Java manifest for '{}' did not match its SHA-1",
@@ -427,7 +433,7 @@ where
 
 pub async fn install_mojang_java<F>(
     runtime_paths: &RuntimePaths,
-    client: &reqwest::Client,
+    client: &crate::download_source::DownloadClient,
     plan: MojangJavaPlan,
     concurrency: usize,
     progress: F,
@@ -890,7 +896,10 @@ impl Drop for StagingDirectoryGuard {
     }
 }
 
-async fn fetch_metadata(client: &reqwest::Client, url: &str) -> Result<Vec<u8>, LauncherError> {
+async fn fetch_metadata(
+    client: &crate::download_source::DownloadClient,
+    url: &str,
+) -> Result<Vec<u8>, LauncherError> {
     crate::network::fetch_bounded(client, url, MAX_METADATA_BYTES, "Mojang Java metadata").await
 }
 

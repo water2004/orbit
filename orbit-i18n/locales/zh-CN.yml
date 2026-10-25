@@ -1,4 +1,11 @@
 _version: 1
+"Public download source for this command only: official or bmclapi.": "仅对本次命令生效的公开资源下载源：official 或 bmclapi。"
+"Read the latest launch result and crash diagnostics.": "读取最近一次启动结果及崩溃报告。"
+"Download source selected": "已选择下载源"
+"No new crash report was generated.": "本次退出没有生成新的崩溃报告。"
+"No launch record exists for this instance.": "此实例尚无启动记录。"
+"Preview truncated. Open the original file for the complete report.": "预览已截断，请打开原文件查看完整报告。"
+"CLI shutdown was not acknowledged: %{error}": "CLI 未确认安全退出：%{error}"
 "Uninstall cleanup:": "卸载数据清理："
 "All caches only": "仅清除全部缓存"
 "Configuration and caches (keep instances)": "清除配置和缓存（保留实例）"

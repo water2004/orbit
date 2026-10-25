@@ -56,6 +56,7 @@ pub enum CommandOutput {
     Install(InstallView),
     LaunchPlan(LaunchPlanView),
     LaunchResult(LaunchResultView),
+    LaunchReport(Option<orbit_launcher_core::launch_record::LaunchRecord>),
     ServerStart(ServerStartView),
     ServerStatus(ServerStatusView),
     ServerControl(ServerControlView),
@@ -119,6 +120,7 @@ impl CommandOutput {
                 }
             }
             Self::ServerStart(_) => "server.start",
+            Self::LaunchReport(_) => "instance.launch-report",
             Self::ServerStatus(_) => "server.status",
             Self::ServerControl(view) => match view.action {
                 "stop" => "server.stop",
@@ -435,7 +437,7 @@ async fn execute_versions(
             "--instance is not valid for global version catalogs".to_string(),
         ));
     }
-    let client = runtime.config().http_client()?;
+    let client = runtime.config().download_client()?;
     match command {
         VersionCommands::Minecraft => Ok(CommandOutput::MinecraftVersions(
             orbit_launcher_core::MojangClient::new(client)
@@ -1056,7 +1058,7 @@ async fn execute_existing_install(
             resolved.manifest.kind.as_str()
         )));
     }
-    let client = runtime.config().http_client()?;
+    let client = runtime.config().download_client()?;
     let plan = prepare_install(
         &resolved.entry.location,
         &client,
@@ -1196,7 +1198,7 @@ async fn execute_server(
         ServerCommands::Run { dry_run: false } => {
             execute_foreground_supervisor(&resolved, runtime, frontend).await
         }
-        ServerCommands::Start => start_detached_supervisor(&resolved, runtime).await,
+        ServerCommands::Start => start_detached_supervisor(&resolved, runtime, frontend).await,
         ServerCommands::Stop => {
             execute_supervisor_control(&resolved, runtime, IpcRequest::Stop, "stop").await
         }
@@ -1385,6 +1387,7 @@ async fn wait_for_shutdown_signal() -> Result<(), std::io::Error> {
 async fn start_detached_supervisor(
     resolved: &ResolvedInstance,
     runtime: &RuntimeContext,
+    frontend: &mut dyn Frontend,
 ) -> Result<CommandOutput, AppError> {
     if let Some(response) = supervisor_request(
         runtime.paths().data_dir(),
@@ -1458,11 +1461,20 @@ async fn start_detached_supervisor(
                 ))
                 .into());
             }
-            return Ok(CommandOutput::ServerStart(ServerStartView {
-                state: response.state,
-                stdout_log,
-                stderr_log,
-            }));
+            if let Some(pid) = response.state.child_pid {
+                frontend.supervisor_event(
+                    "server.start",
+                    SupervisorEvent::Spawned {
+                        pid,
+                        generation: response.state.generation,
+                    },
+                );
+                return Ok(CommandOutput::ServerStart(ServerStartView {
+                    state: response.state,
+                    stdout_log,
+                    stderr_log,
+                }));
+            }
         }
         if let Some(status) = child.try_wait().map_err(LauncherError::from)? {
             return Err(LauncherError::Launch(format!(
@@ -1694,6 +1706,16 @@ fn execute_instance(
                 })
                 .collect::<Result<Vec<_>, LauncherError>>()?;
             Ok(CommandOutput::InstanceList(InstanceListView { instances }))
+        }
+        InstanceCommands::LaunchReport => {
+            let registry = InstanceRegistry::load(&registry_path)?;
+            let resolved =
+                resolve_instance(&registry, selector, current_dir, ContextIntent::ReadOnly)?;
+            Ok(CommandOutput::LaunchReport(
+                orbit_launcher_core::launch_record::latest_launch(
+                    resolved.entry.instance_directory(),
+                )?,
+            ))
         }
         InstanceCommands::Show => {
             let registry = InstanceRegistry::load(&registry_path)?;

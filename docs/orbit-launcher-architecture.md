@@ -9,6 +9,22 @@
 
 ## 1. 目标
 
+### 启动与下载边界（2026-10-26）
+
+`download_source` 的 `DownloadClient` 只承载公开下载，认证 client 不经过地址映射；
+配置命令与命令级覆盖共用 `DownloadSource`，lock、缓存及强哈希身份保持上游 URL。
+GUI 不实现镜像映射。BMCLAPI 的署名、使用条款和覆盖限制见 `orbit-network.md`。
+
+`launch_session` 将本次输出记录、脱敏和 `launch_diagnostics` 快照采集合并为客户端/服务端
+共用入口，`launch_record` 拥有有界日志及最近结果。报告采集不猜测崩溃原因，只显示本次
+证据，原文件不改写、不上传。成功协议结果可以承载 `success=false` 的退出事实，操作系统
+退出码仍非零；显示层必须保留报告而不是只显示返回码。
+
+GUI 只持有可释放的 CLI 观察连接；关闭窗口与显式取消是不同控制消息。真实 spawned 事件
+之前的任务不能脱离窗口；之后的游戏任务由 CLI 继续管理，BrokenPipe 只关闭对应展示流，
+不结束 Java 或日志记录。窗口关闭前等待控制确认；Windows Job 不设置 kill-on-close，
+显式取消仍杀进程组。没有 GUI 专用启动 API、后台服务或 Launcher → Orbit 反向依赖。
+
 `orbit-launcher` 是独立的 Minecraft Java Edition CLI Launcher。它负责构造、更新并启动
 一个完整的 Minecraft 客户端或独立服务端运行时，同时为原生 GUI 提供稳定的 JSON 与
 NDJSON 进程协议。

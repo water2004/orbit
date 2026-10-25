@@ -654,6 +654,7 @@ pub struct LaunchResultView {
     pub exit_code: Option<i32>,
     pub success: bool,
     pub elapsed_milliseconds: u128,
+    pub diagnostics: Option<orbit_launcher_core::launch_diagnostics::LaunchDiagnostics>,
 }
 
 #[derive(Debug, Serialize)]
@@ -687,6 +688,7 @@ pub struct SupervisorResultView {
     pub final_success: bool,
     pub stopped_by_request: bool,
     pub restart_limit_reached: bool,
+    pub diagnostics: Option<orbit_launcher_core::launch_diagnostics::LaunchDiagnostics>,
 }
 
 impl From<SupervisorResult> for SupervisorResultView {
@@ -699,6 +701,7 @@ impl From<SupervisorResult> for SupervisorResultView {
             final_success: result.final_success,
             stopped_by_request: result.stopped_by_request,
             restart_limit_reached: result.restart_limit_reached,
+            diagnostics: result.diagnostics,
         }
     }
 }
@@ -712,6 +715,7 @@ impl From<LaunchResult> for LaunchResultView {
             exit_code: result.exit_code,
             success: result.success,
             elapsed_milliseconds: result.elapsed_milliseconds,
+            diagnostics: result.diagnostics,
         }
     }
 }
@@ -820,6 +824,9 @@ impl From<MicrosoftDeviceSession> for MicrosoftDeviceSessionView {
 #[derive(Debug, Serialize)]
 #[serde(tag = "event", rename_all = "snake_case")]
 pub enum ProgressData {
+    DownloadSource {
+        attribution: orbit_launcher_core::download_source::DownloadAttribution,
+    },
     InstanceImportCopying {
         completed: u64,
         total: u64,
@@ -944,6 +951,7 @@ pub enum ProgressData {
     ProcessExited {
         exit_code: Option<i32>,
         success: bool,
+        report_paths: Vec<PathBuf>,
     },
     SupervisorSpawned {
         pid: u32,
@@ -1037,7 +1045,8 @@ impl ProgressData {
             Self::ArtifactStarted { .. }
             | Self::ArtifactBytes { .. }
             | Self::ArtifactCached { .. }
-            | Self::ArtifactFinished { .. } => ProgressPhase::Download,
+            | Self::ArtifactFinished { .. }
+            | Self::DownloadSource { .. } => ProgressPhase::Download,
             Self::JavaManifestStarted
             | Self::JavaRuntimeResolved { .. }
             | Self::JavaMaterialized { .. }
@@ -1114,9 +1123,15 @@ impl ProgressData {
         match event {
             LaunchProcessEvent::Spawned { pid } => Self::ProcessSpawned { pid },
             LaunchProcessEvent::Output { stream, line } => Self::ProcessOutput { stream, line },
-            LaunchProcessEvent::Exited { exit_code, success } => {
-                Self::ProcessExited { exit_code, success }
-            }
+            LaunchProcessEvent::Exited {
+                exit_code,
+                success,
+                report_paths,
+            } => Self::ProcessExited {
+                exit_code,
+                success,
+                report_paths,
+            },
         }
     }
 

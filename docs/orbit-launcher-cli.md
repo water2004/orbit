@@ -14,7 +14,37 @@
 文字，缺省 `system`。JSON/NDJSON 的 schema、字段、枚举码与错误码保持稳定，协议编码固定为
 UTF-8，不依赖 Windows 当前代码页。
 
-## 实例上下文
+## 下载源、崩溃报告与 GUI 生命周期
+
+官方源仍是默认值。可用全局参数只覆盖一次命令，或通过已有配置命令保存默认源：
+
+```sh
+orbit-launcher --download-source bmclapi versions minecraft
+orbit-launcher --download-source bmclapi install --new demo --kind client --minecraft 26.2 --loader fabric --loader-version 0.19.5
+orbit-launcher config set network.download-source bmclapi
+orbit-launcher config unset network.download-source
+orbit-launcher --instance demo instance launch-report
+```
+
+`official|bmclapi` 仅改变公开资源的传输地址，不改 lock 原始 URL、缓存身份或哈希校验。
+认证、EULA、模组 Provider 不经镜像；不支持的端点仍用上游，映射请求失败不静默换源。
+BMCLAPI 来源及协议链接显示在下载界面和 CLI，范围与限制见
+[`orbit-network.md`](orbit-network.md#launcher-可选-bmclapi-下载源)。
+
+失败退出返回非零状态，但仍输出包含 `diagnostics` 的结构化 `LaunchResult`；GUI 不丢弃该结果。
+报告仅选取本次创建/修改的 `crash-reports/*.txt`（最新两份）及本进程 JVM fatal report；
+无报告时显示本次日志末尾。文本预览脱敏、有界且标记截断，不改原文件、不上传。
+实例 `.orbit-launcher/latest-launch.json` 保存最近启动结果，单流进程日志上限 2 MiB；启动时
+清理旧的自有日志，保留最近约 20 组，活动会话锁定的日志除外。`instance launch-report`
+是普通 CLI 查询，关闭再打开 GUI 后仍可查看，无需再启动游戏。
+
+GUI 默认保留窗口；设置 → Launcher 可开启“游戏启动后关闭启动器”。只在真实 Java
+进程已启动后放开运行中的启动任务；未完成的安装/认证等任务会取消，显式取消仍终止进程组。
+CLI 继续等待 Java、排空输出并落盘，GUI 管道关闭不使其 panic；客户端不继承 GUI stdin。
+没有新增常驻系统服务，也不要求 Launcher 识别 Orbit。GUI 关闭后不会再即时弹窗，重开后
+通过上述查询读取报告。前台服务端与后台 supervisor 使用同一报告采集模块。
+
+## 实例选择顺序
 
 实例选择顺序固定为：
 

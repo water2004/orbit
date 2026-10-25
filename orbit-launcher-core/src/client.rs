@@ -234,7 +234,7 @@ pub async fn resolve_vanilla_client(
         upstream_id: asset_index.id.clone(),
         runtime_name: asset_index_runtime_name,
     };
-    let asset_bytes = crate::network::fetch_bounded(
+    let asset_bytes = crate::network::fetch_integrity_metadata(
         mojang.http_client(),
         &asset_index.download.url,
         MAX_ASSET_INDEX_BYTES,
@@ -899,6 +899,7 @@ mod tests {
     #[ignore = "uses live Mojang metadata services"]
     async fn live_modern_client_resolution_preserves_classpath_and_asset_mappings() {
         let client = reqwest::Client::builder().build().unwrap();
+        let client = crate::download_source::DownloadClient::new(client, Default::default());
         let resolved = resolve_vanilla_client(&MojangClient::new(client), "1.21.1", &platform())
             .await
             .unwrap();
@@ -925,6 +926,7 @@ mod tests {
     #[ignore = "uses live Mojang metadata services"]
     async fn live_legacy_client_resolution_extracts_classifier_natives() {
         let client = reqwest::Client::builder().build().unwrap();
+        let client = crate::download_source::DownloadClient::new(client, Default::default());
         let resolved = resolve_vanilla_client(&MojangClient::new(client), "1.7.10", &platform())
             .await
             .unwrap();

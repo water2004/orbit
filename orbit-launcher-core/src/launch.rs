@@ -6,13 +6,13 @@ use std::process::Stdio;
 use std::time::Duration;
 use std::time::Instant;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use zeroize::{Zeroize, Zeroizing};
 
 use base64::Engine;
 
-use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::mpsc;
 
 use crate::account::AccountLaunchIdentity;
@@ -125,10 +125,11 @@ pub enum LaunchProcessEvent {
     Exited {
         exit_code: Option<i32>,
         success: bool,
+        report_paths: Vec<PathBuf>,
     },
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LaunchResult {
     pub instance_id: Uuid,
     pub kind: InstanceKind,
@@ -136,6 +137,7 @@ pub struct LaunchResult {
     pub exit_code: Option<i32>,
     pub success: bool,
     pub elapsed_milliseconds: u128,
+    pub diagnostics: Option<crate::launch_diagnostics::LaunchDiagnostics>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -187,6 +189,7 @@ pub struct SupervisorResult {
     pub final_success: bool,
     pub stopped_by_request: bool,
     pub restart_limit_reached: bool,
+    pub diagnostics: Option<crate::launch_diagnostics::LaunchDiagnostics>,
 }
 
 pub fn prepare_launch<F>(
@@ -294,11 +297,15 @@ where
     let _lease = crate::instance_lifecycle::InstanceLease::acquire(&plan.working_directory, false)?;
     let instance_id = plan.instance_id;
     let kind = plan.kind;
-    let started = Instant::now();
+    let mut session = crate::launch_session::LaunchSession::new(&plan.working_directory)?;
     let sensitive_values = Zeroizing::new(std::mem::take(&mut plan.sensitive_values));
     let mut command = tokio::process::Command::from(plan.command());
     command
-        .stdin(Stdio::inherit())
+        .stdin(if kind == InstanceKind::Client {
+            Stdio::null()
+        } else {
+            Stdio::inherit()
+        })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     let mut child = command.spawn().map_err(|error| {
@@ -318,9 +325,13 @@ where
         .stderr
         .take()
         .ok_or_else(|| LauncherError::Launch("failed to capture Java stderr".to_string()))?;
+    if let Err(error) = session.started(pid) {
+        child.kill().await?;
+        return Err(error);
+    }
     event_handler(LaunchProcessEvent::Spawned { pid });
 
-    let (sender, mut receiver) = mpsc::unbounded_channel();
+    let (sender, mut receiver) = mpsc::channel(16);
     let stdout_task = tokio::spawn(pump_output(
         stdout,
         LaunchOutputStream::Stdout,
@@ -334,20 +345,14 @@ where
     drop(sender);
     let wait_task = tokio::spawn(async move { child.wait().await });
 
-    let mut output_error = None;
     while let Some(event) = receiver.recv().await {
         match event {
-            Ok(LaunchProcessEvent::Output { stream, mut line }) => {
-                for value in sensitive_values.iter() {
-                    if line.contains(value) {
-                        line = line.replace(value, REDACTED);
-                    }
-                }
+            Ok(LaunchProcessEvent::Output { stream, line }) => {
+                let line = session.output(stream, line, &sensitive_values);
                 event_handler(LaunchProcessEvent::Output { stream, line });
             }
             Ok(event) => event_handler(event),
-            Err(error) if output_error.is_none() => output_error = Some(error),
-            Err(_) => {}
+            Err(error) => session.output_error(error),
         }
     }
     stdout_task
@@ -359,20 +364,30 @@ where
     let status = wait_task
         .await
         .map_err(|error| LauncherError::Launch(format!("process wait task failed: {error}")))??;
-    if let Some(error) = output_error {
-        return Err(error);
-    }
-    let exit_code = status.code();
-    let success = status.success();
-    event_handler(LaunchProcessEvent::Exited { exit_code, success });
-    Ok(LaunchResult {
+    let result = session.finish(
+        &plan.working_directory,
         instance_id,
         kind,
         pid,
-        exit_code,
-        success,
-        elapsed_milliseconds: started.elapsed().as_millis(),
-    })
+        status,
+        &sensitive_values,
+    )?;
+    event_handler(LaunchProcessEvent::Exited {
+        exit_code: result.exit_code,
+        success: result.success,
+        report_paths: result
+            .diagnostics
+            .as_ref()
+            .map(|value| {
+                value
+                    .reports
+                    .iter()
+                    .map(|report| report.path.clone())
+                    .collect()
+            })
+            .unwrap_or_default(),
+    });
+    Ok(result)
 }
 
 pub async fn supervise_server<F>(
@@ -398,6 +413,7 @@ where
     let mut final_exit_code;
     let mut final_success;
     let mut stopped_by_request = false;
+    let mut final_diagnostics;
 
     'supervisor: loop {
         generation = generation.checked_add(1).ok_or_else(|| {
@@ -406,7 +422,13 @@ where
         if generation > 1 {
             event_handler(SupervisorEvent::Restarting { generation });
         }
+        let mut session = crate::launch_session::LaunchSession::new(&plan.working_directory)?;
         let mut running = spawn_supervised_child(&plan).await?;
+        if let Err(error) = session.started(running.pid) {
+            running.child.kill().await?;
+            return Err(error);
+        }
+        let pid = running.pid;
         event_handler(SupervisorEvent::Spawned {
             pid: running.pid,
             generation,
@@ -421,10 +443,11 @@ where
                     if let Some(output) = output {
                         match output {
                             Ok(LaunchProcessEvent::Output { stream, line }) => {
+                                let line = session.output(stream, line, &plan.sensitive_values);
                                 event_handler(SupervisorEvent::Output { stream, line });
                             }
                             Ok(_) => unreachable!("output pumps only emit output events"),
-                            Err(error) => return Err(error),
+                            Err(error) => session.output_error(error),
                         }
                     } else {
                         output_open = false;
@@ -449,15 +472,31 @@ where
                                 &mut running,
                                 Duration::from_secs(config.graceful_stop_timeout_seconds),
                                 Duration::from_secs(config.kill_timeout_seconds),
+                                |stream, line| {
+                                    let line = session.output(stream, line, &plan.sensitive_values);
+                                    event_handler(SupervisorEvent::Output { stream, line });
+                                },
                             ).await?;
                         }
                     }
                 }
             }
         };
-        for (stream, line) in running.finish_output().await? {
-            event_handler(SupervisorEvent::Output { stream, line });
-        }
+        running
+            .finish_output(|stream, line| {
+                let line = session.output(stream, line, &plan.sensitive_values);
+                event_handler(SupervisorEvent::Output { stream, line });
+            })
+            .await?;
+        let launch_result = session.finish(
+            &plan.working_directory,
+            plan.instance_id,
+            plan.kind,
+            pid,
+            status,
+            &plan.sensitive_values,
+        )?;
+        final_diagnostics = launch_result.diagnostics;
         let uptime = started.elapsed();
         event_handler(SupervisorEvent::Exited {
             exit_code: status.code(),
@@ -531,34 +570,38 @@ where
         final_success,
         stopped_by_request,
         restart_limit_reached,
+        diagnostics: final_diagnostics,
     })
 }
 
 struct SupervisedChild {
     child: tokio::process::Child,
     stdin: Option<tokio::process::ChildStdin>,
-    output: mpsc::UnboundedReceiver<Result<LaunchProcessEvent, LauncherError>>,
+    output: mpsc::Receiver<Result<LaunchProcessEvent, LauncherError>>,
     stdout_task: tokio::task::JoinHandle<()>,
     stderr_task: tokio::task::JoinHandle<()>,
     pid: u32,
 }
 
 impl SupervisedChild {
-    async fn finish_output(mut self) -> Result<Vec<(LaunchOutputStream, String)>, LauncherError> {
+    async fn finish_output(
+        mut self,
+        mut output_handler: impl FnMut(LaunchOutputStream, String),
+    ) -> Result<(), LauncherError> {
+        // Drain before joining: bounded pumps can otherwise be blocked on send.
+        while let Some(output) = self.output.recv().await {
+            match output? {
+                LaunchProcessEvent::Output { stream, line } => output_handler(stream, line),
+                _ => unreachable!("output pumps only emit output events"),
+            }
+        }
         self.stdout_task.await.map_err(|error| {
             LauncherError::Launch(format!("stdout reader task failed: {error}"))
         })?;
         self.stderr_task.await.map_err(|error| {
             LauncherError::Launch(format!("stderr reader task failed: {error}"))
         })?;
-        let mut remaining = Vec::new();
-        while let Some(output) = self.output.recv().await {
-            match output? {
-                LaunchProcessEvent::Output { stream, line } => remaining.push((stream, line)),
-                _ => unreachable!("output pumps only emit output events"),
-            }
-        }
-        Ok(remaining)
+        Ok(())
     }
 }
 
@@ -587,7 +630,7 @@ async fn spawn_supervised_child(plan: &LaunchPlan) -> Result<SupervisedChild, La
         .stderr
         .take()
         .ok_or_else(|| LauncherError::Launch("failed to capture Java stderr".to_string()))?;
-    let (sender, output) = mpsc::unbounded_channel();
+    let (sender, output) = mpsc::channel(16);
     let stdout_task = tokio::spawn(pump_output(
         stdout,
         LaunchOutputStream::Stdout,
@@ -608,13 +651,28 @@ async fn stop_supervised_child(
     running: &mut SupervisedChild,
     graceful_timeout: Duration,
     kill_timeout: Duration,
+    mut output_handler: impl FnMut(LaunchOutputStream, String),
 ) -> Result<std::process::ExitStatus, LauncherError> {
     if let Some(stdin) = running.stdin.as_mut() {
         let _ = stdin.write_all(b"stop\n").await;
         let _ = stdin.flush().await;
     }
-    match tokio::time::timeout(graceful_timeout, running.child.wait()).await {
-        Ok(status) => status.map_err(LauncherError::from),
+    let graceful = async {
+        let mut output_open = true;
+        loop {
+            tokio::select! {
+                status = running.child.wait() => return status.map_err(LauncherError::from),
+                output = running.output.recv(), if output_open => match output {
+                    Some(Ok(LaunchProcessEvent::Output { stream, line })) => output_handler(stream, line),
+                    Some(Err(error)) => return Err(error),
+                    Some(Ok(_)) => unreachable!("output pumps only emit output events"),
+                    None => output_open = false,
+                }
+            }
+        }
+    };
+    match tokio::time::timeout(graceful_timeout, graceful).await {
+        Ok(status) => status,
         Err(_) => {
             running.child.start_kill()?;
             tokio::time::timeout(kill_timeout, running.child.wait())
@@ -660,30 +718,60 @@ fn validate_supervisor_config(config: &ServerConfig) -> Result<(), LauncherError
 async fn pump_output<R>(
     reader: R,
     stream: LaunchOutputStream,
-    sender: mpsc::UnboundedSender<Result<LaunchProcessEvent, LauncherError>>,
+    sender: mpsc::Sender<Result<LaunchProcessEvent, LauncherError>>,
 ) where
     R: AsyncRead + Unpin,
 {
-    let mut lines = BufReader::new(reader).split(b'\n');
+    let mut reader = BufReader::new(reader);
     loop {
-        match lines.next_segment().await {
-            Ok(Some(mut bytes)) => {
+        let mut bytes = Vec::new();
+        match (&mut reader)
+            .take(65537)
+            .read_until(b'\n', &mut bytes)
+            .await
+        {
+            Ok(0) => break,
+            Ok(_) => {
+                if bytes.len() > 65536 {
+                    while bytes.last() != Some(&b'\n') {
+                        bytes.clear();
+                        match (&mut reader)
+                            .take(65537)
+                            .read_until(b'\n', &mut bytes)
+                            .await
+                        {
+                            Ok(0) => break,
+                            Ok(_) => {}
+                            Err(error) => {
+                                let _ = sender.send(Err(error.into())).await;
+                                return;
+                            }
+                        }
+                    }
+                    bytes = b"[Oversized game output line omitted; consult the game's own log.]"
+                        .to_vec();
+                }
+                if bytes.last() == Some(&b'\n') {
+                    bytes.pop();
+                }
                 if bytes.last() == Some(&b'\r') {
                     bytes.pop();
                 }
                 let line = String::from_utf8_lossy(&bytes).into_owned();
                 if sender
                     .send(Ok(LaunchProcessEvent::Output { stream, line }))
+                    .await
                     .is_err()
                 {
                     break;
                 }
             }
-            Ok(None) => break,
             Err(error) => {
-                let _ = sender.send(Err(LauncherError::Launch(format!(
-                    "failed to read Java {stream:?}: {error}"
-                ))));
+                let _ = sender
+                    .send(Err(LauncherError::Launch(format!(
+                        "failed to read Java {stream:?}: {error}"
+                    ))))
+                    .await;
                 break;
             }
         }
@@ -1044,6 +1132,103 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn crashing_child_fixture() {
+        let directory = std::env::current_dir().unwrap();
+        if !directory.join("launch-fixture.marker").is_file() {
+            return;
+        }
+        std::fs::create_dir_all(directory.join("crash-reports")).unwrap();
+        std::fs::write(
+            directory.join("crash-reports/current.txt"),
+            "Simulated crash with private-token",
+        )
+        .unwrap();
+        eprintln!("Simulated stderr with private-token");
+        std::process::exit(1);
+    }
+
+    fn failing_plan(directory: &Path) -> LaunchPlan {
+        std::fs::write(directory.join("launch-fixture.marker"), b"test fixture").unwrap();
+        let mut plan = successful_test_process_plan(directory);
+        plan.arguments = vec![
+            "--exact".into(),
+            "launch::tests::crashing_child_fixture".into(),
+            "--nocapture".into(),
+        ];
+        plan.sensitive_values = vec!["private-token".into()];
+        plan
+    }
+
+    #[tokio::test]
+    async fn failed_launch_returns_and_persists_the_current_report_not_just_exit_one() {
+        let directory = tempfile::tempdir().unwrap();
+        let plan = failing_plan(directory.path());
+        let mut output = Vec::new();
+        let result = run_launch(plan, |event| output.push(event)).await.unwrap();
+        assert_eq!(result.exit_code, Some(1));
+        let diagnostics = result.diagnostics.unwrap();
+        assert_eq!(
+            diagnostics.reports[0].text,
+            "Simulated crash with <redacted>"
+        );
+        assert!(diagnostics.log_tail.unwrap().text.contains("<redacted>"));
+        assert!(!format!("{output:?}").contains("private-token"));
+        let recorded = crate::launch_record::latest_launch(directory.path())
+            .unwrap()
+            .unwrap()
+            .result
+            .unwrap();
+        assert_eq!(recorded.exit_code, Some(1));
+        assert_eq!(recorded.diagnostics.unwrap().reports, diagnostics.reports);
+    }
+
+    #[tokio::test]
+    async fn server_supervisor_uses_the_same_launch_diagnostics() {
+        let directory = tempfile::tempdir().unwrap();
+        let plan = failing_plan(directory.path());
+        let config = ServerConfig {
+            restart: RestartPolicy::Never,
+            ..Default::default()
+        };
+        let (_sender, mut controls) = mpsc::unbounded_channel();
+        let result = supervise_server(plan, &config, &mut controls, |_| {})
+            .await
+            .unwrap();
+        assert!(!result.final_success);
+        assert_eq!(
+            result.diagnostics.unwrap().reports[0].text,
+            "Simulated crash with <redacted>"
+        );
+        assert!(
+            crate::launch_record::latest_launch(directory.path())
+                .unwrap()
+                .unwrap()
+                .result
+                .is_some()
+        );
+    }
+
+    #[tokio::test]
+    async fn oversized_game_output_is_drained_bounded_and_does_not_expose_a_partial_secret() {
+        let bytes = format!("{}private-token\nnormal line\n", "x".repeat(200_000)).into_bytes();
+        let (sender, mut receiver) = mpsc::channel(1);
+        let task = tokio::spawn(async move {
+            pump_output(bytes.as_slice(), LaunchOutputStream::Stderr, sender).await
+        });
+        let mut lines = Vec::new();
+        while let Some(output) = receiver.recv().await {
+            if let LaunchProcessEvent::Output { line, .. } = output.unwrap() {
+                lines.push(line)
+            }
+        }
+        task.await.unwrap();
+        assert_eq!(lines.len(), 2);
+        assert!(!lines[0].contains("private-token"));
+        assert!(lines[0].contains("omitted"));
+        assert_eq!(lines[1], "normal line");
+    }
 
     fn successful_test_process_plan(working_directory: &Path) -> LaunchPlan {
         LaunchPlan {

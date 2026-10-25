@@ -10,11 +10,35 @@ pub(crate) fn error(error: orbit_http::Error) -> LauncherError {
 }
 
 pub(crate) async fn fetch_bounded(
-    client: &reqwest::Client,
+    client: &crate::download_source::DownloadClient,
     url: &str,
     maximum: u64,
     subject: &str,
 ) -> Result<Vec<u8>, LauncherError> {
+    Ok(fetch_response(client, url, maximum, subject).await?.body)
+}
+
+/// Mirrors may reserialize JSON. Byte-digest-pinned metadata is always read
+/// from its declared origin, rather than relaxing validation or falling back.
+pub(crate) async fn fetch_integrity_metadata(
+    client: &crate::download_source::DownloadClient,
+    url: &str,
+    maximum: u64,
+    subject: &str,
+) -> Result<Vec<u8>, LauncherError> {
+    let origin = crate::download_source::DownloadClient::new(
+        client.official_client().clone(),
+        Default::default(),
+    );
+    fetch_bounded(&origin, url, maximum, subject).await
+}
+
+pub(crate) async fn fetch_response(
+    client: &crate::download_source::DownloadClient,
+    url: &str,
+    maximum: u64,
+    subject: &str,
+) -> Result<orbit_http::BufferedResponse, LauncherError> {
     let parsed = reqwest::Url::parse(url).map_err(|error| {
         LauncherError::InvalidRemoteData(format!("{subject} URL is invalid: {error}"))
     })?;
@@ -38,5 +62,5 @@ pub(crate) async fn fetch_bounded(
             String::from_utf8_lossy(&response.body)
         )));
     }
-    Ok(response.body)
+    Ok(response)
 }

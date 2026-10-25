@@ -37,6 +37,9 @@ pub struct Cli {
     /// Exact launcher cache directory.
     #[arg(long, global = true)]
     pub cache_dir: Option<PathBuf>,
+    /// Public download source for this command only: official or bmclapi.
+    #[arg(long, global = true)]
+    pub download_source: Option<orbit_launcher_core::download_source::DownloadSource>,
 
     #[command(subcommand)]
     pub command: Commands,
@@ -382,6 +385,8 @@ pub enum InstanceCommands {
 
     /// Show the explicit, local, or default instance.
     Show,
+    /// Read the latest launch result and crash diagnostics.
+    LaunchReport,
 
     /// Rename the explicit or local instance.
     Rename { new_name: String },
@@ -436,6 +441,7 @@ impl InstanceCommands {
         matches!(
             self,
             Self::Show
+                | Self::LaunchReport
                 | Self::Rename { .. }
                 | Self::Configure { .. }
                 | Self::Resolution { .. }
@@ -518,6 +524,46 @@ mod tests {
     use clap::CommandFactory;
 
     use super::*;
+
+    #[test]
+    fn public_download_source_and_launch_report_use_the_normal_cli_surface() {
+        let cli = Cli::try_parse_from([
+            "orbit-launcher",
+            "versions",
+            "minecraft",
+            "--download-source",
+            "bmclapi",
+        ])
+        .unwrap();
+        assert_eq!(
+            cli.download_source,
+            Some(orbit_launcher_core::download_source::DownloadSource::Bmclapi)
+        );
+        assert!(
+            Cli::try_parse_from([
+                "orbit-launcher",
+                "versions",
+                "minecraft",
+                "--download-source",
+                "unknown"
+            ])
+            .is_err()
+        );
+        assert!(matches!(
+            Cli::try_parse_from([
+                "orbit-launcher",
+                "--instance",
+                "demo",
+                "instance",
+                "launch-report"
+            ])
+            .unwrap()
+            .command,
+            Commands::Instance {
+                command: InstanceCommands::LaunchReport
+            }
+        ));
+    }
 
     #[test]
     fn clap_schema_has_no_global_subcommand_argument_collisions() {

@@ -42,9 +42,16 @@ pub async fn ensure_account_avatar(
         return Ok(Some(path));
     }
 
-    let bytes =
-        crate::network::fetch_bounded(client, skin_url, MAX_SKIN_BYTES as u64, "account skin")
-            .await?;
+    let bytes = crate::network::fetch_bounded(
+        &crate::download_source::DownloadClient::new(
+            client.clone(),
+            crate::download_source::DownloadSource::Official,
+        ),
+        skin_url,
+        MAX_SKIN_BYTES as u64,
+        "account skin",
+    )
+    .await?;
     let avatar = render_avatar(&bytes)?;
     let mut encoded = Cursor::new(Vec::new());
     DynamicImage::ImageRgba8(avatar)

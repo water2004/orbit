@@ -22,21 +22,17 @@ pub struct ResolvedAuthlibInjector {
 }
 
 pub async fn resolve_authlib_injector(
-    client: &reqwest::Client,
+    client: &crate::download_source::DownloadClient,
 ) -> Result<ResolvedAuthlibInjector, LauncherError> {
-    let response = orbit_http::read(
-        client.get(AUTHLIB_INJECTOR_LATEST_URL),
-        3,
+    let response = crate::network::fetch_response(
+        client,
+        AUTHLIB_INJECTOR_LATEST_URL,
         MAX_METADATA_BYTES as u64,
+        "authlib-injector metadata",
     )
-    .await
-    .map_err(crate::network::error)?;
-    validate_official_url(&response.url, "metadata")?;
-    if !response.status.is_success() {
-        return Err(LauncherError::InvalidRemoteData(format!(
-            "authlib-injector metadata returned HTTP {}",
-            response.status
-        )));
+    .await?;
+    if client.source() == crate::download_source::DownloadSource::Official {
+        validate_official_url(&response.url, "metadata response")?;
     }
     let bytes = response.body;
     let latest: LatestArtifact = serde_json::from_slice(&bytes).map_err(|error| {
@@ -225,6 +221,7 @@ mod tests {
     #[ignore = "uses the live official authlib-injector artifact service"]
     async fn live_metadata_resolves_a_sha256_verified_artifact() {
         let client = reqwest::Client::new();
+        let client = crate::download_source::DownloadClient::new(client, Default::default());
         let resolved = resolve_authlib_injector(&client).await.unwrap();
         assert!(matches!(
             resolved.request.expected_hash,

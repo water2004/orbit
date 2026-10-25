@@ -274,9 +274,17 @@ mod tests {
             major: 25,
         };
         assert!(
-            plan_java(&reqwest::Client::new(), &requirement, &selection, |_| {})
-                .await
-                .is_err()
+            plan_java(
+                &crate::download_source::DownloadClient::new(
+                    reqwest::Client::new(),
+                    Default::default()
+                ),
+                &requirement,
+                &selection,
+                |_| {}
+            )
+            .await
+            .is_err()
         );
     }
     #[test]
@@ -308,6 +316,7 @@ mod tests {
             .proxy(reqwest::Proxy::all("http://127.0.0.1:1").unwrap())
             .build()
             .unwrap();
+        let client = crate::download_source::DownloadClient::new(client, Default::default());
         let plan = plan_java(&client, &requirement, &selection, |_| {})
             .await
             .unwrap();
@@ -340,7 +349,7 @@ pub enum JavaInstallPlan {
     System(SystemJava),
 }
 pub async fn plan_java<F: FnMut(JavaProgressEvent)>(
-    client: &reqwest::Client,
+    client: &crate::download_source::DownloadClient,
     requirement: &MojangJavaRequirement,
     selection: &JavaSelection,
     progress: F,
@@ -354,7 +363,7 @@ pub async fn plan_java<F: FnMut(JavaProgressEvent)>(
 }
 pub async fn materialize_java<F: FnMut(JavaProgressEvent) + Send>(
     paths: &RuntimePaths,
-    client: &reqwest::Client,
+    client: &crate::download_source::DownloadClient,
     plan: JavaInstallPlan,
     concurrency: usize,
     mut progress: F,

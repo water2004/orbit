@@ -177,7 +177,7 @@ pub struct InstallResult {
 
 async fn plan_authlib_injector(
     manifest: &InstanceManifest,
-    client: &reqwest::Client,
+    client: &crate::download_source::DownloadClient,
 ) -> Result<Option<ResolvedAuthlibInjector>, LauncherError> {
     if manifest_requires_authlib_injector(manifest) {
         resolve_authlib_injector(client).await.map(Some)
@@ -231,7 +231,7 @@ fn lock_authlib_injector(
 
 async fn prepare_vanilla_client_install<F>(
     instance_root: &Path,
-    client: &reqwest::Client,
+    client: &crate::download_source::DownloadClient,
     selection: &JavaSelection,
     mut progress: F,
 ) -> Result<ClientInstallPlan, LauncherError>
@@ -276,7 +276,7 @@ where
 
 async fn prepare_vanilla_server_install<F>(
     instance_root: &Path,
-    client: &reqwest::Client,
+    client: &crate::download_source::DownloadClient,
     selection: &JavaSelection,
     mut progress: F,
 ) -> Result<ServerInstallPlan, LauncherError>
@@ -304,7 +304,7 @@ where
         progress(InstallProgressEvent::Java(event));
     })
     .await?;
-    let eula = show_current_eula(instance_root, client).await?;
+    let eula = show_current_eula(instance_root, client.official_client()).await?;
     let acceptance = match require_current_acceptance(instance_root, &eula) {
         Ok(acceptance) => Some(acceptance),
         Err(LauncherError::EulaRequired(_)) => None,
@@ -330,7 +330,7 @@ where
 
 async fn prepare_profile_loader_install<F>(
     instance_root: &Path,
-    client: &reqwest::Client,
+    client: &crate::download_source::DownloadClient,
     selection: &JavaSelection,
     mut progress: F,
 ) -> Result<InstallPlan, LauncherError>
@@ -431,7 +431,7 @@ where
             })?;
             let java =
                 plan_selected_java(client, java_requirement, selection, &mut progress).await?;
-            let eula = show_current_eula(instance_root, client).await?;
+            let eula = show_current_eula(instance_root, client.official_client()).await?;
             let acceptance = match require_current_acceptance(instance_root, &eula) {
                 Ok(acceptance) => Some(acceptance),
                 Err(LauncherError::EulaRequired(_)) => None,
@@ -459,7 +459,7 @@ where
 
 async fn prepare_installer_loader_install<F>(
     instance_root: &Path,
-    client: &reqwest::Client,
+    client: &crate::download_source::DownloadClient,
     selection: &JavaSelection,
     mut progress: F,
 ) -> Result<InstallPlan, LauncherError>
@@ -548,7 +548,7 @@ where
             })?;
             let java =
                 plan_selected_java(client, java_requirement, selection, &mut progress).await?;
-            let eula = show_current_eula(instance_root, client).await?;
+            let eula = show_current_eula(instance_root, client.official_client()).await?;
             let acceptance = match require_current_acceptance(instance_root, &eula) {
                 Ok(acceptance) => Some(acceptance),
                 Err(LauncherError::EulaRequired(_)) => None,
@@ -576,7 +576,7 @@ where
 
 pub async fn prepare_install<F>(
     location: &InstanceLocation,
-    client: &reqwest::Client,
+    client: &crate::download_source::DownloadClient,
     global_java: &JavaSelection,
     progress: F,
 ) -> Result<InstallPlan, LauncherError>
@@ -623,7 +623,7 @@ where
 }
 
 async fn plan_selected_java<F>(
-    client: &reqwest::Client,
+    client: &crate::download_source::DownloadClient,
     requirement: &crate::mojang::MojangJavaRequirement,
     selection: &JavaSelection,
     progress: &mut F,
@@ -658,7 +658,7 @@ fn ensure_loader_java_compatible(
 async fn execute_client_install<F>(
     location: &InstanceLocation,
     runtime_paths: &RuntimePaths,
-    client: &reqwest::Client,
+    client: &crate::download_source::DownloadClient,
     plan: ClientInstallPlan,
     concurrency: usize,
     installer_timeout_seconds: u64,
@@ -862,7 +862,7 @@ where
 async fn execute_server_install<F>(
     location: &InstanceLocation,
     runtime_paths: &RuntimePaths,
-    client: &reqwest::Client,
+    client: &crate::download_source::DownloadClient,
     plan: ServerInstallPlan,
     concurrency: usize,
     installer_timeout_seconds: u64,
@@ -1112,7 +1112,7 @@ where
 pub async fn apply_install_plan<F>(
     location: &InstanceLocation,
     runtime_paths: &RuntimePaths,
-    client: &reqwest::Client,
+    client: &crate::download_source::DownloadClient,
     plan: InstallPlan,
     concurrency: usize,
     installer_timeout_seconds: u64,

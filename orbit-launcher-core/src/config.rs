@@ -53,6 +53,12 @@ impl Default for GlobalConfig {
 }
 
 impl GlobalConfig {
+    pub fn download_client(&self) -> Result<crate::download_source::DownloadClient, LauncherError> {
+        Ok(crate::download_source::DownloadClient::new(
+            self.http_client()?,
+            self.network.download_source,
+        ))
+    }
     /// Released migrations are projected in memory; previewing cleanup does
     /// not rewrite the source, create a lock or save a migration backup.
     pub fn inspect(path: &Path) -> Result<Self, LauncherError> {
@@ -173,6 +179,7 @@ impl GlobalConfig {
 #[serde(rename_all = "kebab-case")]
 pub enum ConfigKey {
     JavaSelection,
+    NetworkDownloadSource,
     NetworkConcurrency,
     NetworkConnectTimeoutSeconds,
     NetworkRequestTimeoutSeconds,
@@ -183,8 +190,9 @@ pub enum ConfigKey {
 }
 
 impl ConfigKey {
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 9] = [
         Self::JavaSelection,
+        Self::NetworkDownloadSource,
         Self::NetworkConcurrency,
         Self::NetworkConnectTimeoutSeconds,
         Self::NetworkRequestTimeoutSeconds,
@@ -197,6 +205,7 @@ impl ConfigKey {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::JavaSelection => "java.selection",
+            Self::NetworkDownloadSource => "network.download-source",
             Self::NetworkConcurrency => "network.concurrency",
             Self::NetworkConnectTimeoutSeconds => "network.connect-timeout-seconds",
             Self::NetworkRequestTimeoutSeconds => "network.request-timeout-seconds",
@@ -209,6 +218,7 @@ impl ConfigKey {
 
     pub const fn allowed_values(self) -> &'static [&'static str] {
         match self {
+            Self::NetworkDownloadSource => &["official", "bmclapi"],
             Self::UiProgressBar | Self::UiColor => &["auto", "always", "never"],
             _ => &[],
         }
@@ -217,6 +227,7 @@ impl ConfigKey {
     const fn toml_path(self) -> (&'static str, &'static str) {
         match self {
             Self::JavaSelection => ("java", "selection"),
+            Self::NetworkDownloadSource => ("network", "download_source"),
             Self::NetworkConcurrency => ("network", "concurrency"),
             Self::NetworkConnectTimeoutSeconds => ("network", "connect_timeout_seconds"),
             Self::NetworkRequestTimeoutSeconds => ("network", "request_timeout_seconds"),
@@ -230,6 +241,7 @@ impl ConfigKey {
     fn read(self, config: &GlobalConfig) -> Option<String> {
         match self {
             Self::JavaSelection => Some(config.java.selection.clone().into()),
+            Self::NetworkDownloadSource => Some(config.network.download_source.to_string()),
             Self::NetworkConcurrency => Some(config.network.concurrency.to_string()),
             Self::NetworkConnectTimeoutSeconds => {
                 Some(config.network.connect_timeout_seconds.to_string())
@@ -252,6 +264,10 @@ impl ConfigKey {
             ))
         };
         Ok(match self {
+            Self::NetworkDownloadSource => value(
+                raw.parse::<crate::download_source::DownloadSource>()?
+                    .to_string(),
+            ),
             Self::JavaSelection => {
                 let selection = raw.parse::<crate::java::JavaSelection>()?;
                 if let crate::java::JavaSelection::Executable(path) = &selection {
@@ -508,6 +524,8 @@ fn validate_identifier(value: &str, subject: &str) -> Result<(), LauncherError> 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct NetworkConfig {
+    #[serde(default)]
+    pub download_source: crate::download_source::DownloadSource,
     pub concurrency: u16,
     pub connect_timeout_seconds: u64,
     pub request_timeout_seconds: u64,
@@ -516,6 +534,7 @@ pub struct NetworkConfig {
 impl Default for NetworkConfig {
     fn default() -> Self {
         Self {
+            download_source: Default::default(),
             concurrency: 8,
             connect_timeout_seconds: 15,
             request_timeout_seconds: 120,
@@ -666,6 +685,27 @@ fn parse_byte_size(value: &str) -> Result<u64, LauncherError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn download_source_is_optional_and_configurable_through_the_shared_settings_api() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("config.toml");
+        assert_eq!(
+            GlobalConfig::load(&path).unwrap().network.download_source,
+            crate::download_source::DownloadSource::Official
+        );
+        set_config(&path, ConfigKey::NetworkDownloadSource, "bmclapi").unwrap();
+        assert_eq!(
+            GlobalConfig::load(&path).unwrap().network.download_source,
+            crate::download_source::DownloadSource::Bmclapi
+        );
+        unset_config(&path, ConfigKey::NetworkDownloadSource).unwrap();
+        assert_eq!(
+            GlobalConfig::load(&path).unwrap().network.download_source,
+            crate::download_source::DownloadSource::Official
+        );
+        assert!(set_config(&path, ConfigKey::NetworkDownloadSource, "unknown").is_err());
+    }
 
     #[test]
     fn missing_config_uses_valid_defaults_without_creating_a_file() {

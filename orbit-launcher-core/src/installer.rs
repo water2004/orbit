@@ -89,7 +89,7 @@ pub struct InstalledClientProfile {
 }
 
 pub(crate) async fn list_installer_loader_versions(
-    client: &reqwest::Client,
+    client: &crate::download_source::DownloadClient,
     kind: LoaderKind,
     minecraft_version: &str,
 ) -> Result<Vec<LoaderVersion>, LauncherError> {
@@ -105,7 +105,7 @@ pub(crate) async fn list_installer_loader_versions(
 }
 
 pub async fn resolve_loader_installer(
-    client: &reqwest::Client,
+    client: &crate::download_source::DownloadClient,
     kind: LoaderKind,
     minecraft_version: &str,
     requirement: &str,
@@ -535,7 +535,7 @@ fn validate_profile_text(value: &str, subject: &str) -> Result<(), LauncherError
 }
 
 async fn resolve_forge_version(
-    client: &reqwest::Client,
+    client: &crate::download_source::DownloadClient,
     minecraft: &str,
     requirement: &str,
 ) -> Result<String, LauncherError> {
@@ -567,7 +567,7 @@ async fn resolve_forge_version(
 }
 
 async fn list_forge_versions(
-    client: &reqwest::Client,
+    client: &crate::download_source::DownloadClient,
     minecraft: &str,
 ) -> Result<Vec<LoaderVersion>, LauncherError> {
     let bytes = crate::network::fetch_bounded(
@@ -617,7 +617,7 @@ async fn list_forge_versions(
 }
 
 async fn resolve_neoforge_version(
-    client: &reqwest::Client,
+    client: &crate::download_source::DownloadClient,
     minecraft: &str,
     requirement: &str,
 ) -> Result<(String, String), LauncherError> {
@@ -642,7 +642,7 @@ async fn resolve_neoforge_version(
 }
 
 async fn list_neoforge_versions(
-    client: &reqwest::Client,
+    client: &crate::download_source::DownloadClient,
     minecraft: &str,
 ) -> Result<Vec<LoaderVersion>, LauncherError> {
     let layout = neoforge_layout(minecraft)?;
@@ -701,7 +701,7 @@ fn is_prerelease(version: &str) -> bool {
 }
 
 async fn fetch_digest_sidecar(
-    client: &reqwest::Client,
+    client: &crate::download_source::DownloadClient,
     url: &str,
     length: usize,
 ) -> Result<String, LauncherError> {
@@ -932,6 +932,7 @@ mod tests {
             .user_agent("orbit-launcher-tests/0.1")
             .build()
             .unwrap();
+        let client = crate::download_source::DownloadClient::new(client, Default::default());
         for (kind, minecraft, requirement) in [
             (LoaderKind::Forge, "1.21.1", "stable"),
             (LoaderKind::Neoforge, "1.21.1", "latest"),
