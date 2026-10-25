@@ -7,6 +7,15 @@ Launcher 外部实例导入集中于 `external_instance/`，来源适配后复�
 
 ## 1. workspace
 
+打包后的数据生命周期集中在 `installer/actions`：这是安装/卸载期的独立宿主，
+调用各 core 的格式/实例校验，不改变三个已安装程序的独立依赖。三档清理和父子目录暂存/回滚
+独立于 GUI。GUI 自己的展示配置集中在 `preferences`，安装后用无窗口入口更新相邻 CLI
+绑定；安装器不解释 GUI JSON。Windows 调用原生 MSI DLL，Linux 的 `orbit-maintenance`
+使用同一规划/事务实现；两个 CLI deb 各带私有副本，经 Debian alternatives 暴露一个入口，
+不新增第四个 deb、不要求同时安装两个 CLI。root 包脚本只维护这个系统级入口，不操作用户数据。
+Linux GUI 通过自己的安装指纹，在每个用户安装后首次启动时刷新路径，后续启动保留用户选择。
+细节见 [MSI](windows-msi.md) 与 [Linux deb](linux-deb.md)。
+
 GUI 动效属于纯展示层：统一 motion token、可复用的 keyed `ContentStage` 及 Vue 过渡，不进入
 CLI/core。仅导航切换重建展示节点，任务进度不重建控件；原生 dialog 关闭、交互响应和取消
 不等待动画，系统减少动态效果时停用。详见 [GUI 架构](orbit-gui.md)。

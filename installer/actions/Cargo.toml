@@ -1,0 +1,29 @@
+[package]
+name = "orbit-installer-actions"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+publish = false
+description = "Packaging host for opt-in Orbit user-data cleanup"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+orbit-core = { path = "../../orbit-core" }
+orbit-launcher-core = { path = "../../orbit-launcher-core" }
+orbit-i18n = { workspace = true, features = ["clap"] }
+clap.workspace = true
+directories = "6.0.0"
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+dunce.workspace = true
+sha2.workspace = true
+tempfile.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_System_ApplicationInstallationAndServicing", "Win32_System_LibraryLoader", "Win32_UI_Controls", "Win32_UI_WindowsAndMessaging"] }
+
+[build-dependencies]
+serde_json.workspace = true

@@ -99,6 +99,14 @@ pub struct ArtifactCache {
 }
 
 impl ArtifactCache {
+    /// Exact owned cache subtrees, excluding installed Java and game files.
+    pub fn cleanup_paths(&self) -> [PathBuf; 3] {
+        [
+            self.root.join("objects"),
+            self.root.join("metadata"),
+            self.root.join("staging"),
+        ]
+    }
     pub fn new(root: impl Into<PathBuf>) -> Self {
         Self {
             root: root.into(),

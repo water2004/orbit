@@ -6,6 +6,16 @@ Orbit GUI 使用 Vue 3 + Tauri 2，以 Modrinth App 的导航、实例库、内�
 
 ## 单一业务边界
 
+GUI 偏好由 Rust `preferences` 模块读写，安装器只调用 `orbit-gui --install-cli-bindings` 的
+无窗口安装入口，不能直接修改 JSON。该入口用当前 GUI EXE 的实际父目录覆盖 Orbit/Launcher
+路径，验证两者已存在，原子保存并保留其他偏好；正常窗口与安装入口共用同一格式及写入器。
+Linux 不从 root 的 DEB 钩子运行 GUI；Windows 其它用户也可能在系统安装完成后才首次打开。
+GUI 保存本次可执行文件位置、大小、修改时间的安装指纹，在每个用户安装/升级后第一次打开
+时复用同一写入器；正常后续启动不覆盖用户手动
+选择的 CLI。展示设置更新保留内部安装指纹。此处理不需要图形会话即可独立测试。
+这不读取或修改 Orbit/Launcher 的业务配置。卸载数据档位见 [Windows MSI](windows-msi.md)
+和 [Linux deb](linux-deb.md)。
+
 界面动效统一在 `src/motion.css` 管理，时长与缓动共用 token。页面、向导步骤和页签通过
 `ContentStage`/Vue Transition 切换；实例/账户使用稳定 ID 的列表过渡；菜单、提示和活动抽屉
 支持进出过渡，遮罩只淡入淡出，抽屉自身滑动。原生 dialog 只增加入场动效，保留浏览器的

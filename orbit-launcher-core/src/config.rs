@@ -53,6 +53,20 @@ impl Default for GlobalConfig {
 }
 
 impl GlobalConfig {
+    /// Released migrations are projected in memory; previewing cleanup does
+    /// not rewrite the source, create a lock or save a migration backup.
+    pub fn inspect(path: &Path) -> Result<Self, LauncherError> {
+        if !path.exists() {
+            return Ok(Self::default());
+        }
+        let content = crate::storage_migrations::inspect_current(
+            path,
+            crate::storage_migrations::DocumentKind::Config,
+        )?;
+        let config: Self = toml::from_str(&content).map_err(LauncherError::ConfigParse)?;
+        config.validate()?;
+        Ok(config)
+    }
     pub fn http_client(&self) -> Result<reqwest::Client, LauncherError> {
         self.validate()?;
         Ok(reqwest::Client::builder()

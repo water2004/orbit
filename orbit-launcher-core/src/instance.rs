@@ -427,6 +427,20 @@ pub struct ManifestFile {
 }
 
 impl ManifestFile {
+    /// Preview a released manifest without upgrading it on disk.
+    pub fn inspect(root: &Path) -> Result<Self, LauncherError> {
+        let content = crate::storage_migrations::inspect_current(
+            &root.join(INSTANCE_MANIFEST_FILE),
+            crate::storage_migrations::DocumentKind::Instance,
+        )?;
+        let inner: InstanceManifest =
+            toml::from_str(&content).map_err(LauncherError::ManifestParse)?;
+        inner.validate()?;
+        Ok(Self {
+            root: root.to_path_buf(),
+            inner,
+        })
+    }
     pub fn open(root: &Path) -> Result<Self, LauncherError> {
         let path = root.join(INSTANCE_MANIFEST_FILE);
         if !path.is_file() {
@@ -466,6 +480,29 @@ impl ManifestFile {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn inspection_of_a_released_manifest_never_writes_back() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut old = InstanceManifest::new(
+            Uuid::new_v4(),
+            "Preview",
+            InstanceKind::Client,
+            "26.2",
+            LoaderKind::Vanilla,
+            None,
+        )
+        .unwrap();
+        old.schema = 1;
+        let bytes = toml::to_string_pretty(&old).unwrap();
+        let path = temp.path().join(INSTANCE_MANIFEST_FILE);
+        std::fs::write(&path, &bytes).unwrap();
+        assert_eq!(
+            ManifestFile::inspect(temp.path()).unwrap().inner.schema,
+            INSTANCE_SCHEMA
+        );
+        assert_eq!(std::fs::read_to_string(path).unwrap(), bytes);
+        assert_eq!(std::fs::read_dir(temp.path()).unwrap().count(), 1);
+    }
 
     #[test]
     fn schema_one_instance_keeps_its_identity_and_launch_configuration() {

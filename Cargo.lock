@@ -3571,6 +3571,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "orbit-installer-actions"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "directories",
+ "dunce",
+ "orbit-core",
+ "orbit-i18n",
+ "orbit-launcher-core",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "uuid",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "orbit-launcher"
 version = "0.8.1"
 dependencies = [

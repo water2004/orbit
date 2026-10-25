@@ -1,0 +1,21 @@
+#!/bin/sh
+set -eu
+
+# No per-user files may be opened by root-run package hooks.
+case "${DPKG_MAINTSCRIPT_PACKAGE:?}" in
+    orbit|orbit-launcher) package="$DPKG_MAINTSCRIPT_PACKAGE" ;;
+    *) echo "Unexpected package for Orbit maintenance registration" >&2; exit 1 ;;
+esac
+case "${1:-}" in
+configure|abort-remove)
+    version=$(dpkg-query --show --showformat='${Version}' "$package")
+    version=${version%%-*}
+    major=${version%%.*}
+    remainder=${version#*.}
+    minor=${remainder%%.*}
+    patch=${remainder#*.}
+    priority=$((major * 1000000 + minor * 1000 + patch + 1))
+    update-alternatives --install /usr/bin/orbit-maintenance orbit-maintenance \
+        "/usr/lib/$package/orbit-maintenance" "$priority"
+    ;;
+esac

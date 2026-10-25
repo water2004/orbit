@@ -135,6 +135,18 @@ fn upgrade(document: &mut DocumentMut, kind: DocumentKind) -> Result<(), Launche
     Ok(())
 }
 
+/// Read-only current-model projection for destructive-operation previews.
+pub(crate) fn inspect_current(path: &Path, kind: DocumentKind) -> Result<String, LauncherError> {
+    let original = std::fs::read_to_string(path)?;
+    let mut document = original.parse::<DocumentMut>().map_err(|error| {
+        LauncherError::Transaction(format!("cannot inspect stored schema: {error}"))
+    })?;
+    upgrade(&mut document, kind)?;
+    let projected = document.to_string();
+    kind.validate(&projected)?;
+    Ok(projected)
+}
+
 pub(crate) fn read_current(path: &Path, kind: DocumentKind) -> Result<String, LauncherError> {
     let original = std::fs::read_to_string(path)?;
     let (previous, current) = kind.schemas();

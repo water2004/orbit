@@ -196,7 +196,7 @@
           Height="15"
           Transparent="yes"
           NoPrefix="yes"
-          Text="Choose whether to keep your $(var.ProductDisplayName) data." />
+          Text="Choose one cleanup level. Every level removes all caches." />
         <Control
           Id="BannerBitmap"
           Type="Bitmap"
@@ -213,34 +213,22 @@
           Y="44"
           Width="370"
           Height="0" />
-        <Control
-          Id="RemoveAppData"
-          Type="CheckBox"
-          X="25"
-          Y="75"
-          Width="320"
-          Height="18"
-          Property="REMOVE_APPDATA"
-          CheckBoxValue="1"
-          Text="Remove $(var.ProductDisplayName) data from the default AppData locations" />
-        <Control
-          Id="RemoveAppDataDescription"
-          Type="Text"
-          X="44"
-          Y="97"
-          Width="295"
-          Height="48"
-          NoPrefix="yes"
-          Text="$(var.ProductDataDescription)" />
+        <Control Id="CleanupLevel" Type="RadioButtonGroup" X="25" Y="64" Width="325" Height="104" Property="UNINSTALL_DATA_LEVEL">
+          <RadioButtonGroup Property="UNINSTALL_DATA_LEVEL">
+            <RadioButton Value="cache" X="0" Y="0" Width="320" Height="28" Text="Program files and all caches — keep settings and instances" />
+            <RadioButton Value="settings" X="0" Y="36" Width="320" Height="28" Text="Also delete settings — keep all game instances" />
+            <RadioButton Value="all" X="0" Y="72" Width="320" Height="28" Text="Delete everything — including all instances and worlds" />
+          </RadioButtonGroup>
+        </Control>
         <Control
           Id="KeepDataDescription"
           Type="Text"
           X="25"
-          Y="160"
+          Y="181"
           Width="320"
-          Height="32"
+          Height="45"
           NoPrefix="yes"
-          Text="This option is off by default. Leave it unchecked to keep your settings and download cache." />
+          Text="The first level is selected by default. Full deletion permanently removes registered instances and complete managed game repositories, including custom locations. You will review exact paths before cleanup. Other users' data is not included." />
         <Control
           Id="BottomLine"
           Type="Line"
@@ -527,8 +515,15 @@
       <Publish
         Dialog="OrbitUninstallOptionsDlg"
         Control="Next"
+        Property="ORBIT_CLEANUP_OPTIONS_SEEN"
+        Value="1"
+        Order="1" />
+      <Publish
+        Dialog="OrbitUninstallOptionsDlg"
+        Control="Next"
         Event="NewDialog"
-        Value="VerifyReadyDlg" />
+        Value="VerifyReadyDlg"
+        Order="2" />
     </UI>
 
     <UIRef Id="WixUI_Common" />

@@ -19,9 +19,12 @@ responsibilities of Orbit Launcher."""
 depends = "$auto"
 section = "utils"
 priority = "optional"
+maintainer-scripts = "../installer/linux/maintainer-scripts"
 assets = [
     ["target/release/orbit", "usr/bin/", "755"],
     ["target/release/orbit-runtime-agent.jar", "usr/lib/orbit/", "644"],
+    ["target/release/orbit-maintenance", "usr/lib/orbit/orbit-maintenance", "755"],
+    ["../docs/linux-deb.md", "usr/share/doc/orbit/linux-deb.md", "644"],
     ["../README.md", "usr/share/doc/orbit/README.md", "644"],
     ["../docs/orbit-cli-commands.md", "usr/share/doc/orbit/orbit-cli.md", "644"],
 ]

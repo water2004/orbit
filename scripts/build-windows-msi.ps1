@@ -21,6 +21,7 @@ $executable = Join-Path $repoRoot "target\release\orbit.exe"
 $launcherExecutable = Join-Path $repoRoot "target\release\orbit-launcher.exe"
 $guiExecutable = Join-Path $repoRoot "target\release\orbit-gui.exe"
 $runtimeAgent = Join-Path $repoRoot "target\release\orbit-runtime-agent.jar"
+$cleanupActions = Join-Path $repoRoot "target\release\orbit_installer_actions.dll"
 $guiBuildDirectory = Join-Path $repoRoot "target\release\build"
 $license = Join-Path $repoRoot "LICENSE"
 
@@ -72,7 +73,7 @@ try {
         if ($LASTEXITCODE -ne 0) { throw "Restoring GUI dependencies failed." }
         npm --prefix orbit-gui/ui run build
         if ($LASTEXITCODE -ne 0) { throw "Building the GUI frontend failed." }
-        cargo build --release --locked --package orbit --package orbit-launcher --package orbit-gui
+        cargo build --release --locked --package orbit --package orbit-launcher --package orbit-gui --package orbit-installer-actions
         if ($LASTEXITCODE -ne 0) {
             throw "The release build failed."
         }
@@ -99,6 +100,9 @@ try {
     if (-not (Test-Path -LiteralPath $runtimeAgent -PathType Leaf)) {
         throw "Orbit Runtime Agent not found at '$runtimeAgent'."
     }
+    if (-not (Test-Path -LiteralPath $cleanupActions -PathType Leaf)) {
+        throw "Installer cleanup actions not found at '$cleanupActions'."
+    }
     $guiIcon = Get-ChildItem -LiteralPath $guiBuildDirectory -Directory -Filter "orbit-gui-*" |
         ForEach-Object { Join-Path $_.FullName "out\orbit-gui.ico" } |
         Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } |
@@ -120,13 +124,6 @@ try {
         throw "Restoring the pinned WiX UI extension failed."
     }
 
-    dotnet tool run wix -- extension add `
-        "WixToolset.Util.wixext/$wixVersion" `
-        -acceptEula wix7
-    if ($LASTEXITCODE -ne 0) {
-        throw "Restoring the pinned WiX Util extension failed."
-    }
-
     New-Item -ItemType Directory -Force -Path $OutputDirectory | Out-Null
     $outputPath = Join-Path $OutputDirectory "orbit-$version-x86_64.msi"
     $intermediatePath = Join-Path $repoRoot "target\wix\obj"
@@ -141,6 +138,7 @@ try {
         -d "OrbitLauncherExecutable=$launcherExecutable" `
         -d "OrbitGuiExecutable=$guiExecutable" `
         -d "OrbitRuntimeAgent=$runtimeAgent" `
+        -d "OrbitCleanupActions=$cleanupActions" `
         -d "OrbitGuiIcon=$guiIcon" `
         -d "OrbitLicense=$license" `
         -d "OrbitGuiLicense=$(Join-Path $repoRoot 'orbit-gui\ui\LICENSE')" `
@@ -148,9 +146,7 @@ try {
         -d "OrbitLicenseRtf=$licenseRtf" `
         -d "ProductDisplayName=Orbit" `
         -d "ProductCommand=orbit" `
-        -d "ProductDataDescription=Deletes Orbit and Orbit Launcher configuration, account metadata, encrypted local credentials, instance registries, managed Java runtimes, and caches from the AppData paths recorded during installation. Minecraft instances and custom paths are never removed." `
         -ext WixToolset.UI.wixext `
-        -ext WixToolset.Util.wixext `
         -intermediatefolder $intermediatePath `
         -out $outputPath
     if ($LASTEXITCODE -ne 0) {
@@ -167,6 +163,8 @@ try {
     if ($LASTEXITCODE -ne 0) {
         throw "Windows Installer validation failed."
     }
+
+    & (Join-Path $repoRoot "scripts\test-windows-msi.ps1") -Path $outputPath
 
     Write-Output (Resolve-Path $outputPath)
 }

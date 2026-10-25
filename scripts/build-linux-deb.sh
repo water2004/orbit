@@ -97,6 +97,7 @@ if [[ "$skip_cargo_build" != true ]]; then
 		--package orbit \
 		--package orbit-launcher \
 		--package orbit-gui \
+		--package orbit-installer-actions \
 		--target "$target"
 fi
 
@@ -105,7 +106,7 @@ bash ./orbit-runtime-agent/build.sh \
 bash ./orbit-runtime-agent/test.sh \
 	"$repo_root/target/$target/release/orbit-runtime-agent.jar"
 
-for binary_name in orbit orbit-launcher orbit-gui; do
+for binary_name in orbit orbit-launcher orbit-gui orbit-maintenance; do
 	binary="target/$target/release/$binary_name"
 	if [[ ! -x "$binary" ]]; then
 		echo "release executable not found at '$binary'" >&2
@@ -160,8 +161,20 @@ for package in "${packages[@]}"; do
 			exit 1
 		}
 	fi
+	if [[ "$package" == "orbit" || "$package" == "orbit-launcher" ]]; then
+		package_contents="$(dpkg-deb --contents "$deb")"
+		grep -Fq "./usr/lib/$package/orbit-maintenance" <<<"$package_contents" || {
+			echo "$package must contain its private maintenance host" >&2
+			exit 1
+		}
+		for hook in postinst prerm; do
+			dpkg-deb --ctrl-tarfile "$deb" | tar --wildcards --wildcards-match-slash -xOf - "*$hook" | sh -n
+		done
+	fi
 
 	dpkg-deb --info "$deb"
 	dpkg-deb --contents "$deb"
 	printf '%s\n' "$(realpath "$deb")"
 done
+
+bash ./scripts/test-linux-packaging.sh "target/$target/release/orbit-maintenance"

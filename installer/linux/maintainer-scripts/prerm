@@ -1,0 +1,12 @@
+#!/bin/sh
+set -eu
+
+case "${DPKG_MAINTSCRIPT_PACKAGE:?}" in
+    orbit|orbit-launcher) package="$DPKG_MAINTSCRIPT_PACKAGE" ;;
+    *) echo "Unexpected package for Orbit maintenance registration" >&2; exit 1 ;;
+esac
+# Never deregister on upgrade: that would discard an administrator's selection.
+if [ "${1:-}" = remove ]; then
+    update-alternatives --remove orbit-maintenance "/usr/lib/$package/orbit-maintenance"
+    echo 'Orbit user data is retained. To clean it, run orbit-maintenance as the owning user before removing the last Orbit package.'
+fi

@@ -24,23 +24,47 @@ WiX 的 Icon 表和开始菜单 Shortcut 显式引用构建生成的 ICO，不�
 双击 MSI 会进入标准安装向导，依次提供欢迎页、套件许可说明页、安装目录选择、安装档位与
 Windows 集成选项、安装确认、进度和完成页。“加入系统 PATH”默认勾选，但用户可以在
 安装前取消。已安装后再次运行同一 MSI，可以修改安装档位和 PATH 集成、修复或卸载。
-卸载向导还会提供“删除 Orbit AppData”复选框，默认不勾选。勾选后会递归删除安装时
-记录的 Orbit 与 Orbit Launcher 默认 roaming/local AppData；这包含 GUI 偏好、账户元数据、
-系统秘密存储中的本地凭据、实例注册表、managed Java 和缓存。自定义配置/缓存路径和
-Minecraft 实例不属于 MSI 管理范围，始终不会删除。
+卸载采用三个互斥档位，默认第一档：
+
+1. 删除程序文件和所有可重建缓存，保留配置与实例。
+2. 再删除 Orbit、Launcher、GUI 的配置及已保存登录，保留实例。
+3. 全部删除，包括实例、存档、模组、截图、托管 Java 和完整受管 Minecraft 目录中的残留文件。
+
+缓存包括 JAR/版本数据库、下载工件/索引/临时下载、头像及 WebView 缓存，并消费持久化配置中
+指定的缓存位置。前两档保留实例索引、共享已安装 Minecraft 资源及实例 lock 引用的托管 Java；
+已安装运行时不是可丢弃缓存。第三档也覆盖注册在自定义位置的实例，以及配置/注册表中的
+Minecraft 仓库，不通过目录名猜测扫描磁盘。其他用户的数据始终不在范围内。
+
+完整向导显示三档单选；Windows 设置/控制面板触发的 basic UI 卸载也有原生三档选择。
+卸载前再次列出准确路径并确认，第三档执行永久删除而不是注销或回收站操作。取消不删除数据；
+程序升级、修复和安装档位变更不会进入清理。路径重定向、危险祖先路径、确认后配置/索引变化
+或运行中实例均会拒绝清理。
+
+清理由内嵌原生 `orbit-installer-actions` 实施，各自的配置与实例格式仍由所属 core 读取；
+只读预览在内存中应用已发布 schema 的迁移，不写回。实例先持有同一生命周期锁并暂存，再
+暂存包含它们的应用目录；卸载失败时先恢复父目录、再恢复实例。只有程序卸载成功提交后才
+永久清除暂存副本。提交后的物理清理失败会明确警告并给出保留的恢复目录，不因部分删除
+再发起不可能完整恢复的 MSI 回滚。MSI 参数只含路径与快照摘要，不携带 API key 或配置正文。
+
+安装包含 GUI 时，在成功提交阶段调用 GUI 自己的 `--install-cli-bindings` 无窗口入口，
+将两条 CLI 路径覆盖为新安装目录中相邻的 EXE。其他偏好保持不变；损坏配置明确失败，
+不能为了修路径重置用户偏好。仅安装 CLI 不触碰 GUI 配置，安装器不解析 GUI JSON。
+程序卸载同时移除安装器专用的 HKLM 路径/PATH 记录，包括旧版留下的 AppData 路径值；
+这不是用户的业务配置，不受三档用户数据选择影响。
 
 `/quiet` 等标准 Windows Installer 参数仍可用于无人值守部署。静默安装默认选择完整
 档位并加入系统 PATH。`INSTALL_PROFILE` 接受 `orbit`、`launcher` 或 `complete`；
 传递 `ADD_TO_PATH=0` 可以关闭 PATH 集成：
 
 ```powershell
-msiexec.exe /i orbit-0.6.3-x86_64.msi /quiet INSTALL_PROFILE=launcher ADD_TO_PATH=0
+msiexec.exe /i orbit-0.8.1-x86_64.msi /quiet INSTALL_PROFILE=launcher ADD_TO_PATH=0
 ```
 
-静默卸载默认保留 AppData。只有显式传递 `REMOVE_APPDATA=1` 才删除上述两个默认目录：
+静默卸载默认选择 `UNINSTALL_DATA_LEVEL=cache`，不弹出交互。可显式选择 `settings` 或
+`all`；`all` 是删除存档等所有实例内容的明确授权。旧的 AppData 勾选参数不再存在：
 
 ```powershell
-msiexec.exe /x orbit-0.6.3-x86_64.msi /quiet REMOVE_APPDATA=1
+msiexec.exe /x orbit-0.8.1-x86_64.msi /quiet UNINSTALL_DATA_LEVEL=all
 ```
 
 ## 构建
@@ -61,13 +85,14 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-windows-
 ```
 
 脚本先恢复锁定 npm 依赖并构建 Vue 前端，再执行锁定的 Cargo release 构建，然后恢复仓库
-`.config/dotnet-tools.json` 中固定的 WiX 版本与同版本的 WixUI、Util 扩展。输出路径为：
+`.config/dotnet-tools.json` 中固定的 WiX 版本与同版本的 WixUI 扩展；原生清理 DLL 作为
+MSI Binary 内嵌，不作为第四个用户程序安装。输出路径为：
 
 ```text
 target\wix\orbit-<version>-x86_64.msi
 ```
 
-仅在已经构建过三个相邻的 release 可执行文件时，可以跳过 Cargo：
+仅在已经构建过三个相邻的 release 可执行文件及清理 DLL 时，可以跳过 Cargo：
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-windows-msi.ps1 -SkipCargoBuild

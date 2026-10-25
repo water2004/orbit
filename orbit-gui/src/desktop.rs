@@ -9,14 +9,14 @@ use std::{
     time::Duration,
 };
 
-use directories::ProjectDirs;
 use orbit_machine_protocol::InteractionResponse;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_json::{Value, json};
 use tauri::{Manager, State, ipc::Channel};
 use tauri_plugin_opener::OpenerExt;
 use zeroize::Zeroizing;
 
+use crate::preferences::Preferences;
 use crate::string_rule::StringRuleDraft;
 use crate::{
     process::{BridgeEvent, CliKind, ProcessBridge, ProcessRequest, TaskId},
@@ -33,49 +33,6 @@ pub fn render_string_rule(draft: StringRuleDraft) -> Result<String, String> {
     draft
         .expression()
         .ok_or_else(|| "Incomplete string condition".into())
-}
-
-#[derive(Clone, Serialize, Deserialize)]
-pub struct Preferences {
-    pub orbit_binary: PathBuf,
-    pub launcher_binary: PathBuf,
-    pub selected_instance: Option<String>,
-    #[serde(default)]
-    pub language: orbit_i18n::LanguageMode,
-    pub theme_mode: String,
-    pub accent_theme: String,
-}
-
-impl Preferences {
-    fn path() -> Result<PathBuf, String> {
-        ProjectDirs::from("dev", "Orbit", "Orbit GUI")
-            .map(|dirs| dirs.config_dir().join("preferences.json"))
-            .ok_or_else(|| "Cannot locate GUI preferences directory".into())
-    }
-
-    fn load() -> Result<Self, String> {
-        let path = Self::path()?;
-        match std::fs::read(&path) {
-            Ok(bytes) => serde_json::from_slice(&bytes).map_err(|e| e.to_string()),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-                let dir = exe.parent().ok_or("Executable has no parent directory")?;
-                Ok(Self {
-                    orbit_binary: dir.join(if cfg!(windows) { "orbit.exe" } else { "orbit" }),
-                    launcher_binary: dir.join(if cfg!(windows) {
-                        "orbit-launcher.exe"
-                    } else {
-                        "orbit-launcher"
-                    }),
-                    selected_instance: None,
-                    language: Default::default(),
-                    theme_mode: "system".into(),
-                    accent_theme: "indigo".into(),
-                })
-            }
-            Err(e) => Err(e.to_string()),
-        }
-    }
 }
 
 pub struct Desktop {
@@ -134,22 +91,14 @@ pub fn preferences(state: State<'_, Mutex<Desktop>>) -> Result<Preferences, Stri
 
 #[tauri::command]
 pub fn save_preferences(
-    value: Preferences,
+    mut value: Preferences,
     state: State<'_, Mutex<Desktop>>,
 ) -> Result<(), String> {
-    if !["system", "light", "dark"].contains(&value.theme_mode.as_str())
-        || !["indigo", "emerald", "amber"].contains(&value.accent_theme.as_str())
-    {
-        return Err("Unknown appearance setting".into());
-    }
-    let path = Preferences::path()?;
-    let parent = path.parent().ok_or("Invalid preferences path")?;
-    std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-    let mut file = tempfile::NamedTempFile::new_in(parent).map_err(|e| e.to_string())?;
-    serde_json::to_writer_pretty(&mut file, &value).map_err(|e| e.to_string())?;
-    file.persist(&path).map_err(|e| e.to_string())?;
+    let mut state = state.lock().map_err(|e| e.to_string())?;
+    value.retain_installation_binding(&state.preferences);
+    value.save()?;
     orbit_i18n::install(value.language);
-    state.lock().map_err(|e| e.to_string())?.preferences = value;
+    state.preferences = value;
     Ok(())
 }
 

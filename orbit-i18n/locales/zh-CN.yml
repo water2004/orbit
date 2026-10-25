@@ -1,4 +1,20 @@
 _version: 1
+"Uninstall cleanup:": "卸载数据清理："
+"All caches only": "仅清除全部缓存"
+"Configuration and caches (keep instances)": "清除配置和缓存（保留实例）"
+"Everything, including instances and worlds": "全部清除，包括实例和存档"
+"The listed data will be permanently deleted. Review all paths before confirming.": "列出的数据将被永久删除，确认前请检查所有路径。"
+"Game instances (worlds, mods and all instance files):": "游戏实例（存档、模组和实例内全部文件）："
+"Whole managed Minecraft repositories (including residual files):": "整个受管 Minecraft 目录（包括残留文件）："
+"All game instances, shared installed Minecraft resources and Java runtimes will be kept.": "将保留所有游戏实例、共享的已安装 Minecraft 资源和 Java 运行时。"
+"Exact cleanup locations:": "精确清理路径："
+"Other users' data is not included. Continue?": "不包含其他用户的数据，是否继续？"
+"Permanently remove the listed data? Type yes to continue:": "将永久删除上列数据，输入 yes 继续："
+"Recovery restores staged paths only; permanently deleted files cannot be recovered.": "恢复仅能还原暂存路径；已永久删除的文件无法恢复。"
+"1. All caches only\n2. Configuration and caches (keep instances)\n3. Everything, including instances and worlds": "1. 仅清除全部缓存\n2. 清除配置和缓存（保留实例）\n3. 全部清除，包括实例和存档"
+"Cleanup level [1]:": "选择清理档位 [1]："
+"Recovery plan:": "恢复计划："
+"User data cleanup completed. Remove the installed programs using your package manager.": "用户数据已清理，请使用软件包管理器卸载程序。"
 Follow system: 跟随系统
 English: 英语
 Simplified Chinese: 简体中文

@@ -4,12 +4,48 @@ use std::path::{Path, PathBuf};
 use crate::instance_lifecycle::InstanceLease;
 use crate::{InstanceRegistry, LauncherError, ManifestFile, RegistryEntry, RuntimePaths};
 
+pub const INSTANCE_LEASE_DIRECTORY: &str = ".orbit-launcher-locks";
+
 #[derive(Debug, Serialize)]
 pub struct InstanceDeletionPlan {
     pub instance_id: uuid::Uuid,
     pub name: String,
     pub directory: PathBuf,
     pub includes_worlds_and_mods: bool,
+}
+
+/// Hold the same lifecycle exclusion used by complete instance removal while
+/// an external installation transaction stages the instance. This does not
+/// delete data or change the registry.
+pub struct InstanceDeletionLease {
+    _lease: InstanceLease,
+}
+
+impl InstanceDeletionLease {
+    /// Retire only this instance's ephemeral lock once its original path no
+    /// longer exists. Rollback can recreate a lease without losing user data.
+    pub fn release_after_staging(self) -> Result<(), LauncherError> {
+        self._lease.release_after_staging()
+    }
+}
+
+pub fn lease_instance_deletion(
+    paths: &RuntimePaths,
+    plan: &InstanceDeletionPlan,
+) -> Result<InstanceDeletionLease, LauncherError> {
+    let registry = InstanceRegistry::load(&paths.instances_file())?;
+    let entry = registry
+        .find_by_id(plan.instance_id)
+        .ok_or_else(|| LauncherError::InstanceNotFound(plan.instance_id.to_string()))?;
+    validate(&registry, entry, paths)?;
+    if plan.directory != entry.instance_directory() {
+        return Err(LauncherError::Transaction(
+            "instance directory changed after confirmation".into(),
+        ));
+    }
+    Ok(InstanceDeletionLease {
+        _lease: InstanceLease::acquire(&plan.directory, true)?,
+    })
 }
 
 pub fn plan_instance_deletion(
@@ -45,7 +81,7 @@ fn validate(
             "refusing to delete a redirected or non-canonical instance root".into(),
         ));
     }
-    if ManifestFile::open(root)?.inner.id != entry.id {
+    if ManifestFile::inspect(root)?.inner.id != entry.id {
         return Err(LauncherError::InstanceRegistryMismatch(
             "instance deletion manifest ID differs".into(),
         ));

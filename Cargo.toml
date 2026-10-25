@@ -14,6 +14,7 @@ members = [
     "orbit-loader-json",
     "orbit-launcher-format",
     "orbit-http",
+    "installer/actions",
     "curseforge-wrapper",
     "modrinth-wrapper",
 ]

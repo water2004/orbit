@@ -1,4 +1,20 @@
 _version: 1
+"Uninstall cleanup:": "Uninstall cleanup:"
+"All caches only": "All caches only"
+"Configuration and caches (keep instances)": "Configuration and caches (keep instances)"
+"Everything, including instances and worlds": "Everything, including instances and worlds"
+"The listed data will be permanently deleted. Review all paths before confirming.": "The listed data will be permanently deleted. Review all paths before confirming."
+"Game instances (worlds, mods and all instance files):": "Game instances (worlds, mods and all instance files):"
+"Whole managed Minecraft repositories (including residual files):": "Whole managed Minecraft repositories (including residual files):"
+"All game instances, shared installed Minecraft resources and Java runtimes will be kept.": "All game instances, shared installed Minecraft resources and Java runtimes will be kept."
+"Exact cleanup locations:": "Exact cleanup locations:"
+"Other users' data is not included. Continue?": "Other users' data is not included. Continue?"
+"Permanently remove the listed data? Type yes to continue:": "Permanently remove the listed data? Type yes to continue:"
+"Recovery restores staged paths only; permanently deleted files cannot be recovered.": "Recovery restores staged paths only; permanently deleted files cannot be recovered."
+"1. All caches only\n2. Configuration and caches (keep instances)\n3. Everything, including instances and worlds": "1. All caches only\n2. Configuration and caches (keep instances)\n3. Everything, including instances and worlds"
+"Cleanup level [1]:": "Cleanup level [1]:"
+"Recovery plan:": "Recovery plan:"
+"User data cleanup completed. Remove the installed programs using your package manager.": "User data cleanup completed. Remove the installed programs using your package manager."
 Follow system: Follow system
 English: English
 Simplified Chinese: Simplified Chinese
