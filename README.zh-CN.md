@@ -66,15 +66,15 @@ Debian/Ubuntu amd64 使用三个独立 deb，不提供 MSI 式的交互式功能
 
 ```bash
 # 无图形服务端：只安装 Launcher
-sudo apt install ./orbit-launcher_0.6.4-1_amd64.deb
+sudo apt install ./orbit-launcher_0.7.0-1_amd64.deb
 
 # 服务端还需要管理模组时再安装 Orbit
-sudo apt install ./orbit_0.6.4-1_amd64.deb
+sudo apt install ./orbit_0.7.0-1_amd64.deb
 
 # 桌面完整套件：GUI 精确依赖同版本的两个 CLI
-sudo apt install ./orbit_0.6.4-1_amd64.deb \
-  ./orbit-launcher_0.6.4-1_amd64.deb \
-  ./orbit-gui_0.6.4-1_amd64.deb
+sudo apt install ./orbit_0.7.0-1_amd64.deb \
+  ./orbit-launcher_0.7.0-1_amd64.deb \
+  ./orbit-gui_0.7.0-1_amd64.deb
 ```
 
 在无图形环境中安装 GUI 并不会阻止服务端工作，但会额外引入图形运行库，而且没有图形会话
@@ -355,11 +355,11 @@ orbit config list
 
 欢迎提交 Issue 报告 bug，或者发起 Pull Request 改进 Orbit！
 
-## GUI 重构分支
+## 桌面界面
 
-本分支已用基于 Modrinth App 的 Vue/Tauri 界面替换旧 GPUI 路径，围绕实例库、模组内容、
+Orbit 0.7.0 用基于 Modrinth App 的 Vue/Tauri 界面替换旧 GPUI 路径，围绕实例库、模组内容、
 账户和安装向导整理交互，底层继续使用原有 CLI 进程协议。Windows 需要 WebView2，
-Linux 使用 WebKitGTK 4.1；构建与边界见 [GUI 文档](docs/orbit-gui.md)。尚未作为新版本发布。
+Linux 使用 WebKitGTK 4.1；构建与边界见 [GUI 文档](docs/orbit-gui.md)。
 
 ## 📄 License
 

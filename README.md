@@ -41,16 +41,16 @@ server needs only Launcher, and can add Orbit when it also wants managed mods:
 
 ```bash
 # Headless Minecraft runtime management.
-sudo apt install ./orbit-launcher_0.6.4-1_amd64.deb
+sudo apt install ./orbit-launcher_0.7.0-1_amd64.deb
 
 # Optional mod package management on that server.
-sudo apt install ./orbit_0.6.4-1_amd64.deb
+sudo apt install ./orbit_0.7.0-1_amd64.deb
 
 # Desktop installation: apt resolves the GUI's exact-version CLI dependencies
 # when all three downloaded files are supplied together.
-sudo apt install ./orbit_0.6.4-1_amd64.deb \
-  ./orbit-launcher_0.6.4-1_amd64.deb \
-  ./orbit-gui_0.6.4-1_amd64.deb
+sudo apt install ./orbit_0.7.0-1_amd64.deb \
+  ./orbit-launcher_0.7.0-1_amd64.deb \
+  ./orbit-gui_0.7.0-1_amd64.deb
 ```
 
 Installing the GUI on a headless host is technically harmless, but it pulls graphical runtime
@@ -267,13 +267,13 @@ On Windows, `scripts/build-windows-msi.ps1` builds release binaries and the WiX 
 
 Issues and pull requests are welcome. Changes must preserve the crate boundaries, typed machine protocols, real Loader/JAR semantics, and ordered tests documented in [CLAUDE.md](CLAUDE.md).
 
-## GUI development branch
+## Desktop interface
 
 The Modrinth-based GUI replaces the former GPUI implementation. It keeps the same Orbit/Launcher
 process protocol and reorganizes workflows around the instance library, content management,
 accounts and a guided installation flow. Build instructions and system requirements are in
 [GUI documentation](docs/orbit-gui.md). Windows requires WebView2; Linux uses WebKitGTK 4.1.
-This branch has not been published as a new release.
+Available starting with Orbit 0.7.0.
 
 ## License
 
