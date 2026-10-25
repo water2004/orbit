@@ -177,7 +177,13 @@ pub(crate) fn build_solver_graph_with_package_roots(
         root_version.clone(),
         root_dependencies,
     );
-    provider.add_package_incompatibilities(root_package.clone(), root_version.clone(), Vec::new());
+    let package_constraints =
+        manifest_package_constraints(manifest, lockfile, candidates, loader, target, &provider);
+    provider.add_package_incompatibilities(
+        root_package.clone(),
+        root_version.clone(),
+        package_constraints,
+    );
     ensure_referenced_packages(&mut provider);
 
     Ok(SolverGraph {
@@ -872,6 +878,48 @@ fn register_proxy_candidate(
         Vec::new(),
     );
     dependencies.push((proxy_package, Ranges::singleton(proxy_version)));
+}
+
+/// Package presence is an objective; an admitted package's numeric/string
+/// policy is always a hard constraint. Attach it to the root so it remains in
+/// force even if a soft preference is abandoned or another mod requires the
+/// package. A positive forbidden term allows absence without allowing a bad
+/// version, using PubGrub's ordinary incompatibility model.
+fn manifest_package_constraints(
+    manifest: &OrbitManifest,
+    lockfile: &OrbitLockfile,
+    candidates: &HashMap<String, Vec<CandidateVersion>>,
+    loader: LoaderKind,
+    target: Environment,
+    provider: &OrbitDependencyProvider,
+) -> super::provider::PackageIncompatibilities {
+    manifest
+        .packages
+        .iter()
+        .filter(|(package, specification)| {
+            effective_root_environment(package, specification, lockfile, candidates)
+                .applies_to(target)
+        })
+        .filter_map(|(name, specification)| {
+            let package = logical_package(name);
+            let allowed = manifest_package_versions(provider, name, specification, loader, false);
+            let versions = provider.versions.get(&package)?;
+            if versions.iter().all(|version| allowed.contains(version)) {
+                return None;
+            }
+            Some(IncompatibilityConstraint {
+                terms: vec![IncompatibilityConstraintTerm::Positive(
+                    package,
+                    allowed.complement(),
+                )],
+                reason: format!(
+                    "{name} must satisfy configured numeric rule '{}' and string rule '{}'",
+                    specification.version_constraint(),
+                    specification.string_expression()
+                ),
+            })
+        })
+        .collect()
 }
 
 fn root_dependencies(

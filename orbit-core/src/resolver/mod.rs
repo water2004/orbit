@@ -1689,6 +1689,115 @@ fapi = { version = "*", remotes = [{ type = "file", path = "fapi.jar" }] }
     }
 
     #[tokio::test]
+    async fn soft_package_presence_never_relaxes_numeric_or_string_rules() {
+        for (loader, loader_version) in [
+            ("fabric", "0.16.0"),
+            ("quilt", "0.24.0"),
+            ("forge", "47.2.0"),
+            ("neoforge", "21.1.0"),
+        ] {
+            for (numeric, string, version) in [
+                ("<2", "all", "2"),
+                (
+                    "*",
+                    "all; intersect not contains(i\"beta\")",
+                    "3.33.3-beta.1",
+                ),
+                (
+                    "=999",
+                    "all; intersect not contains(i\"beta\")",
+                    "release-next-beta",
+                ),
+            ] {
+                let mut manifest = manifest();
+                manifest.project.modloader = loader.into();
+                manifest.project.modloader_version = loader_version.into();
+                manifest.packages["a"].version = numeric.into();
+                manifest.packages["a"].string = string.into();
+                let empty_lock = OrbitLockfile {
+                    meta: lockfile().meta,
+                    packages: Vec::new(),
+                };
+                let mut catalog = CandidateCatalog::default();
+                catalog
+                    .candidates
+                    .insert("a".into(), vec![candidate(version, Vec::new())]);
+                catalog
+                    .candidates
+                    .insert("b".into(), vec![candidate("1", Vec::new())]);
+                let mut selector: Option<ResolutionSelector> = Some(Box::new(|_, alternatives| {
+                    assert!(
+                        alternatives
+                            .iter()
+                            .all(|report| !report.selected_versions.contains_key("a")),
+                        "a forbidden candidate must never reach version selection"
+                    );
+                    Ok(0)
+                }));
+                let portfolio = resolve_package_preserving_portfolio_with_progress(
+                    &manifest,
+                    &empty_lock,
+                    &catalog,
+                    None,
+                    &mut selector,
+                )
+                .await
+                .unwrap();
+                assert_eq!(portfolio.alternatives.len(), 1);
+                let report = &portfolio.alternatives[0];
+                assert!(
+                    !report.selected_versions.contains_key("a"),
+                    "rule {numeric}, {string} was bypassed by {version}"
+                );
+                assert_eq!(report.selected_versions["b"], "1");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn soft_removal_cannot_reintroduce_a_forbidden_version_via_another_package() {
+        let mut manifest = manifest();
+        manifest.packages["a"].version = "<2".into();
+        let empty_lock = OrbitLockfile {
+            meta: lockfile().meta,
+            packages: Vec::new(),
+        };
+        let mut catalog = CandidateCatalog::default();
+        catalog.candidates.insert(
+            "a".into(),
+            vec![candidate("1", Vec::new()), candidate("2", Vec::new())],
+        );
+        catalog.candidates.insert(
+            "b".into(),
+            vec![candidate("1", vec![ModDependency::required("a", "[2]")])],
+        );
+        let mut selector: Option<ResolutionSelector> = Some(Box::new(|_, alternatives| {
+            // Exercise the erroneous remove-a branch if it is offered. With
+            // hard package rules there is no such branch: only b can be removed.
+            Ok(alternatives
+                .iter()
+                .position(|report| {
+                    report.changes.iter().any(|change| {
+                        change.package == "a" && change.kind == PackageChangeKind::Remove
+                    })
+                })
+                .unwrap_or(0))
+        }));
+        let portfolio = resolve_package_preserving_portfolio_with_progress(
+            &manifest,
+            &empty_lock,
+            &catalog,
+            None,
+            &mut selector,
+        )
+        .await
+        .unwrap();
+        let report = &portfolio.alternatives[0];
+        assert_eq!(report.selected_versions["a"], "1");
+        assert!(!report.selected_versions.contains_key("b"));
+    }
+
+    #[tokio::test]
     async fn package_preserving_portfolio_drops_only_unavailable_manifest_packages() {
         let mut catalog = CandidateCatalog::default();
         catalog

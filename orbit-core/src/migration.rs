@@ -923,6 +923,10 @@ mod tests {
     }
 
     fn write_fabric_package(path: &Path, mod_id: &str, minecraft: &str) {
+        write_versioned_fabric_package(path, mod_id, "1", minecraft);
+    }
+
+    fn write_versioned_fabric_package(path: &Path, mod_id: &str, version: &str, minecraft: &str) {
         let file = std::fs::File::create(path).unwrap();
         let mut archive = zip::ZipWriter::new(file);
         archive
@@ -930,7 +934,7 @@ mod tests {
             .unwrap();
         write!(
             archive,
-            r#"{{"schemaVersion":1,"id":"{mod_id}","version":"1","name":"{mod_id}","depends":{{"minecraft":"{minecraft}"}}}}"#
+            r#"{{"schemaVersion":1,"id":"{mod_id}","version":"{version}","name":"{mod_id}","depends":{{"minecraft":"{minecraft}"}}}}"#
         )
         .unwrap();
         archive.finish().unwrap();
@@ -1082,6 +1086,99 @@ mod tests {
                 .iter()
                 .any(|remote| matches!(remote, crate::manifest::PackageRemote::File { .. }))
         );
+    }
+
+    #[tokio::test]
+    async fn soft_migration_package_rules_remain_valid_through_export_and_install() {
+        for (numeric, string, version) in [
+            ("<2", "all", "2"),
+            (
+                "*",
+                "all; intersect not contains(i\"beta\")",
+                "3.33.3-beta.1",
+            ),
+        ] {
+            let root = tempfile::tempdir().unwrap();
+            let source = root.path().join("source");
+            let target = root.path().join("target");
+            std::fs::create_dir_all(source.join("mods")).unwrap();
+            write_empty_orbit_instance(&source, "1", "1");
+            write_fabric_package(&source.join("mods/kept.jar"), "kept", ">=1");
+            write_versioned_fabric_package(
+                &source.join("mods/filtered.jar"),
+                "filtered",
+                version,
+                ">=1",
+            );
+            crate::sync_instance(&source, &[], false).await.unwrap();
+            // A user policy can exclude a local JAR. Migration must either
+            // satisfy that policy or omit the package, never soften its rule.
+            let mut manifest = ManifestFile::open(&source).unwrap();
+            manifest.inner.packages["filtered"].version = numeric.into();
+            manifest.inner.packages["filtered"].string = string.into();
+            manifest.save().unwrap();
+            let before =
+                ["orbit.toml", "orbit.lock"].map(|name| std::fs::read(source.join(name)).unwrap());
+            crate::platform_detection::test_support::write_platform(&target, "2", "fabric", "1");
+            let cache = crate::jar_cache::JarCache::open(root.path().join("cache")).unwrap();
+            let repository = version_repository(root.path());
+            let plan = plan_migration(
+                &source,
+                &target,
+                &[],
+                crate::version_repository::CandidateStorage::new(&cache, &repository),
+                MigrationOptions::default(),
+                MigrationInteraction {
+                    confirm_soft_fallback: Some(Box::new(|prompt| {
+                        assert!(prompt.strict_failure.contains("filtered"));
+                        Ok(())
+                    })),
+                    select_resolution: Some(Box::new(|_, alternatives| {
+                        assert!(
+                            alternatives
+                                .iter()
+                                .all(|report| !report.selected_versions.contains_key("filtered"))
+                        );
+                        Ok(0)
+                    })),
+                    ..MigrationInteraction::default()
+                },
+            )
+            .await
+            .unwrap();
+            assert!(plan.target_lockfile().find("filtered").is_none());
+            assert!(!plan.target_manifest().packages.contains_key("filtered"));
+            assert!(
+                plan.changes
+                    .iter()
+                    .any(|change| change.package == "filtered"
+                        && change.kind == PackageChangeKind::Remove)
+            );
+            export_migration(&plan, false).unwrap();
+            let exported =
+                ["orbit.toml", "orbit.lock"].map(|name| std::fs::read(target.join(name)).unwrap());
+            let installed = crate::installer::install_instance(
+                &target,
+                &[],
+                &cache,
+                crate::installer::InstanceInstallOptions::default(),
+                None,
+            )
+            .await
+            .unwrap();
+            assert_eq!(installed.installed.len(), 1);
+            assert!(target.join("mods/kept.jar").is_file());
+            assert!(!target.join("mods/filtered.jar").exists());
+            assert_eq!(
+                ["orbit.toml", "orbit.lock"].map(|name| std::fs::read(target.join(name)).unwrap()),
+                exported,
+                "install must materialize the selected lock without changing the plan"
+            );
+            assert_eq!(
+                ["orbit.toml", "orbit.lock"].map(|name| std::fs::read(source.join(name)).unwrap()),
+                before
+            );
+        }
     }
 
     #[tokio::test]

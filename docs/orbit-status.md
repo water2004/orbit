@@ -74,7 +74,7 @@ GUI 文件选择已统一异步处理：修正整合包导入/导出按钮同步
 | PubGrub fork 远端 | ✅ | 功能分支已发布，Orbit 固定到完整 commit SHA |
 | 多解选择 | ✅ | fork 原生枚举完整变更极小或版本极大 Pareto front；唯一解自动选择，多解经同一进程的终端或 schema 2 机器交互明确选择；`--yes` 不代选 |
 | 本地重复包 | ✅ | init/sync 保留全部事实并要求 fix；fix 确认后删除未选顶层实现并同步清理 lock/TOML/source |
-| 版本迁移 | ✅ | 先冻结源包再创建目标；check/export 共享严格优先规划，GUI 仅在一次 export 中完成选择与最终确认，失败的物化可复用已提交 lock 重试；组合世界投影排除 Orbit payload，避免重叠恢复；严格无解后经明确许可原生枚举 Pareto 极小删包 front，目标 install 物化 JAR |
+| 版本迁移 | ✅ | 先冻结源包再创建目标；check/export 共享严格优先规划，GUI 仅在一次 export 中完成选择与最终确认，失败的物化可复用已提交 lock 重试；组合世界投影排除 Orbit payload，避免重叠恢复；严格无解后经明确许可原生枚举 Pareto 极小删包 front，数字/字符串规则由公共图硬约束且不能被软偏好或传递依赖绕过，目标 install 物化 JAR |
 | 远端身份边界 | ✅ | provider 只给下载 locator；一个 locator 的多种真实 mod_id 按 JAR 身份分区并选择 |
 | Provider 分层 | ✅ | Modrinth / CurseForge HTTP 与 DTO 各在独立 wrapper，core 只做领域适配 |
 | Provider 网络配置 | ✅ | metadata 与 artifact 客户端统一消费 proxy/timeout/retry；全部 provider 共享下载并发上限；Modrinth token 与 CurseForge Key 仅停留在运行时客户端 |
