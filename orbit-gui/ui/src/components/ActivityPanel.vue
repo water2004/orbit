@@ -69,7 +69,14 @@ const deletion = computed(
         class="spin"
         :size="16"
       /><Activity v-else :size="16" /><strong>{{ current.label }}</strong
-      ><span class="truncate">{{ current.message }}</span>
+      ><span class="truncate">{{
+        current.message ||
+        (current.state === "succeeded"
+          ? t("Completed", "已完成")
+          : current.state === "cancelled"
+            ? t("Cancelled", "已取消")
+            : "")
+      }}</span>
     </button>
     <Button
       v-if="['running', 'waiting'].includes(current.state)"
@@ -135,7 +142,8 @@ const deletion = computed(
     :key="pending.interaction.interaction_id"
     :title="pending.interaction.prompt.split('\n')[0]"
     wide
-    :closable="false"
+    :closable="pending.interaction.allow_cancel && !pending.answering"
+    @close="act(() => answer(pending!, null))"
   >
     <div class="stack">
       <p
@@ -217,9 +225,18 @@ const deletion = computed(
       </template>
     </div>
     <template #footer>
+      <Button
+        v-if="pending.interaction.allow_cancel"
+        :disabled="pending.answering"
+        @click="act(() => answer(pending!, null))"
+        >{{ t("Cancel operation", "取消操作") }}</Button
+      >
+      <span class="grow"></span>
       <template v-if="confirmation"
         ><Button
-          v-for="choice in pending.interaction.choices"
+          v-for="choice in pending.interaction.choices.filter(
+            (c) => !pending?.interaction?.allow_cancel || c.id !== 'cancel',
+          )"
           :key="choice.id"
           :disabled="pending.answering"
           :type="
@@ -230,12 +247,6 @@ const deletion = computed(
           @click="act(() => answer(pending!, choice.id))"
           >{{ choice.label }}</Button
         ></template
-      >
-      <Button
-        v-else-if="pending.interaction.allow_cancel"
-        :disabled="pending.answering"
-        @click="act(() => answer(pending!, null))"
-        >{{ t("Cancel operation", "取消操作") }}</Button
       >
     </template>
   </Modal>

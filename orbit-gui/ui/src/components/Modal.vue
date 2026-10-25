@@ -3,11 +3,14 @@ import { onMounted, onUnmounted, ref, useId } from "vue";
 import { X } from "lucide-vue-next";
 import Button from "./upstream/Button.vue";
 import { t } from "../i18n";
-const props = defineProps<{
-  title: string;
-  wide?: boolean;
-  closable?: boolean;
-}>();
+const props = withDefaults(
+  defineProps<{
+    title: string;
+    wide?: boolean;
+    closable?: boolean;
+  }>(),
+  { closable: true },
+);
 const emit = defineEmits<{ close: [] }>();
 const dialog = ref<HTMLDialogElement>();
 const heading = ref<HTMLElement>();
