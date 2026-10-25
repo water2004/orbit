@@ -15,6 +15,12 @@
 配置 Key 后，可将 `curseforge` 加入 `[resolver].catalogs`。该数组只控制无限定
 搜索/添加启用哪些目录，不是包候选的回退优先级。
 
+用户入口为 `orbit config --scope instance set resolver.catalogs modrinth,curseforge`，
+或 GUI“发现模组”的搜索来源复选框。配置 key 不隐式开启所有实例的 CurseForge。
+GUI 从同一 `config --scope instance list` 获取可选来源和凭据状态，不读取 TOML。
+关闭某个搜索来源不删除包上的该平台远端；包版本发现照常消费全部准确远端，
+`search` 则严格使用实例选中的 catalogs（或显式 `--platform`），不会因已有远端而自动启用。
+
 ## 2. 模块边界
 
 ```text

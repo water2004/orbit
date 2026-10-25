@@ -21,11 +21,11 @@ pub use audit::audit_report;
 pub(crate) use progress_ndjson::write_machine_line;
 pub use progress_ndjson::{ndjson_audit_reporter, ndjson_progress_reporter};
 pub use view::{
-    CacheOutput, ConfigEntryOutput, ConfigEntryView, ConfigListOutput, ConfigPathOutput,
-    ConfigResolvedPaths, ConfigValueView, DiagnosticView, ErrorJson, ExportOutput, ImportOutput,
-    InitOutput, InstanceDefaultOutput, InstanceRegisterOutput, InstanceRemoveOutput,
-    InstancesOutput, JsonEnvelope, MigrationExportView, MigrationOutput, MigrationSummary,
-    OutdatedOutput, OutdatedSummary, OwnershipOutput, PackageActivationOutput,
+    CacheOutput, ConfigChoiceView, ConfigEntryOutput, ConfigEntryView, ConfigListOutput,
+    ConfigPathOutput, ConfigResolvedPaths, ConfigValueView, DiagnosticView, ErrorJson,
+    ExportOutput, ImportOutput, InitOutput, InstanceDefaultOutput, InstanceRegisterOutput,
+    InstanceRemoveOutput, InstancesOutput, JsonEnvelope, MigrationExportView, MigrationOutput,
+    MigrationSummary, OutdatedOutput, OutdatedSummary, OwnershipOutput, PackageActivationOutput,
     PackageConstraintOutput, PackageEnvironmentOutput, PackageVersionCandidateView,
     PackageVersionsOutput, PurgeOutput, RemoveOutput, ResetOutput, SearchFilters, SearchOutput,
     SearchResultView, owned_artifact_view, owned_path_view,
@@ -142,6 +142,7 @@ pub fn config_entries_table(entries: &[ConfigEntryView]) -> String {
         let value = match &entry.value {
             Some(ConfigValueView::Text(value)) => value.clone(),
             Some(ConfigValueView::Integer(value)) => value.to_string(),
+            Some(ConfigValueView::TextList(value)) => value.join(", "),
             None => ABSENT.to_string(),
         };
         table.add_row([

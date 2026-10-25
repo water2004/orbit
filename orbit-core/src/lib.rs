@@ -12,6 +12,7 @@ mod detection;
 pub mod error;
 pub mod identification;
 pub mod init;
+pub mod instance_config;
 pub mod jar;
 pub mod lockfile;
 pub mod manifest;

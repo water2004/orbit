@@ -4,6 +4,11 @@
 
 ## 1. 当前结论
 
+实例搜索来源已提供用户入口：`orbit config --scope instance` 管理 `resolver.catalogs`，
+GUI“发现模组”可选择 Modrinth/CurseForge 并保存。它不是 GUI 直接改 TOML，也不是新的
+独立 catalog 命令；凭据可用性、至少一个来源、去重、dry-run 和持久化都通过现有 CLI/core。
+`search` 不再被已有包远端悄悄扩大查询平台。全局配置命令及现有 schema 不变。
+
 网络重试已覆盖响应体完成，不再只保护响应头。provider 查询、工件与 mrpack 单文件传输、
 Launcher 公共元数据走同一有限预算与退避策略；无效 JSON/哈希/本地 I/O 不重试。Microsoft
 proof 交换及 GET 由认证模块显式接入有限重试，OAuth 设备码/token 请求不自动重放。

@@ -16,6 +16,10 @@ Modrinth 用户输入的 slug 在进入候选发现前解析为官方 project ID
 
 ## 1. 模块边界
 
+`config --scope instance` 的搜索来源编辑属于发现配置，不进入求解器；只修改
+`[resolver].catalogs`，不求解、不改 lock、不移除包远端。search 严格查询显式目录，
+对已有包进行版本候选发现仍消费全部远端，因此关闭搜索来源不会改变已有包的解空间。
+
 候选获取的网络重试只在 wrapper/下载层完成；响应体中断可重试，候选 JSON 无效或求解无解
 不能重试为“另一个网络请求”。一次完整候选输入仍只进入原有离线求解路径。
 Launcher 的 Microsoft proof 交换重试由认证协议层单独确认安全性，既不进入 resolver，也不

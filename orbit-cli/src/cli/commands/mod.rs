@@ -1025,13 +1025,7 @@ pub fn create_instance_providers(
     let mut catalogs = if let Some(platform) = platform {
         vec![normalize_platform(platform).to_string()]
     } else {
-        match orbit_core::ManifestFile::open(instance_dir) {
-            Ok(manifest) => manifest.inner.resolver.catalogs,
-            Err(orbit_core::OrbitError::ManifestNotFound) => vec!["modrinth".to_string()],
-            Err(error) => {
-                return Err(error).with_context(|| tr!("Failed to read orbit.toml").into_owned());
-            }
-        }
+        orbit_core::instance_config::discovery_catalogs(instance_dir)?
     };
     if platform.is_none()
         && let Ok(lockfile) = orbit_core::Lockfile::open(instance_dir)

@@ -594,11 +594,19 @@ pub struct ConfigPathOutput {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct ConfigChoiceView {
+    pub id: &'static str,
+    pub name: &'static str,
+    pub available: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct ConfigListOutput {
     pub subcommand: String,
     pub config_path: String,
     pub entries: Vec<ConfigEntryView>,
-    pub resolved_paths: ConfigResolvedPaths,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resolved_paths: Option<ConfigResolvedPaths>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -620,7 +628,9 @@ pub struct ConfigEntryView {
     pub key: String,
     pub value_type: String,
     pub sensitive: bool,
-    pub allowed_values: &'static [&'static str],
+    pub allowed_values: Vec<&'static str>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub choices: Vec<ConfigChoiceView>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub value: Option<ConfigValueView>,
 }
@@ -630,6 +640,7 @@ pub struct ConfigEntryView {
 pub enum ConfigValueView {
     Text(String),
     Integer(u64),
+    TextList(Vec<String>),
 }
 
 // ---------------------------------------------------------------------------

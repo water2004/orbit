@@ -105,6 +105,11 @@ benchmark = { packages = ["sodium", "reeses_sodium_options"] }
 `catalogs` 不是远端优先级。一个包配置的全部 `remotes` 都进入同一次候选发现，并按内容
 哈希去重；不会在首个 provider 返回结果后停止。CurseForge provider 必须配置 API Key。
 
+不需要手工编辑此数组：`orbit config --scope instance get/set/unset resolver.catalogs`
+提供同一强类型入口，`set` 值为逗号分隔的目录名称，例如 `modrinth,curseforge`。
+GUI“发现模组 → 搜索来源”调用该 CLI；至少一个目录、凭据检查、去重和原子持久化
+都在 core 中执行。仅改变发现目录，不重写包远端、版本规则或 lock。
+
 ### 2.4 `[packages]`
 
 ```toml

@@ -32,6 +32,7 @@ import type { SearchResult, Package } from "../types";
 import Button from "../components/upstream/Button.vue";
 import Avatar from "../components/Avatar.vue";
 import PackageManager from "../components/PackageManager.vue";
+import CatalogSettings from "../components/CatalogSettings.vue";
 const route = useRoute(),
   router = useRouter();
 const targetId = computed(() =>
@@ -44,6 +45,14 @@ const state = computed(() =>
   discoverySession(targetId.value || "__no_instance__"),
 );
 const selecting = ref(false);
+const savingCatalogs = ref(new Set<string>());
+const savingCurrentCatalogs = computed(() =>
+  savingCatalogs.value.has(targetId.value),
+);
+function catalogBusy(id: string, busy: boolean) {
+  if (busy) savingCatalogs.value.add(id);
+  else savingCatalogs.value.delete(id);
+}
 const ready = computed(
   () =>
     !!instance.value &&
@@ -149,7 +158,7 @@ const results = computed(() =>
 async function search() {
   const session = state.value,
     target = instance.value;
-  if (!target || selecting.value) return;
+  if (!target || selecting.value || savingCatalogs.value.has(target.id)) return;
   const runtime = workspace.detail?.desired;
   if (!runtime) {
     session.error = t(
@@ -185,6 +194,16 @@ async function search() {
   } finally {
     if (revision === session.revision) session.loading = false;
   }
+}
+async function catalogsChanged() {
+  const session = state.value;
+  session.revision++;
+  session.results = [];
+  session.searched = false;
+  session.loading = false;
+  // The settings command has finished; refresh the same query using CLI policy.
+  savingCatalogs.value.delete(targetId.value);
+  if (session.query.trim()) await search();
 }
 async function install(project: SearchResult) {
   const target = instance.value;
@@ -268,10 +287,17 @@ async function manage(project: SearchResult) {
           native-type="submit"
           type="colored"
           :loading="state.loading"
-          :disabled="!state.query.trim() || selecting"
+          :disabled="!state.query.trim() || selecting || savingCurrentCatalogs"
           >{{ t("Search", "搜索") }}</Button
         >
       </form>
+      <CatalogSettings
+        :key="instance.id"
+        :instance="instance"
+        :ready="ready"
+        @busy="catalogBusy"
+        @changed="catalogsChanged"
+      />
       <div class="discover-options">
         <label
           ><input v-model="state.recommended" type="checkbox" />{{

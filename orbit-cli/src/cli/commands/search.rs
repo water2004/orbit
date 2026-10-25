@@ -19,8 +19,13 @@ pub async fn handle(
         None => orbit_core::OrbitManifest::mc_version_from_dir(&instance_dir),
     };
 
-    let providers =
-        super::create_instance_providers(&instance_dir, platform.as_deref(), &ctx.runtime)?;
+    // Discovery catalogs are user-selected. Existing package remotes must not
+    // silently re-enable a disabled search source.
+    let catalogs = match platform.as_deref() {
+        Some(platform) => vec![super::normalize_platform(platform).to_string()],
+        None => orbit_core::instance_config::discovery_catalogs(&instance_dir)?,
+    };
+    let providers = orbit_core::providers::create_providers(&catalogs, ctx.runtime.config())?;
 
     if ctx.output.format == OutputFormat::Text {
         ctx.print_information_line(format_args!(

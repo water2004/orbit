@@ -28,6 +28,7 @@ import {
   selectInstance,
 } from "../src/services/workspace";
 import DropdownSelect from "../src/components/upstream/DropdownSelect.vue";
+import CatalogSettings from "../src/components/CatalogSettings.vue";
 import { discoverySession } from "../src/services/discovery";
 import type { Detail, Instance, SearchResult } from "../src/types";
 const instance = {
@@ -78,7 +79,10 @@ async function page(path: string) {
   await router.push(path);
   await router.isReady();
   const wrapper = mount(Browse, {
-    global: { plugins: [router], stubs: { Teleport: true } },
+    global: {
+      plugins: [router],
+      stubs: { Teleport: true, CatalogSettings: true },
+    },
   });
   return { wrapper, router };
 }
@@ -160,6 +164,25 @@ it("search always passes the exact instance runtime axes", async () => {
   vi.mocked(orbit).mockResolvedValue({ results: [project] });
   const { wrapper } = await page(`/browse?instance=${instance.id}`);
   await wrapper.find(".search-bar").trigger("submit");
+  await flushPromises();
+  expect(orbit).toHaveBeenCalledWith(
+    ["search", "sodium", "--mc-version", "26.2", "--modloader", "fabric"],
+    expect.any(String),
+    instance,
+  );
+  wrapper.unmount();
+});
+it("refreshes the current query after CLI source settings are saved", async () => {
+  vi.mocked(orbit).mockResolvedValue({ results: [project] });
+  const { wrapper } = await page(`/browse?instance=${instance.id}`);
+  const settings = wrapper.findComponent(CatalogSettings);
+  settings.vm.$emit("busy", instance.id, true);
+  await flushPromises();
+  expect(
+    wrapper.find('.search-bar button[type="submit"]').attributes("disabled"),
+  ).toBeDefined();
+  settings.vm.$emit("changed");
+  settings.vm.$emit("busy", instance.id, false);
   await flushPromises();
   expect(orbit).toHaveBeenCalledWith(
     ["search", "sodium", "--mc-version", "26.2", "--modloader", "fabric"],

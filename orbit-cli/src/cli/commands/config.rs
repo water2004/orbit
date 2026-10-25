@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 
 use crate::cli::{
-    ConfigCommands,
+    ConfigCommands, ConfigScope,
     commands::CliContext,
     output::{
         ConfigEntryOutput, ConfigEntryView, ConfigListOutput, ConfigPathOutput,
@@ -11,7 +11,10 @@ use crate::cli::{
     },
 };
 
-pub async fn handle(command: ConfigCommands, ctx: &CliContext) -> Result<()> {
+pub async fn handle(scope: ConfigScope, command: ConfigCommands, ctx: &CliContext) -> Result<()> {
+    if scope == ConfigScope::Instance {
+        return handle_instance(command, ctx);
+    }
     let path = ctx.runtime.paths().config_file();
     let display_path = display_path(path);
 
@@ -45,7 +48,7 @@ pub async fn handle(command: ConfigCommands, ctx: &CliContext) -> Result<()> {
                         subcommand: "list".to_string(),
                         config_path: display_path.to_string_lossy().into_owned(),
                         entries,
-                        resolved_paths: ConfigResolvedPaths {
+                        resolved_paths: Some(ConfigResolvedPaths {
                             cache_directory: ctx
                                 .runtime
                                 .paths()
@@ -58,7 +61,7 @@ pub async fn handle(command: ConfigCommands, ctx: &CliContext) -> Result<()> {
                                 .repository_dir()
                                 .to_string_lossy()
                                 .into_owned(),
-                        },
+                        }),
                     },
                 ),
             }
@@ -130,6 +133,85 @@ pub async fn handle(command: ConfigCommands, ctx: &CliContext) -> Result<()> {
     Ok(())
 }
 
+fn handle_instance(command: ConfigCommands, ctx: &CliContext) -> Result<()> {
+    use orbit_core::instance_config::{InstanceConfigKey, list_catalogs};
+    let instance = ctx.instance_dir()?;
+    let path = display_path(&instance.join("orbit.toml"));
+    match command {
+        ConfigCommands::Path => match ctx.output.format {
+            OutputFormat::Text => ctx.print_result_line(format_args!("{}", path.display())),
+            OutputFormat::Json => ctx.print_json(
+                "config",
+                &ConfigPathOutput {
+                    subcommand: "path".into(),
+                    config_path: path.to_string_lossy().into_owned(),
+                },
+            ),
+        },
+        ConfigCommands::List => {
+            let entries = vec![catalog_entry(list_catalogs(
+                &instance,
+                ctx.runtime.config(),
+            )?)];
+            match ctx.output.format {
+                OutputFormat::Text => ctx.print_result_line(format_args!(
+                    "{}",
+                    crate::cli::output::config_entries_table(&entries)
+                )),
+                OutputFormat::Json => ctx.print_json(
+                    "config",
+                    &ConfigListOutput {
+                        subcommand: "list".into(),
+                        config_path: path.to_string_lossy().into_owned(),
+                        entries,
+                        resolved_paths: None,
+                    },
+                ),
+            }
+        }
+        ConfigCommands::Get { key } => {
+            InstanceConfigKey::parse(&key)?;
+            render_entry(
+                "get",
+                path,
+                false,
+                catalog_entry(list_catalogs(&instance, ctx.runtime.config())?),
+                ctx,
+            );
+        }
+        ConfigCommands::Set { key, value } => {
+            let key = InstanceConfigKey::parse(&key)?;
+            let report = key.set(&instance, Some(&value), ctx.runtime.config(), ctx.dry_run)?;
+            render_entry("set", path, ctx.dry_run, catalog_entry(report), ctx);
+        }
+        ConfigCommands::Unset { key } => {
+            let key = InstanceConfigKey::parse(&key)?;
+            let report = key.set(&instance, None, ctx.runtime.config(), ctx.dry_run)?;
+            render_entry("unset", path, ctx.dry_run, catalog_entry(report), ctx);
+        }
+    }
+    Ok(())
+}
+
+fn catalog_entry(report: orbit_core::instance_config::CatalogSettings) -> ConfigEntryView {
+    ConfigEntryView {
+        key: "resolver.catalogs".into(),
+        value_type: "string-list".into(),
+        sensitive: false,
+        allowed_values: report.options.iter().map(|option| option.id).collect(),
+        choices: report
+            .options
+            .into_iter()
+            .map(|option| crate::cli::output::ConfigChoiceView {
+                id: option.id,
+                name: option.name,
+                available: option.available,
+            })
+            .collect(),
+        value: Some(ConfigValueView::TextList(report.catalogs)),
+    }
+}
+
 fn display_path(path: &Path) -> PathBuf {
     std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf())
 }
@@ -147,7 +229,8 @@ fn entry_view(key: orbit_core::ConfigKey, config: &orbit_core::GlobalConfig) -> 
         key: key.as_str().to_string(),
         value_type: key.value_type().to_string(),
         sensitive: key.is_sensitive(),
-        allowed_values: key.allowed_values(),
+        allowed_values: key.allowed_values().to_vec(),
+        choices: Vec::new(),
         value,
     }
 }
@@ -165,6 +248,7 @@ fn render_entry(
             let value = match &entry.value {
                 Some(ConfigValueView::Text(value)) => value.clone(),
                 Some(ConfigValueView::Integer(value)) => value.to_string(),
+                Some(ConfigValueView::TextList(value)) => value.join(", "),
                 None => "—".to_string(),
             };
             ctx.print_result_line(format_args!("{prefix}{} = {value}", entry.key));
@@ -205,5 +289,34 @@ mod tests {
         assert_eq!(view.allowed_values, ["modern", "plain", "off"]);
         let json = serde_json::to_value(view).unwrap();
         assert_eq!(json["value"], "modern");
+    }
+
+    #[test]
+    fn instance_catalog_definition_exposes_typed_values_and_credential_status() {
+        let view = catalog_entry(orbit_core::instance_config::CatalogSettings {
+            catalogs: vec!["modrinth".into()],
+            options: vec![
+                orbit_core::instance_config::CatalogOption {
+                    id: "modrinth",
+                    name: "Modrinth",
+                    available: true,
+                },
+                orbit_core::instance_config::CatalogOption {
+                    id: "curseforge",
+                    name: "CurseForge",
+                    available: false,
+                },
+            ],
+        });
+        let json = serde_json::to_value(&view).unwrap();
+        assert_eq!(json["value"], serde_json::json!(["modrinth"]));
+        assert_eq!(json["choices"][1]["available"], false);
+        assert_eq!(
+            json["allowed_values"],
+            serde_json::json!(["modrinth", "curseforge"])
+        );
+        let text = crate::cli::output::config_entries_table(&[view]);
+        assert!(text.contains("resolver.catalogs"));
+        assert!(text.contains("modrinth"));
     }
 }

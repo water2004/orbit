@@ -7,6 +7,12 @@ Launcher 外部实例导入集中于 `external_instance/`，来源适配后复�
 
 ## 1. workspace
 
+实例设置集中在 `orbit-core::instance_config`，与全局 `config` 类型分开。CLI 复用
+`orbit config --scope global|instance path/list/get/set/unset`；默认仍为全局，不新增平行的
+catalog 管理命令。实例的来源集合解析、凭据要求及原子保存由 core 处理，写操作受现有
+workspace mutation lock 保护。GUI 只渲染 CLI 返回的数组/选项与凭据状态并提交同一字符串参数。
+发现页的来源设置按准确实例保存；已有包远端不参与扩大 `search` 的来源范围。
+
 可安全重放的网络读取统一使用 `orbit-http`，重试覆盖响应体完成，状态/发送/读取共享一次
 有限预算。HTTP 传输与 JSON/领域校验分开，GUI 不重放事务；具体规则见 [网络重试](orbit-network.md)。
 Microsoft 认证的重放安全性由认证模块按步骤决定：proof 交换与 GET 可以有限重试，

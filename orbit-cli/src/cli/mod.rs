@@ -299,8 +299,11 @@ pub enum Commands {
         command: CacheCommands,
     },
 
-    /// Inspect or change global configuration.
+    /// Inspect or change global or instance configuration.
     Config {
+        /// Configuration scope: global settings or this instance's orbit.toml.
+        #[arg(long, value_enum, default_value = "global", global = true)]
+        scope: ConfigScope,
         #[command(subcommand)]
         command: ConfigCommands,
     },
@@ -330,9 +333,15 @@ pub enum CacheCommands {
     Clean,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum ConfigScope {
+    Global,
+    Instance,
+}
+
 #[derive(Subcommand)]
 pub enum ConfigCommands {
-    /// Show the exact global configuration file path in use.
+    /// Show the exact configuration file path for this scope.
     Path,
     /// List file-level values for every supported field.
     List,
@@ -519,7 +528,7 @@ impl CommandHandler for Commands {
                 limit,
             } => handle_audit(min_risk, fail_on_risk, mod_filter, report, limit, ctx).await,
             Commands::Cache { command } => command.execute(ctx).await,
-            Commands::Config { command } => handle_config(command, ctx).await,
+            Commands::Config { scope, command } => handle_config(scope, command, ctx).await,
             Commands::Remote { command } => handle_remote(command, ctx).await,
         }
     }
@@ -583,6 +592,10 @@ impl Commands {
                 }
                 | Self::Remote {
                     command: RemoteCommands::Add { .. } | RemoteCommands::Remove { .. }
+                }
+                | Self::Config {
+                    scope: ConfigScope::Instance,
+                    command: ConfigCommands::Set { .. } | ConfigCommands::Unset { .. }
                 }
         )
     }
@@ -677,6 +690,33 @@ mod tests {
     #[test]
     fn clap_schema_has_no_global_subcommand_argument_collisions() {
         Cli::command().debug_assert();
+    }
+
+    #[test]
+    fn instance_config_read_and_write_have_distinct_mutation_semantics() {
+        let read = Cli::try_parse_from(["orbit", "config", "--scope", "instance", "list"]).unwrap();
+        assert!(!read.command.mutates_instance());
+        let write = Cli::try_parse_from([
+            "orbit",
+            "config",
+            "--scope",
+            "instance",
+            "set",
+            "resolver.catalogs",
+            "modrinth,curseforge",
+        ])
+        .unwrap();
+        assert!(write.command.mutates_instance());
+        assert_eq!(write.command.command_name(), "config");
+        let Commands::Config {
+            scope: super::ConfigScope::Instance,
+            command: ConfigCommands::Set { key, value },
+        } = write.command
+        else {
+            panic!("instance config set not parsed");
+        };
+        assert_eq!(key, "resolver.catalogs");
+        assert_eq!(value, "modrinth,curseforge");
     }
 
     #[test]
@@ -903,6 +943,7 @@ mod tests {
             Cli::try_parse_from(["orbit", "config", "set", "cache.capacity-mib", "2048"]).unwrap();
         let Commands::Config {
             command: ConfigCommands::Set { key, value },
+            scope: super::ConfigScope::Global,
         } = cli.command
         else {
             panic!("config set command was not parsed");

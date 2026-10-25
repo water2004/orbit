@@ -135,6 +135,10 @@ orbit config list
 orbit config get <key>
 orbit config set <key> <value>
 orbit config unset <key>
+orbit config --scope instance list
+orbit config --scope instance get resolver.catalogs
+orbit config --scope instance set resolver.catalogs modrinth,curseforge
+orbit config --scope instance unset resolver.catalogs
 ```
 
 配置键是固定、强类型的公开接口，不接受任意 TOML path。公开键使用连字符，例如
@@ -148,6 +152,14 @@ orbit config unset <key>
 这里展示的是持久化层，不叠加环境变量。正常业务命令仍遵守“环境变量 > 文件 >
 schema 默认值”的有效配置优先级。完整键表、取值约束和路径规则见
 [orbit-global-config.md](orbit-global-config.md)。
+
+`--scope` 默认 `global`，保持原有全局配置行为。`instance` 作用域读写所选实例的
+`orbit.toml`，目前公开键是 `resolver.catalogs`；使用逗号分隔的 `modrinth`、`curseforge`，
+至少保留一个，重复项去重，CurseForge 必须已有有效配置来源中的 API Key（不在保存时联网验证）。
+`unset` 恢复 `modrinth` 默认值。写入遵守实例变更锁、显式目标保护和 `--dry-run`，不修改
+包约束、远端或 lock。JSON 值是字符串数组，`choices` 提供来源名称与凭据是否已配置；
+不返回密钥。GUI 的“发现模组 → 搜索来源”仅调用这些相同命令，保存后重新执行当前搜索。
+已有包的远端仍用于候选获取，但不自动扩大 `search` 的用户选择来源。
 
 ## 3. 添加、还原与删除
 
