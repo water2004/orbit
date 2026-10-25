@@ -360,3 +360,11 @@ rename，跨卷逐文件复制并用 SHA-256 验证后才切换注册表与配�
 最终 JSON 只写 stdout，进度与
 错误只写 stderr。Microsoft `complete` 的轮询、Xbox、Minecraft 和安全持久化阶段也使用
 同一 NDJSON envelope，且不会包含 device code 或任何 token。
+
+### JSON 模式的首次服务端安装确认
+
+`install --new --kind server --output-format json` 在需要 EULA 时，通过 stderr 发出共享
+schema 2 `confirmation`，接受选项的 `data.document` 包含完整正文、URL 和 SHA-256。
+调用者展示正文后，用同一进程 stdin 的 `interaction_response` 回答 `accept` 或 `decline`；
+默认拒绝，过期 ID/非法响应不接受。`--non-interactive` 保持原行为：未接受时明确报错。
+这只是原有安装确认的机器展示，不新增安装入口，也不绕过 core 的 EULA 校验。

@@ -1,5 +1,6 @@
 mod app;
 mod cli;
+mod interaction;
 mod output;
 mod supervisor_ipc;
 
@@ -1422,6 +1423,15 @@ impl app::Frontend for TerminalFrontend {
     }
 
     fn confirm_eula(&mut self, document: &EulaDocument) -> Result<bool, LauncherError> {
+        if !self.non_interactive && self.output_format == OutputFormat::Json {
+            self.sequence += 1;
+            return interaction::confirm_eula(
+                document,
+                self.sequence,
+                std::io::stdin().lock(),
+                std::io::stderr().lock(),
+            );
+        }
         if self.non_interactive
             || self.output_format == OutputFormat::Json
             || !std::io::stdin().is_terminal()
