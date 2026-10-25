@@ -22,13 +22,13 @@ pub(crate) use progress_ndjson::write_machine_line;
 pub use progress_ndjson::{ndjson_audit_reporter, ndjson_progress_reporter};
 pub use view::{
     CacheOutput, ConfigEntryOutput, ConfigEntryView, ConfigListOutput, ConfigPathOutput,
-    ConfigValueView, DiagnosticView, ErrorJson, ExportOutput, ImportOutput, InitOutput,
-    InstanceDefaultOutput, InstanceRegisterOutput, InstanceRemoveOutput, InstancesOutput,
-    JsonEnvelope, MigrationExportView, MigrationOutput, MigrationSummary, OutdatedOutput,
-    OutdatedSummary, OwnershipOutput, PackageActivationOutput, PackageConstraintOutput,
-    PackageEnvironmentOutput, PackageVersionCandidateView, PackageVersionsOutput, PurgeOutput,
-    RemoveOutput, ResetOutput, SearchFilters, SearchOutput, SearchResultView, owned_artifact_view,
-    owned_path_view,
+    ConfigResolvedPaths, ConfigValueView, DiagnosticView, ErrorJson, ExportOutput, ImportOutput,
+    InitOutput, InstanceDefaultOutput, InstanceRegisterOutput, InstanceRemoveOutput,
+    InstancesOutput, JsonEnvelope, MigrationExportView, MigrationOutput, MigrationSummary,
+    OutdatedOutput, OutdatedSummary, OwnershipOutput, PackageActivationOutput,
+    PackageConstraintOutput, PackageEnvironmentOutput, PackageVersionCandidateView,
+    PackageVersionsOutput, PurgeOutput, RemoveOutput, ResetOutput, SearchFilters, SearchOutput,
+    SearchResultView, owned_artifact_view, owned_path_view,
 };
 
 static COLOR_MODE: AtomicU8 = AtomicU8::new(0);

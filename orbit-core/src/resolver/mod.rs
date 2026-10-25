@@ -547,6 +547,29 @@ pub(crate) async fn resolve_minimal_change_portfolio_with_progress_and_selector(
     .map_err(|error| error.to_string())
 }
 
+/// Lexicographic objective: first maximize the requested package alone, then
+/// minimize the changed baseline facts across the rest of the complete graph.
+/// Equal-precedence target realizations remain available for the second phase.
+pub(crate) async fn resolve_targeted_upgrade_portfolio(
+    manifest: &OrbitManifest,
+    lockfile: &OrbitLockfile,
+    catalog: &CandidateCatalog,
+    package: &str,
+    progress: Option<ProgressReporter>,
+    selector: &mut Option<ResolutionSelector>,
+) -> Result<ResolutionPortfolio, String> {
+    resolve_portfolio_with_progress_detailed(
+        manifest,
+        lockfile,
+        catalog,
+        ResolutionObjective::UpgradePackage(package),
+        progress,
+        selector,
+    )
+    .await
+    .map_err(|error| error.to_string())
+}
+
 #[derive(Debug)]
 pub(crate) enum ResolutionFailure {
     NoSolution(String),
@@ -604,22 +627,23 @@ pub(crate) async fn resolve_package_preserving_portfolio_with_progress(
 }
 
 #[derive(Clone, Copy)]
-enum ResolutionObjective {
+enum ResolutionObjective<'a> {
     MaximizeVersions,
     MinimizeChanges,
     RequireManifestPackages,
     PreserveManifestPackages,
+    UpgradePackage(&'a str),
 }
 
 async fn resolve_portfolio_with_progress_detailed(
     manifest: &OrbitManifest,
     lockfile: &OrbitLockfile,
     catalog: &CandidateCatalog,
-    objective: ResolutionObjective,
+    objective: ResolutionObjective<'_>,
     progress: Option<ProgressReporter>,
     selector: &mut Option<ResolutionSelector>,
 ) -> Result<ResolutionPortfolio, ResolutionFailure> {
-    let graph = match objective {
+    let mut graph = match objective {
         ResolutionObjective::RequireManifestPackages => build_solver_graph_with_package_roots(
             manifest,
             lockfile,
@@ -638,15 +662,15 @@ async fn resolve_portfolio_with_progress_detailed(
             manifest.platform.physical_environment,
             ManifestPackageRoots::Preferred,
         ),
-        ResolutionObjective::MaximizeVersions | ResolutionObjective::MinimizeChanges => {
-            build_solver_graph(
-                manifest,
-                lockfile,
-                &catalog.candidates,
-                catalog.loader_package.as_ref(),
-                catalog.java_feature,
-            )
-        }
+        ResolutionObjective::MaximizeVersions
+        | ResolutionObjective::MinimizeChanges
+        | ResolutionObjective::UpgradePackage(_) => build_solver_graph(
+            manifest,
+            lockfile,
+            &catalog.candidates,
+            catalog.loader_package.as_ref(),
+            catalog.java_feature,
+        ),
     }
     .map_err(ResolutionFailure::Internal)?;
     let mut maximized_mods: Vec<_> = catalog
@@ -665,9 +689,84 @@ async fn resolve_portfolio_with_progress_detailed(
         .collect::<Vec<_>>();
     let watched_candidates = highest_candidates(&catalog.candidates, graph.loader);
     let mut trace = diagnostics::ResolutionTrace::with_progress(watched_candidates, progress);
+    if let ResolutionObjective::UpgradePackage(mod_id) = objective {
+        let package = SolverPackage::logical(mod_id.to_owned());
+        let solutions = pubgrub::resolve_maximal_solutions_with_observer(
+            &graph.provider,
+            graph.root_package.clone(),
+            graph.root_version.clone(),
+            [package.clone()],
+            solver_version_ordering(),
+            &mut trace,
+        )
+        .map_err(solver_failure)?;
+        let current = lockfile.find(mod_id).ok_or_else(|| {
+            ResolutionFailure::Internal(format!("upgrade target '{mod_id}' is not installed"))
+        })?;
+        let current_version = Version::parse(&current.version, graph.loader);
+        let newer = solutions.iter().any(|solution| {
+            solution
+                .get(&package)
+                .and_then(SolverVersion::domain)
+                .is_some_and(|version| {
+                    current_version
+                        .strictly_higher_precedence()
+                        .contains(version)
+                })
+        });
+        if !newer {
+            trace.flush_progress();
+            let context = ReportContext {
+                lockfile,
+                candidates: &catalog.candidates,
+                loader: graph.loader,
+                exclusions: &graph.exclusions,
+                target: graph.target,
+            };
+            let snapshots = trace.into_solutions();
+            if snapshots.len() != solutions.len() {
+                return Err(ResolutionFailure::Internal(
+                    "target optimization trace count mismatch".into(),
+                ));
+            }
+            let reports = solutions
+                .iter()
+                .zip(&snapshots)
+                .map(|(solution, snapshot)| collect_report(&context, solution, snapshot))
+                .collect::<Vec<_>>();
+            return Ok(ResolutionPortfolio {
+                alternatives: vec![ResolutionReport {
+                    diagnostics: aggregate_candidate_diagnostics(&reports, Some(mod_id)),
+                    ..ResolutionReport::default()
+                }],
+            });
+        }
+        let highest = solutions
+            .iter()
+            .filter_map(|solution| solution.get(&package))
+            .filter_map(SolverVersion::domain)
+            .fold(Ranges::empty(), |range, version| {
+                range.union(&solver_range(version.precedence_class()))
+            });
+        // A hard root dependency freezes the primary optimum, not a particular
+        // source/hash. The existing factored preference solver can now optimize
+        // the secondary objective without enumerating the full upgrade front.
+        graph
+            .provider
+            .dependencies
+            .get_mut(&(graph.root_package.clone(), graph.root_version.clone()))
+            .ok_or_else(|| {
+                ResolutionFailure::Internal("solver root dependencies are missing".into())
+            })?
+            .push((package, highest));
+        trace.discard_solution_snapshots();
+    }
     let preferences = match objective {
-        ResolutionObjective::MinimizeChanges => {
-            minimal_change_preferences(manifest, lockfile, &graph.provider, &maximized_mods)
+        ResolutionObjective::MinimizeChanges | ResolutionObjective::UpgradePackage(_) => {
+            let preserved = maximized_mods.iter().filter(|package| {
+                !matches!(objective, ResolutionObjective::UpgradePackage(target) if target == package.as_str())
+            }).cloned().collect::<Vec<_>>();
+            minimal_change_preferences(manifest, lockfile, &graph.provider, &preserved)
         }
         ResolutionObjective::PreserveManifestPackages => {
             manifest_package_preferences(manifest, &graph.provider)
@@ -1975,6 +2074,134 @@ iris = { version = "*", remotes = [{ type = "file", path = "iris.jar" }] }
                 .iter()
                 .any(|fact| fact.contains("unavailable-dependency")),
             "{targeted:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn targeted_upgrade_maximizes_target_then_preserves_unrelated_packages() {
+        let mut catalog = CandidateCatalog::default();
+        catalog
+            .candidates
+            .insert("a".into(), vec![candidate("2", vec![])]);
+        catalog
+            .candidates
+            .insert("b".into(), vec![candidate("2", vec![])]);
+        let report = resolve_targeted_upgrade_portfolio(
+            &manifest(),
+            &lockfile(),
+            &catalog,
+            "a",
+            None,
+            &mut None,
+        )
+        .await
+        .unwrap()
+        .alternatives
+        .remove(0);
+        assert_eq!(report.selected_versions["a"], "2");
+        assert_eq!(report.selected_versions["b"], "1");
+        assert_eq!(
+            upgrades(&report),
+            BTreeMap::from([("a".into(), "2".into())])
+        );
+    }
+
+    #[tokio::test]
+    async fn targeted_upgrade_primary_optimum_beats_a_smaller_change_set() {
+        let mut catalog = CandidateCatalog::default();
+        catalog.candidates.insert(
+            "a".into(),
+            vec![
+                candidate("2", vec![]),
+                candidate("3", vec![ModDependency::required("b", "=2")]),
+            ],
+        );
+        catalog
+            .candidates
+            .insert("b".into(), vec![candidate("2", vec![])]);
+        let report = resolve_targeted_upgrade_portfolio(
+            &manifest(),
+            &lockfile(),
+            &catalog,
+            "a",
+            None,
+            &mut None,
+        )
+        .await
+        .unwrap()
+        .alternatives
+        .remove(0);
+        assert_eq!(report.selected_versions["a"], "3");
+        assert_eq!(report.selected_versions["b"], "2");
+    }
+
+    #[tokio::test]
+    async fn targeted_upgrade_allows_necessary_dependency_downgrades() {
+        let mut catalog = CandidateCatalog::default();
+        catalog.candidates.insert(
+            "a".into(),
+            vec![candidate("2", vec![ModDependency::required("b", "=0")])],
+        );
+        catalog.candidates.insert(
+            "b".into(),
+            vec![candidate("0", vec![]), candidate("3", vec![])],
+        );
+        let report = resolve_targeted_upgrade_portfolio(
+            &manifest(),
+            &lockfile(),
+            &catalog,
+            "a",
+            None,
+            &mut None,
+        )
+        .await
+        .unwrap()
+        .alternatives
+        .remove(0);
+        assert_eq!(report.selected_versions["a"], "2");
+        assert_eq!(report.selected_versions["b"], "0");
+        assert!(
+            report
+                .changes
+                .iter()
+                .any(|change| change.package == "b" && change.kind == PackageChangeKind::Downgrade)
+        );
+    }
+
+    #[tokio::test]
+    async fn targeted_upgrade_does_not_prompt_or_upgrade_others_when_target_is_blocked() {
+        let mut catalog = CandidateCatalog::default();
+        catalog.candidates.insert(
+            "a".into(),
+            vec![candidate(
+                "2",
+                vec![ModDependency::required("missing", "=9")],
+            )],
+        );
+        catalog
+            .candidates
+            .insert("b".into(), vec![candidate("2", vec![])]);
+        let mut selector: Option<ResolutionSelector> =
+            Some(Box::new(|_, _| panic!("no upgrade must not prompt")));
+        let report = resolve_targeted_upgrade_portfolio(
+            &manifest(),
+            &lockfile(),
+            &catalog,
+            "a",
+            None,
+            &mut selector,
+        )
+        .await
+        .unwrap()
+        .alternatives
+        .remove(0);
+        assert!(report.changes.is_empty());
+        assert!(
+            report
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.package == "a"
+                    && diagnostic.facts.iter().any(|fact| fact.contains("missing")))
         );
     }
 

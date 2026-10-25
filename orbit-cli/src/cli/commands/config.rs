@@ -6,8 +6,8 @@ use crate::cli::{
     ConfigCommands,
     commands::CliContext,
     output::{
-        ConfigEntryOutput, ConfigEntryView, ConfigListOutput, ConfigPathOutput, ConfigValueView,
-        OutputFormat,
+        ConfigEntryOutput, ConfigEntryView, ConfigListOutput, ConfigPathOutput,
+        ConfigResolvedPaths, ConfigValueView, OutputFormat,
     },
 };
 
@@ -45,6 +45,20 @@ pub async fn handle(command: ConfigCommands, ctx: &CliContext) -> Result<()> {
                         subcommand: "list".to_string(),
                         config_path: display_path.to_string_lossy().into_owned(),
                         entries,
+                        resolved_paths: ConfigResolvedPaths {
+                            cache_directory: ctx
+                                .runtime
+                                .paths()
+                                .cache_dir()
+                                .to_string_lossy()
+                                .into_owned(),
+                            repository_directory: ctx
+                                .runtime
+                                .paths()
+                                .repository_dir()
+                                .to_string_lossy()
+                                .into_owned(),
+                        },
                     },
                 ),
             }
@@ -133,6 +147,7 @@ fn entry_view(key: orbit_core::ConfigKey, config: &orbit_core::GlobalConfig) -> 
         key: key.as_str().to_string(),
         value_type: key.value_type().to_string(),
         sensitive: key.is_sensitive(),
+        allowed_values: key.allowed_values(),
         value,
     }
 }
@@ -181,5 +196,14 @@ mod tests {
         assert!(view.sensitive);
         assert!(serialized.contains("<redacted>"));
         assert!(!serialized.contains("private-secret"));
+    }
+
+    #[test]
+    fn setting_definitions_use_orbits_actual_progress_modes() {
+        let config = orbit_core::GlobalConfig::default();
+        let view = entry_view(orbit_core::ConfigKey::UiProgressBar, &config);
+        assert_eq!(view.allowed_values, ["modern", "plain", "off"]);
+        let json = serde_json::to_value(view).unwrap();
+        assert_eq!(json["value"], "modern");
     }
 }

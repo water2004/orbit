@@ -1110,18 +1110,17 @@ async fn install_mod(input: InstallModInput<'_>) -> Result<InstallExecution, Orb
             candidates: catalog.candidates.values().map(Vec::len).sum(),
         },
     );
-    let (requested_package, _feasibility_portfolio) =
-        resolve_requested_package(RequestedPackageInput {
-            requested_package,
-            intent: options.intent,
-            manifest,
-            lockfile,
-            catalog: &catalog,
-            requirement: requested_requirement.clone(),
-            selector: select_package,
-            progress: progress.clone(),
-        })
-        .await?;
+    let requested_package = resolve_requested_package(RequestedPackageInput {
+        requested_package,
+        intent: options.intent,
+        manifest,
+        lockfile,
+        catalog: &catalog,
+        requirement: requested_requirement.clone(),
+        selector: select_package,
+        progress: progress.clone(),
+    })
+    .await?;
 
     // Package identity discovery is deliberately a feasibility-only pass. Once the logical
     // package is known, solve it again through the factored interactive path so independent
@@ -1136,10 +1135,11 @@ async fn install_mod(input: InstallModInput<'_>) -> Result<InstallExecution, Orb
         selected_requirement,
     );
     let portfolio = if options.intent == InstallIntent::Upgrade {
-        crate::resolver::resolve_candidate_portfolio_with_progress_and_selector(
+        crate::resolver::resolve_targeted_upgrade_portfolio(
             &resolution_manifest,
             lockfile,
             &catalog,
+            &requested_package,
             progress.clone(),
             &mut select_resolution,
         )
@@ -1286,9 +1286,7 @@ struct RequestedPackageInput<'a> {
     progress: Option<ProgressReporter>,
 }
 
-async fn resolve_requested_package(
-    input: RequestedPackageInput<'_>,
-) -> Result<(String, crate::resolver::types::ResolutionPortfolio), OrbitError> {
+async fn resolve_requested_package(input: RequestedPackageInput<'_>) -> Result<String, OrbitError> {
     let RequestedPackageInput {
         requested_package,
         intent,
@@ -1310,23 +1308,9 @@ async fn resolve_requested_package(
                  package '{package}'; a mod_id change is a package replacement, not an upgrade"
             )));
         }
-        let mut resolution_manifest = manifest.clone();
-        ensure_package_spec(&mut resolution_manifest, &package, requirement);
-        let portfolio = crate::resolver::resolve_candidate_portfolio_with_progress(
-            &resolution_manifest,
-            lockfile,
-            catalog,
-            progress.clone(),
-        )
-        .await
-        .map_err(OrbitError::Conflict)?;
-        emit_progress(
-            progress.as_ref(),
-            ProgressEvent::ResolutionFinished {
-                solutions: portfolio.alternatives.len(),
-            },
-        );
-        return Ok((package, portfolio));
+        // An installed ID is already unambiguous. Do not run a global upgrade
+        // portfolio just to rediscover it before the actual targeted objective.
+        return Ok(package);
     }
 
     let packages: Vec<_> = catalog.requested_packages.iter().cloned().collect();
@@ -1409,7 +1393,7 @@ async fn resolve_requested_package(
             feasible.len()
         )));
     }
-    Ok(feasible.swap_remove(index))
+    Ok(feasible.swap_remove(index).0)
 }
 
 // ── download / jar / manifest helpers ─────────────────────────────────
@@ -2974,7 +2958,7 @@ physical_environment = "client"
             )
             .unwrap();
 
-        let (package, portfolio) = resolve_requested_package(RequestedPackageInput {
+        let package = resolve_requested_package(RequestedPackageInput {
             requested_package: None,
             intent: InstallIntent::Add,
             manifest: &manifest(),
@@ -2993,13 +2977,7 @@ physical_environment = "client"
         .unwrap();
 
         assert_eq!(package, "gca_wrapper");
-        assert!(!portfolio.alternatives.is_empty());
-        assert!(
-            portfolio
-                .alternatives
-                .iter()
-                .all(|solution| solution.selected_versions.contains_key("gca_wrapper"))
-        );
+        assert!(catalog.candidates.contains_key(&package));
     }
 
     #[tokio::test]
@@ -3020,7 +2998,7 @@ physical_environment = "client"
         let prompted = Arc::new(AtomicBool::new(false));
         let captured = Arc::clone(&prompted);
 
-        let (package, _) = resolve_requested_package(RequestedPackageInput {
+        let package = resolve_requested_package(RequestedPackageInput {
             requested_package: None,
             intent: InstallIntent::Add,
             manifest: &manifest(),
@@ -3073,7 +3051,7 @@ physical_environment = "client"
         );
         catalog.requested_packages.insert("requested".to_string());
 
-        let (package, portfolio) = resolve_requested_package(RequestedPackageInput {
+        let package = resolve_requested_package(RequestedPackageInput {
             requested_package: None,
             intent: InstallIntent::Add,
             manifest: &manifest,
@@ -3087,6 +3065,13 @@ physical_environment = "client"
         .unwrap();
 
         assert_eq!(package, "requested");
+        manifest
+            .packages
+            .insert(package.clone(), PackageSpec::new("*", Vec::new()));
+        let portfolio =
+            crate::resolver::resolve_minimal_change_portfolio(&manifest, &lockfile, &catalog)
+                .await
+                .unwrap();
         assert_eq!(portfolio.alternatives.len(), 1);
         let selected = &portfolio.alternatives[0];
         assert_eq!(selected.selected_versions["base"], "1");
@@ -3103,7 +3088,7 @@ physical_environment = "client"
     }
 
     #[tokio::test]
-    async fn upgrade_keeps_the_version_maximal_objective() {
+    async fn upgrade_identity_lookup_does_not_solve_a_global_portfolio() {
         let mut manifest = manifest();
         manifest.packages.insert(
             "base".to_string(),
@@ -3127,7 +3112,7 @@ physical_environment = "client"
             ],
         );
 
-        let (package, portfolio) = resolve_requested_package(RequestedPackageInput {
+        let package = resolve_requested_package(RequestedPackageInput {
             requested_package: Some("base"),
             intent: InstallIntent::Upgrade,
             manifest: &manifest,
@@ -3141,12 +3126,6 @@ physical_environment = "client"
         .unwrap();
 
         assert_eq!(package, "base");
-        assert_eq!(portfolio.alternatives.len(), 1);
-        assert_eq!(portfolio.alternatives[0].selected_versions["base"], "2");
-        assert_eq!(
-            portfolio.alternatives[0].changes[0].kind,
-            crate::PackageChangeKind::Upgrade
-        );
     }
 
     #[test]

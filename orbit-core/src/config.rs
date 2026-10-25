@@ -356,6 +356,14 @@ impl ConfigKey {
     pub const fn is_sensitive(self) -> bool {
         matches!(self, Self::AuthCurseforgeApiKey | Self::AuthModrinthToken)
     }
+    pub const fn allowed_values(self) -> &'static [&'static str] {
+        match self {
+            Self::CoreLanguage => &["system", "en", "zh-CN"],
+            Self::UiColor => &["auto", "always", "never"],
+            Self::UiProgressBar => &["modern", "plain", "off"],
+            _ => &[],
+        }
+    }
 
     pub fn get(self, config: &GlobalConfig) -> ConfigValue {
         match self {

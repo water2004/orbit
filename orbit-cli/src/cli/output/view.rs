@@ -598,6 +598,13 @@ pub struct ConfigListOutput {
     pub subcommand: String,
     pub config_path: String,
     pub entries: Vec<ConfigEntryView>,
+    pub resolved_paths: ConfigResolvedPaths,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ConfigResolvedPaths {
+    pub cache_directory: String,
+    pub repository_directory: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -613,6 +620,7 @@ pub struct ConfigEntryView {
     pub key: String,
     pub value_type: String,
     pub sensitive: bool,
+    pub allowed_values: &'static [&'static str],
     #[serde(skip_serializing_if = "Option::is_none")]
     pub value: Option<ConfigValueView>,
 }
