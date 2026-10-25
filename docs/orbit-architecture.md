@@ -1,5 +1,10 @@
 # Orbit 架构
 
+Launcher 公共资源下载通过 `download_source::DownloadClient` 统一选源，独立于认证 client，
+不会改写 Orbit Provider 或求解路径。客户端/服务端共用 `launch_session` 采集本次崩溃
+证据并记录到 Launcher 自有状态；GUI 只读 CLI JSON，关闭观察连接后 Java/CLI 可继续运行。
+具体边界见 [`orbit-launcher-architecture.md`](orbit-launcher-architecture.md)。
+
 Launcher 外部实例导入集中于 `external_instance/`，来源适配后复用现有官方运行时安装，
 原样复制不透明数据并在校验完成后注册。GUI 只调用 inspect/import 及删除预览/确认命令。
 完整实例删除与注销分离，生命周期锁和可回滚回收站事务不依赖 Orbit 模组管理，详见

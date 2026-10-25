@@ -171,6 +171,7 @@ fn resolution_current_label(data: &Value) -> Option<String> {
 
 fn progress_event_label(event: &str) -> String {
     let key = match event {
+        "download_source" => "Download source selected",
         "repository_index_started" => "Checking local version repository",
         "repository_project_checked" => "Checking package versions",
         "repository_index_finished" => "Local version repository is ready",

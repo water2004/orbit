@@ -153,17 +153,23 @@ export async function launch(instance: Instance) {
     instance,
   );
   if (detail.desired.loader === "vanilla") {
-    await launcher(
-      detail.kind === "server" ? ["server", "start"] : ["launch"],
-      detail.kind === "server"
-        ? t("Starting server", "正在启动服务端")
-        : t("Launching game", "正在启动游戏"),
-      instance,
-    );
+    await run({
+      kind: "launcher",
+      lifetime: "game",
+      instance: instance.id,
+      args: detail.kind === "server" ? ["server", "start"] : ["launch"],
+      label:
+        detail.kind === "server"
+          ? t("Starting server", "正在启动服务端")
+          : t("Launching game", "正在启动游戏"),
+    });
     return;
   }
-  await orbit(
-    [
+  await run({
+    kind: "orbit",
+    lifetime: "game",
+    directory: instance.directory,
+    args: [
       "launch",
       "--launcher",
       binary,
@@ -171,9 +177,8 @@ export async function launch(instance: Instance) {
       instance.id,
       ...(detail.kind === "server" ? ["--server"] : []),
     ],
-    t("Launching game", "正在启动游戏"),
-    instance,
-  );
+    label: t("Launching game", "正在启动游戏"),
+  });
 }
 export async function act(operation: () => Promise<unknown>) {
   try {

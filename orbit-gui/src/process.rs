@@ -4,6 +4,10 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 use std::thread;
 use std::time::Duration;
 
@@ -25,8 +29,16 @@ pub enum CliKind {
     Orbit,
     Launcher,
 }
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProcessLifetime {
+    #[default]
+    Window,
+    Game,
+}
 
 pub struct ProcessRequest {
+    pub lifetime: ProcessLifetime,
     pub kind: CliKind,
     pub program: PathBuf,
     pub args: Vec<String>,
@@ -39,6 +51,9 @@ pub struct ProcessRequest {
 
 #[derive(Debug)]
 pub enum BridgeEvent {
+    GameStarted {
+        task_id: TaskId,
+    },
     Progress {
         task_id: TaskId,
         envelope: ProgressEnvelope<Value>,
@@ -69,6 +84,7 @@ pub enum BridgeEvent {
 
 enum Control {
     Cancel,
+    WindowClosed(mpsc::SyncSender<Result<(), String>>),
     StdinLine(String),
 }
 
@@ -136,6 +152,37 @@ impl ProcessBridge {
             let _ = control.send(Control::Cancel);
         }
     }
+    pub fn window_closed(&self) -> Result<(), String> {
+        let mut pending = Vec::new();
+        for control in self.controls.values() {
+            let (sender, receiver) = mpsc::sync_channel(1);
+            if control.send(Control::WindowClosed(sender)).is_ok() {
+                pending.push(receiver);
+            }
+        }
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        for receiver in pending {
+            match receiver
+                .recv_timeout(deadline.saturating_duration_since(std::time::Instant::now()))
+            {
+                Ok(result) => result?,
+                Err(mpsc::RecvTimeoutError::Disconnected) => {}
+                Err(error) => {
+                    return Err(tr!(
+                        "CLI shutdown was not acknowledged: %{error}",
+                        error = error
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+    pub fn observer_closed(&self, task: TaskId) {
+        if let Some(control) = self.controls.get(&task) {
+            let (sender, _) = mpsc::sync_channel(1);
+            let _ = control.send(Control::WindowClosed(sender));
+        }
+    }
 
     pub fn send_line(&self, task_id: TaskId, line: String) {
         if let Some(control) = self.controls.get(&task_id) {
@@ -170,6 +217,8 @@ fn run_process(
     controls: Receiver<Control>,
     events: Sender<BridgeEvent>,
 ) {
+    let can_survive = request.lifetime == ProcessLifetime::Game;
+    let game_started = Arc::new(AtomicBool::new(false));
     let mut command = Command::new(&request.program);
     command
         .args(&request.args)
@@ -217,6 +266,7 @@ fn run_process(
     });
 
     let stderr_events = events.clone();
+    let observed_start = game_started.clone();
     let (stderr_failure_tx, stderr_failure_rx) = mpsc::channel();
     let stderr_reader = thread::spawn(move || {
         let Some(stderr) = stderr else {
@@ -289,6 +339,12 @@ fn run_process(
             } else if let Some(progress) = wire::progress_line(line) {
                 match progress {
                     Ok(envelope) => {
+                        if can_survive
+                            && is_game_started(&envelope)
+                            && !observed_start.swap(true, Ordering::Release)
+                        {
+                            let _ = stderr_events.send(BridgeEvent::GameStarted { task_id });
+                        }
                         let _ = stderr_events.send(BridgeEvent::Progress { task_id, envelope });
                     }
                     Err(error) => {
@@ -319,7 +375,7 @@ fn run_process(
     let mut cancelled = false;
     let mut protocol_failed = false;
     let status = loop {
-        match child.try_wait() {
+        match child.inner().try_wait() {
             Ok(Some(status)) => break status.code(),
             Ok(None) => {}
             Err(error) => {
@@ -337,6 +393,18 @@ fn run_process(
         }
 
         match controls.recv_timeout(Duration::from_millis(40)) {
+            Ok(Control::WindowClosed(acknowledge))
+                if can_survive && game_started.load(Ordering::Acquire) =>
+            {
+                let _ = acknowledge.send(Ok(()));
+                // Keep explicit cancellation available if another task prevents
+                // the window from closing. Actual GUI exit closes the observer
+                // pipes/job handle; it must not terminate the game group.
+            }
+            Ok(Control::WindowClosed(acknowledge)) => {
+                cancelled = true;
+                let _ = acknowledge.send(child.kill().map_err(|error| error.to_string()));
+            }
             Ok(Control::Cancel) => {
                 cancelled = true;
                 let _ = child.kill();
@@ -349,6 +417,9 @@ fn run_process(
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {}
             Err(mpsc::RecvTimeoutError::Disconnected) => {
+                if can_survive && game_started.load(Ordering::Acquire) {
+                    return;
+                }
                 cancelled = true;
                 let _ = child.kill();
             }
@@ -379,10 +450,24 @@ fn run_process(
     });
 }
 
+fn is_game_started(envelope: &ProgressEnvelope<Value>) -> bool {
+    matches!(
+        envelope.command.as_str(),
+        "launch" | "server.start" | "server.run" | "server.supervisor"
+    ) && matches!(
+        envelope.data.get("event").and_then(Value::as_str),
+        Some("process_spawned" | "supervisor_spawned")
+    ) && envelope
+        .data
+        .get("pid")
+        .and_then(Value::as_u64)
+        .is_some_and(|pid| pid > 0 && pid <= u32::MAX as u64)
+}
+
 fn spawn_process_group(command: &mut Command) -> std::io::Result<command_group::GroupChild> {
     let mut group = command.group();
     #[cfg(target_os = "windows")]
-    group.creation_flags(CREATE_NO_WINDOW);
+    group.creation_flags(CREATE_NO_WINDOW).kill_on_drop(false);
     group.spawn()
 }
 
@@ -421,6 +506,152 @@ fn read_utf8_stream(mut reader: impl Read, stream: &str) -> Result<String, Strin
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn detachment_child_fixture() {
+        let Ok(marker) = std::env::var("ORBIT_GUI_DETACH_MARKER") else {
+            return;
+        };
+        let mode = std::env::var("ORBIT_GUI_DETACH_MODE").unwrap();
+        let data = if mode == "unfinished" {
+            serde_json::json!({"event":"launch_plan_ready"})
+        } else {
+            serde_json::json!({"event":"process_spawned","pid":std::process::id()})
+        };
+        let envelope = ProgressEnvelope::new(
+            "launch",
+            1,
+            orbit_machine_protocol::ProgressPhase::Process,
+            data,
+        );
+        eprintln!("{}", serde_json::to_string(&envelope).unwrap());
+        thread::sleep(Duration::from_millis(800));
+        // A long-lived CLI tolerates its observer's closed pipes.
+        let _ = writeln!(std::io::stderr(), "finished after observer exit");
+        std::fs::write(marker, b"survived").unwrap();
+    }
+
+    #[test]
+    fn detachment_host_fixture() {
+        if std::env::var_os("ORBIT_GUI_DETACH_MARKER").is_none() {
+            return;
+        }
+        let mode = std::env::var("ORBIT_GUI_DETACH_MODE").unwrap();
+        let mut bridge = ProcessBridge::default();
+        let task = bridge.spawn(ProcessRequest {
+            lifetime: ProcessLifetime::Game,
+            kind: CliKind::Launcher,
+            program: std::env::current_exe().unwrap(),
+            args: vec![
+                "--exact".into(),
+                "process::tests::detachment_child_fixture".into(),
+                "--nocapture".into(),
+            ],
+            working_directory: None,
+            initial_stdin: None,
+        });
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            let ready = bridge
+                .drain()
+                .into_iter()
+                .any(|event| matches!(event, BridgeEvent::Progress { .. }));
+            if ready {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "fixture never started"
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
+        if mode == "cancel" {
+            bridge.cancel(task);
+        }
+        bridge.window_closed().unwrap();
+        // Close every pipe, reader thread, and Windows job handle just as a
+        // GUI process exiting does. The parent checks the child's later marker.
+        std::process::exit(0);
+    }
+
+    #[test]
+    fn window_exit_detaches_only_started_games_and_explicit_cancel_still_kills() {
+        for mode in ["game", "unfinished", "cancel"] {
+            let temp = tempfile::tempdir().unwrap();
+            let marker = temp.path().join("survived");
+            let mut host = Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "process::tests::detachment_host_fixture",
+                    "--nocapture",
+                ])
+                .env("ORBIT_GUI_DETACH_MARKER", &marker)
+                .env("ORBIT_GUI_DETACH_MODE", mode)
+                .stdout(Stdio::null())
+                .stderr(Stdio::piped())
+                .spawn()
+                .unwrap();
+            let deadline = std::time::Instant::now() + Duration::from_secs(15);
+            loop {
+                if let Some(status) = host.try_wait().unwrap() {
+                    assert!(
+                        status.success(),
+                        "host failed: {}",
+                        host.wait_with_output().unwrap().status
+                    );
+                    break;
+                }
+                if std::time::Instant::now() >= deadline {
+                    let _ = host.kill();
+                    panic!("host did not close")
+                }
+                thread::sleep(Duration::from_millis(20));
+            }
+            thread::sleep(Duration::from_millis(1200));
+            assert_eq!(marker.exists(), mode == "game", "mode {mode}");
+        }
+    }
+
+    #[test]
+    fn only_actual_spawn_events_allow_detaching() {
+        for (command, data, expected) in [
+            (
+                "launch",
+                serde_json::json!({"event":"process_spawned","pid":42}),
+                true,
+            ),
+            (
+                "server.run",
+                serde_json::json!({"event":"supervisor_spawned","pid":42}),
+                true,
+            ),
+            (
+                "launch",
+                serde_json::json!({"event":"launch_plan_ready"}),
+                false,
+            ),
+            (
+                "install",
+                serde_json::json!({"event":"process_spawned","pid":42}),
+                false,
+            ),
+            (
+                "launch",
+                serde_json::json!({"event":"process_spawned","pid":0}),
+                false,
+            ),
+        ] {
+            assert_eq!(
+                is_game_started(&ProgressEnvelope::new(
+                    command,
+                    1,
+                    orbit_machine_protocol::ProgressPhase::Process,
+                    data
+                )),
+                expected
+            );
+        }
+    }
 
     #[test]
     fn protocol_streams_require_utf8_instead_of_silently_replacing_bytes() {

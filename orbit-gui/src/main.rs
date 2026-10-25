@@ -34,6 +34,12 @@ fn main() {
         .plugin(tauri_plugin_opener::init())
         .setup(desktop::setup)
         .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event
+                && let Err(error) = desktop::prepare_close(window.app_handle())
+            {
+                api.prevent_close();
+                eprintln!("Cannot close Launcher safely: {error}");
+            }
             if matches!(event, tauri::WindowEvent::Destroyed) {
                 desktop::shutdown(window.app_handle());
             }

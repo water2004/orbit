@@ -3,6 +3,9 @@ import { mount, flushPromises } from "@vue/test-utils";
 import { createRouter, createMemoryHistory } from "vue-router";
 vi.mock("@tauri-apps/api/path", () => ({ join: vi.fn() }));
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn() }));
+vi.mock("../src/components/DownloadSourcePicker.vue", () => ({
+  default: { template: "<div />" },
+}));
 vi.mock("../src/services/installations", () => ({
   createInstallation: vi.fn(),
   prepareMigration: vi.fn(),

@@ -17,11 +17,61 @@ import { activity, answer, cancel, Cancelled, run } from "../src/services/cli";
 
 beforeEach(() => {
   activity.tasks.splice(0);
+  activity.diagnostics = null;
   ipc.channels.splice(0);
   ipc.invoke.mockReset();
   ipc.invoke.mockResolvedValue(12);
 });
 describe("CLI channel lifecycle", () => {
+  it("keeps the failed process result and opens its crash report", async () => {
+    const diagnostics = {
+      reports: [
+        {
+          path: "crash-reports/current.txt",
+          text: "Crash details",
+          truncated: false,
+        },
+      ],
+      log_tail: null,
+      warnings: [],
+    };
+    const result = run({ kind: "launcher", args: ["launch"], label: "Launch" });
+    const rejected = expect(result).rejects.toThrow();
+    ipc.channels[0].onmessage({
+      type: "finished",
+      ok: false,
+      status: 1,
+      data: { success: false, diagnostics },
+    });
+    await rejected;
+    expect(activity.tasks[0].diagnostics).toEqual(diagnostics);
+    expect(activity.diagnostics).toEqual(diagnostics);
+  });
+  it("keeps BMCLAPI credit while later download progress arrives", async () => {
+    const result = run({
+      kind: "launcher",
+      args: ["install"],
+      label: "Install",
+    });
+    const attribution = {
+      name: "BMCLAPI · by bangbang93",
+      documentation: "https://bmclapidoc.bangbang93.com/",
+    };
+    ipc.channels[0].onmessage({
+      type: "progress",
+      message: "Download source",
+      envelope: { data: { event: "download_source", attribution } },
+    });
+    ipc.channels[0].onmessage({
+      type: "progress",
+      message: "Downloading game",
+      completed: 1,
+      total: 2,
+    });
+    expect(activity.tasks[0].downloadSource).toEqual(attribution);
+    ipc.channels[0].onmessage({ type: "finished", ok: true, data: {} });
+    await result;
+  });
   it("waits for the real process ID when cancelled during spawn", async () => {
     let spawned!: (id: number) => void;
     ipc.invoke.mockImplementationOnce(

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from "vue";
+import DownloadSourcePicker from "../components/DownloadSourcePicker.vue";
 import { useRoute, useRouter } from "vue-router";
 import { join } from "@tauri-apps/api/path";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -252,6 +253,19 @@ watch(step, (value) => {
 </script>
 <template>
   <div class="page create-page">
+    <DownloadSourcePicker
+      @changed="
+        async () => {
+          if (step === 0) await loadCatalog();
+          else {
+            const previous = draft.loaderVersion;
+            await components();
+            if (loaders.some((loader) => loader.version === previous))
+              draft.loaderVersion = previous;
+          }
+        }
+      "
+    />
     <ImportInstance
       v-if="importOpen"
       @close="importOpen = false"

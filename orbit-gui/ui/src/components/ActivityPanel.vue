@@ -8,6 +8,7 @@ import type { Change } from "../types";
 import Button from "./upstream/Button.vue";
 import Modal from "./Modal.vue";
 import TaskProgress from "./TaskProgress.vue";
+import LaunchFailureDialog from "./LaunchFailureDialog.vue";
 const current = computed(
   () =>
     [...activity.tasks]
@@ -63,6 +64,7 @@ const deletion = computed(
 );
 </script>
 <template>
+  <LaunchFailureDialog />
   <div v-if="current" class="activity-strip">
     <button class="activity-summary" @click="activity.open = !activity.open">
       <LoaderCircle
@@ -118,10 +120,17 @@ const deletion = computed(
               class="card stack"
             >
               <TaskProgress :task="task" />
+              <Button
+                v-if="task.diagnostics"
+                @click="activity.diagnostics = task.diagnostics"
+                >{{ t("View crash details", "查看崩溃详情") }}</Button
+              >
             </article>
           </section>
-        </aside></div></Transition
-  ></Teleport>
+        </aside>
+      </div></Transition
+    ></Teleport
+  >
   <Modal
     v-if="pending?.interaction"
     :key="pending.interaction.interaction_id"

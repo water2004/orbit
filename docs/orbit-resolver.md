@@ -2,6 +2,10 @@
 
 > 本文描述当前实现。依赖语义的来源是 JAR 内的 loader 元数据，所有 loader 都经过同一条求解路径。
 
+Launcher 的 BMCLAPI 公开资源选源、启动报告和 GUI 关窗行为不经过 resolver，不改变
+Orbit Provider、候选枚举、物理端或 Pareto 策略；GUI 的游戏任务仍复用原有 CLI 启动路径。
+没有为这些功能新增求解或安装旁路，也不改 Orbit TOML/lock schema。
+
 卸载的三档数据清理属于跨平台 `installer/actions`，不经过 resolver；它通过所属 core
 只读校验配置、注册表与实例，复用实例生命周期锁。GUI 安装路径重绑只写 GUI 展示偏好，
 不加载或修改 Orbit 的 manifest/lock。

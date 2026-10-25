@@ -7,6 +7,7 @@ vi.mock("../src/services/workspace", async () => {
   return {
     workspace: reactive({
       preferences: {
+        close_after_launch: false,
         language: "en",
         theme_mode: "light",
         accent_theme: "indigo",

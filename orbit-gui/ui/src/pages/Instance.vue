@@ -28,6 +28,8 @@ import {
 } from "../services/workspace";
 import { importArguments } from "../services/commands";
 import { initializeOrbit } from "../services/installations";
+import { activity } from "../services/cli";
+import { launchDiagnostics } from "../services/launch-diagnostics";
 import type { Package } from "../types";
 import { t } from "../i18n";
 import { instancePath, discoveryPath } from "../services/navigation";
@@ -49,6 +51,27 @@ const {
 } = useCommandScope();
 const exporting = ref(false),
   importing = ref(false);
+const launchReportNote = ref("");
+async function showLaunchReport() {
+  const record = await launcher<{ result: unknown | null } | null>(
+    ["instance", "launch-report"],
+    t("Loading launch report", "正在读取启动报告"),
+  );
+  const diagnostics = launchDiagnostics(record?.result);
+  if (diagnostics) activity.diagnostics = diagnostics;
+  else
+    launchReportNote.value = !record
+      ? t("No launch record exists yet.", "尚无启动记录。")
+      : record.result === null
+        ? t(
+            "The latest launch has not recorded an exit yet.",
+            "最近一次启动尚未记录退出结果。",
+          )
+        : t(
+            "No crash report is available for the latest launch.",
+            "最近一次启动没有可用的崩溃报告。",
+          );
+}
 const route = useRoute(),
   router = useRouter(),
   query = ref(""),
@@ -606,6 +629,23 @@ async function status() {
       </template>
     </template>
     <template v-if="tab === 'runtime'">
+      <div class="card row">
+        <div class="grow">
+          <h3>{{ t("Launch reports", "启动报告") }}</h3>
+          <p>
+            {{
+              launchReportNote ||
+              t(
+                "Reports and bounded process logs stay available after closing the GUI.",
+                "关闭 GUI 后，仍可查看本次报告和有大小限制的进程日志。",
+              )
+            }}
+          </p>
+        </div>
+        <Button @click="act(showLaunchReport)">{{
+          t("View latest report", "查看最近报告")
+        }}</Button>
+      </div>
       <div class="card stack">
         <h2>{{ t("Game installation", "游戏安装") }}</h2>
         <div class="row wrap">

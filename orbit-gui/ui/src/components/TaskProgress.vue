@@ -70,6 +70,14 @@ const active = computed(() =>
       :max="task.total || 1"
       :aria-label="task.label"
     />
+    <small v-if="task.downloadSource"
+      ><a
+        :href="task.downloadSource.documentation"
+        target="_blank"
+        rel="noreferrer"
+        >{{ task.downloadSource.name }}</a
+      ></small
+    >
   </div>
 </template>
 <style scoped>

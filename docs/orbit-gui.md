@@ -1,5 +1,18 @@
 # Orbit GUI
 
+## 下载源、启动报告与关窗
+
+安装向导和 Launcher 设置可选官方源/BMCLAPI，使用已有 CLI 配置命令保存；BMCLAPI
+署名和协议链接保留在下载任务中。GUI 不改 URL、不实现网络重试、不读取 lock/报告文件。
+游戏异常退出时即使 CLI 返回非零，也读取同一个最终 JSON 的 `diagnostics` 并展示有界的
+报告/日志预览；活动中可再次打开，实例 → 运行时 → 最近报告通过 `instance launch-report`
+在重开 GUI 后读取结果。没有报告时明确说明，不把历史报告当作本次错误。
+
+设置 → Launcher 的“游戏启动后关闭启动器”缺省关闭。手动关窗同样保留已启动游戏；
+运行中的 CLI 负责输出排空和日志保存，GUI 退出前确认连接已安全释放。未完成的安装/
+登录任务取消，任务上的取消按钮仍终止游戏，而非仅隐藏窗口。该开关是 GUI 展示偏好，
+不进入 Launcher 游戏配置 schema，也不改变 Orbit Agent 注入路径。
+
 Orbit GUI 使用 Vue 3 + Tauri 2，以 Modrinth App 的导航、实例库、内容页和基础控件为基础改造。
 来源、上游提交及复制文件见 [UPSTREAM.md](../orbit-gui/ui/UPSTREAM.md)。不引入 Modrinth
 的认证、下载、启动、托管服务、广告、分析或品牌资源。

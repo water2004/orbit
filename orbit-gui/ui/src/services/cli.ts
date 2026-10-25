@@ -1,9 +1,14 @@
 import { Channel, convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { reactive } from "vue";
 import { taskOutcome, type TaskOutcome } from "./task-outcome";
+import {
+  launchDiagnostics,
+  type LaunchDiagnostics,
+} from "./launch-diagnostics";
 
 export type Kind = "orbit" | "launcher";
 export interface Preferences {
+  close_after_launch: boolean;
   orbit_binary: string;
   launcher_binary: string;
   selected_instance: string | null;
@@ -12,6 +17,7 @@ export interface Preferences {
   accent_theme: "indigo" | "emerald" | "amber";
 }
 export interface Request {
+  lifetime?: "window" | "game";
   kind: Kind;
   args: string[];
   label: string;
@@ -43,9 +49,22 @@ export interface Task {
   interaction?: Interaction;
   answering?: boolean;
   outcome?: TaskOutcome;
+  diagnostics?: LaunchDiagnostics;
+  downloadSource?: { name: string; documentation: string };
 }
 type Event =
-  | { type: "progress"; message: string; completed?: number; total?: number }
+  | {
+      type: "progress";
+      message: string;
+      completed?: number;
+      total?: number;
+      envelope?: {
+        data?: {
+          event?: string;
+          attribution?: { name: string; documentation: string };
+        };
+      };
+    }
   | { type: "interaction"; envelope: Interaction }
   | { type: "error"; message: string; code?: string }
   | {
@@ -57,7 +76,11 @@ type Event =
       status?: number;
     };
 
-export const activity = reactive({ tasks: [] as Task[], open: false });
+export const activity = reactive({
+  tasks: [] as Task[],
+  open: false,
+  diagnostics: null as LaunchDiagnostics | null,
+});
 let provisionalId = -1;
 const ready = new WeakMap<Task, Promise<number>>();
 export class Cancelled extends Error {}
@@ -92,6 +115,8 @@ export function run<T>(
       if (finished) return;
       switch (event.type) {
         case "progress":
+          if (event.envelope?.data?.event === "download_source")
+            task.downloadSource = event.envelope.data.attribution;
           task.message = event.message;
           task.completed = event.completed;
           task.total = event.total;
@@ -123,6 +148,12 @@ export function run<T>(
             task.total = undefined;
             resolve(event.data as T);
           } else {
+            try {
+              task.diagnostics = launchDiagnostics(event.data);
+              if (task.diagnostics) activity.diagnostics = task.diagnostics;
+            } catch (error) {
+              protocolError = String(error);
+            }
             task.state =
               event.cancelled || protocolCancelled ? "cancelled" : "failed";
             task.message =

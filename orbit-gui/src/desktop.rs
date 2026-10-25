@@ -19,7 +19,7 @@ use zeroize::Zeroizing;
 use crate::preferences::Preferences;
 use crate::string_rule::StringRuleDraft;
 use crate::{
-    process::{BridgeEvent, CliKind, ProcessBridge, ProcessRequest, TaskId},
+    process::{BridgeEvent, CliKind, ProcessBridge, ProcessLifetime, ProcessRequest, TaskId},
     wire,
 };
 
@@ -69,14 +69,22 @@ pub fn shutdown(app: &tauri::AppHandle) {
         && let Ok(state) = state.lock()
     {
         state.stopped.store(true, Ordering::Relaxed);
-        for id in state.channels.keys() {
-            state.bridge.cancel(*id);
-        }
     }
+}
+
+pub fn prepare_close(app: &tauri::AppHandle) -> Result<(), String> {
+    let state = app.state::<Mutex<Desktop>>();
+    state
+        .lock()
+        .map_err(|error| error.to_string())?
+        .bridge
+        .window_closed()
 }
 
 #[derive(Deserialize)]
 pub struct CommandRequest {
+    #[serde(default)]
+    pub lifetime: ProcessLifetime,
     pub kind: CliKind,
     pub args: Vec<String>,
     pub directory: Option<PathBuf>,
@@ -134,6 +142,7 @@ pub fn run_cli(
     }
     args.extend(request.args);
     let id = state.bridge.spawn(ProcessRequest {
+        lifetime: request.lifetime,
         kind: request.kind,
         program,
         args,
@@ -222,19 +231,28 @@ fn dispatch_events(app: tauri::AppHandle, stopped: Arc<AtomicBool>) {
         let Ok(mut state) = state.lock() else {
             break;
         };
+        let mut started_games = std::collections::HashSet::new();
         for event in state.bridge.drain() {
+            if let BridgeEvent::GameStarted { task_id } = &event {
+                started_games.insert(*task_id);
+            }
             let (id, finished, payload) = event_payload(event, &app, &mut state.directories);
             if let Some(channel) = state.channels.get(&id)
                 && channel.send(payload).is_err()
                 && !finished
             {
-                state.bridge.cancel(id);
+                state.bridge.observer_closed(id);
             }
             if finished {
+                started_games.remove(&id);
                 state.channels.remove(&id);
             }
         }
+        let close_after_launch = state.preferences.close_after_launch && !started_games.is_empty();
         drop(state);
+        if close_after_launch && let Some(window) = app.get_webview_window("main") {
+            let _ = window.close();
+        }
         std::thread::sleep(Duration::from_millis(40));
     }
 }
@@ -245,6 +263,11 @@ fn event_payload(
     directories: &mut std::collections::HashSet<PathBuf>,
 ) -> (TaskId, bool, Value) {
     match event {
+        BridgeEvent::GameStarted { task_id } => (
+            task_id,
+            false,
+            json!({"type":"progress", "message": tr!("Game process started")}),
+        ),
         BridgeEvent::Progress { task_id, envelope } => {
             let (completed, total) = wire::progress_numbers(&envelope.data);
             let message = wire::progress_label(&envelope.data);
@@ -291,7 +314,12 @@ fn event_payload(
                     }
                 }
             } else {
-                json!({"type": "finished", "ok": false, "status": status})
+                match success_payload(&stdout, app, directories) {
+                    Ok(data) => {
+                        json!({"type": "finished", "ok": false, "status": status, "data": data})
+                    }
+                    Err(_) => json!({"type": "finished", "ok": false, "status": status}),
+                }
             };
             (task_id, true, payload)
         }

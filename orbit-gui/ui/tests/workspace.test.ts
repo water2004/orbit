@@ -120,6 +120,7 @@ it.each(["client", "server"])(
       .mockResolvedValueOnce({});
     await launch(target);
     expect(vi.mocked(run).mock.calls[1][0]).toMatchObject({
+      lifetime: "game",
       kind: "orbit",
       directory: target.directory,
       args: [

@@ -11,6 +11,7 @@ import Modal from "../components/Modal.vue";
 import JavaChooser from "../components/JavaChooser.vue";
 import DropdownSelect from "../components/upstream/DropdownSelect.vue";
 import ProgressSpinner from "../components/upstream/ProgressSpinner.vue";
+import Toggle from "../components/upstream/Toggle.vue";
 import { useCommandScope } from "../services/task-scope";
 const {
   task: dialogTask,
@@ -62,6 +63,7 @@ const resolvedPaths = ref<{
   repository_directory: string;
 }>();
 const labels: Record<string, [string, string]> = {
+  "network.download-source": ["Game download source", "游戏下载源"],
   "network.concurrency": ["Parallel downloads", "并行下载数量"],
   "network.connect-timeout-seconds": [
     "Connection timeout (seconds)",
@@ -96,6 +98,8 @@ const labels: Record<string, [string, string]> = {
 function optionLabel(value: string) {
   const labels: Record<string, [string, string]> = {
     system: ["Follow system", "跟随系统"],
+    official: ["Official servers", "官方源"],
+    bmclapi: ["BMCLAPI · by bangbang93", "BMCLAPI · bangbang93 公益镜像"],
     en: ["English", "English"],
     "zh-CN": ["简体中文", "简体中文"],
     auto: ["Automatic", "自动"],
@@ -484,6 +488,55 @@ watch(tab, (value) => {
             }}</Button>
           </div>
         </template>
+        <div
+          v-if="tab === 'launcher' && workspace.preferences"
+          class="card setting"
+        >
+          <div>
+            <h3>
+              {{
+                t(
+                  "Close Launcher after the game starts",
+                  "游戏启动后关闭启动器",
+                )
+              }}
+            </h3>
+            <p>
+              {{
+                t(
+                  "The game keeps running. Launcher continues collecting logs without the GUI.",
+                  "游戏会继续运行，Launcher 在后台收集日志，不依赖 GUI。",
+                )
+              }}
+            </p>
+          </div>
+          <Toggle
+            :model-value="workspace.preferences.close_after_launch"
+            @update:model-value="
+              (value) => {
+                preferences().close_after_launch = value;
+                act(() => savePreferences(preferences()));
+              }
+            "
+          />
+        </div>
+        <div v-if="tab === 'launcher'" class="card">
+          <h3>BMCLAPI · by bangbang93</h3>
+          <p>
+            {{
+              t(
+                "Opt-in public mirror for Minecraft, supported loaders and Java. Authentication, pinned metadata, checksums and uncovered endpoints (including Quilt) stay upstream. Mod providers are unchanged.",
+                "可选的 Minecraft、受支持加载器及 Java 公益下载镜像。账户认证、带摘要的元数据、校验文件和未覆盖端点（包括 Quilt）仍使用原站；不影响模组 Provider。",
+              )
+            }}
+          </p>
+          <a
+            href="https://bmclapidoc.bangbang93.com/"
+            target="_blank"
+            rel="noreferrer"
+            >{{ t("Service documentation and terms", "服务说明与使用协议") }}</a
+          >
+        </div>
         <template v-if="tab === 'java'"
           ><div class="page-heading">
             <div>

@@ -6,6 +6,8 @@ use std::path::{Path, PathBuf};
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Preferences {
+    #[serde(default)]
+    pub close_after_launch: bool,
     pub orbit_binary: PathBuf,
     pub launcher_binary: PathBuf,
     pub selected_instance: Option<String>,
@@ -63,6 +65,7 @@ impl Preferences {
         match std::fs::read(path) {
             Ok(bytes) => serde_json::from_slice(&bytes).map_err(|e| e.to_string()),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Self {
+                close_after_launch: false,
                 orbit_binary: directory.join(executable_name("orbit")),
                 launcher_binary: directory.join(executable_name("orbit-launcher")),
                 selected_instance: None,
