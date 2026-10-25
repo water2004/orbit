@@ -29,15 +29,18 @@ import { t } from "../i18n";
 import { instancePath } from "../services/navigation";
 import Button from "../components/upstream/Button.vue";
 import BigOptionButton from "../components/upstream/BigOptionButton.vue";
+import DropdownSelect from "../components/upstream/DropdownSelect.vue";
+import ProgressSpinner from "../components/upstream/ProgressSpinner.vue";
+import LoaderIcon from "../components/LoaderIcon.vue";
 const route = useRoute(),
   router = useRouter(),
   step = ref(route.query.migrate || route.query.loader ? 0 : -1),
   catalog = ref<MinecraftVersion[]>([]),
   loaders = ref<LoaderVersion[]>([]),
   loading = ref(false),
+  catalogLoading = ref(false),
   busy = ref(false),
   versionFilter = ref("release"),
-  query = ref(""),
   error = ref(""),
   java = ref<number>(),
   pack = ref<Pack>(),
@@ -65,19 +68,24 @@ const steps = computed(() => [
 const visibleVersions = computed(() =>
   catalog.value.filter(
     (v) =>
-      (versionFilter.value === "all" ||
-        v.version_type === versionFilter.value) &&
-      v.id.toLowerCase().includes(query.value.toLowerCase()),
+      versionFilter.value === "all" || v.version_type === versionFilter.value,
   ),
 );
 const canNext = computed(() =>
   step.value === 0
     ? !!draft.minecraft
     : step.value === 1
-      ? draft.loader === "vanilla" || !!draft.loaderVersion
+      ? !loading.value &&
+        !!java.value &&
+        !error.value &&
+        (draft.loader === "vanilla" || !!draft.loaderVersion)
       : !!draft.name.trim() &&
         (draft.kind !== "server" || !!draft.serverDirectory),
 );
+watch(versionFilter, () => {
+  if (!visibleVersions.value.some((version) => version.id === draft.minecraft))
+    draft.minecraft = "";
+});
 let catalogRevision = 0;
 async function components() {
   const revision = ++catalogRevision;
@@ -215,7 +223,9 @@ async function migrate() {
   }
 }
 async function loadCatalog() {
-  if (catalog.value.length) return;
+  if (catalog.value.length || catalogLoading.value) return;
+  catalogLoading.value = true;
+  error.value = "";
   try {
     catalog.value = (
       await launcher<{ versions: MinecraftVersion[] }>(
@@ -226,6 +236,8 @@ async function loadCatalog() {
     ).versions;
   } catch (e) {
     error.value = String(e);
+  } finally {
+    catalogLoading.value = false;
   }
 }
 function customInstallation() {
@@ -379,11 +391,6 @@ watch(step, (value) => {
     <template v-else-if="step >= 0">
       <div v-if="step === 0" class="stack">
         <div class="toolbar">
-          <input
-            v-model="query"
-            class="search"
-            :placeholder="t('Find a Minecraft version', '查找 Minecraft 版本')"
-          />
           <div class="tabs">
             <button
               v-for="item in [
@@ -399,25 +406,30 @@ watch(step, (value) => {
             </button>
           </div>
         </div>
-        <div class="version-picker list">
-          <button
-            v-for="version in visibleVersions"
-            :key="version.id"
-            class="version-option"
-            :class="{ selected: draft.minecraft === version.id }"
-            @click="draft.minecraft = version.id"
-          >
-            <strong class="grow">{{ version.id }}</strong
-            ><span class="badge">{{
-              version.version_type === "release"
-                ? t("Release", "正式版")
-                : version.version_type === "snapshot"
-                  ? t("Snapshot", "快照")
-                  : version.version_type
-            }}</span
-            ><Check v-if="draft.minecraft === version.id" :size="18" />
-          </button>
-        </div>
+        <label class="field"
+          >{{ t("Minecraft version", "Minecraft 版本")
+          }}<DropdownSelect
+            v-model="draft.minecraft"
+            :label="t('Minecraft version', 'Minecraft 版本')"
+            :loading="catalogLoading"
+            :options="
+              visibleVersions.map((version) => ({
+                value: version.id,
+                label: version.id,
+                badge:
+                  version.version_type === 'release'
+                    ? t('Release', '正式版')
+                    : version.version_type === 'snapshot'
+                      ? t('Snapshot', '快照')
+                      : version.version_type,
+              }))
+            "
+        /></label>
+        <Button
+          v-if="!catalogLoading && !catalog.length"
+          @click="loadCatalog"
+          >{{ t("Retry", "重试") }}</Button
+        >
       </div>
       <div v-if="step === 1" class="stack">
         <div class="card stack">
@@ -447,6 +459,11 @@ watch(step, (value) => {
                 act(components);
               "
             >
+              <LoaderIcon
+                v-if="loader !== 'vanilla'"
+                :loader="loader"
+                :size="28"
+              />
               <strong>{{
                 loader === "vanilla"
                   ? t("Vanilla", "原版")
@@ -459,20 +476,19 @@ watch(step, (value) => {
           </div>
           <label v-if="draft.loader !== 'vanilla'" class="field"
             >{{ t("Loader version", "加载器版本")
-            }}<select
+            }}<DropdownSelect
               v-model="draft.loaderVersion"
-              :disabled="loading || !!pack"
-            >
-              <option
-                v-for="version in loaders"
-                :key="version.version"
-                :value="version.version"
-              >
-                {{ version.version
-                }}{{ version.stable ? " · " + t("Stable", "稳定版") : "" }}
-              </option>
-            </select></label
-          >
+              :disabled="!!pack"
+              :loading="loading"
+              :label="t('Loader version', '加载器版本')"
+              :options="
+                loaders.map((version) => ({
+                  value: version.version,
+                  label: version.version,
+                  badge: version.stable ? t('Stable', '稳定版') : undefined,
+                }))
+              "
+          /></label>
         </div>
         <div class="card row">
           <div class="grow">
@@ -480,14 +496,19 @@ watch(step, (value) => {
             <p>
               {{
                 t(
-                  "Launcher downloads and verifies the required runtime automatically.",
-                  "Launcher 自动下载并校验所需运行时。",
+                  "Launcher follows your Java selection, preferring a matching local runtime in automatic mode.",
+                  "Launcher 遵循 Java 选择；自动模式优先使用匹配的本地运行时。",
                 )
               }}
             </p>
           </div>
-          <span class="badge">{{ t("Managed", "自动管理") }}</span>
+          <ProgressSpinner v-if="loading" /><span v-else class="badge">{{
+            t("Automatic selection", "按设置选择")
+          }}</span>
         </div>
+        <Button v-if="!loading && error" @click="components">{{
+          t("Retry loading components", "重新加载组件")
+        }}</Button>
       </div>
       <div v-if="step === 2" class="stack">
         <div class="card stack">
@@ -636,26 +657,6 @@ watch(step, (value) => {
 .stepper .complete span {
   background: var(--color-brand);
   color: var(--color-accent-contrast);
-}
-.version-picker {
-  max-height: 48vh;
-  overflow: auto;
-  overscroll-behavior: contain;
-}
-.version-option {
-  width: 100%;
-  display: flex;
-  text-align: left;
-  align-items: center;
-  gap: 12px;
-  padding: 13px 18px;
-  border: 0;
-  border-bottom: 1px solid var(--surface-4);
-  background: none;
-  cursor: pointer;
-}
-.version-option:hover {
-  background: var(--surface-4);
 }
 .selected {
   background: var(--color-button-bg-selected) !important;

@@ -3,11 +3,14 @@ import { onMounted, onUnmounted, ref, useId } from "vue";
 import { X } from "lucide-vue-next";
 import Button from "./upstream/Button.vue";
 import { t } from "../i18n";
+import type { Task } from "../services/cli";
+import TaskProgress from "./TaskProgress.vue";
 const props = withDefaults(
   defineProps<{
     title: string;
     wide?: boolean;
     closable?: boolean;
+    task?: Task;
   }>(),
   { closable: true },
 );
@@ -49,6 +52,7 @@ onUnmounted(() => previous?.focus());
         /></Button>
       </header>
       <section class="modal-scroll"><slot /></section>
+      <TaskProgress v-if="task" :task="task" />
       <footer v-if="$slots.footer"><slot name="footer" /></footer></dialog
   ></Teleport>
 </template>

@@ -1,41 +1,130 @@
 <script setup lang="ts">
-import { computed, ref, onMounted, watch } from "vue";
+import { computed, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import {
   Search,
   Plus,
   Download,
   Check,
-  ArrowLeft,
   LoaderCircle,
   SlidersHorizontal,
 } from "lucide-vue-next";
-import { workspace, orbit, mutate, act } from "../services/workspace";
+import {
+  workspace,
+  orbit,
+  mutate,
+  act,
+  selectInstance,
+} from "../services/workspace";
 import { Cancelled } from "../services/cli";
 import {
   discoverySession,
   projectKey,
   installedPackages,
   addArguments,
-  type DiscoveryState,
 } from "../services/discovery";
-import { instancePath } from "../services/navigation";
+import { instancePath, discoveryPath } from "../services/navigation";
+import { imageUrl } from "../services/cli";
+import DropdownSelect from "../components/upstream/DropdownSelect.vue";
+import ProgressSpinner from "../components/upstream/ProgressSpinner.vue";
 import { t } from "../i18n";
-import type { SearchResult, Package, Instance } from "../types";
+import type { SearchResult, Package } from "../types";
 import Button from "../components/upstream/Button.vue";
 import Avatar from "../components/Avatar.vue";
-import Modal from "../components/Modal.vue";
 import PackageManager from "../components/PackageManager.vue";
 const route = useRoute(),
   router = useRouter();
-const instance = computed(() =>
-  workspace.instances.find((i) => i.id === route.params.id),
+const targetId = computed(() =>
+  typeof route.query.instance === "string" ? route.query.instance : "",
 );
-const state = computed(() => discoverySession(instance.value?.id));
-const chooseTarget = ref<SearchResult>();
+const instance = computed(() =>
+  workspace.instances.find((i) => i.id === targetId.value),
+);
+const state = computed(() =>
+  discoverySession(targetId.value || "__no_instance__"),
+);
+const selecting = ref(false);
+const ready = computed(
+  () =>
+    !!instance.value &&
+    !selecting.value &&
+    workspace.selected?.id === instance.value.id &&
+    !!workspace.detail,
+);
+const targetOptions = computed(() =>
+  workspace.instances.map((i) => ({
+    value: i.id,
+    label: i.name,
+    description: [
+      i.game_version,
+      i.loader,
+      i.kind === "server" ? t("Server", "服务端") : t("Client", "客户端"),
+    ]
+      .filter(Boolean)
+      .join(" · "),
+    icon:
+      imageUrl(i.icon_path || undefined) ||
+      (i.kind === "server"
+        ? "/upstream/terminal.png"
+        : "/upstream/grass-block.png"),
+  })),
+);
+let selection = 0;
 const manager = ref<Package>();
+watch(ready, (value) => {
+  if (
+    value &&
+    state.value.query.trim() &&
+    !state.value.searched &&
+    !state.value.loading
+  )
+    void search();
+});
 watch(
-  () => instance.value && workspace.detail?.desired,
+  () => workspace.selected?.id,
+  (id) => {
+    if (!targetId.value && id) void router.replace(discoveryPath(id));
+  },
+  { immediate: true },
+);
+watch(
+  () => [targetId.value, workspace.instances] as const,
+  async ([id], previous) => {
+    if (!id) {
+      if (workspace.selected)
+        await router.replace(discoveryPath(workspace.selected.id));
+      return;
+    }
+    const target = instance.value;
+    if (!target) return;
+    const revision = ++selection;
+    manager.value = undefined;
+    const previousId = previous?.[0];
+    const previousQuery = previousId ? discoverySession(previousId).query : "";
+    if (previousId && previousId !== id && previousQuery) {
+      state.value.query = previousQuery;
+      state.value.results = [];
+      state.value.searched = false;
+    }
+    if (typeof route.query.q === "string") state.value.query = route.query.q;
+    selecting.value = true;
+    try {
+      if (workspace.selected?.id !== id) await selectInstance(target);
+    } finally {
+      if (revision === selection) selecting.value = false;
+    }
+    if (
+      revision === selection &&
+      ready.value &&
+      state.value.query.trim() &&
+      !state.value.searched
+    )
+      await search();
+  },
+  { immediate: true },
+);
+watch(
+  () => ready.value && workspace.detail?.desired,
   (runtime) => {
     if (!runtime) return;
     const session = state.value;
@@ -60,16 +149,25 @@ const results = computed(() =>
 async function search() {
   const session = state.value,
     target = instance.value;
+  if (!target || selecting.value) return;
+  const runtime = workspace.detail?.desired;
+  if (!runtime) {
+    session.error = t(
+      "The instance runtime is unavailable. Check its installation before searching.",
+      "无法读取实例运行时，请先检查实例安装。",
+    );
+    return;
+  }
   const revision = ++session.revision;
   session.loading = true;
   session.error = "";
   try {
-    const runtime = target ? workspace.detail?.desired : undefined;
     const data = await orbit<{ results: SearchResult[] }>(
       [
         "search",
         session.query,
-        ...(runtime ? ["--mc-version", runtime.minecraft] : []),
+        "--mc-version",
+        runtime.minecraft,
         ...(runtime?.loader && runtime.loader !== "vanilla"
           ? ["--modloader", runtime.loader]
           : []),
@@ -88,21 +186,12 @@ async function search() {
     if (revision === session.revision) session.loading = false;
   }
 }
-async function install(
-  project: SearchResult,
-  target = instance.value,
-  options: Pick<
-    DiscoveryState,
-    "recommended" | "environment" | "optional"
-  > = state.value,
-) {
-  if (!target) {
-    chooseTarget.value = project;
-    return;
-  }
+async function install(project: SearchResult) {
+  const target = instance.value;
+  if (!target) return;
   const session = discoverySession(target.id);
   if (session.installing) return;
-  const args = addArguments(project, options);
+  const args = addArguments(project, session);
   session.installing = projectKey(project);
   session.error = "";
   try {
@@ -113,69 +202,52 @@ async function install(
     session.installing = null;
   }
 }
-async function targetSelected(target: Instance) {
-  const project = chooseTarget.value;
-  if (!project) return;
-  const { recommended, environment, optional } = state.value;
-  const options = { recommended, environment, optional };
-  Object.assign(discoverySession(target.id), options);
-  chooseTarget.value = undefined;
-  await router.push({
-    path: instancePath(target.id, "browse"),
-    query: { q: project.name },
-  });
-  await install(project, target, options);
-}
 async function manage(project: SearchResult) {
   const packages = installed(project);
   if (packages.length === 1) manager.value = packages[0];
   else if (instance.value) await router.push(instancePath(instance.value.id));
 }
-onMounted(() => {
-  if (typeof route.query.q === "string") {
-    state.value.query = route.query.q;
-    void search();
-  }
-});
 </script>
 <template>
   <div class="page discover-page">
-    <RouterLink
-      v-if="instance"
-      class="back-link"
-      :to="instancePath(instance.id)"
-      ><ArrowLeft :size="16" />{{ instance.name }} /
-      {{ t("Content", "模组内容") }}</RouterLink
-    >
     <header class="page-heading">
       <div>
-        <h1>
-          {{
-            instance
-              ? t("Add content", "添加模组")
-              : t("Discover mods", "发现模组")
-          }}
-        </h1>
-        <p v-if="instance">
-          {{ t("Installing to", "安装到") }}
-          <strong>{{ instance.name }}</strong> ·
-          {{ workspace.detail?.desired.minecraft }} ·
-          {{ workspace.detail?.desired.loader }}
-        </p>
-        <p v-else>
+        <h1>{{ t("Discover mods", "发现模组") }}</h1>
+        <p>
           {{
             t(
-              "Find a mod, then choose where to install it.",
-              "发现模组，然后选择安装到哪个实例。",
+              "Choose an instance to browse compatible mods.",
+              "选择实例，浏览与其兼容的模组。",
             )
           }}
         </p>
       </div>
-      <Button v-if="instance" @click="router.push(instancePath(instance.id))"
-        ><Check />{{ t("Done", "返回已安装") }}</Button
-      >
+      <div class="target-selector field">
+        <span>{{ t("Install to", "安装到实例") }}</span
+        ><DropdownSelect
+          :model-value="targetId"
+          :options="targetOptions"
+          :label="t('Target instance', '目标实例')"
+          :loading="workspace.loading && !workspace.instances.length"
+          @update:model-value="(id) => router.replace(discoveryPath(id))"
+        />
+      </div>
     </header>
-    <div class="discover-layout">
+    <div v-if="!workspace.instances.length && !workspace.loading" class="empty">
+      <h2>{{ t("Create your first instance", "先创建一个实例") }}</h2>
+      <Button @click="router.push('/create')"
+        ><Plus />{{ t("Create instance", "创建实例") }}</Button
+      >
+    </div>
+    <p v-else-if="targetId && !instance" class="error">
+      {{
+        t(
+          "This instance is not available. Select another instance.",
+          "此实例不存在，请选择其他实例。",
+        )
+      }}
+    </p>
+    <div v-else-if="instance" class="discover-layout">
       <aside class="discover-options stack">
         <h3>
           <SlidersHorizontal :size="16" />{{
@@ -204,15 +276,20 @@ onMounted(() => {
           <div class="stack">
             <label class="field"
               >{{ t("Environment", "运行环境")
-              }}<select v-model="state.environment">
-                <option value="auto">
-                  {{ t("Follow JAR declaration", "遵循 JAR 声明") }}
-                </option>
-                <option value="client">{{ t("Client", "客户端") }}</option>
-                <option value="server">{{ t("Server", "服务端") }}</option>
-                <option value="both">{{ t("Both", "两端") }}</option>
-              </select></label
-            >
+              }}<DropdownSelect
+                v-model="state.environment"
+                :label="t('Environment', '运行环境')"
+                :searchable="false"
+                :options="[
+                  {
+                    value: 'auto',
+                    label: t('Follow JAR declaration', '遵循 JAR 声明'),
+                  },
+                  { value: 'client', label: t('Client', '客户端') },
+                  { value: 'server', label: t('Server', '服务端') },
+                  { value: 'both', label: t('Both', '两端') },
+                ]"
+            /></label>
             <label
               ><input v-model="state.optional" type="checkbox" />{{
                 t("Optional package", "可选包")
@@ -239,11 +316,14 @@ onMounted(() => {
         <p v-if="state.error" role="alert" class="error card">
           {{ state.error }}
         </p>
+        <p v-if="selecting" class="row">
+          <ProgressSpinner />{{ t("Loading instance…", "正在加载实例…") }}
+        </p>
         <small v-if="state.searched"
           >{{ results.length }} {{ t("results", "个结果") }}</small
         >
         <article
-          v-for="result in results"
+          v-for="result in ready ? results : []"
           :key="projectKey(result)"
           class="project-card card"
         >
@@ -297,8 +377,11 @@ onMounted(() => {
             >
           </div>
         </article>
-        <div v-if="!results.length" class="empty">
-          <Search :size="32" />
+        <div v-if="!results.length && !selecting" class="empty">
+          <ProgressSpinner v-if="state.loading" :size="32" /><Search
+            v-else
+            :size="32"
+          />
           <h2>
             {{
               state.loading
@@ -310,56 +393,15 @@ onMounted(() => {
           </h2>
           <p>
             {{
-              instance
-                ? t(
-                    "Results are filtered for this Minecraft version and loader.",
-                    "按此实例的 Minecraft 版本和加载器筛选结果。",
-                  )
-                : t(
-                    "Search Modrinth and your configured CurseForge catalog.",
-                    "搜索 Modrinth 与已配置的 CurseForge 项目。",
-                  )
+              t(
+                "Results are filtered for this Minecraft version and loader.",
+                "按此实例的 Minecraft 版本和加载器筛选结果。",
+              )
             }}
           </p>
         </div>
       </section>
     </div>
-    <Modal
-      v-if="chooseTarget"
-      :title="t('Choose an instance', '选择实例')"
-      @close="chooseTarget = undefined"
-    >
-      <p>
-        {{ chooseTarget.name }} ·
-        {{
-          t(
-            "Choose where to install. Orbit will check compatible versions before applying changes.",
-            "选择安装位置。Orbit 会先检查兼容版本，再确认应用更改。",
-          )
-        }}
-      </p>
-      <div class="stack target-list">
-        <Button
-          v-for="target in workspace.instances"
-          :key="target.id"
-          @click="targetSelected(target)"
-          >{{ target.name }} ·
-          {{
-            target.kind === "server"
-              ? t("Server", "服务端")
-              : t("Client", "客户端")
-          }}</Button
-        >
-      </div>
-      <template #footer
-        ><Button @click="chooseTarget = undefined">{{
-          t("Cancel", "取消")
-        }}</Button
-        ><Button @click="router.push('/create')">{{
-          t("Create instance", "创建实例")
-        }}</Button></template
-      >
-    </Modal>
     <PackageManager
       v-if="manager"
       :pkg="manager"
@@ -373,6 +415,9 @@ onMounted(() => {
   grid-template-columns: 220px minmax(0, 1fr);
   gap: 24px;
   align-items: start;
+}
+.target-selector {
+  width: min(380px, 100%);
 }
 .discover-options {
   position: sticky;
@@ -431,9 +476,6 @@ onMounted(() => {
 .installed-label {
   color: var(--color-green);
   font-size: 12px;
-}
-.target-list {
-  margin-top: 16px;
 }
 @media (max-width: 1100px) {
   .discover-layout {

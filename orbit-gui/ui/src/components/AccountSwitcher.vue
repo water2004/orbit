@@ -49,6 +49,7 @@ async function choose(account: Account) {
   <ActionMenu :label="t('Switch account', '切换账户')">
     <template #trigger
       ><Avatar
+        skin
         v-if="current"
         :src="current.avatar_path"
         :alt="current.profile_name"
@@ -69,6 +70,7 @@ async function choose(account: Account) {
       @click="act(() => choose(account))"
     >
       <Avatar
+        skin
         :src="account.avatar_path"
         :alt="account.profile_name"
         :size="32"

@@ -17,8 +17,7 @@ export interface DiscoveryState {
   error: string;
 }
 const sessions = new Map<string, DiscoveryState>();
-export function discoverySession(id?: string) {
-  const key = id ?? "global";
+export function discoverySession(key: string) {
   let state = sessions.get(key);
   if (!state) {
     state = reactive<DiscoveryState>({

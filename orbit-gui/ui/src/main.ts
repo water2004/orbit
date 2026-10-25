@@ -18,7 +18,6 @@ const router = createRouter({
       path: "/instance/:id",
       component: InstanceContext,
       children: [
-        { path: "browse", component: Browse },
         { path: "create", component: Create },
         { path: ":tab", component: Instance },
       ],

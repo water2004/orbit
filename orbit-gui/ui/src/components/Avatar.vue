@@ -7,6 +7,7 @@ const props = withDefaults(
     alt?: string;
     tintBy?: string;
     size?: string | number;
+    skin?: boolean;
   }>(),
   { alt: "", size: "100%" },
 );
@@ -31,6 +32,10 @@ const hue = computed(
 <template>
   <div
     class="avatar"
+    :class="{
+      'avatar-placeholder': (!src || failed) && !$slots.fallback,
+      'avatar-skin': skin,
+    }"
     :style="{ width: dimension, height: dimension, '--avatar-hue': hue }"
   >
     <img
@@ -40,9 +45,11 @@ const hue = computed(
       loading="lazy"
       @error="failed = true"
     />
-    <span v-else aria-hidden="true">{{
-      (alt || tintBy || "O").slice(0, 1).toUpperCase()
-    }}</span>
+    <slot v-else name="fallback"
+      ><span aria-hidden="true">{{
+        (alt || tintBy || "O").slice(0, 1).toUpperCase()
+      }}</span></slot
+    >
   </div>
 </template>
 <style scoped>
@@ -52,20 +59,30 @@ const hue = computed(
   justify-content: center;
   overflow: hidden;
   border-radius: 10px;
-  background: linear-gradient(
-    145deg,
-    hsl(var(--avatar-hue) 35% 42%),
-    hsl(calc(var(--avatar-hue) + 40) 38% 22%)
-  );
+  background: transparent;
   color: white;
   font-size: 2em;
   font-weight: 700;
   flex-shrink: 0;
 }
+.avatar-placeholder {
+  background: linear-gradient(
+    145deg,
+    hsl(var(--avatar-hue) 35% 42%),
+    hsl(calc(var(--avatar-hue) + 40) 38% 22%)
+  );
+}
+.avatar-skin {
+  border-radius: 0;
+  overflow: visible;
+}
+.avatar.avatar-skin img {
+  object-fit: contain;
+}
 .avatar img {
   width: 100%;
   height: 100%;
-  object-fit: cover;
+  object-fit: contain;
   image-rendering: pixelated;
 }
 </style>

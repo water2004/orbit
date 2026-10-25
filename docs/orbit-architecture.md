@@ -4,6 +4,12 @@
 
 GUI 导航与基础控件基于 Modrinth App 源码适配，采用 GPL-3.0-only；不导入其业务后端。
 原 GPUI 页面已移除。Vue 仅通过 Tauri 进程桥消费同一 CLI 协议，细节见 [GUI 架构](orbit-gui.md)。
+Launcher 的实例图标、Java 环境发现/选择与存储升级均由 Launcher core 提供；GUI 只展示 CLI
+清单并提交命令。历史读取只进入 `storage_migrations`，以 v0.7.0 schema 为起点备份并逐级
+升级，业务不保留旧字段/旧格式分支。Orbit 的求解和实例物理端语义不因这些展示能力改变。
+GUI 控件只消费 CLI 设置定义、运行时清单和真实任务事件；弹窗在创建任务时绑定进度归属。
+单包与全部升级复用完整图/事实/事务，但求解目标不同：单包先最大化目标，再最小化其余变动；
+全部升级最大化完整用户包投影。目标差异不在 GUI 实现。
 
 ```text
 orbit-gui       Vue/Tauri 进程薄壳；不链接任何 core

@@ -62,7 +62,10 @@ export class Cancelled extends Error {}
 
 // A Channel is supplied before spawning: even a CLI which exits immediately
 // cannot finish before its consumer exists. No stdout parsing happens in Vue.
-export function run<T>(request: Request): Promise<T> {
+export function run<T>(
+  request: Request,
+  observe?: (task: Task) => void,
+): Promise<T> {
   const task = reactive<Task>({
     id: provisionalId--,
     label: request.label,
@@ -70,6 +73,7 @@ export function run<T>(request: Request): Promise<T> {
     message: "",
   });
   activity.tasks.push(task);
+  observe?.(task);
   // Keep active requests and a bounded recent history.
   if (activity.tasks.length > 100) {
     const old = activity.tasks.findIndex((t) =>

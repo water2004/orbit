@@ -29,13 +29,25 @@ import {
 import { importArguments } from "../services/commands";
 import type { Package } from "../types";
 import { t } from "../i18n";
-import { instancePath } from "../services/navigation";
+import { instancePath, discoveryPath } from "../services/navigation";
 import Avatar from "../components/Avatar.vue";
 import Button from "../components/upstream/Button.vue";
 import Modal from "../components/Modal.vue";
 import PackageManager from "../components/PackageManager.vue";
 import ActionMenu from "../components/ActionMenu.vue";
 import Toggle from "../components/upstream/Toggle.vue";
+import JavaChooser from "../components/JavaChooser.vue";
+import InstanceIcon from "../components/InstanceIcon.vue";
+import { useCommandScope } from "../services/task-scope";
+import DropdownSelect from "../components/upstream/DropdownSelect.vue";
+const {
+  task: dialogTask,
+  orbit: dialogOrbit,
+  launcher: dialogLauncher,
+  mutate: dialogMutate,
+} = useCommandScope();
+const exporting = ref(false),
+  importing = ref(false);
 const route = useRoute(),
   router = useRouter(),
   query = ref(""),
@@ -43,6 +55,49 @@ const route = useRoute(),
   checking = ref(false),
   showUpdates = ref(false);
 const maintenanceOpen = ref(false);
+const configuringJava = ref(false);
+const changingIcon = ref(false);
+async function changeJava(value: string | null) {
+  const instance = selected();
+  configuringJava.value = true;
+  try {
+    await launcher(
+      ["instance", "java", ...(value == null ? ["clear"] : ["set", value])],
+      t("Saving Java selection", "正在保存 Java 选择"),
+      instance,
+    );
+    if (workspace.selected?.id === instance.id) await selectInstance(instance);
+  } finally {
+    configuringJava.value = false;
+  }
+}
+async function changeIcon(reset = false) {
+  if (changingIcon.value) return;
+  changingIcon.value = true;
+  try {
+    const instance = selected();
+    const image = reset
+      ? null
+      : await open({
+          multiple: false,
+          filters: [
+            {
+              name: t("Image", "图片"),
+              extensions: ["png", "jpg", "jpeg", "webp"],
+            },
+          ],
+        });
+    if (!reset && typeof image !== "string") return;
+    await launcher(
+      ["instance", "icon", ...(reset ? ["clear"] : ["set", image as string])],
+      t("Updating instance icon", "正在更新实例图标"),
+      instance,
+    );
+    await refresh(instance.id);
+  } finally {
+    changingIcon.value = false;
+  }
+}
 const activating = ref(new Set<string>());
 async function togglePackage(pkg: Package) {
   if (activating.value.has(pkg.mod_id)) return;
@@ -199,6 +254,7 @@ async function runAudit(report?: string) {
   }
 }
 async function exportPack() {
+  if (exporting.value) return;
   const instance = workspace.selected;
   if (!instance) return;
   const selectedFormat = format.value;
@@ -208,18 +264,23 @@ async function exportPack() {
     defaultPath: `${instance.name}.${selectedFormat === "orbit" ? "orbitbundle" : "mrpack"}`,
   });
   if (!path) return;
-  exportOpen.value = false;
-  await orbit(
-    ["export", path, "--format", selectedFormat, "--content", content],
-    t("Exporting modpack", "正在导出整合包"),
-    instance,
-  );
-  if (withRuntime)
-    await launcher(
-      ["export", path, "--base", path],
-      t("Exporting worlds and runtime state", "正在导出世界及运行时状态"),
+  exporting.value = true;
+  try {
+    await dialogOrbit(
+      ["export", path, "--format", selectedFormat, "--content", content],
+      t("Exporting modpack", "正在导出整合包"),
       instance,
     );
+    if (withRuntime)
+      await dialogLauncher(
+        ["export", path, "--base", path],
+        t("Exporting worlds and runtime state", "正在导出世界及运行时状态"),
+        instance,
+      );
+    exportOpen.value = false;
+  } finally {
+    exporting.value = false;
+  }
 }
 async function importPack() {
   const instance = selected();
@@ -251,12 +312,17 @@ async function importPack() {
 }
 async function importConfirmed() {
   const pack = importReview.value;
-  if (!pack) return;
-  importReview.value = undefined;
-  await mutate(
-    importArguments(pack.path, pack.selected),
-    t("Importing modpack", "正在导入整合包"),
-  );
+  if (!pack || importing.value) return;
+  importing.value = true;
+  try {
+    await dialogMutate(
+      importArguments(pack.path, pack.selected),
+      t("Importing modpack", "正在导入整合包"),
+    );
+    importReview.value = undefined;
+  } finally {
+    importing.value = false;
+  }
 }
 async function resolution(clear = false) {
   await launcher(
@@ -286,25 +352,39 @@ async function status() {
       ><ArrowLeft :size="16" />{{ t("Library", "实例库") }}</RouterLink
     >
     <header class="page-heading">
-      <div>
-        <h1>{{ workspace.selected.name }}</h1>
-        <p>
-          {{
-            workspace.detail?.installed?.minecraft ||
-            workspace.detail?.desired.minecraft
-          }}
-          ·
-          {{
-            workspace.detail?.installed?.loader ||
-            workspace.detail?.desired.loader
-          }}
-          {{ workspace.detail?.installed?.loader_version }} ·
-          {{
-            workspace.selected.kind === "server"
-              ? t("Server", "服务端")
-              : t("Client", "客户端")
-          }}
-        </p>
+      <div class="row">
+        <button
+          :title="t('Change instance icon', '更改实例图标')"
+          :disabled="changingIcon"
+          @click="act(() => changeIcon())"
+        >
+          <InstanceIcon
+            :src="workspace.detail?.icon_path"
+            :name="workspace.selected.name"
+            :kind="workspace.selected.kind"
+            :size="56"
+          />
+        </button>
+        <div>
+          <h1>{{ workspace.selected.name }}</h1>
+          <p>
+            {{
+              workspace.detail?.installed?.minecraft ||
+              workspace.detail?.desired.minecraft
+            }}
+            ·
+            {{
+              workspace.detail?.installed?.loader ||
+              workspace.detail?.desired.loader
+            }}
+            {{ workspace.detail?.installed?.loader_version }} ·
+            {{
+              workspace.selected.kind === "server"
+                ? t("Server", "服务端")
+                : t("Client", "客户端")
+            }}
+          </p>
+        </div>
       </div>
       <div class="row">
         <Button
@@ -356,7 +436,7 @@ async function status() {
             :placeholder="t('Filter installed mods', '筛选已安装模组')"
           /><Button
             type="colored"
-            @click="router.push(instancePath(selected().id, 'browse'))"
+            @click="router.push(discoveryPath(selected().id))"
             ><PackagePlus />{{ t("Add content", "添加模组") }}</Button
           ><ActionMenu :label="t('More content actions', '更多内容操作')">
             <button @click="act(importPack)">
@@ -531,6 +611,43 @@ async function status() {
           >
         </div>
       </div>
+      <div class="card stack">
+        <h2>{{ t("Java runtime", "Java 运行时") }}</h2>
+        <JavaChooser
+          :model-value="workspace.detail?.java_selection"
+          inherit
+          :disabled="configuringJava"
+          @update:model-value="(value) => act(() => changeJava(value))"
+        />
+      </div>
+      <div class="card row">
+        <InstanceIcon
+          :src="workspace.detail?.icon_path"
+          :name="workspace.selected.name"
+          :kind="workspace.selected.kind"
+          :size="56"
+        />
+        <div class="grow">
+          <h3>{{ t("Instance icon", "实例图标") }}</h3>
+          <p>
+            {{
+              t(
+                "A personal image for this instance.",
+                "为这个实例选择一张图片。",
+              )
+            }}
+          </p>
+        </div>
+        <Button :disabled="changingIcon" @click="act(() => changeIcon())">{{
+          t("Choose image…", "选择图片…")
+        }}</Button
+        ><Button
+          v-if="workspace.detail?.icon_path"
+          :disabled="changingIcon"
+          @click="act(() => changeIcon(true))"
+          >{{ t("Reset", "重置") }}</Button
+        >
+      </div>
       <div v-if="workspace.selected.kind === 'client'" class="card stack">
         <h2>{{ t("Window resolution", "窗口分辨率") }}</h2>
         <p>
@@ -617,13 +734,17 @@ async function status() {
           <input
             v-model="auditFilter"
             :placeholder="t('All mods', '全部模组')"
-          /><select v-model="minRisk">
-            <option value="0">{{ t("All risks", "全部风险") }}</option>
-            <option value="35">
-              {{ t("Medium and above", "中等及以上") }}
-            </option>
-            <option value="70">{{ t("High risk", "高风险") }}</option></select
-          ><Button
+          /><DropdownSelect
+            v-model="minRisk"
+            :label="t('Risk level', '风险等级')"
+            :searchable="false"
+            :options="[
+              { value: '0', label: t('All risks', '全部风险') },
+              { value: '35', label: t('Medium and above', '中等及以上') },
+              { value: '70', label: t('High risk', '高风险') },
+            ]"
+          />
+          <Button
             type="colored"
             :disabled="auditBusy"
             @click="act(() => runAudit())"
@@ -751,6 +872,7 @@ async function status() {
     </template>
     <Modal
       v-if="renameOpen"
+      :task="dialogTask"
       :title="t('Rename instance', '重命名实例')"
       @close="renameOpen = false"
       ><label class="field"
@@ -762,7 +884,7 @@ async function status() {
           @click="
             act(async () => {
               const instance = selected();
-              await launcher(
+              await dialogLauncher(
                 ['instance', 'rename', newName],
                 t('Renaming instance', '正在重命名实例'),
                 instance,
@@ -777,6 +899,7 @@ async function status() {
     >
     <Modal
       v-if="unregister"
+      :task="dialogTask"
       :title="t('Remove from library?', '从实例库移除？')"
       @close="unregister = false"
       ><p>
@@ -793,7 +916,7 @@ async function status() {
           type="colored"
           @click="
             act(async () => {
-              await launcher(
+              await dialogLauncher(
                 ['instance', 'remove'],
                 t('Unregistering instance', '正在取消实例注册'),
                 selected(),
@@ -891,15 +1014,22 @@ async function status() {
     />
     <Modal
       v-if="exportOpen"
+      :task="dialogTask"
+      :closable="!exporting"
       :title="t('Export modpack', '导出整合包')"
       @close="exportOpen = false"
       ><div class="stack">
         <label class="field"
           >{{ t("Format", "格式")
-          }}<select v-model="format">
-            <option value="orbit">Orbit (.orbitbundle)</option>
-            <option value="mrpack">Modrinth (.mrpack)</option>
-          </select></label
+          }}<DropdownSelect
+            v-model="format"
+            :disabled="exporting"
+            :label="t('Format', '格式')"
+            :searchable="false"
+            :options="[
+              { value: 'orbit', label: 'Orbit (.orbitbundle)' },
+              { value: 'mrpack', label: 'Modrinth (.mrpack)' },
+            ]" /></label
         ><label
           ><input v-model="includeData" type="checkbox" />{{
             t("Include owned mod data", "包含模组所属数据")
@@ -911,14 +1041,18 @@ async function status() {
         >
       </div>
       <template #footer
-        ><Button @click="exportOpen = false">{{ t("Cancel", "取消") }}</Button
-        ><Button type="colored" @click="act(exportPack)">{{
+        ><Button :disabled="exporting" @click="exportOpen = false">{{
+          t("Close", "关闭")
+        }}</Button
+        ><Button type="colored" :loading="exporting" @click="act(exportPack)">{{
           t("Choose destination…", "选择导出位置…")
         }}</Button></template
       ></Modal
     >
     <Modal
       v-if="importReview"
+      :task="dialogTask"
+      :closable="!importing"
       :title="t('Import modpack', '导入整合包')"
       @close="importReview = undefined"
       ><div class="stack">
@@ -940,12 +1074,15 @@ async function status() {
         >
       </div>
       <template #footer
-        ><Button @click="importReview = undefined">{{
+        ><Button :disabled="importing" @click="importReview = undefined">{{
           t("Cancel", "取消")
         }}</Button
-        ><Button type="colored" @click="act(importConfirmed)">{{
-          t("Import", "导入")
-        }}</Button></template
+        ><Button
+          type="colored"
+          :loading="importing"
+          @click="act(importConfirmed)"
+          >{{ t("Import", "导入") }}</Button
+        ></template
       ></Modal
     >
     <Modal v-if="eula" title="Minecraft EULA" wide @close="eula = undefined"

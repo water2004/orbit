@@ -1,5 +1,14 @@
 // Browser-only visual fixture. Does not invoke a CLI, open user files, or ship in dist.
-import { mockIPC } from "@tauri-apps/api/mocks";
+import {
+  mockIPC,
+  mockWindows,
+  mockConvertFileSrc,
+} from "@tauri-apps/api/mocks";
+mockWindows("main");
+mockConvertFileSrc("windows");
+// Fixture artwork is served by Vite, not the native asset protocol. Only this
+// excluded test entry replaces the mock's conversion; production stays strict.
+window.__TAURI_INTERNALS__.convertFileSrc = (path: string) => path;
 import type { Channel } from "@tauri-apps/api/core";
 import type { Request } from "../src/services/cli";
 import { discoverySession } from "../src/services/discovery";
@@ -9,6 +18,8 @@ const instances = [
     name: "Creative · Fabric",
     directory: "X:/fixture/creative",
     kind: "client",
+    game_version: "26.2",
+    loader: "fabric",
     is_default: true,
   },
 ];
@@ -42,6 +53,7 @@ const results = [
   downloads: 12000000,
   categories: ["optimization"],
   compatible: true,
+  icon_url: "/orbit.svg",
 }));
 Object.assign(discoverySession("demo"), {
   query: "sodium",
@@ -58,6 +70,7 @@ const prefs = {
 };
 let id = 0;
 mockIPC((cmd, args) => {
+  if (cmd === "plugin:window|is_maximized") return false;
   if (cmd === "preferences") return prefs;
   if (cmd === "save_preferences") return;
   if (cmd === "run_cli") {
@@ -105,6 +118,66 @@ mockIPC((cmd, args) => {
           },
         ],
       };
+    else if (key === "java list")
+      data = {
+        sources: ["system", "mojang"],
+        runtimes: [
+          {
+            runtime_id: "fixture-system",
+            provider: "system",
+            executable: "X:/fixture/java/bin/java",
+            major: 25,
+            version: "25.0.2",
+            verified: true,
+            bytes: null,
+          },
+        ],
+      };
+    else if (key === "versions loader")
+      data = {
+        versions: [
+          { version: "0.20.1", stable: true },
+          { version: "0.20.0", stable: false },
+          { version: "0.19.5", stable: true },
+        ],
+      };
+    else if (key === "versions java") data = { major: 25 };
+    else if (key === "config list")
+      data =
+        request.kind === "orbit"
+          ? {
+              entries: [
+                {
+                  key: "auth.modrinth-token",
+                  value: "<redacted>",
+                  sensitive: true,
+                  allowed_values: [],
+                },
+                { key: "cache.dir", value: null, allowed_values: [] },
+                { key: "repository.dir", value: null, allowed_values: [] },
+                {
+                  key: "ui.progress-bar",
+                  value: "modern",
+                  allowed_values: ["modern", "plain", "off"],
+                },
+                {
+                  key: "ui.color",
+                  value: "auto",
+                  allowed_values: ["auto", "always", "never"],
+                },
+              ],
+              resolved_paths: {
+                cache_directory: "X:/fixture/cache/jars",
+                repository_directory: "X:/fixture/cache/repository",
+              },
+            }
+          : {
+              settings: [
+                { key: "java.selection", value: "auto", allowed_values: [] },
+              ],
+            };
+    else if (key === "minecraft directory")
+      data = { directory: "X:/fixture/minecraft" };
     else throw new Error(`Read-only fixture does not implement ${key}`);
     events.onmessage({ type: "finished", ok: true, data });
     return ++id;

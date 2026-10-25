@@ -11,6 +11,13 @@
 后续 GUI 交互整理已落地：实例 ID 路由、实例内发现/安装状态、按需加载的包管理、
 新建/整合包/导入统一入口、账户快速切换；默认弹窗关闭和 Escape 已修复。
 求解选择仍由同一个 CLI 多步询问，仅最终确认应用。隔离浏览器与组件测试不触碰真实实例。
+发现页统一为带实例下拉框的 `/browse`，切换目标同步改变筛选和安装目标。
+新增 Launcher 图标管理/清单展示字段、系统 Java 检测和统一选择。
+全局 Java 默认 auto，实例可覆盖；只有无合适本地 Java 时才下载，明确指定时不静默回退。
+迁移从 v0.7.0 schema 起，集中于独立模块，校验/备份后原子替换；未知历史不猜测。
+透明头像/模组图片不再垫占位背景；Minecraft/Loader/Java 等下拉复用同一控件及加载状态。
+弹窗内任务绑定自身进度并提供取消。配置定义由 CLI 给出合法枚举，默认缓存路径不再显示为空。
+单模组升级先最大化目标版本，再对其余包求 Pareto 极小变动，不再套用全局更新前沿。
 
 Fabric 0.20.x 已纳入 Agent 与 audit 的共享兼容范围。对照 0.19.5 / 0.20.0 / 0.20.1
 官方源码和签名发行 JAR，两种 Knot 类加载器的物理来源与 Agent 文件归属回归通过。
@@ -37,7 +44,7 @@ GUI 文件选择已统一异步处理：修正整合包导入/导出按钮同步
 | 依赖求解 | ✅ | 强类型 occurrence 图、原生变更极小与版本极大 Pareto front、any/all/unless、环境、provides、ordering、Java、JarJar |
 | 原因 | ✅ | 自定义 reason 参与原始推导；成功候选用同次 observer |
 | 本地校验 | ✅ | 转 Fat Lockfile 后复用统一建图 |
-| 安装/修复/升级/移除 | ✅ | install 精确物化 lock；add/fix 使用 Pareto 极小变更；upgrade/outdated 使用版本 Pareto 极大；统一生成包事务计划；remove 在 JAR/TOML/lock 任一失败时恢复原状 |
+| 安装/修复/升级/移除 | ✅ | install 精确物化 lock；add/fix 使用 Pareto 极小变更；全部 upgrade/outdated 使用版本 Pareto 极大；单包 upgrade 优先目标最高版本、其次最小变动；统一生成包事务计划；remove 在 JAR/TOML/lock 任一失败时恢复原状 |
 | Modrinth / CurseForge / `file:` | ✅ | 查询、下载、识别、锁定；CurseForge 无 API Key 时拒绝创建 |
 | 多远端包模型 | ✅ | 每个受管包非空 `remotes`；全部来源共同发现，完全相同字节跨 provider 合并 |
 | 完整 TOML 包集合 | ✅ | 所有选中顶层逻辑包均写入 `[packages]`，无根/传递分类；lock 只记录精确事实 |
@@ -56,7 +63,7 @@ GUI 文件选择已统一异步处理：修正整合包导入/导出按钮同步
 | 跨平台全局路径 | ✅ | RuntimeEnvironment + 显式路径；system/executable 布局 |
 | Windows MSI | ✅ | x64 per-machine 完整套件；Orbit 组件携带 Runtime Agent，三个相邻程序、开始菜单入口、可选系统 PATH、同版本重建升级、维护模式、可选清理默认 AppData；发布产物仍需项目证书签名 |
 | Linux deb / Release | ✅ | amd64 拆为可独立安装的 `orbit`（含 Agent）、`orbit-launcher`、`orbit-gui`；GUI 精确依赖同版本两 CLI 并独占 desktop/icon；统一 `v*` tag 发布 MSI、三个 deb、SHA256SUMS 与 release notes |
-| Launcher Java | ✅ | Minecraft 官方 metadata 选择 Mojang 受管 runtime；下载、逐文件校验、共享、启动前复核与安全删除闭环；不受支持的 Temurin/system 分支不进入 config、实例 schema 或 GUI |
+| Launcher Java | ✅ | 官方 metadata 确定所需主版本；auto 优先实测合适的本地 Java，缺失才下载 Mojang；支持全局/实例的 auto、managed、准确路径选择；系统 Java 不被删除，受管 inventory 仍逐文件校验 |
 | Launcher 安装事务 | ✅ | OS 独占文件锁串行化实例写入；journal 支持崩溃后自动安全回滚，并验证路径、文件集合与复用工件 |
 | 组合包 / mrpack | ✅ | `.orbitbundle` 用共享清单、owner namespace、size/SHA-256 inventory 容纳可选投影，并保证每个文件的 Launcher/Orbit 所有权互斥；GUI 迁移编排 Orbit export + Launcher `export --base` 得到一个包。Launcher 恢复设置/世界，Orbit 恢复模组/数据；EULA/凭据不迁移。mrpack 严格使用官方 index、依赖、env 与 override 层 |
 | 长事务进度 | ✅ | 包操作与 audit 均使用 core 强类型事件；版本库批量检查显示刷新/复用与动态 project 总量，去重候选/审计工件精确计数，求解工作总量随实际 run/probe 动态增长 |

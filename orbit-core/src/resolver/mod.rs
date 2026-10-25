@@ -557,7 +557,7 @@ pub(crate) async fn resolve_targeted_upgrade_portfolio(
     package: &str,
     progress: Option<ProgressReporter>,
     selector: &mut Option<ResolutionSelector>,
-) -> Result<ResolutionPortfolio, String> {
+) -> Result<ResolutionPortfolio, crate::OrbitError> {
     resolve_portfolio_with_progress_detailed(
         manifest,
         lockfile,
@@ -567,7 +567,10 @@ pub(crate) async fn resolve_targeted_upgrade_portfolio(
         selector,
     )
     .await
-    .map_err(|error| error.to_string())
+    .map_err(|error| match error {
+        ResolutionFailure::Interaction(error) => error,
+        other => crate::OrbitError::Conflict(other.to_string()),
+    })
 }
 
 #[derive(Debug)]
@@ -2203,6 +2206,70 @@ iris = { version = "*", remotes = [{ type = "file", path = "iris.jar" }] }
                 .any(|diagnostic| diagnostic.package == "a"
                     && diagnostic.facts.iter().any(|fact| fact.contains("missing")))
         );
+    }
+
+    #[tokio::test]
+    async fn targeted_upgrade_keeps_incomparable_minimal_changes_and_propagates_cancellation() {
+        let mut manifest = manifest();
+        manifest.packages.insert(
+            "c".into(),
+            crate::manifest::PackageSpec::new("*", Vec::new()),
+        );
+        let mut current = lockfile();
+        current.packages.push(locked("c"));
+        let mut catalog = CandidateCatalog::default();
+        let mut first = candidate("2", vec![ModDependency::required("b", "=2")]);
+        first.id = "target-needs-b".into();
+        let mut second = candidate("2", vec![ModDependency::required("c", "=2")]);
+        second.id = "target-needs-c".into();
+        catalog.candidates.insert("a".into(), vec![first, second]);
+        for package in ["b", "c"] {
+            catalog
+                .candidates
+                .insert(package.into(), vec![candidate("2", vec![])]);
+        }
+        let mut reports = Vec::new();
+        for choice in [0, 1] {
+            let mut selector: Option<ResolutionSelector> =
+                Some(Box::new(move |_, alternatives| {
+                    assert_eq!(alternatives.len(), 2);
+                    Ok(choice)
+                }));
+            let report = resolve_targeted_upgrade_portfolio(
+                &manifest,
+                &current,
+                &catalog,
+                "a",
+                None,
+                &mut selector,
+            )
+            .await
+            .unwrap()
+            .alternatives
+            .remove(0);
+            assert_eq!(report.selected_versions["a"], "2");
+            assert_eq!(
+                report.changes.len(),
+                2,
+                "target plus exactly one changed dependency"
+            );
+            reports.push(report.selected_versions);
+        }
+        assert_ne!(reports[0], reports[1]);
+        let mut selector: Option<ResolutionSelector> = Some(Box::new(|_, _| {
+            Err(crate::OrbitError::Cancelled("cancelled selection".into()))
+        }));
+        let error = resolve_targeted_upgrade_portfolio(
+            &manifest,
+            &current,
+            &catalog,
+            "a",
+            None,
+            &mut selector,
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(error, crate::OrbitError::Cancelled(_)));
     }
 
     #[tokio::test]

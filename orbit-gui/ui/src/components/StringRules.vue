@@ -3,6 +3,7 @@ import { ArrowDown, ArrowUp, Plus, Trash2 } from "lucide-vue-next";
 import type { StringRule } from "../types";
 import Button from "./upstream/Button.vue";
 import { t } from "../i18n";
+import DropdownSelect from "./upstream/DropdownSelect.vue";
 const draft = defineModel<StringRule>({ required: true });
 function add() {
   draft.value.operations.push({
@@ -30,11 +31,16 @@ function move(index: number, delta: number) {
     </p>
     <label
       >{{ t("Start with", "起始集合")
-      }}<select v-model="draft.initial_all">
-        <option :value="true">{{ t("All versions", "全部版本") }}</option>
-        <option :value="false">{{ t("No versions", "空集") }}</option>
-      </select></label
-    >
+      }}<DropdownSelect
+        :model-value="draft.initial_all ? 'all' : 'none'"
+        :label="t('Start with', '起始集合')"
+        :searchable="false"
+        :options="[
+          { value: 'all', label: t('All versions', '全部版本') },
+          { value: 'none', label: t('No versions', '空集') },
+        ]"
+        @update:model-value="(value) => (draft.initial_all = value === 'all')"
+    /></label>
     <div
       v-for="(operation, index) in draft.operations"
       :key="index"
@@ -42,17 +48,26 @@ function move(index: number, delta: number) {
     >
       <div class="row wrap">
         <span class="badge">{{ index + 1 }}</span
-        ><select v-model="operation.operator">
-          <option value="intersect">
-            {{ t("Keep matching", "保留匹配项（交集）") }}
-          </option>
-          <option value="union">
-            {{ t("Also include", "加入匹配项（并集）") }}
-          </option>
-          <option value="complement">
-            {{ t("Invert the result so far", "反转当前结果（整体取补）") }}
-          </option></select
-        ><span class="grow" /><Button
+        ><DropdownSelect
+          :model-value="operation.operator"
+          :label="t('Set operation', '集合运算')"
+          :searchable="false"
+          :options="[
+            {
+              value: 'intersect',
+              label: t('Keep matching', '保留匹配项（交集）'),
+            },
+            { value: 'union', label: t('Also include', '加入匹配项（并集）') },
+            {
+              value: 'complement',
+              label: t('Invert the result so far', '反转当前结果（整体取补）'),
+            },
+          ]"
+          @update:model-value="
+            (value) => (operation.operator = value as typeof operation.operator)
+          "
+        />
+        <span class="grow" /><Button
           :disabled="index === 0"
           type="quiet"
           :aria-label="t('Move up', '上移')"
@@ -77,14 +92,23 @@ function move(index: number, delta: number) {
             t("Not", "取反")
           }}</label
         >
-        <select v-model="operation.predicate">
-          <option value="equals">{{ t("Equals", "精确等于") }}</option>
-          <option value="contains">{{ t("Contains", "包含") }}</option>
-          <option value="starts_with">{{ t("Starts with", "开头为") }}</option>
-          <option value="ends_with">{{ t("Ends with", "结尾为") }}</option>
-          <option value="empty">{{ t("Is empty", "为空") }}</option>
-          <option value="present">{{ t("Is not empty", "非空") }}</option>
-        </select>
+        <DropdownSelect
+          :model-value="operation.predicate"
+          :label="t('String comparison', '字符串比较')"
+          :searchable="false"
+          :options="[
+            { value: 'equals', label: t('Equals', '精确等于') },
+            { value: 'contains', label: t('Contains', '包含') },
+            { value: 'starts_with', label: t('Starts with', '开头为') },
+            { value: 'ends_with', label: t('Ends with', '结尾为') },
+            { value: 'empty', label: t('Is empty', '为空') },
+            { value: 'present', label: t('Is not empty', '非空') },
+          ]"
+          @update:model-value="
+            (value) =>
+              (operation.predicate = value as typeof operation.predicate)
+          "
+        />
         <input
           v-if="!['empty', 'present'].includes(operation.predicate)"
           v-model="operation.value"

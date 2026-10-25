@@ -5,6 +5,9 @@ export interface Instance {
   kind: string;
   is_default: boolean;
   minecraft_directory?: string;
+  icon_path?: string | null;
+  game_version?: string | null;
+  loader?: string | null;
 }
 export interface Runtime {
   minecraft: string;
@@ -17,6 +20,7 @@ export interface Detail extends Instance {
   installed?: Runtime;
   selected_account_id?: string;
   client_resolution?: { width: number; height: number };
+  java_selection?: string | null;
 }
 export interface Package {
   mod_id: string;

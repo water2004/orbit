@@ -21,7 +21,8 @@ import NavButton from "./components/upstream/NavButton.vue";
 import Button from "./components/upstream/Button.vue";
 import ActivityPanel from "./components/ActivityPanel.vue";
 import AccountSwitcher from "./components/AccountSwitcher.vue";
-import { instancePath } from "./services/navigation";
+import WindowControls from "./components/WindowControls.vue";
+import { discoveryPath } from "./services/navigation";
 const router = useRouter();
 const route = useRoute();
 const routeInstance = computed(() =>
@@ -52,10 +53,14 @@ watchEffect(() => {
 </script>
 <template>
   <div class="app-grid">
-    <header class="app-title-bar">
-      <img src="/orbit.svg" alt="" width="28" height="28" /><strong
-        class="wordmark"
-        >Orbit</strong
+    <header class="app-title-bar" data-tauri-drag-region>
+      <img
+        data-tauri-drag-region
+        src="/orbit.svg"
+        alt=""
+        width="28"
+        height="28"
+      /><strong data-tauri-drag-region class="wordmark">Orbit</strong
       ><Button
         type="quiet"
         size="sm"
@@ -68,7 +73,11 @@ watchEffect(() => {
         :title="t('Forward', '前进')"
         @click="router.forward()"
         ><ChevronRight /></Button
-      ><span class="grow"></span>
+      ><span
+        class="grow"
+        data-tauri-drag-region
+        style="align-self: stretch"
+      ></span>
       <AccountSwitcher
         :instance-id="
           routeInstance?.kind === 'client' ? routeInstance.id : undefined
@@ -85,23 +94,21 @@ watchEffect(() => {
         @click="activity.open = !activity.open"
         ><Activity
       /></Button>
+      <WindowControls />
     </header>
     <nav class="app-grid-navbar">
       <NavButton
         to="/"
-        :is-primary="
-          (r) =>
-            r.path === '/' ||
-            (r.path.startsWith('/instance') && !r.path.endsWith('/browse'))
-        "
+        :is-primary="(r) => r.path === '/' || r.path.startsWith('/instance')"
         :title="t('Library', '实例库')"
         ><Home /></NavButton
       ><NavButton
         :to="
           route.params.id
-            ? instancePath(String(route.params.id), 'browse')
-            : '/browse'
+            ? discoveryPath(String(route.params.id))
+            : discoveryPath(workspace.selected?.id)
         "
+        :is-primary="(r) => r.path === '/browse'"
         :title="t('Discover', '发现')"
         ><Compass /></NavButton
       ><NavButton to="/create" :title="t('Create instance', '创建实例')"
@@ -116,7 +123,7 @@ watchEffect(() => {
     <main class="app-content">
       <RouterView v-slot="{ Component }"
         ><Transition name="page" mode="out-in"
-          ><component :is="Component" :key="route.fullPath" /></Transition
+          ><component :is="Component" :key="route.path" /></Transition
       ></RouterView>
     </main>
     <div class="app-status"><ActivityPanel /></div>

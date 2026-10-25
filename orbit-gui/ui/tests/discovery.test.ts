@@ -4,7 +4,7 @@ import {
   discoverySession,
   installedPackages,
 } from "../src/services/discovery";
-import { instancePath } from "../src/services/navigation";
+import { discoveryPath } from "../src/services/navigation";
 import type { Package, SearchResult } from "../src/types";
 const project = {
   platform: "modrinth",
@@ -19,7 +19,7 @@ it("retains catalog state per instance, not in a global selected-installation sl
   expect(discoverySession("A")).toBe(a);
   expect(b.query).toBe("");
   expect(b.installing).toBeNull();
-  expect(instancePath("a/b", "browse")).toBe("/instance/a%2Fb/browse");
+  expect(discoveryPath("a/b")).toBe("/browse?instance=a%2Fb");
 });
 it("detects installed UI state by explicit remotes, never mod ID / slug guesses", () => {
   const pkg = {

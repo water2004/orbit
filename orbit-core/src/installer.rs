@@ -1153,8 +1153,8 @@ async fn install_mod(input: InstallModInput<'_>) -> Result<InstallExecution, Orb
             &mut select_resolution,
         )
         .await
-    }
-    .map_err(OrbitError::Conflict)?;
+        .map_err(OrbitError::Conflict)
+    }?;
 
     // 3. Resolve offline
     let resolution = if options.intent == InstallIntent::Upgrade {

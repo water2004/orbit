@@ -9,13 +9,15 @@ import {
   ExternalLink,
   Trash2,
 } from "lucide-vue-next";
-import { workspace, act, launcher } from "../services/workspace";
-import { run } from "../services/cli";
+import { workspace, act } from "../services/workspace";
+import { useCommandScope } from "../services/task-scope";
 import type { Account } from "../types";
 import { t } from "../i18n";
 import Avatar from "../components/Avatar.vue";
 import Button from "../components/upstream/Button.vue";
 import Modal from "../components/Modal.vue";
+import DropdownSelect from "../components/upstream/DropdownSelect.vue";
+const { task, launcher, run } = useCommandScope();
 const flow = ref(""),
   name = ref(""),
   username = ref(""),
@@ -169,6 +171,7 @@ onMounted(() => act(loadProviders));
       >
         <div class="row">
           <Avatar
+            skin
             :src="account.avatar_path"
             :alt="account.profile_name"
             :size="64"
@@ -284,6 +287,7 @@ onMounted(() => act(loadProviders));
     </details>
     <Modal
       v-if="flow"
+      :task="task"
       :title="t('Add account', '添加账户')"
       @close="
         flow = '';
@@ -335,11 +339,16 @@ onMounted(() => act(loadProviders));
         <template v-else
           ><label class="field"
             >{{ t("Authentication service", "认证服务")
-            }}<select v-model="provider">
-              <option v-for="item in providers" :key="item.id" :value="item.id">
-                {{ item.id }} · {{ item.api_root }}
-              </option>
-            </select></label
+            }}<DropdownSelect
+              v-model="provider"
+              :label="t('Authentication service', '认证服务')"
+              :options="
+                providers.map((item) => ({
+                  value: item.id,
+                  label: item.id,
+                  description: item.api_root,
+                }))
+              " /></label
           ><Button type="quiet" @click="endpoint = true"
             ><Plus />{{ t("Add a service first", "添加认证端点") }}</Button
           ><label class="field"
@@ -375,6 +384,7 @@ onMounted(() => act(loadProviders));
     </Modal>
     <Modal
       v-if="endpoint"
+      :task="task"
       :title="t('Add authentication endpoint', '添加认证端点')"
       @close="endpoint = false"
       ><div class="stack">
@@ -400,6 +410,7 @@ onMounted(() => act(loadProviders));
     >
     <Modal
       v-if="session"
+      :task="task"
       :title="t('Sign in to Microsoft', '登录微软账户')"
       @close="session = undefined"
       ><div class="stack">
@@ -425,6 +436,7 @@ onMounted(() => act(loadProviders));
     >
     <Modal
       v-if="remove"
+      :task="task"
       :title="t('Sign out of this account?', '退出此账户？')"
       @close="remove = undefined"
       ><p>

@@ -19,6 +19,24 @@ pub fn success_document(document: &str) -> Result<SuccessEnvelope<Value>> {
     if !envelope.ok {
         bail!("success envelope has ok=false");
     }
+    if envelope.command == "java.list"
+        && !envelope
+            .result
+            .get("sources")
+            .and_then(Value::as_array)
+            .is_some_and(|sources| {
+                ["mojang", "system"]
+                    .iter()
+                    .all(|source| sources.iter().any(|value| value.as_str() == Some(source)))
+            })
+    {
+        bail!(
+            "{}",
+            tr!(
+                "Configured Orbit Launcher does not provide the complete Java inventory. Update the Launcher executable selected in GUI settings."
+            )
+        );
+    }
     Ok(envelope)
 }
 
@@ -165,7 +183,7 @@ fn progress_event_label(event: &str) -> String {
         "java_manifest_started" => "Loading managed Java manifest",
         "java_runtime_resolved" => "Managed Java runtime resolved",
         "java_materialized" => "Assembling managed Java runtime files",
-        "java_runtime_verified" => "Managed Java runtime verified",
+        "java_runtime_verified" => "Java runtime verified",
         "java_runtime_cached" => "Using cached Java runtime",
         "loader_installer_started" => "Running official Loader installer",
         "loader_installer_output" => "Loader installer output",
@@ -529,4 +547,14 @@ mod tests {
         .unwrap_err();
         assert!(error.to_string().contains("expected exactly 2"));
     }
+}
+#[test]
+fn java_inventory_requires_both_sources_even_when_no_runtime_is_found() {
+    assert!(
+        success_document(
+            r#"{"schema_version":2,"command":"java.list","ok":true,"result":{"runtimes":[]}}"#
+        )
+        .is_err()
+    );
+    assert!(success_document(r#"{"schema_version":2,"command":"java.list","ok":true,"result":{"sources":["system","mojang"],"runtimes":[]}}"#).is_ok());
 }

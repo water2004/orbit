@@ -5,6 +5,7 @@ import {
   savePreferences,
   Cancelled,
   type Preferences,
+  type Task,
 } from "./cli";
 import type { Account, Detail, Instance, Package } from "../types";
 import { language, t } from "../i18n";
@@ -104,23 +105,32 @@ export function orbit<T>(
   args: string[],
   label: string,
   instance = workspace.selected,
+  observe?: (task: Task) => void,
 ) {
-  return run<T>({ kind: "orbit", args, label, directory: instance?.directory });
+  return run<T>(
+    { kind: "orbit", args, label, directory: instance?.directory },
+    observe,
+  );
 }
 export function launcher<T>(
   args: string[],
   label: string,
   instance = workspace.selected,
+  observe?: (task: Task) => void,
 ) {
-  return run<T>({ kind: "launcher", args, label, instance: instance?.id });
+  return run<T>(
+    { kind: "launcher", args, label, instance: instance?.id },
+    observe,
+  );
 }
 export async function mutate(
   args: string[],
   label: string,
   instance = workspace.selected,
+  observe?: (task: Task) => void,
 ) {
   if (!instance) throw new Error(t("Select an installation", "请先选择实例"));
-  await orbit(args, label, instance);
+  await orbit(args, label, instance, observe);
   if (workspace.selected?.id === instance.id) await selectInstance(instance);
 }
 export async function launch(instance: Instance) {

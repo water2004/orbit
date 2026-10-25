@@ -2,6 +2,7 @@
 import { computed, ref } from "vue";
 
 import ButtonFrame from "./ButtonFrame.vue";
+import ProgressSpinner from "./ProgressSpinner.vue";
 import type { ButtonProps } from "./types";
 
 const props = withDefaults(defineProps<ButtonProps>(), {
@@ -30,6 +31,7 @@ defineExpose({ element });
     :disabled="props.disabled || props.loading"
     :aria-busy="props.loading || undefined"
   >
+    <ProgressSpinner v-if="props.loading" />
     <slot />
   </ButtonFrame>
 </template>

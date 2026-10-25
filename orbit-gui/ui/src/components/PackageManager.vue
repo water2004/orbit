@@ -12,7 +12,6 @@ import {
   ChevronRight,
 } from "lucide-vue-next";
 import {
-  act,
   mutate as mutateWorkspace,
   orbit,
   workspace,
@@ -30,6 +29,8 @@ import Modal from "./Modal.vue";
 import Button from "./upstream/Button.vue";
 import StringRules from "./StringRules.vue";
 import Avatar from "./Avatar.vue";
+import DropdownSelect from "./upstream/DropdownSelect.vue";
+import { Cancelled, type Task } from "../services/cli";
 const props = defineProps<{ pkg: Package }>();
 const emit = defineEmits<{ close: [] }>();
 const tab = ref("overview"),
@@ -47,6 +48,11 @@ const mode = ref("any"),
   upper = ref(""),
   includeLower = ref(true),
   includeUpper = ref(true);
+const versionOptions = computed(() =>
+  [...new Set(versions.value?.candidates.map((c) => c.version))].map(
+    (value) => ({ value, label: value }),
+  ),
+);
 const provider = ref("modrinth"),
   locator = ref("");
 const current = computed(
@@ -55,8 +61,28 @@ const current = computed(
 );
 const environment = ref(props.pkg.configured_environment ?? "auto");
 const instance = workspace.selected;
-const mutate = (args: string[], label: string) =>
-  mutateWorkspace(args, label, instance);
+const task = ref<Task>();
+const observe = (value: Task) => {
+  task.value = value;
+};
+const working = computed(
+  () =>
+    saving.value ||
+    task.value?.state === "running" ||
+    task.value?.state === "waiting",
+);
+async function mutate(args: string[], label: string) {
+  if (working.value && !saving.value) return;
+  error.value = "";
+  await mutateWorkspace(args, label, instance, observe);
+}
+async function act(operation: () => Promise<unknown>) {
+  try {
+    await operation();
+  } catch (e) {
+    if (!(e instanceof Cancelled)) error.value = String(e);
+  }
+}
 async function load() {
   if (loading.value) return;
   loading.value = true;
@@ -66,6 +92,7 @@ async function load() {
       ["versions", props.pkg.mod_id],
       t("Loading available versions", "正在加载可用版本"),
       instance,
+      observe,
     );
     policy.value = versions.value.policy;
     rules.value = await invoke("parse_string_rule", {
@@ -99,6 +126,7 @@ async function files() {
       ["ownership", props.pkg.mod_id],
       t("Loading files and data", "正在加载文件与数据"),
       instance,
+      observe,
     );
   } catch (e) {
     error.value = String(e);
@@ -155,6 +183,7 @@ function editRules(next: string) {
   <Modal
     :title="`${pkg.mod_id} · ${current.version}`"
     :wide="['versions', 'strings', 'files'].includes(tab)"
+    :task="task"
     @close="emit('close')"
   >
     <div class="stack">
@@ -196,140 +225,141 @@ function editRules(next: string) {
         <LoaderCircle class="spin" />{{ t("Loading…", "正在加载…") }}
       </p>
       <template v-if="tab === 'overview'">
-        <div class="package-summary row">
-          <Avatar :src="current.icon_path" :alt="current.mod_id" :size="64" />
-          <div class="grow stack">
-            <h2>{{ current.mod_id }}</h2>
-            <div class="row wrap">
-              <span class="badge">{{ current.version }}</span
-              ><span class="badge">{{
-                current.enabled
-                  ? t("Enabled", "已启用")
-                  : t("Disabled", "已禁用")
-              }}</span>
+        <fieldset :disabled="working" class="package-controls">
+          <div class="package-summary row">
+            <Avatar :src="current.icon_path" :alt="current.mod_id" :size="64" />
+            <div class="grow stack">
+              <h2>{{ current.mod_id }}</h2>
+              <div class="row wrap">
+                <span class="badge">{{ current.version }}</span
+                ><span class="badge">{{
+                  current.enabled
+                    ? t("Enabled", "已启用")
+                    : t("Disabled", "已禁用")
+                }}</span>
+              </div>
             </div>
+            <Button
+              @click="
+                act(() =>
+                  mutate(
+                    [current.enabled ? 'disable' : 'enable', pkg.mod_id],
+                    t('Updating activation', '正在更新启用状态'),
+                  ),
+                )
+              "
+              >{{
+                current.enabled ? t("Disable", "禁用") : t("Enable", "启用")
+              }}</Button
+            >
           </div>
-          <Button
-            @click="
-              act(() =>
-                mutate(
-                  [current.enabled ? 'disable' : 'enable', pkg.mod_id],
-                  t('Updating activation', '正在更新启用状态'),
-                ),
-              )
-            "
-            >{{
-              current.enabled ? t("Disable", "禁用") : t("Enable", "启用")
-            }}</Button
-          >
-        </div>
-        <div class="management-actions">
-          <button
-            @click="
-              act(() =>
-                mutate(
-                  ['upgrade', pkg.mod_id],
-                  t('Upgrading mod', '正在升级模组'),
-                ),
-              )
-            "
-          >
-            <ArrowUpCircle /><span
-              ><strong>{{ t("Find an update", "查找可行更新") }}</strong
-              ><small>{{
-                t(
-                  "Review compatible upgrades before applying.",
-                  "先查看兼容的升级方案，再确认应用。",
+          <div class="management-actions">
+            <button
+              @click="
+                act(() =>
+                  mutate(
+                    ['upgrade', pkg.mod_id],
+                    t('Upgrading mod', '正在升级模组'),
+                  ),
                 )
-              }}</small></span
-            ><ChevronRight />
-          </button>
-          <button @click="editRules('versions')">
-            <SlidersHorizontal /><span
-              ><strong>{{
-                t("Choose versions & rules", "选择版本与约束")
-              }}</strong
-              ><small>{{
-                t(
-                  "Browse versions, pin a version or limit updates.",
-                  "浏览可用版本、锁定版本或限定更新范围。",
-                )
-              }}</small></span
-            ><ChevronRight />
-          </button>
-          <button @click="files">
-            <Folder /><span
-              ><strong>{{ t("Files & data", "文件与数据") }}</strong
-              ><small>{{
-                t(
-                  "View ownership and reset this mod’s data.",
-                  "查看所属文件，或重置此模组的数据。",
-                )
-              }}</small></span
-            ><ChevronRight />
-          </button>
-        </div>
+              "
+            >
+              <ArrowUpCircle /><span
+                ><strong>{{ t("Find an update", "查找可行更新") }}</strong
+                ><small>{{
+                  t(
+                    "Review compatible upgrades before applying.",
+                    "先查看兼容的升级方案，再确认应用。",
+                  )
+                }}</small></span
+              ><ChevronRight />
+            </button>
+            <button @click="editRules('versions')">
+              <SlidersHorizontal /><span
+                ><strong>{{
+                  t("Choose versions & rules", "选择版本与约束")
+                }}</strong
+                ><small>{{
+                  t(
+                    "Browse versions, pin a version or limit updates.",
+                    "浏览可用版本、锁定版本或限定更新范围。",
+                  )
+                }}</small></span
+              ><ChevronRight />
+            </button>
+            <button @click="files">
+              <Folder /><span
+                ><strong>{{ t("Files & data", "文件与数据") }}</strong
+                ><small>{{
+                  t(
+                    "View ownership and reset this mod’s data.",
+                    "查看所属文件，或重置此模组的数据。",
+                  )
+                }}</small></span
+              ><ChevronRight />
+            </button>
+          </div>
+        </fieldset>
       </template>
       <template v-if="tab === 'versions' && versions">
         <div class="toolbar">
-          <select v-model="mode">
-            <option value="any">
-              {{ t("Any compatible version", "任意兼容版本") }}
-            </option>
-            <option value="comparison">
-              {{ t("One boundary", "单边界") }}
-            </option>
-            <option value="range">{{ t("Version range", "版本区间") }}</option>
-            <option v-if="policy.kind === 'custom'" value="custom">
-              {{
-                t(
-                  "Existing custom rule (unchanged)",
-                  "现有自定义规则（未修改）",
-                )
-              }}
-            </option>
-          </select>
+          <DropdownSelect
+            v-model="mode"
+            :label="t('Numeric rule', '数字规则')"
+            :searchable="false"
+            :options="[
+              {
+                value: 'any',
+                label: t('Any compatible version', '任意兼容版本'),
+              },
+              { value: 'comparison', label: t('One boundary', '单边界') },
+              { value: 'range', label: t('Version range', '版本区间') },
+              ...(policy.kind === 'custom'
+                ? [
+                    {
+                      value: 'custom',
+                      label: t(
+                        'Existing custom rule (unchanged)',
+                        '现有自定义规则（未修改）',
+                      ),
+                    },
+                  ]
+                : []),
+            ]"
+          />
           <template v-if="mode === 'comparison'"
-            ><select v-model="operator">
-              <option v-for="op in ['=', '>', '>=', '<', '<=']" :key="op">
-                {{ op }}
-              </option></select
-            ><select v-model="lower">
-              <option
-                v-for="version in [
-                  ...new Set(versions.candidates.map((c) => c.version)),
-                ]"
-                :key="version"
-              >
-                {{ version }}
-              </option>
-            </select></template
-          >
+            ><DropdownSelect
+              v-model="operator"
+              :label="t('Comparison', '比较运算')"
+              :searchable="false"
+              :options="
+                ['=', '>', '>=', '<', '<='].map((value) => ({
+                  value,
+                  label: value,
+                }))
+              " />
+            <DropdownSelect
+              v-model="lower"
+              :label="t('Boundary version', '边界版本')"
+              :options="versionOptions"
+          /></template>
           <template v-if="mode === 'range'"
-            ><select v-model="lower">
-              <option
-                v-for="version in [
-                  ...new Set(versions.candidates.map((c) => c.version)),
-                ]"
-                :key="version"
-              >
-                {{ version }}
-              </option></select
-            ><label
+            ><DropdownSelect
+              v-model="lower"
+              :label="t('Lower version', '下界版本')"
+              :options="versionOptions"
+            />
+            <label
               ><input v-model="includeLower" type="checkbox" />{{
                 t("Include lower", "包含下界")
               }}</label
             ><span>—</span
-            ><select v-model="upper">
-              <option
-                v-for="version in [
-                  ...new Set(versions.candidates.map((c) => c.version)),
-                ]"
-                :key="version"
-              >
-                {{ version }}
-              </option></select
-            ><label
+            ><DropdownSelect
+              v-model="upper"
+              :label="t('Upper version', '上界版本')"
+              :options="versionOptions"
+            />
+            <label
               ><input v-model="includeUpper" type="checkbox" />{{
                 t("Include upper", "包含上界")
               }}</label
@@ -445,14 +475,21 @@ function editRules(next: string) {
         <div class="card stack">
           <h3>{{ t("Environment", "运行环境") }}</h3>
           <div class="row">
-            <select v-model="environment">
-              <option value="auto">
-                {{ t("Use JAR declaration", "按 JAR 声明") }}
-              </option>
-              <option value="client">{{ t("Client", "客户端") }}</option>
-              <option value="server">{{ t("Server", "服务端") }}</option>
-              <option value="both">{{ t("Both", "两端") }}</option></select
-            ><Button
+            <DropdownSelect
+              v-model="environment"
+              :label="t('Environment', '运行环境')"
+              :searchable="false"
+              :options="[
+                {
+                  value: 'auto',
+                  label: t('Use JAR declaration', '按 JAR 声明'),
+                },
+                { value: 'client', label: t('Client', '客户端') },
+                { value: 'server', label: t('Server', '服务端') },
+                { value: 'both', label: t('Both', '两端') },
+              ]"
+            />
+            <Button
               @click="
                 act(() =>
                   mutate(
@@ -489,11 +526,18 @@ function editRules(next: string) {
             /></Button>
           </div>
           <div class="row">
-            <select v-model="provider">
-              <option>modrinth</option>
-              <option>curseforge</option>
-              <option>file</option></select
-            ><input
+            <DropdownSelect
+              v-model="provider"
+              :label="t('Source type', '来源类型')"
+              :searchable="false"
+              :options="
+                ['modrinth', 'curseforge', 'file'].map((value) => ({
+                  value,
+                  label: value,
+                }))
+              "
+            />
+            <input
               v-model="locator"
               class="grow"
               :placeholder="
@@ -566,6 +610,12 @@ function editRules(next: string) {
 <style scoped>
 .package-summary {
   padding: 8px 0 20px;
+}
+.package-controls {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  min-width: 0;
 }
 .management-actions {
   display: flex;

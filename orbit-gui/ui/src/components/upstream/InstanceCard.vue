@@ -1,15 +1,12 @@
 <script setup lang="ts">
 // Adapted from Modrinth App's library card; see ui/UPSTREAM.md.
 import { computed } from "vue";
-import Avatar from "../Avatar.vue";
+import InstanceIcon from "../InstanceIcon.vue";
+import LoaderIcon from "../LoaderIcon.vue";
 import type { Instance } from "../../types";
 const props = withDefaults(
   defineProps<{
-    instance: Instance & {
-      loader?: string;
-      game_version?: string;
-      icon_path?: string;
-    };
+    instance: Instance;
     selected?: boolean;
     compact?: boolean;
   }>(),
@@ -38,14 +35,13 @@ const compactMode = computed(() => props.compact);
           : 'aspect-square min-w-full rounded-2xl'
       "
     >
-      <Avatar
+      <InstanceIcon
         class="pointer-events-none outline-none"
         :class="compactMode ? '!rounded-lg' : '!rounded-2xl'"
         size="100%"
         :src="instance.icon_path"
-        loading="lazy"
-        :tint-by="instance.name"
-        :alt="instance.name"
+        :name="instance.name"
+        :kind="instance.kind"
       />
       <slot name="loading" :compact="compactMode" />
       <div
@@ -66,10 +62,13 @@ const compactMode = computed(() => props.compact);
         {{ instance.name }}
       </p>
       <p
-        :title="instance.game_version"
+        :title="instance.game_version || undefined"
         class="m-0 w-full truncate text-sm font-medium capitalize leading-[18px] text-primary"
       >
-        {{ instance.loader || instance.kind }} {{ instance.game_version || "" }}
+        <LoaderIcon :loader="instance.loader" />{{
+          instance.loader || instance.kind
+        }}
+        {{ instance.game_version || "" }}
       </p>
     </div>
     <slot name="overlay" :compact="compactMode" />
