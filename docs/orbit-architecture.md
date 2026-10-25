@@ -7,6 +7,10 @@ Launcher 外部实例导入集中于 `external_instance/`，来源适配后复�
 
 ## 1. workspace
 
+第三方认证服务输入归 Launcher：普通 URL 与 authlib-injector 拖放 URI 共用
+`yggdrasil::input` 和同一 ALI/metadata 发现路径。GUI 只检测拖放类型并传递原文；
+只读 inspect 返回预览，用户确认后仍调用既有 add，不在 Tauri/Vue 新增认证或配置写入接口。
+
 实例设置集中在 `orbit-core::instance_config`，与全局 `config` 类型分开。CLI 复用
 `orbit config --scope global|instance path/list/get/set/unset`；默认仍为全局，不新增平行的
 catalog 管理命令。实例的来源集合解析、凭据要求及原子保存由 core 处理，写操作受现有

@@ -313,9 +313,17 @@ pub enum ConfigCommands {
 pub enum YggdrasilProviderCommands {
     /// List configured providers.
     List,
+    /// Preview a website, API root, or authlib-injector drag URI without saving.
+    Inspect {
+        address: String,
+        /// Explicitly permit an HTTP endpoint; credentials can be intercepted.
+        #[arg(long)]
+        allow_insecure_http: bool,
+    },
     /// Discover and add a provider from a website or exact API root.
     Add {
         id: String,
+        /// Website, API root, or authlib-injector drag URI.
         api_root: String,
         /// Explicitly permit an HTTP endpoint; credentials can be intercepted.
         #[arg(long)]
@@ -621,6 +629,32 @@ mod tests {
         };
         assert_eq!(key, "cache.max-size");
         assert_eq!(value, "8 GiB");
+    }
+
+    #[test]
+    fn authlib_drag_links_use_the_existing_endpoint_commands() {
+        let uri = "authlib-injector:yggdrasil-server:https%3A%2F%2Fskin.example%2Fapi";
+        let inspect =
+            Cli::try_parse_from(["orbit-launcher", "config", "yggdrasil", "inspect", uri]).unwrap();
+        assert!(
+            matches!(inspect.command, Commands::Config { command: ConfigCommands::Yggdrasil {
+            command: YggdrasilProviderCommands::Inspect { address, allow_insecure_http: false }
+        }} if address == uri)
+        );
+        let add = Cli::try_parse_from([
+            "orbit-launcher",
+            "config",
+            "yggdrasil",
+            "add",
+            "Example",
+            uri,
+        ])
+        .unwrap();
+        assert!(
+            matches!(add.command, Commands::Config { command: ConfigCommands::Yggdrasil {
+            command: YggdrasilProviderCommands::Add { api_root, .. }
+        }} if api_root == uri)
+        );
     }
 
     #[test]

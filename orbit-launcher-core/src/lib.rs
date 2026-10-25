@@ -135,4 +135,4 @@ pub use state_archive::{
     inspect_launcher_state, restore_launcher_state,
 };
 pub use versions::{LoaderVersion, list_loader_versions};
-pub use yggdrasil::discover_yggdrasil_api_root;
+pub use yggdrasil::{YggdrasilEndpoint, inspect_yggdrasil_provider};

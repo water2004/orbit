@@ -4,6 +4,10 @@
 
 ## 1. 当前结论
 
+第三方登录支持标准 authlib-injector 按钮拖放及粘贴。手动输入与拖放共用确认弹窗；
+Launcher core 解码、验证、发现端点，GUI 只调用 inspect/add。取消预览不写配置、不发账户
+凭据，HTTP 仍须显式授权；支持已有端点复用。原有账户/config schema 不变。
+
 修正 GUI 对所有实例无条件调用 Orbit 的职责偏差：原版实例不查询模组清单、不初始化工作区，
 客户端/服务端分别直接调用 Launcher launch/server start。普通新建模组实例安装运行时后，
 自动执行同一 Orbit init 并注册，整合包只初始化一次；失败保留运行时并刷新库供显式重试。

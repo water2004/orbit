@@ -67,6 +67,7 @@ anyhow = "1.0.102"
 thiserror = "2.0.18"
 # 工具
 url = "2.5.8"
+percent-encoding = "2.3.2"
 zip = "3.0.0"
 indexmap = { version = "2.0", features = ["serde"] }
 ristretto_classfile = "0.31.0"

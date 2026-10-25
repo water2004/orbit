@@ -39,6 +39,7 @@ orbit-launcher config get <key>
 orbit-launcher config set <key> <value>
 orbit-launcher config unset <key>
 orbit-launcher config yggdrasil list
+orbit-launcher config yggdrasil inspect <address-or-drag-uri> [--allow-insecure-http]
 orbit-launcher config yggdrasil add <id> <api-root> [--allow-insecure-http]
 orbit-launcher config yggdrasil remove <id>
 
@@ -122,11 +123,20 @@ orbit-launcher java remove <runtime-id>
 颜色偏好，以及 `java.selection`。`list`/`get` 会区分显式值与默认值；`unset` 删除显式值并恢复
 默认值。修改经过强类型解析和完整配置校验后原子写入，同时保留已有 TOML 注释。External
 Yggdrasil provider 属于复合对象，由 `config yggdrasil` 的强类型命令管理，不接受任意 TOML
-路径写入。`add` 接受站点地址或精确 API root：缺少协议时只补全 HTTPS，随后执行
+路径写入。`inspect` 与 `add` 接受站点地址、精确 API root 或
+`authlib-injector:yggdrasil-server:<encodeURIComponent(API 地址)>`：只解码拖放 URI 的地址
+部分一次，严格检查百分号和 UTF-8，不将字面量 `+` 改成空格。缺少协议时只补全 HTTPS，随后执行
 authlib-injector 的 API Location Indication（`X-Authlib-Injector-API-Location`）服务发现，
 验证标准 metadata，并且只持久化解析后的精确 API root。API root 默认必须使用 HTTPS；
 `--allow-insecure-http` 是会暴露账号密码与 token 的明确危险选择。账户请求固定使用 API root
 下的 `authserver/authenticate`、`authserver/refresh` 与 `authserver/validate`。
+
+`inspect` 是只读预览，返回准确 `api_root`、服务名称、建议 ID、已有端点 ID 及 HTTP 风险标记，
+不创建账户、不发送密码/token，也不保存配置。GUI 拖入按钮或手动添加共用预览/确认弹窗，
+确认后才调用已有 `config yggdrasil add`；HTTP 必须显式授权，已有端点可直接复用。GUI 只转交
+原始拖放文本，既不解码 URI，也不猜 API 地址。不注册系统 URL scheme 或自动打开网页。
+
+协议依据：[authlib-injector 启动器规范](https://yushijinhun.github.io/authlib-injector/en/launcher-technical-specification.html#configuration-via-drag-and-drop)。
 
 `accounts.json` 是 Launcher 管理的全局内部状态，不是实例配置，也不属于
 `orbit-launcher.toml`。其 schema 3 只保存 account ID、provider、角色 UUID/name、认证状态、可选 HTTPS

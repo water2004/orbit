@@ -22,6 +22,7 @@ import Button from "./components/upstream/Button.vue";
 import ActivityPanel from "./components/ActivityPanel.vue";
 import AccountSwitcher from "./components/AccountSwitcher.vue";
 import WindowControls from "./components/WindowControls.vue";
+import AuthEndpointDrop from "./components/AuthEndpointDrop.vue";
 import { discoveryPath } from "./services/navigation";
 const router = useRouter();
 const route = useRoute();
@@ -127,6 +128,7 @@ watchEffect(() => {
       ></RouterView>
     </main>
     <div class="app-status"><ActivityPanel /></div>
+    <AuthEndpointDrop />
     <div v-if="workspace.error" role="alert" class="error-toast">
       <p>{{ workspace.error }}</p>
       <Button

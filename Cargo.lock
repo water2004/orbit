@@ -3609,6 +3609,7 @@ dependencies = [
  "orbit-http",
  "orbit-launcher-format",
  "os_info",
+ "percent-encoding",
  "regex",
  "reqwest",
  "rusqlite",

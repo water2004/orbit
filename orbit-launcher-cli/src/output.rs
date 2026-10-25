@@ -535,6 +535,27 @@ pub struct YggdrasilProviderListView {
 }
 
 #[derive(Debug, Serialize)]
+pub struct YggdrasilEndpointView {
+    pub api_root: String,
+    pub server_name: Option<String>,
+    pub suggested_id: String,
+    pub existing_provider_id: Option<String>,
+    pub insecure_http: bool,
+}
+
+impl From<orbit_launcher_core::YggdrasilEndpoint> for YggdrasilEndpointView {
+    fn from(endpoint: orbit_launcher_core::YggdrasilEndpoint) -> Self {
+        Self {
+            api_root: endpoint.api_root,
+            server_name: endpoint.server_name,
+            suggested_id: endpoint.suggested_id,
+            existing_provider_id: endpoint.existing_provider_id,
+            insecure_http: endpoint.insecure_http,
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
 pub struct YggdrasilProviderMutationView {
     pub action: &'static str,
     pub provider: YggdrasilProviderView,

@@ -86,6 +86,7 @@ fn command_name(command: &cli::Commands) -> &'static str {
             cli::ConfigCommands::Unset { .. } => "config.unset",
             cli::ConfigCommands::Yggdrasil { command } => match command {
                 cli::YggdrasilProviderCommands::List => "config.yggdrasil.list",
+                cli::YggdrasilProviderCommands::Inspect { .. } => "config.yggdrasil.inspect",
                 cli::YggdrasilProviderCommands::Add { .. } => "config.yggdrasil.add",
                 cli::YggdrasilProviderCommands::Remove { .. } => "config.yggdrasil.remove",
             },
@@ -194,6 +195,7 @@ fn render_success(format: OutputFormat, output: app::CommandOutput) {
             app::CommandOutput::AccountLogout(value) => print_json(command, value),
             app::CommandOutput::MicrosoftDeviceSession(value) => print_json(command, value),
             app::CommandOutput::YggdrasilProviderList(value) => print_json(command, value),
+            app::CommandOutput::YggdrasilEndpoint(value) => print_json(command, value),
             app::CommandOutput::YggdrasilProviderMutation(value) => print_json(command, value),
             app::CommandOutput::JavaRuntimeList(value) => print_json(command, value),
             app::CommandOutput::JavaRuntimeMutation(value) => print_json(command, value),
@@ -744,6 +746,25 @@ fn render_text(output: app::CommandOutput) {
                     id = view.login_session_id
                 )
             );
+        }
+        app::CommandOutput::YggdrasilEndpoint(view) => {
+            println!(
+                "{}: {}",
+                tr!("Name"),
+                view.server_name.as_deref().unwrap_or(&view.suggested_id)
+            );
+            println!("{}: {}", tr!("API root"), view.api_root);
+            if view.insecure_http {
+                println!(
+                    "{}",
+                    tr!(
+                        "HTTP sends passwords without encryption; only add this service if you accept the risk."
+                    )
+                );
+            }
+            if let Some(id) = view.existing_provider_id {
+                println!("{}: {}", tr!("Configured provider"), id);
+            }
         }
         app::CommandOutput::YggdrasilProviderList(view) => {
             if view.providers.is_empty() {

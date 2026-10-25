@@ -38,8 +38,8 @@ use crate::output::{
     LaunchResultView, LauncherStateExportView, LoaderVersionCatalogView,
     MicrosoftDeviceSessionView, MinecraftDirectoryMoveView, MinecraftDirectoryView,
     MinecraftVersionCatalogView, PackageRequirementView, RenameView, ServerControlView,
-    ServerStartView, ServerStatusView, SupervisorResultView, YggdrasilProviderListView,
-    YggdrasilProviderMutationView, YggdrasilProviderView,
+    ServerStartView, ServerStatusView, SupervisorResultView, YggdrasilEndpointView,
+    YggdrasilProviderListView, YggdrasilProviderMutationView, YggdrasilProviderView,
 };
 use crate::supervisor_ipc::{
     IpcRequest, IpcServer, SupervisorLock, SupervisorState, request as supervisor_request,
@@ -82,6 +82,7 @@ pub enum CommandOutput {
     AccountLogout(AccountLogoutView),
     MicrosoftDeviceSession(MicrosoftDeviceSessionView),
     YggdrasilProviderList(YggdrasilProviderListView),
+    YggdrasilEndpoint(YggdrasilEndpointView),
     YggdrasilProviderMutation(YggdrasilProviderMutationView),
     JavaRuntimeList(JavaRuntimeListView),
     JavaRuntimeMutation(JavaRuntimeMutationView),
@@ -149,6 +150,7 @@ impl CommandOutput {
             Self::AccountLogout(_) => "account.logout",
             Self::MicrosoftDeviceSession(_) => "account.login.microsoft.begin",
             Self::YggdrasilProviderList(_) => "config.yggdrasil.list",
+            Self::YggdrasilEndpoint(_) => "config.yggdrasil.inspect",
             Self::YggdrasilProviderMutation(view) => match view.action {
                 "added" => "config.yggdrasil.add",
                 _ => "config.yggdrasil.remove",
@@ -1546,6 +1548,22 @@ async fn execute_config(
             )))
         }
         ConfigCommands::Yggdrasil { command } => match command {
+            YggdrasilProviderCommands::Inspect {
+                address,
+                allow_insecure_http,
+            } => {
+                let client = runtime.config().http_client()?;
+                Ok(CommandOutput::YggdrasilEndpoint(
+                    orbit_launcher_core::inspect_yggdrasil_provider(
+                        &client,
+                        &runtime.config().yggdrasil.providers,
+                        &address,
+                        allow_insecure_http,
+                    )
+                    .await?
+                    .into(),
+                ))
+            }
             YggdrasilProviderCommands::List => {
                 let config = orbit_launcher_core::GlobalConfig::load(&path)?;
                 Ok(CommandOutput::YggdrasilProviderList(
@@ -1565,8 +1583,9 @@ async fn execute_config(
                 allow_insecure_http,
             } => {
                 let client = runtime.config().http_client()?;
-                let api_root = orbit_launcher_core::discover_yggdrasil_api_root(
+                let endpoint = orbit_launcher_core::inspect_yggdrasil_provider(
                     &client,
+                    &runtime.config().yggdrasil.providers,
                     &api_root,
                     allow_insecure_http,
                 )
@@ -1578,7 +1597,7 @@ async fn execute_config(
                             &path,
                             YggdrasilProviderConfig {
                                 id,
-                                api_root,
+                                api_root: endpoint.api_root,
                                 allow_insecure_http,
                             },
                         )?),

@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { onMounted, ref } from "vue";
+import { ref, watch } from "vue";
+import { useRoute, useRouter } from "vue-router";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   Plus,
@@ -17,6 +18,9 @@ import Avatar from "../components/Avatar.vue";
 import Button from "../components/upstream/Button.vue";
 import Modal from "../components/Modal.vue";
 import DropdownSelect from "../components/upstream/DropdownSelect.vue";
+import { openAuthEndpoint } from "../services/auth-endpoint";
+const route = useRoute();
+const router = useRouter();
 const { task, launcher, run } = useCommandScope();
 const flow = ref(""),
   name = ref(""),
@@ -26,16 +30,15 @@ const flow = ref(""),
   provider = ref(""),
   busy = ref(false);
 const providers = ref<{ id: string; api_root: string }[]>([]),
-  endpoint = ref(false),
-  endpointName = ref(""),
-  endpointUrl = ref(""),
-  insecure = ref(false),
   remove = ref<Account>();
 const session = ref<{
   login_session_id: string;
   verification_uri: string;
   user_code: string;
 }>();
+watch(provider, () => {
+  password.value = "";
+});
 async function reload() {
   const result = await launcher<{ accounts: Account[] }>(
     ["account", "list"],
@@ -122,24 +125,33 @@ async function complete() {
     busy.value = false;
   }
 }
-async function addEndpoint() {
-  await launcher(
-    [
-      "config",
-      "yggdrasil",
-      "add",
-      endpointName.value,
-      endpointUrl.value,
-      ...(insecure.value ? ["--allow-insecure-http"] : []),
-    ],
-    t("Saving authentication endpoint", "正在保存认证端点"),
-    null,
-  );
-  provider.value = endpointName.value;
+async function endpointAdded(id: string) {
   await loadProviders();
-  endpoint.value = false;
+  provider.value = id;
 }
-onMounted(() => act(loadProviders));
+watch(
+  () => route.query.provider,
+  (id, previous) => {
+    if (typeof id !== "string" && previous !== undefined) return;
+    return act(async () => {
+      await loadProviders();
+      if (
+        typeof id === "string" &&
+        providers.value.some((item) => item.id === id)
+      ) {
+        provider.value = id;
+        username.value = "";
+        password.value = "";
+        profile.value = "";
+        flow.value = "yggdrasil";
+        const query = { ...route.query };
+        delete query.provider;
+        await router.replace({ path: route.path, query });
+      }
+    });
+  },
+  { immediate: true },
+);
 </script>
 <template>
   <div class="page">
@@ -280,7 +292,7 @@ onMounted(() => act(loadProviders));
             ><Trash2
           /></Button>
         </div>
-        <Button @click="endpoint = true"
+        <Button @click="openAuthEndpoint('', endpointAdded)"
           ><Plus />{{ t("Add endpoint", "添加端点") }}</Button
         >
       </div>
@@ -349,7 +361,7 @@ onMounted(() => act(loadProviders));
                   description: item.api_root,
                 }))
               " /></label
-          ><Button type="quiet" @click="endpoint = true"
+          ><Button type="quiet" @click="openAuthEndpoint('', endpointAdded)"
             ><Plus />{{ t("Add a service first", "添加认证端点") }}</Button
           ><label class="field"
             >{{ t("Email or username", "邮箱或用户名")
@@ -382,32 +394,6 @@ onMounted(() => act(loadProviders));
         ></template
       >
     </Modal>
-    <Modal
-      v-if="endpoint"
-      :task="task"
-      :title="t('Add authentication endpoint', '添加认证端点')"
-      @close="endpoint = false"
-      ><div class="stack">
-        <label class="field"
-          >{{ t("Name", "名称") }}<input v-model="endpointName" /></label
-        ><label class="field"
-          >{{ t("Website or API root", "网站或 API 根地址")
-          }}<input v-model="endpointUrl" placeholder="https://" /></label
-        ><label
-          ><input v-model="insecure" type="checkbox" />{{
-            t("Allow unencrypted HTTP (unsafe)", "允许未加密 HTTP（不安全）")
-          }}</label
-        >
-      </div>
-      <template #footer
-        ><Button
-          type="colored"
-          :disabled="!endpointName || !endpointUrl"
-          @click="act(addEndpoint)"
-          >{{ t("Add service", "添加服务") }}</Button
-        ></template
-      ></Modal
-    >
     <Modal
       v-if="session"
       :task="task"

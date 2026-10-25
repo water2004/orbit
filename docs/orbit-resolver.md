@@ -16,6 +16,9 @@ Modrinth 用户输入的 slug 在进入候选发现前解析为官方 project ID
 
 ## 1. 模块边界
 
+authlib-injector 拖放配置属于 Launcher 认证端点发现；既不进入 Orbit 的 provider 目录，
+也不进入依赖求解。GUI 只转交标准 URI，不能把认证 URL 当作模组来源。
+
 原版实例的 GUI 启动/展示不进入 Orbit；模组实例创建后仅由同一 init 扫描并注册，
 不额外求解或修复。迁移目标不得先 init，以免干扰既有 migrate export 的唯一规划/提交路径。
 
