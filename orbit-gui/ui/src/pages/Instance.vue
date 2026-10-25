@@ -27,6 +27,7 @@ import {
   act,
 } from "../services/workspace";
 import { importArguments } from "../services/commands";
+import { initializeOrbit } from "../services/installations";
 import type { Package } from "../types";
 import { t } from "../i18n";
 import { instancePath, discoveryPath } from "../services/navigation";
@@ -206,20 +207,8 @@ watch(
 async function initializeMods() {
   const d = workspace.detail;
   if (!d) return;
-  await mutate(
-    [
-      "init",
-      d.name,
-      "--mc-version",
-      d.desired.minecraft,
-      "--modloader",
-      d.desired.loader,
-      ...(d.desired.loader_version
-        ? ["--modloader-version", d.desired.loader_version]
-        : []),
-    ],
-    t("Initializing mod workspace", "正在初始化模组工作区"),
-  );
+  await initializeOrbit(d);
+  if (workspace.selected?.id === d.id) await selectInstance(d);
 }
 async function reviewDeletion() {
   deletion.value = await dialogLauncher(
@@ -433,7 +422,9 @@ async function status() {
         v-for="item in [
           ['mods', t('Content', '模组内容')],
           ['runtime', t('Installation', '运行时')],
-          ['audit', t('Compatibility', '兼容性')],
+          ...(workspace.detail?.desired.loader === 'vanilla'
+            ? []
+            : [['audit', t('Compatibility', '兼容性')]]),
           ...(workspace.selected.kind === 'server'
             ? [['server', t('Server', '服务端')]]
             : []),
@@ -446,7 +437,24 @@ async function status() {
       </button>
     </nav>
     <template v-if="tab === 'mods'">
-      <div v-if="workspace.inventoryError" class="card stack">
+      <div
+        v-if="workspace.detail?.desired.loader === 'vanilla'"
+        class="card stack"
+      >
+        <h2>{{ t("Vanilla Minecraft", "原版 Minecraft") }}</h2>
+        <p>
+          {{
+            t(
+              "This instance has no mod loader and does not need an Orbit workspace.",
+              "此实例没有模组加载器，无需 Orbit 工作区。",
+            )
+          }}
+        </p>
+        <Button @click="router.push(instancePath(selected().id, 'runtime'))">{{
+          t("Manage runtime", "管理运行时")
+        }}</Button>
+      </div>
+      <div v-else-if="workspace.inventoryError" class="card stack">
         <p class="error">{{ workspace.inventoryError }}</p>
         <Button
           :disabled="

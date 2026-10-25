@@ -82,24 +82,33 @@ export async function selectInstance(instance: Instance) {
     workspace.preferences.selected_instance = instance.id;
     await savePreferences(workspace.preferences);
   }
-  const result = await Promise.allSettled([
-    launcher<Detail>(
+  let detail: Detail;
+  try {
+    detail = await launcher<Detail>(
       ["instance", "show"],
       t("Loading installation", "正在加载实例"),
       instance,
-    ),
-    orbit<{ packages: Package[] }>(
+    );
+  } catch (error) {
+    if (revision === selectionRevision) workspace.error = String(error);
+    return;
+  }
+  if (revision !== selectionRevision) return;
+  workspace.detail = detail;
+  // Vanilla has no Orbit workspace. Do not turn its absence into an inventory
+  // error or require the optional mod manager just to view a runtime.
+  if (detail.desired.loader === "vanilla") return;
+  try {
+    const inventory = await orbit<{ packages: Package[] }>(
       ["list"],
       t("Loading mods", "正在加载模组"),
       instance,
-    ),
-  ]);
-  if (revision !== selectionRevision) return;
-  if (result[0].status === "fulfilled") workspace.detail = result[0].value;
-  else workspace.error = String(result[0].reason);
-  if (result[1].status === "fulfilled")
-    workspace.packages = result[1].value.packages;
-  else workspace.inventoryError = String(result[1].reason);
+    );
+    if (revision === selectionRevision) workspace.packages = inventory.packages;
+  } catch (error) {
+    if (revision === selectionRevision)
+      workspace.inventoryError = String(error);
+  }
 }
 export function orbit<T>(
   args: string[],
@@ -136,6 +145,23 @@ export async function mutate(
 export async function launch(instance: Instance) {
   const binary = workspace.preferences?.launcher_binary;
   if (!binary) throw new Error("Orbit Launcher executable is not configured");
+  // Read the selected instance, not workspace.detail: library actions can launch
+  // an instance which is not currently open, and cached metadata may be stale.
+  const detail = await launcher<Detail>(
+    ["instance", "show"],
+    t("Loading launch target", "正在读取启动实例"),
+    instance,
+  );
+  if (detail.desired.loader === "vanilla") {
+    await launcher(
+      detail.kind === "server" ? ["server", "start"] : ["launch"],
+      detail.kind === "server"
+        ? t("Starting server", "正在启动服务端")
+        : t("Launching game", "正在启动游戏"),
+      instance,
+    );
+    return;
+  }
   await orbit(
     [
       "launch",
@@ -143,7 +169,7 @@ export async function launch(instance: Instance) {
       binary,
       "--launcher-instance",
       instance.id,
-      ...(instance.kind === "server" ? ["--server"] : []),
+      ...(detail.kind === "server" ? ["--server"] : []),
     ],
     t("Launching game", "正在启动游戏"),
     instance,

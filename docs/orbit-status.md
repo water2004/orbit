@@ -4,6 +4,11 @@
 
 ## 1. 当前结论
 
+修正 GUI 对所有实例无条件调用 Orbit 的职责偏差：原版实例不查询模组清单、不初始化工作区，
+客户端/服务端分别直接调用 Launcher launch/server start。普通新建模组实例安装运行时后，
+自动执行同一 Orbit init 并注册，整合包只初始化一次；失败保留运行时并刷新库供显式重试。
+迁移目标仍由原 migrate export 路径写入，不提前初始化。Launcher 自身仍不依赖或调用 Orbit。
+
 实例搜索来源已提供用户入口：`orbit config --scope instance` 管理 `resolver.catalogs`，
 GUI“发现模组”可选择 Modrinth/CurseForge 并保存。它不是 GUI 直接改 TOML，也不是新的
 独立 catalog 命令；凭据可用性、至少一个来源、去重、dry-run 和持久化都通过现有 CLI/core。

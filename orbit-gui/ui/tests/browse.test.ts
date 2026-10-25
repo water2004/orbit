@@ -200,3 +200,17 @@ it("a failed instance load cannot turn into an unfiltered global search", async 
   expect(wrapper.find("[role=alert]").exists()).toBe(true);
   wrapper.unmount();
 });
+it("vanilla cannot invoke Orbit discovery or source settings", async () => {
+  workspace.detail = {
+    desired: { minecraft: "26.2", loader: "vanilla" },
+  } as Detail;
+  const { wrapper } = await page(`/browse?instance=${instance.id}`);
+  await wrapper.find(".search-bar").trigger("submit");
+  await flushPromises();
+  expect(orbit).not.toHaveBeenCalled();
+  expect(wrapper.findComponent(CatalogSettings).exists()).toBe(false);
+  expect(
+    wrapper.find('.search-bar button[type="submit"]').attributes("disabled"),
+  ).toBeDefined();
+  wrapper.unmount();
+});

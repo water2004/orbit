@@ -15,9 +15,11 @@ import {
   prepareMigration,
   applyMigration,
   updateLoader,
+  createInstallation,
 } from "../src/services/installations";
 import { policyArguments } from "../src/services/commands";
-import { workspace } from "../src/services/workspace";
+import { workspace, refresh } from "../src/services/workspace";
+import type { Pack } from "../src/services/installations";
 const draft = {
   name: "Target",
   kind: "client" as const,
@@ -36,6 +38,101 @@ const source = {
 beforeEach(() => {
   calls.orbit.mockReset();
   calls.launcher.mockReset();
+  vi.mocked(refresh).mockClear();
+});
+it.each(["client", "server"] as const)(
+  "creates a modded %s and initializes its Orbit workspace in one flow",
+  async (kind) => {
+    const detail = {
+      ...source,
+      id: "new",
+      kind,
+      desired: {
+        minecraft: draft.minecraft,
+        loader: draft.loader,
+        loader_version: draft.loaderVersion,
+      },
+    };
+    calls.launcher
+      .mockResolvedValueOnce({ instance_id: detail.id })
+      .mockResolvedValueOnce(detail);
+    const result = await createInstallation({
+      ...draft,
+      kind,
+      serverDirectory: "/server",
+    });
+    expect(result).toEqual(detail);
+    expect(calls.orbit).toHaveBeenCalledExactlyOnceWith(
+      [
+        "init",
+        detail.name,
+        "--mc-version",
+        draft.minecraft,
+        "--modloader",
+        draft.loader,
+        "--modloader-version",
+        draft.loaderVersion,
+      ],
+      expect.any(String),
+      detail,
+    );
+    expect(vi.mocked(refresh)).toHaveBeenCalledWith(detail.id);
+  },
+);
+it.each(["client", "server"] as const)(
+  "creates a vanilla %s without any Orbit command",
+  async (kind) => {
+    const detail = {
+      ...source,
+      id: "vanilla",
+      kind,
+      desired: { minecraft: draft.minecraft, loader: "vanilla" },
+    };
+    calls.launcher
+      .mockResolvedValueOnce({ instance_id: detail.id })
+      .mockResolvedValueOnce(detail);
+    await createInstallation({
+      ...draft,
+      loader: "vanilla",
+      kind,
+      serverDirectory: "/server",
+    });
+    expect(calls.orbit).not.toHaveBeenCalled();
+    expect(vi.mocked(refresh)).toHaveBeenCalledWith(detail.id);
+  },
+);
+it("initializes a workspace once before importing mod content", async () => {
+  const detail = {
+    ...source,
+    desired: { minecraft: "26.2", loader: "fabric" },
+  };
+  calls.launcher
+    .mockResolvedValueOnce({ instance_id: detail.id })
+    .mockResolvedValueOnce(detail);
+  await createInstallation(draft, {
+    source: "/pack.mrpack",
+    orbit_content: true,
+  } as Pack);
+  expect(calls.orbit.mock.calls.map(([args]) => args[0])).toEqual([
+    "init",
+    "import",
+  ]);
+});
+it("preserves a created runtime in the library if Orbit initialization fails", async () => {
+  const detail = {
+    ...source,
+    desired: { minecraft: "26.2", loader: "fabric" },
+  };
+  calls.launcher
+    .mockResolvedValueOnce({ instance_id: detail.id })
+    .mockResolvedValueOnce(detail);
+  calls.orbit.mockRejectedValueOnce(new Error("init failed"));
+  await expect(createInstallation(draft)).rejects.toThrow("init failed");
+  expect(refresh).toHaveBeenCalledWith(detail.id);
+  expect(calls.launcher.mock.calls.map(([args]) => args[0])).toEqual([
+    "install",
+    "instance",
+  ]);
 });
 it("never creates a target if source export fails", async () => {
   calls.orbit.mockRejectedValue(new Error("export cancelled"));

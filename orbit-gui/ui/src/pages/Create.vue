@@ -49,7 +49,8 @@ const route = useRoute(),
   optional = ref<string[]>([]),
   review = ref<Migration>();
 const source = workspace.selected;
-const sourceHasOrbit = !workspace.inventoryError;
+const sourceHasOrbit =
+  workspace.detail?.desired.loader !== "vanilla" && !workspace.inventoryError;
 const mode = computed(() =>
   route.query.migrate ? "migrate" : route.query.loader ? "loader" : "new",
 );

@@ -16,6 +16,9 @@ Modrinth 用户输入的 slug 在进入候选发现前解析为官方 project ID
 
 ## 1. 模块边界
 
+原版实例的 GUI 启动/展示不进入 Orbit；模组实例创建后仅由同一 init 扫描并注册，
+不额外求解或修复。迁移目标不得先 init，以免干扰既有 migrate export 的唯一规划/提交路径。
+
 `config --scope instance` 的搜索来源编辑属于发现配置，不进入求解器；只修改
 `[resolver].catalogs`，不求解、不改 lock、不移除包远端。search 严格查询显式目录，
 对已有包进行版本候选发现仍消费全部远端，因此关闭搜索来源不会改变已有包的解空间。

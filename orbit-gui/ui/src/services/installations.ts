@@ -89,16 +89,20 @@ export async function createInstallation(
     t("Loading new installation", "正在加载新实例"),
     { id: installed.instance_id } as Instance,
   );
-  if (pack?.orbit_content) {
-    await initializeOrbit(detail);
-    await orbit(
-      importArguments(pack.source, optional),
-      t("Importing mod content", "正在导入模组内容"),
-      detail,
-    );
+  try {
+    if (detail.desired.loader !== "vanilla") await initializeOrbit(detail);
+    if (pack?.orbit_content) {
+      await orbit(
+        importArguments(pack.source, optional),
+        t("Importing mod content", "正在导入模组内容"),
+        detail,
+      );
+    }
+  } finally {
+    // A failed/cancelled Orbit setup must not hide or delete the already
+    // installed runtime. Its normal instance page exposes initialization retry.
+    await refresh(detail.id);
   }
-  await refresh();
-  await selectInstance(detail);
   return detail;
 }
 export async function prepareMigration(

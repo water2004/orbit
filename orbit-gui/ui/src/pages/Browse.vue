@@ -58,7 +58,8 @@ const ready = computed(
     !!instance.value &&
     !selecting.value &&
     workspace.selected?.id === instance.value.id &&
-    !!workspace.detail,
+    !!workspace.detail &&
+    workspace.detail.desired.loader !== "vanilla",
 );
 const targetOptions = computed(() =>
   workspace.instances.map((i) => ({
@@ -167,6 +168,7 @@ async function search() {
     );
     return;
   }
+  if (runtime.loader === "vanilla") return;
   const revision = ++session.revision;
   session.loading = true;
   session.error = "";
@@ -287,17 +289,28 @@ async function manage(project: SearchResult) {
           native-type="submit"
           type="colored"
           :loading="state.loading"
-          :disabled="!state.query.trim() || selecting || savingCurrentCatalogs"
+          :disabled="
+            !state.query.trim() || !ready || selecting || savingCurrentCatalogs
+          "
           >{{ t("Search", "搜索") }}</Button
         >
       </form>
       <CatalogSettings
+        v-if="workspace.detail?.desired.loader !== 'vanilla'"
         :key="instance.id"
         :instance="instance"
         :ready="ready"
         @busy="catalogBusy"
         @changed="catalogsChanged"
       />
+      <p v-else class="card">
+        {{
+          t(
+            "Vanilla instances do not load mods. Select an instance with a mod loader.",
+            "原版实例不加载模组，请选择带模组加载器的实例。",
+          )
+        }}
+      </p>
       <div class="discover-options">
         <label
           ><input v-model="state.recommended" type="checkbox" />{{

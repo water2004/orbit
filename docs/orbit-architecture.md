@@ -19,6 +19,10 @@ Microsoft 认证的重放安全性由认证模块按步骤决定：proof 交换�
 OAuth 设备码/token 请求不重放；不因统一客户端关闭底层重试而遗漏认证链，也不重跑完整登录。
 
 GUI 导航与基础控件基于 Modrinth App 源码适配，采用 GPL-3.0-only；不导入其业务后端。
+GUI 按 Launcher `instance show` 的准确目标 Loader 编排启动：vanilla 直接走 Launcher
+客户端 launch / 服务端 server start，不要求 Orbit；模组实例仍走 Orbit 的观测启动。
+新建模组实例将 Launcher 安装与 Orbit init/注册串成一次用户操作，初始化与业务规则仍由各自 CLI
+执行，Launcher 不知道 Orbit。迁移不复用这段新建初始化，而由 migrate export 独立提交目标状态。
 原 GPUI 页面已移除。Vue 仅通过 Tauri 进程桥消费同一 CLI 协议，细节见 [GUI 架构](orbit-gui.md)。
 Launcher 的实例图标、Java 环境发现/选择与存储升级均由 Launcher core 提供；GUI 只展示 CLI
 清单并提交命令。Launcher 自有存储升级只进入 `storage_migrations`，以 v0.7.0 schema 为起点备份并逐级

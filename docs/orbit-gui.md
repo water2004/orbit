@@ -13,7 +13,10 @@ Rust 桥负责进程生命周期、协议验证、展示投影及系统集成；
 - stdout：schema 2 success envelope；stderr：进度、交互、错误；stdin：同一进程的 interaction_response。
 - 严格 UTF-8，拒绝旧 schema 与损坏编码。失败不得转走文件直读或兼容 API。
 - 取消或关闭 GUI 终止仍受管理的子进程组/Windows Job。Windows 不弹控制台。
-- Launcher 负责运行时/账户/Java；模组及数据管理归 Orbit。游戏启动调用 orbit launch。
+- Launcher 负责运行时/账户/Java；模组及数据管理归 Orbit。GUI 启动前用 Launcher
+  `instance show` 读取准确目标，而不是依赖当前页面或过时的实例列表。原版客户端直接调用
+  Launcher `launch`，原版服务端调用 `server start`，不要求 Orbit 工作区或 Agent；
+  模组实例仍走 `orbit launch` 的运行时观测，失败不偷偷降级为不观测启动。
 
 ## 信息架构
 
@@ -47,6 +50,13 @@ Minecraft、Loader、Java、目标实例与其他下拉选择共用有界、可�
 隔离实例目录；服务端选择父目录并展示新建目录。install --new 执行同一安装事务。
 首次服务端安装通过 JSON 交互展示完整 EULA、官方 URL 和摘要，仅在明确同意后继续；
 --non-interactive 仍拒绝尚未接受的协议，不因 GUI 自动授权。
+
+普通新建模组实例在 Launcher 安装完成后，由 GUI 顺序调用同一 `orbit init`，同时完成
+Orbit 注册，再进入实例详情；从整合包创建同样只初始化一次，然后由 `orbit import` 恢复内容。
+这是 GUI 对两个独立 CLI 的顺序编排，Launcher 不调用或依赖 Orbit。原版实例跳过 init 和
+模组 inventory 查询，发现页不执行模组搜索。初始化失败/取消保留已经安装的运行时并刷新实例库，
+由实例页的同一初始化入口重试，不能宣称整次创建成功。迁移目标不提前 init，仍由 migrate export
+提交自己的目标状态，避免冲突或双次求解。
 
 运行时页提供打开目录、Loader 更新、校验修复、客户端分辨率、重命名、默认实例和取消注册。
 取消注册保留磁盘数据。Java 页提供清单、校验和经确认的删除；仓库迁移调用 minecraft move。
