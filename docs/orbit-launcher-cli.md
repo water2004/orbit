@@ -241,7 +241,7 @@ runtime inventory，也不得被 `list`、`verify` 或 `remove` 枚举为已安�
 唯一历史起点是 **v0.7.0** 使用的格式；更早、未知或更新的 schema 明确拒绝，不猜测。
 相同 schema 的数据不按程序版本号重新解释。开发中未发布的中间结构不注册迁移步骤。
 
-| 文件 | v0.7.0 schema | 当前开发 schema |
+| 文件 | v0.7.0 schema | v0.8.0 schema |
 | --- | --- | --- |
 | Launcher 全局 config.toml | 2 | 3 |
 | orbit-launcher.toml | 1 | 2 |
