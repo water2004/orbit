@@ -1,7 +1,16 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
+import { computed, ref } from "vue";
 import { invoke } from "@tauri-apps/api/core";
-import { Folder, File, Plus, Trash2, LoaderCircle } from "lucide-vue-next";
+import {
+  Folder,
+  File,
+  Plus,
+  Trash2,
+  LoaderCircle,
+  ArrowUpCircle,
+  SlidersHorizontal,
+  ChevronRight,
+} from "lucide-vue-next";
 import {
   act,
   mutate as mutateWorkspace,
@@ -20,13 +29,14 @@ import { t } from "../i18n";
 import Modal from "./Modal.vue";
 import Button from "./upstream/Button.vue";
 import StringRules from "./StringRules.vue";
+import Avatar from "./Avatar.vue";
 const props = defineProps<{ pkg: Package }>();
 const emit = defineEmits<{ close: [] }>();
-const tab = ref("versions"),
+const tab = ref("overview"),
   versions = ref<PackageVersions>(),
   ownership = ref<Ownership>(),
   error = ref(""),
-  loading = ref(true),
+  loading = ref(false),
   filesLoading = ref(false),
   saving = ref(false);
 const policy = ref<VersionPolicy>({ kind: "any" }),
@@ -48,6 +58,7 @@ const instance = workspace.selected;
 const mutate = (args: string[], label: string) =>
   mutateWorkspace(args, label, instance);
 async function load() {
+  if (loading.value) return;
   loading.value = true;
   error.value = "";
   try {
@@ -135,24 +146,33 @@ async function apply() {
     saving.value = false;
   }
 }
-onMounted(load);
+function editRules(next: string) {
+  tab.value = next;
+  if (!versions.value) void load();
+}
 </script>
 <template>
   <Modal
     :title="`${pkg.mod_id} · ${current.version}`"
-    wide
+    :wide="['versions', 'strings', 'files'].includes(tab)"
     @close="emit('close')"
   >
     <div class="stack">
       <nav class="tabs">
         <button
-          :class="{ active: tab === 'versions' }"
-          @click="tab = 'versions'"
+          :class="{ active: tab === 'overview' }"
+          @click="tab = 'overview'"
         >
-          {{ t("Versions", "数字版本") }}</button
+          {{ t("Overview", "概览") }}
+        </button>
+        <button
+          :class="{ active: tab === 'versions' }"
+          @click="editRules('versions')"
+        >
+          {{ t("Version rules", "版本规则") }}</button
         ><button
           :class="{ active: tab === 'strings' }"
-          @click="tab = 'strings'"
+          @click="editRules('strings')"
         >
           {{ t("String filters", "字符串过滤") }}</button
         ><button :class="{ active: tab === 'files' }" @click="files">
@@ -165,9 +185,91 @@ onMounted(load);
         </button>
       </nav>
       <p v-if="error" class="error">{{ error }}</p>
-      <p v-if="tab === 'files' ? filesLoading : loading" class="row">
+      <p
+        v-if="
+          tab === 'files'
+            ? filesLoading
+            : ['versions', 'strings'].includes(tab) && loading
+        "
+        class="row"
+      >
         <LoaderCircle class="spin" />{{ t("Loading…", "正在加载…") }}
       </p>
+      <template v-if="tab === 'overview'">
+        <div class="package-summary row">
+          <Avatar :src="current.icon_path" :alt="current.mod_id" :size="64" />
+          <div class="grow stack">
+            <h2>{{ current.mod_id }}</h2>
+            <div class="row wrap">
+              <span class="badge">{{ current.version }}</span
+              ><span class="badge">{{
+                current.enabled
+                  ? t("Enabled", "已启用")
+                  : t("Disabled", "已禁用")
+              }}</span>
+            </div>
+          </div>
+          <Button
+            @click="
+              act(() =>
+                mutate(
+                  [current.enabled ? 'disable' : 'enable', pkg.mod_id],
+                  t('Updating activation', '正在更新启用状态'),
+                ),
+              )
+            "
+            >{{
+              current.enabled ? t("Disable", "禁用") : t("Enable", "启用")
+            }}</Button
+          >
+        </div>
+        <div class="management-actions">
+          <button
+            @click="
+              act(() =>
+                mutate(
+                  ['upgrade', pkg.mod_id],
+                  t('Upgrading mod', '正在升级模组'),
+                ),
+              )
+            "
+          >
+            <ArrowUpCircle /><span
+              ><strong>{{ t("Find an update", "查找可行更新") }}</strong
+              ><small>{{
+                t(
+                  "Review compatible upgrades before applying.",
+                  "先查看兼容的升级方案，再确认应用。",
+                )
+              }}</small></span
+            ><ChevronRight />
+          </button>
+          <button @click="editRules('versions')">
+            <SlidersHorizontal /><span
+              ><strong>{{
+                t("Choose versions & rules", "选择版本与约束")
+              }}</strong
+              ><small>{{
+                t(
+                  "Browse versions, pin a version or limit updates.",
+                  "浏览可用版本、锁定版本或限定更新范围。",
+                )
+              }}</small></span
+            ><ChevronRight />
+          </button>
+          <button @click="files">
+            <Folder /><span
+              ><strong>{{ t("Files & data", "文件与数据") }}</strong
+              ><small>{{
+                t(
+                  "View ownership and reset this mod’s data.",
+                  "查看所属文件，或重置此模组的数据。",
+                )
+              }}</small></span
+            ><ChevronRight />
+          </button>
+        </div>
+      </template>
       <template v-if="tab === 'versions' && versions">
         <div class="toolbar">
           <select v-model="mode">
@@ -441,19 +543,58 @@ onMounted(load);
         </div>
       </template>
     </div>
-    <template v-if="['versions', 'strings'].includes(tab)" #footer
-      ><span class="grow muted">{{
-        t(
-          "No changes until you apply and confirm.",
-          "应用并确认方案之前不会更改实例。",
-        )
-      }}</span
-      ><Button
-        type="colored"
-        :disabled="!versions || loading || saving || mode === 'custom'"
-        @click="act(apply)"
-        >{{ t("Apply policy", "应用策略") }}</Button
-      ></template
-    >
+    <template #footer>
+      <Button @click="emit('close')">{{ t("Close", "关闭") }}</Button>
+      <span class="grow"></span>
+      <template v-if="['versions', 'strings'].includes(tab)">
+        <small class="muted">{{
+          t(
+            "No changes until you apply and confirm.",
+            "应用并确认方案之前不会更改实例。",
+          )
+        }}</small
+        ><Button
+          type="colored"
+          :disabled="!versions || loading || saving || mode === 'custom'"
+          @click="act(apply)"
+          >{{ t("Apply policy", "应用策略") }}</Button
+        ></template
+      >
+    </template>
   </Modal>
 </template>
+<style scoped>
+.package-summary {
+  padding: 8px 0 20px;
+}
+.management-actions {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--surface-5);
+  border-radius: 12px;
+  overflow: hidden;
+}
+.management-actions button {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  padding: 18px;
+  text-align: left;
+  border-bottom: 1px solid var(--surface-4);
+}
+.management-actions button:last-child {
+  border-bottom: 0;
+}
+.management-actions button:hover {
+  background: var(--surface-4);
+}
+.management-actions span {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.management-actions svg {
+  width: 20px;
+}
+</style>

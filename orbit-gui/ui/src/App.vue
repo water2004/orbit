@@ -1,6 +1,6 @@
 <script setup lang="ts">
 // Shell structure adapted from Modrinth App's App.vue and title-bar/index.vue.
-import { onMounted, watchEffect } from "vue";
+import { computed, onMounted, watchEffect } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import {
   Home,
@@ -14,27 +14,25 @@ import {
   RefreshCw,
   X,
 } from "lucide-vue-next";
-import {
-  workspace,
-  initialize,
-  refresh,
-  selectInstance,
-  act,
-} from "./services/workspace";
+import { workspace, initialize, refresh, act } from "./services/workspace";
 import { activity } from "./services/cli";
 import { language, t } from "./i18n";
 import NavButton from "./components/upstream/NavButton.vue";
 import Button from "./components/upstream/Button.vue";
 import ActivityPanel from "./components/ActivityPanel.vue";
-import Avatar from "./components/Avatar.vue";
+import AccountSwitcher from "./components/AccountSwitcher.vue";
+import { instancePath } from "./services/navigation";
 const router = useRouter();
 const route = useRoute();
-function changeInstance(event: Event) {
-  const id = (event.target as HTMLSelectElement).value;
-  const instance = workspace.instances.find((item) => item.id === id);
-  if (instance) void act(() => selectInstance(instance));
-}
-onMounted(initialize);
+const routeInstance = computed(() =>
+  workspace.instances.find((i) => i.id === route.params.id),
+);
+onMounted(() =>
+  initialize(
+    routeInstance.value?.id ||
+      (typeof route.params.id === "string" ? route.params.id : undefined),
+  ),
+);
 const system = window.matchMedia("(prefers-color-scheme: dark)");
 function applyTheme() {
   const p = workspace.preferences;
@@ -71,21 +69,15 @@ watchEffect(() => {
         @click="router.forward()"
         ><ChevronRight /></Button
       ><span class="grow"></span>
-      <select
-        v-if="route.path.startsWith('/instance') || route.path === '/browse'"
-        :value="workspace.selected?.id"
-        :aria-label="t('Installation', '实例')"
-        @change="changeInstance"
-      >
-        <option
-          v-for="instance in workspace.instances"
-          :key="instance.id"
-          :value="instance.id"
-        >
-          {{ instance.name }}
-        </option>
-      </select>
-      <Button type="quiet" :title="t('Refresh', '刷新')" @click="act(refresh)"
+      <AccountSwitcher
+        :instance-id="
+          routeInstance?.kind === 'client' ? routeInstance.id : undefined
+        "
+      />
+      <Button
+        type="quiet"
+        :title="t('Refresh', '刷新')"
+        @click="act(() => refresh(routeInstance?.id))"
         ><RefreshCw /></Button
       ><Button
         type="quiet"
@@ -97,10 +89,20 @@ watchEffect(() => {
     <nav class="app-grid-navbar">
       <NavButton
         to="/"
-        :is-primary="(r) => r.path === '/' || r.path.startsWith('/instance')"
+        :is-primary="
+          (r) =>
+            r.path === '/' ||
+            (r.path.startsWith('/instance') && !r.path.endsWith('/browse'))
+        "
         :title="t('Library', '实例库')"
         ><Home /></NavButton
-      ><NavButton to="/browse" :title="t('Discover', '发现')"
+      ><NavButton
+        :to="
+          route.params.id
+            ? instancePath(String(route.params.id), 'browse')
+            : '/browse'
+        "
+        :title="t('Discover', '发现')"
         ><Compass /></NavButton
       ><NavButton to="/create" :title="t('Create instance', '创建实例')"
         ><Plus /></NavButton
@@ -108,10 +110,7 @@ watchEffect(() => {
       ><NavButton to="/settings" :title="t('Settings', '设置')"
         ><Settings /></NavButton
       ><NavButton to="/accounts" :title="t('Accounts', '账户')"
-        ><Avatar
-          v-if="workspace.accounts.find((a) => a.is_default)?.avatar_path"
-          :src="workspace.accounts.find((a) => a.is_default)?.avatar_path"
-          :size="28" /><User v-else
+        ><User
       /></NavButton>
     </nav>
     <main class="app-content">
@@ -151,11 +150,6 @@ watchEffect(() => {
 .wordmark {
   font-size: 20px;
   margin-right: 16px;
-}
-.app-title-bar select {
-  max-width: 300px;
-  min-width: 180px;
-  padding: 7px 10px;
 }
 .app-grid-navbar {
   grid-area: nav;

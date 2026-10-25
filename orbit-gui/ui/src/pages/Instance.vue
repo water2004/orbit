@@ -14,6 +14,7 @@ import {
   Upload,
   ShieldCheck,
   RefreshCw,
+  ArrowLeft,
 } from "lucide-vue-next";
 import {
   workspace,
@@ -28,16 +29,33 @@ import {
 import { importArguments } from "../services/commands";
 import type { Package } from "../types";
 import { t } from "../i18n";
+import { instancePath } from "../services/navigation";
 import Avatar from "../components/Avatar.vue";
 import Button from "../components/upstream/Button.vue";
 import Modal from "../components/Modal.vue";
 import PackageManager from "../components/PackageManager.vue";
+import ActionMenu from "../components/ActionMenu.vue";
+import Toggle from "../components/upstream/Toggle.vue";
 const route = useRoute(),
   router = useRouter(),
   query = ref(""),
   manager = ref<Package>(),
   checking = ref(false),
   showUpdates = ref(false);
+const maintenanceOpen = ref(false);
+const activating = ref(new Set<string>());
+async function togglePackage(pkg: Package) {
+  if (activating.value.has(pkg.mod_id)) return;
+  activating.value.add(pkg.mod_id);
+  try {
+    await mutate(
+      [pkg.enabled ? "disable" : "enable", pkg.mod_id],
+      t("Updating activation", "正在更新启用状态"),
+    );
+  } finally {
+    activating.value.delete(pkg.mod_id);
+  }
+}
 const openPath = (path: string) => invoke("open_directory", { path });
 function selected() {
   if (!workspace.selected)
@@ -73,6 +91,12 @@ const updates = ref<Updates>(),
     warnings: { detail: string }[];
     coverage_gaps: { detail: string; count: number }[];
   }>();
+watch(
+  () => workspace.packages,
+  () => {
+    updates.value = undefined;
+  },
+);
 const minRisk = ref("35"),
   auditFilter = ref(""),
   auditBusy = ref(false);
@@ -258,6 +282,9 @@ async function status() {
 </script>
 <template>
   <div v-if="workspace.selected" class="page">
+    <RouterLink class="back-link" to="/"
+      ><ArrowLeft :size="16" />{{ t("Library", "实例库") }}</RouterLink
+    >
     <header class="page-heading">
       <div>
         <h1>{{ workspace.selected.name }}</h1>
@@ -293,7 +320,7 @@ async function status() {
         >
       </div>
     </header>
-    <nav class="tabs">
+    <nav class="tabs section-tabs">
       <button
         v-for="item in [
           ['mods', t('Content', '模组内容')],
@@ -305,7 +332,7 @@ async function status() {
         ]"
         :key="item[0]"
         :class="{ active: tab === item[0] }"
-        @click="router.push('/instance/' + item[0])"
+        @click="router.push(instancePath(selected().id, item[0]))"
       >
         {{ item[1] }}
       </button>
@@ -327,13 +354,27 @@ async function status() {
             v-model="query"
             class="search"
             :placeholder="t('Filter installed mods', '筛选已安装模组')"
-          /><Button @click="router.push('/browse')"
+          /><Button
+            type="colored"
+            @click="router.push(instancePath(selected().id, 'browse'))"
             ><PackagePlus />{{ t("Add content", "添加模组") }}</Button
-          ><Button @click="act(importPack)"
-            ><Download />{{ t("Import", "导入") }}</Button
-          ><Button @click="exportOpen = true"
-            ><Upload />{{ t("Export", "导出") }}</Button
-          >
+          ><ActionMenu :label="t('More content actions', '更多内容操作')">
+            <button @click="act(importPack)">
+              <Download :size="18" />{{ t("Import modpack", "导入整合包") }}
+            </button>
+            <button @click="exportOpen = true">
+              <Upload :size="18" />{{ t("Export modpack", "导出整合包") }}
+            </button>
+            <hr />
+            <button @click="maintenanceOpen = true">
+              <Settings2 :size="18" /><span
+                >{{ t("Repair & reconcile", "修复与对账")
+                }}<small>{{
+                  t("Changed files outside Orbit?", "手动更改过模组文件？")
+                }}</small></span
+              >
+            </button>
+          </ActionMenu>
         </div>
         <div class="toolbar">
           <div class="tabs grow">
@@ -368,20 +409,20 @@ async function status() {
             <Avatar :src="pkg.icon_path" :alt="pkg.mod_id" :size="44" />
             <div class="grow">
               <div class="row wrap">
-                <strong>{{ pkg.mod_id }}</strong
+                <button class="text-link" @click="manager = pkg">
+                  <strong>{{ pkg.mod_id }}</strong></button
                 ><span class="badge">{{ pkg.version }}</span
                 ><span v-if="!pkg.enabled" class="badge">{{
                   t("Disabled", "已禁用")
                 }}</span>
               </div>
-              <small
-                >{{ pkg.environment }} · {{ pkg.dependencies.length }}
-                {{ t("dependencies", "个依赖")
-                }}<template v-if="pkg.bundled_count">
-                  · {{ pkg.bundled_count }}
-                  {{ t("bundled modules", "个内置模块") }}</template
-                ></small
-              >
+              <small>{{
+                pkg.environment === "client"
+                  ? t("Client", "客户端")
+                  : pkg.environment === "server"
+                    ? t("Server", "服务端")
+                    : t("Client & server", "客户端与服务端")
+              }}</small>
               <p v-if="updates?.updates.find((u) => u.mod_id === pkg.mod_id)">
                 →
                 {{
@@ -391,11 +432,7 @@ async function status() {
               </p>
             </div>
             <Button
-              type="quiet"
-              :title="t('Manage', '管理')"
-              @click="manager = pkg"
-              ><Settings2 /></Button
-            ><Button
+              v-if="updates?.updates.some((u) => u.mod_id === pkg.mod_id)"
               type="quiet"
               :title="t('Upgrade', '升级')"
               @click="
@@ -406,32 +443,30 @@ async function status() {
                   ),
                 )
               "
-              ><ArrowUpCircle /></Button
-            ><label :title="t('Enabled', '启用')"
-              ><input
-                type="checkbox"
-                :checked="pkg.enabled"
-                @change="
+              ><ArrowUpCircle />{{ t("Update", "升级") }}</Button
+            ><Toggle
+              :model-value="pkg.enabled"
+              :disabled="activating.has(pkg.mod_id)"
+              :aria-label="t('Enable ', '启用 ') + pkg.mod_id"
+              @update:model-value="act(() => togglePackage(pkg))"
+            />
+            <ActionMenu :label="t('Manage ', '管理 ') + pkg.mod_id">
+              <button @click="manager = pkg">
+                <Settings2 :size="18" />{{ t("Manage mod", "管理模组") }}
+              </button>
+              <button
+                @click="
                   act(() =>
                     mutate(
-                      [pkg.enabled ? 'disable' : 'enable', pkg.mod_id],
-                      t('Updating activation', '正在更新启用状态'),
+                      ['remove', pkg.mod_id],
+                      t('Removing', '正在移除') + ' ' + pkg.mod_id,
                     ),
                   )
-                " /></label
-            ><Button
-              type="quiet"
-              :title="t('Remove', '移除')"
-              @click="
-                act(() =>
-                  mutate(
-                    ['remove', pkg.mod_id],
-                    t('Removing', '正在移除') + ' ' + pkg.mod_id,
-                  ),
-                )
-              "
-              ><Trash2
-            /></Button>
+                "
+              >
+                <Trash2 :size="18" />{{ t("Remove mod", "移除模组") }}
+              </button>
+            </ActionMenu>
           </div>
         </div>
         <p v-if="!packages.length" class="empty">
@@ -452,39 +487,6 @@ async function status() {
             {{ warning }}
           </p></template
         >
-        <div class="toolbar">
-          <small class="grow">{{
-            t(
-              "Sync records disk state. Fix resolves dependency conflicts.",
-              "同步如实记录磁盘状态；修复用于解决依赖冲突。",
-            )
-          }}</small
-          ><Button
-            @click="
-              act(() =>
-                mutate(['sync'], t('Synchronizing mods', '正在同步模组')),
-              )
-            "
-            >{{ t("Sync", "同步") }}</Button
-          ><Button
-            @click="
-              act(() =>
-                mutate(['fix'], t('Fixing dependencies', '正在修复依赖')),
-              )
-            "
-            >{{ t("Fix", "修复") }}</Button
-          ><Button
-            @click="
-              act(() =>
-                mutate(
-                  ['install'],
-                  t('Restoring locked files', '正在安装锁定文件'),
-                ),
-              )
-            "
-            ><Download />{{ t("Install locked files", "安装锁定文件") }}</Button
-          >
-        </div>
       </template>
     </template>
     <template v-if="tab === 'runtime'">
@@ -502,13 +504,18 @@ async function status() {
         </div>
         <p class="path">{{ workspace.selected.directory }}</p>
         <div class="toolbar">
-          <Button @click="router.push('/create?migrate=1')"
+          <Button
+            @click="
+              router.push(instancePath(selected().id, 'create') + '?migrate=1')
+            "
             ><ArrowUpCircle />{{
               t("Migrate to a new instance", "迁移到新实例")
             }}</Button
           ><Button
             :disabled="workspace.detail?.desired.loader === 'vanilla'"
-            @click="router.push('/create?loader=1')"
+            @click="
+              router.push(instancePath(selected().id, 'create') + '?loader=1')
+            "
             >{{ t("Update loader", "更新加载器") }}</Button
           ><Button
             @click="
@@ -800,6 +807,82 @@ async function status() {
         ></template
       ></Modal
     >
+    <Modal
+      v-if="maintenanceOpen"
+      :title="t('What needs attention?', '需要处理什么？')"
+      @close="maintenanceOpen = false"
+    >
+      <div class="maintenance-options">
+        <button
+          @click="
+            maintenanceOpen = false;
+            act(() =>
+              mutate(['sync'], t('Synchronizing mods', '正在同步模组')),
+            );
+          "
+        >
+          <RefreshCw /><span
+            ><strong>{{
+              t("I changed files in the mods folder", "我手动改了模组文件")
+            }}</strong
+            ><small>{{
+              t(
+                "Record what is on disk. Does not solve dependencies or delete mods.",
+                "重新记录磁盘现状，不求解依赖，也不删除模组。",
+              )
+            }}</small></span
+          >
+        </button>
+        <button
+          @click="
+            maintenanceOpen = false;
+            act(() =>
+              mutate(['fix'], t('Fixing dependencies', '正在修复依赖')),
+            );
+          "
+        >
+          <ShieldCheck /><span
+            ><strong>{{
+              t("Resolve dependency conflicts", "解决依赖冲突")
+            }}</strong
+            ><small>{{
+              t(
+                "Find minimal-change plans and review them before applying.",
+                "查找改动尽量少的方案，由你选择并确认后应用。",
+              )
+            }}</small></span
+          >
+        </button>
+        <button
+          @click="
+            maintenanceOpen = false;
+            act(() =>
+              mutate(
+                ['install'],
+                t('Restoring locked files', '正在恢复锁定文件'),
+              ),
+            );
+          "
+        >
+          <Download /><span
+            ><strong>{{
+              t("Restore missing package files", "恢复缺失的模组文件")
+            }}</strong
+            ><small>{{
+              t(
+                "Install the exact versions already recorded in the lockfile.",
+                "仅安装锁文件中已记录的精确版本，不重新选版本。",
+              )
+            }}</small></span
+          >
+        </button>
+      </div>
+      <template #footer
+        ><Button @click="maintenanceOpen = false">{{
+          t("Cancel", "取消")
+        }}</Button></template
+      >
+    </Modal>
     <PackageManager
       v-if="manager"
       :key="manager.mod_id"
@@ -828,6 +911,7 @@ async function status() {
         >
       </div>
       <template #footer
+        ><Button @click="exportOpen = false">{{ t("Cancel", "取消") }}</Button
         ><Button type="colored" @click="act(exportPack)">{{
           t("Choose destination…", "选择导出位置…")
         }}</Button></template
@@ -856,6 +940,9 @@ async function status() {
         >
       </div>
       <template #footer
+        ><Button @click="importReview = undefined">{{
+          t("Cancel", "取消")
+        }}</Button
         ><Button type="colored" @click="act(importConfirmed)">{{
           t("Import", "导入")
         }}</Button></template
@@ -889,6 +976,28 @@ async function status() {
   </div>
 </template>
 <style scoped>
+.maintenance-options {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.maintenance-options button {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  text-align: left;
+  padding: 18px;
+  border-radius: 12px;
+  background: var(--surface-3);
+}
+.maintenance-options button:hover {
+  background: var(--surface-4);
+}
+.maintenance-options span {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
 .path {
   overflow-wrap: anywhere;
 }

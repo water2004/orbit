@@ -2,16 +2,9 @@
 import { computed, ref } from "vue";
 import { useRouter } from "vue-router";
 import { Plus, Search, Play, FolderInput, Settings } from "lucide-vue-next";
-import { open } from "@tauri-apps/plugin-dialog";
-import {
-  workspace,
-  selectInstance,
-  launch,
-  act,
-  refresh,
-} from "../services/workspace";
-import { run } from "../services/cli";
+import { workspace, launch, act } from "../services/workspace";
 import { t } from "../i18n";
+import { instancePath } from "../services/navigation";
 import Button from "../components/upstream/Button.vue";
 import InstanceCard from "../components/upstream/InstanceCard.vue";
 const router = useRouter();
@@ -28,19 +21,7 @@ const instances = computed(() =>
 async function openInstance(id: string) {
   const instance = workspace.instances.find((i) => i.id === id);
   if (instance) {
-    await selectInstance(instance);
-    await router.push("/instance/mods");
-  }
-}
-async function importDirectory() {
-  const path = await open({ directory: true });
-  if (typeof path === "string") {
-    await run({
-      kind: "launcher",
-      args: ["instance", "import", "--directory", path],
-      label: t("Import installation", "导入实例"),
-    });
-    await refresh();
+    await router.push(instancePath(instance.id));
   }
 }
 </script>
@@ -116,8 +97,7 @@ async function importDirectory() {
             :title="t('Manage instance', '管理实例')"
             @click="
               act(async () => {
-                await selectInstance(instance);
-                await router.push('/instance/runtime');
+                await router.push(instancePath(instance.id, 'runtime'));
               })
             "
             ><Settings
@@ -145,7 +125,7 @@ async function importDirectory() {
     <div class="row">
       <small class="grow"
         >{{ instances.length }} {{ t("instances", "个实例") }}</small
-      ><Button type="quiet" @click="act(importDirectory)"
+      ><Button type="quiet" @click="router.push('/create?import=1')"
         ><FolderInput />{{ t("Import existing", "导入现有实例") }}</Button
       ><Button @click="router.push('/create?pack=1')">{{
         t("Install modpack", "安装整合包")

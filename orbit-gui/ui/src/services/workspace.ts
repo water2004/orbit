@@ -22,16 +22,16 @@ export const workspace = reactive({
   loading: false,
 });
 let selectionRevision = 0;
-export async function initialize() {
+export async function initialize(instanceId?: string) {
   try {
     workspace.preferences = await loadPreferences();
     language.value = workspace.preferences.language;
-    await refresh();
+    await refresh(instanceId);
   } catch (error) {
     workspace.error = String(error);
   }
 }
-export async function refresh() {
+export async function refresh(instanceId = workspace.selected?.id) {
   workspace.loading = true;
   try {
     const [instances, accounts] = await Promise.allSettled([
@@ -53,6 +53,7 @@ export async function refresh() {
     if (instances.status === "rejected") throw instances.reason;
     workspace.instances = instances.value.instances;
     const chosen =
+      workspace.instances.find((x) => x.id === instanceId) ??
       workspace.instances.find(
         (x) => x.id === workspace.preferences?.selected_instance,
       ) ??

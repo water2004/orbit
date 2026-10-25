@@ -4,6 +4,7 @@ import App from "./App.vue";
 import Library from "./pages/Library.vue";
 import Browse from "./pages/Browse.vue";
 import Instance from "./pages/Instance.vue";
+import InstanceContext from "./components/InstanceContext.vue";
 import Accounts from "./pages/Accounts.vue";
 import Settings from "./pages/Settings.vue";
 import Create from "./pages/Create.vue";
@@ -13,7 +14,15 @@ const router = createRouter({
   routes: [
     { path: "/", component: Library },
     { path: "/browse", component: Browse },
-    { path: "/instance/:tab", component: Instance },
+    {
+      path: "/instance/:id",
+      component: InstanceContext,
+      children: [
+        { path: "browse", component: Browse },
+        { path: "create", component: Create },
+        { path: ":tab", component: Instance },
+      ],
+    },
     { path: "/accounts", component: Accounts },
     { path: "/settings", component: Settings },
     { path: "/create", component: Create },

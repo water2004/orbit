@@ -10,8 +10,10 @@ import {
   Download,
   FolderOpen,
   ArrowUpCircle,
+  Boxes,
+  FolderInput,
 } from "lucide-vue-next";
-import { act, launcher, workspace } from "../services/workspace";
+import { act, launcher, workspace, refresh } from "../services/workspace";
 import { Cancelled } from "../services/cli";
 import {
   createInstallation,
@@ -24,10 +26,12 @@ import {
 } from "../services/installations";
 import type { MinecraftVersion, LoaderVersion } from "../types";
 import { t } from "../i18n";
+import { instancePath } from "../services/navigation";
 import Button from "../components/upstream/Button.vue";
+import BigOptionButton from "../components/upstream/BigOptionButton.vue";
 const route = useRoute(),
   router = useRouter(),
-  step = ref(0),
+  step = ref(route.query.migrate || route.query.loader ? 0 : -1),
   catalog = ref<MinecraftVersion[]>([]),
   loaders = ref<LoaderVersion[]>([]),
   loading = ref(false),
@@ -142,6 +146,22 @@ async function inspectPack() {
   step.value = 1;
   await components();
 }
+async function importDirectory() {
+  const path = await open({ directory: true });
+  if (typeof path !== "string") return;
+  busy.value = true;
+  try {
+    await launcher(
+      ["instance", "import", "--directory", path],
+      t("Importing instance", "正在导入实例"),
+      null,
+    );
+    await refresh();
+    await router.push("/");
+  } finally {
+    busy.value = false;
+  }
+}
 watch(
   () => draft.kind,
   (kind) => {
@@ -169,14 +189,14 @@ async function install() {
       if (!source)
         throw new Error(t("Select a source instance", "请选择源实例"));
       await updateLoader(draft.loaderVersion, source, sourceHasOrbit);
-      await router.push("/instance/runtime");
+      await router.push(instancePath(workspace.selected!.id, "runtime"));
     } else if (mode.value === "migrate") {
       if (!source)
         throw new Error(t("Select a source instance", "请选择源实例"));
       review.value = await prepareMigration({ ...draft }, source);
     } else {
       await createInstallation({ ...draft }, pack.value, optional.value);
-      await router.push("/instance/runtime");
+      await router.push(instancePath(workspace.selected!.id, "runtime"));
     }
   } catch (e) {
     if (!(e instanceof Cancelled)) error.value = String(e);
@@ -188,20 +208,14 @@ async function migrate() {
   if (!review.value) return;
   busy.value = true;
   try {
-    if (await applyMigration(review.value)) await router.push("/instance/mods");
+    if (await applyMigration(review.value))
+      await router.push(instancePath(workspace.selected!.id));
   } finally {
     busy.value = false;
   }
 }
-onMounted(async () => {
-  if (mode.value === "loader" && workspace.detail) {
-    draft.minecraft = workspace.detail.desired.minecraft;
-    draft.loader = workspace.detail.desired.loader;
-    draft.name = workspace.selected?.name || "";
-    step.value = 1;
-    await components();
-    return;
-  }
+async function loadCatalog() {
+  if (catalog.value.length) return;
   try {
     catalog.value = (
       await launcher<{ versions: MinecraftVersion[] }>(
@@ -210,10 +224,26 @@ onMounted(async () => {
         null,
       )
     ).versions;
-    if (route.query.pack) await inspectPack();
   } catch (e) {
     error.value = String(e);
   }
+}
+function customInstallation() {
+  step.value = 0;
+}
+onMounted(async () => {
+  if (mode.value === "loader" && workspace.detail) {
+    draft.minecraft = workspace.detail.desired.minecraft;
+    draft.loader = workspace.detail.desired.loader;
+    draft.name = workspace.selected?.name || "";
+    step.value = 1;
+    await components();
+  } else if (route.query.pack) await act(inspectPack);
+  else if (route.query.import) await act(importDirectory);
+  else if (mode.value === "migrate") await loadCatalog();
+});
+watch(step, (value) => {
+  if (value === 0) void loadCatalog();
 });
 </script>
 <template>
@@ -243,13 +273,17 @@ onMounted(async () => {
           }}
         </p>
       </div>
-      <Button v-if="mode === 'new' && !pack" @click="act(inspectPack)"
-        ><Download />{{
-          t("Install a modpack instead", "从整合包安装")
-        }}</Button
+      <Button
+        :disabled="busy"
+        @click="
+          router.push(
+            source && mode !== 'new' ? instancePath(source.id, 'runtime') : '/',
+          )
+        "
+        >{{ t("Cancel", "取消") }}</Button
       >
     </header>
-    <nav v-if="!review" class="stepper">
+    <nav v-if="!review && step >= 0" class="stepper">
       <div
         v-for="(label, index) in steps"
         :key="index"
@@ -263,6 +297,43 @@ onMounted(async () => {
       </div>
     </nav>
     <p v-if="error" class="error card">{{ error }}</p>
+    <div v-if="step === -1" class="setup-options stack">
+      <h2>{{ t("How would you like to start?", "从哪里开始？") }}</h2>
+      <BigOptionButton
+        :icon="Boxes"
+        :title="t('Build your own', '创建自己的实例')"
+        :description="
+          t(
+            'Choose Minecraft and a loader, then add the mods you want.',
+            '选择 Minecraft 和加载器，再添加你需要的模组。',
+          )
+        "
+        @click="customInstallation"
+      />
+      <BigOptionButton
+        :icon="Download"
+        :title="t('Install a modpack', '从整合包安装')"
+        :description="
+          t(
+            'Open an Orbit bundle or Modrinth .mrpack file.',
+            '打开 Orbit 组合包或 Modrinth .mrpack 文件。',
+          )
+        "
+        @click="act(inspectPack)"
+      />
+      <BigOptionButton
+        :icon="FolderInput"
+        :disabled="busy"
+        :title="t('Import an existing instance', '导入已有实例')"
+        :description="
+          t(
+            'Add a game directory to your library without reinstalling it.',
+            '把已有游戏目录加入实例库，不重新安装。',
+          )
+        "
+        @click="act(importDirectory)"
+      />
+    </div>
     <template v-if="review"
       ><div class="card stack">
         <h2>{{ t("Migration preview", "迁移预览") }}</h2>
@@ -305,7 +376,7 @@ onMounted(async () => {
         }}</Button>
       </div></template
     >
-    <template v-else>
+    <template v-else-if="step >= 0">
       <div v-if="step === 0" class="stack">
         <div class="toolbar">
           <input
@@ -498,7 +569,9 @@ onMounted(async () => {
       <footer class="wizard-footer">
         <Button
           :disabled="
-            busy || step === 0 || (step === 1 && (mode === 'loader' || !!pack))
+            busy ||
+            (step === 0 && mode !== 'new') ||
+            (step === 1 && (mode === 'loader' || !!pack))
           "
           @click="step--"
           ><ChevronLeft />{{ t("Back", "上一步") }}</Button
@@ -528,8 +601,14 @@ onMounted(async () => {
 </template>
 <style scoped>
 .create-page {
-  max-width: 1100px;
+  max-width: 1000px;
   margin: auto;
+}
+.setup-options {
+  max-width: 720px;
+  width: 100%;
+  margin: 12px auto;
+  gap: 16px;
 }
 .stepper {
   display: flex;

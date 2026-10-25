@@ -51,7 +51,7 @@ const hue = computed(
   align-items: center;
   justify-content: center;
   overflow: hidden;
-  border-radius: inherit;
+  border-radius: 10px;
   background: linear-gradient(
     145deg,
     hsl(var(--avatar-hue) 35% 42%),

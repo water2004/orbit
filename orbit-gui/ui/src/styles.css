@@ -8,11 +8,11 @@
     Inter, "Segoe UI", "Noto Sans CJK SC", "Microsoft YaHei", sans-serif;
   font-size: 14px;
   color-scheme: dark;
-  --surface-1: #171a20;
-  --surface-2: #20242c;
-  --surface-3: #292e38;
-  --surface-4: #343b46;
-  --surface-5: #444d5b;
+  --surface-1: #16181c;
+  --surface-2: #1d1f23;
+  --surface-3: #27292e;
+  --surface-4: #34363c;
+  --surface-5: #42444a;
   --color-base: #b8c1ce;
   --color-contrast: #f3f5f7;
   --color-brand: #8b91ff;
@@ -30,18 +30,20 @@
 }
 :root[data-theme="light"] {
   color-scheme: light;
-  --surface-1: #edf0f4;
-  --surface-2: #f6f7fa;
+  --surface-1: #f5f5f5;
+  --surface-2: #ebebeb;
   --surface-3: #fff;
-  --surface-4: #e9edf2;
-  --surface-5: #d6dde5;
-  --color-base: #526074;
-  --color-contrast: #1f2937;
+  --surface-4: #eef0f2;
+  --surface-5: #dddddd;
+  --color-base: #60646b;
+  --color-contrast: #1a202c;
   --color-brand: #5760da;
   --color-accent-contrast: white;
   --color-button-bg-selected: #5760da20;
   --color-button-text-selected: #4751c8;
   --hover-brightness: 0.97;
+  --color-green: #087c4d;
+  --color-red: #b7193d;
 }
 :root[data-accent="emerald"] {
   --color-brand: #42b98a;
@@ -153,7 +155,7 @@ svg {
   padding: 24px;
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  gap: 16px;
   min-height: 100%;
 }
 .page-heading {
@@ -184,8 +186,8 @@ svg {
 .card {
   background: var(--surface-3);
   border: 1px solid var(--surface-4);
-  border-radius: 16px;
-  padding: 18px;
+  border-radius: 12px;
+  padding: 16px;
 }
 .toolbar {
   display: flex;
@@ -239,10 +241,10 @@ svg {
 .modal {
   padding: 0;
   border: 1px solid var(--surface-5);
-  border-radius: 20px;
+  border-radius: 16px;
   width: min(680px, calc(100vw - 48px));
   max-height: calc(100dvh - 48px);
-  background: var(--surface-2);
+  background: var(--surface-1);
   color: var(--color-base);
   box-shadow: 0 24px 90px #0005;
   overflow: hidden;
@@ -252,11 +254,11 @@ svg {
   flex-direction: column;
 }
 .modal.wide {
-  width: min(1000px, calc(100vw - 48px));
+  width: min(900px, calc(100vw - 48px));
 }
 .modal::backdrop {
   background: #080b1266;
-  backdrop-filter: blur(5px);
+  backdrop-filter: blur(3px);
 }
 .modal > header,
 .modal > footer {
@@ -273,6 +275,7 @@ svg {
 .modal > footer {
   border-top: 1px solid var(--surface-4);
   justify-content: flex-end;
+  background: var(--surface-2);
 }
 .modal-scroll {
   padding: 20px 22px;
@@ -294,7 +297,52 @@ svg {
   background: var(--surface-3);
   border: 1px solid var(--surface-4);
   border-radius: 14px;
-  overflow: hidden;
+  overflow: visible;
+}
+.list > :first-child {
+  border-radius: 14px 14px 0 0;
+}
+.list > :last-child {
+  border-radius: 0 0 14px 14px;
+}
+.back-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  align-self: flex-start;
+  font-size: 13px;
+  color: var(--color-base);
+  text-decoration: none;
+}
+.back-link:hover,
+.text-link:hover {
+  color: var(--color-brand);
+}
+.text-link {
+  text-align: left;
+  cursor: pointer;
+}
+.text-link:hover strong {
+  color: inherit;
+}
+.section-tabs {
+  border-bottom: 1px solid var(--surface-5);
+  gap: 20px;
+}
+.section-tabs button {
+  border-radius: 0;
+  padding: 12px 2px;
+  border-bottom: 3px solid transparent;
+}
+.section-tabs button.active {
+  border-bottom-color: var(--color-brand);
+  background: none;
+}
+summary {
+  cursor: pointer;
+}
+button:disabled {
+  cursor: not-allowed;
 }
 .truncate {
   overflow: hidden;
