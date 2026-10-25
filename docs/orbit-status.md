@@ -1,8 +1,12 @@
 # Orbit 实现状态
 
-> 更新日期：2026-10-24。本文区分“正确规范曾未被代码执行”和“文档本身已经过时”。
+> 更新日期：2026-10-25。本文区分“正确规范曾未被代码执行”和“文档本身已经过时”。
 
 ## 1. 当前结论
+
+本开发分支把 GUI 替换为基于 Modrinth App 控件/实例交互的 Vue/Tauri 薄壳，保留 CLI 业务边界。
+首次服务端安装的 EULA 已接入 Launcher 同一 JSON 交互协议。构建与协议/交互测试通过后，
+仍需用户验收原生窗口、真实账户及安装任务；本分支尚未发布。
 
 Fabric 0.20.x 已纳入 Agent 与 audit 的共享兼容范围。对照 0.19.5 / 0.20.0 / 0.20.1
 官方源码和签名发行 JAR，两种 Knot 类加载器的物理来源与 Agent 文件归属回归通过。
@@ -58,7 +62,7 @@ GUI 文件选择已统一异步处理：修正整合包导入/导出按钮同步
 | Loader JSON 容错 | ✅ | Fabric-compatible 字符串控制字符；仅限 JAR 内 loader/Mixin/refmap，其他 JSON 保持严格 |
 | 字节码运行时符号对齐 | ✅ | Fabric/Quilt 按实际 Tiny/identity 能力选择 official 或投影，不复制版本边界；Forge/NeoForge 验证 Loader runtime game；未对齐时在 finding 前停止 |
 | i18n | ✅ | `orbit`、`orbit-launcher` 与 GUI 共用 `system`（默认）/`en`/`zh-CN` 语言模型；CLI help、文本结果、进度、询问和结构化错误均在展示边界翻译，机器字段保持稳定 |
-| 原生 GUI | ✅ | GPUI + gpui-component 原生进程薄壳；统一 SVG/EXE 品牌标志、领域化侧栏图标、紧凑任务条、Activity 抽屉、连续触控板滚动、语言/主题/强调色；Runtime 用同一组合包完成先导出再创建的迁移，并提供 Orbit 数据范围与 mrpack 导入导出；模组管理以独立“文件与数据”工作区消费 `ownership` 机器结果；GUI 只编排 CLI，不解析包、直读业务 TOML/归属账本或实现第二条路径 |
+| 原生 GUI | ✅ | Vue/Tauri 进程薄壳（Modrinth App 源码适配）；统一 SVG/EXE 品牌标志、领域化侧栏图标、紧凑任务条、Activity 抽屉、连续触控板滚动、语言/主题/强调色；Runtime 用同一组合包完成先导出再创建的迁移，并提供 Orbit 数据范围与 mrpack 导入导出；模组管理以独立“文件与数据”工作区消费 `ownership` 机器结果；GUI 只编排 CLI，不解析包、直读业务 TOML/归属账本或实现第二条路径 |
 
 ## 2. 保留的正确规范
 

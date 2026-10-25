@@ -2,8 +2,11 @@
 
 ## 1. workspace
 
+GUI 导航与基础控件基于 Modrinth App 源码适配，采用 GPL-3.0-only；不导入其业务后端。
+原 GPUI 页面已移除。Vue 仅通过 Tauri 进程桥消费同一 CLI 协议，细节见 [GUI 架构](orbit-gui.md)。
+
 ```text
-orbit-gui       原生进程薄壳；不链接任何 core
+orbit-gui       Vue/Tauri 进程薄壳；不链接任何 core
   ├── 启动/深度清理 → orbit
   └── 其它运行时操作 → orbit-launcher
 

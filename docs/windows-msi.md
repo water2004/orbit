@@ -14,11 +14,14 @@ Launcher，也不单独暴露功能；只有 `orbit launch` 会注入它。完�
 项目图标的唯一设计源是 `assets/orbit.svg`：中心点与外环三分之二使用同一主色，剩余
 三分之一由四段等长彩色短弧组成，弧段之间保留明确空隙。`orbit-gui` 的 Rust build
 script 在 Windows 构建时从该 SVG 生成多尺寸 ICO 并嵌入 PE 资源，因此窗口品牌区、开始菜单、
-任务栏和 `orbit-gui.exe` 本身使用同一标志；品牌区使用同一次构建生成的 PNG，WiX 的 Icon
-表和开始菜单 Shortcut 显式引用生成的 ICO，不依赖 Shell 从目标 EXE 猜测。仓库不维护会
-漂移的手工 PNG/ICO 源文件。
+任务栏和 `orbit-gui.exe` 本身使用同一标志。Vue 品牌区直接使用 SVG；Tauri 默认窗口图标的
+PNG/ICO 位于 `orbit-gui/icons/`，是同一 SVG 的生成快照，修改标志时应同步重新生成。
+WiX 的 Icon 表和开始菜单 Shortcut 显式引用构建生成的 ICO，不依赖 Shell 从目标 EXE 猜测。
 
-双击 MSI 会进入标准安装向导，依次提供欢迎页、MIT 许可页、安装目录选择、安装档位与
+完整 GUI 档位需要系统已安装 Microsoft Edge WebView2 Runtime。GUI 前端资源嵌入 EXE，
+无需运行本地 Web 服务器。GUI 采用 GPL-3.0-only，Orbit/Launcher 仍为 MIT，安装携带完整许可和上游说明。
+
+双击 MSI 会进入标准安装向导，依次提供欢迎页、套件许可说明页、安装目录选择、安装档位与
 Windows 集成选项、安装确认、进度和完成页。“加入系统 PATH”默认勾选，但用户可以在
 安装前取消。已安装后再次运行同一 MSI，可以修改安装档位和 PATH 集成、修复或卸载。
 卸载向导还会提供“删除 Orbit AppData”复选框，默认不勾选。勾选后会递归删除安装时
@@ -46,6 +49,7 @@ msiexec.exe /x orbit-0.6.3-x86_64.msi /quiet REMOVE_APPDATA=1
 
 - Windows x64；
 - Rust MSVC toolchain；
+- Node.js 22+（构建 Vue 前端）；
 - .NET SDK 6 或更高版本；
 - JDK 21（用于编译 Java 17 基线的 Runtime Agent）；
 - 首次恢复 Cargo 与 .NET 工具时可访问对应包源。
@@ -56,7 +60,7 @@ msiexec.exe /x orbit-0.6.3-x86_64.msi /quiet REMOVE_APPDATA=1
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-windows-msi.ps1
 ```
 
-脚本执行锁定的 Cargo release 构建，然后恢复仓库
+脚本先恢复锁定 npm 依赖并构建 Vue 前端，再执行锁定的 Cargo release 构建，然后恢复仓库
 `.config/dotnet-tools.json` 中固定的 WiX 版本与同版本的 WixUI、Util 扩展。输出路径为：
 
 ```text

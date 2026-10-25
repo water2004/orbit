@@ -6,7 +6,7 @@
 
 [简体中文](README.zh-CN.md)
 
-**A modern, non-intrusive package manager and native workspace for Minecraft Java Edition.**
+**A modern, non-intrusive package manager and desktop workspace for Minecraft Java Edition.**
 
 Orbit brings package-manager semantics to Minecraft mods without replacing the launcher workflow you already use. It can adopt an existing valid game instance, reconstruct its package graph from JAR-declared metadata, discover candidates from multiple providers, resolve complete dependency portfolios, and restore an exact lockfile.
 
@@ -14,7 +14,7 @@ The repository contains three deliberately separated applications:
 
 - `orbit` manages mods and their dependency graph.
 - `orbit-launcher` manages Minecraft, Loaders, Java, accounts, launching, and supervised servers. It never links to or calls Orbit; Orbit can wrap its start command when package-owned runtime data observation is requested.
-- `orbit-gui` is a native GPUI shell. It performs no package or launcher business logic. Runtime installation/accounts still call Launcher directly, while game start and package-data purge go through Orbit's joint-launch path.
+- `orbit-gui` is a Vue/Tauri desktop shell adapted from Modrinth App's library, navigation and controls. It performs no package or launcher business logic. Runtime installation/accounts still call Launcher directly, while game start and package-data purge go through Orbit's joint-launch path.
 
 The detailed boundaries are documented in [Orbit architecture](docs/orbit-architecture.md), [Launcher architecture](docs/orbit-launcher-architecture.md), [GUI architecture](docs/orbit-gui.md), and the [native bundle format](docs/orbit-bundle-format.md).
 
@@ -267,6 +267,14 @@ On Windows, `scripts/build-windows-msi.ps1` builds release binaries and the WiX 
 
 Issues and pull requests are welcome. Changes must preserve the crate boundaries, typed machine protocols, real Loader/JAR semantics, and ordered tests documented in [CLAUDE.md](CLAUDE.md).
 
+## GUI development branch
+
+The Modrinth-based GUI replaces the former GPUI implementation. It keeps the same Orbit/Launcher
+process protocol and reorganizes workflows around the instance library, content management,
+accounts and a guided installation flow. Build instructions and system requirements are in
+[GUI documentation](docs/orbit-gui.md). Windows requires WebView2; Linux uses WebKitGTK 4.1.
+This branch has not been published as a new release.
+
 ## License
 
-MIT License.
+Orbit and Orbit Launcher use the MIT License. Orbit GUI uses GPL-3.0-only because it adapts Modrinth App components; see [GUI license](orbit-gui/ui/LICENSE) and [upstream attribution](orbit-gui/ui/UPSTREAM.md).

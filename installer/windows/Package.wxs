@@ -199,6 +199,10 @@
             Name="LICENSE.txt"
             KeyPath="yes" />
         </Component>
+        <Component Id="OrbitGuiLicenseComponent" Guid="*">
+          <File Id="OrbitGuiLicense" Source="$(var.OrbitGuiLicense)" Name="LICENSE-GUI.txt" KeyPath="yes" />
+          <File Id="OrbitGuiAttribution" Source="$(var.OrbitGuiAttribution)" Name="GUI-UPSTREAM.md" />
+        </Component>
       </Directory>
     </StandardDirectory>
     <StandardDirectory Id="ProgramMenuFolder" />
@@ -236,6 +240,7 @@
       AllowAdvertise="no">
       <Level Condition="INSTALL_PROFILE &lt;&gt; &quot;complete&quot;" Value="0" />
       <ComponentRef Id="OrbitGuiExecutableComponent" />
+      <ComponentRef Id="OrbitGuiLicenseComponent" />
     </Feature>
 
     <Feature

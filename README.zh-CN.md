@@ -6,7 +6,7 @@
   <img src="assets/orbit.svg" width="112" height="112" alt="Orbit 图标">
 </p>
 
-**面向 Minecraft Java Edition 的现代、非侵入式模组包管理器与原生工作区。**
+**面向 Minecraft Java Edition 的现代、非侵入式模组包管理器与桌面工作区。**
 
 Orbit 本体的目标没有改变：`orbit` 只管理模组包、真实 JAR 元数据、依赖图、可复现清单与
 lock，不替代用户已有的启动器。它可以接管一个合法的现有实例，也可以管理 Launcher 新建的
@@ -18,7 +18,7 @@ lock，不替代用户已有的启动器。它可以接管一个合法的现有�
 - `orbit-launcher`：Minecraft 运行时管理器；负责官方 Minecraft/Loader 元数据、隔离实例、
   Mojang Java、Microsoft/离线/标准 Yggdrasil 账户、客户端启动、EULA 与服务端监督运行；
   不链接、不调用 Orbit，也不管理模组；需要包级运行时归属时由 Orbit 单向包装其启动命令。
-- `orbit-gui`：GPUI 原生桌面薄壳；不实现包管理或启动业务，只通过两个 CLI 的
+- `orbit-gui`：基于 Modrinth App 导航、实例库及控件改造的 Vue/Tauri 桌面薄壳；不实现包管理或启动业务，只通过两个 CLI 的
   JSON/NDJSON/stdin 协议提供完整图形交互；安装、账户等直接调用 Launcher，客户端/服务端
   启动与包数据 purge 统一调用 Orbit 的联合路径。
 
@@ -355,6 +355,12 @@ orbit config list
 
 欢迎提交 Issue 报告 bug，或者发起 Pull Request 改进 Orbit！
 
+## GUI 重构分支
+
+本分支已用基于 Modrinth App 的 Vue/Tauri 界面替换旧 GPUI 路径，围绕实例库、模组内容、
+账户和安装向导整理交互，底层继续使用原有 CLI 进程协议。Windows 需要 WebView2，
+Linux 使用 WebKitGTK 4.1；构建与边界见 [GUI 文档](docs/orbit-gui.md)。尚未作为新版本发布。
+
 ## 📄 License
 
-MIT License. 
+Orbit 与 Orbit Launcher 使用 MIT；GUI 改造部分采用 GPL-3.0-only，详见 [GUI 许可证](orbit-gui/ui/LICENSE) 和 [上游来源说明](orbit-gui/ui/UPSTREAM.md)。

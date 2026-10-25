@@ -189,10 +189,10 @@
 62. **audit 进度也必须来自 core 强类型事实**。依次报告输入准备、readiness、顶层
     artifact、Mixin、Transformer 和冲突比较；已知总量使用真实计数，plain 输出节流。
     禁止定时假进度、解析日志或在进度中打印物理 JAR 文件名。
-63. **GUI 是严格的原生进程薄壳，不是第二业务实现**。`orbit-gui` 只能调用同目录或用户
+63. **GUI 是严格的桌面进程薄壳，不是第二业务实现**。`orbit-gui` 只能调用同目录或用户
     明确选择的 `orbit` / `orbit-launcher`，使用共享 schema 的 stdout/stderr/stdin；禁止链接
-    core、扫描 PATH、直读业务文件、增加 GUI 专用接口或在失败后走兼容路径。wgpu 是原生
-    D3D12/Vulkan renderer，不代表 WebView。
+    core、扫描 PATH、直读业务文件、增加 GUI 专用业务接口或在失败后走兼容路径。
+    界面使用 Vue/Tauri；IPC 只承载同一 CLI 进程协议和必要系统集成，不能成为第二业务 API。
 64. **运行时版本选择必须来自 Launcher 官方目录**。Minecraft、Loader 和 Java 要求由
     `versions minecraft|loader|java` 返回，并与 install 共用 metadata adapter。新建实例走
     `install --new`；版本升级/迁移必须创建独立目标实例，禁止原地 configure 源实例。GUI
@@ -202,7 +202,7 @@
     CLI 参数只属于进程桥，不得作为主要用户交互层级。
 66. **主题不能代替界面设计**。GUI 必须把跟随系统、浅色、深色与强调色作为独立、持久的
     展示策略；任一主题下都要保持同一信息层级、可读对比度和非颜色差异提示。页面实现放在
-    `app/pages/`，`app.rs` 只保留共享状态、进程调度与动作控制，禁止重新堆成单文件命令表单。
+    `ui/src/pages/`，展示状态与编排放在 `ui/src/services/`，禁止重新堆成单文件命令表单。
 67. **CLI 与 GUI 共用一种语言模型**。`orbit`、`orbit-launcher` 和 `orbit-gui` 只支持
     `system`（缺省）、`en`、`zh-CN`；CLI help、文本结果、进度、询问与错误在展示边界翻译，
     core/domain 类型和 JSON 字段、枚举码、错误码不得本地化。GUI 每次调用 CLI 都显式传递
@@ -226,8 +226,8 @@
     `orbit export --format orbit|mrpack`。迁移走 `源 orbit export -> Launcher export --base ->
     Launcher install --new -> orbit migrate export --source-pack -> 目标 orbit install`。源导出失败时
     禁止创建目标；取消任一确认后不得偷偷继续后续阶段，GUI 禁止自行解析归档或生成 TOML/lock。
-72. **GUI 动画只描述界面状态变化**。页面、向导步骤、模态框、抽屉和提示可以使用 GPUI
-    原生短过渡；任务进度只能来自 CLI 强类型事件，禁止用定时动画制造下载、求解或安装进度。
+72. **GUI 动画只描述界面状态变化**。页面、向导步骤、模态框、抽屉和提示可以使用尊重系统减少动画设置的
+    短过渡；任务进度只能来自 CLI 强类型事件，禁止用定时动画制造下载、求解或安装进度。
 73. **便携包只有一个导出事实管线**。普通 `.orbitbundle` 和迁移源快照必须共用同一个 core
     exporter，包含校验后的包、TOML/lock 与允许的配置根；已经压缩的 JAR 使用 ZIP Stored，
     不能再次 Deflate。校验和写入按真实字节发强类型进度，失败输出必须由事务临时文件清理。

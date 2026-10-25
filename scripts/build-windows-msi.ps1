@@ -68,6 +68,10 @@ if ($versionParts[0] -gt 255 -or
 Push-Location $repoRoot
 try {
     if (-not $SkipCargoBuild) {
+        npm --prefix orbit-gui/ui ci
+        if ($LASTEXITCODE -ne 0) { throw "Restoring GUI dependencies failed." }
+        npm --prefix orbit-gui/ui run build
+        if ($LASTEXITCODE -ne 0) { throw "Building the GUI frontend failed." }
         cargo build --release --locked --package orbit --package orbit-launcher --package orbit-gui
         if ($LASTEXITCODE -ne 0) {
             throw "The release build failed."
@@ -139,6 +143,8 @@ try {
         -d "OrbitRuntimeAgent=$runtimeAgent" `
         -d "OrbitGuiIcon=$guiIcon" `
         -d "OrbitLicense=$license" `
+        -d "OrbitGuiLicense=$(Join-Path $repoRoot 'orbit-gui\ui\LICENSE')" `
+        -d "OrbitGuiAttribution=$(Join-Path $repoRoot 'orbit-gui\ui\UPSTREAM.md')" `
         -d "OrbitLicenseRtf=$licenseRtf" `
         -d "ProductDisplayName=Orbit" `
         -d "ProductCommand=orbit" `

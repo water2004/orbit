@@ -9,7 +9,7 @@ Orbit 的 Debian/Ubuntu 发布面向 `amd64`，由三个职责独立的软件包
 | `orbit-gui` | `/usr/bin/orbit-gui`、desktop entry、scalable icon | 图形桌面；精确依赖同版本的前两个包 |
 
 deb 没有 MSI 安装向导那种交互式功能树，因此不能用一个包让用户安装时勾选组件。拆包也让
-无图形服务器只安装所需 CLI，不引入 GPUI、X11/Wayland 等图形运行依赖。服务器技术上可以
+无图形服务器只安装所需 CLI，不引入 WebKitGTK、GTK 等图形运行依赖。服务器技术上可以
 安装 `orbit-gui` 而不启动它，但没有图形会话时无法使用，也会浪费依赖和磁盘空间。
 
 三个程序共用同一套件版本和 GitHub Release，但仍保持运行时隔离：Launcher 不调用 Orbit；
@@ -40,18 +40,17 @@ sudo apt remove orbit-gui orbit-launcher orbit
 
 ## 本地构建
 
-本地构建要求 Linux、稳定版 Rust、JDK 21、Python 3、`dpkg-deb`、GPUI 的 Wayland/X11 原生开发库
+本地构建要求 Linux、稳定版 Rust、Node.js 22+、JDK 21、Python 3、`dpkg-deb`、WebKitGTK 4.1/GTK 3 开发库
 与固定版本 `cargo-deb 3.7.0`：
 
 ```bash
 sudo apt-get install libclang-dev libgtk-3-dev libssl-dev \
-  libxcb1-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
-  libxkbcommon-dev libxkbcommon-x11-dev
+  libwebkit2gtk-4.1-dev librsvg2-dev
 cargo install cargo-deb --version 3.7.0 --locked
 bash ./scripts/build-linux-deb.sh
 ```
 
-脚本使用 `x86_64-unknown-linux-gnu` release target，先执行三个程序的锁定 Cargo 构建，
+脚本使用 `x86_64-unknown-linux-gnu` release target，先恢复锁定 npm 依赖并构建前端，再执行三个程序的锁定 Cargo 构建，
 再运行两个 CLI 产物的 `--help`，并在打包前校验所有静态文档、桌面入口与图标资源存在，
 最后分别读取三个 crate 的强类型 cargo-deb 元数据生成
 三个包。`dpkg-deb` 会验证包名、版本、安装树，以及 GUI 对同版本两个 CLI 的精确依赖。

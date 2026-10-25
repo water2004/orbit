@@ -89,6 +89,8 @@ done
 rustup target add "$target"
 
 if [[ "$skip_cargo_build" != true ]]; then
+	npm --prefix orbit-gui/ui ci
+	npm --prefix orbit-gui/ui run build
 	cargo build \
 		--release \
 		--locked \
