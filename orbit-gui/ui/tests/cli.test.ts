@@ -93,6 +93,83 @@ describe("CLI channel lifecycle", () => {
     ipc.channels[0].onmessage({ type: "finished", ok: true, data: {} });
     await expect(result).rejects.toThrow("invalid UTF-8");
   });
+  it("does not claim upgrade completion when its final report is missing", async () => {
+    const result = run({
+      kind: "orbit",
+      args: ["upgrade", "sodium"],
+      label: "Upgrading",
+    });
+    ipc.channels[0].onmessage({ type: "finished", ok: true, data: {} });
+    await expect(result).rejects.toThrow(/invalid upgrade result|升级结果无效/);
+    expect(activity.tasks[0].state).toBe("failed");
+  });
+  it("ends a no-op upgrade with the returned reason instead of its last solver progress", async () => {
+    const result = run({
+      kind: "orbit",
+      args: ["upgrade", "sodium"],
+      label: "Upgrading mod",
+    });
+    ipc.channels[0].onmessage({
+      type: "progress",
+      message: "Choosing sodium",
+      completed: 3,
+      total: 10,
+    });
+    ipc.channels[0].onmessage({
+      type: "finished",
+      ok: true,
+      data: {
+        changes: [],
+        warnings: [],
+        diagnostics: [
+          {
+            package: "sodium",
+            candidate_version: "0.10",
+            facts: ["dependency requires another version"],
+          },
+        ],
+      },
+    });
+    await result;
+    const task = activity.tasks[0];
+    expect(task.state).toBe("succeeded");
+    expect(task.message).toBe("");
+    expect(task.total).toBeUndefined();
+    expect(task.outcome?.title).toMatch(/No feasible|没有可行/);
+    expect(task.outcome?.detailsExpanded).toBe(true);
+    expect(task.outcome?.notices[0].lines).toEqual([
+      "dependency requires another version",
+    ]);
+    ipc.channels[0].onmessage({
+      type: "progress",
+      message: "Late queued progress",
+    });
+    expect(task.message).toBe("");
+    expect(task.state).toBe("succeeded");
+  });
+  it("summarizes an applied upgrade from the CLI transaction without another version check", async () => {
+    const result = run({
+      kind: "orbit",
+      args: ["upgrade", "sodium"],
+      label: "Upgrading mod",
+    });
+    ipc.channels[0].onmessage({
+      type: "finished",
+      ok: true,
+      data: {
+        changes: [{ package: "sodium", kind: "upgrade" }],
+        diagnostics: [],
+        warnings: [],
+      },
+    });
+    await result;
+    expect(activity.tasks[0].outcome?.title).toMatch(
+      /Update completed|升级完成/,
+    );
+    expect(
+      ipc.invoke.mock.calls.filter((call) => call[0] === "run_cli"),
+    ).toHaveLength(1);
+  });
   it("does not erase the next factor question when the previous answer resolves", async () => {
     const result = run({ kind: "orbit", args: ["upgrade"], label: "upgrade" });
     await Promise.resolve();

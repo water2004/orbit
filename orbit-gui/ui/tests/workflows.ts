@@ -80,6 +80,35 @@ mockIPC((cmd, args) => {
     };
     const key = request.args.slice(0, 2).join(" ");
     let data: unknown;
+    if (key === "upgrade sodium") {
+      const taskId = ++id;
+      events.onmessage({
+        type: "progress",
+        message: "正在选择 sodium",
+        completed: 4,
+        total: 10,
+      });
+      setTimeout(
+        () =>
+          events.onmessage({
+            type: "finished",
+            ok: true,
+            data: {
+              changes: [],
+              warnings: [],
+              diagnostics: [
+                {
+                  package: "sodium",
+                  candidate_version: "0.10",
+                  facts: ["测试数据：另一个模组的依赖约束阻止该版本。"],
+                },
+              ],
+            },
+          }),
+        1200,
+      );
+      return taskId;
+    }
     if (key === "instance list") data = { instances };
     else if (key === "instance show") data = detail;
     else if (key === "account list")

@@ -95,6 +95,52 @@ it("passes a single upgrade target and renders its live progress inside the moda
   task.state = "succeeded";
   finish();
   await flushPromises();
+  expect(wrapper.find("dialog .task-progress").text()).not.toContain(
+    "Applying",
+  );
+  expect(wrapper.find("dialog .task-progress").text()).toMatch(
+    /Completed|已完成/,
+  );
+  expect(wrapper.find("dialog .task-progress progress").exists()).toBe(false);
+  wrapper.unmount();
+});
+it("shows a completed no-update result and its reasons, not a stalled selection screen", async () => {
+  const task = reactive<Task>({
+    id: 5,
+    label: "Upgrading mod",
+    state: "running",
+    message: "Choosing sodium",
+  });
+  vi.mocked(mutate).mockImplementation(
+    async (_args, _label, _instance, observe) => {
+      observe?.(task);
+      task.state = "succeeded";
+      task.outcome = {
+        title: "No feasible newer version",
+        notices: [
+          {
+            title: "sodium · 0.10",
+            lines: ["Requires a different dependency"],
+          },
+        ],
+        omitted: 0,
+        detailsExpanded: true,
+      };
+    },
+  );
+  const wrapper = mount(PackageManager, {
+    props: { pkg },
+    global: { stubs: { Teleport: true } },
+  });
+  await wrapper.find(".management-actions button").trigger("click");
+  await flushPromises();
+  const status = wrapper.find("dialog .task-progress");
+  expect(status.text()).toContain("No feasible newer version");
+  expect(status.text()).toContain("Requires a different dependency");
+  expect(status.text()).not.toContain("Choosing sodium");
+  expect(status.find("details").attributes("open")).toBeDefined();
+  expect(status.find("progress").exists()).toBe(false);
+  expect(status.find("button").exists()).toBe(false);
   wrapper.unmount();
 });
 it("shows ownership loading and results without waiting for game startup", async () => {

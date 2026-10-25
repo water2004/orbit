@@ -222,16 +222,6 @@ async function manage(project: SearchResult) {
           }}
         </p>
       </div>
-      <div class="target-selector field">
-        <span>{{ t("Install to", "安装到实例") }}</span
-        ><DropdownSelect
-          :model-value="targetId"
-          :options="targetOptions"
-          :label="t('Target instance', '目标实例')"
-          :loading="workspace.loading && !workspace.instances.length"
-          @update:model-value="(id) => router.replace(discoveryPath(id))"
-        />
-      </div>
     </header>
     <div v-if="!workspace.instances.length && !workspace.loading" class="empty">
       <h2>{{ t("Create your first instance", "先创建一个实例") }}</h2>
@@ -248,31 +238,57 @@ async function manage(project: SearchResult) {
       }}
     </p>
     <div v-else-if="instance" class="discover-layout">
-      <aside class="discover-options stack">
-        <h3>
-          <SlidersHorizontal :size="16" />{{
-            t("Install preferences", "添加选项")
-          }}
-        </h3>
+      <form class="search-bar" @submit.prevent="search">
+        <DropdownSelect
+          class="target-selector"
+          :model-value="targetId"
+          :options="targetOptions"
+          :label="t('Target instance', '目标实例')"
+          :loading="workspace.loading && !workspace.instances.length"
+          @update:model-value="(id) => router.replace(discoveryPath(id))"
+        >
+          <template #selected="{ option }"
+            ><img
+              v-if="option?.icon"
+              :src="option.icon"
+              alt=""
+              class="target-icon"
+            /><span class="target-name">{{
+              option?.label || t("Select instance", "选择实例")
+            }}</span></template
+          >
+        </DropdownSelect>
+        <Search :size="18" /><input
+          v-model="state.query"
+          class="search"
+          :aria-label="t('Search mods', '搜索模组')"
+          :placeholder="t('Search mods…', '搜索模组…')"
+        />
+        <Button
+          native-type="submit"
+          type="colored"
+          :loading="state.loading"
+          :disabled="!state.query.trim() || selecting"
+          >{{ t("Search", "搜索") }}</Button
+        >
+      </form>
+      <div class="discover-options">
         <label
           ><input v-model="state.recommended" type="checkbox" />{{
             t("Exclude beta / snapshot", "排除 beta / snapshot")
           }}</label
         >
-        <small>{{
-          t(
-            "Only new packages use this editable string rule. Existing rules stay unchanged.",
-            "仅为新包设置此可编辑的字符串规则，不更改已有包。",
-          )
-        }}</small>
-        <hr />
         <label v-if="instance"
           ><input v-model="state.hideInstalled" type="checkbox" />{{
             t("Hide installed", "隐藏已安装")
           }}</label
         >
         <details>
-          <summary>{{ t("Advanced options", "高级添加选项") }}</summary>
+          <summary>
+            <SlidersHorizontal :size="14" />{{
+              t("Advanced options", "更多添加选项")
+            }}
+          </summary>
           <div class="stack">
             <label class="field"
               >{{ t("Environment", "运行环境")
@@ -297,22 +313,11 @@ async function manage(project: SearchResult) {
             >
           </div>
         </details>
-      </aside>
+        <small class="add-hint">{{
+          t("Applies to new packages only.", "约束仅用于新添加的模组。")
+        }}</small>
+      </div>
       <section class="stack results-column">
-        <form class="toolbar search-bar" @submit.prevent="search">
-          <Search :size="20" /><input
-            v-model="state.query"
-            class="search"
-            :aria-label="t('Search mods', '搜索模组')"
-            :placeholder="t('Search mods…', '搜索模组…')"
-          /><Button
-            native-type="submit"
-            type="colored"
-            :loading="state.loading"
-            :disabled="!state.query.trim()"
-            >{{ t("Search", "搜索") }}</Button
-          >
-        </form>
         <p v-if="state.error" role="alert" class="error card">
           {{ state.error }}
         </p>
@@ -411,38 +416,70 @@ async function manage(project: SearchResult) {
 </template>
 <style scoped>
 .discover-layout {
-  display: grid;
-  grid-template-columns: 220px minmax(0, 1fr);
-  gap: 24px;
-  align-items: start;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.discover-page {
+  max-width: 1240px;
+  margin-inline: auto;
 }
 .target-selector {
-  width: min(380px, 100%);
+  width: 250px;
+}
+.target-icon {
+  width: 22px;
+  height: 22px;
+  object-fit: contain;
+}
+.target-name {
+  flex: 1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  overflow: hidden;
+  font-weight: 600;
 }
 .discover-options {
-  position: sticky;
-  top: 20px;
-  padding: 16px;
-  border-radius: 12px;
-  background: var(--surface-2);
-  gap: 16px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px 20px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--surface-4);
+  font-size: 13px;
 }
-.discover-options h3 {
+.discover-options summary {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 5px;
+  cursor: pointer;
 }
-.discover-options small {
-  line-height: 1.6;
+.discover-options details[open] {
+  flex-basis: 100%;
+  order: 2;
 }
 .discover-options details .stack {
-  margin-top: 14px;
+  margin-top: 12px;
+  flex-direction: row;
+  align-items: end;
+  gap: 20px;
 }
-.discover-options hr {
-  border-color: var(--surface-5);
+.discover-options .field {
+  width: 240px;
+}
+.add-hint {
+  margin-left: auto;
+}
+.results-column .empty {
+  padding: 36px 16px;
+}
+.results-column .empty h2 {
+  font-size: 17px;
 }
 .search-bar {
-  flex-wrap: nowrap;
+  display: flex;
+  align-items: center;
+  gap: 10px;
 }
 .project-card {
   display: grid;
@@ -478,13 +515,21 @@ async function manage(project: SearchResult) {
   font-size: 12px;
 }
 @media (max-width: 1100px) {
-  .discover-layout {
-    grid-template-columns: 190px minmax(0, 1fr);
-    gap: 16px;
-  }
   .project-actions {
     grid-column: 2 / -1;
     justify-self: end;
+  }
+}
+@media (max-width: 760px) {
+  .search-bar {
+    flex-wrap: wrap;
+  }
+  .target-selector {
+    width: 100%;
+  }
+  .add-hint {
+    flex-basis: 100%;
+    margin-left: 0;
   }
 }
 </style>

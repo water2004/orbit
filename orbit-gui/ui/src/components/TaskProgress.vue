@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import { cancel, type Task } from "../services/cli";
+import { CheckCircle2 } from "lucide-vue-next";
 import { act } from "../services/workspace";
 import { t } from "../i18n";
 import Button from "./upstream/Button.vue";
@@ -18,9 +19,11 @@ const active = computed(() =>
     :class="{ error: task.state === 'failed' }"
   >
     <div class="row">
-      <ProgressSpinner v-if="active" /><strong class="grow">{{
-        task.label
-      }}</strong
+      <ProgressSpinner v-if="active" /><CheckCircle2
+        v-else-if="task.state === 'succeeded'"
+        :size="18"
+        class="success"
+      /><strong class="grow">{{ task.outcome?.title || task.label }}</strong
       ><Button
         v-if="active"
         size="sm"
@@ -29,16 +32,38 @@ const active = computed(() =>
         >{{ t("Cancel", "取消") }}</Button
       >
     </div>
-    <p>
+    <p v-if="task.state !== 'succeeded' || !task.outcome">
       {{
-        task.message ||
-        (task.state === "succeeded"
+        task.state === "succeeded"
           ? t("Completed", "已完成")
-          : task.state === "cancelled"
-            ? t("Cancelled", "已取消")
-            : t("Working…", "正在处理…"))
+          : task.message ||
+            (task.state === "cancelled"
+              ? t("Cancelled", "已取消")
+              : t("Working…", "正在处理…"))
       }}
     </p>
+    <details
+      v-if="task.outcome?.notices.length"
+      class="outcome-details"
+      :open="task.outcome.detailsExpanded"
+    >
+      <summary>
+        {{ t("Result details", "查看结果与原因") }} ·
+        {{ task.outcome.notices.length + task.outcome.omitted }}
+      </summary>
+      <article v-for="(notice, index) in task.outcome.notices" :key="index">
+        <strong>{{ notice.title }}</strong>
+        <ul>
+          <li v-for="(line, i) in notice.lines" :key="i">{{ line }}</li>
+        </ul>
+      </article>
+      <small v-if="task.outcome.omitted">{{
+        t(
+          `${task.outcome.omitted} more notices in CLI output`,
+          `另有 ${task.outcome.omitted} 条提示，可通过命令行查看完整输出`,
+        )
+      }}</small>
+    </details>
     <progress
       v-if="active"
       :value="task.total ? task.completed : undefined"
@@ -69,5 +94,27 @@ progress {
   accent-color: var(--color-brand);
   display: block;
   margin-top: 9px;
+}
+.success {
+  color: var(--color-green);
+  flex-shrink: 0;
+}
+.outcome-details {
+  margin-top: 8px;
+  max-height: 180px;
+  overflow: auto;
+  overscroll-behavior: contain;
+  font-size: 13px;
+}
+.outcome-details article {
+  margin-top: 10px;
+}
+.outcome-details ul {
+  margin: 4px 0 0;
+  padding-left: 18px;
+}
+.outcome-details li {
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
 }
 </style>

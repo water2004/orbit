@@ -432,7 +432,7 @@ watch(step, (value) => {
         >
       </div>
       <div v-if="step === 1" class="stack">
-        <div class="card stack">
+        <div class="card stack components-card">
           <h2>Minecraft {{ draft.minecraft }}</h2>
           <p>
             {{
@@ -454,6 +454,7 @@ watch(step, (value) => {
               :key="loader"
               :disabled="mode === 'loader' || !!pack"
               :class="{ selected: draft.loader === loader }"
+              :aria-pressed="draft.loader === loader"
               @click="
                 draft.loader = loader;
                 act(components);
@@ -462,7 +463,7 @@ watch(step, (value) => {
               <LoaderIcon
                 v-if="loader !== 'vanilla'"
                 :loader="loader"
-                :size="28"
+                :size="20"
               />
               <strong>{{
                 loader === "vanilla"
@@ -471,10 +472,10 @@ watch(step, (value) => {
                     ? "NeoForge"
                     : loader[0].toUpperCase() + loader.slice(1)
               }}</strong
-              ><Check v-if="draft.loader === loader" :size="18" />
+              ><Check v-if="draft.loader === loader" :size="16" />
             </button>
           </div>
-          <label v-if="draft.loader !== 'vanilla'" class="field"
+          <label v-if="draft.loader !== 'vanilla'" class="field loader-version"
             >{{ t("Loader version", "加载器版本")
             }}<DropdownSelect
               v-model="draft.loaderVersion"
@@ -489,22 +490,22 @@ watch(step, (value) => {
                 }))
               "
           /></label>
-        </div>
-        <div class="card row">
-          <div class="grow">
-            <h3>Java {{ java ?? "—" }}</h3>
-            <p>
-              {{
-                t(
-                  "Launcher follows your Java selection, preferring a matching local runtime in automatic mode.",
-                  "Launcher 遵循 Java 选择；自动模式优先使用匹配的本地运行时。",
-                )
-              }}
-            </p>
+          <div class="java-requirement row">
+            <div class="grow">
+              <h3>Java {{ java ?? "—" }}</h3>
+              <p>
+                {{
+                  t(
+                    "Launcher follows your Java selection, preferring a matching local runtime in automatic mode.",
+                    "Launcher 遵循 Java 选择；自动模式优先使用匹配的本地运行时。",
+                  )
+                }}
+              </p>
+            </div>
+            <ProgressSpinner v-if="loading" /><span v-else class="badge">{{
+              t("Automatic selection", "按设置选择")
+            }}</span>
           </div>
-          <ProgressSpinner v-if="loading" /><span v-else class="badge">{{
-            t("Automatic selection", "按设置选择")
-          }}</span>
         </div>
         <Button v-if="!loading && error" @click="components">{{
           t("Retry loading components", "重新加载组件")
@@ -622,8 +623,10 @@ watch(step, (value) => {
 </template>
 <style scoped>
 .create-page {
-  max-width: 1000px;
-  margin: auto;
+  max-width: 900px;
+  margin-inline: auto;
+  min-height: 0;
+  gap: 20px;
 }
 .setup-options {
   max-width: 720px;
@@ -666,16 +669,38 @@ watch(step, (value) => {
 .loader-grid {
   display: grid;
   grid-template-columns: repeat(5, 1fr);
-  gap: 10px;
+  gap: 8px;
 }
 .loader-grid button {
   border: 1px solid var(--surface-5);
   border-radius: 12px;
-  padding: 18px 10px;
+  padding: 10px;
   display: flex;
-  justify-content: space-between;
+  align-items: center;
+  gap: 7px;
   background: var(--surface-2);
   cursor: pointer;
+}
+.loader-grid strong {
+  flex: 1;
+  text-align: left;
+  font-size: 13px;
+}
+.loader-version {
+  width: min(360px, 100%);
+  margin-top: 4px;
+}
+.java-requirement {
+  border-top: 1px solid var(--surface-4);
+  padding-top: 14px;
+  margin-top: 4px;
+}
+.java-requirement p {
+  font-size: 13px;
+  margin-top: 4px;
+}
+.components-card {
+  gap: 14px;
 }
 .loader-grid button:disabled {
   cursor: default;
@@ -692,11 +717,14 @@ watch(step, (value) => {
   display: flex;
   align-items: center;
   gap: 12px;
-  position: sticky;
-  bottom: -24px;
   background: var(--surface-1);
   padding: 16px 0;
-  margin-top: auto;
+  margin-top: 8px;
   border-top: 1px solid var(--surface-4);
+}
+@media (max-width: 760px) {
+  .loader-grid {
+    grid-template-columns: repeat(3, 1fr);
+  }
 }
 </style>

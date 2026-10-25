@@ -7,6 +7,7 @@ import { t, changeLabel } from "../i18n";
 import type { Change } from "../types";
 import Button from "./upstream/Button.vue";
 import Modal from "./Modal.vue";
+import TaskProgress from "./TaskProgress.vue";
 const current = computed(
   () =>
     [...activity.tasks]
@@ -68,7 +69,9 @@ const deletion = computed(
         v-if="['running', 'waiting'].includes(current.state)"
         class="spin"
         :size="16"
-      /><Activity v-else :size="16" /><strong>{{ current.label }}</strong
+      /><Activity v-else :size="16" /><strong>{{
+        current.outcome?.title || current.label
+      }}</strong
       ><span class="truncate">{{
         current.message ||
         (current.state === "succeeded"
@@ -109,34 +112,11 @@ const deletion = computed(
               :key="task.id"
               class="card stack"
             >
-              <strong>{{ task.label }}</strong>
-              <p :class="{ error: task.state === 'failed' }">
-                {{ task.message }}
-              </p>
-              <progress
-                v-if="['running', 'waiting'].includes(task.state)"
-                :value="task.total ? task.completed : undefined"
-                :max="task.total || 1"
-              />
-              <small v-else>{{
-                task.state === "succeeded"
-                  ? t("Completed", "已完成")
-                  : task.state === "cancelled"
-                    ? t("Cancelled", "已取消")
-                    : t("Failed", "失败")
-              }}</small>
-              <Button
-                v-if="['running', 'waiting'].includes(task.state)"
-                size="sm"
-                @click="act(() => cancel(task))"
-                >{{ t("Cancel", "取消") }}</Button
-              >
+              <TaskProgress :task="task" />
             </article>
           </section>
-        </aside>
-      </div></Transition
-    ></Teleport
-  >
+        </aside></div></Transition
+  ></Teleport>
   <Modal
     v-if="pending?.interaction"
     :key="pending.interaction.interaction_id"
@@ -327,6 +307,13 @@ progress {
 .activity-drawer p {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+.activity-drawer article {
+  padding: 0;
+  overflow: hidden;
+}
+.activity-drawer :deep(.task-progress) {
+  border-top: 0;
 }
 .choice {
   text-align: left;

@@ -4,6 +4,8 @@
 
 GUI 的发现查询必须绑定准确实例，再消费其版本/Loader；Launcher 的 Java 选择、实例图标
 和本地 schema 升级不属于 resolver。Orbit TOML/lock 本次不变，不能为这些能力增加求解旁路。
+GUI 显示“无可行更新”的依据只允许是同次升级返回的无变更报告及其 diagnostics，不能把最后一条
+solver 进度当成仍在求解，也不能为补充显示原因另跑一轮求解。
 
 Modrinth 用户输入的 slug 在进入候选发现前解析为官方 project ID；远端版本库以该 ID
 校验工件归属。此定位过程不改变求解包身份，求解仍只使用 JAR 声明的 `mod_id`。

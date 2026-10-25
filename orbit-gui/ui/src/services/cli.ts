@@ -1,5 +1,6 @@
 import { Channel, convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { reactive } from "vue";
+import { taskOutcome, type TaskOutcome } from "./task-outcome";
 
 export type Kind = "orbit" | "launcher";
 export interface Preferences {
@@ -41,6 +42,7 @@ export interface Task {
   total?: number;
   interaction?: Interaction;
   answering?: boolean;
+  outcome?: TaskOutcome;
 }
 type Event =
   | { type: "progress"; message: string; completed?: number; total?: number }
@@ -85,7 +87,9 @@ export function run<T>(
     const channel = new Channel<Event>();
     let protocolError: string | undefined;
     let protocolCancelled = false;
+    let finished = false;
     channel.onmessage = (event) => {
+      if (finished) return;
       switch (event.type) {
         case "progress":
           task.message = event.message;
@@ -102,9 +106,21 @@ export function run<T>(
           task.message = event.message;
           break;
         case "finished":
+          finished = true;
           task.interaction = undefined;
           if (event.ok && !protocolError) {
+            try {
+              task.outcome = taskOutcome(request, event.data);
+            } catch (error) {
+              task.state = "failed";
+              task.message = String(error);
+              reject(error);
+              break;
+            }
             task.state = "succeeded";
+            task.message = "";
+            task.completed = undefined;
+            task.total = undefined;
             resolve(event.data as T);
           } else {
             task.state =
