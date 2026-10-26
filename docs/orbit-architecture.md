@@ -8,6 +8,7 @@ Launcher 公共资源下载通过 `download_source::DownloadClient` 统一选源
 下载源统一覆盖公开元数据、校验文件和工件；未覆盖的镜像路径明确拒绝，不暗中回源。
 Java manifest 的镜像格式化与文件摘要校验分层处理，无上游摘要工件明确报告来源信任。
 GUI 只通过 CLI 切换并刷新目录，不携带 URL 映射或校验策略。
+向导选源使用共享下拉的紧凑尺寸与面板 footer，署名/协议不再额外占据标题区高度。
 
 Launcher 外部实例导入集中于 `external_instance/`，来源适配后复用现有官方运行时安装，
 原样复制不透明数据并在校验完成后注册。GUI 只调用 inspect/import 及删除预览/确认命令。

@@ -28,8 +28,9 @@ const props = withDefaults(
     disabled?: boolean;
     loading?: boolean;
     searchable?: boolean;
+    size?: "sm" | "md";
   }>(),
-  { searchable: true },
+  { searchable: true, size: "md" },
 );
 const emit = defineEmits<{ "update:modelValue": [value: string] }>();
 const root = ref<HTMLElement>(),
@@ -141,6 +142,7 @@ onUnmounted(() => document.removeEventListener("pointerdown", outside));
   <div
     ref="root"
     class="dropdown-select"
+    :class="{ compact: size === 'sm' }"
     @keydown="keydown"
     @focusout="
       (event) => {
@@ -224,6 +226,9 @@ onUnmounted(() => document.removeEventListener("pointerdown", outside));
             {{ t("No matching options", "没有匹配的选项") }}
           </p>
         </div>
+        <div v-if="$slots.footer" class="select-footer" @keydown.enter.stop>
+          <slot name="footer" />
+        </div>
       </div>
     </Transition>
   </div>
@@ -248,6 +253,29 @@ onUnmounted(() => document.removeEventListener("pointerdown", outside));
 .select-trigger:focus-visible {
   outline: 2px solid var(--color-brand);
   outline-offset: 2px;
+}
+.compact .select-trigger {
+  height: 2rem;
+  min-height: 2rem;
+  padding: 0 10px;
+  gap: 8px;
+  border-radius: 10px;
+  font-size: 0.875rem;
+  background: var(--surface-2);
+}
+.compact .select-trigger:not(:disabled):hover {
+  background: var(--surface-4);
+}
+.compact .options-wrapper {
+  left: auto;
+  min-width: 230px;
+}
+.select-footer {
+  flex-shrink: 0;
+  border-top: 1px solid var(--surface-5);
+  padding: 10px 8px 5px;
+  margin-top: 5px;
+  font-size: 12px;
 }
 .select-trigger:disabled {
   opacity: 0.6;

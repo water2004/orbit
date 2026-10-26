@@ -337,6 +337,7 @@ watch(step, (value) => {
           @pending="sourcePending = $event"
         />
         <Button
+          size="sm"
           :disabled="busy"
           @click="
             router.push(
@@ -683,8 +684,8 @@ watch(step, (value) => {
 }
 .heading-actions {
   display: flex;
-  align-items: flex-start;
-  gap: 12px;
+  align-items: center;
+  gap: 8px;
 }
 @media (max-width: 760px) {
   .page-heading {

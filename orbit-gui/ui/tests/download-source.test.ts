@@ -28,9 +28,19 @@ it("reads and saves the source through Launcher config commands and credits the 
     args: ["config", "set", "network.download-source", "bmclapi"],
   });
   expect(wrapper.emitted("changed")).toHaveLength(1);
+  expect(wrapper.find("a").exists()).toBe(false);
+  expect(wrapper.findComponent(DropdownSelect).props("size")).toBe("sm");
+  expect(wrapper.find("[role=combobox]").text()).toBe("BMCLAPI");
+  await wrapper.find("[role=combobox]").trigger("click");
+  expect(wrapper.find(".select-footer").text()).toContain("by bangbang93");
   expect(wrapper.find("a").attributes("href")).toBe(
     "https://bmclapidoc.bangbang93.com/",
   );
+  await wrapper.find("a").trigger("keydown", { key: "Enter" });
+  expect(wrapper.emitted("changed")).toHaveLength(1);
+  await wrapper.find("[role=combobox]").trigger("keydown", { key: "Escape" });
+  expect(wrapper.find("[role=listbox]").exists()).toBe(false);
+  wrapper.unmount();
 });
 it("does not show a setting as saved when the CLI rejected it", async () => {
   vi.mocked(run)

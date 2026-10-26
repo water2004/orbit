@@ -7,6 +7,7 @@ Orbit Provider、候选枚举、物理端或 Pareto 策略；GUI 的游戏任务
 没有为这些功能新增求解或安装旁路，也不改 Orbit TOML/lock schema。
 下载源对元数据/工件的统一路由、镜像不支持时拒绝及显式来源信任报告，均在 Launcher
 下载边界处理；GUI 刷新目录不参与候选约束或求解，也不重跑 Orbit 命令。
+下载源控件的紧凑展示及协议 footer 仅是共享控件布局，不新增业务入口。
 
 卸载的三档数据清理属于跨平台 `installer/actions`，不经过 resolver；它通过所属 core
 只读校验配置、注册表与实例，复用实例生命周期锁。GUI 安装路径重绑只写 GUI 展示偏好，
