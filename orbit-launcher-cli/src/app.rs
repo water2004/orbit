@@ -1688,6 +1688,7 @@ fn execute_instance(
         }
         InstanceCommands::List => {
             let registry = InstanceRegistry::load(&registry_path)?;
+            let accounts = AccountRepository::load(runtime.paths())?;
             let instances = registry
                 .instances
                 .iter()
@@ -1705,6 +1706,7 @@ fn execute_instance(
                         &resolved.manifest,
                         installed.as_ref().map(|f| &f.inner),
                         registry.default_instance,
+                        accounts.instance_selection_summary(runtime.paths(), &resolved.manifest),
                     ))
                 })
                 .collect::<Result<Vec<_>, LauncherError>>()?;
@@ -1732,6 +1734,8 @@ fn execute_instance(
                 installed.as_ref().map(|lock| &lock.inner),
                 registry.default_instance,
                 resolved.source,
+                AccountRepository::load(runtime.paths())?
+                    .instance_selection_summary(runtime.paths(), &resolved.manifest),
             )))
         }
         InstanceCommands::Rename { new_name } => {
@@ -1777,6 +1781,8 @@ fn execute_instance(
                 installed.as_ref().map(|lock| &lock.inner),
                 registry.default_instance,
                 resolved.source,
+                AccountRepository::load(runtime.paths())?
+                    .instance_selection_summary(runtime.paths(), &configured.manifest),
             )))
         }
         InstanceCommands::Memory { command } => {
@@ -1834,6 +1840,8 @@ fn execute_instance(
                 installed.as_ref().map(|lock| &lock.inner),
                 registry.default_instance,
                 resolved.source,
+                AccountRepository::load(runtime.paths())?
+                    .instance_selection_summary(runtime.paths(), &configured.manifest),
             )))
         }
         InstanceCommands::Icon { command } => {
@@ -1858,6 +1866,8 @@ fn execute_instance(
                 installed.as_ref().map(|f| &f.inner),
                 registry.default_instance,
                 resolved.source,
+                AccountRepository::load(runtime.paths())?
+                    .instance_selection_summary(runtime.paths(), &configured.manifest),
             )))
         }
         InstanceCommands::Java { command } => {
@@ -1882,6 +1892,8 @@ fn execute_instance(
                 installed.as_ref().map(|f| &f.inner),
                 registry.default_instance,
                 resolved.source,
+                AccountRepository::load(runtime.paths())?
+                    .instance_selection_summary(runtime.paths(), &configured.manifest),
             )))
         }
         InstanceCommands::Remove => {
@@ -2060,6 +2072,90 @@ mod tests {
         }
     }
 
+    #[test]
+    fn instance_inventory_exposes_the_effective_account_without_authenticating() {
+        let directory = tempfile::tempdir().unwrap();
+        let runtime = runtime(directory.path());
+        let default = create_offline_account(runtime.paths(), "DefaultPlayer").unwrap();
+        let explicit = create_offline_account(runtime.paths(), "InstancePlayer").unwrap();
+        for (name, kind, account, expected_source, expected_account) in [
+            (
+                "inherited",
+                InstanceKindArg::Client,
+                None,
+                "global",
+                default.id,
+            ),
+            (
+                "specific",
+                InstanceKindArg::Client,
+                Some(explicit.id),
+                "instance",
+                explicit.id,
+            ),
+            ("server", InstanceKindArg::Server, None, "", default.id),
+        ] {
+            let game = directory.path().join(name);
+            std::fs::create_dir_all(&game).unwrap();
+            let game = dunce::canonicalize(game).unwrap();
+            let CommandOutput::InstanceMutation(created) = execute_instance(
+                InstanceCommands::Create {
+                    name: name.into(),
+                    kind,
+                    server_directory: None,
+                    minecraft: "26.2".into(),
+                    loader: LoaderKindArg::Vanilla,
+                    loader_version: None,
+                },
+                None,
+                &game,
+                &runtime,
+            )
+            .unwrap() else {
+                panic!("unexpected create output");
+            };
+            if let Some(account) = account {
+                set_instance_account(Some(&created.instance.id), &game, &runtime, Some(account))
+                    .unwrap();
+            }
+            let CommandOutput::InstanceList(list) =
+                execute_instance(InstanceCommands::List, None, &game, &runtime).unwrap()
+            else {
+                panic!("unexpected list output");
+            };
+            let listed = list
+                .instances
+                .iter()
+                .find(|instance| instance.id == created.instance.id)
+                .unwrap();
+            let CommandOutput::InstanceDetail(shown) = execute_instance(
+                InstanceCommands::Show,
+                Some(&created.instance.id),
+                &game,
+                &runtime,
+            )
+            .unwrap() else {
+                panic!("unexpected show output");
+            };
+            let list_json = serde_json::to_value(listed).unwrap();
+            let show_json = serde_json::to_value(shown).unwrap();
+            assert_eq!(list_json["launch_account"], show_json["launch_account"]);
+            if name == "server" {
+                assert!(list_json["launch_account"].is_null());
+            } else {
+                assert_eq!(list_json["launch_account"]["source"], expected_source);
+                assert_eq!(
+                    list_json["launch_account"]["account"]["id"],
+                    expected_account.to_string()
+                );
+                assert_eq!(
+                    list_json["launch_account"]["account"]["provider"]["kind"],
+                    "offline"
+                );
+                assert!(!list_json.to_string().contains("token"));
+            }
+        }
+    }
     #[test]
     fn current_directory_and_explicit_global_id_resolve_the_same_instance() {
         let directory = tempfile::tempdir().unwrap();

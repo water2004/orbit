@@ -177,6 +177,14 @@ authlib-injector 的 API Location Indication（`X-Authlib-Injector-API-Location`
 皮肤纹理 URL 和时间等非秘密元数据。皮肤只用于展示，URL 无效或缺失不会改变账户身份；token、
 密码和纹理内容都不进入该文件。v0.7.0 的账户 schema 3 本次不变；不支持更早 schema，
 不匹配时明确报错，不能伪装成空账户列表。
+
+`instance list` 和 `instance show` 的客户端 JSON 包含 `launch_account`，由 core 按与实际
+启动相同的“实例覆盖优先、否则全局默认”规则解析，不认证、不联网、不读取 token。
+`state` 为 `selected` 时包含 `source: instance|global` 和公开的 `account`（ID、角色名、
+provider、认证状态、派生头像路径）；`not-configured` 表示尚未选择，`unavailable` 表示
+已指定的账户不存在，不暗中回落到其他账户。服务端该字段为 null。
+`selected_account_id` 仍表示实例自身配置的覆盖，而非合并后的账户。这只扩充只读 JSON
+视图，不改变实例、账户或全局配置的持久化 schema。
 账户 JSON view 不把皮肤纹理 URL 当作可直接显示的头像。Launcher 根据 Minecraft 皮肤布局
 裁取脸部 `(8,8)-(16,16)`，再叠加帽子层 `(40,8)-(48,16)`，按 64 像素逻辑宽度适配
 64×32、64×64 和等比例高清皮肤，最后返回全局派生缓存中的 `avatar_path`。GUI 只显示该

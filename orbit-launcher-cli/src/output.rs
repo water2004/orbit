@@ -25,6 +25,7 @@ pub struct InstanceView {
     pub game_version: Option<String>,
     pub loader: Option<String>,
     pub icon_path: Option<PathBuf>,
+    pub launch_account: Option<orbit_launcher_core::account::AccountSelectionSummary>,
 }
 
 impl InstanceView {
@@ -33,6 +34,7 @@ impl InstanceView {
         manifest: &InstanceManifest,
         installed: Option<&orbit_launcher_core::LauncherLock>,
         default: Option<uuid::Uuid>,
+        launch_account: Option<orbit_launcher_core::account::AccountSelectionSummary>,
     ) -> Self {
         let mut view = Self::from_entry(entry, default);
         view.game_version = Some(
@@ -45,6 +47,7 @@ impl InstanceView {
             .icon
             .as_ref()
             .map(|path| entry.instance_directory().join(path));
+        view.launch_account = launch_account;
         view
     }
     pub fn from_entry(entry: &RegistryEntry, default: Option<uuid::Uuid>) -> Self {
@@ -58,6 +61,7 @@ impl InstanceView {
             game_version: None,
             loader: None,
             icon_path: None,
+            launch_account: None,
         }
     }
 }
@@ -209,9 +213,16 @@ impl InstanceDetailView {
         installed: Option<&orbit_launcher_core::LauncherLock>,
         default: Option<uuid::Uuid>,
         context: ContextSource,
+        launch_account: Option<orbit_launcher_core::account::AccountSelectionSummary>,
     ) -> Self {
         Self {
-            instance: InstanceView::from_snapshot(entry, manifest, installed, default),
+            instance: InstanceView::from_snapshot(
+                entry,
+                manifest,
+                installed,
+                default,
+                launch_account,
+            ),
             java_selection: manifest.launch.java.clone().map(Into::into),
             memory: manifest.launch.memory,
             context,
@@ -1392,7 +1403,7 @@ mod tests {
         manifest.launch.account = Some(account);
 
         let detail =
-            InstanceDetailView::new(&entry, &manifest, None, None, ContextSource::Explicit);
+            InstanceDetailView::new(&entry, &manifest, None, None, ContextSource::Explicit, None);
         let json = serde_json::to_value(detail).unwrap();
         assert_eq!(json["selected_account_id"], account.to_string());
     }

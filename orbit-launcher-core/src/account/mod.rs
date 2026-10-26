@@ -1,5 +1,6 @@
 mod avatar;
 mod microsoft;
+mod presentation;
 mod yggdrasil;
 
 use std::collections::HashSet;
@@ -22,6 +23,7 @@ pub use microsoft::{
     MicrosoftDeviceSession, MicrosoftLoginProgressEvent, begin_microsoft_device_login,
     complete_microsoft_device_login,
 };
+pub use presentation::{AccountPresentation, AccountSelectionSource, AccountSelectionSummary};
 pub use yggdrasil::{ExternalYggdrasilLoginRequest, login_external_yggdrasil};
 
 pub const ACCOUNTS_SCHEMA: u32 = 3;
@@ -231,7 +233,7 @@ impl AccountRepository {
     }
 
     pub fn selected(&self, explicit: Option<Uuid>) -> Result<&AccountMetadata, LauncherError> {
-        let id = explicit.or(self.document.default_account).ok_or_else(|| {
+        let id = self.selection_id(explicit).ok_or_else(|| {
             LauncherError::InteractionRequired(
                 "a client account must be selected in [launch].account or with 'account select'"
                     .to_string(),
@@ -254,6 +256,10 @@ impl AccountRepository {
         }
         self.document.default_account = account;
         self.save()
+    }
+
+    fn selection_id(&self, explicit: Option<Uuid>) -> Option<Uuid> {
+        explicit.or(self.document.default_account)
     }
 
     fn identity_match(left: &AccountMetadata, right: &AccountMetadata) -> bool {
