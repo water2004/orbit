@@ -1,6 +1,8 @@
 import { beforeEach, expect, it, vi } from "vitest";
 import { mount, flushPromises } from "@vue/test-utils";
 import { reactive } from "vue";
+import { invoke } from "@tauri-apps/api/core";
+import DropdownSelect from "../src/components/upstream/DropdownSelect.vue";
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(),
   convertFileSrc: (p: string) => p,
@@ -23,7 +25,7 @@ const context = {
   orbit,
   mutate,
 } as unknown as InstanceContext;
-import type { Package } from "../src/types";
+import type { Package, PackageVersions } from "../src/types";
 import type { Task } from "../src/services/cli";
 const pkg = {
   mod_id: "sodium",
@@ -34,12 +36,146 @@ const pkg = {
   bundled_count: 0,
 } as Package;
 beforeEach(() => {
+  vi.mocked(invoke).mockReset();
+  vi.mocked(invoke).mockImplementation(async (command) =>
+    command === "parse_string_rule"
+      ? { initial_all: true, operations: [] }
+      : "all",
+  );
   vi.mocked(mutate).mockReset();
   vi.mocked(orbit).mockReset();
   HTMLDialogElement.prototype.showModal = function () {
     this.open = true;
   };
 });
+const versionCatalog: PackageVersions = {
+  package: "sodium",
+  string: "all",
+  policy: { kind: "any" },
+  candidates: [
+    {
+      version: "1.1.3+26.3",
+      numeric_core: "1.1.3",
+      numeric_filterable: true,
+      selected: true,
+      matches_constraint: true,
+      details: "",
+      sources: [],
+    },
+    {
+      version: "1.1.3-hotfix.1+26.3",
+      numeric_core: "1.1.3",
+      numeric_filterable: true,
+      selected: false,
+      matches_constraint: true,
+      details: "",
+      sources: [],
+    },
+    {
+      version: "1.1.2+26.3",
+      numeric_core: "1.1.2",
+      numeric_filterable: true,
+      selected: false,
+      matches_constraint: true,
+      details: "",
+      sources: [],
+    },
+    {
+      version: "custom",
+      numeric_filterable: false,
+      selected: false,
+      matches_constraint: true,
+      details: "",
+      sources: [],
+    },
+  ],
+};
+async function versionPage() {
+  vi.mocked(orbit).mockResolvedValue(versionCatalog);
+  const wrapper = mount(PackageManager, {
+    props: { pkg, context },
+    global: { stubs: { Teleport: true } },
+  });
+  await wrapper.findAll(".tabs button")[1].trigger("click");
+  await flushPromises();
+  return wrapper;
+}
+it("numeric comparisons and range boundaries use CLI numeric cores, never suffix-bearing strings", async () => {
+  const wrapper = await versionPage();
+  await wrapper.findAll(".item-row")[1].find("button").trigger("click");
+  const boundary = wrapper
+    .findAllComponents(DropdownSelect)
+    .find((control) => control.props("label") === "Boundary version")!;
+  expect(boundary.props("modelValue")).toBe("1.1.3");
+  expect(boundary.props("options").map((option) => option.value)).toEqual([
+    "1.1.3",
+    "1.1.2",
+  ]);
+  await wrapper.findAll("footer button").at(-1)!.trigger("click");
+  await flushPromises();
+  expect(mutate).toHaveBeenCalledWith(
+    ["constraint", "set", "sodium", "exact", "1.1.3", "--string", "all"],
+    expect.any(String),
+    expect.any(Function),
+  );
+  wrapper.findComponent(DropdownSelect).vm.$emit("update:modelValue", "range");
+  await flushPromises();
+  await wrapper.findAll(".item-row")[2].find("button").trigger("click");
+  await wrapper.findAll(".item-row")[1].findAll("button")[1].trigger("click");
+  await wrapper.findAll("footer button").at(-1)!.trigger("click");
+  await flushPromises();
+  expect(vi.mocked(mutate).mock.lastCall?.[0]).toEqual([
+    "constraint",
+    "set",
+    "sodium",
+    "range",
+    "1.1.2",
+    "1.1.3",
+    "--lower-bound",
+    "inclusive",
+    "--upper-bound",
+    "inclusive",
+    "--string",
+    "all",
+  ]);
+  wrapper.unmount();
+});
+it.each([
+  [1, "1.1.3-hotfix.1+26.3"],
+  [3, "custom"],
+])(
+  "version %s can be pinned with an exact full-string rule",
+  async (index, version) => {
+    const wrapper = await versionPage();
+    const row = wrapper.findAll(".item-row")[index as number];
+    if (index === 3)
+      expect(row.find("button").attributes("disabled")).toBeDefined();
+    await row.findAll("button").at(-1)!.trigger("click");
+    await wrapper.findAll("footer button").at(-1)!.trigger("click");
+    await flushPromises();
+    expect(invoke).toHaveBeenCalledWith("render_string_rule", {
+      draft: {
+        initial_all: true,
+        operations: [
+          {
+            operator: "intersect",
+            negated: false,
+            predicate: "equals",
+            value: version,
+            case_sensitive: true,
+          },
+        ],
+      },
+    });
+    expect(vi.mocked(mutate).mock.lastCall?.[0].slice(0, 4)).toEqual([
+      "constraint",
+      "set",
+      "sodium",
+      "any",
+    ]);
+    wrapper.unmount();
+  },
+);
 it("opens without fetching a version catalog and files only request ownership", async () => {
   const wrapper = mount(PackageManager, {
     props: { pkg, context },

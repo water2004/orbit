@@ -20,6 +20,7 @@ import type {
   PackageVersions,
   StringRule,
   VersionPolicy,
+  VersionCandidate,
 } from "../types";
 import { t } from "../i18n";
 import Modal from "./Modal.vue";
@@ -46,11 +47,54 @@ const mode = ref("any"),
   upper = ref(""),
   includeLower = ref(true),
   includeUpper = ref(true);
-const versionOptions = computed(() =>
-  [...new Set(versions.value?.candidates.map((c) => c.version))].map(
-    (value) => ({ value, label: value }),
-  ),
+const versionOptions = computed(() => {
+  const cores =
+    versions.value?.candidates
+      .filter(
+        (candidate) => candidate.numeric_filterable && candidate.numeric_core,
+      )
+      .map((candidate) => candidate.numeric_core!) || [];
+  const existing =
+    policy.value.kind === "comparison"
+      ? [policy.value.version]
+      : policy.value.kind === "range"
+        ? [policy.value.lower, policy.value.upper]
+        : [];
+  return [...new Set([...cores, ...existing])].map((value) => ({
+    value,
+    label: value,
+  }));
+});
+const numericReady = computed(
+  () =>
+    mode.value !== "custom" &&
+    (mode.value === "any" ||
+      (!!lower.value && (mode.value !== "range" || !!upper.value))),
 );
+function chooseBoundary(candidate: VersionCandidate, side: "lower" | "upper") {
+  if (!candidate.numeric_filterable || !candidate.numeric_core) return;
+  if (side === "upper") upper.value = candidate.numeric_core;
+  else {
+    lower.value = candidate.numeric_core;
+    mode.value = mode.value === "range" ? "range" : "comparison";
+  }
+}
+function pinBuild(candidate: VersionCandidate) {
+  mode.value = "any";
+  rules.value = {
+    initial_all: true,
+    operations: [
+      {
+        operator: "intersect",
+        negated: false,
+        predicate: "equals",
+        value: candidate.version,
+        case_sensitive: true,
+      },
+    ],
+  };
+  tab.value = "strings";
+}
 const provider = ref("modrinth"),
   locator = ref("");
 const current = computed(
@@ -134,6 +178,7 @@ async function files() {
   }
 }
 async function apply() {
+  if (!numericReady.value) return;
   saving.value = true;
   try {
     const next: VersionPolicy =
@@ -373,8 +418,8 @@ function editRules(next: string) {
           <p>
             {{
               t(
-                "Choose a version below, then a boundary. Applying a policy solves the complete mod environment before changing anything.",
-                "选择下方版本作为边界。应用策略前会对完整模组环境求解并让你确认方案。",
+                "Numeric boundaries use only the CLI-provided numeric part, not suffixes. Pin a build to match its full string exactly. Applying solves the complete mod environment before confirmation.",
+                "数字边界只使用 CLI 返回的数字部分，不含后缀；“仅此构建”使用完整字符串精确匹配。应用前会对完整模组环境求解并让你确认方案。",
               )
             }}
           </p>
@@ -395,7 +440,11 @@ function editRules(next: string) {
                   }}</span>
                 </div>
                 <small>{{ candidate.details }}</small
-                ><small v-if="!candidate.numeric_filterable">{{
+                ><small
+                  v-if="candidate.numeric_filterable && candidate.numeric_core"
+                  >{{ t("Numeric part", "数字部分") }}:
+                  {{ candidate.numeric_core }}</small
+                ><small v-else>{{
                   t(
                     "No numeric comparison; string filters still apply.",
                     "无法进行数字比较，字符串过滤仍然生效。",
@@ -404,21 +453,27 @@ function editRules(next: string) {
               </div>
               <Button
                 size="sm"
-                @click="
-                  lower = candidate.version;
-                  mode = mode === 'range' ? 'range' : 'comparison';
+                :disabled="
+                  !candidate.numeric_filterable || !candidate.numeric_core
                 "
+                @click="chooseBoundary(candidate, 'lower')"
                 >{{
                   mode === "range"
                     ? t("Lower", "设为下界")
-                    : t("Select", "选择")
+                    : t("Numeric boundary", "数字边界")
                 }}</Button
               ><Button
                 v-if="mode === 'range'"
                 size="sm"
-                @click="upper = candidate.version"
+                :disabled="
+                  !candidate.numeric_filterable || !candidate.numeric_core
+                "
+                @click="chooseBoundary(candidate, 'upper')"
                 >{{ t("Upper", "设为上界") }}</Button
               >
+              <Button size="sm" @click="pinBuild(candidate)">{{
+                t("Pin this build", "仅此构建")
+              }}</Button>
             </div>
           </div>
         </template>
@@ -613,7 +668,7 @@ function editRules(next: string) {
         }}</small
         ><Button
           type="colored"
-          :disabled="!versions || loading || saving || mode === 'custom'"
+          :disabled="!versions || loading || saving || !numericReady"
           @click="act(apply)"
           >{{ t("Apply policy", "应用策略") }}</Button
         ></template

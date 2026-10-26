@@ -310,6 +310,22 @@ mod tests {
     use super::*;
 
     #[test]
+    fn exact_build_selection_serializes_the_full_case_sensitive_string() {
+        let draft = StringRuleDraft {
+            initial_all: true,
+            operations: vec![StringOperationDraft {
+                operator: StringSetOperator::Intersect,
+                negated: false,
+                predicate: StringPredicate::Equals,
+                value: Some("1.1.3-hotfix.1+26.3".into()),
+                case_sensitive: true,
+            }],
+        };
+        let expression = draft.expression().unwrap();
+        assert_eq!(expression, r#"all; intersect "1.1.3-hotfix.1+26.3""#);
+        assert_eq!(StringRuleDraft::parse(&expression).unwrap(), draft);
+    }
+    #[test]
     fn ordered_rule_roundtrips_for_visual_editing() {
         let source = "all; intersect not contains(i\"beta\"); union \"allowed\"; complement";
         assert_eq!(
