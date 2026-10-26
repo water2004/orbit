@@ -8,6 +8,7 @@ pub mod account;
 pub mod artifact;
 mod atomic_io;
 pub mod authlib_injector;
+mod bootstrap;
 pub mod client;
 pub mod config;
 pub mod context;
@@ -59,6 +60,7 @@ pub use authlib_injector::{
     AUTHLIB_INJECTOR_LATEST_URL, ResolvedAuthlibInjector, resolve_authlib_injector,
     verify_authlib_injector,
 };
+pub use bootstrap::{NewInstallRequest, PreparedNewInstall, prepare_new_install};
 pub use client::{
     AssetMapping, ClientDownload, NativeExtract, ResolvedVanillaClient, resolve_vanilla_client,
 };
@@ -121,7 +123,7 @@ pub use operations::{
     ConfigureInstanceRequest, ConfigureInstanceResult, CreateInstanceRequest, CreateInstanceResult,
     ImportInstanceResult, RemoveInstanceResult, RenameInstanceResult, configure_instance,
     create_instance, import_instance, remove_instance, rename_instance, resolve_directory,
-    rollback_created_instance, set_client_resolution, set_default_instance,
+    rollback_created_instance, set_client_resolution, set_default_instance, set_instance_account,
 };
 pub use pack::{
     InstallPackFormat, InstallPackOptionalFile, InstallPackRequirement, inspect_install_pack,

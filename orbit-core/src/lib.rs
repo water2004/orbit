@@ -47,7 +47,12 @@ pub mod runtime_launch;
 mod source_store;
 pub mod sync;
 pub mod workspace;
+mod workspace_context;
 mod workspace_lock;
+
+pub use workspace_context::{
+    WorkspaceContext, WorkspaceContextError, WorkspaceSource, resolve_workspace_context,
+};
 
 pub use archive::{
     ExportContent, ExportReport, ImportMergeStrategy, ImportReport, PortableInstance,

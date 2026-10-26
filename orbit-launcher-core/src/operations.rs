@@ -351,6 +351,39 @@ pub fn set_client_resolution(
     })
 }
 
+/// Persist a client-only account override. Clearing it restores global inheritance.
+pub fn set_instance_account(
+    paths: &RuntimePaths,
+    selector: &str,
+    account: Option<Uuid>,
+) -> Result<ConfigureInstanceResult, LauncherError> {
+    if let Some(id) = account {
+        crate::account::AccountRepository::load(paths)?.get(&id.to_string())?;
+    }
+    let registry = InstanceRegistry::load(&paths.instances_file())?;
+    let entry = registry
+        .find(selector)
+        .cloned()
+        .ok_or_else(|| LauncherError::InstanceNotFound(selector.into()))?;
+    let mut file = ManifestFile::open(entry.instance_directory())?;
+    if file.inner.id != entry.id {
+        return Err(LauncherError::InstanceRegistryMismatch(
+            "account selection target has a different ID".into(),
+        ));
+    }
+    if file.inner.kind != InstanceKind::Client {
+        return Err(LauncherError::InvalidManifest(
+            "server instances do not use client accounts".into(),
+        ));
+    }
+    file.inner.launch.account = account;
+    file.save()?;
+    Ok(ConfigureInstanceResult {
+        entry,
+        manifest: file.inner,
+    })
+}
+
 pub fn set_instance_java(
     paths: &RuntimePaths,
     selector: &str,
