@@ -21,13 +21,10 @@ pub async fn handle(scope: ConfigScope, command: ConfigCommands, ctx: &CliContex
     match command {
         ConfigCommands::Path => match ctx.output.format {
             OutputFormat::Text => ctx.print_result_line(format_args!("{}", display_path.display())),
-            OutputFormat::Json => ctx.print_json(
-                "config",
-                &ConfigPathOutput {
-                    subcommand: "path".to_string(),
-                    config_path: display_path.to_string_lossy().into_owned(),
-                },
-            ),
+            OutputFormat::Json => ctx.print_json(&ConfigPathOutput {
+                subcommand: "path".to_string(),
+                config_path: display_path.to_string_lossy().into_owned(),
+            }),
         },
         ConfigCommands::List => {
             let config = orbit_core::GlobalConfig::load_stored(path)?;
@@ -42,28 +39,25 @@ pub async fn handle(scope: ConfigScope, command: ConfigCommands, ctx: &CliContex
                         crate::cli::output::config_entries_table(&entries)
                     ));
                 }
-                OutputFormat::Json => ctx.print_json(
-                    "config",
-                    &ConfigListOutput {
-                        subcommand: "list".to_string(),
-                        config_path: display_path.to_string_lossy().into_owned(),
-                        entries,
-                        resolved_paths: Some(ConfigResolvedPaths {
-                            cache_directory: ctx
-                                .runtime
-                                .paths()
-                                .cache_dir()
-                                .to_string_lossy()
-                                .into_owned(),
-                            repository_directory: ctx
-                                .runtime
-                                .paths()
-                                .repository_dir()
-                                .to_string_lossy()
-                                .into_owned(),
-                        }),
-                    },
-                ),
+                OutputFormat::Json => ctx.print_json(&ConfigListOutput {
+                    subcommand: "list".to_string(),
+                    config_path: display_path.to_string_lossy().into_owned(),
+                    entries,
+                    resolved_paths: Some(ConfigResolvedPaths {
+                        cache_directory: ctx
+                            .runtime
+                            .paths()
+                            .cache_dir()
+                            .to_string_lossy()
+                            .into_owned(),
+                        repository_directory: ctx
+                            .runtime
+                            .paths()
+                            .repository_dir()
+                            .to_string_lossy()
+                            .into_owned(),
+                    }),
+                }),
             }
         }
         ConfigCommands::Get { key } => {
@@ -88,7 +82,7 @@ pub async fn handle(scope: ConfigScope, command: ConfigCommands, ctx: &CliContex
                     anyhow::bail!(
                         "{}",
                         tr!(
-                            "Instance '%{instance}' was not found; run 'orbit instances list' to see registered instances",
+                            "Instance '%{instance}' was not found; run 'orbit instance list' to see registered instances",
                             instance = instance_name
                         )
                     );
@@ -140,13 +134,10 @@ fn handle_instance(command: ConfigCommands, ctx: &CliContext) -> Result<()> {
     match command {
         ConfigCommands::Path => match ctx.output.format {
             OutputFormat::Text => ctx.print_result_line(format_args!("{}", path.display())),
-            OutputFormat::Json => ctx.print_json(
-                "config",
-                &ConfigPathOutput {
-                    subcommand: "path".into(),
-                    config_path: path.to_string_lossy().into_owned(),
-                },
-            ),
+            OutputFormat::Json => ctx.print_json(&ConfigPathOutput {
+                subcommand: "path".into(),
+                config_path: path.to_string_lossy().into_owned(),
+            }),
         },
         ConfigCommands::List => {
             let entries = vec![catalog_entry(list_catalogs(
@@ -158,15 +149,12 @@ fn handle_instance(command: ConfigCommands, ctx: &CliContext) -> Result<()> {
                     "{}",
                     crate::cli::output::config_entries_table(&entries)
                 )),
-                OutputFormat::Json => ctx.print_json(
-                    "config",
-                    &ConfigListOutput {
-                        subcommand: "list".into(),
-                        config_path: path.to_string_lossy().into_owned(),
-                        entries,
-                        resolved_paths: None,
-                    },
-                ),
+                OutputFormat::Json => ctx.print_json(&ConfigListOutput {
+                    subcommand: "list".into(),
+                    config_path: path.to_string_lossy().into_owned(),
+                    entries,
+                    resolved_paths: None,
+                }),
             }
         }
         ConfigCommands::Get { key } => {
@@ -253,15 +241,12 @@ fn render_entry(
             };
             ctx.print_result_line(format_args!("{prefix}{} = {value}", entry.key));
         }
-        OutputFormat::Json => ctx.print_json(
-            "config",
-            &ConfigEntryOutput {
-                subcommand: subcommand.to_string(),
-                config_path: path.to_string_lossy().into_owned(),
-                dry_run,
-                entry,
-            },
-        ),
+        OutputFormat::Json => ctx.print_json(&ConfigEntryOutput {
+            subcommand: subcommand.to_string(),
+            config_path: path.to_string_lossy().into_owned(),
+            dry_run,
+            entry,
+        }),
     }
 }
 

@@ -24,7 +24,7 @@ pub async fn handle(mod_name: String, platform: Option<String>, ctx: &CliContext
                         ));
                     }
                     OutputFormat::Json => {
-                        ctx.print_json("info", &view);
+                        ctx.print_json(&view);
                     }
                 }
                 return Ok(());

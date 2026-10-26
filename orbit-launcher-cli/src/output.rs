@@ -489,24 +489,14 @@ impl From<orbit_launcher_core::LauncherStateRestoreReport> for LauncherStateRest
 #[serde(rename_all = "snake_case")]
 pub enum InstanceMutationAction {
     Deleted,
-    Created,
     Removed,
 }
 
 impl InstanceMutationAction {
     pub const fn as_str(self) -> &'static str {
         match self {
-            Self::Created => "created",
             Self::Deleted => "deleted",
             Self::Removed => "removed",
-        }
-    }
-
-    pub const fn command_name(self) -> &'static str {
-        match self {
-            Self::Created => "instance.create",
-            Self::Deleted => "instance.delete",
-            Self::Removed => "instance.remove",
         }
     }
 }
@@ -811,7 +801,7 @@ pub struct AccountLoginView {
 #[derive(Debug, Serialize)]
 pub struct AccountSelectionView {
     pub scope: &'static str,
-    pub account: Option<AccountView>,
+    pub selection: orbit_launcher_core::account::AccountSelectionSummary,
 }
 
 #[derive(Debug, Serialize)]
@@ -1310,15 +1300,6 @@ impl ProgressData {
 pub enum ConfigMutationAction {
     Set,
     Unset,
-}
-
-impl ConfigMutationAction {
-    pub const fn command_name(self) -> &'static str {
-        match self {
-            Self::Set => "config.set",
-            Self::Unset => "config.unset",
-        }
-    }
 }
 
 impl ConfigMutationView {

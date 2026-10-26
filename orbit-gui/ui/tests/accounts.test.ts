@@ -69,7 +69,9 @@ it("Accounts only manages identities and has no global or implicit instance sele
     vi
       .mocked(launcher)
       .mock.calls.every(
-        ([args]) => args[0] !== "account" || args[1] !== "select",
+        ([args]) =>
+          !(args[0] === "account" && args[1] === "default") &&
+          !(args[0] === "instance" && args[1] === "account"),
       ),
   ).toBe(true);
   wrapper.unmount();
@@ -88,7 +90,7 @@ it("instance account settings explicitly select or clear only that instance", as
   picker.vm.$emit("update:modelValue", account.id);
   await flushPromises();
   expect(launcher).toHaveBeenLastCalledWith(
-    ["account", "select", account.id],
+    ["instance", "account", "set", account.id],
     expect.any(String),
     instance,
     expect.any(Function),
@@ -98,7 +100,7 @@ it("instance account settings explicitly select or clear only that instance", as
   picker.vm.$emit("update:modelValue", "inherit");
   await flushPromises();
   expect(launcher).toHaveBeenLastCalledWith(
-    ["account", "clear"],
+    ["instance", "account", "clear"],
     expect.any(String),
     instance,
     expect.any(Function),
@@ -121,7 +123,7 @@ it("the header switcher always sets a global default regardless of route", async
   await wrapper.find(".menu-panel button").trigger("click");
   await flushPromises();
   expect(launcher).toHaveBeenCalledWith(
-    ["account", "select", "player", "--global"],
+    ["account", "default", "set", "player"],
     expect.any(String),
     null,
   );

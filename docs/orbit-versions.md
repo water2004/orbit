@@ -117,12 +117,12 @@ Fabric/Maven 实现内部仍有 prerelease、qualifier、build 等 Loader 术语
 ## 6. 命令与机器输出
 
 ```text
-orbit versions <package>
-orbit constraint show <package>
-orbit constraint set <package> any [--string '<ordered-set-rule>']
-orbit constraint set <package> exact <numeric-core> [--string ...]
-orbit constraint set <package> <greater-than|at-least|less-than|at-most> <numeric-core> [--string ...]
-orbit constraint set <package> range <lower> <upper> \
+orbit package <package> versions
+orbit package <package> constraint show
+orbit package <package> constraint set any [--string '<ordered-set-rule>']
+orbit package <package> constraint set exact <numeric-core> [--string ...]
+orbit package <package> constraint set <greater-than|at-least|less-than|at-most> <numeric-core> [--string ...]
+orbit package <package> constraint set range <lower> <upper> \
   [--lower-bound inclusive|exclusive] [--upper-bound inclusive|exclusive] [--string ...]
 ```
 

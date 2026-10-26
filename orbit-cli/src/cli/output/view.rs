@@ -313,12 +313,6 @@ pub struct InstanceView {
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct InstanceDefaultOutput {
-    pub subcommand: String,
-    pub name: String,
-}
-
-#[derive(Debug, Clone, Serialize)]
 pub struct InstanceRegisterOutput {
     pub subcommand: String,
     pub instance: InstanceView,

@@ -114,7 +114,16 @@ it("numeric comparisons and range boundaries use CLI numeric cores, never suffix
   await wrapper.findAll("footer button").at(-1)!.trigger("click");
   await flushPromises();
   expect(mutate).toHaveBeenCalledWith(
-    ["constraint", "set", "sodium", "exact", "1.1.3", "--string", "all"],
+    [
+      "package",
+      "sodium",
+      "constraint",
+      "set",
+      "exact",
+      "1.1.3",
+      "--string",
+      "all",
+    ],
     expect.any(String),
     expect.any(Function),
   );
@@ -125,9 +134,10 @@ it("numeric comparisons and range boundaries use CLI numeric cores, never suffix
   await wrapper.findAll("footer button").at(-1)!.trigger("click");
   await flushPromises();
   expect(vi.mocked(mutate).mock.lastCall?.[0]).toEqual([
+    "package",
+    "sodium",
     "constraint",
     "set",
-    "sodium",
     "range",
     "1.1.2",
     "1.1.3",
@@ -167,10 +177,11 @@ it.each([
         ],
       },
     });
-    expect(vi.mocked(mutate).mock.lastCall?.[0].slice(0, 4)).toEqual([
+    expect(vi.mocked(mutate).mock.lastCall?.[0].slice(0, 5)).toEqual([
+      "package",
+      "sodium",
       "constraint",
       "set",
-      "sodium",
       "any",
     ]);
     wrapper.unmount();
@@ -190,7 +201,11 @@ it("opens without fetching a version catalog and files only request ownership", 
   await wrapper.findAll(".management-actions button")[2].trigger("click");
   await flushPromises();
   expect(orbit).toHaveBeenCalledTimes(1);
-  expect(vi.mocked(orbit).mock.calls[0][0]).toEqual(["ownership", "sodium"]);
+  expect(vi.mocked(orbit).mock.calls[0][0]).toEqual([
+    "package",
+    "sodium",
+    "files",
+  ]);
   await wrapper.find("footer button").trigger("click");
   expect(wrapper.emitted("close")).toHaveLength(1);
   wrapper.unmount();

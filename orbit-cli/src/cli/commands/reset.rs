@@ -32,14 +32,11 @@ pub async fn handle(package: String, ctx: &CliContext) -> Result<()> {
                 ));
             }
         }
-        OutputFormat::Json => ctx.print_json(
-            "reset",
-            &ResetOutput {
-                mod_id: report.mod_id,
-                data_removed: report.removed.iter().map(owned_path_view).collect(),
-                warnings: report.warnings,
-            },
-        ),
+        OutputFormat::Json => ctx.print_json(&ResetOutput {
+            mod_id: report.mod_id,
+            data_removed: report.removed.iter().map(owned_path_view).collect(),
+            warnings: report.warnings,
+        }),
     }
     Ok(())
 }

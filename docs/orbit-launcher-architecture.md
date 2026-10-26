@@ -750,7 +750,7 @@ Domain Socket 只存在于平台 IPC 模块，不进入安装或账户领域。
 
 ```text
 orbit-launcher
-  instance create|import|list|show|rename|configure|remove|default
+  instance import|list|show|rename|configure|unregister|delete|account|default
   versions minecraft|loader|java
   minecraft directory|move
   install [--new <name>] [--server-directory <path>] [--kind <client|server>]
@@ -1011,7 +1011,7 @@ Launcher 投影。恢复失败会删除整个 provisional 新实例。不存在�
 - 日志和错误在序列化前统一脱敏；
 - `launch --dry-run`、bug report 和诊断包不得包含 token；
 - 账户密码只允许在安全 stdin/TTY 或 OS 凭据 API 输入，不接受普通命令行参数；
-- 删除实例、runtime 和 cache 前解析并验证绝对目标；instance remove 只注销，instance delete
+- 删除实例、runtime 和 cache 前解析并验证绝对目标；instance unregister 只注销，instance delete
   明确删除包括 worlds/saves 在内的全部实例数据，要求确认且默认送入系统回收站。
 
 ## 18. 错误模型
@@ -1130,3 +1130,12 @@ LaunchPlan golden test。没有测试覆盖的组合不得笼统宣称“支持�
 
 所有网络 adapter 在实现时必须把实际使用的 endpoint、认证方式、缓存语义和响应 fixture
 补充到独立协议文档，不能仅以第三方 Launcher 的代码行为作为规范。
+
+## 命令边界整理
+
+创建并完整安装只有 `install --new`；不存在仅写 manifest 的 create 命令。Core `bootstrap`
+负责包运行时要求、全新目标分配与失败回滚，CLI 编排下载/EULA/输出。
+`account` 管全局身份，`account default` 管全局选择；`instance account` 管实例覆盖。
+`instance unregister` 只注销，`instance delete` 才删除完整实例，两者无兼容别名。
+`command_metadata` 是机器 command 标识和实例参数适用性的唯一入口；成功结果不按 DTO 类型
+反推名字，Frontend 绑定原始命令，嵌套安装进度不再误标 install。

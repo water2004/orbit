@@ -987,7 +987,7 @@ pub fn set_default_instance(
     let mut registry = InstancesRegistry::load(paths.instances_file())?;
     let selected = registry.set_default(name).ok_or_else(|| {
         OrbitError::Other(anyhow::anyhow!(
-            "instance '{name}' not found; run 'orbit instances list' to see registered instances"
+            "instance '{name}' not found; run 'orbit instance list' to see registered instances"
         ))
     })?;
     let mut config = GlobalConfig::load_or_create_stored_unlocked(paths.config_file())?;

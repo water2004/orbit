@@ -101,7 +101,7 @@ cd /path/to/your/game-directory
 orbit init survival
 orbit sync
 orbit add sodium
-orbit versions sodium
+orbit package sodium versions
 orbit upgrade sodium
 ```
 
@@ -114,10 +114,10 @@ Useful commands:
 | `orbit install` | Restore the exact existing lockfile, without solving. |
 | `orbit outdated` / `orbit upgrade` | Inspect/apply global updates, including reasons for blocked upgrades. |
 | `orbit upgrade <mod_id>` | Prioritize that package's update and minimize other changes. |
-| `orbit constraint set <mod_id> …` | Solve and apply a version policy transaction; cancellation/failure leaves the old policy intact. |
-| `orbit disable <mod_id>` / `orbit enable <mod_id>` | Toggle Loader discovery by renaming the selected JAR and recording its state. |
+| `orbit package <mod_id> constraint set …` | Solve and apply a version policy transaction; cancellation/failure leaves the old policy intact. |
+| `orbit package <mod_id> disable` / `orbit package <mod_id> enable` | Toggle Loader discovery by renaming the selected JAR and recording its state. |
 | `orbit audit` | Read-only bytecode compatibility risk analysis. |
-| `orbit reset <mod_id>` / `orbit purge <mod_id>` | Confirm a data-only reset, or remove the package and its observed data. |
+| `orbit package <mod_id> reset` / `orbit package <mod_id> purge` | Confirm a data-only reset, or remove the package and its observed data. |
 
 ### Create or import an instance
 
@@ -137,7 +137,7 @@ orbit-launcher install --new server --kind server --server-directory /srv/minecr
   --minecraft latest-release --loader fabric --loader-version stable
 ```
 
-`instance remove` only unregisters an instance. Use `instance delete --dry-run` to review full
+`instance unregister` only unregisters an instance. Use `instance delete --dry-run` to review full
 directory deletion; the terminal asks for confirmation unless `--yes` is supplied.
 
 ### Packs and migration

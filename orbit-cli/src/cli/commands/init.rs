@@ -206,7 +206,7 @@ pub async fn handle(
             lock_created: output.lock_created,
             dependency_error: output.dependency_error.clone(),
         };
-        ctx.print_json("init", &view);
+        ctx.print_json(&view);
         return Ok(());
     }
     if ctx.quiet {

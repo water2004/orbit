@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { accountCommands } from "../services/commands";
 import { computed, ref } from "vue";
 import type { InstanceContext } from "../services/instance-context";
 import { workspace, refresh } from "../services/workspace";
@@ -46,7 +47,7 @@ async function change(id: string) {
   error.value = "";
   try {
     await launcher(
-      id === "inherit" ? ["account", "clear"] : ["account", "select", id],
+      accountCommands.instance(id === "inherit" ? undefined : id),
       t("Updating instance account", "正在更新实例账户"),
     );
     await props.context.refresh();

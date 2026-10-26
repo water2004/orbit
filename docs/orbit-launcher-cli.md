@@ -96,14 +96,6 @@ orbit-launcher install --new <name> [--server-directory <path>] \
 # 只读检查包结构并返回供 CLI/GUI 使用的结构化运行时要求
 orbit-launcher package inspect <package.orbitbundle|pack.mrpack>
 
-orbit-launcher instance create \
-  --name <name> \
-  [--server-directory <path>] \
-  --kind <client|server> \
-  --minecraft <requirement> \
-  [--loader <vanilla|fabric|quilt|forge|neoforge>] \
-  [--loader-version <requirement>]
-
 orbit-launcher instance inspect --directory <path>
 orbit-launcher instance import --directory <path> [--source <id>] \
   [--name <new-name>] [--game-directory <actual-game-directory>] [--dry-run]
@@ -116,7 +108,7 @@ orbit-launcher [--instance <id|name>] instance configure \
   [--loader-version <requirement>]
 orbit-launcher [--instance <id|name>] instance resolution set <width> <height>
 orbit-launcher [--instance <id|name>] instance resolution clear
-orbit-launcher [--instance <id|name>] instance remove
+orbit-launcher [--instance <id|name>] instance unregister
 orbit-launcher [--instance <id|name>] instance delete [--dry-run] [--yes]
 orbit-launcher instance default set <id|name>
 orbit-launcher instance default clear
@@ -142,10 +134,14 @@ orbit-launcher account login microsoft complete <login-session-id>
 orbit-launcher account login yggdrasil \
   --provider <id> --username <login-name> [--profile <name-or-uuid>] [--password-stdin]
 orbit-launcher account list
-orbit-launcher account show [<account-id|profile-name|profile-uuid>]
+orbit-launcher account show <account-id|profile-name|profile-uuid>
 orbit-launcher account refresh <account-id|profile-name|profile-uuid>
-orbit-launcher [--instance <id|name>] account select <account> [--global]
-orbit-launcher [--instance <id|name>] account clear [--global]
+orbit-launcher account default show
+orbit-launcher account default set <account>
+orbit-launcher account default clear
+orbit-launcher [--instance <id|name>] instance account show
+orbit-launcher [--instance <id|name>] instance account set <account>
+orbit-launcher [--instance <id|name>] instance account clear
 orbit-launcher account logout <account>
 
 orbit-launcher java list [--verify]
@@ -207,11 +203,14 @@ public-client ID 固定在 Launcher 中，不属于用户配置或秘密；refre
 账户才进入 `reauthentication-required`。超时、限流和服务端故障不会把账户误标为失效。重新
 登录复用原 account ID 并原子恢复 `active`；登录开始失败不得写 `accounts.json`。
 
-`account select` 默认修改具体客户端实例的 `[launch].account`；`--global` 只修改全局缺省
-账户且不能与 `--instance` 同用。服务端实例不使用客户端账户。`logout` 删除本地秘密与元
+`account default` 只管理全局缺省账户，不接受 `--instance`；`instance account set|clear` 修改
+具体客户端实例的 `[launch].account`，`show` 读取有效账户。清除实例覆盖后继承全局默认。
+`account show` 必须明确指定账户，不再把账户查询和缺省选择混在一起。
+选择类命令返回 `scope` 和同一个 Core `selection` 模型：`state` 区分 `selected`、
+`not-configured`、`unavailable`，已选状态携带公开账户与 `source=instance|global`；不会刷新 token。服务端实例不使用客户端账户。`logout` 删除本地秘密与元
 数据；若实例仍引用该 account ID，之后启动会明确报错，不会静默选择另一个账号。
 
-客户端 `create/install --new` 不接受任意 root：它们始终使用唯一托管 Minecraft 仓库，并把
+客户端 `install --new` 不接受任意 root：它们始终使用唯一托管 Minecraft 仓库，并把
 game directory 建为 `<minecraft-directory>/instances/<name>`。该目录保存实例自己的
 `minecraft.jar` 与 manifest/lock；`mods`、`config`、`saves` 在对应领域第一次真正写入时
 按需产生。共享 `libraries`、`assets` 和
@@ -220,7 +219,7 @@ Mojang/HMCL profile，而由自己的 lock 直接记录实例 JAR 与共享 clas
 实例隔离策略，不是 Mojang 规定的实例描述格式。服务端使用 `--server-directory`；省略时使用
 当前目录，方便 headless 部署。`instance import --directory` 必须指向现有实例的精确目录；
 客户端目录必须是某个 `instances/` 的直接子目录，不接受扁平单版本目录兜底。注册表持久化规范化绝对路径，但路径
-不是实例身份。`remove` 只注销实例并保留全部文件。
+不是实例身份。`unregister` 只注销实例并保留全部文件。
 `instance configure` 原子修改现有 `orbit-launcher.toml` 的期望运行时，不下载、不修改 lock；
 随后运行同一个 `install` 事务完成 Minecraft、loader 与 Java 更新。切换到非 Vanilla loader
 时必须同时给出 loader requirement；切换到 Vanilla 会删除 loader requirement。
@@ -240,10 +239,10 @@ version manifest v2 的完整有序目录、类型、发布时间及 latest 标�
 标记。`versions java` 读取该 Minecraft 的官方 version JSON，返回必须自动下载的 Java
 component/major。新建、更新和修复复用这些只读目录与同一个 `configure -> install` 事务。
 
-非 Vanilla Loader 必须提供 `--loader-version`；Vanilla 禁止提供该参数。当前 `create` 只
-建立用户意图和全局注册，不下载任何内容。一次命令创建并安装由真实安装事务入口
-`install --new` 提供，不复用 `instance create` 伪装安装成功。bootstrap 失败时会注销临时
-实例并删除 provisional manifest，不删除用户文件。
+非 Vanilla Loader 必须提供 `--loader-version`；Vanilla 禁止提供该参数。
+创建并安装只有 `install --new` 一条路径；不再提供只写 manifest 的 `instance create`。
+已有实例通过 `instance configure -> install` 更新。新建时的包要求校验、实例分配与失败回滚由
+Launcher Core 的 `bootstrap` 模块负责，CLI 只编排安装、EULA 与进度，不自行编辑业务文件。
 
 当前 `install` 接受 Vanilla/Fabric/Quilt/Forge/NeoForge client/server 实例。它先解析 Mojang version manifest v2、
 目标版本 JSON 和该版本声明的 Java component/major，再一次性确定完整下载队列。客户端

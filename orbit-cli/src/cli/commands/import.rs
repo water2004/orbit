@@ -66,17 +66,14 @@ pub async fn handle(
                     ));
                 }
                 OutputFormat::Json => {
-                    ctx.print_json(
-                        "import",
-                        &ImportOutput {
-                            dry_run: ctx.dry_run,
-                            added: report.added,
-                            merged: report.merged,
-                            replaced: report.replaced,
-                            kept: report.kept,
-                            extracted: Vec::new(),
-                        },
-                    );
+                    ctx.print_json(&ImportOutput {
+                        dry_run: ctx.dry_run,
+                        added: report.added,
+                        merged: report.merged,
+                        replaced: report.replaced,
+                        kept: report.kept,
+                        extracted: Vec::new(),
+                    });
                 }
             }
         }
@@ -160,17 +157,14 @@ pub async fn handle(
                         ));
                     }
                     OutputFormat::Json => {
-                        ctx.print_json(
-                            "import",
-                            &ImportOutput {
-                                dry_run: false,
-                                added: report.added.clone(),
-                                merged: report.merged.clone(),
-                                replaced: report.replaced.clone(),
-                                kept: report.kept.clone(),
-                                extracted: report.extracted.clone(),
-                            },
-                        );
+                        ctx.print_json(&ImportOutput {
+                            dry_run: false,
+                            added: report.added.clone(),
+                            merged: report.merged.clone(),
+                            replaced: report.replaced.clone(),
+                            kept: report.kept.clone(),
+                            extracted: report.extracted.clone(),
+                        });
                     }
                 }
             } else {
@@ -187,17 +181,14 @@ pub async fn handle(
                         ));
                     }
                     OutputFormat::Json => {
-                        ctx.print_json(
-                            "import",
-                            &ImportOutput {
-                                dry_run: ctx.dry_run,
-                                added: report.added,
-                                merged: report.merged,
-                                replaced: report.replaced,
-                                kept: report.kept,
-                                extracted: report.extracted,
-                            },
-                        );
+                        ctx.print_json(&ImportOutput {
+                            dry_run: ctx.dry_run,
+                            added: report.added,
+                            merged: report.merged,
+                            replaced: report.replaced,
+                            kept: report.kept,
+                            extracted: report.extracted,
+                        });
                     }
                 }
             }

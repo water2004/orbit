@@ -31,14 +31,11 @@ pub async fn handle(package: String, ctx: &CliContext) -> Result<()> {
                 ));
             }
         }
-        OutputFormat::Json => ctx.print_json(
-            "purge",
-            &PurgeOutput {
-                mod_id: report.mod_id,
-                jar_deleted: report.jar_deleted,
-                data_removed: report.removed.iter().map(owned_path_view).collect(),
-            },
-        ),
+        OutputFormat::Json => ctx.print_json(&PurgeOutput {
+            mod_id: report.mod_id,
+            jar_deleted: report.jar_deleted,
+            data_removed: report.removed.iter().map(owned_path_view).collect(),
+        }),
     }
     Ok(())
 }

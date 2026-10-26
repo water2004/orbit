@@ -61,6 +61,7 @@ async fn main() {
         yes: cli.yes,
         dry_run: cli.dry_run,
         instance: cli.instance.clone(),
+        workspace: Default::default(),
         language,
         runtime,
         output,

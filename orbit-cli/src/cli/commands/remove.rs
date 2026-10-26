@@ -35,13 +35,10 @@ pub async fn handle(input: String, ctx: &CliContext) -> Result<()> {
                     ));
                 }
                 OutputFormat::Json => {
-                    ctx.print_json(
-                        "remove",
-                        &RemoveOutput {
-                            mod_id: report.mod_id,
-                            jar_deleted: report.jar_deleted,
-                        },
-                    );
+                    ctx.print_json(&RemoveOutput {
+                        mod_id: report.mod_id,
+                        jar_deleted: report.jar_deleted,
+                    });
                 }
             }
             Ok(())

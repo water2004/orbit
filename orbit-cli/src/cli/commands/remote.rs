@@ -4,14 +4,10 @@ use anyhow::Result;
 
 use crate::cli::output::{OutputFormat, remote_view};
 
-pub async fn handle(command: RemoteCommands, ctx: &CliContext) -> Result<()> {
+pub async fn handle(package: String, command: RemoteCommands, ctx: &CliContext) -> Result<()> {
     let instance_dir = ctx.instance_dir()?;
     match command {
-        RemoteCommands::Add {
-            package,
-            provider,
-            locator,
-        } => {
+        RemoteCommands::Add { provider, locator } => {
             let remote = super::parse_package_remote(&provider, &locator)?;
             let providers = if remote.provider() == "file" {
                 Vec::new()
@@ -35,7 +31,6 @@ pub async fn handle(command: RemoteCommands, ctx: &CliContext) -> Result<()> {
             print_report(&report, "add", ctx);
         }
         RemoteCommands::Remove {
-            package,
             provider,
             locator,
             index,
@@ -73,7 +68,7 @@ pub async fn handle(command: RemoteCommands, ctx: &CliContext) -> Result<()> {
                 orbit_core::remove_package_remote(&instance_dir, &package, &remote, ctx.dry_run)?;
             print_report(&report, "remove", ctx);
         }
-        RemoteCommands::List { package } => {
+        RemoteCommands::List => {
             let report = orbit_core::list_package_remotes(&instance_dir, &package)?;
             print_report(&report, "list", ctx);
         }
@@ -104,7 +99,7 @@ fn print_report(report: &orbit_core::RemoteReport, subcommand: &str, ctx: &CliCo
         }
         OutputFormat::Json => {
             let view = remote_view(report, subcommand);
-            ctx.print_json("remote", &view);
+            ctx.print_json(&view);
         }
     }
 }

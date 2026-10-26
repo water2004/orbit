@@ -3,6 +3,11 @@
 > 本文约定 `--output-format` 全局选项、JSON 结果 schema、NDJSON 进度协议和结构化错误。
 > 命令语义见 [orbit-cli-commands.md](orbit-cli-commands.md)。
 
+所有响应的 `command` 标识由解析后的命令生成，成功/失败/NDJSON/交互一致。
+嵌套动作使用点分标识，如 `config.get`、`config.set`、`migrate.check`、`migrate.export`、
+`package.constraint.show`、`package.constraint.set`、`package.remote.add`。
+不再根据返回值类型反推调用的命令；例如 clear 不会再误标成 select。
+
 ## 1. 全局选项
 
 ```text
@@ -188,7 +193,7 @@ orbit [--output-format text|json] [--progress-format none|ndjson] <command> ...
 ```json
 {
   "schema_version": 2,
-  "command": "ownership",
+  "command": "package.files",
   "ok": true,
   "result": {
     "mod_id": "sodium",
@@ -225,7 +230,7 @@ orbit [--output-format text|json] [--progress-format none|ndjson] <command> ...
 ```json
 {
   "schema_version": 2,
-  "command": "env",
+  "command": "package.env",
   "ok": true,
   "result": {
     "package": "sodium",
@@ -244,7 +249,7 @@ orbit [--output-format text|json] [--progress-format none|ndjson] <command> ...
 ```json
 {
   "schema_version": 2,
-  "command": "disable",
+  "command": "package.disable",
   "ok": true,
   "result": {
     "package": "sodium",
@@ -264,7 +269,7 @@ lock 精确记录。
 ```json
 {
   "schema_version": 2,
-  "command": "constraint",
+  "command": "package.constraint.set",
   "ok": true,
   "result": {
     "package": "sodium",
@@ -283,7 +288,7 @@ lock 精确记录。
 ```json
 {
   "schema_version": 2,
-  "command": "versions",
+  "command": "package.versions",
   "ok": true,
   "result": {
     "package": "sodium",
@@ -320,7 +325,7 @@ lock 精确记录。
 ```json
 {
   "schema_version": 2,
-  "command": "migrate",
+  "command": "migrate.check",
   "ok": true,
   "result": {
     "subcommand": "check",
@@ -391,14 +396,14 @@ lock 精确记录。
 `kind` 枚举：`no_compatible_candidate` / `excluded_by_propagation` / `backtracked` / `unexplained`。
 `summary.up_to_date` 为 1 表示无更新且无诊断，否则 0。
 
-### `instances`
+### `instance`
 
-`instances list`：
+`instance list`：
 
 ```json
 {
   "schema_version": 2,
-  "command": "instances",
+  "command": "instance.list",
   "ok": true,
   "result": {
     "subcommand": "list",
@@ -416,25 +421,16 @@ lock 精确记录。
 }
 ```
 
-`instances default <name>`：
+默认实例通过 `config set/unset core.default-instance` 修改，使用配置命令的结果模型。
+
+`instance unregister <name>`：
 
 ```json
 {
   "schema_version": 2,
-  "command": "instances",
+  "command": "instance.unregister",
   "ok": true,
-  "result": { "subcommand": "default", "name": "alpha" }
-}
-```
-
-`instances remove <name>`：
-
-```json
-{
-  "schema_version": 2,
-  "command": "instances",
-  "ok": true,
-  "result": { "subcommand": "remove", "name": "alpha" }
+  "result": { "subcommand": "unregister", "name": "alpha" }
 }
 ```
 
@@ -443,7 +439,7 @@ lock 精确记录。
 ```json
 {
   "schema_version": 2,
-  "command": "remote",
+  "command": "package.remote.list",
   "ok": true,
   "result": {
     "subcommand": "list",
@@ -511,7 +507,7 @@ lock 精确记录。
 ```json
 {
   "schema_version": 2,
-  "command": "instances",
+  "command": "instance.list",
   "ok": true,
   "result": {
     "subcommand": "register",
@@ -588,7 +584,7 @@ lock 精确记录。
 ```json
 {
   "schema_version": 2,
-  "command": "purge",
+  "command": "package.purge",
   "ok": true,
   "result": {
     "mod_id": "sodium",
@@ -619,7 +615,7 @@ JAR 哈希。
 ```json
 {
   "schema_version": 2,
-  "command": "reset",
+  "command": "package.reset",
   "ok": true,
   "result": {
     "mod_id": "sodium",
@@ -703,7 +699,7 @@ Orbit 只在启动前创建 Agent session、退出后归并可用 snapshot；若
 ```json
 {
   "schema_version": 2,
-  "command": "cache",
+  "command": "cache.clean",
   "ok": true,
   "result": {
     "subcommand": "clean",
@@ -724,7 +720,7 @@ Orbit 只在启动前创建 Agent session、退出后归并可用 snapshot；若
 ```json
 {
   "schema_version": 2,
-  "command": "config",
+  "command": "config.path",
   "ok": true,
   "result": {
     "subcommand": "path",
@@ -738,7 +734,7 @@ Orbit 只在启动前创建 Agent session、退出后归并可用 snapshot；若
 ```json
 {
   "schema_version": 2,
-  "command": "config",
+  "command": "config.list",
   "ok": true,
   "result": {
     "subcommand": "list",
@@ -771,7 +767,7 @@ Orbit 只在启动前创建 Agent session、退出后归并可用 snapshot；若
 ```json
 {
   "schema_version": 2,
-  "command": "config",
+  "command": "config.set",
   "ok": true,
   "result": {
     "subcommand": "set",

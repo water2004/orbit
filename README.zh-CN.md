@@ -90,7 +90,7 @@ cd /path/to/your/game-directory
 orbit init survival
 orbit sync
 orbit add sodium
-orbit versions sodium
+orbit package sodium versions
 orbit upgrade sodium
 ```
 
@@ -101,10 +101,10 @@ orbit upgrade sodium
 | `orbit install` | 严格恢复已有 lock，不求解。 |
 | `orbit outdated` / `orbit upgrade` | 检查/执行全局更新，同时解释受阻原因。 |
 | `orbit upgrade <mod_id>` | 优先更新指定包，再最小化其它变动。 |
-| `orbit constraint set <mod_id> …` | 以同一事务求解并应用版本策略；失败或取消不写入策略。 |
-| `orbit disable <mod_id>` / `orbit enable <mod_id>` | 原子重命名所选 JAR 并记录状态，改变 Loader 是否发现它。 |
+| `orbit package <mod_id> constraint set …` | 以同一事务求解并应用版本策略；失败或取消不写入策略。 |
+| `orbit package <mod_id> disable` / `orbit package <mod_id> enable` | 原子重命名所选 JAR 并记录状态，改变 Loader 是否发现它。 |
 | `orbit audit` | 只读的字节码兼容风险分析。 |
-| `orbit reset <mod_id>` / `orbit purge <mod_id>` | 确认后仅重置包数据，或移除包及已观测的所属数据。 |
+| `orbit package <mod_id> reset` / `orbit package <mod_id> purge` | 确认后仅重置包数据，或移除包及已观测的所属数据。 |
 
 ### 新建或导入实例
 
@@ -124,7 +124,7 @@ orbit-launcher install --new server --kind server --server-directory /srv/minecr
   --minecraft latest-release --loader fabric --loader-version stable
 ```
 
-`instance remove` 只注销实例；`instance delete --dry-run` 预览整个目录的删除范围。
+`instance unregister` 只注销实例；`instance delete --dry-run` 预览整个目录的删除范围。
 没有 `--yes` 时，终端会再次要求确认。
 
 ### 整合包与迁移

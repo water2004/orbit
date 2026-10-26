@@ -25,13 +25,10 @@ pub async fn handle(name: String, ctx: &CliContext) -> Result<()> {
                 )
             ));
         }
-        OutputFormat::Json => ctx.print_json(
-            "instances",
-            &InstanceRemoveOutput {
-                subcommand: "remove".to_string(),
-                name,
-            },
-        ),
+        OutputFormat::Json => ctx.print_json(&InstanceRemoveOutput {
+            subcommand: "unregister".to_string(),
+            name,
+        }),
     }
     Ok(())
 }

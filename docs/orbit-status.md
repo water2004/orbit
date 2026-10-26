@@ -4,6 +4,13 @@
 
 ## 1. 当前结论
 
+命令体系已按工作区事务、单包管理和全局资源整理。包管理集中到 `package <mod_id>`，
+两端注册表统一使用 `instance ... unregister`；账户全局默认与实例覆盖分成两个显式领域。
+删除散落顶层旧入口、重复默认实例入口、半成品 create 命令和按结果类型反推命令名的映射。
+Core 负责目标解析、账户写入、安装 bootstrap 与回滚；GUI 保持进程薄壳并有跨端语法合同测试。
+TOML/lock schema 不变，不需要迁移已有实例；自动化脚本的旧命令拼写需要更新。
+
+
 已修复 CurseForge 搜索因历史 `latestFilesIndexes` 缺少 `modLoader` 而整批解析失败的问题，
 并避免用不完整 latest 摘要覆盖官方过滤搜索的结果。发现页错误不再伪装为“0 个结果/无匹配”。
 搜索来源勾选后通过原有 CLI 自动保存，失败回滚；模组数字边界只使用 CLI 的 `numeric_core`，
@@ -154,7 +161,7 @@ GUI 文件选择已统一异步处理：修正整合包导入/导出按钮同步
 | 长事务进度 | ✅ | 包操作与 audit 均使用 core 强类型事件；版本库批量检查显示刷新/复用与动态 project 总量，去重候选/审计工件精确计数，求解工作总量随实际 run/probe 动态增长 |
 | JSON / 自动化输出 | ✅ | 全局 `--output-format text\|json` 与 `--progress-format none\|ndjson`；`export --format orbit\|mrpack` 只选择包格式，`--content` 选择数据范围；JSON 结果 + NDJSON 进度/交互 + stdin 响应 + 结构化错误与稳定错误码共用 schema 2；协议严格 UTF-8，字段/枚举码不随语言变化；view-model 层隔离哈希、密钥和无意义的候选文件名，仅 `ownership` 按领域语义返回当前受管顶层 JAR 路径；search/info 契约提供官方 icon/link/gallery 展示数据 |
 | 全局配置命令 | ✅ | `config path/list/get/set/unset`；强类型校验、单字段原子更新、注释保留、密钥脱敏、环境覆盖不回写；网络/并发/认证/cache 进入共享服务，语言/颜色/进度进入 CLI 展示边界 |
-| 受管包环境过滤 | ✅ | TOML `env` 可选；缺失时跟随 lock/JAR 声明；`orbit env ... auto` 可设置过滤或恢复自动 |
+| 受管包环境过滤 | ✅ | TOML `env` 可选；缺失时跟随 lock/JAR 声明；`orbit package <mod_id> env ... auto` 可设置过滤或恢复自动 |
 | Loader JSON 容错 | ✅ | Fabric-compatible 字符串控制字符；仅限 JAR 内 loader/Mixin/refmap，其他 JSON 保持严格 |
 | 字节码运行时符号对齐 | ✅ | Fabric/Quilt 按实际 Tiny/identity 能力选择 official 或投影，不复制版本边界；Forge/NeoForge 验证 Loader runtime game；未对齐时在 finding 前停止 |
 | i18n | ✅ | `orbit`、`orbit-launcher` 与 GUI 共用 `system`（默认）/`en`/`zh-CN` 语言模型；CLI help、文本结果、进度、询问和结构化错误均在展示边界翻译，机器字段保持稳定 |

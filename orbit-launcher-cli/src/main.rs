@@ -2,6 +2,7 @@ mod app;
 #[macro_use]
 mod output_sink;
 mod cli;
+mod command_metadata;
 mod interaction;
 mod output;
 mod supervisor_ipc;
@@ -28,7 +29,7 @@ async fn main() -> ExitCode {
     let matches = orbit_i18n::get_matches(Cli::command());
     let cli = Cli::from_arg_matches(&matches).expect("Clap matches the derived CLI schema");
     orbit_i18n::install(cli.language);
-    let command_name = command_name(&cli.command);
+    let command_name = cli.command.command_name();
     let runtime =
         orbit_launcher_core::RuntimeContext::load(orbit_launcher_core::RuntimePathOptions {
             config_dir: cli.config_dir.clone(),
@@ -54,8 +55,12 @@ async fn main() -> ExitCode {
             );
         }
     };
-    let mut frontend =
-        TerminalFrontend::new(cli.output_format, cli.progress_format, cli.non_interactive);
+    let mut frontend = TerminalFrontend::new(
+        cli.output_format,
+        cli.progress_format,
+        cli.non_interactive,
+        command_name,
+    );
     if matches!(
         cli.command,
         cli::Commands::Install { .. }
@@ -65,7 +70,7 @@ async fn main() -> ExitCode {
             }
     ) && let Some(attribution) = runtime.config().network.download_source.attribution()
     {
-        frontend.download_source(command_name, attribution);
+        frontend.download_source(attribution);
     }
     match app::execute(
         cli.command,
@@ -78,7 +83,7 @@ async fn main() -> ExitCode {
     {
         Ok(output) => {
             let process_succeeded = output.process_succeeded();
-            render_success(cli.output_format, output);
+            render_success(cli.output_format, command_name, output);
             if process_succeeded {
                 ExitCode::SUCCESS
             } else {
@@ -89,93 +94,7 @@ async fn main() -> ExitCode {
     }
 }
 
-fn command_name(command: &cli::Commands) -> &'static str {
-    match command {
-        cli::Commands::Install { .. } => "install",
-        cli::Commands::Launch { .. } => "launch",
-        cli::Commands::Export { .. } => "export",
-        cli::Commands::Config { command } => match command {
-            cli::ConfigCommands::Path => "config.path",
-            cli::ConfigCommands::List => "config.list",
-            cli::ConfigCommands::Get { .. } => "config.get",
-            cli::ConfigCommands::Set { .. } => "config.set",
-            cli::ConfigCommands::Unset { .. } => "config.unset",
-            cli::ConfigCommands::Yggdrasil { command } => match command {
-                cli::YggdrasilProviderCommands::List => "config.yggdrasil.list",
-                cli::YggdrasilProviderCommands::Inspect { .. } => "config.yggdrasil.inspect",
-                cli::YggdrasilProviderCommands::Add { .. } => "config.yggdrasil.add",
-                cli::YggdrasilProviderCommands::Remove { .. } => "config.yggdrasil.remove",
-            },
-        },
-        cli::Commands::Instance { command } => match command {
-            cli::InstanceCommands::Create { .. } => "instance.create",
-            cli::InstanceCommands::Import { .. } => "instance.import",
-            cli::InstanceCommands::Inspect { .. } => "instance.inspect",
-            cli::InstanceCommands::Delete { .. } => "instance.delete",
-            cli::InstanceCommands::List => "instance.list",
-            cli::InstanceCommands::Show => "instance.show",
-            cli::InstanceCommands::LaunchReport => "instance.launch-report",
-            cli::InstanceCommands::Rename { .. } => "instance.rename",
-            cli::InstanceCommands::Configure { .. } => "instance.configure",
-            cli::InstanceCommands::Resolution { .. } => "instance.resolution",
-            cli::InstanceCommands::Memory { .. } => "instance.memory",
-            cli::InstanceCommands::Icon { .. } => "instance.icon",
-            cli::InstanceCommands::Java { .. } => "instance.java",
-            cli::InstanceCommands::Remove => "instance.remove",
-            cli::InstanceCommands::Default { .. } => "instance.default",
-        },
-        cli::Commands::Server { command } => match command {
-            cli::ServerCommands::Run { .. } => "server.run",
-            cli::ServerCommands::Start => "server.start",
-            cli::ServerCommands::Stop => "server.stop",
-            cli::ServerCommands::Status => "server.status",
-            cli::ServerCommands::Command { .. } => "server.command",
-            cli::ServerCommands::Eula { command } => match command {
-                cli::EulaCommands::Show => "server.eula.show",
-                cli::EulaCommands::Accept { .. } => "server.eula.accept",
-            },
-        },
-        cli::Commands::Account { command } => match command {
-            cli::AccountCommands::Login { command } => match command {
-                cli::AccountLoginCommands::Offline { .. } => "account.login.offline",
-                cli::AccountLoginCommands::Yggdrasil { .. } => "account.login.yggdrasil",
-                cli::AccountLoginCommands::Microsoft { command } => match command {
-                    cli::MicrosoftLoginCommands::Begin => "account.login.microsoft.begin",
-                    cli::MicrosoftLoginCommands::Complete { .. } => {
-                        "account.login.microsoft.complete"
-                    }
-                },
-            },
-            cli::AccountCommands::List => "account.list",
-            cli::AccountCommands::Show { .. } => "account.show",
-            cli::AccountCommands::Refresh { .. } => "account.refresh",
-            cli::AccountCommands::Select { .. } => "account.select",
-            cli::AccountCommands::Clear { .. } => "account.clear",
-            cli::AccountCommands::Logout { .. } => "account.logout",
-        },
-        cli::Commands::Versions { command } => match command {
-            cli::VersionCommands::Minecraft => "versions.minecraft",
-            cli::VersionCommands::Loader { .. } => "versions.loader",
-            cli::VersionCommands::Java { .. } => "versions.java",
-        },
-        cli::Commands::Java { command } => match command {
-            cli::JavaCommands::List { .. } => "java.list",
-            cli::JavaCommands::Verify { .. } => "java.verify",
-            cli::JavaCommands::Remove { .. } => "java.remove",
-        },
-        cli::Commands::Package { command } => match command {
-            cli::PackageCommands::Inspect { .. } => "package.inspect",
-        },
-        cli::Commands::Minecraft { command } => match command {
-            cli::MinecraftCommands::Directory => "minecraft.directory",
-            cli::MinecraftCommands::Move { .. } => "minecraft.move",
-        },
-        cli::Commands::Supervisor => "server.supervisor",
-    }
-}
-
-fn render_success(format: OutputFormat, output: app::CommandOutput) {
-    let command = output.command_name();
+fn render_success(format: OutputFormat, command: &'static str, output: app::CommandOutput) {
     match format {
         OutputFormat::Json => match output {
             app::CommandOutput::ConfigPath(value) => print_json(command, value),
@@ -773,24 +692,35 @@ fn render_text(output: app::CommandOutput) {
             render_account(&view);
         }
         app::CommandOutput::AccountLogin(view) => render_account(&view.account),
-        app::CommandOutput::AccountSelection(view) => match view.account {
-            Some(account) => outln!(
-                "{}",
-                tr!(
-                    "Selected %{name} (%{id}) for %{scope} scope.",
-                    name = account.profile_name,
-                    id = account.id,
-                    scope = tr!(view.scope)
-                )
-            ),
-            None => outln!(
-                "{}",
-                tr!(
-                    "Cleared the %{scope} account selection.",
-                    scope = tr!(view.scope)
-                )
-            ),
-        },
+        app::CommandOutput::AccountSelection(view) => {
+            use orbit_launcher_core::account::{AccountSelectionSource, AccountSelectionSummary};
+            match view.selection {
+                AccountSelectionSummary::Selected { account, source } => outln!(
+                    "{}",
+                    tr!(
+                        "Account for %{scope}: %{name} (%{id}), source: %{source}",
+                        scope = tr!(view.scope),
+                        name = account.profile_name,
+                        id = account.id,
+                        source = tr!(match source {
+                            AccountSelectionSource::Instance => "instance",
+                            AccountSelectionSource::Global => "global",
+                        })
+                    )
+                ),
+                AccountSelectionSummary::NotConfigured => outln!(
+                    "{}",
+                    tr!(
+                        "No account is configured for %{scope}.",
+                        scope = tr!(view.scope)
+                    )
+                ),
+                AccountSelectionSummary::Unavailable { account_id, .. } => outln!(
+                    "{}",
+                    tr!("Configured account %{id} is unavailable.", id = account_id)
+                ),
+            }
+        }
         app::CommandOutput::AccountLogout(view) => outln!(
             "{}",
             tr!(
@@ -1234,6 +1164,7 @@ fn localized_launcher_error(error: &LauncherError) -> String {
 }
 
 struct TerminalFrontend {
+    command: &'static str,
     output_format: OutputFormat,
     progress_format: ProgressFormat,
     non_interactive: bool,
@@ -1247,8 +1178,10 @@ impl TerminalFrontend {
         output_format: OutputFormat,
         progress_format: ProgressFormat,
         non_interactive: bool,
+        command: &'static str,
     ) -> Self {
         Self {
+            command,
             output_format,
             progress_format,
             non_interactive,
@@ -1622,7 +1555,7 @@ impl app::Frontend for TerminalFrontend {
                 ProgressData::InstanceImportVerified
             }
         };
-        self.render_launch_event("instance.import", data);
+        self.render_launch_event(data);
     }
 
     fn confirm_instance_deletion(
@@ -1659,7 +1592,7 @@ impl app::Frontend for TerminalFrontend {
             ProgressFormat::Ndjson => {
                 self.sequence += 1;
                 let phase = data.phase();
-                let envelope = ProgressEnvelope::new("install", self.sequence, phase, data);
+                let envelope = ProgressEnvelope::new(self.command, self.sequence, phase, data);
                 errln!(
                     "{}",
                     serde_json::to_string(&envelope)
@@ -1784,12 +1717,7 @@ impl app::Frontend for TerminalFrontend {
             ProgressFormat::Ndjson => {
                 self.sequence += 1;
                 let phase = data.phase();
-                let envelope = ProgressEnvelope::new(
-                    "account.login.microsoft.complete",
-                    self.sequence,
-                    phase,
-                    data,
-                );
+                let envelope = ProgressEnvelope::new(self.command, self.sequence, phase, data);
                 errln!(
                     "{}",
                     serde_json::to_string(&envelope)
@@ -1799,35 +1727,35 @@ impl app::Frontend for TerminalFrontend {
         }
     }
 
-    fn launch_preparation(&mut self, command: &'static str, event: LaunchPreparationEvent) {
-        self.render_launch_event(command, ProgressData::from_launch_preparation(event));
+    fn launch_preparation(&mut self, event: LaunchPreparationEvent) {
+        self.render_launch_event(ProgressData::from_launch_preparation(event));
     }
 
-    fn launch_process(&mut self, command: &'static str, event: LaunchProcessEvent) {
-        self.render_launch_event(command, ProgressData::from_launch_process(event));
+    fn launch_process(&mut self, event: LaunchProcessEvent) {
+        self.render_launch_event(ProgressData::from_launch_process(event));
     }
 
-    fn supervisor_event(&mut self, command: &'static str, event: SupervisorEvent) {
-        self.render_launch_event(command, ProgressData::from_supervisor(event));
+    fn supervisor_event(&mut self, event: SupervisorEvent) {
+        self.render_launch_event(ProgressData::from_supervisor(event));
     }
 
     fn repository_move(&mut self, event: RepositoryMoveEvent) {
-        self.render_launch_event("minecraft.move", ProgressData::from_repository(event));
+        self.render_launch_event(ProgressData::from_repository(event));
     }
 
-    fn state_archive_progress(&mut self, command: &'static str, event: StateArchiveProgressEvent) {
+    fn state_archive_progress(&mut self, event: StateArchiveProgressEvent) {
         let data = ProgressData::from_state_archive(event);
         match self.progress_format {
             ProgressFormat::None => {}
             ProgressFormat::Text => self.render_text_progress(data),
             ProgressFormat::Ndjson => {
                 self.sequence += 1;
-                let phase = if command == "export" {
+                let phase = if self.command == "export" {
                     orbit_machine_protocol::ProgressPhase::Export
                 } else {
                     orbit_machine_protocol::ProgressPhase::Apply
                 };
-                let envelope = ProgressEnvelope::new(command, self.sequence, phase, data);
+                let envelope = ProgressEnvelope::new(self.command, self.sequence, phase, data);
                 errln!(
                     "{}",
                     serde_json::to_string(&envelope)
@@ -1841,24 +1769,23 @@ impl app::Frontend for TerminalFrontend {
 impl TerminalFrontend {
     fn download_source(
         &mut self,
-        command: &'static str,
         attribution: orbit_launcher_core::download_source::DownloadAttribution,
     ) {
         if self.progress_format == ProgressFormat::None {
             // Attribution remains visible even when ordinary progress is disabled.
             errln!("{} — {}", attribution.name, attribution.documentation);
         } else {
-            self.render_launch_event(command, ProgressData::DownloadSource { attribution });
+            self.render_launch_event(ProgressData::DownloadSource { attribution });
         }
     }
-    fn render_launch_event(&mut self, command: &'static str, data: ProgressData) {
+    fn render_launch_event(&mut self, data: ProgressData) {
         match self.progress_format {
             ProgressFormat::None => {}
             ProgressFormat::Text => self.render_text_progress(data),
             ProgressFormat::Ndjson => {
                 self.sequence += 1;
                 let phase = data.phase();
-                let envelope = ProgressEnvelope::new(command, self.sequence, phase, data);
+                let envelope = ProgressEnvelope::new(self.command, self.sequence, phase, data);
                 errln!(
                     "{}",
                     serde_json::to_string(&envelope)

@@ -3441,6 +3441,7 @@ dependencies = [
  "orbit-machine-protocol",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
 ]
 

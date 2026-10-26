@@ -6,28 +6,28 @@ use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use orbit_launcher_core::{
-    AccountMetadata, AccountRepository, ConfigKey, ContextIntent, CreateInstanceRequest,
-    EulaAcceptanceMethod, EulaDocument, ExternalYggdrasilLoginRequest, InstallPackFormat,
-    InstallProgressEvent, InstanceKind, InstanceRegistry, LaunchPreparationEvent,
-    LaunchProcessEvent, LauncherError, ManifestFile, MicrosoftLoginProgressEvent,
-    RepositoryMoveEvent, ResolvedInstance, RuntimeContext, ServerInstallPlan,
-    StateArchiveProgressEvent, SupervisorControl, SupervisorEvent, YggdrasilProviderConfig,
-    accept_shown_eula, add_yggdrasil_provider, apply_install_plan, begin_microsoft_device_login,
-    complete_microsoft_device_login, configure_instance, create_instance, create_offline_account,
-    export_launcher_state_with_base, get_config, import_instance, inspect_install_pack,
-    list_config, login_external_yggdrasil, move_minecraft_directory, native_secret_store,
-    prepare_install, prepare_launch, remove_instance, remove_yggdrasil_provider, rename_instance,
-    resolve_directory, resolve_instance, resolve_launch_identity, restore_launcher_state,
-    rollback_created_instance, run_launch, set_client_resolution, set_config, set_default_instance,
-    show_current_eula, supervise_server, unset_config,
+    AccountMetadata, AccountRepository, ConfigKey, ContextIntent, EulaAcceptanceMethod,
+    EulaDocument, ExternalYggdrasilLoginRequest, InstallProgressEvent, InstanceKind,
+    InstanceRegistry, LaunchPreparationEvent, LaunchProcessEvent, LauncherError,
+    MicrosoftLoginProgressEvent, RepositoryMoveEvent, ResolvedInstance, RuntimeContext,
+    ServerInstallPlan, StateArchiveProgressEvent, SupervisorControl, SupervisorEvent,
+    YggdrasilProviderConfig, accept_shown_eula, add_yggdrasil_provider, apply_install_plan,
+    begin_microsoft_device_login, complete_microsoft_device_login, configure_instance,
+    create_offline_account, export_launcher_state_with_base, get_config, import_instance,
+    inspect_install_pack, list_config, login_external_yggdrasil, move_minecraft_directory,
+    native_secret_store, prepare_install, prepare_launch, remove_instance,
+    remove_yggdrasil_provider, rename_instance, resolve_directory, resolve_instance,
+    resolve_launch_identity, restore_launcher_state, run_launch, set_client_resolution, set_config,
+    set_default_instance, show_current_eula, supervise_server, unset_config,
 };
 use tokio::sync::{mpsc, watch};
 use zeroize::Zeroizing;
 
 use crate::cli::{
-    AccountCommands, AccountLoginCommands, Commands, ConfigCommands, DefaultCommands, EulaCommands,
-    InstanceCommands, JavaCommands, MicrosoftLoginCommands, MinecraftCommands, PackageCommands,
-    ResolutionCommands, ServerCommands, VersionCommands, YggdrasilProviderCommands,
+    AccountCommands, AccountDefaultCommands, AccountLoginCommands, Commands, ConfigCommands,
+    DefaultCommands, EulaCommands, InstanceAccountCommands, InstanceCommands, JavaCommands,
+    MicrosoftLoginCommands, MinecraftCommands, PackageCommands, ResolutionCommands, ServerCommands,
+    VersionCommands, YggdrasilProviderCommands,
 };
 use crate::output::{
     AccountListView, AccountLoginView, AccountLogoutView, AccountSelectionView, AccountView,
@@ -97,82 +97,6 @@ pub enum CommandOutput {
 }
 
 impl CommandOutput {
-    pub fn command_name(&self) -> &'static str {
-        match self {
-            Self::ConfigPath(_) => "config.path",
-            Self::ConfigList(_) => "config.list",
-            Self::ConfigEntry(_) => "config.get",
-            Self::ConfigMutation(view) => view.action.command_name(),
-            Self::EulaDocument(_) => "server.eula.show",
-            Self::EulaAcceptance(_) => "server.eula.accept",
-            Self::Install(_) => "install",
-            Self::LaunchPlan(view) => {
-                if view.kind == "client" {
-                    "launch"
-                } else {
-                    "server.run"
-                }
-            }
-            Self::LaunchResult(view) => {
-                if view.kind == "client" {
-                    "launch"
-                } else {
-                    "server.run"
-                }
-            }
-            Self::ServerStart(_) => "server.start",
-            Self::LaunchReport(_) => "instance.launch-report",
-            Self::ServerStatus(_) => "server.status",
-            Self::ServerControl(view) => match view.action {
-                "stop" => "server.stop",
-                _ => "server.command",
-            },
-            Self::SupervisorResult(_) => "server.supervisor",
-            Self::InstanceList(_) => "instance.list",
-            Self::InstanceDetail(_) => "instance.show",
-            Self::InstanceMutation(view) => view.action.command_name(),
-            Self::InstanceSources(_) => "instance.inspect",
-            Self::InstanceImportPreview(_) | Self::InstanceImported(_) => "instance.import",
-            Self::InstanceDeletion(_) => "instance.delete",
-            Self::Rename(_) => "instance.rename",
-            Self::InstanceConfigured(_) => "instance.configure",
-            Self::InstanceResolution(_) => "instance.resolution",
-            Self::InstanceMemory(_) => "instance.memory",
-            Self::InstanceIcon(_) => "instance.icon",
-            Self::InstanceJava(_) => "instance.java",
-            Self::LauncherStateExport(_) => "export",
-            Self::Default(_) => "instance.default",
-            Self::AccountList(_) => "account.list",
-            Self::AccountDetail(_) => "account.show",
-            Self::AccountRefresh(_) => "account.refresh",
-            Self::AccountLogin(view) => match view.method {
-                "offline" => "account.login.offline",
-                "microsoft" => "account.login.microsoft.complete",
-                _ => "account.login.yggdrasil",
-            },
-            Self::AccountSelection(_) => "account.select",
-            Self::AccountLogout(_) => "account.logout",
-            Self::MicrosoftDeviceSession(_) => "account.login.microsoft.begin",
-            Self::YggdrasilProviderList(_) => "config.yggdrasil.list",
-            Self::YggdrasilEndpoint(_) => "config.yggdrasil.inspect",
-            Self::YggdrasilProviderMutation(view) => match view.action {
-                "added" => "config.yggdrasil.add",
-                _ => "config.yggdrasil.remove",
-            },
-            Self::JavaRuntimeList(_) => "java.list",
-            Self::JavaRuntimeMutation(view) => match view.action {
-                "verified" => "java.verify",
-                _ => "java.remove",
-            },
-            Self::MinecraftVersions(_) => "versions.minecraft",
-            Self::LoaderVersions(_) => "versions.loader",
-            Self::JavaRequirement(_) => "versions.java",
-            Self::MinecraftDirectory(_) => "minecraft.directory",
-            Self::MinecraftDirectoryMove(_) => "minecraft.move",
-            Self::PackageRequirement(_) => "package.inspect",
-        }
-    }
-
     pub const fn process_succeeded(&self) -> bool {
         match self {
             Self::LaunchResult(view) => view.success,
@@ -211,15 +135,15 @@ pub trait Frontend: Send {
 
     fn microsoft_login_progress(&mut self, event: MicrosoftLoginProgressEvent);
 
-    fn launch_preparation(&mut self, command: &'static str, event: LaunchPreparationEvent);
+    fn launch_preparation(&mut self, event: LaunchPreparationEvent);
 
-    fn launch_process(&mut self, command: &'static str, event: LaunchProcessEvent);
+    fn launch_process(&mut self, event: LaunchProcessEvent);
 
-    fn supervisor_event(&mut self, command: &'static str, event: SupervisorEvent);
+    fn supervisor_event(&mut self, event: SupervisorEvent);
 
     fn repository_move(&mut self, event: RepositoryMoveEvent);
 
-    fn state_archive_progress(&mut self, command: &'static str, event: StateArchiveProgressEvent);
+    fn state_archive_progress(&mut self, event: StateArchiveProgressEvent);
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -246,6 +170,11 @@ pub async fn execute(
     runtime: &RuntimeContext,
     frontend: &mut dyn Frontend,
 ) -> Result<CommandOutput, AppError> {
+    if instance_selector.is_some() && !command.accepts_instance_context() {
+        return Err(AppError::Argument(
+            "--instance is not valid for this command".into(),
+        ));
+    }
     match command {
         Commands::Install {
             new,
@@ -296,133 +225,102 @@ pub async fn execute(
                 resolved.entry.instance_directory(),
                 base.as_deref(),
                 &output,
-                |event| frontend.state_archive_progress("export", event),
+                |event| frontend.state_archive_progress(event),
             )?;
             Ok(CommandOutput::LauncherStateExport(report.into()))
         }
-        Commands::Config { command } => {
-            if instance_selector.is_some() {
-                return Err(AppError::Argument(
-                    "--instance is not valid for configuration commands".to_string(),
-                ));
-            }
-            execute_config(command, runtime).await
-        }
-        Commands::Instance { command } => {
-            if instance_selector.is_some() && !command.accepts_instance_context() {
-                return Err(AppError::Argument(
-                    "--instance is not valid for this instance subcommand".to_string(),
-                ));
-            }
-            match command {
-                InstanceCommands::Import {
-                    directory,
-                    source,
-                    name,
-                    game_directory,
-                    dry_run,
-                } => {
-                    let directory = resolve_directory(current_dir, directory.as_deref())?;
-                    let catalog = orbit_launcher_core::inspect_external_instances(&directory)?;
-                    if catalog.instances.len() == 1 && catalog.instances[0].format == "orbit" {
-                        if source.is_some() || name.is_some() || game_directory.is_some() || dry_run
-                        {
-                            return Err(AppError::Argument("Orbit instances are registered in place; external import options do not apply".into()));
-                        }
-                        let imported = import_instance(runtime.paths(), &directory)?;
-                        return Ok(CommandOutput::InstanceImported(
-                            crate::output::InstanceImportView {
-                                instance: InstanceView::from_entry(&imported.entry, None),
-                                copied: false,
-                                source_directory: directory,
-                                files: 0,
-                                bytes: 0,
-                                warnings: Vec::new(),
-                            },
-                        ));
+        Commands::Config { command } => execute_config(command, runtime).await,
+        Commands::Instance { command } => match command {
+            InstanceCommands::Import {
+                directory,
+                source,
+                name,
+                game_directory,
+                dry_run,
+            } => {
+                let directory = resolve_directory(current_dir, directory.as_deref())?;
+                let catalog = orbit_launcher_core::inspect_external_instances(&directory)?;
+                if catalog.instances.len() == 1 && catalog.instances[0].format == "orbit" {
+                    if source.is_some() || name.is_some() || game_directory.is_some() || dry_run {
+                        return Err(AppError::Argument("Orbit instances are registered in place; external import options do not apply".into()));
                     }
-                    let plan = orbit_launcher_core::plan_external_import(
-                        runtime,
-                        orbit_launcher_core::ExternalImportRequest {
-                            directory,
-                            source,
-                            name,
-                            game_directory: game_directory
-                                .map(|p| resolve_directory(current_dir, Some(&p)))
-                                .transpose()?,
+                    let imported = import_instance(runtime.paths(), &directory)?;
+                    return Ok(CommandOutput::InstanceImported(
+                        crate::output::InstanceImportView {
+                            instance: InstanceView::from_entry(&imported.entry, None),
+                            copied: false,
+                            source_directory: directory,
+                            files: 0,
+                            bytes: 0,
+                            warnings: Vec::new(),
                         },
-                    )?;
-                    if dry_run {
-                        return Ok(CommandOutput::InstanceImportPreview(plan));
-                    }
-                    let result =
-                        orbit_launcher_core::import_external_instance(runtime, plan, |event| {
-                            frontend.external_import_progress(event)
-                        })
-                        .await?;
-                    Ok(CommandOutput::InstanceImported(result.into()))
+                    ));
                 }
-                InstanceCommands::Delete { yes, dry_run } => {
-                    let registry = InstanceRegistry::load(&runtime.paths().instances_file())?;
-                    let resolved = resolve_instance(
-                        &registry,
-                        instance_selector,
-                        current_dir,
-                        ContextIntent::Sensitive,
-                    )?;
-                    let plan = orbit_launcher_core::plan_instance_deletion(
-                        runtime.paths(),
-                        &resolved.entry.id.to_string(),
-                    )?;
-                    if dry_run {
-                        return Ok(CommandOutput::InstanceDeletion(plan));
-                    }
-                    if !yes && !frontend.confirm_instance_deletion(&plan)? {
-                        return Err(LauncherError::InteractionRequired(
-                            "instance deletion was cancelled".into(),
-                        )
-                        .into());
-                    }
-                    let entry = orbit_launcher_core::delete_instance(runtime.paths(), &plan)?;
-                    Ok(CommandOutput::InstanceMutation(InstanceMutationView {
-                        instance: InstanceView::from_entry(&entry, None),
-                        action: InstanceMutationAction::Deleted,
-                        files_deleted: true,
-                    }))
+                let plan = orbit_launcher_core::plan_external_import(
+                    runtime,
+                    orbit_launcher_core::ExternalImportRequest {
+                        directory,
+                        source,
+                        name,
+                        game_directory: game_directory
+                            .map(|p| resolve_directory(current_dir, Some(&p)))
+                            .transpose()?,
+                    },
+                )?;
+                if dry_run {
+                    return Ok(CommandOutput::InstanceImportPreview(plan));
                 }
-                other => execute_instance(other, instance_selector, current_dir, runtime),
+                let result =
+                    orbit_launcher_core::import_external_instance(runtime, plan, |event| {
+                        frontend.external_import_progress(event)
+                    })
+                    .await?;
+                Ok(CommandOutput::InstanceImported(result.into()))
             }
-        }
+            InstanceCommands::Delete { yes, dry_run } => {
+                let registry = InstanceRegistry::load(&runtime.paths().instances_file())?;
+                let resolved = resolve_instance(
+                    &registry,
+                    instance_selector,
+                    current_dir,
+                    ContextIntent::Sensitive,
+                )?;
+                let plan = orbit_launcher_core::plan_instance_deletion(
+                    runtime.paths(),
+                    &resolved.entry.id.to_string(),
+                )?;
+                if dry_run {
+                    return Ok(CommandOutput::InstanceDeletion(plan));
+                }
+                if !yes && !frontend.confirm_instance_deletion(&plan)? {
+                    return Err(LauncherError::InteractionRequired(
+                        "instance deletion was cancelled".into(),
+                    )
+                    .into());
+                }
+                let entry = orbit_launcher_core::delete_instance(runtime.paths(), &plan)?;
+                Ok(CommandOutput::InstanceMutation(InstanceMutationView {
+                    instance: InstanceView::from_entry(&entry, None),
+                    action: InstanceMutationAction::Deleted,
+                    files_deleted: true,
+                }))
+            }
+            other => execute_instance(other, instance_selector, current_dir, runtime),
+        },
         Commands::Server { command } => {
             execute_server(command, instance_selector, current_dir, runtime, frontend).await
         }
-        Commands::Account { command } => {
-            execute_account(command, instance_selector, current_dir, runtime, frontend).await
-        }
-        Commands::Java { command } => execute_java(command, instance_selector, runtime),
+        Commands::Account { command } => execute_account(command, runtime, frontend).await,
+        Commands::Java { command } => execute_java(command, runtime),
         Commands::Minecraft { command } => {
-            if instance_selector.is_some() {
-                return Err(AppError::Argument(
-                    "--instance is not valid for Minecraft repository commands".to_string(),
-                ));
-            }
             execute_minecraft(command, current_dir, runtime, frontend)
         }
-        Commands::Versions { command } => {
-            execute_versions(command, instance_selector, runtime).await
-        }
-        Commands::Package { command } => {
-            if instance_selector.is_some() {
-                return Err(AppError::Argument(
-                    "--instance is not valid for package inspection".to_string(),
-                ));
-            }
-            match command {
-                PackageCommands::Inspect { source } => Ok(CommandOutput::PackageRequirement(
-                    inspect_install_pack(&source)?.into(),
-                )),
-            }
-        }
+        Commands::Versions { command } => execute_versions(command, runtime).await,
+        Commands::Package { command } => match command {
+            PackageCommands::Inspect { source } => Ok(CommandOutput::PackageRequirement(
+                inspect_install_pack(&source)?.into(),
+            )),
+        },
         Commands::Supervisor => {
             execute_internal_supervisor(instance_selector, current_dir, runtime, frontend).await
         }
@@ -431,14 +329,8 @@ pub async fn execute(
 
 async fn execute_versions(
     command: VersionCommands,
-    instance_selector: Option<&str>,
     runtime: &RuntimeContext,
 ) -> Result<CommandOutput, AppError> {
-    if instance_selector.is_some() {
-        return Err(AppError::Argument(
-            "--instance is not valid for global version catalogs".to_string(),
-        ));
-    }
     let client = runtime.config().download_client()?;
     match command {
         VersionCommands::Minecraft => Ok(CommandOutput::MinecraftVersions(
@@ -473,14 +365,8 @@ async fn execute_versions(
 
 fn execute_java(
     command: JavaCommands,
-    instance_selector: Option<&str>,
     runtime: &RuntimeContext,
 ) -> Result<CommandOutput, AppError> {
-    if instance_selector.is_some() {
-        return Err(AppError::Argument(
-            "--instance is not valid for global Java runtime management".to_string(),
-        ));
-    }
     match command {
         JavaCommands::List { verify } => Ok(CommandOutput::JavaRuntimeList(JavaRuntimeListView {
             sources: ["mojang", "system"],
@@ -562,11 +448,6 @@ async fn execute_launch(
             expected_kind.as_str()
         )));
     }
-    let command_name = if expected_kind == InstanceKind::Client {
-        "launch"
-    } else {
-        "server.run"
-    };
     let identity = if expected_kind == InstanceKind::Client {
         let client = runtime.config().http_client()?;
         let secrets = native_secret_store(runtime.paths())?;
@@ -588,19 +469,17 @@ async fn execute_launch(
         runtime.paths(),
         runtime.config(),
         identity,
-        |event| frontend.launch_preparation(command_name, event),
+        |event| frontend.launch_preparation(event),
     )?;
     if dry_run {
         return Ok(CommandOutput::LaunchPlan(plan.summary().into()));
     }
-    let result = run_launch(plan, |event| frontend.launch_process(command_name, event)).await?;
+    let result = run_launch(plan, |event| frontend.launch_process(event)).await?;
     Ok(CommandOutput::LaunchResult(result.into()))
 }
 
 async fn execute_account(
     command: AccountCommands,
-    instance_selector: Option<&str>,
-    current_dir: &Path,
     runtime: &RuntimeContext,
     frontend: &mut dyn Frontend,
 ) -> Result<CommandOutput, AppError> {
@@ -608,11 +487,6 @@ async fn execute_account(
     let backend = secrets.backend_name().to_string();
     match command {
         AccountCommands::Login { command } => {
-            if instance_selector.is_some() {
-                return Err(AppError::Argument(
-                    "--instance is not valid for account login".to_string(),
-                ));
-            }
             let (account, method) = match command {
                 AccountLoginCommands::Offline { profile_name } => (
                     create_offline_account(runtime.paths(), &profile_name)?,
@@ -679,11 +553,6 @@ async fn execute_account(
             }))
         }
         AccountCommands::List => {
-            if instance_selector.is_some() {
-                return Err(AppError::Argument(
-                    "--instance is not valid for account list".to_string(),
-                ));
-            }
             let repository = AccountRepository::load(runtime.paths())?;
             let accounts = repository.accounts().to_vec();
             ensure_account_presentations(runtime, &accounts).await;
@@ -704,17 +573,8 @@ async fn execute_account(
             }))
         }
         AccountCommands::Show { account } => {
-            if instance_selector.is_some() {
-                return Err(AppError::Argument(
-                    "--instance is not valid for account show".to_string(),
-                ));
-            }
             let repository = AccountRepository::load(runtime.paths())?;
-            let account = match account {
-                Some(selector) => repository.get(&selector)?,
-                None => repository.selected(None)?,
-            }
-            .clone();
+            let account = repository.get(&account)?.clone();
             ensure_account_presentations(runtime, std::slice::from_ref(&account)).await;
             let repository = AccountRepository::load(runtime.paths())?;
             let account = repository.get(&account.id.to_string())?;
@@ -726,11 +586,6 @@ async fn execute_account(
             )))
         }
         AccountCommands::Refresh { account } => {
-            if instance_selector.is_some() {
-                return Err(AppError::Argument(
-                    "--instance is not valid for account refresh".to_string(),
-                ));
-            }
             let account_id = AccountRepository::load(runtime.paths())?.get(&account)?.id;
             let client = runtime.config().http_client()?;
             drop(
@@ -755,64 +610,24 @@ async fn execute_account(
                 runtime.paths(),
             )))
         }
-        AccountCommands::Select { account, global } => {
+        AccountCommands::Default { command } => {
             let mut repository = AccountRepository::load(runtime.paths())?;
-            let selected = repository.get(&account)?.clone();
-            if global {
-                if instance_selector.is_some() {
-                    return Err(AppError::Argument(
-                        "--instance cannot be combined with account select --global".to_string(),
-                    ));
+            match command {
+                AccountDefaultCommands::Show => {}
+                AccountDefaultCommands::Set { account } => {
+                    let id = repository.get(&account)?.id;
+                    repository.set_default(Some(id))?;
                 }
-                repository.set_default(Some(selected.id))?;
-                Ok(CommandOutput::AccountSelection(AccountSelectionView {
-                    scope: "global",
-                    account: Some(AccountView::new(
-                        &selected,
-                        repository.default_account(),
-                        &backend,
-                        runtime.paths(),
-                    )),
-                }))
-            } else {
-                set_instance_account(instance_selector, current_dir, runtime, Some(selected.id))?;
-                Ok(CommandOutput::AccountSelection(AccountSelectionView {
-                    scope: "instance",
-                    account: Some(AccountView::new(
-                        &selected,
-                        repository.default_account(),
-                        &backend,
-                        runtime.paths(),
-                    )),
-                }))
+                AccountDefaultCommands::Clear => repository.set_default(None)?,
             }
-        }
-        AccountCommands::Clear { global } => {
-            if global {
-                if instance_selector.is_some() {
-                    return Err(AppError::Argument(
-                        "--instance cannot be combined with account clear --global".to_string(),
-                    ));
-                }
-                AccountRepository::load(runtime.paths())?.set_default(None)?;
-                Ok(CommandOutput::AccountSelection(AccountSelectionView {
-                    scope: "global",
-                    account: None,
-                }))
-            } else {
-                set_instance_account(instance_selector, current_dir, runtime, None)?;
-                Ok(CommandOutput::AccountSelection(AccountSelectionView {
-                    scope: "instance",
-                    account: None,
-                }))
-            }
+            Ok(CommandOutput::AccountSelection(account_selection_view(
+                runtime,
+                &repository,
+                None,
+                "global",
+            )))
         }
         AccountCommands::Logout { account } => {
-            if instance_selector.is_some() {
-                return Err(AppError::Argument(
-                    "--instance is not valid for account logout".to_string(),
-                ));
-            }
             let mut repository = AccountRepository::load(runtime.paths())?;
             let account = repository.get(&account)?.clone();
             let view = AccountView::new(
@@ -846,23 +661,16 @@ async fn ensure_account_presentations(runtime: &RuntimeContext, accounts: &[Acco
     }
 }
 
-fn set_instance_account(
-    selector: Option<&str>,
-    current_dir: &Path,
+fn account_selection_view(
     runtime: &RuntimeContext,
-    account: Option<uuid::Uuid>,
-) -> Result<(), AppError> {
-    let registry = InstanceRegistry::load(&runtime.paths().instances_file())?;
-    let resolved = resolve_instance(&registry, selector, current_dir, ContextIntent::Sensitive)?;
-    if resolved.manifest.kind != InstanceKind::Client {
-        return Err(AppError::Argument(
-            "server instances do not use client accounts".to_string(),
-        ));
+    repository: &AccountRepository,
+    explicit: Option<uuid::Uuid>,
+    scope: &'static str,
+) -> AccountSelectionView {
+    AccountSelectionView {
+        scope,
+        selection: repository.selection_summary(runtime.paths(), explicit),
     }
-    let mut manifest = ManifestFile::open(resolved.entry.instance_directory())?;
-    manifest.inner.launch.account = account;
-    manifest.save()?;
-    Ok(())
 }
 
 struct InstallCommandRequest {
@@ -888,111 +696,18 @@ async fn execute_install(
                 .to_string(),
         ));
     }
-    let package = request
-        .from
-        .as_deref()
-        .map(inspect_install_pack)
-        .transpose()?;
-    let fresh_package_install = package.is_some();
     let created = if let Some(name) = request.new_name {
-        if selector.is_some() {
-            return Err(AppError::Argument(
-                "--instance cannot be combined with install --new".to_string(),
-            ));
-        }
-        let kind: InstanceKind = match (request.kind.map(Into::into), package.as_ref()) {
-            (Some(kind), _) => kind,
-            (None, Some(package)) if package.targets.len() == 1 => package.targets[0],
-            (None, Some(_)) => {
-                return Err(AppError::Argument(
-                    "install --from requires --kind when the package supports both client and server"
-                        .to_string(),
-                ));
-            }
-            (None, None) => {
-                return Err(AppError::Argument(
-                    "install --new requires --kind".to_string(),
-                ));
-            }
-        };
-        if package
-            .as_ref()
-            .is_some_and(|package| !package.targets.contains(&kind))
-        {
-            return Err(AppError::Argument(format!(
-                "the package does not support a {} instance",
-                kind.as_str()
-            )));
-        }
-        let minecraft = exact_package_value(
-            "Minecraft",
-            request.minecraft,
-            package.as_ref().map(|package| package.minecraft.clone()),
-            package
-                .as_ref()
-                .is_some_and(|package| package.format == InstallPackFormat::Mrpack),
-        )?;
-        let requested_loader: Option<orbit_launcher_core::LoaderKind> =
-            request.loader.map(Into::into);
-        let loader = match (requested_loader, package.as_ref()) {
-            (Some(loader), Some(package))
-                if package.format == InstallPackFormat::Mrpack && loader != package.loader =>
-            {
-                return Err(AppError::Argument(format!(
-                    "--loader {} conflicts with package Loader {}",
-                    loader.as_str(),
-                    package.loader.as_str()
-                )));
-            }
-            (Some(loader), _) => loader,
-            (None, Some(package)) => package.loader,
-            (None, None) => orbit_launcher_core::LoaderKind::Vanilla,
-        };
-        let loader_version = exact_package_value_optional(
-            "Loader",
-            request.loader_version,
-            package
-                .as_ref()
-                .and_then(|package| package.loader_version.clone()),
-            package
-                .as_ref()
-                .is_some_and(|package| package.format == InstallPackFormat::Mrpack),
-        )?;
-        let directory = match kind {
-            InstanceKind::Client => {
-                if request.server_directory.is_some() {
-                    return Err(AppError::Argument(
-                        "--server-directory is invalid for client instances; use 'minecraft move' to relocate the managed repository"
-                            .to_string(),
-                    ));
-                }
-                runtime.minecraft_directory()
-            }
-            InstanceKind::Server => {
-                resolve_directory(current_dir, request.server_directory.as_deref())?
-            }
-        };
-        if fresh_package_install {
-            let target = match kind {
-                InstanceKind::Client => directory.join("instances").join(&name),
-                InstanceKind::Server => directory.clone(),
-            };
-            if target.exists() {
-                return Err(AppError::Argument(format!(
-                    "install --from requires a new instance directory; '{}' already exists",
-                    target.display()
-                )));
-            }
-        }
-        Some(create_instance(
-            runtime.paths(),
-            CreateInstanceRequest {
-                directory,
+        Some(orbit_launcher_core::prepare_new_install(
+            runtime,
+            current_dir,
+            orbit_launcher_core::NewInstallRequest {
                 name,
-                kind,
-                minecraft_requirement: minecraft,
-                loader_kind: loader,
-                loader_requirement: loader_version,
+                server_directory: request.server_directory,
+                kind: request.kind.map(Into::into),
+                minecraft: request.minecraft,
+                loader: request.loader.map(Into::into),
+                loader_version: request.loader_version,
+                from: request.from,
             },
         )?)
     } else {
@@ -1009,35 +724,28 @@ async fn execute_install(
         }
         None
     };
-    let created_selector = created.as_ref().map(|created| created.entry.id.to_string());
+    let created_selector = created
+        .as_ref()
+        .map(|created| created.created.entry.id.to_string());
     let selector = created_selector.as_deref().or(selector);
     let result = execute_existing_install(
         selector,
         current_dir,
         runtime,
         frontend,
-        request.from.as_deref(),
+        created
+            .as_ref()
+            .and_then(|prepared| prepared.state_archive.as_deref()),
     )
     .await;
     if result.is_err()
         && let Some(created) = created
     {
-        let instance_directory = created.entry.instance_directory().to_path_buf();
-        rollback_created_instance(runtime.paths(), &created.entry.id.to_string()).map_err(
-            |rollback| {
-                AppError::Core(LauncherError::Transaction(format!(
-                    "bootstrap failed and its provisional instance could not be rolled back: {rollback}"
-                )))
-            },
-        )?;
-        if fresh_package_install && instance_directory.exists() {
-            std::fs::remove_dir_all(&instance_directory).map_err(|error| {
-                AppError::Core(LauncherError::Transaction(format!(
-                    "failed to remove the fresh bootstrap directory '{}': {error}",
-                    instance_directory.display()
-                )))
-            })?;
-        }
+        created.rollback(runtime.paths()).map_err(|error| {
+            LauncherError::Transaction(format!(
+                "bootstrap failed and its provisional instance could not be rolled back: {error}"
+            ))
+        })?;
     }
     result
 }
@@ -1092,7 +800,7 @@ async fn execute_existing_install(
         })
         .map(|source| {
             restore_launcher_state(resolved.entry.instance_directory(), source, |event| {
-                frontend.state_archive_progress("install", event)
+                frontend.state_archive_progress(event)
             })
             .map(Into::into)
         })
@@ -1114,46 +822,6 @@ async fn execute_existing_install(
         source_pinned_artifacts: result.source_pinned_artifacts,
         state,
     }))
-}
-
-fn exact_package_value(
-    name: &str,
-    requested: Option<String>,
-    packaged: Option<String>,
-    strict: bool,
-) -> Result<String, AppError> {
-    match (requested, packaged) {
-        (Some(requested), Some(packaged)) if strict && requested != packaged => {
-            Err(AppError::Argument(format!(
-                "--{} {requested} conflicts with package value {packaged}",
-                name.to_ascii_lowercase()
-            )))
-        }
-        (Some(requested), _) => Ok(requested),
-        (None, Some(packaged)) => Ok(packaged),
-        (None, None) => Err(AppError::Argument(format!(
-            "install --new requires --{}",
-            name.to_ascii_lowercase()
-        ))),
-    }
-}
-
-fn exact_package_value_optional(
-    name: &str,
-    requested: Option<String>,
-    packaged: Option<String>,
-    strict: bool,
-) -> Result<Option<String>, AppError> {
-    match (requested, packaged) {
-        (Some(requested), Some(packaged)) if strict && requested != packaged => {
-            Err(AppError::Argument(format!(
-                "--{}-version {requested} conflicts with package value {packaged}",
-                name.to_ascii_lowercase()
-            )))
-        }
-        (Some(requested), _) => Ok(Some(requested)),
-        (None, packaged) => Ok(packaged),
-    }
 }
 
 fn ensure_server_eula_accepted(
@@ -1279,14 +947,13 @@ fn prepare_server_plan(
     resolved: &ResolvedInstance,
     runtime: &RuntimeContext,
     frontend: &mut dyn Frontend,
-    command: &'static str,
 ) -> Result<orbit_launcher_core::LaunchPlan, AppError> {
     prepare_launch(
         &resolved.entry.location,
         runtime.paths(),
         runtime.config(),
         None,
-        |event| frontend.launch_preparation(command, event),
+        |event| frontend.launch_preparation(event),
     )
     .map_err(AppError::from)
 }
@@ -1296,7 +963,7 @@ async fn execute_foreground_supervisor(
     runtime: &RuntimeContext,
     frontend: &mut dyn Frontend,
 ) -> Result<CommandOutput, AppError> {
-    let plan = prepare_server_plan(resolved, runtime, frontend, "server.run")?;
+    let plan = prepare_server_plan(resolved, runtime, frontend)?;
     let config =
         resolved.manifest.server.as_ref().ok_or_else(|| {
             LauncherError::InvalidManifest("server configuration is missing".into())
@@ -1327,7 +994,7 @@ async fn execute_foreground_supervisor(
     });
     drop(controls);
     let result = supervise_server(plan, config, &mut receiver, |event| {
-        frontend.supervisor_event("server.run", event)
+        frontend.supervisor_event(event)
     })
     .await;
     signal_task.abort();
@@ -1342,7 +1009,7 @@ async fn execute_internal_supervisor(
 ) -> Result<CommandOutput, AppError> {
     let resolved = resolve_server_instance(selector, current_dir, runtime)?;
     let _lock = SupervisorLock::acquire(resolved.entry.instance_directory())?;
-    let plan = prepare_server_plan(&resolved, runtime, frontend, "server.supervisor")?;
+    let plan = prepare_server_plan(&resolved, runtime, frontend)?;
     let config =
         resolved.manifest.server.clone().ok_or_else(|| {
             LauncherError::InvalidManifest("server configuration is missing".into())
@@ -1362,7 +1029,7 @@ async fn execute_internal_supervisor(
         if let Ok(mut current) = state.write() {
             current.apply(&event);
         }
-        frontend.supervisor_event("server.supervisor", event);
+        frontend.supervisor_event(event);
     })
     .await;
     signal_task.abort();
@@ -1465,13 +1132,10 @@ async fn start_detached_supervisor(
                 .into());
             }
             if let Some(pid) = response.state.child_pid {
-                frontend.supervisor_event(
-                    "server.start",
-                    SupervisorEvent::Spawned {
-                        pid,
-                        generation: response.state.generation,
-                    },
-                );
+                frontend.supervisor_event(SupervisorEvent::Spawned {
+                    pid,
+                    generation: response.state.generation,
+                });
                 return Ok(CommandOutput::ServerStart(ServerStartView {
                     state: response.state,
                     stdout_log,
@@ -1637,46 +1301,6 @@ fn execute_instance(
 ) -> Result<CommandOutput, AppError> {
     let registry_path = runtime.paths().instances_file();
     match command {
-        InstanceCommands::Create {
-            name,
-            server_directory,
-            kind,
-            minecraft,
-            loader,
-            loader_version,
-        } => {
-            let kind: InstanceKind = kind.into();
-            let directory = match kind {
-                InstanceKind::Client => {
-                    if server_directory.is_some() {
-                        return Err(AppError::Argument(
-                            "--server-directory is invalid for client instances; use 'minecraft move' to relocate the managed repository"
-                                .to_string(),
-                        ));
-                    }
-                    runtime.minecraft_directory()
-                }
-                InstanceKind::Server => {
-                    resolve_directory(current_dir, server_directory.as_deref())?
-                }
-            };
-            let created = create_instance(
-                runtime.paths(),
-                CreateInstanceRequest {
-                    directory,
-                    name,
-                    kind,
-                    minecraft_requirement: minecraft,
-                    loader_kind: loader.into(),
-                    loader_requirement: loader_version,
-                },
-            )?;
-            Ok(CommandOutput::InstanceMutation(InstanceMutationView {
-                instance: InstanceView::from_entry(&created.entry, None),
-                action: InstanceMutationAction::Created,
-                files_deleted: false,
-            }))
-        }
         InstanceCommands::Inspect { directory } => Ok(CommandOutput::InstanceSources(
             orbit_launcher_core::inspect_external_instances(&resolve_directory(
                 current_dir,
@@ -1896,7 +1520,49 @@ fn execute_instance(
                     .instance_selection_summary(runtime.paths(), &configured.manifest),
             )))
         }
-        InstanceCommands::Remove => {
+        InstanceCommands::Account { command } => {
+            let registry = InstanceRegistry::load(&registry_path)?;
+            let intent = if matches!(command, InstanceAccountCommands::Show) {
+                ContextIntent::ReadOnly
+            } else {
+                ContextIntent::Sensitive
+            };
+            let resolved = resolve_instance(&registry, selector, current_dir, intent)?;
+            let accounts = AccountRepository::load(runtime.paths())?;
+            let manifest = match command {
+                InstanceAccountCommands::Show => resolved.manifest,
+                InstanceAccountCommands::Set { account } => {
+                    let id = accounts.get(&account)?.id;
+                    orbit_launcher_core::set_instance_account(
+                        runtime.paths(),
+                        &resolved.entry.id.to_string(),
+                        Some(id),
+                    )?
+                    .manifest
+                }
+                InstanceAccountCommands::Clear => {
+                    orbit_launcher_core::set_instance_account(
+                        runtime.paths(),
+                        &resolved.entry.id.to_string(),
+                        None,
+                    )?
+                    .manifest
+                }
+            };
+            if manifest.kind != InstanceKind::Client {
+                return Err(LauncherError::InvalidManifest(
+                    "server instances do not use client accounts".into(),
+                )
+                .into());
+            }
+            Ok(CommandOutput::AccountSelection(account_selection_view(
+                runtime,
+                &accounts,
+                manifest.launch.account,
+                "instance",
+            )))
+        }
+        InstanceCommands::Unregister => {
             let registry = InstanceRegistry::load(&registry_path)?;
             let resolved =
                 resolve_instance(&registry, selector, current_dir, ContextIntent::Sensitive)?;
@@ -1931,6 +1597,7 @@ mod tests {
     use super::*;
     use crate::cli::{DefaultCommands, InstanceKindArg, LoaderKindArg};
     use orbit_launcher_core::{ContextSource, RuntimePathOptions};
+    use orbit_launcher_core::{CreateInstanceRequest, create_instance};
 
     struct NoopFrontend;
 
@@ -1955,20 +1622,28 @@ mod tests {
 
         fn microsoft_login_progress(&mut self, _event: MicrosoftLoginProgressEvent) {}
 
-        fn launch_preparation(&mut self, _command: &'static str, _event: LaunchPreparationEvent) {}
+        fn launch_preparation(&mut self, _event: LaunchPreparationEvent) {}
 
-        fn launch_process(&mut self, _command: &'static str, _event: LaunchProcessEvent) {}
+        fn launch_process(&mut self, _event: LaunchProcessEvent) {}
 
-        fn supervisor_event(&mut self, _command: &'static str, _event: SupervisorEvent) {}
+        fn supervisor_event(&mut self, _event: SupervisorEvent) {}
 
         fn repository_move(&mut self, _event: RepositoryMoveEvent) {}
 
-        fn state_archive_progress(
-            &mut self,
-            _command: &'static str,
-            _event: StateArchiveProgressEvent,
-        ) {
-        }
+        fn state_archive_progress(&mut self, _event: StateArchiveProgressEvent) {}
+    }
+
+    struct Fixture {
+        instance: InstanceView,
+    }
+    fn create_fixture(
+        request: CreateInstanceRequest,
+        runtime: &RuntimeContext,
+    ) -> Result<Fixture, AppError> {
+        let created = create_instance(runtime.paths(), request)?;
+        Ok(Fixture {
+            instance: InstanceView::from_entry(&created.entry, None),
+        })
     }
 
     fn runtime(directory: &Path) -> RuntimeContext {
@@ -1980,6 +1655,99 @@ mod tests {
         .unwrap()
     }
 
+    #[tokio::test]
+    async fn default_and_instance_account_commands_are_separate_and_inherit_after_clear() {
+        use orbit_launcher_core::account::{AccountSelectionSource, AccountSelectionSummary};
+        let temp = tempfile::tempdir().unwrap();
+        let runtime = runtime(temp.path());
+        let fallback = create_offline_account(runtime.paths(), "Fallback").unwrap();
+        let explicit = create_offline_account(runtime.paths(), "Specific").unwrap();
+        let fixture = create_fixture(
+            CreateInstanceRequest {
+                directory: runtime.minecraft_directory(),
+                name: "test".into(),
+                kind: InstanceKind::Client,
+                minecraft_requirement: "1.21.1".into(),
+                loader_kind: orbit_launcher_core::LoaderKind::Vanilla,
+                loader_requirement: None,
+            },
+            &runtime,
+        )
+        .unwrap();
+        let selected = execute_instance(
+            InstanceCommands::Account {
+                command: InstanceAccountCommands::Set {
+                    account: explicit.id.to_string(),
+                },
+            },
+            Some(&fixture.instance.id),
+            temp.path(),
+            &runtime,
+        )
+        .unwrap();
+        let CommandOutput::AccountSelection(selected) = selected else {
+            panic!("wrong output")
+        };
+        assert!(
+            matches!(selected.selection, AccountSelectionSummary::Selected { account, source: AccountSelectionSource::Instance } if account.id == explicit.id)
+        );
+        let cleared = execute_instance(
+            InstanceCommands::Account {
+                command: InstanceAccountCommands::Clear,
+            },
+            Some(&fixture.instance.id),
+            temp.path(),
+            &runtime,
+        )
+        .unwrap();
+        let CommandOutput::AccountSelection(cleared) = cleared else {
+            panic!("wrong output")
+        };
+        assert!(
+            matches!(cleared.selection, AccountSelectionSummary::Selected { account, source: AccountSelectionSource::Global } if account.id == fallback.id)
+        );
+        assert_eq!(
+            AccountRepository::load(runtime.paths())
+                .unwrap()
+                .default_account(),
+            Some(fallback.id)
+        );
+        let mut frontend = NoopFrontend;
+        let error = execute(
+            Commands::Account {
+                command: AccountCommands::Default {
+                    command: AccountDefaultCommands::Clear,
+                },
+            },
+            Some(&fixture.instance.id),
+            temp.path(),
+            &runtime,
+            &mut frontend,
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error.code(), "argument");
+        let CommandOutput::AccountSelection(empty) = execute(
+            Commands::Account {
+                command: AccountCommands::Default {
+                    command: AccountDefaultCommands::Clear,
+                },
+            },
+            None,
+            temp.path(),
+            &runtime,
+            &mut frontend,
+        )
+        .await
+        .unwrap() else {
+            panic!("wrong output")
+        };
+        assert!(matches!(
+            empty.selection,
+            AccountSelectionSummary::NotConfigured
+        ));
+    }
+
     #[test]
     fn memory_management_uses_the_same_instance_api_for_clients_and_servers() {
         for kind in [InstanceKindArg::Client, InstanceKindArg::Server] {
@@ -1988,22 +1756,22 @@ mod tests {
             std::fs::create_dir_all(&game).unwrap();
             let game = dunce::canonicalize(game).unwrap();
             let runtime = runtime(directory.path());
-            let CommandOutput::InstanceMutation(created) = execute_instance(
-                InstanceCommands::Create {
+            let created = create_fixture(
+                CreateInstanceRequest {
                     name: "memory-test".into(),
-                    kind,
-                    server_directory: None,
-                    minecraft: "26.2".into(),
-                    loader: LoaderKindArg::Vanilla,
-                    loader_version: None,
+                    kind: kind.into(),
+                    directory: if kind == InstanceKindArg::Client {
+                        runtime.minecraft_directory()
+                    } else {
+                        game.clone()
+                    },
+                    minecraft_requirement: "26.2".into(),
+                    loader_kind: LoaderKindArg::Vanilla.into(),
+                    loader_requirement: None,
                 },
-                None,
-                &game,
                 &runtime,
             )
-            .unwrap() else {
-                panic!("unexpected create output")
-            };
+            .unwrap();
             let selector = Some(created.instance.id.as_str());
             let output = execute_instance(
                 InstanceCommands::Memory {
@@ -2098,25 +1866,29 @@ mod tests {
             let game = directory.path().join(name);
             std::fs::create_dir_all(&game).unwrap();
             let game = dunce::canonicalize(game).unwrap();
-            let CommandOutput::InstanceMutation(created) = execute_instance(
-                InstanceCommands::Create {
+            let created = create_fixture(
+                CreateInstanceRequest {
                     name: name.into(),
-                    kind,
-                    server_directory: None,
-                    minecraft: "26.2".into(),
-                    loader: LoaderKindArg::Vanilla,
-                    loader_version: None,
+                    kind: kind.into(),
+                    directory: if kind == InstanceKindArg::Client {
+                        runtime.minecraft_directory()
+                    } else {
+                        game.clone()
+                    },
+                    minecraft_requirement: "26.2".into(),
+                    loader_kind: LoaderKindArg::Vanilla.into(),
+                    loader_requirement: None,
                 },
-                None,
-                &game,
                 &runtime,
             )
-            .unwrap() else {
-                panic!("unexpected create output");
-            };
+            .unwrap();
             if let Some(account) = account {
-                set_instance_account(Some(&created.instance.id), &game, &runtime, Some(account))
-                    .unwrap();
+                orbit_launcher_core::set_instance_account(
+                    runtime.paths(),
+                    &created.instance.id,
+                    Some(account),
+                )
+                .unwrap();
             }
             let CommandOutput::InstanceList(list) =
                 execute_instance(InstanceCommands::List, None, &game, &runtime).unwrap()
@@ -2164,23 +1936,22 @@ mod tests {
         let instance_root = dunce::canonicalize(instance_root).unwrap();
         let runtime = runtime(directory.path());
 
-        let created = execute_instance(
-            InstanceCommands::Create {
+        let created = create_fixture(
+            CreateInstanceRequest {
                 name: "server".to_string(),
-                server_directory: None,
-                kind: InstanceKindArg::Server,
-                minecraft: "1.21.1".to_string(),
-                loader: LoaderKindArg::Fabric,
-                loader_version: Some("stable".to_string()),
+                kind: InstanceKindArg::Server.into(),
+                directory: if InstanceKindArg::Server == InstanceKindArg::Client {
+                    runtime.minecraft_directory()
+                } else {
+                    instance_root.clone()
+                },
+                minecraft_requirement: "1.21.1".to_string(),
+                loader_kind: LoaderKindArg::Fabric.into(),
+                loader_requirement: Some("stable".to_string()),
             },
-            None,
-            &instance_root,
             &runtime,
         )
         .unwrap();
-        let CommandOutput::InstanceMutation(created) = created else {
-            panic!("unexpected create output");
-        };
 
         let local =
             execute_instance(InstanceCommands::Show, None, &instance_root, &runtime).unwrap();
@@ -2212,17 +1983,19 @@ mod tests {
         std::fs::create_dir_all(&instance_root).unwrap();
         let instance_root = dunce::canonicalize(instance_root).unwrap();
         let runtime = runtime(directory.path());
-        execute_instance(
-            InstanceCommands::Create {
+        create_fixture(
+            CreateInstanceRequest {
                 name: "client".to_string(),
-                server_directory: None,
-                kind: InstanceKindArg::Client,
-                minecraft: "latest-release".to_string(),
-                loader: LoaderKindArg::Vanilla,
-                loader_version: None,
+                kind: InstanceKindArg::Client.into(),
+                directory: if InstanceKindArg::Client == InstanceKindArg::Client {
+                    runtime.minecraft_directory()
+                } else {
+                    instance_root.clone()
+                },
+                minecraft_requirement: "latest-release".to_string(),
+                loader_kind: LoaderKindArg::Vanilla.into(),
+                loader_requirement: None,
             },
-            None,
-            &instance_root,
             &runtime,
         )
         .unwrap();

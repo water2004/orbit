@@ -152,7 +152,7 @@ export async function applyMigration(review: Migration) {
   }
   if (!review.registered) {
     await orbit(
-      ["instances", "register", review.target.name, review.target.directory],
+      ["instance", "register", review.target.name, review.target.directory],
       t("Registering mod workspace", "正在注册模组工作区"),
       null,
     );

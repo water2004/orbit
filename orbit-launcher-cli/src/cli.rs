@@ -66,19 +66,19 @@ pub enum Commands {
         #[arg(long)]
         new: Option<String>,
         /// Dedicated server directory; only valid for a new server and defaults to the current directory.
-        #[arg(long)]
+        #[arg(long, requires = "new")]
         server_directory: Option<PathBuf>,
         /// New instance kind; required with --new.
-        #[arg(long, value_enum)]
+        #[arg(long, value_enum, requires = "new")]
         kind: Option<InstanceKindArg>,
         /// Minecraft requirement for a new instance; required with --new.
-        #[arg(long)]
+        #[arg(long, requires = "new")]
         minecraft: Option<String>,
         /// Loader for a new instance; defaults to Vanilla.
-        #[arg(long, value_enum)]
+        #[arg(long, value_enum, requires = "new")]
         loader: Option<LoaderKindArg>,
         /// Loader requirement for a new non-Vanilla instance.
-        #[arg(long)]
+        #[arg(long, requires = "new")]
         loader_version: Option<String>,
         /// Create from an .orbitbundle or .mrpack after installing runtime artifacts.
         #[arg(long, requires = "new")]
@@ -163,23 +163,34 @@ pub enum AccountCommands {
     },
     /// List non-secret account metadata.
     List,
-    /// Show one account; defaults to the global selection.
-    Show { account: Option<String> },
+    /// Show one explicit account.
+    Show { account: String },
     /// Refresh one account session and its public profile metadata.
     Refresh { account: String },
-    /// Select an account for this client instance, or globally with --global.
-    Select {
-        account: String,
-        #[arg(long)]
-        global: bool,
-    },
-    /// Clear this client instance's account, or the global selection with --global.
-    Clear {
-        #[arg(long)]
-        global: bool,
+    /// Inspect or change the fallback account used by client instances.
+    Default {
+        #[command(subcommand)]
+        command: AccountDefaultCommands,
     },
     /// Delete a persisted local account session and its non-secret metadata.
     Logout { account: String },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum AccountDefaultCommands {
+    Show,
+    Set { account: String },
+    Clear,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum InstanceAccountCommands {
+    /// Show the effective account and whether the instance inherits it.
+    Show,
+    /// Assign one persisted account to this client instance.
+    Set { account: String },
+    /// Inherit the global fallback account.
+    Clear,
 }
 
 #[derive(Debug, Subcommand)]
@@ -338,24 +349,6 @@ pub enum YggdrasilProviderCommands {
 
 #[derive(Debug, Subcommand)]
 pub enum InstanceCommands {
-    /// Create and register an instance manifest without installing runtime artifacts.
-    Create {
-        #[arg(long)]
-        name: String,
-        /// Dedicated server directory; invalid for clients and defaults to the current directory.
-        #[arg(long)]
-        server_directory: Option<PathBuf>,
-        #[arg(long, value_enum)]
-        kind: InstanceKindArg,
-        #[arg(long)]
-        minecraft: String,
-        #[arg(long, value_enum, default_value_t = LoaderKindArg::Vanilla)]
-        loader: LoaderKindArg,
-        /// Required for non-Vanilla loaders; for example `stable` or an exact version.
-        #[arg(long)]
-        loader_version: Option<String>,
-    },
-
     /// Inspect supported launcher instances without changing any files.
     Inspect {
         #[arg(long)]
@@ -422,8 +415,14 @@ pub enum InstanceCommands {
         command: InstanceJavaCommands,
     },
 
+    /// Inspect or override this client instance's account.
+    Account {
+        #[command(subcommand)]
+        command: InstanceAccountCommands,
+    },
+
     /// Unregister the explicit or local instance without deleting its files.
-    Remove,
+    Unregister,
 
     /// Delete the entire instance (including worlds and mods) through the system trash.
     Delete {
@@ -453,7 +452,8 @@ impl InstanceCommands {
                 | Self::Memory { .. }
                 | Self::Icon { .. }
                 | Self::Java { .. }
-                | Self::Remove
+                | Self::Account { .. }
+                | Self::Unregister
                 | Self::Delete { .. }
         )
     }
@@ -630,12 +630,11 @@ mod tests {
     }
 
     #[test]
-    fn create_accepts_global_options_after_subcommands_for_gui_callers() {
+    fn install_accepts_global_options_after_subcommands_for_gui_callers() {
         let cli = Cli::try_parse_from([
             "orbit-launcher",
-            "instance",
-            "create",
-            "--name",
+            "install",
+            "--new",
             "server",
             "--kind",
             "server",
@@ -653,13 +652,13 @@ mod tests {
     }
 
     #[test]
-    fn remove_has_no_positional_path_or_instance_selector() {
+    fn unregister_uses_the_explicit_instance_context() {
         let cli = Cli::try_parse_from([
             "orbit-launcher",
             "--instance",
             "server-id",
             "instance",
-            "remove",
+            "unregister",
         ])
         .unwrap();
         assert_eq!(cli.instance.as_deref(), Some("server-id"));

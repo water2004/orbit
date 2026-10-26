@@ -217,10 +217,7 @@ fn render_plan(
             );
         }
         OutputFormat::Json => {
-            ctx.print_json(
-                "migrate",
-                &migration_view(plan, subcommand, export, ctx.dry_run),
-            );
+            ctx.print_json(&migration_view(plan, subcommand, export, ctx.dry_run));
         }
     }
 }
@@ -283,7 +280,7 @@ fn confirm_export(
     if ctx.output.format == OutputFormat::Json {
         use orbit_machine_protocol::{InteractionChoice, InteractionKind};
         let envelope = super::machine_interaction(
-            "migrate",
+            ctx.command,
             &ctx.machine_sequence,
             "confirmation",
             InteractionKind::Confirmation,

@@ -16,13 +16,10 @@ pub async fn handle(name: String, path: PathBuf, ctx: &CliContext) -> Result<()>
                 path = entry.path
             )
         )),
-        OutputFormat::Json => ctx.print_json(
-            "instances",
-            &InstanceRegisterOutput {
-                subcommand: "register".to_string(),
-                instance: instance_view(&entry, false),
-            },
-        ),
+        OutputFormat::Json => ctx.print_json(&InstanceRegisterOutput {
+            subcommand: "register".to_string(),
+            instance: instance_view(&entry, false),
+        }),
     }
     Ok(())
 }

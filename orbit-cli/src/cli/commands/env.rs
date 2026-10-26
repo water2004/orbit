@@ -43,7 +43,7 @@ pub fn handle(package: String, environment: String, ctx: &CliContext) -> Result<
                 )
             ));
         }
-        OutputFormat::Json => ctx.print_json("env", &output),
+        OutputFormat::Json => ctx.print_json(&output),
     }
     Ok(())
 }

@@ -203,7 +203,8 @@ export --base 追加世界与运行时状态。
 拖放共用一个全局确认弹窗，只有确认才执行原有 add，已有端点可复用。HTTP 需要显式许可；
 不自动登录或发送凭据，切换认证服务会清除未提交密码。不支持的外部 URL/文件不能触发页面导航。
 标题栏只切换全局默认账户，实例账户在对应实例的运行时页设置；
-账户管理仍独立存在，切换只调用 Launcher `account select` 并刷新同一 CLI 数据。
+账户管理仍独立存在；全局切换调用 Launcher `account default set`，实例选择调用
+`instance account set|clear`，然后刷新同一 CLI 数据。GUI 不写账户或实例文件。
 
 设置按外观、Launcher、Java、Orbit 分组，使用选择、数值和路径控件，不暴露 key/value
 命令表格。GUI 只保存自己的展示偏好；两套业务配置调用各自 config 命令。
@@ -258,3 +259,10 @@ ui/tests/visual.html 验证多步选择弹窗；ui/tests/workflows.html 使用�
 验证发现、实例内容、管理与创建入口布局。这些入口不执行真实 CLI，不读取用户数据，
 不进入生产路由或打包。组件测试覆盖默认关闭、取消回传、实例上下文、安装防重和按需加载。
 原生窗口、真实登录及游戏的最终验收由用户执行，构建通过不代表全部平台端到端验证。
+
+## CLI 命令合同
+
+包管理弹窗的版本、所属文件、启停、规则、环境、远端、重置和清除统一调用
+`package <mod_id> ...`；参数由 `services/commands.ts` 构造，实例由固定页面上下文提供。
+账户控件分别调用 `account default set|clear` 和 `instance account set|clear`。
+共享的测试合同同时通过 Vue builder 和两套 Rust CLI 解析，避免 UI 与 CLI 独立演化。

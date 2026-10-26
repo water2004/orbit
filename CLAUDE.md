@@ -293,3 +293,8 @@
 87. **GUI 不维护全局“当前实例”**。实例操作目标只来自实例路由或可见的显式选择控件，
     CLI 默认实例不参与 GUI 推断。页面/弹窗持有固定目标上下文，任务发出后不能随导航改投；
     旧异步结果不得污染其他实例。全局账户默认值与实例账户覆盖分别展示，不因所在页面改变按钮语义。
+88. **命令以领域归组且只有一条路径**。包管理统一 `package <mod_id> ...`；实例注销用
+    `instance unregister`，完整删除用 `instance delete`。Launcher 仅 `install --new` 创建并安装；
+    `account default` 与 `instance account` 不混用。成功/错误/进度共享解析时的 command 标识，
+    禁止按结果 DTO 猜动作或各 handler 手填不同名字。GUI 参数 builder 与真实 clap 解析器
+    共用合同样例；修改命令时同步更新 CLI、GUI、测试和文档，不留旧别名。

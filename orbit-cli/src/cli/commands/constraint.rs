@@ -6,10 +6,10 @@ use crate::cli::output::{
 };
 use crate::cli::{BoundInclusion, ConstraintCommands, ConstraintPolicyCommands};
 
-pub async fn handle(command: ConstraintCommands, ctx: &CliContext) -> Result<()> {
+pub async fn handle(package: String, command: ConstraintCommands, ctx: &CliContext) -> Result<()> {
     let instance_dir = ctx.instance_dir()?;
     let (output, text_transaction) = match command {
-        ConstraintCommands::Show { package } => {
+        ConstraintCommands::Show => {
             let report = orbit_core::package_constraint(&instance_dir, &package)?;
             (
                 PackageConstraintOutput {
@@ -30,11 +30,7 @@ pub async fn handle(command: ConstraintCommands, ctx: &CliContext) -> Result<()>
                 None,
             )
         }
-        ConstraintCommands::Set {
-            package,
-            string,
-            policy,
-        } => {
+        ConstraintCommands::Set { string, policy } => {
             let policy = core_policy(policy);
             let providers = super::create_instance_providers(&instance_dir, None, &ctx.runtime)?;
             let report = orbit_core::apply_package_constraint(
@@ -74,7 +70,7 @@ pub async fn handle(command: ConstraintCommands, ctx: &CliContext) -> Result<()>
 
     match ctx.output.format {
         OutputFormat::Text => print_text(&output, text_transaction.as_ref(), ctx),
-        OutputFormat::Json => ctx.print_json("constraint", &output),
+        OutputFormat::Json => ctx.print_json(&output),
     }
     Ok(())
 }

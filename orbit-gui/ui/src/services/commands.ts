@@ -41,3 +41,40 @@ export function importArguments(path: string, optional: string[]) {
     ...optional.flatMap((file) => ["--optional", file]),
   ];
 }
+
+// These builders encode the public CLI grammar only. Package identity is always
+// the JAR-declared mod_id; target selection is supplied separately by the page.
+export function packageCommands(modId: string) {
+  const command = (...args: string[]) => ["package", modId, ...args];
+  return {
+    versions: () => command("versions"),
+    files: () => command("files"),
+    activation: (enabled: boolean) => command(enabled ? "enable" : "disable"),
+    environment: (value: string) => command("env", value),
+    reset: () => command("reset"),
+    purge: () => command("purge"),
+    constraint: (policy: VersionPolicy, string: string) =>
+      command(
+        "constraint",
+        "set",
+        ...policyArguments(policy),
+        "--string",
+        string,
+      ),
+    addRemote: (provider: string, locator: string) =>
+      command("remote", "add", provider, locator),
+    removeRemote: (index: number) =>
+      command("remote", "remove", "--index", String(index)),
+  };
+}
+
+export const accountCommands = {
+  default: (account?: string) =>
+    account
+      ? ["account", "default", "set", account]
+      : ["account", "default", "clear"],
+  instance: (account?: string) =>
+    account
+      ? ["instance", "account", "set", account]
+      : ["instance", "account", "clear"],
+};

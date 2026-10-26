@@ -34,7 +34,7 @@ orbit-launcher instance inspect --directory <source>
 orbit-launcher instance import --directory <source> [--source <id>] \
   [--name <new-name>] [--game-directory <actual-game-directory>] [--dry-run]
 orbit-launcher --instance <id> instance delete [--dry-run] [--yes]
-orbit-launcher --instance <id> instance remove
+orbit-launcher --instance <id> instance unregister
 ```
 
 inspect/dry-run 不下载、不复制、不注册、不升级来源格式。import 的统一结果为
@@ -60,7 +60,7 @@ GUI 先选来源、核对 MC/Loader 与数据目录，再展示 CLI 提供的目
 
 ## 完整删除与注销
 
-`instance remove` 仅注销；`instance delete` 删除整个目录，**包含 worlds/saves、mods、
+`instance unregister` 仅注销；`instance delete` 删除整个目录，**包含 worlds/saves、mods、
 截图与设置**。GUI 分别提供按钮，完整删除先展示 CLI 计划的准确名称/绝对路径，再显式
 确认；终端默认要求输入 DELETE，无交互调用需传 `--yes`。
 

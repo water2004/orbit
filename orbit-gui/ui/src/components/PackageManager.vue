@@ -13,7 +13,7 @@ import {
   ChevronRight,
 } from "lucide-vue-next";
 import type { InstanceContext } from "../services/instance-context";
-import { policyArguments } from "../services/commands";
+import { packageCommands } from "../services/commands";
 import type {
   Ownership,
   Package,
@@ -31,6 +31,7 @@ import DropdownSelect from "./upstream/DropdownSelect.vue";
 import { Cancelled, type Task } from "../services/cli";
 const props = defineProps<{ pkg: Package; context: InstanceContext }>();
 const orbit = props.context.orbit;
+const commands = packageCommands(props.pkg.mod_id);
 const emit = defineEmits<{ close: [] }>();
 const tab = ref("overview"),
   versions = ref<PackageVersions>(),
@@ -132,7 +133,7 @@ async function load() {
   error.value = "";
   try {
     versions.value = await orbit<PackageVersions>(
-      ["versions", props.pkg.mod_id],
+      commands.versions(),
       t("Loading available versions", "正在加载可用版本"),
       instance,
       observe,
@@ -166,7 +167,7 @@ async function files() {
   error.value = "";
   try {
     ownership.value = await orbit<Ownership>(
-      ["ownership", props.pkg.mod_id],
+      commands.files(),
       t("Loading files and data", "正在加载文件与数据"),
       instance,
       observe,
@@ -203,14 +204,7 @@ async function apply() {
       draft: JSON.parse(JSON.stringify(rules.value)),
     });
     await mutate(
-      [
-        "constraint",
-        "set",
-        props.pkg.mod_id,
-        ...policyArguments(next),
-        "--string",
-        expression,
-      ],
+      commands.constraint(next, expression),
       t("Applying version policy", "正在应用版本策略"),
     );
     await load();
@@ -292,7 +286,7 @@ function editRules(next: string) {
                 @click="
                   act(() =>
                     mutate(
-                      [current.enabled ? 'disable' : 'enable', pkg.mod_id],
+                      commands.activation(!current.enabled),
                       t('Updating activation', '正在更新启用状态'),
                     ),
                   )
@@ -523,7 +517,7 @@ function editRules(next: string) {
               @click="
                 act(async () => {
                   await mutate(
-                    ['reset', pkg.mod_id],
+                    commands.reset(),
                     t('Resetting mod data', '正在重置模组数据'),
                   );
                   await files();
@@ -555,7 +549,7 @@ function editRules(next: string) {
                 @click="
                   act(() =>
                     mutate(
-                      ['env', pkg.mod_id, environment],
+                      commands.environment(environment),
                       t('Updating environment', '正在更新环境'),
                     ),
                   )
@@ -579,13 +573,7 @@ function editRules(next: string) {
                 @click="
                   act(() =>
                     mutate(
-                      [
-                        'remote',
-                        'remove',
-                        pkg.mod_id,
-                        '--index',
-                        String(index),
-                      ],
+                      commands.removeRemote(index),
                       t('Removing source', '正在移除来源'),
                     ),
                   )
@@ -618,7 +606,7 @@ function editRules(next: string) {
                 @click="
                   act(async () => {
                     await mutate(
-                      ['remote', 'add', pkg.mod_id, provider, locator],
+                      commands.addRemote(provider, locator),
                       t('Adding source', '正在添加来源'),
                     );
                     locator = '';
@@ -644,7 +632,7 @@ function editRules(next: string) {
               @click="
                 act(async () => {
                   await mutate(
-                    ['purge', pkg.mod_id],
+                    commands.purge(),
                     t('Removing mod and data', '正在移除模组及数据'),
                   );
                   emit('close');

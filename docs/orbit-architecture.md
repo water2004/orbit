@@ -364,7 +364,7 @@ Agent 每个 JVM 只在启动/退出维护一次活动代次；重压缩前后�
 映射到顶层受管 JAR 的路径都不进入可清理计划。code-source 或原生模块身份映射歧义时安全地不观测；
 依赖委托调用栈不能替代来源身份，也不能跨越未声明依赖。没有文件名猜测、静态分析或“匹配 config
 名称”兜底。服务端后台进程
-的 snapshot 由下一次 `orbit launch` / `orbit purge` 合并；同一 JVM 的旧 generation 会被水位拒绝，
+的 snapshot 由下一次 `orbit launch` / `orbit package <mod_id> purge` 合并；同一 JVM 的旧 generation 会被水位拒绝，
 不同 JVM 按启动顺序合并。损坏或截断 session 会显式报错并保留。同一实例同时只允许一个 Agent
 持有操作系统文件锁，避免两个运行时制造无法定义的“最后”顺序。
 同一包在自己已拥有的目录树下继续写入时，Agent 直接继承树归属，不再为每个文件执行
@@ -532,7 +532,7 @@ GUI 不持有策略状态或调用 core。求解器对未选候选产生的传�
 受管包环境具有两层正交语义：`orbit.toml` 的可选 `env` 是用户 target 过滤，lock 的
 `environment` 是精确候选从 JAR 解析出的事实。TOML 缺失设置时，locked 路径直接使用
 选中候选的环境；无 lock 的候选路径使用候选集合的真实 Loader 声明。Loader 没有包级
-声明时 adapter 产生 `both`。init/sync 不把推导结果反写成用户策略，`orbit env` 只修改
+声明时 adapter 产生 `both`。init/sync 不把推导结果反写成用户策略，`orbit package <mod_id> env` 只修改
 manifest 过滤。
 
 ## 5. loader 支持矩阵
@@ -597,3 +597,16 @@ Orbit 不能仅凭字节码完整证明：
 
 调用方可传精确配置、缓存和版本库路径，也可选择 `system` 或 `executable` 布局。Cargo
 `portable` feature 只把编译默认值改成 executable 布局，不取消运行时显式覆盖。
+
+## 命令与前端合同
+
+CLI 按领域分组，不按每个新功能增加一个顶层动词。工作区事务保留顶层动词，单包能力集中在
+`package <mod_id>`，注册表使用 `instance list|register|unregister`，全局默认值只经配置命令修改。
+Orbit CLI 的 `args` 只定义语法，`dispatch` 定义执行/写入策略；`commands/context`、
+`commands/interaction`、`commands/providers` 分别负责展示上下文、交互协议和 Provider 组装。
+目标优先级及默认实例写入保护在 Core `workspace_context`，每次 CLI 执行只解析并固定一次目标，
+锁和 handler 使用同一目录。init 明确只针对 cwd，不消费默认实例或 --instance。
+所有结果、错误、进度和交互共享已解析命令的唯一标识，不允许 handler 自行另报 command。
+
+GUI 的 `services/commands.ts` 只构造相同公开 CLI 参数；共享命令合同样例同时由 Vue 测试和两套
+真实 clap 解析器校验。CLI/GUI 同时修改，不保留旧顶层入口或别名；本次不修改持久化 schema。

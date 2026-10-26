@@ -17,18 +17,15 @@ pub async fn handle(ctx: &CliContext) -> Result<()> {
                 ctx.print_result_line(format_args!("{}", tr!("Cache is already empty.")))
             }
             OutputFormat::Json => {
-                ctx.print_json(
-                    "cache",
-                    &CacheOutput {
-                        subcommand: "clean".to_string(),
-                        dry_run: ctx.dry_run,
-                        cache_path: summary.path.to_string_lossy().into_owned(),
-                        files_before: summary.files,
-                        bytes_before: summary.bytes,
-                        files_removed: 0,
-                        bytes_freed: 0,
-                    },
-                );
+                ctx.print_json(&CacheOutput {
+                    subcommand: "clean".to_string(),
+                    dry_run: ctx.dry_run,
+                    cache_path: summary.path.to_string_lossy().into_owned(),
+                    files_before: summary.files,
+                    bytes_before: summary.bytes,
+                    files_removed: 0,
+                    bytes_freed: 0,
+                });
             }
         }
         return Ok(());
@@ -51,18 +48,15 @@ pub async fn handle(ctx: &CliContext) -> Result<()> {
                 ctx.print_result_line(format_args!("{}", tr!("[dry-run] Cache was not modified.")))
             }
             OutputFormat::Json => {
-                ctx.print_json(
-                    "cache",
-                    &CacheOutput {
-                        subcommand: "clean".to_string(),
-                        dry_run: true,
-                        cache_path: summary.path.to_string_lossy().into_owned(),
-                        files_before: summary.files,
-                        bytes_before: summary.bytes,
-                        files_removed: 0,
-                        bytes_freed: 0,
-                    },
-                );
+                ctx.print_json(&CacheOutput {
+                    subcommand: "clean".to_string(),
+                    dry_run: true,
+                    cache_path: summary.path.to_string_lossy().into_owned(),
+                    files_before: summary.files,
+                    bytes_before: summary.bytes,
+                    files_removed: 0,
+                    bytes_freed: 0,
+                });
             }
         }
         return Ok(());
@@ -85,18 +79,15 @@ pub async fn handle(ctx: &CliContext) -> Result<()> {
             ));
         }
         OutputFormat::Json => {
-            ctx.print_json(
-                "cache",
-                &CacheOutput {
-                    subcommand: "clean".to_string(),
-                    dry_run: false,
-                    cache_path: cleaned.path.to_string_lossy().into_owned(),
-                    files_before: summary.files,
-                    bytes_before: summary.bytes,
-                    files_removed: summary.files,
-                    bytes_freed: cleaned.bytes,
-                },
-            );
+            ctx.print_json(&CacheOutput {
+                subcommand: "clean".to_string(),
+                dry_run: false,
+                cache_path: cleaned.path.to_string_lossy().into_owned(),
+                files_before: summary.files,
+                bytes_before: summary.bytes,
+                files_removed: summary.files,
+                bytes_freed: cleaned.bytes,
+            });
         }
     }
     Ok(())

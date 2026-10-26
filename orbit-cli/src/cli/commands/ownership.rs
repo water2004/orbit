@@ -14,18 +14,15 @@ pub fn handle(package: String, ctx: &CliContext) -> Result<()> {
         OutputFormat::Text => {
             ctx.print_result_line(format_args!("{}", package_ownership_table(&ownership)));
         }
-        OutputFormat::Json => ctx.print_json(
-            "ownership",
-            &OwnershipOutput {
-                mod_id: ownership.mod_id,
-                artifacts: ownership
-                    .artifacts
-                    .iter()
-                    .map(owned_artifact_view)
-                    .collect(),
-                data: ownership.data.iter().map(owned_path_view).collect(),
-            },
-        ),
+        OutputFormat::Json => ctx.print_json(&OwnershipOutput {
+            mod_id: ownership.mod_id,
+            artifacts: ownership
+                .artifacts
+                .iter()
+                .map(owned_artifact_view)
+                .collect(),
+            data: ownership.data.iter().map(owned_path_view).collect(),
+        }),
     }
     Ok(())
 }

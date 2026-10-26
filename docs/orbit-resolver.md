@@ -479,3 +479,11 @@ store；`mods/` 仍只由后续 `install` 从最终 lock 物化。
 - 远端 fork：功能分支已发布；Orbit 通过完整 commit SHA
   `19e9622e48fe37f62abd9e270e356aab5ec2e2f6` 固定依赖，不跟随可移动分支头。
 - 静态字节码判断：只给出必要条件，不宣称能完整证明模组运行时兼容。
+
+## 命令重组不改变优化目标
+
+`package <mod_id> constraint set` 沿用原有全图 Pareto 极小事务，与 `add/fix` 共用求解能力；
+不会把 GUI 的数字/字符串控件转换成另一套求解实现。
+`upgrade <mod_id>` 仍为目标优先升级、其余最小变动；不带包名的 `upgrade` 仍为全图 Pareto 极大。
+`sync` 不求解，`install` 只物化 lock，`migrate check/export` 共用迁移规划。
+本次整理只删除重复命令路径和重复前端映射，不改依赖关系、版本比较或 Pareto 支配定义。

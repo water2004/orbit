@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { accountCommands } from "../services/commands";
 import { computed, ref } from "vue";
 import { Check, ChevronDown, UserRound, Users } from "lucide-vue-next";
 import { workspace, act, launcher, refresh } from "../services/workspace";
@@ -13,7 +14,7 @@ async function choose(account: Account) {
   busy.value = true;
   try {
     await launcher(
-      ["account", "select", account.id, "--global"],
+      accountCommands.default(account.id),
       t("Switching account", "正在切换账户"),
       null,
     );

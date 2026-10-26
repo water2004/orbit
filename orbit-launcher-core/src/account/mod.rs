@@ -235,7 +235,7 @@ impl AccountRepository {
     pub fn selected(&self, explicit: Option<Uuid>) -> Result<&AccountMetadata, LauncherError> {
         let id = self.selection_id(explicit).ok_or_else(|| {
             LauncherError::InteractionRequired(
-                "a client account must be selected in [launch].account or with 'account select'"
+                "select a client account with 'account default set <account>' or 'instance account set <account>'"
                     .to_string(),
             )
         })?;

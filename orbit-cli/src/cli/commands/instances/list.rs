@@ -12,13 +12,10 @@ pub async fn handle(ctx: &CliContext) -> Result<()> {
                 tr!("No instances registered. Use 'orbit init' to get started.")
             ));
         } else {
-            ctx.print_json(
-                "instances",
-                &InstancesOutput {
-                    subcommand: "list".to_string(),
-                    instances: Vec::new(),
-                },
-            );
+            ctx.print_json(&InstancesOutput {
+                subcommand: "list".to_string(),
+                instances: Vec::new(),
+            });
         }
         return Ok(());
     }
@@ -55,13 +52,10 @@ pub async fn handle(ctx: &CliContext) -> Result<()> {
             ));
         }
         OutputFormat::Json => {
-            ctx.print_json(
-                "instances",
-                &InstancesOutput {
-                    subcommand: "list".to_string(),
-                    instances: views,
-                },
-            );
+            ctx.print_json(&InstancesOutput {
+                subcommand: "list".to_string(),
+                instances: views,
+            });
         }
     }
     Ok(())

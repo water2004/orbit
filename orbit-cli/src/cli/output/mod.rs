@@ -23,9 +23,9 @@ pub use progress_ndjson::{ndjson_audit_reporter, ndjson_progress_reporter};
 pub use view::{
     CacheOutput, ConfigChoiceView, ConfigEntryOutput, ConfigEntryView, ConfigListOutput,
     ConfigPathOutput, ConfigResolvedPaths, ConfigValueView, DiagnosticView, ErrorJson,
-    ExportOutput, ImportOutput, InitOutput, InstanceDefaultOutput, InstanceRegisterOutput,
-    InstanceRemoveOutput, InstancesOutput, JsonEnvelope, MigrationExportView, MigrationOutput,
-    MigrationSummary, OutdatedOutput, OutdatedSummary, OwnershipOutput, PackageActivationOutput,
+    ExportOutput, ImportOutput, InitOutput, InstanceRegisterOutput, InstanceRemoveOutput,
+    InstancesOutput, JsonEnvelope, MigrationExportView, MigrationOutput, MigrationSummary,
+    OutdatedOutput, OutdatedSummary, OwnershipOutput, PackageActivationOutput,
     PackageConstraintOutput, PackageEnvironmentOutput, PackageVersionCandidateView,
     PackageVersionsOutput, PurgeOutput, RemoveOutput, ResetOutput, SearchFilters, SearchOutput,
     SearchResultView, owned_artifact_view, owned_path_view,

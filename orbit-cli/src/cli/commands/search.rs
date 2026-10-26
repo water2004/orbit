@@ -78,20 +78,17 @@ pub async fn handle(
                 tr!("No results found for '%{query}'.", query = query)
             ));
         } else {
-            ctx.print_json(
-                "search",
-                &SearchOutput {
-                    query: query.clone(),
-                    platforms,
-                    filters: SearchFilters {
-                        mc_version: mc_version.clone(),
-                        modloader: modloader.clone(),
-                    },
-                    ref_mc_version: ref_mc.clone(),
-                    results: Vec::new(),
-                    truncated: false,
+            ctx.print_json(&SearchOutput {
+                query: query.clone(),
+                platforms,
+                filters: SearchFilters {
+                    mc_version: mc_version.clone(),
+                    modloader: modloader.clone(),
                 },
-            );
+                ref_mc_version: ref_mc.clone(),
+                results: Vec::new(),
+                truncated: false,
+            });
         }
         return Ok(());
     }

@@ -145,7 +145,7 @@ package_id = {
 
 所有包条目地位相同。若包 A 的 JAR 依赖包 B，依赖边仍记录在 lock 的 A 元数据中，
 而实际选中的 B 也必须有自己的 `[packages.B]`，通常由操作自动补入、版本策略为 `*`。
-不需要也不存在 override 表；用 `orbit constraint` 直接修改任一包的策略。
+不需要也不存在 override 表；用 `orbit package <mod_id> constraint` 直接修改任一包的策略。
 
 `env` 是可选用户过滤，不是 Loader 元数据副本。未配置时，当前展示使用 lock 中选中
 JAR 的声明；下一次求解使用每个候选 JAR 的真实声明。没有包级环境声明的 Loader 适配器
@@ -174,12 +174,12 @@ Pareto 前沿，必须交给用户选择。候选身份可由内容哈希区分�
 相关命令：
 
 ```text
-orbit versions <package>
-orbit constraint show <package>
-orbit constraint set <package> any
-orbit constraint set <package> exact <version>
-orbit constraint set <package> <greater-than|at-least|less-than|at-most> <version>
-orbit constraint set <package> range <lower> <upper> \
+orbit package <package> versions
+orbit package <package> constraint show
+orbit package <package> constraint set any
+orbit package <package> constraint set exact <version>
+orbit package <package> constraint set <greater-than|at-least|less-than|at-most> <version>
+orbit package <package> constraint set range <lower> <upper> \
   [--lower-bound inclusive|exclusive] [--upper-bound inclusive|exclusive]
   [--string '<ordered-set-rule>']
 ```
@@ -203,7 +203,7 @@ GUI 默认勾选推荐的 `beta` / `snapshot` 排除规则，但实现仍是把�
 ### 2.6 本地远端与组
 
 包激活是 TOML 用户状态，不是 JAR 元数据。启用包的精确载体名以 `.jar` 结尾；禁用包以
-`.jar.disabled` 结尾。`orbit enable/disable` 同一事务更新物理文件、`enabled` 与 lock 的
+`.jar.disabled` 结尾。`orbit package <mod_id> enable/disable` 同一事务更新物理文件、`enabled` 与 lock 的
 真实文件名；`sync` 从磁盘后缀重新建立三者的一致状态。禁用不会把包移出受管集合或 lock。
 
 普通 `file` 远端可使用相对实例目录路径或绝对路径。若源位于事务输出 `mods/`，Orbit
@@ -292,12 +292,12 @@ TOML 与 lock，所以被移除包及其无效 group 引用不会残留。
 ## 5. 远端管理
 
 ```text
-orbit remote list <package>
-orbit remote add <package> modrinth <project-id>
-orbit remote add <package> curseforge <numeric-project-id>
-orbit remote add <package> file <jar-path>
-orbit remote remove <package> <provider> <locator>
-orbit remote remove <package> --index <number>
+orbit package <package> remote list
+orbit package <package> remote add modrinth <project-id>
+orbit package <package> remote add curseforge <numeric-project-id>
+orbit package <package> remote add file <jar-path>
+orbit package <package> remote remove <provider> <locator>
+orbit package <package> remote remove --index <number>
 ```
 
 全部远端一视同仁且按内容哈希去重。不能删除最后一个远端。删除发现远端不会立即破坏

@@ -107,7 +107,7 @@ pub async fn handle(mod_name: Option<String>, ctx: &CliContext) -> Result<()> {
                 ));
             }
             OutputFormat::Json => {
-                ctx.print_json("outdated", &view);
+                ctx.print_json(&view);
             }
         }
         return Ok(());
@@ -122,7 +122,7 @@ pub async fn handle(mod_name: Option<String>, ctx: &CliContext) -> Result<()> {
             ));
         }
         OutputFormat::Json => {
-            ctx.print_json("outdated", &view);
+            ctx.print_json(&view);
         }
     }
     Ok(())

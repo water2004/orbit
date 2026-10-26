@@ -1332,7 +1332,7 @@ async fn resolve_requested_package(input: RequestedPackageInput<'_>) -> Result<S
             failures.push((
                 package.clone(),
                 format!(
-                    "package '{package}' is already managed; use 'orbit versions {package}' and structured 'orbit constraint set {package} ...' commands to change its version policy"
+                    "package '{package}' is already managed; use 'orbit package {package} versions' and 'orbit package {package} constraint set ...' to change its version policy"
                 ),
             ));
             continue;

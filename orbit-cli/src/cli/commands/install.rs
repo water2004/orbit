@@ -44,7 +44,7 @@ pub async fn handle(
         }
         OutputFormat::Json => {
             let view = install_instance_view(&report, ctx.dry_run);
-            ctx.print_json("install", &view);
+            ctx.print_json(&view);
         }
     }
     Ok(())

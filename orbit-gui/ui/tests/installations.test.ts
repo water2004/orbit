@@ -221,7 +221,7 @@ it("retrying a failed package install reuses the committed plan, not the consume
   expect(await applyMigration(review)).toBe(true);
   expect(calls.orbit.mock.calls.map(([args]) => args.slice(0, 2))).toEqual([
     ["migrate", "export"],
-    ["instances", "register"],
+    ["instance", "register"],
     ["install"],
     ["install"],
   ]);

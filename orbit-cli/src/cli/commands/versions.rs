@@ -42,7 +42,7 @@ pub async fn handle(package: String, ctx: &CliContext) -> Result<()> {
         OutputFormat::Text => {
             ctx.print_result_line(format_args!("{}", package_versions_table(&output)))
         }
-        OutputFormat::Json => ctx.print_json("versions", &output),
+        OutputFormat::Json => ctx.print_json(&output),
     }
     Ok(())
 }

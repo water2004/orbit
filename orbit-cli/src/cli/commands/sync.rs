@@ -30,6 +30,6 @@ pub async fn handle(ctx: &CliContext) -> Result<()> {
     }
 
     let view = sync_view(&report, ctx.dry_run);
-    ctx.print_json("sync", &view);
+    ctx.print_json(&view);
     Ok(())
 }

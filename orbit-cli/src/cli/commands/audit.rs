@@ -71,7 +71,7 @@ pub async fn handle(
             }
         }
         crate::cli::output::OutputFormat::Json => {
-            ctx.print_json("audit", &report);
+            ctx.print_json(&report);
         }
     }
     if threshold_exceeded {

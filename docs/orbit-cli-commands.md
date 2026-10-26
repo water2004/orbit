@@ -4,6 +4,17 @@
 > [orbit-toml-spec.md](orbit-toml-spec.md)，实现快照见
 > [orbit-status.md](orbit-status.md)。
 
+## 命令分层
+
+- 工作区事务：`init / add / remove / sync / install / fix / outdated / upgrade / import / export / migrate / launch`。
+- 单包管理：`package <mod_id> versions|files|env|enable|disable|constraint|remote|reset|purge`。包 ID 只写一次，必须是 JAR 声明的 ID。
+- 全局资源：`instance list|register|unregister`、`cache clean`、`config`；实例配置通过 `config --scope instance` 修改。
+- 只读发现与诊断：`search / info / list / capabilities / audit`。
+
+旧的散落顶层入口已经删除，不提供别名。GUI 与命令行用户使用同一入口；`--yes` 不跳过多步方案选择。
+命令的 JSON 成功、错误、交互与进度共用一个规范标识，例如 `package.constraint.set`、`migrate.export`、`config.set`。
+本次只调整命令合同，不改变 TOML/lock schema；已有脚本需要使用新的命令拼写。
+
 ## 1. 全局上下文
 
 实例选择优先级：
@@ -17,11 +28,12 @@
 拒绝执行，要求显式 `--instance` 或进入项目目录。当前受保护的命令是：
 
 ```text
-add install fix remove enable disable launch reset purge sync upgrade import migrate-export remote-add remote-remove
+init add install fix remove launch sync upgrade import migrate export
+package <mod_id> env|enable|disable|reset|purge|constraint set|remote add|remote remove
 ```
 
 `init` 始终初始化当前目录；实例注册表和 cache 命令操作全局数据；`export` 读取实例但只
-写用户指定的输出文件。
+写用户指定的输出文件。注册/注销命令不支持 `--dry-run`，显式传入时拒绝，而不是忽略后仍写入。
 
 凡是求解型命令会确定一个包集合，求解包键都是 JAR 的 `mod_id`，但优化目标按操作语义区分：
 
@@ -111,21 +123,20 @@ Orbit 读取 Fabric/Quilt launch JAR、Forge bootstrap shim 或当前平台
 显式参数用于筛选实际候选，不能凭空创建平台工件。交互模式在多个候选时请求选择；
 `--yes` 模式不读取 stdin，歧义或缺少实际 JAR 时要求显式参数/修复启动器安装。
 
-### `orbit instances`
+### `orbit instance`
 
 ```text
-orbit instances list
-orbit instances register <name> <path>
-orbit instances default <name>
-orbit instances remove <name>
+orbit instance list
+orbit instance register <name> <path>
+orbit config set core.default-instance <name>
+orbit instance unregister <name>
 ```
 
 - `list` 展示名称、路径、Minecraft、loader 以及当前/默认标记，输出为统一自适应表格；
 - `register` 只接管一个已经同时具有有效 `orbit.toml` 与 `orbit.lock` 的工作区；名称和路径必须
   显式提供，两份文件的平台元数据必须完全一致。它不执行探测、补全、sync 或任何兜底；
-- `default` 保证只有一个默认实例，并以跨进程串行、失败可回滚的双文件提交同步
-  `config.toml` 的 `default_instance`；
-- `remove` 只移除全局追踪，绝不删除实例目录；若移除默认实例，同时清除默认值。
+- 默认实例只有 `config set/unset core.default-instance` 一条修改路径；以跨进程串行、失败可回滚的双文件提交同步注册表和配置；
+- `unregister` 只移除全局追踪，绝不删除实例目录；若移除默认实例，同时清除默认值。
 
 ### `orbit config`
 
@@ -223,10 +234,10 @@ Pareto 或 co-Pareto front 本身仍可能很大。
 在线与本地添加都使用同一个方案选择和包事务报告；若选中方案替换或淘汰已有顶层包
 版本，会与新安装项一起展示并确认。
 
-### `orbit env`
+### `orbit package <mod_id> env`
 
 ```text
-orbit env <package> <client|server|both|auto>
+orbit package <package> env <client|server|both|auto>
 ```
 
 修改 `orbit.toml` 中一个受管包的环境过滤。`client`、`server` 和 `both` 是显式用户
@@ -234,11 +245,11 @@ orbit env <package> <client|server|both|auto>
 接受 JAR 声明的 `mod_id`，不修改 lock，也不重新求解或下载。支持全局 `--dry-run` 和
 `--output-format json`。
 
-### `orbit enable` 与 `orbit disable`
+### `orbit package <mod_id> enable` 与 `orbit package <mod_id> disable`
 
 ```text
-orbit enable <package>
-orbit disable <package>
+orbit package <package> enable
+orbit package <package> disable
 ```
 
 这两个命令只切换一个已受管逻辑包的 Loader 激活状态，不删除包、不改变版本、不求解依赖。
@@ -247,15 +258,15 @@ orbit disable <package>
 `enabled = true`。目标文件已存在、文件哈希不符或 TOML/lock 缺失时拒绝操作。`sync` 也识别
 两种后缀，因此手工切换后缀会被如实对账。支持 `--dry-run` 与 JSON 输出。
 
-### `orbit versions` 与 `orbit constraint`
+### `orbit package <mod_id> versions` 与 `orbit package <mod_id> constraint`
 
 ```text
-orbit versions <package>
-orbit constraint show <package>
-orbit constraint set <package> any
-orbit constraint set <package> exact <version>
-orbit constraint set <package> <greater-than|at-least|less-than|at-most> <version>
-orbit constraint set <package> range <lower> <upper> \
+orbit package <package> versions
+orbit package <package> constraint show
+orbit package <package> constraint set any
+orbit package <package> constraint set exact <version>
+orbit package <package> constraint set <greater-than|at-least|less-than|at-most> <version>
+orbit package <package> constraint set range <lower> <upper> \
   [--lower-bound inclusive|exclusive] [--upper-bound inclusive|exclusive]
   [--string '<ordered-set-rule>']
 ```
@@ -288,15 +299,15 @@ range 的端点包含关系显式传入，并由 core 转换为对应 Loader 家
 不区分大小写。匹配输入始终是完整 JAR 声明版本；Orbit 不把任何字符串硬编码为稳定版、
 预发布或 Loader 名。该规则和数字范围在同一求解图中筛选候选。
 
-### `orbit remote`
+### `orbit package <mod_id> remote`
 
 ```text
-orbit remote list <package>
-orbit remote add <package> file <jar-path>
-orbit remote add <package> modrinth <project-id>
-orbit remote add <package> curseforge <numeric-project-id>
-orbit remote remove <package> <provider> <locator>
-orbit remote remove <package> --index <one-based-index>
+orbit package <package> remote list
+orbit package <package> remote add file <jar-path>
+orbit package <package> remote add modrinth <project-id>
+orbit package <package> remote add curseforge <numeric-project-id>
+orbit package <package> remote remove <provider> <locator>
+orbit package <package> remote remove --index <one-based-index>
 ```
 
 `add` 会先下载并分析目标远端的全部候选，只有其中存在 JAR 实际声明 `<package>` 才写入。
@@ -375,10 +386,10 @@ orbit remove <mod>
 迁移导出以规范化路径顺序同时锁定源和目标，因此不会形成双实例死锁。`install` 恢复多个
 lock 工件时同样是整体事务，后一个下载或校验失败会撤销此前已经写入的 JAR。
 
-### `orbit ownership`
+### `orbit package <mod_id> files`
 
 ```text
-orbit ownership <package>
+orbit package <package> files
 orbit --output-format json ownership <package>
 ```
 
@@ -393,10 +404,10 @@ orbit --output-format json ownership <package>
 不会为了 UI 枚举出每个文件。尚未经 `orbit launch` 观测到写入时，仅显示受管 JAR
 并明确报告没有已观测数据，不根据文件名猜测。
 
-### `orbit reset`
+### `orbit package <mod_id> reset`
 
 ```text
-orbit reset <package>
+orbit package <package> reset
 ```
 
 合并完整 Runtime Agent session，并展示与 `purge` 相同的准确数据删除计划，但不删除逻辑包。
@@ -407,10 +418,10 @@ orbit reset <package>
 共享实例根、世界根和系统临时目录不能作为递归删除根；包在其中实际写入的更具体文件或子目录
 仍可进入计划。`--yes` 与 `--dry-run` 的确认语义和 `purge` 一致。
 
-### `orbit purge`
+### `orbit package <mod_id> purge`
 
 ```text
-orbit purge <package>
+orbit package <package> purge
 ```
 
 先合并完整的 Runtime Agent session，用稳定的逻辑 `mod_id` 查询实例归属账本。运行时仍以当前
@@ -443,7 +454,7 @@ Runtime Agent，保留现有 `JAVA_TOOL_OPTIONS` 后注入 Agent，再调用 Lau
 未安装都会明确报错，没有 PATH 扫描或直接 Java 启动兜底。
 
 文本、JSON、NDJSON、语言和同进程交互参数原样传给 Launcher。客户端命令等待 Java 退出并
-立即合并 session；后台服务端在下一条 `orbit launch` / `orbit purge` 中合并。Launcher 的
+立即合并 session；后台服务端在下一条 `orbit launch` / `orbit package <mod_id> purge` 中合并。Launcher 的
 最终成功/错误信封原样透传，Orbit 不再包一层重复结果。
 每次实际启动在生成新 Agent context 之前会扫描归属账本的显式路径，删除已经不存在的节点并
 收敛对应的目录重平衡水位。只有文件系统返回 `NotFound` 时才会移除；其他 I/O 错误会明确中止启动且
@@ -526,7 +537,7 @@ orbit search <query>
 
 orbit info <mod> [--platform <provider>]
 orbit list [--tree] [--target client|server|both]
-orbit versions <package>
+orbit package <package> versions
 ```
 
 - `search` 合并已配置 provider 的结果并应用可选的 Minecraft/loader 过滤；结果由统一

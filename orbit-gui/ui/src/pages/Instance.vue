@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { packageCommands } from "../services/commands";
 import { computed, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { invoke } from "@tauri-apps/api/core";
@@ -202,7 +203,7 @@ async function togglePackage(pkg: Package) {
   activating.value.add(pkg.mod_id);
   try {
     await mutate(
-      [pkg.enabled ? "disable" : "enable", pkg.mod_id],
+      packageCommands(pkg.mod_id).activation(!pkg.enabled),
       t("Updating activation", "正在更新启用状态"),
     );
   } finally {

@@ -61,15 +61,12 @@ pub async fn handle(
             ));
         }
         OutputFormat::Json => {
-            ctx.print_json(
-                "export",
-                &ExportOutput {
-                    dry_run: ctx.dry_run,
-                    path: report.path.to_string_lossy().into_owned(),
-                    packages: report.packages,
-                    bytes: report.bytes,
-                },
-            );
+            ctx.print_json(&ExportOutput {
+                dry_run: ctx.dry_run,
+                path: report.path.to_string_lossy().into_owned(),
+                packages: report.packages,
+                bytes: report.bytes,
+            });
         }
     }
     Ok(())

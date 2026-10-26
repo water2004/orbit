@@ -17,15 +17,12 @@ pub async fn handle(tree: bool, target: Option<String>, ctx: &CliContext) -> Res
         if ctx.output.format == OutputFormat::Text {
             ctx.print_result_line(format_args!("{}", tr!("No mods installed.")));
         } else {
-            ctx.print_json(
-                "list",
-                &list_view(
-                    &output.packages,
-                    target.as_deref(),
-                    tree,
-                    Some(ctx.runtime.paths().cache_dir()),
-                ),
-            );
+            ctx.print_json(&list_view(
+                &output.packages,
+                target.as_deref(),
+                tree,
+                Some(ctx.runtime.paths().cache_dir()),
+            ));
         }
         return Ok(());
     }
@@ -47,7 +44,7 @@ pub async fn handle(tree: bool, target: Option<String>, ctx: &CliContext) -> Res
                     false,
                     Some(ctx.runtime.paths().cache_dir()),
                 );
-                ctx.print_json("list", &view);
+                ctx.print_json(&view);
             }
         }
     }
@@ -75,7 +72,7 @@ fn print_tree(
             true,
             Some(ctx.runtime.paths().cache_dir()),
         );
-        ctx.print_json("list", &view);
+        ctx.print_json(&view);
         return Ok(());
     }
     if ctx.quiet {

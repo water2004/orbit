@@ -1,0 +1,107 @@
+[
+  {
+    "kind": "orbit",
+    "args": ["package", "sodium", "versions"],
+    "command": "package.versions",
+    "mutates": false
+  },
+  {
+    "kind": "orbit",
+    "args": ["package", "sodium", "files"],
+    "command": "package.files",
+    "mutates": false
+  },
+  {
+    "kind": "orbit",
+    "args": ["package", "sodium", "enable"],
+    "command": "package.enable",
+    "mutates": true
+  },
+  {
+    "kind": "orbit",
+    "args": ["package", "sodium", "disable"],
+    "command": "package.disable",
+    "mutates": true
+  },
+  {
+    "kind": "orbit",
+    "args": ["package", "sodium", "reset"],
+    "command": "package.reset",
+    "mutates": true
+  },
+  {
+    "kind": "orbit",
+    "args": ["package", "sodium", "purge"],
+    "command": "package.purge",
+    "mutates": true
+  },
+  {
+    "kind": "orbit",
+    "args": ["package", "sodium", "env", "auto"],
+    "command": "package.env",
+    "mutates": true
+  },
+  {
+    "kind": "orbit",
+    "args": [
+      "package",
+      "sodium",
+      "constraint",
+      "set",
+      "exact",
+      "0.9.1",
+      "--string",
+      "all"
+    ],
+    "command": "package.constraint.set",
+    "mutates": true
+  },
+  {
+    "kind": "orbit",
+    "args": ["package", "sodium", "remote", "add", "modrinth", "AANobbMI"],
+    "command": "package.remote.add",
+    "mutates": true
+  },
+  {
+    "kind": "orbit",
+    "args": ["package", "sodium", "remote", "remove", "--index", "1"],
+    "command": "package.remote.remove",
+    "mutates": true
+  },
+  {
+    "kind": "orbit",
+    "args": ["instance", "register", "Creative", "D:/Minecraft/Creative"],
+    "command": "instance.register",
+    "mutates": false
+  },
+  {
+    "kind": "launcher",
+    "args": ["account", "default", "set", "player"],
+    "command": "account.default.set"
+  },
+  {
+    "kind": "launcher",
+    "args": ["account", "default", "clear"],
+    "command": "account.default.clear"
+  },
+  {
+    "kind": "launcher",
+    "args": ["instance", "account", "set", "player"],
+    "command": "instance.account.set"
+  },
+  {
+    "kind": "launcher",
+    "args": ["instance", "account", "clear"],
+    "command": "instance.account.clear"
+  },
+  {
+    "kind": "launcher",
+    "args": ["account", "default", "show"],
+    "command": "account.default.show"
+  },
+  {
+    "kind": "launcher",
+    "args": ["instance", "account", "show"],
+    "command": "instance.account.show"
+  }
+]

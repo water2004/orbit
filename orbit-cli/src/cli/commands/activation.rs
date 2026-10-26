@@ -40,7 +40,7 @@ pub fn handle(package: String, enabled: bool, ctx: &CliContext) -> Result<()> {
                 )
             ));
         }
-        OutputFormat::Json => ctx.print_json(if enabled { "enable" } else { "disable" }, &output),
+        OutputFormat::Json => ctx.print_json(&output),
     }
     Ok(())
 }
