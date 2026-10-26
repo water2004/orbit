@@ -140,6 +140,8 @@ async function search() {
   if (runtime.loader === "vanilla") return;
   const revision = ++session.revision;
   session.loading = true;
+  session.searched = false;
+  session.results = [];
   session.error = "";
   try {
     const data = await orbit<{ results: SearchResult[] }>(
@@ -324,7 +326,7 @@ async function manage(project: SearchResult) {
         <p v-if="selecting" class="row">
           <ProgressSpinner />{{ t("Loading instance…", "正在加载实例…") }}
         </p>
-        <small v-if="state.searched"
+        <small v-if="state.searched && !state.error"
           >{{ results.length }} {{ t("results", "个结果") }}</small
         >
         <article
@@ -382,7 +384,7 @@ async function manage(project: SearchResult) {
             >
           </div>
         </article>
-        <div v-if="!results.length && !selecting" class="empty">
+        <div v-if="!results.length && !selecting && !state.error" class="empty">
           <ProgressSpinner v-if="state.loading" :size="32" /><Search
             v-else
             :size="32"

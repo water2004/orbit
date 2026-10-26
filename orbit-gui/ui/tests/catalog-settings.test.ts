@@ -35,7 +35,7 @@ it("reads and saves instance catalogs exclusively through the CLI", async () => 
     instance,
   );
   await wrapper.find('input[value="curseforge"]').setValue(true);
-  await wrapper.find("button").trigger("click");
+  expect(wrapper.find("button").exists()).toBe(false);
   await flushPromises();
   expect(orbit).toHaveBeenLastCalledWith(
     [
@@ -59,23 +59,54 @@ it("renders credential availability from CLI and prevents empty selection", asyn
   expect(
     wrapper.find('input[value="curseforge"]').attributes("disabled"),
   ).toBeDefined();
-  await wrapper.find('input[value="modrinth"]').setValue(false);
-  expect(wrapper.find("button").attributes("disabled")).toBeDefined();
+  expect(
+    wrapper.find('input[value="modrinth"]').attributes("disabled"),
+  ).toBeDefined();
   expect(orbit).toHaveBeenCalledTimes(1);
   wrapper.unmount();
 });
-it("keeps edits and error visible on failure without reporting a successful change", async () => {
+it("rolls back failed autosave without claiming a successful change", async () => {
   vi.mocked(orbit)
     .mockResolvedValueOnce(response())
     .mockRejectedValueOnce(new Error("save failed"));
   const wrapper = mount(CatalogSettings, { props: { instance, ready: true } });
   await flushPromises();
   await wrapper.find('input[value="curseforge"]').setValue(true);
-  await wrapper.find("button").trigger("click");
   await flushPromises();
   expect(wrapper.find('[role="alert"]').text()).toContain("save failed");
   expect(wrapper.emitted("changed")).toBeUndefined();
-  expect(wrapper.find('input[value="curseforge"]').element.checked).toBe(true);
+  expect(wrapper.find('input[value="curseforge"]').element.checked).toBe(false);
+  wrapper.unmount();
+});
+it("auto-saving captures the target, blocks further clicks and ignores a late save for a different instance", async () => {
+  let finish!: (data: unknown) => void;
+  vi.mocked(orbit)
+    .mockResolvedValueOnce(response())
+    .mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    )
+    .mockResolvedValueOnce(response());
+  const wrapper = mount(CatalogSettings, { props: { instance, ready: true } });
+  await flushPromises();
+  await wrapper.find('input[value="curseforge"]').setValue(true);
+  expect(wrapper.find('[role="status"]').text()).toContain("Saving");
+  expect(
+    wrapper.find('input[value="modrinth"]').attributes("disabled"),
+  ).toBeDefined();
+  await wrapper.setProps({ instance: { ...instance, id: "other" } });
+  await flushPromises();
+  finish({ entry: response(true, true).entries[0] });
+  await flushPromises();
+  expect(wrapper.find('input[value="curseforge"]').element.checked).toBe(false);
+  expect(vi.mocked(orbit).mock.calls[1][2]).toEqual(instance);
+  expect(wrapper.emitted("changed")).toBeUndefined();
+  expect(wrapper.emitted("busy")).toEqual([
+    [instance.id, true],
+    [instance.id, false],
+  ]);
   wrapper.unmount();
 });
 it("ignores a previous instance response after switching instances", async () => {

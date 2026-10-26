@@ -1,10 +1,9 @@
 <script setup lang="ts">
-import { computed, onUnmounted, ref, watch } from "vue";
+import { onUnmounted, ref, watch } from "vue";
 import { orbit } from "../services/workspace";
 import { Cancelled } from "../services/cli";
 import type { Instance } from "../types";
 import { t } from "../i18n";
-import Button from "./upstream/Button.vue";
 import ProgressSpinner from "./upstream/ProgressSpinner.vue";
 
 interface CatalogEntry {
@@ -23,17 +22,12 @@ const loading = ref(false),
   saving = ref(false),
   error = ref("");
 let revision = 0;
-const changed = computed(
-  () =>
-    !!settings.value &&
-    (settings.value.value.length !== selected.value.length ||
-      settings.value.value.some((id) => !selected.value.includes(id))),
-);
 watch(
   () => [props.instance.id, props.ready] as const,
   async ([, ready]) => {
     const current = ++revision;
     settings.value = undefined;
+    selected.value = [];
     error.value = "";
     loading.value = false;
     if (!ready) return;
@@ -100,8 +94,10 @@ async function save() {
       emit("changed");
     }
   } catch (e) {
-    if (current === revision && !(e instanceof Cancelled))
-      error.value = String(e);
+    if (current === revision) {
+      selected.value = [...(settings.value?.value || [])];
+      if (!(e instanceof Cancelled)) error.value = String(e);
+    }
   } finally {
     saving.value = false;
     emit("busy", target.id, false);
@@ -119,9 +115,12 @@ async function save() {
           type="checkbox"
           :value="option.id"
           :disabled="
+            loading ||
             saving ||
+            (selected.length === 1 && selected.includes(option.id)) ||
             (!option.available && !settings?.value.includes(option.id))
           "
+          @change="save"
         />
         {{ option.name }}
         <small v-if="!option.available">{{
@@ -131,19 +130,14 @@ async function save() {
           )
         }}</small>
       </label>
-      <Button
-        v-if="settings"
-        :disabled="!changed || !selected.length || saving"
-        :loading="saving"
-        @click="save"
+      <span v-if="saving" class="row" role="status"
+        ><ProgressSpinner :size="16" />{{ t("Saving…", "正在保存…") }}</span
       >
-        {{ t("Save", "保存") }}
-      </Button>
     </div>
     <small>{{
       t(
-        "Saved for this instance. Existing package remotes are unchanged.",
-        "按实例保存，不改变已有模组的远端。",
+        "Changes are saved automatically for this instance. Existing package remotes are unchanged.",
+        "修改后自动按实例保存，不改变已有模组的远端。",
       )
     }}</small>
     <p v-if="error" class="error" role="alert">{{ error }}</p>

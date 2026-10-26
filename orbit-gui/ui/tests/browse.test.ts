@@ -216,6 +216,21 @@ it("a failed instance load cannot turn into an unfiltered global search", async 
   expect(wrapper.find("[role=alert]").exists()).toBe(true);
   wrapper.unmount();
 });
+it("a search failure is not displayed as an empty successful result", async () => {
+  const { wrapper } = await page(`/browse?instance=${instance.id}`);
+  vi.mocked(orbit).mockRejectedValueOnce(
+    new Error("invalid CurseForge JSON response"),
+  );
+  await wrapper.find(".search-bar").trigger("submit");
+  await flushPromises();
+  expect(wrapper.find("[role=alert]").text()).toContain(
+    "invalid CurseForge JSON response",
+  );
+  expect(wrapper.text()).not.toContain("No matching mods");
+  expect(wrapper.find(".results-column > small").exists()).toBe(false);
+  expect(wrapper.findAll(".project-card")).toHaveLength(0);
+  wrapper.unmount();
+});
 it("vanilla cannot invoke Orbit discovery or source settings", async () => {
   details[instance.id].desired.loader = "vanilla";
   const { wrapper } = await page(`/browse?instance=${instance.id}`);
