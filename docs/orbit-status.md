@@ -4,6 +4,9 @@
 
 ## 1. 当前结论
 
+0.8.2 汇总运行时下载源、启动报告、实例内存、后台启动收尾与可选能力隔离；面向用户的
+发布说明见 [`releases/v0.8.2.md`](releases/v0.8.2.md)。Windows 打包为一个 MSI，Linux 为三个 DEB。
+
 可选能力与运行时安装/包管理分离：新增 `orbit capabilities`，GUI 禁用未支持的 audit，
 Agent 范围未验证时提示无观测启动。Forge 1.12.2-14.23.5.2860 的官方 installer
 spec 0 已通过真实下载、SHA-256 校验和 inspect 回归；这项验证不等于启动游戏或宣称
