@@ -151,6 +151,11 @@ package_id = {
 JAR 的声明；下一次求解使用每个候选 JAR 的真实声明。没有包级环境声明的 Loader 适配器
 产生 `both`。`init`、`sync` 和未传 `--env` 的 `add` 不把自动结果写回 TOML。
 
+JAR 的环境声明过滤的是加载模块，不是安装包。服务端可以安装 client-only JAR，
+但它不会贡献活动依赖、冲突、provides 或嵌套模块。例如 Fabric 的依赖方可能要求
+malilib 的匹配 JAR 必须在实例中，即使 malilib 自身在服务端被停用；缺失或手动禁用
+这个 JAR 仍然无解。`enabled = false` 与 Loader 因环境不符停用是不同事实。
+
 ### 2.5 版本约束
 
 包策略把 Loader 可建立的数字核心与完整原始版本字符串分开：

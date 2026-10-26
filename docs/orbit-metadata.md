@@ -91,7 +91,7 @@ lock/cache 索引等非 loader 输入继续使用严格 JSON。宽松边界集�
 
 ## 5. Fabric 与 Quilt
 
-Fabric 映射：
+Fabric schema 1 映射：
 
 - `depends` → `required`
 - `recommends` → `recommended`
@@ -100,6 +100,11 @@ Fabric 映射：
 - `breaks` → `incompatible`
 
 `environment` 支持字符串和数组。`provides` 继承声明模组版本。
+
+schema 缺省为 0；schema 0 使用 `side`（client/server/universal）、`requires` → required、
+`conflicts` → incompatible、`recommends` → suggested，不读取 schema 1 的 provides/jars。
+未知/未来 schema 明确拒绝，不能误套 schema 0/1 的环境依赖放宽。旧解析数据库通过
+analysis revision 失效重算，原始 JAR 缓存与远端目录不受影响。
 
 Quilt 递归保存依赖组。`unless` 是条件表达式而不是字符串标记；`breaks` 进入硬冲突。
 带 group 前缀的依赖和 provides ID 在适配层归一化为实际 mod ID。

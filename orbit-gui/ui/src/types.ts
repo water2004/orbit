@@ -60,6 +60,7 @@ export interface Package {
   optional: boolean;
   environment: string;
   configured_environment?: string;
+  load_status: "eligible" | "disabled" | "environment_disabled";
   remotes: string[];
   dependencies: string[];
   bundled_count: number;

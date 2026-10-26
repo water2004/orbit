@@ -14,14 +14,14 @@ fn version(value: &str) -> SolverVersion {
 }
 
 fn package(value: &str) -> SolverPackage {
-    SolverPackage::logical(value)
+    SolverPackage::installed(value)
 }
 
 #[test]
 fn failed_probe_rolls_back_path_state_while_improved_probe_commits_it() {
     let selected = version("2");
     let selected_package = package("a");
-    let mut trace = ResolutionTrace::with_progress([("a".to_string(), selected.clone())], None);
+    let mut trace = ResolutionTrace::with_progress([(package("a"), selected.clone())], None);
     trace.on_event(SolverEvent::Decision {
         package: &selected_package,
         version: &selected,
@@ -56,7 +56,7 @@ fn failed_probe_rolls_back_path_state_while_improved_probe_commits_it() {
 fn incremental_probe_retains_path_state_and_keeps_progress_in_the_probe_stage() {
     let selected = version("2");
     let selected_package = package("a");
-    let mut trace = ResolutionTrace::with_progress([("a".to_string(), selected.clone())], None);
+    let mut trace = ResolutionTrace::with_progress([(package("a"), selected.clone())], None);
     trace.on_event(SolverEvent::MaximalityProbeStarted {
         continuation: false,
     });
@@ -105,7 +105,7 @@ fn explains_a_candidate_excluded_before_selection() {
         vec![(package("a"), Ranges::singleton(version("1")))],
     );
 
-    let mut trace = ResolutionTrace::with_progress([("a".to_string(), version("2"))], None);
+    let mut trace = ResolutionTrace::with_progress([(package("a"), version("2"))], None);
     let solution =
         resolve_with_observer(&provider, package("root"), version("1"), &mut trace).unwrap();
 
@@ -150,7 +150,7 @@ fn explains_a_candidate_rejected_after_conflicting_choices() {
     provider.add_package_deps(package("b"), version("2"), vec![]);
     provider.add_package_deps(package("b"), version("1"), vec![]);
 
-    let mut trace = ResolutionTrace::with_progress([("a".to_string(), version("2"))], None);
+    let mut trace = ResolutionTrace::with_progress([(package("a"), version("2"))], None);
     let solution =
         resolve_with_observer(&provider, package("root"), version("1"), &mut trace).unwrap();
 

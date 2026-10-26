@@ -280,6 +280,13 @@ function editRules(next: string) {
                       ? t("Enabled", "已启用")
                       : t("Disabled", "已禁用")
                   }}</span>
+                  <span
+                    v-if="current.load_status === 'environment_disabled'"
+                    class="badge"
+                    >{{
+                      t("Not loaded on this side", "不在实例当前端加载")
+                    }}</span
+                  >
                 </div>
               </div>
               <Button

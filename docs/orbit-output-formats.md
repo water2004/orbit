@@ -8,6 +8,10 @@
 `package.constraint.show`、`package.constraint.set`、`package.remote.add`。
 不再根据返回值类型反推调用的命令；例如 clear 不会再误标成 select。
 
+`list` 的包条目包含 `load_status`：`eligible`（主模块适用于实例端）、`disabled`
+（用户禁用）或 `environment_disabled`（已安装/启用，但 Loader 环境声明排除当前端）。
+这不是依赖校验成功的保证，也不改变 `enabled`、用户过滤 `environment` 或 JAR 精确 lock。
+
 ## 1. 全局选项
 
 ```text

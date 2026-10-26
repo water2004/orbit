@@ -23,11 +23,12 @@ use super::ordering::register_ordering_cycles;
 
 pub(crate) type ExclusionMap = HashMap<String, HashSet<String>>;
 
-#[derive(Clone, Copy)]
 struct GraphContext<'a> {
     loader: LoaderKind,
     exclusions: &'a ExclusionMap,
     target: Environment,
+    manifest: &'a OrbitManifest,
+    discovery: &'a super::discovery::DiscoveryIndex,
 }
 
 struct ModuleRegistration<'a> {
@@ -73,6 +74,7 @@ pub(crate) struct SolverGraph {
     pub(crate) loader: LoaderKind,
     pub(crate) exclusions: ExclusionMap,
     pub(crate) target: Environment,
+    pub(super) discovery: super::discovery::DiscoveryIndex,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -134,10 +136,20 @@ pub(crate) fn build_solver_graph_with_package_roots(
         .map_err(|error| error.to_string())?;
     let exclusions = manifest_exclusions(manifest);
     let mut provider = OrbitDependencyProvider::new();
+    let discovery = super::discovery::DiscoveryIndex::new(
+        manifest,
+        lockfile,
+        candidates,
+        loader_package,
+        loader,
+        target,
+    );
     let context = GraphContext {
         loader,
         exclusions: &exclusions,
         target,
+        manifest,
+        discovery: &discovery,
     };
 
     if java_feature == 0 {
@@ -163,22 +175,21 @@ pub(crate) fn build_solver_graph_with_package_roots(
     let root_package = SolverPackage::Root;
     let root_version = SolverVersion::platform(Version::zero());
     provider.add_package_versions(root_package.clone(), vec![root_version.clone()]);
-    let root_dependencies = root_dependencies(
-        manifest,
-        lockfile,
-        candidates,
-        loader,
-        target,
-        package_roots,
-        &provider,
-    );
+    let root_dependencies = root_dependencies(manifest, loader, target, package_roots, &provider);
     provider.add_package_deps(
         root_package.clone(),
         root_version.clone(),
         root_dependencies,
     );
-    let package_constraints =
-        manifest_package_constraints(manifest, lockfile, candidates, loader, target, &provider);
+
+    let mut package_constraints = manifest_package_constraints(manifest, loader, &provider);
+    package_constraints.extend(manifest_root_constraints(
+        manifest,
+        loader,
+        target,
+        package_roots,
+        &provider,
+    ));
     provider.add_package_incompatibilities(
         root_package.clone(),
         root_version.clone(),
@@ -193,6 +204,7 @@ pub(crate) fn build_solver_graph_with_package_roots(
         loader,
         exclusions,
         target,
+        discovery,
     })
 }
 
@@ -267,7 +279,12 @@ fn register_platform_candidate(
             owner: None,
             identity: identity.clone(),
             parent_priority: Vec::new(),
-            bundled: candidate_bundled_links(&candidate.bundled, &identity, context.loader),
+            bundled: candidate_bundled_links(
+                &candidate.bundled,
+                &identity,
+                context.loader,
+                context.target,
+            ),
         },
         context,
     );
@@ -315,12 +332,13 @@ fn register_candidate_versions(
             installed: false,
         };
         let solver_version = SolverVersion::candidate(version.clone(), identity.clone());
+        let installed_package = SolverPackage::installed(package);
         let solver_package = SolverPackage::Mod(package.to_string());
         // The local file and the repository may name the same content hash. Register its
         // module/owner graph once, retaining the installed identity for transaction planning.
         if provider
             .versions
-            .get(&solver_package)
+            .get(&installed_package)
             .is_some_and(|versions| {
                 let realization = solver_version.same_realization();
                 versions
@@ -330,7 +348,19 @@ fn register_candidate_versions(
         {
             continue;
         }
-        let bundled = candidate_bundled_links(&candidate.bundled, &identity, context.loader);
+        register_installed_package(
+            provider,
+            &installed_package,
+            &solver_version,
+            candidate.environment,
+            context,
+        );
+        let bundled = candidate_bundled_links(
+            &candidate.bundled,
+            &identity,
+            context.loader,
+            context.target,
+        );
         register_module(
             provider,
             ModuleRegistration {
@@ -344,7 +374,7 @@ fn register_candidate_versions(
                 language_loader: candidate.language_loader.as_ref(),
                 embedded_artifacts: &candidate.embedded_artifacts,
                 source_artifact: None,
-                owner: None,
+                owner: Some((installed_package.clone(), solver_version.clone())),
                 identity: identity.clone(),
                 parent_priority: Vec::new(),
                 bundled,
@@ -388,8 +418,17 @@ fn register_lockfile(
             installed: true,
         };
         let solver_version = SolverVersion::candidate(version.clone(), identity.clone());
+        let installed_package = SolverPackage::installed(&entry.mod_id);
         let solver_package = SolverPackage::Mod(entry.mod_id.clone());
-        let bundled_links = bundled_links(&entry.bundled, &identity, context.loader);
+        register_installed_package(
+            provider,
+            &installed_package,
+            &solver_version,
+            entry.environment,
+            context,
+        );
+        let bundled_links =
+            bundled_links(&entry.bundled, &identity, context.loader, context.target);
         register_module(
             provider,
             ModuleRegistration {
@@ -403,7 +442,7 @@ fn register_lockfile(
                 language_loader: entry.language_loader.as_ref(),
                 embedded_artifacts: &entry.embedded_artifacts,
                 source_artifact: None,
-                owner: None,
+                owner: Some((installed_package.clone(), solver_version.clone())),
                 identity: identity.clone(),
                 parent_priority: Vec::new(),
                 bundled: bundled_links,
@@ -483,7 +522,12 @@ fn register_bundled_candidate(
             owner: Some(parent),
             identity: identity.clone(),
             parent_priority: parent_priority.clone(),
-            bundled: candidate_bundled_links(&bundled.bundled, &identity, context.loader),
+            bundled: candidate_bundled_links(
+                &bundled.bundled,
+                &identity,
+                context.loader,
+                context.target,
+            ),
         },
         context,
     );
@@ -551,7 +595,7 @@ fn register_bundled_lock(
             owner: Some(parent),
             identity: identity.clone(),
             parent_priority: parent_priority.clone(),
-            bundled: bundled_links(&bundled.bundled, &identity, context.loader),
+            bundled: bundled_links(&bundled.bundled, &identity, context.loader, context.target),
         },
         context,
     );
@@ -583,9 +627,11 @@ fn bundled_links(
     mods: &[BundledMod],
     parent: &CandidateIdentity,
     loader: LoaderKind,
+    target: Environment,
 ) -> Vec<BundledLink> {
     mods.iter()
         .enumerate()
+        .filter(|(_, metadata)| metadata.environment.applies_to(target))
         .map(|(index, metadata)| {
             bundled_link(
                 &metadata.mod_id,
@@ -604,9 +650,11 @@ fn candidate_bundled_links(
     mods: &[BundledCandidate],
     parent: &CandidateIdentity,
     loader: LoaderKind,
+    target: Environment,
 ) -> Vec<BundledLink> {
     mods.iter()
         .enumerate()
+        .filter(|(_, metadata)| metadata.environment.applies_to(target))
         .map(|(index, metadata)| {
             bundled_link(
                 &metadata.mod_id,
@@ -705,11 +753,9 @@ fn register_module(
         parent_priority,
         bundled,
     } = registration;
-    let GraphContext {
-        loader,
-        exclusions,
-        target,
-    } = *context;
+    let loader = context.loader;
+    let exclusions = context.exclusions;
+    let target = context.target;
     add_version(provider, package.clone(), solver_version.clone());
     provider.add_candidate_priority(
         identity.clone(),
@@ -720,16 +766,31 @@ fn register_module(
         },
     );
     let mut dependencies = Vec::new();
-    let mut incompatibilities =
-        compile_dependency_constraints(expressions, mod_id, loader, exclusions, target);
-    if target != Environment::Both && !environment.applies_to(target) {
+    let mut incompatibilities = compile_dependency_constraints(
+        expressions,
+        mod_id,
+        loader,
+        exclusions,
+        target,
+        Some(context.discovery),
+    );
+    let enabled = context
+        .manifest
+        .packages
+        .get(&identity.owner)
+        .is_none_or(|spec| spec.enabled());
+    if !environment.applies_to(target) || !enabled {
         incompatibilities.push(IncompatibilityConstraint {
             terms: Vec::new(),
-            reason: format!(
-                "{mod_id} is declared for {} but the selected target is {}",
-                environment.as_str(),
-                target.as_str()
-            ),
+            reason: if !enabled {
+                format!("{mod_id} is disabled by the user")
+            } else {
+                format!(
+                    "{mod_id} is declared for {} but the selected target is {}",
+                    environment.as_str(),
+                    target.as_str()
+                )
+            },
         });
     }
 
@@ -856,6 +917,34 @@ fn register_module(
     );
 }
 
+/// Installation does not imply loading. The bridge is deterministic for this
+/// candidate and physical side; it is not a new selectable load preference.
+fn register_installed_package(
+    provider: &mut OrbitDependencyProvider,
+    package: &SolverPackage,
+    version: &SolverVersion,
+    environment: Environment,
+    context: &GraphContext<'_>,
+) {
+    add_version(provider, package.clone(), version.clone());
+    let mod_id = package.user_label();
+    let enabled = context
+        .manifest
+        .packages
+        .get(mod_id)
+        .is_none_or(|spec| spec.enabled());
+    let dependencies = if enabled && environment.applies_to(context.target) {
+        vec![(
+            SolverPackage::Mod(mod_id.to_string()),
+            Ranges::singleton(version.clone()),
+        )]
+    } else {
+        Vec::new()
+    };
+    provider.add_package_deps(package.clone(), version.clone(), dependencies);
+    provider.add_package_incompatibilities(package.clone(), version.clone(), Vec::new());
+}
+
 fn register_proxy_candidate(
     provider: &mut OrbitDependencyProvider,
     dependencies: &mut Vec<(SolverPackage, Ranges<SolverVersion>)>,
@@ -887,22 +976,18 @@ fn register_proxy_candidate(
 /// version, using PubGrub's ordinary incompatibility model.
 fn manifest_package_constraints(
     manifest: &OrbitManifest,
-    lockfile: &OrbitLockfile,
-    candidates: &HashMap<String, Vec<CandidateVersion>>,
     loader: LoaderKind,
-    target: Environment,
     provider: &OrbitDependencyProvider,
 ) -> super::provider::PackageIncompatibilities {
     manifest
         .packages
         .iter()
-        .filter(|(package, specification)| {
-            effective_root_environment(package, specification, lockfile, candidates)
-                .applies_to(target)
+        .flat_map(|(name, specification)| {
+            [SolverPackage::installed(name), logical_package(name)]
+                .map(|package| (name, specification, package))
         })
-        .filter_map(|(name, specification)| {
-            let package = logical_package(name);
-            let allowed = manifest_package_versions(provider, name, specification, loader, false);
+        .filter_map(|(name, specification, package)| {
+            let allowed = policy_versions(provider, &package, name, specification, loader, false);
             let versions = provider.versions.get(&package)?;
             if versions.iter().all(|version| allowed.contains(version)) {
                 return None;
@@ -924,8 +1009,6 @@ fn manifest_package_constraints(
 
 fn root_dependencies(
     manifest: &OrbitManifest,
-    lockfile: &OrbitLockfile,
-    candidates: &HashMap<String, Vec<CandidateVersion>>,
     loader: LoaderKind,
     target: Environment,
     package_roots: ManifestPackageRoots,
@@ -935,12 +1018,14 @@ fn root_dependencies(
         manifest
             .packages
             .iter()
-            .filter(|(package, spec)| {
-                effective_root_environment(package, spec, lockfile, candidates).applies_to(target)
+            .filter(|(_, spec)| spec.env().is_none_or(|env| env.applies_to(target)))
+            .filter(|(name, spec)| {
+                package_roots == ManifestPackageRoots::RequiredTopLevel
+                    || !has_contained_provider(provider, name, spec, loader)
             })
             .map(|(name, spec)| {
                 (
-                    logical_package(name),
+                    SolverPackage::installed(name),
                     manifest_package_versions(
                         provider,
                         name,
@@ -976,6 +1061,65 @@ fn root_dependencies(
     dependencies
 }
 
+fn has_contained_provider(
+    provider: &OrbitDependencyProvider,
+    name: &str,
+    spec: &PackageSpec,
+    loader: LoaderKind,
+) -> bool {
+    let allowed = policy_versions(provider, &logical_package(name), name, spec, loader, false);
+    provider
+        .versions
+        .get(&logical_package(name))
+        .into_iter()
+        .flatten()
+        .any(|version| {
+            allowed.contains(version)
+                && version
+                    .candidate_identity()
+                    .is_some_and(|identity| identity.owner != name || !identity.path.is_empty())
+        })
+}
+
+/// A logical requirement can also be supplied by an installed owner's contained
+/// module or alias. Migration's top-level retention preference remains distinct.
+fn manifest_root_constraints(
+    manifest: &OrbitManifest,
+    loader: LoaderKind,
+    target: Environment,
+    roots: ManifestPackageRoots,
+    provider: &OrbitDependencyProvider,
+) -> super::provider::PackageIncompatibilities {
+    if roots != ManifestPackageRoots::Required {
+        return Vec::new();
+    }
+    manifest
+        .packages
+        .iter()
+        .filter(|(_, spec)| spec.env().is_none_or(|env| env.applies_to(target)))
+        .filter(|(name, spec)| has_contained_provider(provider, name, spec, loader))
+        .map(|(name, spec)| IncompatibilityConstraint {
+            terms: [
+                (
+                    SolverPackage::installed(name),
+                    manifest_package_versions(provider, name, spec, loader, true),
+                ),
+                (
+                    logical_package(name),
+                    policy_versions(provider, &logical_package(name), name, spec, loader, false),
+                ),
+            ]
+            .into_iter()
+            .filter(|(_, range)| *range != Ranges::empty())
+            .map(|(package, range)| IncompatibilityConstraintTerm::Negative(package, range))
+            .collect(),
+            reason: format!(
+                "the project requires {name} from an installed package or contained provider"
+            ),
+        })
+        .collect()
+}
+
 pub(super) fn manifest_package_versions(
     provider: &OrbitDependencyProvider,
     name: &str,
@@ -983,13 +1127,30 @@ pub(super) fn manifest_package_versions(
     loader: LoaderKind,
     top_level_only: bool,
 ) -> Ranges<SolverVersion> {
-    let package = logical_package(name);
+    policy_versions(
+        provider,
+        &SolverPackage::installed(name),
+        name,
+        specification,
+        loader,
+        top_level_only,
+    )
+}
+
+fn policy_versions(
+    provider: &OrbitDependencyProvider,
+    package: &SolverPackage,
+    name: &str,
+    specification: &PackageSpec,
+    loader: LoaderKind,
+    top_level_only: bool,
+) -> Ranges<SolverVersion> {
     let allowed = dependency_constraint(name, specification.version_constraint(), loader);
     let string = crate::VersionStringRule::parse(specification.string_expression())
         .expect("manifest string expression was validated");
     provider
         .versions
-        .get(&package)
+        .get(package)
         .into_iter()
         .flatten()
         .filter(|version| {
@@ -1010,29 +1171,6 @@ pub(super) fn manifest_package_versions(
         .fold(Ranges::empty(), |range, version| {
             range.union(&Ranges::singleton(version.clone()))
         })
-}
-
-fn effective_root_environment(
-    package: &str,
-    spec: &crate::manifest::PackageSpec,
-    lockfile: &OrbitLockfile,
-    candidates: &HashMap<String, Vec<CandidateVersion>>,
-) -> Environment {
-    if let Some(environment) = spec.env() {
-        return environment;
-    }
-    if let Some(entry) = lockfile.find(package) {
-        return entry.environment;
-    }
-    candidates
-        .get(package)
-        .and_then(|candidates| {
-            candidates
-                .iter()
-                .map(|candidate| candidate.environment)
-                .reduce(Environment::union)
-        })
-        .unwrap_or(Environment::Both)
 }
 
 pub(crate) fn manifest_exclusions(manifest: &OrbitManifest) -> ExclusionMap {
@@ -1121,6 +1259,321 @@ mod tests {
     use crate::lockfile::{LockMeta, PackageEntry};
     use crate::metadata::{DependencyKind, DependencyOrdering, ModDependency};
     use crate::resolver::ordering::resolution_warnings;
+
+    fn fabric_server() -> OrbitManifest {
+        let mut manifest = manifest();
+        manifest.project.modloader = "fabric".into();
+        manifest.project.modloader_version = "0.19.2".into();
+        manifest.platform.physical_environment = Environment::Server;
+        manifest.packages.shift_remove("b");
+        manifest
+    }
+
+    fn server_lock(manifest: &OrbitManifest, packages: Vec<PackageEntry>) -> OrbitLockfile {
+        OrbitLockfile {
+            meta: LockMeta {
+                mc_version: manifest.project.mc_version.clone(),
+                modloader: manifest.project.modloader.clone(),
+                modloader_version: manifest.project.modloader_version.clone(),
+            },
+            packages,
+        }
+    }
+
+    #[test]
+    fn fabric_server_installs_environment_disabled_dependency_and_keeps_its_bytes() {
+        let manifest = fabric_server();
+        let lock = server_lock(
+            &manifest,
+            vec![package(
+                "a",
+                "1",
+                vec![dependency("malilib", ">=1", DependencyKind::Required)],
+            )],
+        );
+        let mut client_library = candidate("1", Vec::new());
+        client_library.dependencies =
+            vec![dependency("minecraft", "999", DependencyKind::Required)];
+        client_library.environment = Environment::Client;
+        let catalog = HashMap::from([("malilib".into(), vec![client_library])]);
+        let graph = build_solver_graph(&manifest, &lock, &catalog, None);
+        let solution =
+            pubgrub::resolve(&graph.provider, graph.root_package, graph.root_version).unwrap();
+        assert!(
+            solution.get(&SolverPackage::installed("malilib")).is_some(),
+            "dependency bytes must be installed, not merely downloaded"
+        );
+        assert!(
+            solution
+                .get(&SolverPackage::Mod("malilib".into()))
+                .is_none(),
+            "Fabric does not load the client-only module on a server"
+        );
+    }
+
+    #[test]
+    fn fabric_server_rejects_missing_wrong_version_and_user_disabled_dependency() {
+        let mut manifest = fabric_server();
+        let mut library = package("malilib", "1", Vec::new());
+        library.environment = Environment::Client;
+        let consumer = package(
+            "a",
+            "1",
+            vec![dependency("malilib", ">=2", DependencyKind::Required)],
+        );
+        for packages in [
+            vec![consumer.clone()],
+            vec![consumer.clone(), library.clone()],
+        ] {
+            let graph = build_solver_graph(
+                &manifest,
+                &server_lock(&manifest, packages),
+                &HashMap::new(),
+                None,
+            );
+            assert!(
+                pubgrub::resolve(&graph.provider, graph.root_package, graph.root_version).is_err()
+            );
+        }
+        library.version = "2".into();
+        let mut spec = crate::manifest::PackageSpec::new("*", Vec::new());
+        spec.enabled = false;
+        manifest.packages.insert("malilib".into(), spec);
+        let graph = build_solver_graph(
+            &manifest,
+            &server_lock(&manifest, vec![consumer, library]),
+            &HashMap::new(),
+            None,
+        );
+        assert!(
+            pubgrub::resolve(&graph.provider, graph.root_package, graph.root_version).is_err(),
+            "a .jar.disabled must not become an environment-disabled witness"
+        );
+    }
+
+    #[test]
+    fn inactive_package_still_obeys_user_version_policy() {
+        let mut manifest = fabric_server();
+        manifest.packages["a"].version = ">=2".into();
+        let mut client = package("a", "1", Vec::new());
+        client.environment = Environment::Client;
+        let graph = build_solver_graph(
+            &manifest,
+            &server_lock(&manifest, vec![client]),
+            &HashMap::new(),
+            None,
+        );
+        assert!(pubgrub::resolve(&graph.provider, graph.root_package, graph.root_version).is_err());
+    }
+
+    #[test]
+    fn fabric_discovery_depends_on_selected_owners_not_the_download_catalog() {
+        let mut manifest = fabric_server();
+        let mut inactive = package("malilib", "2", Vec::new());
+        inactive.environment = Environment::Client;
+        let mut carrier = package("b", "1", Vec::new());
+        carrier.bundled.push(BundledMod {
+            mod_id: "malilib".into(),
+            version: "1".into(),
+            load_condition: ModLoadCondition::IfPossible,
+            origin: crate::jar::JarModOrigin::Nested {
+                path: "library.jar".into(),
+                artifact: None,
+            },
+            environment: Environment::Both,
+            dependencies: Vec::new(),
+            provides: Vec::new(),
+            language_loader: None,
+            embedded_artifacts: Vec::new(),
+            bundled: Vec::new(),
+        });
+        let consumer = package(
+            "a",
+            "1",
+            vec![dependency("malilib", ">=2", DependencyKind::Required)],
+        );
+        let lock = server_lock(&manifest, vec![consumer, inactive, carrier]);
+        let graph = build_solver_graph(&manifest, &lock, &HashMap::new(), None);
+        let solution =
+            pubgrub::resolve(&graph.provider, graph.root_package, graph.root_version).unwrap();
+        assert!(solution.get(&SolverPackage::installed("b")).is_none());
+        assert!(solution.get(&SolverPackage::installed("malilib")).is_some());
+
+        // Once b is installed, its discoverable malilib@1 blocks Fabric's
+        // workaround, even though malilib@2 is also present but inactive.
+        manifest.packages.insert(
+            "b".into(),
+            crate::manifest::PackageSpec::new("*", Vec::new()),
+        );
+        let graph = build_solver_graph(&manifest, &lock, &HashMap::new(), None);
+        assert!(pubgrub::resolve(&graph.provider, graph.root_package, graph.root_version).is_err());
+    }
+
+    #[test]
+    fn inactive_parent_does_not_discover_its_nested_dependencies() {
+        let manifest = fabric_server();
+        let mut carrier = package("carrier", "1", Vec::new());
+        carrier.environment = Environment::Client;
+        carrier.bundled.push(BundledMod {
+            mod_id: "malilib".into(),
+            version: "2".into(),
+            load_condition: ModLoadCondition::Always,
+            origin: crate::jar::JarModOrigin::Nested {
+                path: "library.jar".into(),
+                artifact: None,
+            },
+            environment: Environment::Client,
+            dependencies: Vec::new(),
+            provides: Vec::new(),
+            language_loader: None,
+            embedded_artifacts: Vec::new(),
+            bundled: Vec::new(),
+        });
+        let lock = server_lock(
+            &manifest,
+            vec![
+                package(
+                    "a",
+                    "1",
+                    vec![dependency("malilib", ">=2", DependencyKind::Required)],
+                ),
+                carrier,
+            ],
+        );
+        let graph = build_solver_graph(&manifest, &lock, &HashMap::new(), None);
+        assert!(pubgrub::resolve(&graph.provider, graph.root_package, graph.root_version).is_err());
+    }
+
+    #[test]
+    fn loader_carried_active_modules_also_block_environment_dependency_softening() {
+        let manifest = fabric_server();
+        let mut inactive = package("mixinextras", "999", Vec::new());
+        inactive.environment = Environment::Client;
+        let lock = server_lock(
+            &manifest,
+            vec![
+                package(
+                    "a",
+                    "1",
+                    vec![dependency("mixinextras", ">=999", DependencyKind::Required)],
+                ),
+                inactive,
+            ],
+        );
+        let loader = PlatformCandidate {
+            mod_id: "fabricloader".into(),
+            version: "0.19.2".into(),
+            dependencies: Vec::new(),
+            environment: Environment::Both,
+            provides: Vec::new(),
+            language_loader: None,
+            embedded_artifacts: Vec::new(),
+            bundled: vec![BundledCandidate {
+                mod_id: "mixinextras".into(),
+                version: "0.5.4".into(),
+                load_condition: ModLoadCondition::IfPossible,
+                origin: crate::jar::JarModOrigin::Nested {
+                    path: "mixinextras.jar".into(),
+                    artifact: None,
+                },
+                environment: Environment::Both,
+                dependencies: Vec::new(),
+                provides: Vec::new(),
+                language_loader: None,
+                embedded_artifacts: Vec::new(),
+                bundled: Vec::new(),
+            }],
+        };
+        let graph = build_solver_graph(&manifest, &lock, &HashMap::new(), Some(&loader));
+        assert!(pubgrub::resolve(&graph.provider, graph.root_package, graph.root_version).is_err());
+    }
+
+    #[test]
+    fn binding_coalescing_preserves_feasibility_across_side_and_version_combinations() {
+        for target in [Environment::Client, Environment::Server] {
+            for first_side in [Environment::Both, Environment::Client, Environment::Server] {
+                for second_side in [Environment::Both, Environment::Client, Environment::Server] {
+                    for required in ["=1", "=2"] {
+                        let mut manifest = fabric_server();
+                        manifest.platform.physical_environment = target;
+                        let lock = server_lock(
+                            &manifest,
+                            vec![package(
+                                "a",
+                                "1",
+                                vec![dependency("malilib", required, DependencyKind::Required)],
+                            )],
+                        );
+                        let mut first = candidate("1", Vec::new());
+                        first.environment = first_side;
+                        let mut second = candidate("2", Vec::new());
+                        second.environment = second_side;
+                        let candidates = HashMap::from([("malilib".into(), vec![first, second])]);
+                        let plain = build_solver_graph(&manifest, &lock, &candidates, None);
+                        let mut folded = build_solver_graph(&manifest, &lock, &candidates, None);
+                        let aliases = folded.provider.coalesce_module_bindings();
+                        assert!(aliases.contains_key(&SolverPackage::Mod("a".into())));
+                        assert_eq!(
+                            aliases.contains_key(&SolverPackage::Mod("malilib".into())),
+                            first_side.applies_to(target) && second_side.applies_to(target),
+                        );
+                        let original = pubgrub::resolve(
+                            &plain.provider,
+                            plain.root_package,
+                            plain.root_version,
+                        );
+                        let optimized = pubgrub::resolve(
+                            &folded.provider,
+                            folded.root_package,
+                            folded.root_version,
+                        );
+                        assert_eq!(
+                            original.is_ok(),
+                            optimized.is_ok(),
+                            "{target:?}, {first_side:?}, {second_side:?}, {required}"
+                        );
+                        if let (Ok(original), Ok(optimized)) = (original, optimized) {
+                            for (module, installed) in aliases {
+                                assert_eq!(original.get(&module), optimized.get(&installed));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn environment_softening_is_not_applied_to_other_loaders() {
+        for loader in ["forge", "neoforge", "quilt"] {
+            let mut manifest = fabric_server();
+            manifest.project.modloader = loader.into();
+            manifest.project.modloader_version = match loader {
+                "forge" => "47.2.0",
+                "neoforge" => "21.1.0",
+                _ => "0.28.1",
+            }
+            .into();
+            let mut library = package("malilib", "1", Vec::new());
+            library.environment = Environment::Client;
+            let lock = server_lock(
+                &manifest,
+                vec![
+                    package(
+                        "a",
+                        "1",
+                        vec![dependency("malilib", "*", DependencyKind::Required)],
+                    ),
+                    library,
+                ],
+            );
+            let graph = build_solver_graph(&manifest, &lock, &HashMap::new(), None);
+            assert!(
+                pubgrub::resolve(&graph.provider, graph.root_package, graph.root_version).is_err(),
+                "{loader}"
+            );
+        }
+    }
 
     fn build_solver_graph(
         manifest: &OrbitManifest,
@@ -1998,6 +2451,7 @@ z_parent = { version = "*", remotes = [{ type = "file", path = "z_parent.jar" }]
             manifest.project.loader_kind().unwrap(),
             &graph.exclusions,
             graph.target,
+            &graph.discovery,
         );
 
         assert_eq!(warnings.len(), 2);

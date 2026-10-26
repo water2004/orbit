@@ -108,7 +108,7 @@ fn collect_external_facts(cause: &Cause, facts: &mut Vec<String>) {
                 External::FromDependencyOf(package, _, dependency, _)
                     if matches!(package, SolverPackage::LoadPreference { .. })
                         || matches!(dependency, SolverPackage::LoadPreference { .. })
-                        || package == dependency =>
+                        || package.user_label() == dependency.user_label() =>
                 {
                     None
                 }

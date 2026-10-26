@@ -183,6 +183,9 @@ fn map_end_bound(bound: Bound<Version>) -> Bound<SolverVersion> {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub(crate) enum SolverPackage {
     Root,
+    /// Installed logical package, projected into user-visible solutions.
+    Package(String),
+    /// A module actually loaded by the selected Loader on this physical side.
     Mod(String),
     EmbeddedArtifact(String),
     LoadPreference {
@@ -193,6 +196,10 @@ pub(crate) enum SolverPackage {
 }
 
 impl SolverPackage {
+    pub(crate) fn installed(package: impl Into<String>) -> Self {
+        Self::Package(package.into())
+    }
+
     pub(crate) fn logical(package: impl Into<String>) -> Self {
         let package = package.into();
         if crate::resolver::graph::is_platform_package(&package) {
@@ -204,7 +211,7 @@ impl SolverPackage {
 
     pub(crate) fn top_level_mod_id(&self) -> Option<&str> {
         match self {
-            Self::Mod(mod_id) => Some(mod_id),
+            Self::Package(mod_id) => Some(mod_id),
             _ => None,
         }
     }
@@ -212,7 +219,8 @@ impl SolverPackage {
     pub(crate) fn user_label(&self) -> &str {
         match self {
             Self::Root => "the project",
-            Self::Mod(mod_id)
+            Self::Package(mod_id)
+            | Self::Mod(mod_id)
             | Self::EmbeddedArtifact(mod_id)
             | Self::LoadPreference { mod_id, .. }
             | Self::Platform(mod_id) => mod_id,
@@ -224,7 +232,7 @@ impl std::fmt::Display for SolverPackage {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Root => write!(f, "the project"),
-            Self::Mod(id) => write!(f, "{id}"),
+            Self::Package(id) | Self::Mod(id) => write!(f, "{id}"),
             Self::EmbeddedArtifact(id) => {
                 write!(f, "{id} embedded artifact")
             }

@@ -809,6 +809,8 @@ pub struct ListedPackage {
     pub version: String,
     pub version_constraint: String,
     pub enabled: bool,
+    /// Eligibility of the primary module on the instance's physical side.
+    pub load_status: PackageLoadStatus,
     pub remotes: Vec<String>,
     /// Explicit package filter; `None` means follow the selected JAR.
     pub configured_environment: Option<String>,
@@ -821,6 +823,14 @@ pub struct ListedPackage {
     pub bundled: Vec<(String, String)>,
     /// Loader-declared icon source retained for machine presentation output.
     pub icon: Option<PackageIcon>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PackageLoadStatus {
+    Eligible,
+    Disabled,
+    EnvironmentDisabled,
 }
 
 #[derive(Debug, Clone)]
@@ -927,6 +937,16 @@ fn list_output(
                     .map(|specification| specification.version.clone())
                     .unwrap_or_else(|| "*".to_string()),
                 enabled: requirement.is_none_or(PackageSpec::enabled),
+                load_status: if !requirement.is_none_or(PackageSpec::enabled) {
+                    PackageLoadStatus::Disabled
+                } else if !entry
+                    .environment
+                    .applies_to(manifest.platform.physical_environment)
+                {
+                    PackageLoadStatus::EnvironmentDisabled
+                } else {
+                    PackageLoadStatus::Eligible
+                },
                 remotes: entry
                     .remotes
                     .iter()
@@ -1544,11 +1564,9 @@ pub(crate) fn selected_packages(
                 .iter()
                 .any(|dependency| dependency == package)
         });
-        let declared_environment = lockfile
-            .find(package)
-            .map(|entry| entry.environment)
-            .unwrap_or(crate::metadata::Environment::Both);
-        let environment = spec.effective_environment(declared_environment);
+        // JAR environment controls loading, not whether its bytes may be
+        // installed. Only an explicit user filter excludes installation.
+        let environment = spec.env().unwrap_or(crate::metadata::Environment::Both);
         let environment_matches = match target {
             "client" => environment.applies_to(crate::metadata::Environment::Client),
             "server" => environment.applies_to(crate::metadata::Environment::Server),
@@ -3272,7 +3290,7 @@ packages = ["client-mod", "optional-mod"]
     }
 
     #[test]
-    fn missing_manifest_environment_follows_the_locked_jar_declaration() {
+    fn installation_retains_jars_that_the_loader_does_not_load_on_this_side() {
         let manifest: OrbitManifest = toml::from_str(
             r#"
 [project]
@@ -3316,7 +3334,7 @@ example = { version = "*", remotes = [{ type = "file", path = "example.jar" }] }
         );
         assert_eq!(
             selected_packages(&manifest, &lockfile, &server, None, 21).unwrap(),
-            (Vec::new(), vec!["example".to_string()])
+            (vec!["example".to_string()], Vec::new())
         );
         assert_eq!(
             selected_packages(&manifest, &lockfile, &PackageSelection::default(), None, 21)
@@ -3334,12 +3352,12 @@ example = { version = "*", remotes = [{ type = "file", path = "example.jar" }] }
                 21
             )
             .unwrap(),
-            (Vec::new(), vec!["example".to_string()])
+            (vec!["example".to_string()], Vec::new())
         );
     }
 
     #[test]
-    fn explicit_manifest_environment_overrides_the_locked_jar_filter() {
+    fn explicit_manifest_environment_does_not_override_loader_loading_rules() {
         let mut manifest: OrbitManifest = toml::from_str(
             r#"
 [project]
@@ -3373,7 +3391,10 @@ example = { version = "*", remotes = [{ type = "file", path = "example.jar" }] }
             ..PackageSelection::default()
         };
 
-        assert!(selected_packages(&manifest, &lockfile, &server, None, 21).is_err());
+        assert_eq!(
+            selected_packages(&manifest, &lockfile, &server, None, 21).unwrap(),
+            (vec!["example".to_string()], Vec::new())
+        );
     }
 
     #[test]

@@ -1,4 +1,5 @@
 _version: 1
+"Not loaded on this side": "不在实例当前端加载"
 "Public download source for this command only: official or bmclapi.": "仅对本次命令生效的公开资源下载源：official 或 bmclapi。"
 "Read the latest launch result and crash diagnostics.": "读取最近一次启动结果及崩溃报告。"
 "Download source selected": "已选择下载源"

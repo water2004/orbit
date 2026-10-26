@@ -28,38 +28,75 @@ impl MetadataParser for FabricParser {
                 "fabric.mod.json must contain a JSON object"
             ))
         })?;
+        if let Some(schema) = object.get("schemaVersion")
+            && !matches!(schema.as_u64(), Some(0 | 1))
+        {
+            return Err(OrbitError::Other(anyhow::anyhow!(
+                "unsupported fabric.mod.json schemaVersion {schema}; expected 0 or 1"
+            )));
+        }
         let id = required_string(object, "id", "fabric.mod.json")?;
         validate_mod_id(&id)?;
         let version = required_string(object, "version", "fabric.mod.json")?;
 
+        let schema = object
+            .get("schemaVersion")
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
         let mut dependencies = Vec::new();
-        append_dependencies(
-            &mut dependencies,
-            object.get("depends"),
-            DependencyKind::Required,
-        )?;
-        append_dependencies(
-            &mut dependencies,
-            object.get("recommends"),
-            DependencyKind::Recommended,
-        )?;
-        append_dependencies(
-            &mut dependencies,
-            object.get("suggests"),
-            DependencyKind::Suggested,
-        )?;
-        append_dependencies(
-            &mut dependencies,
-            object.get("conflicts"),
-            DependencyKind::Discouraged,
-        )?;
-        append_dependencies(
-            &mut dependencies,
-            object.get("breaks"),
-            DependencyKind::Incompatible,
-        )?;
-        let provides = parse_provides(object.get("provides"))?;
-        let embedded_jars = parse_jars(object.get("jars"))?;
+        if schema == 0 {
+            append_dependencies(
+                &mut dependencies,
+                object.get("requires"),
+                DependencyKind::Required,
+            )?;
+            append_dependencies(
+                &mut dependencies,
+                object.get("conflicts"),
+                DependencyKind::Incompatible,
+            )?;
+            append_dependencies(
+                &mut dependencies,
+                object.get("recommends"),
+                DependencyKind::Suggested,
+            )?;
+        } else {
+            append_dependencies(
+                &mut dependencies,
+                object.get("depends"),
+                DependencyKind::Required,
+            )?;
+            append_dependencies(
+                &mut dependencies,
+                object.get("recommends"),
+                DependencyKind::Recommended,
+            )?;
+            append_dependencies(
+                &mut dependencies,
+                object.get("suggests"),
+                DependencyKind::Suggested,
+            )?;
+            append_dependencies(
+                &mut dependencies,
+                object.get("conflicts"),
+                DependencyKind::Discouraged,
+            )?;
+            append_dependencies(
+                &mut dependencies,
+                object.get("breaks"),
+                DependencyKind::Incompatible,
+            )?;
+        }
+        let provides = if schema == 1 {
+            parse_provides(object.get("provides"))?
+        } else {
+            Vec::new()
+        };
+        let embedded_jars = if schema == 1 {
+            parse_jars(object.get("jars"))?
+        } else {
+            Vec::new()
+        };
 
         Ok(ModFileMetadata {
             loader: LoaderKind::Fabric,
@@ -72,7 +109,15 @@ impl MetadataParser for FabricParser {
                 version,
                 authors: object.get("authors").map(parse_people).unwrap_or_default(),
                 description: optional_string(object, "description").unwrap_or_default(),
-                environment: parse_environment(object.get("environment"))?,
+                environment: if schema == 0 {
+                    match object.get("side").and_then(Value::as_str) {
+                        Some("client") => Environment::Client,
+                        Some("server") => Environment::Server,
+                        _ => Environment::Both,
+                    }
+                } else {
+                    parse_environment(object.get("environment"))?
+                },
                 dependencies,
                 provides,
                 // Fabric Loader treats nested candidates as greedy optional mods.
@@ -298,6 +343,45 @@ fn validate_mod_id(id: &str) -> Result<(), OrbitError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn legacy_metadata_uses_legacy_side_and_dependency_kinds() {
+        let parsed = FabricParser
+            .parse(
+                r#"{
+            "id":"legacy_mod","version":"1","side":"client",
+            "requires":{"library":">=1"},"conflicts":{"broken":"*"},
+            "recommends":{"optional":"*"}
+        }"#,
+            )
+            .unwrap();
+        assert_eq!(parsed.mods[0].environment, Environment::Client);
+        let kinds: Vec<_> = parsed.mods[0]
+            .dependencies
+            .iter()
+            .flat_map(DependencyExpression::relations)
+            .map(|edge| edge.kind)
+            .collect();
+        assert_eq!(
+            kinds,
+            [
+                DependencyKind::Required,
+                DependencyKind::Incompatible,
+                DependencyKind::Suggested
+            ]
+        );
+    }
+
+    #[test]
+    fn rejects_future_metadata_instead_of_applying_legacy_environment_rules() {
+        assert!(
+            FabricParser
+                .parse(r#"{"schemaVersion":2,"id":"future_mod","version":"1"}"#)
+                .unwrap_err()
+                .to_string()
+                .contains("schemaVersion")
+        );
+    }
 
     #[test]
     fn normalizes_every_dependency_kind_and_provides() {

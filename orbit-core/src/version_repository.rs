@@ -22,6 +22,9 @@ use crate::providers::RemoteArtifact;
 use crate::resolver::types::CandidateCatalog;
 
 const SCHEMA_VERSION: i64 = 2;
+// Parsed JAR facts are derived data. A parser change must not leave stale
+// dependency/environment facts authoritative under an unchanged content hash.
+const JAR_ANALYSIS_REVISION: i64 = 1;
 
 #[derive(Debug, Clone)]
 pub struct VersionRepository {
@@ -153,6 +156,7 @@ impl RepositoryScope {
              CREATE INDEX IF NOT EXISTS jars_sha1 ON jars(sha1);
              CREATE INDEX IF NOT EXISTS jars_mod_id ON jars(mod_id);",
         )?;
+        refresh_analysis_revision(&jars)?;
         Ok(())
     }
 
@@ -452,6 +456,38 @@ fn open_database(path: &Path) -> Result<Connection, OrbitError> {
     Ok(connection)
 }
 
+fn refresh_analysis_revision(connection: &Connection) -> Result<(), OrbitError> {
+    let transaction = connection.unchecked_transaction().map_err(sql_error)?;
+    transaction
+        .execute_batch(
+            "CREATE TABLE IF NOT EXISTS analysis_revision (
+        singleton INTEGER PRIMARY KEY CHECK (singleton = 1), revision INTEGER NOT NULL
+    )",
+        )
+        .map_err(sql_error)?;
+    let previous: Option<i64> = transaction
+        .query_row(
+            "SELECT revision FROM analysis_revision WHERE singleton = 1",
+            [],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(sql_error)?;
+    if previous != Some(JAR_ANALYSIS_REVISION) {
+        transaction
+            .execute("DELETE FROM jars", [])
+            .map_err(sql_error)?;
+        transaction
+            .execute(
+                "INSERT INTO analysis_revision(singleton, revision) VALUES (1, ?1)
+            ON CONFLICT(singleton) DO UPDATE SET revision = excluded.revision",
+                [JAR_ANALYSIS_REVISION],
+            )
+            .map_err(sql_error)?;
+    }
+    transaction.commit().map_err(sql_error)
+}
+
 fn initialize_database(connection: &Connection, schema: &str) -> Result<(), OrbitError> {
     let version: i64 = connection
         .query_row("PRAGMA user_version", [], |row| row.get(0))
@@ -723,6 +759,40 @@ mod tests {
         assert_ne!(fabric.remote_path(), newer.remote_path());
         assert_ne!(uppercase.remote_path(), lowercase.remote_path());
         assert_ne!(punctuation.remote_path(), literal.remote_path());
+    }
+
+    #[test]
+    fn parser_revision_invalidates_only_derived_jar_facts_once() {
+        let directory = tempfile::tempdir().unwrap();
+        let repository = VersionRepository::open(directory.path().to_path_buf()).unwrap();
+        let scope = repository.scope("1.21.1", LoaderKind::Fabric).unwrap();
+        let jar = inspected("1.0.0", "revision-test");
+        scope.store_jar(&jar).unwrap();
+        scope
+            .replace_project("modrinth", "project", "marker", &[])
+            .unwrap();
+        open_database(&scope.jars_path())
+            .unwrap()
+            .execute("DROP TABLE analysis_revision", [])
+            .unwrap();
+        let refreshed = repository.scope("1.21.1", LoaderKind::Fabric).unwrap();
+        assert!(refreshed.find_jar(&jar.sha512, "").unwrap().is_none());
+        assert_eq!(
+            refreshed
+                .project_marker("modrinth", "project")
+                .unwrap()
+                .as_deref(),
+            Some("marker")
+        );
+        refreshed.store_jar(&jar).unwrap();
+        assert!(
+            repository
+                .scope("1.21.1", LoaderKind::Fabric)
+                .unwrap()
+                .find_jar(&jar.sha512, "")
+                .unwrap()
+                .is_some()
+        );
     }
 
     #[test]

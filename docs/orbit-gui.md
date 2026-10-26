@@ -157,6 +157,8 @@ CLI 返回的 provider/project ID。默认 beta/snapshot 排除规则是可取�
 - 文件与数据按需调用 ownership，显示顶层 JAR、独占文件/目录树及保留节点。
   reset 保留包本体，purge 删除包及独占数据，均由 CLI 确认准确范围。
 - 包设置管理环境和多远端，不能删除最后一个远端。内置模块只显示数量。
+- 概览消费 CLI `load_status`，将“已启用但不在实例当前端加载”与用户手动禁用分开展示；
+  GUI 不读取 JAR、不推导物理端或重写依赖规则。
 
 sync 如实对账，fix 求解修复，install 按 lock 恢复，三者不得隐式串联。
 升级与受阻诊断分开呈现，GUI 不自行筛选 Pareto 解。

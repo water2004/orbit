@@ -31,10 +31,21 @@ const pkg = {
   mod_id: "sodium",
   version: "0.9.1",
   enabled: true,
+  load_status: "eligible",
   remotes: [],
   dependencies: [],
   bundled_count: 0,
 } as Package;
+it("shows CLI environment exclusion without treating the installed mod as disabled", async () => {
+  const wrapper = mount(PackageManager, {
+    props: { pkg: { ...pkg, load_status: "environment_disabled" }, context },
+    global: { stubs: { Teleport: true } },
+  });
+  await flushPromises();
+  expect(wrapper.text()).toContain("Not loaded on this side");
+  expect(wrapper.text()).toContain("Enabled");
+  expect(orbit).not.toHaveBeenCalled();
+});
 beforeEach(() => {
   vi.mocked(invoke).mockReset();
   vi.mocked(invoke).mockImplementation(async (command) =>

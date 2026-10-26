@@ -66,6 +66,7 @@ resolver/
 ├── mod.rs          公共 API 与求解编排
 ├── graph.rs        注册包候选、模块、provides、load condition 和 Jar-in-Jar
 ├── constraints.rs  将规范化 any/all/unless 表达式编译为 PubGrub 子句
+├── discovery.rs    按已选择的安装候选表达 Loader 发现与环境停用事实
 ├── ordering.rs     加载顺序环约束与软依赖告警
 ├── local.rs        把本地扫描结果转换为 lockfile 后复用统一建图
 ├── provider.rs     内存 DependencyProvider
@@ -208,12 +209,34 @@ JAR 才是不同实现，即使它们声明了相同版本。
 
 所有候选求解及本地运行时校验都以 `[platform].physical_environment` 选择物理端；不能
 用 `both` 代替实例的端。客户端包含内置服务器，但 Fabric Loader 的物理端仍是 `client`；
-`server` 指独立服务端。模块声明和 TOML 包 `env` 是该物理端下的过滤条件，不是另一个
-运行时。安装恢复未指定 `--target` 时也遵循实例物理端；显式目标导出/预览仍按请求的端过滤。
+`server` 指独立服务端。TOML 包 `env` 是显式安装过滤；JAR 的 `environment` 决定
+模块是否加载，不能直接禁止安装这个包。未配置 `env` 时，install 保留 lock 的精确包，
+包括当前物理端不会加载的 JAR；其依赖、冲突、provides 和嵌套内容不冒充已加载模块。
+显式目标导出/预览继续尊重用户的包过滤，不以元数据声明替代用户策略。
 服务端专用的嵌套 provider 在客户端不可用，但在独立服务端仍可合法满足依赖。
 例如 Voxy 的 server-only `sodiumprovider` 提供 `sodium=0.0.0`，不能使客户端的 Iris
 `sodium 0.9.x` 依赖失效。该规则已对照 Fabric Loader 0.19.5 的 ModDiscoverer、Solver 与
 EnvType 核对，不以某个模组名称硬编码判断。
+
+安装和加载在同一个图中分别表示：`Package(mod_id)` 是用户包投影，`Mod(mod_id)` 是
+Loader 实际加载模块。选中安装候选后，是否绑定主模块由 JAR 环境和用户 enabled 状态
+确定，不能自由选择“装着但不加载”。反向绑定保证模块不能脱离包含它的已安装候选。
+这套可行性同时用于 add/fix/constraint/upgrade/migrate、本地校验和 install 的 lock 校验，
+不是仅供 audit 使用；audit 只消费同一图导出的加载集合。
+
+portfolio 枚举前做严格的确定性绑定合并：安装/模块的候选域完全相同，且每个候选都有
+双向精确绑定，才可合并两个节点（缺席状态也等价）。存在混合端候选、禁用项或额外
+contained/provider 候选时不能合并。依赖和不兼容子句整体映射到等价节点，输出仅解码
+已证明的别名；不做额外求解、猜测独立因子或结果修复。因式分解仍由 fork 证明。
+
+Fabric schema 0/1 的环境停用例外也在图内表达：正向依赖没有任何已安装、可被发现的
+同 ID/alias 活动候选，并且有版本匹配的环境停用候选，才按 Loader 放宽。
+下载目录中未选中的候选不算存在；活动候选即使版本不匹配也会阻止放宽；环境停用项
+只按自己的 ID 匹配，不按 provides；停用父模块不继续发现其嵌套子项。
+依赖缺失时，求解必须选入匹配 JAR 的安装候选，否则失败。手动禁用的 `.jar.disabled`
+不属于环境停用候选，不能满足此例外。其他 Loader 不套用 Fabric 的这项规则。
+依据：[Fabric ModResolver](https://github.com/FabricMC/fabric-loader/blob/master/src/main/java/net/fabricmc/loader/impl/discovery/ModResolver.java)
+与 [ModDiscoverer](https://github.com/FabricMC/fabric-loader/blob/master/src/main/java/net/fabricmc/loader/impl/discovery/ModDiscoverer.java)。
 
 `constraints.rs` 处理 loader-neutral 的 `DependencyExpression`：
 
@@ -239,7 +262,8 @@ EnvType 核对，不以某个模组名称硬编码判断。
 
 ## 4. 包、候选与 `provides`
 
-求解器中的模组包只有一个身份轴：JAR loader 元数据声明的 `mod_id`。物理文件名、
+用户包只有一个身份轴：JAR loader 元数据声明的 `mod_id`。内部安装/加载节点不新增
+用户可选状态或 Pareto 维度。物理文件名、
 provider slug、project ID、下载 URL 和嵌套路径都不能成为 `SolverPackage`。
 
 一个包可以有多个候选版本。私有 `SolverVersion` 同时保存：
@@ -258,7 +282,7 @@ CLI 文本。顶层 `mods/*.jar` / `mods/*.jar.disabled` 是包的具体候选�
 移动。contained 候选带 owner/source/path，并精确依赖 owner 候选，所以不能脱离外层包
 单独安装或删除：
 
-- 同一元数据文件声明的模块与 owner 原子选择；
+- 同一元数据文件声明的模块在适用物理端时与 owner 原子加载；
 - Fabric 嵌套模组按 `if_possible` 优先加载，无兼容候选时可以省略；
 - Quilt 使用 `always` / `if_possible` / `if_required`；
 - Forge-family JarJar 先按 Maven `group:artifact` 区间选 artifact；若 artifact 本身

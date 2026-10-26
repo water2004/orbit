@@ -607,6 +607,9 @@ pub fn installed_packages_table(packages: &[ListedPackage]) -> String {
         if package.optional {
             notes.push(tr!("optional").into_owned());
         }
+        if package.load_status == orbit_core::installer::PackageLoadStatus::EnvironmentDisabled {
+            notes.push(tr!("Not loaded on this side").into_owned());
+        }
         if !package.bundled.is_empty() {
             notes.push(tr!(
                 "%{count} bundled module(s)",
@@ -1168,6 +1171,7 @@ mod tests {
             version: "0.100".to_string(),
             version_constraint: "*".to_string(),
             enabled: true,
+            load_status: orbit_core::installer::PackageLoadStatus::Eligible,
             remotes: vec!["modrinth:project".to_string()],
             configured_environment: None,
             environment: "both".to_string(),

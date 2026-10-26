@@ -530,10 +530,17 @@ GUI 不持有策略状态或调用 core。求解器对未选候选产生的传�
 结果只保留实际删除顶层包的解释，不把已被排除的源版本或 bundled 候选展示成错误。
 
 受管包环境具有两层正交语义：`orbit.toml` 的可选 `env` 是用户 target 过滤，lock 的
-`environment` 是精确候选从 JAR 解析出的事实。TOML 缺失设置时，locked 路径直接使用
-选中候选的环境；无 lock 的候选路径使用候选集合的真实 Loader 声明。Loader 没有包级
+`environment` 是精确候选从 JAR 解析出的加载事实。TOML 缺失设置时，不因 JAR 环境
+排除安装；由所选候选的声明决定主模块是否在当前端加载。安装包与实际加载模块在
+同一求解图中确定性绑定，所有包事务共享，audit 复用加载投影而不是单独解释依赖。
+Fabric 环境停用依赖规则由 `resolver/discovery.rs` 按所选 owner 编译成普通子句，不能
+把远端候选库当成已安装集合。Loader 没有包级
 声明时 adapter 产生 `both`。init/sync 不把推导结果反写成用户策略，`orbit package <mod_id> env` 只修改
 manifest 过滤。
+
+JAR 解析数据库带独立 analysis revision。解析规则变化时仅清除旧的派生解析行，并从
+全局 JAR 字节缓存重新分析；不清除 remote project 变更标记、字节缓存、用户 TOML/lock。
+此版本没有增加实例存储字段，不迁移或改写 Launcher schema。
 
 ## 5. loader 支持矩阵
 

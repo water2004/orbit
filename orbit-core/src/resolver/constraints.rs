@@ -15,10 +15,13 @@ pub(super) fn compile_dependency_constraints(
     loader: LoaderKind,
     exclusions: &ExclusionMap,
     target: Environment,
+    discovery: Option<&super::discovery::DiscoveryIndex>,
 ) -> PackageIncompatibilities {
     let mut output = Vec::new();
     for expression in expressions {
-        if let Some(required) = required_formula(expression, package, loader, exclusions, target) {
+        if let Some(required) =
+            required_formula(expression, package, loader, exclusions, target, discovery)
+        {
             for clause in to_cnf(required) {
                 output.push(IncompatibilityConstraint {
                     terms: clause.into_iter().map(Literal::negated_term).collect(),
@@ -154,6 +157,7 @@ fn required_formula(
     loader: LoaderKind,
     exclusions: &ExclusionMap,
     target: Environment,
+    discovery: Option<&super::discovery::DiscoveryIndex>,
 ) -> Option<Formula> {
     match expression {
         DependencyExpression::Only(relation)
@@ -169,6 +173,15 @@ fn required_formula(
                     loader,
                 )),
             };
+            let atom = match discovery.and_then(|index| {
+                index.relaxation(
+                    relation,
+                    &dependency_constraint(&relation.id, &relation.requirement, loader),
+                )
+            }) {
+                Some(relaxation) => Formula::Or(vec![atom, relaxation]),
+                None => atom,
+            };
             Some(match &relation.unless {
                 Some(unless) => Formula::Or(vec![atom, presence_formula(unless, loader)]),
                 None => atom,
@@ -179,7 +192,7 @@ fn required_formula(
             let expressions: Vec<_> = expressions
                 .iter()
                 .filter_map(|expression| {
-                    required_formula(expression, package, loader, exclusions, target)
+                    required_formula(expression, package, loader, exclusions, target, discovery)
                 })
                 .collect();
             (!expressions.is_empty()).then_some(Formula::Or(expressions))
@@ -188,7 +201,7 @@ fn required_formula(
             let expressions: Vec<_> = expressions
                 .iter()
                 .filter_map(|expression| {
-                    required_formula(expression, package, loader, exclusions, target)
+                    required_formula(expression, package, loader, exclusions, target, discovery)
                 })
                 .collect();
             (!expressions.is_empty()).then_some(Formula::And(expressions))
@@ -228,7 +241,7 @@ fn presence_formula(expression: &DependencyExpression, loader: LoaderKind) -> Fo
 }
 
 #[derive(Clone)]
-enum Formula {
+pub(super) enum Formula {
     True,
     False,
     Atom {

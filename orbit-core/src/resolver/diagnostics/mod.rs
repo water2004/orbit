@@ -93,7 +93,7 @@ pub(crate) struct ResolutionSnapshot {
 
 impl ResolutionTrace {
     pub(crate) fn with_progress(
-        candidates: impl IntoIterator<Item = (String, SolverVersion)>,
+        candidates: impl IntoIterator<Item = (SolverPackage, SolverVersion)>,
         progress: Option<ProgressReporter>,
     ) -> Self {
         Self {
@@ -101,7 +101,7 @@ impl ResolutionTrace {
                 .into_iter()
                 .map(|(package, version)| {
                     (
-                        SolverPackage::logical(package),
+                        package,
                         WatchedVersion {
                             version,
                             decision_level: None,
@@ -243,10 +243,14 @@ impl ResolutionSnapshot {
         package: &str,
         selected: &SolverVersion,
     ) -> CandidateDiagnostic {
+        let installed = self.watched.get(&SolverPackage::installed(package));
+        let loaded = self.watched.get(&SolverPackage::logical(package));
         render::diagnose(
             package,
             selected,
-            self.watched.get(&SolverPackage::logical(package)),
+            loaded
+                .filter(|watched| watched.reason.is_some())
+                .or(installed),
         )
     }
 }

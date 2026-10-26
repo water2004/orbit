@@ -2,6 +2,7 @@
 
 mod constraints;
 mod diagnostics;
+mod discovery;
 mod graph;
 mod local;
 mod ordering;
@@ -234,6 +235,9 @@ pub(crate) fn selected_runtime_load(
         );
     }
     for (package, version) in solution.iter() {
+        if matches!(package, SolverPackage::Package(_)) {
+            continue;
+        }
         if let SolverPackage::Mod(mod_id) = package
             && version.candidate_identity().is_some()
         {
@@ -676,6 +680,7 @@ async fn resolve_portfolio_with_progress_detailed(
         ),
     }
     .map_err(ResolutionFailure::Internal)?;
+    let aliases = graph.provider.coalesce_module_bindings();
     let mut maximized_mods: Vec<_> = catalog
         .candidates
         .keys()
@@ -688,12 +693,17 @@ async fn resolve_portfolio_with_progress_detailed(
     let maximized_packages = maximized_mods
         .iter()
         .cloned()
-        .map(SolverPackage::logical)
+        .map(SolverPackage::installed)
         .collect::<Vec<_>>();
-    let watched_candidates = highest_candidates(&catalog.candidates, graph.loader);
+    let watched_candidates =
+        highest_candidates(&catalog.candidates, graph.loader).flat_map(|(id, version)| {
+            let module = SolverPackage::Mod(id.clone());
+            std::iter::once((SolverPackage::installed(id), version.clone()))
+                .chain((!aliases.contains_key(&module)).then_some((module, version)))
+        });
     let mut trace = diagnostics::ResolutionTrace::with_progress(watched_candidates, progress);
     if let ResolutionObjective::UpgradePackage(mod_id) = objective {
-        let package = SolverPackage::logical(mod_id.to_owned());
+        let package = SolverPackage::installed(mod_id.to_owned());
         let solutions = pubgrub::resolve_maximal_solutions_with_observer(
             &graph.provider,
             graph.root_package.clone(),
@@ -725,6 +735,8 @@ async fn resolve_portfolio_with_progress_detailed(
                 loader: graph.loader,
                 exclusions: &graph.exclusions,
                 target: graph.target,
+                discovery: &graph.discovery,
+                aliases: &aliases,
             };
             let snapshots = trace.into_solutions();
             if snapshots.len() != solutions.len() {
@@ -838,6 +850,8 @@ async fn resolve_portfolio_with_progress_detailed(
         loader: graph.loader,
         exclusions: &graph.exclusions,
         target: graph.target,
+        discovery: &graph.discovery,
+        aliases: &aliases,
     };
     let version_factor_total = factored_versions
         .factors()
@@ -931,7 +945,7 @@ fn minimal_change_preferences(
 ) -> Vec<pubgrub::PackagePreference<SolverPackage, Ranges<SolverVersion>>> {
     let mut preferences = Vec::new();
     for mod_id in packages {
-        let package = SolverPackage::logical(mod_id.clone());
+        let package = SolverPackage::installed(mod_id.clone());
         if !manifest.packages.contains_key(mod_id) {
             preferences.push(pubgrub::PackagePreference::absent(package));
             continue;
@@ -980,7 +994,7 @@ fn manifest_package_preferences(
         .packages
         .iter()
         .filter_map(|(mod_id, spec)| {
-            let package = SolverPackage::logical(mod_id.clone());
+            let package = SolverPackage::installed(mod_id.clone());
             let preferred = manifest_package_versions(provider, mod_id, spec, loader, true);
             (preferred != Ranges::empty())
                 .then(|| pubgrub::PackagePreference::selected(package, preferred))
@@ -1166,6 +1180,8 @@ struct ReportContext<'a> {
     loader: LoaderKind,
     exclusions: &'a graph::ExclusionMap,
     target: Environment,
+    discovery: &'a discovery::DiscoveryIndex,
+    aliases: &'a HashMap<SolverPackage, SolverPackage>,
 }
 
 fn collect_report(
@@ -1173,6 +1189,17 @@ fn collect_report(
     solution: &pubgrub::SelectedDependencies<SolverPackage, SolverVersion>,
     trace: &diagnostics::ResolutionSnapshot,
 ) -> ResolutionReport {
+    // Decode exact compiler aliases, not a second solve or a feasibility repair.
+    let expanded: pubgrub::SelectedDependencies<_, _> = solution
+        .iter()
+        .map(|(package, version)| (package.clone(), version.clone()))
+        .chain(context.aliases.iter().filter_map(|(module, package)| {
+            solution
+                .get(package)
+                .map(|version| (module.clone(), version.clone()))
+        }))
+        .collect();
+    let solution = &expanded;
     let mut warnings = resolution_warnings(
         context.lockfile,
         context.candidates,
@@ -1180,6 +1207,7 @@ fn collect_report(
         context.loader,
         context.exclusions,
         context.target,
+        context.discovery,
     );
 
     let mut selected_versions = BTreeMap::new();
@@ -1187,7 +1215,7 @@ fn collect_report(
     let mut selected_candidates = BTreeMap::new();
     let mut selected_identities = BTreeMap::new();
     for (package, version) in solution.iter() {
-        let SolverPackage::Mod(mod_id) = package else {
+        let SolverPackage::Package(mod_id) = package else {
             continue;
         };
         let Some(identity) = version
@@ -1324,7 +1352,7 @@ fn collect_report(
     let mut packages: Vec<_> = context.candidates.keys().collect();
     packages.sort();
     for package in packages {
-        let Some(selected) = solution.get(&SolverPackage::logical(package)) else {
+        let Some(selected) = solution.get(&SolverPackage::installed(package)) else {
             continue;
         };
         let selected_semantic = selected.domain();
@@ -1589,6 +1617,60 @@ b = { version = "*", remotes = [{ type = "file", path = "b.jar" }] }
                 )
             })
             .collect()
+    }
+
+    #[tokio::test]
+    async fn all_portfolio_objectives_install_but_do_not_load_client_dependency_on_server() {
+        let mut manifest = manifest();
+        manifest.project.modloader = "fabric".into();
+        manifest.project.modloader_version = "0.19.2".into();
+        manifest.platform.physical_environment = Environment::Server;
+        manifest.packages.shift_remove("b");
+        let mut current = lockfile();
+        current.meta.modloader = "fabric".into();
+        current.meta.modloader_version = "0.19.2".into();
+        current.packages.retain(|entry| entry.mod_id == "a");
+        current.packages[0].dependencies = vec![ModDependency::required("malilib", ">=1").into()];
+        let mut library = candidate("1", vec![ModDependency::required("minecraft", "999")]);
+        library.environment = Environment::Client;
+        let mut catalog = CandidateCatalog::default();
+        catalog.candidates.insert("malilib".into(), vec![library]);
+        catalog.candidates.insert(
+            "a".into(),
+            vec![candidate(
+                "2",
+                vec![ModDependency::required("malilib", ">=1")],
+            )],
+        );
+        for portfolio in [
+            resolve_minimal_change_portfolio(&manifest, &current, &catalog)
+                .await
+                .unwrap(),
+            resolve_candidate_portfolio(&manifest, &current, &catalog)
+                .await
+                .unwrap(),
+            resolve_targeted_upgrade_portfolio(&manifest, &current, &catalog, "a", None, &mut None)
+                .await
+                .unwrap(),
+        ] {
+            let report = &portfolio.alternatives[0];
+            assert_eq!(report.selected_versions["malilib"], "1");
+            assert!(
+                report
+                    .changes
+                    .iter()
+                    .any(|change| change.package == "malilib"
+                        && change.kind == PackageChangeKind::Install)
+            );
+        }
+        let mut library = locked("malilib");
+        library.environment = Environment::Client;
+        current.packages.push(library);
+        let load =
+            selected_runtime_load(&manifest, &current, None, 21, Environment::Server).unwrap();
+        assert!(load.active_mod_ids.contains("a"));
+        assert!(!load.active_mod_ids.contains("malilib"));
+        assert!(!load.top_level_jars.contains("malilib.jar"));
     }
 
     #[tokio::test]

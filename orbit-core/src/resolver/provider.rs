@@ -56,6 +56,103 @@ impl OrbitDependencyProvider {
         Self::default()
     }
 
+    /// Compile away proven bijective installation/module bindings before
+    /// portfolio enumeration. Equality includes absence and every concrete
+    /// realization: mixed-side domains or competing contained providers cannot
+    /// pass this proof. No satisfiability queries or candidate choices are used.
+    pub(crate) fn coalesce_module_bindings(&mut self) -> HashMap<SolverPackage, SolverPackage> {
+        let aliases: HashMap<_, _> = self
+            .versions
+            .iter()
+            .filter_map(|(package, versions)| {
+                let SolverPackage::Package(id) = package else {
+                    return None;
+                };
+                let module = SolverPackage::Mod(id.clone());
+                let modules = self.versions.get(&module)?;
+                if versions.is_empty()
+                    || versions.len() != modules.len()
+                    || !versions.iter().all(|version| {
+                        modules.contains(version)
+                            && self
+                                .dependencies
+                                .get(&(package.clone(), version.clone()))
+                                .is_some_and(|deps| {
+                                    deps.len() == 1
+                                        && deps[0]
+                                            == (module.clone(), Ranges::singleton(version.clone()))
+                                })
+                            && self
+                                .dependencies
+                                .get(&(module.clone(), version.clone()))
+                                .is_some_and(|deps| {
+                                    deps.iter().any(|(owner, range)| {
+                                        owner == package
+                                            && *range == Ranges::singleton(version.clone())
+                                    })
+                                })
+                    })
+                {
+                    return None;
+                }
+                Some((module, package.clone()))
+            })
+            .collect();
+        if aliases.is_empty() {
+            return aliases;
+        }
+        let canonical = |package: SolverPackage| aliases.get(&package).cloned().unwrap_or(package);
+        self.versions
+            .retain(|package, _| !aliases.contains_key(package));
+        let mut dependencies: HashMap<
+            PackageVersionKey,
+            HashMap<SolverPackage, Ranges<SolverVersion>>,
+        > = HashMap::new();
+        for ((package, version), deps) in std::mem::take(&mut self.dependencies) {
+            let package = canonical(package);
+            let output = dependencies
+                .entry((package.clone(), version.clone()))
+                .or_default();
+            for (dependency, range) in deps {
+                let dependency = canonical(dependency);
+                if dependency == package && range.contains(&version) {
+                    continue;
+                }
+                output
+                    .entry(dependency)
+                    .and_modify(|existing| *existing = existing.intersection(&range))
+                    .or_insert(range);
+            }
+        }
+        self.dependencies = dependencies
+            .into_iter()
+            .map(|(key, deps)| {
+                let mut deps: Vec<_> = deps.into_iter().collect();
+                deps.sort_by(|left, right| left.0.cmp(&right.0));
+                (key, deps)
+            })
+            .collect();
+        let mut incompatibilities: HashMap<PackageVersionKey, PackageIncompatibilities> =
+            HashMap::new();
+        for ((package, version), clauses) in std::mem::take(&mut self.incompatibilities) {
+            let output = incompatibilities
+                .entry((canonical(package), version))
+                .or_default();
+            for mut clause in clauses {
+                for term in &mut clause.terms {
+                    let (pubgrub::IncompatibilityConstraintTerm::Positive(package, _)
+                    | pubgrub::IncompatibilityConstraintTerm::Negative(package, _)) = term;
+                    if let Some(alias) = aliases.get(package) {
+                        *package = alias.clone();
+                    }
+                }
+                output.push(clause);
+            }
+        }
+        self.incompatibilities = incompatibilities;
+        aliases
+    }
+
     pub(crate) fn add_package_versions(
         &mut self,
         pkg: SolverPackage,
@@ -186,7 +283,7 @@ fn compare_versions(
 ) -> std::cmp::Ordering {
     match (package, left, right) {
         (
-            SolverPackage::Mod(_),
+            SolverPackage::Mod(_) | SolverPackage::Package(_),
             SolverVersion::Version {
                 semantic: left_semantic,
                 identity: VersionIdentity::Candidate(left_identity),

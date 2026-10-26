@@ -265,6 +265,7 @@ pub(crate) fn resolution_warnings(
     loader: LoaderKind,
     exclusions: &ExclusionMap,
     target: Environment,
+    discovery: &super::discovery::DiscoveryIndex,
 ) -> Vec<String> {
     let records = module_records(lockfile, candidates, loader);
     let mut warnings = Vec::new();
@@ -286,7 +287,8 @@ pub(crate) fn resolution_warnings(
             let selected = solution.get(&logical_package(&relation.id));
             let warn = match relation.kind {
                 DependencyKind::Recommended => {
-                    selected.is_none_or(|version| !range.contains(version))
+                    !discovery.relaxed_in(relation, &range, solution)
+                        && selected.is_none_or(|version| !range.contains(version))
                 }
                 DependencyKind::Discouraged => {
                     selected.is_some_and(|version| range.contains(version))
