@@ -30,8 +30,14 @@ import { importArguments } from "../services/commands";
 import { initializeOrbit } from "../services/installations";
 import { activity } from "../services/cli";
 import { launchDiagnostics } from "../services/launch-diagnostics";
-import type { Package, MemoryLimits, MemorySettingsResult } from "../types";
+import type {
+  Package,
+  MemoryLimits,
+  MemorySettingsResult,
+  InstanceFeatureSupport,
+} from "../types";
 import MemorySettings from "../components/MemorySettings.vue";
+import ProgressSpinner from "../components/upstream/ProgressSpinner.vue";
 import { t } from "../i18n";
 import { instancePath, discoveryPath } from "../services/navigation";
 import Avatar from "../components/Avatar.vue";
@@ -54,6 +60,26 @@ const exporting = ref(false),
   importing = ref(false);
 const launchReportNote = ref("");
 const memorySaving = ref(false);
+const features = ref<InstanceFeatureSupport>();
+const featuresLoading = ref(false);
+let featuresRevision = 0;
+async function loadFeatures() {
+  const instance = workspace.selected;
+  if (!instance) return;
+  const revision = ++featuresRevision;
+  featuresLoading.value = true;
+  try {
+    const result = await orbit<InstanceFeatureSupport>(
+      ["capabilities"],
+      t("Checking optional analysis support", "正在检查可选分析支持"),
+      instance,
+    );
+    if (revision === featuresRevision && workspace.selected?.id === instance.id)
+      features.value = result;
+  } finally {
+    if (revision === featuresRevision) featuresLoading.value = false;
+  }
+}
 const memoryLoading = ref(false),
   memorySettings = ref<MemorySettingsResult>();
 let memoryRevision = 0;
@@ -199,6 +225,15 @@ const renameOpen = ref(false),
   deleting = ref(false),
   deletion = ref<{ name: string; directory: string }>();
 const tab = computed(() => String(route.params.tab || "mods"));
+watch(
+  [tab, () => workspace.selected?.id],
+  () => {
+    ++featuresRevision;
+    features.value = undefined;
+    if (tab.value === "audit") void act(loadFeatures);
+  },
+  { immediate: true },
+);
 watch(
   [tab, () => workspace.selected?.id],
   () => {
@@ -903,11 +938,11 @@ async function status() {
           />
           <Button
             type="colored"
-            :disabled="auditBusy"
+            :disabled="auditBusy || !features?.audit.available"
             @click="act(() => runAudit())"
             ><ShieldCheck />{{ t("Run audit", "运行审计") }}</Button
           ><Button
-            :disabled="auditBusy"
+            :disabled="auditBusy || !features?.audit.available"
             @click="
               act(async () => {
                 const path = await save({ defaultPath: 'orbit-audit.json' });
@@ -917,6 +952,19 @@ async function status() {
             >{{ t("Save detailed report", "保存详细报告") }}</Button
           >
         </div>
+        <ProgressSpinner v-if="featuresLoading" />
+        <p v-else-if="features && !features.audit.available">
+          {{
+            t(
+              "Bytecode audit is not supported for this runtime. Launching and mod management remain available.",
+              "此运行时暂不支持字节码审计，不影响启动和模组管理。",
+            )
+          }}
+          {{ features.audit.reason }}
+        </p>
+        <Button v-else-if="!features" type="quiet" @click="act(loadFeatures)">{{
+          t("Retry support check", "重新检查支持情况")
+        }}</Button>
       </div>
       <template v-if="audit"
         ><div class="card">

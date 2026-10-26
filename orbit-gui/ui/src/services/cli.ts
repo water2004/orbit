@@ -51,6 +51,7 @@ export interface Task {
   outcome?: TaskOutcome;
   diagnostics?: LaunchDiagnostics;
   downloadSource?: { name: string; documentation: string };
+  observationNotice?: string;
 }
 type Event =
   | {
@@ -62,6 +63,7 @@ type Event =
         data?: {
           event?: string;
           attribution?: { name: string; documentation: string };
+          reason?: string;
         };
       };
     }
@@ -117,6 +119,8 @@ export function run<T>(
         case "progress":
           if (event.envelope?.data?.event === "download_source")
             task.downloadSource = event.envelope.data.attribution;
+          if (event.envelope?.data?.event === "runtime_observation_unavailable")
+            task.observationNotice = event.envelope.data.reason;
           task.message = event.message;
           task.completed = event.completed;
           task.total = event.total;

@@ -64,6 +64,15 @@ const active = computed(() =>
         )
       }}</small>
     </details>
+    <p v-if="task.observationNotice" class="observation-notice">
+      {{
+        t(
+          "Started without runtime data observation. New file ownership is not recorded.",
+          "此次启动未启用运行时文件观测，不会记录新的文件归属。",
+        )
+      }}
+      {{ task.observationNotice }}
+    </p>
     <progress
       v-if="active"
       :value="task.total ? task.completed : undefined"

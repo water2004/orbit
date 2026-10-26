@@ -2,6 +2,7 @@ pub mod activation;
 pub mod add;
 pub mod audit;
 pub mod cache;
+pub mod capabilities;
 pub mod config;
 pub mod constraint;
 pub mod env;
@@ -198,6 +199,7 @@ pub trait CommandHandler {
 pub use activation::handle as handle_activation;
 pub use add::handle as handle_add;
 pub use audit::handle as handle_audit;
+pub use capabilities::handle as handle_capabilities;
 pub use config::handle as handle_config;
 pub use export::handle as handle_export;
 pub use fix::handle as handle_fix;

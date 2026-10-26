@@ -48,7 +48,26 @@ pub async fn handle(
         non_interactive: ctx.output.format == crate::cli::output::OutputFormat::Json,
         dry_run: ctx.dry_run,
     };
-    orbit_core::launch_with_runtime_observation(&request)?;
+    orbit_core::launch_with_runtime_observation(&request, |event| {
+        if ctx.output.ndjson_progress() {
+            use std::sync::atomic::Ordering;
+            let envelope = orbit_machine_protocol::ProgressEnvelope::new(
+                "launch",
+                ctx.machine_sequence.fetch_add(1, Ordering::Relaxed) + 1,
+                orbit_machine_protocol::ProgressPhase::Launch,
+                &event,
+            );
+            crate::cli::output::write_machine_line(
+                &serde_json::to_string(&envelope).expect("launch event is serializable"),
+            );
+        } else if !ctx.quiet {
+            let orbit_core::RuntimeLaunchEvent::RuntimeObservationUnavailable { reason } = event;
+            ctx.print_information_line(format_args!(
+                "{}: {reason}",
+                tr!("Runtime data observation is unavailable; starting without the Agent")
+            ));
+        }
+    })?;
     Ok(())
 }
 

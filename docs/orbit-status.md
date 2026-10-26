@@ -4,6 +4,11 @@
 
 ## 1. 当前结论
 
+可选能力与运行时安装/包管理分离：新增 `orbit capabilities`，GUI 禁用未支持的 audit，
+Agent 范围未验证时提示无观测启动。Forge 1.12.2-14.23.5.2860 的官方 installer
+spec 0 已通过真实下载、SHA-256 校验和 inspect 回归；这项验证不等于启动游戏或宣称
+所有更早 Forge 安装器、旧 JAR 元数据都已完整支持。
+
 已修复后台服务端正常运行但 GUI 启动任务等待后代管道 EOF 的收尾问题；真实子进程测试
 覆盖继承/重定向管道、尾部 UTF-8 与 stderr 消息、非零退出且不误杀常驻后代。
 Launcher 新增 instance memory show/set/clear，客户端/服务端共用；GUI 运行时页增加

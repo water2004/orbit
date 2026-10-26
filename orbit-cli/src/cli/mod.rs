@@ -274,6 +274,9 @@ pub enum Commands {
         command: MigrateCommands,
     },
 
+    /// Show optional audit and runtime-observation support for this instance.
+    Capabilities,
+
     /// Statically analyze bytecode compatibility risks in the current instance (read-only).
     Audit {
         /// Show only findings at or above this risk score (0-100).
@@ -520,6 +523,7 @@ impl CommandHandler for Commands {
                 content,
             } => handle_export(file, target, archive_format, content, ctx).await,
             Commands::Migrate { command } => command.execute(ctx).await,
+            Commands::Capabilities => handle_capabilities(ctx).await,
             Commands::Audit {
                 min_risk,
                 fail_on_risk,
@@ -562,6 +566,7 @@ impl Commands {
             Self::Export { .. } => "export",
             Self::Migrate { .. } => "migrate",
             Self::Audit { .. } => "audit",
+            Self::Capabilities => "capabilities",
             Self::Cache { .. } => "cache",
             Self::Config { .. } => "config",
             Self::Remote { .. } => "remote",

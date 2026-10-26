@@ -1,5 +1,8 @@
 # Orbit 依赖解析引擎
 
+可选的 audit/运行时 Agent 版本表不参与依赖候选、求解器或包管理的可用性判断。
+`orbit capabilities` 是独立的只读能力查询，不是求解前置条件。
+
 > 本文描述当前实现。依赖语义的来源是 JAR 内的 loader 元数据，所有 loader 都经过同一条求解路径。
 
 Launcher 实例内存（manifest schema 3）及后台启动管道收尾不参与包求解。Orbit 的只读

@@ -137,3 +137,11 @@ export interface Change {
   selected_description?: string;
   different?: boolean;
 }
+export interface FeatureSupport {
+  available: boolean;
+  reason?: string;
+}
+export interface InstanceFeatureSupport {
+  audit: FeatureSupport;
+  runtime_observation: FeatureSupport;
+}

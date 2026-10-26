@@ -210,6 +210,7 @@ fn progress_event_label(event: &str) -> String {
         "launch_java_verified" => "Verifying launch Java runtime",
         "launch_natives_prepared" => "Preparing native libraries",
         "launch_plan_ready" => "Launch plan ready",
+        "runtime_observation_unavailable" => "Starting without runtime data observation",
         "repository_copying" => "Moving Minecraft repository",
         "repository_verifying" => "Verifying moved repository",
         "repository_switching" => "Switching Minecraft repository",

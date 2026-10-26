@@ -197,7 +197,10 @@ pub fn inspect_loader_installer(
             resolved.version
         ))
     })?;
-    if profile.spec != 1 {
+    // The official 2.x installer reads both Install (spec 0) and InstallV1
+    // (spec 1). We execute that verified installer rather than reimplementing
+    // its processors, so its own schema support is the relevant boundary.
+    if !matches!(profile.spec, 0 | 1) {
         return Err(LauncherError::UnsupportedRequirement(format!(
             "{} {} installer schema {} is unsupported",
             resolved.kind.as_str(),
@@ -894,6 +897,62 @@ struct InstalledOsRule {
 mod tests {
     use super::*;
 
+    #[test]
+    fn official_installer_schemas_are_not_gated_by_audit_support() {
+        use std::io::Write;
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("installer.jar");
+        let resolved = ResolvedLoaderInstaller {
+            kind: LoaderKind::Forge,
+            minecraft_version: "1.12.2".into(),
+            version: "1.12.2-14.23.5.2860".into(),
+            artifact: ArtifactRequest {
+                logical_name: "Forge installer".into(),
+                url: "https://maven.minecraftforge.net/installer.jar".into(),
+                expected_hash: ExpectedHash::Sha256("a".repeat(64)),
+                expected_size: None,
+            },
+        };
+        assert!(
+            orbit_compatibility::audit::select(
+                orbit_compatibility::ModLoader::Forge,
+                "1.12.2",
+                "14.23.5.2860"
+            )
+            .is_err()
+        );
+        for (spec, minecraft, profile, accepted) in [
+            (0, "1.12.2", "forge", true),
+            (1, "1.12.2", "forge", true),
+            (2, "1.12.2", "forge", false),
+            (0, "1.16.5", "forge", false),
+            (0, "1.12.2", "", false),
+        ] {
+            let bytes = serde_json::to_vec(&serde_json::json!({
+                "spec": spec, "minecraft": minecraft, "profile": profile,
+                "version": "1.12.2-forge-14.23.5.2860", "json": "/version.json"
+            }))
+            .unwrap();
+            let mut archive = zip::ZipWriter::new(std::fs::File::create(&path).unwrap());
+            archive
+                .start_file(
+                    "install_profile.json",
+                    zip::write::SimpleFileOptions::default(),
+                )
+                .unwrap();
+            archive.write_all(&bytes).unwrap();
+            archive.finish().unwrap();
+            let result = inspect_loader_installer(&path, &resolved);
+            assert_eq!(result.is_ok(), accepted, "{result:?}");
+            if let Ok(inspected) = result {
+                assert_eq!(
+                    inspected.install_profile_sha256,
+                    hex::encode(Sha256::digest(&bytes))
+                );
+            }
+        }
+    }
+
     #[tokio::test]
     async fn mirror_mode_cannot_silently_start_an_independently_networked_installer() {
         let client = crate::download_source::DownloadClient::new(
@@ -959,6 +1018,30 @@ mod tests {
                 .as_deref(),
             Some("25w14craftmine")
         );
+    }
+
+    #[tokio::test]
+    #[ignore = "downloads and verifies the official 1.12.2 Forge installer, without launching Minecraft"]
+    async fn live_forge_112_installer_inspection() {
+        let client = crate::download_source::DownloadClient::new(
+            reqwest::Client::builder()
+                .user_agent("orbit-launcher-tests")
+                .build()
+                .unwrap(),
+            Default::default(),
+        );
+        let resolved =
+            resolve_loader_installer(&client, LoaderKind::Forge, "1.12.2", "14.23.5.2860")
+                .await
+                .unwrap();
+        let temporary = tempfile::tempdir().unwrap();
+        let cache = crate::artifact::ArtifactCache::new(temporary.path());
+        let fetched = cache
+            .fetch(&client, &resolved.artifact, |_| {})
+            .await
+            .unwrap();
+        let inspected = inspect_loader_installer(&fetched.object_path, &resolved).unwrap();
+        assert_eq!(inspected.install_profile_sha256.len(), 64);
     }
 
     #[tokio::test]

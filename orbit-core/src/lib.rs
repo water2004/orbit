@@ -10,6 +10,7 @@ pub mod config;
 mod dependency_environment;
 mod detection;
 pub mod error;
+pub mod feature_support;
 pub mod identification;
 pub mod init;
 pub mod instance_config;
@@ -118,7 +119,7 @@ pub use runtime_data::{
     package_ownership, plan_data_purge, plan_data_reset,
 };
 pub use runtime_launch::{
-    RuntimeLaunchRequest, RuntimeLaunchTarget, launch_with_runtime_observation,
+    RuntimeLaunchEvent, RuntimeLaunchRequest, RuntimeLaunchTarget, launch_with_runtime_observation,
 };
 pub use sync::{PlatformChange, SyncReport, sync_instance};
 pub use version_repository::{CandidateStorage, VersionRepository};

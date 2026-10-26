@@ -464,7 +464,10 @@ Forge/NeoForge installer 是被下载并执行的 Java 程序。Launcher 必须�
 - 执行后重新检查生成的 version、libraries、argfile 和主入口；
 - 不把 `run.sh` / `run.bat` 当作跨平台事实来源；
 - 将 installer URL、installer SHA-256、`install_profile.json` SHA-256 和逐文件输出清单写入 lock；
-- 遇到未知 installer schema 时返回 `unsupported_requirement`，不猜测参数。
+- 遵循官方 Installer 的 spec 0/1：两者都由已验证的官方 Java installer 执行，
+  不在 Launcher 重写 processors。Minecraft 身份、完整性和执行后输出仍校验；
+  未知 spec 返回 `unsupported_requirement`，不把 spec 0 误拒绝，也不把它等同于
+  更早的无 spec、`install/versionInfo` 安装器格式。
 
 Loader 更新只替换 lock 中由 Launcher 拥有的运行时文件。其他实例文件不进入计划。
 

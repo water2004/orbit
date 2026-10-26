@@ -38,7 +38,16 @@ pub struct RuntimeLaunchRequest {
     pub dry_run: bool,
 }
 
-pub fn launch_with_runtime_observation(request: &RuntimeLaunchRequest) -> Result<(), OrbitError> {
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(tag = "event", rename_all = "snake_case")]
+pub enum RuntimeLaunchEvent {
+    RuntimeObservationUnavailable { reason: String },
+}
+
+pub fn launch_with_runtime_observation(
+    request: &RuntimeLaunchRequest,
+    mut progress: impl FnMut(RuntimeLaunchEvent),
+) -> Result<(), OrbitError> {
     let instance_dir = dunce::canonicalize(&request.instance_dir)?;
     if !instance_dir.join("orbit.toml").is_file() {
         return Err(OrbitError::ManifestNotFound);
@@ -47,24 +56,17 @@ pub fn launch_with_runtime_observation(request: &RuntimeLaunchRequest) -> Result
         return Err(OrbitError::LockfileNotFound);
     }
     let launcher_program = absolute_file(&request.launcher_program, RuntimeComponent::Launcher)?;
-    let runtime_agent = absolute_file(&request.runtime_agent, RuntimeComponent::Agent)?;
     if request.target == RuntimeLaunchTarget::Server && request.dry_run {
         return Err(OrbitError::RuntimeData(RuntimeDataError::ServerDryRun));
     }
 
-    let java_tool_options = if request.dry_run {
-        None
-    } else {
-        merge_observation_sessions(&instance_dir)?;
-        prune_missing_ownership(&instance_dir)?;
-        let session = observation_session_path(&instance_dir)?;
-        let context = write_agent_context(&instance_dir)?;
-        let agent_option = java_agent_option(&runtime_agent, &instance_dir, &session, &context)?;
-        Some(append_java_tool_option(
-            std::env::var_os("JAVA_TOOL_OPTIONS").as_deref(),
-            &agent_option,
-        )?)
-    };
+    let java_tool_options = prepare_observation(
+        &instance_dir,
+        &request.runtime_agent,
+        request.dry_run,
+        &mut progress,
+    )?;
+    let observe = java_tool_options.is_some();
 
     let mut command = Command::new(launcher_program);
     command
@@ -99,7 +101,7 @@ pub fn launch_with_runtime_observation(request: &RuntimeLaunchRequest) -> Result
     let status = command.status()?;
     // Client launch normally blocks until Java exits. Server start normally
     // detaches; its snapshot is merged by the next Orbit launch/purge command.
-    if !request.dry_run {
+    if !request.dry_run && observe {
         merge_observation_sessions(&instance_dir)?;
     }
     if status.success() {
@@ -107,6 +109,35 @@ pub fn launch_with_runtime_observation(request: &RuntimeLaunchRequest) -> Result
     } else {
         Err(OrbitError::ForwardedProcessExit(status.code().unwrap_or(1)))
     }
+}
+
+fn prepare_observation(
+    instance: &Path,
+    agent: &Path,
+    dry_run: bool,
+    progress: &mut impl FnMut(RuntimeLaunchEvent),
+) -> Result<Option<std::ffi::OsString>, OrbitError> {
+    let support = crate::feature_support::runtime_observation_support(instance)?;
+    if !support.available {
+        progress(RuntimeLaunchEvent::RuntimeObservationUnavailable {
+            reason: support.reason.unwrap_or_default(),
+        });
+        return Ok(None);
+    }
+    if dry_run {
+        return Ok(None);
+    }
+    let runtime_agent = absolute_file(agent, RuntimeComponent::Agent)?;
+    merge_observation_sessions(instance)?;
+    prune_missing_ownership(instance)?;
+    let session = observation_session_path(instance)?;
+    let context = write_agent_context(instance)?;
+    let agent_option = java_agent_option(&runtime_agent, instance, &session, &context)?;
+    append_java_tool_option(
+        std::env::var_os("JAVA_TOOL_OPTIONS").as_deref(),
+        &agent_option,
+    )
+    .map(Some)
 }
 
 fn absolute_file(path: &Path, component: RuntimeComponent) -> Result<PathBuf, OrbitError> {
@@ -453,6 +484,44 @@ fn append_java_tool_option(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unavailable_observation_does_not_require_an_agent_or_rewrite_existing_ownership() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path();
+        let manifest = format!(
+            "[project]\nname='test'\nmc_version='27.1'\nmodloader='forge'\nmodloader_version='65.0.0'\n\
+             [platform]\nruntime_jars=[]\nphysical_environment='client'\n\
+             [platform.minecraft_jar]\npath='game.jar'\nsha256='{}'\n\
+             [platform.loader_jar]\npath='loader.jar'\nsha256='{}'\n",
+            "a".repeat(64),
+            "b".repeat(64)
+        );
+        std::fs::write(root.join("orbit.toml"), &manifest).unwrap();
+        let ledger = root.join(".orbit/runtime-data/ownership.toml");
+        std::fs::create_dir_all(ledger.parent().unwrap()).unwrap();
+        std::fs::write(&ledger, "existing ownership must remain untouched").unwrap();
+        let mut events = Vec::new();
+        let result =
+            prepare_observation(root, &root.join("missing-agent.jar"), false, &mut |event| {
+                events.push(event)
+            })
+            .unwrap();
+        assert!(result.is_none());
+        assert!(matches!(
+            events.as_slice(),
+            [RuntimeLaunchEvent::RuntimeObservationUnavailable { .. }]
+        ));
+        assert_eq!(
+            std::fs::read_to_string(root.join("orbit.toml")).unwrap(),
+            manifest
+        );
+        assert_eq!(
+            std::fs::read_to_string(ledger).unwrap(),
+            "existing ownership must remain untouched"
+        );
+        assert!(!root.join(".orbit/runtime-data/sessions").exists());
+    }
 
     #[test]
     fn preserves_existing_java_tool_options() {

@@ -69,7 +69,7 @@ Runtime Agent 与 audit 当前注册的 Loader 线为：
 |---|---|---|
 | Fabric | 0.4.x–0.20.x | Mixin/Fabric namespace；Agent `file:` source |
 | Quilt | 0.12.x–0.30.x | 0.18 起可用 Quilt 原生 module identity |
-| Forge | 14.x–64.x | 37 起 secure module/`union:`；14–36 audit 由实际 ABI 拒绝 LaunchWrapper |
+| Forge | Agent 14.x–64.x；audit 25.x–64.x | 37 起 secure module/`union:`；14–23 的 LaunchWrapper 不提供 audit；所选分析管线仍校验实际 ABI |
 | NeoForge | 47.1.x、20.2.x–21.11.x、26.1.x–26.2.x | 实际 ABI 在 ITransformer/ClassProcessor 间验证 |
 
 NeoForge 分发布局另按 Minecraft 范围选择：

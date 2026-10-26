@@ -23,6 +23,23 @@ beforeEach(() => {
   ipc.invoke.mockResolvedValue(12);
 });
 describe("CLI channel lifecycle", () => {
+  it("retains the CLI observation warning after a successful launch", async () => {
+    const result = run({ kind: "orbit", args: ["launch"], label: "Launch" });
+    ipc.channels[0].onmessage({
+      type: "progress",
+      message: "Starting without observation",
+      envelope: {
+        data: {
+          event: "runtime_observation_unavailable",
+          reason: "Unverified Loader ABI",
+        },
+      },
+    });
+    ipc.channels[0].onmessage({ type: "finished", ok: true, data: {} });
+    await result;
+    expect(activity.tasks[0].state).toBe("succeeded");
+    expect(activity.tasks[0].observationNotice).toBe("Unverified Loader ABI");
+  });
   it("keeps the failed process result and opens its crash report", async () => {
     const diagnostics = {
       reports: [

@@ -29,6 +29,14 @@ pub fn audit_instance_with_progress(
         total: Some(5),
     });
     let manifest = crate::manifest::OrbitManifest::from_dir(instance_dir)?;
+    // Reject only this optional analysis, before runtime scans or package
+    // resolution. No installer, launch, or package operation consumes this gate.
+    orbit_compatibility::audit::select(
+        manifest.project.loader_kind()?,
+        &manifest.project.mc_version,
+        &manifest.project.modloader_version,
+    )
+    .map_err(|error| OrbitError::Other(error.into()))?;
     emit(AuditProgressEvent::Advanced {
         stage: AuditProgressStage::PrepareInputs,
         completed: 1,

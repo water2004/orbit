@@ -1,5 +1,10 @@
 # Orbit 架构
 
+可选分析能力由 Orbit 的 `feature_support` 独立查询；`orbit capabilities` 返回 audit 与
+runtime_observation 各自的范围支持及原因。审计不支持不能成为下载、安装、求解或启动的
+门禁。Agent 范围未验证时，Orbit 明确发出结构化提示并不注入 Agent，仍复用 Launcher
+正常启动；不猜测归属、不改写历史账本，也不伪称此次运行收集了文件记录。
+
 后台 server start 的 CLI 生命周期与常驻监管器分离：GUI 以直接 CLI 退出为完成边界，
 排空已写输出后释放读端，不等待后代 EOF，也不停止后代。实例内存属于 Launcher，
 schema 3 的集中迁移及 CLI/GUI 配置详见 `orbit-launcher-cli.md`；Orbit 仍只读运行时投影。

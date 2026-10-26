@@ -668,6 +668,12 @@ provider 兼容声明，也不修改 manifest、lockfile、下载缓存或实例
 GUI 通过同一个 `audit --output-format json` 路径渲染 Loader 能力、namespace、风险以及
 warning/coverage gap 的结构化预览；GUI 不自行解析 JAR，也不维护第二套兼容性判断。
 
+`orbit capabilities --output-format json` 返回 `audit` / `runtime_observation` 的
+`available` 与可选 `reason`，只检查独立版本范围，不扫描 JAR、不求解或联网。
+GUI 据此禁用未支持的审计；真实 audit 仍严格校验实际 ABI。此命令及 audit 的支持范围
+不控制包管理或 Launcher 安装。Agent 未验证时 `orbit launch` 发出明确提示、跳过注入并
+正常启动，不为缺失观测生成所有权事实；其他实际启动错误仍正常返回失败。
+
 `--output-format json` 保留完整 evidence（audit 子 schema 5）。显式 `--report <path>` 额外写入
 未按文本 limit、risk threshold 或 mod 过滤截断的完整结构化报告；默认模式不创建报告文件。
 JSON 结果直接嵌入 audit 的 `AuditReport`（schema 5），顶层固定包含 `schema_version`、

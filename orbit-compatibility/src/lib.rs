@@ -737,12 +737,11 @@ pub mod audit {
             [0, 30, u32::MAX, u32::MAX],
             QUILT,
         ),
-        // Selecting a pipeline is not declaring readiness. The actual ABI
-        // probe recognizes and rejects the Forge 14-36 LaunchWrapper line with
-        // a precise diagnostic instead of a generic missing-range error.
+        // Forge 14-23 uses LaunchWrapper, not this analysis pipeline. Version
+        // support remains distinct from the actual ModLauncher ABI probe.
         rule(
             ModLoader::Forge,
-            [14, 0, 0, 0],
+            [25, 0, 0, 0],
             [36, u32::MAX, u32::MAX, u32::MAX],
             FORGE,
         ),
