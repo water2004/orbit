@@ -2,6 +2,9 @@
 
 > 本文描述当前实现。依赖语义的来源是 JAR 内的 loader 元数据，所有 loader 都经过同一条求解路径。
 
+Launcher 实例内存（manifest schema 3）及后台启动管道收尾不参与包求解。Orbit 的只读
+Launcher 适配消费共享的 manifest 1/2/3 运行时投影，不修改 Launcher 设置或迁移文档。
+
 Launcher 的 BMCLAPI 公开资源选源、启动报告和 GUI 关窗行为不经过 resolver，不改变
 Orbit Provider、候选枚举、物理端或 Pareto 策略；GUI 的游戏任务仍复用原有 CLI 启动路径。
 没有为这些功能新增求解或安装旁路，也不改 Orbit TOML/lock schema。

@@ -30,7 +30,8 @@ import { importArguments } from "../services/commands";
 import { initializeOrbit } from "../services/installations";
 import { activity } from "../services/cli";
 import { launchDiagnostics } from "../services/launch-diagnostics";
-import type { Package } from "../types";
+import type { Package, MemoryLimits, MemorySettingsResult } from "../types";
+import MemorySettings from "../components/MemorySettings.vue";
 import { t } from "../i18n";
 import { instancePath, discoveryPath } from "../services/navigation";
 import Avatar from "../components/Avatar.vue";
@@ -52,6 +53,56 @@ const {
 const exporting = ref(false),
   importing = ref(false);
 const launchReportNote = ref("");
+const memorySaving = ref(false);
+const memoryLoading = ref(false),
+  memorySettings = ref<MemorySettingsResult>();
+let memoryRevision = 0;
+async function loadMemory() {
+  const instance = workspace.selected;
+  if (!instance) return;
+  const revision = ++memoryRevision;
+  memoryLoading.value = true;
+  memorySettings.value = undefined;
+  try {
+    const result = await launcher<MemorySettingsResult>(
+      ["instance", "memory", "show"],
+      t("Loading instance memory", "正在读取实例内存"),
+      instance,
+    );
+    if (revision === memoryRevision && workspace.selected?.id === instance.id)
+      memorySettings.value = result;
+  } finally {
+    if (revision === memoryRevision) memoryLoading.value = false;
+  }
+}
+async function saveMemory(value?: MemoryLimits) {
+  const instance = workspace.selected;
+  if (!instance || memorySaving.value) return;
+  memorySaving.value = true;
+  try {
+    const result = await launcher<MemorySettingsResult>(
+      value
+        ? [
+            "instance",
+            "memory",
+            "set",
+            "--min-mib",
+            String(value.min_mib),
+            "--max-mib",
+            String(value.max_mib),
+          ]
+        : ["instance", "memory", "clear"],
+      t("Updating instance memory", "正在更新实例内存"),
+      instance,
+    );
+    if (workspace.selected?.id === instance.id) {
+      memorySettings.value = result;
+      await selectInstance(instance);
+    }
+  } finally {
+    memorySaving.value = false;
+  }
+}
 async function showLaunchReport() {
   const record = await launcher<{ result: unknown | null } | null>(
     ["instance", "launch-report"],
@@ -148,6 +199,15 @@ const renameOpen = ref(false),
   deleting = ref(false),
   deletion = ref<{ name: string; directory: string }>();
 const tab = computed(() => String(route.params.tab || "mods"));
+watch(
+  [tab, () => workspace.selected?.id],
+  () => {
+    ++memoryRevision;
+    memorySettings.value = undefined;
+    if (tab.value === "runtime") void act(loadMemory);
+  },
+  { immediate: true },
+);
 interface Updates {
   updates: { mod_id: string; current_version: string; new_version: string }[];
   diagnostics: {
@@ -724,6 +784,24 @@ async function status() {
           >{{ t("Reset", "重置") }}</Button
         >
       </div>
+      <MemorySettings
+        v-if="workspace.detail?.memory"
+        :value="workspace.detail.memory"
+        :pending="memorySaving"
+        :capabilities="memorySettings?.capabilities"
+        :loading="memoryLoading"
+        @retry="act(loadMemory)"
+        @save="(value) => act(() => saveMemory(value))"
+        @reset="act(() => saveMemory())"
+      />
+      <p v-else class="error">
+        {{
+          t(
+            "Update Orbit Launcher to manage instance memory.",
+            "请更新 Orbit Launcher 后管理实例内存。",
+          )
+        }}
+      </p>
       <div v-if="workspace.selected.kind === 'client'" class="card stack">
         <h2>{{ t("Window resolution", "窗口分辨率") }}</h2>
         <p>

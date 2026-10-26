@@ -4,6 +4,12 @@
 
 ## 1. 当前结论
 
+已修复后台服务端正常运行但 GUI 启动任务等待后代管道 EOF 的收尾问题；真实子进程测试
+覆盖继承/重定向管道、尾部 UTF-8 与 stderr 消息、非零退出且不误杀常驻后代。
+Launcher 新增 instance memory show/set/clear，客户端/服务端共用；GUI 运行时页增加
+滑块、精确 MiB 输入和快捷容量。实例 schema 2→3 逐级迁移并保留备份，lock/global schema
+不变；Windows/Linux/macOS 的硬件范围查询与内存规则均在 Launcher，GUI 不自造容量。
+
 已修复切换下载源时用空 Minecraft 标识查询组件/Java 的向导错误；下载源控件移到紧凑
 标题操作区，刷新期间阻止继续并忽略旧响应。公开 metadata、sidecar 与工件统一走所选源，
 不支持的镜像组件明确拒绝。Java JSON 重排单独建立源内容身份，工件摘要仍严格校验；
@@ -14,7 +20,8 @@
 开发分支新增 Launcher 官方/BMCLAPI 公开下载源、命令级覆盖及 GUI 选源；默认官方，
 认证/EULA 不走镜像，原 URL 和哈希校验保持。失败启动在 CLI/GUI 展示本次 crash report，
 无报告时使用日志末尾，预览有界脱敏；最近结果可通过 CLI 查询。GUI 支持关窗保留游戏，
-并可设置真实进程启动后自动关闭，CLI 独立排空输出并保存日志。不新增业务 schema 版本；
+并可设置真实进程启动后自动关闭，CLI 独立排空输出并保存日志。下载源与关窗不增加 schema，
+实例内存则按上文升级 manifest 到 3；
 下载源是兼容缺省字段，关窗开关只存 GUI 偏好。Windows 进程退出/取消由独立夹具验证，
 不自动启动用户游戏或 GUI；Linux 仍需 CI 验证，不能用本机结果替代。
 

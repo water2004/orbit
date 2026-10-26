@@ -1,6 +1,6 @@
 # Orbit Launcher 架构
 
-> 状态：当前实现（2026-10-25）。可用命令以
+> 状态：当前实现（2026-10-26）。可用命令以
 > [`orbit-launcher-cli.md`](orbit-launcher-cli.md) 为准。早期方案中没有落实且已由更小组合
 > 取代的命令不再保留为“规划”，避免把历史设计草案误读成产品承诺。
 >
@@ -10,6 +10,12 @@
 ## 1. 目标
 
 ### 启动与下载边界（2026-10-26）
+
+实例内存由 manifest schema 3 的 `[launch.memory]` 统一拥有，CLI 的 instance memory
+show/set/clear 只编排 core 的校验、原子设置及硬件能力查询。Windows/Linux/macOS 的物理
+内存读取封装在 `platform::memory`，展示范围不成为分配承诺或硬限制。旧已发布的平铺
+字段及可无损表示的显式 heap 参数只在 `storage_migrations` 中逐级迁移。
+Orbit 只编入共享 manifest 1/2/3 的只读契约，不读取或迁移 Launcher 的内存设置。
 
 `download_source` 的 `DownloadClient` 只承载公开下载，认证 client 不经过地址映射；
 配置命令与命令级覆盖共用 `DownloadSource`，lock、缓存及强哈希身份保持上游 URL。

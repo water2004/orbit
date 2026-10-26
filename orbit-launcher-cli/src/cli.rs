@@ -406,6 +406,11 @@ pub enum InstanceCommands {
         #[command(subcommand)]
         command: ResolutionCommands,
     },
+    /// Inspect or change this instance's Java heap limits (MiB).
+    Memory {
+        #[command(subcommand)]
+        command: MemoryCommands,
+    },
     /// Set or reset this instance's image.
     Icon {
         #[command(subcommand)]
@@ -445,12 +450,28 @@ impl InstanceCommands {
                 | Self::Rename { .. }
                 | Self::Configure { .. }
                 | Self::Resolution { .. }
+                | Self::Memory { .. }
                 | Self::Icon { .. }
                 | Self::Java { .. }
                 | Self::Remove
                 | Self::Delete { .. }
         )
     }
+}
+
+#[derive(Debug, Subcommand)]
+pub enum MemoryCommands {
+    /// Show heap limits and system memory.
+    Show,
+    /// Set initial and maximum Java heap sizes in MiB.
+    Set {
+        #[arg(long)]
+        min_mib: u32,
+        #[arg(long)]
+        max_mib: u32,
+    },
+    /// Restore the default heap limits.
+    Clear,
 }
 
 #[derive(Debug, Subcommand)]
@@ -524,6 +545,44 @@ mod tests {
     use clap::CommandFactory;
 
     use super::*;
+    #[test]
+    fn memory_commands_are_explicit_and_typed() {
+        let command = Cli::try_parse_from([
+            "orbit-launcher",
+            "--instance",
+            "server",
+            "instance",
+            "memory",
+            "set",
+            "--min-mib",
+            "1024",
+            "--max-mib",
+            "8192",
+        ])
+        .unwrap();
+        assert!(matches!(
+            command.command,
+            Commands::Instance {
+                command: InstanceCommands::Memory {
+                    command: MemoryCommands::Set {
+                        min_mib: 1024,
+                        max_mib: 8192
+                    }
+                }
+            }
+        ));
+        assert!(
+            Cli::try_parse_from([
+                "orbit-launcher",
+                "instance",
+                "memory",
+                "set",
+                "--max-mib",
+                "8192"
+            ])
+            .is_err()
+        );
+    }
 
     #[test]
     fn public_download_source_and_launch_report_use_the_normal_cli_surface() {

@@ -280,6 +280,29 @@ component/major 要求，不把“Java 越新”当作普遍兼容。
 经过目录边界校验的单个 runtime 目录。`runtimes/.staging` 是安装事务的内部工作区，不属于
 runtime inventory，也不得被 `list`、`verify` 或 `remove` 枚举为已安装 Java。
 
+## 实例内存
+
+客户端与服务端共用 Launcher 的实例内存配置，修改仅影响下次启动，不重启正在运行的游戏。
+
+```sh
+orbit-launcher --instance demo instance memory show
+orbit-launcher --instance demo instance memory set --min-mib 1024 --max-mib 8192
+orbit-launcher --instance demo instance memory clear
+```
+
+数值单位为 MiB，必须是正整数且最大值不小于初始值；clear 恢复 512/4096 MiB。
+show/set/clear 的 JSON 包含 `memory` 和 `capabilities`（实际物理内存及滑块参考上界）；
+查询硬件失败明确报错，不伪造容量。参考范围不作为强制分配上限，允许用户明确设置更大值。
+GUI 在实例 → 运行时提供同一配置的滑块、精确输入和快捷容量，不自己读写 TOML 或检测内存。
+
+当前实例 schema 为 **3**，内存保存在 `[launch.memory]` 的 `min_mib` / `max_mib`。
+已发布 schema 2 的平铺字段由集中迁移步骤移动到新表；schema 1 先逐级升到 2，再到 3。
+历史 `jvm_args` 中可精确转换为整 MiB 的 `-Xms/-Xmx` 和 HeapSize 选项会按原顺序合并，
+保留原来的最终生效值，然后删除重复选项。无法无损转换时拒绝迁移且保留原文件。
+新格式内存只由该表管理，不能再在 `jvm_args` 中重复声明；运行时生成唯一的一对堆参数。
+lock schema 仍为 7，全局配置 schema 不变；Orbit 通过共享只读格式支持 manifest 1/2/3，
+不代替 Launcher 迁移文件。正常迁移保存原字节备份并原子提交，不要求两个程序同时安装。
+
 ## 已发布 schema 的自动迁移
 
 唯一历史起点是 **v0.7.0** 使用的格式；更早、未知或更新的 schema 明确拒绝，不猜测。

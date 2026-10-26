@@ -15,7 +15,22 @@ export interface Runtime {
   loader_version?: string;
   java?: { major: number; version: string; provider: string };
 }
+export interface MemoryLimits {
+  min_mib: number;
+  max_mib: number;
+}
+export interface MemoryCapabilities {
+  physical_memory_mib: number;
+  slider_max_mib: number;
+}
+export interface MemorySettingsResult {
+  instance_id: string;
+  name: string;
+  memory: MemoryLimits;
+  capabilities: MemoryCapabilities;
+}
 export interface Detail extends Instance {
+  memory: MemoryLimits;
   desired: Runtime;
   installed?: Runtime;
   selected_account_id?: string;

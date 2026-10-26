@@ -1,4 +1,5 @@
 use crate::error::LauncherError;
+pub mod memory;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OperatingSystem {

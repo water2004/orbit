@@ -1,5 +1,9 @@
 # Orbit 架构
 
+后台 server start 的 CLI 生命周期与常驻监管器分离：GUI 以直接 CLI 退出为完成边界，
+排空已写输出后释放读端，不等待后代 EOF，也不停止后代。实例内存属于 Launcher，
+schema 3 的集中迁移及 CLI/GUI 配置详见 `orbit-launcher-cli.md`；Orbit 仍只读运行时投影。
+
 Launcher 公共资源下载通过 `download_source::DownloadClient` 统一选源，独立于认证 client，
 不会改写 Orbit Provider 或求解路径。客户端/服务端共用 `launch_session` 采集本次崩溃
 证据并记录到 Launcher 自有状态；GUI 只读 CLI JSON，关闭观察连接后 Java/CLI 可继续运行。

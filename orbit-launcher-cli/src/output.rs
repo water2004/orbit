@@ -185,12 +185,21 @@ pub struct InstanceDetailView {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub client_resolution: Option<ClientResolutionView>,
     pub java_selection: Option<String>,
+    pub memory: orbit_launcher_core::instance::MemoryConfig,
 }
 
 #[derive(Debug, Clone, Copy, Serialize)]
 pub struct ClientResolutionView {
     pub width: u32,
     pub height: u32,
+}
+
+#[derive(Debug, Serialize)]
+pub struct InstanceMemoryView {
+    pub instance_id: String,
+    pub name: String,
+    pub memory: orbit_launcher_core::instance::MemoryConfig,
+    pub capabilities: orbit_launcher_core::platform::memory::MemoryCapabilities,
 }
 
 impl InstanceDetailView {
@@ -204,6 +213,7 @@ impl InstanceDetailView {
         Self {
             instance: InstanceView::from_snapshot(entry, manifest, installed, default),
             java_selection: manifest.launch.java.clone().map(Into::into),
+            memory: manifest.launch.memory,
             context,
             desired: DesiredRuntimeView {
                 minecraft: manifest.minecraft.requirement.clone(),

@@ -173,12 +173,15 @@ impl InstanceManifest {
                 "loader",
             )?,
         }
-        if self.launch.min_memory_mib == 0
-            || self.launch.max_memory_mib < self.launch.min_memory_mib
+        self.launch.memory.validate()?;
+        if self
+            .launch
+            .jvm_args
+            .iter()
+            .any(|argument| heap_option(argument).is_some())
         {
             return Err(LauncherError::InvalidManifest(
-                "launch memory must be non-zero and max_memory_mib must be at least min_memory_mib"
-                    .to_string(),
+                "configure Java heap through [launch.memory], not launch.jvm_args".into(),
             ));
         }
         match (self.kind, &self.client, &self.server) {
@@ -251,17 +254,61 @@ pub struct LoaderConfig {
     pub requirement: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct LaunchConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub java: Option<crate::java::JavaSelection>,
-    pub min_memory_mib: u32,
-    pub max_memory_mib: u32,
+    pub memory: MemoryConfig,
     pub jvm_args: Vec<String>,
     pub game_args: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub account: Option<Uuid>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct MemoryConfig {
+    pub min_mib: u32,
+    pub max_mib: u32,
+}
+/// Standard JVM heap spellings. This is not a Loader/version heuristic.
+pub(crate) fn heap_option(argument: &str) -> Option<(&'static str, &str)> {
+    for (prefix, field) in [
+        ("-Xms", "min_mib"),
+        ("-Xmx", "max_mib"),
+        ("-XX:InitialHeapSize=", "min_mib"),
+        ("-XX:MaxHeapSize=", "max_mib"),
+    ] {
+        if let Some(size) = argument.strip_prefix(prefix) {
+            return Some((field, size));
+        }
+    }
+    None
+}
+impl Default for MemoryConfig {
+    fn default() -> Self {
+        Self {
+            min_mib: 512,
+            max_mib: 4096,
+        }
+    }
+}
+impl MemoryConfig {
+    pub(crate) fn jvm_arguments(self) -> [String; 2] {
+        [
+            format!("-Xms{}M", self.min_mib),
+            format!("-Xmx{}M", self.max_mib),
+        ]
+    }
+    pub fn validate(self) -> Result<(), LauncherError> {
+        if self.min_mib == 0 || self.max_mib < self.min_mib {
+            return Err(LauncherError::InvalidManifest(
+                "memory minimum must be positive and maximum must be at least the minimum".into(),
+            ));
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -292,19 +339,6 @@ impl ClientResolution {
             ));
         }
         Ok(())
-    }
-}
-
-impl Default for LaunchConfig {
-    fn default() -> Self {
-        Self {
-            java: None,
-            min_memory_mib: 512,
-            max_memory_mib: 4096,
-            jvm_args: Vec::new(),
-            game_args: Vec::new(),
-            account: None,
-        }
     }
 }
 
@@ -481,6 +515,27 @@ impl ManifestFile {
 mod tests {
     use super::*;
     #[test]
+    fn memory_is_a_single_typed_heap_configuration() {
+        let memory = MemoryConfig {
+            min_mib: 1024,
+            max_mib: 8192,
+        };
+        memory.validate().unwrap();
+        assert_eq!(memory.jvm_arguments(), ["-Xms1024M", "-Xmx8192M"]);
+        for invalid in [
+            MemoryConfig {
+                min_mib: 0,
+                max_mib: 4096,
+            },
+            MemoryConfig {
+                min_mib: 4096,
+                max_mib: 512,
+            },
+        ] {
+            assert!(invalid.validate().is_err());
+        }
+    }
+    #[test]
     fn inspection_of_a_released_manifest_never_writes_back() {
         let temp = tempfile::tempdir().unwrap();
         let mut old = InstanceManifest::new(
@@ -493,7 +548,10 @@ mod tests {
         )
         .unwrap();
         old.schema = 1;
-        let bytes = toml::to_string_pretty(&old).unwrap();
+        let bytes = format!(
+            "schema = 1\nid = '{}'\nname = 'Preview'\nkind = 'client'\n[minecraft]\nrequirement = '26.2'\n[loader]\nkind = 'vanilla'\n[launch]\nmin_memory_mib = 512\nmax_memory_mib = 4096\n",
+            old.id
+        );
         let path = temp.path().join(INSTANCE_MANIFEST_FILE);
         std::fs::write(&path, &bytes).unwrap();
         assert_eq!(
@@ -518,18 +576,18 @@ mod tests {
         .unwrap();
         old.schema = 1;
         old.launch.account = Some(Uuid::new_v4());
-        old.launch.max_memory_mib = 8192;
+        old.launch.memory.max_mib = 8192;
         old.launch.jvm_args = vec!["-Dexample=true".into()];
         std::fs::write(
             dir.path().join(INSTANCE_MANIFEST_FILE),
-            toml::to_string_pretty(&old).unwrap(),
+            format!("schema = 1\nid = '{}'\nname = 'Existing client'\nkind = 'client'\n[minecraft]\nrequirement = '26.2'\n[loader]\nkind = 'fabric'\nrequirement = '0.20.0'\n[launch]\nmin_memory_mib = 512\nmax_memory_mib = 8192\naccount = '{}'\njvm_args = ['-Dexample=true']\n", old.id, old.launch.account.unwrap()),
         )
         .unwrap();
         let migrated = ManifestFile::open(dir.path()).unwrap().inner;
         assert_eq!(migrated.schema, INSTANCE_SCHEMA);
         assert_eq!(migrated.id, old.id);
         assert_eq!(migrated.launch.account, old.launch.account);
-        assert_eq!(migrated.launch.max_memory_mib, 8192);
+        assert_eq!(migrated.launch.memory.max_mib, 8192);
         assert_eq!(migrated.launch.jvm_args, old.launch.jvm_args);
         assert!(migrated.icon.is_none());
         assert!(migrated.launch.java.is_none());

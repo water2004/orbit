@@ -39,11 +39,18 @@ impl DocumentKind {
                 to: 3,
                 apply: config_v2,
             }],
-            Self::Instance => &[MigrationStep {
-                from: 1,
-                to: 2,
-                apply: instance_v1,
-            }],
+            Self::Instance => &[
+                MigrationStep {
+                    from: 1,
+                    to: 2,
+                    apply: instance_v1,
+                },
+                MigrationStep {
+                    from: 2,
+                    to: 3,
+                    apply: instance_v2,
+                },
+            ],
             Self::Lock => &[MigrationStep {
                 from: 6,
                 to: 7,
@@ -70,6 +77,66 @@ struct MigrationStep {
     from: i64,
     to: i64,
     apply: fn(&mut DocumentMut) -> Result<(), LauncherError>,
+}
+fn instance_v2(document: &mut DocumentMut) -> Result<(), LauncherError> {
+    let mut launch = match document.remove("launch") {
+        None => toml_edit::Table::new(),
+        Some(toml_edit::Item::Table(table)) => table,
+        Some(toml_edit::Item::Value(toml_edit::Value::InlineTable(table))) => table.into_table(),
+        _ => {
+            return Err(LauncherError::InvalidManifest(
+                "launch must be a table".into(),
+            ));
+        }
+    };
+    if launch.contains_key("memory") {
+        return Err(LauncherError::InvalidManifest(
+            "schema 2 did not support launch.memory; original file was not changed".into(),
+        ));
+    }
+    let defaults = crate::instance::MemoryConfig::default();
+    let mut memory = toml_edit::Table::new();
+    for (old, new, default) in [
+        ("min_memory_mib", "min_mib", defaults.min_mib),
+        ("max_memory_mib", "max_mib", defaults.max_mib),
+    ] {
+        if let Some((key, item)) = launch.remove_entry(old) {
+            let renamed = toml_edit::Key::new(new).with_leaf_decor(key.leaf_decor().clone());
+            memory.insert_formatted(&renamed, item);
+        } else {
+            memory.insert(new, value(i64::from(default)));
+        }
+    }
+    if let Some(arguments) = launch.get_mut("jvm_args") {
+        let arguments = arguments.as_array_mut().ok_or_else(|| {
+            LauncherError::InvalidManifest("launch.jvm_args must be an array".into())
+        })?;
+        let mut removed = Vec::new();
+        for (index, argument) in arguments.iter().enumerate() {
+            if let Some((field, size)) = argument.as_str().and_then(crate::instance::heap_option) {
+                // Preserve the old command-line precedence: the last explicit
+                // JVM heap argument overrode the old scalar config fields.
+                let (number, multiplier) = match size.as_bytes().last() {
+                    Some(b'k' | b'K') => (&size[..size.len() - 1], 1024_u64),
+                    Some(b'm' | b'M') => (&size[..size.len() - 1], 1024 * 1024),
+                    Some(b'g' | b'G') => (&size[..size.len() - 1], 1024 * 1024 * 1024),
+                    _ => (size, 1),
+                };
+                let mib = number.parse::<u64>().ok().and_then(|number| number.checked_mul(multiplier))
+                    .filter(|bytes| *bytes > 0 && bytes % (1024 * 1024) == 0)
+                    .map(|bytes| bytes / (1024 * 1024)).and_then(|mib| u32::try_from(mib).ok())
+                    .ok_or_else(|| LauncherError::InvalidManifest("legacy JVM heap option cannot be represented in whole MiB; original file was not changed".into()))?;
+                memory[field] = value(i64::from(mib));
+                removed.push(index);
+            }
+        }
+        for index in removed.into_iter().rev() {
+            arguments.remove(index);
+        }
+    }
+    launch.insert("memory", toml_edit::Item::Table(memory));
+    document.insert("launch", toml_edit::Item::Table(launch));
+    Ok(())
 }
 fn instance_v1(document: &mut DocumentMut) -> Result<(), LauncherError> {
     if document.contains_key("icon")
@@ -236,6 +303,73 @@ pub(crate) fn read_current(path: &Path, kind: DocumentKind) -> Result<String, La
 mod tests {
     use super::*;
     use crate::config::GlobalConfig;
+    #[test]
+    fn released_instance_memory_is_migrated_once_with_exact_backup() {
+        for schema in [1, 2] {
+            for launch in [
+                "[launch]\n# Memory comment\nmin_memory_mib = 768\nmax_memory_mib = 6144\njvm_args = ['-Dkeep=true']\n",
+                "launch = { min_memory_mib = 768, max_memory_mib = 6144, jvm_args = ['-Dkeep=true'] }\n",
+            ] {
+                let dir = tempfile::tempdir().unwrap();
+                let path = dir.path().join(crate::instance::INSTANCE_MANIFEST_FILE);
+                let prefix = format!(
+                    "# Original\nschema = {schema}\nid = 'b895cb9a-d43e-4a76-9fc4-a5b8d05c4385'\nname = 'client'\nkind = 'client'\n"
+                );
+                let suffix = "[minecraft]\nrequirement = '26.2'\n[loader]\nkind = 'vanilla'\n";
+                let old = format!("{prefix}{launch}{suffix}");
+                std::fs::write(&path, &old).unwrap();
+                let file = crate::instance::ManifestFile::open(dir.path()).unwrap();
+                assert_eq!(file.inner.schema, 3);
+                assert_eq!(
+                    file.inner.launch.memory,
+                    crate::instance::MemoryConfig {
+                        min_mib: 768,
+                        max_mib: 6144
+                    }
+                );
+                assert_eq!(file.inner.launch.jvm_args, ["-Dkeep=true"]);
+                let migrated = std::fs::read_to_string(&path).unwrap();
+                if launch.contains("# Memory comment") {
+                    assert!(migrated.contains("# Memory comment"));
+                }
+                assert!(!migrated.contains("max_memory_mib"));
+                assert!(migrated.contains("[launch.memory]"));
+                crate::instance::ManifestFile::open(dir.path()).unwrap();
+                assert_eq!(std::fs::read_to_string(&path).unwrap(), migrated);
+                let backups: Vec<_> = std::fs::read_dir(dir.path())
+                    .unwrap()
+                    .flatten()
+                    .filter(|entry| {
+                        entry
+                            .path()
+                            .extension()
+                            .is_some_and(|extension| extension == "bak")
+                    })
+                    .collect();
+                assert_eq!(backups.len(), 1);
+                assert_eq!(std::fs::read_to_string(backups[0].path()).unwrap(), old);
+            }
+        }
+    }
+    #[test]
+    fn legacy_heap_arguments_are_consolidated_without_changing_effective_values() {
+        let source = "schema = 2\n[launch]\nmin_memory_mib = 512\nmax_memory_mib = 4096\njvm_args = ['-Xmx6G', '-Dkeep=true', '-Xms768m', '-XX:MaxHeapSize=8589934592']\n";
+        let mut document = source.parse::<DocumentMut>().unwrap();
+        upgrade(&mut document, DocumentKind::Instance).unwrap();
+        assert_eq!(
+            document["launch"]["memory"]["min_mib"].as_integer(),
+            Some(768)
+        );
+        assert_eq!(
+            document["launch"]["memory"]["max_mib"].as_integer(),
+            Some(8192)
+        );
+        assert_eq!(document["launch"]["jvm_args"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            document["launch"]["jvm_args"][0].as_str(),
+            Some("-Dkeep=true")
+        );
+    }
     #[test]
     fn upgrade_keeps_exact_backup_and_comments_and_is_idempotent() {
         let dir = tempfile::tempdir().unwrap();

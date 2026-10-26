@@ -17,6 +17,8 @@ use serde_json::Value;
 use zeroize::Zeroizing;
 
 use crate::wire;
+mod pipe;
+use pipe::CommandPipe;
 
 pub type TaskId = u64;
 
@@ -219,6 +221,7 @@ fn run_process(
 ) {
     let can_survive = request.lifetime == ProcessLifetime::Game;
     let game_started = Arc::new(AtomicBool::new(false));
+    let process_finished = Arc::new(AtomicBool::new(false));
     let mut command = Command::new(&request.program);
     command
         .args(&request.args)
@@ -258,19 +261,36 @@ fn run_process(
     let stdout = child.inner().stdout.take();
     let stderr = child.inner().stderr.take();
 
+    let stdout_finished = process_finished.clone();
     let stdout_reader = thread::spawn(move || {
         stdout.map_or_else(
             || Ok(String::new()),
-            |stdout| read_utf8_stream(stdout, "stdout"),
+            |stdout| {
+                let stdout = CommandPipe::new(stdout, stdout_finished)
+                    .map_err(|error| tr!("Failed to read CLI stdout: %{error}", error = error))?;
+                read_utf8_stream(stdout, "stdout")
+            },
         )
     });
 
     let stderr_events = events.clone();
     let observed_start = game_started.clone();
     let (stderr_failure_tx, stderr_failure_rx) = mpsc::channel();
+    let stderr_finished = process_finished.clone();
     let stderr_reader = thread::spawn(move || {
         let Some(stderr) = stderr else {
             return;
+        };
+        let stderr = match CommandPipe::new(stderr, stderr_finished) {
+            Ok(pipe) => pipe,
+            Err(error) => {
+                let _ = stderr_events.send(BridgeEvent::ProtocolError {
+                    task_id,
+                    message: tr!("Failed to read CLI stderr: %{error}", error = error),
+                });
+                let _ = stderr_failure_tx.send(());
+                return;
+            }
         };
         let mut reader = BufReader::new(stderr);
         let mut bytes = Vec::new();
@@ -426,6 +446,7 @@ fn run_process(
         }
     };
 
+    process_finished.store(true, Ordering::Release);
     drop(stdin);
     let stdout = match stdout_reader.join() {
         Ok(Ok(stdout)) => stdout,
@@ -506,6 +527,150 @@ fn read_utf8_stream(mut reader: impl Read, stream: &str) -> Result<String, Strin
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn inherited_pipe_child_fixture() {
+        let Ok(root) = std::env::var("ORBIT_GUI_PIPE_FIXTURE") else {
+            return;
+        };
+        let root = PathBuf::from(root);
+        if std::env::var_os("ORBIT_GUI_PIPE_DESCENDANT").is_some() {
+            std::fs::write(root.join("alive"), b"ready").unwrap();
+            let deadline = std::time::Instant::now() + Duration::from_secs(15);
+            while !root.join("stop").exists() && std::time::Instant::now() < deadline {
+                thread::sleep(Duration::from_millis(10));
+            }
+            std::fs::write(root.join("stopped"), b"done").unwrap();
+            return;
+        }
+        let mode = std::env::var("ORBIT_GUI_PIPE_MODE").unwrap();
+        let mut descendant = Command::new(std::env::current_exe().unwrap());
+        descendant
+            .args([
+                "--exact",
+                "process::tests::inherited_pipe_child_fixture",
+                "--nocapture",
+            ])
+            .env("ORBIT_GUI_PIPE_DESCENDANT", "1")
+            .stdin(Stdio::null());
+        if mode == "redirect" {
+            descendant.stdout(Stdio::null()).stderr(Stdio::null());
+        }
+        let child = descendant.spawn().unwrap();
+        let ready_deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while !root.join("alive").exists() {
+            assert!(
+                std::time::Instant::now() < ready_deadline,
+                "descendant did not start"
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
+        let envelope = ProgressEnvelope::new(
+            "server.start",
+            1,
+            orbit_machine_protocol::ProgressPhase::Process,
+            serde_json::json!({"event":"supervisor_spawned", "pid":child.id()}),
+        );
+        eprintln!("{}", serde_json::to_string(&envelope).unwrap());
+        // Exercise fragmented Unicode and a final unterminated progress line.
+        std::io::stdout().write_all("启动成功".as_bytes()).unwrap();
+        std::io::stdout().flush().unwrap();
+        std::io::stderr()
+            .write_all(serde_json::to_string(&envelope).unwrap().as_bytes())
+            .unwrap();
+        std::io::stderr().flush().unwrap();
+        if mode == "bad_utf8" {
+            std::io::stdout().write_all(&[0xff]).unwrap();
+        }
+        std::process::exit(if mode == "failure" { 7 } else { 0 });
+    }
+
+    #[test]
+    fn inherited_pipe_host_fixture() {
+        let Ok(root) = std::env::var("ORBIT_GUI_PIPE_FIXTURE") else {
+            return;
+        };
+        let root = PathBuf::from(root);
+        let mode = std::env::var("ORBIT_GUI_PIPE_MODE").unwrap();
+        let mut bridge = ProcessBridge::default();
+        bridge.spawn(ProcessRequest {
+            lifetime: ProcessLifetime::Game,
+            kind: CliKind::Launcher,
+            program: std::env::current_exe().unwrap(),
+            args: vec![
+                "--exact".into(),
+                "process::tests::inherited_pipe_child_fixture".into(),
+                "--nocapture".into(),
+            ],
+            working_directory: None,
+            initial_stdin: None,
+        });
+        let deadline = std::time::Instant::now() + Duration::from_secs(4);
+        let mut protocol_error = false;
+        let mut progress_count = 0;
+        let mut finished = None;
+        while std::time::Instant::now() < deadline && finished.is_none() {
+            for event in bridge.drain() {
+                match event {
+                    BridgeEvent::ProtocolError { .. } => protocol_error = true,
+                    BridgeEvent::Progress { .. } => progress_count += 1,
+                    BridgeEvent::Finished {
+                        status,
+                        stdout,
+                        cancelled,
+                        ..
+                    } => finished = Some((status, stdout, cancelled)),
+                    _ => {}
+                }
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        let alive = root.join("alive").exists() && !root.join("stopped").exists();
+        std::fs::write(root.join("stop"), b"stop fixture").unwrap();
+        let (status, stdout, cancelled) =
+            finished.expect("CLI task waited for the detached descendant's pipe EOF");
+        assert!(alive, "task completion must not stop the detached server");
+        assert_eq!(status, Some(if mode == "failure" { 7 } else { 0 }));
+        assert!(!cancelled);
+        assert_eq!(protocol_error, mode == "bad_utf8");
+        if mode != "bad_utf8" {
+            assert!(stdout.contains("启动成功"));
+        }
+        assert_eq!(progress_count, 2, "last buffered stderr line was lost");
+    }
+
+    #[test]
+    fn finite_cli_completion_drains_output_without_waiting_for_detached_descendants() {
+        for mode in ["inherit", "redirect", "failure", "bad_utf8"] {
+            let root = tempfile::tempdir().unwrap();
+            let output = Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "process::tests::inherited_pipe_host_fixture",
+                    "--nocapture",
+                ])
+                .env("ORBIT_GUI_PIPE_FIXTURE", root.path())
+                .env("ORBIT_GUI_PIPE_MODE", mode)
+                .stdout(Stdio::null())
+                .stderr(Stdio::piped())
+                .output()
+                .unwrap();
+            std::fs::write(root.path().join("stop"), b"cleanup fixture").unwrap();
+            let deadline = std::time::Instant::now() + Duration::from_secs(5);
+            while !root.path().join("stopped").exists() && std::time::Instant::now() < deadline {
+                thread::sleep(Duration::from_millis(10));
+            }
+            assert!(
+                output.status.success(),
+                "{mode}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert!(
+                root.path().join("stopped").exists(),
+                "fixture did not cleanly stop"
+            );
+        }
+    }
 
     #[test]
     fn detachment_child_fixture() {

@@ -291,6 +291,31 @@ pub struct ConfigureInstanceResult {
     pub manifest: InstanceManifest,
 }
 
+pub fn set_instance_memory(
+    paths: &RuntimePaths,
+    selector: &str,
+    memory: crate::instance::MemoryConfig,
+) -> Result<ConfigureInstanceResult, LauncherError> {
+    memory.validate()?;
+    let registry = InstanceRegistry::load(&paths.instances_file())?;
+    let entry = registry
+        .find(selector)
+        .cloned()
+        .ok_or_else(|| LauncherError::InstanceNotFound(selector.into()))?;
+    let mut file = ManifestFile::open(entry.instance_directory())?;
+    if file.inner.id != entry.id {
+        return Err(LauncherError::InstanceRegistryMismatch(
+            "memory target has a different ID".into(),
+        ));
+    }
+    file.inner.launch.memory = memory;
+    file.save()?;
+    Ok(ConfigureInstanceResult {
+        entry,
+        manifest: file.inner,
+    })
+}
+
 pub fn set_client_resolution(
     paths: &RuntimePaths,
     selector: &str,
@@ -512,6 +537,57 @@ pub fn rollback_created_instance(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn memory_updates_apply_to_both_kinds_and_invalid_requests_preserve_bytes() {
+        for kind in [InstanceKind::Client, InstanceKind::Server] {
+            let directory = tempfile::tempdir().unwrap();
+            let paths = paths(directory.path());
+            let created = create_instance(
+                &paths,
+                CreateInstanceRequest {
+                    directory: directory.path().join("game"),
+                    name: "memory".into(),
+                    kind,
+                    minecraft_requirement: "26.2".into(),
+                    loader_kind: LoaderKind::Vanilla,
+                    loader_requirement: None,
+                },
+            )
+            .unwrap();
+            let root = created.entry.instance_directory();
+            let memory = crate::instance::MemoryConfig {
+                min_mib: 1024,
+                max_mib: 8192,
+            };
+            set_instance_memory(&paths, "memory", memory).unwrap();
+            assert_eq!(
+                ManifestFile::open(root).unwrap().inner.launch.memory,
+                memory
+            );
+            let original = std::fs::read(root.join(INSTANCE_MANIFEST_FILE)).unwrap();
+            assert!(
+                set_instance_memory(
+                    &paths,
+                    "memory",
+                    crate::instance::MemoryConfig {
+                        min_mib: 8192,
+                        max_mib: 1024
+                    }
+                )
+                .is_err()
+            );
+            assert_eq!(
+                std::fs::read(root.join(INSTANCE_MANIFEST_FILE)).unwrap(),
+                original
+            );
+            set_instance_memory(&paths, "memory", crate::instance::MemoryConfig::default())
+                .unwrap();
+            assert_eq!(
+                ManifestFile::open(root).unwrap().inner.launch.memory,
+                crate::instance::MemoryConfig::default()
+            );
+        }
+    }
     use crate::runtime::RuntimePathOptions;
 
     fn paths(directory: &Path) -> RuntimePaths {

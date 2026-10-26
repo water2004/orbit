@@ -4,14 +4,16 @@ use serde::Deserialize;
 
 pub const MANIFEST_FILE: &str = "orbit-launcher.toml";
 pub const LOCK_FILE: &str = "orbit-launcher.lock";
-pub const MANIFEST_SCHEMA: u32 = 2;
+pub const MANIFEST_SCHEMA: u32 = 3;
 pub const LOCK_SCHEMA: u32 = 7;
 pub const V0_7_MANIFEST_SCHEMA: u32 = 1;
 pub const V0_7_LOCK_SCHEMA: u32 = 6;
+pub const V0_8_MANIFEST_SCHEMA: u32 = 2;
 
-// Both published formats have the same runtime projection. Reading these facts
+// All supported formats have the same runtime projection. Reading these facts
 // does not migrate documents or permit writing older formats.
-pub const READABLE_MANIFEST_SCHEMAS: &[u32] = &[V0_7_MANIFEST_SCHEMA, MANIFEST_SCHEMA];
+pub const READABLE_MANIFEST_SCHEMAS: &[u32] =
+    &[V0_7_MANIFEST_SCHEMA, V0_8_MANIFEST_SCHEMA, MANIFEST_SCHEMA];
 pub const READABLE_LOCK_SCHEMAS: &[u32] = &[V0_7_LOCK_SCHEMA, LOCK_SCHEMA];
 
 // Icons, Java, accounts, download URLs and all unrelated fields remain entirely

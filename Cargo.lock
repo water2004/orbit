@@ -3536,6 +3536,7 @@ dependencies = [
  "anyhow",
  "command-group",
  "directories",
+ "libc",
  "orbit-i18n",
  "orbit-machine-protocol",
  "resvg",
@@ -3546,6 +3547,7 @@ dependencies = [
  "tauri-plugin-dialog",
  "tauri-plugin-opener",
  "tempfile",
+ "windows-sys 0.61.2",
  "zeroize",
 ]
 
@@ -3621,6 +3623,7 @@ dependencies = [
  "html2text",
  "image",
  "java-properties",
+ "libc",
  "md-5",
  "orbit-bundle-format",
  "orbit-compatibility",

@@ -71,6 +71,7 @@ pub enum CommandOutput {
     Rename(RenameView),
     InstanceConfigured(InstanceDetailView),
     InstanceResolution(InstanceDetailView),
+    InstanceMemory(crate::output::InstanceMemoryView),
     InstanceIcon(InstanceDetailView),
     InstanceJava(InstanceDetailView),
     LauncherStateExport(LauncherStateExportView),
@@ -136,6 +137,7 @@ impl CommandOutput {
             Self::Rename(_) => "instance.rename",
             Self::InstanceConfigured(_) => "instance.configure",
             Self::InstanceResolution(_) => "instance.resolution",
+            Self::InstanceMemory(_) => "instance.memory",
             Self::InstanceIcon(_) => "instance.icon",
             Self::InstanceJava(_) => "instance.java",
             Self::LauncherStateExport(_) => "export",
@@ -1777,6 +1779,40 @@ fn execute_instance(
                 resolved.source,
             )))
         }
+        InstanceCommands::Memory { command } => {
+            let registry = InstanceRegistry::load(&registry_path)?;
+            let resolved =
+                resolve_instance(&registry, selector, current_dir, ContextIntent::Sensitive)?;
+            let memory = match command {
+                crate::cli::MemoryCommands::Show => None,
+                crate::cli::MemoryCommands::Clear => {
+                    Some(orbit_launcher_core::instance::MemoryConfig::default())
+                }
+                crate::cli::MemoryCommands::Set { min_mib, max_mib } => {
+                    Some(orbit_launcher_core::instance::MemoryConfig { min_mib, max_mib })
+                }
+            };
+            let selected_memory = memory.unwrap_or(resolved.manifest.launch.memory);
+            let capabilities =
+                orbit_launcher_core::platform::memory::MemoryCapabilities::native(selected_memory)?;
+            memory
+                .map(|memory| {
+                    orbit_launcher_core::operations::set_instance_memory(
+                        runtime.paths(),
+                        &resolved.entry.id.to_string(),
+                        memory,
+                    )
+                })
+                .transpose()?;
+            Ok(CommandOutput::InstanceMemory(
+                crate::output::InstanceMemoryView {
+                    instance_id: resolved.entry.id.to_string(),
+                    name: resolved.entry.name,
+                    memory: selected_memory,
+                    capabilities,
+                },
+            ))
+        }
         InstanceCommands::Resolution { command } => {
             let registry = InstanceRegistry::load(&registry_path)?;
             let resolved =
@@ -1930,6 +1966,98 @@ mod tests {
             cache_dir: Some(directory.join("cache")),
         })
         .unwrap()
+    }
+
+    #[test]
+    fn memory_management_uses_the_same_instance_api_for_clients_and_servers() {
+        for kind in [InstanceKindArg::Client, InstanceKindArg::Server] {
+            let directory = tempfile::tempdir().unwrap();
+            let game = directory.path().join("game");
+            std::fs::create_dir_all(&game).unwrap();
+            let game = dunce::canonicalize(game).unwrap();
+            let runtime = runtime(directory.path());
+            let CommandOutput::InstanceMutation(created) = execute_instance(
+                InstanceCommands::Create {
+                    name: "memory-test".into(),
+                    kind,
+                    server_directory: None,
+                    minecraft: "26.2".into(),
+                    loader: LoaderKindArg::Vanilla,
+                    loader_version: None,
+                },
+                None,
+                &game,
+                &runtime,
+            )
+            .unwrap() else {
+                panic!("unexpected create output")
+            };
+            let selector = Some(created.instance.id.as_str());
+            let output = execute_instance(
+                InstanceCommands::Memory {
+                    command: crate::cli::MemoryCommands::Set {
+                        min_mib: 1024,
+                        max_mib: 8192,
+                    },
+                },
+                selector,
+                &game,
+                &runtime,
+            )
+            .unwrap();
+            let CommandOutput::InstanceMemory(memory) = output else {
+                panic!("unexpected memory output")
+            };
+            assert_eq!(memory.memory.max_mib, 8192);
+            assert!(memory.capabilities.physical_memory_mib > 0);
+            let path = created
+                .instance
+                .directory
+                .join(orbit_launcher_core::instance::INSTANCE_MANIFEST_FILE);
+            let original = std::fs::read(&path).unwrap();
+            assert!(
+                execute_instance(
+                    InstanceCommands::Memory {
+                        command: crate::cli::MemoryCommands::Set {
+                            min_mib: 0,
+                            max_mib: 8192
+                        }
+                    },
+                    selector,
+                    &game,
+                    &runtime
+                )
+                .is_err()
+            );
+            assert_eq!(std::fs::read(&path).unwrap(), original);
+            let CommandOutput::InstanceMemory(shown) = execute_instance(
+                InstanceCommands::Memory {
+                    command: crate::cli::MemoryCommands::Show,
+                },
+                selector,
+                &game,
+                &runtime,
+            )
+            .unwrap() else {
+                panic!("unexpected show output")
+            };
+            assert_eq!(shown.memory, memory.memory);
+            let CommandOutput::InstanceMemory(cleared) = execute_instance(
+                InstanceCommands::Memory {
+                    command: crate::cli::MemoryCommands::Clear,
+                },
+                selector,
+                &game,
+                &runtime,
+            )
+            .unwrap() else {
+                panic!("unexpected clear output")
+            };
+            assert_eq!(
+                cleared.memory,
+                orbit_launcher_core::instance::MemoryConfig::default()
+            );
+        }
     }
 
     #[test]

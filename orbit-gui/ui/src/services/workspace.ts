@@ -177,7 +177,10 @@ export async function launch(instance: Instance) {
       instance.id,
       ...(detail.kind === "server" ? ["--server"] : []),
     ],
-    label: t("Launching game", "正在启动游戏"),
+    label:
+      detail.kind === "server"
+        ? t("Starting server", "正在启动服务端")
+        : t("Launching game", "正在启动游戏"),
   });
 }
 export async function act(operation: () => Promise<unknown>) {

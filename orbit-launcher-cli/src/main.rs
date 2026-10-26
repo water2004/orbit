@@ -118,6 +118,7 @@ fn command_name(command: &cli::Commands) -> &'static str {
             cli::InstanceCommands::Rename { .. } => "instance.rename",
             cli::InstanceCommands::Configure { .. } => "instance.configure",
             cli::InstanceCommands::Resolution { .. } => "instance.resolution",
+            cli::InstanceCommands::Memory { .. } => "instance.memory",
             cli::InstanceCommands::Icon { .. } => "instance.icon",
             cli::InstanceCommands::Java { .. } => "instance.java",
             cli::InstanceCommands::Remove => "instance.remove",
@@ -201,6 +202,7 @@ fn render_success(format: OutputFormat, output: app::CommandOutput) {
             app::CommandOutput::Rename(value) => print_json(command, value),
             app::CommandOutput::InstanceConfigured(value) => print_json(command, value),
             app::CommandOutput::InstanceResolution(value) => print_json(command, value),
+            app::CommandOutput::InstanceMemory(value) => print_json(command, value),
             app::CommandOutput::InstanceIcon(value) => print_json(command, value),
             app::CommandOutput::InstanceJava(value) => print_json(command, value),
             app::CommandOutput::LauncherStateExport(value) => print_json(command, value),
@@ -704,6 +706,17 @@ fn render_text(output: app::CommandOutput) {
                 instance = view.instance.name
             )
         ),
+        app::CommandOutput::InstanceMemory(view) => {
+            outln!(
+                "{}",
+                tr!(
+                    "Java heap for %{instance}: %{minimum}–%{maximum} MiB (next launch)",
+                    instance = view.name,
+                    minimum = view.memory.min_mib,
+                    maximum = view.memory.max_mib
+                )
+            );
+        }
         app::CommandOutput::InstanceResolution(view) => match view.client_resolution {
             Some(resolution) => outln!(
                 "{}",

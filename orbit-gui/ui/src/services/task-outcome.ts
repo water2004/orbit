@@ -13,6 +13,33 @@ export function taskOutcome(
   request: Request,
   result: unknown,
 ): TaskOutcome | undefined {
+  const serverStart =
+    request.kind === "launcher"
+      ? request.args[0] === "server" && request.args[1] === "start"
+      : request.args[0] === "launch" && request.args.includes("--server");
+  if (serverStart) {
+    const state = (
+      result as { state?: { child_pid?: unknown; phase?: unknown } } | null
+    )?.state;
+    if (
+      !state ||
+      typeof state.child_pid !== "number" ||
+      state.child_pid <= 0 ||
+      state.phase !== "running"
+    )
+      throw new Error(
+        t(
+          "CLI returned an invalid server startup result.",
+          "CLI 返回的服务端启动结果无效。",
+        ),
+      );
+    return {
+      title: t("Server started in the background", "服务端已在后台启动"),
+      notices: [],
+      omitted: 0,
+      detailsExpanded: false,
+    };
+  }
   if (request.kind === "launcher" && request.args[0] === "install") {
     const artifacts = (result as { source_pinned_artifacts?: unknown } | null)
       ?.source_pinned_artifacts;

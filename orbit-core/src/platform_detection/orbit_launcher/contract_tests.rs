@@ -197,6 +197,13 @@ impl Fixture {
             .parse::<toml_edit::DocumentMut>()
             .unwrap();
         document["schema"] = toml_edit::value(i64::from(schema));
+        if file == format::MANIFEST_FILE
+            && (1..=2).contains(&schema)
+            && let Some(memory) = document["launch"].as_table_mut().unwrap().remove("memory")
+        {
+            document["launch"]["min_memory_mib"] = memory["min_mib"].clone();
+            document["launch"]["max_memory_mib"] = memory["max_mib"].clone();
+        }
         std::fs::write(path, document.to_string()).unwrap();
     }
     fn verify(&self) {
@@ -429,8 +436,9 @@ fn released_and_partially_upgraded_storage_use_one_read_only_projection() {
     fixture.manifest.icon = None;
     fixture.manifest.launch.java = None;
     fixture.save();
-    for manifest in [1, 2] {
+    for manifest in [1, 2, launcher::instance::INSTANCE_SCHEMA] {
         for lock in [6, 7] {
+            fixture.save();
             fixture.set_schema(format::MANIFEST_FILE, manifest);
             fixture.set_schema(format::LOCK_FILE, lock);
             fixture.verify();
@@ -449,7 +457,10 @@ fn released_and_partially_upgraded_storage_use_one_read_only_projection() {
 #[test]
 fn unknown_schemas_are_rejected_without_reset_migration_or_fallback() {
     for (file, schemas) in [
-        (format::MANIFEST_FILE, vec![0, 3, u32::MAX]),
+        (
+            format::MANIFEST_FILE,
+            vec![0, launcher::instance::INSTANCE_SCHEMA + 1, u32::MAX],
+        ),
         (format::LOCK_FILE, vec![0, 5, 8, u32::MAX]),
     ] {
         let fixture = Fixture::new(launcher::InstanceKind::Client, JavaProvider::System);

@@ -944,13 +944,18 @@ fn assemble_arguments(
     placeholders: &BTreeMap<&'static str, String>,
     authentication_arguments: &[String],
 ) -> Result<Vec<String>, LauncherError> {
-    let mut arguments = vec![
-        format!("-Xms{}M", manifest.launch.min_memory_mib),
-        format!("-Xmx{}M", manifest.launch.max_memory_mib),
-    ];
+    let mut arguments = Vec::new();
     arguments.extend(authentication_arguments.iter().cloned());
     arguments.extend(manifest.launch.jvm_args.iter().cloned());
-    arguments.extend(expand_arguments(&lock.arguments.jvm, placeholders)?);
+    arguments.extend(
+        expand_arguments(&lock.arguments.jvm, placeholders)?
+            .into_iter()
+            .filter(|argument| crate::instance::heap_option(argument).is_none()),
+    );
+    // Heap policy belongs to Launcher. Place its canonical arguments after
+    // additional/profile JVM arguments, before the entry point, so old custom
+    // JVM options cannot silently override a user's memory setting.
+    arguments.extend(manifest.launch.memory.jvm_arguments());
     match &lock.entrypoint {
         LockedEntrypoint::Jar { path } => {
             arguments.push("-jar".to_string());
