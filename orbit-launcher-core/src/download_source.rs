@@ -2,6 +2,7 @@
 //! Authentication clients never use this transport.
 use crate::LauncherError;
 use serde::{Deserialize, Serialize};
+use sha1::{Digest, Sha1};
 use std::{fmt, str::FromStr};
 
 pub const BMCLAPI_DOCUMENTATION: &str = "https://bmclapidoc.bangbang93.com/";
@@ -40,7 +41,7 @@ impl DownloadSource {
             documentation: BMCLAPI_DOCUMENTATION,
         })
     }
-    pub fn route(self, canonical: &url::Url) -> url::Url {
+    fn route(self, canonical: &url::Url) -> url::Url {
         if self == Self::Official
             || canonical.scheme() != "https"
             || canonical.port().is_some()
@@ -50,15 +51,6 @@ impl DownloadSource {
             return canonical.clone();
         }
         let path = canonical.path();
-        // Hash sidecars are integrity inputs, not bulk artifacts. BMCLAPI's
-        // Maven mirror does not consistently publish them; fetch them from
-        // their declared origin directly, never by retry/fallback after a 404.
-        if [".sha1", ".sha256", ".sha512", ".asc"]
-            .iter()
-            .any(|suffix| path.ends_with(suffix))
-        {
-            return canonical.clone();
-        }
         let mapped = match canonical.host_str() {
             Some(
                 "launchermeta.mojang.com"
@@ -102,8 +94,21 @@ impl DownloadClient {
     pub fn new(client: reqwest::Client, source: DownloadSource) -> Self {
         Self { client, source }
     }
-    pub fn get(&self, canonical: url::Url) -> reqwest::RequestBuilder {
-        self.client.get(self.source.route(&canonical))
+    pub fn get(&self, canonical: url::Url) -> Result<reqwest::RequestBuilder, LauncherError> {
+        let routed = self.source.route(&canonical);
+        if self.source == DownloadSource::Bmclapi
+            && (routed.scheme() != "https"
+                || routed.port().is_some()
+                || !routed.username().is_empty()
+                || routed.password().is_some()
+                || routed.host_str() != Some("bmclapi2.bangbang93.com"))
+        {
+            return Err(LauncherError::UnsupportedRequirement(format!(
+                "BMCLAPI does not provide a verified route for '{}'; select the official download source for this component",
+                canonical.host_str().unwrap_or("invalid host")
+            )));
+        }
+        Ok(self.client.get(routed))
     }
     pub(crate) fn source(&self) -> DownloadSource {
         self.source
@@ -112,6 +117,23 @@ impl DownloadClient {
     pub fn official_client(&self) -> &reqwest::Client {
         &self.client
     }
+
+    /// BMCLAPI reserializes this particular JSON document. Its bytes are source
+    /// metadata, not a Mojang byte-exact artifact. Keep the received digest as
+    /// its identity; individual Java file digests are never relaxed.
+    pub(crate) fn java_manifest_digest(
+        &self,
+        bytes: &[u8],
+        declared: &str,
+    ) -> Result<String, LauncherError> {
+        let actual = hex::encode(Sha1::digest(bytes));
+        if self.source == DownloadSource::Official && actual != declared {
+            return Err(LauncherError::ArtifactIntegrity(
+                "Mojang Java manifest did not match its declared SHA-1".into(),
+            ));
+        }
+        Ok(actual)
+    }
 }
 #[cfg(test)]
 mod tests {
@@ -119,8 +141,37 @@ mod tests {
     #[tokio::test]
     #[ignore = "uses live BMCLAPI metadata, without installing or starting a game"]
     async fn live_bmclapi_minecraft_fabric_and_java_preserve_canonical_identity() {
-        let config = crate::config::GlobalConfig::default();
-        let client = DownloadClient::new(config.http_client().unwrap(), DownloadSource::Bmclapi);
+        let http = reqwest::Client::builder()
+            .user_agent("orbit-launcher-source-test")
+            .timeout(std::time::Duration::from_secs(60))
+            .retry(reqwest::retry::never())
+            .redirect(reqwest::redirect::Policy::custom(|attempt| {
+                if attempt.url().scheme() != "https"
+                    || matches!(
+                        attempt.url().host_str(),
+                        Some(
+                            "piston-meta.mojang.com"
+                                | "piston-data.mojang.com"
+                                | "launchermeta.mojang.com"
+                                | "launcher.mojang.com"
+                                | "resources.download.minecraft.net"
+                                | "libraries.minecraft.net"
+                                | "meta.fabricmc.net"
+                                | "maven.fabricmc.net"
+                                | "authlib-injector.yushi.moe"
+                        )
+                    )
+                {
+                    attempt.error("test forbids redirects to the origin")
+                } else if attempt.previous().len() >= 10 {
+                    attempt.error("too many redirects")
+                } else {
+                    attempt.follow()
+                }
+            }))
+            .build()
+            .unwrap();
+        let client = DownloadClient::new(http, DownloadSource::Bmclapi);
         let server = crate::mojang::MojangClient::new(client.clone())
             .resolve_vanilla_server("26.2")
             .await
@@ -130,6 +181,14 @@ mod tests {
                 .version_json_url
                 .starts_with("https://piston-meta.mojang.com/")
         );
+        let vanilla = crate::client::resolve_vanilla_client(
+            &crate::mojang::MojangClient::new(client.clone()),
+            "26.2",
+            &crate::platform::HostPlatform::native().unwrap(),
+        )
+        .await
+        .unwrap();
+        assert!(!vanilla.asset_mappings.is_empty());
         assert!(
             server
                 .server
@@ -152,11 +211,28 @@ mod tests {
         );
         let temp = tempfile::tempdir().unwrap();
         let cache = crate::artifact::ArtifactCache::new(temp.path());
+        assert!(profile.downloads.iter().any(|download| matches!(
+            download.request.expected_hash,
+            crate::artifact::ExpectedHash::Sha256(_)
+        )));
         let artifact = cache
             .fetch(&client, &profile.downloads[0].request, |_| {})
             .await
             .unwrap();
         assert!(artifact.size > 0);
+        let authlib = crate::authlib_injector::resolve_authlib_injector(&client)
+            .await
+            .unwrap();
+        let artifact = cache
+            .fetch(&client, &authlib.request, |_| {})
+            .await
+            .unwrap();
+        crate::authlib_injector::verify_authlib_injector(
+            &artifact.object_path,
+            &authlib,
+            &artifact,
+        )
+        .unwrap();
         let requirement = server.java.unwrap();
         let java = crate::java::plan_mojang_java(
             &client,
@@ -223,8 +299,61 @@ mod tests {
         assert_eq!(routed.query(), original.query());
     }
     #[test]
-    fn integrity_sidecars_are_always_fetched_from_the_declared_origin() {
+    fn integrity_sidecars_follow_the_selected_source_without_an_origin_exception() {
         let url = url::Url::parse("https://maven.fabricmc.net/net/fabricmc/fabric-loader/0.19.5/fabric-loader-0.19.5.jar.sha1").unwrap();
-        assert_eq!(DownloadSource::Bmclapi.route(&url), url);
+        assert_eq!(
+            DownloadSource::Bmclapi.route(&url).host_str(),
+            Some("bmclapi2.bangbang93.com")
+        );
+        let request = DownloadClient::new(reqwest::Client::new(), DownloadSource::Bmclapi)
+            .get(url)
+            .unwrap()
+            .build()
+            .unwrap();
+        assert_eq!(request.url().host_str(), Some("bmclapi2.bangbang93.com"));
+    }
+    #[test]
+    fn unsupported_mirror_components_fail_without_contacting_the_origin() {
+        let client = DownloadClient::new(reqwest::Client::new(), DownloadSource::Bmclapi);
+        assert!(
+            client
+                .get(url::Url::parse("https://meta.quiltmc.org/v3/versions/loader").unwrap())
+                .is_err()
+        );
+        assert!(
+            client
+                .get(url::Url::parse("https://user:secret@bmclapi2.bangbang93.com/a").unwrap())
+                .is_err()
+        );
+        assert!(
+            client
+                .get(url::Url::parse("http://bmclapi2.bangbang93.com/a").unwrap())
+                .is_err()
+        );
+        assert!(
+            client
+                .get(url::Url::parse("https://unknown.example/a.jar").unwrap())
+                .is_err()
+        );
+    }
+    #[test]
+    fn java_metadata_reformatting_is_source_specific_not_an_artifact_hash_override() {
+        let official = DownloadClient::new(reqwest::Client::new(), DownloadSource::Official);
+        let mirror = DownloadClient::new(reqwest::Client::new(), DownloadSource::Bmclapi);
+        let bytes = br#"{"files":{}}"#;
+        let digest = hex::encode(Sha1::digest(bytes));
+        assert_eq!(
+            official.java_manifest_digest(bytes, &digest).unwrap(),
+            digest
+        );
+        assert!(
+            official
+                .java_manifest_digest(bytes, &"a".repeat(40))
+                .is_err()
+        );
+        assert_eq!(
+            mirror.java_manifest_digest(bytes, &"a".repeat(40)).unwrap(),
+            hex::encode(Sha1::digest(bytes))
+        );
     }
 }

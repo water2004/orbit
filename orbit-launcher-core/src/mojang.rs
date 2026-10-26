@@ -173,7 +173,7 @@ impl MojangClient {
         validate_mojang_url(&entry.url, &["piston-meta.mojang.com"], "version JSON")?;
         validate_digest(&entry.sha1, 40, "version JSON SHA-1")?;
 
-        let version_bytes = crate::network::fetch_integrity_metadata(
+        let version_bytes = crate::network::fetch_bounded(
             &self.client,
             &entry.url,
             MAX_METADATA_BYTES,

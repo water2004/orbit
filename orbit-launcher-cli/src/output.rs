@@ -619,6 +619,7 @@ pub struct InstallView {
     pub eula_digest_sha256: Option<String>,
     pub downloaded_artifacts: usize,
     pub cached_artifacts: usize,
+    pub source_pinned_artifacts: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub state: Option<LauncherStateRestoreView>,
 }

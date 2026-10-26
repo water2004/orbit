@@ -175,7 +175,7 @@ impl ArtifactCache {
                 client.get(
                     url::Url::parse(&request.url)
                         .map_err(|error| LauncherError::InvalidRemoteData(error.to_string()))?,
-                ),
+                )?,
             )
             .await
             .map_err(crate::network::error)?

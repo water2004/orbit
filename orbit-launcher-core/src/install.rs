@@ -173,6 +173,9 @@ pub struct InstallResult {
     pub lock: LauncherLock,
     pub downloaded_artifacts: usize,
     pub cached_artifacts: usize,
+    /// Source supplied no upstream checksum; the received content is pinned by
+    /// the locally computed SHA-256, not claimed as upstream-verified.
+    pub source_pinned_artifacts: Vec<String>,
 }
 
 async fn plan_authlib_injector(
@@ -207,6 +210,14 @@ fn append_authlib_download(
             native_extract: None,
         });
     }
+}
+
+fn source_pinned_artifacts(downloads: &[ClientDownload]) -> Vec<String> {
+    downloads
+        .iter()
+        .filter(|download| matches!(download.request.expected_hash, ExpectedHash::Unverified))
+        .map(|download| download.request.logical_name.clone())
+        .collect()
 }
 
 fn lock_authlib_injector(
@@ -744,6 +755,7 @@ where
         }
     };
     append_authlib_download(&mut resolved.downloads, authlib_injector.as_ref());
+    let source_pinned_artifacts = source_pinned_artifacts(&resolved.downloads);
     cache.flush()?;
     let progress = Arc::new(Mutex::new(progress));
     let mut transfers = stream::iter(resolved.downloads.iter().cloned().map(|download| {
@@ -856,6 +868,7 @@ where
         lock,
         downloaded_artifacts: downloaded,
         cached_artifacts: cached,
+        source_pinned_artifacts,
     })
 }
 
@@ -972,6 +985,7 @@ where
         });
     }
     append_authlib_download(&mut downloads, authlib_injector.as_ref());
+    let source_pinned_artifacts = source_pinned_artifacts(&downloads);
     cache.flush()?;
     let progress = Arc::new(Mutex::new(progress));
     let mut transfers = stream::iter(downloads.into_iter().map(|download| {
@@ -1106,6 +1120,7 @@ where
         lock,
         downloaded_artifacts: downloaded,
         cached_artifacts: cached,
+        source_pinned_artifacts,
     })
 }
 

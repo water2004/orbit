@@ -41,12 +41,7 @@ pub async fn resolve_authlib_injector(
         ))
     })?;
     latest.validate()?;
-    let url = url::Url::parse(&latest.download_url).map_err(|error| {
-        LauncherError::InvalidRemoteData(format!(
-            "authlib-injector download URL is invalid: {error}"
-        ))
-    })?;
-    validate_official_url(&url, "artifact")?;
+    let url = canonical_artifact_url(client.source(), &latest.download_url)?;
     let sha256 = latest.checksums.get("sha256").cloned().ok_or_else(|| {
         LauncherError::InvalidRemoteData(
             "authlib-injector metadata does not publish a SHA-256 checksum".to_string(),
@@ -62,12 +57,37 @@ pub async fn resolve_authlib_injector(
         version: latest.version.clone(),
         request: ArtifactRequest {
             logical_name: format!("authlib-injector {}", latest.version),
-            url: latest.download_url,
+            url: url.to_string(),
             expected_hash: ExpectedHash::Sha256(sha256),
             expected_size: None,
         },
         target,
     })
+}
+
+/// This metadata service embeds an already-mirrored artifact URL. Normalize
+/// only its documented namespace, so lock provenance remains canonical and
+/// all transfers still go through DownloadClient's single routing boundary.
+fn canonical_artifact_url(
+    source: crate::download_source::DownloadSource,
+    value: &str,
+) -> Result<url::Url, LauncherError> {
+    let mut url = url::Url::parse(value).map_err(|error| {
+        LauncherError::InvalidRemoteData(format!(
+            "authlib-injector download URL is invalid: {error}"
+        ))
+    })?;
+    if source == crate::download_source::DownloadSource::Bmclapi
+        && url.host_str() == Some("bmclapi2.bangbang93.com")
+        && let Some(path) = url.path().strip_prefix("/mirrors/authlib-injector/")
+    {
+        let path = format!("/{path}");
+        url.set_host(Some(AUTHLIB_INJECTOR_HOST))
+            .expect("static valid host");
+        url.set_path(&path);
+    }
+    validate_official_url(&url, "artifact")?;
+    Ok(url)
 }
 
 pub fn verify_authlib_injector(
@@ -210,6 +230,36 @@ pub fn resolved_target_path(root: &Path, resolved: &ResolvedAuthlibInjector) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mirror_artifact_links_have_one_canonical_identity_and_no_arbitrary_host_escape() {
+        use crate::download_source::{DownloadClient, DownloadSource};
+        let mirror = "https://bmclapi2.bangbang93.com/mirrors/authlib-injector/artifact/56/authlib-injector-1.2.8.jar";
+        let canonical = canonical_artifact_url(DownloadSource::Bmclapi, mirror).unwrap();
+        assert_eq!(
+            canonical.as_str(),
+            "https://authlib-injector.yushi.moe/artifact/56/authlib-injector-1.2.8.jar"
+        );
+        assert_eq!(
+            DownloadClient::new(reqwest::Client::new(), DownloadSource::Bmclapi)
+                .get(canonical)
+                .unwrap()
+                .build()
+                .unwrap()
+                .url()
+                .as_str(),
+            mirror
+        );
+        for invalid in [
+            "https://bmclapi2.bangbang93.com/other/a.jar",
+            "https://unknown.example/a.jar",
+            "http://bmclapi2.bangbang93.com/mirrors/authlib-injector/a.jar",
+            "https://user:secret@bmclapi2.bangbang93.com/mirrors/authlib-injector/a.jar",
+        ] {
+            assert!(canonical_artifact_url(DownloadSource::Bmclapi, invalid).is_err());
+        }
+        assert!(canonical_artifact_url(DownloadSource::Official, mirror).is_err());
+    }
 
     #[test]
     fn manifest_parser_joins_continuation_lines() {

@@ -356,6 +356,15 @@ fn render_text(output: app::CommandOutput) {
                     cached = view.cached_artifacts
                 )
             );
+            if !view.source_pinned_artifacts.is_empty() {
+                outln!(
+                    "  {}",
+                    tr!(
+                        "No upstream checksum was provided for these artifacts; their downloaded content is pinned locally by SHA-256: %{artifacts}",
+                        artifacts = view.source_pinned_artifacts.join(", ")
+                    )
+                );
+            }
             if let Some(digest) = view.eula_digest_sha256 {
                 outln!("  EULA SHA-256: {digest}");
             }

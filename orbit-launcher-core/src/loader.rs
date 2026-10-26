@@ -133,8 +133,47 @@ pub async fn resolve_loader_profile(
     let game_arguments = string_arguments(&profile.arguments.game, "Loader game arguments")?;
     let jvm_arguments = string_arguments(&profile.arguments.jvm, "Loader JVM arguments")?;
 
+    let integrity_libraries = if matches!(adapter.format, ProfileMetadataFormat::Fabric) {
+        let url = endpoint(adapter.metadata_root, &[minecraft_version, &version])?;
+        let bytes = crate::network::fetch_bounded(
+            client,
+            &url,
+            MAX_PROFILE_BYTES,
+            "Fabric Loader integrity metadata",
+        )
+        .await?;
+        let metadata: FabricMetadata<FabricLauncherLibraries> = serde_json::from_slice(&bytes)
+            .map_err(|error| {
+                LauncherError::InvalidRemoteData(format!(
+                    "invalid Fabric integrity metadata: {error}"
+                ))
+            })?;
+        if metadata.loader.version != version {
+            return Err(LauncherError::InvalidRemoteData(
+                "Fabric integrity metadata identifies another loader version".into(),
+            ));
+        }
+        index_integrity_libraries(metadata.launcher_meta.libraries)?
+    } else {
+        BTreeMap::new()
+    };
     let mut resolved = BTreeMap::new();
-    for library in profile.libraries {
+    for mut library in profile.libraries {
+        if let Some(integrity) = integrity_libraries.get(&library.name) {
+            if artifact_url(&library.url, &library.name, None)?
+                != artifact_url(&integrity.url, &integrity.name, None)?
+            {
+                return Err(LauncherError::InvalidRemoteData(format!(
+                    "Fabric integrity metadata uses a different repository for '{}'",
+                    library.name
+                )));
+            }
+            if library.sha256.is_none() && library.sha1.is_none() {
+                library.sha256 = integrity.sha256.clone();
+                library.sha1 = integrity.sha1.clone();
+                library.size = library.size.or(integrity.size);
+            }
+        }
         let download = resolve_profile_library(client, library).await?;
         match resolved.entry(download.target.clone()) {
             std::collections::btree_map::Entry::Vacant(entry) => {
@@ -173,6 +212,27 @@ pub async fn resolve_loader_profile(
     })
 }
 
+fn index_integrity_libraries(
+    groups: BTreeMap<String, Vec<ProfileLibrary>>,
+) -> Result<BTreeMap<String, ProfileLibrary>, LauncherError> {
+    let mut indexed = BTreeMap::new();
+    for library in groups.into_values().flatten() {
+        match indexed.entry(library.name.clone()) {
+            std::collections::btree_map::Entry::Vacant(entry) => {
+                entry.insert(library);
+            }
+            std::collections::btree_map::Entry::Occupied(entry) if entry.get() == &library => {}
+            std::collections::btree_map::Entry::Occupied(_) => {
+                return Err(LauncherError::InvalidRemoteData(format!(
+                    "Fabric integrity metadata contains conflicting entries for '{}'",
+                    library.name
+                )));
+            }
+        }
+    }
+    Ok(indexed)
+}
+
 async fn resolve_fabric_version(
     client: &crate::download_source::DownloadClient,
     adapter: ProfileLoaderAdapter,
@@ -202,11 +262,12 @@ async fn list_fabric_versions(
     let bytes =
         crate::network::fetch_bounded(client, &url, MAX_PROFILE_BYTES, "Fabric Loader versions")
             .await?;
-    let versions: Vec<FabricMetadata> = serde_json::from_slice(&bytes).map_err(|error| {
-        LauncherError::InvalidRemoteData(format!(
-            "failed to parse Fabric Loader versions for Minecraft {minecraft}: {error}"
-        ))
-    })?;
+    let versions: Vec<FabricMetadata<FabricJavaRequirement>> = serde_json::from_slice(&bytes)
+        .map_err(|error| {
+            LauncherError::InvalidRemoteData(format!(
+                "failed to parse Fabric Loader versions for Minecraft {minecraft}: {error}"
+            ))
+        })?;
     Ok(versions
         .into_iter()
         .enumerate()
@@ -303,8 +364,12 @@ async fn resolve_profile_library(
         ExpectedHash::Sha256(sha256)
     } else if let Some(sha1) = library.sha1 {
         ExpectedHash::Sha1(sha1)
-    } else {
+    } else if client.source() == crate::download_source::DownloadSource::Official {
         ExpectedHash::Sha1(fetch_sha1_sidecar(client, &url, &library.name).await?)
+    } else {
+        // This source does not publish Maven sidecars. Absence is explicit in
+        // the install report/lock; no declared checksum is overridden.
+        ExpectedHash::Unverified
     };
     let request = ArtifactRequest {
         logical_name: format!("Loader library {}", library.name),
@@ -432,10 +497,10 @@ fn validate_text(value: &str, subject: &str) -> Result<(), LauncherError> {
 }
 
 #[derive(Debug, Deserialize)]
-struct FabricMetadata {
+struct FabricMetadata<T> {
     loader: FabricLoaderVersion,
     #[serde(rename = "launcherMeta")]
-    launcher_meta: FabricLauncherMeta,
+    launcher_meta: T,
 }
 
 #[derive(Debug, Deserialize)]
@@ -445,9 +510,15 @@ struct FabricLoaderVersion {
 }
 
 #[derive(Debug, Deserialize)]
-struct FabricLauncherMeta {
+struct FabricJavaRequirement {
     #[serde(rename = "min_java_version")]
     min_java_version: Option<u32>,
+}
+
+#[derive(Debug, Deserialize)]
+struct FabricLauncherLibraries {
+    #[serde(default)]
+    libraries: BTreeMap<String, Vec<ProfileLibrary>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -481,7 +552,7 @@ struct ProfileArguments {
     jvm: Vec<serde_json::Value>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, PartialEq, Eq)]
 struct ProfileLibrary {
     name: String,
     url: String,
@@ -496,6 +567,82 @@ struct ProfileLibrary {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn version_catalog_does_not_require_install_details_for_unselected_historical_versions() {
+        let bytes = br#"[{"loader":{"version":"0.1.0","stable":false},"launcherMeta":{"libraries":{"common":[{"name":"legacy:library:1"}]}}}]"#;
+        let entries: Vec<FabricMetadata<FabricJavaRequirement>> =
+            serde_json::from_slice(bytes).unwrap();
+        assert_eq!(entries[0].loader.version, "0.1.0");
+        assert_eq!(entries[0].launcher_meta.min_java_version, None);
+        assert!(
+            serde_json::from_slice::<Vec<FabricMetadata<FabricLauncherLibraries>>>(bytes).is_err()
+        );
+    }
+
+    #[test]
+    fn conflicting_integrity_metadata_is_not_silently_overwritten() {
+        let library = |hash: char| ProfileLibrary {
+            name: "org.example:library:1".into(),
+            url: "https://libraries.minecraft.net/".into(),
+            sha1: Some(hash.to_string().repeat(40)),
+            sha256: None,
+            size: Some(42),
+        };
+        assert_eq!(
+            index_integrity_libraries(BTreeMap::from([
+                ("client".into(), vec![library('a')]),
+                ("server".into(), vec![library('a')]),
+            ]))
+            .unwrap()
+            .len(),
+            1
+        );
+        assert!(
+            index_integrity_libraries(BTreeMap::from([
+                ("client".into(), vec![library('a')]),
+                ("server".into(), vec![library('b')]),
+            ]))
+            .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn supplied_library_digests_are_kept_and_missing_mirror_digests_are_explicit() {
+        let client = crate::download_source::DownloadClient::new(
+            reqwest::Client::new(),
+            crate::download_source::DownloadSource::Bmclapi,
+        );
+        for expected in [
+            ExpectedHash::Sha256("a".repeat(64)),
+            ExpectedHash::Sha1("b".repeat(40)),
+            ExpectedHash::Unverified,
+        ] {
+            let library = ProfileLibrary {
+                name: "net.fabricmc:fabric-loader:0.19.5".into(),
+                url: "https://maven.fabricmc.net/".into(),
+                sha256: match &expected {
+                    ExpectedHash::Sha256(value) => Some(value.clone()),
+                    _ => None,
+                },
+                sha1: match &expected {
+                    ExpectedHash::Sha1(value) => Some(value.clone()),
+                    _ => None,
+                },
+                size: None,
+            };
+            // No network: neither a declared checksum nor its absence triggers
+            // an origin sidecar request in mirror mode.
+            assert_eq!(
+                resolve_profile_library(&client, library)
+                    .await
+                    .unwrap()
+                    .request
+                    .expected_hash,
+                expected
+            );
+        }
+    }
 
     #[test]
     fn profile_endpoints_encode_only_valid_exact_identifiers() {

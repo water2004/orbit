@@ -4,7 +4,6 @@ use std::sync::{Arc, Mutex};
 
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
-use sha1::{Digest, Sha1};
 use uuid::Uuid;
 
 use crate::artifact::{ArtifactCache, ArtifactRequest, ArtifactTransferEvent, ExpectedHash};
@@ -386,19 +385,14 @@ where
             "Mojang Java runtime version is empty".to_string(),
         ));
     }
-    let manifest_bytes = crate::network::fetch_integrity_metadata(
+    let manifest_bytes = crate::network::fetch_bounded(
         client,
         &runtime.manifest.url,
         MAX_METADATA_BYTES,
         "Mojang Java runtime manifest",
     )
     .await?;
-    if hex::encode(Sha1::digest(&manifest_bytes)) != runtime.manifest.sha1 {
-        return Err(LauncherError::ArtifactIntegrity(format!(
-            "Mojang Java manifest for '{}' did not match its SHA-1",
-            requirement.component
-        )));
-    }
+    let manifest_sha1 = client.java_manifest_digest(&manifest_bytes, &runtime.manifest.sha1)?;
     let manifest: RuntimeFileManifest =
         serde_json::from_slice(&manifest_bytes).map_err(|error| {
             LauncherError::InvalidRemoteData(format!(
@@ -411,7 +405,7 @@ where
         target.mojang_name(),
         requirement.component,
         sanitize_id(&runtime.version.name),
-        &runtime.manifest.sha1[..12]
+        &manifest_sha1[..12]
     );
     let plan = MojangJavaPlan {
         target,
@@ -420,7 +414,7 @@ where
         version: runtime.version.name.clone(),
         runtime_id,
         manifest_url: runtime.manifest.url.clone(),
-        manifest_sha1: runtime.manifest.sha1.clone(),
+        manifest_sha1,
         entries,
     };
     progress(JavaProgressEvent::RuntimeResolved {

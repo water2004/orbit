@@ -5,6 +5,10 @@ Launcher 公共资源下载通过 `download_source::DownloadClient` 统一选源
 证据并记录到 Launcher 自有状态；GUI 只读 CLI JSON，关闭观察连接后 Java/CLI 可继续运行。
 具体边界见 [`orbit-launcher-architecture.md`](orbit-launcher-architecture.md)。
 
+下载源统一覆盖公开元数据、校验文件和工件；未覆盖的镜像路径明确拒绝，不暗中回源。
+Java manifest 的镜像格式化与文件摘要校验分层处理，无上游摘要工件明确报告来源信任。
+GUI 只通过 CLI 切换并刷新目录，不携带 URL 映射或校验策略。
+
 Launcher 外部实例导入集中于 `external_instance/`，来源适配后复用现有官方运行时安装，
 原样复制不透明数据并在校验完成后注册。GUI 只调用 inspect/import 及删除预览/确认命令。
 完整实例删除与注销分离，生命周期锁和可回滚回收站事务不依赖 Orbit 模组管理，详见

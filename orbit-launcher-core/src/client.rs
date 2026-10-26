@@ -234,7 +234,7 @@ pub async fn resolve_vanilla_client(
         upstream_id: asset_index.id.clone(),
         runtime_name: asset_index_runtime_name,
     };
-    let asset_bytes = crate::network::fetch_integrity_metadata(
+    let asset_bytes = crate::network::fetch_bounded(
         mojang.http_client(),
         &asset_index.download.url,
         MAX_ASSET_INDEX_BYTES,

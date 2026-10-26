@@ -51,3 +51,18 @@ it("does not show a setting as saved when the CLI rejected it", async () => {
   expect(wrapper.emitted("changed")).toBeUndefined();
   expect(wrapper.text()).toContain("config is locked");
 });
+it("cannot change the source while its parent installation is busy", async () => {
+  vi.mocked(run).mockResolvedValueOnce({
+    value: "official",
+    allowed_values: ["official", "bmclapi"],
+  });
+  const wrapper = mount(DownloadSourcePicker, { props: { disabled: true } });
+  await flushPromises();
+  wrapper
+    .findComponent(DropdownSelect)
+    .vm.$emit("update:modelValue", "bmclapi");
+  await flushPromises();
+  expect(run).toHaveBeenCalledTimes(1);
+  expect(wrapper.emitted("pending")).toEqual([[true], [false]]);
+  wrapper.unmount();
+});

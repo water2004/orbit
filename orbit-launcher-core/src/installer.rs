@@ -94,6 +94,7 @@ pub(crate) async fn list_installer_loader_versions(
     minecraft_version: &str,
 ) -> Result<Vec<LoaderVersion>, LauncherError> {
     validate_identifier(minecraft_version, "Minecraft version")?;
+    require_official_installer_source(client)?;
     match kind {
         LoaderKind::Forge => list_forge_versions(client, minecraft_version).await,
         LoaderKind::Neoforge => list_neoforge_versions(client, minecraft_version).await,
@@ -112,6 +113,7 @@ pub async fn resolve_loader_installer(
 ) -> Result<ResolvedLoaderInstaller, LauncherError> {
     validate_identifier(minecraft_version, "Minecraft version")?;
     validate_requirement(requirement)?;
+    require_official_installer_source(client)?;
     let (version, url) = match kind {
         LoaderKind::Forge => {
             let version = resolve_forge_version(client, minecraft_version, requirement).await?;
@@ -142,6 +144,17 @@ pub async fn resolve_loader_installer(
         version,
         artifact,
     })
+}
+
+fn require_official_installer_source(
+    client: &crate::download_source::DownloadClient,
+) -> Result<(), LauncherError> {
+    if client.source() == crate::download_source::DownloadSource::Bmclapi {
+        return Err(LauncherError::UnsupportedRequirement(
+            "Forge/NeoForge installers manage their own downloads and cannot currently honor BMCLAPI routing; select the official download source".into(),
+        ));
+    }
+    Ok(())
 }
 
 pub fn inspect_loader_installer(
@@ -880,6 +893,29 @@ struct InstalledOsRule {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn mirror_mode_cannot_silently_start_an_independently_networked_installer() {
+        let client = crate::download_source::DownloadClient::new(
+            reqwest::Client::new(),
+            crate::download_source::DownloadSource::Bmclapi,
+        );
+        for loader in [LoaderKind::Forge, LoaderKind::Neoforge] {
+            let error = list_installer_loader_versions(&client, loader, "1.21.1")
+                .await
+                .unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("select the official download source")
+            );
+            assert!(
+                resolve_loader_installer(&client, loader, "1.21.1", "latest")
+                    .await
+                    .is_err()
+            );
+        }
+    }
 
     #[test]
     fn neoforge_versions_map_to_their_real_minecraft_line() {

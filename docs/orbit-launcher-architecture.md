@@ -13,7 +13,9 @@
 
 `download_source` 的 `DownloadClient` 只承载公开下载，认证 client 不经过地址映射；
 配置命令与命令级覆盖共用 `DownloadSource`，lock、缓存及强哈希身份保持上游 URL。
-GUI 不实现镜像映射。BMCLAPI 的署名、使用条款和覆盖限制见 `orbit-network.md`。
+GUI 不实现镜像映射。元数据和工件经过同一下载源边界，不因存在摘要而回源；不支持的
+镜像组件明确拒绝。Java manifest 的源格式化身份和无摘要库的显式来源信任，与实际工件
+的声明摘要校验分开建模，见 `orbit-network.md` 的规则、署名、使用条款和覆盖限制。
 
 `launch_session` 将本次输出记录、脱敏和 `launch_diagnostics` 快照采集合并为客户端/服务端
 共用入口，`launch_record` 拥有有界日志及最近结果。报告采集不猜测崩溃原因，只显示本次

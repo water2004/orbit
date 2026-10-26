@@ -26,8 +26,12 @@ orbit-launcher config unset network.download-source
 orbit-launcher --instance demo instance launch-report
 ```
 
-`official|bmclapi` 仅改变公开资源的传输地址，不改 lock 原始 URL、缓存身份或哈希校验。
-认证、EULA、模组 Provider 不经镜像；不支持的端点仍用上游，映射请求失败不静默换源。
+`official|bmclapi` 统一控制公开元数据、校验文件和工件的传输，不改 lock 原始 URL。
+已声明的工件摘要始终严格校验。BMCLAPI 重排的 Java manifest 按实际内容建立 runtime
+身份，单个 Java 文件仍校验声明摘要；无摘要的 Loader 库会在安装结果的
+`source_pinned_artifacts` 中列出，使用本地 SHA-256 固定，不宣称上游校验。
+认证、EULA、模组 Provider 不经镜像。不支持的端点明确报错，不静默回源；目前 Quilt
+镜像及自行联网的 Forge/NeoForge 官方安装器须显式选择官方源。
 BMCLAPI 来源及协议链接显示在下载界面和 CLI，范围与限制见
 [`orbit-network.md`](orbit-network.md#launcher-可选-bmclapi-下载源)。
 

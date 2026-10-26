@@ -69,7 +69,11 @@ describe("CLI channel lifecycle", () => {
       total: 2,
     });
     expect(activity.tasks[0].downloadSource).toEqual(attribution);
-    ipc.channels[0].onmessage({ type: "finished", ok: true, data: {} });
+    ipc.channels[0].onmessage({
+      type: "finished",
+      ok: true,
+      data: { source_pinned_artifacts: [] },
+    });
     await result;
   });
   it("waits for the real process ID when cancelled during spawn", async () => {

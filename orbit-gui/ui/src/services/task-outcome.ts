@@ -13,6 +13,38 @@ export function taskOutcome(
   request: Request,
   result: unknown,
 ): TaskOutcome | undefined {
+  if (request.kind === "launcher" && request.args[0] === "install") {
+    const artifacts = (result as { source_pinned_artifacts?: unknown } | null)
+      ?.source_pinned_artifacts;
+    if (
+      !Array.isArray(artifacts) ||
+      !artifacts.every((item) => typeof item === "string")
+    )
+      throw new Error(
+        t(
+          "CLI returned an invalid installation integrity report.",
+          "CLI 返回的安装完整性报告无效。",
+        ),
+      );
+    if (!artifacts.length) return;
+    return {
+      title: t(
+        "Installation completed with source-trusted artifacts",
+        "安装完成，部分文件依赖下载源信任",
+      ),
+      notices: artifacts.slice(0, 16).map((artifact) => ({
+        title: artifact,
+        lines: [
+          t(
+            "No upstream checksum was supplied. This file is pinned locally by SHA-256, not verified against an upstream checksum.",
+            "来源未提供上游摘要。此文件已用本地 SHA-256 固定内容，但未经上游摘要校验。",
+          ),
+        ],
+      })),
+      omitted: Math.max(0, artifacts.length - 16),
+      detailsExpanded: true,
+    };
+  }
   if (request.kind !== "orbit" || request.args[0] !== "upgrade") return;
   const invalid = () =>
     new Error(

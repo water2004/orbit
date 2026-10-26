@@ -8,14 +8,28 @@
 
 依据 [BMCLAPI 文档与使用协议](https://bmclapidoc.bangbang93.com/) 的路径映射，
 `DownloadClient` 在公共下载边界映射 Mojang 元数据/Java/资源、Maven 库、Fabric、
-Forge/NeoForge Maven 工件及 authlib-injector 公开下载。Mojang Piston 元数据保留原路径，
-带上游字节摘要的 JSON（版本文档、asset index、Java manifest）及 Maven SHA sidecar/签名
-始终从声明的原站获取：实测镜像会重新序列化 Java JSON，且不保证提供校验 sidecar；不能
-以“JSON 等价”绕过字节摘要。此策略在请求前决定，不是哈希失败/404 后隐式回退。大工件
-仍使用选定镜像，内容严格按声明的 SHA 校验；所有读取共用同一有界传输/重试内核。
-Quilt 镜像在该文档中标为不可用，因此保留官方端点；未明确映射的 URL（包括部分
-Forge/NeoForge 目录端点）同样使用上游。Forge-family 官方安装器作为外部进程的内部
-网络请求不被代理或改写，不能宣称所有安装器流量都经过 BMCLAPI。
+Forge/NeoForge Maven 工件及 authlib-injector 公开下载。Mojang Piston 元数据保留原路径。
+版本文档、asset index、Java manifest、校验 sidecar 与实际工件均经过所选源，不存在
+“有摘要就回原站”的例外。所有读取共用同一有界传输/重试内核。
+
+选镜像意味着信任镜像提供的元数据，不意味着具有独立的 Mojang 签名认证。版本 JSON、
+asset index 和实际文件仍严格验证声明的摘要，错误立即拒绝。唯一的格式化例外是已实测
+BMCLAPI 会重新序列化的 Java manifest：它作为该源的结构化元数据解析，用收到字节的
+真实 SHA-1 建立 runtime/inventory 身份；不冒称通过官方原始 JSON 的字节摘要校验。
+每个 Java 文件依然校验 manifest 声明的 SHA-1，不能借此忽略文件摘要不匹配。
+
+Fabric profile 的库摘要取自同源详细 metadata，要求 coordinate 与仓库地址一致，重复的
+冲突记录拒绝。镜像没有提供摘要的库（例如部分 Loader 主 JAR）按 HTTPS 来源信任下载并
+固定本地 SHA-256；安装结果 `source_pinned_artifacts` 在 CLI/GUI 明确提示，不冒称已作
+上游摘要校验。官方源仍获取缺失的 Maven sidecar。任何已知摘要均不能被响应头或本地
+计算值覆盖。
+authlib-injector 的镜像 metadata 会返回已改写的下载链接；其 adapter 只接受精确镜像
+命名空间并恢复 canonical URL，再交给同一下载边界路由。SHA-256 和 JAR build 身份
+仍严格校验，不允许任意主机，也不产生第二条直接下载路径。
+
+Quilt 镜像在服务文档中标为不可用，未明确映射的公共 URL 直接报错，要求显式选官方源。
+Forge/NeoForge 外部官方安装器自行联网，目前不能保证其内部请求走镜像，因此在 BMCLAPI
+模式下明确拒绝其目录/安装路径；不得静默运行安装器并回源。上述边界不限制官方模式。
 
 账户认证使用独立的官方/用户指定 HTTP client，EULA 也始终来自官方。模组 Provider
 不属于 Launcher，切换不会转发 Modrinth/CurseForge 流量。匹配精确 HTTPS 主机，

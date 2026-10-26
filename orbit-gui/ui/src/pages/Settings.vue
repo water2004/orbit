@@ -525,8 +525,8 @@ watch(tab, (value) => {
           <p>
             {{
               t(
-                "Opt-in public mirror for Minecraft, supported loaders and Java. Authentication, pinned metadata, checksums and uncovered endpoints (including Quilt) stay upstream. Mod providers are unchanged.",
-                "可选的 Minecraft、受支持加载器及 Java 公益下载镜像。账户认证、带摘要的元数据、校验文件和未覆盖端点（包括 Quilt）仍使用原站；不影响模组 Provider。",
+                "Mirror metadata and downloads for Minecraft, Fabric and Java. Choosing a mirror trusts its metadata; declared file checksums are still verified. Unsupported components fail explicitly rather than silently contacting official servers. Account authentication and mod providers are unchanged.",
+                "Minecraft、Fabric 和 Java 的元数据与资源均走镜像。选择镜像即信任其元数据，文件仍校验已声明的摘要。不支持的组件会明确报错，不静默回源；账户认证与模组 Provider 不受影响。",
               )
             }}
           </p>

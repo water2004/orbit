@@ -4,12 +4,16 @@ import { run } from "../services/cli";
 import { t } from "../i18n";
 import DropdownSelect from "./upstream/DropdownSelect.vue";
 import ProgressSpinner from "./upstream/ProgressSpinner.vue";
-const emit = defineEmits<{ changed: [] }>();
+const emit = defineEmits<{ changed: []; pending: [value: boolean] }>();
+const props = withDefaults(defineProps<{ disabled?: boolean }>(), {
+  disabled: false,
+});
 const source = ref(""),
   allowed = ref<string[]>([]),
   busy = ref(true),
   error = ref("");
 onMounted(async () => {
+  emit("pending", true);
   try {
     const entry = await run<{ value: string; allowed_values: string[] }>({
       kind: "launcher",
@@ -22,11 +26,13 @@ onMounted(async () => {
     error.value = String(reason);
   } finally {
     busy.value = false;
+    emit("pending", false);
   }
 });
 async function change(value: string) {
-  if (busy.value || value === source.value) return;
+  if (busy.value || props.disabled || value === source.value) return;
   busy.value = true;
+  emit("pending", true);
   error.value = "";
   try {
     await run({
@@ -40,15 +46,19 @@ async function change(value: string) {
     error.value = String(reason);
   } finally {
     busy.value = false;
+    emit("pending", false);
   }
 }
 </script>
 <template>
-  <div class="download-source card">
-    <label>{{ t("Game download source", "游戏下载源") }}</label>
-    <ProgressSpinner v-if="busy" />
+  <div class="download-source">
+    <div class="source-control">
+      <span>{{ t("Download source", "下载源") }}</span
+      ><ProgressSpinner v-if="busy" :size="14" />
+    </div>
     <DropdownSelect
-      v-else
+      :disabled="disabled || busy"
+      :loading="busy"
       :model-value="source"
       :searchable="false"
       :label="t('Game download source', '游戏下载源')"
@@ -58,44 +68,46 @@ async function change(value: string) {
           label:
             value === 'official'
               ? t('Official servers', '官方源')
-              : 'BMCLAPI · bangbang93',
+              : value === 'bmclapi'
+                ? 'BMCLAPI'
+                : value,
         }))
       "
       @update:model-value="change"
     />
     <small v-if="source === 'bmclapi'"
-      >BMCLAPI · by bangbang93 ·
+      >by bangbang93 ·
       <a
         href="https://bmclapidoc.bangbang93.com/"
         target="_blank"
         rel="noreferrer"
         >{{ t("Service terms", "使用协议") }}</a
-      ><br />{{
-        t(
-          "Public game downloads only. Authentication, pinned metadata and checksums stay upstream.",
-          "仅加速公开游戏资源。账户认证、带摘要的元数据和校验文件仍使用原站。",
-        )
-      }}</small
+      ></small
     >
-    <small v-else>{{
-      t(
-        "Saved through Launcher for future game, loader and Java downloads.",
-        "通过 Launcher 保存，用于后续游戏、加载器和 Java 下载。",
-      )
-    }}</small>
     <p v-if="error" class="error">{{ error }}</p>
   </div>
 </template>
 <style scoped>
 .download-source {
-  display: grid;
-  grid-template-columns: auto minmax(12rem, 20rem) 1fr;
-  gap: 1rem;
-  align-items: center;
+  display: flex;
+  flex-direction: column;
+  width: 174px;
+  gap: 5px;
+  flex-shrink: 0;
 }
-@media (max-width: 900px) {
-  .download-source {
-    grid-template-columns: 1fr;
-  }
+.source-control {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--color-secondary);
+}
+.download-source small {
+  font-size: 11px;
+  color: var(--color-secondary);
+}
+.download-source p {
+  font-size: 12px;
+  overflow-wrap: anywhere;
 }
 </style>

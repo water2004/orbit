@@ -1109,6 +1109,7 @@ async fn execute_existing_install(
             .map(|acceptance| acceptance.digest_sha256.clone()),
         downloaded_artifacts: result.downloaded_artifacts,
         cached_artifacts: result.cached_artifacts,
+        source_pinned_artifacts: result.source_pinned_artifacts,
         state,
     }))
 }

@@ -44,6 +44,7 @@ const route = useRoute(),
   loading = ref(false),
   catalogLoading = ref(false),
   busy = ref(false),
+  sourcePending = ref(false),
   versionFilter = ref("release"),
   error = ref(""),
   java = ref<number>(),
@@ -76,24 +77,39 @@ const visibleVersions = computed(() =>
       versionFilter.value === "all" || v.version_type === versionFilter.value,
   ),
 );
-const canNext = computed(() =>
-  step.value === 0
-    ? !!draft.minecraft
-    : step.value === 1
-      ? !loading.value &&
-        !!java.value &&
-        !error.value &&
-        (draft.loader === "vanilla" || !!draft.loaderVersion)
-      : !!draft.name.trim() &&
-        (draft.kind !== "server" || !!draft.serverDirectory),
+const canNext = computed(
+  () =>
+    !busy.value &&
+    !sourcePending.value &&
+    (step.value === 0
+      ? !catalogLoading.value && !error.value && !!draft.minecraft
+      : step.value === 1
+        ? !loading.value &&
+          !!java.value &&
+          !error.value &&
+          (draft.loader === "vanilla" || !!draft.loaderVersion)
+        : step.value === 2 &&
+          !loading.value &&
+          !!java.value &&
+          !error.value &&
+          (draft.loader === "vanilla" || !!draft.loaderVersion) &&
+          !!draft.name.trim() &&
+          (draft.kind !== "server" || !!draft.serverDirectory)),
 );
 watch(versionFilter, () => {
   if (!visibleVersions.value.some((version) => version.id === draft.minecraft))
     draft.minecraft = "";
 });
-let catalogRevision = 0;
-async function components() {
+let catalogRevision = 0,
+  versionsRevision = 0;
+async function components(preferredVersion = "") {
   const revision = ++catalogRevision;
+  const minecraft = draft.minecraft,
+    loader = draft.loader;
+  if (!minecraft) {
+    loading.value = false;
+    return;
+  }
   loading.value = true;
   error.value = "";
   loaders.value = [];
@@ -101,30 +117,38 @@ async function components() {
   draft.loaderVersion = "";
   try {
     const [versions, requirement] = await Promise.all([
-      draft.loader === "vanilla"
+      loader === "vanilla"
         ? Promise.resolve({ versions: [] as LoaderVersion[] })
         : launcher<{ versions: LoaderVersion[] }>(
             [
               "versions",
               "loader",
               "--loader",
-              draft.loader,
+              loader,
               "--minecraft",
-              draft.minecraft,
+              minecraft,
             ],
             t("Loading compatible loaders", "正在加载兼容加载器"),
             null,
           ),
       launcher<{ major: number }>(
-        ["versions", "java", "--minecraft", draft.minecraft],
+        ["versions", "java", "--minecraft", minecraft],
         t("Checking Java requirement", "正在检查 Java 要求"),
         null,
       ),
     ]);
-    if (revision !== catalogRevision) return;
+    if (
+      revision !== catalogRevision ||
+      minecraft !== draft.minecraft ||
+      loader !== draft.loader
+    )
+      return;
     loaders.value = versions.versions;
     draft.loaderVersion =
       pack.value?.loader_version ||
+      (versions.versions.some((v) => v.version === preferredVersion)
+        ? preferredVersion
+        : "") ||
       versions.versions.find((v) => v.stable)?.version ||
       versions.versions[0]?.version ||
       "";
@@ -172,6 +196,7 @@ watch(
   },
 );
 async function next() {
+  if (!canNext.value) return;
   if (step.value === 0) {
     step.value = 1;
     await components();
@@ -182,6 +207,7 @@ async function next() {
   }
 }
 async function install() {
+  if (!canNext.value) return;
   busy.value = true;
   error.value = "";
   try {
@@ -215,23 +241,33 @@ async function migrate() {
     busy.value = false;
   }
 }
-async function loadCatalog() {
-  if (catalog.value.length || catalogLoading.value) return;
+async function loadCatalog(force = false) {
+  if (!force && (catalog.value.length || catalogLoading.value)) return;
+  const revision = ++versionsRevision;
   catalogLoading.value = true;
   error.value = "";
   try {
-    catalog.value = (
+    const result = (
       await launcher<{ versions: MinecraftVersion[] }>(
         ["versions", "minecraft"],
         t("Loading Minecraft versions", "正在加载 Minecraft 版本"),
         null,
       )
     ).versions;
+    if (revision !== versionsRevision) return;
+    catalog.value = result;
+    if (!result.some((version) => version.id === draft.minecraft))
+      draft.minecraft = "";
   } catch (e) {
-    error.value = String(e);
+    if (revision === versionsRevision) error.value = String(e);
   } finally {
-    catalogLoading.value = false;
+    if (revision === versionsRevision) catalogLoading.value = false;
   }
+}
+async function downloadSourceChanged() {
+  if (busy.value || review.value || step.value < 0) return;
+  if (step.value === 0) await loadCatalog(true);
+  else if (draft.minecraft) await components(draft.loaderVersion);
 }
 function customInstallation() {
   step.value = 0;
@@ -248,24 +284,16 @@ onMounted(async () => {
   else if (mode.value === "migrate") await loadCatalog();
 });
 watch(step, (value) => {
+  if (value < 1) {
+    ++catalogRevision;
+    loading.value = false;
+    error.value = "";
+  }
   if (value === 0) void loadCatalog();
 });
 </script>
 <template>
   <div class="page create-page">
-    <DownloadSourcePicker
-      @changed="
-        async () => {
-          if (step === 0) await loadCatalog();
-          else {
-            const previous = draft.loaderVersion;
-            await components();
-            if (loaders.some((loader) => loader.version === previous))
-              draft.loaderVersion = previous;
-          }
-        }
-      "
-    />
     <ImportInstance
       v-if="importOpen"
       @close="importOpen = false"
@@ -301,15 +329,25 @@ watch(step, (value) => {
           }}
         </p>
       </div>
-      <Button
-        :disabled="busy"
-        @click="
-          router.push(
-            source && mode !== 'new' ? instancePath(source.id, 'runtime') : '/',
-          )
-        "
-        >{{ t("Cancel", "取消") }}</Button
-      >
+      <div class="heading-actions">
+        <DownloadSourcePicker
+          v-if="step >= 0 && !review"
+          :disabled="busy"
+          @changed="downloadSourceChanged"
+          @pending="sourcePending = $event"
+        />
+        <Button
+          :disabled="busy"
+          @click="
+            router.push(
+              source && mode !== 'new'
+                ? instancePath(source.id, 'runtime')
+                : '/',
+            )
+          "
+          >{{ t("Cancel", "取消") }}</Button
+        >
+      </div>
     </header>
     <nav v-if="!review && step >= 0" class="stepper">
       <div
@@ -436,8 +474,8 @@ watch(step, (value) => {
               "
           /></label>
           <Button
-            v-if="!catalogLoading && !catalog.length"
-            @click="loadCatalog"
+            v-if="!catalogLoading && (error || !catalog.length)"
+            @click="loadCatalog(true)"
             >{{ t("Retry", "重试") }}</Button
           >
         </div>
@@ -519,7 +557,7 @@ watch(step, (value) => {
               }}</span>
             </div>
           </div>
-          <Button v-if="!loading && error" @click="components">{{
+          <Button v-if="!loading && error" @click="components()">{{
             t("Retry loading components", "重新加载组件")
           }}</Button>
         </div>
@@ -642,6 +680,20 @@ watch(step, (value) => {
   margin-inline: auto;
   min-height: 0;
   gap: 20px;
+}
+.heading-actions {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+@media (max-width: 760px) {
+  .page-heading {
+    flex-wrap: wrap;
+  }
+  .heading-actions {
+    width: 100%;
+    justify-content: flex-end;
+  }
 }
 .setup-options {
   max-width: 720px;
