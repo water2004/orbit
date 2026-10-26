@@ -78,7 +78,7 @@ const labels: Record<string, [string, string]> = {
     "加载器安装器超时（秒）",
   ],
   "cache.max-size": ["Artifact cache capacity", "工件缓存容量"],
-  "core.default-instance": ["Default instance", "默认实例"],
+  "core.default-instance": ["CLI default instance", "命令行默认实例"],
   "core.max-concurrent-downloads": [
     "Parallel mod downloads",
     "模组并行下载数量",

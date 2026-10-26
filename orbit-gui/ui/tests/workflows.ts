@@ -63,7 +63,6 @@ Object.assign(discoverySession("demo"), {
 const prefs = {
   orbit_binary: "fixture",
   launcher_binary: "fixture",
-  selected_instance: "demo",
   language: "zh-CN",
   theme_mode: new URL(location.href).searchParams.get("theme") || "light",
   accent_theme: "indigo",

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 // Shell structure adapted from Modrinth App's App.vue and title-bar/index.vue.
-import { computed, onMounted, watchEffect } from "vue";
+import { onMounted, watchEffect } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import {
   Home,
@@ -23,18 +23,9 @@ import ActivityPanel from "./components/ActivityPanel.vue";
 import AccountSwitcher from "./components/AccountSwitcher.vue";
 import WindowControls from "./components/WindowControls.vue";
 import AuthEndpointDrop from "./components/AuthEndpointDrop.vue";
-import { discoveryPath } from "./services/navigation";
 const router = useRouter();
 const route = useRoute();
-const routeInstance = computed(() =>
-  workspace.instances.find((i) => i.id === route.params.id),
-);
-onMounted(() =>
-  initialize(
-    routeInstance.value?.id ||
-      (typeof route.params.id === "string" ? route.params.id : undefined),
-  ),
-);
+onMounted(initialize);
 const system = window.matchMedia("(prefers-color-scheme: dark)");
 function applyTheme() {
   const p = workspace.preferences;
@@ -79,15 +70,8 @@ watchEffect(() => {
         data-tauri-drag-region
         style="align-self: stretch"
       ></span>
-      <AccountSwitcher
-        :instance-id="
-          routeInstance?.kind === 'client' ? routeInstance.id : undefined
-        "
-      />
-      <Button
-        type="quiet"
-        :title="t('Refresh', '刷新')"
-        @click="act(() => refresh(routeInstance?.id))"
+      <AccountSwitcher />
+      <Button type="quiet" :title="t('Refresh', '刷新')" @click="act(refresh)"
         ><RefreshCw /></Button
       ><Button
         type="quiet"
@@ -104,11 +88,7 @@ watchEffect(() => {
         :title="t('Library', '实例库')"
         ><Home /></NavButton
       ><NavButton
-        :to="
-          route.params.id
-            ? discoveryPath(String(route.params.id))
-            : discoveryPath(workspace.selected?.id)
-        "
+        to="/browse"
         :is-primary="(r) => r.path === '/browse'"
         :title="t('Discover', '发现')"
         ><Compass /></NavButton

@@ -6,16 +6,23 @@ vi.mock("@tauri-apps/api/core", () => ({
   convertFileSrc: (p: string) => p,
 }));
 vi.mock("../src/services/workspace", async () => {
-  const { reactive } = await import("vue");
   return {
-    workspace: reactive({ selected: { id: "instance" }, packages: [] }),
-    mutate: vi.fn(),
     orbit: vi.fn(),
     act: (f: () => unknown) => f(),
   };
 });
 import PackageManager from "../src/components/PackageManager.vue";
-import { mutate, orbit } from "../src/services/workspace";
+import { orbit } from "../src/services/workspace";
+import type { InstanceContext } from "../src/services/instance-context";
+const mutate = vi.fn();
+const context = {
+  state: reactive({
+    instance: { id: "instance", name: "Creative" },
+    packages: [],
+  }),
+  orbit,
+  mutate,
+} as unknown as InstanceContext;
 import type { Package } from "../src/types";
 import type { Task } from "../src/services/cli";
 const pkg = {
@@ -35,7 +42,7 @@ beforeEach(() => {
 });
 it("opens without fetching a version catalog and files only request ownership", async () => {
   const wrapper = mount(PackageManager, {
-    props: { pkg },
+    props: { pkg, context },
     global: { stubs: { Teleport: true } },
   });
   expect(orbit).not.toHaveBeenCalled();
@@ -62,21 +69,20 @@ it("passes a single upgrade target and renders its live progress inside the moda
     completed: 3,
     total: 8,
   });
-  vi.mocked(mutate).mockImplementation((_args, _label, _instance, observe) => {
+  vi.mocked(mutate).mockImplementation((_args, _label, observe) => {
     observe?.(task);
     return new Promise<void>((resolve) => {
       finish = resolve;
     });
   });
   const wrapper = mount(PackageManager, {
-    props: { pkg },
+    props: { pkg, context },
     global: { stubs: { Teleport: true } },
   });
   await wrapper.find(".management-actions button").trigger("click");
   expect(mutate).toHaveBeenCalledWith(
     ["upgrade", "sodium"],
     expect.any(String),
-    { id: "instance" },
     expect.any(Function),
   );
   expect(
@@ -111,25 +117,23 @@ it("shows a completed no-update result and its reasons, not a stalled selection 
     state: "running",
     message: "Choosing sodium",
   });
-  vi.mocked(mutate).mockImplementation(
-    async (_args, _label, _instance, observe) => {
-      observe?.(task);
-      task.state = "succeeded";
-      task.outcome = {
-        title: "No feasible newer version",
-        notices: [
-          {
-            title: "sodium · 0.10",
-            lines: ["Requires a different dependency"],
-          },
-        ],
-        omitted: 0,
-        detailsExpanded: true,
-      };
-    },
-  );
+  vi.mocked(mutate).mockImplementation(async (_args, _label, observe) => {
+    observe?.(task);
+    task.state = "succeeded";
+    task.outcome = {
+      title: "No feasible newer version",
+      notices: [
+        {
+          title: "sodium · 0.10",
+          lines: ["Requires a different dependency"],
+        },
+      ],
+      omitted: 0,
+      detailsExpanded: true,
+    };
+  });
   const wrapper = mount(PackageManager, {
-    props: { pkg },
+    props: { pkg, context },
     global: { stubs: { Teleport: true } },
   });
   await wrapper.find(".management-actions button").trigger("click");
@@ -158,7 +162,7 @@ it("shows ownership loading and results without waiting for game startup", async
     });
   });
   const wrapper = mount(PackageManager, {
-    props: { pkg },
+    props: { pkg, context },
     global: { stubs: { Teleport: true } },
   });
   await wrapper.findAll(".management-actions button")[2].trigger("click");

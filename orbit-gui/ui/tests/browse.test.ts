@@ -8,26 +8,15 @@ vi.mock("@tauri-apps/api/core", () => ({
 vi.mock("../src/services/workspace", async () => {
   const { reactive } = await import("vue");
   return {
-    workspace: reactive({
-      instances: [],
-      packages: [],
-      detail: null,
-      selected: null,
-    }),
-    selectInstance: vi.fn(),
+    workspace: reactive({ instances: [], loading: false }),
+    launcher: vi.fn(),
     orbit: vi.fn(),
-    mutate: vi.fn(),
     act: (fn: () => Promise<unknown>) => fn(),
   };
 });
 import Browse from "../src/pages/Browse.vue";
-import {
-  workspace,
-  mutate,
-  orbit,
-  selectInstance,
-} from "../src/services/workspace";
-import DropdownSelect from "../src/components/upstream/DropdownSelect.vue";
+import { workspace, orbit, launcher } from "../src/services/workspace";
+import InstancePicker from "../src/components/InstancePicker.vue";
 import CatalogSettings from "../src/components/CatalogSettings.vue";
 import { discoverySession } from "../src/services/discovery";
 import type { Detail, Instance, SearchResult } from "../src/types";
@@ -36,7 +25,15 @@ const instance = {
   name: "Creative",
   directory: "test",
   kind: "client",
+  is_default: true,
 } as Instance;
+const other = {
+  ...instance,
+  id: "other",
+  name: "Server",
+  directory: "server",
+  kind: "server",
+};
 const project = {
   platform: "modrinth",
   project_id: "AANobbMI",
@@ -45,21 +42,34 @@ const project = {
   downloads: 100,
   compatible: true,
 } as SearchResult;
+let details: Record<string, Detail>;
 beforeEach(() => {
-  vi.mocked(mutate).mockReset();
   vi.mocked(orbit).mockReset();
-  workspace.instances = [instance];
-  workspace.selected = instance;
-  workspace.packages = [];
-  workspace.detail = {
-    desired: { minecraft: "26.2", loader: "fabric" },
-  } as Detail;
-  for (const id of [instance.id])
-    Object.assign(discoverySession(id), {
+  vi.mocked(launcher).mockReset();
+  workspace.instances = [instance, other];
+  details = {
+    [instance.id]: {
+      ...instance,
+      desired: { minecraft: "26.2", loader: "fabric" },
+    } as Detail,
+    [other.id]: {
+      ...other,
+      desired: { minecraft: "26.3", loader: "neoforge" },
+    } as Detail,
+  };
+  vi.mocked(launcher).mockImplementation(
+    async (_args, _label, target) => details[target!.id],
+  );
+  vi.mocked(orbit).mockImplementation(async (args) =>
+    args[0] === "list" ? { packages: [] } : { results: [project] },
+  );
+  for (const target of [instance, other])
+    Object.assign(discoverySession(target.id), {
       scope: "",
       query: "sodium",
       results: [project],
       searched: true,
+      loading: false,
       installing: null,
       error: "",
       recommended: false,
@@ -84,22 +94,25 @@ async function page(path: string) {
       stubs: { Teleport: true, CatalogSettings: true },
     },
   });
+  await flushPromises();
   return { wrapper, router };
 }
-it("installs in place without another form, guards double clicks and preserves the query", async () => {
+it("installs into the explicit target, guards double clicks and preserves the query", async () => {
   let finish!: () => void;
-  vi.mocked(mutate).mockImplementation(
-    () =>
-      new Promise<void>((resolve) => {
-        finish = resolve;
-      }),
+  vi.mocked(orbit).mockImplementation(async (args) =>
+    args[0] === "add"
+      ? new Promise<void>((resolve) => {
+          finish = resolve;
+        })
+      : { packages: [] },
   );
   const { wrapper } = await page(`/browse?instance=${instance.id}`);
   await wrapper.find(".project-actions button").trigger("click");
-  expect(mutate).toHaveBeenCalledWith(
+  expect(orbit).toHaveBeenCalledWith(
     ["add", "mr:AANobbMI"],
     expect.any(String),
     instance,
+    undefined,
   );
   expect(
     wrapper.find(".project-actions button").attributes("disabled"),
@@ -110,58 +123,54 @@ it("installs in place without another form, guards double clicks and preserves t
   expect(discoverySession(instance.id).query).toBe("sodium");
   wrapper.unmount();
 });
-it("the sidebar and instance entry share one page with an inline target selector", async () => {
+it("sidebar discovery requires an explicit target even when a CLI default exists", async () => {
   const { wrapper, router } = await page("/browse");
-  await flushPromises();
-  expect(wrapper.find(".target-selector").exists()).toBe(true);
-  expect(wrapper.find(".back-link").exists()).toBe(false);
-  expect(mutate).not.toHaveBeenCalled();
-  expect(router.currentRoute.value.query.instance).toBe(instance.id);
-  expect(mutate).not.toHaveBeenCalled();
+  expect(wrapper.findComponent(InstancePicker).props("modelValue")).toBe("");
+  expect(wrapper.text()).toContain("Where should the mods be installed?");
+  expect(router.currentRoute.value.query.instance).toBeUndefined();
+  expect(orbit).not.toHaveBeenCalled();
+  expect(launcher).not.toHaveBeenCalled();
   wrapper.unmount();
 });
-it("switches runtime filtering and installation target without another navigation flow", async () => {
-  const other = { ...instance, id: "other", name: "Server", kind: "server" };
-  workspace.instances.push(other);
-  vi.mocked(selectInstance).mockImplementation(async (target) => {
-    workspace.selected = target;
-    workspace.detail = {
-      desired: { minecraft: "26.3", loader: "neoforge" },
-    } as Detail;
-    workspace.packages = [];
-  });
-  vi.mocked(orbit).mockResolvedValue({ results: [project] });
+it("switches filtering and installation target with the visible instance picker", async () => {
   const { wrapper, router } = await page(`/browse?instance=${instance.id}`);
-  wrapper.findComponent(DropdownSelect).vm.$emit("update:modelValue", other.id);
+  wrapper.findComponent(InstancePicker).vm.$emit("update:modelValue", other.id);
   await flushPromises();
   expect(router.currentRoute.value.path).toBe("/browse");
-  expect(selectInstance).toHaveBeenCalledWith(other);
+  expect(launcher).toHaveBeenLastCalledWith(
+    ["instance", "show"],
+    expect.any(String),
+    other,
+  );
   expect(orbit).toHaveBeenLastCalledWith(
     ["search", "sodium", "--mc-version", "26.3", "--modloader", "neoforge"],
     expect.any(String),
     other,
   );
   await wrapper.find(".project-actions button").trigger("click");
-  expect(mutate).toHaveBeenLastCalledWith(
-    expect.arrayContaining(["add", "mr:AANobbMI"]),
-    expect.any(String),
-    other,
-  );
+  await flushPromises();
+  expect(
+    vi.mocked(orbit).mock.calls.find(([args]) => args[0] === "add")?.[2],
+  ).toEqual(other);
   wrapper.unmount();
 });
-it("invalidates displayed compatibility after the instance runtime changes", async () => {
+it("runtime inventory refresh invalidates compatibility and queries only the new runtime", async () => {
   const { wrapper } = await page(`/browse?instance=${instance.id}`);
-  expect(wrapper.findAll(".project-card")).toHaveLength(1);
-  workspace.detail = {
+  details[instance.id] = {
+    ...details[instance.id],
     desired: { minecraft: "26.3", loader: "fabric" },
   } as Detail;
+  workspace.instances = [{ ...instance }, other];
   await flushPromises();
-  expect(wrapper.findAll(".project-card")).toHaveLength(0);
   expect(discoverySession(instance.id).query).toBe("sodium");
+  const searches = vi
+    .mocked(orbit)
+    .mock.calls.filter(([args]) => args[0] === "search");
+  expect(searches).toHaveLength(1);
+  expect(searches[0][0]).toContain("26.3");
   wrapper.unmount();
 });
 it("search always passes the exact instance runtime axes", async () => {
-  vi.mocked(orbit).mockResolvedValue({ results: [project] });
   const { wrapper } = await page(`/browse?instance=${instance.id}`);
   await wrapper.find(".search-bar").trigger("submit");
   await flushPromises();
@@ -172,8 +181,7 @@ it("search always passes the exact instance runtime axes", async () => {
   );
   wrapper.unmount();
 });
-it("refreshes the current query after CLI source settings are saved", async () => {
-  vi.mocked(orbit).mockResolvedValue({ results: [project] });
+it("refreshes the query after CLI catalog settings are saved", async () => {
   const { wrapper } = await page(`/browse?instance=${instance.id}`);
   const settings = wrapper.findComponent(CatalogSettings);
   settings.vm.$emit("busy", instance.id, true);
@@ -191,8 +199,16 @@ it("refreshes the current query after CLI source settings are saved", async () =
   );
   wrapper.unmount();
 });
+it("a missing instance never falls back to the default or first instance", async () => {
+  const { wrapper, router } = await page("/browse?instance=removed");
+  expect(wrapper.text()).toContain("This instance is not available");
+  expect(router.currentRoute.value.query.instance).toBe("removed");
+  expect(launcher).not.toHaveBeenCalled();
+  expect(orbit).not.toHaveBeenCalled();
+  wrapper.unmount();
+});
 it("a failed instance load cannot turn into an unfiltered global search", async () => {
-  workspace.detail = null;
+  vi.mocked(launcher).mockRejectedValue(new Error("invalid runtime"));
   const { wrapper } = await page(`/browse?instance=${instance.id}`);
   await wrapper.find(".search-bar").trigger("submit");
   await flushPromises();
@@ -201,9 +217,7 @@ it("a failed instance load cannot turn into an unfiltered global search", async 
   wrapper.unmount();
 });
 it("vanilla cannot invoke Orbit discovery or source settings", async () => {
-  workspace.detail = {
-    desired: { minecraft: "26.2", loader: "vanilla" },
-  } as Detail;
+  details[instance.id].desired.loader = "vanilla";
   const { wrapper } = await page(`/browse?instance=${instance.id}`);
   await wrapper.find(".search-bar").trigger("submit");
   await flushPromises();
@@ -212,5 +226,32 @@ it("vanilla cannot invoke Orbit discovery or source settings", async () => {
   expect(
     wrapper.find('.search-bar button[type="submit"]').attributes("disabled"),
   ).toBeDefined();
+  wrapper.unmount();
+});
+it("an install already started remains bound to its original target after switching", async () => {
+  let finish!: () => void;
+  vi.mocked(orbit).mockImplementation(async (args) =>
+    args[0] === "add"
+      ? new Promise<void>((resolve) => {
+          finish = resolve;
+        })
+      : args[0] === "list"
+        ? { packages: [] }
+        : { results: [project] },
+  );
+  const { wrapper } = await page(`/browse?instance=${instance.id}`);
+  await wrapper.find(".project-actions button").trigger("click");
+  wrapper.findComponent(InstancePicker).vm.$emit("update:modelValue", other.id);
+  await flushPromises();
+  finish();
+  await flushPromises();
+  const adds = vi
+    .mocked(orbit)
+    .mock.calls.filter(([args]) => args[0] === "add");
+  expect(adds).toHaveLength(1);
+  expect(adds[0][2]).toEqual(instance);
+  expect(wrapper.findComponent(InstancePicker).props("modelValue")).toBe(
+    other.id,
+  );
   wrapper.unmount();
 });

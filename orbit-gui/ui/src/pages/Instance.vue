@@ -16,16 +16,7 @@ import {
   RefreshCw,
   ArrowLeft,
 } from "lucide-vue-next";
-import {
-  workspace,
-  orbit,
-  launcher,
-  mutate,
-  refresh,
-  selectInstance,
-  launch,
-  act,
-} from "../services/workspace";
+import { refresh, launch, act } from "../services/workspace";
 import { importArguments } from "../services/commands";
 import { initializeOrbit } from "../services/installations";
 import { activity } from "../services/cli";
@@ -47,15 +38,20 @@ import PackageManager from "../components/PackageManager.vue";
 import ActionMenu from "../components/ActionMenu.vue";
 import Toggle from "../components/upstream/Toggle.vue";
 import JavaChooser from "../components/JavaChooser.vue";
+import InstanceAccount from "../components/InstanceAccount.vue";
 import InstanceIcon from "../components/InstanceIcon.vue";
 import { useCommandScope } from "../services/task-scope";
 import DropdownSelect from "../components/upstream/DropdownSelect.vue";
+import { useInstanceContext } from "../services/instance-context";
+const context = useInstanceContext();
+const view = context.state;
+const { orbit, launcher, mutate } = context;
 const {
   task: dialogTask,
   orbit: dialogOrbit,
   launcher: dialogLauncher,
   mutate: dialogMutate,
-} = useCommandScope();
+} = useCommandScope(view.instance, context.refresh);
 const exporting = ref(false),
   importing = ref(false);
 const launchReportNote = ref("");
@@ -64,7 +60,7 @@ const features = ref<InstanceFeatureSupport>();
 const featuresLoading = ref(false);
 let featuresRevision = 0;
 async function loadFeatures() {
-  const instance = workspace.selected;
+  const instance = view.instance;
   if (!instance) return;
   const revision = ++featuresRevision;
   featuresLoading.value = true;
@@ -74,7 +70,7 @@ async function loadFeatures() {
       t("Checking optional analysis support", "正在检查可选分析支持"),
       instance,
     );
-    if (revision === featuresRevision && workspace.selected?.id === instance.id)
+    if (revision === featuresRevision && view.instance?.id === instance.id)
       features.value = result;
   } finally {
     if (revision === featuresRevision) featuresLoading.value = false;
@@ -84,7 +80,7 @@ const memoryLoading = ref(false),
   memorySettings = ref<MemorySettingsResult>();
 let memoryRevision = 0;
 async function loadMemory() {
-  const instance = workspace.selected;
+  const instance = view.instance;
   if (!instance) return;
   const revision = ++memoryRevision;
   memoryLoading.value = true;
@@ -95,14 +91,14 @@ async function loadMemory() {
       t("Loading instance memory", "正在读取实例内存"),
       instance,
     );
-    if (revision === memoryRevision && workspace.selected?.id === instance.id)
+    if (revision === memoryRevision && view.instance?.id === instance.id)
       memorySettings.value = result;
   } finally {
     if (revision === memoryRevision) memoryLoading.value = false;
   }
 }
 async function saveMemory(value?: MemoryLimits) {
-  const instance = workspace.selected;
+  const instance = view.instance;
   if (!instance || memorySaving.value) return;
   memorySaving.value = true;
   try {
@@ -121,9 +117,9 @@ async function saveMemory(value?: MemoryLimits) {
       t("Updating instance memory", "正在更新实例内存"),
       instance,
     );
-    if (workspace.selected?.id === instance.id) {
+    if (view.instance?.id === instance.id) {
       memorySettings.value = result;
-      await selectInstance(instance);
+      await context.refresh();
     }
   } finally {
     memorySaving.value = false;
@@ -159,7 +155,7 @@ const maintenanceOpen = ref(false);
 const configuringJava = ref(false);
 const changingIcon = ref(false);
 async function changeJava(value: string | null) {
-  const instance = selected();
+  const instance = target();
   configuringJava.value = true;
   try {
     await launcher(
@@ -167,7 +163,7 @@ async function changeJava(value: string | null) {
       t("Saving Java selection", "正在保存 Java 选择"),
       instance,
     );
-    if (workspace.selected?.id === instance.id) await selectInstance(instance);
+    if (view.instance?.id === instance.id) await context.refresh();
   } finally {
     configuringJava.value = false;
   }
@@ -176,7 +172,7 @@ async function changeIcon(reset = false) {
   if (changingIcon.value) return;
   changingIcon.value = true;
   try {
-    const instance = selected();
+    const instance = target();
     const image = reset
       ? null
       : await open({
@@ -194,7 +190,8 @@ async function changeIcon(reset = false) {
       t("Updating instance icon", "正在更新实例图标"),
       instance,
     );
-    await refresh(instance.id);
+    await refresh();
+    await context.refresh();
   } finally {
     changingIcon.value = false;
   }
@@ -213,10 +210,9 @@ async function togglePackage(pkg: Package) {
   }
 }
 const openPath = (path: string) => invoke("open_directory", { path });
-function selected() {
-  if (!workspace.selected)
-    throw new Error(t("Select an instance", "请选择实例"));
-  return workspace.selected;
+function target() {
+  if (!view.instance) throw new Error(t("Select an instance", "请选择实例"));
+  return view.instance;
 }
 const renameOpen = ref(false),
   newName = ref(""),
@@ -226,7 +222,7 @@ const renameOpen = ref(false),
   deletion = ref<{ name: string; directory: string }>();
 const tab = computed(() => String(route.params.tab || "mods"));
 watch(
-  [tab, () => workspace.selected?.id],
+  [tab, () => view.instance?.id],
   () => {
     ++featuresRevision;
     features.value = undefined;
@@ -235,7 +231,7 @@ watch(
   { immediate: true },
 );
 watch(
-  [tab, () => workspace.selected?.id],
+  [tab, () => view.instance?.id],
   () => {
     ++memoryRevision;
     memorySettings.value = undefined;
@@ -269,7 +265,7 @@ const updates = ref<Updates>(),
     coverage_gaps: { detail: string; count: number }[];
   }>();
 watch(
-  () => workspace.packages,
+  () => view.packages,
   () => {
     updates.value = undefined;
   },
@@ -278,7 +274,7 @@ const minRisk = ref("35"),
   auditFilter = ref(""),
   auditBusy = ref(false);
 const packages = computed(() =>
-  workspace.packages.filter(
+  view.packages.filter(
     (p) =>
       p.mod_id.toLowerCase().includes(query.value.toLowerCase()) &&
       (!showUpdates.value ||
@@ -300,7 +296,7 @@ const width = ref(1280),
   serverStatus = ref<{ running: boolean }>(),
   eula = ref<{ text: string; digest_sha256: string; url: string }>();
 watch(
-  () => workspace.selected?.id,
+  () => view.instance?.id,
   () => {
     updates.value = undefined;
     audit.value = undefined;
@@ -316,23 +312,23 @@ watch(
   },
 );
 watch(
-  () => workspace.detail,
+  () => view.detail,
   (detail) => {
     width.value = detail?.client_resolution?.width ?? 1280;
     height.value = detail?.client_resolution?.height ?? 720;
   },
 );
 async function initializeMods() {
-  const d = workspace.detail;
+  const d = view.detail;
   if (!d) return;
   await initializeOrbit(d);
-  if (workspace.selected?.id === d.id) await selectInstance(d);
+  if (view.instance?.id === d.id) await context.refresh();
 }
 async function reviewDeletion() {
   deletion.value = await dialogLauncher(
     ["instance", "delete", "--dry-run"],
     t("Reviewing instance deletion", "正在检查实例删除范围"),
-    selected(),
+    target(),
   );
   deleteOpen.value = true;
 }
@@ -342,7 +338,7 @@ async function deleteInstance() {
     await dialogLauncher(
       ["instance", "delete", "--yes"],
       t("Deleting entire instance", "正在删除整个实例"),
-      selected(),
+      target(),
     );
     deleteOpen.value = false;
     await refresh();
@@ -352,7 +348,7 @@ async function deleteInstance() {
   }
 }
 async function checkUpdates() {
-  const selected = workspace.selected;
+  const selected = view.instance;
   checking.value = true;
   try {
     const result = await orbit<Updates>(
@@ -360,7 +356,7 @@ async function checkUpdates() {
       t("Checking mod updates", "正在检查模组更新"),
       selected,
     );
-    if (workspace.selected?.id === selected?.id) {
+    if (view.instance?.id === selected?.id) {
       updates.value = result;
       showUpdates.value = true;
     }
@@ -369,7 +365,7 @@ async function checkUpdates() {
   }
 }
 async function runAudit(report?: string) {
-  const selected = workspace.selected;
+  const selected = view.instance;
   auditBusy.value = true;
   try {
     const result = await orbit<NonNullable<typeof audit.value>>(
@@ -383,14 +379,14 @@ async function runAudit(report?: string) {
       t("Auditing compatibility", "正在审计兼容性"),
       selected,
     );
-    if (workspace.selected?.id === selected?.id) audit.value = result;
+    if (view.instance?.id === selected?.id) audit.value = result;
   } finally {
     auditBusy.value = false;
   }
 }
 async function exportPack() {
   if (exporting.value) return;
-  const instance = workspace.selected;
+  const instance = view.instance;
   if (!instance) return;
   const selectedFormat = format.value;
   const content = includeData.value ? "mods-and-data" : "mods";
@@ -418,7 +414,7 @@ async function exportPack() {
   }
 }
 async function importPack() {
-  const instance = selected();
+  const instance = target();
   const path = await open({
     multiple: false,
     filters: [
@@ -442,7 +438,7 @@ async function importPack() {
       .filter((f) => f.targets.includes(instance.kind))
       .map((f) => f.path);
   }
-  if (workspace.selected?.id === instance.id)
+  if (view.instance?.id === instance.id)
     importReview.value = { path, optional, selected: [...optional] };
 }
 async function importConfirmed() {
@@ -472,7 +468,7 @@ async function resolution(clear = false) {
         ],
     t("Updating launch resolution", "正在更新启动分辨率"),
   );
-  if (workspace.selected) await selectInstance(workspace.selected);
+  if (view.instance) await context.refresh();
 }
 async function status() {
   serverStatus.value = await launcher(
@@ -482,7 +478,7 @@ async function status() {
 }
 </script>
 <template>
-  <div v-if="workspace.selected" class="page">
+  <div v-if="view.instance" class="page">
     <RouterLink class="back-link" to="/"
       ><ArrowLeft :size="16" />{{ t("Library", "实例库") }}</RouterLink
     >
@@ -494,27 +490,24 @@ async function status() {
           @click="act(() => changeIcon())"
         >
           <InstanceIcon
-            :src="workspace.detail?.icon_path"
-            :name="workspace.selected.name"
-            :kind="workspace.selected.kind"
+            :src="view.detail?.icon_path"
+            :name="view.instance.name"
+            :kind="view.instance.kind"
             :size="56"
           />
         </button>
         <div>
-          <h1>{{ workspace.selected.name }}</h1>
+          <h1>{{ view.instance.name }}</h1>
           <p>
             {{
-              workspace.detail?.installed?.minecraft ||
-              workspace.detail?.desired.minecraft
+              view.detail?.installed?.minecraft ||
+              view.detail?.desired.minecraft
             }}
             ·
+            {{ view.detail?.installed?.loader || view.detail?.desired.loader }}
+            {{ view.detail?.installed?.loader_version }} ·
             {{
-              workspace.detail?.installed?.loader ||
-              workspace.detail?.desired.loader
-            }}
-            {{ workspace.detail?.installed?.loader_version }} ·
-            {{
-              workspace.selected.kind === "server"
+              view.instance.kind === "server"
                 ? t("Server", "服务端")
                 : t("Client", "客户端")
             }}
@@ -524,11 +517,11 @@ async function status() {
       <div class="row">
         <Button
           :title="t('Open instance folder', '打开实例目录')"
-          @click="act(() => openPath(selected().directory))"
+          @click="act(() => openPath(target().directory))"
           ><FolderOpen /></Button
-        ><Button type="colored" @click="act(() => launch(selected()))"
+        ><Button type="colored" @click="act(() => launch(target()))"
           ><Play />{{
-            workspace.selected.kind === "server"
+            view.instance.kind === "server"
               ? t("Start server", "启动服务端")
               : t("Play", "开始游戏")
           }}</Button
@@ -540,25 +533,22 @@ async function status() {
         v-for="item in [
           ['mods', t('Content', '模组内容')],
           ['runtime', t('Installation', '运行时')],
-          ...(workspace.detail?.desired.loader === 'vanilla'
+          ...(view.detail?.desired.loader === 'vanilla'
             ? []
             : [['audit', t('Compatibility', '兼容性')]]),
-          ...(workspace.selected.kind === 'server'
+          ...(view.instance.kind === 'server'
             ? [['server', t('Server', '服务端')]]
             : []),
         ]"
         :key="item[0]"
         :class="{ active: tab === item[0] }"
-        @click="router.push(instancePath(selected().id, item[0]))"
+        @click="router.push(instancePath(target().id, item[0]))"
       >
         {{ item[1] }}
       </button>
     </nav>
     <template v-if="tab === 'mods'">
-      <div
-        v-if="workspace.detail?.desired.loader === 'vanilla'"
-        class="card stack"
-      >
+      <div v-if="view.detail?.desired.loader === 'vanilla'" class="card stack">
         <h2>{{ t("Vanilla Minecraft", "原版 Minecraft") }}</h2>
         <p>
           {{
@@ -568,16 +558,14 @@ async function status() {
             )
           }}
         </p>
-        <Button @click="router.push(instancePath(selected().id, 'runtime'))">{{
+        <Button @click="router.push(instancePath(target().id, 'runtime'))">{{
           t("Manage runtime", "管理运行时")
         }}</Button>
       </div>
-      <div v-else-if="workspace.inventoryError" class="card stack">
-        <p class="error">{{ workspace.inventoryError }}</p>
+      <div v-else-if="view.inventoryError" class="card stack">
+        <p class="error">{{ view.inventoryError }}</p>
         <Button
-          :disabled="
-            !workspace.detail || workspace.detail.desired.loader === 'vanilla'
-          "
+          :disabled="!view.detail || view.detail.desired.loader === 'vanilla'"
           @click="act(initializeMods)"
           >{{ t("Initialize Orbit workspace", "初始化 Orbit 工作区") }}</Button
         >
@@ -590,7 +578,7 @@ async function status() {
             :placeholder="t('Filter installed mods', '筛选已安装模组')"
           /><Button
             type="colored"
-            @click="router.push(discoveryPath(selected().id))"
+            @click="router.push(discoveryPath(target().id))"
             ><PackagePlus />{{ t("Add content", "添加模组") }}</Button
           ><ActionMenu :label="t('More content actions', '更多内容操作')">
             <button @click="act(importPack)">
@@ -617,7 +605,7 @@ async function status() {
               @click="showUpdates = false"
             >
               {{ t("Installed", "已安装") }}
-              {{ workspace.packages.length }}</button
+              {{ view.packages.length }}</button
             ><button
               :class="{ active: showUpdates }"
               @click="showUpdates = true"
@@ -724,6 +712,10 @@ async function status() {
       </template>
     </template>
     <template v-if="tab === 'runtime'">
+      <InstanceAccount
+        v-if="view.instance.kind === 'client'"
+        :context="context"
+      />
       <div class="card row">
         <div class="grow">
           <h3>{{ t("Launch reports", "启动报告") }}</h3>
@@ -745,27 +737,27 @@ async function status() {
         <h2>{{ t("Game installation", "游戏安装") }}</h2>
         <div class="row wrap">
           <span class="badge"
-            >Minecraft {{ workspace.detail?.installed?.minecraft ?? "—" }}</span
+            >Minecraft {{ view.detail?.installed?.minecraft ?? "—" }}</span
           ><span class="badge"
-            >{{ workspace.detail?.installed?.loader }}
-            {{ workspace.detail?.installed?.loader_version }}</span
+            >{{ view.detail?.installed?.loader }}
+            {{ view.detail?.installed?.loader_version }}</span
           ><span class="badge"
-            >Java {{ workspace.detail?.installed?.java?.major ?? "—" }}</span
+            >Java {{ view.detail?.installed?.java?.major ?? "—" }}</span
           >
         </div>
-        <p class="path">{{ workspace.selected.directory }}</p>
+        <p class="path">{{ view.instance.directory }}</p>
         <div class="toolbar">
           <Button
             @click="
-              router.push(instancePath(selected().id, 'create') + '?migrate=1')
+              router.push(instancePath(target().id, 'create') + '?migrate=1')
             "
             ><ArrowUpCircle />{{
               t("Migrate to a new instance", "迁移到新实例")
             }}</Button
           ><Button
-            :disabled="workspace.detail?.desired.loader === 'vanilla'"
+            :disabled="view.detail?.desired.loader === 'vanilla'"
             @click="
-              router.push(instancePath(selected().id, 'create') + '?loader=1')
+              router.push(instancePath(target().id, 'create') + '?loader=1')
             "
             >{{ t("Update loader", "更新加载器") }}</Button
           ><Button
@@ -775,7 +767,7 @@ async function status() {
                   ['install'],
                   t('Verifying runtime', '正在校验运行时'),
                 );
-                await selectInstance(selected());
+                await context.refresh();
               })
             "
             ><ShieldCheck />{{ t("Verify & repair", "校验与修复") }}</Button
@@ -785,7 +777,7 @@ async function status() {
       <div class="card stack">
         <h2>{{ t("Java runtime", "Java 运行时") }}</h2>
         <JavaChooser
-          :model-value="workspace.detail?.java_selection"
+          :model-value="view.detail?.java_selection"
           inherit
           :disabled="configuringJava"
           @update:model-value="(value) => act(() => changeJava(value))"
@@ -793,9 +785,9 @@ async function status() {
       </div>
       <div class="card row">
         <InstanceIcon
-          :src="workspace.detail?.icon_path"
-          :name="workspace.selected.name"
-          :kind="workspace.selected.kind"
+          :src="view.detail?.icon_path"
+          :name="view.instance.name"
+          :kind="view.instance.kind"
           :size="56"
         />
         <div class="grow">
@@ -813,15 +805,15 @@ async function status() {
           t("Choose image…", "选择图片…")
         }}</Button
         ><Button
-          v-if="workspace.detail?.icon_path"
+          v-if="view.detail?.icon_path"
           :disabled="changingIcon"
           @click="act(() => changeIcon(true))"
           >{{ t("Reset", "重置") }}</Button
         >
       </div>
       <MemorySettings
-        v-if="workspace.detail?.memory"
-        :value="workspace.detail.memory"
+        v-if="view.detail?.memory"
+        :value="view.detail.memory"
         :pending="memorySaving"
         :capabilities="memorySettings?.capabilities"
         :loading="memoryLoading"
@@ -837,7 +829,7 @@ async function status() {
           )
         }}
       </p>
-      <div v-if="workspace.selected.kind === 'client'" class="card stack">
+      <div v-if="view.instance.kind === 'client'" class="card stack">
         <h2>{{ t("Window resolution", "窗口分辨率") }}</h2>
         <p>
           {{
@@ -870,11 +862,11 @@ async function status() {
       <div class="card row">
         <div class="grow">
           <h3>{{ t("Instance identity", "实例身份") }}</h3>
-          <p>{{ workspace.selected.name }}</p>
+          <p>{{ view.instance.name }}</p>
         </div>
         <Button
           @click="
-            newName = selected().name;
+            newName = target().name;
             renameOpen = true;
           "
           >{{ t("Rename", "重命名") }}</Button
@@ -887,12 +879,12 @@ async function status() {
       </div>
       <div class="card row">
         <div class="grow">
-          <h3>{{ t("Default installation", "默认实例") }}</h3>
+          <h3>{{ t("CLI default instance", "命令行默认实例") }}</h3>
           <p>
             {{
               t(
-                "Use this installation when no local context is available.",
-                "没有局部上下文时使用此实例。",
+                "Used by command-line commands without a local instance or explicit target. This does not change GUI targets.",
+                "仅供命令行未指定目标且不在实例目录时使用，不会改变 GUI 的操作目标。",
               )
             }}
           </p>
@@ -901,8 +893,8 @@ async function status() {
           @click="
             act(() =>
               launcher(
-                ['instance', 'default', 'set', selected().id],
-                t('Setting default instance', '正在设置默认实例'),
+                ['instance', 'default', 'set', target().id],
+                t('Setting CLI default instance', '正在设置命令行默认实例'),
                 null,
               ),
             )
@@ -1008,7 +1000,7 @@ async function status() {
         </details></template
       >
     </template>
-    <template v-if="tab === 'server' && workspace.selected.kind === 'server'">
+    <template v-if="tab === 'server' && view.instance.kind === 'server'">
       <div class="card stack">
         <h2>{{ t("Server controls", "服务端控制") }}</h2>
         <div class="toolbar">
@@ -1088,7 +1080,7 @@ async function status() {
           :disabled="!newName.trim()"
           @click="
             act(async () => {
-              const instance = selected();
+              const instance = target();
               await dialogLauncher(
                 ['instance', 'rename', newName],
                 t('Renaming instance', '正在重命名实例'),
@@ -1163,7 +1155,7 @@ async function status() {
               await dialogLauncher(
                 ['instance', 'remove'],
                 t('Unregistering instance', '正在取消实例注册'),
-                selected(),
+                target(),
               );
               unregister = false;
               await refresh();
@@ -1254,6 +1246,7 @@ async function status() {
       v-if="manager"
       :key="manager.mod_id"
       :pkg="manager"
+      :context="context"
       @close="manager = undefined"
     />
     <Modal
@@ -1304,8 +1297,8 @@ async function status() {
         <p>
           {{
             t(
-              "Package files and configuration will be merged into this instance. No dependency repair is performed.",
-              "整合包文件及配置将合并到当前实例，不自动求解或修复依赖。",
+              `Package files and configuration will be merged into ${view.instance.name}. No dependency repair is performed.`,
+              `整合包文件及配置将合并到 ${view.instance.name}，不自动求解或修复依赖。`,
             )
           }}
         </p>

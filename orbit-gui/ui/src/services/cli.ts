@@ -11,7 +11,6 @@ export interface Preferences {
   close_after_launch: boolean;
   orbit_binary: string;
   launcher_binary: string;
-  selected_instance: string | null;
   language: "system" | "en" | "zh-CN";
   theme_mode: "system" | "light" | "dark";
   accent_theme: "indigo" | "emerald" | "amber";

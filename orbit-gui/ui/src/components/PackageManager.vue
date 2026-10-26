@@ -12,11 +12,7 @@ import {
   SlidersHorizontal,
   ChevronRight,
 } from "lucide-vue-next";
-import {
-  mutate as mutateWorkspace,
-  orbit,
-  workspace,
-} from "../services/workspace";
+import type { InstanceContext } from "../services/instance-context";
 import { policyArguments } from "../services/commands";
 import type {
   Ownership,
@@ -32,7 +28,8 @@ import StringRules from "./StringRules.vue";
 import Avatar from "./Avatar.vue";
 import DropdownSelect from "./upstream/DropdownSelect.vue";
 import { Cancelled, type Task } from "../services/cli";
-const props = defineProps<{ pkg: Package }>();
+const props = defineProps<{ pkg: Package; context: InstanceContext }>();
+const orbit = props.context.orbit;
 const emit = defineEmits<{ close: [] }>();
 const tab = ref("overview"),
   versions = ref<PackageVersions>(),
@@ -58,10 +55,11 @@ const provider = ref("modrinth"),
   locator = ref("");
 const current = computed(
   () =>
-    workspace.packages.find((p) => p.mod_id === props.pkg.mod_id) ?? props.pkg,
+    props.context.state.packages.find((p) => p.mod_id === props.pkg.mod_id) ??
+    props.pkg,
 );
 const environment = ref(props.pkg.configured_environment ?? "auto");
-const instance = workspace.selected;
+const instance = props.context.state.instance;
 const task = ref<Task>();
 const observe = (value: Task) => {
   task.value = value;
@@ -75,7 +73,7 @@ const working = computed(
 async function mutate(args: string[], label: string) {
   if (working.value && !saving.value) return;
   error.value = "";
-  await mutateWorkspace(args, label, instance, observe);
+  await props.context.mutate(args, label, observe);
 }
 async function act(operation: () => Promise<unknown>) {
   try {
@@ -182,7 +180,7 @@ function editRules(next: string) {
 </script>
 <template>
   <Modal
-    :title="`${pkg.mod_id} · ${current.version}`"
+    :title="`${pkg.mod_id} · ${context.state.instance.name}`"
     :wide="['versions', 'strings', 'files'].includes(tab)"
     :task="task"
     @close="emit('close')"

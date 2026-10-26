@@ -3,8 +3,8 @@ import { computed, ref, watch } from "vue";
 import { open } from "@tauri-apps/plugin-dialog";
 import { FolderOpen } from "lucide-vue-next";
 import { useCommandScope } from "../services/task-scope";
-import { refresh, selectInstance } from "../services/workspace";
-import type { Detail, Instance } from "../types";
+import { refresh } from "../services/workspace";
+import type { Instance } from "../types";
 import { Cancelled } from "../services/cli";
 import { t } from "../i18n";
 import Button from "./upstream/Button.vue";
@@ -111,12 +111,6 @@ async function apply() {
   );
   const id = result.instance.id;
   await refresh();
-  const detail = await launcher<Detail>(
-    ["instance", "show"],
-    t("Loading imported instance", "正在加载导入的实例"),
-    { id } as Instance,
-  );
-  await selectInstance(detail);
   emit("imported", id);
 }
 </script>

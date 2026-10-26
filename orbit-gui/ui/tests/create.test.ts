@@ -1,12 +1,17 @@
 import { beforeEach, expect, it, vi } from "vitest";
 import { mount, flushPromises } from "@vue/test-utils";
 import { createRouter, createMemoryHistory } from "vue-router";
+import { shallowRef } from "vue";
+import {
+  instanceContextKey,
+  type InstanceContext,
+} from "../src/services/instance-context";
 vi.mock("@tauri-apps/api/path", () => ({ join: vi.fn() }));
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn() }));
 vi.mock("../src/components/DownloadSourcePicker.vue", () => ({
   default: {
     name: "DownloadSourcePicker",
-    emits: ["changed"],
+    emits: ["changed", "pending"],
     template: "<div />",
   },
 }));
@@ -17,7 +22,6 @@ vi.mock("../src/services/installations", () => ({
   updateLoader: vi.fn(),
 }));
 vi.mock("../src/services/workspace", () => ({
-  workspace: { selected: null },
   launcher: vi.fn(),
   refresh: vi.fn(),
   act: (fn: () => unknown) => fn(),
@@ -34,18 +38,61 @@ const catalog = {
 beforeEach(() => {
   vi.mocked(launcher).mockReset();
 });
-async function page(start = true) {
+async function page(start = true, path = "/create", context?: InstanceContext) {
   const router = createRouter({
     history: createMemoryHistory(),
-    routes: [{ path: "/create", component: Create }],
+    routes: [
+      { path: "/create", component: Create },
+      { path: "/instance/:id/create", component: Create },
+    ],
   });
-  await router.push("/create");
+  await router.push(path);
   await router.isReady();
-  const wrapper = mount(Create, { global: { plugins: [router] } });
+  const wrapper = mount(Create, {
+    global: {
+      plugins: [router],
+      provide: context
+        ? { [instanceContextKey as symbol]: shallowRef(context) }
+        : {},
+    },
+  });
   if (start) await wrapper.find(".setup-options button").trigger("click");
   await flushPromises();
   return wrapper;
 }
+it("migration without a source route context cannot fall back to any instance", async () => {
+  const wrapper = await page(false, "/create?migrate=1");
+  expect(wrapper.text()).toContain("Open a source instance from the library");
+  expect(launcher).not.toHaveBeenCalled();
+  expect(
+    wrapper.findAll(".wizard-footer button").at(-1)!.attributes("disabled"),
+  ).toBeDefined();
+  wrapper.unmount();
+});
+it("loader updates show the exact source supplied by the instance route", async () => {
+  vi.mocked(launcher).mockImplementation(async (args) =>
+    args[1] === "loader"
+      ? { versions: [{ version: "0.20.1", stable: true }] }
+      : { major: 25 },
+  );
+  const context = {
+    state: {
+      instance: { id: "source", name: "Creative Source" },
+      detail: { desired: { minecraft: "26.2", loader: "fabric" } },
+      inventoryError: "",
+    },
+  } as unknown as InstanceContext;
+  const wrapper = await page(
+    false,
+    "/instance/source/create?loader=1",
+    context,
+  );
+  expect(wrapper.find(".source-context").text()).toContain("Creative Source");
+  expect(
+    vi.mocked(launcher).mock.calls.every((call) => call[0].includes("26.2")),
+  ).toBe(true);
+  wrapper.unmount();
+});
 it("uses one control for Minecraft and Loader, and blocks continuing until metadata has loaded", async () => {
   let loaders!: (result: unknown) => void, java!: (result: unknown) => void;
   vi.mocked(launcher).mockImplementation(async (args) =>

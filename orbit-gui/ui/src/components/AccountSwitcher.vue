@@ -1,52 +1,30 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
 import { Check, ChevronDown, UserRound, Users } from "lucide-vue-next";
-import { workspace, act, launcher } from "../services/workspace";
-import type { Account, Detail } from "../types";
+import { workspace, act, launcher, refresh } from "../services/workspace";
+import { accountProviderLabel } from "../services/account-label";
+import type { Account } from "../types";
 import { t } from "../i18n";
 import ActionMenu from "./ActionMenu.vue";
 import Avatar from "./Avatar.vue";
-const props = defineProps<{ instanceId?: string }>();
 const busy = ref(false);
-const current = computed(() =>
-  workspace.accounts.find((a) =>
-    props.instanceId && workspace.detail?.selected_account_id
-      ? a.id === workspace.detail.selected_account_id
-      : a.is_default,
-  ),
-);
+const current = computed(() => workspace.accounts.find((a) => a.is_default));
 async function choose(account: Account) {
-  const instance =
-    workspace.instances.find((i) => i.id === props.instanceId) ?? null;
   busy.value = true;
   try {
     await launcher(
-      ["account", "select", account.id, ...(instance ? [] : ["--global"])],
+      ["account", "select", account.id, "--global"],
       t("Switching account", "正在切换账户"),
-      instance,
+      null,
     );
-    if (instance) {
-      const detail = await launcher<Detail>(
-        ["instance", "show"],
-        t("Loading installation", "正在加载实例"),
-        instance,
-      );
-      if (workspace.selected?.id === instance.id) workspace.detail = detail;
-    } else {
-      const result = await launcher<{ accounts: Account[] }>(
-        ["account", "list"],
-        t("Loading accounts", "正在加载账户"),
-        null,
-      );
-      workspace.accounts = result.accounts;
-    }
+    await refresh();
   } finally {
     busy.value = false;
   }
 }
 </script>
 <template>
-  <ActionMenu :label="t('Switch account', '切换账户')">
+  <ActionMenu :label="t('Switch default account', '切换默认账户')">
     <template #trigger
       ><Avatar
         skin
@@ -56,12 +34,16 @@ async function choose(account: Account) {
         :size="28" /><UserRound v-else :size="22" /><span>{{
         current?.profile_name || t("Accounts", "账户")
       }}</span
+      ><small v-if="current" class="default-label">{{
+        t("Default", "默认")
+      }}</small
       ><ChevronDown :size="14"
     /></template>
     <small class="scope">{{
-      instanceId
-        ? t("For this instance", "此实例使用的账户")
-        : t("Default account", "默认账户")
+      t(
+        "Default account for instances without their own selection",
+        "未单独指定账户的实例使用此默认账户",
+      )
     }}</small>
     <button
       v-for="account in workspace.accounts"
@@ -76,7 +58,10 @@ async function choose(account: Account) {
         :size="32"
       />
       <span class="grow"
-        >{{ account.profile_name }}<small>{{ account.provider }}</small></span
+        >{{ account.profile_name
+        }}<small>{{
+          accountProviderLabel(account.provider, account.provider_id)
+        }}</small></span
       >
       <Check v-if="current?.id === account.id" :size="16" />
     </button>
@@ -89,5 +74,9 @@ async function choose(account: Account) {
 <style scoped>
 .scope {
   padding: 8px 10px 4px;
+}
+.default-label {
+  color: var(--color-secondary);
+  font-size: 11px;
 }
 </style>

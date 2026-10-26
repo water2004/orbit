@@ -3,7 +3,6 @@ import { mount, flushPromises } from "@vue/test-utils";
 const calls = vi.hoisted(() => ({
   launcher: vi.fn(),
   refresh: vi.fn(),
-  selectInstance: vi.fn(),
   open: vi.fn(),
 }));
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: calls.open }));
@@ -13,7 +12,6 @@ vi.mock("../src/services/task-scope", async () => {
 });
 vi.mock("../src/services/workspace", () => ({
   refresh: calls.refresh,
-  selectInstance: calls.selectInstance,
   act: (f: () => unknown) => f(),
 }));
 import ImportInstance from "../src/components/ImportInstance.vue";
@@ -46,8 +44,7 @@ it("requires a source choice and reviews the same CLI import before executing it
       excluded: ["PCL"],
       resuming: false,
     })
-    .mockResolvedValueOnce({ instance: { id: "imported" } })
-    .mockResolvedValueOnce({ id: "imported", name: "Two" });
+    .mockResolvedValueOnce({ instance: { id: "imported" } });
   const w = mount(ImportInstance, { global: { stubs: { Teleport: true } } });
   await w.find(".row button").trigger("click");
   await flushPromises();
@@ -76,10 +73,8 @@ it("requires a source choice and reviews the same CLI import before executing it
   await w.findAll("footer button").at(-1)!.trigger("click");
   await flushPromises();
   expect(calls.launcher.mock.calls[2][0]).toEqual(args);
-  expect(calls.selectInstance).toHaveBeenCalledWith({
-    id: "imported",
-    name: "Two",
-  });
+  expect(calls.launcher).toHaveBeenCalledTimes(3);
+  expect(calls.refresh).toHaveBeenCalledWith();
   expect(w.emitted("imported")).toEqual([["imported"]]);
   w.unmount();
 });

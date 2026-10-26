@@ -7,8 +7,6 @@ vi.mock("@tauri-apps/api/path", () => ({
 vi.mock("../src/services/workspace", () => ({
   ...calls,
   refresh: vi.fn(),
-  selectInstance: vi.fn(),
-  workspace: {},
 }));
 import {
   installArguments,
@@ -18,7 +16,7 @@ import {
   createInstallation,
 } from "../src/services/installations";
 import { policyArguments } from "../src/services/commands";
-import { workspace, refresh } from "../src/services/workspace";
+import { refresh } from "../src/services/workspace";
 import type { Pack } from "../src/services/installations";
 const draft = {
   name: "Target",
@@ -76,7 +74,7 @@ it.each(["client", "server"] as const)(
       expect.any(String),
       detail,
     );
-    expect(vi.mocked(refresh)).toHaveBeenCalledWith(detail.id);
+    expect(vi.mocked(refresh)).toHaveBeenCalledWith();
   },
 );
 it.each(["client", "server"] as const)(
@@ -98,7 +96,7 @@ it.each(["client", "server"] as const)(
       serverDirectory: "/server",
     });
     expect(calls.orbit).not.toHaveBeenCalled();
-    expect(vi.mocked(refresh)).toHaveBeenCalledWith(detail.id);
+    expect(vi.mocked(refresh)).toHaveBeenCalledWith();
   },
 );
 it("initializes a workspace once before importing mod content", async () => {
@@ -128,7 +126,7 @@ it("preserves a created runtime in the library if Orbit initialization fails", a
     .mockResolvedValueOnce(detail);
   calls.orbit.mockRejectedValueOnce(new Error("init failed"));
   await expect(createInstallation(draft)).rejects.toThrow("init failed");
-  expect(refresh).toHaveBeenCalledWith(detail.id);
+  expect(refresh).toHaveBeenCalledWith();
   expect(calls.launcher.mock.calls.map(([args]) => args[0])).toEqual([
     "install",
     "instance",
@@ -234,10 +232,7 @@ it("keeps client and server installation locations distinct", () => {
     installArguments({ ...draft, kind: "server", serverDirectory: "/server" }),
   ).toContain("/server");
 });
-it("keeps a loader update on its source if the selection changes", async () => {
-  calls.launcher.mockImplementation(async () => {
-    workspace.selected = { ...source, id: "other" };
-  });
+it("keeps a loader update explicitly bound to its source", async () => {
   await updateLoader("0.20.0", source, true);
   expect(calls.launcher).toHaveBeenCalledTimes(2);
   for (const call of calls.launcher.mock.calls) expect(call[2]).toEqual(source);

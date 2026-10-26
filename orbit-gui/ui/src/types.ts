@@ -8,7 +8,22 @@ export interface Instance {
   icon_path?: string | null;
   game_version?: string | null;
   loader?: string | null;
+  launch_account?: LaunchAccount | null;
 }
+export type LaunchAccount =
+  | { state: "not-configured" }
+  | { state: "unavailable"; account_id: string; source: "instance" | "global" }
+  | {
+      state: "selected";
+      source: "instance" | "global";
+      account: {
+        id: string;
+        profile_name: string;
+        avatar_path?: string | null;
+        provider: { kind: string; provider_id?: string };
+        authentication_state: string;
+      };
+    };
 export interface Runtime {
   minecraft: string;
   loader: string;

@@ -83,11 +83,7 @@ async function openInstance(id: string) {
         class="instance-item"
       >
         <button class="card-link" @click="act(() => openInstance(instance.id))">
-          <InstanceCard
-            :instance="instance"
-            :selected="workspace.selected?.id === instance.id"
-            :compact="compact"
-          />
+          <InstanceCard :instance="instance" :compact="compact" />
         </button>
         <div class="instance-actions">
           <Button type="colored" size="sm" @click="act(() => launch(instance))"

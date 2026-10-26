@@ -3,28 +3,25 @@
 import { computed } from "vue";
 import InstanceIcon from "../InstanceIcon.vue";
 import LoaderIcon from "../LoaderIcon.vue";
+import InstanceLaunchAccount from "../InstanceLaunchAccount.vue";
 import type { Instance } from "../../types";
 const props = withDefaults(
   defineProps<{
     instance: Instance;
-    selected?: boolean;
     compact?: boolean;
   }>(),
-  { selected: false, compact: false },
+  { compact: false },
 );
 const compactMode = computed(() => props.compact);
 </script>
 
 <template>
   <div
-    class="relative flex w-full min-w-0 select-none overflow-clip border border-solid bg-surface-3 text-left transition-[background-color,border-color,filter]"
+    class="relative flex w-full min-w-0 select-none overflow-clip border border-solid border-surface-4 bg-surface-3 text-left transition-[background-color,border-color,filter]"
     :class="{
       'flex-row items-center justify-start gap-2.5 rounded-xl p-2.5':
         compactMode,
       'flex-col items-start justify-end gap-3 rounded-[20px] p-3': !compactMode,
-      '[border-color:color-mix(in_srgb,var(--color-brand)_40%,transparent)] brightness-110':
-        selected,
-      'border-surface-4': !selected,
     }"
   >
     <div
@@ -70,6 +67,10 @@ const compactMode = computed(() => props.compact);
         }}
         {{ instance.game_version || "" }}
       </p>
+      <InstanceLaunchAccount
+        v-if="instance.kind === 'client'"
+        :selection="instance.launch_account"
+      />
     </div>
     <slot name="overlay" :compact="compactMode" />
   </div>

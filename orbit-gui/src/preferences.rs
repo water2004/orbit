@@ -10,7 +10,6 @@ pub struct Preferences {
     pub close_after_launch: bool,
     pub orbit_binary: PathBuf,
     pub launcher_binary: PathBuf,
-    pub selected_instance: Option<String>,
     #[serde(default)]
     pub language: orbit_i18n::LanguageMode,
     pub theme_mode: String,
@@ -68,7 +67,6 @@ impl Preferences {
                 close_after_launch: false,
                 orbit_binary: directory.join(executable_name("orbit")),
                 launcher_binary: directory.join(executable_name("orbit-launcher")),
-                selected_instance: None,
                 language: Default::default(),
                 theme_mode: "system".into(),
                 accent_theme: "indigo".into(),
@@ -226,7 +224,7 @@ mod tests {
             std::fs::write(new.join(executable_name(name)), "fixture").unwrap();
         }
         let mut preferences = Preferences::load_at(&path, &old).unwrap();
-        preferences.selected_instance = Some("keep-instance".into());
+        preferences.close_after_launch = true;
         preferences.theme_mode = "dark".into();
         preferences.accent_theme = "emerald".into();
         preferences.language = serde_json::from_str("\"zh-CN\"").unwrap();
@@ -238,7 +236,7 @@ mod tests {
             current.launcher_binary,
             new.join(executable_name("orbit-launcher"))
         );
-        assert_eq!(current.selected_instance.as_deref(), Some("keep-instance"));
+        assert!(current.close_after_launch);
         assert_eq!(current.theme_mode, "dark");
         assert_eq!(current.accent_theme, "emerald");
         assert_eq!(
@@ -248,6 +246,25 @@ mod tests {
         let bytes = std::fs::read(&path).unwrap();
         install_at(&path, &new).unwrap();
         assert_eq!(std::fs::read(&path).unwrap(), bytes);
+    }
+    #[test]
+    fn obsolete_gui_selection_is_dropped_without_resetting_preferences() {
+        let temp = tempfile::tempdir().unwrap();
+        let preferences =
+            Preferences::load_at(&temp.path().join("preferences.json"), temp.path()).unwrap();
+        let mut value = serde_json::to_value(&preferences).unwrap();
+        value["selected_instance"] = "old-selection".into();
+        value["theme_mode"] = "dark".into();
+        value["close_after_launch"] = true.into();
+        let updated: Preferences = serde_json::from_value(value).unwrap();
+        assert_eq!(updated.theme_mode, "dark");
+        assert!(updated.close_after_launch);
+        assert!(
+            serde_json::to_value(updated)
+                .unwrap()
+                .get("selected_instance")
+                .is_none()
+        );
     }
     #[test]
     fn missing_cli_or_corrupt_preferences_does_not_reset_existing_settings() {

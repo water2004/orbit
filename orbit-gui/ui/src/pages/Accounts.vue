@@ -10,7 +10,8 @@ import {
   ExternalLink,
   Trash2,
 } from "lucide-vue-next";
-import { workspace, act } from "../services/workspace";
+import { workspace, act, refresh } from "../services/workspace";
+import { accountProviderLabel } from "../services/account-label";
 import { useCommandScope } from "../services/task-scope";
 import type { Account } from "../types";
 import { t } from "../i18n";
@@ -40,13 +41,7 @@ watch(provider, () => {
   password.value = "";
 });
 async function reload() {
-  const result = await launcher<{ accounts: Account[] }>(
-    ["account", "list"],
-    t("Loading accounts", "正在加载账户"),
-    null,
-  );
-  workspace.accounts = result.accounts;
-  workspace.accountsError = "";
+  await refresh();
 }
 async function loadProviders() {
   providers.value = (
@@ -190,7 +185,9 @@ watch(
           />
           <div class="grow">
             <h2>{{ account.profile_name }}</h2>
-            <p>{{ account.provider_id || account.provider }}</p>
+            <p>
+              {{ accountProviderLabel(account.provider, account.provider_id) }}
+            </p>
           </div>
           <span v-if="account.is_default" class="badge"
             ><Check :size="14" />{{ t("Default", "默认") }}</span
@@ -207,27 +204,6 @@ watch(
             )
           }}
         </p>
-        <div class="toolbar">
-          <Button
-            size="sm"
-            @click="
-              act(() => change(['account', 'select', account.id, '--global']))
-            "
-            >{{ t("Make default", "设为默认") }}</Button
-          ><Button
-            v-if="workspace.selected"
-            size="sm"
-            @click="
-              act(() =>
-                launcher(
-                  ['account', 'select', account.id],
-                  t('Selecting instance account', '正在选择实例账户'),
-                ),
-              )
-            "
-            >{{ t("Use for this instance", "用于当前实例") }}</Button
-          >
-        </div>
         <div class="toolbar">
           <Button
             v-if="account.authentication_state === 'reauthentication-required'"

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from "vue";
+import { computed, inject, onMounted, reactive, ref, watch } from "vue";
 import DownloadSourcePicker from "../components/DownloadSourcePicker.vue";
 import { useRoute, useRouter } from "vue-router";
 import { join } from "@tauri-apps/api/path";
@@ -14,7 +14,8 @@ import {
   Boxes,
   FolderInput,
 } from "lucide-vue-next";
-import { act, launcher, workspace } from "../services/workspace";
+import { act, launcher } from "../services/workspace";
+import { instanceContextKey } from "../services/instance-context";
 import { Cancelled } from "../services/cli";
 import {
   createInstallation,
@@ -51,9 +52,12 @@ const route = useRoute(),
   pack = ref<Pack>(),
   optional = ref<string[]>([]),
   review = ref<Migration>();
-const source = workspace.selected;
+const sourceContext = inject(instanceContextKey, undefined)?.value;
+const source = sourceContext?.state.instance;
 const sourceHasOrbit =
-  workspace.detail?.desired.loader !== "vanilla" && !workspace.inventoryError;
+  !!sourceContext?.state.detail &&
+  sourceContext.state.detail.desired.loader !== "vanilla" &&
+  !sourceContext.state.inventoryError;
 const mode = computed(() =>
   route.query.migrate ? "migrate" : route.query.loader ? "loader" : "new",
 );
@@ -215,15 +219,19 @@ async function install() {
       if (!source)
         throw new Error(t("Select a source instance", "请选择源实例"));
       await updateLoader(draft.loaderVersion, source, sourceHasOrbit);
-      await router.push(instancePath(workspace.selected!.id, "runtime"));
+      await router.push(instancePath(source.id, "runtime"));
     } else if (mode.value === "migrate") {
       if (!source)
         throw new Error(t("Select a source instance", "请选择源实例"));
       review.value = await prepareMigration({ ...draft }, source);
       await migrate();
     } else {
-      await createInstallation({ ...draft }, pack.value, optional.value);
-      await router.push(instancePath(workspace.selected!.id, "runtime"));
+      const created = await createInstallation(
+        { ...draft },
+        pack.value,
+        optional.value,
+      );
+      await router.push(instancePath(created.id, "runtime"));
     }
   } catch (e) {
     if (!(e instanceof Cancelled)) error.value = String(e);
@@ -236,7 +244,7 @@ async function migrate() {
   busy.value = true;
   try {
     if (await applyMigration(review.value))
-      await router.push(instancePath(workspace.selected!.id));
+      await router.push(instancePath(review.value.target.id));
   } finally {
     busy.value = false;
   }
@@ -273,10 +281,17 @@ function customInstallation() {
   step.value = 0;
 }
 onMounted(async () => {
-  if (mode.value === "loader" && workspace.detail) {
-    draft.minecraft = workspace.detail.desired.minecraft;
-    draft.loader = workspace.detail.desired.loader;
-    draft.name = workspace.selected?.name || "";
+  if (mode.value !== "new" && !source) {
+    error.value = t(
+      "Open a source instance from the library to update or migrate it.",
+      "请从实例库打开源实例，再选择更新或迁移。",
+    );
+    return;
+  }
+  if (mode.value === "loader" && sourceContext?.state.detail) {
+    draft.minecraft = sourceContext.state.detail.desired.minecraft;
+    draft.loader = sourceContext.state.detail.desired.loader;
+    draft.name = source!.name;
     step.value = 1;
     await components();
   } else if (route.query.pack) await act(inspectPack);
@@ -327,6 +342,11 @@ watch(step, (value) => {
                   "选择游戏版本与加载器，开始构建你的实例。",
                 )
           }}
+        </p>
+        <p v-if="source && mode !== 'new'" class="source-context">
+          <strong
+            >{{ t("Source instance", "源实例") }} · {{ source.name }}</strong
+          >
         </p>
       </div>
       <div class="heading-actions">

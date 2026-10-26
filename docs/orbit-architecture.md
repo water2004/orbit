@@ -1,5 +1,13 @@
 # Orbit 架构
 
+GUI 的实例目标是页面级显式上下文，不是全局选中状态。实例路由、发现页目标下拉、账户
+分配各自传确定的 ID/目录，任务启动时捕获目标；切换页面和异步返回不能使任务改投其他实例。
+实例库与账户库存才属于全局展示状态，CLI 默认实例不参与 GUI 目标推断。详见 `orbit-gui.md`。
+
+实例卡片的有效账户由 Launcher core 的只读 account presentation 投影生成，复用实际启动的
+账户选择优先级，不读取秘密或刷新登录。GUI 不用账户列表重新猜测实例账户；两种卡片布局
+只消费 CLI 的 `launch_account`。第三方来源名称使用原有 provider ID，内置类型在展示层翻译。
+
 可选分析能力由 Orbit 的 `feature_support` 独立查询；`orbit capabilities` 返回 audit 与
 runtime_observation 各自的范围支持及原因。审计不支持不能成为下载、安装、求解或启动的
 门禁。Agent 范围未验证时，Orbit 明确发出结构化提示并不注入 Agent，仍复用 Launcher

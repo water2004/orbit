@@ -1,11 +1,5 @@
 import { join, tempDir } from "@tauri-apps/api/path";
-import {
-  launcher,
-  orbit,
-  refresh,
-  selectInstance,
-  workspace,
-} from "./workspace";
+import { launcher, orbit, refresh } from "./workspace";
 import { importArguments } from "./commands";
 import { t } from "../i18n";
 import type { Detail, Instance } from "../types";
@@ -101,7 +95,7 @@ export async function createInstallation(
   } finally {
     // A failed/cancelled Orbit setup must not hide or delete the already
     // installed runtime. Its normal instance page exposes initialization retry.
-    await refresh(detail.id);
+    await refresh();
   }
   return detail;
 }
@@ -170,7 +164,6 @@ export async function applyMigration(review: Migration) {
     review.target,
   );
   await refresh();
-  await selectInstance(review.target);
   return true;
 }
 export async function updateLoader(
@@ -194,5 +187,5 @@ export async function updateLoader(
       t("Synchronizing loader metadata", "正在同步加载器元数据"),
       instance,
     );
-  if (workspace.selected?.id === instance.id) await selectInstance(instance);
+  await refresh();
 }
