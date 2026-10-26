@@ -302,8 +302,11 @@ fn project_versions(project: &Mod, loader: Option<ModLoaderType>) -> Vec<String>
     let requested_loader = loader.map(|value| value as u8);
     let mut versions = Vec::new();
     for index in &project.latest_files_indexes {
-        if requested_loader.is_none_or(|loader| index.mod_loader == 0 || index.mod_loader == loader)
-            && !versions.contains(&index.game_version)
+        if requested_loader.is_none_or(|loader| {
+            index
+                .mod_loader
+                .is_some_and(|value| value == 0 || value == loader)
+        }) && !versions.contains(&index.game_version)
         {
             versions.push(index.game_version.clone());
         }
@@ -411,16 +414,23 @@ impl ModProvider for CurseForgeProvider {
                 || u64::from(response.pagination.index + response.pagination.result_count)
                     >= response.pagination.total_count
                 || response.pagination.index + response.pagination.page_size >= MAX_RESULTS;
-            for project in response.data.into_iter().filter(|project| {
-                project.is_available
-                    && loader_type.is_none_or(|loader| {
-                        project
-                            .latest_files_indexes
-                            .iter()
-                            .any(|index| index.mod_loader == 0 || index.mod_loader == loader as u8)
-                    })
-            }) {
-                let mc_versions = project_versions(&project, loader_type);
+            // The search endpoint already applies the requested axes. Its
+            // latest-file summary can omit historical loader tags and is not
+            // a complete compatibility index; do not second-guess the query.
+            for project in response
+                .data
+                .into_iter()
+                .filter(|project| project.is_available)
+            {
+                let mut mc_versions = project_versions(&project, loader_type);
+                // This version is established by the server-side search
+                // filter even when the project's latest-file summary omits it.
+                // It is a discovery hint, never a JAR dependency constraint.
+                if let Some(version) = mc_version
+                    && !mc_versions.iter().any(|value| value == version)
+                {
+                    mc_versions.push(version.to_string());
+                }
                 let latest_version = project
                     .latest_files
                     .iter()
@@ -782,6 +792,36 @@ mod tests {
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].slug, "sodium");
         assert_eq!(results[0].mc_versions, vec!["1.21.1"]);
+        stop_mock_server(server).await;
+    }
+
+    #[tokio::test]
+    async fn filtered_search_accepts_historical_indexes_without_loader_tags() {
+        let (base_url, server) = mock_server(vec![
+            MockResponse {
+                request_contains: "GET /v1/games?index=0&pageSize=50 ", status: "200 OK",
+                body: r#"{"data":[{"id":432,"slug":"minecraft"}],"pagination":{"index":0,"pageSize":50,"resultCount":1,"totalCount":1}}"#,
+            },
+            MockResponse {
+                request_contains: "GET /v1/categories?gameId=432 ", status: "200 OK",
+                body: r#"{"data":[{"id":6,"name":"Mods","slug":"mc-mods","isClass":true}]}"#,
+            },
+            MockResponse {
+                request_contains: "GET /v1/mods/search?gameId=432&classId=6&index=0&pageSize=50&searchFilter=imblocker&gameVersion=26.3&modLoaderType=4 ", status: "200 OK",
+                body: r#"{"data":[{"id":483760,"name":"IMBlocker","slug":"imblocker","summary":"Input method control","downloadCount":42,"latestFilesIndexes":[{"gameVersion":"1.19.1","fileId":3924925,"filename":"imblocker-1.19.1-3.1.1.jar","releaseType":3,"gameVersionTypeId":73407},{"gameVersion":"1.16.5","modLoader":null}],"isAvailable":true}],"pagination":{"index":0,"pageSize":50,"resultCount":1,"totalCount":1}}"#,
+            },
+        ]).await;
+        let provider =
+            CurseForgeProvider::with_base_url("test-key", "orbit-test", &base_url).unwrap();
+        let results = provider
+            .search("imblocker", Some("26.3"), Some("fabric"), 5)
+            .await
+            .unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].project_id, "483760");
+        // Missing tags do not claim old versions are loader-compatible. The
+        // requested version is a fact of the filtered endpoint, not inference.
+        assert_eq!(results[0].mc_versions, vec!["26.3"]);
         stop_mock_server(server).await;
     }
 

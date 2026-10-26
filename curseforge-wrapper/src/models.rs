@@ -150,7 +150,9 @@ pub struct FileDependency {
 #[serde(rename_all = "camelCase")]
 pub struct FileIndex {
     pub game_version: String,
-    pub mod_loader: u8,
+    /// Historical index entries may omit this field. Missing is unknown, not
+    /// the explicit official enum value 0 (Any).
+    pub mod_loader: Option<u8>,
 }
 
 #[derive(Debug, Serialize)]
@@ -229,6 +231,26 @@ pub struct GetFilesParams<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn historical_file_indexes_preserve_unknown_loader_instead_of_inventing_any() {
+        for (json, expected) in [
+            (
+                r#"{"gameVersion":"1.19.1","fileId":3924925,"filename":"imblocker-1.19.1-3.1.1.jar","releaseType":3,"gameVersionTypeId":73407}"#,
+                None,
+            ),
+            (r#"{"gameVersion":"1.19","modLoader":null}"#, None),
+            (r#"{"gameVersion":"26.3","modLoader":0}"#, Some(0)),
+            (r#"{"gameVersion":"26.3","modLoader":4}"#, Some(4)),
+        ] {
+            let index: FileIndex = serde_json::from_str(json).unwrap();
+            assert_eq!(index.mod_loader, expected);
+        }
+        assert!(
+            serde_json::from_str::<FileIndex>(r#"{"gameVersion":"26.3","modLoader":"Fabric"}"#)
+                .is_err()
+        );
+    }
 
     #[test]
     fn loader_names_roundtrip_to_official_enum_values() {
