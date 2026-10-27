@@ -877,8 +877,8 @@ mod tests {
                 version_id: format!("{project_id}-version"),
             }),
             curseforge: None,
-            download_url: String::new(),
-            filename: String::new(),
+            download_url: format!("https://cdn.modrinth.com/{source}.jar"),
+            filename: format!("{source}.jar"),
             related_projects: Vec::new(),
         }
     }

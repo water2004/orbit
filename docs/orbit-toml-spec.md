@@ -100,15 +100,18 @@ benchmark = { packages = ["sodium", "reeses_sodium_options"] }
 
 | 字段 | 默认值 | 含义 |
 |---|---|---|
-| `catalogs` | `["modrinth"]` | 无限定 `search`/`add` 使用的 provider 集合 |
+| `catalogs` | `["modrinth"]` | 无限定 `search`/`add` 与本地 JAR 来源识别使用的 provider 集合 |
 
 `catalogs` 不是远端优先级。一个包配置的全部 `remotes` 都进入同一次候选发现，并按内容
 哈希去重；不会在首个 provider 返回结果后停止。CurseForge provider 必须配置 API Key。
+配置全局 API key 不会自动启用该来源。`sync`（包括整合包导入后的同步）只用实例选择的
+catalogs 识别本地 JAR；`init` 使用默认 `modrinth`。识别到但不能下载的远端不会自动写入
+包远端或 lock 的下载来源；没有可下载远端时保留持久的本地文件来源。
 
 不需要手工编辑此数组：`orbit config --scope instance get/set/unset resolver.catalogs`
 提供同一强类型入口，`set` 值为逗号分隔的目录名称，例如 `modrinth,curseforge`。
-GUI“发现模组 → 搜索来源”调用该 CLI；至少一个目录、凭据检查、去重和原子持久化
-都在 core 中执行。仅改变发现目录，不重写包远端、版本规则或 lock。
+GUI 的发现页和实例模组管理页共用“模组来源”控件并调用该 CLI；至少一个目录、凭据检查、
+去重和原子持久化都在 core 中执行。设置本身不重写包远端、版本规则或 lock。
 
 ### 2.4 `[packages]`
 

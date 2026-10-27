@@ -170,18 +170,16 @@ impl CurseForgeProvider {
         &self,
         project: &Mod,
         file: &File,
-        require_download: bool,
     ) -> Result<Option<RemoteArtifact>, OrbitError> {
-        if !file.is_available {
+        if !file.is_available || project.allow_mod_distribution == Some(false) {
             return Ok(None);
         }
         let sha1 = file.sha1();
-        if require_download && sha1.is_empty() {
+        if sha1.is_empty() {
             return Ok(None);
         }
         let download_url = match &file.download_url {
-            Some(url) if !url.is_empty() => Some(url.clone()),
-            _ if !require_download => None,
+            Some(url) if !url.trim().is_empty() => Some(url.clone()),
             _ => match self.client.download_url(project.id, file.id).await {
                 Ok(url) => Some(url),
                 Err(error)
@@ -195,9 +193,9 @@ impl CurseForgeProvider {
                 Err(error) => return Err(map_client_error(error)),
             },
         };
-        if require_download && download_url.is_none() {
+        let Some(download_url) = download_url.filter(|url| !url.trim().is_empty()) else {
             return Ok(None);
-        }
+        };
         let dependencies = file
             .dependencies
             .iter()
@@ -217,7 +215,7 @@ impl CurseForgeProvider {
                 file_id: file.id,
                 fingerprint: u32::try_from(file.file_fingerprint).unwrap_or_default(),
             }),
-            download_url: download_url.unwrap_or_default(),
+            download_url,
             filename: file.file_name.clone(),
             related_projects: dependencies,
         }))
@@ -247,7 +245,7 @@ impl CurseForgeProvider {
         let mut versions = Vec::new();
         let mut unavailable = Vec::new();
         for file in files {
-            if let Some(resolved) = self.resolved_file(project, &file, true).await? {
+            if let Some(resolved) = self.resolved_file(project, &file).await? {
                 versions.push(resolved);
             } else {
                 unavailable.push(format!("{} ({})", file.file_name, file.id));
@@ -585,7 +583,7 @@ impl ModProvider for CurseForgeProvider {
             let Some(project) = projects.get(&matched.file.mod_id) else {
                 continue;
             };
-            if let Some(resolved) = self.resolved_file(project, &matched.file, false).await? {
+            if let Some(resolved) = self.resolved_file(project, &matched.file).await? {
                 identified.push(resolved);
             }
         }
@@ -947,9 +945,11 @@ mod tests {
         stop_mock_server(server).await;
     }
 
-    #[tokio::test]
-    async fn identifies_local_artifacts_with_the_fingerprint_endpoint() {
-        let (base_url, server) = mock_server(vec![
+    async fn identify_fixture(
+        project: &'static str,
+        download: Option<MockResponse>,
+    ) -> Vec<RemoteArtifact> {
+        let mut responses = vec![
             MockResponse {
                 request_contains: "GET /v1/games?index=0&pageSize=50 ",
                 status: "200 OK",
@@ -968,10 +968,11 @@ mod tests {
             MockResponse {
                 request_contains: "POST /v1/mods ",
                 status: "200 OK",
-                body: r#"{"data":[{"id":123,"name":"Example","slug":"example","summary":"Example","downloadCount":1,"categories":[],"authors":[],"latestFiles":[],"latestFilesIndexes":[],"isAvailable":true}]}"#,
+                body: project,
             },
-        ])
-        .await;
+        ];
+        responses.extend(download);
+        let (base_url, server) = mock_server(responses).await;
         let provider =
             CurseForgeProvider::with_base_url("test-key", "orbit-test", &base_url).unwrap();
 
@@ -984,9 +985,31 @@ mod tests {
             .await
             .unwrap();
 
+        stop_mock_server(server).await;
+        identified
+    }
+
+    const IDENTIFIED_PROJECT: &str = r#"{"data":[{"id":123,"name":"Example","slug":"example","summary":"Example","downloadCount":1,"isAvailable":true}]}"#;
+
+    #[tokio::test]
+    async fn identifies_only_downloadable_local_artifacts_with_the_fingerprint_endpoint() {
+        let identified = identify_fixture(
+            IDENTIFIED_PROJECT,
+            Some(MockResponse {
+                request_contains: "GET /v1/mods/123/files/456/download-url ",
+                status: "200 OK",
+                body: r#"{"data":"https://edge.forgecdn.net/files/0/456/example.jar"}"#,
+            }),
+        )
+        .await;
+
         assert_eq!(identified.len(), 1);
         assert_eq!(identified[0].slug, "example");
-        assert!(identified[0].download_url.is_empty());
+        assert_eq!(
+            identified[0].download_url,
+            "https://edge.forgecdn.net/files/0/456/example.jar"
+        );
+        assert!(identified[0].artifact_source().is_ok());
         assert_eq!(
             identified[0]
                 .curseforge
@@ -994,7 +1017,34 @@ mod tests {
                 .map(|metadata| metadata.fingerprint),
             Some(987)
         );
-        stop_mock_server(server).await;
+    }
+
+    #[tokio::test]
+    async fn identification_omits_blocked_or_empty_download_urls() {
+        for (status, body) in [
+            ("403 Forbidden", r#"{"error":"Forbidden"}"#),
+            ("404 Not Found", r#"{"error":"Not found"}"#),
+            ("200 OK", r#"{"data":""}"#),
+        ] {
+            let identified = identify_fixture(
+                IDENTIFIED_PROJECT,
+                Some(MockResponse {
+                    request_contains: "GET /v1/mods/123/files/456/download-url ",
+                    status,
+                    body,
+                }),
+            )
+            .await;
+            assert!(identified.is_empty(), "{status}: {body}");
+        }
+    }
+
+    #[tokio::test]
+    async fn identification_does_not_resolve_downloads_for_distribution_disabled_projects() {
+        assert!(identify_fixture(
+            r#"{"data":[{"id":123,"name":"Example","slug":"example","summary":"Example","downloadCount":1,"isAvailable":true,"allowModDistribution":false}]}"#,
+            None,
+        ).await.is_empty());
     }
 
     #[tokio::test]

@@ -181,7 +181,9 @@ pub async fn run_init(
 
     // 2. Identify top-level package JARs. Modules contained in one package are
     // already represented by the JAR layer as bundled metadata.
-    let mut identified = crate::identification::identify_mods(&scanned, providers).await?;
+    let resolver = ResolverConfig::default();
+    let mut identified =
+        crate::identification::identify_mods(&scanned, providers, &resolver.catalogs).await?;
     if !input.dry_run {
         crate::identification::preserve_local_sources(&input.instance_dir, &mut identified)?;
     }
@@ -248,7 +250,7 @@ pub async fn run_init(
             version: None,
         },
         platform: platform_snapshot,
-        resolver: ResolverConfig::default(),
+        resolver,
         packages,
         groups: Default::default(),
     };

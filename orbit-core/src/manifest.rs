@@ -69,7 +69,7 @@ impl ProjectMeta {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ResolverConfig {
-    /// Provider catalogs enabled for unqualified search and add operations.
+    /// Provider catalogs enabled for unqualified search/add and local JAR identification.
     /// Exact package remotes are not prioritized and always participate.
     #[serde(default = "default_catalogs")]
     pub catalogs: Vec<String>,

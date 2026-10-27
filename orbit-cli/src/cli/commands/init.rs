@@ -157,6 +157,7 @@ pub async fn handle(
     };
 
     // ── 3. 执行 init ───────────────────────────
+    let providers = create_identification_providers(&instance_dir, ctx.runtime.config())?;
     let input = InitInput {
         name: name.clone(),
         mc_version: mc_ver,
@@ -166,7 +167,6 @@ pub async fn handle(
         dry_run: ctx.dry_run,
     };
 
-    let providers = create_identification_providers(ctx.runtime.config())?;
     let output = run_init(input, &providers).await?;
 
     let identified = output

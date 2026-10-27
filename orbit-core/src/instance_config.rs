@@ -271,4 +271,27 @@ mod tests {
         );
         assert_eq!(discovery_catalogs(directory.path()).unwrap(), ["modrinth"]);
     }
+
+    #[test]
+    fn identification_uses_selected_catalogs_not_configured_credentials() {
+        let directory = fixture();
+        let mut config = GlobalConfig::default();
+        config.auth.curseforge_api_key = Some("private-test-key".into());
+        let names = |path: &Path| {
+            crate::providers::create_identification_providers(path, &config)
+                .unwrap()
+                .iter()
+                .map(|provider| provider.name())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(names(directory.path()), ["modrinth"]);
+        let uninitialized = tempfile::tempdir().unwrap();
+        assert_eq!(names(uninitialized.path()), ["modrinth"]);
+        set_catalogs(directory.path(), vec!["curseforge".into()], &config, false).unwrap();
+        assert_eq!(names(directory.path()), ["curseforge"]);
+        std::fs::write(directory.path().join("orbit.toml"), "invalid").unwrap();
+        assert!(
+            crate::providers::create_identification_providers(directory.path(), &config).is_err()
+        );
+    }
 }

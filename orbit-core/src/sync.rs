@@ -1,6 +1,6 @@
 //! Reconciles the manifest, lockfile, and local `mods/` directory without dependency solving.
 //!
-//! Local artifacts are batch-identified by every available provider before
+//! Local artifacts are batch-identified by the instance's enabled catalogs before
 //! reconciliation. Provider metadata is used only to recover source locators;
 //! package identity and dependency metadata still come exclusively from JARs.
 
@@ -62,7 +62,8 @@ pub async fn sync_instance(
         modloader_version: manifest.inner.project.modloader_version.clone(),
     };
     let scanned = crate::init::scan_mods_dir(instance_dir, discovered_platform.loader)?;
-    let mut identified = identify_mods(&scanned, providers).await?;
+    let mut identified =
+        identify_mods(&scanned, providers, &manifest.inner.resolver.catalogs).await?;
     let mut superseded_managed_remotes =
         HashMap::<String, HashSet<crate::manifest::PackageRemote>>::new();
     for package in &identified {
@@ -403,6 +404,8 @@ mod tests {
     }
 
     struct IdentificationProvider {
+        name: &'static str,
+        calls: std::sync::Arc<std::sync::atomic::AtomicUsize>,
         downloader: ArtifactDownloadClient,
         artifacts: Vec<RemoteArtifact>,
     }
@@ -410,7 +413,7 @@ mod tests {
     #[async_trait]
     impl ModProvider for IdentificationProvider {
         fn name(&self) -> &'static str {
-            "modrinth"
+            self.name
         }
 
         fn artifact_downloader(&self) -> &ArtifactDownloadClient {
@@ -435,6 +438,8 @@ mod tests {
             &self,
             _artifacts: &[ArtifactFingerprint],
         ) -> Result<Vec<RemoteArtifact>, OrbitError> {
+            self.calls
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             Ok(self.artifacts.clone())
         }
 
@@ -499,6 +504,8 @@ physical_environment = "client"
         assert!(managed.is_file());
 
         let provider: Box<dyn ModProvider> = Box::new(IdentificationProvider {
+            name: "modrinth",
+            calls: Default::default(),
             downloader: ArtifactDownloadClient::test_anonymous("orbit-sync-test").unwrap(),
             artifacts: vec![RemoteArtifact {
                 sha1: local.sha1.clone(),
@@ -536,6 +543,112 @@ physical_environment = "client"
         ));
         assert!(!managed.exists());
         std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[tokio::test]
+    async fn sync_respects_catalogs_and_keeps_only_downloadable_identified_sources() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        crate::platform_detection::test_support::write_platform(root, "26.2", "fabric", "0.19.5");
+        std::fs::create_dir_all(root.join("mods")).unwrap();
+        write_fabric_jar(&root.join("mods/alpha.jar"), "1");
+        crate::init::run_init(
+            crate::init::InitInput {
+                name: "test".into(),
+                mc_version: "26.2".into(),
+                modloader: "fabric".into(),
+                modloader_version: "0.19.5".into(),
+                instance_dir: root.into(),
+                dry_run: false,
+            },
+            &[],
+        )
+        .await
+        .unwrap();
+        let entry = Lockfile::open(root)
+            .unwrap()
+            .inner
+            .find("alpha")
+            .unwrap()
+            .clone();
+        let blocked = RemoteArtifact {
+            sha1: entry.sha1.clone(),
+            sha512: entry.sha512.clone(),
+            slug: "alpha".into(),
+            provider: "curseforge".into(),
+            modrinth: None,
+            curseforge: Some(crate::providers::CurseForgeResolvedInfo {
+                project_id: 123,
+                file_id: 456,
+                fingerprint: 789,
+            }),
+            download_url: String::new(),
+            filename: "alpha.jar".into(),
+            related_projects: Vec::new(),
+        };
+        let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let providers: Vec<Box<dyn ModProvider>> = vec![Box::new(IdentificationProvider {
+            name: "curseforge",
+            calls: calls.clone(),
+            downloader: ArtifactDownloadClient::test_anonymous("orbit-sync-test").unwrap(),
+            artifacts: vec![blocked],
+        })];
+        sync_instance(root, &providers, false).await.unwrap();
+        assert_eq!(calls.load(std::sync::atomic::Ordering::Relaxed), 0);
+
+        // Even an enabled provider must not replace a durable local source with
+        // an identification that cannot restore the file.
+        let mut manifest = ManifestFile::open(root).unwrap();
+        manifest.inner.resolver.catalogs.push("curseforge".into());
+        manifest.save().unwrap();
+        sync_instance(root, &providers, false).await.unwrap();
+        assert_eq!(calls.load(std::sync::atomic::Ordering::Relaxed), 1);
+        let lock = Lockfile::open(root).unwrap();
+        let local = lock.inner.find("alpha").unwrap();
+        assert!(matches!(
+            local.artifact_sources.as_slice(),
+            [ArtifactSource::File { .. }]
+        ));
+        assert!(matches!(
+            local.remotes.as_slice(),
+            [PackageRemote::File { .. }]
+        ));
+
+        let mut all_providers = providers;
+        all_providers.push(Box::new(IdentificationProvider {
+            name: "modrinth",
+            calls: Default::default(),
+            downloader: ArtifactDownloadClient::test_anonymous("orbit-sync-test").unwrap(),
+            artifacts: vec![RemoteArtifact {
+                sha1: entry.sha1,
+                sha512: entry.sha512,
+                slug: "alpha".into(),
+                provider: "modrinth".into(),
+                modrinth: Some(ModrinthResolvedInfo {
+                    project_id: "alpha-project".into(),
+                    version_id: "alpha-version".into(),
+                }),
+                curseforge: None,
+                download_url: "https://cdn.modrinth.com/alpha.jar".into(),
+                filename: "alpha.jar".into(),
+                related_projects: Vec::new(),
+            }],
+        }));
+        sync_instance(root, &all_providers, false).await.unwrap();
+        let lock = Lockfile::open(root).unwrap();
+        let alpha = lock.inner.find("alpha").unwrap();
+        assert!(matches!(
+            alpha.artifact_sources.as_slice(),
+            [ArtifactSource::Modrinth { .. }]
+        ));
+        assert!(matches!(
+            alpha.remotes.as_slice(),
+            [PackageRemote::Modrinth { .. }]
+        ));
+        assert_eq!(
+            alpha.remotes,
+            ManifestFile::open(root).unwrap().inner.packages["alpha"].remotes
+        );
     }
 
     #[tokio::test]

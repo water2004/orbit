@@ -140,8 +140,10 @@ pub async fn handle(
                 .await?
             };
             if !ctx.dry_run && !report.extracted.is_empty() {
-                let providers =
-                    orbit_core::providers::create_identification_providers(ctx.runtime.config())?;
+                let providers = orbit_core::providers::create_identification_providers(
+                    &instance_dir,
+                    ctx.runtime.config(),
+                )?;
                 let sync = orbit_core::sync_instance(&instance_dir, &providers, false).await?;
                 match ctx.output.format {
                     OutputFormat::Text => {

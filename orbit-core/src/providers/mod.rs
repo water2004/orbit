@@ -97,21 +97,13 @@ pub fn create_providers(
     Ok(providers)
 }
 
-/// Create every provider that can safely participate in source identification
-/// before a manifest exists. Modrinth is always available; authenticated
-/// providers are added only when their credentials are configured.
+/// Identify local JARs through the instance's enabled catalogs. Before init,
+/// use the manifest defaults; credentials never implicitly enable a catalog.
 pub fn create_identification_providers(
+    instance_dir: &std::path::Path,
     config: &crate::config::GlobalConfig,
 ) -> Result<Vec<Box<dyn ModProvider>>, crate::error::OrbitError> {
-    let mut catalogs = vec!["modrinth".to_string()];
-    if config
-        .auth
-        .curseforge_api_key
-        .as_deref()
-        .is_some_and(|key| !key.trim().is_empty())
-    {
-        catalogs.push("curseforge".to_string());
-    }
+    let catalogs = crate::instance_config::discovery_catalogs(instance_dir)?;
     create_providers(&catalogs, config)
 }
 
@@ -199,6 +191,13 @@ impl RemoteArtifact {
     }
 
     pub fn artifact_source(&self) -> Result<crate::lockfile::ArtifactSource, OrbitError> {
+        if self.download_url.trim().is_empty() {
+            return Err(OrbitError::Other(anyhow::anyhow!(
+                "{} artifact '{}' has no downloadable source",
+                self.provider,
+                self.filename
+            )));
+        }
         if let Some(metadata) = &self.modrinth {
             return Ok(crate::lockfile::ArtifactSource::Modrinth {
                 project_id: metadata.project_id.clone(),
@@ -474,6 +473,26 @@ pub trait ModProvider: Send + Sync {
 mod tests {
     use super::*;
     use crate::config::GlobalConfig;
+
+    #[test]
+    fn exact_artifact_sources_require_a_download_url() {
+        let artifact = RemoteArtifact {
+            sha1: "a".repeat(40),
+            sha512: String::new(),
+            slug: "example".into(),
+            provider: "curseforge".into(),
+            modrinth: None,
+            curseforge: Some(CurseForgeResolvedInfo {
+                project_id: 123,
+                file_id: 456,
+                fingerprint: 789,
+            }),
+            download_url: "  ".into(),
+            filename: "example.jar".into(),
+            related_projects: Vec::new(),
+        };
+        assert!(artifact.artifact_source().is_err());
+    }
 
     #[test]
     fn curseforge_requires_an_explicit_api_key() {

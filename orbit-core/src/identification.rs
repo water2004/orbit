@@ -96,11 +96,15 @@ fn unidentified_local(m: &ScannedMod) -> IdentifiedMod {
 pub async fn identify_mods(
     scanned: &[ScannedMod],
     providers: &[Box<dyn ModProvider>],
+    catalogs: &[String],
 ) -> Result<Vec<IdentifiedMod>, OrbitError> {
     let mut results: Vec<IdentifiedMod> = scanned.iter().map(unidentified_local).collect();
     let mut identified = vec![false; scanned.len()];
 
-    for p in providers {
+    for p in providers
+        .iter()
+        .filter(|provider| catalogs.iter().any(|catalog| catalog == provider.name()))
+    {
         let fingerprints: Vec<ArtifactFingerprint> = scanned
             .iter()
             .map(|artifact| ArtifactFingerprint {

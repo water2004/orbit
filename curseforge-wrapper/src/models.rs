@@ -60,6 +60,8 @@ pub struct Mod {
     pub latest_files_indexes: Vec<FileIndex>,
     pub is_available: bool,
     #[serde(default)]
+    pub allow_mod_distribution: Option<bool>,
+    #[serde(default)]
     pub date_modified: String,
 }
 
