@@ -567,7 +567,7 @@ lock 精确记录。
 ```
 
 `changes[].kind` 枚举：`install` / `upgrade` / `downgrade` / `replace` / `remove`。
-内容哈希、物理 JAR 文件名、provider 密钥永不进入 JSON，与 text 表格一致（CLAUDE.md #41/#50）。
+内容哈希、物理 JAR 文件名、provider 密钥永不进入 JSON，与 text 表格一致。
 
 ### `remove` / `reset` / `purge`
 
@@ -1012,7 +1012,7 @@ Orbit Launcher 直接使用 `orbit-machine-protocol` 中同一个信封类型，
 | `cancelled` | 3 | 用户交互取消 |
 | `internal` | 1 | 未分类错误（兜底） |
 
-`checksum_mismatch` 的 `message` 不包含期望/实际哈希值（CLAUDE.md #41）。
+`checksum_mismatch` 的 `message` 不包含期望/实际哈希值。
 
 ## 7. 稳定性承诺
 

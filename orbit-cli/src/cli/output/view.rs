@@ -3,7 +3,7 @@
 //! Each command builds a view-model from the core domain report. View-models
 //! are the single source of truth for both `text` (tables) and `json` output.
 //! They never contain content hashes, physical JAR filenames, or provider
-//! secrets (CLAUDE.md #41/#50): those stay in core domain types and never
+//! secrets: those stay in core domain types and never
 //! cross the output boundary.
 //!
 //! The JSON envelope wraps every command result with a stable
