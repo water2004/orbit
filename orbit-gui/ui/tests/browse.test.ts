@@ -126,6 +126,7 @@ it("installs into the explicit target, guards double clicks and preserves the qu
 it("sidebar discovery requires an explicit target even when a CLI default exists", async () => {
   const { wrapper, router } = await page("/browse");
   expect(wrapper.findComponent(InstancePicker).props("modelValue")).toBe("");
+  expect(wrapper.find(".discovery-target").element.tagName).toBe("DIV");
   expect(wrapper.text()).toContain("Where should the mods be installed?");
   expect(router.currentRoute.value.query.instance).toBeUndefined();
   expect(orbit).not.toHaveBeenCalled();

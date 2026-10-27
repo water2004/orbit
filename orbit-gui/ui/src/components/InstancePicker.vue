@@ -35,6 +35,7 @@ const options = computed(() =>
 </script>
 <template>
   <DropdownSelect
+    class="instance-picker"
     :model-value="modelValue"
     :options="options"
     :label="label"
@@ -50,16 +51,25 @@ const options = computed(() =>
         alt=""
         class="instance-picker-icon"
       />
-      <span class="instance-picker-name">{{
+      <span class="instance-picker-name" :title="option?.label">{{
         option?.label || t("Choose an instance", "选择实例")
       }}</span>
     </template>
   </DropdownSelect>
 </template>
 <style scoped>
+.instance-picker {
+  width: 100%;
+}
+.instance-picker :deep(.select-options .select-copy strong),
+.instance-picker :deep(.select-options .select-copy small) {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
 .instance-picker-icon {
   width: 22px;
   height: 22px;
+  flex-shrink: 0;
   object-fit: contain;
 }
 .instance-picker-name {

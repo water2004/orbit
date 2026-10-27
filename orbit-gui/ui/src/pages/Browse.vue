@@ -215,7 +215,7 @@ async function manage(project: SearchResult) {
           }}
         </p>
       </div>
-      <label class="discovery-target">
+      <div class="discovery-target">
         <span>{{ t("Install into", "安装到实例") }}</span>
         <InstancePicker
           :model-value="targetId"
@@ -224,7 +224,7 @@ async function manage(project: SearchResult) {
           :loading="workspace.loading && !workspace.instances.length"
           @update:model-value="(id) => router.replace(discoveryPath(id))"
         />
-      </label>
+      </div>
     </header>
     <div v-if="!workspace.instances.length && !workspace.loading" class="empty">
       <h2>{{ t("Create your first instance", "先创建一个实例") }}</h2>
@@ -443,8 +443,10 @@ async function manage(project: SearchResult) {
 }
 .discovery-target {
   width: min(310px, 100%);
+  flex-shrink: 0;
   display: flex;
   flex-direction: column;
+  align-items: stretch;
   gap: 6px;
   font-size: 12px;
 }
@@ -530,6 +532,10 @@ async function manage(project: SearchResult) {
   }
 }
 @media (max-width: 760px) {
+  .discover-page > .page-heading {
+    align-items: stretch;
+    flex-direction: column;
+  }
   .search-bar {
     flex-wrap: wrap;
   }

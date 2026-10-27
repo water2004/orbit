@@ -302,6 +302,7 @@ onUnmounted(() => document.removeEventListener("pointerdown", outside));
 img {
   width: 28px;
   height: 28px;
+  flex-shrink: 0;
   object-fit: contain;
   image-rendering: pixelated;
 }

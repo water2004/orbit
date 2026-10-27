@@ -23,6 +23,22 @@ const instances = [
     is_default: true,
   },
 ];
+if (new URLSearchParams(location.search).has("instance-picker")) {
+  instances.push(
+    ...[
+      ["26.1.2-Fabric", "26.1.2"],
+      ["26.2-Fabric", "26.2"],
+      ["26.3-fabric-migrate", "26.3"],
+      ["一个名称很长的建筑与生存联机测试实例 · Fabric", "26.3"],
+    ].map(([name, game_version], index) => ({
+      ...instances[0],
+      id: `picker-${index}`,
+      name,
+      game_version,
+      is_default: false,
+    })),
+  );
+}
 const detail = {
   ...instances[0],
   desired: { minecraft: "26.2", loader: "fabric", loader_version: "0.20.0" },
@@ -109,8 +125,17 @@ mockIPC((cmd, args) => {
       return taskId;
     }
     if (key === "instance list") data = { instances };
-    else if (key === "instance show") data = detail;
-    else if (key === "account list")
+    else if (key === "instance show") {
+      const selected =
+        instances.find((instance) => instance.id === request.instance) ||
+        instances[0];
+      data = {
+        ...detail,
+        ...selected,
+        desired: { ...detail.desired, minecraft: selected.game_version },
+        installed: { ...detail.installed, minecraft: selected.game_version },
+      };
+    } else if (key === "account list")
       data = {
         accounts: [
           {
