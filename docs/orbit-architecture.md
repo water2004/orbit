@@ -64,7 +64,11 @@ CLI/core。仅导航切换重建展示节点，任务进度不重建控件；原
 `orbit config --scope global|instance path/list/get/set/unset`；默认仍为全局，不新增平行的
 catalog 管理命令。实例的来源集合解析、凭据要求及原子保存由 core 处理，写操作受现有
 workspace mutation lock 保护。GUI 只渲染 CLI 返回的数组/选项与凭据状态并提交同一字符串参数。
-发现页的来源设置按准确实例保存；已有包远端不参与扩大 `search` 的来源范围。
+发现页与实例模组管理页共用同一来源控件，按准确实例保存；已有包远端不参与扩大 `search`
+或本地 JAR 识别的来源范围。`init` 使用默认 catalogs，`sync`/导入后同步使用实例 catalogs；
+全局凭据只提供访问能力，不能隐式启用 provider。CurseForge 使用统一的可下载工件转换：
+尊重 `allowModDistribution`，缺少 URL 时只查询官方下载端点，拒绝绕过分发限制。
+本地识别不会把无下载能力的匹配写成远端；没有可用远端时保留本地持久来源，lock 继续严格校验。
 
 可安全重放的网络读取统一使用 `orbit-http`，重试覆盖响应体完成，状态/发送/读取共享一次
 有限预算。HTTP 传输与 JSON/领域校验分开，GUI 不重放事务；具体规则见 [网络重试](orbit-network.md)。

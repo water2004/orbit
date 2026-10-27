@@ -13,6 +13,7 @@ import { workspace, orbit, act } from "../services/workspace";
 import { Cancelled } from "../services/cli";
 import {
   discoverySession,
+  invalidateDiscovery,
   projectKey,
   installedPackages,
   addArguments,
@@ -170,10 +171,7 @@ async function search() {
 }
 async function catalogsChanged() {
   const session = state.value;
-  session.revision++;
-  session.results = [];
-  session.searched = false;
-  session.loading = false;
+  invalidateDiscovery(targetId.value);
   // The settings command has finished; refresh the same query using CLI policy.
   savingCatalogs.value.delete(targetId.value);
   if (session.query.trim()) await search();

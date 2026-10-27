@@ -38,6 +38,14 @@ export function discoverySession(key: string) {
   }
   return state;
 }
+export function invalidateDiscovery(key: string) {
+  const session = discoverySession(key);
+  ++session.revision;
+  session.results = [];
+  session.searched = false;
+  session.loading = false;
+  session.error = "";
+}
 export function projectKey(project: SearchResult) {
   return `${project.platform}:${project.project_id}`;
 }

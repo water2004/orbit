@@ -21,8 +21,11 @@ GitHub 发布页，用户按平台下载安装包。失败、限流、暂无发�
 移到标题下方，不能因全局 label 对齐或占位文本导致菜单缩成窄条。
 `tests/workflows.html?instance-picker#/browse` 使用隔离的多实例/长名称用例验证真实布局。
 
-搜索来源勾选后立即调用已有 `config --scope instance set resolver.catalogs`，成功后刷新查询，
+发现页与实例的模组管理页共用“模组来源”控件。勾选后立即调用已有
+`config --scope instance set resolver.catalogs`，发现页成功后刷新查询，管理页清除旧的更新结果，
 不再有第二个保存步骤；保存中禁用继续修改，错误恢复原勾选并提示，不能关闭最后一个来源。
+来源用于发现模组和 `init`/`sync` 的本地 JAR 识别，已有包的明确远端不被改写。
+全局 API key 仅提供访问能力，不自动为任何实例启用 CurseForge。
 搜索失败只展示错误，不显示成功查询才有的结果数和“无匹配”占位。
 
 GUI 不维护全局“当前实例”，也不保存上次选中项。启动只加载实例库与账户；不会按命令行

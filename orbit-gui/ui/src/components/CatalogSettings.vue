@@ -11,7 +11,11 @@ interface CatalogEntry {
   value: string[];
   choices: { id: string; name: string; available: boolean }[];
 }
-const props = defineProps<{ instance: Instance; ready: boolean }>();
+const props = defineProps<{
+  instance: Instance;
+  ready: boolean;
+  disabled?: boolean;
+}>();
 const emit = defineEmits<{
   changed: [];
   busy: [instanceId: string, value: boolean];
@@ -35,7 +39,7 @@ watch(
     try {
       const data = await orbit<{ entries: CatalogEntry[] }>(
         ["config", "--scope", "instance", "list"],
-        t("Loading search sources", "正在读取搜索来源"),
+        t("Loading mod sources", "正在读取模组来源"),
         props.instance,
       );
       if (current === revision) {
@@ -45,8 +49,8 @@ watch(
         if (!entry)
           throw new Error(
             t(
-              "The CLI did not return search source settings.",
-              "CLI 未返回搜索来源设置。",
+              "The CLI did not return mod source settings.",
+              "CLI 未返回模组来源设置。",
             ),
           );
         settings.value = entry;
@@ -65,7 +69,13 @@ onUnmounted(() => {
   revision++;
 });
 async function save() {
-  if (saving.value || !selected.value.length || !settings.value) return;
+  if (
+    props.disabled ||
+    saving.value ||
+    !selected.value.length ||
+    !settings.value
+  )
+    return;
   const current = revision;
   const target = props.instance;
   // Retain the CLI-provided display order; no provider policy is implemented here.
@@ -85,7 +95,7 @@ async function save() {
         "resolver.catalogs",
         enabled.join(","),
       ],
-      t("Saving search sources", "正在保存搜索来源"),
+      t("Saving mod sources", "正在保存模组来源"),
       target,
     );
     if (current === revision) {
@@ -107,7 +117,7 @@ async function save() {
 <template>
   <div class="catalog-settings">
     <div class="row wrap">
-      <strong>{{ t("Search sources", "搜索来源") }}</strong>
+      <strong>{{ t("Mod sources", "模组来源") }}</strong>
       <ProgressSpinner v-if="loading" :size="16" />
       <label v-for="option in settings?.choices" :key="option.id">
         <input
@@ -115,6 +125,7 @@ async function save() {
           type="checkbox"
           :value="option.id"
           :disabled="
+            disabled ||
             loading ||
             saving ||
             (selected.length === 1 && selected.includes(option.id)) ||
@@ -136,8 +147,8 @@ async function save() {
     </div>
     <small>{{
       t(
-        "Changes are saved automatically for this instance. Existing package remotes are unchanged.",
-        "修改后自动按实例保存，不改变已有模组的远端。",
+        "Saved automatically for finding mods and identifying local JARs in this instance. Existing mod remotes are unchanged.",
+        "自动按实例保存，用于发现模组与识别本地 JAR，不改变已有模组的远端。",
       )
     }}</small>
     <p v-if="error" class="error" role="alert">{{ error }}</p>

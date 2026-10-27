@@ -84,6 +84,17 @@ const prefs = {
   accent_theme: "indigo",
 };
 let id = 0;
+const catalogs = new Map<string, string[]>();
+function catalogEntry(instanceId: string) {
+  return {
+    key: "resolver.catalogs",
+    value: catalogs.get(instanceId) || ["modrinth"],
+    choices: [
+      { id: "modrinth", name: "Modrinth", available: true },
+      { id: "curseforge", name: "CurseForge", available: true },
+    ],
+  };
+}
 mockIPC((cmd, args) => {
   if (cmd === "plugin:window|is_maximized") return false;
   if (cmd === "preferences") return prefs;
@@ -195,7 +206,12 @@ mockIPC((cmd, args) => {
         ],
       };
     else if (key === "versions java") data = { major: 25 };
-    else if (key === "config list")
+    else if (key === "config --scope" && request.args[2] === "instance") {
+      if (request.args[3] === "set") {
+        catalogs.set(request.instance!, request.args[5].split(","));
+        data = { entry: catalogEntry(request.instance!) };
+      } else data = { entries: [catalogEntry(request.instance!)] };
+    } else if (key === "config list")
       data =
         request.kind === "orbit"
           ? {

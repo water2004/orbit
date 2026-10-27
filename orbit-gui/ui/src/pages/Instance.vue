@@ -32,6 +32,7 @@ import MemorySettings from "../components/MemorySettings.vue";
 import ProgressSpinner from "../components/upstream/ProgressSpinner.vue";
 import { t } from "../i18n";
 import { instancePath, discoveryPath } from "../services/navigation";
+import { invalidateDiscovery } from "../services/discovery";
 import Avatar from "../components/Avatar.vue";
 import Button from "../components/upstream/Button.vue";
 import Modal from "../components/Modal.vue";
@@ -41,6 +42,7 @@ import Toggle from "../components/upstream/Toggle.vue";
 import JavaChooser from "../components/JavaChooser.vue";
 import InstanceAccount from "../components/InstanceAccount.vue";
 import InstanceIcon from "../components/InstanceIcon.vue";
+import CatalogSettings from "../components/CatalogSettings.vue";
 import { useCommandScope } from "../services/task-scope";
 import DropdownSelect from "../components/upstream/DropdownSelect.vue";
 import { useInstanceContext } from "../services/instance-context";
@@ -153,6 +155,20 @@ const route = useRoute(),
   checking = ref(false),
   showUpdates = ref(false);
 const maintenanceOpen = ref(false);
+const catalogsSaving = ref(false);
+function catalogBusy(instanceId: string, busy: boolean) {
+  if (view.instance?.id === instanceId) catalogsSaving.value = busy;
+}
+let updatesRevision = 0;
+function invalidateUpdates() {
+  ++updatesRevision;
+  updates.value = undefined;
+  showUpdates.value = false;
+}
+function catalogsChanged() {
+  invalidateUpdates();
+  invalidateDiscovery(view.instance.id);
+}
 const configuringJava = ref(false);
 const changingIcon = ref(false);
 async function changeJava(value: string | null) {
@@ -265,12 +281,7 @@ const updates = ref<Updates>(),
     warnings: { detail: string }[];
     coverage_gaps: { detail: string; count: number }[];
   }>();
-watch(
-  () => view.packages,
-  () => {
-    updates.value = undefined;
-  },
-);
+watch(() => view.packages, invalidateUpdates);
 const minRisk = ref("35"),
   auditFilter = ref(""),
   auditBusy = ref(false);
@@ -299,7 +310,8 @@ const width = ref(1280),
 watch(
   () => view.instance?.id,
   () => {
-    updates.value = undefined;
+    invalidateUpdates();
+    catalogsSaving.value = false;
     audit.value = undefined;
     manager.value = undefined;
     serverStatus.value = undefined;
@@ -349,7 +361,9 @@ async function deleteInstance() {
   }
 }
 async function checkUpdates() {
+  if (checking.value || catalogsSaving.value) return;
   const selected = view.instance;
+  const revision = updatesRevision;
   checking.value = true;
   try {
     const result = await orbit<Updates>(
@@ -357,7 +371,7 @@ async function checkUpdates() {
       t("Checking mod updates", "正在检查模组更新"),
       selected,
     );
-    if (view.instance?.id === selected?.id) {
+    if (view.instance?.id === selected?.id && revision === updatesRevision) {
       updates.value = result;
       showUpdates.value = true;
     }
@@ -599,6 +613,14 @@ async function status() {
             </button>
           </ActionMenu>
         </div>
+        <CatalogSettings
+          :key="view.instance.id"
+          :instance="view.instance"
+          :ready="!!view.detail"
+          :disabled="checking"
+          @busy="catalogBusy"
+          @changed="catalogsChanged"
+        />
         <div class="toolbar">
           <div class="tabs grow">
             <button
@@ -614,11 +636,15 @@ async function status() {
               {{ t("Updates", "更新") }} {{ updates?.updates.length ?? "—" }}
             </button>
           </div>
-          <Button size="sm" :disabled="checking" @click="act(checkUpdates)"
+          <Button
+            size="sm"
+            :disabled="checking || catalogsSaving"
+            @click="act(checkUpdates)"
             ><RefreshCw />{{ t("Check for updates", "检查更新") }}</Button
           ><Button
             v-if="updates?.updates.length"
             type="colored"
+            :disabled="catalogsSaving || checking"
             @click="
               act(() =>
                 mutate(['upgrade'], t('Upgrading mods', '正在升级模组')),
@@ -1174,6 +1200,7 @@ async function status() {
     >
       <div class="maintenance-options">
         <button
+          :disabled="catalogsSaving"
           @click="
             maintenanceOpen = false;
             act(() =>
@@ -1194,6 +1221,7 @@ async function status() {
           >
         </button>
         <button
+          :disabled="catalogsSaving"
           @click="
             maintenanceOpen = false;
             act(() =>
@@ -1214,6 +1242,7 @@ async function status() {
           >
         </button>
         <button
+          :disabled="catalogsSaving"
           @click="
             maintenanceOpen = false;
             act(() =>
