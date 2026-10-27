@@ -3430,7 +3430,7 @@ checksum = "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d"
 
 [[package]]
 name = "orbit"
-version = "0.9.1"
+version = "0.9.2"
 dependencies = [
  "anyhow",
  "clap",
@@ -3488,7 +3488,7 @@ dependencies = [
 
 [[package]]
 name = "orbit-core"
-version = "0.9.1"
+version = "0.9.2"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3533,7 +3533,7 @@ dependencies = [
 
 [[package]]
 name = "orbit-gui"
-version = "0.9.1"
+version = "0.9.2"
 dependencies = [
  "anyhow",
  "command-group",
@@ -3594,7 +3594,7 @@ dependencies = [
 
 [[package]]
 name = "orbit-launcher"
-version = "0.9.1"
+version = "0.9.2"
 dependencies = [
  "clap",
  "dunce",
@@ -3614,7 +3614,7 @@ dependencies = [
 
 [[package]]
 name = "orbit-launcher-core"
-version = "0.9.1"
+version = "0.9.2"
 dependencies = [
  "async-trait",
  "base64 0.22.1",

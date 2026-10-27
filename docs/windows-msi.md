@@ -57,14 +57,14 @@ Minecraft 仓库，不通过目录名猜测扫描磁盘。其他用户的数据�
 传递 `ADD_TO_PATH=0` 可以关闭 PATH 集成：
 
 ```powershell
-msiexec.exe /i orbit-0.9.1-x86_64.msi /quiet INSTALL_PROFILE=launcher ADD_TO_PATH=0
+msiexec.exe /i orbit-0.9.2-x86_64.msi /quiet INSTALL_PROFILE=launcher ADD_TO_PATH=0
 ```
 
 静默卸载默认选择 `UNINSTALL_DATA_LEVEL=cache`，不弹出交互。可显式选择 `settings` 或
 `all`；`all` 是删除存档等所有实例内容的明确授权。旧的 AppData 勾选参数不再存在：
 
 ```powershell
-msiexec.exe /x orbit-0.9.1-x86_64.msi /quiet UNINSTALL_DATA_LEVEL=all
+msiexec.exe /x orbit-0.9.2-x86_64.msi /quiet UNINSTALL_DATA_LEVEL=all
 ```
 
 ## 构建

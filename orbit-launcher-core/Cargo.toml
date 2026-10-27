@@ -1,6 +1,6 @@
 [package]
 name = "orbit-launcher-core"
-version = "0.9.1"
+version = "0.9.2"
 edition = "2024"
 license = "MIT"
 description = "Platform-independent core for Orbit Launcher"
