@@ -21,6 +21,7 @@ pub mod metadata;
 pub mod progress;
 pub mod providers;
 pub mod runtime;
+pub mod updates;
 pub mod version_repository;
 pub mod version_string;
 pub mod versions;

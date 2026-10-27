@@ -24,6 +24,7 @@ pub mod remove;
 pub mod reset;
 pub mod search;
 pub mod sync;
+pub mod update;
 pub mod upgrade;
 pub mod versions;
 

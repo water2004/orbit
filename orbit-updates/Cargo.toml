@@ -1,0 +1,17 @@
+[package]
+name = "orbit-updates"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "Read-only GitHub Release checks shared by Orbit frontends"
+
+[dependencies]
+orbit-http.workspace = true
+reqwest.workspace = true
+semver.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true

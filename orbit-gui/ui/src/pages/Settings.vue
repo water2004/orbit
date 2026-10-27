@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import ContentStage from "../components/ContentStage.vue";
+import About from "../components/About.vue";
 import { computed, onMounted, reactive, ref, watch } from "vue";
 import { open } from "@tauri-apps/plugin-dialog";
 import { FolderOpen, RefreshCw, ShieldCheck, Trash2 } from "lucide-vue-next";
@@ -263,6 +264,7 @@ watch(tab, (value) => {
             ['launcher', 'Launcher'],
             ['java', 'Java'],
             ['orbit', 'Orbit'],
+            ['about', t('About', '关于')],
           ]"
           :key="item[0]"
           :class="{ active: tab === item[0] }"
@@ -272,6 +274,7 @@ watch(tab, (value) => {
         </button>
       </nav>
       <ContentStage :stage="tab" class="settings-content">
+        <About v-if="tab === 'about'" />
         <template v-if="tab === 'appearance' && workspace.preferences">
           <div class="card stack">
             <h2>{{ t("Language & theme", "语言与主题") }}</h2>

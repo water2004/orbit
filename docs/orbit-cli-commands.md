@@ -8,7 +8,7 @@
 
 - 工作区事务：`init / add / remove / sync / install / fix / outdated / upgrade / import / export / migrate / launch`。
 - 单包管理：`package <mod_id> versions|files|env|enable|disable|constraint|remote|reset|purge`。包 ID 只写一次，必须是 JAR 声明的 ID。
-- 全局资源：`instance list|register|unregister`、`cache clean`、`config`；实例配置通过 `config --scope instance` 修改。
+- 全局资源：`instance list|register|unregister`、`cache clean`、`config`、`update check`；实例配置通过 `config --scope instance` 修改。
 - 只读发现与诊断：`search / info / list / capabilities / audit`。
 
 旧的散落顶层入口已经删除，不提供别名。GUI 与命令行用户使用同一入口；`--yes` 不跳过多步方案选择。
@@ -16,6 +16,18 @@
 本次只调整命令合同，不改变 TOML/lock schema；已有脚本需要使用新的命令拼写。
 
 ## 1. 全局上下文
+
+### 程序更新
+
+`orbit update check` 查询 [GitHub 最新正式 Release](https://docs.github.com/en/rest/releases/releases#get-the-latest-release)，
+不检查模组、不要求实例，也不下载或安装程序。`orbit-launcher update check` 使用同一实现，两个 CLI 可以单独使用。
+`--current-version <SemVer>` 可指定比较基准，默认是当前 CLI 的编译版本；GUI 用它传入自己的实际版本。
+
+JSON 命令标识为 `update.check`，结果包含 `current_version`、`status` 和可空的 `release`。
+状态为 `update_available`、`up_to_date`、`ahead` 或 `no_release`；`release` 包含
+`version/name/url/published_at/notes`。版本按 SemVer 比较，忽略 build metadata，开发构建领先时不会建议降级。
+网络、限流、无效响应均返回错误，不能当作“已是最新”。检查遵守本程序的网络配置及统一有限重试，
+不携带 provider/账户凭据，不上传实例信息。更新说明按不可信文本展示；用户自行打开发布页安装对应平台的包。
 
 实例选择优先级：
 

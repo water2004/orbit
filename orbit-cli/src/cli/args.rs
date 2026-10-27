@@ -63,6 +63,11 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Commands {
+    /// Check published Orbit application updates without installing them.
+    Update {
+        #[command(subcommand)]
+        command: UpdateCommands,
+    },
     /// Initialize the current directory as an Orbit project.
     Init {
         /// Instance name.
@@ -274,6 +279,16 @@ pub enum Commands {
         package: String,
         #[command(subcommand)]
         command: PackageCommands,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum UpdateCommands {
+    /// Check the latest stable GitHub Release.
+    Check {
+        /// Compare an explicit application version instead of this CLI's version.
+        #[arg(long)]
+        current_version: Option<String>,
     },
 }
 

@@ -43,6 +43,7 @@ pub mod runtime;
 pub mod secret_store;
 pub mod state_archive;
 mod storage_migrations;
+pub mod updates;
 pub mod versions;
 pub mod yggdrasil;
 

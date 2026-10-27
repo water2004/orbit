@@ -1,6 +1,18 @@
 [
   {
     "kind": "orbit",
+    "args": ["update", "check", "--current-version", "0.9.0"],
+    "command": "update.check",
+    "mutates": false
+  },
+  {
+    "kind": "launcher",
+    "args": ["update", "check", "--current-version", "0.9.0"],
+    "command": "update.check",
+    "mutates": false
+  },
+  {
+    "kind": "orbit",
     "args": ["package", "sodium", "versions"],
     "command": "package.versions",
     "mutates": false

@@ -4,6 +4,11 @@
 
 ## 1. 当前结论
 
+设置已增加关于页和手动 GitHub 正式版检查。两个 CLI 均提供只读 `update check`，
+共用 `orbit-updates`，GUI 仍通过 CLI 查询，网络失败不等于“已是最新”。
+中英文 README 改为面向使用者的简要介绍；开发约束集中在 `development.md`，
+根 `AGENTS.md` 只作代理阅读入口，不再使用 `CLAUDE.md` 作为公共开发规范。
+
 0.9.0 统一发布 Orbit、Launcher 与 GUI，包含显式实例/账户交互、搜索和版本规则修复、
 命令归组以及安装/加载环境分离。用户发行说明见 [`releases/v0.9.0.md`](releases/v0.9.0.md)。
 现有实例配置与 lock 格式不变；CLI 旧命令脚本需要按当前命令参考更新。

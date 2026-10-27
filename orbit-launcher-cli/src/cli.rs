@@ -60,6 +60,11 @@ pub enum ProgressFormat {
 
 #[derive(Debug, Subcommand)]
 pub enum Commands {
+    /// Check published Orbit application updates without installing them.
+    Update {
+        #[command(subcommand)]
+        command: UpdateCommands,
+    },
     /// Resolve, download, verify, and atomically install an existing or new instance.
     Install {
         /// Create and install a new named instance in one command.
@@ -152,6 +157,16 @@ pub enum Commands {
     /// Internal detached supervisor entrypoint.
     #[command(name = "__supervisor", hide = true)]
     Supervisor,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum UpdateCommands {
+    /// Check the latest stable GitHub Release.
+    Check {
+        /// Compare an explicit application version instead of this CLI's version.
+        #[arg(long)]
+        current_version: Option<String>,
+    },
 }
 
 #[derive(Debug, Subcommand)]

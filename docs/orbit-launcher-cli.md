@@ -1,5 +1,13 @@
 # Orbit Launcher CLI
 
+## 检查程序更新
+
+`orbit-launcher update check` 只查询 GitHub 最新正式 Release，不修改程序或实例。
+`--current-version <SemVer>` 指定比较基准，默认使用当前 CLI 版本；GUI 传入自己的版本。
+结果与 `orbit update check` 共用实现和 JSON 合同，详见
+[程序更新](orbit-cli-commands.md#程序更新)。两个程序独立编入共享检查模块，无需互相调用或同时安装。
+检查使用 Launcher 普通 HTTP client 的网络超时与有限重试，不经游戏下载镜像、不携带认证凭据。
+
 > 实现状态：实例、配置、账户持久化、系统与 Mojang Java runtime，Vanilla、Fabric、Quilt、Forge、
 > NeoForge 客户端/独立服务端安装，以及客户端启动和受管理的服务端运行均已可用。
 > 未实现的命令不会以空壳形式出现在 CLI 中。

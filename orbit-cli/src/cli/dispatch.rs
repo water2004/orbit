@@ -28,6 +28,9 @@ impl CommandHandler for Commands {
             None
         };
         match self {
+            Commands::Update {
+                command: UpdateCommands::Check { current_version },
+            } => commands::update::handle(current_version, ctx).await,
             Commands::Init {
                 name,
                 mc_version,
@@ -104,6 +107,7 @@ impl Commands {
                 Self::Init { .. }
                     | Self::Instance { .. }
                     | Self::Cache { .. }
+                    | Self::Update { .. }
                     | Self::Config {
                         scope: ConfigScope::Global,
                         ..
@@ -131,6 +135,7 @@ impl Commands {
 
     pub fn command_name(&self) -> &'static str {
         match self {
+            Self::Update { .. } => "update.check",
             Self::Init { .. } => "init",
             Self::Install { .. } => "install",
             Self::Fix => "fix",
@@ -190,6 +195,7 @@ impl Commands {
             }
             Self::Migrate { command } => matches!(command, MigrateCommands::Export { .. }),
             Self::Instance { .. }
+            | Self::Update { .. }
             | Self::Outdated { .. }
             | Self::Search { .. }
             | Self::Info { .. }

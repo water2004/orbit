@@ -11,6 +11,7 @@ description = "Platform-independent core for Orbit Launcher"
 ignored = ["md-5"]
 
 [dependencies]
+orbit-updates.workspace = true
 orbit-http.workspace = true
 orbit-compatibility.workspace = true
 orbit-bundle-format.workspace = true

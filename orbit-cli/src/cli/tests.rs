@@ -516,6 +516,7 @@ fn command_wide_flags_cannot_be_silently_ignored_by_global_mutations() {
         vec!["cache", "clean"],
         vec!["instance", "list"],
         vec!["init", "new"],
+        vec!["update", "check"],
     ] {
         let cli = Cli::try_parse_from(std::iter::once("orbit").chain(args)).unwrap();
         assert!(cli.command.validate_invocation(true, false).is_err());

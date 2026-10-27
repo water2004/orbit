@@ -1,5 +1,10 @@
 # Orbit 架构
 
+程序更新检查集中在独立的 `orbit-updates` crate：只查询公开 GitHub Release、验证响应、
+做 SemVer 比较，返回有界结构化结果；不接触实例、账户、下载镜像或安装器。
+两套 core 仅适配各自网络配置，CLI 暴露相同 `update check` 命令。GUI 传入自身版本并展示结果，
+不新增直连网络或更新业务路径。打开发布页属于系统集成，程序安装仍由用户完成。
+
 CurseForge `FileIndex.modLoader` 对真实历史条目允许缺失/null，wrapper 保留为未知，不映射
 成 `Any=0`。搜索使用官方端点的精确游戏版本/Loader 参数，不能依赖不完整的 latest 索引
 再次过滤掉结果；索引只补充展示提示，下载后的真实 JAR 元数据仍是求解的唯一来源。

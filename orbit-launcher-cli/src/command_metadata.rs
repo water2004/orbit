@@ -8,6 +8,7 @@ impl Commands {
             Self::Launch { .. } | Self::Export { .. } | Self::Server { .. } => true,
             Self::Instance { command } => command.accepts_instance_context(),
             Self::Config { .. }
+            | Self::Update { .. }
             | Self::Account { .. }
             | Self::Versions { .. }
             | Self::Java { .. }
@@ -19,6 +20,7 @@ impl Commands {
 
     pub fn command_name(&self) -> &'static str {
         match self {
+            Self::Update { .. } => "update.check",
             Self::Install { .. } => "install",
             Self::Launch { .. } => "launch",
             Self::Export { .. } => "export",

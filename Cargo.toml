@@ -14,6 +14,7 @@ members = [
     "orbit-loader-json",
     "orbit-launcher-format",
     "orbit-http",
+    "orbit-updates",
     "installer/actions",
     "curseforge-wrapper",
     "modrinth-wrapper",
@@ -89,3 +90,5 @@ orbit-compatibility = { path = "orbit-compatibility" }
 orbit-bundle-format = { path = "orbit-bundle-format" }
 orbit-launcher-format = { path = "orbit-launcher-format" }
 orbit-http = { path = "orbit-http" }
+orbit-updates = { path = "orbit-updates" }
+semver = "1.0"

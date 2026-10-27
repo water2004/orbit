@@ -3513,6 +3513,7 @@ dependencies = [
  "orbit-launcher-core",
  "orbit-launcher-format",
  "orbit-loader-json",
+ "orbit-updates",
  "pubgrub",
  "reqwest",
  "rusqlite",
@@ -3630,6 +3631,7 @@ dependencies = [
  "orbit-compatibility",
  "orbit-http",
  "orbit-launcher-format",
+ "orbit-updates",
  "os_info",
  "percent-encoding",
  "regex",
@@ -3676,6 +3678,19 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "orbit-updates"
+version = "0.1.0"
+dependencies = [
+ "orbit-http",
+ "reqwest",
+ "semver",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
 ]
 
 [[package]]

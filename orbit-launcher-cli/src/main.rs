@@ -97,6 +97,7 @@ async fn main() -> ExitCode {
 fn render_success(format: OutputFormat, command: &'static str, output: app::CommandOutput) {
     match format {
         OutputFormat::Json => match output {
+            app::CommandOutput::UpdateCheck(value) => print_json(command, value),
             app::CommandOutput::ConfigPath(value) => print_json(command, value),
             app::CommandOutput::ConfigList(value) => print_json(command, value),
             app::CommandOutput::ConfigEntry(value) => print_json(command, value),
@@ -159,6 +160,19 @@ fn print_json<T: serde::Serialize>(command: &'static str, value: T) {
 
 fn render_text(output: app::CommandOutput) {
     match output {
+        app::CommandOutput::UpdateCheck(view) => {
+            use orbit_launcher_core::updates::Status;
+            let message = match view.status {
+                Status::UpdateAvailable => tr!("A new Orbit release is available"),
+                Status::UpToDate => tr!("Orbit is up to date"),
+                Status::Ahead => tr!("This build is newer than the latest stable release"),
+                Status::NoRelease => tr!("No published stable release is available"),
+            };
+            outln!("{message} · {}", view.current_version);
+            if let Some(release) = view.release {
+                outln!("{} · {}\n{}", release.name, release.version, release.url);
+            }
+        }
         app::CommandOutput::LaunchReport(record) => {
             if let Some(record) = record {
                 outln!(

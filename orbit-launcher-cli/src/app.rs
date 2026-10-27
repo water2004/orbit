@@ -47,6 +47,7 @@ use crate::supervisor_ipc::{
 
 #[derive(Debug)]
 pub enum CommandOutput {
+    UpdateCheck(orbit_launcher_core::updates::UpdateCheck),
     ConfigPath(ConfigPathView),
     ConfigList(ConfigListView),
     ConfigEntry(ConfigEntryView),
@@ -176,6 +177,17 @@ pub async fn execute(
         ));
     }
     match command {
+        Commands::Update {
+            command: crate::cli::UpdateCommands::Check { current_version },
+        } => Ok(CommandOutput::UpdateCheck(
+            orbit_launcher_core::updates::check(
+                runtime.config(),
+                current_version
+                    .as_deref()
+                    .unwrap_or(env!("CARGO_PKG_VERSION")),
+            )
+            .await?,
+        )),
         Commands::Install {
             new,
             server_directory,
