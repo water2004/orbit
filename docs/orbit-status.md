@@ -4,6 +4,9 @@
 
 ## 1. 当前结论
 
+0.9.1 增加关于页与手动更新检查，修复实例选择器宽度和设置卡片排版，并整理中英文 README。
+实例及配置格式不变。用户发行说明见 [`releases/v0.9.1.md`](releases/v0.9.1.md)。
+
 设置已增加关于页和手动 GitHub 正式版检查。两个 CLI 均提供只读 `update check`，
 共用 `orbit-updates`，GUI 仍通过 CLI 查询，网络失败不等于“已是最新”。
 中英文 README 改为面向使用者的简要介绍；开发约束集中在 `development.md`，
