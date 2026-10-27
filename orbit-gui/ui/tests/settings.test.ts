@@ -20,8 +20,11 @@ vi.mock("../src/services/workspace", async () => {
 });
 import Settings from "../src/pages/Settings.vue";
 import DropdownSelect from "../src/components/upstream/DropdownSelect.vue";
-import { orbit, launcher } from "../src/services/workspace";
+import { orbit, launcher, workspace } from "../src/services/workspace";
+import { invoke } from "@tauri-apps/api/core";
 beforeEach(() => {
+  workspace.preferences!.close_after_launch = false;
+  vi.mocked(invoke).mockClear();
   vi.mocked(orbit).mockResolvedValue({
     entries: [
       {
@@ -56,6 +59,32 @@ beforeEach(() => {
           ],
         },
   );
+});
+
+it("keeps the launch preference text in a flexible label and saves through the existing preference API", async () => {
+  const wrapper = mount(Settings);
+  await flushPromises();
+  await wrapper
+    .findAll(".settings-nav button")
+    .find((button) => button.text() === "Launcher")!
+    .trigger("click");
+  const toggle = wrapper.find('[role="switch"]');
+  const title = wrapper.find(`#${toggle.attributes("aria-labelledby")}`);
+  expect(title.text()).toBe("Close Launcher after the game starts");
+  expect(title.element.parentElement?.classList.contains("setting-label")).toBe(
+    true,
+  );
+  expect(
+    wrapper.find(`#${toggle.attributes("aria-describedby")}`).text(),
+  ).toContain("The game keeps running");
+  expect(toggle.attributes("aria-checked")).toBe("false");
+  await toggle.trigger("click");
+  await flushPromises();
+  expect(invoke).toHaveBeenCalledWith("save_preferences", {
+    value: expect.objectContaining({ close_after_launch: true }),
+  });
+  expect(toggle.attributes("aria-checked")).toBe("true");
+  wrapper.unmount();
 });
 it("renders canonical choices from each CLI and resolved default locations without revealing credentials", async () => {
   const wrapper = mount(Settings);

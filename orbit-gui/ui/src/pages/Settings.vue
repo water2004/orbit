@@ -495,8 +495,8 @@ watch(tab, (value) => {
           v-if="tab === 'launcher' && workspace.preferences"
           class="card setting"
         >
-          <div>
-            <h3>
+          <div class="setting-label">
+            <h3 id="close-after-launch-title">
               {{
                 t(
                   "Close Launcher after the game starts",
@@ -504,7 +504,7 @@ watch(tab, (value) => {
                 )
               }}
             </h3>
-            <p>
+            <p id="close-after-launch-description">
               {{
                 t(
                   "The game keeps running. Launcher continues collecting logs without the GUI.",
@@ -514,6 +514,8 @@ watch(tab, (value) => {
             </p>
           </div>
           <Toggle
+            aria-labelledby="close-after-launch-title"
+            aria-describedby="close-after-launch-description"
             :model-value="workspace.preferences.close_after_launch"
             @update:model-value="
               (value) => {
@@ -739,6 +741,9 @@ watch(tab, (value) => {
   align-items: center;
   gap: 12px;
   flex-wrap: wrap;
+}
+/* Row spacing belongs inside a card, not on the card's own surface. */
+.card > .setting {
   padding: 14px 0;
   border-top: 1px solid var(--surface-4);
 }
